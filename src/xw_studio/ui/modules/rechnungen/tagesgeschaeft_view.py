@@ -280,6 +280,8 @@ class TagesgeschaeftView(QWidget):
         self._reprint_exec_worker: BackgroundWorker | None = None
         self._start_requested_mode: StartMode = StartMode.INVOICES_AND_PRINT
         self._start_selected_mode: StartMode = StartMode.INVOICES_AND_PRINT
+        self._start_selected_invoice_ids: list[str] = []
+        self._start_selected_only = False
         self._pending_start_preflight: StartPreflight | None = None
         self._start_abort_requested = False
         self._badge_timer = QTimer(self)
@@ -356,6 +358,10 @@ class TagesgeschaeftView(QWidget):
         menu = QMenu(self._btn_start)
         act_full = menu.addAction("Vollflow (Rechnungen + Druck)")
         act_full.triggered.connect(lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT))
+        act_selected = menu.addAction("START SELECTED (markierte Rechnungen)")
+        act_selected.triggered.connect(
+            lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, selected_only=True)
+        )
         act_invoices = menu.addAction("Nur Rechnungen")
         act_invoices.triggered.connect(lambda: self._on_start_clicked(StartMode.INVOICES_ONLY))
         act_print = menu.addAction("Nachdrucke (nur Lagerauffüllung)")
@@ -427,10 +433,29 @@ class TagesgeschaeftView(QWidget):
     def _on_badges_error(self, exc: Exception) -> None:
         logger.warning("Badge refresh failed: %s", exc)
 
-    def _on_start_clicked(self, requested_mode: StartMode = StartMode.INVOICES_AND_PRINT) -> None:
+    def _on_start_clicked(
+        self,
+        requested_mode: StartMode = StartMode.INVOICES_AND_PRINT,
+        *,
+        selected_only: bool = False,
+    ) -> None:
         if self._start_worker is not None and self._start_worker.isRunning():
             return
         self._start_requested_mode = requested_mode
+        self._start_selected_only = bool(selected_only)
+        self._start_selected_invoice_ids = []
+        if selected_only:
+            selected = self._rechnungen_view.selected_summaries()
+            self._start_selected_invoice_ids = [
+                str(summary.id).strip() for summary in selected if str(summary.id).strip()
+            ]
+            if not self._start_selected_invoice_ids:
+                QMessageBox.information(
+                    self,
+                    "START SELECTED",
+                    "Bitte zuerst eine oder mehrere Rechnungen markieren.",
+                )
+                return
 
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.status_message.emit("Pre-Flight wird erstellt…", 2500)
@@ -438,7 +463,11 @@ class TagesgeschaeftView(QWidget):
         def job() -> StartPreflight:
             invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             inventory_service: InventoryService = self._container.resolve(InventoryService)
-            open_count = invoice_service.count_invoices(status=100)
+            open_count = (
+                len(self._start_selected_invoice_ids)
+                if self._start_selected_only
+                else invoice_service.count_invoices(status=100)
+            )
             return inventory_service.build_start_preflight(open_count)
 
         self._start_worker = BackgroundWorker(job)
@@ -449,9 +478,9 @@ class TagesgeschaeftView(QWidget):
     def _on_start_preflight_ready(self, result: object) -> None:
         if not isinstance(result, StartPreflight):
             return
+        signals: AppSignals = self._container.resolve(AppSignals)
         dlg = _StartDialog(result, initial_mode=self._start_requested_mode, parent=self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
-            signals: AppSignals = self._container.resolve(AppSignals)
             signals.status_message.emit("START abgebrochen", 2500)
             return
         self._start_selected_mode = dlg.selected_mode
@@ -471,6 +500,11 @@ class TagesgeschaeftView(QWidget):
             invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             draft_service: DraftInvoiceService = self._container.resolve(DraftInvoiceService)
             summaries = invoice_service.load_invoice_summaries(status=100, limit=1000, offset=0)
+            if self._start_selected_only:
+                selected_ids = set(self._start_selected_invoice_ids)
+                summaries = [
+                    summary for summary in summaries if str(summary.id).strip() in selected_ids
+                ]
             targets_by_reference: dict[str, list[ProductIssueTarget]] = {}
             refs: list[str] = []
             for summary in summaries:
@@ -521,6 +555,7 @@ class TagesgeschaeftView(QWidget):
             batch_result = invoice_service.run_start_fullflow(
                 full_mode=(mode == StartMode.INVOICES_AND_PRINT),
                 should_abort=lambda: self._start_abort_requested,
+                invoice_ids=list(self._start_selected_invoice_ids) if self._start_selected_only else None,
             )
             inventory_report: StartExecutionReport | None = None
             inventory_warning = ""
@@ -603,6 +638,9 @@ class TagesgeschaeftView(QWidget):
             lines.append(
                 f"Inventar-Druckjobs: {len(inventory_report.printed_skus)}"
             )
+            if inventory_report.warnings:
+                lines.append("Inventar-/Druck-Hinweise:")
+                lines.extend(f"- {warning}" for warning in inventory_report.warnings)
         elif inventory_warning:
             lines.append(inventory_warning)
         if isinstance(product_apply, ProductPreflightApplyResult):
@@ -705,6 +743,11 @@ class TagesgeschaeftView(QWidget):
                 f"Druckjobs: {len(result.printed_skus)}\n"
                 f"SKU: {', '.join(result.printed_skus) if result.printed_skus else 'keine'}\n"
                 f"Bestand aktualisiert: {result.stock_updated}"
+                + (
+                    "\n\nHinweise:\n" + "\n".join(f"- {warning}" for warning in result.warnings)
+                    if result.warnings
+                    else ""
+                )
             ),
         )
 

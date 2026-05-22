@@ -64,3 +64,31 @@ def test_print_pdf_by_plan_dispatches_each_target_with_parsed_pages() -> None:
     assert mock_print.call_count == 1
     assert mock_print.call_args.kwargs["pages"] == [1, 2, 3]
     assert mock_print.call_args.kwargs["dpi"] == 600
+
+
+def test_print_pdf_by_plan_uses_internal_renderer_without_shelling_out() -> None:
+    printing = _printing_config()
+
+    class _PrinterStub:
+        class PrinterMode:
+            HighResolution = object()
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.printer_name = ""
+
+        def setPrinterName(self, value: str) -> None:
+            self.printer_name = value
+
+    with patch("xw_studio.services.printing.planned_pdf_printer.QPrinter", _PrinterStub), patch(
+        "xw_studio.services.printing.planned_pdf_printer.print_pdf"
+    ) as mock_print, patch("subprocess.Popen") as mock_popen, patch("os.startfile", create=True) as mock_startfile:
+        print_pdf_by_plan(
+            "C:/tmp/test.pdf",
+            printing,
+            profile_id="noten_duplex",
+            page_count=4,
+        )
+
+    mock_print.assert_called_once()
+    mock_popen.assert_not_called()
+    mock_startfile.assert_not_called()

@@ -13,6 +13,8 @@ class _InvoiceClientStub:
         self._rows = rows
         self.render_calls: list[str] = []
         self.invoice_payloads: dict[str, dict[str, object]] = {}
+        self.mail_calls: list[dict[str, object]] = []
+        self.fail_mail = False
 
     def list_invoice_summaries(
         self,
@@ -45,6 +47,28 @@ class _InvoiceClientStub:
             "send_type": send_type,
             "send_draft": send_draft,
         }
+
+    def send_invoice_via_email(
+        self,
+        invoice_id: str,
+        *,
+        to_email: str,
+        subject: str,
+        text: str,
+        copy: bool = True,
+    ) -> dict[str, object]:
+        if self.fail_mail:
+            raise RuntimeError("sevDesk mail down")
+        self.mail_calls.append(
+            {
+                "invoice_id": invoice_id,
+                "to_email": to_email,
+                "subject": subject,
+                "text": text,
+                "copy": copy,
+            }
+        )
+        return {"ok": True}
 
 
 class _RepoStub:
@@ -323,13 +347,11 @@ def test_mail_step_uses_saved_template_when_available() -> None:
     flags = svc._run_mail_step(summary, svc.read_fulfillment_flags("7"))  # noqa: SLF001
 
     assert flags.mail_sent is True
-    assert mailer.calls[0]["to_email"] == "max@example.test"
-    assert mailer.calls[0]["subject"] == "Rechnung RE-TEST-1"
-    assert "Hallo Max Mustermann" in str(mailer.calls[0]["text_body"])
-    attachments = mailer.calls[0]["attachments"]
-    assert len(attachments) == 1
-    assert getattr(attachments[0], "filename", "") == "RE-TEST-1.pdf"
-    assert client.render_calls == ["7"]
+    assert client.mail_calls[0]["to_email"] == "max@example.test"
+    assert client.mail_calls[0]["subject"] == "Rechnung RE-TEST-1"
+    assert "Hallo Max Mustermann" in str(client.mail_calls[0]["text"])
+    assert mailer.calls == []
+    assert client.render_calls == []
 
 
 def test_mail_step_honors_recipient_override() -> None:
@@ -345,10 +367,11 @@ def test_mail_step_honors_recipient_override() -> None:
     )
 
     assert flags.mail_sent is True
-    assert mailer.calls[0]["to_email"] == "bernhard.holl@gmx.at"
+    assert client.mail_calls[0]["to_email"] == "bernhard.holl@gmx.at"
+    assert mailer.calls == []
 
 
-def test_manual_send_invoice_mail_uses_same_graph_template_path() -> None:
+def test_manual_send_invoice_mail_uses_same_sevdesk_template_path() -> None:
     summary = InvoiceSummary(id="8a", invoiceNumber="RE-TEST-8A", contact_name="Max Mustermann")
     client = _InvoiceClientStub([summary])
     mailer = _MailServiceStub()
@@ -365,11 +388,9 @@ def test_manual_send_invoice_mail_uses_same_graph_template_path() -> None:
     assert flags.mail_sent is True
     assert recipient == "max@example.test"
     assert subject == "Rechnung RE-TEST-8A"
-    assert mailer.calls[0]["to_email"] == "max@example.test"
-    assert "Hallo Max Mustermann" in str(mailer.calls[0]["text_body"])
-    attachments = mailer.calls[0]["attachments"]
-    assert len(attachments) == 1
-    assert getattr(attachments[0], "filename", "") == "RE-TEST-8A.pdf"
+    assert client.mail_calls[0]["to_email"] == "max@example.test"
+    assert "Hallo Max Mustermann" in str(client.mail_calls[0]["text"])
+    assert mailer.calls == []
 
 
 def test_product_step_marks_digital_fulfilled_without_warning() -> None:
@@ -461,5 +482,67 @@ def test_start_fullflow_repairs_draft_products_before_finalize() -> None:
 
     assert result["successful"] == 1
     assert drafts.calls == [("11", "20519")]
-    assert client.last_send_document["invoice_id"] == "11"
-    assert mailer.calls[0]["to_email"] == "wix@example.test"
+    assert not hasattr(client, "last_send_document")
+    assert client.mail_calls[0]["invoice_id"] == "11"
+    assert mailer.calls == []
+
+
+def test_start_fullflow_processes_only_requested_invoice_ids() -> None:
+    rows = [
+        InvoiceSummary(id="11", invoiceNumber="RE-TEST-11"),
+        InvoiceSummary(id="12", invoiceNumber="RE-TEST-12"),
+    ]
+    client = _InvoiceClientStub(rows)
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        _RepoStub({}),
+        None,
+        _MailServiceStub(),  # type: ignore[arg-type]
+    )
+
+    result = svc.run_start_fullflow(full_mode=False, invoice_ids=["12"])
+
+    assert result["processed"] == 1
+    assert result["successful"] == 1
+    assert not hasattr(client, "last_send_document")
+    assert client.mail_calls[0]["invoice_id"] == "12"
+
+
+def test_send_invoice_mail_uses_sevdesk_when_graph_unconfigured() -> None:
+    summary = InvoiceSummary(id="11", invoiceNumber="RE-TEST-11", order_reference="")
+    client = _InvoiceClientStub([summary])
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        _RepoStub({}),
+        None,
+        _MailServiceStub(configured=False),  # type: ignore[arg-type]
+    )
+
+    _flags, recipient, _subject = svc.send_invoice_mail_for_invoice(summary)
+
+    assert recipient == "max@example.test"
+    assert client.mail_calls[0]["invoice_id"] == "11"
+    assert client.mail_calls[0]["to_email"] == "max@example.test"
+
+
+def test_send_invoice_mail_falls_back_to_graph_when_sevdesk_fails() -> None:
+    summary = InvoiceSummary(id="12", invoiceNumber="RE-TEST-12", order_reference="")
+    client = _InvoiceClientStub([summary])
+    client.fail_mail = True
+    mailer = _MailServiceStub()
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        _RepoStub({}),
+        None,
+        mailer,  # type: ignore[arg-type]
+    )
+
+    _flags, recipient, _subject = svc.send_invoice_mail_for_invoice(summary)
+
+    assert recipient == "max@example.test"
+    assert client.mail_calls == []
+    assert mailer.calls[0]["to_email"] == "max@example.test"
+    assert len(mailer.calls[0]["attachments"]) == 1

@@ -668,7 +668,11 @@ class InvoiceClient:
 
     def render_invoice_pdf(self, invoice_id: str) -> dict[str, Any]:
         """Ask sevDesk to render invoice PDF asynchronously."""
-        response = self._conn.post(f"/Invoice/{str(invoice_id).strip()}/render", json={})
+        response = self._conn.post(
+            f"/Invoice/{str(invoice_id).strip()}/render",
+            json={},
+            params={"getAsPdf": "true"},
+        )
         return response.json() if response.content else {}
 
     def get_invoice_pdf(self, invoice_id: str) -> bytes:
@@ -690,7 +694,7 @@ class InvoiceClient:
                 f"sevDesk PDF: ungültige Antwort (content-type={content_type})"
             ) from exc
 
-        decoded = self._extract_pdf_from_payload(payload)
+        decoded = self.extract_pdf_from_payload(payload)
         if decoded:
             return decoded
         raise ValueError("sevDesk PDF: kein PDF/base64 geliefert")
@@ -790,15 +794,22 @@ class InvoiceClient:
         except Exception:
             return 0
 
+    def extract_pdf_from_payload(self, payload: object) -> bytes | None:
+        """Extract PDF bytes from sevDesk render/getPdf JSON payloads."""
+        return self._extract_pdf_from_payload(payload)
+
     def _extract_pdf_from_payload(self, payload: object) -> bytes | None:
         if not isinstance(payload, dict):
             return None
-        for key in ("base64", "pdfBase64", "documentBase64"):
+        for key in ("pdf", "base64", "pdfBase64", "documentBase64"):
             raw = payload.get(key)
             if not raw:
                 continue
             try:
-                decoded = base64.b64decode(str(raw), validate=False)
+                encoded = str(raw).strip()
+                if encoded.lower().startswith("data:application/pdf;base64,"):
+                    encoded = encoded.split(",", 1)[1]
+                decoded = base64.b64decode(encoded, validate=False)
             except Exception:
                 continue
             if decoded.startswith(b"%PDF"):
@@ -809,6 +820,10 @@ class InvoiceClient:
             if decoded:
                 return decoded
         objects = payload.get("objects")
+        if isinstance(objects, dict):
+            decoded = self._extract_pdf_from_payload(objects)
+            if decoded:
+                return decoded
         if isinstance(objects, list):
             for item in objects:
                 decoded = self._extract_pdf_from_payload(item)

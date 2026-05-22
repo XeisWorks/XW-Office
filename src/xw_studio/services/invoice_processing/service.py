@@ -329,10 +329,14 @@ class InvoiceProcessingService:
         full_mode: bool,
         should_abort: Callable[[], bool] | None = None,
         mail_recipient_override: str | None = None,
+        invoice_ids: list[str] | None = None,
     ) -> dict[str, object]:
         """Execute invoice processing flow for all open drafts (status=100)."""
         started = time.perf_counter()
         summaries = self._load_all_open_drafts(limit_per_page=100, max_pages=20)
+        if invoice_ids:
+            wanted = {str(invoice_id).strip() for invoice_id in invoice_ids if str(invoice_id).strip()}
+            summaries = [summary for summary in summaries if str(summary.id).strip() in wanted]
         if full_mode:
             self._prefetch_wix_order_context(summaries)
         updates: dict[str, FulfillmentFlags] = {}
@@ -522,28 +526,71 @@ class InvoiceProcessingService:
         *,
         recipient_override: str | None = None,
     ) -> tuple[FulfillmentFlags, str, str]:
-        """Send one invoice manually using the same template and Graph path as START."""
+        """Send one invoice manually using the same sevDesk-first path as START."""
 
         flags = self.read_fulfillment_flags(summary.id)
         invoice = self._fetch_invoice_detail(summary.id)
         to_email = str(recipient_override or "").strip() or self._resolve_customer_email(summary, invoice)
         if not to_email:
             raise RuntimeError("Keine E-Mail-Adresse fuer Rechnungsversand")
-        if self._mail_service is None or not self._mail_service.is_configured():
-            raise RuntimeError("MS-Graph-Konfiguration fuer Rechnungsmail fehlt")
         subject, text_body = self._build_mail_content(summary, invoice)
         html_body = self._build_mail_html(text_body)
-        attachment = self._build_invoice_attachment(summary, invoice)
-        self._mail_service.send_mail(
-            to_email=to_email,
-            subject=subject,
-            text_body=text_body,
-            html_body=html_body,
-            attachments=[attachment],
-        )
-        next_flags = self._next_flags(flags, mail_sent=True)
-        self.write_fulfillment_flags(summary.id, next_flags)
-        return next_flags, to_email, subject
+        sevdesk_error: Exception | None = None
+        sender = getattr(self._invoices, "send_invoice_via_email", None)
+        if callable(sender):
+            try:
+                sender(
+                    summary.id,
+                    to_email=to_email,
+                    subject=subject,
+                    text=text_body,
+                    copy=True,
+                )
+            except TypeError:
+                try:
+                    sender(
+                        summary.id,
+                        to=to_email,
+                        subject=subject,
+                        text=text_body,
+                        copy=True,
+                    )
+                except Exception as exc:  # noqa: BLE001 - Graph fallback below.
+                    sevdesk_error = exc
+                    logger.warning("sevDesk invoice mail failed for %s: %s", summary.id, exc)
+                else:
+                    next_flags = self._next_flags(flags, mail_sent=True)
+                    self.write_fulfillment_flags(summary.id, next_flags)
+                    return next_flags, to_email, subject
+            except Exception as exc:  # noqa: BLE001 - Graph fallback below.
+                sevdesk_error = exc
+                logger.warning("sevDesk invoice mail failed for %s: %s", summary.id, exc)
+            else:
+                next_flags = self._next_flags(flags, mail_sent=True)
+                self.write_fulfillment_flags(summary.id, next_flags)
+                return next_flags, to_email, subject
+        else:
+            sevdesk_error = RuntimeError("sevDesk sendViaEmail ist nicht verfuegbar")
+
+        if self._mail_service is not None and self._mail_service.is_configured():
+            try:
+                attachment = self._build_invoice_attachment(summary, invoice)
+                self._mail_service.send_mail(
+                    to_email=to_email,
+                    subject=subject,
+                    text_body=text_body,
+                    html_body=html_body,
+                    attachments=[attachment],
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    f"sevDesk-Mail fehlgeschlagen ({sevdesk_error}); Graph-Mail fehlgeschlagen ({exc})"
+                ) from exc
+            next_flags = self._next_flags(flags, mail_sent=True)
+            self.write_fulfillment_flags(summary.id, next_flags)
+            return next_flags, to_email, subject
+
+        raise RuntimeError(f"sevDesk-Mail fehlgeschlagen ({sevdesk_error}); Graph-Mail nicht konfiguriert")
 
     def get_invoice_detail_context(self, summary: InvoiceSummary) -> dict[str, object]:
         """Return sevDesk-backed customer/shipping fallback data for the detail panel."""
@@ -646,11 +693,16 @@ class InvoiceProcessingService:
         digital_only: bool = False,
         printed_copy: bool = False,
     ) -> FulfillmentFlags:
-        send_type = "VPR" if printed_copy else "VM"
-        self._invoices.send_invoice_document(summary.id, send_type=send_type, send_draft=False)
+        if printed_copy:
+            self._invoices.send_invoice_document(summary.id, send_type="VPR", send_draft=False)
+        elif digital_only:
+            logger.info("Invoice %s: digital-only finalization delegated to sendViaEmail", summary.id)
+        else:
+            logger.info("Invoice %s: mail-only finalization delegated to sendViaEmail", summary.id)
         return self._next_flags(
             flags,
             payment_applicable=(self._stamp(flags).payment_applicable or bool(summary.order_reference.strip())),
+            mail_sent=self._stamp(flags).mail_sent,
         )
 
     def _run_invoice_print_step(self, summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
@@ -924,12 +976,26 @@ class InvoiceProcessingService:
         cached = self._invoice_pdf_cache.get(str(invoice_id))
         if cached:
             return cached
-        self._invoices.render_invoice_pdf(invoice_id)
-        pdf_bytes = self._invoices.get_invoice_pdf(invoice_id)
-        if not pdf_bytes:
-            raise RuntimeError("PDF nicht verfügbar")
-        self._invoice_pdf_cache[str(invoice_id)] = pdf_bytes
-        return pdf_bytes
+        extractor = getattr(self._invoices, "extract_pdf_from_payload", None)
+        last_exc: Exception | None = None
+        for attempt, delay in enumerate((0.0, 0.5, 1.0, 2.0, 4.0), start=1):
+            if delay:
+                time.sleep(delay)
+            try:
+                render_payload = self._invoices.render_invoice_pdf(invoice_id)
+                if callable(extractor):
+                    rendered_pdf = extractor(render_payload)
+                    if rendered_pdf:
+                        self._invoice_pdf_cache[str(invoice_id)] = rendered_pdf
+                        return rendered_pdf
+                pdf_bytes = self._invoices.get_invoice_pdf(invoice_id)
+                if pdf_bytes:
+                    self._invoice_pdf_cache[str(invoice_id)] = pdf_bytes
+                    return pdf_bytes
+            except Exception as exc:  # noqa: BLE001 - retry transient sevDesk render/getPdf states.
+                last_exc = exc
+                logger.info("Invoice %s PDF attempt %s failed: %s", invoice_id, attempt, exc)
+        raise RuntimeError("PDF nicht verfügbar") from last_exc
 
     def _load_fulfillment_flags_map(self) -> dict[str, FulfillmentFlags]:
         if self._settings_repo is None:

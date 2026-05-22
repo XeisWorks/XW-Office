@@ -129,6 +129,24 @@ class DataTable(QTableView):
         source_idx = self._proxy.mapToSource(indexes[0])
         return self._model.row_data(source_idx.row())
 
+    def selected_source_rows(self) -> list[int]:
+        """Selected source-model row indexes, respecting proxy sort/filter state."""
+        indexes = self.selectionModel().selectedRows()
+        rows: list[int] = []
+        seen: set[int] = set()
+        for index in indexes:
+            source_idx = self._proxy.mapToSource(index)
+            row = int(source_idx.row())
+            if row < 0 or row in seen:
+                continue
+            seen.add(row)
+            rows.append(row)
+        return rows
+
+    def selected_rows_data(self) -> list[dict[str, Any]]:
+        """All selected row payloads in source-model order."""
+        return [self._model.row_data(row) for row in self.selected_source_rows()]
+
     def selected_source_row(self) -> int | None:
         """0-based row index in the source model (proxy sort/filter aware)."""
         indexes = self.selectionModel().selectedRows()

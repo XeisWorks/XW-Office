@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from unittest.mock import patch
 
 from xw_studio.core.config import AppConfig, PrintingSection
 from xw_studio.services.inventory.service import (
@@ -19,6 +21,39 @@ class _RepoStub:
 
     def set_value_json(self, key: str, value_json: str) -> None:
         self.values[key] = value_json
+
+
+def _printing_config() -> PrintingSection:
+    return PrintingSection(
+        buffer_quantity=3,
+        print_profiles=[
+            {
+                "id": "noten_a4_duplex",
+                "label": "Noten A4 Duplex",
+                "printer_name": "Rechnungen",
+                "dpi": 600,
+            }
+        ],
+    )
+
+
+def _product_payload(pdf_path: Path) -> str:
+    return json.dumps(
+        [
+            {
+                "sku": "XW-6-003",
+                "name": "Test Piece",
+                "category": "Noten",
+                "on_hand": 0,
+                "price_eur": "0",
+                "wix_id": "",
+                "sevdesk_id": "",
+                "print_file_path": str(pdf_path),
+                "print_profile_id": "noten_a4_duplex",
+                "print_plan": [],
+            }
+        ]
+    )
 
 
 def test_preflight_prints_only_when_stock_insufficient() -> None:
@@ -43,21 +78,27 @@ def test_preflight_prints_only_when_stock_insufficient() -> None:
     assert by_sku["XW-6-003"].final_print_qty == 4
 
 
-def test_execute_full_mode_updates_stock_with_buffer_and_consumption() -> None:
+def test_execute_full_mode_updates_stock_with_buffer_and_consumption(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "score.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
     repo = _RepoStub(
         {
             "daily_business.pending_requirements": json.dumps({"XW-4-001": 5, "XW-6-003": 2}),
             "inventory.stock_levels": json.dumps({"XW-4-001": 5, "XW-6-003": 1}),
+            "inventory.products": _product_payload(pdf_path),
         }
     )
-    cfg = AppConfig(printing=PrintingSection(buffer_quantity=3))
+    cfg = AppConfig(printing=_printing_config())
     service = InventoryService(cfg, repo)
 
     preflight = service.build_start_preflight(open_invoice_count=4)
-    report = service.execute_start_workflow(preflight, StartMode.INVOICES_AND_PRINT)
+    with patch("xw_studio.services.inventory.service.print_pdf_by_plan") as mock_print:
+        report = service.execute_start_workflow(preflight, StartMode.INVOICES_AND_PRINT)
 
     assert report.stock_updated is True
     assert report.printed_skus == ["XW-6-003"]
+    assert report.warnings == []
+    mock_print.assert_called_once()
 
     stock_after = json.loads(repo.values["inventory.stock_levels"])
     # XW-4-001: on_hand=5, required=5, printed=0 -> 0
@@ -110,15 +151,18 @@ def test_build_reprint_preflight_identifies_low_stock() -> None:
     assert by_sku["XW-6-003"].final_print_qty == 3
 
 
-def test_execute_reprint_workflow_only_adds_printed_stock() -> None:
+def test_execute_reprint_workflow_only_adds_printed_stock(tmp_path: Path) -> None:
     from xw_studio.services.inventory.service import ReprintDecision, ReprintPreflight
 
+    pdf_path = tmp_path / "score.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
     repo = _RepoStub(
         {
             "inventory.stock_levels": json.dumps({"XW-6-003": 2}),
+            "inventory.products": _product_payload(pdf_path),
         }
     )
-    cfg = AppConfig(printing=PrintingSection(buffer_quantity=3))
+    cfg = AppConfig(printing=_printing_config())
     service = InventoryService(cfg, repo)
 
     decisions = [
@@ -132,11 +176,36 @@ def test_execute_reprint_workflow_only_adds_printed_stock() -> None:
         )
     ]
     preflight = ReprintPreflight(decisions=decisions, missing_position_data=False)
-    report = service.execute_reprint_workflow(preflight)
+    with patch("xw_studio.services.inventory.service.print_pdf_by_plan") as mock_print:
+        report = service.execute_reprint_workflow(preflight)
 
     assert report.stock_updated is True
     assert report.printed_skus == ["XW-6-003"]
+    assert report.warnings == []
+    mock_print.assert_called_once()
 
     stock_after = json.loads(repo.values["inventory.stock_levels"])
     # on_hand=2, printed=3 => 5, no invoice consumption
     assert stock_after["XW-6-003"] == 5
+
+
+def test_execute_start_workflow_skips_stock_increment_when_print_config_missing() -> None:
+    repo = _RepoStub(
+        {
+            "daily_business.pending_requirements": json.dumps({"XW-6-003": 2}),
+            "inventory.stock_levels": json.dumps({"XW-6-003": 1}),
+        }
+    )
+    service = InventoryService(AppConfig(printing=_printing_config()), repo)
+
+    preflight = service.build_start_preflight(open_invoice_count=1)
+    with patch("xw_studio.services.inventory.service.print_pdf_by_plan") as mock_print:
+        report = service.execute_start_workflow(preflight, StartMode.INVOICES_AND_PRINT)
+
+    assert report.stock_updated is True
+    assert report.printed_skus == []
+    assert report.consumed_skus == ["XW-6-003"]
+    assert report.warnings == ["XW-6-003: kein Produktdatensatz fuer Notendruck gefunden"]
+    mock_print.assert_not_called()
+    stock_after = json.loads(repo.values["inventory.stock_levels"])
+    assert stock_after["XW-6-003"] == 0

@@ -16,6 +16,8 @@ class _InvoiceClientE2E:
     def __init__(self) -> None:
         self.render_calls: list[str] = []
         self.send_calls: list[tuple[str, str, bool]] = []
+        self.mail_calls: list[dict[str, object]] = []
+        self.fail_mail = False
 
     def list_invoice_summaries(self, *, limit: int, offset: int, status: int | None = None):
         if offset > 0 or status != 100:
@@ -52,6 +54,27 @@ class _InvoiceClientE2E:
 
     def send_invoice_document(self, invoice_id: str, *, send_type: str, send_draft: bool) -> None:
         self.send_calls.append((invoice_id, send_type, send_draft))
+
+    def send_invoice_via_email(
+        self,
+        invoice_id: str,
+        *,
+        to_email: str,
+        subject: str,
+        text: str,
+        copy: bool = True,
+    ) -> None:
+        if self.fail_mail:
+            raise RuntimeError("sevDesk mail down")
+        self.mail_calls.append(
+            {
+                "invoice_id": invoice_id,
+                "to_email": to_email,
+                "subject": subject,
+                "text": text,
+                "copy": copy,
+            }
+        )
 
 
 class _WixOrdersDigitalOnlyStub:
@@ -121,11 +144,12 @@ class _SettingsRepoE2E:
 
 
 class _MailServiceStub:
-    def __init__(self) -> None:
+    def __init__(self, *, configured: bool = True) -> None:
+        self.configured = configured
         self.calls: list[dict[str, object]] = []
 
     def is_configured(self) -> bool:
-        return True
+        return self.configured
 
     @staticmethod
     def plain_text_to_html(value: str) -> str:
@@ -268,9 +292,9 @@ def test_fullflow_invoice_and_label_steps() -> None:
     assert mock_inv_print.called
     assert mock_label_print.called
     assert invoice_client.send_calls == [("INV-001", "VPR", False)]
-    assert len(mailer.calls) == 1
-    assert mailer.calls[0]["to_email"] == "john@example.test"
-    assert len(mailer.calls[0]["attachments"]) == 1
+    assert len(invoice_client.mail_calls) == 1
+    assert invoice_client.mail_calls[0]["to_email"] == "john@example.test"
+    assert len(mailer.calls) == 0
 
 
 def test_fullflow_skips_print_for_digital_only_wix_orders() -> None:
@@ -298,9 +322,12 @@ def test_fullflow_skips_print_for_digital_only_wix_orders() -> None:
     assert result["processed"] == 1
     assert result["failures"] == 0
     assert result["successful"] == 1
-    assert invoice_client.send_calls == [("INV-DIGI-001", "VM", False)]
-    assert len(mailer.calls) == 1
-    assert mailer.calls[0]["to_email"] == "digital@example.test"
+    assert invoice_client.send_calls == []
+    assert invoice_client.mail_calls[0]["invoice_id"] == "INV-DIGI-001"
+    assert invoice_client.mail_calls[0]["to_email"] == "digital@example.test"
+    assert len(mailer.calls) == 0
+    stored = json.loads(repo.values["rechnungen.fulfillment_status"])
+    assert stored["INV-DIGI-001"]["mail_sent"] is True
     assert not mock_inv_print.called
     assert not mock_label_print.called
 
@@ -333,12 +360,12 @@ def test_start_fullflow_honors_abort_between_invoices() -> None:
     assert result["successful"] == 1
     assert result["failures"] == 0
     assert result["aborted"] is True
-    assert invoice_client.send_calls == [("INV-001", "VM", False)]
-    assert len(mailer.calls) == 1
-    assert mailer.calls[0]["to_email"] == "john@example.test"
+    assert invoice_client.send_calls == []
+    assert invoice_client.mail_calls[0]["invoice_id"] == "INV-001"
+    assert len(mailer.calls) == 0
 
 
-def test_mail_only_fullflow_marks_physical_order_as_vm_when_no_print_copy_exists() -> None:
+def test_mail_only_fullflow_uses_sevdesk_email_when_no_print_copy_exists() -> None:
     config = AppConfig()
     invoice_client = _InvoiceClientE2E()
     repo = _SettingsRepoE2E()
@@ -358,8 +385,30 @@ def test_mail_only_fullflow_marks_physical_order_as_vm_when_no_print_copy_exists
 
     assert result["processed"] == 1
     assert result["failures"] == 0
-    assert invoice_client.send_calls == [("INV-ORDER-001", "VM", False)]
+    assert invoice_client.send_calls == []
+    assert invoice_client.mail_calls[0]["invoice_id"] == "INV-ORDER-001"
+    assert invoice_client.mail_calls[0]["to_email"] == "john@example.test"
+    assert len(mailer.calls) == 0
+    stored = json.loads(repo.values["rechnungen.fulfillment_status"])
+    assert stored["INV-ORDER-001"]["mail_sent"] is True
+
+
+def test_mail_step_uses_graph_only_when_sevdesk_mail_fails() -> None:
+    config = AppConfig()
+    invoice_client = _InvoiceClientE2E()
+    invoice_client.fail_mail = True
+    repo = _SettingsRepoE2E()
+    mailer = _MailServiceStub()
+    service = InvoiceProcessingService(config, invoice_client, repo, None, mailer)
+
+    summary = InvoiceSummary(id="INV-001", invoice_number="R-001", contact_name="John Doe")
+    result = service._run_mail_step(summary, FulfillmentFlags())  # noqa: SLF001
+
+    assert result.mail_sent is True
+    assert invoice_client.mail_calls == []
     assert len(mailer.calls) == 1
+    assert mailer.calls[0]["to_email"] == "john@example.test"
+    assert len(mailer.calls[0]["attachments"]) == 1
 
 
 def test_print_label_for_invoice_uses_override_lines_and_persists_flag() -> None:

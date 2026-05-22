@@ -37,6 +37,12 @@ class TestCoreOperations:
             )
         ]
         invoice_client.send_invoice_document = MagicMock()
+        invoice_client.send_invoice_via_email = MagicMock()
+        invoice_client.fetch_invoice_by_id.return_value = {
+            "id": "INV-001",
+            "invoiceNumber": "R-001",
+            "contact": {"emails": [{"value": "test@example.test"}]},
+        }
 
         repo = MagicMock()
         repo.get_value_json = MagicMock(return_value=None)
@@ -49,7 +55,8 @@ class TestCoreOperations:
         result = service.run_start_fullflow(full_mode=False)
 
         assert result["processed"] >= 1
-        assert invoice_client.send_invoice_document.called
+        assert not invoice_client.send_invoice_document.called
+        assert invoice_client.send_invoice_via_email.called
 
     def test_check_products_preflight_validation(self) -> None:
         """Verify preflight validation (product checks) runs."""

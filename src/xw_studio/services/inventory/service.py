@@ -4,12 +4,18 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
 from xw_studio.core.config import AppConfig
 from xw_studio.repositories.settings_kv import SettingKvRepository
+from xw_studio.services.printing.planned_pdf_printer import print_pdf_by_plan
+
+try:
+    import fitz
+except Exception:  # pragma: no cover - optional at import time
+    fitz = None
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +63,7 @@ class StartExecutionReport:
     printed_skus: list[str]
     consumed_skus: list[str]
     stock_updated: bool
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -86,6 +93,7 @@ class ReprintExecutionReport:
     decisions_count: int
     printed_skus: list[str]
     stock_updated: bool
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -271,9 +279,13 @@ class InventoryService:
 
         stock_levels = self.load_stock_levels()
         printed_skus: list[str] = []
+        warnings: list[str] = []
 
         for decision in preflight.decisions:
             if not decision.will_print:
+                continue
+            printed = self._print_decision_product(decision.sku, decision.final_print_qty, warnings)
+            if not printed:
                 continue
             current = max(0, int(stock_levels.get(decision.sku, decision.on_hand_qty)))
             produced = max(0, int(decision.final_print_qty))
@@ -286,6 +298,7 @@ class InventoryService:
             decisions_count=len(preflight.decisions),
             printed_skus=printed_skus,
             stock_updated=True,
+            warnings=warnings,
         )
 
     def execute_start_workflow(
@@ -323,10 +336,15 @@ class InventoryService:
         stock_levels = self.load_stock_levels()
         printed_skus: list[str] = []
         consumed_skus: list[str] = []
+        warnings: list[str] = []
 
         for decision in preflight.decisions:
             current = max(0, int(stock_levels.get(decision.sku, decision.on_hand_qty)))
-            produced = max(0, int(decision.final_print_qty)) if decision.will_print else 0
+            produced = 0
+            if decision.will_print:
+                requested_production = max(0, int(decision.final_print_qty))
+                if self._print_decision_product(decision.sku, requested_production, warnings):
+                    produced = requested_production
             consumed = 0
             if mode == StartMode.INVOICES_AND_PRINT:
                 consumed = max(0, int(decision.required_qty))
@@ -346,7 +364,69 @@ class InventoryService:
             printed_skus=printed_skus,
             consumed_skus=consumed_skus,
             stock_updated=True,
+            warnings=warnings,
         )
+
+    def _print_decision_product(self, sku: str, qty: int, warnings: list[str]) -> bool:
+        """Print one SKU through the new PyMuPDF/QPrinter print-plan path."""
+        qty = max(0, int(qty or 0))
+        if qty <= 0:
+            return False
+        product = self._product_row_by_sku(sku)
+        if product is None:
+            warnings.append(f"{sku}: kein Produktdatensatz fuer Notendruck gefunden")
+            return False
+        pdf_path = str(product.print_file_path or "").strip()
+        if not pdf_path:
+            warnings.append(f"{sku}: kein PDF-Pfad fuer Notendruck hinterlegt")
+            return False
+        if not Path(pdf_path).is_file():
+            warnings.append(f"{sku}: PDF-Datei nicht gefunden: {pdf_path}")
+            return False
+        if not str(product.print_profile_id or "").strip() and not product.print_plan:
+            warnings.append(f"{sku}: kein Druckprofil/Druckplan im neuen Modul hinterlegt")
+            return False
+        page_count = self._pdf_page_count(pdf_path)
+        try:
+            print_pdf_by_plan(
+                pdf_path,
+                self._config.printing,
+                print_plan=list(product.print_plan or []),
+                profile_id=str(product.print_profile_id or "").strip(),
+                copies=qty,
+                page_count=page_count,
+            )
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"{sku}: Notendruck fehlgeschlagen: {exc}")
+            logger.warning("START product print failed for %s: %s", sku, exc)
+            return False
+        return True
+
+    def _product_row_by_sku(self, sku: str) -> ProductRow | None:
+        wanted = str(sku or "").strip().upper()
+        if not wanted:
+            return None
+        for product in self.list_products():
+            if str(product.sku or "").strip().upper() == wanted:
+                return product
+        return None
+
+    @staticmethod
+    def _pdf_page_count(pdf_path: str) -> int | None:
+        if fitz is None:
+            return None
+        doc = None
+        try:
+            doc = fitz.open(pdf_path)
+            return len(doc)
+        except Exception:
+            return None
+        finally:
+            try:
+                if doc is not None:
+                    doc.close()
+            except Exception:
+                pass
 
     def _save_stock_levels(self, stock_levels: dict[str, int]) -> None:
         if self._settings_repo is None:

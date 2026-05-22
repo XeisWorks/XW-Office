@@ -1,4 +1,5 @@
 """Tests for sevDesk invoice DTO parsing."""
+import base64
 from datetime import date, timedelta
 import httpx
 
@@ -142,6 +143,29 @@ def test_invoice_client_fetch_invoice_positions_uses_invoice_filter_params() -> 
 
     assert len(positions) == 1
     assert positions[0]["id"] == "POS-1"
+
+
+def test_invoice_client_extracts_q1_2026_objects_pdf_payload() -> None:
+    pdf = b"%PDF-1.7\nq1-2026"
+    payload = {"objects": {"pdf": base64.b64encode(pdf).decode("ascii")}}
+    transport = httpx.MockTransport(lambda _request: httpx.Response(200, json={}))
+    client = httpx.Client(transport=transport, base_url="https://example.test/api/v1")
+    inv = InvoiceClient(SevdeskConnection(client=client, config=AppConfig()))
+
+    assert inv.extract_pdf_from_payload(payload) == pdf
+
+
+def test_invoice_client_render_requests_pdf_payload() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/Invoice/123/render")
+        assert request.url.params["getAsPdf"] == "true"
+        return httpx.Response(200, json={"objects": {"pdf": ""}})
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.Client(transport=transport, base_url="https://example.test/api/v1")
+    inv = InvoiceClient(SevdeskConnection(client=client, config=AppConfig()))
+
+    assert inv.render_invoice_pdf("123") == {"objects": {"pdf": ""}}
 
 
 def test_invoice_client_search_matches_wix_order_and_customer_within_initial_window() -> None:

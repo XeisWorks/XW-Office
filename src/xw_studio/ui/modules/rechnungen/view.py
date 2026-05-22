@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
@@ -656,6 +657,7 @@ class RechnungenView(QWidget):
         left_layout.setSpacing(6)
 
         self._table = DataTable(_TABLE_COLUMNS)
+        self._table.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)
         self._table.setStyleSheet(
             "QTableView::item:selected { background-color: rgba(29, 78, 216, 0.16); color: #0f172a; }"
             "QTableView::item:selected:focus { background-color: rgba(29, 78, 216, 0.26); color: #0f172a; }"
@@ -1132,6 +1134,14 @@ class RechnungenView(QWidget):
         if row is None or row < 0 or row >= len(self._summaries):
             return None
         return self._summaries[row]
+
+    def selected_summaries(self) -> list[InvoiceSummary]:
+        """Return selected invoice summaries in source-model order."""
+        selected: list[InvoiceSummary] = []
+        for row in self._table.selected_source_rows():
+            if 0 <= row < len(self._summaries):
+                selected.append(self._summaries[row])
+        return selected
 
     def _require_selected_invoice(self) -> InvoiceSummary | None:
         summary = self._selected_summary()
