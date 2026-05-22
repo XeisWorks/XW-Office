@@ -1,0 +1,110 @@
+Breaking Changes Q1 2026
+February 19, 2026 - One minute read- 154 words
+PDF Rendering Endpoints Will Return Full PDFs
+Current Behavior:
+
+The endpoints render, changeParameter, and sendByWithRender currently return the rendered PDF document as a series of Base64-encoded images per default.
+
+Example:
+
+{
+  "objects": {
+    ...
+    "thumbs": [
+      "base64 image of page 1",
+      "base64 image of page 2"
+    ],
+    "pages": 2,
+    ...
+  }
+}
+New Behavior:
+
+The thumbs and pages properties will be removed. Instead, the complete pdf will be returned as a single Base64-encoded string.
+
+Example:
+
+{
+  "objects": {
+    ...
+    "pdf": "base64 pdf",
+    ...
+  }
+}
+How to Prepare:
+
+You can start using the new response format now by passing the parameter getAsPdf=true to the respective endpoints.
+
+After the breaking change goes live, these parameters will be ignored and can be removed from your requests. The new behavior (returning the full PDF) will become the default.
+
+Affected Endpoints:
+
+/api/v1/CreditNote/{creditNoteId}/render
+
+/api/v1/Invoice/{invoiceId}/render
+
+/api/v1/Letter/{letterId}/render
+
+/api/v1/Order/{orderId}/render
+
+/api/v1/CreditNote/{creditNoteId}/changeParameter
+
+/api/v1/Invoice/{invoiceId}/changeParameter
+
+/api/v1/Letter/{letterId}/changeParameter
+
+/api/v1/Order/{orderId}/changeParameter
+
+/api/v1/CreditNote/{creditNoteId}/sendByWithRender
+
+/api/v1/Invoice/{invoiceId}/sendByWithRender
+
+/api/v1/Letter/{letterId}/sendByWithRender
+
+/api/v1/Order/{orderId}/sendByWithRender
+
+Release Date: April 07, 2026
+
+
+
+
+----
+
+
+
+
+Update: OAuth 2.0 Authentifizierung für den E-Mail Versand
+E-Mails aus sevdesk jetzt auch sicher über euer Microsoft 365-Konto versenden
+
+Vor über 3 Wochen aktualisiert
+Microsoft verabschiedet sich von der veralteten Basic-Authentifizierung für den E-Mail-Versand – und sevdesk ist bereit. Mit der Unterstützung von OAuth 2.0 können Nutzer ihre Microsoft 365-E-Mail-Adresse ab sofort sicher und ohne Kompromisse direkt aus sevdesk heraus nutzen.
+
+Warum ändert sich etwas?
+Wer in sevdesk Rechnungen, Angebote oder Gutschriften per E-Mail versendet und dafür eine eigene Microsoft 365-Adresse verwenden möchte, stand bislang vor einem Problem: Der E-Mail-Versand über SMTP setzte auf die sogenannte Basic-Authentifizierung, also eine Kombination aus Benutzername und Passwort. Microsoft hat diese Methode für alle Exchange Online- und M365-Konten schrittweise abgeschaltet. Der Grund ist eindeutig: Basic-Authentifizierung gilt als unsicher und anfällig für Angriffe wie Credential Stuffing oder Phishing.
+
+ 
+
+Wer den Versand trotzdem nutzen wollte, musste bisher in den Microsoft-Sicherheitseinstellungen Ausnahmen konfigurieren und damit aktiv Sicherheitsrichtlinien aushebeln. Das ist keine Lösung, die wir unseren Nutzern dauerhaft zumuten wollen und auch Microsoft macht mit diesem Weg nun endgültig Schluss: Ab Ende 2026 wird Basic-Authentifizierung für SMTP AUTH vollständig abgeschaltet. Wer bis dahin nicht auf moderne Authentifizierung umgestellt hat, kann keine E-Mails mehr über seinen M365-Account versenden.
+
+Was ist OAuth 2.0 und warum ist es besser?
+OAuth 2.0 ist der aktuelle Industriestandard für sichere Authentifizierung und wird von Microsoft unter dem Namen Microsoft Entra (ehemals Azure Active Directory) bereitgestellt. Statt Benutzername und Passwort direkt zu übertragen, wird bei OAuth 2.0 ein zeitlich begrenztes Access Token ausgestellt, das die Identität des Nutzers bestätigt, ohne die eigentlichen Anmeldedaten preiszugeben.
+
+ 
+
+Für den E-Mail-Versand über SMTP wird dabei der Berechtigungsbereich https://outlook.office.com/SMTP.Send verwendet. Die sichere Übertragung des Tokens erfolgt im standardisierten SASL XOAUTH2-Format, das von Microsoft für IMAP-, POP- und SMTP-Verbindungen spezifiziert wurde. OAuth 2.0 wird sowohl für Microsoft 365 als auch für Outlook.com-Konten vollständig unterstützt.
+
+ 
+
+Das bedeutet für euch in der Praxis: keine Passwörter, die irgendwo gespeichert werden müssen, kein Aushebeln von Sicherheitsrichtlinien und eine Authentifizierung, die den aktuellen IT-Compliance-Anforderungen entspricht.
+
+Was ändert sich in sevdesk?
+Mit dem neuen Update ist die OAuth 2.0-Authentifizierung direkt in sevdesk integriert. Die Einrichtung erfolgt bequem über die Benutzereinstellungen, genauso wie ihr es vom bisherigen E-Mail-Setup kennt. Der Prozess ist intuitiv gestaltet und orientiert sich an den bekannten Anmeldeflows von Microsoft, sodass keine technischen Vorkenntnisse erforderlich sind.
+
+Für wen ist das Update relevant?
+Dieses Update betrifft alle sevdesk-Nutzer, die:
+
+Rechnungen, Angebote, Bestellungen oder Gutschriften per E-Mail direkt aus sevdesk versenden
+
+dabei ihre eigene Microsoft 365-E-Mail-Adresse als Absender verwenden möchten
+
+aktuell Probleme mit dem SMTP-Versand haben, weil Microsoft die Basic-Authentifizierung in ihrem Tenant bereits deaktiviert hat
