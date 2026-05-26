@@ -22,6 +22,7 @@ class PlanTarget:
     range_text: str
     printer_name: str
     dpi: int
+    duplex: str
 
 
 def page_indices_from_range_text(range_text: str, *, page_count: int) -> list[int] | None:
@@ -81,6 +82,7 @@ def resolve_plan_targets(
                     range_text=str(entry.get("range") or "").strip() or "Alle Seiten",
                     printer_name=resolved.printer_name.strip(),
                     dpi=max(int(resolved.dpi or 600), 1),
+                    duplex=str(resolved.duplex or "").strip(),
                 )
             )
         if targets:
@@ -94,6 +96,7 @@ def resolve_plan_targets(
             range_text="Alle Seiten",
             printer_name=resolved.printer_name.strip(),
             dpi=max(int(resolved.dpi or 600), 1),
+            duplex=str(resolved.duplex or "").strip(),
         )
     ]
 
@@ -120,7 +123,7 @@ def print_pdf_by_plan(
             pages = None
             if page_count is not None:
                 pages = page_indices_from_range_text(target.range_text, page_count=page_count)
-            print_pdf(pdf_path, printer, dpi=target.dpi, pages=pages)
+            print_pdf(pdf_path, printer, dpi=target.dpi, pages=pages, duplex=target.duplex)
 
 
 def _resolve_profile(printing: PrintingSection, profile_id: str) -> PrintProfile | None:

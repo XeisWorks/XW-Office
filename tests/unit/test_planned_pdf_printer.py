@@ -13,9 +13,27 @@ from xw_studio.services.printing.planned_pdf_printer import (
 def _printing_config() -> PrintingSection:
     return PrintingSection(
         print_profiles=[
-            {"id": "noten_simplex", "label": "Noten A4 Simplex", "printer_name": "Simplex", "dpi": 600},
-            {"id": "noten_duplex", "label": "Noten A4 Duplex", "printer_name": "Duplex", "dpi": 600},
-            {"id": "brochure_mono", "label": "Canon Broschuere Mono", "printer_name": "Brochure", "dpi": 600},
+            {
+                "id": "noten_simplex",
+                "label": "Noten A4 Simplex",
+                "printer_name": "Simplex",
+                "dpi": 600,
+                "duplex": "simplex",
+            },
+            {
+                "id": "noten_duplex",
+                "label": "Noten A4 Duplex",
+                "printer_name": "Duplex",
+                "dpi": 600,
+                "duplex": "long",
+            },
+            {
+                "id": "brochure_mono",
+                "label": "Canon Broschuere Mono",
+                "printer_name": "Brochure",
+                "dpi": 600,
+                "duplex": "long",
+            },
         ]
     )
 
@@ -36,6 +54,7 @@ def test_resolve_plan_targets_maps_legacy_profile_aliases() -> None:
     assert len(targets) == 1
     assert targets[0].printer_name == "Duplex"
     assert targets[0].range_text == "1-3"
+    assert targets[0].duplex == "long"
 
 
 def test_print_pdf_by_plan_dispatches_each_target_with_parsed_pages() -> None:
@@ -64,6 +83,7 @@ def test_print_pdf_by_plan_dispatches_each_target_with_parsed_pages() -> None:
     assert mock_print.call_count == 1
     assert mock_print.call_args.kwargs["pages"] == [1, 2, 3]
     assert mock_print.call_args.kwargs["dpi"] == 600
+    assert mock_print.call_args.kwargs["duplex"] == "long"
 
 
 def test_print_pdf_by_plan_uses_internal_renderer_without_shelling_out() -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 import fitz  # PyMuPDF
-from PySide6.QtCore import QSizeF, QRectF, QMarginsF
+from PySide6.QtCore import QPointF, QMarginsF
 from PySide6.QtGui import QImage, QPainter, QPageSize, QPageLayout
 from PySide6.QtPrintSupport import QPrinter
 
@@ -49,41 +49,38 @@ def page_indices_from_qprinter(printer: QPrinter, page_count: int) -> list[int] 
     return list(range(lo, hi_excl))
 
 
-def _configure_printer_for_pdf_page(printer: QPrinter, page: fitz.Page) -> None:
-    rect = page.rect
-    orientation = (
-        QPageLayout.Orientation.Landscape
-        if float(rect.width) > float(rect.height)
-        else QPageLayout.Orientation.Portrait
+def _duplex_mode(value: str) -> QPrinter.DuplexMode | None:
+    normalized = str(value or "").strip().casefold().replace("_", "").replace("-", "")
+    if normalized in {"", "default", "driver"}:
+        return None
+    if normalized in {"simplex", "none", "off"}:
+        return QPrinter.DuplexMode.DuplexNone
+    if normalized in {"long", "longedge", "duplex", "duplexlong", "duplexlongedge"}:
+        return QPrinter.DuplexMode.DuplexLongSide
+    if normalized in {"short", "shortedge", "duplexshort", "duplexshortedge"}:
+        return QPrinter.DuplexMode.DuplexShortSide
+    logger.warning("Unknown duplex mode %r; using printer default", value)
+    return None
+
+
+def _configure_printer_for_a4_portrait(
+    printer: QPrinter,
+    *,
+    dpi: int,
+    duplex: str = "",
+) -> None:
+    printer.setResolution(int(dpi))
+    layout = QPageLayout(
+        QPageSize(QPageSize.PageSizeId.A4),
+        QPageLayout.Orientation.Portrait,
+        QMarginsF(0.0, 0.0, 0.0, 0.0),
+        QPageLayout.Unit.Millimeter,
     )
-    page_size = QPageSize(QSizeF(float(rect.width), float(rect.height)), QPageSize.Unit.Point)
-    printer.setPageLayout(
-        QPageLayout(
-            page_size,
-            orientation,
-            QMarginsF(0.0, 0.0, 0.0, 0.0),
-            QPageLayout.Unit.Point,
-        )
-    )
+    printer.setPageLayout(layout)
     printer.setFullPage(True)
-
-
-def _full_rect(printer: QPrinter) -> QRectF:
-    rect = printer.pageLayout().fullRectPixels(printer.resolution())
-    if rect.isValid() and rect.width() > 0 and rect.height() > 0:
-        return QRectF(rect)
-    return QRectF(printer.pageRect(QPrinter.Unit.DevicePixel))
-
-
-def _actual_size_rect(container: QRectF, width: float, height: float) -> QRectF:
-    if container.width() <= 0 or container.height() <= 0 or width <= 0 or height <= 0:
-        return QRectF(container)
-    return QRectF(
-        container.x() + (container.width() - float(width)) / 2.0,
-        container.y() + (container.height() - float(height)) / 2.0,
-        float(width),
-        float(height),
-    )
+    mode = _duplex_mode(duplex)
+    if mode is not None:
+        printer.setDuplex(mode)
 
 
 def print_pdf(
@@ -93,6 +90,7 @@ def print_pdf(
     *,
     pages: list[int] | None = None,
     page_ranges: list[range] | None = None,
+    duplex: str = "",
 ) -> None:
     """Print *pdf_path* using *printer*, rasterizing each page at *dpi*.
 
@@ -119,29 +117,27 @@ def print_pdf(
             logger.warning("No pages to print for %s", pdf_path)
             return
 
-        printer.setResolution(dpi)
-        _configure_printer_for_pdf_page(printer, doc[page_indices[0]])
+        _configure_printer_for_a4_portrait(printer, dpi=dpi, duplex=duplex)
         painter = QPainter()
         if not painter.begin(printer):
             logger.error("QPainter.begin(printer) failed")
             return
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
 
-        for i, page_num in enumerate(page_indices):
-            if i > 0:
-                printer.newPage()
-            page = doc[page_num]
-            mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
-            pix = page.get_pixmap(matrix=mat, alpha=False)
-            img = QImage(
-                pix.samples,
-                pix.width,
-                pix.height,
-                pix.stride,
-                QImage.Format.Format_RGB888,
-            )
-            painter.drawImage(_actual_size_rect(_full_rect(printer), img.width(), img.height()), img)
-
-        painter.end()
+        try:
+            for i, page_num in enumerate(page_indices):
+                if i > 0:
+                    printer.newPage()
+                page = doc[page_num]
+                pix = page.get_pixmap(dpi=int(dpi), alpha=False)
+                img = QImage(
+                    pix.samples,
+                    pix.width,
+                    pix.height,
+                    pix.stride,
+                    QImage.Format.Format_RGB888,
+                )
+                painter.drawImage(QPointF(0.0, 0.0), img)
+        finally:
+            painter.end()
     finally:
         doc.close()
