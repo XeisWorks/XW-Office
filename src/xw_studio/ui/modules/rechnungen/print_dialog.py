@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import fitz
@@ -15,6 +16,7 @@ from xw_studio.services.printing.planned_pdf_printer import print_pdf_by_plan
 from xw_studio.services.printing.pdf_renderer import (
     INVOICE_DPI,
     MUSIC_DPI,
+    page_indices_from_qprinter,
     print_pdf,
 )
 
@@ -146,13 +148,16 @@ def run_music_pdf_print(parent: QWidget, container: Container) -> None:
     )
 
 
-def run_piece_pdf_print(parent: QWidget, container: Container, *, piece: PieceBlock) -> bool:
-    """Print one product PDF from the product pipeline path.
-
-    Returns ``True`` when printing was started successfully.
-    """
+def prepare_piece_pdf_print(
+    parent: QWidget,
+    container: Container,
+    *,
+    piece: PieceBlock,
+    copies: int = 1,
+) -> Callable[[], None] | None:
+    """Validate one product print and return the blocking print job."""
     if not _check_printer_runtime(parent, container):
-        return False
+        return None
 
     path_obj = piece.print_file_path
     if path_obj is None:
@@ -161,12 +166,19 @@ def run_piece_pdf_print(parent: QWidget, container: Container, *, piece: PieceBl
             "Produktdruck",
             f"Kein PDF-Pfad für SKU {piece.sku} konfiguriert.",
         )
-        return False
+        return None
     path = str(path_obj)
     doc = None
     try:
         doc = fitz.open(path)
         page_count = len(doc)
+    except Exception as exc:
+        QMessageBox.critical(
+            parent,
+            "Produktdruck fehlgeschlagen",
+            f"Die Produkt-PDF konnte nicht geoeffnet werden:\n\n{exc}",
+        )
+        return None
     finally:
         try:
             if doc is not None:
@@ -181,17 +193,39 @@ def run_piece_pdf_print(parent: QWidget, container: Container, *, piece: PieceBl
             f"Fuer SKU {piece.sku} fehlt im neuen Repo ein vollstaendiger Druckpfad.\n\n"
             "Bitte im Produkte-Modul PDF-Pfad und Druckplan/Profil pflegen.",
         )
-        return False
+        return None
 
-    try:
+    effective_copies = max(1, int(copies or piece.print_qty or piece.qty_needed or 1))
+
+    def job() -> None:
         print_pdf_by_plan(
             path,
             container.config.printing,
             print_plan=piece.print_plan,
             profile_id=piece.print_profile_id,
-            copies=max(1, int(piece.print_qty or piece.qty_needed or 1)),
+            copies=effective_copies,
             page_count=page_count,
         )
+
+    return job
+
+
+def run_piece_pdf_print(
+    parent: QWidget,
+    container: Container,
+    *,
+    piece: PieceBlock,
+    copies: int = 1,
+) -> bool:
+    """Print one product PDF from the product pipeline path.
+
+    Returns ``True`` when printing was started successfully.
+    """
+    job = prepare_piece_pdf_print(parent, container, piece=piece, copies=copies)
+    if job is None:
+        return False
+    try:
+        job()
         return True
     except Exception as exc:
         logger.exception("Direct product print failed: %s", exc)

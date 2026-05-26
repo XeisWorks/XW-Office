@@ -5,7 +5,7 @@ import logging
 from typing import Sequence
 
 import fitz
-from PySide6.QtCore import QRectF, Qt, QSizeF, QMarginsF
+from PySide6.QtCore import QRectF, Qt, QMarginsF
 from PySide6.QtGui import QImage, QPainter, QPageLayout, QPageSize
 from PySide6.QtPrintSupport import QPrinter, QPrinterInfo
 
@@ -138,7 +138,6 @@ def print_pdf_bytes_silent(
         try:
             for page_num in range(page_count):
                 if page_num > 0:
-                    _configure_invoice_layout(printer)
                     printer.newPage()
                 page = doc[page_num]
                 scale = float(dpi) / 72.0
@@ -193,7 +192,6 @@ def print_pdf_file_silent(
         try:
             for page_num in range(page_count):
                 if page_num > 0:
-                    _configure_invoice_layout(printer)
                     printer.newPage()
                 page = doc[page_num]
                 scale = float(dpi) / 72.0

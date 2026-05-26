@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 import fitz  # PyMuPDF
-from PySide6.QtCore import QSizeF, QRectF
+from PySide6.QtCore import QSizeF, QRectF, QMarginsF
 from PySide6.QtGui import QImage, QPainter, QPageSize, QPageLayout
 from PySide6.QtPrintSupport import QPrinter
 
@@ -57,28 +57,32 @@ def _configure_printer_for_pdf_page(printer: QPrinter, page: fitz.Page) -> None:
         else QPageLayout.Orientation.Portrait
     )
     page_size = QPageSize(QSizeF(float(rect.width), float(rect.height)), QPageSize.Unit.Point)
-    printer.setPageLayout(QPageLayout(page_size, orientation, printer.pageLayout().margins(), printer.pageLayout().units()))
-    printer.setFullPage(False)
+    printer.setPageLayout(
+        QPageLayout(
+            page_size,
+            orientation,
+            QMarginsF(0.0, 0.0, 0.0, 0.0),
+            QPageLayout.Unit.Point,
+        )
+    )
+    printer.setFullPage(True)
 
 
-def _paint_rect(printer: QPrinter) -> QRectF:
-    rect = printer.pageLayout().paintRectPixels(printer.resolution())
+def _full_rect(printer: QPrinter) -> QRectF:
+    rect = printer.pageLayout().fullRectPixels(printer.resolution())
     if rect.isValid() and rect.width() > 0 and rect.height() > 0:
         return QRectF(rect)
     return QRectF(printer.pageRect(QPrinter.Unit.DevicePixel))
 
 
-def _aspect_fit_rect(container: QRectF, width: float, height: float) -> QRectF:
+def _actual_size_rect(container: QRectF, width: float, height: float) -> QRectF:
     if container.width() <= 0 or container.height() <= 0 or width <= 0 or height <= 0:
         return QRectF(container)
-    scale = min(container.width() / float(width), container.height() / float(height))
-    target_width = float(width) * scale
-    target_height = float(height) * scale
     return QRectF(
-        container.x() + (container.width() - target_width) / 2.0,
-        container.y() + (container.height() - target_height) / 2.0,
-        target_width,
-        target_height,
+        container.x() + (container.width() - float(width)) / 2.0,
+        container.y() + (container.height() - float(height)) / 2.0,
+        float(width),
+        float(height),
     )
 
 
@@ -125,7 +129,6 @@ def print_pdf(
 
         for i, page_num in enumerate(page_indices):
             if i > 0:
-                _configure_printer_for_pdf_page(printer, doc[page_num])
                 printer.newPage()
             page = doc[page_num]
             mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
@@ -137,7 +140,7 @@ def print_pdf(
                 pix.stride,
                 QImage.Format.Format_RGB888,
             )
-            painter.drawImage(_aspect_fit_rect(_paint_rect(printer), img.width(), img.height()), img)
+            painter.drawImage(_actual_size_rect(_full_rect(printer), img.width(), img.height()), img)
 
         painter.end()
     finally:

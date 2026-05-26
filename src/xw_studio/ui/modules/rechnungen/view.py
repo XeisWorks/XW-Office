@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QTableView,
     QVBoxLayout,
@@ -53,7 +54,6 @@ from xw_studio.services.daily_business.service import DailyBusinessService
 from xw_studio.services.draft_invoice.service import (
     DraftInvoiceService,
     ProductIssueDecision,
-    ProductIssueTarget,
     ProductPreflightApplyResult,
     ProductPreflightPlan,
 )
@@ -551,6 +551,7 @@ class RechnungenView(QWidget):
         self._fulfillment_step_worker: BackgroundWorker | None = None
         self._invoice_mail_worker: BackgroundWorker | None = None
         self._open_overview_worker: BackgroundWorker | None = None
+        self._product_print_worker: BackgroundWorker | None = None
         self._did_initial_load = False
         self._print_allowed = False
         self._open_draft_after_create = False
@@ -583,6 +584,7 @@ class RechnungenView(QWidget):
         self._summaries: list[InvoiceSummary] = []
         self._current_piece_blocks: list[PieceBlock] = []
         self._piece_print_buttons: list[QPushButton] = []
+        self._piece_quantity_inputs: list[QSpinBox] = []
         self._append_mode = False
         self._queued_wix_context_ref = ""
         self._table_layout_initialized = False
@@ -949,8 +951,9 @@ class RechnungenView(QWidget):
 
     def _on_printer_status(self, printing_allowed: bool) -> None:
         self._print_allowed = printing_allowed
-        for button in self._piece_print_buttons:
-            button.setEnabled(printing_allowed)
+        self._set_piece_print_controls_enabled(
+            printing_allowed and not (self._product_print_worker is not None and self._product_print_worker.isRunning())
+        )
         self._update_plc_controls()
 
     def _initialize_printer_status(self) -> None:
@@ -2369,6 +2372,7 @@ class RechnungenView(QWidget):
     def _reset_stuecke(self) -> None:
         self._current_piece_blocks = []
         self._piece_print_buttons = []
+        self._piece_quantity_inputs = []
         self._stuecke_hint.setText("—")
         # Remove dynamic item widgets (keep only the hint label)
         while self._stuecke_layout.count() > 1:
@@ -2396,6 +2400,7 @@ class RechnungenView(QWidget):
             if item and item.widget():
                 item.widget().deleteLater()
         self._piece_print_buttons = []
+        self._piece_quantity_inputs = []
         self._stuecke_hint.hide()
         if not isinstance(payload_items, list) or not payload_items:
             self._stuecke_hint.setText("Keine Positionen gefunden.")
@@ -2433,6 +2438,16 @@ class RechnungenView(QWidget):
             header_row.addWidget(lbl, stretch=1)
 
             if flagged_for_print:
+                qty_input = QSpinBox()
+                qty_input.setRange(1, 999)
+                qty_input.setValue(self._default_piece_print_qty(item))
+                qty_input.setFixedHeight(24)
+                qty_input.setFixedWidth(64)
+                qty_input.setEnabled(self._print_allowed)
+                qty_input.setToolTip("Anzahl fuer diesen Produktdruck")
+                header_row.addWidget(qty_input)
+                self._piece_quantity_inputs.append(qty_input)
+
                 print_btn = QPushButton("Drucken")
                 print_btn.setFixedHeight(24)
                 print_btn.setEnabled(self._print_allowed)
@@ -2442,7 +2457,9 @@ class RechnungenView(QWidget):
                     print_btn.setToolTip("PDF vorhanden, aber noch kein Druckplan/Profil im neuen Repo hinterlegt")
                 else:
                     print_btn.setToolTip("Kein PDF-Pfad im neuen Repo hinterlegt")
-                print_btn.clicked.connect(lambda _checked=False, block=item: self._on_product_print_clicked(block))
+                print_btn.clicked.connect(
+                    lambda _checked=False, block=item, qty=qty_input: self._on_product_print_clicked(block, qty.value())
+                )
                 header_row.addWidget(print_btn)
                 self._piece_print_buttons.append(print_btn)
 
@@ -2477,22 +2494,72 @@ class RechnungenView(QWidget):
             row_layout.addWidget(stock_lbl)
             self._stuecke_layout.addWidget(row_widget)
 
-    def _on_product_print_clicked(self, block: PieceBlock) -> None:
-        if not self._print_allowed:
+    def _on_product_print_clicked(self, block: PieceBlock, quantity: int | None = None) -> None:
+        if not self._print_allowed or (self._product_print_worker is not None and self._product_print_worker.isRunning()):
             return
-        from xw_studio.ui.modules.rechnungen.print_dialog import run_piece_pdf_print
+        from xw_studio.ui.modules.rechnungen.print_dialog import prepare_piece_pdf_print
 
-        if run_piece_pdf_print(self, self._container, piece=block):
+        qty = max(1, int(quantity or self._default_piece_print_qty(block)))
+        job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty)
+        if job is None:
+            return
+
+        row = self._table.selected_source_row()
+        invoice_ref = ""
+        if row is not None and 0 <= row < len(self._summaries):
+            invoice_ref = self._summaries[row].invoice_number or self._summaries[row].id
+
+        self._set_piece_print_controls_enabled(False)
+        signals: AppSignals = self._container.resolve(AppSignals)
+        signals.status_message.emit(f"Produktdruck fuer {block.sku} gestartet ({qty}x).", 5000)
+
+        def worker_job() -> dict[str, object]:
+            job()
             try:
                 engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
-                row = self._table.selected_source_row()
-                invoice_ref = ""
-                if row is not None and 0 <= row < len(self._summaries):
-                    invoice_ref = self._summaries[row].invoice_number or self._summaries[row].id
-                qty = max(1, int(block.print_qty or block.qty_needed or 1))
                 engine.record_print_and_update_sevdesk(block, qty, invoice_ref=invoice_ref)
             except Exception as exc:
                 logger.warning("Stock update after product print failed: %s", exc)
+                return {"sku": block.sku, "quantity": qty, "stock_warning": str(exc)}
+            return {"sku": block.sku, "quantity": qty, "stock_warning": ""}
+
+        self._product_print_worker = BackgroundWorker(worker_job)
+        self._product_print_worker.signals.result.connect(self._on_product_print_result)
+        self._product_print_worker.signals.error.connect(self._on_product_print_error)
+        self._product_print_worker.signals.finished.connect(self._on_product_print_finished)
+        self._product_print_worker.start()
+
+    def _on_product_print_result(self, payload: object) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        sku = str(data.get("sku") or "").strip() or "Produkt"
+        qty = str(data.get("quantity") or "").strip() or "?"
+        warning = str(data.get("stock_warning") or "").strip()
+        signals: AppSignals = self._container.resolve(AppSignals)
+        if warning:
+            signals.status_message.emit(f"{sku}: {qty}x gedruckt; Bestand nicht aktualisiert.", 8000)
+        else:
+            signals.status_message.emit(f"{sku}: {qty}x gedruckt und Bestand aktualisiert.", 5000)
+
+    def _on_product_print_error(self, exc: Exception) -> None:
+        QMessageBox.critical(
+            self,
+            "Produktdruck fehlgeschlagen",
+            f"Die Produkt-PDF konnte nicht ueber den hinterlegten Druckplan gedruckt werden:\n\n{exc}",
+        )
+
+    def _on_product_print_finished(self) -> None:
+        self._product_print_worker = None
+        self._set_piece_print_controls_enabled(self._print_allowed)
+
+    @staticmethod
+    def _default_piece_print_qty(block: PieceBlock) -> int:
+        return max(1, int(block.print_qty or block.qty_needed or 1))
+
+    def _set_piece_print_controls_enabled(self, enabled: bool) -> None:
+        for button in self._piece_print_buttons:
+            button.setEnabled(enabled)
+        for qty_input in self._piece_quantity_inputs:
+            qty_input.setEnabled(enabled)
 
     def _on_product_manage_clicked(self, block: PieceBlock) -> None:
         signals: AppSignals = self._container.resolve(AppSignals)
