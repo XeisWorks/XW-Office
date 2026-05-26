@@ -6,6 +6,8 @@ All writes to sevDesk Part stock go through PartClient (separate concern).
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +18,42 @@ if TYPE_CHECKING:
     from xw_studio.services.sevdesk.part_client import SevdeskPart
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_musikheroes_tokens(text: str) -> str:
+    value = str(text or "")
+    if not value:
+        return ""
+    normalized = value
+
+    normalized = re.sub(r"\bchristkindl[\s\-]*hits?\b", " ckh ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\btanzl\s*(?:&|und)\s*g['`]?\s*stanzl\b", " tg ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bt\s*&\s*g\b", " tg ", normalized, flags=re.IGNORECASE)
+
+    normalized = re.sub(r"\blead\s*sheet\b", " ls ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bleadsheet\b", " ls ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bbegl(?:eit(?:stimme)?)?\.?\s*c?\b", " ls ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\b2\s*\.?\s*st(?:imme)?\s*\.?\s*b\b", " 2b ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\b2\s*\.?\s*st(?:imme)?\s*\.?\s*c\b", " 2c ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\b2\s*\.?\s*st(?:imme)?\s*\.?\s*f\b", " 2f ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\b2b[\s\-_]*(?:hoch|h)\b", " 2bh ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\b2b[\s\-_]*(?:tief|t)\b", " 2bt ", normalized, flags=re.IGNORECASE)
+    return normalized
+
+
+def normalize_legacy_title(value: str) -> str:
+    """Return the same title key shape used by the legacy inventory mapper."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    normalized = unicodedata.normalize("NFKD", text)
+    normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    normalized = normalized.lower()
+    normalized = _normalize_musikheroes_tokens(normalized)
+    normalized = normalized.replace("&", " und ")
+    normalized = re.sub(r"[^a-z0-9#]+", " ", normalized)
+    normalized = normalized.replace("#", " ")
+    return " ".join(normalized.split())
 
 
 @dataclass
@@ -165,6 +203,13 @@ class ProductCatalogService:
         title_key = str(title or "").strip()
         if title_key and title_key in titles and isinstance(titles[title_key], dict):
             return dict(titles[title_key])
+        normalized_title_key = normalize_legacy_title(title_key)
+        if normalized_title_key:
+            for candidate_title, candidate_config in titles.items():
+                if not isinstance(candidate_config, dict):
+                    continue
+                if normalize_legacy_title(str(candidate_title or "")) == normalized_title_key:
+                    return dict(candidate_config)
         default = config.get("default")
         return dict(default) if isinstance(default, dict) else {}
 

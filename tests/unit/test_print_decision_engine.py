@@ -60,3 +60,41 @@ def test_piece_block_uses_new_repo_print_config_for_title_specific_entry(tmp_pat
     assert block.print_profile_id == "noten_a4_duplex"
     assert block.print_plan == [{"range": "1-2", "profile_id": "canon_brochure_mono"}]
     assert block.has_direct_print_config is True
+
+
+def test_piece_block_uses_legacy_normalized_title_matching(tmp_path) -> None:
+    pdf_path = tmp_path / "die-ungewoehnliche.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+    repo = _RepoStub(
+        {
+            "inventory.products": json.dumps(
+                [
+                    {
+                        "sku": "XW-4513",
+                        "name": "Die Ungewoehnliche",
+                        "print_file_path": "",
+                        "print_profile_id": "",
+                        "print_plan": [],
+                        "title_print_configs": {
+                            "Die Ungewöhnliche": {
+                                "path": str(pdf_path),
+                                "profile_id": "noten_a4_duplex",
+                                "print_plan": [{"range": "Alle Seiten", "profile_id": "noten_a4_duplex"}],
+                            }
+                        },
+                    }
+                ],
+                ensure_ascii=False,
+            )
+        }
+    )
+
+    engine = PrintDecisionEngine(ProductCatalogService(repo), _PartClientStub())
+    blocks = engine.get_piece_blocks([WixOrderItem(sku="XW-4513", name="Die Ungewohnliche", qty=1)])
+
+    assert len(blocks) == 1
+    block = blocks[0]
+    assert block.print_file_path is not None
+    assert str(block.print_file_path) == str(pdf_path)
+    assert block.print_profile_id == "noten_a4_duplex"
+    assert block.print_plan == [{"range": "Alle Seiten", "profile_id": "noten_a4_duplex"}]
