@@ -61,6 +61,23 @@ def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
     assert not view._btn_send_invoice.isEnabled()  # noqa: SLF001
 
 
+def test_rechnungen_detail_panel_click_does_not_clear_selection(qtbot: object) -> None:
+    container = _build_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    view.resize(1100, 700)
+    view.show()
+    qtbot.waitExposed(view)
+
+    detail_pos = view._detail_scroll.mapToGlobal(view._detail_scroll.rect().center())  # noqa: SLF001
+    table_pos = view._table.mapToGlobal(view._table.rect().center())  # noqa: SLF001
+    outside_pos = view._btn_more.mapToGlobal(view._btn_more.rect().center())  # noqa: SLF001
+
+    assert view._should_clear_selection_for_global_pos(detail_pos) is False  # noqa: SLF001
+    assert view._should_clear_selection_for_global_pos(table_pos) is False  # noqa: SLF001
+    assert view._should_clear_selection_for_global_pos(outside_pos) is True  # noqa: SLF001
+
+
 def test_rechnungen_mollie_alert_button_visibility(qtbot: object) -> None:
     container = _build_container()
     view = RechnungenView(container)

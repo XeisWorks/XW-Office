@@ -699,6 +699,7 @@ class RechnungenView(QWidget):
 
         # --- Structured detail panel ---
         detail_scroll = QScrollArea()
+        self._detail_scroll = detail_scroll
         detail_scroll.setWidgetResizable(True)
         detail_scroll.setMinimumWidth(520)
 
@@ -903,13 +904,24 @@ class RechnungenView(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
         if event.button() == Qt.MouseButton.LeftButton:
             global_pos = self.mapToGlobal(event.position().toPoint())
-            local_to_table = self._table.mapFromGlobal(global_pos)
-            if not self._table.rect().contains(local_to_table):
+            if self._should_clear_selection_for_global_pos(global_pos):
                 sel = self._table.selectionModel()
                 if sel is not None:
                     sel.clearSelection()
                 self._refresh_detail_for_selection()
         super().mousePressEvent(event)
+
+    def _should_clear_selection_for_global_pos(self, global_pos: object) -> bool:
+        if self._global_pos_inside_widget(self._table, global_pos):
+            return False
+        if self._global_pos_inside_widget(self._detail_scroll, global_pos):
+            return False
+        return True
+
+    @staticmethod
+    def _global_pos_inside_widget(widget: QWidget, global_pos: object) -> bool:
+        local_pos = widget.mapFromGlobal(global_pos)  # type: ignore[arg-type]
+        return widget.isVisible() and widget.rect().contains(local_pos)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._mollie_timer.stop()
