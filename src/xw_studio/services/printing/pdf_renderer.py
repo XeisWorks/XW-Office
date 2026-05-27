@@ -276,12 +276,12 @@ def classify_pdf_page_for_print(page: fitz.Page, *, sample_dpi: int = 72) -> Pag
     mean = luma_sum / total
     variation = max((luma_sq_sum / total) - (mean * mean), 0.0) ** 0.5 / 255.0
 
-    if color_ratio > 0.012:
+    if color_ratio > 0.003:
         return PagePrintAnalysis("graphic", white_ratio, black_ratio, midtone_ratio, color_ratio, variation, "color")
+    if white_ratio >= 0.84 and midtone_ratio <= 0.14 and 0.0005 <= black_ratio <= 0.24:
+        return PagePrintAnalysis("notation", white_ratio, black_ratio, midtone_ratio, color_ratio, variation, "white-black")
     if midtone_ratio > 0.10 or white_ratio < 0.68:
         return PagePrintAnalysis("graphic", white_ratio, black_ratio, midtone_ratio, color_ratio, variation, "midtone")
-    if white_ratio >= 0.84 and color_ratio <= 0.006 and midtone_ratio <= 0.08 and 0.0005 <= black_ratio <= 0.24:
-        return PagePrintAnalysis("notation", white_ratio, black_ratio, midtone_ratio, color_ratio, variation, "white-black")
     return PagePrintAnalysis("mixed", white_ratio, black_ratio, midtone_ratio, color_ratio, variation, "uncertain")
 
 

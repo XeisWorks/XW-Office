@@ -590,6 +590,21 @@ def test_classify_notation_page_without_cover_assumption() -> None:
     assert analysis.page_class == "notation"
 
 
+def test_classify_antialiased_notation_page_as_notation() -> None:
+    class PixmapStub:
+        width = 100
+        height = 100
+        samples = (bytes([255, 255, 255]) * 8500) + (bytes([0, 0, 0]) * 200) + (bytes([205, 205, 205]) * 1300)
+
+    class PageStub:
+        def get_pixmap(self, **_kwargs: object) -> PixmapStub:
+            return PixmapStub()
+
+    analysis = pdf_renderer.classify_pdf_page_for_print(PageStub())  # type: ignore[arg-type]
+
+    assert analysis.page_class == "notation"
+
+
 def test_classify_sparse_notation_page_as_notation() -> None:
     class PixmapStub:
         width = 100
@@ -626,8 +641,9 @@ def test_classify_shadow_cover_is_not_notation() -> None:
         height = 100
         samples = (
             (bytes([255, 255, 255]) * 8500)
-            + (bytes([170, 170, 170]) * 1100)
+            + (bytes([170, 170, 170]) * 1000)
             + (bytes([40, 40, 40]) * 400)
+            + (bytes([80, 150, 50]) * 100)
         )
 
     class PageStub:
