@@ -605,6 +605,21 @@ def test_classify_antialiased_notation_page_as_notation() -> None:
     assert analysis.page_class == "notation"
 
 
+def test_classify_dense_notation_page_as_notation() -> None:
+    class PixmapStub:
+        width = 100
+        height = 100
+        samples = (bytes([255, 255, 255]) * 7900) + (bytes([0, 0, 0]) * 350) + (bytes([205, 205, 205]) * 1750)
+
+    class PageStub:
+        def get_pixmap(self, **_kwargs: object) -> PixmapStub:
+            return PixmapStub()
+
+    analysis = pdf_renderer.classify_pdf_page_for_print(PageStub())  # type: ignore[arg-type]
+
+    assert analysis.page_class == "notation"
+
+
 def test_classify_sparse_notation_page_as_notation() -> None:
     class PixmapStub:
         width = 100
