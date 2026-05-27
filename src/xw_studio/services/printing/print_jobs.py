@@ -9,7 +9,7 @@ from uuid import uuid4
 PrintJobKind = Literal["music", "product", "invoice", "label"]
 PlacementMode = Literal["paper_origin", "printable_origin", "calibrated"]
 RenderColorMode = Literal["auto", "rgb", "gray"]
-BlackEnhancement = Literal["auto", "none", "darken", "threshold"]
+BlackEnhancement = Literal["auto", "none", "darken", "music_black", "threshold"]
 
 DEFAULT_DPI_BY_KIND: dict[str, int] = {
     "music": 600,
@@ -24,8 +24,8 @@ DEFAULT_RENDER_COLOR_MODE_BY_KIND: dict[str, RenderColorMode] = {
     "label": "rgb",
 }
 DEFAULT_BLACK_ENHANCEMENT_BY_KIND: dict[str, BlackEnhancement] = {
-    "music": "darken",
-    "product": "darken",
+    "music": "music_black",
+    "product": "music_black",
     "invoice": "none",
     "label": "none",
 }

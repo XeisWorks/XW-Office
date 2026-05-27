@@ -432,7 +432,7 @@ def test_print_pdf_with_qprinter_logs_print_metrics(monkeypatch, tmp_path, caplo
     assert "x_offset_mm=-1.500" in caplog.text
     assert "draw_px=(" in caplog.text
     assert "render_color_mode=gray" in caplog.text
-    assert "black_enhancement=darken" in caplog.text
+    assert "black_enhancement=music_black" in caplog.text
 
 
 def test_print_pdf_with_qprinter_renders_product_as_enhanced_grayscale(monkeypatch) -> None:
@@ -534,6 +534,18 @@ def test_gray_black_enhancement_darkens_without_touching_white() -> None:
     assert enhanced[2] < 249
     assert enhanced[3] < 120
     assert enhanced[4] == 0
+
+
+def test_music_black_enhancement_makes_notation_pixels_much_darker() -> None:
+    enhanced = pdf_renderer._enhance_gray_samples(bytes([255, 252, 251, 220, 180, 90, 0]), "music_black", 180)
+
+    assert enhanced[0] == 255
+    assert enhanced[1] == 255
+    assert enhanced[2] < 160
+    assert enhanced[3] < 90
+    assert enhanced[4] == 0
+    assert enhanced[5] == 0
+    assert enhanced[6] == 0
 
 
 def test_create_calibration_pdf_contains_one_page(tmp_path) -> None:

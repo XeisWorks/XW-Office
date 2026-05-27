@@ -17,7 +17,7 @@ MUSIC_DPI = 600
 INVOICE_DPI = 300
 PlacementMode = Literal["paper_origin", "printable_origin", "calibrated"]
 RenderColorMode = Literal["rgb", "gray"]
-BlackEnhancement = Literal["none", "darken", "threshold"]
+BlackEnhancement = Literal["none", "darken", "music_black", "threshold"]
 _VALID_PLACEMENT_MODES = {"paper_origin", "printable_origin", "calibrated"}
 _DARKEN_FACTOR = 0.78
 
@@ -77,8 +77,8 @@ def _render_color_mode(value: str, *, job_kind: str) -> RenderColorMode:
 def _black_enhancement(value: str, *, job_kind: str) -> BlackEnhancement:
     normalized = str(value or "auto").strip().casefold()
     if normalized == "auto":
-        return "darken" if str(job_kind or "").strip().casefold() in {"music", "product"} else "none"
-    if normalized in {"none", "darken", "threshold"}:
+        return "music_black" if str(job_kind or "").strip().casefold() in {"music", "product"} else "none"
+    if normalized in {"none", "darken", "music_black", "threshold"}:
         return cast(BlackEnhancement, normalized)
     return "none"
 
@@ -131,6 +131,19 @@ def _enhance_gray_samples(samples: bytes, enhancement: BlackEnhancement, thresho
     if enhancement == "threshold":
         limit = max(0, min(int(threshold), 255))
         return bytes(0 if value <= limit else 255 for value in samples)
+    if enhancement == "music_black":
+        black_knee = max(0, min(int(threshold), 245))
+        white_knee = 252
+        span = max(white_knee - black_knee, 1)
+        table = bytes(
+            255
+            if value >= white_knee
+            else 0
+            if value <= black_knee
+            else max(0, min(int(((value - black_knee) / span) * 160), 255))
+            for value in range(256)
+        )
+        return samples.translate(table)
     table = bytes(255 if value >= 250 else max(0, min(int(value * _DARKEN_FACTOR), 255)) for value in range(256))
     return samples.translate(table)
 
@@ -295,7 +308,7 @@ def print_pdf(
         placement_mode="paper_origin",
         job_kind="music",
         render_color_mode="gray",
-        black_enhancement="darken",
+        black_enhancement="music_black",
     )
 
 

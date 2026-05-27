@@ -211,6 +211,6 @@ def _render_color_mode(value: str) -> RenderColorMode:
 
 def _black_enhancement(value: str) -> BlackEnhancement:
     normalized = str(value or "auto").strip().casefold()
-    if normalized in {"auto", "none", "darken", "threshold"}:
+    if normalized in {"auto", "none", "darken", "music_black", "threshold"}:
         return cast(BlackEnhancement, normalized)
     return "auto"

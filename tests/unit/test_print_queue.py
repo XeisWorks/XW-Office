@@ -33,7 +33,7 @@ def test_print_queue_worker_executes_jobs_sequentially(monkeypatch) -> None:
     assert pdf_kwargs["x_offset_mm"] == 0.0
     assert pdf_kwargs["y_offset_mm"] == 0.0
     assert pdf_kwargs["render_color_mode"] == "gray"
-    assert pdf_kwargs["black_enhancement"] == "darken"
+    assert pdf_kwargs["black_enhancement"] == "music_black"
     assert pdf_kwargs["black_threshold"] == 180
 
 
