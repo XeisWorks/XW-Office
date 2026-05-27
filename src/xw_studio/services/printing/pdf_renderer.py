@@ -203,13 +203,11 @@ def _enhance_gray_samples(samples: bytes, enhancement: ResolvedBlackEnhancement,
 def _adaptive_music_value(value: int) -> int:
     if value >= 248:
         return 255
-    if value <= 70:
+    if value <= 110:
         return 0
-    normalized = value / 255.0
-    curved = normalized**1.85
-    if value <= 140:
-        curved *= 0.80
-    return max(0, min(int(curved * 255), 255))
+    normalized = (value - 110) / 138.0
+    curved = normalized**1.75
+    return max(0, min(int(curved * 190), 255))
 
 
 def _render_page_image(
@@ -278,11 +276,11 @@ def classify_pdf_page_for_print(page: fitz.Page, *, sample_dpi: int = 72) -> Pag
     mean = luma_sum / total
     variation = max((luma_sq_sum / total) - (mean * mean), 0.0) ** 0.5 / 255.0
 
-    if color_ratio > 0.015:
+    if color_ratio > 0.012:
         return PagePrintAnalysis("graphic", white_ratio, black_ratio, midtone_ratio, color_ratio, variation, "color")
-    if midtone_ratio > 0.18 or white_ratio < 0.68:
+    if midtone_ratio > 0.10 or white_ratio < 0.68:
         return PagePrintAnalysis("graphic", white_ratio, black_ratio, midtone_ratio, color_ratio, variation, "midtone")
-    if white_ratio >= 0.78 and color_ratio <= 0.008 and midtone_ratio <= 0.12 and 0.002 <= black_ratio <= 0.22:
+    if white_ratio >= 0.84 and color_ratio <= 0.006 and midtone_ratio <= 0.08 and 0.0005 <= black_ratio <= 0.24:
         return PagePrintAnalysis("notation", white_ratio, black_ratio, midtone_ratio, color_ratio, variation, "white-black")
     return PagePrintAnalysis("mixed", white_ratio, black_ratio, midtone_ratio, color_ratio, variation, "uncertain")
 

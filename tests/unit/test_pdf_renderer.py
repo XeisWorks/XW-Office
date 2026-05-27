@@ -562,14 +562,15 @@ def test_music_black_enhancement_makes_notation_pixels_much_darker() -> None:
 
 
 def test_adaptive_music_enhancement_keeps_white_and_darkens_notes() -> None:
-    enhanced = pdf_renderer._enhance_gray_samples(bytes([255, 248, 220, 120, 60, 0]), "adaptive_music", 180)
+    enhanced = pdf_renderer._enhance_gray_samples(bytes([255, 248, 220, 160, 120, 60, 0]), "adaptive_music", 180)
 
     assert enhanced[0] == 255
     assert enhanced[1] == 255
-    assert enhanced[2] < 220
-    assert enhanced[3] < 120
-    assert enhanced[4] == 0
+    assert enhanced[2] < 150
+    assert enhanced[3] < 70
+    assert enhanced[4] < 10
     assert enhanced[5] == 0
+    assert enhanced[6] == 0
 
 
 def test_classify_notation_page_without_cover_assumption() -> None:
@@ -582,6 +583,21 @@ def test_classify_notation_page_without_cover_assumption() -> None:
         def get_pixmap(self, **kwargs: object) -> PixmapStub:
             assert kwargs["dpi"] == 72
             assert kwargs["colorspace"] == fitz.csRGB
+            return PixmapStub()
+
+    analysis = pdf_renderer.classify_pdf_page_for_print(PageStub())  # type: ignore[arg-type]
+
+    assert analysis.page_class == "notation"
+
+
+def test_classify_sparse_notation_page_as_notation() -> None:
+    class PixmapStub:
+        width = 100
+        height = 100
+        samples = (bytes([255, 255, 255]) * 9880) + (bytes([0, 0, 0]) * 10) + (bytes([230, 230, 230]) * 110)
+
+    class PageStub:
+        def get_pixmap(self, **_kwargs: object) -> PixmapStub:
             return PixmapStub()
 
     analysis = pdf_renderer.classify_pdf_page_for_print(PageStub())  # type: ignore[arg-type]
@@ -602,6 +618,25 @@ def test_classify_graphic_page_from_midtones_and_color() -> None:
     analysis = pdf_renderer.classify_pdf_page_for_print(PageStub())  # type: ignore[arg-type]
 
     assert analysis.page_class == "graphic"
+
+
+def test_classify_shadow_cover_is_not_notation() -> None:
+    class PixmapStub:
+        width = 100
+        height = 100
+        samples = (
+            (bytes([255, 255, 255]) * 8500)
+            + (bytes([170, 170, 170]) * 1100)
+            + (bytes([40, 40, 40]) * 400)
+        )
+
+    class PageStub:
+        def get_pixmap(self, **_kwargs: object) -> PixmapStub:
+            return PixmapStub()
+
+    analysis = pdf_renderer.classify_pdf_page_for_print(PageStub())  # type: ignore[arg-type]
+
+    assert analysis.page_class != "notation"
 
 
 def test_auto_render_strategy_protects_graphic_and_mixed_pages() -> None:
