@@ -141,7 +141,7 @@ class _PrintQueueWorker(QThread):
         if isinstance(job, PdfPrintJob):
             logger.info(
                 "Print job started: id=%s kind=%s printer='%s' file='%s' copies=%s dpi=%s pages=%s "
-                "placement=%s offset_mm=(%s,%s)",
+                "placement=%s offset_mm=(%s,%s) render_color_mode=%s black_enhancement=%s black_threshold=%s",
                 job.id,
                 job.job_kind,
                 job.printer_name,
@@ -152,6 +152,9 @@ class _PrintQueueWorker(QThread):
                 job.placement_mode,
                 job.x_offset_mm,
                 job.y_offset_mm,
+                job.effective_render_color_mode,
+                job.effective_black_enhancement,
+                job.black_threshold,
             )
             print_pdf_with_qprinter(
                 job.pdf_path,
@@ -164,6 +167,9 @@ class _PrintQueueWorker(QThread):
                 x_offset_mm=job.x_offset_mm,
                 y_offset_mm=job.y_offset_mm,
                 job_kind=job.job_kind,
+                render_color_mode=job.effective_render_color_mode,
+                black_enhancement=job.effective_black_enhancement,
+                black_threshold=job.black_threshold,
             )
             return
         _execute_brother_lbx_job(job)

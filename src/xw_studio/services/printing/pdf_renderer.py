@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
 MUSIC_DPI = 600
 INVOICE_DPI = 300
 PlacementMode = Literal["paper_origin", "printable_origin", "calibrated"]
+RenderColorMode = Literal["rgb", "gray"]
+BlackEnhancement = Literal["none", "darken", "threshold"]
 _VALID_PLACEMENT_MODES = {"paper_origin", "printable_origin", "calibrated"}
+_DARKEN_FACTOR = 0.78
 
 
 def _expand_ranges(page_ranges: list[range], page_count: int) -> list[int]:
@@ -62,6 +65,24 @@ def _placement_mode(value: str) -> PlacementMode:
     return "paper_origin"
 
 
+def _render_color_mode(value: str, *, job_kind: str) -> RenderColorMode:
+    normalized = str(value or "auto").strip().casefold()
+    if normalized == "auto":
+        return "gray" if str(job_kind or "").strip().casefold() in {"music", "product"} else "rgb"
+    if normalized in {"rgb", "gray"}:
+        return cast(RenderColorMode, normalized)
+    return "rgb"
+
+
+def _black_enhancement(value: str, *, job_kind: str) -> BlackEnhancement:
+    normalized = str(value or "auto").strip().casefold()
+    if normalized == "auto":
+        return "darken" if str(job_kind or "").strip().casefold() in {"music", "product"} else "none"
+    if normalized in {"none", "darken", "threshold"}:
+        return cast(BlackEnhancement, normalized)
+    return "none"
+
+
 def _is_plausible_dpi(value: int) -> bool:
     return 72 <= int(value) <= 4800
 
@@ -104,6 +125,46 @@ def _draw_origin(*, dpi: int, x_offset_mm: float, y_offset_mm: float) -> QPointF
     return QPointF(mm_to_px(x_offset_mm, dpi), mm_to_px(y_offset_mm, dpi))
 
 
+def _enhance_gray_samples(samples: bytes, enhancement: BlackEnhancement, threshold: int) -> bytes:
+    if enhancement == "none":
+        return samples
+    if enhancement == "threshold":
+        limit = max(0, min(int(threshold), 255))
+        return bytes(0 if value <= limit else 255 for value in samples)
+    table = bytes(255 if value >= 250 else max(0, min(int(value * _DARKEN_FACTOR), 255)) for value in range(256))
+    return samples.translate(table)
+
+
+def _render_page_image(
+    page: fitz.Page,
+    *,
+    dpi: int,
+    render_color_mode: RenderColorMode,
+    black_enhancement: BlackEnhancement,
+    black_threshold: int,
+) -> QImage:
+    if render_color_mode == "gray":
+        pix = page.get_pixmap(dpi=dpi, colorspace=fitz.csGRAY, alpha=False)
+        samples = _enhance_gray_samples(bytes(pix.samples), black_enhancement, black_threshold)
+        image = QImage(
+            samples,
+            pix.width,
+            pix.height,
+            pix.stride,
+            QImage.Format.Format_Grayscale8,
+        )
+        return image.copy()
+    pix = page.get_pixmap(dpi=dpi, colorspace=fitz.csRGB, alpha=False)
+    image = QImage(
+        pix.samples,
+        pix.width,
+        pix.height,
+        pix.stride,
+        QImage.Format.Format_RGB888,
+    )
+    return image.copy()
+
+
 def print_pdf_with_qprinter(
     pdf_path: str,
     printer_name: str,
@@ -116,6 +177,9 @@ def print_pdf_with_qprinter(
     x_offset_mm: float = 0.0,
     y_offset_mm: float = 0.0,
     job_kind: str = "invoice",
+    render_color_mode: str = "auto",
+    black_enhancement: str = "auto",
+    black_threshold: int = 180,
 ) -> None:
     """Print a PDF with PyMuPDF + QPrinter/QPainter.
 
@@ -127,6 +191,8 @@ def print_pdf_with_qprinter(
     fallback_render_dpi = max(int(fallback_dpi or INVOICE_DPI), 1)
     effective_copies = max(int(copies or 1), 1)
     effective_placement_mode = _placement_mode(placement_mode)
+    effective_color_mode = _render_color_mode(render_color_mode, job_kind=job_kind)
+    effective_black_enhancement = _black_enhancement(black_enhancement, job_kind=job_kind)
     full_page = effective_placement_mode in {"paper_origin", "calibrated"}
     doc = fitz.open(pdf_path)
     try:
@@ -159,13 +225,12 @@ def print_pdf_with_qprinter(
                     if page_offset > 0:
                         printer.newPage()
                     page = doc[page_num]
-                    pix = page.get_pixmap(dpi=render_dpi, alpha=False)
-                    image = QImage(
-                        pix.samples,
-                        pix.width,
-                        pix.height,
-                        pix.stride,
-                        QImage.Format.Format_RGB888,
+                    image = _render_page_image(
+                        page,
+                        dpi=render_dpi,
+                        render_color_mode=effective_color_mode,
+                        black_enhancement=effective_black_enhancement,
+                        black_threshold=black_threshold,
                     )
                     origin = _draw_origin(dpi=render_dpi, x_offset_mm=x_offset_mm, y_offset_mm=y_offset_mm)
                     _log_page_metrics(
@@ -181,6 +246,9 @@ def print_pdf_with_qprinter(
                         x_offset_mm=x_offset_mm,
                         y_offset_mm=y_offset_mm,
                         draw_origin=origin,
+                        render_color_mode=effective_color_mode,
+                        black_enhancement=effective_black_enhancement,
+                        black_threshold=black_threshold,
                     )
                     painter.drawImage(origin, image)
             finally:
@@ -226,6 +294,8 @@ def print_pdf(
         fallback_dpi=dpi,
         placement_mode="paper_origin",
         job_kind="music",
+        render_color_mode="gray",
+        black_enhancement="darken",
     )
 
 
@@ -243,13 +313,17 @@ def _log_page_metrics(
     x_offset_mm: float,
     y_offset_mm: float,
     draw_origin: QPointF,
+    render_color_mode: RenderColorMode,
+    black_enhancement: BlackEnhancement,
+    black_threshold: int,
 ) -> None:
     full_rect, paint_rect = _safe_layout_rects(printer, effective_dpi)
     logger.info(
         "PDF print page metrics: printer='%s' job_kind=%s placement_mode=%s setFullPage=%s "
         "effective_dpi=%s printer_resolution=%s pdf_page_pt=(%.3f, %.3f) image_px=(%s, %s) "
         "layout_full_rect_px=%s layout_paint_rect_px=%s qprinter_page_rect_px=%s "
-        "qprinter_paper_rect_px=%s x_offset_mm=%.3f y_offset_mm=%.3f draw_px=(%.3f, %.3f)",
+        "qprinter_paper_rect_px=%s x_offset_mm=%.3f y_offset_mm=%.3f draw_px=(%.3f, %.3f) "
+        "render_color_mode=%s black_enhancement=%s black_threshold=%s",
         printer_name,
         job_kind,
         placement_mode,
@@ -268,6 +342,9 @@ def _log_page_metrics(
         y_offset_mm,
         float(draw_origin.x()),
         float(draw_origin.y()),
+        render_color_mode,
+        black_enhancement,
+        black_threshold,
     )
 
 

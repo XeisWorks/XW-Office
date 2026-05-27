@@ -5,7 +5,13 @@ from dataclasses import dataclass
 from typing import cast
 
 from xw_studio.core.config import PrintingSection, PrintProfile
-from xw_studio.services.printing.print_jobs import PdfPrintJob, PlacementMode, PrintJobKind
+from xw_studio.services.printing.print_jobs import (
+    BlackEnhancement,
+    PdfPrintJob,
+    PlacementMode,
+    PrintJobKind,
+    RenderColorMode,
+)
 from xw_studio.services.printing.print_queue import PrintQueueService, global_print_queue
 
 _ALL_RANGE_TOKENS = {"", "ALL", "ALLE", "ALLESEITEN", "*"}
@@ -25,6 +31,9 @@ class PlanTarget:
     placement_mode: PlacementMode
     x_offset_mm: float
     y_offset_mm: float
+    render_color_mode: RenderColorMode
+    black_enhancement: BlackEnhancement
+    black_threshold: int
 
 
 def page_indices_from_range_text(range_text: str, *, page_count: int) -> list[int] | None:
@@ -87,6 +96,9 @@ def resolve_plan_targets(
                     placement_mode=_placement_mode(resolved.placement_mode),
                     x_offset_mm=float(resolved.x_offset_mm),
                     y_offset_mm=float(resolved.y_offset_mm),
+                    render_color_mode=_render_color_mode(resolved.render_color_mode),
+                    black_enhancement=_black_enhancement(resolved.black_enhancement),
+                    black_threshold=int(resolved.black_threshold),
                 )
             )
         if targets:
@@ -103,6 +115,9 @@ def resolve_plan_targets(
             placement_mode=_placement_mode(resolved.placement_mode),
             x_offset_mm=float(resolved.x_offset_mm),
             y_offset_mm=float(resolved.y_offset_mm),
+            render_color_mode=_render_color_mode(resolved.render_color_mode),
+            black_enhancement=_black_enhancement(resolved.black_enhancement),
+            black_threshold=int(resolved.black_threshold),
         )
     ]
 
@@ -145,6 +160,9 @@ def print_pdf_by_plan(
                 placement_mode=target.placement_mode,
                 x_offset_mm=target.x_offset_mm,
                 y_offset_mm=target.y_offset_mm,
+                render_color_mode=target.render_color_mode,
+                black_enhancement=target.black_enhancement,
+                black_threshold=target.black_threshold,
             )
         )
 
@@ -182,3 +200,17 @@ def _placement_mode(value: str) -> PlacementMode:
     if normalized in {"paper_origin", "printable_origin", "calibrated"}:
         return cast(PlacementMode, normalized)
     return "paper_origin"
+
+
+def _render_color_mode(value: str) -> RenderColorMode:
+    normalized = str(value or "auto").strip().casefold()
+    if normalized in {"auto", "rgb", "gray"}:
+        return cast(RenderColorMode, normalized)
+    return "auto"
+
+
+def _black_enhancement(value: str) -> BlackEnhancement:
+    normalized = str(value or "auto").strip().casefold()
+    if normalized in {"auto", "none", "darken", "threshold"}:
+        return cast(BlackEnhancement, normalized)
+    return "auto"

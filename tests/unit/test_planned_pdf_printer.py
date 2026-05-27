@@ -33,6 +33,9 @@ def _printing_config() -> PrintingSection:
                 "placement_mode": "calibrated",
                 "x_offset_mm": -2.0,
                 "y_offset_mm": 0.5,
+                "render_color_mode": "gray",
+                "black_enhancement": "threshold",
+                "black_threshold": 200,
             },
         ]
     )
@@ -88,6 +91,9 @@ def test_print_pdf_by_plan_queues_target_with_parsed_pages_and_copies() -> None:
     assert queue.jobs[0].placement_mode == "calibrated"
     assert queue.jobs[0].x_offset_mm == -2.0
     assert queue.jobs[0].y_offset_mm == 0.5
+    assert queue.jobs[0].render_color_mode == "gray"
+    assert queue.jobs[0].black_enhancement == "threshold"
+    assert queue.jobs[0].black_threshold == 200
 
 
 def test_print_pdf_by_plan_uses_queue_without_shelling_out() -> None:
@@ -116,3 +122,6 @@ def test_minimal_profile_keeps_dpi_optional() -> None:
     assert target.placement_mode == "paper_origin"
     assert target.x_offset_mm == 0.0
     assert target.y_offset_mm == 0.0
+    assert target.render_color_mode == "auto"
+    assert target.black_enhancement == "auto"
+    assert target.black_threshold == 180

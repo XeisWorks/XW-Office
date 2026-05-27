@@ -7,7 +7,7 @@ import tempfile
 from typing import cast
 
 from xw_studio.core.config import PrintingSection
-from xw_studio.services.printing.print_jobs import PdfPrintJob, PlacementMode
+from xw_studio.services.printing.print_jobs import BlackEnhancement, PdfPrintJob, PlacementMode, RenderColorMode
 from xw_studio.services.printing.print_queue import PrintQueueService, global_print_queue
 
 logger = logging.getLogger(__name__)
@@ -74,6 +74,9 @@ class InvoicePrinter:
         placement_mode = profile.placement_mode if profile is not None else "paper_origin"
         x_offset_mm = float(profile.x_offset_mm) if profile is not None else 0.0
         y_offset_mm = float(profile.y_offset_mm) if profile is not None else 0.0
+        render_color_mode = profile.render_color_mode if profile is not None else "auto"
+        black_enhancement = profile.black_enhancement if profile is not None else "auto"
+        black_threshold = int(profile.black_threshold) if profile is not None else 180
         queue = self._print_queue or global_print_queue()
         queue.enqueue(
             PdfPrintJob(
@@ -86,6 +89,9 @@ class InvoicePrinter:
                 placement_mode=cast(PlacementMode, placement_mode),
                 x_offset_mm=x_offset_mm,
                 y_offset_mm=y_offset_mm,
+                render_color_mode=cast(RenderColorMode, render_color_mode),
+                black_enhancement=cast(BlackEnhancement, black_enhancement),
+                black_threshold=black_threshold,
                 cleanup_paths=(pdf_path,),
             )
         )
