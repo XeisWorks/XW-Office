@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QEvent, QTimer, Qt, QUrl
@@ -589,6 +590,7 @@ class RechnungenView(QWidget):
         self._current_piece_blocks: list[PieceBlock] = []
         self._piece_print_buttons: list[QPushButton] = []
         self._piece_quantity_inputs: list[QSpinBox] = []
+        self._piece_quantity_controls: list[tuple[PieceBlock, QSpinBox]] = []
         self._append_mode = False
         self._queued_wix_context_ref = ""
         self._table_layout_initialized = False
@@ -1561,9 +1563,68 @@ class RechnungenView(QWidget):
             return
         if self._require_selected_invoice() is None:
             return
-        from xw_studio.ui.modules.rechnungen.print_dialog import run_music_pdf_print
+        if self._product_print_worker is not None and self._product_print_worker.isRunning():
+            return
+        from xw_studio.ui.modules.rechnungen.print_dialog import prepare_piece_pdf_print
 
-        run_music_pdf_print(self, self._container)
+        selected_jobs: list[tuple[PieceBlock, int, Callable[[], None]]] = []
+        skipped: list[str] = []
+        for block, qty_input in self._piece_quantity_controls:
+            qty = max(1, int(qty_input.value() or self._default_piece_print_qty(block)))
+            if not block.has_direct_print_config:
+                skipped.append(block.sku)
+                continue
+            job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty)
+            if job is None:
+                skipped.append(block.sku)
+                continue
+            selected_jobs.append((block, qty, job))
+
+        if not selected_jobs:
+            message = "Keine druckfaehigen Produkte fuer diese Rechnung gefunden."
+            if skipped:
+                message += "\n\nOhne vollstaendige Druckkonfiguration:\n" + ", ".join(skipped)
+            QMessageBox.information(self, "Noten drucken", message)
+            return
+
+        row = self._table.selected_source_row()
+        invoice_ref = ""
+        if row is not None and 0 <= row < len(self._summaries):
+            invoice_ref = self._summaries[row].invoice_number or self._summaries[row].id
+
+        self._set_piece_print_controls_enabled(False)
+        signals: AppSignals = self._container.resolve(AppSignals)
+        total_copies = sum(qty for _block, qty, _job in selected_jobs)
+        signals.status_message.emit(
+            f"Notendruck fuer {len(selected_jobs)} Produkt(e) gestartet ({total_copies}x).",
+            5000,
+        )
+
+        def worker_job() -> dict[str, object]:
+            warnings: list[str] = []
+            printed: list[str] = []
+            for block, qty, job in selected_jobs:
+                job()
+                printed.append(f"{block.sku} ({qty}x)")
+                try:
+                    engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
+                    engine.record_print_and_update_sevdesk(block, qty, invoice_ref=invoice_ref)
+                except Exception as exc:
+                    logger.warning("Stock update after batch product print failed: %s", exc)
+                    warnings.append(f"{block.sku}: {exc}")
+            return {
+                "sku": f"{len(printed)} Produkt(e)",
+                "quantity": total_copies,
+                "stock_warning": "\n".join(warnings),
+                "printed": ", ".join(printed),
+                "skipped": ", ".join(skipped),
+            }
+
+        self._product_print_worker = BackgroundWorker(worker_job)
+        self._product_print_worker.signals.result.connect(self._on_product_print_result)
+        self._product_print_worker.signals.error.connect(self._on_product_print_error)
+        self._product_print_worker.signals.finished.connect(self._on_product_print_finished)
+        self._product_print_worker.start()
 
     def _on_send_invoice_clicked(self) -> None:
         summary = self._require_selected_invoice()
@@ -2389,6 +2450,7 @@ class RechnungenView(QWidget):
         self._current_piece_blocks = []
         self._piece_print_buttons = []
         self._piece_quantity_inputs = []
+        self._piece_quantity_controls = []
         self._stuecke_hint.setText("—")
         # Remove dynamic item widgets (keep only the hint label)
         while self._stuecke_layout.count() > 1:
@@ -2417,6 +2479,7 @@ class RechnungenView(QWidget):
                 item.widget().deleteLater()
         self._piece_print_buttons = []
         self._piece_quantity_inputs = []
+        self._piece_quantity_controls = []
         self._stuecke_hint.hide()
         if not isinstance(payload_items, list) or not payload_items:
             self._stuecke_hint.setText("Keine Positionen gefunden.")
@@ -2463,6 +2526,7 @@ class RechnungenView(QWidget):
                 qty_input.setToolTip("Anzahl fuer diesen Produktdruck")
                 header_row.addWidget(qty_input)
                 self._piece_quantity_inputs.append(qty_input)
+                self._piece_quantity_controls.append((item, qty_input))
 
                 print_btn = QPushButton("Drucken")
                 print_btn.setFixedHeight(24)
