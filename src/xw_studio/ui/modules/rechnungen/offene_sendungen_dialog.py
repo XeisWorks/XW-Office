@@ -1,8 +1,6 @@
 """Dialog for OFFENE SENDUNGEN workflow (mail view, summary, label)."""
 from __future__ import annotations
 
-from typing import Any
-
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -22,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from xw_studio.core.container import Container
 from xw_studio.services.printing.label_printer import LabelPrinter
+from xw_studio.services.printing.print_queue import PrintQueueService
 from xw_studio.services.sendungen.service import OffeneSendungenService, SendungCase
 
 
@@ -177,7 +176,10 @@ class OffeneSendungenDialog(QDialog):
             QMessageBox.information(self, "Label", "Keine Adresszeilen vorhanden.")
             return
         try:
-            printer = LabelPrinter(self._container.config.printing)
+            printer = LabelPrinter(
+                self._container.config.printing,
+                print_queue=self._container.resolve(PrintQueueService),
+            )
             printer.print_address(lines)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "Label", f"Labeldruck fehlgeschlagen:\n\n{exc}")

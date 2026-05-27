@@ -78,8 +78,7 @@ class PrintProfile:
     id: str = ""
     label: str = ""
     printer_name: str = ""
-    dpi: int = 600
-    duplex: str = ""
+    dpi: int | None = None
 
 
 @dataclass(frozen=True)
@@ -107,8 +106,7 @@ class PrintingSection:
                     id=str(entry.get("id") or ""),
                     label=str(entry.get("label") or ""),
                     printer_name=str(entry.get("printer_name") or ""),
-                    dpi=int(entry.get("dpi") or 600),
-                    duplex=str(entry.get("duplex") or ""),
+                    dpi=int(entry["dpi"]) if entry.get("dpi") else None,
                 )
         return None
 
@@ -122,8 +120,7 @@ class PrintingSection:
                         id=str(entry.get("id") or ""),
                         label=str(entry.get("label") or ""),
                         printer_name=str(entry.get("printer_name") or ""),
-                        dpi=int(entry.get("dpi") or 600),
-                        duplex=str(entry.get("duplex") or ""),
+                        dpi=int(entry["dpi"]) if entry.get("dpi") else None,
                     )
                 )
         return result

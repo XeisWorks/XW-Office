@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from xw_studio.core.config import PrintingSection
+from xw_studio.services.printing.print_jobs import PdfPrintJob
 from xw_studio.services.printing.planned_pdf_printer import (
     page_indices_from_range_text,
     print_pdf_by_plan,
@@ -17,22 +18,18 @@ def _printing_config() -> PrintingSection:
                 "id": "noten_simplex",
                 "label": "Noten A4 Simplex",
                 "printer_name": "Simplex",
-                "dpi": 600,
-                "duplex": "simplex",
             },
             {
                 "id": "noten_duplex",
                 "label": "Noten A4 Duplex",
                 "printer_name": "Duplex",
                 "dpi": 600,
-                "duplex": "long",
             },
             {
                 "id": "brochure_mono",
                 "label": "Canon Broschuere Mono",
                 "printer_name": "Brochure",
                 "dpi": 600,
-                "duplex": "long",
             },
         ]
     )
@@ -54,61 +51,57 @@ def test_resolve_plan_targets_maps_legacy_profile_aliases() -> None:
     assert len(targets) == 1
     assert targets[0].printer_name == "Duplex"
     assert targets[0].range_text == "1-3"
-    assert targets[0].duplex == "long"
 
 
-def test_print_pdf_by_plan_dispatches_each_target_with_parsed_pages() -> None:
+class _QueueStub:
+    def __init__(self) -> None:
+        self.jobs: list[PdfPrintJob] = []
+
+    def enqueue(self, job: PdfPrintJob) -> str:
+        self.jobs.append(job)
+        return job.id
+
+
+def test_print_pdf_by_plan_queues_target_with_parsed_pages_and_copies() -> None:
     printing = _printing_config()
+    queue = _QueueStub()
 
-    class _PrinterStub:
-        class PrinterMode:
-            HighResolution = object()
+    print_pdf_by_plan(
+        "C:/tmp/test.pdf",
+        printing,
+        print_plan=[{"range": "2-END", "profile_id": "brochure_mono"}],
+        page_count=4,
+        copies=3,
+        print_queue=queue,  # type: ignore[arg-type]
+    )
 
-        def __init__(self, *_args, **_kwargs) -> None:
-            self.printer_name = ""
-
-        def setPrinterName(self, value: str) -> None:
-            self.printer_name = value
-
-    with patch("xw_studio.services.printing.planned_pdf_printer.QPrinter", _PrinterStub), patch(
-        "xw_studio.services.printing.planned_pdf_printer.print_pdf"
-    ) as mock_print:
-        print_pdf_by_plan(
-            "C:/tmp/test.pdf",
-            printing,
-            print_plan=[{"range": "2-END", "profile_id": "brochure_mono"}],
-            page_count=4,
-        )
-
-    assert mock_print.call_count == 1
-    assert mock_print.call_args.kwargs["pages"] == [1, 2, 3]
-    assert mock_print.call_args.kwargs["dpi"] == 600
-    assert mock_print.call_args.kwargs["duplex"] == "long"
+    assert len(queue.jobs) == 1
+    assert queue.jobs[0].pages == [1, 2, 3]
+    assert queue.jobs[0].dpi == 600
+    assert queue.jobs[0].copies == 3
+    assert queue.jobs[0].printer_name == "Brochure"
 
 
-def test_print_pdf_by_plan_uses_internal_renderer_without_shelling_out() -> None:
+def test_print_pdf_by_plan_uses_queue_without_shelling_out() -> None:
     printing = _printing_config()
+    queue = _QueueStub()
 
-    class _PrinterStub:
-        class PrinterMode:
-            HighResolution = object()
-
-        def __init__(self, *_args, **_kwargs) -> None:
-            self.printer_name = ""
-
-        def setPrinterName(self, value: str) -> None:
-            self.printer_name = value
-
-    with patch("xw_studio.services.printing.planned_pdf_printer.QPrinter", _PrinterStub), patch(
-        "xw_studio.services.printing.planned_pdf_printer.print_pdf"
-    ) as mock_print, patch("subprocess.Popen") as mock_popen, patch("os.startfile", create=True) as mock_startfile:
+    with patch("subprocess.Popen") as mock_popen, patch("os.startfile", create=True) as mock_startfile:
         print_pdf_by_plan(
             "C:/tmp/test.pdf",
             printing,
             profile_id="noten_duplex",
             page_count=4,
+            print_queue=queue,  # type: ignore[arg-type]
         )
 
-    mock_print.assert_called_once()
+    assert len(queue.jobs) == 1
     mock_popen.assert_not_called()
     mock_startfile.assert_not_called()
+
+
+def test_minimal_profile_keeps_dpi_optional() -> None:
+    target = resolve_plan_targets(_printing_config(), profile_id="noten_simplex")[0]
+
+    assert target.printer_name == "Simplex"
+    assert target.dpi is None

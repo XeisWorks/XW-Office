@@ -511,8 +511,12 @@ class _CustomLabelDialog(QDialog):
 
         def job() -> None:
             from xw_studio.services.printing.label_printer import LabelPrinter
+            from xw_studio.services.printing.print_queue import PrintQueueService
 
-            LabelPrinter(self._container.config.printing).print_address(lines)
+            LabelPrinter(
+                self._container.config.printing,
+                print_queue=self._container.resolve(PrintQueueService),
+            ).print_address(lines)
 
         self._worker = BackgroundWorker(job)
         self._worker.signals.result.connect(self._on_print_result)

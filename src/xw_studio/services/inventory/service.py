@@ -11,6 +11,7 @@ from pathlib import Path
 from xw_studio.core.config import AppConfig
 from xw_studio.repositories.settings_kv import SettingKvRepository
 from xw_studio.services.printing.planned_pdf_printer import print_pdf_by_plan
+from xw_studio.services.printing.print_queue import PrintQueueService
 
 try:
     import fitz
@@ -130,9 +131,11 @@ class InventoryService:
         self,
         config: AppConfig,
         settings_repo: SettingKvRepository | None = None,
+        print_queue: PrintQueueService | None = None,
     ) -> None:
         self._config = config
         self._settings_repo = settings_repo
+        self._print_queue = print_queue
 
     def load_stock_levels(self) -> dict[str, int]:
         """Return stock levels by SKU (from DB setting if available)."""
@@ -395,6 +398,8 @@ class InventoryService:
                 profile_id=str(product.print_profile_id or "").strip(),
                 copies=qty,
                 page_count=page_count,
+                print_queue=self._print_queue,
+                job_kind="product",
             )
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"{sku}: Notendruck fehlgeschlagen: {exc}")

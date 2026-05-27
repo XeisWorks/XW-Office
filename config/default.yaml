@@ -55,33 +55,21 @@ printing:
     - id: "invoice"
       label: "Rechnungsdruck"
       printer_name: "Rechnungen"
-      dpi: 300
-      duplex: "long"
     - id: "label"
       label: "Etikettendruck"
       printer_name: "Brother QL-800"
-      dpi: 300
-      duplex: "simplex"
     - id: "noten_simplex"
       label: "Noten A4 Simplex"
       printer_name: "Noten A4 Simplex"
-      dpi: 600
-      duplex: "simplex"
     - id: "noten_duplex"
       label: "Noten A4 Duplex"
       printer_name: "Noten A4 Duplex"
-      dpi: 600
-      duplex: "long"
     - id: "brochure_mono"
       label: "Canon Broschüre Mono"
       printer_name: "Canon Broschüre Mono"
-      dpi: 600
-      duplex: "long"
     - id: "brochure_duo"
       label: "Canon Broschüre Duo"
       printer_name: "Canon Broschüre Duo"
-      dpi: 600
-      duplex: "long"
 
 inventory:
   alarm_threshold: 5

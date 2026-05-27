@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-from PySide6.QtPrintSupport import QPrinter
+from typing import cast
 
 from xw_studio.core.config import PrintingSection, PrintProfile
-from xw_studio.services.printing.pdf_renderer import print_pdf
+from xw_studio.services.printing.print_jobs import PdfPrintJob, PrintJobKind
+from xw_studio.services.printing.print_queue import PrintQueueService, global_print_queue
 
 _ALL_RANGE_TOKENS = {"", "ALL", "ALLE", "ALLESEITEN", "*"}
 _PROFILE_ALIASES = {
@@ -21,8 +21,7 @@ _PROFILE_ALIASES = {
 class PlanTarget:
     range_text: str
     printer_name: str
-    dpi: int
-    duplex: str
+    dpi: int | None
 
 
 def page_indices_from_range_text(range_text: str, *, page_count: int) -> list[int] | None:
@@ -81,8 +80,7 @@ def resolve_plan_targets(
                 PlanTarget(
                     range_text=str(entry.get("range") or "").strip() or "Alle Seiten",
                     printer_name=resolved.printer_name.strip(),
-                    dpi=max(int(resolved.dpi or 600), 1),
-                    duplex=str(resolved.duplex or "").strip(),
+                    dpi=int(resolved.dpi) if resolved.dpi else None,
                 )
             )
         if targets:
@@ -95,8 +93,7 @@ def resolve_plan_targets(
         PlanTarget(
             range_text="Alle Seiten",
             printer_name=resolved.printer_name.strip(),
-            dpi=max(int(resolved.dpi or 600), 1),
-            duplex=str(resolved.duplex or "").strip(),
+            dpi=int(resolved.dpi) if resolved.dpi else None,
         )
     ]
 
@@ -109,21 +106,35 @@ def print_pdf_by_plan(
     profile_id: str = "",
     copies: int = 1,
     page_count: int | None = None,
+    print_queue: PrintQueueService | None = None,
+    job_kind: str = "product",
 ) -> None:
-    """Print a PDF directly to configured printer targets without a dialog."""
+    """Queue PDF print jobs for configured printer targets without a dialog."""
     targets = resolve_plan_targets(printing, print_plan=print_plan, profile_id=profile_id)
     if not targets:
         raise RuntimeError("Kein Druckplan oder Profil fuer Produktdruck konfiguriert")
 
     effective_copies = max(int(copies or 1), 1)
-    for _copy_index in range(effective_copies):
-        for target in targets:
-            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-            printer.setPrinterName(target.printer_name)
-            pages = None
-            if page_count is not None:
-                pages = page_indices_from_range_text(target.range_text, page_count=page_count)
-            print_pdf(pdf_path, printer, dpi=target.dpi, pages=pages, duplex=target.duplex)
+    queue = print_queue or global_print_queue()
+    effective_kind = cast(
+        PrintJobKind,
+        "product" if job_kind not in {"music", "product", "invoice", "label"} else job_kind,
+    )
+    for target in targets:
+        pages = None
+        if page_count is not None:
+            pages = page_indices_from_range_text(target.range_text, page_count=page_count)
+        queue.enqueue(
+            PdfPrintJob(
+                pdf_path=pdf_path,
+                printer_name=target.printer_name,
+                pages=pages,
+                copies=effective_copies,
+                dpi=target.dpi,
+                job_kind=effective_kind,
+                description=f"{job_kind}: {pdf_path}",
+            )
+        )
 
 
 def _resolve_profile(printing: PrintingSection, profile_id: str) -> PrintProfile | None:

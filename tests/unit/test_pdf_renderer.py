@@ -1,46 +1,114 @@
 from __future__ import annotations
 
-from PySide6.QtGui import QPageLayout, QPageSize
-from PySide6.QtPrintSupport import QPrinter
+from unittest.mock import MagicMock
 
-from xw_studio.services.printing.pdf_renderer import _configure_printer_for_a4_portrait, _duplex_mode
+import fitz
+from PySide6.QtCore import QPointF, QRect
 
-
-class _PrinterStub:
-    def __init__(self) -> None:
-        self.resolution = 0
-        self.layout: QPageLayout | None = None
-        self.full_page = False
-        self.duplex: QPrinter.DuplexMode | None = None
-
-    def setResolution(self, value: int) -> None:
-        self.resolution = value
-
-    def setPageLayout(self, value: QPageLayout) -> None:
-        self.layout = value
-
-    def setFullPage(self, value: bool) -> None:
-        self.full_page = value
-
-    def setDuplex(self, value: QPrinter.DuplexMode) -> None:
-        self.duplex = value
+from xw_studio.services.printing import pdf_renderer
 
 
-def test_duplex_mode_maps_profile_values() -> None:
-    assert _duplex_mode("simplex") == QPrinter.DuplexMode.DuplexNone
-    assert _duplex_mode("long") == QPrinter.DuplexMode.DuplexLongSide
-    assert _duplex_mode("short") == QPrinter.DuplexMode.DuplexShortSide
-    assert _duplex_mode("") is None
+def test_print_pdf_with_qprinter_draws_image_without_scaling(monkeypatch, tmp_path) -> None:
+    pdf_path = tmp_path / "a4.pdf"
+    doc = fitz.open()
+    doc.new_page(width=595, height=842)
+    doc.save(pdf_path)
+    doc.close()
+
+    calls: dict[str, object] = {}
+
+    class PrinterStub:
+        class PrinterMode:
+            HighResolution = object()
+
+        class OutputFormat:
+            NativeFormat = object()
+
+        class Unit:
+            DevicePixel = object()
+
+        def __init__(self, *_args: object) -> None:
+            self.name = ""
+
+        def setOutputFormat(self, value: object) -> None:
+            calls["output_format"] = value
+
+        def setPrinterName(self, value: str) -> None:
+            self.name = value
+
+        def setResolution(self, value: int) -> None:
+            calls["resolution"] = value
+
+        def pageRect(self, _unit: object) -> QRect:
+            return QRect(0, 0, 4960, 7016)
+
+        def newPage(self) -> None:
+            calls["new_page"] = True
+
+    class PainterStub:
+        def begin(self, printer: object) -> bool:
+            calls["begin_printer"] = printer
+            return True
+
+        def drawImage(self, pos: QPointF, image: object) -> None:
+            calls["draw_pos"] = pos
+            calls["draw_image"] = image
+
+        def end(self) -> None:
+            calls["ended"] = True
+
+    monkeypatch.setattr(pdf_renderer, "QPrinter", PrinterStub)
+    monkeypatch.setattr(pdf_renderer, "QPainter", PainterStub)
+
+    pdf_renderer.print_pdf_with_qprinter(str(pdf_path), "Printer", dpi=600, center_on_page=False)
+
+    assert calls["resolution"] == 600
+    assert calls["draw_pos"] == QPointF(0.0, 0.0)
+    assert calls["draw_image"] is not None
+    assert calls["ended"] is True
 
 
-def test_configure_printer_for_a4_portrait_sets_physical_layout_before_painting() -> None:
-    printer = _PrinterStub()
+def test_print_pdf_with_qprinter_does_not_configure_driver_options(monkeypatch, tmp_path) -> None:
+    pdf_path = tmp_path / "a4.pdf"
+    doc = fitz.open()
+    doc.new_page(width=595, height=842)
+    doc.save(pdf_path)
+    doc.close()
 
-    _configure_printer_for_a4_portrait(printer, dpi=600, duplex="long")  # type: ignore[arg-type]
+    printer = MagicMock()
+    printer.pageRect.return_value = QRect(0, 0, 4960, 7016)
+    printer.OutputFormat.NativeFormat = object()
 
-    assert printer.resolution == 600
-    assert printer.full_page is True
-    assert printer.duplex == QPrinter.DuplexMode.DuplexLongSide
-    assert printer.layout is not None
-    assert printer.layout.orientation() == QPageLayout.Orientation.Portrait
-    assert printer.layout.pageSize().id() == QPageSize.PageSizeId.A4
+    class PrinterFactory:
+        class PrinterMode:
+            HighResolution = object()
+
+        class OutputFormat:
+            NativeFormat = object()
+
+        class Unit:
+            DevicePixel = object()
+
+        def __new__(cls, *_args: object) -> MagicMock:
+            return printer
+
+    class PainterStub:
+        def begin(self, _printer: object) -> bool:
+            return True
+
+        def drawImage(self, _pos: object, _image: object) -> None:
+            return None
+
+        def end(self) -> None:
+            return None
+
+    monkeypatch.setattr(pdf_renderer, "QPrinter", PrinterFactory)
+    monkeypatch.setattr(pdf_renderer, "QPainter", PainterStub)
+
+    pdf_renderer.print_pdf_with_qprinter(str(pdf_path), "Printer", dpi=600)
+
+    assert not printer.setPageLayout.called
+    assert not printer.setPageSize.called
+    assert not printer.setOrientation.called
+    assert not printer.setDuplex.called
+    assert not printer.setFullPage.called

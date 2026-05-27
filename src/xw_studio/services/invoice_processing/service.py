@@ -17,6 +17,7 @@ from xw_studio.services.draft_invoice.service import DraftInvoiceService
 from xw_studio.services.mailing.service import MailAttachment, MailDeliveryService
 from xw_studio.services.printing.invoice_printer import InvoicePrinter
 from xw_studio.services.printing.label_printer import LabelPrinter
+from xw_studio.services.printing.print_queue import PrintQueueService
 from xw_studio.services.sevdesk.invoice_client import InvoiceClient, InvoiceSummary
 from xw_studio.services.sevdesk.invoice_client import DEFAULT_SENSITIVE_COUNTRY_CODES
 from xw_studio.services.wix.client import WixOrdersClient
@@ -198,12 +199,13 @@ class InvoiceProcessingService:
         wix_orders: WixOrdersClient | None = None,
         mail_service: MailDeliveryService | None = None,
         draft_invoice_service: DraftInvoiceService | None = None,
+        print_queue: PrintQueueService | None = None,
     ) -> None:
         self._invoices = invoice_client
         self._settings_repo = settings_repo
         self._wix_orders = wix_orders
-        self._invoice_printer = InvoicePrinter(config.printing)
-        self._label_printer = LabelPrinter(config.printing)
+        self._invoice_printer = InvoicePrinter(config.printing, print_queue=print_queue)
+        self._label_printer = LabelPrinter(config.printing, print_queue=print_queue)
         self._invoice_pdf_cache: dict[str, bytes] = {}
         self._invoice_detail_cache: dict[str, dict[str, Any]] = {}
         self._wix_address_cache: dict[str, list[str]] = {}

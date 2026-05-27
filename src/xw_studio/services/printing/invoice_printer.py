@@ -4,10 +4,10 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
-import threading
 
 from xw_studio.core.config import PrintingSection
-from xw_studio.services.printing.silent_printer import print_pdf_file_silent
+from xw_studio.services.printing.print_jobs import PdfPrintJob
+from xw_studio.services.printing.print_queue import PrintQueueService, global_print_queue
 
 logger = logging.getLogger(__name__)
 
@@ -18,23 +18,12 @@ def _looks_like_pdf(content: bytes) -> bool:
     return b"%PDF-" in bytes(content[:1024])
 
 
-def _schedule_file_deletion(path: str, delay_seconds: float = 7200.0) -> None:
-    def _cleanup() -> None:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-
-    timer = threading.Timer(delay_seconds, _cleanup)
-    timer.daemon = True
-    timer.start()
-
-
 class InvoicePrinter:
     """Drop-in equivalent to old app's InvoicePrinter with new print engine."""
 
-    def __init__(self, printing: PrintingSection) -> None:
+    def __init__(self, printing: PrintingSection, print_queue: PrintQueueService | None = None) -> None:
         self._printing = printing
+        self._print_queue = print_queue
 
     def _printer_name(self) -> str:
         profile = self._printing.resolve_profile("invoice")
@@ -59,7 +48,7 @@ class InvoicePrinter:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as handle:
                 handle.write(pdf_bytes)
                 temp_path = handle.name
-            self._print_file(temp_path, printer_name)
+            self._queue_file(temp_path, printer_name)
             scheduled = True
         finally:
             if temp_path and not scheduled:
@@ -68,7 +57,7 @@ class InvoicePrinter:
                 except OSError:
                     pass
 
-    def _print_file(self, pdf_path: str, printer_name: str) -> None:
+    def _queue_file(self, pdf_path: str, printer_name: str) -> None:
         try:
             size = os.path.getsize(pdf_path)
         except OSError:
@@ -79,6 +68,17 @@ class InvoicePrinter:
             pdf_path,
             size,
         )
-        dpi = int(self._printing.invoice_dpi or 300)
-        print_pdf_file_silent(pdf_path, printer_name=printer_name, dpi=dpi)
-        _schedule_file_deletion(pdf_path)
+        profile = self._printing.resolve_profile("invoice")
+        dpi = int(profile.dpi if profile is not None and profile.dpi else self._printing.invoice_dpi or 300)
+        queue = self._print_queue or global_print_queue()
+        queue.enqueue(
+            PdfPrintJob(
+                pdf_path=pdf_path,
+                printer_name=printer_name,
+                copies=1,
+                dpi=dpi,
+                job_kind="invoice",
+                description="Rechnungsdruck",
+                cleanup_paths=(pdf_path,),
+            )
+        )

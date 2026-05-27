@@ -1,11 +1,11 @@
-"""Render PDF pages to a QPrinter via PyMuPDF (high-DPI raster path)."""
+"""Render PDF pages through PyMuPDF and QPrinter without external viewers."""
 from __future__ import annotations
 
 import logging
 
 import fitz  # PyMuPDF
-from PySide6.QtCore import QPointF, QMarginsF
-from PySide6.QtGui import QImage, QPainter, QPageSize, QPageLayout
+from PySide6.QtCore import QPointF
+from PySide6.QtGui import QImage, QPainter
 from PySide6.QtPrintSupport import QPrinter
 
 logger = logging.getLogger(__name__)
@@ -24,10 +24,7 @@ def _expand_ranges(page_ranges: list[range], page_count: int) -> list[int]:
 
 
 def page_indices_from_qprinter(printer: QPrinter, page_count: int) -> list[int] | None:
-    """Map Qt print dialog page range to 0-based indices.
-
-    Returns ``None`` to print all pages. Clamps to *page_count*.
-    """
+    """Map Qt print dialog page range to 0-based indices."""
     if page_count <= 0:
         return None
     pr_range = printer.printRange()
@@ -49,40 +46,85 @@ def page_indices_from_qprinter(printer: QPrinter, page_count: int) -> list[int] 
     return list(range(lo, hi_excl))
 
 
-def _duplex_mode(value: str) -> QPrinter.DuplexMode | None:
-    normalized = str(value or "").strip().casefold().replace("_", "").replace("-", "")
-    if normalized in {"", "default", "driver"}:
-        return None
-    if normalized in {"simplex", "none", "off"}:
-        return QPrinter.DuplexMode.DuplexNone
-    if normalized in {"long", "longedge", "duplex", "duplexlong", "duplexlongedge"}:
-        return QPrinter.DuplexMode.DuplexLongSide
-    if normalized in {"short", "shortedge", "duplexshort", "duplexshortedge"}:
-        return QPrinter.DuplexMode.DuplexShortSide
-    logger.warning("Unknown duplex mode %r; using printer default", value)
-    return None
-
-
-def _configure_printer_for_a4_portrait(
-    printer: QPrinter,
-    *,
-    dpi: int,
-    duplex: str = "",
-) -> None:
-    printer.setResolution(int(dpi))
-    layout = QPageLayout(
-        QPageSize(QPageSize.PageSizeId.A4),
-        QPageLayout.Orientation.Portrait,
-        QMarginsF(0.0, 0.0, 0.0, 0.0),
-        QPageLayout.Unit.Millimeter,
+def _draw_origin(printer: QPrinter, image: QImage, *, center_on_page: bool) -> QPointF:
+    if not center_on_page:
+        return QPointF(0.0, 0.0)
+    rect = printer.pageRect(QPrinter.Unit.DevicePixel)
+    if not rect.isValid() or rect.width() <= 0 or rect.height() <= 0:
+        return QPointF(0.0, 0.0)
+    return QPointF(
+        rect.x() + (rect.width() - image.width()) / 2.0,
+        rect.y() + (rect.height() - image.height()) / 2.0,
     )
-    printer.setPageLayout(layout)
-    printer.setFullPage(True)
-    mode = _duplex_mode(duplex)
-    if mode is not None:
-        printer.setDuplex(mode)
 
 
+def print_pdf_with_qprinter(
+    pdf_path: str,
+    printer_name: str,
+    *,
+    pages: list[int] | None = None,
+    copies: int = 1,
+    dpi: int | None = None,
+    center_on_page: bool = True,
+) -> None:
+    """Print a PDF with PyMuPDF + QPrinter/QPainter.
+
+    The selected Windows printer queue is authoritative for paper size, duplex,
+    tray, color, orientation, quality, and vendor-specific settings. This
+    function only selects the queue, optionally sets render resolution, renders
+    pages to bitmaps, and draws them without resizing.
+    """
+    render_dpi = max(int(dpi or INVOICE_DPI), 1)
+    effective_copies = max(int(copies or 1), 1)
+    doc = fitz.open(pdf_path)
+    try:
+        page_count = len(doc)
+        page_indices = list(range(page_count)) if pages is None else [p for p in pages if 0 <= p < page_count]
+        if not page_indices:
+            logger.warning("No pages to print for %s", pdf_path)
+            return
+
+        for copy_index in range(effective_copies):
+            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            printer.setOutputFormat(QPrinter.OutputFormat.NativeFormat)
+            printer.setPrinterName(printer_name)
+            if dpi is not None:
+                printer.setResolution(render_dpi)
+
+            painter = QPainter()
+            if not painter.begin(printer):
+                logger.error("QPainter.begin(printer) failed for %s", printer_name)
+                return
+            try:
+                for page_offset, page_num in enumerate(page_indices):
+                    if page_offset > 0:
+                        printer.newPage()
+                    page = doc[page_num]
+                    pix = page.get_pixmap(dpi=render_dpi, alpha=False)
+                    image = QImage(
+                        pix.samples,
+                        pix.width,
+                        pix.height,
+                        pix.stride,
+                        QImage.Format.Format_RGB888,
+                    )
+                    painter.drawImage(_draw_origin(printer, image, center_on_page=center_on_page), image)
+            finally:
+                painter.end()
+            logger.info(
+                "PDF print copy dispatched: printer='%s' file='%s' copy=%s/%s dpi=%s pages=%s",
+                printer_name,
+                pdf_path,
+                copy_index + 1,
+                effective_copies,
+                render_dpi,
+                page_indices,
+            )
+    finally:
+        doc.close()
+
+
+# Backward-compatible name used by older UI helpers.
 def print_pdf(
     pdf_path: str,
     printer: QPrinter,
@@ -90,54 +132,23 @@ def print_pdf(
     *,
     pages: list[int] | None = None,
     page_ranges: list[range] | None = None,
-    duplex: str = "",
+    center_on_page: bool = True,
 ) -> None:
-    """Print *pdf_path* using *printer*, rasterizing each page at *dpi*.
-
-    *pages*: explicit 0-based page indices. If set, *page_ranges* is ignored.
-    *page_ranges*: legacy alternative; merged only when *pages* is ``None``.
-    If both are ``None``, all PDF pages are printed.
-
-    Music scores should use :data:`MUSIC_DPI` (600); invoices often use
-    :data:`INVOICE_DPI` (300).
-    """
-    doc = fitz.open(pdf_path)
-    try:
-        pc = len(doc)
-        if pages is not None:
-            page_indices = [p for p in pages if 0 <= p < pc]
-        elif page_ranges:
-            page_indices = _expand_ranges(page_ranges, pc)
-            if not page_indices:
-                page_indices = list(range(pc))
-        else:
-            page_indices = list(range(pc))
-
-        if not page_indices:
-            logger.warning("No pages to print for %s", pdf_path)
-            return
-
-        _configure_printer_for_a4_portrait(printer, dpi=dpi, duplex=duplex)
-        painter = QPainter()
-        if not painter.begin(printer):
-            logger.error("QPainter.begin(printer) failed")
-            return
-
+    page_indices = pages
+    if page_indices is None and page_ranges:
+        doc = fitz.open(pdf_path)
         try:
-            for i, page_num in enumerate(page_indices):
-                if i > 0:
-                    printer.newPage()
-                page = doc[page_num]
-                pix = page.get_pixmap(dpi=int(dpi), alpha=False)
-                img = QImage(
-                    pix.samples,
-                    pix.width,
-                    pix.height,
-                    pix.stride,
-                    QImage.Format.Format_RGB888,
-                )
-                painter.drawImage(QPointF(0.0, 0.0), img)
+            page_indices = _expand_ranges(page_ranges, len(doc)) or None
         finally:
-            painter.end()
-    finally:
-        doc.close()
+            doc.close()
+    printer_name = str(printer.printerName() or "").strip()
+    if not printer_name:
+        raise RuntimeError("Kein Drucker ausgewaehlt")
+    print_pdf_with_qprinter(
+        pdf_path,
+        printer_name,
+        pages=page_indices,
+        copies=1,
+        dpi=dpi,
+        center_on_page=center_on_page,
+    )

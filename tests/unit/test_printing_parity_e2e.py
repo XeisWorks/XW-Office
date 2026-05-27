@@ -182,7 +182,7 @@ def test_invoice_print_step_uses_legacy_printer() -> None:
     mailer = _MailServiceStub()
     service = InvoiceProcessingService(config, invoice_client, repo, None, mailer)
 
-    with patch("xw_studio.services.printing.invoice_printer.print_pdf_file_silent") as mock_print, patch(
+    with patch("xw_studio.services.printing.invoice_printer.InvoicePrinter._queue_file") as mock_print, patch(
         "xw_studio.services.printing.invoice_printer.InvoicePrinter._printer_name"
     ) as mock_printer_name:
         mock_printer_name.return_value = "TestPrinter"
@@ -275,7 +275,7 @@ def test_fullflow_invoice_and_label_steps() -> None:
         )
     ]
 
-    with patch("xw_studio.services.printing.invoice_printer.print_pdf_file_silent") as mock_inv_print, patch(
+    with patch("xw_studio.services.printing.invoice_printer.InvoicePrinter._queue_file") as mock_inv_print, patch(
         "xw_studio.services.printing.label_printer.LabelPrinter.print_address"
     ) as mock_label_print, patch(
         "xw_studio.services.printing.invoice_printer.InvoicePrinter._printer_name"
@@ -314,7 +314,7 @@ def test_fullflow_skips_print_for_digital_only_wix_orders() -> None:
         )
     ]
 
-    with patch("xw_studio.services.printing.invoice_printer.print_pdf_file_silent") as mock_inv_print, patch(
+    with patch("xw_studio.services.printing.invoice_printer.InvoicePrinter._queue_file") as mock_inv_print, patch(
         "xw_studio.services.printing.label_printer.LabelPrinter.print_address"
     ) as mock_label_print:
         result = service.run_start_fullflow(full_mode=True)

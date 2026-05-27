@@ -12,12 +12,13 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox, QWidget
 from xw_studio.core.printer_detect import discover_printers, evaluate_printer_status
 from xw_studio.core.types import PrinterStatus
 from xw_studio.services.products.print_decision import PieceBlock
+from xw_studio.services.printing.print_jobs import PdfPrintJob, PrintJobKind
+from xw_studio.services.printing.print_queue import PrintQueueService
 from xw_studio.services.printing.planned_pdf_printer import print_pdf_by_plan
 from xw_studio.services.printing.pdf_renderer import (
     INVOICE_DPI,
     MUSIC_DPI,
     page_indices_from_qprinter,
-    print_pdf,
 )
 
 if TYPE_CHECKING:
@@ -56,6 +57,7 @@ def _print_with_dialog(
     *,
     title: str,
     dpi: int,
+    job_kind: PrintJobKind,
 ) -> None:
     if not _check_printer_runtime(parent, container):
         return
@@ -87,15 +89,23 @@ def _print_with_dialog(
         doc.close()
 
     indices = page_indices_from_qprinter(printer, page_count)
-    try:
-        print_pdf(path, printer, dpi=dpi, pages=indices)
-    except Exception as exc:
-        logger.exception("Print failed: %s", exc)
-        QMessageBox.critical(
-            parent,
-            "Druck fehlgeschlagen",
-            f"Die PDF konnte nicht gedruckt werden:\n\n{exc}",
+    printer_name = str(printer.printerName() or "").strip()
+    if not printer_name:
+        QMessageBox.warning(parent, "Druck", "Kein Drucker ausgewaehlt.")
+        return
+
+    queue: PrintQueueService = container.resolve(PrintQueueService)
+    queue.enqueue(
+        PdfPrintJob(
+            pdf_path=path,
+            printer_name=printer_name,
+            pages=indices,
+            copies=1,
+            dpi=dpi,
+            job_kind=job_kind,
+            description=f"Manueller PDF-Druck: {path}",
         )
+    )
 
 
 def run_invoice_pdf_print(parent: QWidget, container: Container) -> None:
@@ -106,6 +116,7 @@ def run_invoice_pdf_print(parent: QWidget, container: Container) -> None:
         container,
         title="PDF auswählen (Rechnung)",
         dpi=dpi,
+        job_kind="invoice",
     )
 
 
@@ -117,6 +128,7 @@ def run_label_pdf_print(parent: QWidget, container: Container) -> None:
         container,
         title="PDF auswählen (Label)",
         dpi=dpi,
+        job_kind="label",
     )
 
 
@@ -134,6 +146,7 @@ def run_plc_label_pdf_print(
         container,
         title=title,
         dpi=dpi,
+        job_kind="label",
     )
 
 
@@ -145,6 +158,7 @@ def run_music_pdf_print(parent: QWidget, container: Container) -> None:
         container,
         title="PDF auswählen (Noten)",
         dpi=dpi,
+        job_kind="music",
     )
 
 
@@ -198,6 +212,7 @@ def prepare_piece_pdf_print(
     effective_copies = max(1, int(copies or piece.print_qty or piece.qty_needed or 1))
 
     def job() -> None:
+        queue: PrintQueueService = container.resolve(PrintQueueService)
         print_pdf_by_plan(
             path,
             container.config.printing,
@@ -205,6 +220,8 @@ def prepare_piece_pdf_print(
             profile_id=piece.print_profile_id,
             copies=effective_copies,
             page_count=page_count,
+            print_queue=queue,
+            job_kind="product",
         )
 
     return job

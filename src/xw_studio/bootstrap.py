@@ -31,6 +31,7 @@ from xw_studio.services.draft_invoice.service import DraftInvoiceService
 from xw_studio.services.sendungen.service import OffeneSendungenService
 from xw_studio.services.layout.service import LayoutToolsService
 from xw_studio.services.mailing.service import MailDeliveryService
+from xw_studio.services.printing.print_queue import PrintQueueService
 from xw_studio.services.secrets.service import SecretService
 from xw_studio.services.sevdesk.contact_client import ContactClient
 from xw_studio.services.sevdesk.invoice_client import InvoiceClient
@@ -109,6 +110,10 @@ def register_default_services(container: Container) -> None:
         ),
     )
     container.register(
+        PrintQueueService,
+        lambda c: PrintQueueService(),
+    )
+    container.register(
         InvoiceProcessingService,
         lambda c: InvoiceProcessingService(
             c.config,
@@ -117,6 +122,7 @@ def register_default_services(container: Container) -> None:
             c.resolve(WixOrdersClient),
             c.resolve(MailDeliveryService),
             c.resolve(DraftInvoiceService),
+            c.resolve(PrintQueueService),
         ),
     )
     container.register(
@@ -238,6 +244,7 @@ def register_default_services(container: Container) -> None:
         lambda c: InventoryService(
             c.config,
             c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
+            c.resolve(PrintQueueService),
         ),
     )
 
