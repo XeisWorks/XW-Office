@@ -4,9 +4,10 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+from typing import cast
 
 from xw_studio.core.config import PrintingSection
-from xw_studio.services.printing.print_jobs import PdfPrintJob
+from xw_studio.services.printing.print_jobs import PdfPrintJob, PlacementMode
 from xw_studio.services.printing.print_queue import PrintQueueService, global_print_queue
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,9 @@ class InvoicePrinter:
         )
         profile = self._printing.resolve_profile("invoice")
         dpi = int(profile.dpi) if profile is not None and profile.dpi else None
+        placement_mode = profile.placement_mode if profile is not None else "paper_origin"
+        x_offset_mm = float(profile.x_offset_mm) if profile is not None else 0.0
+        y_offset_mm = float(profile.y_offset_mm) if profile is not None else 0.0
         queue = self._print_queue or global_print_queue()
         queue.enqueue(
             PdfPrintJob(
@@ -79,6 +83,9 @@ class InvoicePrinter:
                 dpi=dpi,
                 job_kind="invoice",
                 description="Rechnungsdruck",
+                placement_mode=cast(PlacementMode, placement_mode),
+                x_offset_mm=x_offset_mm,
+                y_offset_mm=y_offset_mm,
                 cleanup_paths=(pdf_path,),
             )
         )

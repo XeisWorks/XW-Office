@@ -14,3 +14,11 @@ def test_pdf_print_job_profile_dpi_overrides_default() -> None:
     job = PdfPrintJob(pdf_path="a.pdf", printer_name="P", job_kind="product", dpi=450)
 
     assert job.effective_dpi == 450
+
+
+def test_pdf_print_job_default_placement_is_paper_origin() -> None:
+    job = PdfPrintJob(pdf_path="a.pdf", printer_name="P")
+
+    assert job.placement_mode == "paper_origin"
+    assert job.x_offset_mm == 0.0
+    assert job.y_offset_mm == 0.0

@@ -79,6 +79,9 @@ class PrintProfile:
     label: str = ""
     printer_name: str = ""
     dpi: int | None = None
+    placement_mode: str = "paper_origin"
+    x_offset_mm: float = 0.0
+    y_offset_mm: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -107,6 +110,9 @@ class PrintingSection:
                     label=str(entry.get("label") or ""),
                     printer_name=str(entry.get("printer_name") or ""),
                     dpi=int(entry["dpi"]) if entry.get("dpi") else None,
+                    placement_mode=str(entry.get("placement_mode") or "paper_origin"),
+                    x_offset_mm=float(entry.get("x_offset_mm") or 0.0),
+                    y_offset_mm=float(entry.get("y_offset_mm") or 0.0),
                 )
         return None
 
@@ -121,6 +127,9 @@ class PrintingSection:
                         label=str(entry.get("label") or ""),
                         printer_name=str(entry.get("printer_name") or ""),
                         dpi=int(entry["dpi"]) if entry.get("dpi") else None,
+                        placement_mode=str(entry.get("placement_mode") or "paper_origin"),
+                        x_offset_mm=float(entry.get("x_offset_mm") or 0.0),
+                        y_offset_mm=float(entry.get("y_offset_mm") or 0.0),
                     )
                 )
         return result

@@ -5,7 +5,10 @@ from xw_studio.services.printing.label_printer import LabelPrinter
 from xw_studio.services.printing.pdf_renderer import (
     INVOICE_DPI,
     MUSIC_DPI,
+    create_calibration_pdf,
+    mm_to_px,
     page_indices_from_qprinter,
+    print_calibration_page_with_qprinter,
     print_pdf,
     print_pdf_with_qprinter,
 )
@@ -21,7 +24,10 @@ __all__ = [
     "BrotherLbxLabelJob",
     "PrintJobResult",
     "PrintQueueService",
+    "create_calibration_pdf",
+    "mm_to_px",
     "page_indices_from_qprinter",
+    "print_calibration_page_with_qprinter",
     "print_pdf",
     "print_pdf_with_qprinter",
 ]

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from xw_studio.core.config import PrintingSection, PrintProfile
-from xw_studio.services.printing.print_jobs import PdfPrintJob, PrintJobKind
+from xw_studio.services.printing.print_jobs import PdfPrintJob, PlacementMode, PrintJobKind
 from xw_studio.services.printing.print_queue import PrintQueueService, global_print_queue
 
 _ALL_RANGE_TOKENS = {"", "ALL", "ALLE", "ALLESEITEN", "*"}
@@ -22,6 +22,9 @@ class PlanTarget:
     range_text: str
     printer_name: str
     dpi: int | None
+    placement_mode: PlacementMode
+    x_offset_mm: float
+    y_offset_mm: float
 
 
 def page_indices_from_range_text(range_text: str, *, page_count: int) -> list[int] | None:
@@ -81,6 +84,9 @@ def resolve_plan_targets(
                     range_text=str(entry.get("range") or "").strip() or "Alle Seiten",
                     printer_name=resolved.printer_name.strip(),
                     dpi=int(resolved.dpi) if resolved.dpi else None,
+                    placement_mode=_placement_mode(resolved.placement_mode),
+                    x_offset_mm=float(resolved.x_offset_mm),
+                    y_offset_mm=float(resolved.y_offset_mm),
                 )
             )
         if targets:
@@ -94,6 +100,9 @@ def resolve_plan_targets(
             range_text="Alle Seiten",
             printer_name=resolved.printer_name.strip(),
             dpi=int(resolved.dpi) if resolved.dpi else None,
+            placement_mode=_placement_mode(resolved.placement_mode),
+            x_offset_mm=float(resolved.x_offset_mm),
+            y_offset_mm=float(resolved.y_offset_mm),
         )
     ]
 
@@ -133,6 +142,9 @@ def print_pdf_by_plan(
                 dpi=target.dpi,
                 job_kind=effective_kind,
                 description=f"{job_kind}: {pdf_path}",
+                placement_mode=target.placement_mode,
+                x_offset_mm=target.x_offset_mm,
+                y_offset_mm=target.y_offset_mm,
             )
         )
 
@@ -161,3 +173,10 @@ def _range_bound(token: str, page_count: int, *, default: int) -> int:
     if value.isdigit():
         return int(value)
     raise RuntimeError(f"Ungueltiger Seitenbereich: {token}")
+
+
+def _placement_mode(value: str) -> PlacementMode:
+    normalized = str(value or "paper_origin").strip().casefold()
+    if normalized in {"paper_origin", "printable_origin", "calibrated"}:
+        return cast(PlacementMode, normalized)
+    return "paper_origin"

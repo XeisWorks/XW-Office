@@ -29,7 +29,9 @@ def test_print_queue_worker_executes_jobs_sequentially(monkeypatch) -> None:
     assert calls == ["pdf", "lbx"]
     assert pdf_kwargs["dpi"] is None
     assert pdf_kwargs["fallback_dpi"] == 600
-    assert pdf_kwargs["center_on_page"] is False
+    assert pdf_kwargs["placement_mode"] == "paper_origin"
+    assert pdf_kwargs["x_offset_mm"] == 0.0
+    assert pdf_kwargs["y_offset_mm"] == 0.0
 
 
 def test_brother_lbx_job_initializes_and_uninitializes_com(monkeypatch, tmp_path) -> None:

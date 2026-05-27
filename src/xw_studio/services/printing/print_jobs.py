@@ -7,6 +7,7 @@ from typing import Literal
 from uuid import uuid4
 
 PrintJobKind = Literal["music", "product", "invoice", "label"]
+PlacementMode = Literal["paper_origin", "printable_origin", "calibrated"]
 
 DEFAULT_DPI_BY_KIND: dict[str, int] = {
     "music": 600,
@@ -29,7 +30,9 @@ class PdfPrintJob:
     dpi: int | None = None
     job_kind: PrintJobKind = "product"
     description: str = ""
-    center_on_page: bool = False
+    placement_mode: PlacementMode = "paper_origin"
+    x_offset_mm: float = 0.0
+    y_offset_mm: float = 0.0
     cleanup_paths: tuple[str, ...] = field(default_factory=tuple)
     id: str = field(default_factory=lambda: uuid4().hex)
 

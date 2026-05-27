@@ -140,7 +140,8 @@ class _PrintQueueWorker(QThread):
     def _execute(job: PrintJob) -> None:
         if isinstance(job, PdfPrintJob):
             logger.info(
-                "Print job started: id=%s kind=%s printer='%s' file='%s' copies=%s dpi=%s pages=%s",
+                "Print job started: id=%s kind=%s printer='%s' file='%s' copies=%s dpi=%s pages=%s "
+                "placement=%s offset_mm=(%s,%s)",
                 job.id,
                 job.job_kind,
                 job.printer_name,
@@ -148,6 +149,9 @@ class _PrintQueueWorker(QThread):
                 job.copies,
                 job.dpi if job.dpi is not None else f"queue-default/fallback-{job.effective_dpi}",
                 job.pages,
+                job.placement_mode,
+                job.x_offset_mm,
+                job.y_offset_mm,
             )
             print_pdf_with_qprinter(
                 job.pdf_path,
@@ -156,7 +160,10 @@ class _PrintQueueWorker(QThread):
                 copies=job.copies,
                 dpi=job.dpi,
                 fallback_dpi=job.effective_dpi,
-                center_on_page=job.center_on_page,
+                placement_mode=job.placement_mode,
+                x_offset_mm=job.x_offset_mm,
+                y_offset_mm=job.y_offset_mm,
+                job_kind=job.job_kind,
             )
             return
         _execute_brother_lbx_job(job)
