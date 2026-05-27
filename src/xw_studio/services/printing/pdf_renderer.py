@@ -500,7 +500,7 @@ def _log_page_metrics(
     black_threshold: int,
 ) -> None:
     full_rect, paint_rect = _safe_layout_rects(printer, effective_dpi)
-    logger.info(
+    logger.debug(
         "PDF print page metrics: printer='%s' job_kind=%s placement_mode=%s setFullPage=%s "
         "effective_dpi=%s printer_resolution=%s pdf_page_pt=(%.3f, %.3f) image_px=(%s, %s) "
         "layout_full_rect_px=%s layout_paint_rect_px=%s qprinter_page_rect_px=%s "
@@ -540,7 +540,7 @@ def _log_page_strategy(
     dpi: int,
 ) -> None:
     analysis = strategy.analysis
-    logger.info(
+    logger.debug(
         "PDF print page strategy: printer='%s' file='%s' page_index=%s job_kind=%s page_class=%s "
         "white_ratio=%.4f black_ratio=%.4f midtone_ratio=%.4f color_ratio=%.4f "
         "effective_render_color_mode=%s effective_black_enhancement=%s notation_boost=%s dpi=%s reason=%s",

@@ -329,6 +329,7 @@ class InvoiceProcessingService:
         self,
         *,
         full_mode: bool,
+        print_products: bool = False,
         should_abort: Callable[[], bool] | None = None,
         mail_recipient_override: str | None = None,
         invoice_ids: list[str] | None = None,
@@ -366,7 +367,8 @@ class InvoiceProcessingService:
                     if not digital_only:
                         flags = self._run_invoice_print_step(summary, flags)
                         flags = self._run_label_print_step(summary, flags)
-                    flags = self._run_product_step(summary, flags)
+                    if print_products:
+                        flags = self._run_product_step(summary, flags)
                 flags = self._run_mail_step(summary, flags, recipient_override=mail_recipient_override)
                 successful += 1
             except Exception as exc:
@@ -376,17 +378,19 @@ class InvoiceProcessingService:
         self.write_fulfillment_flags_batch(updates)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         logger.info(
-            "START metric total_ms=%s processed=%s failures=%s full_mode=%s",
+            "START metric total_ms=%s processed=%s failures=%s full_mode=%s print_products=%s",
             elapsed_ms,
             processed,
             failures,
             full_mode,
+            print_products,
         )
         return {
             "processed": processed,
             "failures": failures,
             "successful": successful,
             "full_mode": full_mode,
+            "print_products": bool(print_products),
             "aborted": aborted,
         }
 
@@ -532,10 +536,15 @@ class InvoiceProcessingService:
 
         flags = self.read_fulfillment_flags(summary.id)
         invoice = self._fetch_invoice_detail(summary.id)
+        subject, text_body = self._build_mail_content(summary, invoice)
         to_email = str(recipient_override or "").strip() or self._resolve_customer_email(summary, invoice)
+        if flags.mail_sent or self._sevdesk_mail_sent(invoice):
+            next_flags = self._next_flags(flags, mail_sent=True)
+            self.write_fulfillment_flags(summary.id, next_flags)
+            logger.info("Invoice %s: email skipped (already sent)", summary.id)
+            return next_flags, to_email, subject
         if not to_email:
             raise RuntimeError("Keine E-Mail-Adresse fuer Rechnungsversand")
-        subject, text_body = self._build_mail_content(summary, invoice)
         html_body = self._build_mail_html(text_body)
         sevdesk_error: Exception | None = None
         sender = getattr(self._invoices, "send_invoice_via_email", None)
@@ -573,6 +582,23 @@ class InvoiceProcessingService:
                 return next_flags, to_email, subject
         else:
             sevdesk_error = RuntimeError("sevDesk sendViaEmail ist nicht verfuegbar")
+
+        # Guard against duplicate emails when sevDesk returned an error but actually sent.
+        try:
+            refreshed = self._invoices.fetch_invoice_by_id(summary.id)
+        except Exception as probe_exc:  # noqa: BLE001
+            logger.debug("Invoice %s: sevDesk mail probe failed: %s", summary.id, probe_exc)
+        else:
+            if isinstance(refreshed, dict):
+                self._invoice_detail_cache[str(summary.id)] = refreshed
+                if self._sevdesk_mail_sent(refreshed):
+                    next_flags = self._next_flags(flags, mail_sent=True)
+                    self.write_fulfillment_flags(summary.id, next_flags)
+                    logger.warning(
+                        "Invoice %s: sevDesk mail marked as sent after error, Graph fallback skipped",
+                        summary.id,
+                    )
+                    return next_flags, to_email, subject
 
         if self._mail_service is not None and self._mail_service.is_configured():
             try:
@@ -859,6 +885,26 @@ class InvoiceProcessingService:
             if candidate:
                 return candidate
         return ""
+
+    @staticmethod
+    def _sevdesk_mail_sent(invoice: dict[str, Any]) -> bool:
+        send_type = invoice.get("sendType") if isinstance(invoice, dict) else None
+        if isinstance(send_type, dict):
+            send_type = send_type.get("id") or send_type.get("value") or send_type.get("name")
+        send_type_norm = str(send_type or "").strip().lower()
+        if send_type_norm in ("vm", "mail", "email", "e-mail"):
+            return True
+
+        sent_flag = invoice.get("sent") if isinstance(invoice, dict) else None
+        if isinstance(sent_flag, bool) and sent_flag:
+            return True
+        if str(sent_flag or "").strip().lower() in ("1", "true", "yes"):
+            return True
+
+        send_date = invoice.get("sendDate") if isinstance(invoice, dict) else None
+        if send_date and send_type_norm in ("", "vm", "mail", "email", "e-mail"):
+            return True
+        return False
 
     def _resolve_customer_email(self, summary: InvoiceSummary, invoice: dict[str, Any]) -> str:
         if summary.order_reference.strip():

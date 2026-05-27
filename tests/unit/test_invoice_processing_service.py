@@ -546,3 +546,84 @@ def test_send_invoice_mail_falls_back_to_graph_when_sevdesk_fails() -> None:
     assert client.mail_calls == []
     assert mailer.calls[0]["to_email"] == "max@example.test"
     assert len(mailer.calls[0]["attachments"]) == 1
+
+
+def test_send_invoice_mail_skips_graph_fallback_if_sevdesk_marked_sent_after_error() -> None:
+    summary = InvoiceSummary(id="12b", invoiceNumber="RE-TEST-12B", order_reference="")
+    client = _InvoiceClientStub([summary])
+    client.fail_mail = True
+    client.invoice_payloads["12b"] = {
+        "id": "12b",
+        "invoiceNumber": "RE-TEST-12B",
+        "sendType": "VM",
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+    mailer = _MailServiceStub()
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        _RepoStub({}),
+        None,
+        mailer,  # type: ignore[arg-type]
+    )
+
+    flags, recipient, _subject = svc.send_invoice_mail_for_invoice(summary)
+
+    assert flags.mail_sent is True
+    assert recipient == "max@example.test"
+    assert client.mail_calls == []
+    assert mailer.calls == []
+
+
+def test_send_invoice_mail_skips_when_sevdesk_invoice_already_sent() -> None:
+    summary = InvoiceSummary(id="13", invoiceNumber="RE-TEST-13", order_reference="")
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads["13"] = {
+        "id": "13",
+        "invoiceNumber": "RE-TEST-13",
+        "sendType": "VM",
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        _RepoStub({}),
+        None,
+        _MailServiceStub(configured=False),  # type: ignore[arg-type]
+    )
+
+    flags, recipient, subject = svc.send_invoice_mail_for_invoice(summary)
+
+    assert flags.mail_sent is True
+    assert recipient == "max@example.test"
+    assert subject == "Ihre Rechnung RE-TEST-13"
+    assert client.mail_calls == []
+
+
+def test_send_invoice_mail_skips_when_internal_mail_flag_already_set() -> None:
+    summary = InvoiceSummary(id="14", invoiceNumber="RE-TEST-14", order_reference="")
+    client = _InvoiceClientStub([summary])
+    repo = _RepoStub(
+        {
+            "rechnungen.fulfillment_status": json.dumps(
+                {
+                    "14": {
+                        "mail_sent": True,
+                    }
+                }
+            )
+        }
+    )
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        repo,
+        None,
+        _MailServiceStub(configured=False),  # type: ignore[arg-type]
+    )
+
+    flags, recipient, _subject = svc.send_invoice_mail_for_invoice(summary)
+
+    assert flags.mail_sent is True
+    assert recipient == "max@example.test"
+    assert client.mail_calls == []

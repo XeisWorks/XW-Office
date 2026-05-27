@@ -1,14 +1,25 @@
 """Centralized logging configuration."""
 import logging
+import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+
+def _configure_noisy_dependency_loggers() -> None:
+    """Clamp third-party logger verbosity unless explicitly overridden."""
+    configured = str(os.getenv("XW_STUDIO_HTTP_LOG_LEVEL", "WARNING")).strip().upper()
+    level = getattr(logging, configured, logging.WARNING)
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(level)
 
 
 def setup_logging(level: int = logging.INFO, log_dir: Path | None = None) -> None:
     """Configure root logger with console + optional rotating file handler."""
     root = logging.getLogger()
     root.setLevel(level)
+
+    _configure_noisy_dependency_loggers()
 
     if root.handlers:
         return

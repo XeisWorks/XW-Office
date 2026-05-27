@@ -36,6 +36,8 @@ _CHANNEL_TOOLTIPS: dict[str, str] = {
     "refunds": "Dringend: Rueckerstattung/Zahlung offen",
 }
 
+_LIVE_QUEUE_CACHE_TTL_SECONDS = 120.0
+
 
 class DailyBusinessService:
     """Read queue counters and optional queue rows from settings storage."""
@@ -63,26 +65,34 @@ class DailyBusinessService:
             "downloads": 0,
             "refunds": 0,
         }
+        live_cache: dict[str, list[dict[str, str]]] | None = None
+
+        def ensure_live_cache() -> dict[str, list[dict[str, str]]]:
+            nonlocal live_cache
+            if live_cache is None:
+                live_cache = self._load_live_queue_map()
+            return live_cache
+
         if self._repo is None:
-            live = self._load_live_queue_map()
+            live = ensure_live_cache()
             for key in ("mollie", "gutscheine", "downloads", "refunds"):
                 result[key] = len(live.get(key, []))
             return result
         raw = self._repo.get_value_json(_PENDING_COUNTS_KEY)
         if not raw:
-            live = self._load_live_queue_map()
+            live = ensure_live_cache()
             for key in ("mollie", "gutscheine", "downloads", "refunds"):
                 result[key] = len(live.get(key, []))
             return result
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            live = self._load_live_queue_map()
+            live = ensure_live_cache()
             for key in ("mollie", "gutscheine", "downloads", "refunds"):
                 result[key] = len(live.get(key, []))
             return result
         if not isinstance(data, dict):
-            live = self._load_live_queue_map()
+            live = ensure_live_cache()
             for key in ("mollie", "gutscheine", "downloads", "refunds"):
                 result[key] = len(live.get(key, []))
             return result
@@ -90,9 +100,10 @@ class DailyBusinessService:
             value = data.get(key)
             if isinstance(value, int):
                 result[key] = max(0, value)
+        live = ensure_live_cache()
         for key in ("mollie", "gutscheine", "downloads", "refunds"):
             if result[key] == 0:
-                result[key] = len(self._load_live_queue_map().get(key, []))
+                result[key] = len(live.get(key, []))
         return result
 
     def load_queue_rows(self, queue_name: str, fallback_count: int = 0) -> list[dict[str, str]]:
@@ -157,7 +168,7 @@ class DailyBusinessService:
             return self._live_cache
 
         now = time.monotonic()
-        if now - self._live_cache_ts <= 30.0:
+        if now - self._live_cache_ts <= _LIVE_QUEUE_CACHE_TTL_SECONDS:
             return self._live_cache
 
         try:

@@ -581,8 +581,9 @@ class RechnungenView(QWidget):
         self._hint_draft_queue: list[str] = []
         self._hint_rest_queue: list[str] = []
         self._hint_inflight_ref = ""
+        self._badge_refresh_managed_externally = False
         self._mollie_timer = QTimer(self)
-        self._mollie_timer.setInterval(60000)
+        self._mollie_timer.setInterval(120000)
         self._mollie_timer.timeout.connect(self._refresh_mollie_alert_count)
         self._last_plc_invoice = "—"
         self._next_offset = 0
@@ -899,8 +900,9 @@ class RechnungenView(QWidget):
             self._did_initial_load = True
             if self._has_sevdesk_token():
                 self._reload_first_page()
-        self._refresh_mollie_alert_count()
-        self._mollie_timer.start()
+        if not self._badge_refresh_managed_externally:
+            self._refresh_mollie_alert_count()
+            self._mollie_timer.start()
 
     def hideEvent(self, event: QHideEvent) -> None:
         super().hideEvent(event)
@@ -933,6 +935,13 @@ class RechnungenView(QWidget):
         self._mollie_timer.stop()
         self._stop_mollie_worker()
         super().closeEvent(event)
+
+    def set_badge_refresh_managed_externally(self, enabled: bool) -> None:
+        """Switch badge refresh to parent-managed mode to avoid duplicate polling."""
+        self._badge_refresh_managed_externally = bool(enabled)
+        if self._badge_refresh_managed_externally:
+            self._mollie_timer.stop()
+            self._stop_mollie_worker()
 
     def _stop_mollie_worker(self) -> None:
         if self._mollie_badge_worker is not None and self._mollie_badge_worker.isRunning():

@@ -43,6 +43,7 @@ from xw_studio.services.inventory.service import (
     StartPreflight,
 )
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
+from xw_studio.services.sendungen.service import OffeneSendungenService
 from xw_studio.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 from xw_studio.ui.modules.rechnungen.reprint_dialog import ReprintPreviewDialog
 from xw_studio.ui.modules.rechnungen.view import RechnungenView
@@ -174,6 +175,8 @@ class _StartDialog(QDialog):
         self,
         preflight: StartPreflight,
         initial_mode: StartMode = StartMode.INVOICES_AND_PRINT,
+        *,
+        allow_mode_selection: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -199,10 +202,14 @@ class _StartDialog(QDialog):
         self._mode_full = QPushButton("📄 + 🖨  Rechnungen + Druck (Noten & Labels vorbereiten)")
         self._mode_full.setCheckable(True)
         self._mode_full.setMinimumHeight(40)
-        full_allowed = not preflight.missing_position_data
-        self._mode_full.setEnabled(full_allowed)
-        self._mode_invoices.setChecked(initial_mode != StartMode.INVOICES_AND_PRINT or not full_allowed)
-        self._mode_full.setChecked(initial_mode == StartMode.INVOICES_AND_PRINT and full_allowed)
+        # Full mode (invoice + label printing) remains available even when
+        # inventory preflight data is missing; only stock updates are skipped.
+        self._mode_full.setEnabled(True)
+        self._mode_invoices.setChecked(initial_mode != StartMode.INVOICES_AND_PRINT)
+        self._mode_full.setChecked(initial_mode == StartMode.INVOICES_AND_PRINT)
+        if not allow_mode_selection:
+            self._mode_invoices.setEnabled(False)
+            self._mode_full.setEnabled(False)
         gb_lay.addWidget(self._mode_invoices)
         gb_lay.addWidget(self._mode_full)
         layout.addWidget(gb)
@@ -280,6 +287,7 @@ class TagesgeschaeftView(QWidget):
         self._reprint_exec_worker: BackgroundWorker | None = None
         self._start_requested_mode: StartMode = StartMode.INVOICES_AND_PRINT
         self._start_selected_mode: StartMode = StartMode.INVOICES_AND_PRINT
+        self._start_include_product_print = False
         self._start_selected_invoice_ids: list[str] = []
         self._start_selected_only = False
         self._pending_start_preflight: StartPreflight | None = None
@@ -343,32 +351,59 @@ class TagesgeschaeftView(QWidget):
         bar_lay.addWidget(title)
         bar_lay.addStretch()
 
-        self._btn_start = QToolButton()
-        self._btn_start.setText("▶  START")
-        self._btn_start.setToolTip("Direktklick: Vollflow | Pfeil: Teil-Flow auswählen")
-        self._btn_start.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self._btn_start = QPushButton("▶  START")
+        self._btn_start.setToolTip("START: Rechnungen + Labels + Fulfillment + Mail")
         self._btn_start.setFixedHeight(34)
-        self._btn_start.setFixedWidth(150)
+        self._btn_start.setFixedWidth(180)
         self._btn_start.setStyleSheet(
-            "QToolButton { background-color: #1976d2; color: white; border-radius: 6px;"
+            "QPushButton { background-color: #1976d2; color: white; border-radius: 6px;"
             " font-weight: bold; font-size: 13px; }"
-            " QToolButton:hover { background-color: #1565c0; }"
-            " QToolButton:pressed { background-color: #0d47a1; }"
+            " QPushButton:hover { background-color: #1565c0; }"
+            " QPushButton:pressed { background-color: #0d47a1; }"
         )
-        menu = QMenu(self._btn_start)
-        act_full = menu.addAction("Vollflow (Rechnungen + Druck)")
-        act_full.triggered.connect(lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT))
-        act_selected = menu.addAction("START SELECTED (markierte Rechnungen)")
-        act_selected.triggered.connect(
-            lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, selected_only=True)
+        self._btn_start.clicked.connect(
+            lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, include_product_print=False)
         )
-        act_invoices = menu.addAction("Nur Rechnungen")
-        act_invoices.triggered.connect(lambda: self._on_start_clicked(StartMode.INVOICES_ONLY))
-        act_print = menu.addAction("Nachdrucke (nur Lagerauffüllung)")
-        act_print.triggered.connect(self._on_reprints_clicked)
-        self._btn_start.setMenu(menu)
-        self._btn_start.clicked.connect(lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT))
         bar_lay.addWidget(self._btn_start)
+
+        self._btn_start_notendruck = QPushButton("▶  START + NOTENDRUCK")
+        self._btn_start_notendruck.setToolTip(
+            "START inkl. Produktdruck (Noten) aller betroffenen Rechnungen"
+        )
+        self._btn_start_notendruck.setFixedHeight(34)
+        self._btn_start_notendruck.setFixedWidth(230)
+        self._btn_start_notendruck.setStyleSheet(
+            "QPushButton { background-color: #0f766e; color: white; border-radius: 6px;"
+            " font-weight: bold; font-size: 13px; }"
+            " QPushButton:hover { background-color: #0d9488; }"
+            " QPushButton:pressed { background-color: #115e59; }"
+        )
+        self._btn_start_notendruck.clicked.connect(
+            lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, include_product_print=True)
+        )
+        bar_lay.addWidget(self._btn_start_notendruck)
+
+        self._btn_start_selected_menu = QToolButton()
+        self._btn_start_selected_menu.setText("START SELECTED ▼")
+        self._btn_start_selected_menu.setToolTip("Varianten nur für markierte Rechnungen")
+        self._btn_start_selected_menu.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._btn_start_selected_menu.setFixedHeight(34)
+        self._btn_start_selected_menu.setFixedWidth(170)
+        self._btn_start_selected_menu.setStyleSheet(
+            "QToolButton { background-color: #455a64; color: white; border-radius: 6px;"
+            " font-weight: bold; font-size: 12px; }"
+            " QToolButton:hover { background-color: #37474f; }"
+            " QToolButton:pressed { background-color: #263238; }"
+        )
+        selected_menu = QMenu(self._btn_start_selected_menu)
+        selected_menu.addAction("START SELECTED").triggered.connect(
+            lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, selected_only=True, include_product_print=False)
+        )
+        selected_menu.addAction("START + NOTENDRUCK SELECTED").triggered.connect(
+            lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, selected_only=True, include_product_print=True)
+        )
+        self._btn_start_selected_menu.setMenu(selected_menu)
+        bar_lay.addWidget(self._btn_start_selected_menu)
 
         self._btn_stop = QPushButton("STOP")
         self._btn_stop.setToolTip("Laufenden START nach der aktuellen Rechnung anhalten")
@@ -401,6 +436,7 @@ class TagesgeschaeftView(QWidget):
         main_layout.addWidget(action_bar)
 
         self._rechnungen_view = RechnungenView(self._container)
+        self._rechnungen_view.set_badge_refresh_managed_externally(True)
         main_layout.addWidget(self._rechnungen_view, stretch=1)
 
     def _refresh_badges(self) -> None:
@@ -411,7 +447,10 @@ class TagesgeschaeftView(QWidget):
             invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             open_count = invoice_service.count_invoices(status=100)
             service: DailyBusinessService = self._container.resolve(DailyBusinessService)
-            return service.load_counts(open_invoice_count=open_count)
+            counts = service.load_counts(open_invoice_count=open_count)
+            sendungen_service: OffeneSendungenService = self._container.resolve(OffeneSendungenService)
+            counts["sendungen"] = max(0, int(sendungen_service.open_count()))
+            return counts
 
         self._badge_worker = BackgroundWorker(job)
         self._badge_worker.signals.result.connect(self._on_badges_result)
@@ -423,8 +462,10 @@ class TagesgeschaeftView(QWidget):
         open_count = max(0, int(counts.get("rechnungen", 0)))
         mollie_count = max(0, int(counts.get("mollie", 0)))
         gutscheine_count = max(0, int(counts.get("gutscheine", 0)))
+        sendungen_count = max(0, int(counts.get("sendungen", 0)))
 
         self._rechnungen_view.update_mollie_alert_count(mollie_count)
+        self._rechnungen_view.update_sendungen_alert_count(sendungen_count)
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.badge_updated.emit(ModuleKey.RECHNUNGEN.value, open_count)
         signals.badge_updated.emit(ModuleKey.GUTSCHEINE.value, gutscheine_count)
@@ -438,10 +479,12 @@ class TagesgeschaeftView(QWidget):
         requested_mode: StartMode = StartMode.INVOICES_AND_PRINT,
         *,
         selected_only: bool = False,
+        include_product_print: bool = False,
     ) -> None:
         if self._start_worker is not None and self._start_worker.isRunning():
             return
         self._start_requested_mode = requested_mode
+        self._start_include_product_print = bool(include_product_print)
         self._start_selected_only = bool(selected_only)
         self._start_selected_invoice_ids = []
         if selected_only:
@@ -479,14 +522,24 @@ class TagesgeschaeftView(QWidget):
         if not isinstance(result, StartPreflight):
             return
         signals: AppSignals = self._container.resolve(AppSignals)
-        dlg = _StartDialog(result, initial_mode=self._start_requested_mode, parent=self)
+        dlg = _StartDialog(
+            result,
+            initial_mode=StartMode.INVOICES_AND_PRINT,
+            allow_mode_selection=False,
+            parent=self,
+        )
         if dlg.exec() != QDialog.DialogCode.Accepted:
             signals.status_message.emit("START abgebrochen", 2500)
             return
-        self._start_selected_mode = dlg.selected_mode
+        self._start_selected_mode = StartMode.INVOICES_AND_PRINT
         self._pending_start_preflight = result
 
-        logger.info("Tagesgeschäft START: mode=%s", self._start_selected_mode.value)
+        logger.info(
+            "Tagesgeschäft START: mode=%s include_product_print=%s selected_only=%s",
+            self._start_selected_mode.value,
+            self._start_include_product_print,
+            self._start_selected_only,
+        )
 
         if (
             (self._start_product_worker is not None and self._start_product_worker.isRunning())
@@ -554,6 +607,7 @@ class TagesgeschaeftView(QWidget):
             invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             batch_result = invoice_service.run_start_fullflow(
                 full_mode=(mode == StartMode.INVOICES_AND_PRINT),
+                print_products=self._start_include_product_print,
                 should_abort=lambda: self._start_abort_requested,
                 invoice_ids=list(self._start_selected_invoice_ids) if self._start_selected_only else None,
             )
@@ -608,6 +662,7 @@ class TagesgeschaeftView(QWidget):
         failures = int(batch.get("failures") or 0)
         successful = int(batch.get("successful") or max(0, processed - failures))
         full_mode = bool(batch.get("full_mode"))
+        print_products = bool(batch.get("print_products"))
         aborted = bool(batch.get("aborted"))
         mode_label = StartMode.INVOICES_AND_PRINT.value if full_mode else StartMode.INVOICES_ONLY.value
 
@@ -625,6 +680,7 @@ class TagesgeschaeftView(QWidget):
 
         lines = [
             f"Modus: {mode_label}",
+            f"Notendruck: {'ja' if print_products else 'nein'}",
             f"Verarbeitete Rechnungen: {processed}",
             f"Erfolgreich: {successful}",
             f"Fehler: {failures}",
@@ -671,6 +727,8 @@ class TagesgeschaeftView(QWidget):
 
     def _set_start_running(self, running: bool) -> None:
         self._btn_start.setEnabled(not running)
+        self._btn_start_notendruck.setEnabled(not running)
+        self._btn_start_selected_menu.setEnabled(not running)
         self._btn_stop.setEnabled(running)
 
     def _on_start_stop_clicked(self) -> None:

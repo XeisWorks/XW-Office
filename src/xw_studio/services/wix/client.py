@@ -762,7 +762,7 @@ class WixOrdersClient:
         started = time.perf_counter()
         order = self._resolve_order(reference)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        logger.info(
+        logger.debug(
             "Wix metric summary_ms=%s ref=%s found=%s",
             elapsed_ms,
             str(reference or "").strip(),
@@ -786,7 +786,7 @@ class WixOrdersClient:
         order_id = str(order.get("id") or "").strip()
         site_id = self._site_id().strip()
         if not order_id or not site_id:
-            logger.info("Wix dashboard resolve failed ref=%s attempts=%s", ref, 3)
+            logger.debug("Wix dashboard resolve failed ref=%s attempts=%s", ref, 3)
             return ""
         return f"https://manage.wix.com/dashboard/{site_id}/ecom-platform/order-details/{order_id}"
 
@@ -830,7 +830,7 @@ class WixOrdersClient:
                     data = payload.get("fulfillableLineItems")
                     if isinstance(data, list):
                         elapsed_ms = int((time.perf_counter() - started) * 1000)
-                        logger.info(
+                        logger.debug(
                             "Wix metric fulfillable_items_ms=%s ref=%s items=%s",
                             elapsed_ms,
                             str(reference or "").strip(),
@@ -839,7 +839,7 @@ class WixOrdersClient:
                         return [item for item in data if isinstance(item, dict)]
                 if isinstance(payload, list):
                     elapsed_ms = int((time.perf_counter() - started) * 1000)
-                    logger.info(
+                    logger.debug(
                         "Wix metric fulfillable_items_ms=%s ref=%s items=%s",
                         elapsed_ms,
                         str(reference or "").strip(),
@@ -850,7 +850,7 @@ class WixOrdersClient:
             except httpx.HTTPError as exc:
                 response = getattr(exc, "response", None)
                 if getattr(response, "status_code", None) == 404:
-                    logger.info(
+                    logger.debug(
                         "WixOrdersClient fulfillable items unavailable ref=%s status=404",
                         str(reference or "").strip(),
                     )
@@ -886,7 +886,7 @@ class WixOrdersClient:
                 )
                 resp.raise_for_status()
                 elapsed_ms = int((time.perf_counter() - started) * 1000)
-                logger.info(
+                logger.debug(
                     "Wix metric create_fulfillment_ms=%s ref=%s lines=%s",
                     elapsed_ms,
                     str(reference or "").strip(),
@@ -1025,13 +1025,13 @@ class WixOrdersClient:
         order = self._resolve_order(ref)
 
         if not order:
-            logger.info("WixOrdersClient: no order found for reference=%r", ref)
+            logger.debug("WixOrdersClient: no order found for reference=%r", ref)
             return []
 
         raw_items = order.get("lineItems") or []
         items = [_parse_order_line_item(item) for item in raw_items if isinstance(item, dict)]
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        logger.info(
+        logger.debug(
             "Wix metric line_items_ms=%s ref=%s items=%s",
             elapsed_ms,
             ref,

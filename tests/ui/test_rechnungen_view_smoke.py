@@ -24,19 +24,20 @@ def test_tagesgeschaeft_contains_rechnungen_view(qtbot: object) -> None:
     qtbot.addWidget(view)
     assert hasattr(view, "_rechnungen_view")  # noqa: SLF001
     assert view._btn_start.text() == "▶  START"  # noqa: SLF001
-    assert view._btn_start.menu() is not None  # noqa: SLF001
+    assert view._btn_start_notendruck.text() == "▶  START + NOTENDRUCK"  # noqa: SLF001
+    assert view._btn_start_selected_menu.menu() is not None  # noqa: SLF001
     assert view._btn_stop.text() == "STOP"  # noqa: SLF001
     assert not view._btn_stop.isEnabled()  # noqa: SLF001
 
 
-def test_start_dialog_forces_invoice_mode_when_print_plan_missing(qtbot: object) -> None:
+def test_start_dialog_keeps_full_mode_when_print_plan_missing(qtbot: object) -> None:
     preflight = StartPreflight(open_invoice_count=2, decisions=[], missing_position_data=True)
     dialog = _StartDialog(preflight, initial_mode=StartMode.INVOICES_AND_PRINT)
     qtbot.addWidget(dialog)
 
-    assert dialog.full_mode is False
-    assert dialog.selected_mode == StartMode.INVOICES_ONLY
-    assert not dialog._mode_full.isEnabled()  # noqa: SLF001
+    assert dialog.full_mode is True
+    assert dialog.selected_mode == StartMode.INVOICES_AND_PRINT
+    assert dialog._mode_full.isEnabled()  # noqa: SLF001
 
 
 def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
