@@ -75,7 +75,6 @@ def test_print_pdf_with_qprinter_draws_image_without_scaling(monkeypatch, tmp_pa
 
     monkeypatch.setattr(pdf_renderer, "QPrinter", PrinterStub)
     monkeypatch.setattr(pdf_renderer, "QPainter", PainterStub)
-
     pdf_renderer.print_pdf_with_qprinter(str(pdf_path), "Printer", dpi=600)
 
     assert calls["resolution"] == 600
@@ -359,7 +358,10 @@ def test_print_pdf_with_qprinter_sets_fallback_resolution_when_driver_dpi_invali
 def test_print_pdf_with_qprinter_logs_print_metrics(monkeypatch, tmp_path, caplog) -> None:
     pdf_path = tmp_path / "a4.pdf"
     doc = fitz.open()
-    doc.new_page(width=595, height=842)
+    page = doc.new_page(width=595, height=842)
+    for y in range(80, 220, 18):
+        page.draw_line((80, y), (500, y), color=(0, 0, 0), width=0.8)
+    page.insert_text((100, 260), "Notation", fontsize=24, color=(0, 0, 0))
     doc.save(pdf_path)
     doc.close()
 
@@ -415,6 +417,11 @@ def test_print_pdf_with_qprinter_logs_print_metrics(monkeypatch, tmp_path, caplo
 
     monkeypatch.setattr(pdf_renderer, "QPrinter", PrinterStub)
     monkeypatch.setattr(pdf_renderer, "QPainter", PainterStub)
+    monkeypatch.setattr(
+        pdf_renderer,
+        "classify_pdf_page_for_print",
+        lambda _page: pdf_renderer.PagePrintAnalysis("notation", 0.9, 0.03, 0.04, 0.0, reason="test"),
+    )
 
     with caplog.at_level("INFO", logger="xw_studio.services.printing.pdf_renderer"):
         pdf_renderer.print_pdf_with_qprinter(
@@ -431,11 +438,11 @@ def test_print_pdf_with_qprinter_logs_print_metrics(monkeypatch, tmp_path, caplo
     assert "placement_mode=calibrated" in caplog.text
     assert "x_offset_mm=-1.500" in caplog.text
     assert "draw_px=(" in caplog.text
-    assert "render_color_mode=gray" in caplog.text
-    assert "black_enhancement=music_black" in caplog.text
+    assert "effective_render_color_mode=gray" in caplog.text
+    assert "effective_black_enhancement=adaptive_music" in caplog.text
 
 
-def test_print_pdf_with_qprinter_renders_product_as_enhanced_grayscale(monkeypatch) -> None:
+def test_print_pdf_with_qprinter_respects_explicit_grayscale_enhancement(monkeypatch) -> None:
     calls: dict[str, object] = {}
 
     class PixmapStub:
@@ -517,7 +524,13 @@ def test_print_pdf_with_qprinter_renders_product_as_enhanced_grayscale(monkeypat
     monkeypatch.setattr(pdf_renderer, "QPainter", PainterStub)
     monkeypatch.setattr(pdf_renderer.fitz, "open", lambda _path: DocStub())
 
-    pdf_renderer.print_pdf_with_qprinter("fake.pdf", "Printer", job_kind="product")
+    pdf_renderer.print_pdf_with_qprinter(
+        "fake.pdf",
+        "Printer",
+        job_kind="product",
+        render_color_mode="gray",
+        black_enhancement="adaptive_music",
+    )
 
     assert calls["pixmap_kwargs"] == {"dpi": 600, "colorspace": fitz.csGRAY, "alpha": False}
     image = calls["draw_image"]
@@ -546,6 +559,180 @@ def test_music_black_enhancement_makes_notation_pixels_much_darker() -> None:
     assert enhanced[4] == 0
     assert enhanced[5] == 0
     assert enhanced[6] == 0
+
+
+def test_adaptive_music_enhancement_keeps_white_and_darkens_notes() -> None:
+    enhanced = pdf_renderer._enhance_gray_samples(bytes([255, 248, 220, 120, 60, 0]), "adaptive_music", 180)
+
+    assert enhanced[0] == 255
+    assert enhanced[1] == 255
+    assert enhanced[2] < 220
+    assert enhanced[3] < 120
+    assert enhanced[4] == 0
+    assert enhanced[5] == 0
+
+
+def test_classify_notation_page_without_cover_assumption() -> None:
+    class PixmapStub:
+        width = 100
+        height = 100
+        samples = (bytes([255, 255, 255]) * 9300) + (bytes([0, 0, 0]) * 500) + (bytes([230, 230, 230]) * 200)
+
+    class PageStub:
+        def get_pixmap(self, **kwargs: object) -> PixmapStub:
+            assert kwargs["dpi"] == 72
+            assert kwargs["colorspace"] == fitz.csRGB
+            return PixmapStub()
+
+    analysis = pdf_renderer.classify_pdf_page_for_print(PageStub())  # type: ignore[arg-type]
+
+    assert analysis.page_class == "notation"
+
+
+def test_classify_graphic_page_from_midtones_and_color() -> None:
+    class PixmapStub:
+        width = 100
+        height = 100
+        samples = (bytes([160, 160, 160]) * 5000) + (bytes([180, 130, 90]) * 3000) + (bytes([255, 255, 255]) * 2000)
+
+    class PageStub:
+        def get_pixmap(self, **_kwargs: object) -> PixmapStub:
+            return PixmapStub()
+
+    analysis = pdf_renderer.classify_pdf_page_for_print(PageStub())  # type: ignore[arg-type]
+
+    assert analysis.page_class == "graphic"
+
+
+def test_auto_render_strategy_protects_graphic_and_mixed_pages() -> None:
+    notation = pdf_renderer.PagePrintAnalysis("notation", 0.9, 0.03, 0.04, 0.0)
+    graphic = pdf_renderer.PagePrintAnalysis("graphic", 0.4, 0.1, 0.4, 0.1)
+    mixed = pdf_renderer.PagePrintAnalysis("mixed", 0.73, 0.02, 0.14, 0.0)
+
+    assert pdf_renderer._resolve_page_render_strategy(
+        job_kind="product",
+        requested_render_color_mode="auto",
+        requested_black_enhancement="auto_music",
+        analysis=notation,
+    ).black_enhancement == "adaptive_music"
+    assert pdf_renderer._resolve_page_render_strategy(
+        job_kind="product",
+        requested_render_color_mode="auto",
+        requested_black_enhancement="auto_music",
+        analysis=graphic,
+    ).black_enhancement == "none"
+    assert pdf_renderer._resolve_page_render_strategy(
+        job_kind="product",
+        requested_render_color_mode="auto",
+        requested_black_enhancement="auto_music",
+        analysis=mixed,
+    ).black_enhancement == "none"
+
+
+def test_explicit_music_black_and_none_overrides_are_respected() -> None:
+    analysis = pdf_renderer.PagePrintAnalysis("graphic", 0.4, 0.1, 0.4, 0.1)
+
+    assert pdf_renderer._resolve_page_render_strategy(
+        job_kind="product",
+        requested_render_color_mode="gray",
+        requested_black_enhancement="music_black",
+        analysis=analysis,
+    ).black_enhancement == "music_black"
+    assert pdf_renderer._resolve_page_render_strategy(
+        job_kind="product",
+        requested_render_color_mode="rgb",
+        requested_black_enhancement="none",
+        analysis=analysis,
+    ).render_color_mode == "rgb"
+
+
+def test_auto_page_analysis_is_cached_across_copies(monkeypatch) -> None:
+    calls: dict[str, object] = {"analysis": 0, "draws": 0}
+
+    class PixmapStub:
+        width = 1
+        height = 1
+        stride = 1
+        samples = bytes([0])
+
+    class PageStub:
+        rect = types.SimpleNamespace(width=595.0, height=842.0)
+
+        def get_pixmap(self, **_kwargs: object) -> PixmapStub:
+            return PixmapStub()
+
+    class DocStub:
+        def __len__(self) -> int:
+            return 2
+
+        def __getitem__(self, index: int) -> PageStub:
+            assert index in {0, 1}
+            return PageStub()
+
+        def close(self) -> None:
+            return None
+
+    class PrinterStub:
+        class PrinterMode:
+            HighResolution = object()
+
+        class OutputFormat:
+            NativeFormat = object()
+
+        class Unit:
+            DevicePixel = object()
+
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def setOutputFormat(self, _value: object) -> None:
+            return None
+
+        def setPrinterName(self, _value: str) -> None:
+            return None
+
+        def setFullPage(self, _value: bool) -> None:
+            return None
+
+        def resolution(self) -> int:
+            return 600
+
+        def pageRect(self, _unit: object) -> QRect:
+            return QRect(0, 0, 4960, 7016)
+
+        def paperRect(self, _unit: object) -> QRect:
+            return QRect(0, 0, 4960, 7016)
+
+        def pageLayout(self) -> object:
+            return object()
+
+        def newPage(self) -> None:
+            return None
+
+    class PainterStub:
+        def begin(self, _printer: object) -> bool:
+            return True
+
+        def drawImage(self, _pos: QPointF, _image: object) -> None:
+            calls["draws"] = int(calls["draws"]) + 1
+
+        def end(self) -> None:
+            return None
+
+    def fake_analysis(_page: object, *, sample_dpi: int = 72) -> pdf_renderer.PagePrintAnalysis:
+        assert sample_dpi == 72
+        calls["analysis"] = int(calls["analysis"]) + 1
+        return pdf_renderer.PagePrintAnalysis("notation", 0.9, 0.03, 0.04, 0.0)
+
+    monkeypatch.setattr(pdf_renderer, "QPrinter", PrinterStub)
+    monkeypatch.setattr(pdf_renderer, "QPainter", PainterStub)
+    monkeypatch.setattr(pdf_renderer.fitz, "open", lambda _path: DocStub())
+    monkeypatch.setattr(pdf_renderer, "classify_pdf_page_for_print", fake_analysis)
+
+    pdf_renderer.print_pdf_with_qprinter("fake.pdf", "Printer", job_kind="product", copies=2)
+
+    assert calls["analysis"] == 2
+    assert calls["draws"] == 4
 
 
 def test_create_calibration_pdf_contains_one_page(tmp_path) -> None:

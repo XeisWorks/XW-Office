@@ -29,10 +29,10 @@ def test_music_and_product_jobs_default_to_gray_with_black_enhancement() -> None
     product = PdfPrintJob(pdf_path="a.pdf", printer_name="P", job_kind="product")
     invoice = PdfPrintJob(pdf_path="a.pdf", printer_name="P", job_kind="invoice")
 
-    assert music.effective_render_color_mode == "gray"
-    assert music.effective_black_enhancement == "music_black"
-    assert product.effective_render_color_mode == "gray"
-    assert product.effective_black_enhancement == "music_black"
+    assert music.effective_render_color_mode == "auto"
+    assert music.effective_black_enhancement == "auto_music"
+    assert product.effective_render_color_mode == "auto"
+    assert product.effective_black_enhancement == "auto_music"
     assert invoice.effective_render_color_mode == "rgb"
     assert invoice.effective_black_enhancement == "none"
 

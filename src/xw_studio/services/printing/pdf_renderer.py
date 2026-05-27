@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
@@ -16,10 +17,49 @@ logger = logging.getLogger(__name__)
 MUSIC_DPI = 600
 INVOICE_DPI = 300
 PlacementMode = Literal["paper_origin", "printable_origin", "calibrated"]
-RenderColorMode = Literal["rgb", "gray"]
-BlackEnhancement = Literal["none", "darken", "music_black", "threshold"]
+PageClass = Literal["notation", "graphic", "mixed"]
+RenderColorMode = Literal["auto", "rgb", "gray"]
+ResolvedRenderColorMode = Literal["rgb", "gray"]
+BlackEnhancement = Literal[
+    "auto",
+    "none",
+    "darken",
+    "mild_darken",
+    "adaptive_music",
+    "auto_music",
+    "music_black",
+    "threshold",
+]
+ResolvedBlackEnhancement = Literal[
+    "none",
+    "darken",
+    "mild_darken",
+    "adaptive_music",
+    "music_black",
+    "threshold",
+]
 _VALID_PLACEMENT_MODES = {"paper_origin", "printable_origin", "calibrated"}
 _DARKEN_FACTOR = 0.78
+_MILD_DARKEN_FACTOR = 0.90
+
+
+@dataclass(frozen=True)
+class PagePrintAnalysis:
+    page_class: PageClass
+    white_ratio: float
+    black_ratio: float
+    midtone_ratio: float
+    color_ratio: float
+    variation_score: float = 0.0
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class PageRenderStrategy:
+    render_color_mode: ResolvedRenderColorMode
+    black_enhancement: ResolvedBlackEnhancement
+    analysis: PagePrintAnalysis | None = None
+    notation_boost: str = "medium"
 
 
 def _expand_ranges(page_ranges: list[range], page_count: int) -> list[int]:
@@ -67,18 +107,24 @@ def _placement_mode(value: str) -> PlacementMode:
 
 def _render_color_mode(value: str, *, job_kind: str) -> RenderColorMode:
     normalized = str(value or "auto").strip().casefold()
-    if normalized == "auto":
-        return "gray" if str(job_kind or "").strip().casefold() in {"music", "product"} else "rgb"
-    if normalized in {"rgb", "gray"}:
+    if normalized in {"auto", "rgb", "gray"}:
         return cast(RenderColorMode, normalized)
-    return "rgb"
+    return "auto" if str(job_kind or "").strip().casefold() in {"music", "product"} else "rgb"
 
 
 def _black_enhancement(value: str, *, job_kind: str) -> BlackEnhancement:
     normalized = str(value or "auto").strip().casefold()
     if normalized == "auto":
-        return "music_black" if str(job_kind or "").strip().casefold() in {"music", "product"} else "none"
-    if normalized in {"none", "darken", "music_black", "threshold"}:
+        return "auto_music" if str(job_kind or "").strip().casefold() in {"music", "product"} else "none"
+    if normalized in {
+        "none",
+        "darken",
+        "mild_darken",
+        "adaptive_music",
+        "auto_music",
+        "music_black",
+        "threshold",
+    }:
         return cast(BlackEnhancement, normalized)
     return "none"
 
@@ -125,12 +171,15 @@ def _draw_origin(*, dpi: int, x_offset_mm: float, y_offset_mm: float) -> QPointF
     return QPointF(mm_to_px(x_offset_mm, dpi), mm_to_px(y_offset_mm, dpi))
 
 
-def _enhance_gray_samples(samples: bytes, enhancement: BlackEnhancement, threshold: int) -> bytes:
+def _enhance_gray_samples(samples: bytes, enhancement: ResolvedBlackEnhancement, threshold: int) -> bytes:
     if enhancement == "none":
         return samples
     if enhancement == "threshold":
         limit = max(0, min(int(threshold), 255))
         return bytes(0 if value <= limit else 255 for value in samples)
+    if enhancement == "adaptive_music":
+        table = bytes(_adaptive_music_value(value) for value in range(256))
+        return samples.translate(table)
     if enhancement == "music_black":
         black_knee = max(0, min(int(threshold), 245))
         white_knee = 252
@@ -144,16 +193,31 @@ def _enhance_gray_samples(samples: bytes, enhancement: BlackEnhancement, thresho
             for value in range(256)
         )
         return samples.translate(table)
+    if enhancement == "mild_darken":
+        table = bytes(255 if value >= 250 else max(0, min(int(value * _MILD_DARKEN_FACTOR), 255)) for value in range(256))
+        return samples.translate(table)
     table = bytes(255 if value >= 250 else max(0, min(int(value * _DARKEN_FACTOR), 255)) for value in range(256))
     return samples.translate(table)
+
+
+def _adaptive_music_value(value: int) -> int:
+    if value >= 248:
+        return 255
+    if value <= 70:
+        return 0
+    normalized = value / 255.0
+    curved = normalized**1.85
+    if value <= 140:
+        curved *= 0.80
+    return max(0, min(int(curved * 255), 255))
 
 
 def _render_page_image(
     page: fitz.Page,
     *,
     dpi: int,
-    render_color_mode: RenderColorMode,
-    black_enhancement: BlackEnhancement,
+    render_color_mode: ResolvedRenderColorMode,
+    black_enhancement: ResolvedBlackEnhancement,
     black_threshold: int,
 ) -> QImage:
     if render_color_mode == "gray":
@@ -176,6 +240,88 @@ def _render_page_image(
         QImage.Format.Format_RGB888,
     )
     return image.copy()
+
+
+def classify_pdf_page_for_print(page: fitz.Page, *, sample_dpi: int = 72) -> PagePrintAnalysis:
+    pix = page.get_pixmap(dpi=sample_dpi, colorspace=fitz.csRGB, alpha=False)
+    samples = memoryview(pix.samples)
+    total = max(int(pix.width) * int(pix.height), 1)
+    white = 0
+    black = 0
+    midtone = 0
+    color = 0
+    luma_sum = 0
+    luma_sq_sum = 0
+
+    for index in range(0, len(samples), 3):
+        r = int(samples[index])
+        g = int(samples[index + 1])
+        b = int(samples[index + 2])
+        high = max(r, g, b)
+        low = min(r, g, b)
+        luma = (77 * r + 150 * g + 29 * b) >> 8
+        if r >= 245 and g >= 245 and b >= 245:
+            white += 1
+        if luma <= 80:
+            black += 1
+        if 90 <= luma <= 235:
+            midtone += 1
+        if high - low > 18:
+            color += 1
+        luma_sum += luma
+        luma_sq_sum += luma * luma
+
+    white_ratio = white / total
+    black_ratio = black / total
+    midtone_ratio = midtone / total
+    color_ratio = color / total
+    mean = luma_sum / total
+    variation = max((luma_sq_sum / total) - (mean * mean), 0.0) ** 0.5 / 255.0
+
+    if color_ratio > 0.015:
+        return PagePrintAnalysis("graphic", white_ratio, black_ratio, midtone_ratio, color_ratio, variation, "color")
+    if midtone_ratio > 0.18 or white_ratio < 0.68:
+        return PagePrintAnalysis("graphic", white_ratio, black_ratio, midtone_ratio, color_ratio, variation, "midtone")
+    if white_ratio >= 0.78 and color_ratio <= 0.008 and midtone_ratio <= 0.12 and 0.002 <= black_ratio <= 0.22:
+        return PagePrintAnalysis("notation", white_ratio, black_ratio, midtone_ratio, color_ratio, variation, "white-black")
+    return PagePrintAnalysis("mixed", white_ratio, black_ratio, midtone_ratio, color_ratio, variation, "uncertain")
+
+
+def _is_music_like_job(job_kind: str) -> bool:
+    return str(job_kind or "").strip().casefold() in {"music", "product"}
+
+
+def _resolve_page_render_strategy(
+    *,
+    job_kind: str,
+    requested_render_color_mode: RenderColorMode,
+    requested_black_enhancement: BlackEnhancement,
+    analysis: PagePrintAnalysis | None,
+) -> PageRenderStrategy:
+    if not _is_music_like_job(job_kind):
+        color = "rgb" if requested_render_color_mode == "auto" else cast(ResolvedRenderColorMode, requested_render_color_mode)
+        enhancement = "none" if requested_black_enhancement in {"auto", "auto_music"} else requested_black_enhancement
+        return PageRenderStrategy(color, cast(ResolvedBlackEnhancement, enhancement), analysis, "off")
+
+    if requested_black_enhancement not in {"auto", "auto_music"}:
+        color = "gray" if requested_render_color_mode == "auto" else requested_render_color_mode
+        return PageRenderStrategy(
+            cast(ResolvedRenderColorMode, color),
+            cast(ResolvedBlackEnhancement, requested_black_enhancement),
+            analysis,
+            "explicit",
+        )
+
+    if requested_render_color_mode != "auto":
+        color = cast(ResolvedRenderColorMode, requested_render_color_mode)
+        enhancement: ResolvedBlackEnhancement = "adaptive_music" if color == "gray" else "none"
+        return PageRenderStrategy(color, enhancement, analysis, "medium")
+
+    if analysis is not None and analysis.page_class == "notation":
+        return PageRenderStrategy("gray", "adaptive_music", analysis, "medium")
+    if analysis is not None and analysis.page_class == "mixed":
+        return PageRenderStrategy("rgb", "none", analysis, "conservative")
+    return PageRenderStrategy("rgb", "none", analysis, "off")
 
 
 def print_pdf_with_qprinter(
@@ -214,6 +360,7 @@ def print_pdf_with_qprinter(
         if not page_indices:
             logger.warning("No pages to print for %s", pdf_path)
             return
+        analysis_cache: dict[int, PagePrintAnalysis] = {}
 
         for copy_index in range(effective_copies):
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
@@ -238,14 +385,38 @@ def print_pdf_with_qprinter(
                     if page_offset > 0:
                         printer.newPage()
                     page = doc[page_num]
+                    analysis = None
+                    if (
+                        _is_music_like_job(job_kind)
+                        and effective_color_mode == "auto"
+                        and effective_black_enhancement in {"auto", "auto_music"}
+                    ):
+                        analysis = analysis_cache.get(page_num)
+                        if analysis is None:
+                            analysis = classify_pdf_page_for_print(page)
+                            analysis_cache[page_num] = analysis
+                    strategy = _resolve_page_render_strategy(
+                        job_kind=job_kind,
+                        requested_render_color_mode=effective_color_mode,
+                        requested_black_enhancement=effective_black_enhancement,
+                        analysis=analysis,
+                    )
                     image = _render_page_image(
                         page,
                         dpi=render_dpi,
-                        render_color_mode=effective_color_mode,
-                        black_enhancement=effective_black_enhancement,
+                        render_color_mode=strategy.render_color_mode,
+                        black_enhancement=strategy.black_enhancement,
                         black_threshold=black_threshold,
                     )
                     origin = _draw_origin(dpi=render_dpi, x_offset_mm=x_offset_mm, y_offset_mm=y_offset_mm)
+                    _log_page_strategy(
+                        printer_name=printer_name,
+                        pdf_path=pdf_path,
+                        page_index=page_num,
+                        job_kind=job_kind,
+                        strategy=strategy,
+                        dpi=render_dpi,
+                    )
                     _log_page_metrics(
                         printer=printer,
                         printer_name=printer_name,
@@ -259,8 +430,8 @@ def print_pdf_with_qprinter(
                         x_offset_mm=x_offset_mm,
                         y_offset_mm=y_offset_mm,
                         draw_origin=origin,
-                        render_color_mode=effective_color_mode,
-                        black_enhancement=effective_black_enhancement,
+                        render_color_mode=strategy.render_color_mode,
+                        black_enhancement=strategy.black_enhancement,
                         black_threshold=black_threshold,
                     )
                     painter.drawImage(origin, image)
@@ -307,8 +478,8 @@ def print_pdf(
         fallback_dpi=dpi,
         placement_mode="paper_origin",
         job_kind="music",
-        render_color_mode="gray",
-        black_enhancement="music_black",
+        render_color_mode="auto",
+        black_enhancement="auto_music",
     )
 
 
@@ -326,8 +497,8 @@ def _log_page_metrics(
     x_offset_mm: float,
     y_offset_mm: float,
     draw_origin: QPointF,
-    render_color_mode: RenderColorMode,
-    black_enhancement: BlackEnhancement,
+    render_color_mode: ResolvedRenderColorMode,
+    black_enhancement: ResolvedBlackEnhancement,
     black_threshold: int,
 ) -> None:
     full_rect, paint_rect = _safe_layout_rects(printer, effective_dpi)
@@ -358,6 +529,37 @@ def _log_page_metrics(
         render_color_mode,
         black_enhancement,
         black_threshold,
+    )
+
+
+def _log_page_strategy(
+    *,
+    printer_name: str,
+    pdf_path: str,
+    page_index: int,
+    job_kind: str,
+    strategy: PageRenderStrategy,
+    dpi: int,
+) -> None:
+    analysis = strategy.analysis
+    logger.info(
+        "PDF print page strategy: printer='%s' file='%s' page_index=%s job_kind=%s page_class=%s "
+        "white_ratio=%.4f black_ratio=%.4f midtone_ratio=%.4f color_ratio=%.4f "
+        "effective_render_color_mode=%s effective_black_enhancement=%s notation_boost=%s dpi=%s reason=%s",
+        printer_name,
+        pdf_path,
+        page_index,
+        job_kind,
+        analysis.page_class if analysis is not None else "not_analyzed",
+        analysis.white_ratio if analysis is not None else 0.0,
+        analysis.black_ratio if analysis is not None else 0.0,
+        analysis.midtone_ratio if analysis is not None else 0.0,
+        analysis.color_ratio if analysis is not None else 0.0,
+        strategy.render_color_mode,
+        strategy.black_enhancement,
+        strategy.notation_boost,
+        dpi,
+        analysis.reason if analysis is not None else "explicit",
     )
 
 
