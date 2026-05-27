@@ -76,3 +76,30 @@ def test_import_legacy_print_data_persists_default_and_title_configs(monkeypatch
     assert row["print_profile_id"] == "noten_a4_duplex"
     assert row["print_plan"] == [{"range": "Alle Seiten", "profile_id": "noten_a4_duplex"}]
     assert row["title_print_configs"]["Sidonje Polka"]["path"] == str(pdf_title)
+
+
+def test_save_product_print_config_persists_title_and_default_when_missing() -> None:
+    repo = _RepoStub()
+    svc = InventoryService(AppConfig(), repo)
+
+    svc.save_product_print_config(
+        sku="xw-4553",
+        name="Test Title",
+        print_file_path="C:/scores/test.pdf",
+        print_profile_id="noten_duplex",
+        print_plan=[{"range": "Alle Seiten", "profile_id": "noten_duplex"}],
+    )
+
+    rows = svc.list_products()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.sku == "XW-4553"
+    assert row.print_file_path == "C:/scores/test.pdf"
+    assert row.print_profile_id == "noten_duplex"
+    assert row.title_print_configs == {
+        "Test Title": {
+            "path": "C:/scores/test.pdf",
+            "profile_id": "noten_duplex",
+            "print_plan": [{"range": "Alle Seiten", "profile_id": "noten_duplex"}],
+        }
+    }

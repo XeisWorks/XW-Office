@@ -2479,9 +2479,9 @@ class RechnungenView(QWidget):
                 header_row.addWidget(print_btn)
                 self._piece_print_buttons.append(print_btn)
 
-                manage_btn = QPushButton("Produkte")
+                manage_btn = QPushButton("Druckplan")
                 manage_btn.setFixedHeight(24)
-                manage_btn.setToolTip("Produkt-Pipeline oeffnen, um PDF-Pfad oder Druckplan zu pflegen")
+                manage_btn.setToolTip("PDF-Pfad und Druckplan direkt fuer dieses Produkt pflegen")
                 manage_btn.clicked.connect(lambda _checked=False, block=item: self._on_product_manage_clicked(block))
                 header_row.addWidget(manage_btn)
 
@@ -2578,12 +2578,18 @@ class RechnungenView(QWidget):
             qty_input.setEnabled(enabled)
 
     def _on_product_manage_clicked(self, block: PieceBlock) -> None:
+        from xw_studio.ui.modules.rechnungen.print_dialog import _configure_missing_piece_print
+
+        if _configure_missing_piece_print(self, self._container, block):
+            signals: AppSignals = self._container.resolve(AppSignals)
+            signals.status_message.emit(f"Druckkonfiguration fuer {block.sku} gespeichert.", 5000)
+            self._on_stuecke_loaded(self._current_piece_blocks)
+            return
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.status_message.emit(
-            f"Produkte-Modul fuer SKU {block.sku} oeffnen und PDF-Pfad/Druckplan pflegen.",
+            f"Druckkonfiguration fuer {block.sku} nicht geaendert.",
             5000,
         )
-        signals.navigate_to_module.emit(ModuleKey.PRODUCTS.value)
 
     @staticmethod
     def _piece_header_text(block: PieceBlock, flagged_for_print: bool) -> str:

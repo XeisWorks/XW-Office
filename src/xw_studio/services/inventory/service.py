@@ -523,6 +523,68 @@ class InventoryService:
         ]
         self._settings_repo.set_value_json(_PRODUCTS_KEY, json.dumps(payload, ensure_ascii=False))
 
+    def save_product_print_config(
+        self,
+        *,
+        sku: str,
+        name: str = "",
+        print_file_path: str,
+        print_profile_id: str,
+        print_plan: list[dict[str, str]] | None = None,
+    ) -> ProductRow:
+        """Persist a default and title-specific print config for one SKU."""
+        clean_sku = str(sku or "").strip().upper()
+        if not clean_sku:
+            raise RuntimeError("SKU fehlt")
+        clean_path = str(print_file_path or "").strip()
+        clean_profile = str(print_profile_id or "").strip()
+        clean_plan = [entry for entry in (print_plan or []) if isinstance(entry, dict)]
+        if not clean_path:
+            raise RuntimeError("Druckpfad fehlt")
+        if not clean_profile and not clean_plan:
+            raise RuntimeError("Druckplan oder Profil fehlt")
+
+        rows = self.list_products()
+        by_sku = {row.sku.strip().upper(): row for row in rows if row.sku.strip()}
+        current = by_sku.get(clean_sku)
+        if current is None:
+            current = ProductRow(
+                sku=clean_sku,
+                name=str(name or clean_sku).strip(),
+                category="",
+                on_hand=0,
+                price_eur="",
+                wix_id="",
+                sevdesk_id="",
+            )
+
+        title_configs = dict(current.title_print_configs or {})
+        title = str(name or current.name or "").strip()
+        title_config = {
+            "path": clean_path,
+            "profile_id": clean_profile,
+            "print_plan": clean_plan,
+        }
+        if title:
+            title_configs[title] = title_config
+
+        updated = ProductRow(
+            sku=current.sku or clean_sku,
+            name=current.name or title or clean_sku,
+            category=current.category,
+            on_hand=current.on_hand,
+            price_eur=current.price_eur,
+            wix_id=current.wix_id,
+            sevdesk_id=current.sevdesk_id,
+            print_file_path=current.print_file_path or clean_path,
+            print_profile_id=current.print_profile_id or clean_profile,
+            print_plan=list(current.print_plan or clean_plan),
+            title_print_configs=title_configs,
+        )
+        by_sku[clean_sku] = updated
+        self.save_products(sorted(by_sku.values(), key=lambda row: row.sku))
+        return updated
+
     def load_print_plans(self) -> list[dict[str, object]]:
         """Load print plan list (free-form JSON objects) from settings."""
         if self._settings_repo is None:
