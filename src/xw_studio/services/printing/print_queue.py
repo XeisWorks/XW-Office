@@ -146,7 +146,7 @@ class _PrintQueueWorker(QThread):
                 job.printer_name,
                 job.pdf_path,
                 job.copies,
-                job.effective_dpi,
+                job.dpi if job.dpi is not None else f"queue-default/fallback-{job.effective_dpi}",
                 job.pages,
             )
             print_pdf_with_qprinter(
@@ -154,7 +154,8 @@ class _PrintQueueWorker(QThread):
                 job.printer_name,
                 pages=job.pages,
                 copies=job.copies,
-                dpi=job.effective_dpi,
+                dpi=job.dpi,
+                fallback_dpi=job.effective_dpi,
                 center_on_page=job.center_on_page,
             )
             return

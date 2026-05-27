@@ -29,7 +29,7 @@ class PdfPrintJob:
     dpi: int | None = None
     job_kind: PrintJobKind = "product"
     description: str = ""
-    center_on_page: bool = True
+    center_on_page: bool = False
     cleanup_paths: tuple[str, ...] = field(default_factory=tuple)
     id: str = field(default_factory=lambda: uuid4().hex)
 

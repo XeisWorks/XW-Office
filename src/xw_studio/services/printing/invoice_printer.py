@@ -69,7 +69,7 @@ class InvoicePrinter:
             size,
         )
         profile = self._printing.resolve_profile("invoice")
-        dpi = int(profile.dpi if profile is not None and profile.dpi else self._printing.invoice_dpi or 300)
+        dpi = int(profile.dpi) if profile is not None and profile.dpi else None
         queue = self._print_queue or global_print_queue()
         queue.enqueue(
             PdfPrintJob(

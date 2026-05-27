@@ -9,9 +9,11 @@ from xw_studio.services.printing.print_jobs import BrotherLbxLabelJob, PdfPrintJ
 
 def test_print_queue_worker_executes_jobs_sequentially(monkeypatch) -> None:
     calls: list[str] = []
+    pdf_kwargs: dict[str, object] = {}
 
-    def fake_pdf(*_args: object, **_kwargs: object) -> None:
+    def fake_pdf(*_args: object, **kwargs: object) -> None:
         calls.append("pdf")
+        pdf_kwargs.update(kwargs)
 
     def fake_lbx(_job: BrotherLbxLabelJob) -> None:
         calls.append("lbx")
@@ -25,6 +27,9 @@ def test_print_queue_worker_executes_jobs_sequentially(monkeypatch) -> None:
     )
 
     assert calls == ["pdf", "lbx"]
+    assert pdf_kwargs["dpi"] is None
+    assert pdf_kwargs["fallback_dpi"] == 600
+    assert pdf_kwargs["center_on_page"] is False
 
 
 def test_brother_lbx_job_initializes_and_uninitializes_com(monkeypatch, tmp_path) -> None:

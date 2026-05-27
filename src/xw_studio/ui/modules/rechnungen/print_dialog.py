@@ -15,11 +15,7 @@ from xw_studio.services.products.print_decision import PieceBlock
 from xw_studio.services.printing.print_jobs import PdfPrintJob, PrintJobKind
 from xw_studio.services.printing.print_queue import PrintQueueService
 from xw_studio.services.printing.planned_pdf_printer import print_pdf_by_plan
-from xw_studio.services.printing.pdf_renderer import (
-    INVOICE_DPI,
-    MUSIC_DPI,
-    page_indices_from_qprinter,
-)
+from xw_studio.services.printing.pdf_renderer import page_indices_from_qprinter
 
 if TYPE_CHECKING:
     from xw_studio.core.container import Container
@@ -56,7 +52,6 @@ def _print_with_dialog(
     container: Container,
     *,
     title: str,
-    dpi: int,
     job_kind: PrintJobKind,
 ) -> None:
     if not _check_printer_runtime(parent, container):
@@ -101,7 +96,7 @@ def _print_with_dialog(
             printer_name=printer_name,
             pages=indices,
             copies=1,
-            dpi=dpi,
+            dpi=None,
             job_kind=job_kind,
             description=f"Manueller PDF-Druck: {path}",
         )
@@ -109,25 +104,21 @@ def _print_with_dialog(
 
 
 def run_invoice_pdf_print(parent: QWidget, container: Container) -> None:
-    """Pick a PDF, show print dialog, print at invoice DPI (respects page range from dialog)."""
-    dpi = int(container.config.printing.invoice_dpi or INVOICE_DPI)
+    """Pick a PDF, show print dialog, and queue it with the selected printer."""
     _print_with_dialog(
         parent,
         container,
         title="PDF auswählen (Rechnung)",
-        dpi=dpi,
         job_kind="invoice",
     )
 
 
 def run_label_pdf_print(parent: QWidget, container: Container) -> None:
-    """Pick a label PDF, show print dialog, print at invoice DPI."""
-    dpi = int(container.config.printing.invoice_dpi or INVOICE_DPI)
+    """Pick a label PDF, show print dialog, and queue it with the selected printer."""
     _print_with_dialog(
         parent,
         container,
         title="PDF auswählen (Label)",
-        dpi=dpi,
         job_kind="label",
     )
 
@@ -139,25 +130,21 @@ def run_plc_label_pdf_print(
     invoice_number: str,
 ) -> None:
     """Pick and print PLC label PDF for a specific invoice row."""
-    dpi = int(container.config.printing.invoice_dpi or INVOICE_DPI)
     title = f"PLC-Label PDF auswählen ({invoice_number})" if invoice_number else "PLC-Label PDF auswählen"
     _print_with_dialog(
         parent,
         container,
         title=title,
-        dpi=dpi,
         job_kind="label",
     )
 
 
 def run_music_pdf_print(parent: QWidget, container: Container) -> None:
-    """Pick a PDF, show print dialog, print at music DPI for score quality."""
-    dpi = int(container.config.printing.music_dpi or MUSIC_DPI)
+    """Pick a music PDF, show print dialog, and queue it with the selected printer."""
     _print_with_dialog(
         parent,
         container,
         title="PDF auswählen (Noten)",
-        dpi=dpi,
         job_kind="music",
     )
 

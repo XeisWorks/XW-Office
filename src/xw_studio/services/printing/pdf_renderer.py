@@ -65,7 +65,8 @@ def print_pdf_with_qprinter(
     pages: list[int] | None = None,
     copies: int = 1,
     dpi: int | None = None,
-    center_on_page: bool = True,
+    fallback_dpi: int = INVOICE_DPI,
+    center_on_page: bool = False,
 ) -> None:
     """Print a PDF with PyMuPDF + QPrinter/QPainter.
 
@@ -74,7 +75,7 @@ def print_pdf_with_qprinter(
     function only selects the queue, optionally sets render resolution, renders
     pages to bitmaps, and draws them without resizing.
     """
-    render_dpi = max(int(dpi or INVOICE_DPI), 1)
+    fallback_render_dpi = max(int(fallback_dpi or INVOICE_DPI), 1)
     effective_copies = max(int(copies or 1), 1)
     doc = fitz.open(pdf_path)
     try:
@@ -88,8 +89,10 @@ def print_pdf_with_qprinter(
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
             printer.setOutputFormat(QPrinter.OutputFormat.NativeFormat)
             printer.setPrinterName(printer_name)
-            if dpi is not None:
-                printer.setResolution(render_dpi)
+            requested_dpi = max(int(dpi), 1) if dpi is not None else None
+            if requested_dpi is not None:
+                printer.setResolution(requested_dpi)
+            render_dpi = max(int(printer.resolution() or requested_dpi or fallback_render_dpi), 1)
 
             painter = QPainter()
             if not painter.begin(printer):
@@ -132,7 +135,7 @@ def print_pdf(
     *,
     pages: list[int] | None = None,
     page_ranges: list[range] | None = None,
-    center_on_page: bool = True,
+    center_on_page: bool = False,
 ) -> None:
     page_indices = pages
     if page_indices is None and page_ranges:
@@ -150,5 +153,6 @@ def print_pdf(
         pages=page_indices,
         copies=1,
         dpi=dpi,
+        fallback_dpi=dpi,
         center_on_page=center_on_page,
     )
