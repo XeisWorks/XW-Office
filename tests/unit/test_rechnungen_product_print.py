@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import fitz
 
-from xw_studio.core.config import AppConfig
+from xw_studio.core.config import AppConfig, PrintingSection
 from xw_studio.core.container import Container
 from xw_studio.services.inventory import InventoryService
 from xw_studio.services.products.catalog import Product
@@ -10,7 +10,7 @@ from xw_studio.services.products.catalog import ProductCatalogService
 from xw_studio.services.products.print_decision import PieceBlock
 from xw_studio.services.printing.print_queue import PrintQueueService
 from xw_studio.ui.modules.rechnungen import print_dialog
-from xw_studio.ui.modules.rechnungen.print_dialog import prepare_piece_pdf_print
+from xw_studio.ui.modules.rechnungen.print_dialog import ProductPrintConfigDialog, prepare_piece_pdf_print
 
 
 def test_prepare_piece_pdf_print_uses_requested_copy_count(monkeypatch, tmp_path) -> None:
@@ -154,3 +154,33 @@ def test_prepare_piece_pdf_print_prompts_for_missing_print_config(monkeypatch, t
     assert captured["profile_id"] == "noten_duplex"
     assert captured["print_plan"] == [{"range": "Alle Seiten", "profile_id": "noten_duplex"}]
     assert captured["copies"] == 2
+
+
+def test_product_print_config_dialog_builds_plan_rows_with_start_end(qtbot: object, tmp_path) -> None:
+    pdf_path = tmp_path / "piece.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    config = AppConfig(
+        printing=PrintingSection(
+            print_profiles=[
+                {"id": "noten_duplex", "label": "Noten Duplex", "printer_name": "Printer A"},
+                {"id": "brochure_mono", "label": "Broschuere", "printer_name": "Printer B"},
+            ]
+        )
+    )
+    container = Container(config)
+    piece = PieceBlock(
+        sku="XW-4553",
+        name="Missing Config Piece",
+        qty_needed=1,
+        print_plan=[{"range": "START-END", "profile_id": "brochure_mono"}],
+        product=Product(id="p1", sku="XW-4553", name="Missing Config Piece", print_file_path=str(pdf_path)),
+    )
+
+    dialog = ProductPrintConfigDialog(None, container, piece)
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+
+    path, profile_id, plan = dialog.values()
+
+    assert path == str(pdf_path)
+    assert profile_id == "brochure_mono"
+    assert plan == [{"range": "START-END", "profile_id": "brochure_mono"}]

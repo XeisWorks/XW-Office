@@ -17,8 +17,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -61,28 +62,29 @@ class ProductPrintConfigDialog(QDialog):
         browse_btn.clicked.connect(self._browse_pdf)
         browse_row.addWidget(browse_btn)
         form.addRow("Druckpfad:", browse_row)
-
-        self._profile_combo = QComboBox()
-        profiles = container.config.printing.all_profiles()
-        current_profile = str(piece.print_profile_id or "").strip()
-        for profile in profiles:
-            if not profile.id:
-                continue
-            label = f"{profile.id} - {profile.label or profile.printer_name}".strip()
-            self._profile_combo.addItem(label, profile.id)
-        if current_profile:
-            index = self._profile_combo.findData(current_profile)
-            if index >= 0:
-                self._profile_combo.setCurrentIndex(index)
-        self._profile_combo.currentIndexChanged.connect(self._sync_plan_profile)
-        form.addRow("Profil:", self._profile_combo)
         root.addLayout(form)
 
-        self._plan_edit = QPlainTextEdit()
-        self._plan_edit.setMinimumHeight(110)
-        self._plan_edit.setPlainText(self._initial_plan_text())
-        root.addWidget(QLabel("Druckplan JSON:"))
-        root.addWidget(self._plan_edit)
+        self._profiles = [
+            (profile.id, f"{profile.id} - {profile.label or profile.printer_name}".strip())
+            for profile in container.config.printing.all_profiles()
+            if profile.id
+        ]
+        root.addWidget(QLabel("Druckplan:"))
+        self._plan_table = QTableWidget(0, 2)
+        self._plan_table.setHorizontalHeaderLabels(["Seitenbereich", "Druckprofil"])
+        self._plan_table.horizontalHeader().setStretchLastSection(True)
+        self._plan_table.setMinimumHeight(130)
+        root.addWidget(self._plan_table)
+        plan_buttons = QHBoxLayout()
+        add_row_btn = QPushButton("Zeile hinzufuegen")
+        add_row_btn.clicked.connect(lambda: self._add_plan_row("Alle Seiten", ""))
+        plan_buttons.addWidget(add_row_btn)
+        remove_row_btn = QPushButton("Zeile entfernen")
+        remove_row_btn.clicked.connect(self._remove_selected_plan_row)
+        plan_buttons.addWidget(remove_row_btn)
+        plan_buttons.addStretch()
+        root.addLayout(plan_buttons)
+        self._load_initial_plan_rows()
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
@@ -93,8 +95,8 @@ class ProductPrintConfigDialog(QDialog):
 
     def values(self) -> tuple[str, str, list[dict[str, str]]]:
         path = self._path_edit.text().strip()
-        profile_id = str(self._profile_combo.currentData() or "").strip()
         plan = self._parse_plan()
+        profile_id = str(plan[0].get("profile_id") or "").strip() if plan else ""
         return path, profile_id, plan
 
     def accept(self) -> None:
@@ -116,46 +118,49 @@ class ProductPrintConfigDialog(QDialog):
         if path:
             self._path_edit.setText(path)
 
-    def _initial_plan_text(self) -> str:
-        import json
-
+    def _load_initial_plan_rows(self) -> None:
         if self._piece.print_plan:
-            return json.dumps(self._piece.print_plan, ensure_ascii=False, indent=2)
-        profile_id = str(self._piece.print_profile_id or "").strip() or self._current_profile_id()
-        if profile_id:
-            return json.dumps([{"range": "Alle Seiten", "profile_id": profile_id}], ensure_ascii=False, indent=2)
-        return "[]"
+            for entry in self._piece.print_plan:
+                if not isinstance(entry, dict):
+                    continue
+                self._add_plan_row(
+                    str(entry.get("range") or "Alle Seiten").strip() or "Alle Seiten",
+                    str(entry.get("profile_id") or "").strip(),
+                )
+        else:
+            self._add_plan_row("Alle Seiten", str(self._piece.print_profile_id or "").strip())
 
-    def _current_profile_id(self) -> str:
-        return str(self._profile_combo.currentData() or "").strip()
+    def _add_plan_row(self, range_text: str, profile_id: str) -> None:
+        row = self._plan_table.rowCount()
+        self._plan_table.insertRow(row)
+        range_item = QTableWidgetItem(str(range_text or "Alle Seiten").strip() or "Alle Seiten")
+        self._plan_table.setItem(row, 0, range_item)
 
-    def _sync_plan_profile(self) -> None:
-        if self._plan_edit.toPlainText().strip() not in {"", "[]"}:
-            return
-        profile_id = self._current_profile_id()
+        combo = QComboBox()
+        for candidate_id, label in self._profiles:
+            combo.addItem(label, candidate_id)
         if profile_id:
-            self._plan_edit.setPlainText(f'[{{"range": "Alle Seiten", "profile_id": "{profile_id}"}}]')
+            index = combo.findData(profile_id)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+        self._plan_table.setCellWidget(row, 1, combo)
+
+    def _remove_selected_plan_row(self) -> None:
+        row = self._plan_table.currentRow()
+        if row >= 0:
+            self._plan_table.removeRow(row)
 
     def _parse_plan(self) -> list[dict[str, str]]:
-        import json
-
-        raw = self._plan_edit.toPlainText().strip()
-        if not raw:
-            return []
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"Druckplan ist kein gueltiges JSON: {exc}") from exc
-        if not isinstance(data, list):
-            raise RuntimeError("Druckplan muss eine JSON-Liste sein.")
         plan: list[dict[str, str]] = []
-        for entry in data:
-            if not isinstance(entry, dict):
-                raise RuntimeError("Jeder Druckplan-Eintrag muss ein Objekt sein.")
-            range_text = str(entry.get("range") or "Alle Seiten").strip() or "Alle Seiten"
-            profile_id = str(entry.get("profile_id") or "").strip()
+        for row in range(self._plan_table.rowCount()):
+            range_item = self._plan_table.item(row, 0)
+            range_text = str(range_item.text() if range_item is not None else "").strip() or "Alle Seiten"
+            profile_widget = self._plan_table.cellWidget(row, 1)
+            profile_id = ""
+            if isinstance(profile_widget, QComboBox):
+                profile_id = str(profile_widget.currentData() or "").strip()
             if not profile_id:
-                raise RuntimeError("Jeder Druckplan-Eintrag braucht profile_id.")
+                raise RuntimeError("Jede Druckplan-Zeile braucht ein Druckprofil.")
             plan.append({"range": range_text, "profile_id": profile_id})
         return plan
 

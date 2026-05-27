@@ -40,6 +40,8 @@ def _printing_config() -> PrintingSection:
 
 def test_page_indices_from_range_text_supports_legacy_end_syntax() -> None:
     assert page_indices_from_range_text("1-2,END", page_count=5) == [0, 1, 4]
+    assert page_indices_from_range_text("START-2,END", page_count=5) == [0, 1, 4]
+    assert page_indices_from_range_text("START-END", page_count=3) == [0, 1, 2]
     assert page_indices_from_range_text("Alle Seiten", page_count=5) is None
 
 

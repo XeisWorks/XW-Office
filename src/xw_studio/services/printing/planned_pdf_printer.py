@@ -168,6 +168,8 @@ def _range_bound(token: str, page_count: int, *, default: int) -> int:
     value = str(token or "").strip().upper()
     if not value:
         return default
+    if value == "START":
+        return 1
     if value == "END":
         return page_count
     if value.isdigit():
