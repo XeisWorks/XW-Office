@@ -4,9 +4,11 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -21,7 +23,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -48,9 +49,7 @@ _SYNC_HEADERS = [
     "SKU",
     "Name",
     "Status",
-    "Lokal",
-    "Wix",
-    "sevDesk",
+    "Konflikt",
     "Brand",
     "Preis",
     "Bestand",
@@ -58,6 +57,8 @@ _SYNC_HEADERS = [
     "sevDesk-ID",
     "Aktion",
 ]
+
+_ICONS_DIR = Path(__file__).resolve().parents[5] / "icons"
 
 
 @dataclass(frozen=True)
@@ -618,8 +619,6 @@ class ProductsView(QWidget):
                     diffs.append("Preis Wix")
                 if sevdesk is not None and local is not None and (sevdesk_price or "") != (local_price or ""):
                     diffs.append("Preis sevDesk")
-                if wix is not None and local is not None and (wix_brand or "") != (local_brand or ""):
-                    diffs.append("Brand Wix")
                 status = "sauber verknuepft" if not diffs else f"Konflikt: {', '.join(diffs)}"
 
             rows.append(
@@ -653,31 +652,98 @@ class ProductsView(QWidget):
             tbl.insertRow(r)
             tbl.setItem(r, 0, QTableWidgetItem(row.sku))
             tbl.setItem(r, 1, QTableWidgetItem(row.name))
-            status_item = QTableWidgetItem(row.status)
-            if row.status == "sauber verknuepft":
-                status_item.setForeground(Qt.GlobalColor.green)
-            elif row.status.startswith("Konflikt"):
-                status_item.setForeground(Qt.GlobalColor.red)
-            else:
-                status_item.setForeground(Qt.GlobalColor.yellow)
-            tbl.setItem(r, 2, status_item)
-            tbl.setItem(r, 3, QTableWidgetItem("ja" if row.local_present else "-"))
-            tbl.setItem(r, 4, QTableWidgetItem("ja" if row.wix_present else "-"))
-            tbl.setItem(r, 5, QTableWidgetItem("ja" if row.sevdesk_present else "-"))
-            tbl.setItem(r, 6, QTableWidgetItem(row.local_brand or row.wix_brand))
-            tbl.setItem(r, 7, QTableWidgetItem(row.local_price or row.wix_price or row.sevdesk_price))
+            tbl.setItem(r, 2, QTableWidgetItem(""))
+            tbl.setCellWidget(r, 2, self._build_status_icons_widget(row))
+            tbl.setItem(r, 3, QTableWidgetItem(""))
+            tbl.setCellWidget(r, 3, self._build_conflict_icons_widget(row))
+            tbl.setItem(r, 4, QTableWidgetItem(row.local_brand or row.wix_brand))
+            price_item = QTableWidgetItem(self._format_eur(row.local_price or row.wix_price or row.sevdesk_price))
+            price_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            tbl.setItem(r, 5, price_item)
             stock_value = row.local_stock if row.local_present else (row.wix_stock if row.wix_stock is not None else row.sevdesk_stock)
-            tbl.setItem(r, 8, QTableWidgetItem("" if stock_value is None else str(stock_value)))
-            tbl.setItem(r, 9, QTableWidgetItem(row.wix_id))
-            tbl.setItem(r, 10, QTableWidgetItem(row.sevdesk_id))
+            stock_item = QTableWidgetItem("" if stock_value is None else str(stock_value))
+            stock_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            tbl.setItem(r, 6, stock_item)
+            tbl.setItem(r, 7, QTableWidgetItem(row.wix_id))
+            tbl.setItem(r, 8, QTableWidgetItem(row.sevdesk_id))
             if row.can_create_sevdesk:
-                btn = QPushButton("In sevDesk anlegen")
+                btn = QPushButton("")
+                btn.setIcon(QIcon(str(_ICONS_DIR / "createInSevdesk.png")))
+                btn.setToolTip("In sevDesk anlegen")
+                btn.setFlat(True)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 btn.clicked.connect(lambda _checked=False, sku=row.sku: self._create_selected_wix_product_in_sevdesk(sku))
-                tbl.setCellWidget(r, 11, btn)
+                tbl.setCellWidget(r, 9, btn)
             else:
-                tbl.setItem(r, 11, QTableWidgetItem("-"))
-        for col in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11):
+                tbl.setItem(r, 9, QTableWidgetItem(""))
+        for col in (2, 3, 4, 5, 6, 7, 8, 9):
             tbl.resizeColumnToContents(col)
+
+    def _build_status_icons_widget(self, row: _SyncRow) -> QWidget:
+        widget = QWidget(self._sync_table)
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(6)
+        layout.addWidget(self._icon_label("cloud.png", QColor("#16a34a") if row.local_present else QColor("#dc2626"), tooltip="Lokal DB"))
+        layout.addWidget(self._icon_label("wix.png", QColor("#16a34a") if row.wix_present else QColor("#dc2626"), tooltip="Wix"))
+        layout.addWidget(self._icon_label("sevdesk.png", QColor("#16a34a") if row.sevdesk_present else QColor("#dc2626"), tooltip="sevDesk"))
+        layout.addStretch(1)
+        return widget
+
+    def _build_conflict_icons_widget(self, row: _SyncRow) -> QWidget:
+        widget = QWidget(self._sync_table)
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(6)
+        for tooltip in self._conflict_icon_labels(row):
+            layout.addWidget(self._icon_label("priceNotSynced.png", QColor("#f59e0b"), tooltip=tooltip))
+        layout.addStretch(1)
+        return widget
+
+    def _conflict_icon_labels(self, row: _SyncRow) -> list[str]:
+        labels: list[str] = []
+        if row.local_present and row.wix_present and (row.local_price or "") != (row.wix_price or ""):
+            labels.append("Preis nicht mit Wix synchron")
+        if row.local_present and row.sevdesk_present and (row.local_price or "") != (row.sevdesk_price or ""):
+            labels.append("Preis nicht mit sevDesk synchron")
+        if row.local_present and row.wix_present and row.wix_stock != row.local_stock:
+            labels.append("Bestand nicht mit Wix synchron")
+        if row.local_present and row.sevdesk_present and row.sevdesk_stock != row.local_stock:
+            labels.append("Bestand nicht mit sevDesk synchron")
+        return labels
+
+    def _icon_label(self, file_name: str, color: QColor, *, tooltip: str) -> QLabel:
+        label = QLabel()
+        label.setPixmap(self._tinted_icon(file_name, color))
+        label.setToolTip(tooltip)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        return label
+
+    def _tinted_icon(self, file_name: str, color: QColor, *, size: int = 16) -> QPixmap:
+        pix = QPixmap(str(_ICONS_DIR / file_name))
+        if pix.isNull():
+            return QPixmap()
+        scaled = pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        image = QImage(scaled.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        painter.drawPixmap(0, 0, scaled)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(image.rect(), color)
+        painter.end()
+        return QPixmap.fromImage(image)
+
+    @staticmethod
+    def _format_eur(value: str) -> str:
+        text = str(value or "").strip().replace("€", "").replace(" ", "").replace(",", ".")
+        if not text:
+            return ""
+        try:
+            amount = float(text)
+        except ValueError:
+            return str(value)
+        formatted = f"{amount:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"€ {formatted}"
 
     def _apply_sync_filter(self, text: str) -> None:
         self._sync_filter_text = text.lower().strip()
