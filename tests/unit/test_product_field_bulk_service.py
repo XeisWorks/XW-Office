@@ -6,7 +6,7 @@ from xw_studio.services.products.field_bulk_service import (
     FieldOperatorType,
     ProductFieldBulkService,
 )
-from xw_studio.services.wix.client import WixProductsClient
+from xw_studio.services.wix.product_details_client import UpdateResult
 
 
 class _FakeInventoryService:
@@ -21,14 +21,58 @@ class _FakeInventoryService:
 
 
 class _FakeWixClient:
+    """Minimal stub matching WixProductDetailsClient public surface."""
+
     def __init__(self) -> None:
-        self.updated_fields: dict[str, tuple[str, str]] = {}
+        # Maps product_id -> (wix_field, value)
+        self.updated_fields: dict[str, tuple[str, object]] = {}
+        self.bulk_calls: list[dict] = []
 
     def has_credentials(self) -> bool:
         return True
 
-    def update_product_field(self, product_id: str, field_name: str, value: str) -> None:
-        self.updated_fields[product_id] = (field_name, value)
+    # Field-specific methods
+    def update_product_price(self, pid: str, *, price: float) -> UpdateResult:
+        self.updated_fields[pid] = ("price", price)
+        return UpdateResult(requested=1, succeeded=1)
+
+    def update_product_compare_at_price(self, pid: str, *, compare_at_price: float | None) -> UpdateResult:
+        self.updated_fields[pid] = ("compareAtPrice", compare_at_price)
+        return UpdateResult(requested=1, succeeded=1)
+
+    def update_product_cost(self, pid: str, *, cost: float) -> UpdateResult:
+        self.updated_fields[pid] = ("cost", cost)
+        return UpdateResult(requested=1, succeeded=1)
+
+    def update_product_weight(self, pid: str, *, weight: float) -> UpdateResult:
+        self.updated_fields[pid] = ("weight", weight)
+        return UpdateResult(requested=1, succeeded=1)
+
+    def update_product_visible(self, pid: str, *, visible: bool) -> UpdateResult:
+        self.updated_fields[pid] = ("visible", visible)
+        return UpdateResult(requested=1, succeeded=1)
+
+    def update_product_name(self, pid: str, *, name: str) -> UpdateResult:
+        self.updated_fields[pid] = ("name", name)
+        return UpdateResult(requested=1, succeeded=1)
+
+    def update_product_description(self, pid: str, *, description: str) -> UpdateResult:
+        self.updated_fields[pid] = ("description", description)
+        return UpdateResult(requested=1, succeeded=1)
+
+    def update_product_ribbon(self, pid: str, *, ribbon: str) -> UpdateResult:
+        self.updated_fields[pid] = ("ribbon", ribbon)
+        return UpdateResult(requested=1, succeeded=1)
+
+    def update_product_brand(self, pid: str, *, brand_name: str) -> UpdateResult:
+        self.updated_fields[pid] = ("brand", brand_name)
+        return UpdateResult(requested=1, succeeded=1)
+
+    def bulk_update_property(self, product_ids: list[str], *, field: str, value: object) -> UpdateResult:
+        self.bulk_calls.append({"ids": list(product_ids), "field": field, "value": value})
+        for pid in product_ids:
+            self.updated_fields[pid] = (field, value)
+        return UpdateResult(requested=len(product_ids), succeeded=len(product_ids))
 
 
 def _make_test_row(sku: str, price: str = "10.00", brand: str = "TestBrand") -> ProductRow:
@@ -230,8 +274,8 @@ def test_field_bulk_service_wix_writeback() -> None:
     # Check that Wix was called with correct product ID and field
     assert "wix-SKU1" in wix.updated_fields
     field_name, value = wix.updated_fields["wix-SKU1"]
-    assert field_name == "price"  # Mapped from price_eur to Wix property name
-    assert value == "25.0"
+    assert field_name == "price"  # Dispatched via update_product_price
+    assert float(value) == pytest.approx(25.0)
 
 
 def test_field_bulk_service_invalid_operator() -> None:

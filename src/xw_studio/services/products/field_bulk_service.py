@@ -10,7 +10,8 @@ from enum import Enum
 from typing import Any
 
 from xw_studio.services.inventory.service import InventoryService, ProductRow
-from xw_studio.services.wix.client import WixProduct, WixProductsClient
+from xw_studio.services.wix.client import WixProduct
+from xw_studio.services.wix.product_details_client import WixProductDetailsClient
 
 
 class FieldOperatorType(str, Enum):
@@ -167,7 +168,7 @@ class FieldBulkUpdateReport:
 class ProductFieldBulkService:
     """Service for bulk edits across all editable product fields."""
 
-    def __init__(self, inventory: InventoryService, wix_client: WixProductsClient) -> None:
+    def __init__(self, inventory: InventoryService, wix_client: WixProductDetailsClient) -> None:
         self._inventory = inventory
         self._wix_client = wix_client
 
@@ -274,7 +275,7 @@ class ProductFieldBulkService:
         *,
         wix_products: list[WixProduct] | None = None,
     ) -> FieldBulkUpdateReport:
-        """Write field updates to Wix (best-effort)."""
+        """Write field updates to Wix via WixProductDetailsClient (version-aware)."""
         if not self._wix_client.has_credentials():
             return local_report
 
@@ -296,6 +297,10 @@ class ProductFieldBulkService:
             if row.sku.strip()
         }
 
+        # Collect (product_id, new_value) pairs for changed items
+        bulk_ids: list[str] = []
+        value_by_pid: dict[str, str] = {}
+
         for item in local_report.items:
             if item.status != "changed":
                 continue
@@ -303,30 +308,57 @@ class ProductFieldBulkService:
             sku = item.sku.strip().upper()
             product = local_by_sku.get(sku)
             wix_product = wix_by_sku.get(sku)
-            product_id = ""
-            if product is not None:
-                product_id = product.wix_id
-            if not product_id and wix_product is not None:
-                product_id = wix_product.id
+            product_id = (
+                (product.wix_id if product is not None else "")
+                or (wix_product.id if wix_product is not None else "")
+            ).strip()
             if not product_id:
                 wix_failed += 1
                 continue
+            bulk_ids.append(product_id)
+            value_by_pid[product_id] = item.new_value
 
+        if not bulk_ids:
+            pass  # nothing to push
+        elif len(bulk_ids) == 1:
+            # Single product — use the field-specific method for best semantics
+            pid = bulk_ids[0]
+            val = value_by_pid[pid]
             wix_attempted += 1
-            try:
-                self._wix_client.update_product_field(
-                    product_id=product_id,
-                    field_name=field_def.wix_property or field_def.field_name,
-                    value=item.new_value,
-                )
+            result = self._call_details_update(pid, field_def.wix_property or field_def.field_name, val)
+            if result.succeeded:
                 wix_updated += 1
-            except Exception as exc:  # noqa: BLE001
+            else:
                 wix_failed += 1
-                logger.warning(
-                    "Wix field update failed for product %s: %s",
-                    product_id,
-                    exc,
+                if result.errors:
+                    logger.warning("Wix field update failed for %s: %s", pid, result.errors[0])
+        else:
+            # Multiple products — use bulk_update_property when all values are equal,
+            # otherwise fall back to per-product calls.
+            unique_values = set(value_by_pid.values())
+            wix_attempted += len(bulk_ids)
+            if len(unique_values) == 1:
+                single_val = next(iter(unique_values))
+                coerced = self._coerce_for_details(field_def.wix_property or field_def.field_name, single_val)
+                bulk_result = self._wix_client.bulk_update_property(
+                    bulk_ids,
+                    field=field_def.wix_property or field_def.field_name,
+                    value=coerced,
                 )
+                wix_updated += bulk_result.succeeded
+                wix_failed += bulk_result.failed
+                for err in bulk_result.errors:
+                    logger.warning("Wix bulk update error: %s", err)
+            else:
+                for pid in bulk_ids:
+                    val = value_by_pid[pid]
+                    result = self._call_details_update(pid, field_def.wix_property or field_def.field_name, val)
+                    if result.succeeded:
+                        wix_updated += 1
+                    else:
+                        wix_failed += 1
+                        if result.errors:
+                            logger.warning("Wix field update failed for %s: %s", pid, result.errors[0])
 
         return FieldBulkUpdateReport(
             requested=local_report.requested,
@@ -429,6 +461,38 @@ class ProductFieldBulkService:
             value=value,
             items=items,
         )
+
+    def _call_details_update(self, product_id: str, wix_field: str, value: str) -> object:
+        """Dispatch to the appropriate WixProductDetailsClient method."""
+        coerced = self._coerce_for_details(wix_field, value)
+        dispatch = {
+            "price": lambda: self._wix_client.update_product_price(product_id, price=float(coerced)),
+            "compareAtPrice": lambda: self._wix_client.update_product_compare_at_price(product_id, compare_at_price=float(coerced) if coerced is not None else None),
+            "cost": lambda: self._wix_client.update_product_cost(product_id, cost=float(coerced)),
+            "weight": lambda: self._wix_client.update_product_weight(product_id, weight=float(coerced)),
+            "visible": lambda: self._wix_client.update_product_visible(product_id, visible=bool(coerced)),
+            "name": lambda: self._wix_client.update_product_name(product_id, name=str(coerced)),
+            "description": lambda: self._wix_client.update_product_description(product_id, description=str(coerced)),
+            "ribbon": lambda: self._wix_client.update_product_ribbon(product_id, ribbon=str(coerced)),
+            "brand": lambda: self._wix_client.update_product_brand(product_id, brand_name=str(coerced)),
+        }
+        fn = dispatch.get(wix_field)
+        if fn is not None:
+            return fn()
+        # Fallback for unknown / future fields
+        return self._wix_client.bulk_update_property([product_id], field=wix_field, value=coerced)
+
+    @staticmethod
+    def _coerce_for_details(wix_field: str, value: str) -> Any:
+        """Convert a string value to the correct Python type for WixProductDetailsClient."""
+        if wix_field in {"price", "compareAtPrice", "cost", "weight"}:
+            try:
+                return round(float(value), 2)
+            except (TypeError, ValueError):
+                return None
+        if wix_field == "visible":
+            return str(value).lower() in ("true", "1", "yes", "ja")
+        return value
 
     @staticmethod
     def _get_field_value(row: ProductRow, field_name: str) -> Any:

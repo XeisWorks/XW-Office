@@ -260,7 +260,7 @@ def register_default_services(container: Container) -> None:
     )
     container.register(
         ProductFieldBulkService,
-        lambda c: ProductFieldBulkService(c.resolve(InventoryService), c.resolve(WixProductsClient)),
+        lambda c: ProductFieldBulkService(c.resolve(InventoryService), c.resolve(WixProductDetailsClient)),
     )
 
     container.register(
