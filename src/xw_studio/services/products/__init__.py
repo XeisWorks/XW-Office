@@ -12,6 +12,11 @@ from xw_studio.services.products.pdf_bulk_mapper import (
     ProductMatch,
     ReviewItem,
 )
+from xw_studio.services.products.brand_service import (
+    BrandBulkUpdateReport,
+    BrandUpdateItem,
+    ProductBrandService,
+)
 
 __all__ = [
     "Product",
@@ -23,4 +28,7 @@ __all__ = [
     "PdfCandidate",
     "ProductMatch",
     "ReviewItem",
+    "BrandBulkUpdateReport",
+    "BrandUpdateItem",
+    "ProductBrandService",
 ]

@@ -108,6 +108,8 @@ class ProductRow:
     price_eur: str
     wix_id: str
     sevdesk_id: str
+    brand_name: str = ""
+    brand_id: str = ""
     print_file_path: str = ""
     print_profile_id: str = ""
     print_plan: list[dict[str, str]] | None = None
@@ -483,6 +485,8 @@ class InventoryService:
                     category=str(item.get("category") or ""),
                     on_hand=on_hand,
                     price_eur=str(item.get("price_eur") or ""),
+                    brand_name=str(item.get("brand_name") or item.get("brand") or ""),
+                    brand_id=str(item.get("brand_id") or ""),
                     wix_id=str(item.get("wix_id") or ""),
                     sevdesk_id=str(item.get("sevdesk_id") or ""),
                     print_file_path=str(item.get("print_file_path") or ""),
@@ -511,6 +515,8 @@ class InventoryService:
                 "category": row.category,
                 "on_hand": max(0, int(row.on_hand)),
                 "price_eur": row.price_eur,
+                "brand_name": str(row.brand_name or "").strip(),
+                "brand_id": str(row.brand_id or "").strip(),
                 "wix_id": row.wix_id,
                 "sevdesk_id": row.sevdesk_id,
                 "print_file_path": str(row.print_file_path or "").strip(),
@@ -646,6 +652,8 @@ class InventoryService:
                 category=str(raw_record.get("category") or "").strip(),
                 on_hand=0,
                 price_eur="",
+                brand_name="",
+                brand_id="",
                 wix_id="",
                 sevdesk_id=str(raw_record.get("sevdesk_part_id") or "").strip(),
             )
@@ -670,6 +678,8 @@ class InventoryService:
                 category=current.category or str(raw_record.get("category") or "").strip(),
                 on_hand=current.on_hand,
                 price_eur=current.price_eur,
+                brand_name=current.brand_name,
+                brand_id=current.brand_id,
                 wix_id=current.wix_id,
                 sevdesk_id=current.sevdesk_id or str(raw_record.get("sevdesk_part_id") or "").strip(),
                 print_file_path=str(default_entry.get("path") or current.print_file_path or "").strip(),

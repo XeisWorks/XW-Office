@@ -8,9 +8,12 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPlainTextEdit,
@@ -25,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from xw_studio.core.worker import BackgroundWorker
 from xw_studio.services.inventory import InventoryService, ProductRow
+from xw_studio.services.products.brand_service import ProductBrandService
 from xw_studio.services.sevdesk.part_client import PartClient, SevdeskPart
 from xw_studio.services.wix.client import WixProduct, WixProductsClient
 from xw_studio.ui.widgets.search_bar import SearchBar
@@ -34,13 +38,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_INV_HEADERS = ["SKU", "Name", "Kategorie", "Bestand", "Preis EUR", "Wix-ID", "sevDesk-ID"]
-_WIX_HEADERS = ["SKU", "Name", "Preis", "Sichtbar", "Bestand", "Wix-ID", "Status"]
+_INV_HEADERS = ["SKU", "Name", "Kategorie", "Brand", "Bestand", "Preis EUR", "Wix-ID", "sevDesk-ID"]
+_WIX_HEADERS = ["SKU", "Name", "Brand", "Preis", "Sichtbar", "Bestand", "Wix-ID", "Status"]
 _SYNC_HEADERS = [
     "SKU",
     "Lokal Bestand",
     "Wix Bestand",
     "sevDesk Bestand",
+    "Lokal Brand",
+    "Wix Brand",
     "Lokal Preis",
     "Wix Preis",
     "sevDesk Preis",
@@ -54,6 +60,8 @@ class _SyncRow:
     local_stock: int
     wix_stock: int | None
     sevdesk_stock: int | None
+    local_brand: str
+    wix_brand: str
     local_price: str
     wix_price: str
     sevdesk_price: str
@@ -74,6 +82,9 @@ class ProductsView(QWidget):
         self._wix_worker: BackgroundWorker | None = None
         self._sevdesk_worker: BackgroundWorker | None = None
         self._save_worker: BackgroundWorker | None = None
+        self._inv_filter_text: str = ""
+        self._inv_filter_category: str = ""
+        self._inv_category_combo: QComboBox | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -101,6 +112,10 @@ class ProductsView(QWidget):
         self._inv_status_lbl.setObjectName("productsStatusLabel")
         bar.addWidget(self._inv_status_lbl)
         bar.addStretch()
+        self._inv_brand_btn = QPushButton("Brand fuer Auswahl setzen")
+        self._inv_brand_btn.clicked.connect(self._bulk_set_inventory_brand)
+        self._inv_brand_btn.setEnabled(False)
+        bar.addWidget(self._inv_brand_btn)
         self._inv_refresh_btn = QPushButton("Aktualisieren")
         self._inv_refresh_btn.clicked.connect(self._load_inventory)
         bar.addWidget(self._inv_refresh_btn)
@@ -112,12 +127,21 @@ class ProductsView(QWidget):
         self._inv_search.set_suggestion_provider(self._inv_search_suggestions)
         lay.addWidget(self._inv_search)
 
+        cat_row = QHBoxLayout()
+        cat_row.addWidget(QLabel("Kategorie:"))
+        self._inv_category_combo = QComboBox()
+        self._inv_category_combo.addItem("Alle Kategorien", "")
+        self._inv_category_combo.currentIndexChanged.connect(self._apply_inv_category_filter)
+        cat_row.addWidget(self._inv_category_combo, stretch=1)
+        lay.addLayout(cat_row)
+
         self._inv_table = QTableWidget(0, len(_INV_HEADERS))
         self._inv_table.setHorizontalHeaderLabels(_INV_HEADERS)
         self._inv_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._inv_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self._inv_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._inv_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._inv_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._inv_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         lay.addWidget(self._inv_table)
 
@@ -145,12 +169,14 @@ class ProductsView(QWidget):
         if not isinstance(rows, list):
             return
         self._all_rows = rows  # type: ignore[assignment]
+        self._inv_brand_btn.setEnabled(bool(self._all_rows))
+        self._refresh_inv_category_options()
         if not self._all_rows:
             self._inv_status_lbl.setText("Keine Produkte in DB — Einstellungen > inventory.products")
         else:
             self._inv_status_lbl.setText(f"{len(self._all_rows)} Produkte geladen")
         self._inv_search.refresh_suggestions()
-        self._populate_inv(self._all_rows)
+        self._apply_inv_filters()
 
     def _on_inv_error(self, exc: BaseException) -> None:
         self._inv_refresh_btn.setEnabled(True)
@@ -166,25 +192,62 @@ class ProductsView(QWidget):
             tbl.setItem(r, 0, QTableWidgetItem(prod.sku))
             tbl.setItem(r, 1, QTableWidgetItem(prod.name))
             tbl.setItem(r, 2, QTableWidgetItem(prod.category))
+            tbl.setItem(r, 3, QTableWidgetItem(prod.brand_name))
             stock_item = QTableWidgetItem(str(prod.on_hand))
             stock_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            tbl.setItem(r, 3, stock_item)
+            tbl.setItem(r, 4, stock_item)
             price_item = QTableWidgetItem(prod.price_eur)
             price_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            tbl.setItem(r, 4, price_item)
-            tbl.setItem(r, 5, QTableWidgetItem(prod.wix_id))
-            tbl.setItem(r, 6, QTableWidgetItem(prod.sevdesk_id))
+            tbl.setItem(r, 5, price_item)
+            tbl.setItem(r, 6, QTableWidgetItem(prod.wix_id))
+            tbl.setItem(r, 7, QTableWidgetItem(prod.sevdesk_id))
         tbl.resizeColumnToContents(0)
-        for col in (3, 4, 5, 6):
+        for col in (3, 4, 5, 6, 7):
             tbl.resizeColumnToContents(col)
 
     def _apply_inv_filter(self, text: str) -> None:
-        needle = text.lower()
+        self._inv_filter_text = text.lower()
+        self._apply_inv_filters()
+
+    def _apply_inv_category_filter(self) -> None:
+        if self._inv_category_combo is None:
+            self._inv_filter_category = ""
+        else:
+            self._inv_filter_category = str(self._inv_category_combo.currentData() or "").strip().lower()
+        self._apply_inv_filters()
+
+    def _apply_inv_filters(self) -> None:
+        needle = self._inv_filter_text
+        category_filter = self._inv_filter_category
         filtered = [
             p for p in self._all_rows
-            if needle in p.sku.lower() or needle in p.name.lower() or needle in p.category.lower()
+            if (
+                not category_filter
+                or p.category.lower().strip() == category_filter
+            )
+            and (
+                not needle
+                or needle in p.sku.lower()
+                or needle in p.name.lower()
+                or needle in p.category.lower()
+                or needle in (p.brand_name or "").lower()
+            )
         ]
         self._populate_inv(filtered)
+
+    def _refresh_inv_category_options(self) -> None:
+        if self._inv_category_combo is None:
+            return
+        categories = sorted({(row.category or "").strip() for row in self._all_rows if (row.category or "").strip()})
+        current = self._inv_filter_category
+        self._inv_category_combo.blockSignals(True)
+        self._inv_category_combo.clear()
+        self._inv_category_combo.addItem("Alle Kategorien", "")
+        for category in categories:
+            self._inv_category_combo.addItem(category, category)
+        idx = self._inv_category_combo.findData(current)
+        self._inv_category_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._inv_category_combo.blockSignals(False)
 
     # ==================================================================
     # Wix-Abgleich tab
@@ -216,6 +279,7 @@ class ProductsView(QWidget):
         self._wix_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._wix_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._wix_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._wix_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._wix_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         lay.addWidget(self._wix_table, stretch=2)
 
@@ -272,31 +336,32 @@ class ProductsView(QWidget):
             tbl.insertRow(r)
             tbl.setItem(r, 0, QTableWidgetItem(prod.sku))
             tbl.setItem(r, 1, QTableWidgetItem(prod.name))
+            tbl.setItem(r, 2, QTableWidgetItem(prod.brand_name))
             price_item = QTableWidgetItem(prod.price)
             price_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            tbl.setItem(r, 2, price_item)
+            tbl.setItem(r, 3, price_item)
             vis_item = QTableWidgetItem("ja" if prod.visible else "nein")
             vis_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            tbl.setItem(r, 3, vis_item)
+            tbl.setItem(r, 4, vis_item)
             qty_item = QTableWidgetItem(str(prod.inventory_quantity))
             qty_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            tbl.setItem(r, 4, qty_item)
-            tbl.setItem(r, 5, QTableWidgetItem(prod.id))
+            tbl.setItem(r, 5, qty_item)
+            tbl.setItem(r, 6, QTableWidgetItem(prod.id))
             # Status: matched in local DB?
             matched = prod.sku in inv_skus if prod.sku else False
             status_item = QTableWidgetItem("verknuepft" if matched else "nur Wix")
             status_item.setForeground(
                 Qt.GlobalColor.green if matched else Qt.GlobalColor.yellow
             )
-            tbl.setItem(r, 6, status_item)
-        for col in (0, 3, 4, 6):
+            tbl.setItem(r, 7, status_item)
+        for col in (0, 2, 4, 5, 7):
             tbl.resizeColumnToContents(col)
 
     def _apply_wix_filter(self, text: str) -> None:
         needle = text.lower()
         filtered = [
             p for p in self._wix_rows
-            if needle in p.sku.lower() or needle in p.name.lower()
+            if needle in p.sku.lower() or needle in p.name.lower() or needle in (p.brand_name or "").lower()
         ]
         self._populate_wix(filtered)
 
@@ -306,7 +371,7 @@ class ProductsView(QWidget):
             return []
         items: list[str] = []
         for row in self._all_rows:
-            hay = f"{row.sku} {row.name} {row.category}".lower()
+            hay = f"{row.sku} {row.name} {row.category} {row.brand_name}".lower()
             if q in hay:
                 items.append(f"{row.sku} - {row.name}")
         return items
@@ -317,7 +382,7 @@ class ProductsView(QWidget):
             return []
         items: list[str] = []
         for row in self._wix_rows:
-            hay = f"{row.sku} {row.name}".lower()
+            hay = f"{row.sku} {row.name} {row.brand_name}".lower()
             if q in hay:
                 items.append(f"{row.sku} - {row.name}")
         return items
@@ -365,6 +430,7 @@ class ProductsView(QWidget):
         self._sync_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._sync_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._sync_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._sync_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         lay.addWidget(self._sync_table, stretch=1)
 
         tip = QLabel(
@@ -467,6 +533,8 @@ class ProductsView(QWidget):
             local_price = local.price_eur if local is not None else ""
             wix_price = wix.price if wix is not None else ""
             sevdesk_price = sevdesk.price_eur if sevdesk is not None else ""
+            local_brand = local.brand_name if local is not None else ""
+            wix_brand = wix.brand_name if wix is not None else ""
 
             status_parts: list[str] = []
             if local is None:
@@ -483,6 +551,8 @@ class ProductsView(QWidget):
                 status_parts.append("preis diff wix")
             if sevdesk is not None and local is not None and (sevdesk_price or "") != (local_price or ""):
                 status_parts.append("preis diff sevdesk")
+            if wix is not None and local is not None and (wix_brand or "") != (local_brand or ""):
+                status_parts.append("brand diff wix")
 
             rows.append(
                 _SyncRow(
@@ -490,6 +560,8 @@ class ProductsView(QWidget):
                     local_stock=local_stock,
                     wix_stock=wix_stock,
                     sevdesk_stock=sevdesk_stock,
+                    local_brand=local_brand,
+                    wix_brand=wix_brand,
                     local_price=local_price,
                     wix_price=wix_price,
                     sevdesk_price=sevdesk_price,
@@ -508,16 +580,18 @@ class ProductsView(QWidget):
             tbl.setItem(r, 1, QTableWidgetItem(str(row.local_stock)))
             tbl.setItem(r, 2, QTableWidgetItem("" if row.wix_stock is None else str(row.wix_stock)))
             tbl.setItem(r, 3, QTableWidgetItem("" if row.sevdesk_stock is None else str(row.sevdesk_stock)))
-            tbl.setItem(r, 4, QTableWidgetItem(row.local_price))
-            tbl.setItem(r, 5, QTableWidgetItem(row.wix_price))
-            tbl.setItem(r, 6, QTableWidgetItem(row.sevdesk_price))
+            tbl.setItem(r, 4, QTableWidgetItem(row.local_brand))
+            tbl.setItem(r, 5, QTableWidgetItem(row.wix_brand))
+            tbl.setItem(r, 6, QTableWidgetItem(row.local_price))
+            tbl.setItem(r, 7, QTableWidgetItem(row.wix_price))
+            tbl.setItem(r, 8, QTableWidgetItem(row.sevdesk_price))
             status_item = QTableWidgetItem(row.status)
             if row.status == "ok":
                 status_item.setForeground(Qt.GlobalColor.green)
             else:
                 status_item.setForeground(Qt.GlobalColor.yellow)
-            tbl.setItem(r, 7, status_item)
-        for col in (1, 2, 3):
+            tbl.setItem(r, 9, status_item)
+        for col in (1, 2, 3, 4, 5):
             tbl.resizeColumnToContents(col)
 
     def _apply_wix_to_local(self) -> None:
@@ -540,6 +614,8 @@ class ProductsView(QWidget):
                     category="",
                     on_hand=max(0, int(wix.inventory_quantity)),
                     price_eur=wix.price,
+                    brand_name=wix.brand_name,
+                    brand_id=wix.brand_id,
                     wix_id=wix.id,
                     sevdesk_id="",
                     print_file_path="",
@@ -555,6 +631,8 @@ class ProductsView(QWidget):
                 category=current.category,
                 on_hand=max(0, int(wix.inventory_quantity)),
                 price_eur=wix.price or current.price_eur,
+                brand_name=wix.brand_name or current.brand_name,
+                brand_id=wix.brand_id or current.brand_id,
                 wix_id=wix.id or current.wix_id,
                 sevdesk_id=current.sevdesk_id,
                 print_file_path=current.print_file_path,
@@ -672,3 +750,91 @@ class ProductsView(QWidget):
             return
         inv.save_print_plans(data)
         QMessageBox.information(self, "Druckplaene", f"{len(data)} Druckplan-Eintraege gespeichert.")
+
+    def _selected_inventory_skus(self) -> list[str]:
+        selected_rows = sorted({item.row() for item in self._inv_table.selectedItems()})
+        skus: list[str] = []
+        for row in selected_rows:
+            sku_item = self._inv_table.item(row, 0)
+            if sku_item is None:
+                continue
+            sku = sku_item.text().strip()
+            if sku:
+                skus.append(sku)
+        return skus
+
+    def _bulk_set_inventory_brand(self) -> None:
+        skus = self._selected_inventory_skus()
+        if not skus:
+            QMessageBox.information(self, "Brand-Update", "Bitte zuerst Produkte in der Inventar-Tabelle auswaehlen.")
+            return
+
+        new_brand, ok = QInputDialog.getText(self, "Brand-Update", "Neue Brand (Marke):")
+        if not ok:
+            return
+        target_brand = new_brand.strip()
+        if not target_brand:
+            QMessageBox.warning(self, "Brand-Update", "Brand darf nicht leer sein.")
+            return
+
+        service: ProductBrandService = self._container.resolve(ProductBrandService)
+        preview = service.preview_local_brand_update(skus, target_brand)
+        if preview.requested == 0:
+            QMessageBox.information(self, "Brand-Update", "Keine gueltigen Ziele gefunden.")
+            return
+
+        question = (
+            f"Ausgewaehlt: {preview.requested}\n"
+            f"Wuerden geaendert: {preview.changed}\n"
+            f"Uebersprungen: {preview.skipped}\n\n"
+            f"Brand setzen auf: {target_brand}\n\n"
+            "Aenderung jetzt speichern?"
+        )
+        if QMessageBox.question(self, "Brand-Update Vorschau", question) != QMessageBox.StandardButton.Yes:
+            return
+
+        sync_choice = QMessageBox.question(
+            self,
+            "Wix Writeback",
+            "Soll die Brand zusaetzlich in Wix aktualisiert werden?\n\n"
+            "Ja: Lokal + Wix\n"
+            "Nein: Nur lokal",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        sync_wix = sync_choice == QMessageBox.StandardButton.Yes
+
+        create_missing_wix_brand = False
+        if sync_wix:
+            create_choice = QMessageBox.question(
+                self,
+                "Wix Brand anlegen",
+                "Falls die Brand in Wix noch nicht existiert: automatisch anlegen?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            create_missing_wix_brand = create_choice == QMessageBox.StandardButton.Yes
+
+        report = service.apply_brand_update(
+            skus,
+            target_brand,
+            sync_wix=sync_wix,
+            create_missing_wix_brand=create_missing_wix_brand,
+        )
+        self._sync_status_lbl.setText(
+            f"Brand-Update: geaendert={report.changed}, uebersprungen={report.skipped}, "
+            f"wix_ok={report.wix_updated}, wix_fehler={report.wix_failed}"
+        )
+        QMessageBox.information(
+            self,
+            "Brand-Update",
+            "Brand-Update abgeschlossen.\n"
+            f"Geaendert (lokal): {report.changed}\n"
+            f"Uebersprungen: {report.skipped}\n"
+            f"Wix versucht: {report.wix_attempted}\n"
+            f"Wix erfolgreich: {report.wix_updated}\n"
+            f"Wix Fehler: {report.wix_failed}\n"
+            f"Brand aufgeloest: {'ja' if report.wix_brand_resolved else 'nein'}\n"
+            f"Brand neu angelegt: {'ja' if report.wix_brand_created else 'nein'}",
+        )
+        self._load_inventory()

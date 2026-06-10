@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT = 15.0
 _PRODUCTS_PAGE_SIZE = 100
+_RETRY_ATTEMPTS = 3
+_RETRY_BACKOFF_SEC = 0.35
 
 _ORDERS_BASE = "https://www.wixapis.com/ecom/v1"
 _UNRELEASED_PREFIXES = ("XW-600", "XW-010")
@@ -30,6 +32,8 @@ class WixProduct(BaseModel):
     name: str = ""
     sku: str = ""
     price: str = ""
+    brand_name: str = ""
+    brand_id: str = ""
     visible: bool = True
     inventory_quantity: int = 0
 
@@ -48,6 +52,18 @@ def _parse_product(raw: dict[str, Any]) -> WixProduct:
             price = str(pricing.get("price") or "")
     if not sku:
         sku = str(raw.get("sku") or "")
+    brand_name = ""
+    brand_id = ""
+    raw_brand = raw.get("brand")
+    if isinstance(raw_brand, str):
+        brand_name = raw_brand.strip()
+    elif isinstance(raw_brand, dict):
+        brand_name = str(raw_brand.get("name") or raw_brand.get("label") or "").strip()
+        brand_id = str(raw_brand.get("id") or "").strip()
+    if not brand_name:
+        brand_name = str(raw.get("brandName") or "").strip()
+    if not brand_id:
+        brand_id = str(raw.get("brandId") or "").strip()
     visible = bool(raw.get("visible", True))
     inv = raw.get("stock") or {}
     qty = 0
@@ -56,7 +72,16 @@ def _parse_product(raw: dict[str, Any]) -> WixProduct:
             qty = int(inv.get("quantity") or 0)
         except (TypeError, ValueError):
             qty = 0
-    return WixProduct(id=pid, name=name, sku=sku, price=price, visible=visible, inventory_quantity=qty)
+    return WixProduct(
+        id=pid,
+        name=name,
+        sku=sku,
+        price=price,
+        brand_name=brand_name,
+        brand_id=brand_id,
+        visible=visible,
+        inventory_quantity=qty,
+    )
 
 
 class WixProductsClient:
@@ -99,6 +124,50 @@ class WixProductsClient:
     def has_credentials(self) -> bool:
         return bool(self._api_key() and self._site_id())
 
+    def _build_headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {
+            "Authorization": self._api_key(),
+            "wix-site-id": self._site_id(),
+            "Content-Type": "application/json",
+        }
+        account_id = self._account_id()
+        if account_id:
+            headers["wix-account-id"] = account_id
+        return headers
+
+    @staticmethod
+    def _is_retryable_status(code: int) -> bool:
+        return code in (408, 409, 425, 429, 500, 502, 503, 504)
+
+    def _request_with_retry(
+        self,
+        client: httpx.Client,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str],
+        json_body: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        last_error: Exception | None = None
+        for attempt in range(1, _RETRY_ATTEMPTS + 1):
+            try:
+                resp = client.request(method, url, headers=headers, json=json_body)
+                if resp.status_code >= 400:
+                    if self._is_retryable_status(resp.status_code) and attempt < _RETRY_ATTEMPTS:
+                        time.sleep(_RETRY_BACKOFF_SEC * attempt)
+                        continue
+                    resp.raise_for_status()
+                return resp
+            except httpx.HTTPError as exc:
+                last_error = exc
+                if attempt < _RETRY_ATTEMPTS:
+                    time.sleep(_RETRY_BACKOFF_SEC * attempt)
+                    continue
+                break
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"HTTP request failed without explicit error: {method} {url}")
+
     # ------------------------------------------------------------------
     # Products
     # ------------------------------------------------------------------
@@ -112,17 +181,7 @@ class WixProductsClient:
             logger.info("WixProductsClient: no credentials — returning empty list")
             return []
 
-        api_key = self._api_key()
-        site_id = self._site_id()
-        account_id = self._account_id()
-
-        headers: dict[str, str] = {
-            "Authorization": api_key,
-            "wix-site-id": site_id,
-            "Content-Type": "application/json",
-        }
-        if account_id:
-            headers["wix-account-id"] = account_id
+        headers = self._build_headers()
 
         results: list[WixProduct] = []
         cursor: str | None = None
@@ -167,6 +226,140 @@ class WixProductsClient:
 
         logger.info("WixProductsClient: fetched %s products", len(results))
         return results
+
+    def update_product_brand(self, product_id: str, *, brand_name: str, brand_id: str = "") -> None:
+        """Update Wix product brand (best-effort payload compatibility).
+
+        Uses Stores Product APIs (not Stores/Products collection writes).
+        """
+        pid = str(product_id or "").strip()
+        name = str(brand_name or "").strip()
+        bid = str(brand_id or "").strip()
+        if not pid:
+            raise ValueError("Wix product_id fehlt")
+        if not name:
+            raise ValueError("Brand-Name fehlt")
+        if not self.has_credentials():
+            raise RuntimeError("Wix Credentials fehlen")
+
+        headers = self._build_headers()
+        payload_candidates: list[dict[str, Any]] = [
+            {"product": {"brand": {"name": name, **({"id": bid} if bid else {})}}},
+            {"product": {"brand": name}},
+            {"product": {"brandName": name, **({"brandId": bid} if bid else {})}},
+        ]
+        endpoint_candidates = [
+            f"{self._base_url}/products/{pid}",
+            f"{self._base_url}/catalog/products/{pid}",
+        ]
+
+        last_error: Exception | None = None
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            for endpoint in endpoint_candidates:
+                for payload in payload_candidates:
+                    try:
+                        self._request_with_retry(
+                            client,
+                            "PATCH",
+                            endpoint,
+                            headers=headers,
+                            json_body=payload,
+                        )
+                        logger.info("Wix brand updated for product %s", pid)
+                        return
+                    except httpx.HTTPError as exc:
+                        last_error = exc
+                        continue
+        if last_error is not None:
+            raise RuntimeError(f"Wix Brand-Update fehlgeschlagen fuer Produkt {pid}: {last_error}") from last_error
+        raise RuntimeError(f"Wix Brand-Update fehlgeschlagen fuer Produkt {pid}")
+
+    def list_brands(self) -> list[dict[str, str]]:
+        """Fetch Wix brands (best-effort across possible API paths)."""
+        if not self.has_credentials():
+            return []
+
+        headers = self._build_headers()
+        endpoints = [
+            ("POST", f"{self._base_url}/brands/query", {"query": {"paging": {"limit": 100}}}),
+            ("POST", f"{self._base_url}/catalog/brands/query", {"query": {"paging": {"limit": 100}}}),
+        ]
+
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            for method, url, payload in endpoints:
+                try:
+                    resp = self._request_with_retry(client, method, url, headers=headers, json_body=payload)
+                    data = resp.json() if resp.content else {}
+                    raw = data.get("brands") if isinstance(data, dict) else []
+                    if not isinstance(raw, list):
+                        continue
+                    out: list[dict[str, str]] = []
+                    for item in raw:
+                        if not isinstance(item, dict):
+                            continue
+                        bid = str(item.get("id") or "").strip()
+                        name = str(item.get("name") or item.get("label") or "").strip()
+                        if name:
+                            out.append({"id": bid, "name": name})
+                    return out
+                except Exception as exc:  # noqa: BLE001
+                    logger.info("Wix list_brands endpoint failed %s: %s", url, exc)
+                    continue
+        return []
+
+    def create_brand(self, brand_name: str) -> str:
+        """Create a Wix brand and return its ID when available."""
+        name = str(brand_name or "").strip()
+        if not name:
+            raise ValueError("Brand-Name fehlt")
+        if not self.has_credentials():
+            raise RuntimeError("Wix Credentials fehlen")
+
+        headers = self._build_headers()
+        endpoints = [
+            ("POST", f"{self._base_url}/brands", {"brand": {"name": name}}),
+            ("POST", f"{self._base_url}/catalog/brands", {"brand": {"name": name}}),
+        ]
+
+        last_error: Exception | None = None
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            for method, url, payload in endpoints:
+                try:
+                    resp = self._request_with_retry(client, method, url, headers=headers, json_body=payload)
+                    data = resp.json() if resp.content else {}
+                    brand_obj: dict[str, Any] = {}
+                    if isinstance(data, dict):
+                        if isinstance(data.get("brand"), dict):
+                            brand_obj = data.get("brand")
+                        else:
+                            brand_obj = data
+                    bid = str(brand_obj.get("id") or "").strip()
+                    if bid:
+                        return bid
+                    # Some endpoints may create by name but not return ID; resolve again.
+                    for item in self.list_brands():
+                        if str(item.get("name") or "").strip().casefold() == name.casefold():
+                            return str(item.get("id") or "").strip()
+                    return ""
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    logger.info("Wix create_brand endpoint failed %s: %s", url, exc)
+                    continue
+        if last_error is not None:
+            raise RuntimeError(f"Wix Brand konnte nicht erstellt werden: {last_error}") from last_error
+        raise RuntimeError("Wix Brand konnte nicht erstellt werden")
+
+    def ensure_brand(self, brand_name: str, *, create_if_missing: bool = True) -> str:
+        """Resolve a Wix brand by name, optionally create when missing."""
+        name = str(brand_name or "").strip()
+        if not name:
+            return ""
+        for item in self.list_brands():
+            if str(item.get("name") or "").strip().casefold() == name.casefold():
+                return str(item.get("id") or "").strip()
+        if not create_if_missing:
+            return ""
+        return self.create_brand(name)
 
 
 class WixOrderItem(BaseModel):

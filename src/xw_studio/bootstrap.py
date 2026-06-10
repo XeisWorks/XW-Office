@@ -39,6 +39,7 @@ from xw_studio.services.sevdesk.part_client import PartClient
 from xw_studio.services.sevdesk.refund_client import SevDeskRefundClient
 from xw_studio.services.statistics.service import StatisticsService
 from xw_studio.services.products.catalog import ProductCatalogService
+from xw_studio.services.products.brand_service import ProductBrandService
 from xw_studio.services.products.print_decision import PrintDecisionEngine
 from xw_studio.services.wix.client import WixProductsClient
 from xw_studio.services.wix.client import WixOrdersClient
@@ -246,6 +247,10 @@ def register_default_services(container: Container) -> None:
             c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
             c.resolve(PrintQueueService),
         ),
+    )
+    container.register(
+        ProductBrandService,
+        lambda c: ProductBrandService(c.resolve(InventoryService), c.resolve(WixProductsClient)),
     )
 
     container.register(

@@ -75,6 +75,8 @@ class Product:
     sku: str
     name: str
     category: str = ""
+    brand_name: str = ""
+    brand_id: str = ""
     is_digital: bool = False
     sevdesk_part_id: str = ""
     wix_product_id: str = ""
@@ -275,6 +277,8 @@ class ProductCatalogService:
                 sku=sku,
                 name=str(item.get("name") or sku),
                 category=str(item.get("category") or ""),
+                brand_name=str(item.get("brand_name") or item.get("brand") or ""),
+                brand_id=str(item.get("brand_id") or ""),
                 sevdesk_part_id=str(item.get("sevdesk_id") or ""),
                 wix_product_id=str(item.get("wix_id") or ""),
                 print_file_path=str(item.get("print_file_path") or ""),
