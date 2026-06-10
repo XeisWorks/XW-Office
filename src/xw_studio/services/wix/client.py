@@ -135,6 +135,18 @@ class WixProductsClient:
             headers["wix-account-id"] = account_id
         return headers
 
+    def _brand_endpoint_candidates(self, suffix: str) -> list[str]:
+        base_v3 = self._base_url.rstrip("/")
+        # Keep fallbacks broad because Wix API surfaces differ between accounts/versions.
+        candidates = [
+            f"{base_v3}/brands{suffix}",
+            f"{base_v3}/catalog/brands{suffix}",
+            "https://www.wixapis.com/stores/v1/brands" + suffix,
+            "https://www.wixapis.com/ecom/v1/brands" + suffix,
+        ]
+        # Preserve order while removing duplicates.
+        return list(dict.fromkeys(candidates))
+
     @staticmethod
     def _is_retryable_status(code: int) -> bool:
         return code in (408, 409, 425, 429, 500, 502, 503, 504)
@@ -251,6 +263,7 @@ class WixProductsClient:
         endpoint_candidates = [
             f"{self._base_url}/products/{pid}",
             f"{self._base_url}/catalog/products/{pid}",
+            f"https://www.wixapis.com/stores/v1/products/{pid}",
         ]
 
         last_error: Exception | None = None
@@ -281,8 +294,8 @@ class WixProductsClient:
 
         headers = self._build_headers()
         endpoints = [
-            ("POST", f"{self._base_url}/brands/query", {"query": {"paging": {"limit": 100}}}),
-            ("POST", f"{self._base_url}/catalog/brands/query", {"query": {"paging": {"limit": 100}}}),
+            ("POST", endpoint, {"query": {"paging": {"limit": 100}}})
+            for endpoint in self._brand_endpoint_candidates("/query")
         ]
 
         with httpx.Client(timeout=_TIMEOUT) as client:
@@ -290,7 +303,13 @@ class WixProductsClient:
                 try:
                     resp = self._request_with_retry(client, method, url, headers=headers, json_body=payload)
                     data = resp.json() if resp.content else {}
-                    raw = data.get("brands") if isinstance(data, dict) else []
+                    raw: object = []
+                    if isinstance(data, dict):
+                        raw = data.get("brands")
+                        if not isinstance(raw, list):
+                            raw = data.get("items")
+                        if not isinstance(raw, list):
+                            raw = data.get("results")
                     if not isinstance(raw, list):
                         continue
                     out: list[dict[str, str]] = []
@@ -316,10 +335,10 @@ class WixProductsClient:
             raise RuntimeError("Wix Credentials fehlen")
 
         headers = self._build_headers()
-        endpoints = [
-            ("POST", f"{self._base_url}/brands", {"brand": {"name": name}}),
-            ("POST", f"{self._base_url}/catalog/brands", {"brand": {"name": name}}),
-        ]
+        endpoints = []
+        for endpoint in self._brand_endpoint_candidates(""):
+            endpoints.append(("POST", endpoint, {"brand": {"name": name}}))
+            endpoints.append(("POST", endpoint, {"name": name}))
 
         last_error: Exception | None = None
         with httpx.Client(timeout=_TIMEOUT) as client:
@@ -331,6 +350,8 @@ class WixProductsClient:
                     if isinstance(data, dict):
                         if isinstance(data.get("brand"), dict):
                             brand_obj = data.get("brand")
+                        elif isinstance(data.get("item"), dict):
+                            brand_obj = data.get("item")
                         else:
                             brand_obj = data
                     bid = str(brand_obj.get("id") or "").strip()
