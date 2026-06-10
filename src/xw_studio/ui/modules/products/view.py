@@ -270,6 +270,10 @@ class ProductsView(QWidget):
         self._wix_status_lbl = QLabel("Wix-Produkte noch nicht geladen.")
         bar.addWidget(self._wix_status_lbl)
         bar.addStretch()
+        self._wix_fields_btn = QPushButton("Felder fuer Auswahl aendern")
+        self._wix_fields_btn.clicked.connect(self._bulk_edit_wix_fields)
+        self._wix_fields_btn.setEnabled(False)
+        bar.addWidget(self._wix_fields_btn)
         self._wix_load_btn = QPushButton("Wix-Produkte laden")
         self._wix_load_btn.clicked.connect(self._load_wix)
         bar.addWidget(self._wix_load_btn)
@@ -323,6 +327,7 @@ class ProductsView(QWidget):
         if not isinstance(rows, list):
             return
         self._wix_rows = rows  # type: ignore[assignment]
+        self._wix_fields_btn.setEnabled(bool(self._wix_rows))
         self._wix_status_lbl.setText(f"{len(self._wix_rows)} Wix-Produkte geladen")
         self._wix_search.refresh_suggestions()
         self._populate_wix(self._wix_rows)
@@ -330,6 +335,7 @@ class ProductsView(QWidget):
 
     def _on_wix_error(self, exc: BaseException) -> None:
         self._wix_load_btn.setEnabled(True)
+        self._wix_fields_btn.setEnabled(False)
         self._wix_status_lbl.setText(f"Fehler: {exc}")
         logger.exception("Wix load failed: %s", exc)
         QMessageBox.warning(self, "Wix-Abgleich", str(exc))
@@ -772,6 +778,101 @@ class ProductsView(QWidget):
                 skus.append(sku)
         return skus
 
+    def _selected_wix_skus(self) -> list[str]:
+        selected_rows = sorted({item.row() for item in self._wix_table.selectedItems()})
+        skus: list[str] = []
+        for row in selected_rows:
+            sku_item = self._wix_table.item(row, 0)
+            if sku_item is None:
+                continue
+            sku = sku_item.text().strip()
+            if sku:
+                skus.append(sku)
+        return skus
+
+    def _run_bulk_field_dialog(self, skus: list[str], *, source_label: str) -> None:
+        if not skus:
+            QMessageBox.information(
+                self,
+                "Felder aendern",
+                f"Bitte zuerst Produkte in der {source_label}-Tabelle auswaehlen.",
+            )
+            return
+
+        service: ProductFieldBulkService = self._container.resolve(ProductFieldBulkService)
+        dialog = BulkFieldEditorDialog(service, self)
+        dialog.set_selected_skus(skus)
+
+        if dialog.exec() != BulkFieldEditorDialog.DialogCode.Accepted:
+            return
+
+        field_name, operator, value, sync_wix = dialog.get_field_and_value()
+        if not field_name or not operator or not value:
+            QMessageBox.warning(self, "Felder aendern", "Bitte alle Felder ausfuellen.")
+            return
+
+        try:
+            report = service.apply_field_update(
+                skus=skus,
+                field_name=field_name,
+                operator=operator,
+                value=value,
+                sync_wix=sync_wix,
+            )
+
+            fields = service.get_editable_fields()
+            field_label = fields.get(field_name).label if field_name in fields else field_name  # type: ignore[union-attr]
+            message = (
+                f"Feld: {field_label}\n"
+                f"Operation: {report.operator}\n"
+                f"Wert: {report.value}\n\n"
+                f"Geaendert (lokal): {report.changed}\n"
+                f"Uebersprungen: {report.skipped}\n"
+                f"Fehler: {report.failed}\n"
+            )
+            if sync_wix:
+                message += (
+                    f"\nWix versucht: {report.wix_attempted}\n"
+                    f"Wix erfolgreich: {report.wix_updated}\n"
+                    f"Wix Fehler: {report.wix_failed}"
+                )
+
+            QMessageBox.information(self, "Felder aendern - Abgeschlossen", message)
+            self._load_inventory()
+            if self._wix_rows:
+                self._load_wix()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Felder aendern - Fehler", f"Fehler: {exc}")
+
+    def _bulk_edit_wix_fields(self) -> None:
+        selected_skus = self._selected_wix_skus()
+        if not selected_skus:
+            QMessageBox.information(
+                self,
+                "Felder aendern",
+                "Bitte zuerst Produkte in der Wix-Tabelle auswaehlen.",
+            )
+            return
+
+        local_skus = {row.sku.strip().upper() for row in self._all_rows if row.sku.strip()}
+        linked_skus = [sku for sku in selected_skus if sku.strip().upper() in local_skus]
+        skipped_count = len(selected_skus) - len(linked_skus)
+        if not linked_skus:
+            QMessageBox.information(
+                self,
+                "Felder aendern",
+                "Im Wix-Tab koennen derzeit nur Produkte bearbeitet werden, die bereits mit der lokalen DB verknuepft sind.",
+            )
+            return
+        if skipped_count > 0:
+            QMessageBox.information(
+                self,
+                "Felder aendern",
+                f"{skipped_count} ausgewaehlte Wix-Produkte sind noch nicht lokal verknuepft und werden uebersprungen.",
+            )
+
+        self._run_bulk_field_dialog(linked_skus, source_label="Wix")
+
     def _bulk_set_inventory_brand(self) -> None:
         skus = self._selected_inventory_skus()
         if not skus:
@@ -850,56 +951,5 @@ class ProductsView(QWidget):
 
     def _bulk_edit_fields(self) -> None:
         """Open dialog for bulk product field editing."""
-        skus = self._selected_inventory_skus()
-        if not skus:
-            QMessageBox.information(
-                self,
-                "Felder ändern",
-                "Bitte zuerst Produkte in der Inventar-Tabelle auswählen.",
-            )
-            return
-
-        service: ProductFieldBulkService = self._container.resolve(ProductFieldBulkService)
-        dialog = BulkFieldEditorDialog(service, self)
-        dialog.set_selected_skus(skus)
-
-        if dialog.exec() != BulkFieldEditorDialog.DialogCode.Accepted:
-            return
-
-        field_name, operator, value, sync_wix = dialog.get_field_and_value()
-        if not field_name or not operator or not value:
-            QMessageBox.warning(self, "Felder ändern", "Bitte alle Felder ausfüllen.")
-            return
-
-        try:
-            report = service.apply_field_update(
-                skus=skus,
-                field_name=field_name,
-                operator=operator,
-                value=value,
-                sync_wix=sync_wix,
-            )
-            
-            fields = service.get_editable_fields()
-            field_label = fields.get(field_name).label if field_name in fields else field_name  # type: ignore[union-attr]
-
-            message = (
-                f"Feld: {field_label}\n"
-                f"Operation: {report.operator}\n"
-                f"Wert: {report.value}\n\n"
-                f"Geändert (lokal): {report.changed}\n"
-                f"Übersprungen: {report.skipped}\n"
-                f"Fehler: {report.failed}\n"
-            )
-            if sync_wix:
-                message += (
-                    f"\nWix versucht: {report.wix_attempted}\n"
-                    f"Wix erfolgreich: {report.wix_updated}\n"
-                    f"Wix Fehler: {report.wix_failed}"
-                )
-            
-            QMessageBox.information(self, "Felder ändern - Abgeschlossen", message)
-            self._load_inventory()
-        except ValueError as exc:
-            QMessageBox.warning(self, "Felder ändern - Fehler", f"Fehler: {exc}")
+        self._run_bulk_field_dialog(self._selected_inventory_skus(), source_label="Inventar")
 
