@@ -44,6 +44,7 @@ from xw_studio.services.products.field_bulk_service import ProductFieldBulkServi
 from xw_studio.services.products.print_decision import PrintDecisionEngine
 from xw_studio.services.wix.client import WixProductsClient
 from xw_studio.services.wix.client import WixOrdersClient
+from xw_studio.services.wix.product_details_client import WixProductDetailsClient
 from xw_studio.services.clickup.client import ClickUpClient
 from xw_studio.services.xw_copilot.dry_run import XWCopilotDryRunService
 from xw_studio.services.xw_copilot.ingress import XWCopilotIngress
@@ -185,6 +186,10 @@ def register_default_services(container: Container) -> None:
     container.register(
         WixProductsClient,
         lambda c: WixProductsClient(secret_service=c.resolve(SecretService)),
+    )
+    container.register(
+        WixProductDetailsClient,
+        lambda c: WixProductDetailsClient(secret_service=c.resolve(SecretService)),
     )
     container.register(
         ClickUpClient,
