@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -479,7 +479,27 @@ class ProductsView(QWidget):
 
         self._sync_table = QTableWidget(0, len(_SYNC_HEADERS))
         self._sync_table.setHorizontalHeaderLabels(_SYNC_HEADERS)
+        self._sync_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self._sync_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._sync_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self._sync_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self._sync_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        self._sync_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        self._sync_table.horizontalHeader().setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
+        self._sync_table.setColumnWidth(2, 86)
+        self._sync_table.setColumnWidth(3, 72)
+        self._sync_table.setColumnWidth(5, 92)
+        self._sync_table.setColumnWidth(6, 76)
+        self._sync_table.setColumnWidth(9, 44)
+        for index, tooltip in {
+            2: "Systemstatus: lokal, Wix, sevDesk",
+            3: "Konflikte bei Preis oder Bestand",
+            5: "Preis im Format € 0,00",
+            9: "Aktion fuer nur-Wix-Produkte",
+        }.items():
+            header_item = self._sync_table.horizontalHeaderItem(index)
+            if header_item is not None:
+                header_item.setToolTip(tooltip)
         self._sync_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._sync_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._sync_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -669,6 +689,8 @@ class ProductsView(QWidget):
             if row.can_create_sevdesk:
                 btn = QPushButton("")
                 btn.setIcon(QIcon(str(_ICONS_DIR / "createInSevdesk.png")))
+                btn.setIconSize(QSize(18, 18))
+                btn.setFixedSize(28, 24)
                 btn.setToolTip("In sevDesk anlegen")
                 btn.setFlat(True)
                 btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -695,21 +717,21 @@ class ProductsView(QWidget):
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(6)
-        for tooltip in self._conflict_icon_labels(row):
-            layout.addWidget(self._icon_label("priceNotSynced.png", QColor("#f59e0b"), tooltip=tooltip))
+        for file_name, tooltip in self._conflict_icon_specs(row):
+            layout.addWidget(self._icon_label(file_name, QColor("#f59e0b"), tooltip=tooltip))
         layout.addStretch(1)
         return widget
 
-    def _conflict_icon_labels(self, row: _SyncRow) -> list[str]:
-        labels: list[str] = []
+    def _conflict_icon_specs(self, row: _SyncRow) -> list[tuple[str, str]]:
+        labels: list[tuple[str, str]] = []
         if row.local_present and row.wix_present and (row.local_price or "") != (row.wix_price or ""):
-            labels.append("Preis nicht mit Wix synchron")
+            labels.append(("priceNotSynced.png", "Preis nicht mit Wix synchron"))
         if row.local_present and row.sevdesk_present and (row.local_price or "") != (row.sevdesk_price or ""):
-            labels.append("Preis nicht mit sevDesk synchron")
+            labels.append(("priceNotSynced.png", "Preis nicht mit sevDesk synchron"))
         if row.local_present and row.wix_present and row.wix_stock != row.local_stock:
-            labels.append("Bestand nicht mit Wix synchron")
+            labels.append(("cloud.png", "Bestand nicht mit Wix synchron"))
         if row.local_present and row.sevdesk_present and row.sevdesk_stock != row.local_stock:
-            labels.append("Bestand nicht mit sevDesk synchron")
+            labels.append(("cloud.png", "Bestand nicht mit sevDesk synchron"))
         return labels
 
     def _icon_label(self, file_name: str, color: QColor, *, tooltip: str) -> QLabel:

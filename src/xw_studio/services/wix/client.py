@@ -101,6 +101,7 @@ class WixProductsClient:
     ) -> None:
         self._secrets = secret_service
         self._base_url = base_url.rstrip("/")
+        self._brand_catalog_supported: bool | None = None
 
     # ------------------------------------------------------------------
     # Credential helpers
@@ -452,6 +453,32 @@ class WixProductsClient:
                     logger.info("Wix list_brands endpoint failed %s: %s", url, exc)
                     continue
         return []
+
+    def supports_brand_catalog(self, *, force: bool = False) -> bool:
+        """Return whether this Wix site appears to expose a usable brand catalog API.
+
+        This check is intentionally quiet: it probes the known brand query endpoints
+        without logging per-endpoint failures, so CATALOG_V1 sites do not spam the log
+        when brand updates can already succeed by name-only PATCH.
+        """
+        if self._brand_catalog_supported is not None and not force:
+            return self._brand_catalog_supported
+        if not self.has_credentials():
+            self._brand_catalog_supported = False
+            return self._brand_catalog_supported
+
+        headers = self._build_headers()
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            for endpoint in self._brand_endpoint_candidates("/query"):
+                try:
+                    resp = client.request("POST", endpoint, headers=headers, json={"query": {"paging": {"limit": 1}}})
+                    if resp.status_code < 400:
+                        self._brand_catalog_supported = True
+                        return True
+                except Exception:
+                    continue
+        self._brand_catalog_supported = False
+        return False
 
 
     def update_product_field(self, product_id: str, field_name: str, value: str) -> None:

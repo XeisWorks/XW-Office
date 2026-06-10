@@ -30,9 +30,13 @@ class _WixStub:
         self.calls: list[_WixUpdateCall] = []
         self.fail_product_ids: set[str] = set()
         self._brands_before: list[dict[str, str]] = [{"id": "existing", "name": "Existing"}]
+        self._supports_brand_catalog = True
 
     def has_credentials(self) -> bool:
         return True
+
+    def supports_brand_catalog(self, *, force: bool = False) -> bool:
+        return self._supports_brand_catalog
 
     def list_products(self) -> list[object]:
         return []
@@ -126,3 +130,30 @@ def test_apply_brand_update_with_wix_create_and_partial_failure() -> None:
     assert len(failed_items) == 1
     assert failed_items[0].sku == "XW-2"
     assert "Wix-Writeback fehlgeschlagen" in failed_items[0].message
+
+
+def test_apply_brand_update_skips_brand_catalog_resolution_when_unsupported() -> None:
+    inv = _InventoryStub(
+        [
+            _row(sku="XW-1", name="One", brand="Alt", wix_id="w1"),
+        ]
+    )
+    wix = _WixStub()
+    wix._supports_brand_catalog = False
+    service = ProductBrandService(inv, wix)
+
+    report = service.apply_brand_update(
+        ["XW-1"],
+        "MegaBrand",
+        sync_wix=True,
+        create_missing_wix_brand=True,
+    )
+
+    assert report.changed == 1
+    assert report.wix_attempted == 1
+    assert report.wix_updated == 1
+    assert report.wix_brand_resolved is False
+    assert report.wix_brand_created is False
+    assert len(wix.calls) == 1
+    assert wix.calls[0].brand_id == ""
+    assert wix.calls[0].brand_name == "MegaBrand"

@@ -112,7 +112,7 @@ class ProductBrandService:
         wix_brand_created = False
         resolved_brand_id = ""
 
-        if self._wix_client.has_credentials():
+        if self._wix_client.has_credentials() and self._wix_client.supports_brand_catalog():
             try:
                 before_ids = {
                     str(item.get("id") or "").strip()
