@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -80,6 +80,7 @@ class ProductsView(QWidget):
         self._sync_rows: list[_SyncRow] = []
         self._inv_worker: BackgroundWorker | None = None
         self._wix_worker: BackgroundWorker | None = None
+        self._wix_selfcheck_worker: BackgroundWorker | None = None
         self._sevdesk_worker: BackgroundWorker | None = None
         self._save_worker: BackgroundWorker | None = None
         self._inv_filter_text: str = ""
@@ -266,6 +267,9 @@ class ProductsView(QWidget):
         self._wix_load_btn = QPushButton("Wix-Produkte laden")
         self._wix_load_btn.clicked.connect(self._load_wix)
         bar.addWidget(self._wix_load_btn)
+        self._wix_brand_selfcheck_btn = QPushButton("Wix Brand-Selfcheck")
+        self._wix_brand_selfcheck_btn.clicked.connect(self._run_wix_brand_selfcheck)
+        bar.addWidget(self._wix_brand_selfcheck_btn)
         lay.addLayout(bar)
 
         self._wix_search = SearchBar("Wix-Produkte filtern (mind. 3 Zeichen)…")
@@ -326,6 +330,76 @@ class ProductsView(QWidget):
         self._wix_status_lbl.setText(f"Fehler: {exc}")
         logger.exception("Wix load failed: %s", exc)
         QMessageBox.warning(self, "Wix-Abgleich", str(exc))
+
+    def _run_wix_brand_selfcheck(self) -> None:
+        client: WixProductsClient = self._container.resolve(WixProductsClient)
+        if not client.has_credentials():
+            QMessageBox.warning(
+                self,
+                "Wix Brand-Selfcheck",
+                "Kein WIX_API_KEY oder WIX_SITE_ID konfiguriert.\n"
+                "Bitte unter Einstellungen > Token-Verwaltung eintragen.",
+            )
+            return
+
+        self._wix_brand_selfcheck_btn.setEnabled(False)
+        self._wix_status_lbl.setText("Pruefe Wix Brand-Endpunkte...")
+
+        def job() -> dict[str, Any]:
+            return client.brand_endpoints_selfcheck()
+
+        self._wix_selfcheck_worker = BackgroundWorker(job)
+        self._wix_selfcheck_worker.signals.result.connect(self._on_wix_brand_selfcheck_done)
+        self._wix_selfcheck_worker.signals.error.connect(self._on_wix_brand_selfcheck_error)
+        self._wix_selfcheck_worker.start()
+
+    def _on_wix_brand_selfcheck_done(self, payload: object) -> None:
+        self._wix_brand_selfcheck_btn.setEnabled(True)
+        if not isinstance(payload, dict):
+            self._wix_status_lbl.setText("Wix Brand-Selfcheck: ungueltige Antwort")
+            return
+
+        preferred = str(payload.get("preferred_query_endpoint") or "").strip()
+        reachable = int(payload.get("reachable_query_endpoints") or 0)
+        checks_raw = payload.get("checks")
+        checks = checks_raw if isinstance(checks_raw, list) else []
+
+        lines = [
+            "Wix Brand-Selfcheck Ergebnis",
+            f"Erreichbare Query-Endpunkte: {reachable}",
+            f"Bevorzugter Endpunkt: {preferred or '-'}",
+            "",
+            "Details:",
+        ]
+        for item in checks:
+            if not isinstance(item, dict):
+                continue
+            endpoint = str(item.get("endpoint") or "")
+            method = str(item.get("method") or "")
+            ok = bool(item.get("ok"))
+            status = int(item.get("status_code") or 0)
+            parsed = bool(item.get("parsed_list"))
+            message = str(item.get("message") or "").strip()
+            marker = "OK" if ok else "FAIL"
+            extra = " (Brand-Liste erkannt)" if parsed else ""
+            line = f"- [{marker}] {method} {endpoint} -> HTTP {status}{extra}"
+            if message:
+                line += f" | {message}"
+            lines.append(line)
+
+        if preferred:
+            self._wix_status_lbl.setText(f"Wix Brand-Selfcheck: OK ({reachable} erreichbar)")
+            QMessageBox.information(self, "Wix Brand-Selfcheck", "\n".join(lines))
+            return
+
+        self._wix_status_lbl.setText("Wix Brand-Selfcheck: kein passender Query-Endpunkt")
+        QMessageBox.warning(self, "Wix Brand-Selfcheck", "\n".join(lines))
+
+    def _on_wix_brand_selfcheck_error(self, exc: BaseException) -> None:
+        self._wix_brand_selfcheck_btn.setEnabled(True)
+        self._wix_status_lbl.setText(f"Wix Brand-Selfcheck Fehler: {exc}")
+        logger.exception("Wix brand selfcheck failed: %s", exc)
+        QMessageBox.warning(self, "Wix Brand-Selfcheck", str(exc))
 
     def _populate_wix(self, rows: list[WixProduct]) -> None:
         tbl = self._wix_table
