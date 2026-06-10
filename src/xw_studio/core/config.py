@@ -230,7 +230,13 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
             str(yaml_data.setdefault("finanzonline", {}).get("test_mode", True)),
         )
     ).strip().lower() in {"1", "true", "yes", "ja", "on"}
-    yaml_data["database_url"] = os.getenv("DATABASE_URL", "")
+    db_url = os.getenv("DATABASE_URL", "").strip()
+    db_public_url = os.getenv("DATABASE_PUBLIC_URL", "").strip()
+    if db_url and ".railway.internal" in db_url and db_public_url:
+        # Local desktop setups cannot resolve Railway internal hostnames.
+        yaml_data["database_url"] = db_public_url
+    else:
+        yaml_data["database_url"] = db_url or db_public_url
     yaml_data["fernet_master_key"] = os.getenv("FERNET_MASTER_KEY", "")
 
     return _merge_dataclass(AppConfig, yaml_data)
