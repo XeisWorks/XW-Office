@@ -195,6 +195,26 @@ class WixProductsClient:
         return None
 
     @staticmethod
+    def _extract_has_next(data: object) -> bool:
+        if not isinstance(data, dict):
+            return False
+        for meta_key in ("metadata", "pagingMetadata", "paging"):
+            meta = data.get(meta_key)
+            if not isinstance(meta, dict):
+                continue
+            for key in ("hasNext", "has_next", "nextPage"):
+                value = meta.get(key)
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, str):
+                    normalized = value.strip().lower()
+                    if normalized in {"true", "1", "yes", "ja", "on"}:
+                        return True
+                    if normalized in {"false", "0", "no", "nein", "off"}:
+                        return False
+        return False
+
+    @staticmethod
     def _is_retryable_status(code: int) -> bool:
         return code in (408, 409, 425, 429, 500, 502, 503, 504)
 
@@ -271,9 +291,19 @@ class WixProductsClient:
             logger.info("WixProductsClient: using product query endpoint %s", chosen_endpoint)
 
             cursor: str | None = None
+            seen_cursors: set[str] = set()
+            seen_product_ids: set[str] = set()
+            offset = 0
             page = 0
             while page < max_pages:
-                body: dict[str, Any] = {"query": {"paging": {"limit": _PRODUCTS_PAGE_SIZE}}}
+                body: dict[str, Any] = {
+                    "query": {
+                        "paging": {
+                            "limit": _PRODUCTS_PAGE_SIZE,
+                            **({"offset": offset} if offset > 0 else {}),
+                        }
+                    }
+                }
                 if cursor:
                     body["query"]["cursorPaging"] = {"cursor": cursor}
 
@@ -291,13 +321,47 @@ class WixProductsClient:
 
                 data = resp.json() if resp.content else {}
                 products = self._extract_product_list(data)
+                count_before = len(results)
                 for raw in products:
-                    results.append(_parse_product(raw))
+                    parsed = _parse_product(raw)
+                    pid = str(parsed.id or "").strip()
+                    if pid:
+                        if pid in seen_product_ids:
+                            continue
+                        seen_product_ids.add(pid)
+                    results.append(parsed)
+                new_items_added = len(results) - count_before
 
-                cursor = self._extract_next_cursor(data)
-                if not cursor or len(products) < _PRODUCTS_PAGE_SIZE:
+                if not products:
                     break
+
+                next_cursor = self._extract_next_cursor(data)
+                has_next = self._extract_has_next(data)
+
+                if next_cursor:
+                    if next_cursor in seen_cursors:
+                        break
+                    seen_cursors.add(next_cursor)
+                    cursor = next_cursor
+                    page += 1
+                    continue
+
+                if has_next:
+                    cursor = None
+                    offset += len(products)
+                    page += 1
+                    continue
+
+                # Some Wix endpoints return full pages without cursor/hasNext metadata.
+                # In that case, continue with offset while new items are still discovered.
+                if len(products) >= _PRODUCTS_PAGE_SIZE and new_items_added > 0:
+                    cursor = None
+                    offset += len(products)
+                    page += 1
+                    continue
+
                 page += 1
+                break
 
         logger.info("WixProductsClient: fetched %s products", len(results))
         return results
