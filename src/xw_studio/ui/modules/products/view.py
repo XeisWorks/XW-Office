@@ -28,11 +28,13 @@ from PySide6.QtWidgets import (
 
 from xw_studio.core.worker import BackgroundWorker
 from xw_studio.services.inventory import InventoryService, ProductRow
+from xw_studio.services.draft_invoice.service import DraftInvoiceService, ProductIssueDecision
 from xw_studio.services.products.brand_service import ProductBrandService
 from xw_studio.services.products.field_bulk_service import ProductFieldBulkService
 from xw_studio.services.sevdesk.part_client import PartClient, SevdeskPart
 from xw_studio.services.wix.client import WixProduct, WixProductsClient
 from xw_studio.ui.modules.products.bulk_field_dialog import BulkFieldEditorDialog
+from xw_studio.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 from xw_studio.ui.widgets.search_bar import SearchBar
 
 if TYPE_CHECKING:
@@ -44,21 +46,29 @@ _INV_HEADERS = ["SKU", "Name", "Kategorie", "Brand", "Bestand", "Preis EUR", "Wi
 _WIX_HEADERS = ["SKU", "Name", "Brand", "Preis", "Sichtbar", "Bestand", "Wix-ID", "Status"]
 _SYNC_HEADERS = [
     "SKU",
-    "Lokal Bestand",
-    "Wix Bestand",
-    "sevDesk Bestand",
-    "Lokal Brand",
-    "Wix Brand",
-    "Lokal Preis",
-    "Wix Preis",
-    "sevDesk Preis",
+    "Name",
     "Status",
+    "Lokal",
+    "Wix",
+    "sevDesk",
+    "Brand",
+    "Preis",
+    "Bestand",
+    "Wix-ID",
+    "sevDesk-ID",
+    "Aktion",
 ]
 
 
 @dataclass(frozen=True)
 class _SyncRow:
     sku: str
+    name: str
+    wix_id: str
+    sevdesk_id: str
+    local_present: bool
+    wix_present: bool
+    sevdesk_present: bool
     local_stock: int
     wix_stock: int | None
     sevdesk_stock: int | None
@@ -68,6 +78,7 @@ class _SyncRow:
     wix_price: str
     sevdesk_price: str
     status: str
+    can_create_sevdesk: bool
 
 
 class ProductsView(QWidget):
@@ -84,20 +95,15 @@ class ProductsView(QWidget):
         self._wix_worker: BackgroundWorker | None = None
         self._sevdesk_worker: BackgroundWorker | None = None
         self._save_worker: BackgroundWorker | None = None
-        self._inv_filter_text: str = ""
-        self._inv_filter_category: str = ""
-        self._inv_category_combo: QComboBox | None = None
+        self._sync_filter_text: str = ""
+        self._sync_filter_status: str = ""
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
 
-        tabs = QTabWidget()
-        tabs.addTab(self._build_inventory_tab(), "Inventar (DB)")
-        tabs.addTab(self._build_wix_tab(), "Wix-Abgleich")
-        tabs.addTab(self._build_sync_tab(), "Sync-Konflikte")
-        root.addWidget(tabs)
+        root.addWidget(self._build_sync_tab())
 
-        self._load_inventory()
+        self._load_sync_sources()
 
     # ==================================================================
     # Inventar tab
@@ -431,6 +437,14 @@ class ProductsView(QWidget):
         self._sync_load_btn = QPushButton("Alle Quellen laden")
         self._sync_load_btn.clicked.connect(self._load_sync_sources)
         bar.addWidget(self._sync_load_btn)
+        self._sync_fields_btn = QPushButton("Felder fuer Auswahl aendern")
+        self._sync_fields_btn.clicked.connect(self._bulk_edit_fields)
+        self._sync_fields_btn.setEnabled(False)
+        bar.addWidget(self._sync_fields_btn)
+        self._sync_brand_btn = QPushButton("Brand fuer Auswahl setzen")
+        self._sync_brand_btn.clicked.connect(self._bulk_set_inventory_brand)
+        self._sync_brand_btn.setEnabled(False)
+        bar.addWidget(self._sync_brand_btn)
         self._legacy_import_btn = QPushButton("Legacy-Druckdaten importieren")
         self._legacy_import_btn.clicked.connect(self._import_legacy_print_data)
         bar.addWidget(self._legacy_import_btn)
@@ -440,17 +454,39 @@ class ProductsView(QWidget):
         bar.addWidget(self._sync_apply_btn)
         lay.addLayout(bar)
 
+        filter_row = QHBoxLayout()
+        self._sync_search = SearchBar("Produkte filtern (SKU, Name, Brand, Status)...")
+        self._sync_search.setPlaceholderText("Produkte filtern (SKU, Name, Brand, Status)...")
+        self._sync_search.search_changed.connect(self._apply_sync_filter)
+        filter_row.addWidget(self._sync_search, stretch=1)
+        filter_row.addWidget(QLabel("Status:"))
+        self._sync_status_combo = QComboBox()
+        self._sync_status_combo.addItem("Alle", "")
+        self._sync_status_combo.addItems([
+            "sauber verknuepft",
+            "nur Wix",
+            "nur sevDesk",
+            "nur lokal DB",
+            "Wix + lokal, nicht in sevDesk",
+            "Wix + sevDesk, nicht lokal",
+            "lokal + sevDesk, nicht in Wix",
+            "Konflikt",
+        ])
+        self._sync_status_combo.currentIndexChanged.connect(self._apply_sync_status_filter)
+        filter_row.addWidget(self._sync_status_combo)
+        lay.addLayout(filter_row)
+
         self._sync_table = QTableWidget(0, len(_SYNC_HEADERS))
         self._sync_table.setHorizontalHeaderLabels(_SYNC_HEADERS)
-        self._sync_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._sync_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._sync_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._sync_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._sync_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         lay.addWidget(self._sync_table, stretch=1)
 
         tip = QLabel(
-            "Konflikte zeigen Unterschiede zwischen lokalem Inventar, Wix und sevDesk. "
-            "Aktuell wird ein sicherer Wix->Lokal Abgleich unterstuetzt."
+            "Eine Liste fuer Lokal-DB, Wix und sevDesk. Der Status zeigt, ob ein Produkt sauber verknuepft ist, "
+            "nur in einem System vorkommt oder Datenkonflikte hat."
         )
         tip.setWordWrap(True)
         tip.setObjectName("infoLabel")
@@ -511,13 +547,12 @@ class ProductsView(QWidget):
         self._wix_rows = [r for r in wix_rows if isinstance(r, WixProduct)]
         self._sevdesk_rows = [r for r in sevdesk_rows if isinstance(r, SevdeskPart)]
 
-        self._populate_inv(self._all_rows)
-        self._populate_wix(self._wix_rows)
-        self._compute_overlap()
-
         self._sync_rows = self._build_sync_rows()
-        self._populate_sync_table(self._sync_rows)
-        conflicts = sum(1 for row in self._sync_rows if row.status != "ok")
+        self._sync_fields_btn.setEnabled(bool(self._sync_rows))
+        self._sync_brand_btn.setEnabled(bool(self._sync_rows))
+        self._sync_search.refresh_suggestions()
+        self._apply_sync_filters()
+        conflicts = sum(1 for row in self._sync_rows if row.status != "sauber verknuepft")
         self._sync_status_lbl.setText(
             f"Sync-Vergleich geladen: {len(self._sync_rows)} SKU, Konflikte: {conflicts}"
         )
@@ -525,6 +560,8 @@ class ProductsView(QWidget):
 
     def _on_sync_sources_error(self, exc: BaseException) -> None:
         self._sync_load_btn.setEnabled(True)
+        self._sync_fields_btn.setEnabled(False)
+        self._sync_brand_btn.setEnabled(False)
         self._sync_apply_btn.setEnabled(False)
         self._sync_status_lbl.setText(f"Fehler: {exc}")
         logger.exception("Sync source load failed: %s", exc)
@@ -550,28 +587,50 @@ class ProductsView(QWidget):
             sevdesk_price = sevdesk.price_eur if sevdesk is not None else ""
             local_brand = local.brand_name if local is not None else ""
             wix_brand = wix.brand_name if wix is not None else ""
+            name = (
+                (local.name if local is not None else "")
+                or (wix.name if wix is not None else "")
+                or (sevdesk.name if sevdesk is not None else "")
+            )
 
-            status_parts: list[str] = []
-            if local is None:
-                status_parts.append("nur extern")
-            if wix is None:
-                status_parts.append("nicht in wix")
-            if sevdesk is None:
-                status_parts.append("nicht in sevdesk")
-            if wix is not None and local is not None and wix_stock != local_stock:
-                status_parts.append("bestand diff wix")
-            if sevdesk is not None and local is not None and sevdesk_stock != local_stock:
-                status_parts.append("bestand diff sevdesk")
-            if wix is not None and local is not None and (wix_price or "") != (local_price or ""):
-                status_parts.append("preis diff wix")
-            if sevdesk is not None and local is not None and (sevdesk_price or "") != (local_price or ""):
-                status_parts.append("preis diff sevdesk")
-            if wix is not None and local is not None and (wix_brand or "") != (local_brand or ""):
-                status_parts.append("brand diff wix")
+            has_local = local is not None
+            has_wix = wix is not None
+            has_sevdesk = sevdesk is not None
+            if has_wix and not has_sevdesk and not has_local:
+                status = "nur Wix"
+            elif has_sevdesk and not has_wix and not has_local:
+                status = "nur sevDesk"
+            elif has_local and not has_wix and not has_sevdesk:
+                status = "nur lokal DB"
+            elif has_wix and has_local and not has_sevdesk:
+                status = "Wix + lokal, nicht in sevDesk"
+            elif has_wix and has_sevdesk and not has_local:
+                status = "Wix + sevDesk, nicht lokal"
+            elif has_local and has_sevdesk and not has_wix:
+                status = "lokal + sevDesk, nicht in Wix"
+            else:
+                diffs: list[str] = []
+                if wix is not None and local is not None and wix_stock != local_stock:
+                    diffs.append("Bestand Wix")
+                if sevdesk is not None and local is not None and sevdesk_stock != local_stock:
+                    diffs.append("Bestand sevDesk")
+                if wix is not None and local is not None and (wix_price or "") != (local_price or ""):
+                    diffs.append("Preis Wix")
+                if sevdesk is not None and local is not None and (sevdesk_price or "") != (local_price or ""):
+                    diffs.append("Preis sevDesk")
+                if wix is not None and local is not None and (wix_brand or "") != (local_brand or ""):
+                    diffs.append("Brand Wix")
+                status = "sauber verknuepft" if not diffs else f"Konflikt: {', '.join(diffs)}"
 
             rows.append(
                 _SyncRow(
                     sku=sku,
+                    name=name,
+                    wix_id=wix.id if wix is not None else (local.wix_id if local is not None else ""),
+                    sevdesk_id=sevdesk.id if sevdesk is not None else (local.sevdesk_id if local is not None else ""),
+                    local_present=has_local,
+                    wix_present=has_wix,
+                    sevdesk_present=has_sevdesk,
                     local_stock=local_stock,
                     wix_stock=wix_stock,
                     sevdesk_stock=sevdesk_stock,
@@ -580,7 +639,8 @@ class ProductsView(QWidget):
                     local_price=local_price,
                     wix_price=wix_price,
                     sevdesk_price=sevdesk_price,
-                    status="; ".join(status_parts) if status_parts else "ok",
+                    status=status,
+                    can_create_sevdesk=has_wix and not has_sevdesk,
                 )
             )
         return rows
@@ -592,22 +652,67 @@ class ProductsView(QWidget):
             r = tbl.rowCount()
             tbl.insertRow(r)
             tbl.setItem(r, 0, QTableWidgetItem(row.sku))
-            tbl.setItem(r, 1, QTableWidgetItem(str(row.local_stock)))
-            tbl.setItem(r, 2, QTableWidgetItem("" if row.wix_stock is None else str(row.wix_stock)))
-            tbl.setItem(r, 3, QTableWidgetItem("" if row.sevdesk_stock is None else str(row.sevdesk_stock)))
-            tbl.setItem(r, 4, QTableWidgetItem(row.local_brand))
-            tbl.setItem(r, 5, QTableWidgetItem(row.wix_brand))
-            tbl.setItem(r, 6, QTableWidgetItem(row.local_price))
-            tbl.setItem(r, 7, QTableWidgetItem(row.wix_price))
-            tbl.setItem(r, 8, QTableWidgetItem(row.sevdesk_price))
+            tbl.setItem(r, 1, QTableWidgetItem(row.name))
             status_item = QTableWidgetItem(row.status)
-            if row.status == "ok":
+            if row.status == "sauber verknuepft":
                 status_item.setForeground(Qt.GlobalColor.green)
+            elif row.status.startswith("Konflikt"):
+                status_item.setForeground(Qt.GlobalColor.red)
             else:
                 status_item.setForeground(Qt.GlobalColor.yellow)
-            tbl.setItem(r, 9, status_item)
-        for col in (1, 2, 3, 4, 5):
+            tbl.setItem(r, 2, status_item)
+            tbl.setItem(r, 3, QTableWidgetItem("ja" if row.local_present else "-"))
+            tbl.setItem(r, 4, QTableWidgetItem("ja" if row.wix_present else "-"))
+            tbl.setItem(r, 5, QTableWidgetItem("ja" if row.sevdesk_present else "-"))
+            tbl.setItem(r, 6, QTableWidgetItem(row.local_brand or row.wix_brand))
+            tbl.setItem(r, 7, QTableWidgetItem(row.local_price or row.wix_price or row.sevdesk_price))
+            stock_value = row.local_stock if row.local_present else (row.wix_stock if row.wix_stock is not None else row.sevdesk_stock)
+            tbl.setItem(r, 8, QTableWidgetItem("" if stock_value is None else str(stock_value)))
+            tbl.setItem(r, 9, QTableWidgetItem(row.wix_id))
+            tbl.setItem(r, 10, QTableWidgetItem(row.sevdesk_id))
+            if row.can_create_sevdesk:
+                btn = QPushButton("In sevDesk anlegen")
+                btn.clicked.connect(lambda _checked=False, sku=row.sku: self._create_selected_wix_product_in_sevdesk(sku))
+                tbl.setCellWidget(r, 11, btn)
+            else:
+                tbl.setItem(r, 11, QTableWidgetItem("-"))
+        for col in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11):
             tbl.resizeColumnToContents(col)
+
+    def _apply_sync_filter(self, text: str) -> None:
+        self._sync_filter_text = text.lower().strip()
+        self._apply_sync_filters()
+
+    def _apply_sync_status_filter(self) -> None:
+        self._sync_filter_status = str(self._sync_status_combo.currentText() or "").strip().lower()
+        if self._sync_filter_status == "alle":
+            self._sync_filter_status = ""
+        self._apply_sync_filters()
+
+    def _apply_sync_filters(self) -> None:
+        needle = self._sync_filter_text
+        status_filter = self._sync_filter_status
+        filtered: list[_SyncRow] = []
+        for row in self._sync_rows:
+            hay = f"{row.sku} {row.name} {row.local_brand} {row.wix_brand} {row.status}".lower()
+            if needle and needle not in hay:
+                continue
+            if status_filter and status_filter not in row.status.lower():
+                continue
+            filtered.append(row)
+        self._populate_sync_table(filtered)
+
+    def _selected_product_skus(self) -> list[str]:
+        selected_rows = sorted({item.row() for item in self._sync_table.selectedItems()})
+        skus: list[str] = []
+        for row in selected_rows:
+            sku_item = self._sync_table.item(row, 0)
+            if sku_item is None:
+                continue
+            sku = sku_item.text().strip()
+            if sku:
+                skus.append(sku)
+        return skus
 
     def _apply_wix_to_local(self) -> None:
         if not self._wix_rows:
@@ -687,7 +792,7 @@ class ProductsView(QWidget):
         except Exception:
             pass
         QMessageBox.information(self, "Produkte", f"{count} Produkte wurden lokal aktualisiert.")
-        self._load_inventory()
+        self._load_sync_sources()
 
     def _on_apply_error(self, exc: BaseException) -> None:
         self._sync_apply_btn.setEnabled(True)
@@ -712,7 +817,7 @@ class ProductsView(QWidget):
         report = payload
         if report is None:
             self._sync_status_lbl.setText("Legacy-Import abgeschlossen")
-            self._load_inventory()
+            self._load_sync_sources()
             return
         source_path = str(getattr(report, "source_path", "") or "")
         updated = int(getattr(report, "products_updated", 0) or 0)
@@ -740,7 +845,7 @@ class ProductsView(QWidget):
         except Exception:
             pass
         QMessageBox.information(self, "Legacy-Druckdaten", "\n".join(lines))
-        self._load_inventory()
+        self._load_sync_sources()
 
     def _on_legacy_import_error(self, exc: BaseException) -> None:
         self._legacy_import_btn.setEnabled(True)
@@ -767,28 +872,10 @@ class ProductsView(QWidget):
         QMessageBox.information(self, "Druckplaene", f"{len(data)} Druckplan-Eintraege gespeichert.")
 
     def _selected_inventory_skus(self) -> list[str]:
-        selected_rows = sorted({item.row() for item in self._inv_table.selectedItems()})
-        skus: list[str] = []
-        for row in selected_rows:
-            sku_item = self._inv_table.item(row, 0)
-            if sku_item is None:
-                continue
-            sku = sku_item.text().strip()
-            if sku:
-                skus.append(sku)
-        return skus
+        return self._selected_product_skus()
 
     def _selected_wix_skus(self) -> list[str]:
-        selected_rows = sorted({item.row() for item in self._wix_table.selectedItems()})
-        skus: list[str] = []
-        for row in selected_rows:
-            sku_item = self._wix_table.item(row, 0)
-            if sku_item is None:
-                continue
-            sku = sku_item.text().strip()
-            if sku:
-                skus.append(sku)
-        return skus
+        return self._selected_product_skus()
 
     def _run_bulk_field_dialog(self, skus: list[str], *, source_label: str) -> None:
         if not skus:
@@ -802,6 +889,7 @@ class ProductsView(QWidget):
         service: ProductFieldBulkService = self._container.resolve(ProductFieldBulkService)
         dialog = BulkFieldEditorDialog(service, self)
         dialog.set_selected_skus(skus)
+        dialog.set_wix_products(self._wix_rows)
 
         if dialog.exec() != BulkFieldEditorDialog.DialogCode.Accepted:
             return
@@ -818,6 +906,7 @@ class ProductsView(QWidget):
                 operator=operator,
                 value=value,
                 sync_wix=sync_wix,
+                wix_products=self._wix_rows,
             )
 
             fields = service.get_editable_fields()
@@ -838,40 +927,99 @@ class ProductsView(QWidget):
                 )
 
             QMessageBox.information(self, "Felder aendern - Abgeschlossen", message)
-            self._load_inventory()
-            if self._wix_rows:
-                self._load_wix()
+            self._load_sync_sources()
         except ValueError as exc:
             QMessageBox.warning(self, "Felder aendern - Fehler", f"Fehler: {exc}")
 
     def _bulk_edit_wix_fields(self) -> None:
-        selected_skus = self._selected_wix_skus()
-        if not selected_skus:
-            QMessageBox.information(
-                self,
-                "Felder aendern",
-                "Bitte zuerst Produkte in der Wix-Tabelle auswaehlen.",
-            )
+        self._run_bulk_field_dialog(self._selected_product_skus(), source_label="Produkte")
+
+    def _create_selected_wix_product_in_sevdesk(self, sku: str) -> None:
+        normalized_sku = str(sku or "").strip().upper()
+        if not normalized_sku:
+            return
+        wix_product = next((row for row in self._wix_rows if row.sku.strip().upper() == normalized_sku), None)
+        if wix_product is None:
+            QMessageBox.warning(self, "sevDesk", f"Wix-Produkt fuer SKU {normalized_sku} nicht gefunden.")
             return
 
-        local_skus = {row.sku.strip().upper() for row in self._all_rows if row.sku.strip()}
-        linked_skus = [sku for sku in selected_skus if sku.strip().upper() in local_skus]
-        skipped_count = len(selected_skus) - len(linked_skus)
-        if not linked_skus:
-            QMessageBox.information(
-                self,
-                "Felder aendern",
-                "Im Wix-Tab koennen derzeit nur Produkte bearbeitet werden, die bereits mit der lokalen DB verknuepft sind.",
+        service: DraftInvoiceService = self._container.resolve(DraftInvoiceService)
+        try:
+            plan = service.build_manual_wix_product_plan(
+                sku=wix_product.sku,
+                wix_name=wix_product.name,
+                wix_product_id=wix_product.id,
+                wix_description="",
+                wix_price_gross=float(wix_product.price) if str(wix_product.price or "").strip() else None,
+                is_digital=False,
             )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "sevDesk", str(exc))
             return
-        if skipped_count > 0:
-            QMessageBox.information(
-                self,
-                "Felder aendern",
-                f"{skipped_count} ausgewaehlte Wix-Produkte sind noch nicht lokal verknuepft und werden uebersprungen.",
-            )
 
-        self._run_bulk_field_dialog(linked_skus, source_label="Wix")
+        issue = plan.issues[0] if plan.issues else None
+        if issue is None:
+            QMessageBox.warning(self, "sevDesk", "Produktdialog konnte nicht vorbereitet werden.")
+            return
+
+        dialog = ProductPreflightDialog(issue, part_categories=plan.part_categories, parent=self)
+        decision = dialog.show_dialog()
+        if decision is None:
+            decision = ProductIssueDecision(action="skip", draft=issue.draft)
+        if decision.action != "create_part":
+            return
+
+        try:
+            created = service.create_part_from_decision(issue, decision)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "sevDesk", f"Produkt konnte nicht angelegt werden:\n{exc}")
+            return
+
+        self._upsert_local_product_from_wix(wix_product, sevdesk_id=created.id)
+        QMessageBox.information(
+            self,
+            "sevDesk",
+            f"Produkt [{created.sku}] {created.name} wurde in sevDesk angelegt.",
+        )
+        self._load_sync_sources()
+
+    def _upsert_local_product_from_wix(self, wix: WixProduct, *, sevdesk_id: str) -> None:
+        inv: InventoryService = self._container.resolve(InventoryService)
+        local_by_sku = {row.sku: row for row in self._all_rows if row.sku}
+        current = local_by_sku.get(wix.sku)
+        if current is None:
+            local_by_sku[wix.sku] = ProductRow(
+                sku=wix.sku,
+                name=wix.name,
+                category="",
+                on_hand=max(0, int(wix.inventory_quantity)),
+                price_eur=wix.price,
+                brand_name=wix.brand_name,
+                brand_id=wix.brand_id,
+                wix_id=wix.id,
+                sevdesk_id=sevdesk_id,
+                print_file_path="",
+                print_profile_id="",
+                print_plan=[],
+                title_print_configs={},
+            )
+        else:
+            local_by_sku[wix.sku] = ProductRow(
+                sku=current.sku,
+                name=current.name or wix.name,
+                category=current.category,
+                on_hand=max(0, int(wix.inventory_quantity)),
+                price_eur=wix.price or current.price_eur,
+                brand_name=wix.brand_name or current.brand_name,
+                brand_id=wix.brand_id or current.brand_id,
+                wix_id=wix.id or current.wix_id,
+                sevdesk_id=sevdesk_id or current.sevdesk_id,
+                print_file_path=current.print_file_path,
+                print_profile_id=current.print_profile_id,
+                print_plan=list(current.print_plan or []),
+                title_print_configs=dict(current.title_print_configs or {}),
+            )
+        inv.save_products(sorted(local_by_sku.values(), key=lambda row: row.sku))
 
     def _bulk_set_inventory_brand(self) -> None:
         skus = self._selected_inventory_skus()
@@ -947,9 +1095,9 @@ class ProductsView(QWidget):
             f"Brand aufgeloest: {'ja' if report.wix_brand_resolved else 'nein'}\n"
             f"Brand neu angelegt: {'ja' if report.wix_brand_created else 'nein'}",
         )
-        self._load_inventory()
+        self._load_sync_sources()
 
     def _bulk_edit_fields(self) -> None:
         """Open dialog for bulk product field editing."""
-        self._run_bulk_field_dialog(self._selected_inventory_skus(), source_label="Inventar")
+        self._run_bulk_field_dialog(self._selected_product_skus(), source_label="Produkte")
 

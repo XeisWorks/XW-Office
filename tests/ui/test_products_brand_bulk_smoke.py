@@ -65,8 +65,8 @@ class _FakeBrandService(ProductBrandService):
 
 
 def test_products_brand_bulk_flow_smoke(qtbot: object, monkeypatch: object) -> None:
-    # Avoid async DB loading in constructor; we manually feed the table.
-    monkeypatch.setattr(ProductsView, "_load_inventory", lambda self: None)
+    # Avoid async sync loading in constructor; we manually feed the table.
+    monkeypatch.setattr(ProductsView, "_load_sync_sources", lambda self: None)
 
     container = Container(AppConfig())
     fake_service = _FakeBrandService()
@@ -91,8 +91,30 @@ def test_products_brand_bulk_flow_smoke(qtbot: object, monkeypatch: object) -> N
         title_print_configs={},
     )
     view._all_rows = [row]  # noqa: SLF001
-    view._populate_inv(view._all_rows)  # noqa: SLF001
-    view._inv_table.selectRow(0)  # noqa: SLF001
+    sync_row_type = __import__("xw_studio.ui.modules.products.view", fromlist=["_SyncRow"])._SyncRow
+    view._sync_rows = [  # noqa: SLF001
+        sync_row_type(
+            sku="XW-900",
+            name="Testprodukt",
+            wix_id="w-900",
+            sevdesk_id="",
+            local_present=True,
+            wix_present=True,
+            sevdesk_present=False,
+            local_stock=1,
+            wix_stock=1,
+            sevdesk_stock=None,
+            local_brand="Alt",
+            wix_brand="Alt",
+            local_price="12.00",
+            wix_price="12.00",
+            sevdesk_price="",
+            status="Wix + lokal, nicht in sevDesk",
+            can_create_sevdesk=True,
+        )
+    ]
+    view._populate_sync_table(view._sync_rows)  # noqa: SLF001
+    view._sync_table.selectRow(0)  # noqa: SLF001
 
     monkeypatch.setattr("xw_studio.ui.modules.products.view.QInputDialog.getText", lambda *args, **kwargs: ("NeuBrand", True))
 

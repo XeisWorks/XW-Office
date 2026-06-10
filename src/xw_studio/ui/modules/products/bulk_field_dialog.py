@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from xw_studio.services.products.field_bulk_service import FieldOperatorType, ProductFieldBulkService
+from xw_studio.services.wix.client import WixProduct
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
@@ -33,6 +34,7 @@ class BulkFieldEditorDialog(QDialog):
         self._selected_field: str = ""
         self._operator_by_field: dict[str, str] = {}
         self._preview_report = None
+        self._wix_products: list[WixProduct] = []
         self.setWindowTitle("Produkte: Massenhaft Felder ändern")
         self.setMinimumWidth(600)
         self.setMinimumHeight(500)
@@ -86,6 +88,7 @@ class BulkFieldEditorDialog(QDialog):
         self._wix_sync_cb = QComboBox()
         self._wix_sync_cb.addItem("Nur lokal (DB)", False)
         self._wix_sync_cb.addItem("Lokal + Wix Writeback", True)
+        self._wix_sync_cb.setCurrentIndex(1)
         form.addRow("Sync:", self._wix_sync_cb)
 
         # Dialog buttons
@@ -173,6 +176,7 @@ class BulkFieldEditorDialog(QDialog):
                 field_name=field_name,
                 operator=operator,
                 value=value,
+                wix_products=self._wix_products,
             )
             self._show_preview(self._preview_report)
         except ValueError as exc:
@@ -221,6 +225,10 @@ class BulkFieldEditorDialog(QDialog):
     def set_selected_skus(self, skus: list[str]) -> None:
         """Set the list of selected SKUs from parent."""
         self._selected_skus = skus
+
+    def set_wix_products(self, wix_products: list[WixProduct]) -> None:
+        """Set currently loaded Wix products for preview/apply of Wix-only rows."""
+        self._wix_products = list(wix_products)
 
     def get_field_and_value(self) -> tuple[str, str, str, bool]:
         """Get selected field, operator, value, and sync_wix flag."""

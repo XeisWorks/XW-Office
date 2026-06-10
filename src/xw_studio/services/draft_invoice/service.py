@@ -323,6 +323,60 @@ class DraftInvoiceService:
             warnings=tuple(warnings),
         )
 
+    def build_manual_wix_product_plan(
+        self,
+        *,
+        sku: str,
+        wix_name: str,
+        wix_product_id: str = "",
+        wix_description: str = "",
+        wix_price_gross: float | None = None,
+        is_digital: bool = False,
+    ) -> ProductPreflightPlan:
+        """Build a one-item product preflight plan for manual product creation from Produkte/Wix views."""
+        normalized_sku = str(sku or "").strip().upper()
+        if not normalized_sku:
+            raise ValueError("SKU fehlt.")
+
+        part_categories = self._parts.list_part_categories()
+        existing_parts = self._parts_by_sku()
+        category = self._infer_part_category(
+            sku=normalized_sku,
+            is_digital=is_digital,
+            categories=part_categories,
+            existing_parts=existing_parts,
+        )
+        issue = ProductIssue(
+            sku=normalized_sku,
+            wix_name=str(wix_name or normalized_sku).strip() or normalized_sku,
+            wix_order_number="",
+            wix_description=str(wix_description or "").strip(),
+            wix_price_gross=wix_price_gross,
+            is_digital=is_digital,
+            draft=ProductDraft(
+                name=str(wix_name or normalized_sku).strip() or normalized_sku,
+                sku=normalized_sku,
+                text=str(wix_description or "").strip(),
+                internal_comment=str(wix_product_id or "").strip(),
+                price_gross=round(float(wix_price_gross), 2) if wix_price_gross is not None else None,
+                tax_rate=19.0,
+                unity={"id": 1, "objectName": "Unity"},
+                category_id=str(category.get("id") or "").strip(),
+                category_name=str(category.get("name") or "").strip(),
+            ),
+        )
+        return ProductPreflightPlan(issues=[issue], part_categories=part_categories)
+
+    def create_part_from_decision(self, issue: ProductIssue, decision: ProductIssueDecision) -> SevdeskPart:
+        """Create a sevDesk part from a dialog decision for one manual product issue."""
+        if decision.action != "create_part":
+            raise ValueError(f"Nur create_part wird unterstuetzt, nicht {decision.action!r}")
+        existing = self._parts.find_part_by_sku(issue.sku)
+        if existing is not None and existing.id.strip():
+            return existing
+        payload = self._draft_to_part_payload(decision.draft, issue)
+        return self._parts.create_part(payload)
+
     def repair_draft_product_mapping(
         self,
         invoice_id: str,

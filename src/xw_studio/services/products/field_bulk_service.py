@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Any
 
 from xw_studio.services.inventory.service import InventoryService, ProductRow
-from xw_studio.services.wix.client import WixProductsClient
+from xw_studio.services.wix.client import WixProduct, WixProductsClient
 
 
 class FieldOperatorType(str, Enum):
@@ -74,6 +74,62 @@ BULK_EDITABLE_FIELDS = {
         writable_wix=True,
         wix_property="name",
     ),
+    "visible": FieldDefinition(
+        field_name="visible",
+        label="Sichtbar",
+        field_type="text",
+        writable_local=False,
+        writable_wix=True,
+        wix_property="visible",
+    ),
+    "compare_at_price": FieldDefinition(
+        field_name="compare_at_price",
+        label="Sale-Preis / Compare-at",
+        field_type="decimal",
+        writable_local=False,
+        writable_wix=True,
+        wix_property="compareAtPrice",
+    ),
+    "cost": FieldDefinition(
+        field_name="cost",
+        label="Herstellungskosten",
+        field_type="decimal",
+        writable_local=False,
+        writable_wix=True,
+        wix_property="cost",
+    ),
+    "weight": FieldDefinition(
+        field_name="weight",
+        label="Versandgewicht",
+        field_type="decimal",
+        writable_local=False,
+        writable_wix=True,
+        wix_property="weight",
+    ),
+    "description": FieldDefinition(
+        field_name="description",
+        label="Infoabschnitt / Beschreibung",
+        field_type="text",
+        writable_local=False,
+        writable_wix=True,
+        wix_property="description",
+    ),
+    "categories": FieldDefinition(
+        field_name="categories",
+        label="Kategorien (CSV)",
+        field_type="text",
+        writable_local=False,
+        writable_wix=True,
+        wix_property="categories",
+    ),
+    "ribbon": FieldDefinition(
+        field_name="ribbon",
+        label="Banner / Ribbon",
+        field_type="text",
+        writable_local=False,
+        writable_wix=True,
+        wix_property="ribbon",
+    ),
 }
 
 
@@ -129,6 +185,8 @@ class ProductFieldBulkService:
         field_name: str,
         operator: FieldOperatorType | str,
         value: str,
+        *,
+        wix_products: list[WixProduct] | None = None,
     ) -> FieldBulkUpdateReport:
         """Preview field update without persisting changes."""
         return self._build_report(
@@ -137,6 +195,7 @@ class ProductFieldBulkService:
             operator=str(operator),
             value=value,
             dry_run=True,
+            wix_products=wix_products,
         )
 
     def apply_field_update(
@@ -147,41 +206,54 @@ class ProductFieldBulkService:
         value: str,
         *,
         sync_wix: bool = False,
+        wix_products: list[WixProduct] | None = None,
     ) -> FieldBulkUpdateReport:
         """Apply field update locally and optionally write to Wix."""
-        local_report = self._apply_local_field_update(
+        report = self._build_report(
             skus=skus,
             field_name=field_name,
             operator=str(operator),
             value=value,
-        )
-        if (not sync_wix) or local_report.changed <= 0:
-            return local_report
-
-        # Attempt Wix writeback
-        return self._apply_wix_field_update(local_report)
-
-    def _apply_local_field_update(
-        self,
-        skus: list[str],
-        field_name: str,
-        operator: str,
-        value: str,
-    ) -> FieldBulkUpdateReport:
-        """Apply field update locally."""
-        report = self._build_report(
-            skus=skus,
-            field_name=field_name,
-            operator=operator,
-            value=value,
             dry_run=False,
+            wix_products=wix_products,
         )
+        field_def = BULK_EDITABLE_FIELDS.get(field_name)
+        if field_def is None:
+            raise ValueError(f"Unknown field: {field_name}")
+
         if report.changed <= 0:
             return report
 
-        selected = {sku.strip().upper() for sku in skus if sku.strip()}
+        if (not sync_wix) and (
+            (not field_def.writable_local)
+            or any(
+                item.status == "changed" and item.sku.strip().upper() not in {row.sku.strip().upper() for row in self._inventory.list_products()}
+                for item in report.items
+            )
+        ):
+            raise ValueError("Diese Auswahl erfordert Wix Writeback.")
+
+        if field_def.writable_local:
+            self._persist_local_changes(report, field_name, operator=str(operator), value=value)
+
+        if sync_wix and field_def.writable_wix:
+            return self._apply_wix_field_update(report, wix_products=wix_products)
+        return report
+
+    def _persist_local_changes(
+        self,
+        report: FieldBulkUpdateReport,
+        field_name: str,
+        *,
+        operator: str,
+        value: str,
+    ) -> None:
+        """Persist locally writable field changes to the inventory store."""
+        selected = {item.sku.strip().upper() for item in report.items if item.status == "changed"}
+        if not selected:
+            return
+
         updated_rows: list[ProductRow] = []
-        items: list[FieldUpdateItem] = []
 
         for row in self._inventory.list_products():
             sku = row.sku.strip().upper()
@@ -189,70 +261,19 @@ class ProductFieldBulkService:
                 updated_rows.append(row)
                 continue
 
-            # Calculate new value based on operator
             old_val = self._get_field_value(row, field_name)
-            try:
-                new_val = self._compute_new_value(old_val, operator, value, field_name)
-            except ValueError as exc:
-                items.append(
-                    FieldUpdateItem(
-                        sku=row.sku,
-                        product_name=row.name,
-                        field_name=field_name,
-                        old_value=str(old_val),
-                        new_value="",
-                        status="failed",
-                        message=str(exc),
-                    )
-                )
-                updated_rows.append(row)
-                continue
-
-            if str(old_val) == str(new_val):
-                items.append(
-                    FieldUpdateItem(
-                        sku=row.sku,
-                        product_name=row.name,
-                        field_name=field_name,
-                        old_value=str(old_val),
-                        new_value=str(new_val),
-                        status="skipped",
-                    )
-                )
-                updated_rows.append(row)
-                continue
-
-            # Update the row with new field value
+            new_val = self._compute_new_value(old_val, operator, value, field_name)
             updated_row = self._set_field_on_row(row, field_name, new_val)
             updated_rows.append(updated_row)
 
-            items.append(
-                FieldUpdateItem(
-                    sku=row.sku,
-                    product_name=row.name,
-                    field_name=field_name,
-                    old_value=str(old_val),
-                    new_value=str(new_val),
-                    status="changed",
-                )
-            )
-
-        # Persist
         self._inventory.save_products(updated_rows)
 
-        return FieldBulkUpdateReport(
-            requested=len(skus),
-            changed=sum(1 for item in items if item.status == "changed"),
-            skipped=sum(1 for item in items if item.status == "skipped"),
-            failed=sum(1 for item in items if item.status == "failed"),
-            dry_run=False,
-            field_name=field_name,
-            operator=operator,
-            value=value,
-            items=items,
-        )
-
-    def _apply_wix_field_update(self, local_report: FieldBulkUpdateReport) -> FieldBulkUpdateReport:
+    def _apply_wix_field_update(
+        self,
+        local_report: FieldBulkUpdateReport,
+        *,
+        wix_products: list[WixProduct] | None = None,
+    ) -> FieldBulkUpdateReport:
         """Write field updates to Wix (best-effort)."""
         if not self._wix_client.has_credentials():
             return local_report
@@ -264,22 +285,37 @@ class ProductFieldBulkService:
         wix_attempted = 0
         wix_updated = 0
         wix_failed = 0
+        wix_by_sku = {
+            row.sku.strip().upper(): row
+            for row in (wix_products or [])
+            if row.sku.strip()
+        }
+        local_by_sku = {
+            row.sku.strip().upper(): row
+            for row in self._inventory.list_products()
+            if row.sku.strip()
+        }
 
         for item in local_report.items:
             if item.status != "changed":
                 continue
 
-            # Find the product's Wix ID from local DB
-            all_products = self._inventory.list_products()
-            product = next((p for p in all_products if p.sku.strip().upper() == item.sku.strip().upper()), None)
-            if not product or not product.wix_id:
+            sku = item.sku.strip().upper()
+            product = local_by_sku.get(sku)
+            wix_product = wix_by_sku.get(sku)
+            product_id = ""
+            if product is not None:
+                product_id = product.wix_id
+            if not product_id and wix_product is not None:
+                product_id = wix_product.id
+            if not product_id:
                 wix_failed += 1
                 continue
 
             wix_attempted += 1
             try:
                 self._wix_client.update_product_field(
-                    product_id=product.wix_id,
+                    product_id=product_id,
                     field_name=field_def.wix_property or field_def.field_name,
                     value=item.new_value,
                 )
@@ -288,7 +324,7 @@ class ProductFieldBulkService:
                 wix_failed += 1
                 logger.warning(
                     "Wix field update failed for product %s: %s",
-                    product.wix_id,
+                    product_id,
                     exc,
                 )
 
@@ -314,25 +350,41 @@ class ProductFieldBulkService:
         operator: str,
         value: str,
         dry_run: bool,
+        wix_products: list[WixProduct] | None = None,
     ) -> FieldBulkUpdateReport:
         """Build a report by simulating the update on all selected products."""
-        selected = {sku.strip().upper() for sku in skus if sku.strip()}
+        selected = [sku.strip().upper() for sku in skus if sku.strip()]
+        local_by_sku = {row.sku.strip().upper(): row for row in self._inventory.list_products() if row.sku.strip()}
+        wix_by_sku = {row.sku.strip().upper(): row for row in (wix_products or []) if row.sku.strip()}
         items: list[FieldUpdateItem] = []
         changed_count = 0
 
-        for row in self._inventory.list_products():
-            sku = row.sku.strip().upper()
-            if sku not in selected:
+        for sku in selected:
+            row = local_by_sku.get(sku)
+            wix_row = wix_by_sku.get(sku)
+            if row is None and wix_row is None:
+                items.append(
+                    FieldUpdateItem(
+                        sku=sku,
+                        product_name=sku,
+                        field_name=field_name,
+                        old_value="",
+                        new_value="",
+                        status="failed",
+                        message="SKU nicht gefunden",
+                    )
+                )
                 continue
 
-            old_val = self._get_field_value(row, field_name)
+            old_val = self._get_effective_field_value(row, wix_row, field_name)
+            product_name = (row.name if row is not None else "") or (wix_row.name if wix_row is not None else sku)
             try:
                 new_val = self._compute_new_value(old_val, operator, value, field_name)
             except ValueError as exc:
                 items.append(
                     FieldUpdateItem(
-                        sku=row.sku,
-                        product_name=row.name,
+                        sku=sku,
+                        product_name=product_name,
                         field_name=field_name,
                         old_value=str(old_val),
                         new_value="",
@@ -345,8 +397,8 @@ class ProductFieldBulkService:
             if str(old_val) == str(new_val):
                 items.append(
                     FieldUpdateItem(
-                        sku=row.sku,
-                        product_name=row.name,
+                        sku=sku,
+                        product_name=product_name,
                         field_name=field_name,
                         old_value=str(old_val),
                         new_value=str(new_val),
@@ -357,8 +409,8 @@ class ProductFieldBulkService:
                 changed_count += 1
                 items.append(
                     FieldUpdateItem(
-                        sku=row.sku,
-                        product_name=row.name,
+                        sku=sku,
+                        product_name=product_name,
                         field_name=field_name,
                         old_value=str(old_val),
                         new_value=str(new_val),
@@ -392,6 +444,28 @@ class ProductFieldBulkService:
         if field_name == "name":
             return row.name or ""
         raise ValueError(f"Unknown field: {field_name}")
+
+    @staticmethod
+    def _get_effective_field_value(
+        row: ProductRow | None,
+        wix_row: WixProduct | None,
+        field_name: str,
+    ) -> Any:
+        if row is not None and field_name in {"price_eur", "on_hand", "brand_name", "category", "name"}:
+            return ProductFieldBulkService._get_field_value(row, field_name)
+        if wix_row is not None:
+            if field_name == "price_eur":
+                return wix_row.price or ""
+            if field_name == "on_hand":
+                return wix_row.inventory_quantity
+            if field_name == "brand_name":
+                return wix_row.brand_name or ""
+            if field_name == "name":
+                return wix_row.name or ""
+            if field_name == "visible":
+                return "true" if wix_row.visible else "false"
+            return ""
+        return ""
 
     @staticmethod
     def _set_field_on_row(row: ProductRow, field_name: str, value: Any) -> ProductRow:
@@ -487,13 +561,13 @@ class ProductFieldBulkService:
             # For numeric fields, validate and parse
             if field_name == "on_hand":
                 return int(input_value)
-            if field_name == "price_eur":
+            if field_name in {"price_eur", "compare_at_price", "cost", "weight"}:
                 return float(input_value)
             return input_value
 
         if op in (FieldOperatorType.ADD_PERCENT, FieldOperatorType.SUBTRACT_PERCENT):
             # Percentage operations only work on numeric fields
-            if field_name not in ("price_eur", "on_hand"):
+            if field_name not in ("price_eur", "on_hand", "compare_at_price", "cost", "weight"):
                 raise ValueError(f"Percentage operations not supported for field {field_name}")
 
             try:
@@ -510,7 +584,7 @@ class ProductFieldBulkService:
             # Return formatted based on field type
             if field_name == "on_hand":
                 return max(0, int(new_num))
-            if field_name == "price_eur":
+            if field_name in {"price_eur", "compare_at_price", "cost", "weight"}:
                 return round(new_num, 2)
 
         raise ValueError(f"Unknown operator: {operator}")

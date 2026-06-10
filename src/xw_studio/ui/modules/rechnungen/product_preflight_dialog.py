@@ -49,7 +49,8 @@ class ProductPreflightDialog(QDialog):
 
         header = QLabel(
             f"<b>Produkt fehlt in sevDesk</b><br>"
-            f"SKU: {self._issue.sku} | Wix-Order: {self._issue.wix_order_number}"
+            f"SKU: {self._issue.sku}"
+            + (f" | Wix-Order: {self._issue.wix_order_number}" if self._issue.wix_order_number else " | manuelle Produktanlage")
         )
         header.setWordWrap(True)
         layout.addWidget(header)
@@ -84,7 +85,7 @@ class ProductPreflightDialog(QDialog):
             f"{target.invoice_number or '(neu)'} | {target.wix_order_number or '-'} | {target.customer_name or '-'}"
             for target in self._issue.targets
         ]
-        self._targets.setPlainText("\n".join(target_lines) or "-")
+        self._targets.setPlainText("\n".join(target_lines) or "Keine Rechnungen verknuepft (manuelle Produktanlage).")
         wix_layout.addWidget(QLabel("Betroffene Rechnungen"))
         wix_layout.addWidget(self._targets, stretch=1)
         body.addWidget(wix_box, stretch=1)
