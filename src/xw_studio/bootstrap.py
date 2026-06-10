@@ -40,6 +40,7 @@ from xw_studio.services.sevdesk.refund_client import SevDeskRefundClient
 from xw_studio.services.statistics.service import StatisticsService
 from xw_studio.services.products.catalog import ProductCatalogService
 from xw_studio.services.products.brand_service import ProductBrandService
+from xw_studio.services.products.field_bulk_service import ProductFieldBulkService
 from xw_studio.services.products.print_decision import PrintDecisionEngine
 from xw_studio.services.wix.client import WixProductsClient
 from xw_studio.services.wix.client import WixOrdersClient
@@ -251,6 +252,10 @@ def register_default_services(container: Container) -> None:
     container.register(
         ProductBrandService,
         lambda c: ProductBrandService(c.resolve(InventoryService), c.resolve(WixProductsClient)),
+    )
+    container.register(
+        ProductFieldBulkService,
+        lambda c: ProductFieldBulkService(c.resolve(InventoryService), c.resolve(WixProductsClient)),
     )
 
     container.register(

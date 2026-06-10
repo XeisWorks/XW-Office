@@ -29,8 +29,10 @@ from PySide6.QtWidgets import (
 from xw_studio.core.worker import BackgroundWorker
 from xw_studio.services.inventory import InventoryService, ProductRow
 from xw_studio.services.products.brand_service import ProductBrandService
+from xw_studio.services.products.field_bulk_service import ProductFieldBulkService
 from xw_studio.services.sevdesk.part_client import PartClient, SevdeskPart
 from xw_studio.services.wix.client import WixProduct, WixProductsClient
+from xw_studio.ui.modules.products.bulk_field_dialog import BulkFieldEditorDialog
 from xw_studio.ui.widgets.search_bar import SearchBar
 
 if TYPE_CHECKING:
@@ -113,6 +115,10 @@ class ProductsView(QWidget):
         self._inv_status_lbl.setObjectName("productsStatusLabel")
         bar.addWidget(self._inv_status_lbl)
         bar.addStretch()
+        self._inv_fields_btn = QPushButton("Felder massenhaft ändern")
+        self._inv_fields_btn.clicked.connect(self._bulk_edit_fields)
+        self._inv_fields_btn.setEnabled(False)
+        bar.addWidget(self._inv_fields_btn)
         self._inv_brand_btn = QPushButton("Brand fuer Auswahl setzen")
         self._inv_brand_btn.clicked.connect(self._bulk_set_inventory_brand)
         self._inv_brand_btn.setEnabled(False)
@@ -171,6 +177,7 @@ class ProductsView(QWidget):
             return
         self._all_rows = rows  # type: ignore[assignment]
         self._inv_brand_btn.setEnabled(bool(self._all_rows))
+        self._inv_fields_btn.setEnabled(bool(self._all_rows))
         self._refresh_inv_category_options()
         if not self._all_rows:
             self._inv_status_lbl.setText("Keine Produkte in DB — Einstellungen > inventory.products")
@@ -912,3 +919,59 @@ class ProductsView(QWidget):
             f"Brand neu angelegt: {'ja' if report.wix_brand_created else 'nein'}",
         )
         self._load_inventory()
+
+    def _bulk_edit_fields(self) -> None:
+        """Open dialog for bulk product field editing."""
+        skus = self._selected_inventory_skus()
+        if not skus:
+            QMessageBox.information(
+                self,
+                "Felder ändern",
+                "Bitte zuerst Produkte in der Inventar-Tabelle auswählen.",
+            )
+            return
+
+        service: ProductFieldBulkService = self._container.resolve(ProductFieldBulkService)
+        dialog = BulkFieldEditorDialog(service, self)
+        dialog.set_selected_skus(skus)
+
+        if dialog.exec() != BulkFieldEditorDialog.DialogCode.Accepted:
+            return
+
+        field_name, operator, value, sync_wix = dialog.get_field_and_value()
+        if not field_name or not operator or not value:
+            QMessageBox.warning(self, "Felder ändern", "Bitte alle Felder ausfüllen.")
+            return
+
+        try:
+            report = service.apply_field_update(
+                skus=skus,
+                field_name=field_name,
+                operator=operator,
+                value=value,
+                sync_wix=sync_wix,
+            )
+            
+            fields = service.get_editable_fields()
+            field_label = fields.get(field_name).label if field_name in fields else field_name  # type: ignore[union-attr]
+
+            message = (
+                f"Feld: {field_label}\n"
+                f"Operation: {report.operator}\n"
+                f"Wert: {report.value}\n\n"
+                f"Geändert (lokal): {report.changed}\n"
+                f"Übersprungen: {report.skipped}\n"
+                f"Fehler: {report.failed}\n"
+            )
+            if sync_wix:
+                message += (
+                    f"\nWix versucht: {report.wix_attempted}\n"
+                    f"Wix erfolgreich: {report.wix_updated}\n"
+                    f"Wix Fehler: {report.wix_failed}"
+                )
+            
+            QMessageBox.information(self, "Felder ändern - Abgeschlossen", message)
+            self._load_inventory()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Felder ändern - Fehler", f"Fehler: {exc}")
+

@@ -529,6 +529,85 @@ class WixProductsClient:
         result["checks"] = checks
         return result
 
+    def update_product_field(self, product_id: str, field_name: str, value: str) -> None:
+        """Update a single product field via PATCH (generic, best-effort).
+
+        Supports: price, name, description, weight, visible, etc.
+        Tries v3 and v1 endpoints with multiple payload variants.
+        """
+        pid = str(product_id or "").strip()
+        fname = str(field_name or "").strip()
+        val = str(value or "").strip()
+        if not pid:
+            raise ValueError("Wix product_id fehlt")
+        if not fname:
+            raise ValueError("Field-Name fehlt")
+        if not self.has_credentials():
+            raise RuntimeError("Wix Credentials fehlen")
+
+        headers = self._build_headers()
+
+        # Build payload variants for common fields
+        payload_candidates: list[dict[str, Any]] = []
+
+        if fname in ("price", "compareAtPrice", "cost", "weight"):
+            # Numeric fields - try nested structure first
+            try:
+                num_val = float(val)
+                payload_candidates.append({"product": {fname: num_val}})
+            except (ValueError, TypeError):
+                pass
+        
+        if fname == "price":
+            payload_candidates.extend([
+                {"product": {"priceData": {"price": val}}},
+                {"product": {"variants": [{"priceData": {"price": val}}]}},
+            ])
+        elif fname == "visible":
+            # Convert boolean string
+            bool_val = val.lower() in ("true", "1", "yes", "ja")
+            payload_candidates.append({"product": {"visible": bool_val}})
+        elif fname == "name":
+            payload_candidates.append({"product": {"name": val}})
+        elif fname == "description":
+            payload_candidates.append({"product": {"description": val}})
+        elif fname == "categories":
+            # categories may be an array
+            payload_candidates.append({"product": {"categories": val.split(",")}})
+        
+        # Fallback: generic nested structure
+        payload_candidates.append({"product": {fname: val}})
+
+        endpoint_candidates = [
+            f"{self._base_url}/products/{pid}",
+            f"{self._base_url}/catalog/products/{pid}",
+            f"https://www.wixapis.com/stores/v1/products/{pid}",
+        ]
+
+        last_error: Exception | None = None
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            for endpoint in endpoint_candidates:
+                for payload in payload_candidates:
+                    try:
+                        self._request_with_retry(
+                            client,
+                            "PATCH",
+                            endpoint,
+                            headers=headers,
+                            json_body=payload,
+                        )
+                        logger.info("Wix field updated: product %s, field %s = %s", pid, fname, val)
+                        return
+                    except httpx.HTTPError as exc:
+                        last_error = exc
+                        continue
+        
+        if last_error is not None:
+            raise RuntimeError(
+                f"Wix field update failed for product {pid}, field {fname}: {last_error}"
+            ) from last_error
+        raise RuntimeError(f"Wix field update failed for product {pid}, field {fname}")
+
     def create_brand(self, brand_name: str) -> str:
         """Create a Wix brand and return its ID when available."""
         name = str(brand_name or "").strip()
