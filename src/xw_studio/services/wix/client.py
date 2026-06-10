@@ -147,6 +147,53 @@ class WixProductsClient:
         # Preserve order while removing duplicates.
         return list(dict.fromkeys(candidates))
 
+    def _product_query_endpoint_candidates(self) -> list[str]:
+        base_v3 = self._base_url.rstrip("/")
+        candidates = [
+            f"{base_v3}/catalog/products/query",
+            f"{base_v3}/products/query",
+            "https://www.wixapis.com/stores/v1/products/query",
+            "https://www.wixapis.com/ecom/v1/products/query",
+        ]
+        return list(dict.fromkeys(candidates))
+
+    @staticmethod
+    def _extract_product_list(data: object) -> list[dict[str, Any]]:
+        if not isinstance(data, dict):
+            return []
+        candidates = [
+            data.get("products"),
+            data.get("items"),
+            data.get("results"),
+        ]
+        for raw in candidates:
+            if isinstance(raw, list):
+                return [item for item in raw if isinstance(item, dict)]
+        return []
+
+    @staticmethod
+    def _extract_next_cursor(data: object) -> str | None:
+        if not isinstance(data, dict):
+            return None
+        for meta_key in ("metadata", "pagingMetadata"):
+            meta = data.get(meta_key)
+            if not isinstance(meta, dict):
+                continue
+            cursors = meta.get("cursors")
+            if isinstance(cursors, dict):
+                nxt = str(cursors.get("next") or "").strip()
+                if nxt:
+                    return nxt
+            nxt_direct = str(meta.get("nextCursor") or "").strip()
+            if nxt_direct:
+                return nxt_direct
+        paging = data.get("paging")
+        if isinstance(paging, dict):
+            nxt = str(paging.get("nextCursor") or paging.get("next") or "").strip()
+            if nxt:
+                return nxt
+        return None
+
     @staticmethod
     def _is_retryable_status(code: int) -> bool:
         return code in (408, 409, 425, 429, 500, 502, 503, 504)
@@ -196,42 +243,58 @@ class WixProductsClient:
         headers = self._build_headers()
 
         results: list[WixProduct] = []
-        cursor: str | None = None
-        page = 0
         max_pages = 50
+        endpoints = self._product_query_endpoint_candidates()
 
         with httpx.Client(timeout=_TIMEOUT) as client:
+            chosen_endpoint = ""
+            for endpoint in endpoints:
+                try:
+                    probe = self._request_with_retry(
+                        client,
+                        "POST",
+                        endpoint,
+                        headers=headers,
+                        json_body={"query": {"paging": {"limit": 1}}},
+                    )
+                    data_probe = probe.json() if probe.content else {}
+                    if self._extract_product_list(data_probe) or probe.status_code < 400:
+                        chosen_endpoint = endpoint
+                        break
+                except Exception as exc:  # noqa: BLE001
+                    logger.info("WixProductsClient: product endpoint probe failed %s: %s", endpoint, exc)
+
+            if not chosen_endpoint:
+                logger.error("WixProductsClient: no working product query endpoint found")
+                return []
+
+            logger.info("WixProductsClient: using product query endpoint %s", chosen_endpoint)
+
+            cursor: str | None = None
+            page = 0
             while page < max_pages:
-                body: dict[str, Any] = {
-                    "query": {
-                        "paging": {"limit": _PRODUCTS_PAGE_SIZE},
-                    }
-                }
+                body: dict[str, Any] = {"query": {"paging": {"limit": _PRODUCTS_PAGE_SIZE}}}
                 if cursor:
                     body["query"]["cursorPaging"] = {"cursor": cursor}
 
                 try:
-                    resp = client.post(
-                        f"{self._base_url}/catalog/products/query",
+                    resp = self._request_with_retry(
+                        client,
+                        "POST",
+                        chosen_endpoint,
                         headers=headers,
-                        json=body,
+                        json_body=body,
                     )
-                    resp.raise_for_status()
-                except httpx.HTTPError:
+                except Exception:
                     logger.exception("WixProductsClient: HTTP error on page %s", page)
                     break
 
-                data = resp.json()
-                products: list[Any] = data.get("products") or []
-                if not isinstance(products, list):
-                    break
+                data = resp.json() if resp.content else {}
+                products = self._extract_product_list(data)
                 for raw in products:
-                    if isinstance(raw, dict):
-                        results.append(_parse_product(raw))
+                    results.append(_parse_product(raw))
 
-                # Check for next cursor
-                meta = data.get("metadata") or data.get("pagingMetadata") or {}
-                cursor = (meta.get("cursors") or {}).get("next") if isinstance(meta, dict) else None
+                cursor = self._extract_next_cursor(data)
                 if not cursor or len(products) < _PRODUCTS_PAGE_SIZE:
                     break
                 page += 1

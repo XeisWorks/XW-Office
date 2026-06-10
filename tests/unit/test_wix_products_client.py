@@ -59,3 +59,50 @@ def test_brand_endpoints_selfcheck_picks_first_working_endpoint() -> None:
     assert isinstance(checks, list)
     assert len(checks) >= 2
     assert any(bool(item.get("parsed_list")) for item in checks if isinstance(item, dict))
+
+
+def test_list_products_uses_fallback_query_endpoint() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        calls.append(url)
+        if url.endswith("/stores/v3/catalog/products/query"):
+            return httpx.Response(404, text="not found")
+        if url.endswith("/stores/v3/products/query"):
+            return httpx.Response(
+                200,
+                json={
+                    "products": [
+                        {
+                            "id": "p-1",
+                            "name": "Produkt A",
+                            "sku": "XW-1",
+                            "brand": {"id": "b-1", "name": "Marke"},
+                            "visible": True,
+                            "stock": {"quantity": 7},
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(404, text="unknown")
+
+    original_client = httpx.Client
+
+    class _Client(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(handler)
+            super().__init__(*args, **kwargs)
+
+    httpx.Client = _Client  # type: ignore[assignment]
+    try:
+        client = WixProductsClient(secret_service=_SecretService(key="k", site="s"))  # type: ignore[arg-type]
+        rows = client.list_products()
+    finally:
+        httpx.Client = original_client  # type: ignore[assignment]
+
+    assert any(url.endswith("/stores/v3/catalog/products/query") for url in calls)
+    assert any(url.endswith("/stores/v3/products/query") for url in calls)
+    assert len(rows) == 1
+    assert rows[0].id == "p-1"
+    assert rows[0].sku == "XW-1"
