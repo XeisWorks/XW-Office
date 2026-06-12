@@ -1,6 +1,8 @@
 """Repository integration tests (SQLite in-memory)."""
 from __future__ import annotations
 
+import json
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -42,6 +44,19 @@ def test_setting_kv_round_trip(session_factory: sessionmaker[Session]) -> None:
         repo = SettingKvRepository(s)
         raw = repo.get_value_json("ui.theme")
         assert raw == '{"mode":"dark"}'
+
+
+def test_setting_kv_mutate_value_json(session_factory: sessionmaker[Session]) -> None:
+    repo = SettingKvRepository(session_factory)
+    repo.set_value_json("shared.items", '["first"]')
+
+    updated = repo.mutate_value_json(
+        "shared.items",
+        lambda raw: json.dumps([*json.loads(raw or "[]"), "second"]),
+    )
+
+    assert json.loads(updated) == ["first", "second"]
+    assert json.loads(repo.get_value_json("shared.items") or "[]") == ["first", "second"]
 
 
 def test_api_secret_upsert(session_factory: sessionmaker[Session]) -> None:

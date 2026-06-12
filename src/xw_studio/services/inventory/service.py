@@ -9,6 +9,7 @@ from enum import Enum
 from pathlib import Path
 
 from xw_studio.core.config import AppConfig
+from xw_studio.core.shared_paths import resolve_shared_path
 from xw_studio.repositories.settings_kv import SettingKvRepository
 from xw_studio.services.printing.planned_pdf_printer import print_pdf_by_plan
 from xw_studio.services.printing.print_queue import PrintQueueService
@@ -488,6 +489,17 @@ class InventoryService:
                 on_hand = int(item.get("on_hand") or 0)
             except (TypeError, ValueError):
                 on_hand = 0
+            title_configs: dict[str, dict[str, object]] = {}
+            raw_title_configs = item.get("title_print_configs")
+            if isinstance(raw_title_configs, dict):
+                for title, config in raw_title_configs.items():
+                    if not isinstance(config, dict):
+                        continue
+                    resolved_config = dict(config)
+                    resolved_config["path"] = resolve_shared_path(
+                        str(resolved_config.get("path") or "")
+                    )
+                    title_configs[str(title)] = resolved_config
             rows.append(
                 ProductRow(
                     sku=str(item.get("sku") or ""),
@@ -499,17 +511,15 @@ class InventoryService:
                     brand_id=str(item.get("brand_id") or ""),
                     wix_id=str(item.get("wix_id") or ""),
                     sevdesk_id=str(item.get("sevdesk_id") or ""),
-                    print_file_path=str(item.get("print_file_path") or ""),
+                    print_file_path=resolve_shared_path(
+                        str(item.get("print_file_path") or "")
+                    ),
                     print_profile_id=str(item.get("print_profile_id") or ""),
                     print_plan=[
                         entry for entry in (item.get("print_plan") or [])
                         if isinstance(entry, dict)
                     ],
-                    title_print_configs=(
-                        dict(item.get("title_print_configs"))
-                        if isinstance(item.get("title_print_configs"), dict)
-                        else {}
-                    ),
+                    title_print_configs=title_configs,
                 )
             )
         return rows

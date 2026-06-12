@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import platform
 import sys
 from pathlib import Path
 
@@ -15,6 +17,8 @@ from xw_studio.core.database import create_engine_from_config, ensure_core_table
 from xw_studio.core.logging_setup import setup_logging
 from xw_studio.core.signals import AppSignals
 from xw_studio.core.updater import check_and_update
+from xw_studio.core.printer_detect import discover_printers
+from xw_studio.repositories import PcRegistryRepository
 from xw_studio.ui.theme import apply_app_theme
 
 logger = logging.getLogger(__name__)
@@ -57,6 +61,26 @@ def _handle_exception(exc_type, exc_value, exc_tb):  # type: ignore[no-untyped-d
     )
 
 
+def _register_workstation(container: Container) -> None:
+    if not (container.config.database_url or "").strip():
+        return
+    try:
+        configured_printers = {
+            str(name).strip()
+            for name in container.config.printing.configured_printer_names
+            if str(name).strip()
+        }
+        available_printers = {printer.name for printer in discover_printers()}
+        machine_id = str(os.getenv("COMPUTERNAME") or platform.node() or "unknown").strip()
+        container.resolve(PcRegistryRepository).upsert_last_seen(
+            machine_id,
+            display_name=machine_id,
+            is_print_station=bool(configured_printers.intersection(available_printers)),
+        )
+    except Exception as exc:
+        logger.warning("Workstation registry update failed: %s", exc)
+
+
 def create_application() -> QApplication:
     """Build and return the fully wired QApplication."""
     setup_logging(log_dir=Path("logs"))
@@ -89,6 +113,8 @@ def create_application() -> QApplication:
             "aber DB-gestuetzte Funktionen sind eingeschraenkt.\n\n"
             f"Fehler: {db_error}",
         )
+    else:
+        _register_workstation(container)
 
     from xw_studio.ui.main_window import MainWindow
     window = MainWindow(container)

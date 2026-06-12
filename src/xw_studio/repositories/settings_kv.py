@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_studio.models.settings_kv import SettingKV
@@ -39,3 +40,27 @@ class SettingKvRepository:
             session.add(entity)
             session.flush()
             return entity
+
+    def mutate_value_json(
+        self,
+        key: str,
+        mutator: Callable[[str | None], str],
+    ) -> str:
+        """Atomically update one JSON blob, serializing writers per key in PostgreSQL."""
+        with self._scope() as session:
+            bind = session.get_bind()
+            if bind is not None and bind.dialect.name == "postgresql":
+                session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                    {"key": key},
+                )
+            row = session.get(SettingKV, key)
+            current = None if row is None else row.value_json
+            updated = mutator(current)
+            if row is None:
+                row = SettingKV(key=key, value_json=updated)
+                session.add(row)
+            else:
+                row.value_json = updated
+            session.flush()
+            return updated

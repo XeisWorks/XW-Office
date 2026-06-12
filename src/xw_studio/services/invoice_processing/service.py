@@ -299,30 +299,45 @@ class InvoiceProcessingService:
     def write_fulfillment_flags(self, invoice_id: str, flags: FulfillmentFlags) -> None:
         if self._settings_repo is None:
             return
-        all_flags = self._load_fulfillment_flags_map()
-        all_flags[str(invoice_id)] = flags
-        payload = {
-            key: value.as_row_payload()
-            for key, value in all_flags.items()
-        }
-        self._settings_repo.set_value_json(
-            _FULFILLMENT_STATUS_KEY,
-            json.dumps(payload, ensure_ascii=False),
-        )
+        self._merge_fulfillment_flags({str(invoice_id): flags})
 
     def write_fulfillment_flags_batch(self, updates: dict[str, FulfillmentFlags]) -> None:
         if self._settings_repo is None or not updates:
             return
-        all_flags = self._load_fulfillment_flags_map()
-        for invoice_id, flags in updates.items():
-            all_flags[str(invoice_id)] = flags
-        payload = {
-            key: value.as_row_payload()
-            for key, value in all_flags.items()
-        }
+        self._merge_fulfillment_flags(
+            {str(invoice_id): flags for invoice_id, flags in updates.items()}
+        )
+
+    def _merge_fulfillment_flags(self, updates: dict[str, FulfillmentFlags]) -> None:
+        if self._settings_repo is None:
+            return
+
+        def merge(raw: str | None) -> str:
+            payload: dict[str, object] = {}
+            if raw:
+                try:
+                    decoded = json.loads(raw)
+                except json.JSONDecodeError:
+                    decoded = {}
+                if isinstance(decoded, dict):
+                    payload = dict(decoded)
+            for invoice_id, flags in updates.items():
+                payload[str(invoice_id)] = flags.as_row_payload()
+            return json.dumps(payload, ensure_ascii=False)
+
+        repo_type = type(self._settings_repo)
+        has_atomic_mutator = callable(getattr(repo_type, "mutate_value_json", None))
+        mutate = (
+            getattr(self._settings_repo, "mutate_value_json", None)
+            if has_atomic_mutator
+            else None
+        )
+        if callable(mutate):
+            mutate(_FULFILLMENT_STATUS_KEY, merge)
+            return
         self._settings_repo.set_value_json(
             _FULFILLMENT_STATUS_KEY,
-            json.dumps(payload, ensure_ascii=False),
+            merge(self._settings_repo.get_value_json(_FULFILLMENT_STATUS_KEY)),
         )
 
     def run_start_fullflow(

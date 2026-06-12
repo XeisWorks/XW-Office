@@ -5,6 +5,9 @@ from pathlib import Path
 
 from xw_studio.services.ideas.store import IdeasStore
 
+MARKETING_IDEAS_KEY = "ideas.marketing"
+NOTATION_IDEAS_KEY = "ideas.notation"
+
 
 class MarketingIdeasStore(IdeasStore):
     """Marketing / content ideas."""

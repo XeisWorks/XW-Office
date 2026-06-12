@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from xw_studio.core.shared_paths import resolve_shared_path
+
 if TYPE_CHECKING:
     from xw_studio.repositories.settings_kv import SettingKvRepository
     from xw_studio.services.sevdesk.part_client import SevdeskPart
@@ -281,7 +283,9 @@ class ProductCatalogService:
                 brand_id=str(item.get("brand_id") or ""),
                 sevdesk_part_id=str(item.get("sevdesk_id") or ""),
                 wix_product_id=str(item.get("wix_id") or ""),
-                print_file_path=str(item.get("print_file_path") or ""),
+                print_file_path=resolve_shared_path(
+                    str(item.get("print_file_path") or "")
+                ),
             )
             self._by_sku[sku] = product
             titles: dict[str, dict[str, object]] = {}
@@ -294,7 +298,9 @@ class ProductCatalogService:
                     if not title:
                         continue
                     titles[title] = {
-                        "path": str(raw_cfg.get("path") or "").strip(),
+                        "path": resolve_shared_path(
+                            str(raw_cfg.get("path") or "")
+                        ),
                         "profile_id": str(raw_cfg.get("profile_id") or "").strip(),
                         "print_plan": [
                             entry for entry in (raw_cfg.get("print_plan") or [])
@@ -303,7 +309,9 @@ class ProductCatalogService:
                     }
             self._direct_print_config[sku] = {
                 "default": {
-                    "path": str(item.get("print_file_path") or "").strip(),
+                    "path": resolve_shared_path(
+                        str(item.get("print_file_path") or "")
+                    ),
                     "profile_id": str(item.get("print_profile_id") or "").strip(),
                     "print_plan": [
                         entry for entry in (item.get("print_plan") or [])

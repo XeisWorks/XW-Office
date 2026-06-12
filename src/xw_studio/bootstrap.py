@@ -20,6 +20,8 @@ from xw_studio.services.finanzonline import (
 )
 from xw_studio.services.http_client import SevdeskConnection, build_sevdesk_connection
 from xw_studio.services.ideas.stores import (
+    MARKETING_IDEAS_KEY,
+    NOTATION_IDEAS_KEY,
     MarketingIdeasStore,
     NotationIdeasStore,
     default_marketing_ideas_path,
@@ -265,11 +267,19 @@ def register_default_services(container: Container) -> None:
 
     container.register(
         MarketingIdeasStore,
-        lambda c: MarketingIdeasStore(default_marketing_ideas_path()),
+        lambda c: MarketingIdeasStore(
+            default_marketing_ideas_path(),
+            c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
+            MARKETING_IDEAS_KEY,
+        ),
     )
     container.register(
         NotationIdeasStore,
-        lambda c: NotationIdeasStore(default_notation_ideas_path()),
+        lambda c: NotationIdeasStore(
+            default_notation_ideas_path(),
+            c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
+            NOTATION_IDEAS_KEY,
+        ),
     )
 
     # PostgreSQL persistence layer: only register when DATABASE_URL is configured.
