@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from xw_studio.core.config import AppConfig
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
@@ -90,6 +91,7 @@ class _WixOrdersStub:
         self._fulfillable_items: list[dict[str, str]] = []
         self._fulfillments: list[dict[str, str]] = []
         self.orders: dict[str, dict[str, object]] = {}
+        self.line_items: dict[str, list[object]] = {}
 
     def has_credentials(self) -> bool:
         return True
@@ -133,6 +135,9 @@ class _WixOrdersStub:
 
     def fulfillment_status(self, reference: str) -> str:
         return self._fulfillment_status
+
+    def fetch_order_line_items(self, reference: str) -> list[object]:
+        return list(self.line_items.get(reference, []))
 
 
 class _MailServiceStub:
@@ -507,6 +512,33 @@ def test_start_fullflow_processes_only_requested_invoice_ids() -> None:
     assert result["successful"] == 1
     assert not hasattr(client, "last_send_document")
     assert client.mail_calls[0]["invoice_id"] == "12"
+
+
+def test_inventory_requirements_use_only_requested_invoice_ids() -> None:
+    rows = [
+        InvoiceSummary(id="11", invoiceNumber="RE-TEST-11", order_reference="ORDER-11"),
+        InvoiceSummary(id="12", invoiceNumber="RE-TEST-12", order_reference="ORDER-12"),
+    ]
+    client = _InvoiceClientStub(rows)
+    wix = _WixOrdersStub()
+    wix.line_items = {
+        "ORDER-11": [SimpleNamespace(sku="XW-100", qty=5)],
+        "ORDER-12": [
+            SimpleNamespace(sku="xw-200", qty=2),
+            SimpleNamespace(sku="XW-200", qty=1),
+        ],
+    }
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        _RepoStub({}),
+        wix,  # type: ignore[arg-type]
+        _MailServiceStub(),  # type: ignore[arg-type]
+    )
+
+    requirements = svc.build_inventory_requirements(invoice_ids=["12"])
+
+    assert requirements == {"XW-200": 3}
 
 
 def test_send_invoice_mail_uses_sevdesk_when_graph_unconfigured() -> None:

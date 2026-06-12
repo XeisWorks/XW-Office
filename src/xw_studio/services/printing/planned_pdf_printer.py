@@ -132,7 +132,8 @@ def print_pdf_by_plan(
     page_count: int | None = None,
     print_queue: PrintQueueService | None = None,
     job_kind: str = "product",
-) -> None:
+    wait: bool = False,
+) -> list[str]:
     """Queue PDF print jobs for configured printer targets without a dialog."""
     targets = resolve_plan_targets(printing, print_plan=print_plan, profile_id=profile_id)
     if not targets:
@@ -144,27 +145,34 @@ def print_pdf_by_plan(
         PrintJobKind,
         "product" if job_kind not in {"music", "product", "invoice", "label"} else job_kind,
     )
+    job_ids: list[str] = []
     for target in targets:
         pages = None
         if page_count is not None:
             pages = page_indices_from_range_text(target.range_text, page_count=page_count)
-        queue.enqueue(
-            PdfPrintJob(
-                pdf_path=pdf_path,
-                printer_name=target.printer_name,
-                pages=pages,
-                copies=effective_copies,
-                dpi=target.dpi,
-                job_kind=effective_kind,
-                description=f"{job_kind}: {pdf_path}",
-                placement_mode=target.placement_mode,
-                x_offset_mm=target.x_offset_mm,
-                y_offset_mm=target.y_offset_mm,
-                render_color_mode=target.render_color_mode,
-                black_enhancement=target.black_enhancement,
-                black_threshold=target.black_threshold,
-            )
+        job = PdfPrintJob(
+            pdf_path=pdf_path,
+            printer_name=target.printer_name,
+            pages=pages,
+            copies=effective_copies,
+            dpi=target.dpi,
+            job_kind=effective_kind,
+            description=f"{job_kind}: {pdf_path}",
+            placement_mode=target.placement_mode,
+            x_offset_mm=target.x_offset_mm,
+            y_offset_mm=target.y_offset_mm,
+            render_color_mode=target.render_color_mode,
+            black_enhancement=target.black_enhancement,
+            black_threshold=target.black_threshold,
         )
+        if wait:
+            result = queue.enqueue_and_wait(job)
+            if not result.success:
+                raise RuntimeError(result.message or f"Druck fehlgeschlagen: {target.printer_name}")
+        else:
+            queue.enqueue(job)
+        job_ids.append(job.id)
+    return job_ids
 
 
 def _resolve_profile(printing: PrintingSection, profile_id: str) -> PrintProfile | None:

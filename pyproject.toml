@@ -40,6 +40,7 @@ dependencies = [
     "tqdm>=4.66",
     "tzdata>=2024.1",
     "icalendar>=5.0",
+    "truststore>=0.10; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

@@ -46,19 +46,24 @@ class LabelPrinter:
         template_path: str | None = None,
         overlay_object: str | None = None,
         overlay_text: str | None = None,
+        wait: bool = False,
     ) -> None:
         printer_name = self._printer_name()
         if not printer_name:
             raise RuntimeError("Kein Etikettendrucker konfiguriert")
         template = self._template_path(template_path)
         queue = self._print_queue or global_print_queue()
-        queue.enqueue(
-            BrotherLbxLabelJob(
-                printer_name=printer_name,
-                template_path=template,
-                lines=[str(line) for line in lines],
-                overlay_object=overlay_object,
-                overlay_text=overlay_text,
-                description="Address Label",
-            )
+        job = BrotherLbxLabelJob(
+            printer_name=printer_name,
+            template_path=template,
+            lines=[str(line) for line in lines],
+            overlay_object=overlay_object,
+            overlay_text=overlay_text,
+            description="Address Label",
         )
+        if wait:
+            result = queue.enqueue_and_wait(job)
+            if not result.success:
+                raise RuntimeError(result.message or "Etikettendruck fehlgeschlagen")
+            return
+        queue.enqueue(job)

@@ -70,6 +70,11 @@ DEFAULT_SENSITIVE_COUNTRY_CODES: set[str] = {
     "SY",
 }
 
+_UUID_PATTERN = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+_WIX_ORDER_NUMBER_PATTERN = re.compile(r"(?<!\d)(\d{5})(?!\d)")
+
 
 def _extract_country_code(value: object) -> str:
     if isinstance(value, str):
@@ -85,6 +90,19 @@ def _extract_country_code(value: object) -> str:
             if nested_code:
                 return nested_code
     return ""
+
+
+def extract_wix_order_number(value: object) -> str:
+    """Extract a five-digit Wix order number from a sevDesk reference."""
+    reference = str(value or "").strip()
+    if not reference or _UUID_PATTERN.fullmatch(reference):
+        return ""
+    if "|" in reference:
+        suffix = reference.rsplit("|", 1)[-1].strip()
+        if re.fullmatch(r"\d{5}", suffix):
+            return suffix
+    matches = _WIX_ORDER_NUMBER_PATTERN.findall(reference)
+    return matches[-1] if matches else ""
 
 
 class InvoiceSummary(BaseModel):
@@ -105,6 +123,7 @@ class InvoiceSummary(BaseModel):
     is_sensitive_country: bool = False
     has_unreleased_sku: bool = False
     order_reference: str = ""
+    sevdesk_reference: str = ""
 
     @field_validator("status_code", mode="before")
     @classmethod
@@ -128,6 +147,7 @@ class InvoiceSummary(BaseModel):
         "address_country_code",
         "delivery_country_code",
         "order_reference",
+        "sevdesk_reference",
         mode="before",
     )
     @classmethod
@@ -211,13 +231,14 @@ class InvoiceSummary(BaseModel):
         buyer_note = str(raw.get("buyerNote") or "").strip()
 
         # Wix order reference stored in customerInternalNote or related fields
-        order_reference = ""
+        sevdesk_reference = ""
         for ref_key in ("reference", "customerInternalNote", "customerInternalNoteText",
                         "referenceNumber", "orderNumber"):
             val = str(raw.get(ref_key) or "").strip()
             if val:
-                order_reference = val
+                sevdesk_reference = val
                 break
+        order_reference = extract_wix_order_number(sevdesk_reference)
 
         payload = {
             **raw,
@@ -229,6 +250,7 @@ class InvoiceSummary(BaseModel):
             "has_delivery_address_override": has_delivery_override,
             "is_sensitive_country": country_code.upper() in DEFAULT_SENSITIVE_COUNTRY_CODES,
             "order_reference": order_reference,
+            "sevdesk_reference": sevdesk_reference,
         }
         return cls.model_validate(payload)
 
@@ -294,16 +316,7 @@ class InvoiceSummary(BaseModel):
 
         Never return UUID-like IDs in the dedicated WIX number column.
         """
-        ref = str(self.order_reference or "").strip()
-        if not ref:
-            return ""
-        if re.fullmatch(
-            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
-            ref,
-        ):
-            return ""
-        digits = "".join(ch for ch in ref if ch.isdigit())
-        return digits if digits else ref
+        return extract_wix_order_number(self.order_reference or self.sevdesk_reference)
 
     def indicator_icon_keys(self) -> list[str]:
         """Return icon keys used by the hints cell delegate."""
@@ -361,7 +374,11 @@ class InvoiceSummary(BaseModel):
             "Hinweise": indicator_symbols,
             "AKTIONEN": "",
             # Hidden column is also used by text filter; include order ref for Wix-order search.
-            "ID": " ".join(part for part in (self.id, self.order_reference) if part).strip(),
+            "ID": " ".join(
+                part
+                for part in (self.id, self.order_reference, self.sevdesk_reference)
+                if part
+            ).strip(),
         }
 
         row["__align__Hinweise"] = "center"
@@ -532,12 +549,12 @@ class InvoiceClient:
     @classmethod
     def _matches_search_query(cls, summary: InvoiceSummary, needle: str) -> bool:
         order_ref = str(summary.order_reference or "").strip()
-        order_digits = "".join(ch for ch in order_ref if ch.isdigit())
+        sevdesk_ref = str(summary.sevdesk_reference or "").strip()
         haystacks = [
             cls._normalize_search_text(summary.invoice_number),
             cls._normalize_search_text(summary.contact_name),
             cls._normalize_search_text(order_ref),
-            cls._normalize_search_text(order_digits),
+            cls._normalize_search_text(sevdesk_ref),
         ]
         if any(needle and needle in hay for hay in haystacks if hay):
             return True

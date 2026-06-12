@@ -52,6 +52,7 @@ class StartMode(str, Enum):
 
     INVOICES_ONLY = "invoices"
     INVOICES_AND_PRINT = "full"
+    PRINT_ONLY = "print"
 
 
 @dataclass(frozen=True)
@@ -189,9 +190,15 @@ class InventoryService:
                 result[key] = qty
         return result
 
-    def build_start_preflight(self, open_invoice_count: int) -> StartPreflight:
+    def build_start_preflight(
+        self,
+        open_invoice_count: int,
+        *,
+        requirements: dict[str, int] | None = None,
+    ) -> StartPreflight:
         """Create decision list: print only when stock is below required quantity."""
-        requirements = self.load_pending_requirements()
+        if requirements is None:
+            requirements = self.load_pending_requirements()
         if not requirements:
             return StartPreflight(
                 open_invoice_count=max(0, int(open_invoice_count)),
@@ -310,6 +317,8 @@ class InventoryService:
         self,
         preflight: StartPreflight,
         mode: StartMode,
+        *,
+        print_products: bool = True,
     ) -> StartExecutionReport:
         """Execute START side effects for the selected *mode*.
 
@@ -346,7 +355,7 @@ class InventoryService:
         for decision in preflight.decisions:
             current = max(0, int(stock_levels.get(decision.sku, decision.on_hand_qty)))
             produced = 0
-            if decision.will_print:
+            if decision.will_print and print_products:
                 requested_production = max(0, int(decision.final_print_qty))
                 if self._print_decision_product(decision.sku, requested_production, warnings):
                     produced = requested_production
@@ -402,6 +411,7 @@ class InventoryService:
                 page_count=page_count,
                 print_queue=self._print_queue,
                 job_kind="product",
+                wait=True,
             )
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"{sku}: Notendruck fehlgeschlagen: {exc}")

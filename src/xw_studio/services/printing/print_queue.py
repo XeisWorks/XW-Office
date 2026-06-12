@@ -6,6 +6,9 @@ import os
 import queue
 import shutil
 import tempfile
+import threading
+import time
+from collections.abc import Callable
 from typing import TypeAlias
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -94,9 +97,15 @@ class _PrintQueueWorker(QThread):
     job_finished = Signal(object)
     job_failed = Signal(object)
 
-    def __init__(self, jobs: "queue.Queue[PrintJob | None]", parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        jobs: "queue.Queue[PrintJob | None]",
+        result_callback: Callable[[PrintJobResult], None] | None = None,
+        parent: QObject | None = None,
+    ) -> None:
         super().__init__(parent)
         self._jobs = jobs
+        self._result_callback = result_callback
         self._stopping = False
 
     def stop(self) -> None:
@@ -121,6 +130,8 @@ class _PrintQueueWorker(QThread):
                     message=str(exc),
                 )
                 logger.exception("Print job failed: %s", result)
+                if self._result_callback is not None:
+                    self._result_callback(result)
                 self.job_failed.emit(result)
             else:
                 result = PrintJobResult(
@@ -130,6 +141,8 @@ class _PrintQueueWorker(QThread):
                     printer_name=getattr(job, "printer_name", ""),
                     message="dispatched",
                 )
+                if self._result_callback is not None:
+                    self._result_callback(result)
                 self.job_finished.emit(result)
             finally:
                 if isinstance(job, PdfPrintJob) and job.cleanup_paths:
@@ -185,10 +198,13 @@ class PrintQueueService(QObject):
         super().__init__(parent)
         self._jobs: queue.Queue[PrintJob | None] = queue.Queue()
         self._worker: _PrintQueueWorker | None = None
+        self._result_condition = threading.Condition()
+        self._awaited_job_ids: set[str] = set()
+        self._results: dict[str, PrintJobResult] = {}
 
     def _ensure_worker(self) -> _PrintQueueWorker:
         if self._worker is None or not self._worker.isRunning():
-            self._worker = _PrintQueueWorker(self._jobs)
+            self._worker = _PrintQueueWorker(self._jobs, self._record_result)
             self._worker.job_started.connect(self.job_started.emit)
             self._worker.job_finished.connect(self.job_finished.emit)
             self._worker.job_failed.connect(self.job_failed.emit)
@@ -201,6 +217,33 @@ class PrintQueueService(QObject):
         self.job_queued.emit(job)
         logger.info("Print job queued: id=%s printer='%s'", job.id, getattr(job, "printer_name", ""))
         return job.id
+
+    def enqueue_and_wait(self, job: PrintJob, *, timeout_seconds: float = 300.0) -> PrintJobResult:
+        """Queue one job and wait until the print backend reports success or failure."""
+        timeout = max(float(timeout_seconds), 0.1)
+        with self._result_condition:
+            self._awaited_job_ids.add(job.id)
+        self.enqueue(job)
+        deadline = time.monotonic() + timeout
+        with self._result_condition:
+            while job.id not in self._results:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._awaited_job_ids.discard(job.id)
+                    raise TimeoutError(
+                        f"Druckjob {job.id} wurde nach {timeout:.0f} Sekunden nicht bestaetigt"
+                    )
+                self._result_condition.wait(remaining)
+            result = self._results.pop(job.id)
+            self._awaited_job_ids.discard(job.id)
+        return result
+
+    def _record_result(self, result: PrintJobResult) -> None:
+        with self._result_condition:
+            if result.job_id not in self._awaited_job_ids:
+                return
+            self._results[result.job_id] = result
+            self._result_condition.notify_all()
 
     def shutdown(self, wait_ms: int = 5000) -> None:
         if self._worker is not None and self._worker.isRunning():

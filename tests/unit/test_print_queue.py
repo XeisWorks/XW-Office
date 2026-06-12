@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import threading
 import types
 from unittest.mock import MagicMock
 
 from xw_studio.services.printing import print_queue
-from xw_studio.services.printing.print_jobs import BrotherLbxLabelJob, PdfPrintJob
+from xw_studio.services.printing.print_jobs import BrotherLbxLabelJob, PdfPrintJob, PrintJobResult
 
 
 def test_print_queue_worker_executes_jobs_sequentially(monkeypatch) -> None:
@@ -65,3 +66,29 @@ def test_brother_lbx_job_initializes_and_uninitializes_com(monkeypatch, tmp_path
 
     assert events == ["init", "uninit"]
     doc.SetPrinter.assert_called_once_with("Brother", True)
+
+
+def test_enqueue_and_wait_returns_worker_result(monkeypatch) -> None:
+    service = print_queue.PrintQueueService()
+    job = PdfPrintJob(pdf_path="a.pdf", printer_name="P")
+
+    def fake_enqueue(queued_job: PdfPrintJob) -> str:
+        threading.Thread(
+            target=lambda: service._record_result(  # noqa: SLF001
+                PrintJobResult(
+                    job_id=queued_job.id,
+                    success=True,
+                    description="test",
+                    printer_name="P",
+                    message="dispatched",
+                )
+            )
+        ).start()
+        return queued_job.id
+
+    monkeypatch.setattr(service, "enqueue", fake_enqueue)
+
+    result = service.enqueue_and_wait(job, timeout_seconds=1)
+
+    assert result.success is True
+    assert result.job_id == job.id

@@ -104,6 +104,9 @@ class _WixOrdersDigitalOnlyStub:
 
 
 class _WixOrdersPhysicalStub:
+    def __init__(self) -> None:
+        self.fulfillment_calls: list[tuple[str, list[dict]]] = []
+
     def has_credentials(self) -> bool:
         return True
 
@@ -123,6 +126,7 @@ class _WixOrdersPhysicalStub:
         return [{"id": "line-1"}]
 
     def create_fulfillment(self, reference: str, items: list[dict]) -> dict:
+        self.fulfillment_calls.append((reference, items))
         return {"id": "ful-1"}
 
     def list_fulfillments(self, reference: str) -> list[dict]:
@@ -193,6 +197,7 @@ def test_invoice_print_step_uses_legacy_printer() -> None:
     assert result.last_error == ""
     assert invoice_client.render_calls == ["INV-001"]
     assert mock_print.called
+    assert mock_print.call_args.kwargs["wait"] is True
 
 
 def test_label_print_step_uses_shipping_address_fallback() -> None:
@@ -292,9 +297,40 @@ def test_fullflow_invoice_and_label_steps() -> None:
     assert mock_inv_print.called
     assert mock_label_print.called
     assert invoice_client.send_calls == [("INV-001", "VPR", False)]
+    assert wix_orders.fulfillment_calls == [("WIX-INV-001", [{"id": "line-1"}])]
     assert len(invoice_client.mail_calls) == 1
     assert invoice_client.mail_calls[0]["to_email"] == "john@example.test"
     assert len(mailer.calls) == 0
+
+
+def test_fullflow_stops_before_fulfillment_and_mail_when_invoice_print_fails() -> None:
+    config = AppConfig()
+    invoice_client = _InvoiceClientE2E()
+    repo = _SettingsRepoE2E()
+    mailer = _MailServiceStub()
+    wix_orders = _WixOrdersPhysicalStub()
+    service = InvoiceProcessingService(config, invoice_client, repo, wix_orders, mailer)
+    invoice_client.list_invoice_summaries = lambda **_: [
+        InvoiceSummary(
+            id="INV-001",
+            invoice_number="R-001",
+            contact_name="John Doe",
+            order_reference="WIX-INV-001",
+            address_country_code="AT",
+        )
+    ]
+
+    with patch.object(
+        service._invoice_printer,  # noqa: SLF001
+        "print_pdf_bytes",
+        side_effect=RuntimeError("printer offline"),
+    ):
+        result = service.run_start_fullflow(full_mode=True)
+
+    assert result["failures"] == 1
+    assert result["successful"] == 0
+    assert wix_orders.fulfillment_calls == []
+    assert invoice_client.mail_calls == []
 
 
 def test_fullflow_skips_print_for_digital_only_wix_orders() -> None:

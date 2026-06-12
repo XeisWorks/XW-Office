@@ -367,8 +367,7 @@ class InvoiceProcessingService:
                     if not digital_only:
                         flags = self._run_invoice_print_step(summary, flags)
                         flags = self._run_label_print_step(summary, flags)
-                    if print_products:
-                        flags = self._run_product_step(summary, flags)
+                    flags = self._run_product_step(summary, flags)
                 flags = self._run_mail_step(summary, flags, recipient_override=mail_recipient_override)
                 successful += 1
             except Exception as exc:
@@ -393,6 +392,51 @@ class InvoiceProcessingService:
             "print_products": bool(print_products),
             "aborted": aborted,
         }
+
+    def build_inventory_requirements(
+        self,
+        *,
+        invoice_ids: list[str] | None = None,
+    ) -> dict[str, int]:
+        """Aggregate Wix line-item quantities for the exact START invoice set."""
+        if self._wix_orders is None or not self._wix_orders.has_credentials():
+            return {}
+        summaries = self._load_all_open_drafts(limit_per_page=100, max_pages=20)
+        if invoice_ids:
+            wanted = {str(invoice_id).strip() for invoice_id in invoice_ids if str(invoice_id).strip()}
+            summaries = [summary for summary in summaries if str(summary.id).strip() in wanted]
+        references = sorted(
+            {summary.order_reference.strip() for summary in summaries if summary.order_reference.strip()}
+        )
+        if not references:
+            return {}
+
+        requirements: dict[str, int] = {}
+        workers = max(2, min(8, len(references)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(self._wix_orders.fetch_order_line_items, reference): reference
+                for reference in references
+            }
+            for future in as_completed(futures):
+                reference = futures[future]
+                try:
+                    items = future.result()
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Wix-Inventar-Preflight fehlgeschlagen fuer Bestellung {reference}: {exc}"
+                    ) from exc
+                for item in items or []:
+                    sku = str(getattr(item, "sku", "") or "").strip().upper()
+                    if not sku:
+                        continue
+                    try:
+                        qty = max(0, int(getattr(item, "qty", 0) or 0))
+                    except (TypeError, ValueError):
+                        qty = 0
+                    if qty:
+                        requirements[sku] = requirements.get(sku, 0) + qty
+        return requirements
 
     def _prefetch_wix_order_context(self, summaries: list[InvoiceSummary]) -> None:
         if self._wix_orders is None or not self._wix_orders.has_credentials():
@@ -737,7 +781,7 @@ class InvoiceProcessingService:
         pdf_bytes = self._get_invoice_pdf_bytes(summary.id)
         if not pdf_bytes:
             raise RuntimeError("PDF nicht verfügbar")
-        self._invoice_printer.print_pdf_bytes(pdf_bytes)
+        self._invoice_printer.print_pdf_bytes(pdf_bytes, wait=True)
         logger.info("Invoice %s printed", summary.invoice_number or summary.id)
         return self._next_flags(flags, invoice_printed=True)
 
@@ -748,7 +792,7 @@ class InvoiceProcessingService:
         lines = self._shipping_lines_from_invoice(full, summary)
         if not lines:
             raise RuntimeError("Keine Lieferadresse für Labeldruck")
-        self._label_printer.print_address(lines)
+        self._label_printer.print_address(lines, wait=True)
         logger.info("Invoice %s label printed", summary.invoice_number or summary.id)
         return self._next_flags(flags, label_printed=True)
 
@@ -999,7 +1043,11 @@ class InvoiceProcessingService:
         else:
             normalized = content.replace("\r\n", "\n").replace("\r", "\n").strip()
             paragraphs = [chunk.strip() for chunk in re.split(r"\n\s*\n", normalized) if chunk.strip()]
-            inner = "\n".join(f"<p>{html.escape(paragraph).replace('\n', '<br>')}</p>" for paragraph in paragraphs)
+            escaped_paragraphs = [
+                html.escape(paragraph).replace("\n", "<br>")
+                for paragraph in paragraphs
+            ]
+            inner = "\n".join(f"<p>{paragraph}</p>" for paragraph in escaped_paragraphs)
         return (
             "<html><body style=\"font-family:Segoe UI,Arial,sans-serif;color:#0f172a;line-height:1.5;\">"
             f"{inner}"
@@ -1306,6 +1354,7 @@ class InvoiceProcessingService:
             hay = " ".join(
                 [
                     summary.order_reference,
+                    summary.sevdesk_reference,
                     summary.buyer_note,
                     summary.invoice_number,
                 ]

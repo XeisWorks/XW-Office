@@ -36,7 +36,7 @@ class InvoicePrinter:
         names = [str(name).strip() for name in self._printing.configured_printer_names if str(name).strip()]
         return names[0] if names else ""
 
-    def print_pdf_bytes(self, pdf_bytes: bytes) -> None:
+    def print_pdf_bytes(self, pdf_bytes: bytes, *, wait: bool = False) -> None:
         printer_name = self._printer_name()
         if not printer_name:
             raise RuntimeError("Kein Rechnungsdrucker konfiguriert")
@@ -49,7 +49,7 @@ class InvoicePrinter:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as handle:
                 handle.write(pdf_bytes)
                 temp_path = handle.name
-            self._queue_file(temp_path, printer_name)
+            self._queue_file(temp_path, printer_name, wait=wait)
             scheduled = True
         finally:
             if temp_path and not scheduled:
@@ -58,7 +58,7 @@ class InvoicePrinter:
                 except OSError:
                     pass
 
-    def _queue_file(self, pdf_path: str, printer_name: str) -> None:
+    def _queue_file(self, pdf_path: str, printer_name: str, *, wait: bool = False) -> None:
         try:
             size = os.path.getsize(pdf_path)
         except OSError:
@@ -78,20 +78,24 @@ class InvoicePrinter:
         black_enhancement = profile.black_enhancement if profile is not None else "auto"
         black_threshold = int(profile.black_threshold) if profile is not None else 180
         queue = self._print_queue or global_print_queue()
-        queue.enqueue(
-            PdfPrintJob(
-                pdf_path=pdf_path,
-                printer_name=printer_name,
-                copies=1,
-                dpi=dpi,
-                job_kind="invoice",
-                description="Rechnungsdruck",
-                placement_mode=cast(PlacementMode, placement_mode),
-                x_offset_mm=x_offset_mm,
-                y_offset_mm=y_offset_mm,
-                render_color_mode=cast(RenderColorMode, render_color_mode),
-                black_enhancement=cast(BlackEnhancement, black_enhancement),
-                black_threshold=black_threshold,
-                cleanup_paths=(pdf_path,),
-            )
+        job = PdfPrintJob(
+            pdf_path=pdf_path,
+            printer_name=printer_name,
+            copies=1,
+            dpi=dpi,
+            job_kind="invoice",
+            description="Rechnungsdruck",
+            placement_mode=cast(PlacementMode, placement_mode),
+            x_offset_mm=x_offset_mm,
+            y_offset_mm=y_offset_mm,
+            render_color_mode=cast(RenderColorMode, render_color_mode),
+            black_enhancement=cast(BlackEnhancement, black_enhancement),
+            black_threshold=black_threshold,
+            cleanup_paths=(pdf_path,),
         )
+        if wait:
+            result = queue.enqueue_and_wait(job)
+            if not result.success:
+                raise RuntimeError(result.message or "Rechnungsdruck fehlgeschlagen")
+            return
+        queue.enqueue(job)

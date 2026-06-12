@@ -107,6 +107,35 @@ def test_execute_full_mode_updates_stock_with_buffer_and_consumption(tmp_path: P
     assert stock_after["XW-6-003"] == 3
 
 
+def test_print_only_then_consumption_does_not_print_twice(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "score.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    repo = _RepoStub(
+        {
+            "daily_business.pending_requirements": json.dumps({"XW-6-003": 2}),
+            "inventory.stock_levels": json.dumps({"XW-6-003": 1}),
+            "inventory.products": _product_payload(pdf_path),
+        }
+    )
+    service = InventoryService(AppConfig(printing=_printing_config()), repo)
+    preflight = service.build_start_preflight(open_invoice_count=1)
+
+    with patch("xw_studio.services.inventory.service.print_pdf_by_plan") as mock_print:
+        print_report = service.execute_start_workflow(preflight, StartMode.PRINT_ONLY)
+        consume_report = service.execute_start_workflow(
+            preflight,
+            StartMode.INVOICES_AND_PRINT,
+            print_products=False,
+        )
+
+    assert print_report.printed_skus == ["XW-6-003"]
+    assert print_report.consumed_skus == []
+    assert consume_report.printed_skus == []
+    assert consume_report.consumed_skus == ["XW-6-003"]
+    mock_print.assert_called_once()
+    assert json.loads(repo.values["inventory.stock_levels"])["XW-6-003"] == 3
+
+
 def test_execute_invoices_mode_keeps_stock_unchanged() -> None:
     raw_stock = json.dumps({"XW-7-100": 9})
     repo = _RepoStub(

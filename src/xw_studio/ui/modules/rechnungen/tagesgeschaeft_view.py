@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -511,7 +510,17 @@ class TagesgeschaeftView(QWidget):
                 if self._start_selected_only
                 else invoice_service.count_invoices(status=100)
             )
-            return inventory_service.build_start_preflight(open_count)
+            requirements = invoice_service.build_inventory_requirements(
+                invoice_ids=(
+                    list(self._start_selected_invoice_ids)
+                    if self._start_selected_only
+                    else None
+                )
+            )
+            return inventory_service.build_start_preflight(
+                open_count,
+                requirements=requirements,
+            )
 
         self._start_worker = BackgroundWorker(job)
         self._start_worker.signals.result.connect(self._on_start_preflight_ready)
@@ -604,6 +613,57 @@ class TagesgeschaeftView(QWidget):
                 if plan.issues
                 else ProductPreflightApplyResult()
             )
+            inventory_service: InventoryService = self._container.resolve(InventoryService)
+            print_report: StartExecutionReport | None = None
+            required_print_skus = {
+                decision.sku for decision in preflight.decisions if decision.will_print
+            }
+            if (
+                mode == StartMode.INVOICES_AND_PRINT
+                and not self._start_include_product_print
+                and required_print_skus
+            ):
+                return {
+                    "batch": {
+                        "processed": 0,
+                        "failures": 1,
+                        "successful": 0,
+                        "full_mode": True,
+                        "print_products": False,
+                        "aborted": False,
+                    },
+                    "inventory_report": None,
+                    "inventory_warning": (
+                        "START wurde vor der Rechnungsfinalisierung gestoppt, weil Bestand "
+                        "fehlt. Bitte START + NOTENDRUCK verwenden: "
+                        + ", ".join(sorted(required_print_skus))
+                    ),
+                    "product_apply": apply_result,
+                }
+            if mode == StartMode.INVOICES_AND_PRINT and self._start_include_product_print:
+                print_report = inventory_service.execute_start_workflow(
+                    preflight,
+                    StartMode.PRINT_ONLY,
+                )
+                missing_prints = required_print_skus.difference(print_report.printed_skus)
+                if missing_prints:
+                    return {
+                        "batch": {
+                            "processed": 0,
+                            "failures": 1,
+                            "successful": 0,
+                            "full_mode": True,
+                            "print_products": True,
+                            "aborted": False,
+                        },
+                        "inventory_report": print_report,
+                        "inventory_warning": (
+                            "START wurde vor der Rechnungsfinalisierung gestoppt, weil "
+                            "erforderlicher Notendruck fehlgeschlagen ist: "
+                            + ", ".join(sorted(missing_prints))
+                        ),
+                        "product_apply": apply_result,
+                    }
             invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             batch_result = invoice_service.run_start_fullflow(
                 full_mode=(mode == StartMode.INVOICES_AND_PRINT),
@@ -624,8 +684,26 @@ class TagesgeschaeftView(QWidget):
                         "oder manuell gestoppt wurde."
                     )
                 else:
-                    inventory_service: InventoryService = self._container.resolve(InventoryService)
-                    inventory_report = inventory_service.execute_start_workflow(preflight, mode)
+                    inventory_report = inventory_service.execute_start_workflow(
+                        preflight,
+                        mode,
+                        print_products=False,
+                    )
+                    if print_report is not None:
+                        inventory_report = StartExecutionReport(
+                            mode=inventory_report.mode,
+                            open_invoice_count=inventory_report.open_invoice_count,
+                            decisions_count=inventory_report.decisions_count,
+                            printed_skus=list(print_report.printed_skus),
+                            consumed_skus=list(inventory_report.consumed_skus),
+                            stock_updated=(
+                                print_report.stock_updated and inventory_report.stock_updated
+                            ),
+                            warnings=[
+                                *print_report.warnings,
+                                *inventory_report.warnings,
+                            ],
+                        )
             return {
                 "batch": batch_result,
                 "inventory_report": inventory_report,
