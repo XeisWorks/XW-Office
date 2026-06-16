@@ -6,6 +6,8 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from xw_studio.services.clearing.models import (
     ClearingDuplicateKey,
     InvoiceRecord,
@@ -152,6 +154,41 @@ def test_confirmed_batch_imports_then_books_once(tmp_path: Path) -> None:
     assert sevdesk.booked[0]["transaction_id"] == 99
     assert len(list(tmp_path.glob("clearing_analysis_*.json"))) == 1
     assert len(list(tmp_path.glob("clearing_booking_*.json"))) == 1
+
+
+def test_booking_rechecks_current_invoice_wix_order_before_writing(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    service = _service(sevdesk, [_payment()], tmp_path)
+    row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
+    sevdesk.invoice = InvoiceRecord(7, "RE-100", "Wix | 99999", money("29.90"), 200, "Anna")
+
+    result = service.book_selected([row])
+
+    assert result.failure_count == 1
+    assert "Wix-Order-Nr." in result.items[0].message
+    assert sevdesk.created == []
+    assert sevdesk.booked == []
+
+
+def test_manual_invoice_assignment_requires_matching_wix_order(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    sevdesk.invoice = InvoiceRecord(7, "RE-100", "Wix | 99999", money("29.90"), 200, "Anna")
+    service = _service(sevdesk, [_payment()], tmp_path)
+    row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
+
+    with pytest.raises(ValueError, match="Wix-Order-Nr."):
+        service.assign_invoice(row, "RE-100")
+
+
+def test_manual_invoice_assignment_normalizes_wix_order(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    service = _service(sevdesk, [_payment()], tmp_path)
+    row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
+
+    assigned = service.assign_invoice(row, "RE-100")
+
+    assert assigned.order_number == "12345"
+    assert assigned.invoice_number == "RE-100"
 
 
 def test_booking_reuses_existing_transaction_instead_of_importing_duplicate(tmp_path: Path) -> None:

@@ -296,3 +296,52 @@ Live-Lesetest Maerz 2026:
 - Status: 178 bereits gebucht
 - Warnungen: 0
 - Schreibzugriffe: keine
+
+### Nachpruefung 16.06.2026: Buchung ueber 5-stellige Wix-Order-Nr.
+
+Die Analyse ordnet Provider-Zahlungen weiterhin ueber Wix-Transaktionsreferenzen zur
+Wix-Order-Nr. und von dort zur sevDesk-Rechnungsreferenz zu. Fuer den eigentlichen
+Buchungsschritt wurde die Zuordnung zusaetzlich gehaertet:
+
+- Vor dem Import einer neuen sevDesk-Konto-Transaktion wird die Rechnung live erneut
+  geladen.
+- Die sevDesk-Rechnungs-ID muss unveraendert sein.
+- Die aktuell geladene Rechnung muss dieselbe normalisierte 5-stellige Wix-Order-Nr.
+  wie der Zahlungskandidat enthalten.
+- Manuelle Rechnungszuordnung akzeptiert nur Rechnungen mit passender Wix-Order-Nr.
+  und speichert danach die normalisierte Nummer.
+- Der Einzelabruf `find_invoice()` liest dieselben Referenzfelder wie der Listenabruf
+  (`reference`, `customerInternalNote`, `customerInternalNoteText`, `referenceNumber`,
+  `orderNumber`).
+
+Damit entsteht bei einer nachtraeglich geaenderten/falschen Rechnung keine neue
+sevDesk-Transaktion und keine Buchung. Der Fehler landet als einzelnes Ergebnis im
+Batch, die uebrigen Kandidaten bleiben unabhaengig verarbeitbar.
+
+Verifikation:
+
+```text
+.venv\Scripts\python.exe -m pytest tests/unit/test_payment_clearing_service.py -q
+11 passed
+
+.venv\Scripts\python.exe -m pytest tests/unit/test_payment_clearing_service.py tests/ui/test_payment_clearing_view.py tests/ui/test_main_window_smoke.py -q
+14 passed
+
+.venv\Scripts\python.exe -m ruff check src/xw_studio/services/clearing tests/unit/test_payment_clearing_service.py
+All checks passed
+
+.venv\Scripts\python.exe -m mypy src/xw_studio/services/clearing --ignore-missing-imports
+Success: no issues found
+```
+
+Read-only Live-Lesetest Maerz 2026:
+
+- Gesamt: 178 Vorgaenge
+- Provider: 154 Stripe, 24 Mollie
+- Art: 173 Zahlungen, 5 Payouts
+- Status: 178 bereits gebucht
+- offene Faelle: 0
+- Warnungen: 0
+- Zahlung ohne Rechnung: 0
+- Order-Nr. fehlt nur bei 5 Payouts, fuer Payouts erwartbar
+- Schreibzugriffe: keine

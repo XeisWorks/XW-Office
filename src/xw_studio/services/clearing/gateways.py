@@ -469,7 +469,11 @@ class SevdeskClearingGateway:
         if not rows:
             return None
         raw = rows[0]
-        reference = str(raw.get("reference") or raw.get("customerInternalNote") or "")
+        reference = ""
+        for key in ("reference", "customerInternalNote", "customerInternalNoteText", "referenceNumber", "orderNumber"):
+            reference = str(raw.get(key) or "").strip()
+            if reference:
+                break
         return InvoiceRecord(
             invoice_id=int(raw["id"]),
             invoice_number=str(raw.get("invoiceNumber") or ""),

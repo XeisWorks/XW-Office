@@ -7,7 +7,7 @@ import io
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -448,7 +448,47 @@ class PaymentClearingService:
             raise ValueError(
                 f"Betrag passt nicht: Zahlung {candidate.amount:.2f}, Rechnung {invoice.amount:.2f}."
             )
-        return candidate.with_manual_invoice(invoice)
+        invoice_order_no = _order_number(invoice.reference)
+        candidate_order_no = _order_number(candidate.order_number)
+        if not invoice_order_no:
+            raise ValueError(f"Rechnung {invoice.invoice_number} enthaelt keine 5-stellige Wix-Order-Nr.")
+        if candidate_order_no and candidate_order_no != invoice_order_no:
+            raise ValueError(
+                f"Wix-Order-Nr. passt nicht: Zahlung {candidate_order_no}, Rechnung {invoice_order_no}."
+            )
+        return replace(candidate.with_manual_invoice(invoice), order_number=invoice_order_no)
+
+    def _current_invoice_for_booking(self, row: ClearingCandidate) -> InvoiceRecord:
+        if self._sevdesk is None:
+            raise RuntimeError("sevDesk-Clearing ist nicht konfiguriert.")
+        if row.invoice_id is None or row.account_id is None:
+            raise RuntimeError("Keine eindeutige Rechnung zugeordnet")
+        current_invoice = self._sevdesk.find_invoice(row.invoice_number)
+        if current_invoice is None:
+            raise RuntimeError(f"Rechnung {row.invoice_number} wurde nicht mehr gefunden")
+        if current_invoice.invoice_id != row.invoice_id:
+            raise RuntimeError(
+                f"Rechnung {row.invoice_number} zeigt auf eine andere sevDesk-ID "
+                f"({current_invoice.invoice_id} statt {row.invoice_id})"
+            )
+        if current_invoice.is_paid:
+            return current_invoice
+        expected_order_no = _order_number(row.order_number)
+        current_order_no = _order_number(current_invoice.reference)
+        if not expected_order_no:
+            raise RuntimeError("Kandidat enthaelt keine 5-stellige Wix-Order-Nr.")
+        if not current_order_no:
+            raise RuntimeError(f"Rechnung {row.invoice_number} enthaelt keine 5-stellige Wix-Order-Nr.")
+        if current_order_no != expected_order_no:
+            raise RuntimeError(
+                f"Wix-Order-Nr. hat sich geaendert: Zahlung {expected_order_no}, "
+                f"Rechnung {current_order_no}"
+            )
+        if current_invoice.amount != row.amount:
+            raise RuntimeError(
+                f"Betrag hat sich geaendert: Zahlung {row.amount:.2f}, Rechnung {current_invoice.amount:.2f}"
+            )
+        return current_invoice
 
     def book_selected(
         self,
@@ -486,6 +526,9 @@ class PaymentClearingService:
                                 )
                             )
                             continue
+                current_invoice: InvoiceRecord | None = None
+                if row.kind in {TransactionKind.PAYMENT, TransactionKind.SEPA}:
+                    current_invoice = self._current_invoice_for_booking(row)
                 if transaction_id is None:
                     if row.account_id is None:
                         raise RuntimeError("Kein sevDesk-Konto zugeordnet")
@@ -497,11 +540,8 @@ class PaymentClearingService:
                         purpose=self._candidate_purpose(row),
                     )
                 if row.kind in {TransactionKind.PAYMENT, TransactionKind.SEPA}:
-                    if row.invoice_id is None or row.account_id is None:
-                        raise RuntimeError("Keine eindeutige Rechnung zugeordnet")
-                    current_invoice = self._sevdesk.find_invoice(row.invoice_number)
                     if current_invoice is None:
-                        raise RuntimeError(f"Rechnung {row.invoice_number} wurde nicht mehr gefunden")
+                        raise RuntimeError("Keine eindeutige Rechnung zugeordnet")
                     if current_invoice.is_paid:
                         results.append(
                             BookingItemResult(
@@ -513,11 +553,8 @@ class PaymentClearingService:
                             )
                         )
                         continue
-                    if current_invoice.amount != row.amount:
-                        raise RuntimeError(
-                            f"Betrag hat sich geaendert: Zahlung {row.amount:.2f}, "
-                            f"Rechnung {current_invoice.amount:.2f}"
-                        )
+                    if row.account_id is None:
+                        raise RuntimeError("Kein sevDesk-Konto zugeordnet")
                     self._sevdesk.book_invoice(
                         invoice_id=current_invoice.invoice_id,
                         amount=row.amount,
