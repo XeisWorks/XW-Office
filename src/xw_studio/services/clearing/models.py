@@ -27,6 +27,8 @@ class TransactionKind(str, Enum):
 class MatchStatus(str, Enum):
     READY = "ready"
     IMPORT_ONLY = "import_only"
+    REFUND_IMPORT = "refund_import"
+    REFUND_REVIEW = "refund_review"
     MANUAL = "manual"
     ALREADY_BOOKED = "already_booked"
     ERROR = "error"
@@ -90,6 +92,24 @@ class SevdeskTransaction:
 
 
 @dataclass(frozen=True)
+class ClearingDuplicateKey:
+    kind: TransactionKind
+    provider: str
+    provider_ref: str
+    value_date: str
+    amount: Decimal
+
+    def as_tuple(self) -> tuple[str, str, str, str, Decimal]:
+        return (
+            self.kind.value,
+            self.provider.casefold().strip(),
+            self.provider_ref.strip(),
+            self.value_date,
+            self.amount,
+        )
+
+
+@dataclass(frozen=True)
 class ClearingCandidate:
     candidate_id: str
     provider: str
@@ -110,7 +130,7 @@ class ClearingCandidate:
 
     @property
     def is_bookable(self) -> bool:
-        return self.status in {MatchStatus.READY, MatchStatus.IMPORT_ONLY}
+        return self.status in {MatchStatus.READY, MatchStatus.IMPORT_ONLY, MatchStatus.REFUND_IMPORT}
 
     def with_manual_invoice(self, invoice: InvoiceRecord) -> ClearingCandidate:
         status = MatchStatus.READY if self.kind in {TransactionKind.PAYMENT, TransactionKind.SEPA} else self.status
@@ -133,6 +153,7 @@ class ClearingAnalysis:
     end_date: datetime
     candidates: tuple[ClearingCandidate, ...]
     warnings: tuple[str, ...] = ()
+    run_id: str = ""
 
     @property
     def ready_count(self) -> int:

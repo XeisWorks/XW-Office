@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from xw_studio.services.clearing.models import (
+    ClearingDuplicateKey,
     InvoiceRecord,
     ProviderTransaction,
     SevdeskTransaction,
@@ -478,10 +479,10 @@ class SevdeskClearingGateway:
             customer=str((raw.get("contact") or {}).get("name") or "") if isinstance(raw.get("contact"), dict) else "",
         )
 
-    def find_transaction_by_provider_ref(
+    def find_transaction_by_duplicate_key(
         self,
         account_id: int,
-        provider_ref: str,
+        duplicate_key: ClearingDuplicateKey,
         value_date: datetime,
     ) -> SevdeskTransaction | None:
         for row in self.transactions(
@@ -489,7 +490,7 @@ class SevdeskClearingGateway:
             value_date - timedelta(days=2),
             value_date + timedelta(days=3),
         ):
-            if purpose_provider_ref(row.purpose) == provider_ref:
+            if transaction_duplicate_key(row).as_tuple() == duplicate_key.as_tuple():
                 return row
         return None
 
@@ -592,8 +593,37 @@ class SevdeskClearingGateway:
 
 
 _PURPOSE_REF = re.compile(r"(?:stripe|mollie|payout):([^|\s]+)", re.IGNORECASE)
+_PROVIDER_REF = re.compile(r"(stripe|mollie):([^|\s]+)", re.IGNORECASE)
+_PAYOUT_REF = re.compile(r"payout:([^|\s]+)", re.IGNORECASE)
 
 
 def purpose_provider_ref(purpose: str) -> str:
     match = _PURPOSE_REF.search(purpose or "")
     return match.group(1).strip() if match else ""
+
+
+def transaction_duplicate_key(row: SevdeskTransaction) -> ClearingDuplicateKey:
+    purpose = row.purpose or ""
+    provider = ""
+    provider_ref = ""
+    kind = TransactionKind.PAYMENT
+    payout = _PAYOUT_REF.search(purpose)
+    if payout:
+        provider = "payout"
+        provider_ref = payout.group(1).strip()
+        kind = TransactionKind.PAYOUT
+    else:
+        provider_match = _PROVIDER_REF.search(purpose)
+        if provider_match:
+            provider = provider_match.group(1).casefold().strip()
+            provider_ref = provider_match.group(2).strip()
+        upper = purpose.upper()
+        if "REFUND" in upper:
+            kind = TransactionKind.REFUND
+    return ClearingDuplicateKey(
+        kind=kind,
+        provider=provider,
+        provider_ref=provider_ref,
+        value_date=row.value_date.date().isoformat(),
+        amount=money(row.amount),
+    )

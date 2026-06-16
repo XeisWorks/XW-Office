@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Callable
 from zoneinfo import ZoneInfo
 
@@ -20,12 +21,14 @@ from xw_studio.services.clearing.gateways import (
     StripeClearingGateway,
     WixClearingGateway,
     purpose_provider_ref,
+    transaction_duplicate_key,
 )
 from xw_studio.services.clearing.models import (
     BookingBatchResult,
     BookingItemResult,
     ClearingAnalysis,
     ClearingCandidate,
+    ClearingDuplicateKey,
     InvoiceRecord,
     MatchStatus,
     ProviderTransaction,
@@ -37,6 +40,10 @@ logger = logging.getLogger(__name__)
 VIENNA = ZoneInfo("Europe/Vienna")
 _QUEUE_MOLLIE_KEY = "daily_business.queue.mollie"
 _ORDER_NUMBER = re.compile(r"(?<!\d)(\d{5})(?!\d)")
+
+
+def default_clearing_history_dir() -> Path:
+    return Path(__file__).resolve().parents[4] / "state" / "clearing_runs"
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,81 @@ def _candidate_id(tx: ProviderTransaction) -> str:
     return hashlib.sha256(tx.stable_key.encode("utf-8")).hexdigest()[:20]
 
 
+def _run_id(value: datetime) -> str:
+    return value.isoformat().replace(":", "-").replace(".", "-")
+
+
+def _json_value(value: object) -> object:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return f"{value:.2f}"
+    if isinstance(value, (MatchStatus, TransactionKind)):
+        return value.value
+    if isinstance(value, tuple):
+        return [_json_value(item) for item in value]
+    if isinstance(value, list):
+        return [_json_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    return value
+
+
+def _candidate_to_dict(row: ClearingCandidate) -> dict[str, object]:
+    return {
+        "candidate_id": row.candidate_id,
+        "provider": row.provider,
+        "kind": row.kind.value,
+        "provider_ref": row.provider_ref,
+        "order_number": row.order_number,
+        "invoice_id": row.invoice_id,
+        "invoice_number": row.invoice_number,
+        "customer": row.customer,
+        "amount": f"{row.amount:.2f}",
+        "payment_date": row.payment_date.isoformat(),
+        "status": row.status.value,
+        "reason": row.reason,
+        "selected": row.selected,
+        "account_id": row.account_id,
+        "transaction_id": row.transaction_id,
+        "stable_key": row.stable_key,
+    }
+
+
+def _booking_item_to_dict(item: BookingItemResult) -> dict[str, object]:
+    return {
+        "candidate_id": item.candidate_id,
+        "success": item.success,
+        "status": item.status.value,
+        "message": item.message,
+        "transaction_id": item.transaction_id,
+    }
+
+
+def _provider_for_duplicate(row: ProviderTransaction | ClearingCandidate) -> str:
+    return "payout" if row.kind == TransactionKind.PAYOUT else row.provider
+
+
+def _duplicate_key_for_provider(tx: ProviderTransaction) -> ClearingDuplicateKey:
+    return ClearingDuplicateKey(
+        kind=tx.kind,
+        provider=_provider_for_duplicate(tx),
+        provider_ref=tx.provider_ref,
+        value_date=tx.created_at.date().isoformat(),
+        amount=tx.amount,
+    )
+
+
+def _duplicate_key_for_candidate(row: ClearingCandidate) -> ClearingDuplicateKey:
+    return ClearingDuplicateKey(
+        kind=row.kind,
+        provider=_provider_for_duplicate(row),
+        provider_ref=row.provider_ref,
+        value_date=row.payment_date.date().isoformat(),
+        amount=row.amount,
+    )
+
+
 class PaymentClearingService:
     """Read-only analysis and explicitly confirmed, idempotent batch booking."""
 
@@ -73,12 +155,14 @@ class PaymentClearingService:
         mollie: MollieClearingGateway | None = None,
         wix: WixClearingGateway | None = None,
         sevdesk: SevdeskClearingGateway | None = None,
+        history_dir: Path | None = None,
     ) -> None:
         self._repo = settings_repo
         self._stripe = stripe
         self._mollie = mollie
         self._wix = wix
         self._sevdesk = sevdesk
+        self._history_dir = history_dir or default_clearing_history_dir()
 
     def describe(self) -> str:
         return (
@@ -107,6 +191,8 @@ class PaymentClearingService:
             raise ValueError("Der Start muss vor dem Ende liegen.")
 
         warnings: list[str] = []
+        started_at = datetime.now(VIENNA)
+        run_id = _run_id(started_at)
         provider_rows: list[ProviderTransaction] = []
         providers = (("Stripe", self._stripe), ("Mollie", self._mollie))
         for index, (label, gateway) in enumerate(providers, start=1):
@@ -144,15 +230,15 @@ class PaymentClearingService:
 
         if progress:
             progress(65, "Vorhandene sevDesk-Transaktionen pruefen")
-        existing_by_ref: dict[str, SevdeskTransaction] = {}
+        existing_by_duplicate: dict[tuple[str, str, str, str, Decimal], SevdeskTransaction] = {}
         all_existing: list[SevdeskTransaction] = []
         for account_id in accounts.values():
             rows = self._sevdesk.transactions(account_id, start - timedelta(days=45), end + timedelta(days=5))
             all_existing.extend(rows)
             for row in rows:
-                ref = purpose_provider_ref(row.purpose)
-                if ref:
-                    existing_by_ref[ref] = row
+                key = transaction_duplicate_key(row)
+                if key.provider_ref:
+                    existing_by_duplicate[key.as_tuple()] = row
 
         candidates: list[ClearingCandidate] = []
         seen_invoice_ids: set[int] = set()
@@ -172,7 +258,7 @@ class PaymentClearingService:
                         order_no = provider_map[ref]
                         break
             invoice = invoice_by_ref.get(order_no)
-            existing = existing_by_ref.get(tx.provider_ref)
+            existing = existing_by_duplicate.get(_duplicate_key_for_provider(tx).as_tuple())
             candidate = self._match_provider_transaction(
                 tx,
                 order_no=order_no,
@@ -235,13 +321,16 @@ class PaymentClearingService:
         candidates.sort(key=lambda row: (row.payment_date, row.provider, row.provider_ref))
         if progress:
             progress(100, "Analyse abgeschlossen")
-        return ClearingAnalysis(
-            started_at=datetime.now(VIENNA),
+        analysis = ClearingAnalysis(
+            started_at=started_at,
             start_date=start,
             end_date=end,
             candidates=tuple(candidates),
             warnings=tuple(warnings),
+            run_id=run_id,
         )
+        self._write_analysis_history(analysis)
+        return analysis
 
     @staticmethod
     def _invoice_index(
@@ -292,10 +381,24 @@ class PaymentClearingService:
         selected = False
         if account_id is None:
             status, reason = MatchStatus.ERROR, f"sevDesk-Konto {tx.provider.title()} fehlt"
-        elif tx.kind in {TransactionKind.REFUND, TransactionKind.PAYOUT}:
+        elif tx.kind == TransactionKind.PAYOUT:
             status = MatchStatus.IMPORT_ONLY
-            reason = "Wird als Refund bzw. Auszahlung importiert"
+            reason = "Wird als Auszahlung importiert"
             selected = True
+        elif tx.kind == TransactionKind.REFUND:
+            if not order_no:
+                status, reason = MatchStatus.REFUND_REVIEW, "Refund: keine eindeutige Wix-Bestellnummer"
+            elif invoice is None:
+                status, reason = MatchStatus.REFUND_REVIEW, "Refund: keine sevDesk-Rechnung gefunden; Gutschrift fehlt?"
+            elif invoice.is_draft:
+                status, reason = MatchStatus.REFUND_REVIEW, "Refund: Rechnung ist noch Entwurf; Gutschrift/Storno pruefen"
+            else:
+                status = MatchStatus.REFUND_IMPORT
+                reason = (
+                    f"Refund: Rechnung {invoice.invoice_number} gefunden; "
+                    "Transaktion kann importiert werden, Gutschrift/Storno separat pruefen"
+                )
+                selected = False
         elif not order_no:
             status, reason = MatchStatus.MANUAL, "Keine eindeutige Wix-Bestellnummer"
         elif invoice is None:
@@ -365,9 +468,9 @@ class PaymentClearingService:
             try:
                 transaction_id = row.transaction_id
                 if row.account_id is not None and row.kind != TransactionKind.SEPA:
-                    existing = self._sevdesk.find_transaction_by_provider_ref(
+                    existing = self._sevdesk.find_transaction_by_duplicate_key(
                         row.account_id,
-                        row.provider_ref,
+                        _duplicate_key_for_candidate(row),
                         row.payment_date,
                     )
                     if existing is not None:
@@ -437,7 +540,9 @@ class PaymentClearingService:
                 )
         if progress:
             progress(100, "Buchung abgeschlossen")
-        return BookingBatchResult(tuple(results))
+        result = BookingBatchResult(tuple(results))
+        self._write_booking_history(candidates, result)
+        return result
 
     @staticmethod
     def _candidate_purpose(row: ClearingCandidate) -> str:
@@ -447,6 +552,56 @@ class PaymentClearingService:
         prefix = f"payout:{row.provider_ref}" if kind == "PAYOUT" else f"{row.provider}:{row.provider_ref}"
         order = f"order:{row.order_number}" if row.order_number else "UNMATCHED"
         return f"{order} | {prefix} | {kind}"
+
+    def _write_analysis_history(self, analysis: ClearingAnalysis) -> None:
+        payload: dict[str, object] = {
+            "run_id": analysis.run_id,
+            "phase": "analysis",
+            "created_at": datetime.now(VIENNA).isoformat(),
+            "range": {
+                "start_date": analysis.start_date.date().isoformat(),
+                "end_date": (analysis.end_date - timedelta(days=1)).date().isoformat(),
+            },
+            "summary": {
+                "total": len(analysis.candidates),
+                "ready": analysis.ready_count,
+                "open": analysis.open_count,
+                "warnings": len(analysis.warnings),
+            },
+            "warnings": list(analysis.warnings),
+            "candidates": [_candidate_to_dict(row) for row in analysis.candidates],
+        }
+        self._write_history_file(f"clearing_analysis_{analysis.run_id}.json", payload)
+
+    def _write_booking_history(
+        self,
+        candidates: list[ClearingCandidate],
+        result: BookingBatchResult,
+    ) -> None:
+        started = min((row.payment_date for row in candidates), default=datetime.now(VIENNA))
+        payload: dict[str, object] = {
+            "run_id": _run_id(datetime.now(VIENNA)),
+            "phase": "booking",
+            "created_at": datetime.now(VIENNA).isoformat(),
+            "summary": {
+                "selected": len([row for row in candidates if row.selected and row.is_bookable]),
+                "successful": result.success_count,
+                "failed": result.failure_count,
+            },
+            "range_hint": {
+                "first_payment_date": started.date().isoformat(),
+            },
+            "items": [_booking_item_to_dict(item) for item in result.items],
+        }
+        self._write_history_file(f"clearing_booking_{payload['run_id']}.json", payload)
+
+    def _write_history_file(self, filename: str, payload: dict[str, object]) -> None:
+        try:
+            self._history_dir.mkdir(parents=True, exist_ok=True)
+            path = self._history_dir / filename
+            path.write_text(json.dumps(_json_value(payload), ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Clearing history could not be written: %s", exc)
 
     # Compatibility helpers retained for the existing daily-business queue.
     def list_pending(self) -> list[ClearingRow]:

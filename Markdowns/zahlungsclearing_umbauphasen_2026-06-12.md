@@ -111,6 +111,7 @@ Quellen:
    automatisch gebucht.
 6. HTTP-Schreibzugriffe werden nicht automatisch wiederholt.
 7. Batch-Ergebnisse werden pro Zeile ausgewiesen.
+8. Jeder Analyse- und Buchungslauf wird unter `state/clearing_runs` protokolliert.
 
 ## Umbauphasen
 
@@ -134,6 +135,7 @@ Status: abgeschlossen
 - [x] Erkennung bereits bezahlter und doppelt referenzierter Rechnungen
 - [x] SEPA-Matching aus vorhandenen sevDesk-Transaktionen
 - [x] Idempotenzschluessel fuer Payment, Refund und Payout
+- [x] Duplicate-Key aus Typ, Provider, Provider-Ref, Wertdatum und Betrag
 
 ### Phase 3: Bestaetigte Batch-Buchung
 
@@ -142,8 +144,10 @@ Status: abgeschlossen
 - [x] Fehlende Stripe-/Mollie-Transaktionen importieren
 - [x] Zahlungen mit sevDesk-Rechnungen verknuepfen
 - [x] Payouts und Refunds als getrennte Importfaelle behandeln
+- [x] Refunds als eigener Pruef-/Importstatus statt generischem Importfall
 - [x] Ergebnis und Fehler pro Zeile zurueckgeben
 - [x] Keine automatischen Retries fuer Schreiboperationen
+- [x] Persistente JSON-Historie fuer Analyse und Buchungsbatch
 
 ### Phase 4: PySide6-Modul
 
@@ -273,3 +277,22 @@ Der komplette Clearing-Lauf bricht dadurch nicht ab:
 
 Fuer den Stripe-Anteil wird ein gueltiger Stripe Secret Key oder ein Restricted Key mit
 passenden Rechten fuer Charges, Refunds, Payouts und Balance Transactions benoetigt.
+
+### Retest 16.06.2026 nach finalem Stripe-Key und Robustheitsausbau
+
+Nach Setzen eines funktionierenden Restricted Keys in `STRIPE_SECRET_KEY` wurden die
+drei offenen Robustheitspunkte umgesetzt und read-only erneut geprueft:
+
+- Duplicate-Key nun analog Legacy zusammengesetzt aus Art, Provider, Provider-Ref,
+  Wertdatum und Betrag
+- Refunds erscheinen mit eigenem Status `refund_import` bzw. `refund_review`
+- Analyse- und Buchungslaeufe werden als JSON unter `state/clearing_runs` persistiert
+
+Live-Lesetest Maerz 2026:
+
+- Gesamt: 178 Vorgaenge
+- Provider: 154 Stripe, 24 Mollie
+- Art: 173 Zahlungen, 5 Payouts
+- Status: 178 bereits gebucht
+- Warnungen: 0
+- Schreibzugriffe: keine

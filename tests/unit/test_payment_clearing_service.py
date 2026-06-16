@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from xw_studio.services.clearing.models import (
+    ClearingDuplicateKey,
     InvoiceRecord,
     MatchStatus,
     ProviderTransaction,
@@ -57,10 +59,19 @@ class _Sevdesk:
     def find_invoice(self, invoice_number: str) -> InvoiceRecord | None:
         return self.invoice if invoice_number == self.invoice.invoice_number else None
 
-    def find_transaction_by_provider_ref(
-        self, account_id: int, provider_ref: str, value_date: datetime
+    def find_transaction_by_duplicate_key(
+        self, account_id: int, duplicate_key: ClearingDuplicateKey, value_date: datetime
     ) -> SevdeskTransaction | None:
-        return self.existing
+        if self.existing is None:
+            return None
+        expected = ClearingDuplicateKey(
+            kind=TransactionKind.PAYMENT,
+            provider="stripe",
+            provider_ref="ch_1",
+            value_date=self.existing.value_date.date().isoformat(),
+            amount=self.existing.amount,
+        )
+        return self.existing if duplicate_key.as_tuple() == expected.as_tuple() else None
 
     def create_transaction(self, **kwargs: object) -> int:
         self.created.append(kwargs)
@@ -82,6 +93,16 @@ def _payment() -> ProviderTransaction:
     )
 
 
+def _service(sevdesk: _Sevdesk, rows: list[ProviderTransaction], tmp_path: Path) -> PaymentClearingService:
+    return PaymentClearingService(
+        stripe=_Provider(rows),  # type: ignore[arg-type]
+        mollie=_Provider([]),  # type: ignore[arg-type]
+        wix=_Wix(),  # type: ignore[arg-type]
+        sevdesk=sevdesk,  # type: ignore[arg-type]
+        history_dir=tmp_path,
+    )
+
+
 def test_money_is_decimal_and_rounded_to_cents() -> None:
     assert money("19,995") == Decimal("20.00")
     assert money(0.1 + 0.2) == Decimal("0.30")
@@ -91,14 +112,9 @@ def test_payout_purpose_is_idempotently_recognized() -> None:
     assert purpose_provider_ref("payout:stl_123 | 2026-03-01-2026-03-31 | PAYOUT") == "stl_123"
 
 
-def test_analysis_preselects_exact_provider_wix_invoice_match() -> None:
+def test_analysis_preselects_exact_provider_wix_invoice_match(tmp_path: Path) -> None:
     sevdesk = _Sevdesk()
-    service = PaymentClearingService(
-        stripe=_Provider([_payment()]),  # type: ignore[arg-type]
-        mollie=_Provider([]),  # type: ignore[arg-type]
-        wix=_Wix(),  # type: ignore[arg-type]
-        sevdesk=sevdesk,  # type: ignore[arg-type]
-    )
+    service = _service(sevdesk, [_payment()], tmp_path)
 
     analysis = service.analyze(date(2026, 5, 1), date(2026, 5, 31))
 
@@ -108,17 +124,13 @@ def test_analysis_preselects_exact_provider_wix_invoice_match() -> None:
     assert row.selected is True
     assert row.order_number == "12345"
     assert row.invoice_number == "RE-100"
+    assert analysis.run_id
 
 
-def test_amount_mismatch_requires_manual_review() -> None:
+def test_amount_mismatch_requires_manual_review(tmp_path: Path) -> None:
     sevdesk = _Sevdesk()
     sevdesk.invoice = InvoiceRecord(7, "RE-100", "12345", money("30.00"), 200, "Anna")
-    service = PaymentClearingService(
-        stripe=_Provider([_payment()]),  # type: ignore[arg-type]
-        mollie=_Provider([]),  # type: ignore[arg-type]
-        wix=_Wix(),  # type: ignore[arg-type]
-        sevdesk=sevdesk,  # type: ignore[arg-type]
-    )
+    service = _service(sevdesk, [_payment()], tmp_path)
 
     row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
 
@@ -127,14 +139,9 @@ def test_amount_mismatch_requires_manual_review() -> None:
     assert "Betrag" in row.reason
 
 
-def test_confirmed_batch_imports_then_books_once() -> None:
+def test_confirmed_batch_imports_then_books_once(tmp_path: Path) -> None:
     sevdesk = _Sevdesk()
-    service = PaymentClearingService(
-        stripe=_Provider([_payment()]),  # type: ignore[arg-type]
-        mollie=_Provider([]),  # type: ignore[arg-type]
-        wix=_Wix(),  # type: ignore[arg-type]
-        sevdesk=sevdesk,  # type: ignore[arg-type]
-    )
+    service = _service(sevdesk, [_payment()], tmp_path)
     row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
 
     result = service.book_selected([row])
@@ -143,9 +150,11 @@ def test_confirmed_batch_imports_then_books_once() -> None:
     assert len(sevdesk.created) == 1
     assert len(sevdesk.booked) == 1
     assert sevdesk.booked[0]["transaction_id"] == 99
+    assert len(list(tmp_path.glob("clearing_analysis_*.json"))) == 1
+    assert len(list(tmp_path.glob("clearing_booking_*.json"))) == 1
 
 
-def test_booking_reuses_existing_transaction_instead_of_importing_duplicate() -> None:
+def test_booking_reuses_existing_transaction_instead_of_importing_duplicate(tmp_path: Path) -> None:
     sevdesk = _Sevdesk()
     sevdesk.existing = SevdeskTransaction(
         55,
@@ -155,12 +164,7 @@ def test_booking_reuses_existing_transaction_instead_of_importing_duplicate() ->
         "order:12345 | stripe:ch_1 | PAYMENT",
         100,
     )
-    service = PaymentClearingService(
-        stripe=_Provider([_payment()]),  # type: ignore[arg-type]
-        mollie=_Provider([]),  # type: ignore[arg-type]
-        wix=_Wix(),  # type: ignore[arg-type]
-        sevdesk=sevdesk,  # type: ignore[arg-type]
-    )
+    service = _service(sevdesk, [_payment()], tmp_path)
     row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
 
     result = service.book_selected([row])
@@ -168,3 +172,45 @@ def test_booking_reuses_existing_transaction_instead_of_importing_duplicate() ->
     assert result.success_count == 1
     assert sevdesk.created == []
     assert sevdesk.booked[0]["transaction_id"] == 55
+
+
+def test_booking_does_not_reuse_same_ref_with_wrong_amount(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    sevdesk.existing = SevdeskTransaction(
+        55,
+        11,
+        money("30.00"),
+        datetime(2026, 5, 10, tzinfo=VIENNA),
+        "order:12345 | stripe:ch_1 | PAYMENT",
+        100,
+    )
+    service = _service(sevdesk, [_payment()], tmp_path)
+    row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
+
+    result = service.book_selected([row])
+
+    assert result.success_count == 1
+    assert len(sevdesk.created) == 1
+    assert sevdesk.booked[0]["transaction_id"] == 99
+
+
+def test_refund_with_invoice_is_visible_but_not_preselected(tmp_path: Path) -> None:
+    refund = ProviderTransaction(
+        provider="stripe",
+        provider_ref="re_1",
+        provider_order_id="pi_1",
+        kind=TransactionKind.REFUND,
+        amount=money("-29.90"),
+        created_at=datetime(2026, 5, 10, 12, 0, tzinfo=VIENNA),
+        customer="Anna",
+    )
+    sevdesk = _Sevdesk()
+    sevdesk.invoice = InvoiceRecord(7, "RE-100", "Wix | 12345", money("-29.90"), 200, "Anna")
+    service = _service(sevdesk, [refund], tmp_path)
+
+    row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
+
+    assert row.status == MatchStatus.REFUND_IMPORT
+    assert row.selected is False
+    assert row.is_bookable is True
+    assert "Gutschrift" in row.reason
