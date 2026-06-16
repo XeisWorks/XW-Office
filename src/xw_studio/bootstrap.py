@@ -6,6 +6,12 @@ from sqlalchemy.orm import sessionmaker as SessionMaker
 from xw_studio.core.container import Container
 from xw_studio.core.database import create_session_factory
 from xw_studio.services.calculation.service import CalculationService
+from xw_studio.services.clearing.gateways import (
+    MollieClearingGateway,
+    SevdeskClearingGateway,
+    StripeClearingGateway,
+    WixClearingGateway,
+)
 from xw_studio.services.clearing.service import PaymentClearingService
 from xw_studio.services.crm.service import CrmService
 from xw_studio.services.daily_business.service import DailyBusinessService
@@ -169,12 +175,29 @@ def register_default_services(container: Container) -> None:
             payload_service=c.resolve(UvaPayloadService),
         ),
     )
-    container.register(
-        PaymentClearingService,
-        lambda c: PaymentClearingService(
+    def build_payment_clearing(c: Container) -> PaymentClearingService:
+        secrets = c.resolve(SecretService)
+        stripe_key = (
+            secrets.get_secret("STRIPE_SECRET_KEY")
+            or secrets.get_secret("STRIPE_API_KEY")
+        )
+        mollie_token = (
+            secrets.get_secret("MOLLIE_ACCESS_TOKEN")
+            or secrets.get_secret("MOLLIE_OAUTH_TOKEN")
+            or secrets.get_secret("MOLLIE_API_KEY")
+        )
+        return PaymentClearingService(
             c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
-        ),
-    )
+            stripe=StripeClearingGateway(stripe_key),
+            mollie=MollieClearingGateway(mollie_token),
+            wix=WixClearingGateway(
+                secrets.get_secret("WIX_API_KEY"),
+                secrets.get_secret("WIX_SITE_ID"),
+            ),
+            sevdesk=SevdeskClearingGateway(c.resolve(SevdeskConnection)),
+        )
+
+    container.register(PaymentClearingService, build_payment_clearing)
     container.register(
         ExpenseAuditService,
         lambda c: ExpenseAuditService(

@@ -1,0 +1,346 @@
+"""PySide6 payment-clearing workflow."""
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import date
+from typing import TYPE_CHECKING, cast
+
+from PySide6.QtCore import QDate, Qt
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QDateEdit,
+    QHBoxLayout,
+    QHeaderView,
+    QInputDialog,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from xw_studio.core.worker import BackgroundWorker
+from xw_studio.services.clearing import (
+    BookingBatchResult,
+    ClearingAnalysis,
+    ClearingCandidate,
+    PaymentClearingService,
+)
+from xw_studio.ui.widgets.search_bar import SearchBar
+
+if TYPE_CHECKING:
+    from xw_studio.core.container import Container
+
+
+class PaymentClearingView(QWidget):
+    """Analyze many payments, review exceptions, and confirm one booking batch."""
+
+    COL_SELECT = 0
+    COL_PROVIDER = 1
+    COL_KIND = 2
+    COL_DATE = 3
+    COL_REF = 4
+    COL_ORDER = 5
+    COL_INVOICE = 6
+    COL_CUSTOMER = 7
+    COL_AMOUNT = 8
+    COL_STATUS = 9
+    COL_REASON = 10
+
+    def __init__(self, container: Container, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._container = container
+        self._service = container.resolve(PaymentClearingService)
+        self._worker: BackgroundWorker | None = None
+        self._candidates: list[ClearingCandidate] = []
+        self._visible_ids: list[str] = []
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        title = QLabel("Zahlungsclearing")
+        title.setStyleSheet("font-size: 20px; font-weight: bold;")
+        layout.addWidget(title)
+        layout.addWidget(QLabel(self._service.describe()))
+
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Von:"))
+        self._start = QDateEdit()
+        self._start.setCalendarPopup(True)
+        controls.addWidget(self._start)
+        controls.addWidget(QLabel("Bis:"))
+        self._end = QDateEdit()
+        self._end.setCalendarPopup(True)
+        controls.addWidget(self._end)
+        today = date.today()
+        first_this_month = today.replace(day=1)
+        previous_end = first_this_month.fromordinal(first_this_month.toordinal() - 1)
+        previous_start = previous_end.replace(day=1)
+        self._start.setDate(QDate(previous_start.year, previous_start.month, previous_start.day))
+        self._end.setDate(QDate(previous_end.year, previous_end.month, previous_end.day))
+
+        self._analyze_btn = QPushButton("Zahlungen analysieren")
+        self._analyze_btn.clicked.connect(self._analyze)
+        controls.addWidget(self._analyze_btn)
+        self._select_all_btn = QPushButton("Alle buchbaren auswaehlen")
+        self._select_all_btn.clicked.connect(lambda: self._set_all_bookable(True))
+        controls.addWidget(self._select_all_btn)
+        deselect = QPushButton("Auswahl aufheben")
+        deselect.clicked.connect(lambda: self._set_all_bookable(False))
+        controls.addWidget(deselect)
+        self._book_btn = QPushButton("Auswahl gesammelt buchen")
+        self._book_btn.clicked.connect(self._book)
+        controls.addWidget(self._book_btn)
+        layout.addLayout(controls)
+
+        filter_row = QHBoxLayout()
+        self._search = SearchBar("Provider, Referenz, Bestellung, Rechnung oder Kunde")
+        self._search.search_changed.connect(lambda _text: self._refresh_table())
+        filter_row.addWidget(self._search)
+        self._manual_btn = QPushButton("Offenen Fall Rechnung zuordnen")
+        self._manual_btn.clicked.connect(self._assign_invoice)
+        filter_row.addWidget(self._manual_btn)
+        layout.addLayout(filter_row)
+
+        self._table = QTableWidget(0, 11)
+        self._table.setHorizontalHeaderLabels(
+            [
+                "",
+                "Provider",
+                "Art",
+                "Datum",
+                "Provider-Ref",
+                "Wix",
+                "sevDesk",
+                "Kunde",
+                "Betrag",
+                "Status",
+                "Hinweis",
+            ]
+        )
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.itemChanged.connect(self._on_item_changed)
+        header = self._table.horizontalHeader()
+        header.setSectionResizeMode(self.COL_CUSTOMER, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(self.COL_REASON, QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self._table)
+
+        self._summary = QLabel("Noch keine Analyse ausgefuehrt.")
+        layout.addWidget(self._summary)
+        self._set_running(False)
+
+    def _set_running(self, running: bool) -> None:
+        self._analyze_btn.setEnabled(not running)
+        self._book_btn.setEnabled(not running and bool(self._candidates))
+        self._manual_btn.setEnabled(not running and bool(self._candidates))
+        self._select_all_btn.setEnabled(not running and bool(self._candidates))
+
+    def _emit_worker_progress(self, value: int, text: str) -> None:
+        worker = self._worker
+        if worker is not None:
+            worker.signals.progress.emit(value, text)
+
+    def _analyze(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
+        start = cast(date, self._start.date().toPython())
+        end = cast(date, self._end.date().toPython())
+        if start > end:
+            QMessageBox.warning(self, "Zahlungsclearing", "Das Startdatum liegt nach dem Enddatum.")
+            return
+        self._set_running(True)
+        self._summary.setText("Analyse wird vorbereitet...")
+
+        def job() -> ClearingAnalysis:
+            return self._service.analyze(
+                start,
+                end,
+                progress=self._emit_worker_progress,
+            )
+
+        self._worker = BackgroundWorker(job)
+        self._worker.signals.progress.connect(
+            lambda value, text: self._summary.setText(f"{text} ({value} %)")
+        )
+        self._worker.signals.result.connect(self._on_analysis)
+        self._worker.signals.error.connect(
+            lambda exc: QMessageBox.critical(self, "Zahlungsclearing", str(exc))
+        )
+        self._worker.signals.finished.connect(lambda: self._set_running(False))
+        self._worker.start()
+
+    def _on_analysis(self, result: object) -> None:
+        if not isinstance(result, ClearingAnalysis):
+            return
+        self._candidates = list(result.candidates)
+        self._refresh_table()
+        warning = f" | Warnungen: {len(result.warnings)}" if result.warnings else ""
+        self._summary.setToolTip("\n".join(result.warnings))
+        self._summary.setText(
+            f"{len(self._candidates)} Vorgange | {result.ready_count} automatisch buchbar | "
+            f"{result.open_count} offen{warning}"
+        )
+
+    def _filtered(self) -> list[ClearingCandidate]:
+        needle = self._search.text().casefold().strip()
+        if not needle:
+            return self._candidates
+        return [
+            row
+            for row in self._candidates
+            if needle
+            in " ".join(
+                (
+                    row.provider,
+                    row.kind.value,
+                    row.provider_ref,
+                    row.order_number,
+                    row.invoice_number,
+                    row.customer,
+                    row.status.value,
+                    row.reason,
+                )
+            ).casefold()
+        ]
+
+    def _refresh_table(self) -> None:
+        rows = self._filtered()
+        self._visible_ids = [row.candidate_id for row in rows]
+        self._table.blockSignals(True)
+        self._table.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            check = QTableWidgetItem()
+            check.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+            check.setCheckState(Qt.CheckState.Checked if row.selected else Qt.CheckState.Unchecked)
+            if not row.is_bookable:
+                check.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            check.setData(Qt.ItemDataRole.UserRole, row.candidate_id)
+            self._table.setItem(index, self.COL_SELECT, check)
+            values = (
+                row.provider.title(),
+                row.kind.value,
+                row.payment_date.strftime("%d.%m.%Y"),
+                row.provider_ref,
+                row.order_number,
+                row.invoice_number,
+                row.customer,
+                f"{row.amount:.2f} EUR",
+                row.status.value,
+                row.reason,
+            )
+            for column, value in enumerate(values, start=1):
+                item = QTableWidgetItem(value)
+                if column == self.COL_AMOUNT:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self._table.setItem(index, column, item)
+        self._table.blockSignals(False)
+
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        if item.column() != self.COL_SELECT:
+            return
+        candidate_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        selected = item.checkState() == Qt.CheckState.Checked
+        self._candidates = [
+            replace(row, selected=selected) if row.candidate_id == candidate_id and row.is_bookable else row
+            for row in self._candidates
+        ]
+
+    def _set_all_bookable(self, selected: bool) -> None:
+        self._candidates = [
+            replace(row, selected=selected) if row.is_bookable else replace(row, selected=False)
+            for row in self._candidates
+        ]
+        self._refresh_table()
+
+    def _selected_candidate(self) -> ClearingCandidate | None:
+        row_index = self._table.currentRow()
+        if row_index < 0 or row_index >= len(self._visible_ids):
+            return None
+        candidate_id = self._visible_ids[row_index]
+        return next((row for row in self._candidates if row.candidate_id == candidate_id), None)
+
+    def _assign_invoice(self) -> None:
+        candidate = self._selected_candidate()
+        if candidate is None:
+            QMessageBox.information(self, "Zahlungsclearing", "Bitte zuerst eine Zeile markieren.")
+            return
+        invoice_number, accepted = QInputDialog.getText(
+            self,
+            "Rechnung zuordnen",
+            "sevDesk-Rechnungsnummer:",
+            text=candidate.invoice_number,
+        )
+        if not accepted or not invoice_number.strip():
+            return
+        try:
+            updated = self._service.assign_invoice(candidate, invoice_number)
+        except Exception as exc:
+            QMessageBox.warning(self, "Zahlungsclearing", str(exc))
+            return
+        self._candidates = [
+            updated if row.candidate_id == candidate.candidate_id else row for row in self._candidates
+        ]
+        self._refresh_table()
+
+    def _book(self) -> None:
+        selected = [row for row in self._candidates if row.selected and row.is_bookable]
+        if not selected:
+            QMessageBox.information(self, "Zahlungsclearing", "Es sind keine buchbaren Zeilen ausgewaehlt.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Zahlungen gesammelt buchen",
+            f"{len(selected)} Vorgange jetzt verbindlich in sevDesk buchen/importieren?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._set_running(True)
+
+        def job() -> BookingBatchResult:
+            return self._service.book_selected(
+                self._candidates,
+                progress=self._emit_worker_progress,
+            )
+
+        self._worker = BackgroundWorker(job)
+        self._worker.signals.progress.connect(
+            lambda value, text: self._summary.setText(f"{text} ({value} %)")
+        )
+        self._worker.signals.result.connect(self._on_booking_result)
+        self._worker.signals.error.connect(
+            lambda exc: QMessageBox.critical(self, "Zahlungsclearing", str(exc))
+        )
+        self._worker.signals.finished.connect(lambda: self._set_running(False))
+        self._worker.start()
+
+    def _on_booking_result(self, result: object) -> None:
+        if not isinstance(result, BookingBatchResult):
+            return
+        by_id = {item.candidate_id: item for item in result.items}
+        self._candidates = [
+            replace(
+                row,
+                selected=False,
+                status=by_id[row.candidate_id].status,
+                reason=by_id[row.candidate_id].message,
+                transaction_id=by_id[row.candidate_id].transaction_id,
+            )
+            if row.candidate_id in by_id
+            else row
+            for row in self._candidates
+        ]
+        self._refresh_table()
+        self._summary.setText(
+            f"Buchung abgeschlossen: {result.success_count} erfolgreich, "
+            f"{result.failure_count} fehlgeschlagen."
+        )
+        QMessageBox.information(self, "Zahlungsclearing", self._summary.text())
+
+    def has_active_flow(self) -> bool:
+        return self._worker is not None and self._worker.isRunning()

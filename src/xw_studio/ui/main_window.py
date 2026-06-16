@@ -119,6 +119,7 @@ class MainWindow(QMainWindow):
         self._register_page_factory(ModuleKey.PRODUCTS, self._build_products_page)
         self._register_page_factory(ModuleKey.CRM, self._build_crm_page)
         self._register_page_factory(ModuleKey.TAXES, self._build_taxes_page)
+        self._register_page_factory(ModuleKey.CLEARING, self._build_clearing_page)
         self._register_page_factory(ModuleKey.STATISTICS, self._build_statistics_page)
         self._register_page_factory(ModuleKey.CALCULATION, self._build_calculation_page)
         self._register_page_factory(ModuleKey.LAYOUT, self._build_layout_page)
@@ -182,6 +183,11 @@ class MainWindow(QMainWindow):
         from xw_studio.ui.modules.taxes.view import TaxesView
 
         return TaxesView(self._container)
+
+    def _build_clearing_page(self) -> QWidget:
+        from xw_studio.ui.modules.payment_clearing.view import PaymentClearingView
+
+        return PaymentClearingView(self._container)
 
     def _build_statistics_page(self) -> QWidget:
         from xw_studio.ui.modules.statistics.view import StatisticsView

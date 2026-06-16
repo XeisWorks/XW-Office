@@ -11,6 +11,7 @@ class ModuleKey(str, Enum):
     PRODUCTS = "products"
     CRM = "crm"
     TAXES = "taxes"
+    CLEARING = "clearing"
     STATISTICS = "statistics"
     LAYOUT = "layout"
     CALCULATION = "calculation"

@@ -54,7 +54,6 @@ class TaxesView(QWidget):
         tabs = QTabWidget()
 
         tabs.addTab(self._build_uva_tab(), "UVA")
-        tabs.addTab(self._build_clearing_tab(), "Clearing")
         tabs.addTab(self._build_expenses_tab(), "Ausgaben")
         outer.addWidget(tabs)
 
