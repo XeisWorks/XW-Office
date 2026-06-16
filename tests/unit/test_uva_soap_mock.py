@@ -130,6 +130,18 @@ def test_uva_service_builds_submission_payload_from_kennzahlen() -> None:
     assert payload["kennzahlen"]["KZ000"] == "123.45"
 
 
+def test_uva_service_describes_single_cash_basis_calculation() -> None:
+    mock = MockUvaSoapBackend()
+    client = FinanzOnlineClient(AppConfig(), uva_backend=mock)
+    service = UvaService(AppConfig(), client, payload_service=_PayloadServiceStub())  # type: ignore[arg-type]
+
+    text = service.describe_capabilities()
+
+    assert "IST-Monatsberechnung" in text
+    assert "Aggregator" in text
+    assert "Phase-1/2" not in text
+
+
 def test_uva_service_submit_month_uses_built_submission_payload() -> None:
     mock = MockUvaSoapBackend()
     client = FinanzOnlineClient(AppConfig(), uva_backend=mock)

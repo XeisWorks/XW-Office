@@ -4,7 +4,7 @@ from __future__ import annotations
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 
 from xw_studio.services.finanzonline.uva_models import UvaKennzahlen, UvaPayloadResult
-from xw_studio.services.finanzonline.uva_preview import UvaPreviewGroup, UvaPreviewService
+from xw_studio.services.finanzonline.uva_preview import UvaPreviewGroup, UvaPreviewResult, UvaPreviewService
 
 _DECIMAL_2 = Decimal("0.01")
 _FOREIGN_MARKERS = (
@@ -41,6 +41,9 @@ class UvaPayloadService:
 
     def build_payload(self, year: int, month: int) -> UvaPayloadResult:
         preview = self._preview_service.build_preview(year, month)
+        return self.build_payload_from_preview(preview)
+
+    def build_payload_from_preview(self, preview: UvaPreviewResult) -> UvaPayloadResult:
         values: dict[str, Decimal] = {key: Decimal("0.00") for key in UvaKennzahlen.model_fields}
         warnings: list[str] = list(preview.warnings)
 
@@ -70,8 +73,8 @@ class UvaPayloadService:
 
         kennzahlen = UvaKennzahlen(**{key: _fmt(value) for key, value in values.items()})
         return UvaPayloadResult(
-            year=year,
-            month=month,
+            year=preview.year,
+            month=preview.month,
             kennzahlen=kennzahlen,
             zahlbetrag=_fmt(zahlbetrag),
             warnings=warnings,

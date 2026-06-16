@@ -353,6 +353,47 @@ def test_preview_splits_mixed_tax_document_by_positions() -> None:
     assert payload.kennzahlen.A022 == "17.30"
 
 
+class _PartialPaidPositionProvider:
+    def load_sales_documents(self, year: int, month: int) -> list[dict[str, object]]:
+        assert (year, month) == (2026, 3)
+        return [
+            {
+                "id": 450,
+                "invoiceNumber": "RE-PART-POS",
+                "status": "750",
+                "xw_payment_date": "2026-03-16",
+                "xw_paid_amount": "94.23",
+                "taxText": "0",
+                "sumGross": "188.46",
+                "sumNet": "167.30",
+                "sumTax": "21.16",
+                "xw_positions": [
+                    {"sumNetAccounting": "150.00", "sumTaxAccounting": "15.00", "taxRate": "10"},
+                    {"sumNetAccounting": "17.30", "sumTaxAccounting": "3.46", "taxRate": "20"},
+                ],
+            }
+        ]
+
+    def load_purchase_documents(self, year: int, month: int) -> list[dict[str, object]]:
+        assert (year, month) == (2026, 3)
+        return []
+
+
+def test_partial_payment_scales_position_amounts() -> None:
+    preview_service = UvaPreviewService(_PartialPaidPositionProvider())
+    payload_service = UvaPayloadService(preview_service)
+
+    preview = preview_service.build_preview(2026, 3)
+    payload = payload_service.build_payload(2026, 3)
+    groups = {group.label: group for group in preview.sales.groups}
+
+    assert groups["MIT 10% MEHRWERTSTEUER"].net_amount == "75.00"
+    assert groups["MIT 20% MEHRWERTSTEUER"].net_amount == "8.65"
+    assert payload.kennzahlen.A029 == "75.00"
+    assert payload.kennzahlen.A022 == "8.65"
+    assert any("Teilzahlung" in warning for warning in payload.warnings)
+
+
 class _FakeResponse:
     def __init__(self, payload: dict[str, object]) -> None:
         self._payload = payload

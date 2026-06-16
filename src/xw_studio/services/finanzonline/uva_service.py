@@ -33,50 +33,58 @@ class UvaService:
         has_url = bool(self._config.database_url)
         has_fon = self._client.has_credentials()
         mode = self._client.backend_mode()
-        preview_mode = "aktiv" if self._preview_service is not None else "nicht aktiv"
-        payload_mode = "aktiv" if self._payload_service is not None else "nicht aktiv"
+        calculation_mode = (
+            "aktiv"
+            if self._preview_service is not None and self._payload_service is not None
+            else "nicht aktiv"
+        )
         return (
-            "UVA-Modul: Phase-1/2-Vorschau + SOAP-Anbindung (zeep) pro Meldungstyp.\n"
+            "UVA-Modul: eine IST-Monatsberechnung aus sevDesk-Zahlungsdaten; "
+            "FinanzOnline nutzt dieselben Kennzahlen.\n"
             f"Backend-Modus: {mode}\n"
-            f"Preview-Berechnung: {preview_mode}\n"
-            f"Kennzahlen-Berechnung: {payload_mode}\n"
+            f"IST-Berechnung: {calculation_mode}\n"
+            "sevDesk-Aggregator: nicht als Berechnungsquelle verwendet\n"
             f"PostgreSQL: {'konfiguriert' if has_url else 'nicht konfiguriert (nur .env)'}\n"
             f"FinanzOnline-Zugangsdaten: {'vorhanden' if has_fon else 'fehlen (Einstellungen > Token)'}"
         )
 
-    def build_preview(self, year: int, month: int) -> dict[str, Any]:
-        """Build phase-1 monthly preview for the UI."""
-        if self._preview_service is None:
+    def calculate_month(self, year: int, month: int) -> dict[str, Any]:
+        """Build the single cash-basis monthly UVA calculation for UI and submission."""
+        if self._preview_service is None or self._payload_service is None:
             return {
                 "jahr": year,
                 "monat": month,
                 "status": "entwurf",
                 "quelle": "xw_studio",
-                "hinweis": "Keine Preview-Quelle konfiguriert.",
+                "hinweis": "Keine IST-Berechnung konfiguriert.",
             }
         preview = self._preview_service.build_preview(year, month)
+        calculated = self._payload_service.build_payload_from_preview(preview)
         payload: dict[str, Any] = {
             "jahr": year,
             "monat": month,
             "status": "entwurf",
             "quelle": "xw_studio",
+            "berechnungsart": "IST",
             "preview": preview.model_dump(),
             "preview_text": self._preview_service.render_preview_text(preview),
+            "kennzahlen": calculated.kennzahlen.model_dump(),
+            "zahlbetrag": calculated.zahlbetrag,
+            "warnings": list(calculated.warnings),
+            "kennzahlen_text": self._payload_service.render_kennzahlen_text(calculated),
         }
-        if self._payload_service is not None:
-            calculated = self._payload_service.build_payload(year, month)
-            payload["kennzahlen"] = calculated.kennzahlen.model_dump()
-            payload["zahlbetrag"] = calculated.zahlbetrag
-            payload["warnings"] = list(calculated.warnings)
-            payload["kennzahlen_text"] = self._payload_service.render_kennzahlen_text(calculated)
         return payload
 
+    def build_preview(self, year: int, month: int) -> dict[str, Any]:
+        """Backward-compatible alias for tests and older UI code."""
+        return self.calculate_month(year, month)
+
     def mock_build_payload(self, year: int, month: int) -> dict[str, Any]:
-        """Phase-1 preview payload for UI/tests; kept under the legacy method name."""
+        """Backward-compatible alias for UI/tests; no mock calculation is used."""
         try:
-            return self.build_preview(year, month)
+            return self.calculate_month(year, month)
         except Exception as exc:
-            logger.exception("UVA preview failed for %s-%s", year, month)
+            logger.exception("UVA calculation failed for %s-%s", year, month)
             return {
                 "jahr": year,
                 "monat": month,

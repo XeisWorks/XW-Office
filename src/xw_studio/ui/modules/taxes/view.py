@@ -80,11 +80,11 @@ class TaxesView(QWidget):
         row.addStretch()
         layout.addLayout(row)
 
-        preview = QPushButton("Preview-Payload erzeugen")
+        preview = QPushButton("UVA berechnen")
         submit = QPushButton("UVA senden (SOAP)")
 
         def on_preview() -> None:
-            payload = uva.mock_build_payload(year.value(), month.value())
+            payload = uva.calculate_month(year.value(), month.value())
             preview_text = str(payload.get("preview_text") or "").strip()
             kennzahlen_text = str(payload.get("kennzahlen_text") or "").strip()
             combined = "\n\n".join(part for part in [preview_text, kennzahlen_text] if part)

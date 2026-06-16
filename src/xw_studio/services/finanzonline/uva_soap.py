@@ -129,12 +129,12 @@ class ZeepUvaSoapBackend:
             return UvaSubmitResult(ok=True, reference_id=None, message=raw)
 
         ok = bool(getattr(raw, "ok", True))
-        ref = getattr(raw, "reference_id", None) or getattr(raw, "reference", None)
-        msg = getattr(raw, "message", None) or getattr(raw, "msg", None)
-        if ref is not None or msg is not None:
+        raw_ref = getattr(raw, "reference_id", None) or getattr(raw, "reference", None)
+        raw_msg = getattr(raw, "message", None) or getattr(raw, "msg", None)
+        if raw_ref is not None or raw_msg is not None:
             return UvaSubmitResult(
                 ok=ok,
-                reference_id=None if ref is None else str(ref),
-                message=str(msg or "accepted"),
+                reference_id=None if raw_ref is None else str(raw_ref),
+                message=str(raw_msg or "accepted"),
             )
         return UvaSubmitResult(ok=True, reference_id=None, message="accepted")

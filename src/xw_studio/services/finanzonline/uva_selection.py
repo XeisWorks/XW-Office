@@ -229,8 +229,33 @@ def _scale_document_to_paid_ratio(document: dict[str, Any]) -> tuple[dict[str, A
     ):
         if key in scaled and scaled.get(key) not in (None, ""):
             scaled[key] = _fmt(_to_decimal(scaled.get(key)) * ratio)
+    positions = scaled.get("xw_positions")
+    if isinstance(positions, list):
+        scaled["xw_positions"] = [
+            _scale_position_to_ratio(position, ratio) if isinstance(position, dict) else position
+            for position in positions
+        ]
     scaled["xw_paid_ratio"] = _fmt(ratio)
     return scaled, True
+
+
+def _scale_position_to_ratio(position: dict[str, Any], ratio: Decimal) -> dict[str, Any]:
+    scaled = dict(position)
+    for key in (
+        "sumGross",
+        "sumGrossAccounting",
+        "sumNet",
+        "sumNetAccounting",
+        "sumTax",
+        "sumTaxAccounting",
+        "amountNet",
+        "priceNet",
+        "priceNetAccounting",
+        "net",
+    ):
+        if key in scaled and scaled.get(key) not in (None, ""):
+            scaled[key] = _fmt(_to_decimal(scaled.get(key)) * ratio)
+    return scaled
 
 
 def _extract_paid_amount(document: dict[str, Any], gross_amount: Decimal) -> Decimal:

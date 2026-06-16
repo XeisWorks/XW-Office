@@ -158,9 +158,14 @@ class SevdeskUvaPreviewProvider:
                 "/Invoice",
                 params={"startDate": start_ts, "endDate": end_ts, "showAll": "true"},
             ),
-            self._load_resource(
-                "/Invoice",
-                params={"startPayDate": start_ts, "endPayDate": end_ts, "showAll": "true"},
+            self._filter_documents_by_period_date(
+                self._load_resource(
+                    "/Invoice",
+                    params={"startPayDate": start_ts, "endPayDate": end_ts, "showAll": "true"},
+                ),
+                year,
+                month,
+                _PAYMENT_DATE_KEYS,
             ),
             self._load_period_overlay("Invoice", year, month, statuses=("750", "1000")),
             self._load_period_overlay(
@@ -176,9 +181,14 @@ class SevdeskUvaPreviewProvider:
                 "/CreditNote",
                 params={"startDate": start_ts, "endDate": end_ts, "showAll": "true"},
             ),
-            self._load_resource(
-                "/CreditNote",
-                params={"startPayDate": start_ts, "endPayDate": end_ts, "showAll": "true"},
+            self._filter_documents_by_period_date(
+                self._load_resource(
+                    "/CreditNote",
+                    params={"startPayDate": start_ts, "endPayDate": end_ts, "showAll": "true"},
+                ),
+                year,
+                month,
+                _PAYMENT_DATE_KEYS,
             ),
             self._load_period_overlay("CreditNote", year, month, statuses=("750", "1000")),
         )
@@ -212,9 +222,14 @@ class SevdeskUvaPreviewProvider:
                 "/Voucher",
                 params={"year": str(year), "month": str(month), "showAll": "true"},
             ),
-            self._load_resource(
-                "/Voucher",
-                params={"startPayDate": start_ts, "endPayDate": end_ts, "showAll": "true"},
+            self._filter_documents_by_period_date(
+                self._load_resource(
+                    "/Voucher",
+                    params={"startPayDate": start_ts, "endPayDate": end_ts, "showAll": "true"},
+                ),
+                year,
+                month,
+                _PAYMENT_DATE_KEYS,
             ),
             self._load_period_overlay("Voucher", year, month, statuses=("150", "750", "1000")),
         )
@@ -286,6 +301,26 @@ class SevdeskUvaPreviewProvider:
             prepared = _with_negative_amounts(enriched, _DOCUMENT_AMOUNT_KEYS) if negative_amounts else enriched
             result.append(self._prepare_document(resource, prepared))
         return result
+
+    @staticmethod
+    def _filter_documents_by_period_date(
+        documents: list[dict[str, Any]],
+        year: int,
+        month: int,
+        date_keys: tuple[str, ...],
+    ) -> list[dict[str, Any]]:
+        keep_undated = len(documents) <= 500
+        filtered: list[dict[str, Any]] = []
+        for document in documents:
+            if not isinstance(document, dict):
+                continue
+            parsed_dates = [_parse_date(document.get(key)) for key in date_keys]
+            if any(parsed is not None and parsed.year == year and parsed.month == month for parsed in parsed_dates):
+                filtered.append(document)
+                continue
+            if keep_undated and all(parsed is None for parsed in parsed_dates):
+                filtered.append(document)
+        return filtered
 
     def _apply_tax_text_fallback(self, document: dict[str, Any]) -> None:
         raw = str(document.get("taxText") or "").strip()
