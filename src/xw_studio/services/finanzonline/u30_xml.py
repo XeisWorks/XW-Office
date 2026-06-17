@@ -27,7 +27,9 @@ def default_u30_xsd_path() -> Path:
 def parse_fastnr(value: str) -> str:
     digits = re.sub(r"\D", "", value or "")
     if len(digits) != 9:
-        raise ValueError("FINANZONLINE_FASTNR / FINANZONLINE_STEUERNUMMER muss 9-stellig sein.")
+        raise ValueError(
+            "FINANZONLINE_FASTNR / FINANZONLINE_STEUERNUMMER / FON_STEUERNUMMER muss 9-stellig sein."
+        )
     return digits
 
 

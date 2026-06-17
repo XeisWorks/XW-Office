@@ -199,7 +199,7 @@ class FinanzOnlineFileUploadBackend:
         if not self._hersteller_id:
             missing.append("FINANZONLINE_UID / FON_HERSTELLER_ID")
         if not self._fastnr:
-            missing.append("FINANZONLINE_FASTNR / FINANZONLINE_STEUERNUMMER")
+            missing.append("FINANZONLINE_FASTNR / FINANZONLINE_STEUERNUMMER / FON_STEUERNUMMER")
         if missing:
             raise UvaSoapUnavailableError("FinanzOnline U30 nicht konfiguriert. Fehlend: " + ", ".join(missing))
 

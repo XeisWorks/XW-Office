@@ -75,16 +75,13 @@ Neue/erweiterte Anschlussstellen:
 
 ## Konfiguration
 
-Vorhanden:
+Erforderlich:
 
 - `FON_TEILNEHMER_ID`
 - `FON_BENUTZER_ID`
 - `FON_PIN`
 - `FINANZONLINE_UID`
-
-Noch fuer echte U30-Sendung erforderlich:
-
-- `FINANZONLINE_FASTNR` oder `FINANZONLINE_STEUERNUMMER`
+- `FINANZONLINE_FASTNR`, `FINANZONLINE_STEUERNUMMER` oder `FON_STEUERNUMMER`
 
 Hinweis:
 
@@ -144,7 +141,7 @@ All checks passed
 Success: no issues found
 ```
 
-Live-Konfigurationscheck:
+Live-Konfigurationscheck vor FASTNR-Nachtrag:
 
 - Backend-Modus aktuell: `mock/off`, weil die FASTNR fehlt
 - Login-Credentials: vorhanden
@@ -160,8 +157,33 @@ Live-FinanzOnline-Sessiontest:
 - `logout`: `rc=0`
 - Upload: nicht ausgefuehrt
 
-Damit ist der technische FinanzOnline-Zugang grundsaetzlich funktionsfaehig. Fuer eine
-echte U30-Testuebermittlung fehlt nur noch die 9-stellige FASTNR.
+Damit war der technische FinanzOnline-Zugang grundsaetzlich funktionsfaehig. Zu diesem
+Zeitpunkt fehlte fuer eine echte U30-Testuebermittlung nur noch die 9-stellige FASTNR.
+
+## Nachtrag 17.06.2026: `FON_STEUERNUMMER`
+
+`FON_STEUERNUMMER` wurde als zusaetzlicher FASTNR-Alias integriert:
+
+- `load_config()` liest `FON_STEUERNUMMER` in `finanzonline.fastnr`.
+- `FinanzOnlineClient.fastnr()` liest den Alias aus SecretService und `.env`.
+- Fehlermeldungen nennen den Alias explizit.
+- Unit-Test prueft, dass `FON_STEUERNUMMER` das FileUpload-Backend aktiviert.
+
+Live-Konfigurationscheck nach FASTNR-Nachtrag:
+
+- Backend-Modus: `fileupload/test`
+- Login-Credentials: vorhanden
+- FinanzOnline-U30-Sendung: vollstaendig konfiguriert
+- FASTNR: 9-stellig erkannt und maskiert ausgegeben
+
+Live-U30-Testuebermittlung fuer Mai 2026:
+
+- Berechnungsquelle: IST-Monatsberechnung aus sevDesk-Zahlungsdaten
+- Upload-Modus: `uebermittlung=T`
+- XML-XSD-Validierung: erfolgreich
+- FinanzOnline-Rueckmeldung: `rc=0`
+- FinanzOnline-Text: XML-File wurde gesendet, 1 Erklaerung wurde uebermittelt,
+  nur fuer Testzwecke; die Daten gelten nicht als eingebracht.
 
 ## Betriebsregel
 

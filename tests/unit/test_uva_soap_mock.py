@@ -215,7 +215,7 @@ def test_finanzonline_client_uses_fileupload_backend_with_submission_credentials
             "FON_BENUTZER_ID": "BENID1",
             "FON_PIN": "secret1",
             "FINANZONLINE_UID": "ATU12345678",
-            "FINANZONLINE_FASTNR": "989999999",
+            "FON_STEUERNUMMER": "989999999",
         }
     )
 
@@ -223,6 +223,7 @@ def test_finanzonline_client_uses_fileupload_backend_with_submission_credentials
 
     assert client.backend_mode() == "fileupload/test"
     assert client.has_submission_credentials() is True
+    assert client.fastnr() == "989999999"
 
 
 def test_uva_service_builds_submission_payload_from_kennzahlen() -> None:

@@ -246,6 +246,7 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     yaml_data.setdefault("finanzonline", {})["fastnr"] = (
         os.getenv("FINANZONLINE_FASTNR", "")
         or os.getenv("FINANZONLINE_STEUERNUMMER", "")
+        or os.getenv("FON_STEUERNUMMER", "")
         or os.getenv("FON_FASTNR", "")
         or yaml_data.setdefault("finanzonline", {}).get("fastnr", "")
     )

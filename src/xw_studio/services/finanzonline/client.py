@@ -85,6 +85,7 @@ class FinanzOnlineClient:
             value = (
                 self._secrets.get_secret("FINANZONLINE_FASTNR")
                 or self._secrets.get_secret("FINANZONLINE_STEUERNUMMER")
+                or self._secrets.get_secret("FON_STEUERNUMMER")
                 or self._secrets.get_secret("FON_FASTNR")
             )
             if value:
@@ -92,6 +93,7 @@ class FinanzOnlineClient:
         env_val = (
             os.getenv("FINANZONLINE_FASTNR", "")
             or os.getenv("FINANZONLINE_STEUERNUMMER", "")
+            or os.getenv("FON_STEUERNUMMER", "")
             or os.getenv("FON_FASTNR", "")
             or self._config.finanzonline.fastnr
             or ""
@@ -183,7 +185,7 @@ class FinanzOnlineClient:
         if not manufacturer_id:
             missing_parts.append("FINANZONLINE_UID / FON_HERSTELLER_ID")
         if not fastnr:
-            missing_parts.append("FINANZONLINE_FASTNR / FINANZONLINE_STEUERNUMMER")
+            missing_parts.append("FINANZONLINE_FASTNR / FINANZONLINE_STEUERNUMMER / FON_STEUERNUMMER")
         reason = "FinanzOnline SOAP nicht konfiguriert. Fehlend: " + ", ".join(missing_parts)
         logger.info("FinanzOnlineClient: using unconfigured/mock backend (%s)", reason)
         return UnconfiguredUvaSoapBackend(reason=reason)
