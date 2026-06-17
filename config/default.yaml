@@ -32,6 +32,7 @@ finanzonline:
   fastnr: ""
   hersteller_id: ""
   u30_xsd_path: ""
+  u13_xsd_path: ""
   test_mode: true
   submit_timeout_seconds: 30
 

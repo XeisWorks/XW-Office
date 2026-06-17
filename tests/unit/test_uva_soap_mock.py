@@ -5,6 +5,7 @@ import pytest
 
 from xw_studio.core.config import AppConfig, FinanzOnlineSection
 from xw_studio.services.finanzonline.client import FinanzOnlineClient
+from xw_studio.services.finanzonline.u13_xml import build_u13_xml, validate_u13_xml
 from xw_studio.services.finanzonline.u30_xml import build_u30_xml, validate_u30_xml
 from xw_studio.services.finanzonline.uva_models import UvaKennzahlen, UvaPayloadResult
 from xw_studio.services.finanzonline.uva_service import UvaService
@@ -15,6 +16,7 @@ from xw_studio.services.finanzonline.uva_soap import (
     UvaSubmitResult,
     ZeepUvaSoapBackend,
 )
+from xw_studio.services.finanzonline.zm_service import ZmRow
 
 
 def test_unconfigured_client_raises() -> None:
@@ -116,6 +118,23 @@ class _PayloadServiceStub:
         return f"KZ000={payload.kennzahlen.A000}"
 
 
+class _ZmServiceStub:
+    def calculate_month(self, year: int, month: int):
+        assert (year, month) == (2026, 3)
+        return type(
+            "ZmCalc",
+            (),
+            {
+                "rows": [ZmRow(uid="DE123456789", amount_eur_int=124, kind="service")],
+                "invalid": [],
+                "warnings": [],
+            },
+        )()
+
+    def render_preview_text(self, _result: object) -> str:
+        return "ZM preview"
+
+
 def test_zeep_backend_calls_operation() -> None:
     backend = ZeepUvaSoapBackend(
         wsdl_url="https://fon.example/wsdl",
@@ -151,6 +170,26 @@ def test_u30_xml_validates_against_legacy_xsd() -> None:
     assert "<ERKLAERUNG art=\"U30\">" in xml
     assert "<FASTNR>989999999</FASTNR>" in xml
     assert "<KZ000 type=\"kz\">12750.60</KZ000>" in xml
+
+
+def test_u13_xml_validates_against_legacy_xsd() -> None:
+    xml = build_u13_xml(
+        year=2026,
+        month=5,
+        rows=[
+            ZmRow(uid="DE123456789", amount_eur_int=124, kind="service"),
+            ZmRow(uid="IT12345678901", amount_eur_int=200, kind="delivery"),
+        ],
+        fastnr="989999999",
+        kundeninfo="XW-Studio ZM 2026-05",
+    )
+
+    validate_u13_xml(xml)
+
+    assert "<ERKLAERUNG art=\"U13\">" in xml
+    assert "<ANBRINGEN>U13</ANBRINGEN>" in xml
+    assert "<SOLEI>J</SOLEI>" in xml
+    assert "<UID_MS>IT12345678901</UID_MS>" in xml
 
 
 def test_fileupload_backend_logs_in_uploads_and_logs_out() -> None:
@@ -190,6 +229,42 @@ def test_fileupload_backend_logs_in_uploads_and_logs_out() -> None:
     assert upload["art"] == "U30"
     assert upload["uebermittlung"] == "T"
     assert "<KZ022 type=\"kz\">100.00</KZ022>" in str(upload["data"])
+
+
+def test_fileupload_backend_uploads_u13_zm() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def factory(wsdl: str) -> _FonClientStub:
+        if "session" in wsdl:
+            return _FonClientStub(_SessionServiceStub(calls))
+        return _FonClientStub(_UploadServiceStub(calls))
+
+    backend = FinanzOnlineFileUploadBackend(
+        session_wsdl_url="session.wsdl",
+        upload_wsdl_url="fileupload.wsdl",
+        tid="123456789012",
+        benid="BENID1",
+        pin="secret1",
+        hersteller_id="ATU12345678",
+        fastnr="989999999",
+        test_mode=True,
+        client_factory=factory,
+    )
+
+    result = backend.submit_zm(
+        {
+            "meldung": "U13",
+            "jahr": 2026,
+            "monat": 5,
+            "rows": [ZmRow(uid="DE123456789", amount_eur_int=124, kind="service").model_dump()],
+        }
+    )
+
+    assert result.ok is True
+    assert [name for name, _ in calls] == ["login", "upload", "logout"]
+    upload = calls[1][1]
+    assert upload["art"] == "U13"
+    assert "<SOLEI>J</SOLEI>" in str(upload["data"])
 
 
 def test_finanzonline_client_uses_live_backend_when_wsdl_set(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -261,6 +336,24 @@ def test_uva_service_submit_month_uses_built_submission_payload() -> None:
     assert result.ok is True
     assert mock.calls[-1]["meldung"] == "U30"
     assert mock.calls[-1]["kennzahlen"]["KZ000"] == "123.45"
+
+
+def test_uva_service_submit_month_sends_zm_after_successful_u30() -> None:
+    mock = MockUvaSoapBackend()
+    client = FinanzOnlineClient(AppConfig(), uva_backend=mock)
+    service = UvaService(
+        AppConfig(),
+        client,
+        payload_service=_PayloadServiceStub(),  # type: ignore[arg-type]
+        zm_service=_ZmServiceStub(),  # type: ignore[arg-type]
+    )
+
+    result = service.submit_month(2026, 3)
+
+    assert result.ok is True
+    assert result.zm_ok is True
+    assert [call["meldung"] for call in mock.calls] == ["U30", "U13"]
+    assert mock.calls[-1]["rows"][0]["kind"] == "service"
 
 
 def test_finanzonline_client_uses_configured_wsdl_without_env() -> None:

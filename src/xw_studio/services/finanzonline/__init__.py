@@ -24,6 +24,12 @@ from xw_studio.services.finanzonline.uva_soap import (
     UvaSubmitResult,
     ZeepUvaSoapBackend,
 )
+from xw_studio.services.finanzonline.zm_service import (
+    SevdeskZmInvoiceProvider,
+    ZmCalculationResult,
+    ZmRow,
+    ZmService,
+)
 
 __all__ = [
     "FinanzOnlineClient",
@@ -45,4 +51,8 @@ __all__ = [
     "UvaSoapUnavailableError",
     "UvaSubmitResult",
     "ZeepUvaSoapBackend",
+    "SevdeskZmInvoiceProvider",
+    "ZmCalculationResult",
+    "ZmRow",
+    "ZmService",
 ]

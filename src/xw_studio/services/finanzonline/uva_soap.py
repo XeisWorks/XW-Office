@@ -7,7 +7,9 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
+from xw_studio.services.finanzonline.u13_xml import build_u13_xml, validate_u13_xml
 from xw_studio.services.finanzonline.u30_xml import build_u30_xml, validate_u30_xml
+from xw_studio.services.finanzonline.zm_service import ZmRow
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +27,21 @@ class UvaSubmitResult(BaseModel):
     test_mode: bool = True
     xml_validated: bool = False
     xml_payload: str = ""
+    zm_ok: bool | None = None
+    zm_reference_id: str | None = None
+    zm_message: str = ""
+    zm_rows: int = 0
+    zm_xml_validated: bool = False
+    zm_xml_payload: str = ""
 
 
 class UvaSoapBackend(Protocol):
     """Pluggable SOAP layer — production uses zeep; tests use :class:`MockUvaSoapBackend`."""
 
     def submit_uva(self, payload: dict[str, Any]) -> UvaSubmitResult:
+        ...
+
+    def submit_zm(self, payload: dict[str, Any]) -> UvaSubmitResult:
         ...
 
 
@@ -42,6 +53,10 @@ class UnconfiguredUvaSoapBackend:
 
     def submit_uva(self, payload: dict[str, Any]) -> UvaSubmitResult:
         logger.warning("FinanzOnline UVA submission not configured; payload keys: %s", tuple(payload))
+        raise UvaSoapUnavailableError(self._reason)
+
+    def submit_zm(self, payload: dict[str, Any]) -> UvaSubmitResult:
+        logger.warning("FinanzOnline ZM submission not configured; payload keys: %s", tuple(payload))
         raise UvaSoapUnavailableError(self._reason)
 
 
@@ -68,6 +83,12 @@ class MockUvaSoapBackend:
             raise self._error
         return self._result.model_copy()
 
+    def submit_zm(self, payload: dict[str, Any]) -> UvaSubmitResult:
+        self.calls.append(dict(payload))
+        if self._error is not None:
+            raise self._error
+        return UvaSubmitResult(ok=True, reference_id="MOCK-ZM-REF-001", message="ZM accepted (mock)")
+
 
 class FinanzOnlineFileUploadBackend:
     """Production U30 backend: session login, file upload, logout."""
@@ -84,6 +105,7 @@ class FinanzOnlineFileUploadBackend:
         fastnr: str,
         test_mode: bool = True,
         u30_xsd_path: str = "",
+        u13_xsd_path: str = "",
         client_factory: Callable[[str], Any] | None = None,
     ) -> None:
         self._session_wsdl_url = session_wsdl_url.strip()
@@ -95,6 +117,7 @@ class FinanzOnlineFileUploadBackend:
         self._fastnr = fastnr.strip()
         self._test_mode = test_mode
         self._u30_xsd_path = u30_xsd_path.strip()
+        self._u13_xsd_path = u13_xsd_path.strip()
         if client_factory is None:
             from zeep import Client as ZeepClient
 
@@ -104,10 +127,45 @@ class FinanzOnlineFileUploadBackend:
         self.calls: list[dict[str, Any]] = []
 
     def submit_uva(self, payload: dict[str, Any]) -> UvaSubmitResult:
-        self.calls.append(dict(payload))
-        self._ensure_configured()
         xml_payload = build_u30_xml(payload, fastnr=self._fastnr)
         validate_u30_xml(xml_payload, self._u30_xsd_path or None)
+        return self._submit_file(
+            payload,
+            art="U30",
+            xml_payload=xml_payload,
+            failure_label="FinanzOnline U30 FileUpload fehlgeschlagen",
+        )
+
+    def submit_zm(self, payload: dict[str, Any]) -> UvaSubmitResult:
+        rows_raw = payload.get("rows")
+        if not isinstance(rows_raw, list):
+            raise ValueError("ZM-Payload enthaelt keine Zeilen.")
+        rows = [row if isinstance(row, ZmRow) else ZmRow.model_validate(row) for row in rows_raw]
+        xml_payload = build_u13_xml(
+            year=int(payload["jahr"]),
+            month=int(payload["monat"]),
+            rows=rows,
+            fastnr=self._fastnr,
+            kundeninfo=str(payload.get("kundeninfo") or "") or None,
+        )
+        validate_u13_xml(xml_payload, self._u13_xsd_path or None)
+        return self._submit_file(
+            payload,
+            art="U13",
+            xml_payload=xml_payload,
+            failure_label="FinanzOnline U13/ZM FileUpload fehlgeschlagen",
+        )
+
+    def _submit_file(
+        self,
+        payload: dict[str, Any],
+        *,
+        art: str,
+        xml_payload: str,
+        failure_label: str,
+    ) -> UvaSubmitResult:
+        self.calls.append(dict(payload))
+        self._ensure_configured()
 
         session_id = ""
         upload_message = ""
@@ -147,7 +205,7 @@ class FinanzOnlineFileUploadBackend:
                 tid=self._tid,
                 benid=self._benid,
                 id=session_id,
-                art="U30",
+                art=art,
                 uebermittlung="T" if self._test_mode else "P",
                 data=xml_payload,
             )
@@ -162,11 +220,11 @@ class FinanzOnlineFileUploadBackend:
                 xml_payload=xml_payload,
             )
         except Exception as exc:
-            logger.exception("FinanzOnline U30 FileUpload failed")
+            logger.exception("%s", failure_label)
             return UvaSubmitResult(
                 ok=False,
                 reference_id=session_id or None,
-                message=f"FinanzOnline U30 FileUpload fehlgeschlagen: {exc}",
+                message=f"{failure_label}: {exc}",
                 test_mode=self._test_mode,
                 xml_validated=True,
                 xml_payload=xml_payload,
@@ -278,6 +336,10 @@ class ZeepUvaSoapBackend:
                 message=str(raw_msg or "accepted"),
             )
         return UvaSubmitResult(ok=True, reference_id=None, message="accepted")
+
+    def submit_zm(self, payload: dict[str, Any]) -> UvaSubmitResult:
+        self.calls.append(dict(payload))
+        raise UvaSoapUnavailableError("FON_SOAP_WSDL-Zeep-Backend unterstuetzt ZM/U13 nicht.")
 
 
 def _call_soap_operation(operation: Callable[..., Any], **kwargs: Any) -> Any:

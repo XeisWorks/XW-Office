@@ -23,6 +23,8 @@ from xw_studio.services.finanzonline import (
     UvaPayloadService,
     UvaPreviewService,
     UvaService,
+    SevdeskZmInvoiceProvider,
+    ZmService,
 )
 from xw_studio.services.http_client import SevdeskConnection, build_sevdesk_connection
 from xw_studio.services.ideas.stores import (
@@ -167,12 +169,17 @@ def register_default_services(container: Container) -> None:
         lambda c: UvaPayloadService(c.resolve(UvaPreviewService)),
     )
     container.register(
+        ZmService,
+        lambda c: ZmService(SevdeskZmInvoiceProvider(c.resolve(SevdeskConnection))),
+    )
+    container.register(
         UvaService,
         lambda c: UvaService(
             c.config,
             c.resolve(FinanzOnlineClient),
             preview_service=c.resolve(UvaPreviewService),
             payload_service=c.resolve(UvaPayloadService),
+            zm_service=c.resolve(ZmService),
         ),
     )
     def build_payment_clearing(c: Container) -> PaymentClearingService:

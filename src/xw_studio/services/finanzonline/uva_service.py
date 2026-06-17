@@ -9,6 +9,7 @@ from xw_studio.services.finanzonline.client import FinanzOnlineClient
 from xw_studio.services.finanzonline.uva_payload_service import UvaPayloadService
 from xw_studio.services.finanzonline.uva_preview import UvaPreviewService
 from xw_studio.services.finanzonline.uva_soap import UvaSubmitResult
+from xw_studio.services.finanzonline.zm_service import ZmService
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +23,13 @@ class UvaService:
         client: FinanzOnlineClient,
         preview_service: UvaPreviewService | None = None,
         payload_service: UvaPayloadService | None = None,
+        zm_service: ZmService | None = None,
     ) -> None:
         self._config = config
         self._client = client
         self._preview_service = preview_service
         self._payload_service = payload_service
+        self._zm_service = zm_service
 
     def describe_capabilities(self) -> str:
         """Human-readable status for the Steuern > UVA tab."""
@@ -45,6 +48,7 @@ class UvaService:
             f"Backend-Modus: {mode}\n"
             f"IST-Berechnung: {calculation_mode}\n"
             "sevDesk-Aggregator: nicht als Berechnungsquelle verwendet\n"
+            f"ZM/U13: {'aktiv, Soll-Berechnung aus sevDesk-Rechnungen' if self._zm_service else 'nicht aktiv'}\n"
             f"PostgreSQL: {'konfiguriert' if has_url else 'nicht konfiguriert (nur .env)'}\n"
             f"FinanzOnline-Login: {'vorhanden' if has_fon else 'fehlt (Einstellungen > Token/.env)'}\n"
             f"FinanzOnline-U30-Sendung: {'vollstaendig konfiguriert' if has_submission else 'FASTNR/Hersteller-ID pruefen'}"
@@ -75,6 +79,10 @@ class UvaService:
             "warnings": list(calculated.warnings),
             "kennzahlen_text": self._payload_service.render_kennzahlen_text(calculated),
         }
+        if self._zm_service is not None:
+            zm = self._zm_service.calculate_month(year, month)
+            payload["zm"] = zm.model_dump()
+            payload["zm_text"] = self._zm_service.render_preview_text(zm)
         return payload
 
     def build_preview(self, year: int, month: int) -> dict[str, Any]:
@@ -129,8 +137,40 @@ class UvaService:
         }
 
     def submit_month(self, year: int, month: int) -> UvaSubmitResult:
-        """Calculate and submit one monthly U30 payload."""
-        return self.submit_uva(self.build_submission_payload(year, month))
+        """Calculate and submit one monthly U30 payload, then U13/ZM when configured."""
+        result = self.submit_uva(self.build_submission_payload(year, month))
+        if not result.ok or self._zm_service is None:
+            return result
+
+        zm = self._zm_service.calculate_month(year, month)
+        result.zm_rows = len(zm.rows)
+        if zm.invalid:
+            result.zm_ok = False
+            result.zm_message = "ZM nicht gesendet: " + "; ".join(zm.invalid)
+            return result
+        if not zm.rows:
+            result.zm_ok = True
+            result.zm_message = "Keine ZM-relevanten Rechnungen fuer diesen Monat."
+            return result
+
+        zm_payload = {
+            "meldung": "U13",
+            "jahr": year,
+            "monat": month,
+            "zeitraum": f"{year:04d}-{month:02d}",
+            "quelle": "xw_studio",
+            "berechnungsart": "SOLL",
+            "kundeninfo": f"XW-Studio ZM {year:04d}-{month:02d}",
+            "rows": [row.model_dump() for row in zm.rows],
+            "warnings": list(zm.warnings),
+        }
+        zm_result = self._client.submit_zm(zm_payload)
+        result.zm_ok = zm_result.ok
+        result.zm_reference_id = zm_result.reference_id
+        result.zm_message = zm_result.message
+        result.zm_xml_validated = zm_result.xml_validated
+        result.zm_xml_payload = zm_result.xml_payload
+        return result
 
     def submit_uva(self, payload: dict[str, Any]) -> UvaSubmitResult:
         """Delegate to FinanzOnline SOAP/FileUpload client."""

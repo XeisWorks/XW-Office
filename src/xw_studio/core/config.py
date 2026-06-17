@@ -72,6 +72,7 @@ class FinanzOnlineSection:
     fastnr: str = ""
     hersteller_id: str = ""
     u30_xsd_path: str = ""
+    u13_xsd_path: str = ""
     test_mode: bool = True
     submit_timeout_seconds: int = 30
 
@@ -258,6 +259,10 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     yaml_data.setdefault("finanzonline", {})["u30_xsd_path"] = os.getenv(
         "FON_U30_XSD",
         yaml_data.setdefault("finanzonline", {}).get("u30_xsd_path", ""),
+    )
+    yaml_data.setdefault("finanzonline", {})["u13_xsd_path"] = os.getenv(
+        "FON_U13_XSD",
+        yaml_data.setdefault("finanzonline", {}).get("u13_xsd_path", ""),
     )
     yaml_data.setdefault("finanzonline", {})["test_mode"] = str(
         os.getenv(

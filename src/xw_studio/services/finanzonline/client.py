@@ -122,6 +122,10 @@ class FinanzOnlineClient:
         """Submit UVA payload via configured SOAP backend."""
         return self._uva_backend.submit_uva(payload)
 
+    def submit_zm(self, payload: dict[str, Any]) -> UvaSubmitResult:
+        """Submit ZM/U13 payload via configured FileUpload backend."""
+        return self._uva_backend.submit_zm(payload)
+
     def _build_default_backend(self) -> UvaSoapBackend:
         wsdl = ((self._config.finanzonline.wsdl_url or "") or os.getenv("FON_SOAP_WSDL") or "").strip()
         operation = (
@@ -169,6 +173,7 @@ class FinanzOnlineClient:
                 fastnr=fastnr,
                 test_mode=self._config.finanzonline.test_mode,
                 u30_xsd_path=self._config.finanzonline.u30_xsd_path,
+                u13_xsd_path=self._config.finanzonline.u13_xsd_path,
             )
 
         missing_parts: list[str] = []

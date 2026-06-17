@@ -81,13 +81,14 @@ class TaxesView(QWidget):
         layout.addLayout(row)
 
         preview = QPushButton("UVA berechnen")
-        submit = QPushButton("UVA an FinanzOnline senden")
+        submit = QPushButton("UVA + ZM an FinanzOnline senden")
 
         def on_preview() -> None:
             payload = uva.calculate_month(year.value(), month.value())
             preview_text = str(payload.get("preview_text") or "").strip()
             kennzahlen_text = str(payload.get("kennzahlen_text") or "").strip()
-            combined = "\n\n".join(part for part in [preview_text, kennzahlen_text] if part)
+            zm_text = str(payload.get("zm_text") or "").strip()
+            combined = "\n\n".join(part for part in [preview_text, kennzahlen_text, zm_text] if part)
             if combined:
                 info.appendPlainText("\n\n" + combined)
                 return
@@ -103,13 +104,18 @@ class TaxesView(QWidget):
                 if not isinstance(res, UvaSubmitResult) or not res.ok:
                     return
                 text = res.message + (f" (Ref. {res.reference_id})" if res.reference_id else "")
-                QMessageBox.information(self, "UVA", f"Erfolg: {text}")
+                if res.zm_ok is not None:
+                    zm_text = res.zm_message or ("ZM erfolgreich" if res.zm_ok else "ZM fehlgeschlagen")
+                    if res.zm_reference_id:
+                        zm_text += f" (Ref. {res.zm_reference_id})"
+                    text = f"U30: {text}\nZM/U13: {zm_text}"
+                QMessageBox.information(self, "UVA + ZM", f"Erfolg: {text}")
 
             self._worker.signals.result.connect(on_uva_result)
             self._worker.signals.error.connect(
                 lambda exc: QMessageBox.information(
                     self,
-                    "UVA",
+                    "UVA + ZM",
                     f"Fehler: {exc}",
                 )
             )
