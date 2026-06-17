@@ -27,6 +27,11 @@ wix:
 finanzonline:
   wsdl_url: ""
   operation_name: "submitUva"
+  session_wsdl_url: "https://finanzonline.bmf.gv.at/fonws/ws/sessionService.wsdl"
+  upload_wsdl_url: "https://finanzonline.bmf.gv.at/fon/ws/fileuploadService.wsdl"
+  fastnr: ""
+  hersteller_id: ""
+  u30_xsd_path: ""
   test_mode: true
   submit_timeout_seconds: 30
 

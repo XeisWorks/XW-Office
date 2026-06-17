@@ -81,7 +81,7 @@ class TaxesView(QWidget):
         layout.addLayout(row)
 
         preview = QPushButton("UVA berechnen")
-        submit = QPushButton("UVA senden (SOAP)")
+        submit = QPushButton("UVA an FinanzOnline senden")
 
         def on_preview() -> None:
             payload = uva.calculate_month(year.value(), month.value())

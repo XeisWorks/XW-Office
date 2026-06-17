@@ -18,6 +18,7 @@ from xw_studio.services.finanzonline.uva_preview import (
 )
 from xw_studio.services.finanzonline.uva_service import UvaService
 from xw_studio.services.finanzonline.uva_soap import (
+    FinanzOnlineFileUploadBackend,
     MockUvaSoapBackend,
     UvaSoapUnavailableError,
     UvaSubmitResult,
@@ -26,6 +27,7 @@ from xw_studio.services.finanzonline.uva_soap import (
 
 __all__ = [
     "FinanzOnlineClient",
+    "FinanzOnlineFileUploadBackend",
     "FinanzOnlineSettings",
     "MockUvaSoapBackend",
     "SevdeskUvaPreviewProvider",

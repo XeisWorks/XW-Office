@@ -32,6 +32,7 @@ class UvaService:
         """Human-readable status for the Steuern > UVA tab."""
         has_url = bool(self._config.database_url)
         has_fon = self._client.has_credentials()
+        has_submission = self._client.has_submission_credentials()
         mode = self._client.backend_mode()
         calculation_mode = (
             "aktiv"
@@ -45,7 +46,8 @@ class UvaService:
             f"IST-Berechnung: {calculation_mode}\n"
             "sevDesk-Aggregator: nicht als Berechnungsquelle verwendet\n"
             f"PostgreSQL: {'konfiguriert' if has_url else 'nicht konfiguriert (nur .env)'}\n"
-            f"FinanzOnline-Zugangsdaten: {'vorhanden' if has_fon else 'fehlen (Einstellungen > Token)'}"
+            f"FinanzOnline-Login: {'vorhanden' if has_fon else 'fehlt (Einstellungen > Token/.env)'}\n"
+            f"FinanzOnline-U30-Sendung: {'vollstaendig konfiguriert' if has_submission else 'FASTNR/Hersteller-ID pruefen'}"
         )
 
     def calculate_month(self, year: int, month: int) -> dict[str, Any]:
@@ -131,5 +133,5 @@ class UvaService:
         return self.submit_uva(self.build_submission_payload(year, month))
 
     def submit_uva(self, payload: dict[str, Any]) -> UvaSubmitResult:
-        """Delegate to SOAP client (mock backend or zeep when configured)."""
+        """Delegate to FinanzOnline SOAP/FileUpload client."""
         return self._client.submit_uva(payload)

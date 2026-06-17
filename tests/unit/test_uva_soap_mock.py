@@ -5,9 +5,11 @@ import pytest
 
 from xw_studio.core.config import AppConfig, FinanzOnlineSection
 from xw_studio.services.finanzonline.client import FinanzOnlineClient
+from xw_studio.services.finanzonline.u30_xml import build_u30_xml, validate_u30_xml
 from xw_studio.services.finanzonline.uva_models import UvaKennzahlen, UvaPayloadResult
 from xw_studio.services.finanzonline.uva_service import UvaService
 from xw_studio.services.finanzonline.uva_soap import (
+    FinanzOnlineFileUploadBackend,
     MockUvaSoapBackend,
     UvaSoapUnavailableError,
     UvaSubmitResult,
@@ -64,6 +66,33 @@ class _ZeepClientStub:
         self.service = _ZeepServiceStub()
 
 
+class _SessionServiceStub:
+    def __init__(self, recorder: list[tuple[str, dict[str, object]]]) -> None:
+        self._recorder = recorder
+
+    def login(self, **kwargs: object) -> dict[str, object]:
+        self._recorder.append(("login", dict(kwargs)))
+        return {"id": "SESSION1234", "rc": 0, "msg": "login ok"}
+
+    def logout(self, **kwargs: object) -> dict[str, object]:
+        self._recorder.append(("logout", dict(kwargs)))
+        return {"rc": 0, "msg": "logout ok"}
+
+
+class _UploadServiceStub:
+    def __init__(self, recorder: list[tuple[str, dict[str, object]]]) -> None:
+        self._recorder = recorder
+
+    def upload(self, **kwargs: object) -> dict[str, object]:
+        self._recorder.append(("upload", dict(kwargs)))
+        return {"rc": 0, "msg": "upload ok"}
+
+
+class _FonClientStub:
+    def __init__(self, service: object) -> None:
+        self.service = service
+
+
 class _SecretsStub:
     def __init__(self, values: dict[str, str]) -> None:
         self._values = values
@@ -101,6 +130,68 @@ def test_zeep_backend_calls_operation() -> None:
     assert out.reference_id == "LIVE-REF-1"
 
 
+def test_u30_xml_validates_against_legacy_xsd() -> None:
+    xml = build_u30_xml(
+        {
+            "jahr": 2026,
+            "monat": 5,
+            "kennzahlen": {
+                "KZ000": "12750.60",
+                "KZ022": "118.83",
+                "KZ029": "3363.40",
+                "KZ006": "6269.60",
+                "KZ060": "209.22",
+            },
+        },
+        fastnr="989999999",
+    )
+
+    validate_u30_xml(xml)
+
+    assert "<ERKLAERUNG art=\"U30\">" in xml
+    assert "<FASTNR>989999999</FASTNR>" in xml
+    assert "<KZ000 type=\"kz\">12750.60</KZ000>" in xml
+
+
+def test_fileupload_backend_logs_in_uploads_and_logs_out() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def factory(wsdl: str) -> _FonClientStub:
+        if "session" in wsdl:
+            return _FonClientStub(_SessionServiceStub(calls))
+        return _FonClientStub(_UploadServiceStub(calls))
+
+    backend = FinanzOnlineFileUploadBackend(
+        session_wsdl_url="session.wsdl",
+        upload_wsdl_url="fileupload.wsdl",
+        tid="123456789012",
+        benid="BENID1",
+        pin="secret1",
+        hersteller_id="ATU12345678",
+        fastnr="989999999",
+        test_mode=True,
+        client_factory=factory,
+    )
+
+    result = backend.submit_uva(
+        {
+            "meldung": "U30",
+            "jahr": 2026,
+            "monat": 5,
+            "kennzahlen": {"KZ000": "100.00", "KZ022": "100.00", "KZ060": "5.00"},
+        }
+    )
+
+    assert result.ok is True
+    assert result.test_mode is True
+    assert result.xml_validated is True
+    assert [name for name, _ in calls] == ["login", "upload", "logout"]
+    upload = calls[1][1]
+    assert upload["art"] == "U30"
+    assert upload["uebermittlung"] == "T"
+    assert "<KZ022 type=\"kz\">100.00</KZ022>" in str(upload["data"])
+
+
 def test_finanzonline_client_uses_live_backend_when_wsdl_set(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FON_SOAP_WSDL", "https://fon.example/wsdl")
     monkeypatch.setenv("FON_SOAP_OPERATION", "submitUva")
@@ -115,6 +206,23 @@ def test_finanzonline_client_uses_live_backend_when_wsdl_set(monkeypatch: pytest
     client = FinanzOnlineClient(AppConfig(), secret_service=secrets)  # type: ignore[arg-type]
 
     assert client.backend_mode().startswith("live")
+
+
+def test_finanzonline_client_uses_fileupload_backend_with_submission_credentials() -> None:
+    secrets = _SecretsStub(
+        {
+            "FON_TEILNEHMER_ID": "123456789012",
+            "FON_BENUTZER_ID": "BENID1",
+            "FON_PIN": "secret1",
+            "FINANZONLINE_UID": "ATU12345678",
+            "FINANZONLINE_FASTNR": "989999999",
+        }
+    )
+
+    client = FinanzOnlineClient(AppConfig(), secret_service=secrets)  # type: ignore[arg-type]
+
+    assert client.backend_mode() == "fileupload/test"
+    assert client.has_submission_credentials() is True
 
 
 def test_uva_service_builds_submission_payload_from_kennzahlen() -> None:

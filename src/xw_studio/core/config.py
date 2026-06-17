@@ -67,6 +67,11 @@ class WixSection:
 class FinanzOnlineSection:
     wsdl_url: str = ""
     operation_name: str = "submitUva"
+    session_wsdl_url: str = "https://finanzonline.bmf.gv.at/fonws/ws/sessionService.wsdl"
+    upload_wsdl_url: str = "https://finanzonline.bmf.gv.at/fon/ws/fileuploadService.wsdl"
+    fastnr: str = ""
+    hersteller_id: str = ""
+    u30_xsd_path: str = ""
     test_mode: bool = True
     submit_timeout_seconds: int = 30
 
@@ -223,6 +228,35 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     yaml_data.setdefault("finanzonline", {})["operation_name"] = os.getenv(
         "FON_SOAP_OPERATION",
         yaml_data.setdefault("finanzonline", {}).get("operation_name", "submitUva"),
+    )
+    yaml_data.setdefault("finanzonline", {})["session_wsdl_url"] = os.getenv(
+        "FON_SESSION_WSDL",
+        yaml_data.setdefault("finanzonline", {}).get(
+            "session_wsdl_url",
+            "https://finanzonline.bmf.gv.at/fonws/ws/sessionService.wsdl",
+        ),
+    )
+    yaml_data.setdefault("finanzonline", {})["upload_wsdl_url"] = os.getenv(
+        "FON_UPLOAD_WSDL",
+        yaml_data.setdefault("finanzonline", {}).get(
+            "upload_wsdl_url",
+            "https://finanzonline.bmf.gv.at/fon/ws/fileuploadService.wsdl",
+        ),
+    )
+    yaml_data.setdefault("finanzonline", {})["fastnr"] = (
+        os.getenv("FINANZONLINE_FASTNR", "")
+        or os.getenv("FINANZONLINE_STEUERNUMMER", "")
+        or os.getenv("FON_FASTNR", "")
+        or yaml_data.setdefault("finanzonline", {}).get("fastnr", "")
+    )
+    yaml_data.setdefault("finanzonline", {})["hersteller_id"] = (
+        os.getenv("FON_HERSTELLER_ID", "")
+        or os.getenv("FINANZONLINE_UID", "")
+        or yaml_data.setdefault("finanzonline", {}).get("hersteller_id", "")
+    )
+    yaml_data.setdefault("finanzonline", {})["u30_xsd_path"] = os.getenv(
+        "FON_U30_XSD",
+        yaml_data.setdefault("finanzonline", {}).get("u30_xsd_path", ""),
     )
     yaml_data.setdefault("finanzonline", {})["test_mode"] = str(
         os.getenv(
