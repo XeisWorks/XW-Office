@@ -2099,15 +2099,17 @@ class RechnungenView(QWidget):
             self._set_shipping_editor_lines(override_lines)
 
     def _prefill_detail_from_invoice_async(self, summary: InvoiceSummary) -> None:
-        self._wix_order_no.setText(summary.order_reference or "---")
-        self._wix_customer.setText(summary.contact_name or "---")
-        self._wix_customer_email.setText("---")
         override_lines = list(self._shipping_address_overrides.get(summary.id, []))
-        if summary.order_reference:
-            self._shipping_status.setText("Lade Wix-Daten...")
-        else:
-            self._shipping_status.setText("Keine Versandadresse verfuegbar")
-        self._set_shipping_editor_lines(override_lines)
+        current_lines = self._current_shipping_lines()
+        if not current_lines:
+            self._wix_order_no.setText(summary.order_reference or "---")
+            self._wix_customer.setText(summary.contact_name or "---")
+            self._wix_customer_email.setText("---")
+            if summary.order_reference:
+                self._shipping_status.setText("Lade Wix-Daten...")
+            else:
+                self._shipping_status.setText("Keine Versandadresse verfuegbar")
+            self._set_shipping_editor_lines(override_lines)
         try:
             service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
         except Exception as exc:  # noqa: BLE001
