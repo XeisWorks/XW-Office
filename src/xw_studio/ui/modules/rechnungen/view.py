@@ -625,6 +625,9 @@ class RechnungenView(QWidget):
         self._draft_has_more = False
         self._open_has_more = False
         self._open_loaded = False
+        self._pending_auto_open_load = False
+        self._load_started_at = 0.0
+        self._wix_warm_started_at = 0.0
         self._search_active = False
         self._search_seq = 0
         self._wix_digital_cache: dict[str, bool] = {}
@@ -1086,6 +1089,8 @@ class RechnungenView(QWidget):
     def _start_load(self, *, limit: int | None = None) -> None:
         if not self._has_sevdesk_token():
             return
+        if self._worker is not None and self._worker.isRunning():
+            return
 
         service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
         status_filter = self._active_load_status
@@ -1094,6 +1099,14 @@ class RechnungenView(QWidget):
             self._draft_offset if status_filter == _DRAFT_STATUS else self._open_offset
         ) if self._append_mode else 0
         append = self._append_mode
+        self._load_started_at = time.perf_counter()
+        logger.info(
+            "Rechnungen load start status=%s limit=%s offset=%s append=%s",
+            status_filter,
+            page_limit,
+            offset,
+            append,
+        )
 
         self._overlay.show_with_message(
             "Rechnungen werden geladen…" if not append else "Weitere Rechnungen werden geladen…",
@@ -1155,6 +1168,14 @@ class RechnungenView(QWidget):
         summaries: list[InvoiceSummary] = [s for s in sums_obj if isinstance(s, InvoiceSummary)]
         has_more = bool(has_more_obj)
         status_filter = int(status_obj)
+        elapsed_ms = int((time.perf_counter() - self._load_started_at) * 1000) if self._load_started_at else 0
+        logger.info(
+            "Rechnungen load result status=%s rows=%s has_more=%s elapsed_ms=%s",
+            status_filter,
+            len(summaries),
+            has_more,
+            elapsed_ms,
+        )
         self._prepare_rows_for_hint_prefetch(rows, summaries)
 
         if self._append_mode:
@@ -1212,9 +1233,8 @@ class RechnungenView(QWidget):
         if status_filter != _OPEN_STATUS:
             self._restart_hint_prefetch()
         if auto_load_open:
-            self._active_load_status = _OPEN_STATUS
-            self._append_mode = True
-            self._start_load(limit=_OPEN_AUTO_LOAD_LIMIT)
+            logger.info("Rechnungen auto-open-load queued limit=%s", _OPEN_AUTO_LOAD_LIMIT)
+            self._pending_auto_open_load = True
 
     def _update_load_more_button(self) -> None:
         if self._search_active:
@@ -1379,6 +1399,7 @@ class RechnungenView(QWidget):
 
     def _on_load_error(self, exc: Exception) -> None:
         logger.error("Invoice load failed: %s", exc)
+        self._pending_auto_open_load = False
         QMessageBox.warning(
             self,
             "Fehler",
@@ -1388,6 +1409,13 @@ class RechnungenView(QWidget):
 
     def _on_load_finished(self) -> None:
         self._overlay.hide()
+        self._worker = None
+        if self._pending_auto_open_load and not self._search_active:
+            self._pending_auto_open_load = False
+            self._active_load_status = _OPEN_STATUS
+            self._append_mode = True
+            logger.info("Rechnungen auto-open-load starting after draft worker finished")
+            self._start_load(limit=_OPEN_AUTO_LOAD_LIMIT)
 
     def _restore_loaded_invoice_list(self) -> None:
         self._table.set_data(self._loaded_rows)
@@ -1559,6 +1587,8 @@ class RechnungenView(QWidget):
             refs.append(ref)
         if not refs:
             return
+        self._wix_warm_started_at = time.perf_counter()
+        logger.info("Wix context warmup start refs=%s", len(refs))
 
         def job() -> list[dict[str, object]]:
             wix_client: WixOrdersClient = self._container.resolve(WixOrdersClient)
@@ -1612,6 +1642,8 @@ class RechnungenView(QWidget):
 
     def _on_wix_warm_result(self, payload: object) -> None:
         rows = payload if isinstance(payload, list) else []
+        elapsed_ms = int((time.perf_counter() - self._wix_warm_started_at) * 1000) if self._wix_warm_started_at else 0
+        logger.info("Wix context warmup result refs=%s elapsed_ms=%s", len(rows), elapsed_ms)
         selected = self._selected_summary()
         selected_ref = selected.order_reference.strip() if selected is not None else ""
         for row in rows:

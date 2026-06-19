@@ -5,8 +5,16 @@ from xw_studio.bootstrap import register_default_services
 from xw_studio.core.config import AppConfig
 from xw_studio.core.container import Container
 from xw_studio.core.signals import AppSignals
+from xw_studio.core.types import ModuleKey
+from xw_studio.services.daily_business.service import DailyBusinessService
 from xw_studio.services.inventory.service import StartMode, StartPreflight
+from xw_studio.services.invoice_processing.service import InvoiceProcessingService
+from xw_studio.services.products.print_decision import PrintDecisionEngine
+from xw_studio.services.secrets.service import SecretService
+from xw_studio.services.sendungen.service import OffeneSendungenService
 from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
+from xw_studio.services.wix.client import WixOrdersClient
+from xw_studio.ui.main_window import MainWindow
 from xw_studio.ui.modules.rechnungen.tagesgeschaeft_view import TagesgeschaeftView, _StartDialog
 from xw_studio.ui.modules.rechnungen.view import RechnungenView
 
@@ -17,6 +25,142 @@ def _build_container() -> Container:
     container.register(AppSignals, lambda _: AppSignals())
     register_default_services(container)
     return container
+
+
+class _FakeSecretService:
+    def get_secret(self, key: str) -> str:
+        if key in {"SEVDESK_API_TOKEN", "WIX_API_KEY", "WIX_SITE_ID"}:
+            return "test-token"
+        return ""
+
+
+class _FakeHint:
+    def as_row_patch(self) -> dict[str, object]:
+        return {
+            "Hinweise": "",
+            "__icons__Hinweise": [],
+            "__tooltip__Hinweise": "",
+            "__fg__Hinweise": "",
+        }
+
+
+class _FakeInvoiceProcessingService:
+    def __init__(self) -> None:
+        self.load_calls: list[tuple[int, int, int]] = []
+        self._draft = InvoiceSummary.model_validate(
+            {
+                "id": "draft-1",
+                "invoiceNumber": "RE-DRAFT",
+                "invoiceDate": "2026-06-19T00:00:00",
+                "status": 100,
+                "sumGross": "10.0",
+                "contact_name": "Draft Customer",
+                "order_reference": "20844",
+            }
+        )
+        self._open = InvoiceSummary.model_validate(
+            {
+                "id": "open-1",
+                "invoiceNumber": "RE-OPEN",
+                "invoiceDate": "2026-06-19T00:00:00",
+                "status": 200,
+                "sumGross": "20.0",
+                "contact_name": "Open Customer",
+                "order_reference": "20845",
+            }
+        )
+
+    def load_invoice_batch(
+        self,
+        *,
+        status: int,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, str]], list[InvoiceSummary]]:
+        self.load_calls.append((status, limit, offset))
+        summaries = [self._draft] if status == 100 else [self._open]
+        if offset:
+            summaries = []
+        return [summary.as_table_row() for summary in summaries], summaries
+
+    def count_invoices(self, status: int) -> int:
+        return 1 if status == 100 else 0
+
+    def get_cached_invoice_list_hints(self, _reference: str) -> None:
+        return None
+
+    def resolve_invoice_list_hints(self, _reference: str) -> _FakeHint:
+        return _FakeHint()
+
+    def get_cached_invoice_detail_context(self, _summary: InvoiceSummary) -> dict[str, object]:
+        return {}
+
+    def get_invoice_detail_context(self, _summary: InvoiceSummary) -> dict[str, object]:
+        return {}
+
+    def is_flagged_sku(self, _sku: str) -> bool:
+        return False
+
+
+class _FakeWixOrdersClient:
+    def has_credentials(self) -> bool:
+        return True
+
+    def resolve_order_summary(self, reference: str) -> dict[str, str]:
+        return {
+            "wix_order_number": reference,
+            "wix_customer_name": f"Customer {reference}",
+            "wix_customer_email": f"customer-{reference}@example.test",
+            "wix_shipping_country": "Austria",
+            "wix_shipping_address": (
+                f"Customer {reference}\n"
+                "Teststrasse 1\n"
+                "1010 Wien\n"
+                "AUSTRIA"
+            ),
+        }
+
+    def fetch_order_line_items(self, _reference: str) -> list[dict[str, object]]:
+        return []
+
+    def is_reference_digital_only(self, _reference: str) -> bool:
+        return False
+
+
+class _FakePrintDecisionEngine:
+    def get_piece_blocks(
+        self,
+        _items: list[dict[str, object]],
+        *,
+        invoice_ref: str | None = None,
+    ) -> list[object]:
+        return []
+
+
+class _FakeDailyBusinessService:
+    def load_counts(self, open_invoice_count: int = 0) -> dict[str, int]:
+        return {
+            "rechnungen": open_invoice_count,
+            "mollie": 0,
+            "gutscheine": 0,
+        }
+
+
+class _FakeOffeneSendungenService:
+    def open_count(self) -> int:
+        return 0
+
+
+def _build_rechnungen_test_container() -> tuple[Container, _FakeInvoiceProcessingService]:
+    container = _build_container()
+    invoice_service = _FakeInvoiceProcessingService()
+    container.register(SecretService, lambda _: _FakeSecretService())
+    container.register(InvoiceProcessingService, lambda _: invoice_service)
+    container.register(WixOrdersClient, lambda _: _FakeWixOrdersClient())
+    container.register(PrintDecisionEngine, lambda _: _FakePrintDecisionEngine())
+    container.register(DailyBusinessService, lambda _: _FakeDailyBusinessService())
+    container.register(OffeneSendungenService, lambda _: _FakeOffeneSendungenService())
+    return container, invoice_service
 
 
 def test_tagesgeschaeft_contains_rechnungen_view(qtbot: object) -> None:
@@ -131,8 +275,47 @@ def test_rechnungen_auto_loads_first_open_page_after_drafts(qtbot: object, monke
     monkeypatch.setattr(view, "_start_load", fake_start_load)
 
     view._on_load_result(([draft.as_table_row()], [draft], False, 100))  # noqa: SLF001
+    assert view._pending_auto_open_load is True  # noqa: SLF001
+    view._on_load_finished()  # noqa: SLF001
 
     assert calls == [(200, True, 30)]
+
+
+def test_main_window_rechnungen_loads_open_invoices_and_reuses_wix_cache(
+    qtbot: object,
+    monkeypatch,
+) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    monkeypatch.setattr("xw_studio.ui.main_window.discover_printers", lambda: [])
+    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.view.discover_printers", lambda: [])
+    window = MainWindow(container)
+    qtbot.addWidget(window)
+    window.show()
+
+    window._navigate_to(ModuleKey.RECHNUNGEN.value)  # noqa: SLF001
+    page = window._pages[ModuleKey.RECHNUNGEN.value]  # noqa: SLF001
+    view = page._rechnungen_view  # noqa: SLF001
+
+    qtbot.waitUntil(
+        lambda: view._open_loaded  # noqa: SLF001
+        and len(view._summaries) == 2  # noqa: SLF001
+        and ("20845" in view._wix_context_cache),  # noqa: SLF001
+        timeout=5000,
+    )
+
+    assert invoice_service.load_calls[:2] == [(100, 50, 0), (200, 30, 0)]
+
+    view._table.select_source_row(1)  # noqa: SLF001
+    qtbot.waitUntil(
+        lambda: "Teststrasse 1" in view._shipping_editor.toPlainText(),  # noqa: SLF001
+        timeout=1000,
+    )
+
+    view._table.select_source_row(0)  # noqa: SLF001
+    view._table.select_source_row(1)  # noqa: SLF001
+
+    assert "Teststrasse 1" in view._shipping_editor.toPlainText()  # noqa: SLF001
+    assert invoice_service.load_calls == [(100, 50, 0), (200, 30, 0)]
 
 
 def test_rechnungen_detail_panel_click_does_not_clear_selection(qtbot: object) -> None:
