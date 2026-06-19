@@ -500,8 +500,16 @@ class InvoiceProcessingService:
         workers = max(2, min(8, len(missing)))
 
         def load_ref(ref: str) -> tuple[str, list[str], bool]:
-            lines = self._wix_orders.resolve_order_address_lines(ref)
-            digital_only = self._wix_orders.is_reference_digital_only(ref)
+            order = self._wix_orders.resolve_order(ref)
+            if not order:
+                return ref, [], False
+            lines = self._wix_orders.best_address_lines_from_order(order)
+            raw_items = order.get("lineItems") if isinstance(order.get("lineItems"), list) else []
+            item_dicts = [item for item in raw_items if isinstance(item, dict)]
+            digital_only = bool(item_dicts) and all(
+                self._wix_orders.line_item_is_digital(item)
+                for item in item_dicts
+            )
             return ref, lines, bool(digital_only)
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -719,6 +727,20 @@ class InvoiceProcessingService:
         """Return sevDesk-backed customer/shipping fallback data for the detail panel."""
 
         invoice = self._fetch_invoice_detail(summary.id)
+        return self._invoice_detail_context_from_data(summary, invoice)
+
+    def get_cached_invoice_detail_context(self, summary: InvoiceSummary) -> dict[str, object] | None:
+        """Return cached sevDesk detail context without triggering an API call."""
+        cached = self._invoice_detail_cache.get(str(summary.id))
+        if cached is None:
+            return None
+        return self._invoice_detail_context_from_data(summary, cached)
+
+    def _invoice_detail_context_from_data(
+        self,
+        summary: InvoiceSummary,
+        invoice: dict[str, Any],
+    ) -> dict[str, object]:
         return {
             "customer_name": self._resolve_customer_name(summary, invoice),
             "customer_email": self._contact_email_from_invoice(invoice),

@@ -599,6 +599,7 @@ class RechnungenView(QWidget):
         self._stuecke_worker: BackgroundWorker | None = None
         self._wix_meta_worker: BackgroundWorker | None = None
         self._wix_context_worker: BackgroundWorker | None = None
+        self._invoice_detail_worker: BackgroundWorker | None = None
         self._hint_worker: BackgroundWorker | None = None
         self._fulfillment_step_worker: BackgroundWorker | None = None
         self._invoice_mail_worker: BackgroundWorker | None = None
@@ -641,6 +642,7 @@ class RechnungenView(QWidget):
         self._piece_quantity_controls: list[tuple[PieceBlock, QSpinBox]] = []
         self._append_mode = False
         self._queued_wix_context_ref = ""
+        self._queued_invoice_detail_id = ""
         self._table_layout_initialized = False
         self._open_overview_key = ""
         self._open_overview_cached_physical = 0
@@ -1990,7 +1992,7 @@ class RechnungenView(QWidget):
             self._reset_detail()
             return
         self._populate_detail_for_summary(summary)
-        self._prefill_detail_from_invoice(summary)
+        self._prefill_detail_from_invoice_async(summary)
 
     def _populate_detail_for_summary(self, summary: InvoiceSummary) -> None:
         self._gb_open.hide()
@@ -2093,6 +2095,108 @@ class RechnungenView(QWidget):
             self._shipping_status.setText("Lade Wix-Datenâ€¦")
             self._set_shipping_editor_lines(override_lines)
         else:
+            self._shipping_status.setText("Keine Versandadresse in sevDesk")
+            self._set_shipping_editor_lines(override_lines)
+
+    def _prefill_detail_from_invoice_async(self, summary: InvoiceSummary) -> None:
+        self._wix_order_no.setText(summary.order_reference or "---")
+        self._wix_customer.setText(summary.contact_name or "---")
+        self._wix_customer_email.setText("---")
+        override_lines = list(self._shipping_address_overrides.get(summary.id, []))
+        if summary.order_reference:
+            self._shipping_status.setText("Lade Wix-Daten...")
+        else:
+            self._shipping_status.setText("Keine Versandadresse verfuegbar")
+        self._set_shipping_editor_lines(override_lines)
+        try:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Invoice detail service unavailable for %s: %s", summary.id, exc)
+            return
+
+        try:
+            context = service.get_cached_invoice_detail_context(summary)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Invoice detail cache read failed for %s: %s", summary.id, exc)
+            context = None
+        if context is not None:
+            self._apply_invoice_detail_context(summary.id, summary, context)
+            return
+        self._load_invoice_detail_context(summary)
+
+    def _load_invoice_detail_context(self, summary: InvoiceSummary) -> None:
+        invoice_id = str(summary.id or "").strip()
+        if not invoice_id:
+            return
+        if self._invoice_detail_worker is not None and self._invoice_detail_worker.isRunning():
+            self._queued_invoice_detail_id = invoice_id
+            return
+
+        def job() -> dict[str, object]:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            context = service.get_invoice_detail_context(summary)
+            return {"__invoice_id": invoice_id, "summary": summary, "context": context}
+
+        self._invoice_detail_worker = BackgroundWorker(job)
+        self._invoice_detail_worker.signals.result.connect(self._on_invoice_detail_context_loaded)
+        self._invoice_detail_worker.signals.error.connect(self._on_invoice_detail_context_error)
+        self._invoice_detail_worker.signals.finished.connect(self._on_invoice_detail_context_finished)
+        self._invoice_detail_worker.start()
+
+    def _on_invoice_detail_context_loaded(self, payload: object) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        invoice_id = str(data.get("__invoice_id") or "").strip()
+        selected = self._selected_summary()
+        if selected is None or invoice_id != str(selected.id or "").strip():
+            return
+        summary = data.get("summary")
+        if not isinstance(summary, InvoiceSummary):
+            summary = selected
+        context = data.get("context") if isinstance(data.get("context"), dict) else {}
+        self._apply_invoice_detail_context(invoice_id, summary, context)
+
+    def _on_invoice_detail_context_error(self, exc: Exception) -> None:
+        logger.warning("Invoice detail background load failed: %s", exc)
+
+    def _on_invoice_detail_context_finished(self) -> None:
+        queued_id = self._queued_invoice_detail_id.strip()
+        self._queued_invoice_detail_id = ""
+        if not queued_id:
+            return
+        selected = self._selected_summary()
+        if selected is None or queued_id != str(selected.id or "").strip():
+            return
+        self._load_invoice_detail_context(selected)
+
+    def _apply_invoice_detail_context(
+        self,
+        invoice_id: str,
+        summary: InvoiceSummary,
+        context: dict[str, object],
+    ) -> None:
+        selected = self._selected_summary()
+        if selected is None or str(selected.id or "").strip() != str(invoice_id or "").strip():
+            return
+        customer_name = str(context.get("customer_name") or "").strip() or summary.contact_name or "---"
+        customer_email = str(context.get("customer_email") or "").strip() or "---"
+        shipping_lines = self._normalize_shipping_lines(context.get("shipping_lines"))  # type: ignore[arg-type]
+        current_customer = str(self._wix_customer.text() or "").strip()
+        current_email = str(self._wix_customer_email.text() or "").strip()
+        if not current_customer or current_customer in {"---", "â€”", "Ã¢â‚¬â€"}:
+            self._wix_customer.setText(customer_name)
+        if not current_email or current_email in {"---", "â€”", "Ã¢â‚¬â€"}:
+            self._wix_customer_email.setText(customer_email)
+        override_lines = list(self._shipping_address_overrides.get(summary.id, []))
+        current_lines = self._current_shipping_lines()
+        if shipping_lines and not current_lines:
+            self._shipping_source_lines = shipping_lines
+            self._shipping_status.setText("Adresse aus sevDesk")
+            self._set_shipping_editor_lines(override_lines or shipping_lines)
+        elif summary.order_reference:
+            if not current_lines:
+                self._shipping_status.setText("Lade Wix-Daten...")
+                self._set_shipping_editor_lines(override_lines)
+        elif not current_lines:
             self._shipping_status.setText("Keine Versandadresse in sevDesk")
             self._set_shipping_editor_lines(override_lines)
 

@@ -10,6 +10,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 
 from xw_studio.services.shipping.countries import country_label_for_address, country_name_en
+from xw_studio.services.wix.order_cache import WixOrderCache
 
 if TYPE_CHECKING:
     from xw_studio.services.secrets.service import SecretService
@@ -705,9 +706,11 @@ class WixOrdersClient:
         *,
         secret_service: "SecretService | None" = None,
         orders_base: str = _ORDERS_BASE,
+        order_cache: WixOrderCache | None = None,
     ) -> None:
         self._secrets = secret_service
         self._orders_base = orders_base.rstrip("/")
+        self._order_cache = order_cache
 
     def _api_key(self) -> str:
         return self._secrets.get_secret("WIX_API_KEY") if self._secrets else ""
@@ -1032,13 +1035,62 @@ class WixOrdersClient:
                 return raw
         return {}
 
-    def _resolve_order(self, reference: str) -> dict[str, Any]:
+    def _cache_scope(self) -> tuple[str, str]:
+        try:
+            site_id = self._site_id()
+            account_id = self._account_id()
+        except Exception:  # noqa: BLE001 - cache must never break API access.
+            return "", ""
+        return str(site_id or "").strip(), str(account_id or "").strip()
+
+    def _cached_order(self, reference: str) -> dict[str, Any] | None:
+        cache = getattr(self, "_order_cache", None)
+        if cache is None:
+            return None
+        site_id, account_id = self._cache_scope()
+        if not site_id:
+            return None
+        cached = cache.get_order(site_id=site_id, account_id=account_id, reference=reference)
+        if cached is None:
+            return None
+        logger.debug(
+            "Wix order cache hit ref=%s found=%s age_ms=%s",
+            str(reference or "").strip(),
+            cached.found,
+            int(cached.age_seconds * 1000),
+        )
+        return dict(cached.order) if cached.found else {}
+
+    def _cache_order(self, reference: str, order: dict[str, Any]) -> None:
+        cache = getattr(self, "_order_cache", None)
+        if cache is None or not order:
+            return
+        site_id, account_id = self._cache_scope()
+        if not site_id:
+            return
+        cache.put_order(site_id=site_id, account_id=account_id, reference=reference, order=order)
+
+    def _cache_missing_order(self, reference: str) -> None:
+        cache = getattr(self, "_order_cache", None)
+        if cache is None:
+            return
+        site_id, account_id = self._cache_scope()
+        if not site_id:
+            return
+        cache.put_missing(site_id=site_id, account_id=account_id, reference=reference)
+
+    def _resolve_order(self, reference: str, *, use_cache: bool = True) -> dict[str, Any]:
         ref = str(reference or "").strip()
         if not ref or not self.has_credentials():
             return {}
+        if use_cache:
+            cached = self._cached_order(ref)
+            if cached is not None:
+                return cached
         if self._looks_like_uuid(ref):
             order_by_id = self._get_order_by_id(ref)
             if order_by_id:
+                self._cache_order(ref, order_by_id)
                 return order_by_id
         order = self._search_order_by_field("number", ref)
         if not order:
@@ -1049,6 +1101,10 @@ class WixOrdersClient:
                 order = self._search_order_by_field("number", digits)
                 if not order:
                     order = self._search_order_by_field("orderNumber", digits)
+        if order:
+            self._cache_order(ref, order)
+        elif use_cache:
+            self._cache_missing_order(ref)
         return order
 
     @staticmethod
@@ -1079,7 +1135,7 @@ class WixOrdersClient:
         return all(self.line_item_is_digital(item) for item in raw_items if isinstance(item, dict))
 
     def fulfillment_status(self, reference: str) -> str:
-        order = self._resolve_order(reference)
+        order = self._resolve_order(reference, use_cache=False)
         return str(order.get("fulfillmentStatus") or "").strip().upper() if isinstance(order, dict) else ""
 
     def _resolve_order_id(self, reference: str) -> str:

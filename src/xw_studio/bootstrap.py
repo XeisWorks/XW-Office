@@ -54,6 +54,7 @@ from xw_studio.services.products.field_bulk_service import ProductFieldBulkServi
 from xw_studio.services.products.print_decision import PrintDecisionEngine
 from xw_studio.services.wix.client import WixProductsClient
 from xw_studio.services.wix.client import WixOrdersClient
+from xw_studio.services.wix.order_cache import WixOrderCache
 from xw_studio.services.wix.product_details_client import WixProductDetailsClient
 from xw_studio.services.clickup.client import ClickUpClient
 from xw_studio.services.xw_copilot.dry_run import XWCopilotDryRunService
@@ -109,8 +110,15 @@ def register_default_services(container: Container) -> None:
         ),
     )
     container.register(
+        WixOrderCache,
+        lambda c: WixOrderCache(),
+    )
+    container.register(
         WixOrdersClient,
-        lambda c: WixOrdersClient(secret_service=c.resolve(SecretService)),
+        lambda c: WixOrdersClient(
+            secret_service=c.resolve(SecretService),
+            order_cache=c.resolve(WixOrderCache),
+        ),
     )
     container.register(
         DraftInvoiceService,

@@ -4,6 +4,7 @@ from typing import Any
 import httpx
 
 from xw_studio.services.wix.client import WixOrdersClient
+from xw_studio.services.wix.order_cache import WixOrderCache
 
 
 def test_pick_exact_order_match_uses_exact_number() -> None:
@@ -272,3 +273,53 @@ def test_resolve_order_falls_back_to_order_number_search() -> None:
 
     assert summary["wix_order_number"] == "20348"
     assert summary["wix_customer_email"] == "info@example.test"
+
+
+def test_resolve_order_summary_uses_persistent_cache(tmp_path, monkeypatch) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json={
+                "orders": [
+                    {
+                        "id": "ord-cache-1",
+                        "number": "20845",
+                        "orderNumber": "20845",
+                        "buyerInfo": {
+                            "email": "cache@example.test",
+                            "firstName": "Cache",
+                            "lastName": "Kunde",
+                        },
+                    }
+                ]
+            },
+        )
+
+    class _SecretService:
+        def get_secret(self, name: str) -> str:
+            values = {
+                "WIX_API_KEY": "key",
+                "WIX_SITE_ID": "site",
+                "WIX_ACCOUNT_ID": "",
+            }
+            return values.get(name, "")
+
+    class _Client(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(handler)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    cache = WixOrderCache(tmp_path / "cache.sqlite")
+    client = WixOrdersClient(secret_service=_SecretService(), order_cache=cache)  # type: ignore[arg-type]
+
+    first = client.resolve_order_summary("20845")
+    second = client.resolve_order_summary("20845")
+
+    assert first["wix_customer_email"] == "cache@example.test"
+    assert second["wix_customer_name"] == "Cache Kunde"
+    assert calls == 1
