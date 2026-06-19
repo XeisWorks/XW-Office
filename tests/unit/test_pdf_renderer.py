@@ -38,6 +38,12 @@ def test_print_pdf_with_qprinter_draws_image_without_scaling(monkeypatch, tmp_pa
         def setPrinterName(self, value: str) -> None:
             self.name = value
 
+        def setPageSize(self, value: object) -> None:
+            calls["page_size"] = value
+
+        def setPageOrientation(self, value: object) -> None:
+            calls["page_orientation"] = value
+
         def setResolution(self, value: int) -> None:
             calls["resolution"] = value
 
@@ -110,6 +116,12 @@ def test_print_pdf_with_qprinter_uses_queue_resolution_without_overriding(monkey
 
         def setPrinterName(self, value: str) -> None:
             calls["printer_name"] = value
+
+        def setPageSize(self, value: object) -> None:
+            calls["page_size"] = value
+
+        def setPageOrientation(self, value: object) -> None:
+            calls["page_orientation"] = value
 
         def setResolution(self, value: int) -> None:
             calls["resolution"] = value
@@ -186,6 +198,12 @@ def test_print_pdf_with_qprinter_printable_origin_sets_full_page_false(monkeypat
         def setPrinterName(self, value: str) -> None:
             calls["printer_name"] = value
 
+        def setPageSize(self, value: object) -> None:
+            calls["page_size"] = value
+
+        def setPageOrientation(self, value: object) -> None:
+            calls["page_orientation"] = value
+
         def setFullPage(self, value: bool) -> None:
             events.append("setFullPage")
             calls["full_page"] = value
@@ -239,7 +257,7 @@ def test_print_pdf_with_qprinter_printable_origin_sets_full_page_false(monkeypat
     assert calls["draw_image"] is not None
 
 
-def test_print_pdf_with_qprinter_does_not_configure_driver_options(monkeypatch, tmp_path) -> None:
+def test_print_pdf_with_qprinter_configures_only_invoice_page_options(monkeypatch, tmp_path) -> None:
     pdf_path = tmp_path / "a4.pdf"
     doc = fitz.open()
     doc.new_page(width=595, height=842)
@@ -281,7 +299,17 @@ def test_print_pdf_with_qprinter_does_not_configure_driver_options(monkeypatch, 
     pdf_renderer.print_pdf_with_qprinter(str(pdf_path), "Printer", dpi=600)
 
     assert not printer.setPageLayout.called
+    assert printer.setPageSize.called
+    assert printer.setPageOrientation.called
+    assert not printer.setOrientation.called
+    assert not printer.setDuplex.called
+
+    printer.reset_mock()
+    pdf_renderer.print_pdf_with_qprinter(str(pdf_path), "Printer", dpi=600, job_kind="product")
+
+    assert not printer.setPageLayout.called
     assert not printer.setPageSize.called
+    assert not printer.setPageOrientation.called
     assert not printer.setOrientation.called
     assert not printer.setDuplex.called
 
@@ -313,6 +341,12 @@ def test_print_pdf_with_qprinter_sets_fallback_resolution_when_driver_dpi_invali
 
         def setPrinterName(self, value: str) -> None:
             calls["printer_name"] = value
+
+        def setPageSize(self, value: object) -> None:
+            calls["page_size"] = value
+
+        def setPageOrientation(self, value: object) -> None:
+            calls["page_orientation"] = value
 
         def setFullPage(self, value: bool) -> None:
             calls["full_page"] = value
@@ -423,7 +457,7 @@ def test_print_pdf_with_qprinter_logs_print_metrics(monkeypatch, tmp_path, caplo
         lambda _page: pdf_renderer.PagePrintAnalysis("notation", 0.9, 0.03, 0.04, 0.0, reason="test"),
     )
 
-    with caplog.at_level("INFO", logger="xw_studio.services.printing.pdf_renderer"):
+    with caplog.at_level("DEBUG", logger="xw_studio.services.printing.pdf_renderer"):
         pdf_renderer.print_pdf_with_qprinter(
             str(pdf_path),
             "Printer",

@@ -848,8 +848,8 @@ class RechnungenView(QWidget):
         shipping_row.setSpacing(8)
         self._shipping_editor = QPlainTextEdit()
         self._shipping_editor.setPlaceholderText("Lieferadresse Zeile für Zeile bearbeiten")
-        self._shipping_editor.setMinimumHeight(58)
-        self._shipping_editor.setMaximumHeight(122)
+        self._shipping_editor.setMinimumHeight(104)
+        self._shipping_editor.setMaximumHeight(150)
         self._shipping_editor.setMaximumWidth(300)
         self._shipping_editor.setMinimumWidth(240)
         self._shipping_editor.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -2264,7 +2264,7 @@ class RechnungenView(QWidget):
             elif shipping_lines:
                 self._dl_country.setText(str(shipping_lines[-1] or "").strip())
         self._shipping_source_lines = shipping_lines
-        self._shipping_status.setText("Adresse aus Wix")
+        self._shipping_status.setText("")
         selected = self._selected_summary()
         override_lines: list[str] = []
         if selected is not None:
@@ -2305,9 +2305,9 @@ class RechnungenView(QWidget):
         return self._normalize_shipping_lines(self._shipping_editor.toPlainText().splitlines())
 
     def _adjust_shipping_editor_height(self) -> None:
-        lines = max(2, min(6, self._shipping_editor.blockCount()))
+        lines = max(5, min(7, self._shipping_editor.blockCount()))
         line_height = self._shipping_editor.fontMetrics().lineSpacing()
-        target = max(58, min(122, 18 + lines * line_height))
+        target = max(104, min(150, 18 + lines * line_height))
         self._shipping_editor.setFixedHeight(target)
 
     def _on_shipping_editor_changed(self) -> None:
@@ -2324,7 +2324,7 @@ class RechnungenView(QWidget):
         else:
             self._shipping_address_overrides.pop(summary.id, None)
             if original:
-                self._shipping_status.setText("Adresse aus Wix")
+                self._shipping_status.setText("")
         self._update_plc_controls()
 
     def _on_direct_label_print_result(self, payload: object) -> None:

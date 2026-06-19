@@ -22,6 +22,11 @@ from xw_studio.services.sevdesk.invoice_client import InvoiceClient, InvoiceSumm
 from xw_studio.services.sevdesk.invoice_client import DEFAULT_SENSITIVE_COUNTRY_CODES
 from xw_studio.services.wix.client import WixOrdersClient
 
+try:
+    import fitz
+except Exception:  # pragma: no cover - optional at import time
+    fitz = None
+
 logger = logging.getLogger(__name__)
 
 _SENSITIVE_COUNTRIES_KEY = "rechnungen.sensitive_country_codes"
@@ -346,17 +351,23 @@ class InvoiceProcessingService:
         full_mode: bool,
         print_products: bool = False,
         should_abort: Callable[[], bool] | None = None,
+        progress_callback: Callable[[str], None] | None = None,
         mail_recipient_override: str | None = None,
         invoice_ids: list[str] | None = None,
     ) -> dict[str, object]:
         """Execute invoice processing flow for all open drafts (status=100)."""
         started = time.perf_counter()
+        if progress_callback is not None:
+            progress_callback("START: Entwuerfe werden geladen...")
         summaries = self._load_all_open_drafts(limit_per_page=100, max_pages=20)
         if invoice_ids:
             wanted = {str(invoice_id).strip() for invoice_id in invoice_ids if str(invoice_id).strip()}
             summaries = [summary for summary in summaries if str(summary.id).strip() in wanted]
         if full_mode:
+            if progress_callback is not None:
+                progress_callback("START: Wix-Kontext wird geladen...")
             self._prefetch_wix_order_context(summaries)
+            summaries.sort(key=lambda item: self._start_processing_priority(item))
         updates: dict[str, FulfillmentFlags] = {}
         processed = 0
         failures = 0
@@ -369,10 +380,15 @@ class InvoiceProcessingService:
                 break
             processed += 1
             summary = self._resolve_current_start_summary(summary)
+            label = summary.invoice_number or summary.order_reference or summary.id
             flags = self.read_fulfillment_flags(summary.id)
             try:
+                if progress_callback is not None:
+                    progress_callback(f"START: {label} wird vorbereitet...")
                 self._repair_draft_products(summary)
                 digital_only = self._is_digital_only(summary) if summary.order_reference.strip() else False
+                if progress_callback is not None and not digital_only and full_mode:
+                    progress_callback(f"START: {label} wird gedruckt...")
                 flags = self._run_finalize_step(
                     summary,
                     flags,
@@ -382,8 +398,12 @@ class InvoiceProcessingService:
                 if full_mode:
                     if not digital_only:
                         flags = self._run_invoice_print_step(summary, flags)
+                        if progress_callback is not None:
+                            progress_callback(f"START: Label fuer {label} wird gedruckt...")
                         flags = self._run_label_print_step(summary, flags)
                     flags = self._run_product_step(summary, flags)
+                if progress_callback is not None:
+                    progress_callback(f"START: Mail fuer {label} wird gesendet...")
                 flags = self._run_mail_step(summary, flags, recipient_override=mail_recipient_override)
                 successful += 1
             except Exception as exc:
@@ -408,6 +428,12 @@ class InvoiceProcessingService:
             "print_products": bool(print_products),
             "aborted": aborted,
         }
+
+    def _start_processing_priority(self, summary: InvoiceSummary) -> tuple[int, str]:
+        """Process physical invoices before digital-only orders for faster visible output."""
+        if not str(summary.order_reference or "").strip():
+            return (0, summary.invoice_date or summary.id)
+        return (1 if self._is_digital_only(summary) else 0, summary.invoice_date or summary.id)
 
     def build_inventory_requirements(
         self,
@@ -615,7 +641,7 @@ class InvoiceProcessingService:
                     to_email=to_email,
                     subject=subject,
                     text=text_body,
-                    copy=True,
+                    copy=False,
                 )
             except TypeError:
                 try:
@@ -624,7 +650,7 @@ class InvoiceProcessingService:
                         to=to_email,
                         subject=subject,
                         text=text_body,
-                        copy=True,
+                        copy=False,
                     )
                 except Exception as exc:  # noqa: BLE001 - Graph fallback below.
                     sevdesk_error = exc
@@ -835,7 +861,10 @@ class InvoiceProcessingService:
         )
 
     def _run_invoice_print_step(self, summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
-        pdf_bytes = self._get_invoice_pdf_bytes(summary.id)
+        pdf_bytes = self._get_invoice_pdf_bytes(
+            summary.id,
+            expected_invoice_number=summary.invoice_number,
+        )
         if not pdf_bytes:
             raise RuntimeError("PDF nicht verfügbar")
         self._invoice_printer.print_pdf_bytes(pdf_bytes, wait=True)
@@ -866,7 +895,20 @@ class InvoiceProcessingService:
             except Exception as exc:
                 logger.warning("Wix fulfillment-status resolve failed ref=%s: %s", reference, exc)
 
-        items = self._wix_orders.get_fulfillable_items(reference)
+        items = self._normalize_wix_fulfillment_items(self._wix_orders.get_fulfillable_items(reference))
+        if not items:
+            fallback = getattr(self._wix_orders, "physical_fulfillment_line_items", None)
+            if callable(fallback):
+                try:
+                    items = self._normalize_wix_fulfillment_items(fallback(reference))
+                    if items:
+                        logger.info(
+                            "Wix fulfillment: using physical order line-item fallback ref=%s items=%s",
+                            reference,
+                            len(items),
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Wix physical fulfillment fallback failed ref=%s: %s", reference, exc)
         if not items:
             existing_fulfillments = self._wix_orders.list_fulfillments(reference)
             if existing_fulfillments or fulfillment_status == "FULFILLED":
@@ -876,10 +918,12 @@ class InvoiceProcessingService:
                 if not digital_only
                 else f"Wix-Digital-Fulfillment nicht bestaetigt fuer {reference}"
             )
+            logger.warning(message)
             return self._next_flags(flags, product_ready=True, wix_fulfilled=False, last_warning=message)
 
         created = self._wix_orders.create_fulfillment(reference, items)
         if not created:
+            logger.warning("Wix-Fulfillment konnte nicht erstellt werden fuer %s", reference)
             return self._next_flags(
                 flags,
                 product_ready=True,
@@ -887,6 +931,40 @@ class InvoiceProcessingService:
                 last_warning=f"Wix-Fulfillment konnte nicht erstellt werden fuer {reference}",
             )
         return self._next_flags(flags, product_ready=True, wix_fulfilled=True)
+
+    @staticmethod
+    def _normalize_wix_fulfillment_items(raw_items: list[dict[str, Any]] | object) -> list[dict[str, object]]:
+        if not isinstance(raw_items, list):
+            return []
+        items: list[dict[str, object]] = []
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
+            nested_line = raw.get("lineItem") if isinstance(raw.get("lineItem"), dict) else {}
+            item_id = str(
+                raw.get("id")
+                or raw.get("lineItemId")
+                or raw.get("line_item_id")
+                or nested_line.get("id")
+                or ""
+            ).strip()
+            if not item_id:
+                continue
+            quantity_raw = (
+                raw.get("quantity")
+                or raw.get("fulfillableQuantity")
+                or raw.get("remainingQuantity")
+                or nested_line.get("quantity")
+                or 1
+            )
+            try:
+                quantity = int(float(str(quantity_raw)))
+            except (TypeError, ValueError):
+                quantity = 1
+            if quantity <= 0:
+                continue
+            items.append({"id": item_id, "quantity": quantity})
+        return items
 
     def _run_mail_step(
         self,
@@ -1112,8 +1190,11 @@ class InvoiceProcessingService:
         )
 
     def _build_invoice_attachment(self, summary: InvoiceSummary, invoice: dict[str, Any]) -> MailAttachment:
-        pdf_bytes = self._get_invoice_pdf_bytes(summary.id)
         invoice_number = self._invoice_number(summary, invoice)
+        pdf_bytes = self._get_invoice_pdf_bytes(
+            summary.id,
+            expected_invoice_number=invoice_number,
+        )
         return MailAttachment(filename=f"{invoice_number}.pdf", content=pdf_bytes, mime_type="application/pdf")
 
     def _fetch_invoice_detail(self, invoice_id: str) -> dict[str, Any]:
@@ -1125,7 +1206,12 @@ class InvoiceProcessingService:
         self._invoice_detail_cache[str(invoice_id)] = normalized
         return normalized
 
-    def _get_invoice_pdf_bytes(self, invoice_id: str) -> bytes:
+    def _get_invoice_pdf_bytes(
+        self,
+        invoice_id: str,
+        *,
+        expected_invoice_number: str = "",
+    ) -> bytes:
         cached = self._invoice_pdf_cache.get(str(invoice_id))
         if cached:
             return cached
@@ -1139,16 +1225,61 @@ class InvoiceProcessingService:
                 if callable(extractor):
                     rendered_pdf = extractor(render_payload)
                     if rendered_pdf:
-                        self._invoice_pdf_cache[str(invoice_id)] = rendered_pdf
-                        return rendered_pdf
+                        sanity_issue = self._invoice_pdf_sanity_issue(
+                            rendered_pdf,
+                            expected_invoice_number=expected_invoice_number,
+                        )
+                        if sanity_issue:
+                            logger.info("Invoice %s renderPdf ignored: %s", invoice_id, sanity_issue)
+                        else:
+                            self._invoice_pdf_cache[str(invoice_id)] = rendered_pdf
+                            return rendered_pdf
                 pdf_bytes = self._invoices.get_invoice_pdf(invoice_id)
                 if pdf_bytes:
+                    sanity_issue = self._invoice_pdf_sanity_issue(
+                        pdf_bytes,
+                        expected_invoice_number=expected_invoice_number,
+                    )
+                    if sanity_issue:
+                        raise ValueError(f"sevDesk PDF unplausibel: {sanity_issue}")
                     self._invoice_pdf_cache[str(invoice_id)] = pdf_bytes
                     return pdf_bytes
             except Exception as exc:  # noqa: BLE001 - retry transient sevDesk render/getPdf states.
                 last_exc = exc
                 logger.info("Invoice %s PDF attempt %s failed: %s", invoice_id, attempt, exc)
         raise RuntimeError("PDF nicht verfügbar") from last_exc
+
+    @staticmethod
+    def _invoice_pdf_sanity_issue(
+        pdf_bytes: bytes,
+        *,
+        expected_invoice_number: str = "",
+    ) -> str:
+        if fitz is None or not pdf_bytes:
+            return ""
+        try:
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Invoice PDF sanity skipped: PDF could not be opened (%s)", exc)
+            return ""
+        try:
+            if len(doc) < 1:
+                return "keine PDF-Seiten"
+            page = doc[0]
+            width = float(page.rect.width)
+            height = float(page.rect.height)
+            if width > height:
+                return f"erste Seite ist Querformat ({width:.0f}x{height:.0f} pt)"
+            expected = str(expected_invoice_number or "").strip()
+            if expected:
+                text = page.get_text("text") or ""
+                if expected not in text:
+                    return f"Rechnungsnummer {expected} fehlt im PDF-Text"
+        except Exception as exc:  # noqa: BLE001
+            return f"PDF-Pruefung fehlgeschlagen ({exc})"
+        finally:
+            doc.close()
+        return ""
 
     def _load_fulfillment_flags_map(self) -> dict[str, FulfillmentFlags]:
         if self._settings_repo is None:

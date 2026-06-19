@@ -130,7 +130,20 @@ class _WixOrdersStub:
     def get_fulfillable_items(self, reference: str) -> list[dict[str, str]]:
         return list(self._fulfillable_items)
 
+    def physical_fulfillment_line_items(self, reference: str) -> list[dict[str, object]]:
+        order = self.orders.get(reference, {})
+        raw_items = order.get("lineItems") if isinstance(order.get("lineItems"), list) else []
+        items: list[dict[str, object]] = []
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                continue
+            item_id = str(raw.get("id") or "").strip()
+            if item_id:
+                items.append({"id": item_id, "quantity": int(raw.get("quantity") or 1)})
+        return items
+
     def create_fulfillment(self, reference: str, items: list[dict[str, str]]) -> dict[str, str]:
+        self._created_fulfillment = (reference, list(items))
         return {"id": "fulfillment-1"} if items else {}
 
     def fulfillment_status(self, reference: str) -> str:
@@ -355,6 +368,7 @@ def test_mail_step_uses_saved_template_when_available() -> None:
     assert client.mail_calls[0]["to_email"] == "max@example.test"
     assert client.mail_calls[0]["subject"] == "Rechnung RE-TEST-1"
     assert "Hallo Max Mustermann" in str(client.mail_calls[0]["text"])
+    assert client.mail_calls[0]["copy"] is False
     assert mailer.calls == []
     assert client.render_calls == []
 
@@ -432,6 +446,28 @@ def test_product_step_returns_warning_for_unconfirmed_physical_fulfillment() -> 
     assert flags.product_ready is True
     assert flags.wix_fulfilled is False
     assert "Wix-Fulfillment nicht bestaetigt" in flags.last_warning
+
+
+def test_product_step_falls_back_to_physical_order_line_items() -> None:
+    summary = InvoiceSummary(id="10b", invoiceNumber="RE-TEST-10B", order_reference="54321")
+    wix = _WixOrdersStub()
+    wix.orders["54321"] = {
+        "lineItems": [
+            {"id": "physical-1", "quantity": 2, "itemType": {"preset": "PHYSICAL"}},
+        ]
+    }
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        _InvoiceClientStub([summary]),  # type: ignore[arg-type]
+        None,
+        wix,  # type: ignore[arg-type]
+    )
+
+    flags = svc._run_product_step(summary, svc.read_fulfillment_flags("10b"))  # noqa: SLF001
+
+    assert flags.product_ready is True
+    assert flags.wix_fulfilled is True
+    assert wix._created_fulfillment == ("54321", [{"id": "physical-1", "quantity": 2}])
 
 
 def test_invoice_list_hints_follow_legacy_alarm_rules() -> None:

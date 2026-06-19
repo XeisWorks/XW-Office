@@ -297,9 +297,10 @@ def test_fullflow_invoice_and_label_steps() -> None:
     assert mock_inv_print.called
     assert mock_label_print.called
     assert invoice_client.send_calls == [("INV-001", "VPR", False)]
-    assert wix_orders.fulfillment_calls == [("WIX-INV-001", [{"id": "line-1"}])]
+    assert wix_orders.fulfillment_calls == [("WIX-INV-001", [{"id": "line-1", "quantity": 1}])]
     assert len(invoice_client.mail_calls) == 1
     assert invoice_client.mail_calls[0]["to_email"] == "john@example.test"
+    assert invoice_client.mail_calls[0]["copy"] is False
     assert len(mailer.calls) == 0
 
 

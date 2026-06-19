@@ -119,6 +119,36 @@ def test_best_address_lines_supports_nested_shipping_address_variants() -> None:
     ]
 
 
+def test_shipping_address_lines_include_company_and_contact_name() -> None:
+    order = {
+        "shippingInfo": {
+            "shippingDestination": {
+                "contactDetails": {
+                    "firstName": "Franz",
+                    "lastName": "Muster",
+                    "company": "Muster Musik GmbH",
+                },
+                "address": {
+                    "addressLine": "Hauptstrasse 9",
+                    "postalCode": "8010",
+                    "city": "Graz",
+                    "countryCode": "AT",
+                },
+            }
+        }
+    }
+
+    lines = WixOrdersClient.shipping_address_lines_from_order(order)
+
+    assert lines == [
+        "Muster Musik GmbH",
+        "Franz Muster",
+        "Hauptstrasse 9",
+        "8010 Graz",
+        "Austria",
+    ]
+
+
 def test_best_address_lines_merges_structured_street_address_number() -> None:
     order = {
         "buyerInfo": {"firstName": "Florian", "lastName": "Brandner"},
@@ -155,6 +185,23 @@ def test_best_address_lines_merges_structured_street_address_number() -> None:
     assert summary["wix_billing_street"] == "Auerdörfl 16"
     assert summary["wix_billing_city"] == "Berchtesgaden"
     assert summary["wix_billing_country"] == "Germany"
+
+
+def test_physical_fulfillment_line_items_from_order_skips_digital_items() -> None:
+    order = {
+        "lineItems": [
+            {"id": "phys-1", "quantity": 2, "itemType": {"preset": "PHYSICAL"}},
+            {"id": "digital-1", "quantity": 1, "itemType": {"preset": "DIGITAL"}},
+            {"id": "phys-2", "quantity": "3", "physicalProperties": {"shippable": True}},
+        ]
+    }
+
+    items = WixOrdersClient._physical_fulfillment_line_items_from_order(order)  # noqa: SLF001
+
+    assert items == [
+        {"id": "phys-1", "quantity": 2},
+        {"id": "phys-2", "quantity": 3},
+    ]
 
 
 def test_resolve_order_falls_back_to_order_number_search() -> None:

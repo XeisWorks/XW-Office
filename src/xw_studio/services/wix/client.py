@@ -906,12 +906,15 @@ class WixOrdersClient:
             shipping,
             keys=("company", "companyName", "businessName", "addressName"),
         )
-        name = company or " ".join(part for part in (first, last) if part).strip()
-        if not name:
-            name = cls._norm_text(buyer.get("firstName"))
+        person_name = " ".join(part for part in (first, last) if part).strip()
+        if not person_name:
+            person_name = cls._norm_text(buyer.get("firstName"))
             fallback_last = cls._norm_text(buyer.get("lastName"))
-            if fallback_last and fallback_last not in name:
-                name = " ".join(part for part in (name, fallback_last) if part).strip()
+            if fallback_last and fallback_last not in person_name:
+                person_name = " ".join(part for part in (person_name, fallback_last) if part).strip()
+        if company and person_name and company.casefold() == person_name.casefold():
+            company = ""
+        name = company or person_name
 
         street1 = cls._address_field(
             destination_address,
@@ -974,6 +977,8 @@ class WixOrdersClient:
         )
         return {
             "name": name,
+            "company": company,
+            "person_name": person_name,
             "street1": street1,
             "street2": street2,
             "postal_code": postal_code,
@@ -1134,6 +1139,11 @@ class WixOrdersClient:
         if not parts:
             return []
         name = parts.get("name", "")
+        company = parts.get("company", "")
+        person_name = parts.get("person_name", "")
+        name_lines = [line for line in (company, person_name if person_name != company else "") if line]
+        if not name_lines and name:
+            name_lines = [name]
         street1 = parts.get("street1", "")
         street2 = parts.get("street2", "")
         postal_code = parts.get("postal_code", "")
@@ -1141,7 +1151,7 @@ class WixOrdersClient:
         country = parts.get("country", "")
         city_line = " ".join(part for part in (postal_code, city) if part)
 
-        return [line for line in (name, street1, street2, city_line, country) if line]
+        return [line for line in (*name_lines, street1, street2, city_line, country) if line]
 
     @classmethod
     def billing_address_lines_from_order(cls, order: dict[str, Any]) -> list[str]:
@@ -1306,6 +1316,30 @@ class WixOrdersClient:
                     logger.warning("WixOrdersClient get fulfillable items failed: %s", exc)
                 return []
 
+    def physical_fulfillment_line_items(self, reference: str) -> list[dict[str, object]]:
+        order = self._resolve_order(reference)
+        return self._physical_fulfillment_line_items_from_order(order)
+
+    @classmethod
+    def _physical_fulfillment_line_items_from_order(cls, order: dict[str, Any]) -> list[dict[str, object]]:
+        raw_items = order.get("lineItems") if isinstance(order.get("lineItems"), list) else []
+        items: list[dict[str, object]] = []
+        for raw in raw_items:
+            if not isinstance(raw, dict) or cls.line_item_is_digital(raw):
+                continue
+            item_id = str(raw.get("id") or raw.get("lineItemId") or "").strip()
+            if not item_id:
+                continue
+            quantity_raw = raw.get("quantity") or raw.get("qty") or 1
+            try:
+                quantity = int(float(str(quantity_raw)))
+            except (TypeError, ValueError):
+                quantity = 1
+            if quantity <= 0:
+                continue
+            items.append({"id": item_id, "quantity": quantity})
+        return items
+
     def create_fulfillment(
         self,
         reference: str,
@@ -1318,10 +1352,9 @@ class WixOrdersClient:
         items = [item for item in line_items if isinstance(item, dict)]
         if not order_id or not items or not self.has_credentials():
             return {}
-        payload = {
+        payload: dict[str, Any] = {
             "fulfillment": {
                 "lineItems": items,
-                "status": "Fulfilled",
             },
             "notifyCustomer": bool(notify_customer),
         }
@@ -1340,8 +1373,12 @@ class WixOrdersClient:
                     str(reference or "").strip(),
                     len(items),
                 )
-                return resp.json() if resp.content else {}
+                return resp.json() if resp.content else {"created": True}
             except httpx.HTTPError as exc:
+                response = getattr(exc, "response", None)
+                if getattr(response, "status_code", None) == 409:
+                    logger.info("WixOrdersClient create fulfillment already exists ref=%s", reference)
+                    return {"already_exists": True}
                 logger.warning("WixOrdersClient create fulfillment failed: %s", exc)
                 return {}
 

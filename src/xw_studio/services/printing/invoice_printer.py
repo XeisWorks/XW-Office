@@ -70,7 +70,7 @@ class InvoicePrinter:
             size,
         )
         profile = self._printing.resolve_profile("invoice")
-        dpi = int(profile.dpi) if profile is not None and profile.dpi else None
+        dpi = int(profile.dpi) if profile is not None and profile.dpi else int(self._printing.invoice_dpi or 300)
         placement_mode = profile.placement_mode if profile is not None else "paper_origin"
         x_offset_mm = float(profile.x_offset_mm) if profile is not None else 0.0
         y_offset_mm = float(profile.y_offset_mm) if profile is not None else 0.0

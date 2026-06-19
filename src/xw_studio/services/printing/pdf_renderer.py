@@ -9,7 +9,7 @@ from typing import Literal, cast
 
 import fitz  # PyMuPDF
 from PySide6.QtCore import QPointF
-from PySide6.QtGui import QImage, QPainter
+from PySide6.QtGui import QImage, QPageLayout, QPageSize, QPainter
 from PySide6.QtPrintSupport import QPrinter
 
 logger = logging.getLogger(__name__)
@@ -364,6 +364,9 @@ def print_pdf_with_qprinter(
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
             printer.setOutputFormat(QPrinter.OutputFormat.NativeFormat)
             printer.setPrinterName(printer_name)
+            if str(job_kind or "").strip().casefold() == "invoice":
+                printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+                printer.setPageOrientation(QPageLayout.Orientation.Portrait)
             printer.setFullPage(full_page)
             requested_dpi = max(int(dpi), 1) if dpi is not None else None
             if requested_dpi is not None:

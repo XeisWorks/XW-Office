@@ -690,6 +690,7 @@ class TagesgeschaeftView(QWidget):
                 full_mode=(mode == StartMode.INVOICES_AND_PRINT),
                 print_products=self._start_include_product_print,
                 should_abort=lambda: self._start_abort_requested,
+                progress_callback=lambda message: signals.status_message.emit(message, 5000),
                 invoice_ids=list(self._start_selected_invoice_ids) if self._start_selected_only else None,
             )
             inventory_report: StartExecutionReport | None = None
