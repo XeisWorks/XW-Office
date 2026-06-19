@@ -45,6 +45,13 @@ class _WixOrdersStub:
                     "productName": {"translated": "Produkt Eins"},
                     "quantity": 2,
                     "price": {"amount": "12.50"},
+                    "taxInfo": {"taxRate": "0"},
+                    "descriptionLines": [
+                        {
+                            "name": {"translated": "Rabatt"},
+                            "plainText": {"translated": "B2B-Rabatt 25%"},
+                        }
+                    ],
                     "physicalProperties": {"sku": "XW-100", "shippable": True},
                 }
             ],
@@ -137,11 +144,11 @@ class _InvoiceClientStub:
             {
                 "id": "POS-1",
                 "objectName": "InvoicePos",
-                "name": "Wix Fallback",
-                "text": "",
+                "name": "Gepruefte Positionsbezeichnung",
+                "text": "Die richtige Produktbeschreibung",
                 "quantity": 2,
                 "price": 12.5,
-                "taxRate": 19,
+                "taxRate": 0,
                 "positionNumber": 0,
                 "unity": {"id": 1, "objectName": "Unity"},
             }
@@ -190,6 +197,7 @@ def test_create_draft_keeps_unmapped_position_when_part_missing() -> None:
     assert "part" not in first_pos
     assert first_pos["name"] == "Produkt Eins"
     assert first_pos["price"] == 12.5
+    assert first_pos["taxRate"] == 0
 
 
 def test_apply_missing_product_plan_creates_part_and_patches_existing_draft() -> None:
@@ -218,12 +226,20 @@ def test_apply_missing_product_plan_creates_part_and_patches_existing_draft() ->
     assert len(parts.created_payloads) == 1
     assert invoices.updated_positions is not None
     assert invoices.updated_positions[0]["part"] == {"id": "P-1", "objectName": "Part"}
-    assert invoices.updated_positions[0]["name"] == "Produkt Eins"
+    assert invoices.updated_positions[0]["name"] == "Gepruefte Positionsbezeichnung"
+    assert invoices.updated_positions[0]["text"] == "Die richtige Produktbeschreibung"
+    assert invoices.updated_positions[0]["taxRate"] == 0
 
 
-def test_repair_draft_product_mapping_updates_existing_positions_without_auto_create() -> None:
+def test_repair_draft_product_mapping_only_adds_part_reference_without_auto_create() -> None:
     service, _connection, parts, invoices = _service()
-    parts.parts["XW-100"] = SevdeskPart(id="P-1", sku="XW-100", name="Produkt Eins")
+    parts.parts["XW-100"] = SevdeskPart(
+        id="P-1",
+        sku="XW-100",
+        name="Produkt Eins",
+        text="Rabatt: B2B-Rabatt 25%",
+        tax_rate=19,
+    )
 
     repaired = service.repair_draft_product_mapping("INV-1", "20519")
 
@@ -231,4 +247,6 @@ def test_repair_draft_product_mapping_updates_existing_positions_without_auto_cr
     assert len(parts.created_payloads) == 0
     assert invoices.updated_positions is not None
     assert invoices.updated_positions[0]["part"] == {"id": "P-1", "objectName": "Part"}
-    assert invoices.updated_positions[0]["name"] == "Produkt Eins"
+    assert invoices.updated_positions[0]["name"] == "Gepruefte Positionsbezeichnung"
+    assert invoices.updated_positions[0]["text"] == "Die richtige Produktbeschreibung"
+    assert invoices.updated_positions[0]["taxRate"] == 0

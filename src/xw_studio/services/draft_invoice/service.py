@@ -440,11 +440,20 @@ class DraftInvoiceService:
                 "objectName": "InvoicePos",
                 "mapAll": True,
                 "unity": {"id": 1, "objectName": "Unity"},
-                "taxRate": float(part.tax_rate) if part is not None and part.tax_rate is not None else 19.0,
+                # The tax rate belongs to this sale, not to the catalog article.
+                # In particular, an EU B2B sale can be tax-free even when the
+                # same article normally has 19 % VAT in Austria.
+                "taxRate": self._line_item_tax_rate(
+                    raw_item,
+                    fallback=float(part.tax_rate) if part is not None and part.tax_rate is not None else 19.0,
+                ),
                 "quantity": float(qty),
                 "price": price,
                 "name": str(item.name or (part.name if part is not None else "") or sku).strip(),
-                "text": str(item.note or (part.text if part is not None else "") or "").strip(),
+                # sevDesk article text is the maintained product description.
+                # Wix description lines may contain order metadata such as a
+                # discount-rule label and must therefore only be a fallback.
+                "text": str((part.text if part is not None else "") or item.note or "").strip(),
                 "positionNumber": index,
             }
             if part is not None and str(part.id).strip():
@@ -484,13 +493,14 @@ class DraftInvoiceService:
             if part is None or not part.id.strip():
                 continue
             updated = dict(patched[index])
+            # START must not alter commercial data on an already reviewed
+            # sevDesk draft.  It merely repairs the product association.
+            # Replacing the description with Wix order metadata or replacing a
+            # tax-free line's 0 % rate with the article's domestic VAT rate
+            # caused incorrect final invoices.
             updated["part"] = {"id": str(part.id), "objectName": "Part"}
-            updated["name"] = str(item.name or part.name or sku).strip()
-            updated["text"] = str(item.note or part.text or updated.get("text") or "").strip()
             if part.unity and isinstance(part.unity, dict) and part.unity.get("id"):
                 updated["unity"] = dict(part.unity)
-            if part.tax_rate is not None:
-                updated["taxRate"] = float(part.tax_rate)
             patched[index] = updated
         return patched
 
@@ -739,6 +749,32 @@ class DraftInvoiceService:
         if total is not None:
             return total / max(qty, 1)
         return 0.0
+
+    @classmethod
+    def _line_item_tax_rate(cls, raw_item: dict[str, Any], *, fallback: float) -> float:
+        """Read the VAT rate carried by a Wix order line, preserving 0 %."""
+        for container_key in ("taxInfo", "taxDetails"):
+            container = raw_item.get(container_key)
+            if isinstance(container, dict) and "taxRate" in container:
+                rate = cls._normalize_tax_rate(container.get("taxRate"))
+                if rate is not None:
+                    return rate
+        for key in ("taxRate", "taxRatePercent"):
+            if key in raw_item:
+                rate = cls._normalize_tax_rate(raw_item.get(key))
+                if rate is not None:
+                    return rate
+        return float(fallback)
+
+    @staticmethod
+    def _normalize_tax_rate(value: object) -> float | None:
+        try:
+            rate = float(str(value).strip().replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+        if rate < 0:
+            return None
+        return rate * 100 if rate <= 1 else rate
 
     @staticmethod
     def _extract_amount(value: object) -> float | None:
