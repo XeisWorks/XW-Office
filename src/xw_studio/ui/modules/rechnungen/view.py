@@ -95,6 +95,8 @@ _TABLE_COLUMNS = [
 ]
 
 _PAGE_SIZE = 50
+_DRAFT_STATUS = 100
+_OPEN_STATUS = 200
 _WIX_CONTEXT_CACHE_TTL_SECONDS = 75.0
 
 
@@ -615,6 +617,12 @@ class RechnungenView(QWidget):
         self._loaded_rows: list[dict[str, Any]] = []
         self._loaded_summaries: list[InvoiceSummary] = []
         self._loaded_has_more = False
+        self._active_load_status = _DRAFT_STATUS
+        self._draft_offset = 0
+        self._open_offset = 0
+        self._draft_has_more = False
+        self._open_has_more = False
+        self._open_loaded = False
         self._search_active = False
         self._search_seq = 0
         self._wix_digital_cache: dict[str, bool] = {}
@@ -747,10 +755,10 @@ class RechnungenView(QWidget):
 
         load_more_row = QHBoxLayout()
         load_more_row.addStretch()
-        self._btn_more = QPushButton("Weitere laden")
-        self._btn_more.setToolTip(f"Naechste bis zu {_PAGE_SIZE} Rechnungen anhaengen")
+        self._btn_more = QPushButton("Weitere Entwuerfe")
+        self._btn_more.setToolTip(f"Naechste bis zu {_PAGE_SIZE} Entwuerfe anhaengen")
         self._btn_more.setFixedHeight(28)
-        self._btn_more.setFixedWidth(136)
+        self._btn_more.setFixedWidth(150)
         self._btn_more.clicked.connect(self._load_more)
         load_more_row.addWidget(self._btn_more)
         left_layout.addLayout(load_more_row)
@@ -1056,12 +1064,20 @@ class RechnungenView(QWidget):
 
     def _reload_first_page(self) -> None:
         self._next_offset = 0
+        self._active_load_status = _DRAFT_STATUS
+        self._draft_offset = 0
+        self._open_offset = 0
+        self._draft_has_more = False
+        self._open_has_more = False
+        self._open_loaded = False
         self._append_mode = False
         self._start_load()
 
     def _load_more(self) -> None:
         if not self._has_sevdesk_token():
             return
+        if self._active_load_status == _DRAFT_STATUS and not self._draft_has_more:
+            self._active_load_status = _OPEN_STATUS
         self._append_mode = True
         self._start_load()
 
@@ -1070,7 +1086,10 @@ class RechnungenView(QWidget):
             return
 
         service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-        offset = self._next_offset if self._append_mode else 0
+        status_filter = self._active_load_status
+        offset = (
+            self._draft_offset if status_filter == _DRAFT_STATUS else self._open_offset
+        ) if self._append_mode else 0
         append = self._append_mode
 
         self._overlay.show_with_message(
@@ -1079,14 +1098,14 @@ class RechnungenView(QWidget):
         self._overlay.setGeometry(self.rect())
         self._overlay.raise_()
 
-        def job() -> tuple[list[dict[str, str]], list[InvoiceSummary], bool]:
+        def job() -> tuple[list[dict[str, str]], list[InvoiceSummary], bool, int]:
             rows, sums = service.load_invoice_batch(
-                status=None,
+                status=status_filter,
                 limit=_PAGE_SIZE,
                 offset=offset,
             )
             has_more = len(sums) >= _PAGE_SIZE
-            return rows, sums, has_more
+            return rows, sums, has_more, status_filter
 
         self._worker = BackgroundWorker(job)
         self._worker.signals.result.connect(self._on_load_result)
@@ -1123,15 +1142,16 @@ class RechnungenView(QWidget):
         return bool(self._current_sevdesk_token())
 
     def _on_load_result(self, payload: object) -> None:
-        if not isinstance(payload, tuple) or len(payload) != 3:
+        if not isinstance(payload, tuple) or len(payload) != 4:
             logger.warning("Unexpected invoice load payload: %s", type(payload))
             return
-        rows_obj, sums_obj, has_more_obj = payload
+        rows_obj, sums_obj, has_more_obj, status_obj = payload
         if not isinstance(rows_obj, list) or not isinstance(sums_obj, list):
             return
         rows: list[dict[str, Any]] = [r for r in rows_obj if isinstance(r, dict)]
         summaries: list[InvoiceSummary] = [s for s in sums_obj if isinstance(s, InvoiceSummary)]
         has_more = bool(has_more_obj)
+        status_filter = int(status_obj)
         self._prepare_rows_for_hint_prefetch(rows, summaries)
 
         if self._append_mode:
@@ -1144,6 +1164,18 @@ class RechnungenView(QWidget):
             self._loaded_summaries = summaries
             self._loaded_has_more = has_more
 
+        if status_filter == _DRAFT_STATUS:
+            self._draft_offset = sum(
+                1 for summary in self._summaries if summary.status_code == _DRAFT_STATUS
+            )
+            self._draft_has_more = has_more
+        elif status_filter == _OPEN_STATUS:
+            self._open_loaded = True
+            self._open_offset = sum(
+                1 for summary in self._summaries if summary.status_code == _OPEN_STATUS
+            )
+            self._open_has_more = has_more
+
         self._search.refresh_suggestions()
         self._rebuild_search_index()
         if not self._append_mode or not self._table_layout_initialized:
@@ -1152,7 +1184,7 @@ class RechnungenView(QWidget):
         self._refresh_open_invoice_overview()
 
         self._next_offset = len(self._summaries)
-        self._btn_more.setEnabled(has_more and not self._search_active)
+        self._update_load_more_button()
 
         signals: AppSignals = self._container.resolve(AppSignals)
         mode = "angehaengt" if self._append_mode else "geladen"
@@ -1163,6 +1195,33 @@ class RechnungenView(QWidget):
         self._append_mode = False
         self._refresh_detail_for_selection()
         self._restart_hint_prefetch()
+
+    def _update_load_more_button(self) -> None:
+        if self._search_active:
+            self._btn_more.setEnabled(False)
+            return
+        if self._active_load_status == _DRAFT_STATUS:
+            if self._draft_has_more:
+                self._btn_more.setText("Weitere Entwuerfe")
+                self._btn_more.setToolTip(f"Naechste bis zu {_PAGE_SIZE} Entwuerfe anhaengen")
+                self._btn_more.setEnabled(True)
+            elif not self._open_loaded:
+                self._btn_more.setText("Offene laden")
+                self._btn_more.setToolTip("Offene Rechnungen erst bei Bedarf laden")
+                self._btn_more.setEnabled(True)
+            else:
+                self._btn_more.setText("Keine weiteren")
+                self._btn_more.setToolTip("Keine weiteren Rechnungen in dieser Ansicht")
+                self._btn_more.setEnabled(False)
+            return
+        if self._open_has_more:
+            self._btn_more.setText("Weitere offene")
+            self._btn_more.setToolTip(f"Naechste bis zu {_PAGE_SIZE} offene Rechnungen anhaengen")
+            self._btn_more.setEnabled(True)
+        else:
+            self._btn_more.setText("Keine weiteren")
+            self._btn_more.setToolTip("Keine weiteren offenen Rechnungen")
+            self._btn_more.setEnabled(False)
 
     def _apply_table_column_layout(self) -> None:
         header = self._table.horizontalHeader()
@@ -1313,7 +1372,7 @@ class RechnungenView(QWidget):
     def _restore_loaded_invoice_list(self) -> None:
         self._table.set_data(self._loaded_rows)
         self._summaries = list(self._loaded_summaries)
-        self._btn_more.setEnabled(self._loaded_has_more)
+        self._update_load_more_button()
         self._search.refresh_suggestions()
         self._rebuild_search_index()
         self._refresh_detail_for_selection()

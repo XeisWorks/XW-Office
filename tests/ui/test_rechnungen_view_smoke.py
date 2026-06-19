@@ -68,7 +68,7 @@ def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
     view = RechnungenView(container)
     qtbot.addWidget(view)
 
-    assert view._btn_more.text() == "Weitere laden"  # noqa: SLF001
+    assert view._btn_more.text() == "Weitere Entwuerfe"  # noqa: SLF001
     assert view._btn_draft.text() == "Rechnungs-Entwurf"  # noqa: SLF001
     assert view._btn_custom_label.text() == "CUSTOM-LABEL"  # noqa: SLF001
     assert view._btn_print.text() == "Rechnung drucken"  # noqa: SLF001
@@ -83,6 +83,31 @@ def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
     assert not view._btn_print_plc.isEnabled()  # noqa: SLF001
     assert not view._btn_print_music.isEnabled()  # noqa: SLF001
     assert not view._btn_send_invoice.isEnabled()  # noqa: SLF001
+
+
+def test_rechnungen_load_more_button_stages_drafts_before_open(qtbot: object) -> None:
+    container = _build_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+
+    view._active_load_status = 100  # noqa: SLF001
+    view._draft_has_more = True  # noqa: SLF001
+    view._open_loaded = False  # noqa: SLF001
+    view._update_load_more_button()  # noqa: SLF001
+    assert view._btn_more.text() == "Weitere Entwuerfe"  # noqa: SLF001
+    assert view._btn_more.isEnabled()  # noqa: SLF001
+
+    view._draft_has_more = False  # noqa: SLF001
+    view._update_load_more_button()  # noqa: SLF001
+    assert view._btn_more.text() == "Offene laden"  # noqa: SLF001
+    assert view._btn_more.isEnabled()  # noqa: SLF001
+
+    view._active_load_status = 200  # noqa: SLF001
+    view._open_loaded = True  # noqa: SLF001
+    view._open_has_more = False  # noqa: SLF001
+    view._update_load_more_button()  # noqa: SLF001
+    assert view._btn_more.text() == "Keine weiteren"  # noqa: SLF001
+    assert not view._btn_more.isEnabled()  # noqa: SLF001
 
 
 def test_rechnungen_detail_panel_click_does_not_clear_selection(qtbot: object) -> None:
