@@ -20,6 +20,7 @@ from xw_studio.services.printing.label_printer import LabelPrinter
 from xw_studio.services.printing.print_queue import PrintQueueService
 from xw_studio.services.sevdesk.invoice_client import InvoiceClient, InvoiceSummary
 from xw_studio.services.sevdesk.invoice_client import DEFAULT_SENSITIVE_COUNTRY_CODES
+from xw_studio.services.shipping.countries import country_label_for_address
 from xw_studio.services.wix.client import WixOrdersClient
 
 try:
@@ -612,6 +613,14 @@ class InvoiceProcessingService:
         self.write_fulfillment_flags(summary.id, next_flags)
         return next_flags
 
+    def print_invoice_for_invoice(self, invoice_id: str) -> FulfillmentFlags:
+        """Print one invoice through the configured invoice printer and persist state."""
+        summary = self._load_summary_by_id(invoice_id)
+        flags = self.read_fulfillment_flags(summary.id)
+        next_flags = self._run_invoice_print_step(summary, flags)
+        self.write_fulfillment_flags(summary.id, next_flags)
+        return next_flags
+
     def send_invoice_mail_for_invoice(
         self,
         summary: InvoiceSummary,
@@ -1014,13 +1023,13 @@ class InvoiceProcessingService:
             or invoice.get("city")
             or ""
         ).strip()
-        country = str(
+        country = country_label_for_address(
             invoice.get("deliveryAddressCountry")
             or invoice.get("shippingCountry")
             or invoice.get("addressCountryCode")
             or summary.display_country
             or ""
-        ).strip()
+        )
 
         city_line = " ".join(part for part in (zip_code, city) if part)
         lines = [line for line in (name, street, city_line, country) if str(line).strip()]

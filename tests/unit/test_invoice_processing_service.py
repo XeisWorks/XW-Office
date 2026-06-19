@@ -347,7 +347,7 @@ def test_invoice_detail_context_uses_sevdesk_shipping_for_older_invoices() -> No
     context = svc.get_invoice_detail_context(summary)
 
     assert context["customer_email"] == "alt@example.test"
-    assert context["shipping_lines"] == ["Alt Kunde", "Hauptstrasse 7", "8010 Graz", "Austria"]
+    assert context["shipping_lines"] == ["Alt Kunde", "Hauptstrasse 7", "8010 Graz", "AUSTRIA"]
 
 
 def test_mail_step_uses_saved_template_when_available() -> None:

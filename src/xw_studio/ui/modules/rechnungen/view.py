@@ -1553,11 +1553,29 @@ class RechnungenView(QWidget):
     def _on_print_clicked(self) -> None:
         if not self._print_allowed:
             return
-        if self._require_selected_invoice() is None:
+        summary = self._require_selected_invoice()
+        if summary is None:
             return
-        from xw_studio.ui.modules.rechnungen.print_dialog import run_invoice_pdf_print
+        if self._fulfillment_step_worker is not None and self._fulfillment_step_worker.isRunning():
+            return
 
-        run_invoice_pdf_print(self, self._container)
+        self._overlay.show_with_message("Rechnungsdruck laeuft...")
+        self._overlay.setGeometry(self.rect())
+        self._overlay.raise_()
+
+        def job() -> dict[str, object]:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            flags = service.print_invoice_for_invoice(summary.id)
+            return {
+                "invoice": summary.invoice_number or summary.id,
+                "flags": flags.as_row_payload(),
+            }
+
+        self._fulfillment_step_worker = BackgroundWorker(job)
+        self._fulfillment_step_worker.signals.result.connect(self._on_direct_invoice_print_result)
+        self._fulfillment_step_worker.signals.error.connect(self._on_direct_invoice_print_error)
+        self._fulfillment_step_worker.signals.finished.connect(self._on_fulfillment_step_finished)
+        self._fulfillment_step_worker.start()
 
     def _on_print_label_clicked(self) -> None:
         if not self._print_allowed:
@@ -2328,6 +2346,9 @@ class RechnungenView(QWidget):
         self._update_plc_controls()
 
     def _on_direct_label_print_result(self, payload: object) -> None:
+        _ = payload
+        self._reload_first_page()
+        return
         data = payload if isinstance(payload, dict) else {}
         invoice = str(data.get("invoice") or "—")
         QMessageBox.information(
@@ -2342,6 +2363,26 @@ class RechnungenView(QWidget):
             self,
             "Labeldruck",
             f"Label konnte nicht gedruckt werden:\n\n{exc}",
+        )
+
+    def _on_direct_invoice_print_result(self, payload: object) -> None:
+        _ = payload
+        self._reload_first_page()
+        return
+        data = payload if isinstance(payload, dict) else {}
+        invoice = str(data.get("invoice") or "â€”")
+        QMessageBox.information(
+            self,
+            "Rechnungsdruck",
+            f"Rechnung {invoice} wurde an den Rechnungsdrucker gesendet.",
+        )
+        self._reload_first_page()
+
+    def _on_direct_invoice_print_error(self, exc: Exception) -> None:
+        QMessageBox.warning(
+            self,
+            "Rechnungsdruck",
+            f"Rechnung konnte nicht gedruckt werden:\n\n{exc}",
         )
 
     def _on_send_invoice_result(self, payload: object) -> None:

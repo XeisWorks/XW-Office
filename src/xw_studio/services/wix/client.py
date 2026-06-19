@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from pydantic import BaseModel, ConfigDict
 
+from xw_studio.services.shipping.countries import country_label_for_address, country_name_en
+
 if TYPE_CHECKING:
     from xw_studio.services.secrets.service import SecretService
 
@@ -780,48 +782,7 @@ class WixOrdersClient:
 
     @classmethod
     def _resolve_country_name(cls, value: object) -> str:
-        text = cls._extract_text(value)
-        if not text:
-            return ""
-        mapping = {
-            "AT": "Austria",
-            "AUT": "Austria",
-            "DE": "Germany",
-            "DEU": "Germany",
-            "CH": "Switzerland",
-            "CHE": "Switzerland",
-            "IT": "Italy",
-            "ITA": "Italy",
-            "FR": "France",
-            "FRA": "France",
-            "BE": "Belgium",
-            "BEL": "Belgium",
-            "NL": "Netherlands",
-            "NLD": "Netherlands",
-            "LU": "Luxembourg",
-            "LUX": "Luxembourg",
-            "DK": "Denmark",
-            "DNK": "Denmark",
-            "SE": "Sweden",
-            "SWE": "Sweden",
-            "FI": "Finland",
-            "FIN": "Finland",
-            "EE": "Estonia",
-            "EST": "Estonia",
-            "LV": "Latvia",
-            "LVA": "Latvia",
-            "LT": "Lithuania",
-            "LTU": "Lithuania",
-            "CZ": "Czech Republic",
-            "CZE": "Czech Republic",
-            "SK": "Slovakia",
-            "SVK": "Slovakia",
-            "SI": "Slovenia",
-            "SVN": "Slovenia",
-            "HR": "Croatia",
-            "HRV": "Croatia",
-        }
-        return mapping.get(text.upper(), text)
+        return country_name_en(value)
 
     @classmethod
     def _street_line_from_value(cls, value: object) -> str:
@@ -1148,7 +1109,7 @@ class WixOrdersClient:
         street2 = parts.get("street2", "")
         postal_code = parts.get("postal_code", "")
         city = parts.get("city", "")
-        country = parts.get("country", "")
+        country = country_label_for_address(parts.get("country", ""))
         city_line = " ".join(part for part in (postal_code, city) if part)
 
         return [line for line in (*name_lines, street1, street2, city_line, country) if line]
@@ -1163,7 +1124,7 @@ class WixOrdersClient:
         street2 = parts.get("street2", "")
         postal_code = parts.get("postal_code", "")
         city = parts.get("city", "")
-        country = parts.get("country", "")
+        country = country_label_for_address(parts.get("country", ""))
         city_line = " ".join(part for part in (postal_code, city) if part)
 
         return [line for line in (name, street, street2, city_line, country) if line]

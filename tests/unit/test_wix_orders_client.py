@@ -72,7 +72,7 @@ def test_best_address_lines_prefers_shipping_then_billing() -> None:
     lines = WixOrdersClient.best_address_lines_from_order(order_shipping)
     assert lines[0] == "Max Mustermann"
     assert "Musterstrasse 1" in lines
-    assert "Austria" in lines
+    assert "AUSTRIA" in lines
 
     order_billing_only = {
         "billingInfo": {
@@ -88,7 +88,7 @@ def test_best_address_lines_prefers_shipping_then_billing() -> None:
     lines2 = WixOrdersClient.best_address_lines_from_order(order_billing_only)
     assert lines2[0] == "Billing GmbH"
     assert "Rechnungsweg 7" in lines2
-    assert "Austria" in lines2
+    assert "AUSTRIA" in lines2
 
 
 def test_best_address_lines_supports_nested_shipping_address_variants() -> None:
@@ -115,7 +115,7 @@ def test_best_address_lines_supports_nested_shipping_address_variants() -> None:
         "Jakob Aichberger",
         "Wolfsbacher Straße 12",
         "3354 Wolfsbach",
-        "Austria",
+        "AUSTRIA",
     ]
 
 
@@ -145,8 +145,28 @@ def test_shipping_address_lines_include_company_and_contact_name() -> None:
         "Franz Muster",
         "Hauptstrasse 9",
         "8010 Graz",
-        "Austria",
+        "AUSTRIA",
     ]
+
+
+def test_shipping_address_lines_translate_german_country_for_label() -> None:
+    order = {
+        "buyerInfo": {"firstName": "Nora", "lastName": "Nord"},
+        "shippingInfo": {
+            "shippingDestination": {
+                "address": {
+                    "addressLine": "Fjordveien 7",
+                    "postalCode": "5003",
+                    "city": "Bergen",
+                    "countryName": "Norwegen",
+                },
+            }
+        },
+    }
+
+    lines = WixOrdersClient.shipping_address_lines_from_order(order)
+
+    assert lines[-1] == "NORWAY"
 
 
 def test_best_address_lines_merges_structured_street_address_number() -> None:
@@ -176,7 +196,7 @@ def test_best_address_lines_merges_structured_street_address_number() -> None:
         "Florian Brandner",
         "Auerdörfl 16",
         "20038 Berchtesgaden",
-        "Germany",
+        "GERMANY",
     ]
 
     summary = WixOrdersClient._summary_from_order(order)  # noqa: SLF001
