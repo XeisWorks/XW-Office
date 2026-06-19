@@ -281,7 +281,7 @@ def test_rechnungen_auto_loads_first_open_page_after_drafts(qtbot: object, monke
     assert calls == [(200, True, 30)]
 
 
-def test_main_window_rechnungen_loads_open_invoices_and_reuses_wix_cache(
+def test_main_window_rechnungen_loads_open_invoices_and_reuses_wix_cache_on_selection(
     qtbot: object,
     monkeypatch,
 ) -> None:
@@ -297,13 +297,16 @@ def test_main_window_rechnungen_loads_open_invoices_and_reuses_wix_cache(
     view = page._rechnungen_view  # noqa: SLF001
 
     qtbot.waitUntil(
-        lambda: view._open_loaded  # noqa: SLF001
-        and len(view._summaries) == 2  # noqa: SLF001
-        and ("20845" in view._wix_context_cache),  # noqa: SLF001
+        lambda: (
+            view._open_loaded  # noqa: SLF001
+            and len(view._summaries) == 2  # noqa: SLF001
+        ),
         timeout=5000,
     )
 
     assert invoice_service.load_calls[:2] == [(100, 50, 0), (200, 30, 0)]
+    assert view._open_overview_worker is None  # noqa: SLF001
+    assert view._wix_warm_worker is None  # noqa: SLF001
 
     view._table.select_source_row(1)  # noqa: SLF001
     qtbot.waitUntil(

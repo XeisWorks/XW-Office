@@ -1502,44 +1502,16 @@ class RechnungenView(QWidget):
             self._open_digital.setText(str(self._open_overview_cached_digital))
             return
 
-        self._open_physical.setText("…")
-        self._open_digital.setText("…")
-        self._open_overview_seq += 1
-        seq = self._open_overview_seq
-
-        def job() -> dict[str, object]:
-            wix_orders: WixOrdersClient = self._container.resolve(WixOrdersClient)
-            physical = 0
-            digital = 0
-            cache_updates: dict[str, bool] = {}
-
-            for ref in refs:
-                if not ref:
-                    digital += 1
-                    continue
-
-                digital_only = self._wix_digital_cache.get(ref)
-                if digital_only is None:
-                    digital_only = wix_orders.is_reference_digital_only(ref)
-                    cache_updates[ref] = bool(digital_only)
-
-                if digital_only:
-                    digital += 1
-                else:
-                    physical += 1
-
-            return {
-                "seq": seq,
-                "physical": physical,
-                "digital": digital,
-                "cache_updates": cache_updates,
-                "overview_key": overview_key,
-            }
-
-        self._open_overview_worker = BackgroundWorker(job)
-        self._open_overview_worker.signals.result.connect(self._on_open_overview_result)
-        self._open_overview_worker.signals.error.connect(self._on_open_overview_error)
-        self._open_overview_worker.start()
+        known_refs = [ref for ref in refs if ref and ref in self._wix_digital_cache]
+        physical = sum(1 for ref in known_refs if not self._wix_digital_cache.get(ref))
+        digital = sum(1 for ref in known_refs if self._wix_digital_cache.get(ref))
+        unknown = max(0, with_ref - len(known_refs))
+        self._open_overview_key = overview_key
+        self._open_overview_cached_physical = physical
+        self._open_overview_cached_digital = digital
+        suffix = "+" if unknown else ""
+        self._open_physical.setText(f"{physical}{suffix}")
+        self._open_digital.setText(f"{digital}{suffix}")
 
     def _on_open_overview_result(self, payload: object) -> None:
         if not isinstance(payload, dict):
@@ -1569,76 +1541,16 @@ class RechnungenView(QWidget):
         self._open_digital.setText(str(self._open_overview_cached_digital))
 
     def _warm_wix_context_for_summaries(self, summaries: list[InvoiceSummary]) -> None:
-        if self._wix_warm_worker is not None and self._wix_warm_worker.isRunning():
-            return
-        service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-        refs: list[str] = []
-        seen: set[str] = set()
-        for summary in summaries:
-            ref = str(summary.order_reference or "").strip()
-            if not ref or ref in seen:
-                continue
-            seen.add(ref)
-            if (
-                self._get_cached_wix_context(ref) is not None
-                and service.get_cached_invoice_list_hints(ref) is not None
-            ):
-                continue
-            refs.append(ref)
-        if not refs:
-            return
-        self._wix_warm_started_at = time.perf_counter()
-        logger.info("Wix context warmup start refs=%s", len(refs))
-
-        def job() -> list[dict[str, object]]:
-            wix_client: WixOrdersClient = self._container.resolve(WixOrdersClient)
-            if not wix_client.has_credentials():
-                return [
-                    {
-                        "reference": ref,
-                        "status": "Kein Wix-API-Key konfiguriert.",
-                        "meta": {},
-                        "items": [],
-                        "patch": self._blank_hint_patch(),
-                    }
-                    for ref in refs
-                ]
-            engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
-            invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-            warmed: list[dict[str, object]] = []
-            for ref in refs:
-                try:
-                    meta = wix_client.resolve_order_summary(ref)
-                    wix_items = wix_client.fetch_order_line_items(ref)
-                    pieces = engine.get_piece_blocks(wix_items, invoice_ref=ref)
-                    hints = invoice_service.resolve_invoice_list_hints(ref)
-                    warmed.append(
-                        {
-                            "reference": ref,
-                            "status": "" if meta else "Wix-Order nicht gefunden",
-                            "meta": meta if isinstance(meta, dict) else {},
-                            "items": pieces,
-                            "patch": hints.as_row_patch(),
-                        }
-                    )
-                except Exception as exc:  # noqa: BLE001 - warmup should never break list loading.
-                    logger.warning("Wix warmup failed ref=%s: %s", ref, exc)
-                    warmed.append(
-                        {
-                            "reference": ref,
-                            "status": f"Wix-Fehler: {exc}",
-                            "meta": {},
-                            "items": [],
-                            "patch": self._blank_hint_patch(),
-                        }
-                    )
-            return warmed
-
-        self._wix_warm_worker = BackgroundWorker(job)
-        self._wix_warm_worker.signals.result.connect(self._on_wix_warm_result)
-        self._wix_warm_worker.signals.error.connect(self._on_wix_warm_error)
-        self._wix_warm_worker.signals.finished.connect(self._on_wix_warm_finished)
-        self._wix_warm_worker.start()
+        refs = {
+            str(summary.order_reference or "").strip()
+            for summary in summaries
+            if str(summary.order_reference or "").strip()
+        }
+        if refs:
+            logger.info(
+                "Wix context warmup deferred refs=%s reason=avoid-menu-load-freeze",
+                len(refs),
+            )
 
     def _on_wix_warm_result(self, payload: object) -> None:
         rows = payload if isinstance(payload, list) else []
