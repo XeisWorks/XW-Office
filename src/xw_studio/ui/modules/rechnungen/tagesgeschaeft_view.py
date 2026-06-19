@@ -504,12 +504,18 @@ class TagesgeschaeftView(QWidget):
 
         def job() -> StartPreflight:
             invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-            inventory_service: InventoryService = self._container.resolve(InventoryService)
             open_count = (
                 len(self._start_selected_invoice_ids)
                 if self._start_selected_only
                 else invoice_service.count_invoices(status=100)
             )
+            if not self._start_include_product_print:
+                return StartPreflight(
+                    open_invoice_count=open_count,
+                    decisions=[],
+                    missing_position_data=True,
+                )
+            inventory_service: InventoryService = self._container.resolve(InventoryService)
             requirements = invoice_service.build_inventory_requirements(
                 invoice_ids=(
                     list(self._start_selected_invoice_ids)
@@ -531,6 +537,15 @@ class TagesgeschaeftView(QWidget):
         if not isinstance(result, StartPreflight):
             return
         signals: AppSignals = self._container.resolve(AppSignals)
+        self._start_selected_mode = StartMode.INVOICES_AND_PRINT
+        self._pending_start_preflight = result
+        if not self._start_include_product_print:
+            logger.info(
+                "Tagesgeschaeft START: direct invoice flow selected_only=%s",
+                self._start_selected_only,
+            )
+            self._start_missing_product_check()
+            return
         dlg = _StartDialog(
             result,
             initial_mode=StartMode.INVOICES_AND_PRINT,
@@ -540,9 +555,6 @@ class TagesgeschaeftView(QWidget):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             signals.status_message.emit("START abgebrochen", 2500)
             return
-        self._start_selected_mode = StartMode.INVOICES_AND_PRINT
-        self._pending_start_preflight = result
-
         logger.info(
             "Tagesgeschäft START: mode=%s include_product_print=%s selected_only=%s",
             self._start_selected_mode.value,
@@ -557,6 +569,15 @@ class TagesgeschaeftView(QWidget):
             return
 
         signals.status_message.emit("Produktprüfung wird vorbereitet…", 2500)
+
+        self._start_missing_product_check()
+
+    def _start_missing_product_check(self) -> None:
+        if (
+            (self._start_product_worker is not None and self._start_product_worker.isRunning())
+            or (self._start_exec_worker is not None and self._start_exec_worker.isRunning())
+        ):
+            return
 
         def job() -> ProductPreflightPlan:
             invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
@@ -784,11 +805,12 @@ class TagesgeschaeftView(QWidget):
                 lines.append("Produkt-Hinweise:")
                 lines.extend(f"- {warning}" for warning in product_apply.warnings)
 
-        QMessageBox.information(
-            self,
-            "START abgeschlossen",
-            "\n".join(lines),
-        )
+        if self._start_include_product_print:
+            QMessageBox.information(
+                self,
+                "START abgeschlossen",
+                "\n".join(lines),
+            )
 
         self._rechnungen_view._reload_first_page()  # noqa: SLF001
         self._refresh_badges()

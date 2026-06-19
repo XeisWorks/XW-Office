@@ -40,6 +40,29 @@ def test_start_dialog_keeps_full_mode_when_print_plan_missing(qtbot: object) -> 
     assert dialog._mode_full.isEnabled()  # noqa: SLF001
 
 
+def test_plain_start_skips_inventory_dialog(qtbot: object, monkeypatch) -> None:
+    container = _build_container()
+    view = TagesgeschaeftView(container)
+    qtbot.addWidget(view)
+    preflight = StartPreflight(open_invoice_count=2, decisions=[], missing_position_data=True)
+    called = {"product_check": 0, "dialog": 0}
+
+    def fake_product_check() -> None:
+        called["product_check"] += 1
+
+    def fake_exec(self) -> int:
+        called["dialog"] += 1
+        return 0
+
+    monkeypatch.setattr(view, "_start_missing_product_check", fake_product_check)
+    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.tagesgeschaeft_view._StartDialog.exec", fake_exec)
+
+    view._start_include_product_print = False  # noqa: SLF001
+    view._on_start_preflight_ready(preflight)  # noqa: SLF001
+
+    assert called == {"product_check": 1, "dialog": 0}
+
+
 def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
     container = _build_container()
     view = RechnungenView(container)

@@ -514,6 +514,48 @@ def test_start_fullflow_processes_only_requested_invoice_ids() -> None:
     assert client.mail_calls[0]["invoice_id"] == "12"
 
 
+def test_start_fullflow_recovers_invoice_by_wix_reference_after_product_creation() -> None:
+    stale = InvoiceSummary(id="old-11", invoiceNumber="RE-OLD", order_reference="20519")
+    current = InvoiceSummary(id="new-11", invoiceNumber="RE-NEW", order_reference="20519")
+
+    class RecoveringClient(_InvoiceClientStub):
+        def __init__(self) -> None:
+            super().__init__([stale])
+            self.list_calls = 0
+
+        def list_invoice_summaries(self, *, limit: int = 50, offset: int = 0, status: int | None = None):
+            if offset > 0:
+                return []
+            self.list_calls += 1
+            return [stale] if self.list_calls == 1 else [current]
+
+        def fetch_invoice_by_id(self, invoice_id: str) -> dict[str, object]:
+            if invoice_id == "old-11":
+                return {}
+            return {
+                "id": invoice_id,
+                "invoiceNumber": "RE-NEW",
+                "customerInternalNote": "20519",
+                "name": "Max Mustermann",
+                "contact": {"emails": [{"value": "max@example.test"}]},
+            }
+
+    client = RecoveringClient()
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        _RepoStub({}),
+        None,
+        _MailServiceStub(),  # type: ignore[arg-type]
+    )
+
+    result = svc.run_start_fullflow(full_mode=False)
+
+    assert result["processed"] == 1
+    assert result["successful"] == 1
+    assert client.mail_calls[0]["invoice_id"] == "new-11"
+
+
 def test_inventory_requirements_use_only_requested_invoice_ids() -> None:
     rows = [
         InvoiceSummary(id="11", invoiceNumber="RE-TEST-11", order_reference="ORDER-11"),

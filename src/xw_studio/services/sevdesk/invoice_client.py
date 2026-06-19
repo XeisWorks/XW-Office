@@ -291,6 +291,19 @@ class InvoiceSummary(BaseModel):
             return "—"
         return "•"
 
+    def status_color(self) -> str:
+        """Traffic-light color for the invoice table status indicator."""
+        label = self.status_label().casefold()
+        if self.status_code == 1000:
+            return "#22c55e"
+        if self.status_code in {200, 300}:
+            return "#facc15"
+        if self.status_code == 100:
+            return "#ef4444"
+        if self.status_code in {1001, 500, 700} or "storn" in label or "cancel" in label:
+            return "#94a3b8"
+        return "#94a3b8"
+
     @property
     def display_country(self) -> str:
         return self.delivery_country_code or self.address_country_code
@@ -391,6 +404,7 @@ class InvoiceSummary(BaseModel):
             row["__fg__Hinweise"] = "#ef4444"
         row[f"__tooltip__{_TABLE_STATUS_COLUMN}"] = self.status_label()
         row[f"__align__{_TABLE_STATUS_COLUMN}"] = "center"
+        row[f"__status_color__{_TABLE_STATUS_COLUMN}"] = self.status_color()
         row["__tooltip__AKTIONEN"] = "Post Label Center / Wix-Bestellung öffnen"
         if self.status_code == 100:
             row[f"__tooltip__{_TABLE_STATUS_COLUMN}"] = "Entwurf: diese Rechnung muss im Tagesgeschäft abgearbeitet werden"

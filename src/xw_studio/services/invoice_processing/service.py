@@ -368,6 +368,7 @@ class InvoiceProcessingService:
                 logger.info("START aborted before invoice %s", summary.id)
                 break
             processed += 1
+            summary = self._resolve_current_start_summary(summary)
             flags = self.read_fulfillment_flags(summary.id)
             try:
                 self._repair_draft_products(summary)
@@ -709,6 +710,47 @@ class InvoiceProcessingService:
         summary = InvoiceSummary.from_api_object(raw)
         self._apply_sensitive_country_flags([summary])
         self._apply_unreleased_sku_flags([summary])
+        return summary
+
+    def _resolve_current_start_summary(self, summary: InvoiceSummary) -> InvoiceSummary:
+        """Refresh a START draft and recover by Wix reference if sevDesk moved the id."""
+        invoice_id = str(summary.id or "").strip()
+        if invoice_id:
+            try:
+                raw = self._invoices.fetch_invoice_by_id(invoice_id)
+            except Exception as exc:  # noqa: BLE001 - fallback below handles stale ids.
+                logger.warning("START invoice refresh failed for %s: %s", invoice_id, exc)
+            else:
+                if isinstance(raw, dict) and str(raw.get("id") or "").strip():
+                    refreshed = InvoiceSummary.from_api_object(raw)
+                    updates: dict[str, object] = {}
+                    if summary.order_reference and not refreshed.order_reference:
+                        updates["order_reference"] = summary.order_reference
+                    if summary.sevdesk_reference and not refreshed.sevdesk_reference:
+                        updates["sevdesk_reference"] = summary.sevdesk_reference
+                    if updates:
+                        refreshed = refreshed.model_copy(update=updates)
+                    self._apply_sensitive_country_flags([refreshed])
+                    self._apply_unreleased_sku_flags([refreshed])
+                    return refreshed
+
+        reference = str(summary.order_reference or "").strip()
+        if not reference:
+            return summary
+        try:
+            drafts = self._load_all_open_drafts(limit_per_page=100, max_pages=20)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("START invoice fallback lookup failed for ref=%s: %s", reference, exc)
+            return summary
+        for candidate in drafts:
+            if str(candidate.order_reference or "").strip() == reference:
+                logger.info(
+                    "START recovered invoice draft by Wix ref %s: old_id=%s new_id=%s",
+                    reference,
+                    summary.id,
+                    candidate.id,
+                )
+                return candidate
         return summary
 
     def _stamp(self, flags: FulfillmentFlags) -> FulfillmentFlags:

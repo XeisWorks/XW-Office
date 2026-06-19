@@ -41,7 +41,9 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QSplitter,
+    QStyle,
     QTableView,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -201,6 +203,51 @@ class _HintsIconDelegate(QStyledItemDelegate):
             icon_y = y + (size - pix.height()) // 2
             painter.drawPixmap(icon_x, icon_y, pix)
             x += size + gap
+        painter.restore()
+
+    def sizeHint(self, option, index):  # type: ignore[override]
+        base = super().sizeHint(option, index)
+        if base.height() < 22:
+            base.setHeight(22)
+        return base
+
+
+class _InvoiceStatusDelegate(QStyledItemDelegate):
+    """Paint consistent round invoice status indicators."""
+
+    _DEFAULT_COLOR = "#94a3b8"
+
+    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+        row_data = index.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(row_data, dict):
+            super().paint(painter, option, index)
+            return
+
+        column = index.model().headerData(
+            index.column(),
+            Qt.Orientation.Horizontal,
+            Qt.ItemDataRole.DisplayRole,
+        )
+        color = str(row_data.get(f"__status_color__{column}") or self._DEFAULT_COLOR).strip()
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.fillRect(
+            option.rect,
+            option.palette.highlight() if selected else option.palette.base(),
+        )
+        size = min(16, max(12, option.rect.height() - 8))
+        x = option.rect.x() + (option.rect.width() - size) // 2
+        y = option.rect.y() + (option.rect.height() - size) // 2
+        target = option.rect.adjusted(0, 0, 0, 0)
+        target.setX(x)
+        target.setY(y)
+        target.setWidth(size)
+        target.setHeight(size)
+        painter.setPen(QColor("#0f172a"))
+        painter.setBrush(QColor(color or self._DEFAULT_COLOR))
+        painter.drawEllipse(target)
         painter.restore()
 
     def sizeHint(self, option, index):  # type: ignore[override]
@@ -589,7 +636,7 @@ class RechnungenView(QWidget):
         self._next_offset = 0
         self._summaries: list[InvoiceSummary] = []
         self._current_piece_blocks: list[PieceBlock] = []
-        self._piece_print_buttons: list[QPushButton] = []
+        self._piece_print_buttons: list[QPushButton | QToolButton] = []
         self._piece_quantity_inputs: list[QSpinBox] = []
         self._piece_quantity_controls: list[tuple[PieceBlock, QSpinBox]] = []
         self._append_mode = False
@@ -672,11 +719,14 @@ class RechnungenView(QWidget):
             "QTableView::item:selected:focus { background-color: rgba(29, 78, 216, 0.26); color: #0f172a; }"
         )
         self._hints_delegate = _HintsIconDelegate(self._table)
+        self._status_delegate = _InvoiceStatusDelegate(self._table)
         self._actions_delegate = _ActionsDelegate(self._table)
         self._fulfillment_delegate = _FulfillmentDelegate(self._table)
+        status_col = 3
         hint_col = _TABLE_COLUMNS.index("Hinweise")
         fulfillment_col = _TABLE_COLUMNS.index("FULFILLMENT")
         actions_col = _TABLE_COLUMNS.index("AKTIONEN")
+        self._table.setItemDelegateForColumn(status_col, self._status_delegate)
         self._table.setItemDelegateForColumn(hint_col, self._hints_delegate)
         self._table.setItemDelegateForColumn(fulfillment_col, self._fulfillment_delegate)
         self._table.setItemDelegateForColumn(actions_col, self._actions_delegate)
@@ -686,6 +736,7 @@ class RechnungenView(QWidget):
         self._table.viewport().setMouseTracking(True)
         self._table.setSortingEnabled(False)
         self._table.horizontalHeader().setSectionsClickable(False)
+        self._table.horizontalHeader().resizeSection(status_col, 48)
         self._table.horizontalHeader().resizeSection(hint_col, 150)
         self._table.horizontalHeader().resizeSection(actions_col, 120)
         self._table.horizontalHeader().resizeSection(fulfillment_col, 170)
@@ -708,7 +759,8 @@ class RechnungenView(QWidget):
         detail_scroll = QScrollArea()
         self._detail_scroll = detail_scroll
         detail_scroll.setWidgetResizable(True)
-        detail_scroll.setMinimumWidth(520)
+        detail_scroll.setMinimumWidth(360)
+        detail_scroll.setMaximumWidth(460)
 
         detail_content = QWidget()
         detail_main = QVBoxLayout(detail_content)
@@ -733,17 +785,16 @@ class RechnungenView(QWidget):
 
         self._gb_info = QGroupBox("INFO")
         info_layout = QGridLayout(self._gb_info)
-        info_layout.setHorizontalSpacing(18)
+        info_layout.setHorizontalSpacing(12)
         info_layout.setVerticalSpacing(8)
         info_layout.setColumnStretch(1, 1)
-        info_layout.setColumnStretch(3, 1)
         self._dl_number = QLabel("—")
         self._dl_date = QLabel("—")
         self._dl_status = QLabel("—")
         self._dl_brutto = QLabel("—")
         self._dl_contact = QLabel("—")
         self._dl_contact.setWordWrap(True)
-        self._dl_contact.setMaximumWidth(220)
+        self._dl_contact.setMaximumWidth(260)
         self._dl_country = QLabel("—")
         self._dl_order_ref = QLabel("—")
         self._wix_order_no = QLabel("—")
@@ -766,12 +817,12 @@ class RechnungenView(QWidget):
             lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         info_fields = (
             ("Rechnung:", self._dl_number, 0, 0),
-            ("Datum:", self._dl_date, 0, 2),
-            ("Status:", self._dl_status, 1, 0),
-            ("Brutto:", self._dl_brutto, 1, 2),
-            ("Kunde:", self._dl_contact, 2, 0),
-            ("Land:", self._dl_country, 2, 2),
-            ("Order-Ref:", self._dl_order_ref, 3, 2),
+            ("Datum:", self._dl_date, 1, 0),
+            ("Status:", self._dl_status, 2, 0),
+            ("Brutto:", self._dl_brutto, 3, 0),
+            ("Kunde:", self._dl_contact, 4, 0),
+            ("Land:", self._dl_country, 5, 0),
+            ("Order-Ref:", self._dl_order_ref, 6, 0),
         )
         for text, value_widget, row, col in info_fields:
             label = QLabel(text)
@@ -799,9 +850,9 @@ class RechnungenView(QWidget):
         self._shipping_editor.setPlaceholderText("Lieferadresse Zeile für Zeile bearbeiten")
         self._shipping_editor.setMinimumHeight(58)
         self._shipping_editor.setMaximumHeight(122)
-        self._shipping_editor.setMaximumWidth(320)
-        self._shipping_editor.setMinimumWidth(320)
-        self._shipping_editor.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._shipping_editor.setMaximumWidth(300)
+        self._shipping_editor.setMinimumWidth(240)
+        self._shipping_editor.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._shipping_editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._shipping_editor.textChanged.connect(self._on_shipping_editor_changed)
         shipping_row.addWidget(self._shipping_editor, stretch=0)
@@ -844,22 +895,33 @@ class RechnungenView(QWidget):
         self._action_state.hide()
         self._plc_last.hide()
 
+        action_button_style = (
+            "QPushButton { background-color: #334155; color: #f8fafc; border: 1px solid #64748b; "
+            "border-radius: 5px; font-weight: 600; padding: 7px 10px; }"
+            "QPushButton:hover { background-color: #475569; border-color: #94a3b8; }"
+            "QPushButton:pressed { background-color: #1e293b; }"
+            "QPushButton:disabled { background-color: #1f2937; color: #64748b; border-color: #334155; }"
+        )
         self._btn_print = QPushButton("Rechnung drucken")
+        self._btn_print.setStyleSheet(action_button_style)
         self._btn_print.clicked.connect(self._on_print_clicked)
         self._btn_print.setEnabled(False)
         actions_layout.addWidget(self._btn_print, 0, 0)
 
         self._btn_print_plc = QPushButton("PLC-Label drucken")
+        self._btn_print_plc.setStyleSheet(action_button_style)
         self._btn_print_plc.clicked.connect(self._on_print_plc_selected)
         self._btn_print_plc.setEnabled(False)
         actions_layout.addWidget(self._btn_print_plc, 0, 1)
 
         self._btn_print_music = QPushButton("Noten drucken")
+        self._btn_print_music.setStyleSheet(action_button_style)
         self._btn_print_music.clicked.connect(self._on_print_music_clicked)
         self._btn_print_music.setEnabled(False)
         actions_layout.addWidget(self._btn_print_music, 1, 0)
 
         self._btn_send_invoice = QPushButton("Rechnung senden")
+        self._btn_send_invoice.setStyleSheet(action_button_style)
         self._btn_send_invoice.clicked.connect(self._on_send_invoice_clicked)
         self._btn_send_invoice.setEnabled(False)
         actions_layout.addWidget(self._btn_send_invoice, 1, 1)
@@ -880,6 +942,7 @@ class RechnungenView(QWidget):
         splitter.addWidget(detail_scroll)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes([920, 390])
         layout.addWidget(splitter, stretch=1)
 
         self._overlay = ProgressOverlay(self)
@@ -2537,8 +2600,14 @@ class RechnungenView(QWidget):
                 self._piece_quantity_inputs.append(qty_input)
                 self._piece_quantity_controls.append((item, qty_input))
 
-                print_btn = QPushButton("Drucken")
-                print_btn.setFixedHeight(24)
+                print_btn = QToolButton()
+                print_btn.setIcon(QIcon(str(Path(__file__).resolve().parents[5] / "icons" / "print.png")))
+                print_btn.setFixedSize(30, 26)
+                print_btn.setStyleSheet(
+                    "QToolButton { background-color: #334155; border: 1px solid #64748b; border-radius: 4px; }"
+                    "QToolButton:hover { background-color: #475569; border-color: #94a3b8; }"
+                    "QToolButton:disabled { background-color: #1f2937; border-color: #334155; }"
+                )
                 print_btn.setEnabled(self._print_allowed)
                 if item.has_direct_print_config:
                     print_btn.setToolTip("Direkter Produktdruck ueber hinterlegten Druckplan")
@@ -2552,8 +2621,14 @@ class RechnungenView(QWidget):
                 header_row.addWidget(print_btn)
                 self._piece_print_buttons.append(print_btn)
 
-                manage_btn = QPushButton("Druckplan")
-                manage_btn.setFixedHeight(24)
+                manage_btn = QToolButton()
+                manage_btn.setIcon(QIcon(str(Path(__file__).resolve().parents[5] / "icons" / "printondemand.png")))
+                manage_btn.setFixedSize(30, 26)
+                manage_btn.setStyleSheet(
+                    "QToolButton { background-color: #334155; border: 1px solid #64748b; border-radius: 4px; }"
+                    "QToolButton:hover { background-color: #475569; border-color: #94a3b8; }"
+                    "QToolButton:disabled { background-color: #1f2937; border-color: #334155; }"
+                )
                 manage_btn.setToolTip("PDF-Pfad und Druckplan direkt fuer dieses Produkt pflegen")
                 manage_btn.clicked.connect(lambda _checked=False, block=item: self._on_product_manage_clicked(block))
                 header_row.addWidget(manage_btn)
