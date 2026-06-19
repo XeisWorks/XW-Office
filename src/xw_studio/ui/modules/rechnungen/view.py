@@ -97,6 +97,7 @@ _TABLE_COLUMNS = [
 _PAGE_SIZE = 50
 _DRAFT_STATUS = 100
 _OPEN_STATUS = 200
+_OPEN_AUTO_LOAD_LIMIT = 30
 _WIX_CONTEXT_CACHE_TTL_SECONDS = 75.0
 
 
@@ -602,6 +603,7 @@ class RechnungenView(QWidget):
         self._wix_meta_worker: BackgroundWorker | None = None
         self._wix_context_worker: BackgroundWorker | None = None
         self._invoice_detail_worker: BackgroundWorker | None = None
+        self._wix_warm_worker: BackgroundWorker | None = None
         self._hint_worker: BackgroundWorker | None = None
         self._fulfillment_step_worker: BackgroundWorker | None = None
         self._invoice_mail_worker: BackgroundWorker | None = None
@@ -755,7 +757,7 @@ class RechnungenView(QWidget):
 
         load_more_row = QHBoxLayout()
         load_more_row.addStretch()
-        self._btn_more = QPushButton("Weitere Entwuerfe")
+        self._btn_more = QPushButton("Weitere Rechnungen laden")
         self._btn_more.setToolTip(f"Naechste bis zu {_PAGE_SIZE} Entwuerfe anhaengen")
         self._btn_more.setFixedHeight(28)
         self._btn_more.setFixedWidth(150)
@@ -1081,12 +1083,13 @@ class RechnungenView(QWidget):
         self._append_mode = True
         self._start_load()
 
-    def _start_load(self) -> None:
+    def _start_load(self, *, limit: int | None = None) -> None:
         if not self._has_sevdesk_token():
             return
 
         service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
         status_filter = self._active_load_status
+        page_limit = max(1, int(limit or _PAGE_SIZE))
         offset = (
             self._draft_offset if status_filter == _DRAFT_STATUS else self._open_offset
         ) if self._append_mode else 0
@@ -1101,10 +1104,10 @@ class RechnungenView(QWidget):
         def job() -> tuple[list[dict[str, str]], list[InvoiceSummary], bool, int]:
             rows, sums = service.load_invoice_batch(
                 status=status_filter,
-                limit=_PAGE_SIZE,
+                limit=page_limit,
                 offset=offset,
             )
-            has_more = len(sums) >= _PAGE_SIZE
+            has_more = len(sums) >= page_limit
             return rows, sums, has_more, status_filter
 
         self._worker = BackgroundWorker(job)
@@ -1176,6 +1179,16 @@ class RechnungenView(QWidget):
             )
             self._open_has_more = has_more
 
+        auto_load_open = (
+            status_filter == _DRAFT_STATUS
+            and not self._draft_has_more
+            and not self._open_loaded
+            and not self._search_active
+        )
+        warm_open_summaries = [
+            summary for summary in summaries if summary.status_code == _OPEN_STATUS
+        ]
+
         self._search.refresh_suggestions()
         self._rebuild_search_index()
         if not self._append_mode or not self._table_layout_initialized:
@@ -1194,7 +1207,14 @@ class RechnungenView(QWidget):
         )
         self._append_mode = False
         self._refresh_detail_for_selection()
-        self._restart_hint_prefetch()
+        if warm_open_summaries:
+            self._warm_wix_context_for_summaries(warm_open_summaries)
+        if status_filter != _OPEN_STATUS:
+            self._restart_hint_prefetch()
+        if auto_load_open:
+            self._active_load_status = _OPEN_STATUS
+            self._append_mode = True
+            self._start_load(limit=_OPEN_AUTO_LOAD_LIMIT)
 
     def _update_load_more_button(self) -> None:
         if self._search_active:
@@ -1202,12 +1222,12 @@ class RechnungenView(QWidget):
             return
         if self._active_load_status == _DRAFT_STATUS:
             if self._draft_has_more:
-                self._btn_more.setText("Weitere Entwuerfe")
+                self._btn_more.setText("Weitere Rechnungen laden")
                 self._btn_more.setToolTip(f"Naechste bis zu {_PAGE_SIZE} Entwuerfe anhaengen")
                 self._btn_more.setEnabled(True)
             elif not self._open_loaded:
-                self._btn_more.setText("Offene laden")
-                self._btn_more.setToolTip("Offene Rechnungen erst bei Bedarf laden")
+                self._btn_more.setText("Weitere Rechnungen laden")
+                self._btn_more.setToolTip("Offene Rechnungen laden")
                 self._btn_more.setEnabled(True)
             else:
                 self._btn_more.setText("Keine weiteren")
@@ -1215,7 +1235,7 @@ class RechnungenView(QWidget):
                 self._btn_more.setEnabled(False)
             return
         if self._open_has_more:
-            self._btn_more.setText("Weitere offene")
+            self._btn_more.setText("Weitere Rechnungen laden")
             self._btn_more.setToolTip(f"Naechste bis zu {_PAGE_SIZE} offene Rechnungen anhaengen")
             self._btn_more.setEnabled(True)
         else:
@@ -1519,6 +1539,101 @@ class RechnungenView(QWidget):
         self._open_overview_cached_digital = max(0, total - with_ref)
         self._open_physical.setText(str(self._open_overview_cached_physical))
         self._open_digital.setText(str(self._open_overview_cached_digital))
+
+    def _warm_wix_context_for_summaries(self, summaries: list[InvoiceSummary]) -> None:
+        if self._wix_warm_worker is not None and self._wix_warm_worker.isRunning():
+            return
+        service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+        refs: list[str] = []
+        seen: set[str] = set()
+        for summary in summaries:
+            ref = str(summary.order_reference or "").strip()
+            if not ref or ref in seen:
+                continue
+            seen.add(ref)
+            if (
+                self._get_cached_wix_context(ref) is not None
+                and service.get_cached_invoice_list_hints(ref) is not None
+            ):
+                continue
+            refs.append(ref)
+        if not refs:
+            return
+
+        def job() -> list[dict[str, object]]:
+            wix_client: WixOrdersClient = self._container.resolve(WixOrdersClient)
+            if not wix_client.has_credentials():
+                return [
+                    {
+                        "reference": ref,
+                        "status": "Kein Wix-API-Key konfiguriert.",
+                        "meta": {},
+                        "items": [],
+                        "patch": self._blank_hint_patch(),
+                    }
+                    for ref in refs
+                ]
+            engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
+            invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            warmed: list[dict[str, object]] = []
+            for ref in refs:
+                try:
+                    meta = wix_client.resolve_order_summary(ref)
+                    wix_items = wix_client.fetch_order_line_items(ref)
+                    pieces = engine.get_piece_blocks(wix_items, invoice_ref=ref)
+                    hints = invoice_service.resolve_invoice_list_hints(ref)
+                    warmed.append(
+                        {
+                            "reference": ref,
+                            "status": "" if meta else "Wix-Order nicht gefunden",
+                            "meta": meta if isinstance(meta, dict) else {},
+                            "items": pieces,
+                            "patch": hints.as_row_patch(),
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001 - warmup should never break list loading.
+                    logger.warning("Wix warmup failed ref=%s: %s", ref, exc)
+                    warmed.append(
+                        {
+                            "reference": ref,
+                            "status": f"Wix-Fehler: {exc}",
+                            "meta": {},
+                            "items": [],
+                            "patch": self._blank_hint_patch(),
+                        }
+                    )
+            return warmed
+
+        self._wix_warm_worker = BackgroundWorker(job)
+        self._wix_warm_worker.signals.result.connect(self._on_wix_warm_result)
+        self._wix_warm_worker.signals.error.connect(self._on_wix_warm_error)
+        self._wix_warm_worker.signals.finished.connect(self._on_wix_warm_finished)
+        self._wix_warm_worker.start()
+
+    def _on_wix_warm_result(self, payload: object) -> None:
+        rows = payload if isinstance(payload, list) else []
+        selected = self._selected_summary()
+        selected_ref = selected.order_reference.strip() if selected is not None else ""
+        for row in rows:
+            data = row if isinstance(row, dict) else {}
+            ref = str(data.get("reference") or "").strip()
+            if not ref:
+                continue
+            status = str(data.get("status") or "").strip()
+            meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+            items = data.get("items") if isinstance(data.get("items"), list) else []
+            patch = data.get("patch") if isinstance(data.get("patch"), dict) else self._blank_hint_patch()
+            self._put_cached_wix_context(ref, status=status, meta=meta, items=items)
+            self._apply_hint_patch_to_visible_rows(ref, patch)
+            if ref == selected_ref and not status:
+                self._on_wix_meta_loaded({**meta, "__requested_ref": ref})
+                self._on_stuecke_loaded({"__requested_ref": ref, "items": items})
+
+    def _on_wix_warm_error(self, exc: Exception) -> None:
+        logger.warning("Wix context warmup failed: %s", exc)
+
+    def _on_wix_warm_finished(self) -> None:
+        self._wix_warm_worker = None
 
     def _restart_hint_prefetch(self) -> None:
         self._hint_seq += 1

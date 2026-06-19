@@ -6,6 +6,7 @@ from xw_studio.core.config import AppConfig
 from xw_studio.core.container import Container
 from xw_studio.core.signals import AppSignals
 from xw_studio.services.inventory.service import StartMode, StartPreflight
+from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
 from xw_studio.ui.modules.rechnungen.tagesgeschaeft_view import TagesgeschaeftView, _StartDialog
 from xw_studio.ui.modules.rechnungen.view import RechnungenView
 
@@ -68,7 +69,7 @@ def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
     view = RechnungenView(container)
     qtbot.addWidget(view)
 
-    assert view._btn_more.text() == "Weitere Entwuerfe"  # noqa: SLF001
+    assert view._btn_more.text() == "Weitere Rechnungen laden"  # noqa: SLF001
     assert view._btn_draft.text() == "Rechnungs-Entwurf"  # noqa: SLF001
     assert view._btn_custom_label.text() == "CUSTOM-LABEL"  # noqa: SLF001
     assert view._btn_print.text() == "Rechnung drucken"  # noqa: SLF001
@@ -94,12 +95,12 @@ def test_rechnungen_load_more_button_stages_drafts_before_open(qtbot: object) ->
     view._draft_has_more = True  # noqa: SLF001
     view._open_loaded = False  # noqa: SLF001
     view._update_load_more_button()  # noqa: SLF001
-    assert view._btn_more.text() == "Weitere Entwuerfe"  # noqa: SLF001
+    assert view._btn_more.text() == "Weitere Rechnungen laden"  # noqa: SLF001
     assert view._btn_more.isEnabled()  # noqa: SLF001
 
     view._draft_has_more = False  # noqa: SLF001
     view._update_load_more_button()  # noqa: SLF001
-    assert view._btn_more.text() == "Offene laden"  # noqa: SLF001
+    assert view._btn_more.text() == "Weitere Rechnungen laden"  # noqa: SLF001
     assert view._btn_more.isEnabled()  # noqa: SLF001
 
     view._active_load_status = 200  # noqa: SLF001
@@ -108,6 +109,30 @@ def test_rechnungen_load_more_button_stages_drafts_before_open(qtbot: object) ->
     view._update_load_more_button()  # noqa: SLF001
     assert view._btn_more.text() == "Keine weiteren"  # noqa: SLF001
     assert not view._btn_more.isEnabled()  # noqa: SLF001
+
+
+def test_rechnungen_auto_loads_first_open_page_after_drafts(qtbot: object, monkeypatch) -> None:
+    container = _build_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    draft = InvoiceSummary.model_validate(
+        {
+            "id": "1",
+            "invoiceNumber": "RE-DRAFT",
+            "status": 100,
+            "contact_name": "Draft Customer",
+        }
+    )
+    calls: list[tuple[int, bool, int | None]] = []
+
+    def fake_start_load(*, limit: int | None = None) -> None:
+        calls.append((view._active_load_status, view._append_mode, limit))  # noqa: SLF001
+
+    monkeypatch.setattr(view, "_start_load", fake_start_load)
+
+    view._on_load_result(([draft.as_table_row()], [draft], False, 100))  # noqa: SLF001
+
+    assert calls == [(200, True, 30)]
 
 
 def test_rechnungen_detail_panel_click_does_not_clear_selection(qtbot: object) -> None:
