@@ -227,6 +227,7 @@ _COUNTRY_BY_NAME = {
     "tschechien": "Czech Republic",
     "tschechische republik": "Czech Republic",
     "turkey": "Turkey",
+    "turkei": "Turkey",
     "tuerkei": "Turkey",
     "ukraine": "Ukraine",
     "united kingdom": "United Kingdom",

@@ -94,6 +94,7 @@ def test_country_name_en_resolves_european_country_codes(value: str, expected: s
         ("Rumaenien", "ROMANIA"),
         ("Russland", "RUSSIA"),
         ("Spanien", "SPAIN"),
+        ("T\u00fcrkei", "TURKEY"),
         ("Tuerkei", "TURKEY"),
         ("Vereinigtes Koenigreich", "UNITED KINGDOM"),
         ("Vatikanstadt", "VATICAN CITY"),
