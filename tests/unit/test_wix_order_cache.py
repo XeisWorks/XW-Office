@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 
 from xw_studio.services.wix.order_cache import WixOrderCache
 
@@ -24,6 +25,30 @@ def test_wix_order_cache_persists_order_aliases(tmp_path: Path) -> None:
     assert by_number.order["id"] == "order-id-1"
     assert by_id is not None
     assert by_id.order["number"] == "20845"
+
+
+def test_wix_order_cache_keeps_successful_orders_until_explicitly_pruned(tmp_path: Path) -> None:
+    cache = WixOrderCache(tmp_path / "cache.sqlite")
+    cache.put_order(
+        site_id="site",
+        account_id="",
+        reference="20845",
+        order={"id": "order-id-1", "number": "20845"},
+    )
+    with sqlite3.connect(cache.path) as con:
+        con.execute("UPDATE wix_order_cache SET fetched_at = 0")
+
+    permanent_hit = cache.get_order(site_id="site", account_id="", reference="20845")
+    explicitly_expired = cache.get_order(
+        site_id="site",
+        account_id="",
+        reference="20845",
+        max_age_seconds=1,
+    )
+
+    assert permanent_hit is not None
+    assert permanent_hit.found is True
+    assert explicitly_expired is None
 
 
 def test_wix_order_cache_short_caches_missing_orders(tmp_path: Path) -> None:

@@ -319,7 +319,11 @@ def test_resolve_order_summary_uses_persistent_cache(tmp_path, monkeypatch) -> N
 
     first = client.resolve_order_summary("20845")
     second = client.resolve_order_summary("20845")
+    cache.clear()
+    cache.put_missing(site_id="site", account_id="", reference="20845")
+    after_negative_cache = client.resolve_order_summary("20845")
 
     assert first["wix_customer_email"] == "cache@example.test"
     assert second["wix_customer_name"] == "Cache Kunde"
-    assert calls == 1
+    assert after_negative_cache["wix_order_number"] == "20845"
+    assert calls == 2

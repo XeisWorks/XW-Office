@@ -1059,7 +1059,10 @@ class WixOrdersClient:
             cached.found,
             int(cached.age_seconds * 1000),
         )
-        return dict(cached.order) if cached.found else {}
+        # A negative marker must never prevent the automatic Wix fallback.  It
+        # only records that an earlier lookup failed; a delayed or newly
+        # available order must still be fetched when requested again.
+        return dict(cached.order) if cached.found else None
 
     def _cache_order(self, reference: str, order: dict[str, Any]) -> None:
         cache = getattr(self, "_order_cache", None)

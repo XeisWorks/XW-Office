@@ -98,7 +98,12 @@ _PAGE_SIZE = 50
 _DRAFT_STATUS = 100
 _OPEN_STATUS = 200
 _OPEN_AUTO_LOAD_LIMIT = 30
-_WIX_CONTEXT_CACHE_TTL_SECONDS = 75.0
+# Contexts are immutable enough for one application session.  The persistent
+# Wix snapshot cache is retained for 180 days; dropping the UI representation
+# after 75 seconds only caused needless conversion work when users revisited a
+# row in the same list.
+_WIX_CONTEXT_CACHE_TTL_SECONDS = 6 * 60 * 60
+_WIX_WARM_BATCH_SIZE = 6
 
 
 class _HintsIconDelegate(QStyledItemDelegate):
@@ -637,6 +642,8 @@ class RechnungenView(QWidget):
         self._shipping_address_overrides: dict[str, list[str]] = {}
         self._shipping_source_lines: list[str] = []
         self._wix_context_seq = 0
+        self._wix_warm_queue: list[str] = []
+        self._wix_warm_inflight_refs: set[str] = set()
         self._open_overview_seq = 0
         self._hint_seq = 0
         self._hint_draft_queue: list[str] = []
@@ -1206,15 +1213,10 @@ class RechnungenView(QWidget):
             and not self._open_loaded
             and not self._search_active
         )
-        warm_open_summaries = [
-            summary for summary in summaries if summary.status_code == _OPEN_STATUS
-        ]
-
         self._search.refresh_suggestions()
         self._rebuild_search_index()
-        if not self._append_mode or not self._table_layout_initialized:
-            self._apply_table_column_layout()
-            self._table_layout_initialized = True
+        self._apply_table_column_layout()
+        self._table_layout_initialized = True
         self._refresh_open_invoice_overview()
 
         self._next_offset = len(self._summaries)
@@ -1228,8 +1230,7 @@ class RechnungenView(QWidget):
         )
         self._append_mode = False
         self._refresh_detail_for_selection()
-        if warm_open_summaries:
-            self._warm_wix_context_for_summaries(warm_open_summaries)
+        self._warm_wix_context_for_summaries(summaries)
         if status_filter != _OPEN_STATUS:
             self._restart_hint_prefetch()
         if auto_load_open:
@@ -1265,6 +1266,7 @@ class RechnungenView(QWidget):
 
     def _apply_table_column_layout(self) -> None:
         header = self._table.horizontalHeader()
+        header.setStretchLastSection(False)
         for idx in range(len(_TABLE_COLUMNS)):
             header.setSectionResizeMode(idx, QHeaderView.ResizeMode.ResizeToContents)
         self._table.resizeColumnsToContents()
@@ -1541,16 +1543,98 @@ class RechnungenView(QWidget):
         self._open_digital.setText(str(self._open_overview_cached_digital))
 
     def _warm_wix_context_for_summaries(self, summaries: list[InvoiceSummary]) -> None:
-        refs = {
-            str(summary.order_reference or "").strip()
-            for summary in summaries
-            if str(summary.order_reference or "").strip()
-        }
-        if refs:
+        """Prefetch full Wix contexts without delaying the invoice list.
+
+        The worker deliberately uses small batches.  This makes cached entries
+        available in the right-hand panel quickly, bounds Wix API pressure, and
+        allows newly loaded pages to be appended to the queue while a batch is
+        running.
+        """
+        service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+        added = 0
+        for summary in summaries:
+            ref = str(summary.order_reference or "").strip()
+            if not ref or ref in self._wix_warm_queue or ref in self._wix_warm_inflight_refs:
+                continue
+            if (
+                self._get_cached_wix_context(ref) is not None
+                and service.get_cached_invoice_list_hints(ref) is not None
+            ):
+                continue
+            self._wix_warm_queue.append(ref)
+            added += 1
+        if added:
             logger.info(
-                "Wix context warmup deferred refs=%s reason=avoid-menu-load-freeze",
-                len(refs),
+                "Wix context warmup queued refs=%s pending=%s",
+                added,
+                len(self._wix_warm_queue),
             )
+        self._start_next_wix_warm_batch()
+
+    def _start_next_wix_warm_batch(self) -> None:
+        if self._wix_warm_worker is not None and self._wix_warm_worker.isRunning():
+            return
+        if not self._wix_warm_queue:
+            return
+
+        refs = self._wix_warm_queue[:_WIX_WARM_BATCH_SIZE]
+        del self._wix_warm_queue[:_WIX_WARM_BATCH_SIZE]
+        self._wix_warm_inflight_refs = set(refs)
+        self._wix_warm_started_at = time.perf_counter()
+        logger.info("Wix context warmup start refs=%s pending=%s", len(refs), len(self._wix_warm_queue))
+
+        def job() -> list[dict[str, object]]:
+            wix_client: WixOrdersClient = self._container.resolve(WixOrdersClient)
+            if not wix_client.has_credentials():
+                return [
+                    {
+                        "reference": ref,
+                        "status": "Kein Wix-API-Key konfiguriert.",
+                        "meta": {},
+                        "items": [],
+                        "patch": self._blank_hint_patch(),
+                    }
+                    for ref in refs
+                ]
+
+            engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
+            invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            warmed: list[dict[str, object]] = []
+            for ref in refs:
+                try:
+                    # All three operations share WixOrdersClient's persistent
+                    # read-through cache, so only the first one can hit Wix.
+                    meta = wix_client.resolve_order_summary(ref)
+                    wix_items = wix_client.fetch_order_line_items(ref)
+                    pieces = engine.get_piece_blocks(wix_items, invoice_ref=ref)
+                    hints = invoice_service.resolve_invoice_list_hints(ref)
+                    warmed.append(
+                        {
+                            "reference": ref,
+                            "status": "" if meta else "Wix-Order nicht gefunden",
+                            "meta": meta if isinstance(meta, dict) else {},
+                            "items": pieces,
+                            "patch": hints.as_row_patch(),
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001 - warmup must not affect the list.
+                    logger.warning("Wix warmup failed ref=%s: %s", ref, exc)
+                    warmed.append(
+                        {
+                            "reference": ref,
+                            "status": f"Wix-Fehler: {exc}",
+                            "meta": {},
+                            "items": [],
+                            "patch": self._blank_hint_patch(),
+                        }
+                    )
+            return warmed
+
+        self._wix_warm_worker = BackgroundWorker(job)
+        self._wix_warm_worker.signals.result.connect(self._on_wix_warm_result)
+        self._wix_warm_worker.signals.error.connect(self._on_wix_warm_error)
+        self._wix_warm_worker.signals.finished.connect(self._on_wix_warm_finished)
+        self._wix_warm_worker.start()
 
     def _on_wix_warm_result(self, payload: object) -> None:
         rows = payload if isinstance(payload, list) else []
@@ -1578,6 +1662,8 @@ class RechnungenView(QWidget):
 
     def _on_wix_warm_finished(self) -> None:
         self._wix_warm_worker = None
+        self._wix_warm_inflight_refs.clear()
+        self._start_next_wix_warm_batch()
 
     def _restart_hint_prefetch(self) -> None:
         self._hint_seq += 1
@@ -1590,6 +1676,8 @@ class RechnungenView(QWidget):
             if not ref or ref in seen:
                 continue
             seen.add(ref)
+            if ref in self._wix_warm_queue or ref in self._wix_warm_inflight_refs:
+                continue
             if service.get_cached_invoice_list_hints(ref) is not None:
                 continue
             if summary.status_code == 100:
@@ -1603,7 +1691,13 @@ class RechnungenView(QWidget):
 
     def _prioritize_hint_prefetch_for_summary(self, summary: InvoiceSummary) -> None:
         ref = str(summary.order_reference or "").strip()
-        if not ref or summary.status_code == 100 or self._hint_draft_queue:
+        if (
+            not ref
+            or summary.status_code == 100
+            or self._hint_draft_queue
+            or ref in self._wix_warm_queue
+            or ref in self._wix_warm_inflight_refs
+        ):
             return
         service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
         if service.get_cached_invoice_list_hints(ref) is not None or ref == self._hint_inflight_ref:
@@ -2346,6 +2440,13 @@ class RechnungenView(QWidget):
             self._on_wix_meta_loaded({**meta, "__requested_ref": ref, "seq": seq})
             self._on_stuecke_loaded({"__requested_ref": ref, "items": items, "seq": seq})
             return
+
+        # A selected row takes precedence over speculative background work.  A
+        # queued reference can be loaded now instead of waiting for all earlier
+        # warmup entries; the direct load will still populate both cache tiers.
+        if ref in self._wix_warm_queue:
+            self._wix_warm_queue.remove(ref)
+            logger.debug("Wix context warmup reprioritized ref=%s", ref)
 
         if self._wix_context_worker is not None and self._wix_context_worker.isRunning():
             self._queued_wix_context_ref = ref

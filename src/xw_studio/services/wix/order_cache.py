@@ -13,7 +13,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ORDER_TTL_SECONDS = 180 * 24 * 60 * 60
+# Invoice analysis only uses immutable order snapshot data (items, buyer and
+# shipping address).  Positive snapshots therefore stay valid until an
+# explicit cache clear/prune.  Missing-order markers deliberately remain
+# short-lived so a delayed Wix order is retried automatically.
+DEFAULT_ORDER_TTL_SECONDS: float | None = None
 DEFAULT_MISSING_TTL_SECONDS = 120
 
 
@@ -39,7 +43,7 @@ class CachedWixOrder:
 
 
 class WixOrderCache:
-    """SQLite-backed read-through cache for immutable-ish Wix order snapshots."""
+    """SQLite-backed read-through cache for immutable Wix order snapshots."""
 
     def __init__(self, path: Path | str | None = None) -> None:
         self._path = Path(path) if path is not None else default_wix_order_cache_path()
@@ -56,7 +60,7 @@ class WixOrderCache:
         site_id: str,
         account_id: str,
         reference: str,
-        max_age_seconds: float = DEFAULT_ORDER_TTL_SECONDS,
+        max_age_seconds: float | None = DEFAULT_ORDER_TTL_SECONDS,
         missing_ttl_seconds: float = DEFAULT_MISSING_TTL_SECONDS,
     ) -> CachedWixOrder | None:
         ref = str(reference or "").strip()
@@ -85,7 +89,7 @@ class WixOrderCache:
         fetched_at = float(row["fetched_at"] or 0.0)
         age = max(0.0, time.time() - fetched_at)
         ttl = max_age_seconds if found else missing_ttl_seconds
-        if age > ttl:
+        if ttl is not None and age > ttl:
             return None
         if not found:
             return CachedWixOrder(found=False, order={}, age_seconds=age)
