@@ -356,7 +356,7 @@ class DraftInvoiceService:
             draft=ProductDraft(
                 name=str(wix_name or normalized_sku).strip() or normalized_sku,
                 sku=normalized_sku,
-                text=str(wix_description or "").strip(),
+                text=self._description_from_category(category),
                 internal_comment=str(wix_product_id or "").strip(),
                 price_gross=round(float(wix_price_gross), 2) if wix_price_gross is not None else None,
                 tax_rate=19.0,
@@ -563,7 +563,7 @@ class DraftInvoiceService:
         return ProductDraft(
             name=str(item.name or sku).strip() or sku,
             sku=sku,
-            text=str(item.note or "").strip(),
+            text=self._description_from_category(category),
             internal_comment=str(
                 raw_item.get("productId")
                 or raw_item.get("catalogItemId")
@@ -576,6 +576,12 @@ class DraftInvoiceService:
             category_id=str(category.get("id") or "").strip(),
             category_name=str(category.get("name") or "").strip(),
         )
+
+    @staticmethod
+    def _description_from_category(category: dict[str, str]) -> str:
+        """Use the inferred sevDesk category as the concise article description."""
+        category_name = str(category.get("name") or "").strip()
+        return f"[{category_name}]" if category_name else ""
 
     def _infer_part_category(
         self,

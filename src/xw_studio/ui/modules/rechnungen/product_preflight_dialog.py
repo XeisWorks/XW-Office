@@ -4,7 +4,6 @@ from __future__ import annotations
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
-    QFormLayout,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -67,7 +66,7 @@ class ProductPreflightDialog(QDialog):
                 [
                     f"Name: {self._issue.wix_name or '-'}",
                     f"SKU: {self._issue.sku or '-'}",
-                    f"Preis brutto: {self._fmt_num(self._issue.wix_price_gross) or '-'}",
+                    f"Preis brutto: {self._fmt_currency(self._issue.wix_price_gross) or '-'}",
                     f"Digital: {'ja' if self._issue.is_digital else 'nein'}",
                 ]
             )
@@ -98,7 +97,7 @@ class ProductPreflightDialog(QDialog):
         draft = self._issue.draft
         self._name = QLineEdit(draft.name)
         self._sku = QLineEdit(draft.sku)
-        self._price = QLineEdit(self._fmt_num(draft.price_gross))
+        self._price = QLineEdit(self._fmt_currency(draft.price_gross))
         self._tax = QLineEdit(self._fmt_num(draft.tax_rate))
         self._category = QComboBox()
         self._category.setEditable(False)
@@ -189,11 +188,19 @@ class ProductPreflightDialog(QDialog):
         return f"{value:.2f}".rstrip("0").rstrip(".")
 
     @staticmethod
+    def _fmt_currency(value: float | None) -> str:
+        if value is None:
+            return ""
+        return f"€ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+    @staticmethod
     def _parse_optional_float(value: str) -> float | None:
-        text = str(value or "").strip().replace(",", ".")
+        text = str(value or "").strip().replace("€", "").replace(" ", "")
         if not text:
             return None
         try:
+            if "," in text:
+                text = text.replace(".", "").replace(",", ".")
             return float(text)
         except ValueError as exc:
             raise ValueError(f"Ungültige Zahl: {value}") from exc

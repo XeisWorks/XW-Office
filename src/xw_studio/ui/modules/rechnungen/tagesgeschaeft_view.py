@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QTimer
@@ -290,6 +291,7 @@ class TagesgeschaeftView(QWidget):
         self._start_selected_invoice_ids: list[str] = []
         self._start_selected_only = False
         self._pending_start_preflight: StartPreflight | None = None
+        self._start_product_preflight_started_at = 0.0
         self._start_abort_requested = False
         self._badge_timer = QTimer(self)
         self._badge_timer.setInterval(60000)
@@ -579,6 +581,8 @@ class TagesgeschaeftView(QWidget):
         ):
             return
 
+        self._start_product_preflight_started_at = time.perf_counter()
+
         def job() -> ProductPreflightPlan:
             invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             draft_service: DraftInvoiceService = self._container.resolve(DraftInvoiceService)
@@ -613,7 +617,19 @@ class TagesgeschaeftView(QWidget):
 
     def _on_start_product_preflight_ready(self, result: object) -> None:
         plan = result if isinstance(result, ProductPreflightPlan) else ProductPreflightPlan(issues=[], part_categories=[])
+        preflight_elapsed_ms = int(
+            (time.perf_counter() - self._start_product_preflight_started_at) * 1000
+        ) if self._start_product_preflight_started_at else 0
+        self._start_product_preflight_started_at = 0.0
+        dialog_started = time.perf_counter()
         decisions = self._run_product_preflight_dialogs(plan)
+        logger.info(
+            "START metric product_preflight_ms=%s product_dialog_ms=%s issues=%s selected_only=%s",
+            preflight_elapsed_ms,
+            int((time.perf_counter() - dialog_started) * 1000),
+            len(plan.issues),
+            self._start_selected_only,
+        )
         preflight = self._pending_start_preflight
         mode = self._start_selected_mode
         if preflight is None:
@@ -629,10 +645,19 @@ class TagesgeschaeftView(QWidget):
 
         def job() -> dict[str, object]:
             draft_service: DraftInvoiceService = self._container.resolve(DraftInvoiceService)
+            product_apply_started = time.perf_counter()
             apply_result = (
                 draft_service.apply_missing_product_plan(plan, decisions)
                 if plan.issues
                 else ProductPreflightApplyResult()
+            )
+            logger.info(
+                "START metric product_apply_ms=%s issues=%s created=%s skipped=%s warnings=%s",
+                int((time.perf_counter() - product_apply_started) * 1000),
+                len(plan.issues),
+                len(apply_result.created_skus),
+                len(apply_result.skipped_skus),
+                len(apply_result.warnings),
             )
             inventory_service: InventoryService = self._container.resolve(InventoryService)
             print_report: StartExecutionReport | None = None

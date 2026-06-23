@@ -224,6 +224,8 @@ def test_apply_missing_product_plan_creates_part_and_patches_existing_draft() ->
 
     assert result.created_skus == ("XW-100",)
     assert len(parts.created_payloads) == 1
+    assert parts.created_payloads[0]["priceGross"] == 12.5
+    assert parts.created_payloads[0]["text"] == "[Noten]"
     assert invoices.updated_positions is not None
     assert invoices.updated_positions[0]["part"] == {"id": "P-1", "objectName": "Part"}
     assert invoices.updated_positions[0]["name"] == "Gepruefte Positionsbezeichnung"

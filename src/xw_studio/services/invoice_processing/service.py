@@ -383,29 +383,56 @@ class InvoiceProcessingService:
             summary = self._resolve_current_start_summary(summary)
             label = summary.invoice_number or summary.order_reference or summary.id
             flags = self.read_fulfillment_flags(summary.id)
+
+            def run_phase(phase: str, operation: Callable[[], Any]) -> Any:
+                phase_started = time.perf_counter()
+                try:
+                    result = operation()
+                except Exception:
+                    logger.info(
+                        "START phase invoice=%s phase=%s elapsed_ms=%s outcome=failed",
+                        summary.id,
+                        phase,
+                        int((time.perf_counter() - phase_started) * 1000),
+                    )
+                    raise
+                logger.info(
+                    "START phase invoice=%s phase=%s elapsed_ms=%s outcome=ok",
+                    summary.id,
+                    phase,
+                    int((time.perf_counter() - phase_started) * 1000),
+                )
+                return result
+
             try:
                 if progress_callback is not None:
                     progress_callback(f"START: {label} wird vorbereitet...")
-                self._repair_draft_products(summary)
+                run_phase("product_mapping", lambda: self._repair_draft_products(summary))
                 digital_only = self._is_digital_only(summary) if summary.order_reference.strip() else False
                 if progress_callback is not None and not digital_only and full_mode:
                     progress_callback(f"START: {label} wird gedruckt...")
-                flags = self._run_finalize_step(
-                    summary,
-                    flags,
-                    digital_only=digital_only,
-                    printed_copy=(full_mode and not digital_only),
+                flags = run_phase(
+                    "finalize",
+                    lambda: self._run_finalize_step(
+                        summary,
+                        flags,
+                        digital_only=digital_only,
+                        printed_copy=(full_mode and not digital_only),
+                    ),
                 )
                 if full_mode:
                     if not digital_only:
-                        flags = self._run_invoice_print_step(summary, flags)
+                        flags = run_phase("invoice_print", lambda: self._run_invoice_print_step(summary, flags))
                         if progress_callback is not None:
                             progress_callback(f"START: Label fuer {label} wird gedruckt...")
-                        flags = self._run_label_print_step(summary, flags)
-                    flags = self._run_product_step(summary, flags)
+                        flags = run_phase("label_print", lambda: self._run_label_print_step(summary, flags))
+                    flags = run_phase("wix_fulfillment", lambda: self._run_product_step(summary, flags))
                 if progress_callback is not None:
                     progress_callback(f"START: Mail fuer {label} wird gesendet...")
-                flags = self._run_mail_step(summary, flags, recipient_override=mail_recipient_override)
+                flags = run_phase(
+                    "mail",
+                    lambda: self._run_mail_step(summary, flags, recipient_override=mail_recipient_override),
+                )
                 successful += 1
             except Exception as exc:
                 failures += 1
