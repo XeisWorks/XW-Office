@@ -85,6 +85,9 @@ class PlcLabelPrintDialog(QDialog):
         container: Container,
         summary: InvoiceSummary,
         parent: QWidget | None = None,
+        *,
+        address_override_lines: list[str] | None = None,
+        recipient_email: str = "",
     ) -> None:
         super().__init__(parent)
         self._container = container
@@ -94,12 +97,18 @@ class PlcLabelPrintDialog(QDialog):
         self._context = _PlcDialogContext(order_number="", address_lines=[], weight_kg=0.0, items=[])
         self._product_catalog = self._load_products()
         self._product_user_set = False
-        self._address_edited = False
+        self._address_edited = bool(address_override_lines)
         self._weight_user_set = False
 
         self.setWindowTitle("PLC Label Print")
         self.setMinimumWidth(700)
         self._build_ui()
+        if address_override_lines:
+            self._address_edit.blockSignals(True)
+            self._address_edit.setPlainText("\n".join(str(line).strip() for line in address_override_lines if str(line).strip()))
+            self._address_edit.blockSignals(False)
+            self._recipient_email.setText(str(recipient_email or "").strip())
+            self._status.setText("Adresse aus VERSANDADRESSE übernommen")
         self._load_context()
 
     def _build_ui(self) -> None:

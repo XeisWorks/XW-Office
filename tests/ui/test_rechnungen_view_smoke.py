@@ -242,11 +242,18 @@ def test_plc_dialog_defaults_to_direct_webservice_without_changing_list_action(q
             "order_reference": "20856",
         }
     )
-    dialog = PlcLabelPrintDialog(container, summary)
+    dialog = PlcLabelPrintDialog(
+        container,
+        summary,
+        address_override_lines=["PLC Customer", "Teststrasse 1", "1030 Wien", "AUSTRIA"],
+        recipient_email="customer@example.test",
+    )
     qtbot.addWidget(dialog)
 
     assert dialog._transport_combo.currentData() == "webservice"  # noqa: SLF001
     assert dialog._transport_combo.count() == 2  # noqa: SLF001
+    assert dialog._address_edit.toPlainText().endswith("AUSTRIA")  # noqa: SLF001
+    assert dialog._recipient_email.text() == "customer@example.test"  # noqa: SLF001
 
 
 def test_rechnungen_load_more_button_stages_drafts_before_open(qtbot: object) -> None:

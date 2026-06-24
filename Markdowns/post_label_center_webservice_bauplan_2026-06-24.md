@@ -31,7 +31,7 @@ Die Phasen 1 bis 3 sind im Arbeitsstand umgesetzt:
 - Zentrale ISO-2-Normalisierung: etwa `AUSTRIA` wird zu `AT`; ein ausgeschriebener Landesname kann nicht mehr in `CountryID` gelangen.
 - Direkter `ImportShipment`-Client mit Zeep, produktivem/Test-WSDL, strikter PDF-Validierung, Trackingcode-Extraktion und redigierten strukturierten Logs.
 - Die Standardauswahl im bestehenden PLC-Dialog ist **Webservice (direkt)**. `Dateiimport (Ondot-Fallback)` bleibt bewusst sichtbar und muss aktiv ausgewaehlt werden.
-- Das SOAP-PDF wird ohne Ordner-Polling in die bestehende lokale Druckwarteschlange eingereiht. Der PLC-Drucker ist separat konfigurierbar und faellt ohne Ueberschreibung auf das bestehende Label-Druckprofil zurueck.
+- Das SOAP-PDF wird ohne Ordner-Polling in die bestehende lokale Druckwarteschlange eingereiht. Standardprofil ist der Windows-Drucker `Paketmarke A5`; `PLC_LABEL_PRINTER` kann ihn gezielt ueberschreiben.
 - Persistente Idempotenz/Audit-Tabelle `plc_shipment` inklusive Alembic-Migration `004_plc_shipment_audit`: gleiche erfolgreiche Requests werden blockiert; ein Transporttimeout wird als `unknown` gesperrt, nicht automatisch erneut gesendet.
 - Neue PLC-Einstellungen speichern Organisationskennung und Absenderdaten verschluesselt ueber `SecretService`.
 

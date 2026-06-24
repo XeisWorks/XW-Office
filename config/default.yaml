@@ -55,6 +55,7 @@ printing:
     - "Canon Broschüre Mono"
     - "Canon Broschüre Duo"
     - "Brother QL-800"
+    - "Paketmarke A5"
   # Named print profiles: map a logical role to a specific printer + DPI.
   # Use profile "id" when calling print_pdf() via product print rules.
   print_profiles:
@@ -66,7 +67,7 @@ printing:
       printer_name: "Brother QL-800"
     - id: "plc_label"
       label: "PLC-Labeldruck"
-      printer_name: "Brother QL-800"
+      printer_name: "Paketmarke A5"
     - id: "noten_simplex"
       label: "Noten A4 Simplex"
       printer_name: "Noten A4 Simplex"

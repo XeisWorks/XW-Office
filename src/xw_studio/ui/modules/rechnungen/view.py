@@ -1860,7 +1860,22 @@ class RechnungenView(QWidget):
         self._plc_last.setText(f"Letzter PLC-Druck: {self._last_plc_invoice}")
 
     def _open_plc_post_popup(self, summary: InvoiceSummary) -> None:
-        dlg = PlcLabelPrintDialog(self._container, summary, self)
+        selected = self._selected_summary()
+        if selected is not None and selected.id == summary.id:
+            address_lines = self._current_shipping_lines()
+            recipient_email = str(self._wix_customer_email.text() or "").strip()
+            if recipient_email in {"—", "---"}:
+                recipient_email = ""
+        else:
+            address_lines = list(self._shipping_address_overrides.get(summary.id, []))
+            recipient_email = ""
+        dlg = PlcLabelPrintDialog(
+            self._container,
+            summary,
+            self,
+            address_override_lines=address_lines,
+            recipient_email=recipient_email,
+        )
         dlg.exec()
 
     def _on_print_music_clicked(self) -> None:
