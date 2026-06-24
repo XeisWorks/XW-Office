@@ -94,6 +94,18 @@ class PlcShipmentService:
                     "Diese PLC-Sendung wurde bereits erstellt. Bitte nicht erneut Ã¼bermitteln."
                 )
             if reservation.state == "blocked":
+                # Compatibility recovery for the first webservice release:
+                # Zeep rejected malformed ArrayOfColloRow locally before any
+                # network request. Those rows were conservatively stored as
+                # ``unknown`` and can now safely be reopened after the fix.
+                if self._is_legacy_local_serialization_error(reservation.shipment.error_message):
+                    self._audit_repository.mark_failed(
+                        request_key,
+                        error_code="CLIENT_SERIALIZATION",
+                        error_message=reservation.shipment.error_message,
+                    )
+                    self._reserve(request_key, shipment)
+                    return
                 raise PlcSubmissionBlockedError(
                     "Der vorherige PLC-Aufruf hat einen unklaren Status. "
                     "Vor einem erneuten Versand bitte PLC/Tracking prÃ¼fen."
@@ -112,6 +124,11 @@ class PlcShipmentService:
                     "Vor einem erneuten Versand bitte PLC/Tracking prÃ¼fen."
                 )
             self._memory_states[request_key] = "sending"
+
+    @staticmethod
+    def _is_legacy_local_serialization_error(message: str) -> bool:
+        text = str(message or "")
+        return "ArrayOfColloRow" in text and "unexpected keyword argument 'Weight'" in text
 
     def _mark_failed(self, request_key: str, error_code: str, error_message: str) -> None:
         if self._audit_repository is not None:

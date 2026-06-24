@@ -112,9 +112,15 @@ def webservice_settings_from_secrets(secrets: "SecretService", *, mode: str) -> 
 
     def value(name: str, *, test_fallback_to_live: bool = False) -> str:
         if normalized_mode == "TEST":
-            test_value = secrets.get_secret(f"PLC_TEST_{name}")
-            if test_value:
-                return test_value
+            for key in (
+                f"PLC_TEST_{name}",
+                f"TEST_PLC_{name}",
+                # Legacy PLC exports use ORGUNIT without the separator.
+                "TEST_PLC_ORGUNIT_GUID" if name == "ORG_UNIT_GUID" else "",
+            ):
+                test_value = secrets.get_secret(key) if key else ""
+                if test_value:
+                    return test_value
             if test_fallback_to_live:
                 return secrets.get_secret(f"PLC_{name}")
         return secrets.get_secret(f"PLC_{name}")
@@ -174,6 +180,10 @@ class PlcWebserviceClient:
         started = time.perf_counter()
         try:
             response = self._service_factory(settings).ImportShipment(row=payload)
+        except TypeError as exc:
+            # Zeep raises TypeError while serializing an invalid local payload;
+            # in this case no HTTP request has been sent and retry is safe.
+            raise PlcWebserviceError(f"PLC-Anfrage konnte lokal nicht aufgebaut werden: {exc}") from exc
         except PlcWebserviceError:
             raise
         except Exception as exc:  # noqa: BLE001 - SOAP transport errors vary by Zeep backend.
@@ -224,12 +234,12 @@ def build_import_shipment_row(settings: PlcWebserviceSettings, shipment: PlcShip
         if not (recipient.phone.strip() or recipient.email.strip()):
             raise ValueError("PLC-Zollsendung benÃ¶tigt Telefon oder E-Mail des Empfängers")
 
-    collo_list: list[dict[str, object]] = []
+    collo_rows: list[dict[str, object]] = []
     for index, parcel in enumerate(shipment.parcels):
         collo: dict[str, object] = {"Weight": float(parcel.weight_kg)}
         if shipment.country_group == "NON_EU" and index == 0:
-            collo["ColloArticleList"] = [_article_row(article) for article in shipment.articles]
-        collo_list.append(collo)
+            collo["ColloArticleList"] = {"ColloArticleRow": [_article_row(article) for article in shipment.articles]}
+        collo_rows.append(collo)
 
     row: dict[str, object] = {
         "ClientID": settings.client_id,
@@ -242,7 +252,9 @@ def build_import_shipment_row(settings: PlcWebserviceSettings, shipment: PlcShip
         "CustomerProduct": "XW-Studio",
         "OURecipientAddress": _address_row(recipient),
         "OUShipperAddress": _address_row(shipper),
-        "ColloList": collo_list,
+        # ArrayOfColloRow is a SOAP wrapper, not a bare Python list.  Passing
+        # a list makes Zeep interpret ``Weight`` as a field of the wrapper.
+        "ColloList": {"ColloRow": collo_rows},
         "PrinterObject": {
             "LanguageID": settings.language_id,
             "LabelFormatID": settings.label_format_id,
@@ -333,12 +345,20 @@ def _tracking_codes(response: object) -> list[str]:
         result = response.get("ImportShipmentResult") or []
     else:
         result = getattr(response, "ImportShipmentResult", None) or []
+    if isinstance(result, Mapping):
+        result = result.get("ColloRow") or []
+    elif hasattr(result, "ColloRow"):
+        result = getattr(result, "ColloRow") or []
     if not isinstance(result, (list, tuple)):
         result = [result]
 
     codes: list[str] = []
     for collo in result:
         values = collo.get("ColloCodeList") if isinstance(collo, Mapping) else getattr(collo, "ColloCodeList", None)
+        if isinstance(values, Mapping):
+            values = values.get("ColloCodeRow") or []
+        elif hasattr(values, "ColloCodeRow"):
+            values = getattr(values, "ColloCodeRow") or []
         if not isinstance(values, (list, tuple)):
             values = [values] if values is not None else []
         for code_row in values:

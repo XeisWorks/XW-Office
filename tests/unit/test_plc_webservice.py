@@ -19,6 +19,7 @@ from xw_studio.services.plc.webservice import (
     PlcWebserviceRejectedError,
     PlcWebserviceSettings,
     build_import_shipment_row,
+    webservice_settings_from_secrets,
 )
 
 
@@ -75,6 +76,24 @@ def test_address_parser_normalizes_wix_country_label_to_iso2() -> None:
     assert address.email == "max@example.test"
 
 
+def test_test_settings_accept_the_existing_test_plc_environment_aliases() -> None:
+    class Secrets:
+        values = {
+            "TEST_PLC_CLIENT_ID": "12",
+            "TEST_PLC_ORG_UNIT_ID": "3456789",
+            "TEST_PLC_ORGUNIT_GUID": "cd96848d-6552-4653-a992-f0f411710fb4",
+        }
+
+        def get_secret(self, key: str) -> str:
+            return self.values.get(key, "")
+
+    settings = webservice_settings_from_secrets(Secrets(), mode="TEST")  # type: ignore[arg-type]
+
+    assert settings.client_id == 12
+    assert settings.org_unit_id == 3456789
+    assert settings.org_unit_guid == "cd96848d-6552-4653-a992-f0f411710fb4"
+
+
 def test_webservice_row_matches_local_plc_specification() -> None:
     row = build_import_shipment_row(_settings(), _shipment())
 
@@ -101,6 +120,7 @@ def test_webservice_row_matches_local_plc_specification() -> None:
         "LabelFormatID": "100x200",
         "PaperLayoutID": "100x200",
     }
+    assert row["ColloList"] == {"ColloRow": [{"Weight": 0.5}]}
 
 
 def test_non_eu_shipment_requires_complete_customs_values() -> None:
@@ -122,7 +142,7 @@ def test_non_eu_shipment_requires_complete_customs_values() -> None:
     )
     valid.validate()
     row = build_import_shipment_row(_settings(), valid)
-    article = row["ColloList"][0]["ColloArticleList"][0]  # type: ignore[index]
+    article = row["ColloList"]["ColloRow"][0]["ColloArticleList"]["ColloArticleRow"][0]  # type: ignore[index]
     assert article["HSTariffNumber"] == "49019900"
     assert article["ValueOfGoodsPerUnit"] == pytest.approx(19.9)
     assert article["DeclarationOfOrigin"] is False
