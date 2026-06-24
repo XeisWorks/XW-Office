@@ -630,6 +630,9 @@ class WixOrderItem(BaseModel):
     name: str = ""
     qty: int = 1
     note: str = ""
+    unit_price_gross: float = 0.0
+    currency: str = "EUR"
+    unit_weight_kg: float = 0.0
     is_unreleased: bool = False
 
 
@@ -664,6 +667,35 @@ def _parse_order_line_item(raw: dict[str, Any]) -> WixOrderItem:
         qty = 1
     qty = max(qty, 1)
 
+    # Gross line-item price is required when a non-EU PLC label needs customs
+    # declarations. Wix has used several representations across API versions.
+    unit_price_gross = 0.0
+    currency = "EUR"
+    for key in ("price", "lineItemPrice", "priceBeforeDiscountsAndTax", "priceBeforeDiscounts"):
+        candidate = raw.get(key)
+        if isinstance(candidate, dict):
+            candidate = candidate.get("amount") or candidate.get("value") or candidate.get("price")
+        try:
+            parsed = float(str(candidate).replace(",", "."))
+        except (TypeError, ValueError):
+            continue
+        if parsed >= 0:
+            unit_price_gross = parsed
+            break
+    for key in ("currency", "currencyCode"):
+        value = str(raw.get(key) or "").strip().upper()
+        if value:
+            currency = value
+            break
+    unit_weight_kg = 0.0
+    raw_weight = phys.get("weight") if isinstance(phys, dict) else None
+    if isinstance(raw_weight, dict):
+        raw_weight = raw_weight.get("value") or raw_weight.get("amount")
+    try:
+        unit_weight_kg = max(float(str(raw_weight).replace(",", ".")), 0.0)
+    except (TypeError, ValueError):
+        pass
+
     # Note from line item description or options
     note = ""
     desc = raw.get("descriptionLines") or []
@@ -691,6 +723,9 @@ def _parse_order_line_item(raw: dict[str, Any]) -> WixOrderItem:
         name=name,
         qty=qty,
         note=note,
+        unit_price_gross=unit_price_gross,
+        currency=currency,
+        unit_weight_kg=unit_weight_kg,
         is_unreleased=is_unreleased,
     )
 
@@ -1249,6 +1284,44 @@ class WixOrdersClient:
         if not order:
             return {}
         return self._summary_from_order(order)
+
+    def resolve_plc_shipping_context(self, reference: str) -> dict[str, str]:
+        """Return normalized address contact fields needed by the PLC dialog.
+
+        The regular invoice detail summary intentionally stays compact. PLC
+        customs validation additionally needs recipient email/phone, so this
+        method exposes them only in the short-lived dialog context.
+        """
+        order = self._resolve_order(reference)
+        if not order:
+            return {}
+        parts = self._shipping_address_parts_from_order(order)
+        shipping = order.get("shippingInfo") if isinstance(order.get("shippingInfo"), dict) else {}
+        destination = shipping.get("shippingDestination") if isinstance(shipping.get("shippingDestination"), dict) else {}
+        contact = destination.get("contactDetails") if isinstance(destination.get("contactDetails"), dict) else {}
+        shipment_details = shipping.get("shipmentDetails") if isinstance(shipping.get("shipmentDetails"), dict) else {}
+        buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
+
+        email = self._address_field(
+            contact,
+            shipment_details,
+            buyer,
+            shipping,
+            keys=("email", "emailAddress"),
+        )
+        phone = self._address_field(
+            contact,
+            shipment_details,
+            buyer,
+            shipping,
+            keys=("phone", "phoneNumber", "phoneNumber1", "mobile", "mobilePhone"),
+        )
+        return {
+            **parts,
+            "email": email,
+            "phone": phone,
+            "order_number": self._norm_text(order.get("number")),
+        }
 
     def resolve_order_dashboard_url(self, reference: str) -> str:
         """Return Wix dashboard URL for an order reference (number or UUID)."""

@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -30,11 +31,22 @@ from xw_studio.services.plc.polling import (
     DEFAULT_PLC_IMPORT_DIR,
     DEFAULT_TEST_PLC_IMPORT_DIR,
     PlcConfig,
-    ShipmentAddress,
-    build_postdefaultport_lines,
-    normalize_shipment_address,
     write_import_file,
 )
+from xw_studio.services.plc.models import (
+    EU_COUNTRIES,
+    PlcCustomsArticle,
+    PlcParcel,
+    PlcShipmentDraft,
+    build_polling_lines,
+    clean_reference,
+    parse_shipment_address_lines,
+)
+from xw_studio.services.plc.service import PlcShipmentService
+from xw_studio.services.plc.webservice import PlcWebserviceResult, webservice_settings_from_secrets
+from xw_studio.services.printing.print_jobs import PdfPrintJob
+from xw_studio.services.printing.print_queue import PrintQueueService
+from xw_studio.services.secrets.service import SecretService
 from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
 from xw_studio.services.wix.client import WixOrderItem, WixOrdersClient
 
@@ -43,10 +55,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_EU_COUNTRIES = {
-    "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE",
-    "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE",
-}
 _EU_PRODUCT_ID = "45"
 _DEFAULT_ITEM_WEIGHT_KG = 0.30
 
@@ -57,6 +65,16 @@ class _PlcDialogContext:
     address_lines: list[str]
     weight_kg: float
     items: list[WixOrderItem]
+    email: str = ""
+    phone: str = ""
+
+
+@dataclass(frozen=True)
+class _PlcSendResult:
+    transport: str
+    reference: str
+    webservice_result: PlcWebserviceResult | None = None
+    polling_path: str = ""
 
 
 class PlcLabelPrintDialog(QDialog):
@@ -72,6 +90,7 @@ class PlcLabelPrintDialog(QDialog):
         self._container = container
         self._summary = summary
         self._load_worker: BackgroundWorker | None = None
+        self._send_worker: BackgroundWorker | None = None
         self._context = _PlcDialogContext(order_number="", address_lines=[], weight_kg=0.0, items=[])
         self._product_catalog = self._load_products()
         self._product_user_set = False
@@ -100,6 +119,11 @@ class PlcLabelPrintDialog(QDialog):
         mode_wrap.setLayout(mode_row)
         form.addRow("Modus:", mode_wrap)
 
+        self._transport_combo = QComboBox()
+        self._transport_combo.addItem("Webservice (direkt, Standard)", "webservice")
+        self._transport_combo.addItem("Dateiimport (Ondot-Fallback)", "polling")
+        form.addRow("Ãœbertragungsweg:", self._transport_combo)
+
         self._product_combo = QComboBox()
         self._product_combo.currentTextChanged.connect(self._on_product_selected)
         form.addRow("Versandprodukt:", self._product_combo)
@@ -120,6 +144,13 @@ class PlcLabelPrintDialog(QDialog):
         self._address_edit.textChanged.connect(self._on_address_edit)
         form.addRow("Lieferadresse:", self._address_edit)
 
+        self._recipient_phone = QLineEdit()
+        self._recipient_phone.setPlaceholderText("für Nicht-EU: Telefon oder E-Mail erforderlich")
+        form.addRow("Empfänger Telefon:", self._recipient_phone)
+        self._recipient_email = QLineEdit()
+        self._recipient_email.setPlaceholderText("für Nicht-EU: Telefon oder E-Mail erforderlich")
+        form.addRow("Empfänger E-Mail:", self._recipient_email)
+
         self._status = QLabel("Lade Analyse...")
         self._status.setStyleSheet("color: #64748b;")
         form.addRow("Status:", self._status)
@@ -139,20 +170,39 @@ class PlcLabelPrintDialog(QDialog):
             address_lines: list[str] = []
             items: list[WixOrderItem] = []
             weight = 0.0
+            email = ""
+            phone = ""
             ref = self._summary.order_reference.strip()
             if ref:
                 wix: WixOrdersClient = self._container.resolve(WixOrdersClient)
                 if wix.has_credentials():
                     meta = wix.resolve_order_summary(ref)
+                    context_method = getattr(wix, "resolve_plc_shipping_context", None)
+                    plc_context = context_method(ref) if callable(context_method) else {}
                     order_number = str(meta.get("wix_order_number") or order_number or "").strip()
+                    if isinstance(plc_context, dict):
+                        order_number = str(plc_context.get("order_number") or order_number).strip()
+                        email = str(plc_context.get("email") or "").strip()
+                        phone = str(plc_context.get("phone") or "").strip()
                     shipping = str(meta.get("wix_shipping_address") or "").strip()
                     if shipping:
                         address_lines = [ln.strip() for ln in shipping.splitlines() if ln.strip()]
                     if not address_lines:
                         address_lines = wix.resolve_order_address_lines(ref)
                     items = wix.fetch_order_line_items(ref)
-                    weight = sum(max(1, int(item.qty or 1)) * _DEFAULT_ITEM_WEIGHT_KG for item in items)
-            return _PlcDialogContext(order_number=order_number, address_lines=address_lines, weight_kg=weight, items=items)
+                    weight = sum(
+                        max(1, int(item.qty or 1))
+                        * (float(item.unit_weight_kg or 0) or _DEFAULT_ITEM_WEIGHT_KG)
+                        for item in items
+                    )
+            return _PlcDialogContext(
+                order_number=order_number,
+                address_lines=address_lines,
+                weight_kg=weight,
+                items=items,
+                email=email,
+                phone=phone,
+            )
 
         self._load_worker = BackgroundWorker(job)
         self._load_worker.signals.result.connect(self._on_context_loaded)
@@ -165,9 +215,15 @@ class PlcLabelPrintDialog(QDialog):
             return
         self._context = result
         if result.address_lines and not self._address_edited:
+            self._address_edit.blockSignals(True)
             self._address_edit.setPlainText("\n".join(result.address_lines))
+            self._address_edit.blockSignals(False)
         if result.weight_kg > 0 and not self._weight_user_set:
             self._weight_edit.setText(f"{result.weight_kg:.2f}".replace(".", ","))
+        if result.phone and not self._recipient_phone.text().strip():
+            self._recipient_phone.setText(result.phone)
+        if result.email and not self._recipient_email.text().strip():
+            self._recipient_email.setText(result.email)
         self._sync_product_options()
         self._update_customs_visibility()
         self._status.setText("Bereit")
@@ -196,67 +252,47 @@ class PlcLabelPrintDialog(QDialog):
 
     def _build_reference(self) -> str:
         if self._context.order_number:
-            return self._context.order_number[:40]
+            return clean_reference(self._context.order_number)
         slug = re.sub(r"[^A-Za-z0-9]+", "", (self._summary.contact_name or ""))[:12]
         day = time.strftime("%Y%m%d")
         count = self._mail_ref_counters.get(day, 0) + 1
         self._mail_ref_counters[day] = count
         value = f"MAIL-{day}-{count:03d}-{slug}" if slug else f"MAIL-{day}-{count:03d}"
-        return value[:40]
+        return clean_reference(value)
 
     def _current_address_lines(self) -> list[str]:
         return [ln.strip() for ln in self._address_edit.toPlainText().splitlines() if ln.strip()]
 
-    def _parse_address(self, lines: list[str]) -> ShipmentAddress:
-        country = lines[-1].strip().upper() if lines else ""
-        zip_city = lines[-2] if len(lines) >= 2 else ""
-        m = re.match(r"^([0-9]{3,6})\s+(.+)$", zip_city.strip())
-        zip_code = m.group(1) if m else ""
-        city = m.group(2) if m else zip_city.strip()
-        street_line = lines[-3] if len(lines) >= 3 else ""
-        house_no = ""
-        street = street_line
-        m2 = re.match(r"^(.*?)(\d+[A-Za-z0-9\-/]*)$", street_line.strip())
-        if m2:
-            street = m2.group(1).strip().rstrip(",")
-            house_no = m2.group(2).strip()
-        name_lines = lines[:-3] if len(lines) > 3 else lines[:1]
-        name1 = name_lines[0] if name_lines else (self._summary.contact_name or "")
-        name2 = name_lines[1] if len(name_lines) > 1 else ""
-        return normalize_shipment_address(
-            ShipmentAddress(
-                name1=name1,
-                name2=name2,
-                street=street,
-                house_no=house_no,
-                zip=zip_code,
-                city=city,
-                country_iso2=country,
-            )
+    def _parse_address(self, lines: list[str]):
+        return parse_shipment_address_lines(
+            lines,
+            fallback_name=self._summary.contact_name,
+            email=self._recipient_email.text().strip(),
+            phone=self._recipient_phone.text().strip(),
         )
 
     def _country_group(self, iso2: str) -> str:
         code = str(iso2 or "").upper().strip()
         if code == "AT":
             return "AT"
-        if code and code in _EU_COUNTRIES:
+        if code and code in EU_COUNTRIES:
             return "EU"
         return "NON_EU"
 
     def _current_country(self) -> str:
-        lines = self._current_address_lines()
-        return lines[-1].strip().upper() if lines else ""
+        return self._parse_address(self._current_address_lines()).country_iso2
 
     def _sync_product_options(self) -> None:
         group = self._country_group(self._current_country())
         options = [item for item in self._product_catalog if group in item.get("regions", set())]
         labels = [str(item["label"]) for item in options]
+        current = self._product_combo.currentText().strip()
         self._product_combo.blockSignals(True)
         self._product_combo.clear()
         self._product_combo.addItems(labels)
-        self._product_combo.blockSignals(False)
         if labels:
-            self._product_combo.setCurrentIndex(0)
+            self._product_combo.setCurrentIndex(labels.index(current) if self._product_user_set and current in labels else 0)
+        self._product_combo.blockSignals(False)
 
     def _update_customs_visibility(self) -> None:
         needs_customs = self._country_group(self._current_country()) == "NON_EU"
@@ -269,24 +305,19 @@ class PlcLabelPrintDialog(QDialog):
                 return item
         return {}
 
-    def _build_customs_articles(self) -> list[dict]:
-        out: list[dict] = []
+    def _build_customs_articles(self) -> list[PlcCustomsArticle]:
+        out: list[PlcCustomsArticle] = []
         for item in self._context.items:
             qty = max(1, int(item.qty or 1))
             out.append(
-                {
-                    "sku": item.sku,
-                    "content": item.name,
-                    "origin": "AT",
-                    "hs_code": "49019900",
-                    "customs_type": "GOODS",
-                    "description": item.name,
-                    "quantity": qty,
-                    "unit": "pcs",
-                    "net_weight_kg": round(qty * _DEFAULT_ITEM_WEIGHT_KG, 3),
-                    "customs_value": "",
-                    "currency": "EUR",
-                }
+                PlcCustomsArticle(
+                    sku=str(item.sku or ""),
+                    name=str(item.name or item.sku or ""),
+                    quantity=qty,
+                    net_weight_kg=round(float(item.unit_weight_kg or 0) or _DEFAULT_ITEM_WEIGHT_KG, 3),
+                    customs_value_eur=round(float(item.unit_price_gross or 0), 2),
+                    currency=str(item.currency or "EUR").upper(),
+                )
             )
         return out
 
@@ -320,46 +351,138 @@ class PlcLabelPrintDialog(QDialog):
             QMessageBox.warning(self, "PLC", "Gewicht ist ungueltig.")
             return
 
-        mode = self._current_mode()
-        import_dir = str(os.getenv("PLC_IMPORT_DIR" if mode == "LIVE" else "TEST_PLC_IMPORT_DIR") or "").strip()
-        if not import_dir:
-            import_dir = DEFAULT_PLC_IMPORT_DIR if mode == "LIVE" else DEFAULT_TEST_PLC_IMPORT_DIR
-
         ref = self._build_reference()
-        parcels = [{"pakettyp": pakettyp, "gewicht": weight_raw, "referenz": ref}]
-        metadata = {
-            "shipment_id": ref,
-            "ref1": ref,
-            "ref2": (self._summary.invoice_number or self._summary.id),
-            "customs_description": self._customs_edit.toPlainText().strip(),
-            "returnsend": "0",
-        }
-
-        articles: list[dict] = []
+        articles: list[PlcCustomsArticle] = []
         if self._country_group(address.country_iso2) == "NON_EU":
             articles = self._build_customs_articles()
             if not articles:
                 QMessageBox.warning(self, "PLC", "Für Nicht-EU werden Wix-Positionen benötigt.")
                 return
 
-        config = PlcConfig(mode=mode, import_dir=import_dir)
+        shipment = PlcShipmentDraft(
+            reference=ref,
+            invoice_id=self._summary.id,
+            invoice_number=self._summary.invoice_number or self._summary.id,
+            mode=self._current_mode(),
+            product_id=product_id,
+            recipient=address,
+            parcels=(PlcParcel(weight_kg=float(weight_raw), package_type=pakettyp, reference=ref),),
+            customs_description=self._customs_edit.toPlainText().strip(),
+            articles=tuple(articles),
+        )
         try:
-            payload_lines = build_postdefaultport_lines(
-                config,
-                product_id=product_id,
-                address=address,
-                parcels=parcels,
-                metadata=metadata,
-                articles=articles,
-            )
-            path = write_import_file(payload_lines, import_dir, f"plc_{ref}")
-        except Exception as exc:
-            QMessageBox.critical(self, "PLC Fehler", str(exc))
+            shipment.validate()
+        except ValueError as exc:
+            QMessageBox.warning(self, "PLC", str(exc))
             return
 
-        self._status.setText(f"Gesendet: {path}")
-        QMessageBox.information(self, "PLC", "Sendung erfolgreich an PLC übergeben.")
+        transport = str(self._transport_combo.currentData() or "webservice")
+        self._start_send(shipment, transport)
+
+    def _start_send(self, shipment: PlcShipmentDraft, transport: str) -> None:
+        self._send_btn.setEnabled(False)
+        self._status.setText("Sende an PLC-Webservice..." if transport == "webservice" else "Erzeuge PLC-Importdatei...")
+
+        def job() -> _PlcSendResult:
+            if transport == "webservice":
+                secrets: SecretService = self._container.resolve(SecretService)
+                settings = webservice_settings_from_secrets(secrets, mode=shipment.mode)
+                service: PlcShipmentService = self._container.resolve(PlcShipmentService)
+                result = service.submit_webservice(settings, shipment)
+                return _PlcSendResult(transport="webservice", reference=shipment.reference, webservice_result=result)
+
+            import_dir = str(
+                os.getenv("PLC_IMPORT_DIR" if shipment.mode == "LIVE" else "TEST_PLC_IMPORT_DIR") or ""
+            ).strip()
+            if not import_dir:
+                import_dir = DEFAULT_PLC_IMPORT_DIR if shipment.mode == "LIVE" else DEFAULT_TEST_PLC_IMPORT_DIR
+            config = PlcConfig(mode=shipment.mode, import_dir=import_dir)
+            path = write_import_file(build_polling_lines(config, shipment), import_dir, f"plc_{shipment.reference}")
+            return _PlcSendResult(transport="polling", reference=shipment.reference, polling_path=str(path))
+
+        self._send_worker = BackgroundWorker(job)
+        self._send_worker.signals.result.connect(lambda result: self._on_send_result(shipment, result))
+        self._send_worker.signals.error.connect(self._on_send_error)
+        self._send_worker.signals.finished.connect(lambda: self._send_btn.setEnabled(True))
+        self._send_worker.start()
+
+    def _on_send_result(self, shipment: PlcShipmentDraft, result: object) -> None:
+        if not isinstance(result, _PlcSendResult):
+            self._on_send_error(RuntimeError("PLC lieferte ein ungültiges Ergebnis"))
+            return
+        if result.transport == "polling":
+            self._status.setText(f"Importdatei abgelegt: {result.polling_path}")
+            QMessageBox.information(
+                self,
+                "PLC-Dateiimport",
+                "Die Importdatei wurde abgelegt. Ondot Data Exchange verarbeitet sie zeitversetzt; "
+                "dies ist der explizite Fallback, nicht der direkte Druck.",
+            )
+            self.accept()
+            return
+
+        if result.webservice_result is None:
+            self._on_send_error(RuntimeError("PLC-Webservice lieferte kein Label"))
+            return
+        try:
+            job_id = self._queue_webservice_label(result.webservice_result.pdf_bytes, shipment.reference)
+            service: PlcShipmentService = self._container.resolve(PlcShipmentService)
+            service.mark_print_queued(shipment, job_id)
+        except Exception as exc:  # noqa: BLE001 - shipment was created; preserve the recovery message.
+            self._status.setText("PLC-Sendung erstellt, Druckauftrag fehlgeschlagen")
+            QMessageBox.warning(
+                self,
+                "PLC-Label erstellt",
+                "Die Sendung wurde von PLC erstellt, aber der lokale Druckauftrag konnte nicht eingereiht werden.\n\n"
+                f"Details: {exc}",
+            )
+            return
+
+        tracking = ", ".join(result.webservice_result.tracking_codes) or "ohne Trackingcode"
+        self._status.setText(f"PLC-Label erstellt; Druckauftrag {job_id[:8]}…")
+        QMessageBox.information(
+            self,
+            "PLC-Label",
+            f"Label direkt erstellt und zum Druck eingereiht.\nTracking: {tracking}",
+        )
         self.accept()
+
+    def _on_send_error(self, exc: Exception) -> None:
+        logger.warning("PLC send failed invoice=%s: %s", self._summary.id, exc)
+        self._status.setText(f"PLC-Fehler: {exc}")
+        QMessageBox.critical(self, "PLC Fehler", str(exc))
+
+    def _queue_webservice_label(self, pdf_bytes: bytes, reference: str) -> str:
+        printer = self._resolve_plc_printer()
+        if not printer:
+            raise RuntimeError("PLC-Labeldrucker ist nicht konfiguriert")
+        safe_ref = re.sub(r"[^A-Za-z0-9_-]+", "_", reference)[:40] or "label"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_plc_{safe_ref}.pdf") as handle:
+            handle.write(pdf_bytes)
+            pdf_path = handle.name
+        queue: PrintQueueService = self._container.resolve(PrintQueueService)
+        return queue.enqueue(
+            PdfPrintJob(
+                pdf_path=pdf_path,
+                printer_name=printer,
+                copies=1,
+                job_kind="label",
+                description=f"PLC-Label {reference}",
+                cleanup_paths=(pdf_path,),
+            )
+        )
+
+    def _resolve_plc_printer(self) -> str:
+        secrets: SecretService = self._container.resolve(SecretService)
+        configured = secrets.get_secret("PLC_LABEL_PRINTER").strip()
+        if configured:
+            return configured
+        profile = self._container.config.printing.resolve_profile("plc_label")
+        if profile is None:
+            profile = self._container.config.printing.resolve_profile("label")
+        if profile is not None and profile.printer_name.strip():
+            return profile.printer_name.strip()
+        return str(self._container.config.printing.label_printer or "").strip()
 
     @staticmethod
     def _load_products() -> list[dict]:

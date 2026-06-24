@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_studio.models.base import Base
-from xw_studio.repositories import ApiSecretRepository, PcRegistryRepository, SettingKvRepository
+from xw_studio.repositories import ApiSecretRepository, PcRegistryRepository, PlcShipmentRepository, SettingKvRepository
 
 
 @pytest.fixture
@@ -78,3 +78,34 @@ def test_api_secret_upsert(session_factory: sessionmaker[Session]) -> None:
     with session_factory() as s:
         repo = ApiSecretRepository(s)
         assert repo.get_ciphertext("SEVDESK") == b"\x02updated\x02"
+
+
+def test_plc_shipment_reservation_blocks_duplicate_after_creation(
+    session_factory: sessionmaker[Session],
+) -> None:
+    repo = PlcShipmentRepository(session_factory)
+    first = repo.reserve(
+        request_key="a" * 64,
+        invoice_id="invoice-1",
+        reference="20856",
+        invoice_number="RE-1",
+        mode="TEST",
+        transport="webservice",
+        product_code="10",
+        country_iso2="AT",
+    )
+    assert first.state == "reserved"
+    repo.mark_created("a" * 64, tracking_codes=("TRACK-1",), label_sha256="b" * 64)
+
+    duplicate = repo.reserve(
+        request_key="a" * 64,
+        invoice_id="invoice-1",
+        reference="20856",
+        invoice_number="RE-1",
+        mode="TEST",
+        transport="webservice",
+        product_code="10",
+        country_iso2="AT",
+    )
+    assert duplicate.state == "already_created"
+    assert duplicate.shipment.status == "created"

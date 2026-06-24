@@ -52,6 +52,27 @@ _URGENCY_RULES_KEY = "daily_business.urgency_rules"
 _FULFILLMENT_MAIL_TEMPLATE_KEY = "rechnungen.fulfillment_mail_template_html"
 _FULFILLMENT_MAIL_SUBJECT_KEY = "rechnungen.fulfillment_mail_subject"
 _CLICKUP_LIST_ID_KEY = "clickup.default_list_id"
+_PLC_SECRET_KEYS: tuple[str, ...] = (
+    "PLC_CLIENT_ID",
+    "PLC_ORG_UNIT_ID",
+    "PLC_ORG_UNIT_GUID",
+    "PLC_LABEL_PRINTER",
+    "PLC_LABEL_FORMAT_ID",
+    "PLC_PAPER_LAYOUT_ID",
+    "PLC_LABEL_LANGUAGE",
+    "PLC_TIMEOUT_SECONDS",
+    "PLC_SHIPPER_NAME1",
+    "PLC_SHIPPER_NAME2",
+    "PLC_SHIPPER_STREET",
+    "PLC_SHIPPER_HOUSE_NUMBER",
+    "PLC_SHIPPER_ADDRESS_LINE2",
+    "PLC_SHIPPER_POSTAL_CODE",
+    "PLC_SHIPPER_CITY",
+    "PLC_SHIPPER_COUNTRY",
+    "PLC_SHIPPER_PHONE",
+    "PLC_SHIPPER_EMAIL",
+    "PLC_SHIPPER_EORI",
+)
 _EXTRA_SECRET_KEYS: tuple[str, ...] = (
     "MOLLIE_ACCESS_TOKEN",
     "STRIPE_SECRET_KEY",
@@ -188,11 +209,16 @@ class SettingsView(QWidget):
         sevdesk_ok = bool(secret_service.get_secret("SEVDESK_API_TOKEN"))
         wix_ok = bool(secret_service.get_secret("WIX_API_KEY"))
         clickup_ok = bool(secret_service.get_secret("CLICKUP_API_TOKEN"))
+        plc_ok = all(
+            secret_service.get_secret(key)
+            for key in ("PLC_CLIENT_ID", "PLC_ORG_UNIT_ID", "PLC_ORG_UNIT_GUID")
+        )
         fernet_ok = bool((cfg.fernet_master_key or "").strip())
         form_sec.addRow("SEVDESK_API_TOKEN:", _pill("gesetzt ✓", sevdesk_ok) if sevdesk_ok else _pill("fehlt ✗", False))
         form_sec.addRow("WIX_API_KEY:", _pill("gesetzt ✓", wix_ok) if wix_ok else _pill("fehlt ✗", False))
         form_sec.addRow("CLICKUP_API_TOKEN:", _pill("gesetzt ✓", clickup_ok) if clickup_ok else _pill("fehlt ✗", False))
         form_sec.addRow("FERNET_MASTER_KEY:", _pill("gesetzt ✓", fernet_ok) if fernet_ok else _pill("fehlt ✗", False))
+        form_sec.addRow("PLC-Webservice:", _pill("gesetzt", plc_ok) if plc_ok else _pill("fehlt", False))
         grid.addWidget(gb_secrets, 0, 1)
 
         gb_printer = QGroupBox("Drucker (konfiguriert)")
@@ -258,9 +284,67 @@ class SettingsView(QWidget):
         sec_edit.addRow("", btn_save_tokens)
         grid.addWidget(gb_secret_edit, 2, 0, 1, 2)
 
+        gb_plc = QGroupBox("Post Label Center (Direkt-Webservice)")
+        plc_form = QFormLayout(gb_plc)
+        plc_form.addRow(
+            "Betrieb:",
+            QLabel("Direkter Webservice ist Standard. Der Dateiimport bleibt nur als Fallback im PLC-Dialog."),
+        )
+        self._plc_client_id = QLineEdit(secret_service.get_secret("PLC_CLIENT_ID"))
+        self._plc_org_unit_id = QLineEdit(secret_service.get_secret("PLC_ORG_UNIT_ID"))
+        self._plc_org_unit_guid = QLineEdit(secret_service.get_secret("PLC_ORG_UNIT_GUID"))
+        self._plc_org_unit_guid.setEchoMode(QLineEdit.EchoMode.Password)
+        self._plc_label_printer = QLineEdit(secret_service.get_secret("PLC_LABEL_PRINTER"))
+        self._plc_label_format_id = QLineEdit(secret_service.get_secret("PLC_LABEL_FORMAT_ID") or "100x200")
+        self._plc_paper_layout_id = QLineEdit(secret_service.get_secret("PLC_PAPER_LAYOUT_ID") or "100x200")
+        self._plc_label_language = QLineEdit(secret_service.get_secret("PLC_LABEL_LANGUAGE") or "PDF")
+        self._plc_timeout_seconds = QLineEdit(secret_service.get_secret("PLC_TIMEOUT_SECONDS") or "45")
+        self._plc_shipper_name1 = QLineEdit(secret_service.get_secret("PLC_SHIPPER_NAME1"))
+        self._plc_shipper_name2 = QLineEdit(secret_service.get_secret("PLC_SHIPPER_NAME2"))
+        self._plc_shipper_street = QLineEdit(secret_service.get_secret("PLC_SHIPPER_STREET"))
+        self._plc_shipper_house_number = QLineEdit(secret_service.get_secret("PLC_SHIPPER_HOUSE_NUMBER"))
+        self._plc_shipper_address_line2 = QLineEdit(secret_service.get_secret("PLC_SHIPPER_ADDRESS_LINE2"))
+        self._plc_shipper_postal_code = QLineEdit(secret_service.get_secret("PLC_SHIPPER_POSTAL_CODE"))
+        self._plc_shipper_city = QLineEdit(secret_service.get_secret("PLC_SHIPPER_CITY"))
+        self._plc_shipper_country = QLineEdit(secret_service.get_secret("PLC_SHIPPER_COUNTRY") or "AT")
+        self._plc_shipper_phone = QLineEdit(secret_service.get_secret("PLC_SHIPPER_PHONE"))
+        self._plc_shipper_email = QLineEdit(secret_service.get_secret("PLC_SHIPPER_EMAIL"))
+        self._plc_shipper_eori = QLineEdit(secret_service.get_secret("PLC_SHIPPER_EORI"))
+        self._plc_client_id.setPlaceholderText("PLC: Gerätekonfiguration → Organisation → API")
+        self._plc_org_unit_id.setPlaceholderText("PLC-Abteilungs-ID")
+        self._plc_org_unit_guid.setPlaceholderText("PLC-Abteilungs-GUID")
+        self._plc_label_printer.setPlaceholderText("leer = bestehender Label-Drucker")
+        plc_form.addRow("Client ID:", self._plc_client_id)
+        plc_form.addRow("Org Unit ID:", self._plc_org_unit_id)
+        plc_form.addRow("Org Unit GUID:", self._plc_org_unit_guid)
+        plc_form.addRow("PLC-Labeldrucker:", self._plc_label_printer)
+        plc_form.addRow("PLC Label-Format:", self._plc_label_format_id)
+        plc_form.addRow("PLC Papierlayout:", self._plc_paper_layout_id)
+        plc_form.addRow("PLC Drucksprache:", self._plc_label_language)
+        plc_form.addRow("PLC Timeout (Sek.):", self._plc_timeout_seconds)
+        plc_form.addRow("Absender Name 1:", self._plc_shipper_name1)
+        plc_form.addRow("Absender Name 2:", self._plc_shipper_name2)
+        plc_form.addRow("Absender Straße:", self._plc_shipper_street)
+        plc_form.addRow("Absender Hausnummer:", self._plc_shipper_house_number)
+        plc_form.addRow("Absender Zusatz:", self._plc_shipper_address_line2)
+        plc_form.addRow("Absender PLZ:", self._plc_shipper_postal_code)
+        plc_form.addRow("Absender Ort:", self._plc_shipper_city)
+        plc_form.addRow("Absender Land (ISO-2):", self._plc_shipper_country)
+        plc_form.addRow("Absender Telefon:", self._plc_shipper_phone)
+        plc_form.addRow("Absender E-Mail:", self._plc_shipper_email)
+        plc_form.addRow("Absender EORI:", self._plc_shipper_eori)
+        plc_form.addRow("Vorgabe:", QLabel("PDF · 100x200 · 100x200 (lokale PLC-Spezifikation)"))
+        self._plc_status = QLabel("—")
+        self._plc_status.setStyleSheet("color: #9e9e9e;")
+        plc_form.addRow("Status:", self._plc_status)
+        plc_save = QPushButton("PLC-Konfiguration sicher speichern")
+        plc_save.clicked.connect(self._save_plc_settings)
+        plc_form.addRow("", plc_save)
+        grid.addWidget(gb_plc, 3, 0, 1, 2)
+
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
-        grid.setRowStretch(3, 1)
+        grid.setRowStretch(4, 1)
         return panel
 
     def _json_box(self, key: str, placeholder: str, min_height: int) -> tuple[QGroupBox, QPlainTextEdit]:
@@ -759,6 +843,95 @@ class SettingsView(QWidget):
         self._mail_template_status.setText(f"Test-Mail fehlgeschlagen: {exc}")
         self._mail_template_status.setStyleSheet(_ERR_STYLE)
         QMessageBox.warning(self, "Test-Mail", f"Senden fehlgeschlagen:\n\n{exc}")
+
+    def _save_plc_settings(self) -> None:
+        values = {
+            "PLC_CLIENT_ID": self._plc_client_id.text().strip(),
+            "PLC_ORG_UNIT_ID": self._plc_org_unit_id.text().strip(),
+            "PLC_ORG_UNIT_GUID": self._plc_org_unit_guid.text().strip(),
+            "PLC_LABEL_PRINTER": self._plc_label_printer.text().strip(),
+            "PLC_LABEL_FORMAT_ID": self._plc_label_format_id.text().strip(),
+            "PLC_PAPER_LAYOUT_ID": self._plc_paper_layout_id.text().strip(),
+            "PLC_LABEL_LANGUAGE": self._plc_label_language.text().strip().upper(),
+            "PLC_TIMEOUT_SECONDS": self._plc_timeout_seconds.text().strip(),
+            "PLC_SHIPPER_NAME1": self._plc_shipper_name1.text().strip(),
+            "PLC_SHIPPER_NAME2": self._plc_shipper_name2.text().strip(),
+            "PLC_SHIPPER_STREET": self._plc_shipper_street.text().strip(),
+            "PLC_SHIPPER_HOUSE_NUMBER": self._plc_shipper_house_number.text().strip(),
+            "PLC_SHIPPER_ADDRESS_LINE2": self._plc_shipper_address_line2.text().strip(),
+            "PLC_SHIPPER_POSTAL_CODE": self._plc_shipper_postal_code.text().strip(),
+            "PLC_SHIPPER_CITY": self._plc_shipper_city.text().strip(),
+            "PLC_SHIPPER_COUNTRY": self._plc_shipper_country.text().strip().upper(),
+            "PLC_SHIPPER_PHONE": self._plc_shipper_phone.text().strip(),
+            "PLC_SHIPPER_EMAIL": self._plc_shipper_email.text().strip(),
+            "PLC_SHIPPER_EORI": self._plc_shipper_eori.text().strip(),
+        }
+        required = (
+            "PLC_CLIENT_ID",
+            "PLC_ORG_UNIT_ID",
+            "PLC_ORG_UNIT_GUID",
+            "PLC_SHIPPER_NAME1",
+            "PLC_SHIPPER_STREET",
+            "PLC_SHIPPER_HOUSE_NUMBER",
+            "PLC_SHIPPER_POSTAL_CODE",
+            "PLC_SHIPPER_CITY",
+            "PLC_SHIPPER_COUNTRY",
+        )
+        missing = [key for key in required if not values[key]]
+        if missing:
+            message = "Fehlende PLC-Pflichtfelder: " + ", ".join(missing)
+            self._plc_status.setText(message)
+            self._plc_status.setStyleSheet(_ERR_STYLE)
+            QMessageBox.warning(self, "PLC-Konfiguration", message)
+            return
+        if not values["PLC_CLIENT_ID"].isdigit() or not values["PLC_ORG_UNIT_ID"].isdigit():
+            message = "Client ID und Org Unit ID müssen Zahlen sein."
+            self._plc_status.setText(message)
+            self._plc_status.setStyleSheet(_ERR_STYLE)
+            QMessageBox.warning(self, "PLC-Konfiguration", message)
+            return
+        if not all(
+            values[key]
+            for key in ("PLC_LABEL_FORMAT_ID", "PLC_PAPER_LAYOUT_ID", "PLC_LABEL_LANGUAGE", "PLC_TIMEOUT_SECONDS")
+        ):
+            message = "PLC-Label-Format, Papierlayout, Drucksprache und Timeout müssen gesetzt sein."
+            self._plc_status.setText(message)
+            self._plc_status.setStyleSheet(_ERR_STYLE)
+            QMessageBox.warning(self, "PLC-Konfiguration", message)
+            return
+        try:
+            if float(values["PLC_TIMEOUT_SECONDS"]) <= 0:
+                raise ValueError
+        except ValueError:
+            message = "PLC Timeout muss größer als 0 sein."
+            self._plc_status.setText(message)
+            self._plc_status.setStyleSheet(_ERR_STYLE)
+            QMessageBox.warning(self, "PLC-Konfiguration", message)
+            return
+        if len(values["PLC_SHIPPER_COUNTRY"]) != 2 or not values["PLC_SHIPPER_COUNTRY"].isalpha():
+            message = "Absender Land muss ein ISO-2-Code sein, zum Beispiel AT."
+            self._plc_status.setText(message)
+            self._plc_status.setStyleSheet(_ERR_STYLE)
+            QMessageBox.warning(self, "PLC-Konfiguration", message)
+            return
+        if not (values["PLC_SHIPPER_PHONE"] or values["PLC_SHIPPER_EMAIL"]):
+            message = "Für PLC-Zollsendungen ist beim Absender Telefon oder E-Mail erforderlich."
+            self._plc_status.setText(message)
+            self._plc_status.setStyleSheet(_ERR_STYLE)
+            QMessageBox.warning(self, "PLC-Konfiguration", message)
+            return
+
+        service: SecretService = self._container.resolve(SecretService)
+        try:
+            for key in _PLC_SECRET_KEYS:
+                service.save_secret(key, values[key])
+        except Exception as exc:
+            self._plc_status.setText(f"Fehler: {exc}")
+            self._plc_status.setStyleSheet(_ERR_STYLE)
+            QMessageBox.warning(self, "PLC-Konfiguration", str(exc))
+            return
+        self._plc_status.setText("PLC-Konfiguration verschlüsselt gespeichert.")
+        self._plc_status.setStyleSheet(_OK_STYLE)
 
     def _save_tokens(self) -> None:
         service: SecretService = self._container.resolve(SecretService)

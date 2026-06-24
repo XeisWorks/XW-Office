@@ -42,6 +42,8 @@ from xw_studio.services.sendungen.service import OffeneSendungenService
 from xw_studio.services.layout.service import LayoutToolsService
 from xw_studio.services.mailing.service import MailDeliveryService
 from xw_studio.services.printing.print_queue import PrintQueueService
+from xw_studio.services.plc.service import PlcShipmentService
+from xw_studio.services.plc.webservice import PlcWebserviceClient
 from xw_studio.services.secrets.service import SecretService
 from xw_studio.services.sevdesk.contact_client import ContactClient
 from xw_studio.services.sevdesk.invoice_client import InvoiceClient
@@ -61,7 +63,7 @@ from xw_studio.services.xw_copilot.dry_run import XWCopilotDryRunService
 from xw_studio.services.xw_copilot.ingress import XWCopilotIngress
 from xw_studio.services.xw_copilot.live_dispatch import XWCopilotLiveDispatcher
 from xw_studio.services.xw_copilot.service import XWCopilotService
-from xw_studio.repositories import ApiSecretRepository, PcRegistryRepository, SettingKvRepository
+from xw_studio.repositories import ApiSecretRepository, PcRegistryRepository, PlcShipmentRepository, SettingKvRepository
 
 
 def register_default_services(container: Container) -> None:
@@ -133,6 +135,14 @@ def register_default_services(container: Container) -> None:
     container.register(
         PrintQueueService,
         lambda c: PrintQueueService(),
+    )
+    container.register(PlcWebserviceClient, lambda c: PlcWebserviceClient())
+    container.register(
+        PlcShipmentService,
+        lambda c: PlcShipmentService(
+            c.resolve(PlcWebserviceClient),
+            c.resolve(PlcShipmentRepository) if (c.config.database_url or "").strip() else None,
+        ),
     )
     container.register(
         InvoiceProcessingService,
@@ -325,6 +335,7 @@ def register_default_services(container: Container) -> None:
     if (container.config.database_url or "").strip():
         container.register(SessionMaker, lambda c: create_session_factory(c.config))
         container.register(PcRegistryRepository, lambda c: PcRegistryRepository(c.resolve(SessionMaker)))
+        container.register(PlcShipmentRepository, lambda c: PlcShipmentRepository(c.resolve(SessionMaker)))
         container.register(
             SettingKvRepository,
             lambda c: SettingKvRepository(c.resolve(SessionMaker)),

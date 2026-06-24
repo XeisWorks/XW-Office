@@ -292,6 +292,29 @@ def country_name_en(value: object) -> str:
     return _COUNTRY_BY_NAME.get(normalized_country_key(text), text)
 
 
+def country_iso2(value: object) -> str:
+    """Return an ISO-3166 alpha-2 code where the country is known.
+
+    Carrier APIs require codes, whereas Wix and sevDesk frequently provide a
+    localized country name (for example ``AUSTRIA`` or ``Oesterreich``).
+    Unknown values deliberately return an empty string instead of producing a
+    plausible but invalid two-character abbreviation.
+    """
+    text = _extract_text(value).strip()
+    if not text:
+        return ""
+    upper = text.upper()
+    if len(upper) == 2 and upper in _COUNTRY_BY_CODE:
+        return upper
+
+    canonical_name = country_name_en(text)
+    canonical_key = normalized_country_key(canonical_name)
+    for code, name in _COUNTRY_BY_CODE.items():
+        if len(code) == 2 and normalized_country_key(name) == canonical_key:
+            return code
+    return ""
+
+
 def country_label_for_address(value: object) -> str:
     """Return the printable country label used on physical address labels."""
     return country_name_en(value).upper()

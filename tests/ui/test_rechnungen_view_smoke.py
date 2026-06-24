@@ -16,6 +16,7 @@ from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
 from xw_studio.services.wix.client import WixOrdersClient
 from xw_studio.ui.main_window import MainWindow
 from xw_studio.ui.modules.rechnungen.tagesgeschaeft_view import TagesgeschaeftView, _StartDialog
+from xw_studio.ui.modules.rechnungen.plc_label_dialog import PlcLabelPrintDialog
 from xw_studio.ui.modules.rechnungen.view import RechnungenView
 
 
@@ -228,6 +229,24 @@ def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
     assert not view._btn_print_plc.isEnabled()  # noqa: SLF001
     assert not view._btn_print_music.isEnabled()  # noqa: SLF001
     assert not view._btn_send_invoice.isEnabled()  # noqa: SLF001
+
+
+def test_plc_dialog_defaults_to_direct_webservice_without_changing_list_action(qtbot: object) -> None:
+    container = _build_container()
+    summary = InvoiceSummary.model_validate(
+        {
+            "id": "plc-1",
+            "invoiceNumber": "RE-PLC-1",
+            "status": 200,
+            "contact_name": "PLC Customer",
+            "order_reference": "20856",
+        }
+    )
+    dialog = PlcLabelPrintDialog(container, summary)
+    qtbot.addWidget(dialog)
+
+    assert dialog._transport_combo.currentData() == "webservice"  # noqa: SLF001
+    assert dialog._transport_combo.count() == 2  # noqa: SLF001
 
 
 def test_rechnungen_load_more_button_stages_drafts_before_open(qtbot: object) -> None:

@@ -10,11 +10,12 @@ from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_studio.core.config import AppConfig
-from xw_studio.models import ApiSecret, Base, PcRegistry, SettingKV
+from xw_studio.models import ApiSecret, Base, PcRegistry, PlcShipment, SettingKV
 
 _CORE_TABLES = (
     ApiSecret.__table__,
     PcRegistry.__table__,
+    PlcShipment.__table__,
     SettingKV.__table__,
 )
 
