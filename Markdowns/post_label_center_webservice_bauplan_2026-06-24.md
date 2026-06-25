@@ -27,6 +27,9 @@ Folgerungen fuer den Bauplan: Die direkte PDF-Rueckgabe ist eindeutig der richti
 
 Die Phasen 1 bis 3 sind im Arbeitsstand umgesetzt:
 
+- Druck-Recovery ergänzt: Das direkt von PLC gelieferte PDF wird vor dem physischen Druck unter `state/plc_labels/<Wix-Order> - <Rechnungsnummer>.pdf` archiviert. Bei einem späteren Klick auf dieselbe gesperrte PLC-Sendung kann dieses Original-PDF erneut eingereiht werden, ohne eine zweite Sendung zu erzeugen. Der senkrechte Strich aus der Wunschbezeichnung wird durch einen Bindestrich ersetzt, weil Windows `|` in Dateinamen verbietet.
+- Für den Drucker `Paketmarke A5` fordert XW-Studio `PaperLayoutID=A5` an. `LabelFormatID` bleibt `100x200`; das Webservice-PDF wird lokal gedruckt, nicht über einen in der PLC-Oberfläche konfigurierten Drucker.
+
 - Kanonisches Modell `PlcShipmentDraft` fuer Adresse, Paket, Zollartikel und Referenz; die Datei- und SOAP-Adapter verwenden dieselbe Validierung.
 - Zentrale ISO-2-Normalisierung: etwa `AUSTRIA` wird zu `AT`; ein ausgeschriebener Landesname kann nicht mehr in `CountryID` gelangen.
 - Direkter `ImportShipment`-Client mit Zeep, produktivem/Test-WSDL, strikter PDF-Validierung, Trackingcode-Extraktion und redigierten strukturierten Logs.

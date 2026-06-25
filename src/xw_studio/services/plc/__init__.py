@@ -18,6 +18,7 @@ from xw_studio.services.plc.models import (
     parse_shipment_address_lines,
 )
 from xw_studio.services.plc.service import PlcShipmentService
+from xw_studio.services.plc.label_archive import PlcLabelArchive
 from xw_studio.services.plc.webservice import (
     PlcWebserviceClient,
     PlcWebserviceResult,
@@ -40,6 +41,7 @@ __all__ = [
     "clean_reference",
     "parse_shipment_address_lines",
     "PlcShipmentService",
+    "PlcLabelArchive",
     "PlcWebserviceClient",
     "PlcWebserviceResult",
     "PlcWebserviceSettings",

@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import re
-import tempfile
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -42,7 +41,8 @@ from xw_studio.services.plc.models import (
     clean_reference,
     parse_shipment_address_lines,
 )
-from xw_studio.services.plc.service import PlcShipmentService
+from xw_studio.services.plc.label_archive import PlcLabelArchive
+from xw_studio.services.plc.service import PlcDuplicateShipmentError, PlcShipmentService
 from xw_studio.services.plc.webservice import PlcWebserviceResult, webservice_settings_from_secrets
 from xw_studio.services.printing.print_jobs import PdfPrintJob
 from xw_studio.services.printing.print_queue import PrintQueueService
@@ -95,6 +95,7 @@ class PlcLabelPrintDialog(QDialog):
         self._load_worker: BackgroundWorker | None = None
         self._send_worker: BackgroundWorker | None = None
         self._context = _PlcDialogContext(order_number="", address_lines=[], weight_kg=0.0, items=[])
+        self._label_archive = PlcLabelArchive()
         self._product_catalog = self._load_products()
         self._product_user_set = False
         self._address_edited = bool(address_override_lines)
@@ -411,13 +412,13 @@ class PlcLabelPrintDialog(QDialog):
 
         self._send_worker = BackgroundWorker(job)
         self._send_worker.signals.result.connect(lambda result: self._on_send_result(shipment, result))
-        self._send_worker.signals.error.connect(self._on_send_error)
+        self._send_worker.signals.error.connect(lambda exc: self._on_send_error(shipment, exc))
         self._send_worker.signals.finished.connect(lambda: self._send_btn.setEnabled(True))
         self._send_worker.start()
 
     def _on_send_result(self, shipment: PlcShipmentDraft, result: object) -> None:
         if not isinstance(result, _PlcSendResult):
-            self._on_send_error(RuntimeError("PLC lieferte ein ungültiges Ergebnis"))
+            self._on_send_error(shipment, RuntimeError("PLC lieferte ein ungültiges Ergebnis"))
             return
         if result.transport == "polling":
             self._status.setText(f"Importdatei abgelegt: {result.polling_path}")
@@ -431,10 +432,11 @@ class PlcLabelPrintDialog(QDialog):
             return
 
         if result.webservice_result is None:
-            self._on_send_error(RuntimeError("PLC-Webservice lieferte kein Label"))
+            self._on_send_error(shipment, RuntimeError("PLC-Webservice lieferte kein Label"))
             return
         try:
-            job_id = self._queue_webservice_label(result.webservice_result.pdf_bytes, shipment.reference)
+            archive_path = self._label_archive.save(shipment, result.webservice_result.pdf_bytes)
+            job_id = self._queue_webservice_label(archive_path, shipment.reference)
             service: PlcShipmentService = self._container.resolve(PlcShipmentService)
             service.mark_print_queued(shipment, job_id)
         except Exception as exc:  # noqa: BLE001 - shipment was created; preserve the recovery message.
@@ -448,36 +450,73 @@ class PlcLabelPrintDialog(QDialog):
             return
 
         tracking = ", ".join(result.webservice_result.tracking_codes) or "ohne Trackingcode"
-        self._status.setText(f"PLC-Label erstellt; Druckauftrag {job_id[:8]}…")
+        self._status.setText(f"PLC-Label archiviert; Druckauftrag {job_id[:8]}…")
         QMessageBox.information(
             self,
             "PLC-Label",
-            f"Label direkt erstellt und zum Druck eingereiht.\nTracking: {tracking}",
+            "Label direkt erstellt, vor dem Druck archiviert und zum Druck eingereiht.\n"
+            f"Tracking: {tracking}\n"
+            f"Archiv: {archive_path}",
         )
         self.accept()
 
-    def _on_send_error(self, exc: Exception) -> None:
+    def _on_send_error(self, shipment: PlcShipmentDraft, exc: Exception) -> None:
+        if isinstance(exc, PlcDuplicateShipmentError):
+            archive_path = self._label_archive.find(shipment)
+            if archive_path is not None:
+                answer = QMessageBox.question(
+                    self,
+                    "PLC-Label erneut drucken",
+                    "Diese PLC-Sendung wurde bereits erstellt.\n\n"
+                    "Das archivierte Original-PDF kann ohne neue PLC-Sendung erneut an den "
+                    "Etikettendrucker gesendet werden.\n\n"
+                    f"Archiv: {archive_path}",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if answer == QMessageBox.StandardButton.Yes:
+                    try:
+                        job_id = self._queue_webservice_label(archive_path, shipment.reference)
+                        service: PlcShipmentService = self._container.resolve(PlcShipmentService)
+                        service.mark_print_queued(shipment, job_id)
+                    except Exception as reprint_exc:  # noqa: BLE001 - recovery error is shown to the user.
+                        self._status.setText("Archivlabel konnte nicht eingereiht werden")
+                        QMessageBox.critical(self, "PLC-Label", str(reprint_exc))
+                        return
+                    self._status.setText(f"Archivlabel erneut eingereiht: {job_id[:8]}…")
+                    QMessageBox.information(self, "PLC-Label", "Das archivierte Original-PDF wurde erneut eingereiht.")
+                    self.accept()
+                return
+
+            self._status.setText("PLC-Sendung besteht bereits; kein lokales Archiv-PDF vorhanden")
+            QMessageBox.warning(
+                self,
+                "PLC-Label bereits erstellt",
+                "PLC sperrt eine zweite Erstellung dieser Sendung. Ein lokales Archiv-PDF wurde noch nicht gefunden, "
+                "daher kann XW-Studio keinen sicheren Nachdruck ausführen.",
+            )
+            return
+
         logger.warning("PLC send failed invoice=%s: %s", self._summary.id, exc)
         self._status.setText(f"PLC-Fehler: {exc}")
         QMessageBox.critical(self, "PLC Fehler", str(exc))
 
-    def _queue_webservice_label(self, pdf_bytes: bytes, reference: str) -> str:
+    def _queue_webservice_label(self, pdf_path: str | os.PathLike[str], reference: str) -> str:
         printer = self._resolve_plc_printer()
         if not printer:
             raise RuntimeError("PLC-Labeldrucker ist nicht konfiguriert")
-        safe_ref = re.sub(r"[^A-Za-z0-9_-]+", "_", reference)[:40] or "label"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_plc_{safe_ref}.pdf") as handle:
-            handle.write(pdf_bytes)
-            pdf_path = handle.name
+        if not os.path.isfile(pdf_path):
+            raise RuntimeError(f"Archiviertes PLC-PDF fehlt: {pdf_path}")
         queue: PrintQueueService = self._container.resolve(PrintQueueService)
         return queue.enqueue(
             PdfPrintJob(
-                pdf_path=pdf_path,
+                pdf_path=os.fspath(pdf_path),
                 printer_name=printer,
                 copies=1,
                 job_kind="label",
                 description=f"PLC-Label {reference}",
-                cleanup_paths=(pdf_path,),
+                # Preserve the exact PLC response for safe local reprints.
+                cleanup_paths=(),
             )
         )
 

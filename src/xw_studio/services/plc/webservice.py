@@ -58,7 +58,9 @@ class PlcWebserviceSettings:
     shipper: ShipmentAddress
     timeout_seconds: float = 45.0
     label_format_id: str = "100x200"
-    paper_layout_id: str = "100x200"
+    # PLC returns an actual A5 page. This avoids printer-driver rescaling
+    # when the Windows queue uses A5 media.
+    paper_layout_id: str = "A5"
     language_id: str = "PDF"
 
     @property
@@ -162,7 +164,7 @@ def webservice_settings_from_secrets(secrets: "SecretService", *, mode: str) -> 
         ),
         timeout_seconds=timeout,
         label_format_id=(secrets.get_secret("PLC_LABEL_FORMAT_ID") or "100x200").strip(),
-        paper_layout_id=(secrets.get_secret("PLC_PAPER_LAYOUT_ID") or "100x200").strip(),
+        paper_layout_id=(secrets.get_secret("PLC_PAPER_LAYOUT_ID") or "A5").strip(),
         language_id=(secrets.get_secret("PLC_LABEL_LANGUAGE") or "PDF").strip().upper(),
     )
 

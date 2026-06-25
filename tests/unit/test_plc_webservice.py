@@ -118,7 +118,7 @@ def test_webservice_row_matches_local_plc_specification() -> None:
     assert row["PrinterObject"] == {
         "LanguageID": "PDF",
         "LabelFormatID": "100x200",
-        "PaperLayoutID": "100x200",
+        "PaperLayoutID": "A5",
     }
     assert row["ColloList"] == {"ColloRow": [{"Weight": 0.5}]}
 
