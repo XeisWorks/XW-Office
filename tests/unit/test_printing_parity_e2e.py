@@ -1,6 +1,7 @@
 """End-to-end test for invoice printing + mail flow parity."""
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from unittest.mock import patch
 
@@ -302,6 +303,79 @@ def test_fullflow_invoice_and_label_steps() -> None:
     assert invoice_client.mail_calls[0]["to_email"] == "john@example.test"
     assert invoice_client.mail_calls[0]["copy"] is False
     assert len(mailer.calls) == 0
+
+
+def test_fullflow_prints_all_physical_output_before_fulfillment_and_mail() -> None:
+    config = AppConfig()
+    invoice_client = _InvoiceClientE2E()
+    repo = _SettingsRepoE2E()
+    mailer = _MailServiceStub()
+    wix_orders = _WixOrdersPhysicalStub()
+    service = InvoiceProcessingService(config, invoice_client, repo, wix_orders, mailer)
+    invoice_client.list_invoice_summaries = lambda **_: [
+        InvoiceSummary(
+            id="INV-001",
+            invoice_number="R-001",
+            contact_name="John Doe",
+            order_reference="WIX-INV-001",
+            address_country_code="AT",
+        ),
+        InvoiceSummary(
+            id="INV-002",
+            invoice_number="R-002",
+            contact_name="Jane Doe",
+            order_reference="WIX-INV-002",
+            address_country_code="AT",
+        ),
+    ]
+
+    events: list[str] = []
+
+    def finalize(summary: InvoiceSummary, flags: FulfillmentFlags, **_kwargs: object) -> FulfillmentFlags:
+        events.append(f"finalize:{summary.id}")
+        return replace(flags, payment_applicable=True)
+
+    def invoice_print(summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
+        events.append(f"invoice_print:{summary.id}")
+        return replace(flags, invoice_printed=True)
+
+    def label_print(summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
+        events.append(f"label_print:{summary.id}")
+        return replace(flags, label_printed=True)
+
+    def wix_fulfillment(summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
+        stored = json.loads(repo.values["rechnungen.fulfillment_status"])
+        assert stored[summary.id]["invoice_printed"] is True
+        assert stored[summary.id]["label_printed"] is True
+        events.append(f"wix:{summary.id}")
+        return replace(flags, product_ready=True, wix_fulfilled=True)
+
+    def mail(summary: InvoiceSummary, flags: FulfillmentFlags, **_kwargs: object) -> FulfillmentFlags:
+        events.append(f"mail:{summary.id}")
+        return replace(flags, mail_sent=True)
+
+    with patch.object(service, "_run_finalize_step", side_effect=finalize), patch.object(
+        service, "_run_invoice_print_step", side_effect=invoice_print
+    ), patch.object(service, "_run_label_print_step", side_effect=label_print), patch.object(
+        service, "_run_product_step", side_effect=wix_fulfillment
+    ), patch.object(service, "_run_mail_step", side_effect=mail):
+        result = service.run_start_fullflow(full_mode=True)
+
+    assert result["processed"] == 2
+    assert result["failures"] == 0
+    assert result["successful"] == 2
+    assert events == [
+        "finalize:INV-001",
+        "invoice_print:INV-001",
+        "label_print:INV-001",
+        "finalize:INV-002",
+        "invoice_print:INV-002",
+        "label_print:INV-002",
+        "wix:INV-001",
+        "mail:INV-001",
+        "wix:INV-002",
+        "mail:INV-002",
+    ]
 
 
 def test_fullflow_stops_before_fulfillment_and_mail_when_invoice_print_fails() -> None:

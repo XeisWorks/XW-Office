@@ -194,6 +194,13 @@ class InvoiceListHintFlags:
         }
 
 
+@dataclass(frozen=True)
+class _StartPostTask:
+    summary: InvoiceSummary
+    flags: FulfillmentFlags
+    digital_only: bool
+
+
 class InvoiceProcessingService:
     """Facade over sevDesk invoice clients for the Rechnungen module."""
 
@@ -369,6 +376,14 @@ class InvoiceProcessingService:
                 progress_callback("START: Wix-Kontext wird geladen...")
             self._prefetch_wix_order_context(summaries)
             summaries.sort(key=lambda item: self._start_processing_priority(item))
+            return self._run_start_fullflow_print_first(
+                summaries=summaries,
+                started=started,
+                print_products=print_products,
+                should_abort=should_abort,
+                progress_callback=progress_callback,
+                mail_recipient_override=mail_recipient_override,
+            )
         updates: dict[str, FulfillmentFlags] = {}
         processed = 0
         failures = 0
@@ -453,6 +468,166 @@ class InvoiceProcessingService:
             "failures": failures,
             "successful": successful,
             "full_mode": full_mode,
+            "print_products": bool(print_products),
+            "aborted": aborted,
+        }
+
+    def _run_start_fullflow_print_first(
+        self,
+        *,
+        summaries: list[InvoiceSummary],
+        started: float,
+        print_products: bool,
+        should_abort: Callable[[], bool] | None,
+        progress_callback: Callable[[str], None] | None,
+        mail_recipient_override: str | None,
+    ) -> dict[str, object]:
+        """Execute full START with all physical output before Wix/mail follow-up."""
+        updates: dict[str, FulfillmentFlags] = {}
+        post_tasks: list[_StartPostTask] = []
+        processed_ids: set[str] = set()
+        failed_ids: set[str] = set()
+        successful_ids: set[str] = set()
+        aborted = False
+
+        def persist(summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
+            updates[str(summary.id)] = flags
+            self.write_fulfillment_flags(str(summary.id), flags)
+            return flags
+
+        def run_phase(summary: InvoiceSummary, phase: str, operation: Callable[[], Any]) -> Any:
+            phase_started = time.perf_counter()
+            try:
+                result = operation()
+            except Exception:
+                logger.info(
+                    "START phase invoice=%s phase=%s elapsed_ms=%s outcome=failed",
+                    summary.id,
+                    phase,
+                    int((time.perf_counter() - phase_started) * 1000),
+                )
+                raise
+            logger.info(
+                "START phase invoice=%s phase=%s elapsed_ms=%s outcome=ok",
+                summary.id,
+                phase,
+                int((time.perf_counter() - phase_started) * 1000),
+            )
+            return result
+
+        for original_summary in summaries:
+            if should_abort is not None and should_abort():
+                aborted = True
+                logger.info("START aborted before invoice %s", original_summary.id)
+                break
+
+            summary = self._resolve_current_start_summary(original_summary)
+            processed_ids.add(str(summary.id))
+            label = summary.invoice_number or summary.order_reference or summary.id
+            flags = self.read_fulfillment_flags(summary.id)
+
+            try:
+                digital_only = self._is_digital_only(summary) if summary.order_reference.strip() else False
+                if digital_only:
+                    post_tasks.append(_StartPostTask(summary=summary, flags=flags, digital_only=True))
+                    continue
+
+                if progress_callback is not None:
+                    progress_callback(f"START: {label} wird vorbereitet...")
+                run_phase(summary, "product_mapping", lambda: self._repair_draft_products(summary))
+
+                if progress_callback is not None:
+                    progress_callback(f"START: {label} wird gedruckt...")
+                flags = persist(
+                    summary,
+                    run_phase(
+                        summary,
+                        "finalize",
+                        lambda: self._run_finalize_step(
+                            summary,
+                            flags,
+                            digital_only=False,
+                            printed_copy=True,
+                        ),
+                    ),
+                )
+                flags = persist(
+                    summary,
+                    run_phase(summary, "invoice_print", lambda: self._run_invoice_print_step(summary, flags)),
+                )
+                if progress_callback is not None:
+                    progress_callback(f"START: Label fuer {label} wird gedruckt...")
+                flags = persist(
+                    summary,
+                    run_phase(summary, "label_print", lambda: self._run_label_print_step(summary, flags)),
+                )
+                post_tasks.append(_StartPostTask(summary=summary, flags=flags, digital_only=False))
+            except Exception as exc:
+                failed_ids.add(str(summary.id))
+                persist(summary, self._with_error(flags, exc))
+
+        if post_tasks and progress_callback is not None:
+            progress_callback("START: Fulfillment und Mail werden nachgelagert...")
+
+        for task in post_tasks:
+            summary = task.summary
+            label = summary.invoice_number or summary.order_reference or summary.id
+            flags = task.flags
+            try:
+                if task.digital_only:
+                    if progress_callback is not None:
+                        progress_callback(f"START: {label} wird vorbereitet...")
+                    run_phase(summary, "product_mapping", lambda: self._repair_draft_products(summary))
+                    flags = persist(
+                        summary,
+                        run_phase(
+                            summary,
+                            "finalize",
+                            lambda: self._run_finalize_step(
+                                summary,
+                                flags,
+                                digital_only=True,
+                                printed_copy=False,
+                            ),
+                        ),
+                    )
+                flags = persist(
+                    summary,
+                    run_phase(summary, "wix_fulfillment", lambda: self._run_product_step(summary, flags)),
+                )
+                if progress_callback is not None:
+                    progress_callback(f"START: Mail fuer {label} wird gesendet...")
+                flags = persist(
+                    summary,
+                    run_phase(
+                        summary,
+                        "mail",
+                        lambda: self._run_mail_step(summary, flags, recipient_override=mail_recipient_override),
+                    ),
+                )
+                successful_ids.add(str(summary.id))
+            except Exception as exc:
+                failed_ids.add(str(summary.id))
+                persist(summary, self._with_error(flags, exc))
+
+        self.write_fulfillment_flags_batch(updates)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        processed = len(processed_ids)
+        failures = len(failed_ids)
+        successful = len(successful_ids)
+        logger.info(
+            "START metric total_ms=%s processed=%s failures=%s full_mode=%s print_products=%s",
+            elapsed_ms,
+            processed,
+            failures,
+            True,
+            print_products,
+        )
+        return {
+            "processed": processed,
+            "failures": failures,
+            "successful": successful,
+            "full_mode": True,
             "print_products": bool(print_products),
             "aborted": aborted,
         }
