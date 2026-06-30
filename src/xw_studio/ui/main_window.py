@@ -37,6 +37,7 @@ class MainWindow(QMainWindow):
         self._setup_window()
         self._build_ui()
         self._connect_signals()
+        self._open_initial_module()
         self._apply_printer_status()
 
     def _setup_window(self) -> None:
@@ -75,6 +76,10 @@ class MainWindow(QMainWindow):
         signals.show_home.connect(lambda: self._navigate_to(ModuleKey.HOME.value))
         signals.status_message.connect(self._status_bar.showMessage)
         signals.theme_changed.connect(self._apply_theme)
+
+    def _open_initial_module(self) -> None:
+        signals = self._container.resolve(AppSignals)
+        signals.navigate_to_module.emit(ModuleKey.RECHNUNGEN.value)
 
     def _apply_theme(self, theme_name: str) -> None:
         try:

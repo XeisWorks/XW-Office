@@ -151,6 +151,9 @@ class _FakeOffeneSendungenService:
     def open_count(self) -> int:
         return 0
 
+    def refresh_count_from_graph_silent(self, *, lookback_days: int = 20, max_items: int = 120) -> int:
+        return self.open_count()
+
 
 def _build_rechnungen_test_container() -> tuple[Container, _FakeInvoiceProcessingService]:
     container = _build_container()
@@ -169,11 +172,33 @@ def test_tagesgeschaeft_contains_rechnungen_view(qtbot: object) -> None:
     view = TagesgeschaeftView(container)
     qtbot.addWidget(view)
     assert hasattr(view, "_rechnungen_view")  # noqa: SLF001
-    assert view._btn_start.text() == "▶  START"  # noqa: SLF001
-    assert view._btn_start_notendruck.text() == "▶  START + NOTENDRUCK"  # noqa: SLF001
-    assert view._btn_start_selected_menu.menu() is not None  # noqa: SLF001
+    assert view._btn_start.text() == "▶ START"  # noqa: SLF001
+    assert view._btn_start.menu() is not None  # noqa: SLF001
+    assert [action.text() for action in view._btn_start.menu().actions()] == [  # noqa: SLF001
+        "Selected",
+        "+ Noten",
+        "+ Noten Selected",
+    ]
+    assert view._btn_refresh.text() == "Aktualisieren"  # noqa: SLF001
+    assert view._btn_draft.text() == "Entwurf"  # noqa: SLF001
+    assert view._btn_custom_label.text() == "Custom-Label"  # noqa: SLF001
     assert view._btn_stop.text() == "STOP"  # noqa: SLF001
     assert not view._btn_stop.isEnabled()  # noqa: SLF001
+    assert not view._rechnungen_view._toolbar.isVisible()  # noqa: SLF001
+
+
+def test_tagesgeschaeft_alert_buttons_follow_counts(qtbot: object) -> None:
+    container = _build_container()
+    view = TagesgeschaeftView(container)
+    qtbot.addWidget(view)
+
+    view._update_alert_button(view._btn_sendungen_alert, "OFFENE SENDUNGEN", 0)  # noqa: SLF001
+    assert view._btn_sendungen_alert.isHidden()  # noqa: SLF001
+
+    view._update_alert_button(view._btn_sendungen_alert, "OFFENE SENDUNGEN", 2)  # noqa: SLF001
+
+    assert view._btn_sendungen_alert.text() == "OFFENE SENDUNGEN (2)"  # noqa: SLF001
+    assert not view._btn_sendungen_alert.isHidden()  # noqa: SLF001
 
 
 def test_start_dialog_keeps_full_mode_when_print_plan_missing(qtbot: object) -> None:

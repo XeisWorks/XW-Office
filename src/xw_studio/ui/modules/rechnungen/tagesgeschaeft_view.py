@@ -168,6 +168,31 @@ class _QueueTabView(QWidget):
         )
 
 
+class QueuePopupDialog(QDialog):
+    """Popup wrapper for the Daily-Business queue views."""
+
+    def __init__(
+        self,
+        container: Container,
+        *,
+        queue_name: str,
+        title: str,
+        fallback_count: int = 0,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumSize(940, 560)
+        layout = QVBoxLayout(self)
+        self._view = _QueueTabView(container, queue_name, title)
+        layout.addWidget(self._view, stretch=1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        layout.addWidget(buttons)
+        self._view.reload(fallback_count=fallback_count)
+
+
 class _StartDialog(QDialog):
     """Pre-flight dialog for the ▶ START workflow."""
 
@@ -290,6 +315,10 @@ class TagesgeschaeftView(QWidget):
         self._start_include_product_print = False
         self._start_selected_invoice_ids: list[str] = []
         self._start_selected_only = False
+        self._sendungen_count = 0
+        self._transfer_count = 0
+        self._mollie_count = 0
+        self._sendungen_live_refresh_ts = 0.0
         self._pending_start_preflight: StartPreflight | None = None
         self._start_product_preflight_started_at = 0.0
         self._start_abort_requested = False
@@ -340,71 +369,59 @@ class TagesgeschaeftView(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # — Top action bar —
         action_bar = QWidget()
         action_bar.setFixedHeight(44)
         bar_lay = QHBoxLayout(action_bar)
         bar_lay.setContentsMargins(12, 4, 12, 4)
-        bar_lay.setSpacing(10)
+        bar_lay.setSpacing(8)
 
-        title = QLabel("Tagesgeschäft")
-        title.setStyleSheet("font-size: 15px; font-weight: bold;")
-        bar_lay.addWidget(title)
-        bar_lay.addStretch()
+        self._btn_refresh = QPushButton("Aktualisieren")
+        self._btn_refresh.setToolTip("Erste Rechnungsseite neu laden")
+        self._btn_refresh.setFixedHeight(34)
+        self._btn_refresh.clicked.connect(lambda: self._rechnungen_view.reload_first_page())
+        bar_lay.addWidget(self._btn_refresh)
 
-        self._btn_start = QPushButton("▶  START")
+        self._btn_draft = QPushButton("Entwurf")
+        self._btn_draft.setToolTip("Neuen sevDesk-Rechnungsentwurf aus Wix-Order-Nr erstellen")
+        self._btn_draft.setFixedHeight(34)
+        self._btn_draft.clicked.connect(lambda: self._rechnungen_view.create_draft_from_wix_order())
+        bar_lay.addWidget(self._btn_draft)
+
+        self._btn_custom_label = QPushButton("Custom-Label")
+        self._btn_custom_label.setToolTip("Freie Lieferadresse eingeben und direkt als Label drucken")
+        self._btn_custom_label.setFixedHeight(34)
+        self._btn_custom_label.clicked.connect(lambda: self._rechnungen_view.open_custom_label_dialog())
+        bar_lay.addWidget(self._btn_custom_label)
+
+        self._btn_start = QToolButton()
+        self._btn_start.setText("▶ START")
         self._btn_start.setToolTip("START: Rechnungen + Labels + Fulfillment + Mail")
+        self._btn_start.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self._btn_start.setFixedHeight(34)
-        self._btn_start.setFixedWidth(180)
+        self._btn_start.setFixedWidth(145)
         self._btn_start.setStyleSheet(
-            "QPushButton { background-color: #1976d2; color: white; border-radius: 6px;"
+            "QToolButton { background-color: #1976d2; color: white; border-radius: 6px;"
             " font-weight: bold; font-size: 13px; }"
-            " QPushButton:hover { background-color: #1565c0; }"
-            " QPushButton:pressed { background-color: #0d47a1; }"
+            " QToolButton:hover { background-color: #1565c0; }"
+            " QToolButton:pressed { background-color: #0d47a1; }"
+            " QToolButton::menu-button { border-left: 1px solid rgba(255,255,255,0.35); width: 26px; }"
+            " QToolButton::menu-arrow { image: none; }"
         )
         self._btn_start.clicked.connect(
             lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, include_product_print=False)
         )
-        bar_lay.addWidget(self._btn_start)
-
-        self._btn_start_notendruck = QPushButton("▶  START + NOTENDRUCK")
-        self._btn_start_notendruck.setToolTip(
-            "START inkl. Produktdruck (Noten) aller betroffenen Rechnungen"
-        )
-        self._btn_start_notendruck.setFixedHeight(34)
-        self._btn_start_notendruck.setFixedWidth(230)
-        self._btn_start_notendruck.setStyleSheet(
-            "QPushButton { background-color: #0f766e; color: white; border-radius: 6px;"
-            " font-weight: bold; font-size: 13px; }"
-            " QPushButton:hover { background-color: #0d9488; }"
-            " QPushButton:pressed { background-color: #115e59; }"
-        )
-        self._btn_start_notendruck.clicked.connect(
-            lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, include_product_print=True)
-        )
-        bar_lay.addWidget(self._btn_start_notendruck)
-
-        self._btn_start_selected_menu = QToolButton()
-        self._btn_start_selected_menu.setText("START SELECTED ▼")
-        self._btn_start_selected_menu.setToolTip("Varianten nur für markierte Rechnungen")
-        self._btn_start_selected_menu.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self._btn_start_selected_menu.setFixedHeight(34)
-        self._btn_start_selected_menu.setFixedWidth(170)
-        self._btn_start_selected_menu.setStyleSheet(
-            "QToolButton { background-color: #455a64; color: white; border-radius: 6px;"
-            " font-weight: bold; font-size: 12px; }"
-            " QToolButton:hover { background-color: #37474f; }"
-            " QToolButton:pressed { background-color: #263238; }"
-        )
-        selected_menu = QMenu(self._btn_start_selected_menu)
-        selected_menu.addAction("START SELECTED").triggered.connect(
+        start_menu = QMenu(self._btn_start)
+        start_menu.addAction("Selected").triggered.connect(
             lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, selected_only=True, include_product_print=False)
         )
-        selected_menu.addAction("START + NOTENDRUCK SELECTED").triggered.connect(
+        start_menu.addAction("+ Noten").triggered.connect(
+            lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, selected_only=False, include_product_print=True)
+        )
+        start_menu.addAction("+ Noten Selected").triggered.connect(
             lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, selected_only=True, include_product_print=True)
         )
-        self._btn_start_selected_menu.setMenu(selected_menu)
-        bar_lay.addWidget(self._btn_start_selected_menu)
+        self._btn_start.setMenu(start_menu)
+        bar_lay.addWidget(self._btn_start)
 
         self._btn_stop = QPushButton("STOP")
         self._btn_stop.setToolTip("Laufenden START nach der aktuellen Rechnung anhalten")
@@ -420,6 +437,23 @@ class TagesgeschaeftView(QWidget):
         )
         self._btn_stop.clicked.connect(self._on_start_stop_clicked)
         bar_lay.addWidget(self._btn_stop)
+
+        bar_lay.addStretch()
+
+        self._btn_sendungen_alert = self._build_alert_button("OFFENE SENDUNGEN")
+        self._btn_sendungen_alert.clicked.connect(self._on_sendungen_alert_clicked)
+        self._btn_sendungen_alert.hide()
+        bar_lay.addWidget(self._btn_sendungen_alert)
+
+        self._btn_transfer_alert = self._build_alert_button("ÜBERWEISUNGEN")
+        self._btn_transfer_alert.clicked.connect(self._on_transfer_alert_clicked)
+        self._btn_transfer_alert.hide()
+        bar_lay.addWidget(self._btn_transfer_alert)
+
+        self._btn_mollie_alert = self._build_alert_button("MOLLIE AUTH")
+        self._btn_mollie_alert.clicked.connect(self._on_mollie_alert_clicked)
+        self._btn_mollie_alert.hide()
+        bar_lay.addWidget(self._btn_mollie_alert)
 
         btn_beenden = QPushButton("■  Beenden")
         btn_beenden.setToolTip("App beenden (laufende Hintergrundaufgaben werden abgewartet)")
@@ -438,7 +472,21 @@ class TagesgeschaeftView(QWidget):
 
         self._rechnungen_view = RechnungenView(self._container)
         self._rechnungen_view.set_badge_refresh_managed_externally(True)
+        self._rechnungen_view.set_top_actions_managed_externally(True)
         main_layout.addWidget(self._rechnungen_view, stretch=1)
+
+    def _build_alert_button(self, label: str) -> QPushButton:
+        button = QPushButton(label)
+        button.setFixedHeight(34)
+        button.setStyleSheet(
+            "QPushButton {"
+            "background-color: #b91c1c; color: white; border-radius: 6px;"
+            "font-weight: bold; padding: 0 14px;"
+            "}"
+            "QPushButton:hover { background-color: #991b1b; }"
+            "QPushButton:pressed { background-color: #7f1d1d; }"
+        )
+        return button
 
     def _refresh_badges(self) -> None:
         if self._badge_worker is not None and self._badge_worker.isRunning():
@@ -450,7 +498,16 @@ class TagesgeschaeftView(QWidget):
             service: DailyBusinessService = self._container.resolve(DailyBusinessService)
             counts = service.load_counts(open_invoice_count=open_count)
             sendungen_service: OffeneSendungenService = self._container.resolve(OffeneSendungenService)
-            counts["sendungen"] = max(0, int(sendungen_service.open_count()))
+            now = time.monotonic()
+            if now - self._sendungen_live_refresh_ts >= 300.0:
+                counts["sendungen"] = max(
+                    0,
+                    int(sendungen_service.refresh_count_from_graph_silent(lookback_days=20, max_items=150)),
+                )
+                self._sendungen_live_refresh_ts = now
+            else:
+                counts["sendungen"] = max(0, int(sendungen_service.open_count()))
+            counts["transfer"] = max(0, int(counts.get("transfers", 0)))
             return counts
 
         self._badge_worker = BackgroundWorker(job)
@@ -464,9 +521,14 @@ class TagesgeschaeftView(QWidget):
         mollie_count = max(0, int(counts.get("mollie", 0)))
         gutscheine_count = max(0, int(counts.get("gutscheine", 0)))
         sendungen_count = max(0, int(counts.get("sendungen", 0)))
+        transfer_count = max(0, int(counts.get("transfer", counts.get("refunds", 0))))
 
-        self._rechnungen_view.update_mollie_alert_count(mollie_count)
-        self._rechnungen_view.update_sendungen_alert_count(sendungen_count)
+        self._sendungen_count = sendungen_count
+        self._transfer_count = transfer_count
+        self._mollie_count = mollie_count
+        self._update_alert_button(self._btn_sendungen_alert, "OFFENE SENDUNGEN", sendungen_count)
+        self._update_alert_button(self._btn_transfer_alert, "ÜBERWEISUNGEN", transfer_count)
+        self._update_alert_button(self._btn_mollie_alert, "MOLLIE AUTH", mollie_count)
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.badge_updated.emit(ModuleKey.RECHNUNGEN.value, open_count)
         signals.badge_updated.emit(ModuleKey.GUTSCHEINE.value, gutscheine_count)
@@ -474,6 +536,35 @@ class TagesgeschaeftView(QWidget):
 
     def _on_badges_error(self, exc: Exception) -> None:
         logger.warning("Badge refresh failed: %s", exc)
+
+    @staticmethod
+    def _update_alert_button(button: QPushButton, label: str, count: int) -> None:
+        if count > 0:
+            button.setText(f"{label} ({count})")
+            button.show()
+            return
+        button.hide()
+
+    def _on_sendungen_alert_clicked(self) -> None:
+        count = self._rechnungen_view.open_sendungen_dialog()
+        self._sendungen_count = max(0, int(count))
+        self._update_alert_button(self._btn_sendungen_alert, "OFFENE SENDUNGEN", self._sendungen_count)
+
+    def _on_transfer_alert_clicked(self) -> None:
+        self._rechnungen_view.open_queue_dialog(
+            "transfers",
+            "OFFENE ÜBERWEISUNGEN",
+            fallback_count=self._transfer_count,
+        )
+        self._refresh_badges()
+
+    def _on_mollie_alert_clicked(self) -> None:
+        self._rechnungen_view.open_queue_dialog(
+            "mollie",
+            "MOLLIE AUTHORIZATION",
+            fallback_count=self._mollie_count,
+        )
+        self._refresh_badges()
 
     def _on_start_clicked(
         self,
@@ -831,6 +922,8 @@ class TagesgeschaeftView(QWidget):
                 lines.append("Produkt-Hinweise:")
                 lines.extend(f"- {warning}" for warning in product_apply.warnings)
 
+        self._rechnungen_view.show_start_summary(lines)
+
         if self._start_include_product_print:
             QMessageBox.information(
                 self,
@@ -853,8 +946,6 @@ class TagesgeschaeftView(QWidget):
 
     def _set_start_running(self, running: bool) -> None:
         self._btn_start.setEnabled(not running)
-        self._btn_start_notendruck.setEnabled(not running)
-        self._btn_start_selected_menu.setEnabled(not running)
         self._btn_stop.setEnabled(running)
 
     def _on_start_stop_clicked(self) -> None:

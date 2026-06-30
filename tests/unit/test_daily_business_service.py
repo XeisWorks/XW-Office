@@ -107,16 +107,29 @@ def test_live_importer_classifies_open_invoices_into_queues() -> None:
                 "status": 200,
             }
         ),
+        InvoiceSummary.model_validate(
+            {
+                "id": "3",
+                "invoiceNumber": "RE-3",
+                "contact_name": "Kunde C",
+                "buyer_note": "Offene Ueberweisung mit EPC QR erstellen",
+                "sumGross": "29.90",
+                "status": 200,
+            }
+        ),
     ]
     svc = DailyBusinessService(_RepoStub({}), _InvoiceProcessingStub(rows))  # type: ignore[arg-type]
 
     refunds = svc.load_queue_rows("refunds")
     mollie = svc.load_queue_rows("mollie")
+    transfers = svc.load_queue_rows("transfers")
 
     assert len(refunds) == 1
     assert refunds[0]["Ref"] == "RE-1"
     assert len(mollie) == 1
     assert mollie[0]["Ref"] == "RE-2"
+    assert len(transfers) == 1
+    assert transfers[0]["Ref"] == "RE-3"
 
 
 def test_load_counts_uses_live_rows_when_pending_counts_missing() -> None:

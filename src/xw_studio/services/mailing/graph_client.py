@@ -349,6 +349,10 @@ class GraphMailClient:
                 return result
         return None
 
+    def has_silent_token(self) -> bool:
+        """Return whether Graph can be used without starting device-flow auth."""
+        return bool(self._acquire_token_silent())
+
     def _acquire_token(self) -> str:
         result = self._acquire_token_silent()
         if not result:

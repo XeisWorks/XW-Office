@@ -676,27 +676,27 @@ class RechnungenView(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
-        toolbar = Toolbar()
-        refresh = toolbar.add_button(
+        self._toolbar = Toolbar()
+        refresh = self._toolbar.add_button(
             "refresh",
             "Aktualisieren",
             tooltip="Erste Seite neu laden",
         )
         refresh.clicked.connect(self._reload_first_page)
-        self._btn_draft = toolbar.add_button(
+        self._btn_draft = self._toolbar.add_button(
             "draft",
             "Rechnungs-Entwurf",
             tooltip="Neuen sevDesk-Rechnungsentwurf aus Wix-Order-Nr erstellen",
         )
         self._btn_draft.clicked.connect(self._on_create_draft_clicked)
-        self._btn_custom_label = toolbar.add_button(
+        self._btn_custom_label = self._toolbar.add_button(
             "label",
             "CUSTOM-LABEL",
             tooltip="Freie Lieferadresse eingeben und direkt als Label drucken",
         )
         self._btn_custom_label.clicked.connect(self._on_custom_label_clicked)
-        toolbar.add_stretch()
-        self._btn_sendungen_alert = toolbar.add_button(
+        self._toolbar.add_stretch()
+        self._btn_sendungen_alert = self._toolbar.add_button(
             "sendungen_alert",
             "✉ OFFENE SENDUNGEN",
             tooltip="Offene Versand-Mails anzeigen",
@@ -710,7 +710,7 @@ class RechnungenView(QWidget):
         )
         self._btn_sendungen_alert.clicked.connect(self._on_sendungen_alert_clicked)
         self._btn_sendungen_alert.hide()
-        self._btn_mollie_alert = toolbar.add_button(
+        self._btn_mollie_alert = self._toolbar.add_button(
             "mollie_alert",
             "💳 MOLLIE AUTH",
             tooltip="Offene Mollie-Authorisierungen anzeigen",
@@ -724,7 +724,7 @@ class RechnungenView(QWidget):
         )
         self._btn_mollie_alert.clicked.connect(self._on_mollie_alert_clicked)
         self._btn_mollie_alert.hide()
-        layout.addWidget(toolbar)
+        layout.addWidget(self._toolbar)
 
         self._search = SearchBar("Suchen…", debounce_ms=220, min_chars=2, max_suggestions=12)
         self._search.set_suggestion_provider(self._invoice_search_suggestions)
@@ -960,6 +960,17 @@ class RechnungenView(QWidget):
         self._stuecke_layout.addWidget(self._stuecke_hint)
         self._gb_stuecke.hide()
         detail_main.addWidget(self._gb_stuecke)
+
+        self._gb_start_summary = QGroupBox("START-ZUSAMMENFASSUNG")
+        summary_layout = QVBoxLayout(self._gb_start_summary)
+        summary_layout.setContentsMargins(10, 8, 10, 10)
+        self._start_summary_label = QLabel("")
+        self._start_summary_label.setWordWrap(True)
+        self._start_summary_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._start_summary_label.setStyleSheet("color: #0f172a; line-height: 1.25;")
+        summary_layout.addWidget(self._start_summary_label)
+        self._gb_start_summary.hide()
+        detail_main.addWidget(self._gb_start_summary)
         detail_main.addStretch()
         detail_scroll.setWidget(detail_content)
 
@@ -1029,6 +1040,47 @@ class RechnungenView(QWidget):
         if self._badge_refresh_managed_externally:
             self._mollie_timer.stop()
             self._stop_mollie_worker()
+
+    def set_top_actions_managed_externally(self, enabled: bool) -> None:
+        """Hide the embedded toolbar when the parent view owns those actions."""
+        self._toolbar.setVisible(not bool(enabled))
+
+    def reload_first_page(self) -> None:
+        self._reload_first_page()
+
+    def create_draft_from_wix_order(self) -> None:
+        self._on_create_draft_clicked()
+
+    def open_custom_label_dialog(self) -> None:
+        self._on_custom_label_clicked()
+
+    def open_sendungen_dialog(self) -> int:
+        dlg = OffeneSendungenDialog(self._container, self)
+        dlg.exec()
+        count = dlg.open_count()
+        self.update_sendungen_alert_count(count)
+        return count
+
+    def open_queue_dialog(self, queue_name: str, title: str, fallback_count: int = 0) -> None:
+        from xw_studio.ui.modules.rechnungen.tagesgeschaeft_view import QueuePopupDialog
+
+        dlg = QueuePopupDialog(
+            self._container,
+            queue_name=queue_name,
+            title=title,
+            fallback_count=max(0, int(fallback_count)),
+            parent=self,
+        )
+        dlg.exec()
+
+    def show_start_summary(self, lines: list[str]) -> None:
+        text = "\n".join(str(line).strip() for line in lines if str(line).strip())
+        if not text:
+            self._gb_start_summary.hide()
+            self._start_summary_label.setText("")
+            return
+        self._start_summary_label.setText(text)
+        self._gb_start_summary.show()
 
     def _stop_mollie_worker(self) -> None:
         if self._mollie_badge_worker is not None and self._mollie_badge_worker.isRunning():

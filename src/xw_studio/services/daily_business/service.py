@@ -16,6 +16,7 @@ _PENDING_COUNTS_KEY = "daily_business.pending_counts"
 _URGENCY_RULES_KEY = "daily_business.urgency_rules"
 _QUEUE_KEYS = {
     "mollie": "daily_business.queue.mollie",
+    "transfers": "daily_business.queue.transfers",
     "gutscheine": "daily_business.queue.gutscheine",
     "downloads": "daily_business.queue.downloads",
     "refunds": "daily_business.queue.refunds",
@@ -24,6 +25,7 @@ _QUEUE_KEYS = {
 _DEFAULT_URGENCY_RULES: dict[str, list[str]] = {
     "generic": ["offen", "fehl", "pending", "ueberweis", "überweis"],
     "mollie": ["auth", "authorized", "chargeback", "missing auth"],
+    "transfers": ["ueberweisung", "überweisung", "banktransfer", "zahlungsanweisung", "qr"],
     "gutscheine": ["ungueltig", "ungültig", "einloes", "einlös"],
     "downloads": ["link fehlt", "download fehlt", "retry", "fehlgeschlagen"],
     "refunds": ["refund", "rueckerstattung", "rückerstattung", "auszahlung"],
@@ -31,12 +33,14 @@ _DEFAULT_URGENCY_RULES: dict[str, list[str]] = {
 
 _CHANNEL_TOOLTIPS: dict[str, str] = {
     "mollie": "Dringend: Mollie-Auth/Zahlung offen",
+    "transfers": "Dringend: Ueberweisung/Zahlungsanweisung offen",
     "gutscheine": "Dringend: Gutschein-Pruefung offen",
     "downloads": "Dringend: Download-Link/Versand offen",
     "refunds": "Dringend: Rueckerstattung/Zahlung offen",
 }
 
 _LIVE_QUEUE_CACHE_TTL_SECONDS = 120.0
+_COUNT_QUEUE_NAMES = ("mollie", "transfers", "gutscheine", "downloads", "refunds")
 
 
 class DailyBusinessService:
@@ -52,6 +56,7 @@ class DailyBusinessService:
         self._live_cache_ts = 0.0
         self._live_cache: dict[str, list[dict[str, str]]] = {
             "mollie": [],
+            "transfers": [],
             "gutscheine": [],
             "downloads": [],
             "refunds": [],
@@ -61,6 +66,7 @@ class DailyBusinessService:
         result = {
             "rechnungen": max(0, int(open_invoice_count)),
             "mollie": 0,
+            "transfers": 0,
             "gutscheine": 0,
             "downloads": 0,
             "refunds": 0,
@@ -75,33 +81,33 @@ class DailyBusinessService:
 
         if self._repo is None:
             live = ensure_live_cache()
-            for key in ("mollie", "gutscheine", "downloads", "refunds"):
+            for key in _COUNT_QUEUE_NAMES:
                 result[key] = len(live.get(key, []))
             return result
         raw = self._repo.get_value_json(_PENDING_COUNTS_KEY)
         if not raw:
             live = ensure_live_cache()
-            for key in ("mollie", "gutscheine", "downloads", "refunds"):
+            for key in _COUNT_QUEUE_NAMES:
                 result[key] = len(live.get(key, []))
             return result
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
             live = ensure_live_cache()
-            for key in ("mollie", "gutscheine", "downloads", "refunds"):
+            for key in _COUNT_QUEUE_NAMES:
                 result[key] = len(live.get(key, []))
             return result
         if not isinstance(data, dict):
             live = ensure_live_cache()
-            for key in ("mollie", "gutscheine", "downloads", "refunds"):
+            for key in _COUNT_QUEUE_NAMES:
                 result[key] = len(live.get(key, []))
             return result
-        for key in ("mollie", "gutscheine", "downloads", "refunds"):
+        for key in _COUNT_QUEUE_NAMES:
             value = data.get(key)
             if isinstance(value, int):
                 result[key] = max(0, value)
         live = ensure_live_cache()
-        for key in ("mollie", "gutscheine", "downloads", "refunds"):
+        for key in _COUNT_QUEUE_NAMES:
             if result[key] == 0:
                 result[key] = len(live.get(key, []))
         return result
@@ -179,6 +185,7 @@ class DailyBusinessService:
 
         live: dict[str, list[dict[str, str]]] = {
             "mollie": [],
+            "transfers": [],
             "gutscheine": [],
             "downloads": [],
             "refunds": [],
@@ -199,6 +206,7 @@ class DailyBusinessService:
         note = inv.buyer_note.strip()
         base_hint = {
             "mollie": "Live aus offenen Rechnungen (Mollie-Hinweis erkannt)",
+            "transfers": "Live aus offenen Rechnungen (Ueberweisungs-Hinweis erkannt)",
             "gutscheine": "Live aus offenen Rechnungen (Gutschein-Hinweis erkannt)",
             "downloads": "Live aus offenen Rechnungen (Download-Hinweis erkannt)",
             "refunds": "Live aus offenen Rechnungen (Refund-Hinweis erkannt)",
@@ -251,7 +259,18 @@ class DailyBusinessService:
             return "refunds"
 
         # ------------------------------------------------------------------
-        # 2. Vouchers / Gift cards  ("Gutschein", NOT "Gutschrift")
+        # 2. Open transfers / payment instructions
+        # ------------------------------------------------------------------
+        _TRANSFER_KEYWORDS = (
+            "ueberweisung", "überweisung", "banktransfer", "vorkasse",
+            "zahlungsanweisung", "payment qr", "epc qr", "iban fehlt",
+            "rechnung bezahlen", "offene zahlung",
+        )
+        if any(k in hay for k in _TRANSFER_KEYWORDS):
+            return "transfers"
+
+        # ------------------------------------------------------------------
+        # 3. Vouchers / Gift cards  ("Gutschein", NOT "Gutschrift")
         # ------------------------------------------------------------------
         _VOUCHER_KEYWORDS = (
             "gutschein", "gutscheincode", "voucher", "coupon", "gift card", "gift-card",
@@ -260,7 +279,7 @@ class DailyBusinessService:
             return "gutscheine"
 
         # ------------------------------------------------------------------
-        # 3. Digital downloads requiring manual delivery
+        # 4. Digital downloads requiring manual delivery
         # ------------------------------------------------------------------
         _DOWNLOAD_KEYWORDS = (
             "download", "digital", "pdf-link", "pdf download",
@@ -273,7 +292,7 @@ class DailyBusinessService:
             return "downloads"
 
         # ------------------------------------------------------------------
-        # 4. Mollie payment authorization issues
+        # 5. Mollie payment authorization issues
         #    Only flag when there is an explicit Mollie reference to avoid
         #    false positives ("auth" alone, "authorized" alone are too broad).
         # ------------------------------------------------------------------
@@ -303,7 +322,7 @@ class DailyBusinessService:
         if not isinstance(data, dict):
             return normalized
 
-        for key in ("generic", "mollie", "gutscheine", "downloads", "refunds"):
+        for key in ("generic", *_COUNT_QUEUE_NAMES):
             candidate = data.get(key)
             if not isinstance(candidate, list):
                 continue

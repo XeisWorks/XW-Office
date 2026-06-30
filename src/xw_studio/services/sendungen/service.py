@@ -46,11 +46,31 @@ class OffeneSendungenService:
         done = self._load_done_ids()
         return [case for case in all_cases if case.id not in done]
 
-    def refresh_from_graph(self, *, lookback_days: int = 20, max_items: int = 120) -> list[SendungCase]:
-        messages = self._fetch_graph_messages(lookback_days=lookback_days, max_items=max_items)
+    def refresh_from_graph(
+        self,
+        *,
+        lookback_days: int = 20,
+        max_items: int = 120,
+        allow_interactive_auth: bool = True,
+    ) -> list[SendungCase]:
+        messages = self._fetch_graph_messages(
+            lookback_days=lookback_days,
+            max_items=max_items,
+            allow_interactive_auth=allow_interactive_auth,
+        )
         cases = [self._to_case(msg) for msg in messages]
         self._save_cases(cases)
         return self.load_open_cases()
+
+    def refresh_count_from_graph_silent(self, *, lookback_days: int = 20, max_items: int = 120) -> int:
+        """Refresh Graph-backed cases only when cached MS auth is already available."""
+        return len(
+            self.refresh_from_graph(
+                lookback_days=lookback_days,
+                max_items=max_items,
+                allow_interactive_auth=False,
+            )
+        )
 
     def mark_done(self, case_id: str, *, done: bool) -> None:
         cid = str(case_id or "").strip()
@@ -160,9 +180,18 @@ class OffeneSendungenService:
             return text
         return self._fallback_summary(case)
 
-    def _fetch_graph_messages(self, *, lookback_days: int, max_items: int) -> list[dict[str, Any]]:
+    def _fetch_graph_messages(
+        self,
+        *,
+        lookback_days: int,
+        max_items: int,
+        allow_interactive_auth: bool = True,
+    ) -> list[dict[str, Any]]:
         client = self._graph_client()
         if client is None:
+            return self._load_cached_raw_messages()
+        if not allow_interactive_auth and not client.has_silent_token():
+            logger.info("MS Graph silent token missing; using cached offene Sendungen")
             return self._load_cached_raw_messages()
         try:
             values = client.list_inbox_messages(days=max(1, lookback_days), top=max(1, min(max_items, 200)))
