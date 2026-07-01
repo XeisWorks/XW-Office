@@ -569,7 +569,7 @@ class InvoiceProcessingService:
         if post_tasks and progress_callback is not None:
             progress_callback("START: Fulfillment und Mail werden nachgelagert...")
 
-        for task in post_tasks:
+        def run_post_task(task: _StartPostTask) -> tuple[str, FulfillmentFlags, bool]:
             summary = task.summary
             label = summary.invoice_number or summary.order_reference or summary.id
             flags = task.flags
@@ -591,24 +591,40 @@ class InvoiceProcessingService:
                             ),
                         ),
                     )
-                flags = persist(
-                    summary,
-                    run_phase(summary, "wix_fulfillment", lambda: self._run_product_step(summary, flags)),
-                )
+                    self.write_fulfillment_flags(summary.id, flags)
+                flags = run_phase(summary, "wix_fulfillment", lambda: self._run_product_step(summary, flags))
+                self.write_fulfillment_flags(summary.id, flags)
                 if progress_callback is not None:
                     progress_callback(f"START: Mail fuer {label} wird gesendet...")
-                flags = persist(
+                flags = run_phase(
                     summary,
-                    run_phase(
-                        summary,
-                        "mail",
-                        lambda: self._run_mail_step(summary, flags, recipient_override=mail_recipient_override),
-                    ),
+                    "mail",
+                    lambda: self._run_mail_step(summary, flags, recipient_override=mail_recipient_override),
                 )
-                successful_ids.add(str(summary.id))
+                return str(summary.id), flags, True
             except Exception as exc:
-                failed_ids.add(str(summary.id))
-                persist(summary, self._with_error(flags, exc))
+                return str(summary.id), self._with_error(flags, exc), False
+
+        if post_tasks:
+            post_started = time.perf_counter()
+            workers = min(5, max(1, len(post_tasks)))
+            logger.info("START post-processing start tasks=%s workers=%s", len(post_tasks), workers)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(run_post_task, task): task for task in post_tasks}
+                for future in as_completed(futures):
+                    summary_id, flags, success = future.result()
+                    updates[summary_id] = flags
+                    self.write_fulfillment_flags(summary_id, flags)
+                    if success:
+                        successful_ids.add(summary_id)
+                    else:
+                        failed_ids.add(summary_id)
+            logger.info(
+                "START post-processing done elapsed_ms=%s tasks=%s workers=%s",
+                int((time.perf_counter() - post_started) * 1000),
+                len(post_tasks),
+                workers,
+            )
 
         self.write_fulfillment_flags_batch(updates)
         elapsed_ms = int((time.perf_counter() - started) * 1000)

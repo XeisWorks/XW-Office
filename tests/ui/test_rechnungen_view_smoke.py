@@ -185,6 +185,31 @@ def test_tagesgeschaeft_contains_rechnungen_view(qtbot: object) -> None:
     assert view._btn_stop.text() == "STOP"  # noqa: SLF001
     assert not view._btn_stop.isEnabled()  # noqa: SLF001
     assert not view._rechnungen_view._toolbar.isVisible()  # noqa: SLF001
+    bar_layout = view._btn_start.parentWidget().layout()  # noqa: SLF001
+    widgets = [bar_layout.itemAt(i).widget() for i in range(bar_layout.count())]
+    assert widgets.index(view._btn_start) == widgets.index(view._btn_stop) - 1  # noqa: SLF001
+    assert widgets.index(view._btn_stop) == widgets.index(view._btn_beenden) - 1  # noqa: SLF001
+
+
+def test_start_click_disables_start_immediately(qtbot: object, monkeypatch) -> None:
+    container = _build_container()
+    view = TagesgeschaeftView(container)
+    qtbot.addWidget(view)
+    started = {"value": False}
+
+    def fake_start(self) -> None:
+        started["value"] = True
+
+    monkeypatch.setattr(
+        "xw_studio.ui.modules.rechnungen.tagesgeschaeft_view.BackgroundWorker.start",
+        fake_start,
+    )
+
+    view._on_start_clicked()  # noqa: SLF001
+
+    assert started["value"] is True
+    assert not view._btn_start.isEnabled()  # noqa: SLF001
+    assert not view._btn_stop.isEnabled()  # noqa: SLF001
 
 
 def test_tagesgeschaeft_alert_buttons_follow_counts(qtbot: object) -> None:

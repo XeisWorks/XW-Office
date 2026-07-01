@@ -393,6 +393,8 @@ class TagesgeschaeftView(QWidget):
         self._btn_custom_label.clicked.connect(lambda: self._rechnungen_view.open_custom_label_dialog())
         bar_lay.addWidget(self._btn_custom_label)
 
+        bar_lay.addStretch()
+
         self._btn_start = QToolButton()
         self._btn_start.setText("▶ START")
         self._btn_start.setToolTip("START: Rechnungen + Labels + Fulfillment + Mail")
@@ -421,7 +423,6 @@ class TagesgeschaeftView(QWidget):
             lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, selected_only=True, include_product_print=True)
         )
         self._btn_start.setMenu(start_menu)
-        bar_lay.addWidget(self._btn_start)
 
         self._btn_stop = QPushButton("STOP")
         self._btn_stop.setToolTip("Laufenden START nach der aktuellen Rechnung anhalten")
@@ -436,9 +437,6 @@ class TagesgeschaeftView(QWidget):
             " QPushButton:disabled { background-color: #cfd8dc; color: #607d8b; }"
         )
         self._btn_stop.clicked.connect(self._on_start_stop_clicked)
-        bar_lay.addWidget(self._btn_stop)
-
-        bar_lay.addStretch()
 
         self._btn_sendungen_alert = self._build_alert_button("OFFENE SENDUNGEN")
         self._btn_sendungen_alert.clicked.connect(self._on_sendungen_alert_clicked)
@@ -455,18 +453,21 @@ class TagesgeschaeftView(QWidget):
         self._btn_mollie_alert.hide()
         bar_lay.addWidget(self._btn_mollie_alert)
 
-        btn_beenden = QPushButton("■  Beenden")
-        btn_beenden.setToolTip("App beenden (laufende Hintergrundaufgaben werden abgewartet)")
-        btn_beenden.setFixedHeight(34)
-        btn_beenden.setFixedWidth(130)
-        btn_beenden.setStyleSheet(
+        bar_lay.addWidget(self._btn_start)
+        bar_lay.addWidget(self._btn_stop)
+
+        self._btn_beenden = QPushButton("■  Beenden")
+        self._btn_beenden.setToolTip("App beenden (laufende Hintergrundaufgaben werden abgewartet)")
+        self._btn_beenden.setFixedHeight(34)
+        self._btn_beenden.setFixedWidth(130)
+        self._btn_beenden.setStyleSheet(
             "QPushButton { background-color: #c62828; color: white; border-radius: 6px;"
             " font-weight: bold; font-size: 13px; }"
             " QPushButton:hover { background-color: #b71c1c; }"
             " QPushButton:pressed { background-color: #7f0000; }"
         )
-        btn_beenden.clicked.connect(self._on_beenden_clicked)
-        bar_lay.addWidget(btn_beenden)
+        self._btn_beenden.clicked.connect(self._on_beenden_clicked)
+        bar_lay.addWidget(self._btn_beenden)
 
         main_layout.addWidget(action_bar)
 
@@ -573,7 +574,7 @@ class TagesgeschaeftView(QWidget):
         selected_only: bool = False,
         include_product_print: bool = False,
     ) -> None:
-        if self._start_worker is not None and self._start_worker.isRunning():
+        if self.has_active_flow() or (self._start_worker is not None and self._start_worker.isRunning()):
             return
         self._start_requested_mode = requested_mode
         self._start_include_product_print = bool(include_product_print)
@@ -593,6 +594,8 @@ class TagesgeschaeftView(QWidget):
                 return
 
         signals: AppSignals = self._container.resolve(AppSignals)
+        self._btn_start.setEnabled(False)
+        self._btn_stop.setEnabled(False)
         signals.status_message.emit("Pre-Flight wird erstellt…", 2500)
 
         def job() -> StartPreflight:
@@ -628,6 +631,7 @@ class TagesgeschaeftView(QWidget):
 
     def _on_start_preflight_ready(self, result: object) -> None:
         if not isinstance(result, StartPreflight):
+            self._set_start_running(False)
             return
         signals: AppSignals = self._container.resolve(AppSignals)
         self._start_selected_mode = StartMode.INVOICES_AND_PRINT
@@ -646,6 +650,7 @@ class TagesgeschaeftView(QWidget):
             parent=self,
         )
         if dlg.exec() != QDialog.DialogCode.Accepted:
+            self._set_start_running(False)
             signals.status_message.emit("START abgebrochen", 2500)
             return
         logger.info(
@@ -670,6 +675,7 @@ class TagesgeschaeftView(QWidget):
             (self._start_product_worker is not None and self._start_product_worker.isRunning())
             or (self._start_exec_worker is not None and self._start_exec_worker.isRunning())
         ):
+            self._btn_start.setEnabled(False)
             return
 
         self._start_product_preflight_started_at = time.perf_counter()
@@ -724,9 +730,11 @@ class TagesgeschaeftView(QWidget):
         preflight = self._pending_start_preflight
         mode = self._start_selected_mode
         if preflight is None:
+            self._set_start_running(False)
             QMessageBox.warning(self, "START", "START-Preflight ist nicht mehr verfuegbar.")
             return
         if self._start_exec_worker is not None and self._start_exec_worker.isRunning():
+            self._btn_start.setEnabled(False)
             return
 
         self._start_abort_requested = False
