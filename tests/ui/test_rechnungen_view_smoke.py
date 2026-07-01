@@ -291,18 +291,28 @@ def test_customer_mail_uses_configured_outlook_sender(qtbot: object, monkeypatch
     class _Accounts:
         Count = 1
 
+        def __iter__(self):  # type: ignore[no-untyped-def]
+            return iter([_Account()])
+
         def Item(self, index: int) -> _Account:  # noqa: N802
             assert index == 1
             return _Account()
 
+    class _Ole:
+        def __init__(self) -> None:
+            self.invocations: list[tuple[object, ...]] = []
+
+        def Invoke(self, *args: object) -> None:  # noqa: N802
+            self.invocations.append(args)
+
     class _Mail:
         def __init__(self) -> None:
             self._send_using_account = None
-            self.SentOnBehalfOfName = ""
             self.To = ""
             self.Subject = ""
             self.displayed = False
             self.account_set_count = 0
+            self._oleobj_ = _Ole()
 
         @property
         def SendUsingAccount(self) -> object:
@@ -333,7 +343,8 @@ def test_customer_mail_uses_configured_outlook_sender(qtbot: object, monkeypatch
     assert view._open_customer_mail_outlook("kunde@example.test", view._customer_mail_subject(summary)) is True  # noqa: SLF001
     assert mail.SendUsingAccount.SmtpAddress == "office@xeisworks.at"
     assert mail.account_set_count == 2
-    assert mail.SentOnBehalfOfName == "office@xeisworks.at"
+    assert len(mail._oleobj_.invocations) == 2
+    assert mail._oleobj_.invocations[0][:4] == (64209, 0, 8, 0)
     assert mail.To == "kunde@example.test"
     assert mail.Subject == "Best.-Nr. 20844 | RE-DRAFT"
     assert mail.displayed is True

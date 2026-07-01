@@ -2265,6 +2265,8 @@ class RechnungenView(QWidget):
                 logger.warning("Outlook account not found for sender %s; falling back to mailto", sender_email)
                 return False
             mail = outlook.CreateItem(0)
+            mail.To = email
+            mail.Subject = subject
             self._apply_outlook_sender(mail, account, sender_email)
             # Display after setting the account. Outlook then applies the
             # account-specific default signature for editable draft mails.
@@ -2273,8 +2275,6 @@ class RechnungenView(QWidget):
             # inspector/signature. Re-apply after Display so the visible From
             # drop-down is forced to the configured account.
             self._apply_outlook_sender(mail, account, sender_email)
-            mail.To = email
-            mail.Subject = subject
             return True
         finally:
             try:
@@ -2285,10 +2285,17 @@ class RechnungenView(QWidget):
     @staticmethod
     def _apply_outlook_sender(mail: object, account: object, sender_email: str) -> None:
         mail.SendUsingAccount = account  # type: ignore[attr-defined]
-        try:
-            mail.SentOnBehalfOfName = sender_email  # type: ignore[attr-defined]
-        except Exception:  # noqa: BLE001
-            pass
+        # Pywin32 late-binding can occasionally fail to propagate
+        # SendUsingAccount into the visible Outlook inspector. 64209 is the
+        # Outlook MailItem.SendUsingAccount dispatch id; invoking it directly
+        # mirrors the common VBA/COM workaround while keeping the normal
+        # attribute assignment above for readability.
+        ole = getattr(mail, "_oleobj_", None)
+        if ole is not None:
+            try:
+                ole.Invoke(64209, 0, 8, 0, account)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Outlook SendUsingAccount COM invoke failed for %s: %s", sender_email, exc)
 
     def _outlook_sender_email(self) -> str:
         try:
@@ -2307,6 +2314,12 @@ class RechnungenView(QWidget):
         if accounts is None:
             return None
         try:
+            for account in accounts:
+                if RechnungenView._outlook_account_matches(account, wanted):
+                    return account
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Outlook account enumeration failed, trying indexed lookup: %s", exc)
+        try:
             count = int(getattr(accounts, "Count", 0) or 0)
         except Exception:  # noqa: BLE001
             count = 0
@@ -2315,14 +2328,18 @@ class RechnungenView(QWidget):
                 account = accounts.Item(idx)
             except Exception:  # noqa: BLE001
                 continue
-            candidates = (
-                getattr(account, "SmtpAddress", ""),
-                getattr(account, "DisplayName", ""),
-                getattr(account, "UserName", ""),
-            )
-            if any(str(candidate or "").strip().lower() == wanted for candidate in candidates):
+            if RechnungenView._outlook_account_matches(account, wanted):
                 return account
         return None
+
+    @staticmethod
+    def _outlook_account_matches(account: object, wanted: str) -> bool:
+        candidates = (
+            getattr(account, "SmtpAddress", ""),
+            getattr(account, "DisplayName", ""),
+            getattr(account, "UserName", ""),
+        )
+        return any(str(candidate or "").strip().lower() == wanted for candidate in candidates)
 
     @staticmethod
     def _customer_mail_subject(summary: InvoiceSummary) -> str:
