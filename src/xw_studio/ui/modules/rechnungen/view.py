@@ -2265,18 +2265,30 @@ class RechnungenView(QWidget):
                 logger.warning("Outlook account not found for sender %s; falling back to mailto", sender_email)
                 return False
             mail = outlook.CreateItem(0)
-            mail.SendUsingAccount = account
-            mail.To = email
-            mail.Subject = subject
+            self._apply_outlook_sender(mail, account, sender_email)
             # Display after setting the account. Outlook then applies the
             # account-specific default signature for editable draft mails.
             mail.Display(False)
+            # Some Outlook builds reset the From account while creating the
+            # inspector/signature. Re-apply after Display so the visible From
+            # drop-down is forced to the configured account.
+            self._apply_outlook_sender(mail, account, sender_email)
+            mail.To = email
+            mail.Subject = subject
             return True
         finally:
             try:
                 pythoncom.CoUninitialize()
             except Exception:  # noqa: BLE001
                 pass
+
+    @staticmethod
+    def _apply_outlook_sender(mail: object, account: object, sender_email: str) -> None:
+        mail.SendUsingAccount = account  # type: ignore[attr-defined]
+        try:
+            mail.SentOnBehalfOfName = sender_email  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
 
     def _outlook_sender_email(self) -> str:
         try:

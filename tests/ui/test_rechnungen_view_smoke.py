@@ -297,10 +297,21 @@ def test_customer_mail_uses_configured_outlook_sender(qtbot: object, monkeypatch
 
     class _Mail:
         def __init__(self) -> None:
-            self.SendUsingAccount = None
+            self._send_using_account = None
+            self.SentOnBehalfOfName = ""
             self.To = ""
             self.Subject = ""
             self.displayed = False
+            self.account_set_count = 0
+
+        @property
+        def SendUsingAccount(self) -> object:
+            return self._send_using_account
+
+        @SendUsingAccount.setter
+        def SendUsingAccount(self, account: object) -> None:
+            self.account_set_count += 1
+            self._send_using_account = account
 
         def Display(self, modal: bool) -> None:  # noqa: N802
             assert modal is False
@@ -321,6 +332,8 @@ def test_customer_mail_uses_configured_outlook_sender(qtbot: object, monkeypatch
 
     assert view._open_customer_mail_outlook("kunde@example.test", view._customer_mail_subject(summary)) is True  # noqa: SLF001
     assert mail.SendUsingAccount.SmtpAddress == "office@xeisworks.at"
+    assert mail.account_set_count == 2
+    assert mail.SentOnBehalfOfName == "office@xeisworks.at"
     assert mail.To == "kunde@example.test"
     assert mail.Subject == "Best.-Nr. 20844 | RE-DRAFT"
     assert mail.displayed is True
