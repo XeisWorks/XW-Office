@@ -1117,6 +1117,39 @@ class WixOrdersClient:
             return
         cache.put_missing(site_id=site_id, account_id=account_id, reference=reference)
 
+    def get_cached_order_summary(self, reference: str) -> dict[str, str] | None:
+        """Return a normalized order summary from the persistent cache only.
+
+        ``None`` means no cache entry exists.  An empty dict means the
+        reference is cached as missing and must not trigger a Wix lookup.
+        """
+        ref = str(reference or "").strip()
+        if not ref:
+            return None
+        cached = self._cached_order(ref)
+        if cached is None:
+            return None
+        if not cached:
+            return {}
+        return self._summary_from_order(cached)
+
+    def get_cached_order_line_items(self, reference: str) -> list[WixOrderItem] | None:
+        """Return normalized line items from the persistent cache only.
+
+        ``None`` means no cache entry exists.  An empty list can mean either a
+        cached missing order or a cached order without line items.
+        """
+        ref = str(reference or "").strip()
+        if not ref:
+            return None
+        cached = self._cached_order(ref)
+        if cached is None:
+            return None
+        if not cached:
+            return []
+        raw_items = cached.get("lineItems") if isinstance(cached.get("lineItems"), list) else []
+        return [_parse_order_line_item(item) for item in raw_items if isinstance(item, dict)]
+
     def _resolve_order(self, reference: str, *, use_cache: bool = True) -> dict[str, Any]:
         ref = str(reference or "").strip()
         if not ref or not self.has_credentials():

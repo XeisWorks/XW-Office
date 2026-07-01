@@ -4,6 +4,8 @@ from __future__ import annotations
 import subprocess
 import types
 
+from PySide6.QtWidgets import QLabel
+
 from xw_studio.bootstrap import register_default_services
 from xw_studio.core.config import AppConfig
 from xw_studio.core.container import Container
@@ -128,6 +130,12 @@ class _FakeWixOrdersClient:
 
     def fetch_order_line_items(self, _reference: str) -> list[dict[str, object]]:
         return []
+
+    def get_cached_order_summary(self, _reference: str) -> dict[str, str] | None:
+        return None
+
+    def get_cached_order_line_items(self, _reference: str) -> list[object] | None:
+        return None
 
     def is_reference_digital_only(self, _reference: str) -> bool:
         return False
@@ -415,6 +423,65 @@ def test_rechnungen_caches_stale_wix_context_result(qtbot: object) -> None:
     assert cached is not None
     assert cached["status"] == ""
     assert cached["meta"]["wix_customer_email"] == "kunde@example.test"
+
+
+def test_rechnungen_applies_persistent_wix_cache_before_background_load(
+    qtbot: object,
+    monkeypatch,
+) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = InvoiceSummary.model_validate(
+        {
+            "id": "cached-1",
+            "invoiceNumber": "RE-CACHED",
+            "status": 200,
+            "contact_name": "sevDesk Kunde",
+            "order_reference": "20899",
+        }
+    )
+    load_calls: list[tuple[str, bool]] = []
+
+    class _CachedWixClient(_FakeWixOrdersClient):
+        def get_cached_order_summary(self, reference: str) -> dict[str, str] | None:
+            return {
+                "wix_order_number": reference,
+                "wix_customer_name": "Wix Kunde",
+                "wix_customer_email": "wix@example.test",
+                "wix_shipping_country": "Austria",
+                "wix_shipping_address": "Wix Kunde\nWixstrasse 7\n1010 Wien\nAUSTRIA",
+            }
+
+        def get_cached_order_line_items(self, _reference: str) -> list[object] | None:
+            return [
+                types.SimpleNamespace(
+                    sku="XW-CACHE-1",
+                    name="Cache Produkt",
+                    qty=2,
+                    note="",
+                    is_unreleased=False,
+                )
+            ]
+
+    def fake_load_wix_context(order_reference: str, *, show_loading: bool = True) -> None:
+        load_calls.append((order_reference, show_loading))
+
+    container.register(WixOrdersClient, lambda _: _CachedWixClient())
+    monkeypatch.setattr(view, "_load_wix_context", fake_load_wix_context)
+
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    view._table.select_source_row(0)  # noqa: SLF001
+
+    assert "Wixstrasse 7" in view._shipping_editor.toPlainText()  # noqa: SLF001
+    assert view._wix_customer.text() == "Wix Kunde"  # noqa: SLF001
+    assert any(
+        "Cache Produkt" in label.text()
+        for label in view._gb_stuecke.findChildren(QLabel)  # noqa: SLF001
+    )
+    assert view._get_cached_wix_context("20899") is not None  # noqa: SLF001
+    assert load_calls == [("20899", False)]
 
 
 def test_rechnungen_load_more_button_stages_drafts_before_open(qtbot: object) -> None:

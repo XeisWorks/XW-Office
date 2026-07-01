@@ -2464,7 +2464,11 @@ class RechnungenView(QWidget):
         self._update_plc_controls()
         self._prioritize_hint_prefetch_for_summary(summary)
         if summary.order_reference:
-            self._load_wix_context(summary.order_reference)
+            has_cached_wix_context = self._apply_cached_wix_context(summary.order_reference)
+            self._load_wix_context(
+                summary.order_reference,
+                show_loading=not has_cached_wix_context,
+            )
         else:
             self._reset_wix_meta("Keine Wix-Order-Referenz")
             self._reset_stuecke()
@@ -2649,7 +2653,64 @@ class RechnungenView(QWidget):
             self._shipping_status.setText("Keine Versandadresse in sevDesk")
             self._set_shipping_editor_lines(override_lines)
 
-    def _load_wix_context(self, order_reference: str) -> None:
+    def _apply_cached_wix_context(self, order_reference: str) -> bool:
+        ref = str(order_reference or "").strip()
+        if not ref:
+            return False
+        try:
+            wix_client: WixOrdersClient = self._container.resolve(WixOrdersClient)
+            meta = wix_client.get_cached_order_summary(ref)
+            cached_items = wix_client.get_cached_order_line_items(ref)
+        except Exception as exc:  # noqa: BLE001 - cache must never block row selection.
+            logger.debug("Persistent Wix context cache lookup failed ref=%s: %s", ref, exc)
+            return False
+        if meta is None:
+            return False
+        if not meta:
+            self._put_cached_wix_context(
+                ref,
+                status="Wix-Order nicht gefunden",
+                meta={},
+                items=[],
+            )
+            self._reset_wix_meta("Wix-Order nicht gefunden")
+            self._reset_stuecke()
+            self._stuecke_hint.setText("Wix-Order nicht gefunden")
+            self._stuecke_hint.show()
+            self._gb_stuecke.show()
+            return True
+        pieces = self._piece_blocks_from_cached_wix_items(cached_items or [])
+        self._put_cached_wix_context(ref, status="", meta=meta, items=pieces)
+        self._on_wix_meta_loaded({**meta, "__requested_ref": ref})
+        self._on_stuecke_loaded({"__requested_ref": ref, "items": pieces})
+        return True
+
+    @staticmethod
+    def _piece_blocks_from_cached_wix_items(items: object) -> list[PieceBlock]:
+        if not isinstance(items, list):
+            return []
+        pieces: list[PieceBlock] = []
+        for item in items:
+            sku = str(getattr(item, "sku", "") or "").strip()
+            name = str(getattr(item, "name", "") or "").strip() or sku
+            if not sku and not name:
+                continue
+            try:
+                qty = max(1, int(getattr(item, "qty", 1) or 1))
+            except (TypeError, ValueError):
+                qty = 1
+            pieces.append(
+                PieceBlock(
+                    sku=sku,
+                    name=name,
+                    qty_needed=qty,
+                    note=str(getattr(item, "note", "") or "").strip(),
+                    is_unreleased=bool(getattr(item, "is_unreleased", False)),
+                )
+            )
+        return pieces
+
+    def _load_wix_context(self, order_reference: str, *, show_loading: bool = True) -> None:
         ref = order_reference.strip()
         if not ref:
             self._reset_wix_meta("Keine Wix-Order-Referenz")
@@ -2689,7 +2750,8 @@ class RechnungenView(QWidget):
 
         self._wix_context_seq += 1
         seq = self._wix_context_seq
-        self._reset_wix_meta("Lade Wix-Daten…")
+        if show_loading:
+            self._reset_wix_meta("Lade Wix-Daten...")
         self._pending_wix_reference = ref
         self._pending_stuecke_reference = ref
         self._reset_stuecke()

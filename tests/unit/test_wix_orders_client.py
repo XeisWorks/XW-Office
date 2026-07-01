@@ -327,3 +327,72 @@ def test_resolve_order_summary_uses_persistent_cache(tmp_path, monkeypatch) -> N
     assert second["wix_customer_name"] == "Cache Kunde"
     assert after_negative_cache == {}
     assert calls == 1
+
+
+def test_get_cached_order_summary_does_not_call_wix(tmp_path, monkeypatch) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(500, json={})
+
+    class _SecretService:
+        def get_secret(self, name: str) -> str:
+            values = {
+                "WIX_API_KEY": "key",
+                "WIX_SITE_ID": "site",
+                "WIX_ACCOUNT_ID": "",
+            }
+            return values.get(name, "")
+
+    class _Client(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(handler)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    cache = WixOrderCache(tmp_path / "cache.sqlite")
+    cache.put_order(
+        site_id="site",
+        account_id="",
+        reference="20899",
+        order={
+            "id": "ord-cache-only",
+            "number": "20899",
+            "orderNumber": "20899",
+            "lineItems": [
+                {
+                    "id": "line-1",
+                    "productName": {"original": "Cache Produkt"},
+                    "quantity": 2,
+                    "physicalProperties": {"sku": "XW-CACHE-1"},
+                }
+            ],
+            "buyerInfo": {
+                "email": "cached-only@example.test",
+                "firstName": "Cached",
+                "lastName": "Only",
+            },
+        },
+    )
+    client = WixOrdersClient(secret_service=_SecretService(), order_cache=cache)  # type: ignore[arg-type]
+
+    summary = client.get_cached_order_summary("20899")
+    items = client.get_cached_order_line_items("20899")
+    missing_cache_entry = client.get_cached_order_summary("99999")
+    cache.put_missing(site_id="site", account_id="", reference="missing")
+    cached_missing = client.get_cached_order_summary("missing")
+    missing_items = client.get_cached_order_line_items("missing")
+
+    assert summary is not None
+    assert summary["wix_customer_email"] == "cached-only@example.test"
+    assert items is not None
+    assert len(items) == 1
+    assert items[0].sku == "XW-CACHE-1"
+    assert items[0].name == "Cache Produkt"
+    assert items[0].qty == 2
+    assert missing_cache_entry is None
+    assert cached_missing == {}
+    assert missing_items == []
+    assert calls == 0
