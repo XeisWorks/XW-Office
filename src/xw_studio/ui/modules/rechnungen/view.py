@@ -2236,9 +2236,81 @@ class RechnungenView(QWidget):
             QMessageBox.information(self, "Kunden-Mail", "Keine gültige Kunden-E-Mail-Adresse vorhanden.")
             return
         subject = self._customer_mail_subject(summary)
+        try:
+            if self._open_customer_mail_outlook(clean_email, subject):
+                return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Outlook customer mail compose failed: %s", exc)
         url = f"mailto:{quote(clean_email, safe='@._+-')}?subject={quote(subject, safe='')}"
         if not QDesktopServices.openUrl(QUrl(url)):
             QMessageBox.warning(self, "Kunden-Mail", "Das Standard-Mailprogramm konnte nicht geöffnet werden.")
+
+    def _open_customer_mail_outlook(self, email: str, subject: str) -> bool:
+        sender_email = self._outlook_sender_email()
+        if not sender_email:
+            return False
+        try:
+            import pythoncom  # type: ignore[import-untyped]
+            import win32com.client  # type: ignore[import-untyped]
+        except Exception as exc:  # noqa: BLE001
+            logger.info("Outlook COM unavailable, falling back to mailto: %s", exc)
+            return False
+
+        pythoncom.CoInitialize()
+        try:
+            outlook = win32com.client.Dispatch("Outlook.Application")
+            namespace = outlook.Session
+            account = self._find_outlook_account(namespace, sender_email)
+            if account is None:
+                logger.warning("Outlook account not found for sender %s; falling back to mailto", sender_email)
+                return False
+            mail = outlook.CreateItem(0)
+            mail.SendUsingAccount = account
+            mail.To = email
+            mail.Subject = subject
+            # Display after setting the account. Outlook then applies the
+            # account-specific default signature for editable draft mails.
+            mail.Display(False)
+            return True
+        finally:
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _outlook_sender_email(self) -> str:
+        try:
+            secrets: SecretService = self._container.resolve(SecretService)
+            return self._clean_email_value(secrets.get_secret("OUTLOOK_SENDER_EMAIL"))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("OUTLOOK_SENDER_EMAIL resolve failed: %s", exc)
+            return ""
+
+    @staticmethod
+    def _find_outlook_account(namespace: object, sender_email: str) -> object | None:
+        wanted = str(sender_email or "").strip().lower()
+        if not wanted:
+            return None
+        accounts = getattr(namespace, "Accounts", None)
+        if accounts is None:
+            return None
+        try:
+            count = int(getattr(accounts, "Count", 0) or 0)
+        except Exception:  # noqa: BLE001
+            count = 0
+        for idx in range(1, count + 1):
+            try:
+                account = accounts.Item(idx)
+            except Exception:  # noqa: BLE001
+                continue
+            candidates = (
+                getattr(account, "SmtpAddress", ""),
+                getattr(account, "DisplayName", ""),
+                getattr(account, "UserName", ""),
+            )
+            if any(str(candidate or "").strip().lower() == wanted for candidate in candidates):
+                return account
+        return None
 
     @staticmethod
     def _customer_mail_subject(summary: InvoiceSummary) -> str:

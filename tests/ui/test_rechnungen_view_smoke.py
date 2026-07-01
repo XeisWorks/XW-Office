@@ -1,6 +1,9 @@
 """Smoke tests for the Rechnungen daily-business view."""
 from __future__ import annotations
 
+import sys
+import types
+
 from xw_studio.bootstrap import register_default_services
 from xw_studio.core.config import AppConfig
 from xw_studio.core.container import Container
@@ -32,6 +35,8 @@ class _FakeSecretService:
     def get_secret(self, key: str) -> str:
         if key in {"SEVDESK_API_TOKEN", "WIX_API_KEY", "WIX_SITE_ID"}:
             return "test-token"
+        if key == "OUTLOOK_SENDER_EMAIL":
+            return "office@xeisworks.at"
         return ""
 
 
@@ -247,6 +252,7 @@ def test_customer_mail_action_opens_mailto_url(qtbot: object, monkeypatch) -> No
         "xw_studio.ui.modules.rechnungen.view.QDesktopServices.openUrl",
         fake_open_url,
     )
+    monkeypatch.setattr(view, "_open_customer_mail_outlook", lambda _email, _subject: False)
 
     summary = invoice_service._draft  # noqa: SLF001
     view._open_customer_mail_url(summary, "customer-20844@example.test")  # noqa: SLF001
@@ -270,6 +276,54 @@ def test_customer_mail_row_action_dispatches(qtbot: object, monkeypatch) -> None
     view._run_row_action(invoice_service._draft, "mail")  # noqa: SLF001
 
     assert called == ["draft-1"]
+
+
+def test_customer_mail_uses_configured_outlook_sender(qtbot: object, monkeypatch) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+
+    class _Account:
+        SmtpAddress = "office@xeisworks.at"
+        DisplayName = "XeisWorks"
+        UserName = "office@xeisworks.at"
+
+    class _Accounts:
+        Count = 1
+
+        def Item(self, index: int) -> _Account:  # noqa: N802
+            assert index == 1
+            return _Account()
+
+    class _Mail:
+        def __init__(self) -> None:
+            self.SendUsingAccount = None
+            self.To = ""
+            self.Subject = ""
+            self.displayed = False
+
+        def Display(self, modal: bool) -> None:  # noqa: N802
+            assert modal is False
+            self.displayed = True
+
+    mail = _Mail()
+    outlook = types.SimpleNamespace(
+        Session=types.SimpleNamespace(Accounts=_Accounts()),
+        CreateItem=lambda _kind: mail,
+    )
+    win32com_client = types.SimpleNamespace(Dispatch=lambda _name: outlook)
+    pythoncom = types.SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None)
+    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=win32com_client))
+    monkeypatch.setitem(sys.modules, "win32com.client", win32com_client)
+    monkeypatch.setitem(sys.modules, "pythoncom", pythoncom)
+
+    summary = invoice_service._draft  # noqa: SLF001
+
+    assert view._open_customer_mail_outlook("kunde@example.test", view._customer_mail_subject(summary)) is True  # noqa: SLF001
+    assert mail.SendUsingAccount.SmtpAddress == "office@xeisworks.at"
+    assert mail.To == "kunde@example.test"
+    assert mail.Subject == "Best.-Nr. 20844 | RE-DRAFT"
+    assert mail.displayed is True
 
 
 def test_start_dialog_keeps_full_mode_when_print_plan_missing(qtbot: object) -> None:
