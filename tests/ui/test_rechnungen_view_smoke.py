@@ -392,6 +392,31 @@ def test_plc_dialog_defaults_to_direct_webservice_without_changing_list_action(q
     assert dialog._recipient_email.text() == "customer@example.test"  # noqa: SLF001
 
 
+def test_rechnungen_caches_stale_wix_context_result(qtbot: object) -> None:
+    container = _build_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+
+    view._wix_context_seq = 2  # noqa: SLF001
+    view._on_wix_context_loaded(  # noqa: SLF001
+        {
+            "seq": 1,
+            "__requested_ref": "20899",
+            "status": "",
+            "meta": {
+                "wix_order_number": "20899",
+                "wix_customer_email": "kunde@example.test",
+            },
+            "items": [],
+        }
+    )
+
+    cached = view._get_cached_wix_context("20899")  # noqa: SLF001
+    assert cached is not None
+    assert cached["status"] == ""
+    assert cached["meta"]["wix_customer_email"] == "kunde@example.test"
+
+
 def test_rechnungen_load_more_button_stages_drafts_before_open(qtbot: object) -> None:
     container = _build_container()
     view = RechnungenView(container)

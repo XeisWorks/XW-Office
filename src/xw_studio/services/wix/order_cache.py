@@ -14,11 +14,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Invoice analysis only uses immutable order snapshot data (items, buyer and
-# shipping address).  Positive snapshots therefore stay valid until an
-# explicit cache clear/prune.  Missing-order markers deliberately remain
-# short-lived so a delayed Wix order is retried automatically.
+# shipping address).  Positive snapshots and missing-order markers therefore
+# stay valid until an explicit cache clear/prune.
 DEFAULT_ORDER_TTL_SECONDS: float | None = None
-DEFAULT_MISSING_TTL_SECONDS = 120
+DEFAULT_MISSING_TTL_SECONDS: float | None = None
 
 
 def _repo_root() -> Path:
@@ -61,7 +60,7 @@ class WixOrderCache:
         account_id: str,
         reference: str,
         max_age_seconds: float | None = DEFAULT_ORDER_TTL_SECONDS,
-        missing_ttl_seconds: float = DEFAULT_MISSING_TTL_SECONDS,
+        missing_ttl_seconds: float | None = DEFAULT_MISSING_TTL_SECONDS,
     ) -> CachedWixOrder | None:
         ref = str(reference or "").strip()
         if not ref:

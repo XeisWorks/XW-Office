@@ -2728,17 +2728,24 @@ class RechnungenView(QWidget):
     def _on_wix_context_loaded(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}
         seq = int(data.get("seq") or 0)
+        requested_ref = str(data.get("__requested_ref") or "").strip()
+        status = str(data.get("status") or "").strip()
+        meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+        items = data.get("items") if isinstance(data.get("items"), list) else []
+        self._put_cached_wix_context(
+            requested_ref,
+            status=status,
+            meta=meta if not status else {},
+            items=items if not status else [],
+        )
         if seq != self._wix_context_seq:
             return
-        requested_ref = str(data.get("__requested_ref") or "").strip()
         selected = self._selected_summary()
         current_ref = selected.order_reference.strip() if selected is not None else ""
         if requested_ref and requested_ref != current_ref:
             return
 
-        status = str(data.get("status") or "").strip()
         if status:
-            self._put_cached_wix_context(requested_ref, status=status, meta={}, items=[])
             self._wix_order_no.setText(requested_ref or "â€”")
             if not self._current_shipping_lines():
                 self._shipping_status.setText(status)
@@ -2748,9 +2755,6 @@ class RechnungenView(QWidget):
             self._gb_stuecke.show()
             return
 
-        meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
-        items = data.get("items") if isinstance(data.get("items"), list) else []
-        self._put_cached_wix_context(requested_ref, status="", meta=meta, items=items)
         self._on_wix_meta_loaded({**meta, "__requested_ref": requested_ref})
         self._on_stuecke_loaded({"__requested_ref": requested_ref, "items": items})
 
