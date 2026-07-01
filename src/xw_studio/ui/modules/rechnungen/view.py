@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 import time
 from pathlib import Path
+from urllib.parse import quote
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -268,12 +269,13 @@ class _InvoiceStatusDelegate(QStyledItemDelegate):
 
 
 class _ActionsDelegate(QStyledItemDelegate):
-    """Paint action icons (Post/PLC + Wix) in one column."""
+    """Paint action icons (Post/PLC + Wix + customer mail) in one column."""
 
-    _ACTION_KEYS = ("post", "wix")
+    _ACTION_KEYS = ("post", "wix", "mail")
     _ICON_FILES = {
         "post": "post.png",
         "wix": "wix.png",
+        "mail": "mail_sent.png",
     }
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -610,6 +612,7 @@ class RechnungenView(QWidget):
         self._wix_meta_worker: BackgroundWorker | None = None
         self._wix_context_worker: BackgroundWorker | None = None
         self._invoice_detail_worker: BackgroundWorker | None = None
+        self._customer_mail_worker: BackgroundWorker | None = None
         self._wix_warm_worker: BackgroundWorker | None = None
         self._hint_worker: BackgroundWorker | None = None
         self._fulfillment_step_worker: BackgroundWorker | None = None
@@ -2168,6 +2171,109 @@ class RechnungenView(QWidget):
         if action == "wix":
             self._open_wix_download_links(summary)
             return
+        if action == "mail":
+            self._open_customer_mail(summary)
+            return
+
+    def _open_customer_mail(self, summary: InvoiceSummary) -> None:
+        email = self._customer_email_from_loaded_context(summary)
+        if email:
+            self._open_customer_mail_url(summary, email)
+            return
+        if self._customer_mail_worker is not None and self._customer_mail_worker.isRunning():
+            QMessageBox.information(self, "Kunden-Mail", "Eine Kunden-Mail wird bereits vorbereitet.")
+            return
+
+        signals: AppSignals = self._container.resolve(AppSignals)
+        signals.status_message.emit("Kunden-Mail wird vorbereitet…", 2500)
+
+        def job() -> dict[str, str]:
+            resolved_email = ""
+            try:
+                service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+                context = service.get_invoice_detail_context(summary)
+                resolved_email = self._clean_email_value(context.get("customer_email"))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Customer mail context load failed for invoice %s: %s", summary.id, exc)
+            if not resolved_email and summary.order_reference.strip():
+                try:
+                    wix_orders: WixOrdersClient = self._container.resolve(WixOrdersClient)
+                    meta = wix_orders.resolve_order_summary(summary.order_reference)
+                    resolved_email = self._clean_email_value(meta.get("wix_customer_email"))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Customer mail Wix lookup failed for invoice %s: %s", summary.id, exc)
+            return {
+                "invoice_id": str(summary.id or "").strip(),
+                "email": resolved_email,
+                "invoice_number": str(summary.invoice_number or "").strip(),
+                "order_reference": str(summary.order_reference or "").strip(),
+            }
+
+        self._customer_mail_worker = BackgroundWorker(job)
+        self._customer_mail_worker.signals.result.connect(lambda payload: self._on_customer_mail_ready(summary, payload))
+        self._customer_mail_worker.signals.error.connect(self._on_customer_mail_error)
+        self._customer_mail_worker.signals.finished.connect(lambda: setattr(self, "_customer_mail_worker", None))
+        self._customer_mail_worker.start()
+
+    def _on_customer_mail_ready(self, summary: InvoiceSummary, payload: object) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        email = self._clean_email_value(data.get("email"))
+        if not email:
+            QMessageBox.information(
+                self,
+                "Kunden-Mail",
+                "Für diese Rechnung konnte keine Kunden-E-Mail-Adresse ermittelt werden.",
+            )
+            return
+        self._open_customer_mail_url(summary, email)
+
+    def _on_customer_mail_error(self, exc: Exception) -> None:
+        QMessageBox.warning(self, "Kunden-Mail", f"Mail konnte nicht vorbereitet werden:\n\n{exc}")
+
+    def _open_customer_mail_url(self, summary: InvoiceSummary, email: str) -> None:
+        clean_email = self._clean_email_value(email)
+        if not clean_email:
+            QMessageBox.information(self, "Kunden-Mail", "Keine gültige Kunden-E-Mail-Adresse vorhanden.")
+            return
+        subject = self._customer_mail_subject(summary)
+        url = f"mailto:{quote(clean_email, safe='@._+-')}?subject={quote(subject, safe='')}"
+        if not QDesktopServices.openUrl(QUrl(url)):
+            QMessageBox.warning(self, "Kunden-Mail", "Das Standard-Mailprogramm konnte nicht geöffnet werden.")
+
+    @staticmethod
+    def _customer_mail_subject(summary: InvoiceSummary) -> str:
+        order_ref = str(summary.order_reference or "").strip() or "—"
+        invoice_no = str(summary.invoice_number or "").strip() or str(summary.id or "").strip() or "—"
+        return f"Best.-Nr. {order_ref} | {invoice_no}"
+
+    def _customer_email_from_loaded_context(self, summary: InvoiceSummary) -> str:
+        selected = self._selected_summary()
+        if selected is not None and str(selected.id or "").strip() == str(summary.id or "").strip():
+            email = self._clean_email_value(self._wix_customer_email.text())
+            if email:
+                return email
+        if summary.order_reference.strip():
+            cached = self._get_cached_wix_context(summary.order_reference)
+            if cached is not None:
+                meta = cached.get("meta") if isinstance(cached.get("meta"), dict) else {}
+                email = self._clean_email_value(meta.get("wix_customer_email"))
+                if email:
+                    return email
+        try:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            context = service.get_cached_invoice_detail_context(summary)
+            if isinstance(context, dict):
+                return self._clean_email_value(context.get("customer_email"))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Customer mail cache lookup failed for invoice %s: %s", summary.id, exc)
+        return ""
+
+    @staticmethod
+    def _clean_email_value(value: object) -> str:
+        email = str(value or "").strip()
+        if not email or email in {"—", "---", "-"}:
+            return ""
+        return email if "@" in email and "." in email.rsplit("@", 1)[-1] else ""
 
     def _open_wix_download_links(self, summary: InvoiceSummary) -> None:
         if not summary.order_reference.strip():

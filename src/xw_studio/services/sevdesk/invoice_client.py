@@ -405,7 +405,7 @@ class InvoiceSummary(BaseModel):
         row[f"__tooltip__{_TABLE_STATUS_COLUMN}"] = self.status_label()
         row[f"__align__{_TABLE_STATUS_COLUMN}"] = "center"
         row[f"__status_color__{_TABLE_STATUS_COLUMN}"] = self.status_color()
-        row["__tooltip__AKTIONEN"] = "Post Label Center / Wix-Bestellung öffnen"
+        row["__tooltip__AKTIONEN"] = "Post Label Center / Wix-Bestellung / Kunden-Mail"
         if self.status_code == 100:
             row[f"__tooltip__{_TABLE_STATUS_COLUMN}"] = "Entwurf: diese Rechnung muss im Tagesgeschäft abgearbeitet werden"
             row[f"__fg__{_TABLE_STATUS_COLUMN}"] = "#9a3412"

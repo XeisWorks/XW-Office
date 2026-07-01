@@ -17,7 +17,7 @@ from xw_studio.services.wix.client import WixOrdersClient
 from xw_studio.ui.main_window import MainWindow
 from xw_studio.ui.modules.rechnungen.tagesgeschaeft_view import TagesgeschaeftView, _StartDialog
 from xw_studio.ui.modules.rechnungen.plc_label_dialog import PlcLabelPrintDialog
-from xw_studio.ui.modules.rechnungen.view import RechnungenView
+from xw_studio.ui.modules.rechnungen.view import RechnungenView, _ActionsDelegate
 
 
 def _build_container() -> Container:
@@ -224,6 +224,52 @@ def test_tagesgeschaeft_alert_buttons_follow_counts(qtbot: object) -> None:
 
     assert view._btn_sendungen_alert.text() == "OFFENE SENDUNGEN (2)"  # noqa: SLF001
     assert not view._btn_sendungen_alert.isHidden()  # noqa: SLF001
+
+
+def test_actions_delegate_exposes_mail_action() -> None:
+    layout = _ActionsDelegate._layout(width=120, height=28)  # noqa: SLF001
+    assert [key for key, _x, _size in layout] == ["post", "wix", "mail"]
+    mail_key, mail_x, mail_size = layout[-1]
+    assert _ActionsDelegate.action_at_x(mail_x + mail_size / 2, width=120, height=28) == mail_key
+
+
+def test_customer_mail_action_opens_mailto_url(qtbot: object, monkeypatch) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    opened: list[str] = []
+
+    def fake_open_url(url: object) -> bool:
+        opened.append(bytes(url.toEncoded()).decode("utf-8"))  # type: ignore[attr-defined]
+        return True
+
+    monkeypatch.setattr(
+        "xw_studio.ui.modules.rechnungen.view.QDesktopServices.openUrl",
+        fake_open_url,
+    )
+
+    summary = invoice_service._draft  # noqa: SLF001
+    view._open_customer_mail_url(summary, "customer-20844@example.test")  # noqa: SLF001
+
+    assert opened
+    assert opened[0].startswith("mailto:customer-20844@example.test?")
+    assert "subject=Best.-Nr.%2020844%20%7C%20RE-DRAFT" in opened[0]
+
+
+def test_customer_mail_row_action_dispatches(qtbot: object, monkeypatch) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    called: list[str] = []
+
+    def fake_open_customer_mail(summary: InvoiceSummary) -> None:
+        called.append(summary.id)
+
+    monkeypatch.setattr(view, "_open_customer_mail", fake_open_customer_mail)
+
+    view._run_row_action(invoice_service._draft, "mail")  # noqa: SLF001
+
+    assert called == ["draft-1"]
 
 
 def test_start_dialog_keeps_full_mode_when_print_plan_missing(qtbot: object) -> None:
