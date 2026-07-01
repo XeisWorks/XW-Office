@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import json
 import logging
+import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -2176,25 +2180,24 @@ class RechnungenView(QWidget):
             return
 
     def _open_customer_mail(self, summary: InvoiceSummary) -> None:
-        email = self._customer_email_from_loaded_context(summary)
-        if email:
-            self._open_customer_mail_url(summary, email)
-            return
         if self._customer_mail_worker is not None and self._customer_mail_worker.isRunning():
             QMessageBox.information(self, "Kunden-Mail", "Eine Kunden-Mail wird bereits vorbereitet.")
             return
 
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.status_message.emit("Kunden-Mail wird vorbereitet…", 2500)
+        email_hint = self._customer_email_from_loaded_context(summary)
+        subject = self._customer_mail_subject(summary)
 
         def job() -> dict[str, str]:
-            resolved_email = ""
-            try:
-                service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-                context = service.get_invoice_detail_context(summary)
-                resolved_email = self._clean_email_value(context.get("customer_email"))
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Customer mail context load failed for invoice %s: %s", summary.id, exc)
+            resolved_email = email_hint
+            if not resolved_email:
+                try:
+                    service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+                    context = service.get_invoice_detail_context(summary)
+                    resolved_email = self._clean_email_value(context.get("customer_email"))
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Customer mail context load failed for invoice %s: %s", summary.id, exc)
             if not resolved_email and summary.order_reference.strip():
                 try:
                     wix_orders: WixOrdersClient = self._container.resolve(WixOrdersClient)
@@ -2202,11 +2205,17 @@ class RechnungenView(QWidget):
                     resolved_email = self._clean_email_value(meta.get("wix_customer_email"))
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Customer mail Wix lookup failed for invoice %s: %s", summary.id, exc)
+            outlook_opened = False
+            if resolved_email:
+                try:
+                    outlook_opened = self._open_customer_mail_outlook(resolved_email, subject)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Outlook customer mail compose failed: %s", exc)
             return {
                 "invoice_id": str(summary.id or "").strip(),
                 "email": resolved_email,
-                "invoice_number": str(summary.invoice_number or "").strip(),
-                "order_reference": str(summary.order_reference or "").strip(),
+                "subject": subject,
+                "outlook_opened": "1" if outlook_opened else "",
             }
 
         self._customer_mail_worker = BackgroundWorker(job)
@@ -2225,22 +2234,21 @@ class RechnungenView(QWidget):
                 "Für diese Rechnung konnte keine Kunden-E-Mail-Adresse ermittelt werden.",
             )
             return
-        self._open_customer_mail_url(summary, email)
+        if str(data.get("outlook_opened") or "").strip():
+            signals: AppSignals = self._container.resolve(AppSignals)
+            signals.status_message.emit("Kunden-Mail in Outlook geöffnet.", 3000)
+            return
+        subject = str(data.get("subject") or "").strip() or self._customer_mail_subject(summary)
+        self._open_customer_mail_url(email, subject)
 
     def _on_customer_mail_error(self, exc: Exception) -> None:
         QMessageBox.warning(self, "Kunden-Mail", f"Mail konnte nicht vorbereitet werden:\n\n{exc}")
 
-    def _open_customer_mail_url(self, summary: InvoiceSummary, email: str) -> None:
+    def _open_customer_mail_url(self, email: str, subject: str) -> None:
         clean_email = self._clean_email_value(email)
         if not clean_email:
             QMessageBox.information(self, "Kunden-Mail", "Keine gültige Kunden-E-Mail-Adresse vorhanden.")
             return
-        subject = self._customer_mail_subject(summary)
-        try:
-            if self._open_customer_mail_outlook(clean_email, subject):
-                return
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Outlook customer mail compose failed: %s", exc)
         url = f"mailto:{quote(clean_email, safe='@._+-')}?subject={quote(subject, safe='')}"
         if not QDesktopServices.openUrl(QUrl(url)):
             QMessageBox.warning(self, "Kunden-Mail", "Das Standard-Mailprogramm konnte nicht geöffnet werden.")
@@ -2249,53 +2257,41 @@ class RechnungenView(QWidget):
         sender_email = self._outlook_sender_email()
         if not sender_email:
             return False
+        payload = json.dumps(
+            {"to": email, "subject": subject, "sender": sender_email},
+            ensure_ascii=False,
+        )
+        env = dict(os.environ)
+        src_path = str(Path(__file__).resolve().parents[4])
+        existing_pythonpath = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = (
+            f"{src_path}{os.pathsep}{existing_pythonpath}"
+            if existing_pythonpath
+            else src_path
+        )
         try:
-            import pythoncom  # type: ignore[import-untyped]
-            import win32com.client  # type: ignore[import-untyped]
-        except Exception as exc:  # noqa: BLE001
-            logger.info("Outlook COM unavailable, falling back to mailto: %s", exc)
+            completed = subprocess.run(
+                [sys.executable, "-m", "xw_studio.services.mailing.outlook_compose"],
+                input=payload,
+                text=True,
+                capture_output=True,
+                timeout=20,
+                env=env,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("Outlook compose timed out; falling back to mailto")
             return False
-
-        pythoncom.CoInitialize()
-        try:
-            outlook = win32com.client.Dispatch("Outlook.Application")
-            namespace = outlook.Session
-            account = self._find_outlook_account(namespace, sender_email)
-            if account is None:
-                logger.warning("Outlook account not found for sender %s; falling back to mailto", sender_email)
-                return False
-            mail = outlook.CreateItem(0)
-            mail.To = email
-            mail.Subject = subject
-            self._apply_outlook_sender(mail, account, sender_email)
-            # Display after setting the account. Outlook then applies the
-            # account-specific default signature for editable draft mails.
-            mail.Display(False)
-            # Some Outlook builds reset the From account while creating the
-            # inspector/signature. Re-apply after Display so the visible From
-            # drop-down is forced to the configured account.
-            self._apply_outlook_sender(mail, account, sender_email)
+        if completed.returncode == 0:
             return True
-        finally:
-            try:
-                pythoncom.CoUninitialize()
-            except Exception:  # noqa: BLE001
-                pass
-
-    @staticmethod
-    def _apply_outlook_sender(mail: object, account: object, sender_email: str) -> None:
-        mail.SendUsingAccount = account  # type: ignore[attr-defined]
-        # Pywin32 late-binding can occasionally fail to propagate
-        # SendUsingAccount into the visible Outlook inspector. 64209 is the
-        # Outlook MailItem.SendUsingAccount dispatch id; invoking it directly
-        # mirrors the common VBA/COM workaround while keeping the normal
-        # attribute assignment above for readability.
-        ole = getattr(mail, "_oleobj_", None)
-        if ole is not None:
-            try:
-                ole.Invoke(64209, 0, 8, 0, account)
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("Outlook SendUsingAccount COM invoke failed for %s: %s", sender_email, exc)
+        logger.warning(
+            "Outlook compose subprocess failed rc=%s stderr=%s stdout=%s",
+            completed.returncode,
+            (completed.stderr or "").strip()[:500],
+            (completed.stdout or "").strip()[:500],
+        )
+        return False
 
     def _outlook_sender_email(self) -> str:
         try:
@@ -2304,42 +2300,6 @@ class RechnungenView(QWidget):
         except Exception as exc:  # noqa: BLE001
             logger.debug("OUTLOOK_SENDER_EMAIL resolve failed: %s", exc)
             return ""
-
-    @staticmethod
-    def _find_outlook_account(namespace: object, sender_email: str) -> object | None:
-        wanted = str(sender_email or "").strip().lower()
-        if not wanted:
-            return None
-        accounts = getattr(namespace, "Accounts", None)
-        if accounts is None:
-            return None
-        try:
-            for account in accounts:
-                if RechnungenView._outlook_account_matches(account, wanted):
-                    return account
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Outlook account enumeration failed, trying indexed lookup: %s", exc)
-        try:
-            count = int(getattr(accounts, "Count", 0) or 0)
-        except Exception:  # noqa: BLE001
-            count = 0
-        for idx in range(1, count + 1):
-            try:
-                account = accounts.Item(idx)
-            except Exception:  # noqa: BLE001
-                continue
-            if RechnungenView._outlook_account_matches(account, wanted):
-                return account
-        return None
-
-    @staticmethod
-    def _outlook_account_matches(account: object, wanted: str) -> bool:
-        candidates = (
-            getattr(account, "SmtpAddress", ""),
-            getattr(account, "DisplayName", ""),
-            getattr(account, "UserName", ""),
-        )
-        return any(str(candidate or "").strip().lower() == wanted for candidate in candidates)
 
     @staticmethod
     def _customer_mail_subject(summary: InvoiceSummary) -> str:

@@ -1,7 +1,7 @@
 """Smoke tests for the Rechnungen daily-business view."""
 from __future__ import annotations
 
-import sys
+import subprocess
 import types
 
 from xw_studio.bootstrap import register_default_services
@@ -252,10 +252,9 @@ def test_customer_mail_action_opens_mailto_url(qtbot: object, monkeypatch) -> No
         "xw_studio.ui.modules.rechnungen.view.QDesktopServices.openUrl",
         fake_open_url,
     )
-    monkeypatch.setattr(view, "_open_customer_mail_outlook", lambda _email, _subject: False)
 
     summary = invoice_service._draft  # noqa: SLF001
-    view._open_customer_mail_url(summary, "customer-20844@example.test")  # noqa: SLF001
+    view._open_customer_mail_url("customer-20844@example.test", view._customer_mail_subject(summary))  # noqa: SLF001
 
     assert opened
     assert opened[0].startswith("mailto:customer-20844@example.test?")
@@ -278,76 +277,39 @@ def test_customer_mail_row_action_dispatches(qtbot: object, monkeypatch) -> None
     assert called == ["draft-1"]
 
 
-def test_customer_mail_uses_configured_outlook_sender(qtbot: object, monkeypatch) -> None:
+def test_customer_mail_outlook_runs_in_subprocess(qtbot: object, monkeypatch) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    calls: list[dict[str, object]] = []
+
+    def fake_run(*args: object, **kwargs: object) -> object:
+        calls.append({"args": args[0], **dict(kwargs)})
+        return types.SimpleNamespace(returncode=0, stdout='{"ok": true}', stderr="")
+
+    summary = invoice_service._draft  # noqa: SLF001
+    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.view.subprocess.run", fake_run)
+
+    assert view._open_customer_mail_outlook("kunde@example.test", view._customer_mail_subject(summary)) is True  # noqa: SLF001
+    assert calls
+    assert calls[0]["timeout"] == 20
+    assert "outlook_compose" in " ".join(calls[0]["args"])  # type: ignore[arg-type]
+    assert "kunde@example.test" in str(calls[0]["input"])
+    assert "office@xeisworks.at" in str(calls[0]["input"])
+
+
+def test_customer_mail_outlook_timeout_falls_back(qtbot: object, monkeypatch) -> None:
     container, invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
     qtbot.addWidget(view)
 
-    class _Account:
-        SmtpAddress = "office@xeisworks.at"
-        DisplayName = "XeisWorks"
-        UserName = "office@xeisworks.at"
-
-    class _Accounts:
-        Count = 1
-
-        def __iter__(self):  # type: ignore[no-untyped-def]
-            return iter([_Account()])
-
-        def Item(self, index: int) -> _Account:  # noqa: N802
-            assert index == 1
-            return _Account()
-
-    class _Ole:
-        def __init__(self) -> None:
-            self.invocations: list[tuple[object, ...]] = []
-
-        def Invoke(self, *args: object) -> None:  # noqa: N802
-            self.invocations.append(args)
-
-    class _Mail:
-        def __init__(self) -> None:
-            self._send_using_account = None
-            self.To = ""
-            self.Subject = ""
-            self.displayed = False
-            self.account_set_count = 0
-            self._oleobj_ = _Ole()
-
-        @property
-        def SendUsingAccount(self) -> object:
-            return self._send_using_account
-
-        @SendUsingAccount.setter
-        def SendUsingAccount(self, account: object) -> None:
-            self.account_set_count += 1
-            self._send_using_account = account
-
-        def Display(self, modal: bool) -> None:  # noqa: N802
-            assert modal is False
-            self.displayed = True
-
-    mail = _Mail()
-    outlook = types.SimpleNamespace(
-        Session=types.SimpleNamespace(Accounts=_Accounts()),
-        CreateItem=lambda _kind: mail,
-    )
-    win32com_client = types.SimpleNamespace(Dispatch=lambda _name: outlook)
-    pythoncom = types.SimpleNamespace(CoInitialize=lambda: None, CoUninitialize=lambda: None)
-    monkeypatch.setitem(sys.modules, "win32com", types.SimpleNamespace(client=win32com_client))
-    monkeypatch.setitem(sys.modules, "win32com.client", win32com_client)
-    monkeypatch.setitem(sys.modules, "pythoncom", pythoncom)
+    def fake_run(*_args: object, **_kwargs: object) -> object:
+        raise subprocess.TimeoutExpired(cmd="outlook", timeout=20)
 
     summary = invoice_service._draft  # noqa: SLF001
+    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.view.subprocess.run", fake_run)
 
-    assert view._open_customer_mail_outlook("kunde@example.test", view._customer_mail_subject(summary)) is True  # noqa: SLF001
-    assert mail.SendUsingAccount.SmtpAddress == "office@xeisworks.at"
-    assert mail.account_set_count == 2
-    assert len(mail._oleobj_.invocations) == 2
-    assert mail._oleobj_.invocations[0][:4] == (64209, 0, 8, 0)
-    assert mail.To == "kunde@example.test"
-    assert mail.Subject == "Best.-Nr. 20844 | RE-DRAFT"
-    assert mail.displayed is True
+    assert view._open_customer_mail_outlook("kunde@example.test", view._customer_mail_subject(summary)) is False  # noqa: SLF001
 
 
 def test_start_dialog_keeps_full_mode_when_print_plan_missing(qtbot: object) -> None:
