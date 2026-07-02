@@ -599,7 +599,8 @@ class TagesgeschaeftView(QWidget):
                 return
 
         signals: AppSignals = self._container.resolve(AppSignals)
-        self._set_start_running(True, allow_stop=False)
+        self._start_abort_requested = False
+        self._set_start_running(True, allow_stop=True)
         scope = (
             f"{len(self._start_selected_invoice_ids)} markierte Rechnung(en)"
             if self._start_selected_only
@@ -646,6 +647,12 @@ class TagesgeschaeftView(QWidget):
         self._start_worker.start()
 
     def _on_start_preflight_ready(self, result: object) -> None:
+        if self._start_abort_requested:
+            self._pending_start_preflight = None
+            self._set_start_running(False)
+            signals: AppSignals = self._container.resolve(AppSignals)
+            signals.status_message.emit("START gestoppt", 2500)
+            return
         if not isinstance(result, StartPreflight):
             self._set_start_running(False)
             return
@@ -727,6 +734,12 @@ class TagesgeschaeftView(QWidget):
         self._start_product_worker.start()
 
     def _on_start_product_preflight_ready(self, result: object) -> None:
+        if self._start_abort_requested:
+            self._pending_start_preflight = None
+            self._set_start_running(False)
+            signals: AppSignals = self._container.resolve(AppSignals)
+            signals.status_message.emit("START gestoppt", 2500)
+            return
         plan = result if isinstance(result, ProductPreflightPlan) else ProductPreflightPlan(issues=[], part_categories=[])
         preflight_elapsed_ms = int(
             (time.perf_counter() - self._start_product_preflight_started_at) * 1000
@@ -973,7 +986,17 @@ class TagesgeschaeftView(QWidget):
         QApplication.processEvents()
 
     def _on_start_stop_clicked(self) -> None:
-        if self._start_exec_worker is None or not self._start_exec_worker.isRunning():
+        running = any(
+            worker is not None and worker.isRunning()
+            for worker in (
+                self._start_worker,
+                self._start_product_worker,
+                self._start_exec_worker,
+            )
+        )
+        if not running and not self._btn_start.isEnabled():
+            running = True
+        if not running:
             return
         self._start_abort_requested = True
         self._btn_stop.setEnabled(False)

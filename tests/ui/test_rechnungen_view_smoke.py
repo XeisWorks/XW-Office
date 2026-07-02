@@ -223,7 +223,7 @@ def test_start_click_disables_start_immediately(qtbot: object, monkeypatch) -> N
     assert started["value"] is True
     assert not view._btn_start.isEnabled()  # noqa: SLF001
     assert view._btn_start.text() == "START..."  # noqa: SLF001
-    assert not view._btn_stop.isEnabled()  # noqa: SLF001
+    assert view._btn_stop.isEnabled()  # noqa: SLF001
     assert "START wird vorbereitet." in view._rechnungen_view._start_summary_label.text()  # noqa: SLF001
 
 

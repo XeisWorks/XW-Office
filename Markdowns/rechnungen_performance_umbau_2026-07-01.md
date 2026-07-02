@@ -78,7 +78,7 @@ Ziel:
 
 - START-Button sofort deaktivieren, Text auf Busy-Zustand setzen und UI-Events flushen.
 - Im Analysis-Panel sofort eine START-Vorbereitungszeile anzeigen.
-- STOP erst aktivieren, wenn der Batch wirklich laeuft.
+- STOP sofort nach START-Klick aktivieren; ein Klick waehrend Preflight verhindert den folgenden Batch.
 - Fuer `START Selected` die bereits selektierten Summaries/IDs weiterreichen und nicht unnoetig alle Entwuerfe laden.
 
 ## Ist-Ablauf bei Detail-Buttons
@@ -116,7 +116,7 @@ Umfang:
 - START-Button: sofort Busy-Text, deaktivieren, Event-Flush.
 - START-Vorbereitung sofort im Analysis-Panel anzeigen.
 - Detail-Aktionsbuttons bei Druck/Mail/Fulfillment sofort deaktivieren.
-- STOP erst bei laufendem START-Batch aktivieren.
+- STOP sofort nach START-Klick aktivieren und Preflight-Abbruch vor dem Batch respektieren.
 - Produktdruck deaktiviert den Hauptbutton ebenfalls sofort.
 
 Risiko: gering. Keine Service-Logik, nur UI-Zustand.
