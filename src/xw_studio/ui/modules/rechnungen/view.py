@@ -29,6 +29,7 @@ from PySide6.QtGui import (
     QShowEvent,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -672,6 +673,7 @@ class RechnungenView(QWidget):
         self._append_mode = False
         self._queued_wix_context_ref = ""
         self._queued_invoice_detail_id = ""
+        self._detail_context_seq = 0
         self._table_layout_initialized = False
         self._open_overview_key = ""
         self._open_overview_cached_physical = 0
@@ -1511,7 +1513,6 @@ class RechnungenView(QWidget):
         self._rebuild_search_index()
         if len(summaries) == 1:
             self._table.select_source_row(0)
-            self._populate_detail_for_summary(summaries[0])
         else:
             self._refresh_detail_for_selection()
         self._restart_hint_prefetch()
@@ -1824,6 +1825,47 @@ class RechnungenView(QWidget):
                 continue
             self._table.update_source_row_data(row_index, normalized_patch)
 
+    def _set_detail_actions_busy(self, message: str) -> None:
+        self._overlay.show_with_message(message)
+        self._overlay.setGeometry(self.rect())
+        self._overlay.raise_()
+        for button in (
+            self._btn_print,
+            self._btn_print_plc,
+            self._btn_print_music,
+            self._btn_print_label,
+            self._btn_send_invoice,
+        ):
+            button.setEnabled(False)
+        QApplication.processEvents()
+
+    def _clear_detail_actions_busy(self) -> None:
+        self._overlay.hide()
+        self._update_plc_controls()
+
+    def _apply_fulfillment_flags_to_row(self, invoice_id: str, flags: object) -> None:
+        if not isinstance(flags, dict):
+            return
+        target_id = str(invoice_id or "").strip()
+        if not target_id:
+            return
+        for row_index, summary in enumerate(self._summaries):
+            if str(summary.id or "").strip() != target_id:
+                continue
+            self._table.update_source_row_data(
+                row_index,
+                {
+                    "FULFILLMENT": "",
+                    "__fulfillment__": dict(flags),
+                    "__tooltip__FULFILLMENT": "Label | Rechnung | Produkt | Mail | Wix | Zahlung",
+                    "__align__FULFILLMENT": "center",
+                },
+            )
+            selected = self._selected_summary()
+            if selected is not None and str(selected.id or "").strip() == target_id:
+                self._update_action_state()
+            return
+
     def _on_print_clicked(self) -> None:
         if not self._print_allowed:
             return
@@ -1833,14 +1875,13 @@ class RechnungenView(QWidget):
         if self._fulfillment_step_worker is not None and self._fulfillment_step_worker.isRunning():
             return
 
-        self._overlay.show_with_message("Rechnungsdruck laeuft...")
-        self._overlay.setGeometry(self.rect())
-        self._overlay.raise_()
+        self._set_detail_actions_busy("Rechnungsdruck laeuft...")
 
         def job() -> dict[str, object]:
             service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             flags = service.print_invoice_for_invoice(summary.id)
             return {
+                "invoice_id": summary.id,
                 "invoice": summary.invoice_number or summary.id,
                 "flags": flags.as_row_payload(),
             }
@@ -1868,14 +1909,13 @@ class RechnungenView(QWidget):
         if self._fulfillment_step_worker is not None and self._fulfillment_step_worker.isRunning():
             return
 
-        self._overlay.show_with_message("Labeldruck läuft…")
-        self._overlay.setGeometry(self.rect())
-        self._overlay.raise_()
+        self._set_detail_actions_busy("Labeldruck laeuft...")
 
         def job() -> dict[str, object]:
             service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             flags = service.print_label_for_invoice(summary.id, override_lines=shipping_lines)
             return {
+                "invoice_id": summary.id,
                 "invoice": summary.invoice_number or summary.id,
                 "flags": flags.as_row_payload(),
             }
@@ -1972,6 +2012,8 @@ class RechnungenView(QWidget):
             invoice_ref = self._summaries[row].invoice_number or self._summaries[row].id
 
         self._set_piece_print_controls_enabled(False)
+        self._btn_print_music.setEnabled(False)
+        QApplication.processEvents()
         signals: AppSignals = self._container.resolve(AppSignals)
         total_copies = sum(qty for _block, qty, _job in selected_jobs)
         signals.status_message.emit(
@@ -2012,14 +2054,13 @@ class RechnungenView(QWidget):
         if self._invoice_mail_worker is not None and self._invoice_mail_worker.isRunning():
             return
 
-        self._overlay.show_with_message("Rechnungsmail wird gesendetâ€¦")
-        self._overlay.setGeometry(self.rect())
-        self._overlay.raise_()
+        self._set_detail_actions_busy("Rechnungsmail wird gesendet...")
 
         def job() -> dict[str, object]:
             service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             flags, recipient, subject = service.send_invoice_mail_for_invoice(summary)
             return {
+                "invoice_id": summary.id,
                 "invoice": summary.invoice_number or summary.id,
                 "recipient": recipient,
                 "subject": subject,
@@ -2048,6 +2089,7 @@ class RechnungenView(QWidget):
     def eventFilter(self, watched: Any, event: QEvent) -> bool:  # type: ignore[override]
         if watched is self._table.viewport() and event.type() in (
             QEvent.Type.MouseMove,
+            QEvent.Type.MouseButtonPress,
             QEvent.Type.MouseButtonRelease,
             QEvent.Type.Leave,
         ):
@@ -2057,6 +2099,19 @@ class RechnungenView(QWidget):
             if isinstance(event, QMouseEvent):
                 index = self._table.indexAt(event.position().toPoint())
                 if index.isValid():
+                    if event.type() == QEvent.Type.MouseButtonPress:
+                        multi_select_modifier = event.modifiers() & (
+                            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+                        )
+                        if (
+                            event.button() == Qt.MouseButton.LeftButton
+                            and not multi_select_modifier
+                        ):
+                            self._table.selectRow(int(index.row()))
+                            self._table.setCurrentIndex(index)
+                            self._table.viewport().update()
+                            QApplication.processEvents()
+                        return super().eventFilter(watched, event)
                     actions_col = _TABLE_COLUMNS.index("AKTIONEN")
                     if event.type() == QEvent.Type.MouseMove:
                         if int(index.column()) == actions_col:
@@ -2125,9 +2180,7 @@ class RechnungenView(QWidget):
             "mail_sent": "Mail",
             "wix_fulfilled": "Wix",
         }
-        self._overlay.show_with_message(f"Retry {labels.get(chip, chip)} läuft…")
-        self._overlay.setGeometry(self.rect())
-        self._overlay.raise_()
+        self._set_detail_actions_busy(f"Retry {labels.get(chip, chip)} laeuft...")
 
         invoice_id = summary.id
 
@@ -2136,6 +2189,7 @@ class RechnungenView(QWidget):
             updated = service.retry_fulfillment_step(invoice_id, chip)
             payload = updated.as_row_payload() if hasattr(updated, "as_row_payload") else {}
             return {
+                "invoice_id": invoice_id,
                 "invoice": summary.invoice_number or summary.id,
                 "chip": chip,
                 "flags": payload,
@@ -2149,14 +2203,15 @@ class RechnungenView(QWidget):
 
     def _on_fulfillment_step_result(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}
+        invoice_id = str(data.get("invoice_id") or "").strip()
         invoice = str(data.get("invoice") or "—")
         chip = str(data.get("chip") or "")
+        self._apply_fulfillment_flags_to_row(invoice_id, data.get("flags"))
         QMessageBox.information(
             self,
             "Fulfillment aktualisiert",
             f"Rechnung {invoice}: Schritt '{chip}' wurde erneut ausgeführt.",
         )
-        self._reload_first_page()
 
     def _on_fulfillment_step_error(self, exc: Exception) -> None:
         QMessageBox.warning(
@@ -2166,7 +2221,8 @@ class RechnungenView(QWidget):
         )
 
     def _on_fulfillment_step_finished(self) -> None:
-        self._overlay.hide()
+        self._fulfillment_step_worker = None
+        self._clear_detail_actions_busy()
 
     def _run_row_action(self, summary: InvoiceSummary, action: str) -> None:
         if action == "post":
@@ -2435,11 +2491,13 @@ class RechnungenView(QWidget):
 
     def _refresh_detail_for_selection(self) -> None:
         summary = self._selected_summary()
+        self._detail_context_seq += 1
+        seq = self._detail_context_seq
         if summary is None:
             self._reset_detail()
             return
         self._populate_detail_for_summary(summary)
-        self._prefill_detail_from_invoice_async(summary)
+        QTimer.singleShot(0, lambda s=summary, token=seq: self._hydrate_detail_for_selection(s, token))
 
     def _populate_detail_for_summary(self, summary: InvoiceSummary) -> None:
         self._gb_open.hide()
@@ -2463,6 +2521,16 @@ class RechnungenView(QWidget):
         self._gb_actions.show()
         self._update_plc_controls()
         self._prioritize_hint_prefetch_for_summary(summary)
+
+    def _hydrate_detail_for_selection(self, summary: InvoiceSummary, seq: int) -> None:
+        selected = self._selected_summary()
+        if (
+            seq != self._detail_context_seq
+            or selected is None
+            or str(selected.id or "").strip() != str(summary.id or "").strip()
+        ):
+            return
+        self._prefill_detail_from_invoice_async(summary)
         if summary.order_reference:
             has_cached_wix_context = self._apply_cached_wix_context(summary.order_reference)
             self._load_wix_context(
@@ -2679,9 +2747,11 @@ class RechnungenView(QWidget):
             self._stuecke_hint.show()
             self._gb_stuecke.show()
             return True
-        pieces = self._piece_blocks_from_cached_wix_items(cached_items or [])
-        self._put_cached_wix_context(ref, status="", meta=meta, items=pieces)
         self._on_wix_meta_loaded({**meta, "__requested_ref": ref})
+        if cached_items is None:
+            return True
+        pieces = self._piece_blocks_from_cached_wix_items(cached_items)
+        self._put_cached_wix_context(ref, status="", meta=meta, items=pieces)
         self._on_stuecke_loaded({"__requested_ref": ref, "items": pieces})
         return True
 
@@ -2972,17 +3042,12 @@ class RechnungenView(QWidget):
         self._update_plc_controls()
 
     def _on_direct_label_print_result(self, payload: object) -> None:
-        _ = payload
-        self._reload_first_page()
-        return
         data = payload if isinstance(payload, dict) else {}
-        invoice = str(data.get("invoice") or "—")
-        QMessageBox.information(
-            self,
-            "Labeldruck",
-            f"Label für Rechnung {invoice} wurde an den Drucker gesendet.",
-        )
-        self._reload_first_page()
+        invoice_id = str(data.get("invoice_id") or "").strip()
+        invoice = str(data.get("invoice") or "---")
+        self._apply_fulfillment_flags_to_row(invoice_id, data.get("flags"))
+        signals: AppSignals = self._container.resolve(AppSignals)
+        signals.status_message.emit(f"Label fuer Rechnung {invoice} wurde gesendet.", 5000)
 
     def _on_direct_label_print_error(self, exc: Exception) -> None:
         QMessageBox.warning(
@@ -2992,17 +3057,12 @@ class RechnungenView(QWidget):
         )
 
     def _on_direct_invoice_print_result(self, payload: object) -> None:
-        _ = payload
-        self._reload_first_page()
-        return
         data = payload if isinstance(payload, dict) else {}
-        invoice = str(data.get("invoice") or "â€”")
-        QMessageBox.information(
-            self,
-            "Rechnungsdruck",
-            f"Rechnung {invoice} wurde an den Rechnungsdrucker gesendet.",
-        )
-        self._reload_first_page()
+        invoice_id = str(data.get("invoice_id") or "").strip()
+        invoice = str(data.get("invoice") or "---")
+        self._apply_fulfillment_flags_to_row(invoice_id, data.get("flags"))
+        signals: AppSignals = self._container.resolve(AppSignals)
+        signals.status_message.emit(f"Rechnung {invoice} wurde an den Drucker gesendet.", 5000)
 
     def _on_direct_invoice_print_error(self, exc: Exception) -> None:
         QMessageBox.warning(
@@ -3013,14 +3073,15 @@ class RechnungenView(QWidget):
 
     def _on_send_invoice_result(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}
-        invoice = str(data.get("invoice") or "â€”")
-        recipient = str(data.get("recipient") or "â€”")
+        invoice_id = str(data.get("invoice_id") or "").strip()
+        invoice = str(data.get("invoice") or "---")
+        recipient = str(data.get("recipient") or "---")
+        self._apply_fulfillment_flags_to_row(invoice_id, data.get("flags"))
         QMessageBox.information(
             self,
             "Rechnung gesendet",
             f"Rechnung {invoice} wurde an {recipient} gesendet.",
         )
-        self._reload_first_page()
 
     def _on_send_invoice_error(self, exc: Exception) -> None:
         QMessageBox.warning(
@@ -3031,7 +3092,7 @@ class RechnungenView(QWidget):
 
     def _on_send_invoice_finished(self) -> None:
         self._invoice_mail_worker = None
-        self._overlay.hide()
+        self._clear_detail_actions_busy()
 
     def _on_create_draft_clicked(self) -> None:
         if (
@@ -3212,6 +3273,7 @@ class RechnungenView(QWidget):
         if requested_ref and requested_ref != current_ref:
             return
 
+        self._gb_stuecke.show()
         while self._stuecke_layout.count() > 1:
             item = self._stuecke_layout.takeAt(1)
             if item and item.widget():
@@ -3341,6 +3403,8 @@ class RechnungenView(QWidget):
             invoice_ref = self._summaries[row].invoice_number or self._summaries[row].id
 
         self._set_piece_print_controls_enabled(False)
+        self._btn_print_music.setEnabled(False)
+        QApplication.processEvents()
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.status_message.emit(f"Produktdruck fuer {block.sku} gestartet ({qty}x).", 5000)
 
@@ -3381,6 +3445,7 @@ class RechnungenView(QWidget):
     def _on_product_print_finished(self) -> None:
         self._product_print_worker = None
         self._set_piece_print_controls_enabled(self._print_allowed)
+        self._update_plc_controls()
 
     @staticmethod
     def _default_piece_print_qty(block: PieceBlock) -> int:

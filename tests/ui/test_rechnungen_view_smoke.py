@@ -222,7 +222,9 @@ def test_start_click_disables_start_immediately(qtbot: object, monkeypatch) -> N
 
     assert started["value"] is True
     assert not view._btn_start.isEnabled()  # noqa: SLF001
+    assert view._btn_start.text() == "START..."  # noqa: SLF001
     assert not view._btn_stop.isEnabled()  # noqa: SLF001
+    assert "START wird vorbereitet." in view._rechnungen_view._start_summary_label.text()  # noqa: SLF001
 
 
 def test_tagesgeschaeft_alert_buttons_follow_counts(qtbot: object) -> None:
@@ -375,6 +377,36 @@ def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
     assert not view._btn_send_invoice.isEnabled()  # noqa: SLF001
 
 
+def test_rechnungen_selection_sets_summary_before_cache_hydration(qtbot: object, monkeypatch) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = InvoiceSummary.model_validate(
+        {
+            "id": "quick-select-1",
+            "invoiceNumber": "RE-QUICK",
+            "status": 200,
+            "contact_name": "Sofort Kunde",
+            "order_reference": "20901",
+        }
+    )
+    hydrate_calls: list[str] = []
+
+    def fake_hydrate(next_summary: InvoiceSummary, _seq: int) -> None:
+        hydrate_calls.append(str(next_summary.id))
+
+    monkeypatch.setattr(view, "_hydrate_detail_for_selection", fake_hydrate)
+
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    view._table.select_source_row(0)  # noqa: SLF001
+
+    assert view._dl_number.text() == "RE-QUICK"  # noqa: SLF001
+    assert view._dl_contact.text() == "Sofort Kunde"  # noqa: SLF001
+    assert hydrate_calls == []
+    qtbot.waitUntil(lambda: hydrate_calls == ["quick-select-1"], timeout=1000)
+
+
 def test_plc_dialog_defaults_to_direct_webservice_without_changing_list_action(qtbot: object) -> None:
     container = _build_container()
     summary = InvoiceSummary.model_validate(
@@ -474,14 +506,69 @@ def test_rechnungen_applies_persistent_wix_cache_before_background_load(
     view._table.set_data([summary.as_table_row()])  # noqa: SLF001
     view._table.select_source_row(0)  # noqa: SLF001
 
+    qtbot.waitUntil(
+        lambda: "Wixstrasse 7" in view._shipping_editor.toPlainText(),  # noqa: SLF001
+        timeout=1000,
+    )
     assert "Wixstrasse 7" in view._shipping_editor.toPlainText()  # noqa: SLF001
     assert view._wix_customer.text() == "Wix Kunde"  # noqa: SLF001
     assert any(
         "Cache Produkt" in label.text()
         for label in view._gb_stuecke.findChildren(QLabel)  # noqa: SLF001
     )
+    assert not view._gb_stuecke.isHidden()  # noqa: SLF001
     assert view._get_cached_wix_context("20899") is not None  # noqa: SLF001
     assert load_calls == [("20899", False)]
+
+
+def test_rechnungen_cached_wix_summary_allows_product_fallback_when_items_missing(
+    qtbot: object,
+    monkeypatch,
+) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = InvoiceSummary.model_validate(
+        {
+            "id": "cached-missing-items",
+            "invoiceNumber": "RE-CACHED-MISSING",
+            "status": 200,
+            "contact_name": "sevDesk Kunde",
+            "order_reference": "20900",
+        }
+    )
+    load_calls: list[tuple[str, bool]] = []
+
+    class _CachedSummaryOnlyWixClient(_FakeWixOrdersClient):
+        def get_cached_order_summary(self, reference: str) -> dict[str, str] | None:
+            return {
+                "wix_order_number": reference,
+                "wix_customer_name": "Wix Kunde",
+                "wix_customer_email": "wix@example.test",
+                "wix_shipping_country": "Austria",
+                "wix_shipping_address": "Wix Kunde\nWixstrasse 7\n1010 Wien\nAUSTRIA",
+            }
+
+        def get_cached_order_line_items(self, _reference: str) -> list[object] | None:
+            return None
+
+    def fake_load_wix_context(order_reference: str, *, show_loading: bool = True) -> None:
+        load_calls.append((order_reference, show_loading))
+
+    container.register(WixOrdersClient, lambda _: _CachedSummaryOnlyWixClient())
+    monkeypatch.setattr(view, "_load_wix_context", fake_load_wix_context)
+
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    view._table.select_source_row(0)  # noqa: SLF001
+
+    qtbot.waitUntil(
+        lambda: "Wixstrasse 7" in view._shipping_editor.toPlainText(),  # noqa: SLF001
+        timeout=1000,
+    )
+    assert "Wixstrasse 7" in view._shipping_editor.toPlainText()  # noqa: SLF001
+    assert view._get_cached_wix_context("20900") is None  # noqa: SLF001
+    assert load_calls == [("20900", False)]
 
 
 def test_rechnungen_load_more_button_stages_drafts_before_open(qtbot: object) -> None:
@@ -582,6 +669,11 @@ def test_main_window_rechnungen_warms_drafts_but_defers_open_invoice_contexts(
     view._table.select_source_row(0)  # noqa: SLF001
     view._table.select_source_row(1)  # noqa: SLF001
 
+    assert view._dl_number.text() == "RE-OPEN"  # noqa: SLF001
+    qtbot.waitUntil(
+        lambda: "Teststrasse 1" in view._shipping_editor.toPlainText(),  # noqa: SLF001
+        timeout=1000,
+    )
     assert "Teststrasse 1" in view._shipping_editor.toPlainText()  # noqa: SLF001
     assert invoice_service.load_calls == [(100, 50, 0), (200, 30, 0)]
 

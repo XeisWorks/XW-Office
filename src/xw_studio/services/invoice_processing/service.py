@@ -367,10 +367,7 @@ class InvoiceProcessingService:
         started = time.perf_counter()
         if progress_callback is not None:
             progress_callback("START: Entwuerfe werden geladen...")
-        summaries = self._load_all_open_drafts(limit_per_page=100, max_pages=20)
-        if invoice_ids:
-            wanted = {str(invoice_id).strip() for invoice_id in invoice_ids if str(invoice_id).strip()}
-            summaries = [summary for summary in summaries if str(summary.id).strip() in wanted]
+        summaries = self._load_start_target_summaries(invoice_ids=invoice_ids)
         if full_mode:
             if progress_callback is not None:
                 progress_callback("START: Wix-Kontext wird geladen...")
@@ -662,10 +659,7 @@ class InvoiceProcessingService:
         """Aggregate Wix line-item quantities for the exact START invoice set."""
         if self._wix_orders is None or not self._wix_orders.has_credentials():
             return {}
-        summaries = self._load_all_open_drafts(limit_per_page=100, max_pages=20)
-        if invoice_ids:
-            wanted = {str(invoice_id).strip() for invoice_id in invoice_ids if str(invoice_id).strip()}
-            summaries = [summary for summary in summaries if str(summary.id).strip() in wanted]
+        summaries = self._load_start_target_summaries(invoice_ids=invoice_ids)
         references = sorted(
             {summary.order_reference.strip() for summary in summaries if summary.order_reference.strip()}
         )
@@ -977,6 +971,35 @@ class InvoiceProcessingService:
                 break
             offset += limit_per_page
         return all_rows
+
+    def _load_start_target_summaries(self, *, invoice_ids: list[str] | None = None) -> list[InvoiceSummary]:
+        ids = [str(invoice_id).strip() for invoice_id in (invoice_ids or []) if str(invoice_id).strip()]
+        if not ids:
+            return self._load_all_open_drafts(limit_per_page=100, max_pages=20)
+        summaries: list[InvoiceSummary] = []
+        needs_summary_context: list[str] = []
+        for invoice_id in dict.fromkeys(ids):
+            summary = self._load_summary_by_id(invoice_id)
+            if summary.status_code and summary.status_code != 100:
+                logger.info(
+                    "START selected skips non-draft invoice id=%s status=%s",
+                    summary.id,
+                    summary.status_code,
+                )
+                continue
+            if not str(summary.order_reference or "").strip():
+                needs_summary_context.append(str(summary.id or "").strip())
+            summaries.append(summary)
+        if needs_summary_context:
+            listed = {
+                str(summary.id or "").strip(): summary
+                for summary in self._load_all_open_drafts(limit_per_page=100, max_pages=20)
+            }
+            summaries = [
+                listed.get(str(summary.id or "").strip(), summary)
+                for summary in summaries
+            ]
+        return summaries
 
     def _load_summary_by_id(self, invoice_id: str) -> InvoiceSummary:
         raw = self._invoices.fetch_invoice_by_id(invoice_id)

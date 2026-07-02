@@ -44,6 +44,7 @@ from xw_studio.services.inventory.service import (
 )
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
 from xw_studio.services.sendungen.service import OffeneSendungenService
+from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
 from xw_studio.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 from xw_studio.ui.modules.rechnungen.reprint_dialog import ReprintPreviewDialog
 from xw_studio.ui.modules.rechnungen.view import RechnungenView
@@ -314,6 +315,7 @@ class TagesgeschaeftView(QWidget):
         self._start_selected_mode: StartMode = StartMode.INVOICES_AND_PRINT
         self._start_include_product_print = False
         self._start_selected_invoice_ids: list[str] = []
+        self._start_selected_summaries: list[InvoiceSummary] = []
         self._start_selected_only = False
         self._sendungen_count = 0
         self._transfer_count = 0
@@ -412,6 +414,7 @@ class TagesgeschaeftView(QWidget):
         self._btn_start.clicked.connect(
             lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, include_product_print=False)
         )
+        self._start_button_idle_text = self._btn_start.text()
         start_menu = QMenu(self._btn_start)
         start_menu.addAction("Selected").triggered.connect(
             lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, selected_only=True, include_product_print=False)
@@ -580,8 +583,10 @@ class TagesgeschaeftView(QWidget):
         self._start_include_product_print = bool(include_product_print)
         self._start_selected_only = bool(selected_only)
         self._start_selected_invoice_ids = []
+        self._start_selected_summaries = []
         if selected_only:
             selected = self._rechnungen_view.selected_summaries()
+            self._start_selected_summaries = list(selected)
             self._start_selected_invoice_ids = [
                 str(summary.id).strip() for summary in selected if str(summary.id).strip()
             ]
@@ -594,8 +599,19 @@ class TagesgeschaeftView(QWidget):
                 return
 
         signals: AppSignals = self._container.resolve(AppSignals)
-        self._btn_start.setEnabled(False)
-        self._btn_stop.setEnabled(False)
+        self._set_start_running(True, allow_stop=False)
+        scope = (
+            f"{len(self._start_selected_invoice_ids)} markierte Rechnung(en)"
+            if self._start_selected_only
+            else "alle offenen Entwuerfe"
+        )
+        self._rechnungen_view.show_start_summary(
+            [
+                "START wird vorbereitet.",
+                f"Umfang: {scope}",
+                f"Notendruck: {'ja' if self._start_include_product_print else 'nein'}",
+            ]
+        )
         signals.status_message.emit("Pre-Flight wird erstellt…", 2500)
 
         def job() -> StartPreflight:
@@ -683,12 +699,10 @@ class TagesgeschaeftView(QWidget):
         def job() -> ProductPreflightPlan:
             invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             draft_service: DraftInvoiceService = self._container.resolve(DraftInvoiceService)
-            summaries = invoice_service.load_invoice_summaries(status=100, limit=1000, offset=0)
             if self._start_selected_only:
-                selected_ids = set(self._start_selected_invoice_ids)
-                summaries = [
-                    summary for summary in summaries if str(summary.id).strip() in selected_ids
-                ]
+                summaries = list(self._start_selected_summaries)
+            else:
+                summaries = invoice_service.load_invoice_summaries(status=100, limit=1000, offset=0)
             targets_by_reference: dict[str, list[ProductIssueTarget]] = {}
             refs: list[str] = []
             for summary in summaries:
@@ -738,7 +752,7 @@ class TagesgeschaeftView(QWidget):
             return
 
         self._start_abort_requested = False
-        self._set_start_running(True)
+        self._set_start_running(True, allow_stop=True)
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.status_message.emit("START wird ausgefuehrt…", 2500)
 
@@ -952,9 +966,11 @@ class TagesgeschaeftView(QWidget):
             f"Pre-Flight konnte nicht erstellt werden:\n\n{exc}",
         )
 
-    def _set_start_running(self, running: bool) -> None:
+    def _set_start_running(self, running: bool, *, allow_stop: bool = True) -> None:
         self._btn_start.setEnabled(not running)
-        self._btn_stop.setEnabled(running)
+        self._btn_start.setText("START..." if running else self._start_button_idle_text)
+        self._btn_stop.setEnabled(bool(running and allow_stop))
+        QApplication.processEvents()
 
     def _on_start_stop_clicked(self) -> None:
         if self._start_exec_worker is None or not self._start_exec_worker.isRunning():

@@ -1147,7 +1147,9 @@ class WixOrdersClient:
             return None
         if not cached:
             return []
-        raw_items = cached.get("lineItems") if isinstance(cached.get("lineItems"), list) else []
+        if not isinstance(cached.get("lineItems"), list):
+            return None
+        raw_items = cached.get("lineItems")
         return [_parse_order_line_item(item) for item in raw_items if isinstance(item, dict)]
 
     def _resolve_order(self, reference: str, *, use_cache: bool = True) -> dict[str, Any]:
@@ -1634,6 +1636,8 @@ class WixOrdersClient:
             return []
 
         order = self._resolve_order(ref)
+        if order and not isinstance(order.get("lineItems"), list):
+            order = self._resolve_order(ref, use_cache=False)
 
         if not order:
             logger.debug("WixOrdersClient: no order found for reference=%r", ref)

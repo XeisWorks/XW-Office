@@ -396,3 +396,68 @@ def test_get_cached_order_summary_does_not_call_wix(tmp_path, monkeypatch) -> No
     assert cached_missing == {}
     assert missing_items == []
     assert calls == 0
+
+
+def test_fetch_order_line_items_refreshes_incomplete_cache(tmp_path, monkeypatch) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json={
+                "orders": [
+                    {
+                        "id": "ord-refreshed",
+                        "number": "20900",
+                        "orderNumber": "20900",
+                        "lineItems": [
+                            {
+                                "id": "line-1",
+                                "productName": {"original": "Refreshed Produkt"},
+                                "quantity": 1,
+                                "physicalProperties": {"sku": "XW-REFRESH"},
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+
+    class _SecretService:
+        def get_secret(self, name: str) -> str:
+            values = {
+                "WIX_API_KEY": "key",
+                "WIX_SITE_ID": "site",
+                "WIX_ACCOUNT_ID": "",
+            }
+            return values.get(name, "")
+
+    class _Client(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(handler)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    cache = WixOrderCache(tmp_path / "cache.sqlite")
+    cache.put_order(
+        site_id="site",
+        account_id="",
+        reference="20900",
+        order={
+            "id": "ord-incomplete",
+            "number": "20900",
+            "orderNumber": "20900",
+            "buyerInfo": {"email": "cached@example.test"},
+        },
+    )
+    client = WixOrdersClient(secret_service=_SecretService(), order_cache=cache)  # type: ignore[arg-type]
+
+    cached_items = client.get_cached_order_line_items("20900")
+    items = client.fetch_order_line_items("20900")
+
+    assert cached_items is None
+    assert len(items) == 1
+    assert items[0].sku == "XW-REFRESH"
+    assert calls == 1
