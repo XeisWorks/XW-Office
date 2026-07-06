@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -41,12 +43,15 @@ class LayoutView(QWidget):
         self._blank_source: bytes | None = None
         self._blank_result: bytes | None = None
         self._cover_result: bytes | None = None
+        self._a5_source_path: str | None = None
+        self._a5_output_path: str | None = None
         self._worker: BackgroundWorker | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
 
         tabs = QTabWidget()
+        tabs.addTab(self._build_a5_tab(), "A5 -> A4")
         tabs.addTab(self._build_qr_tab(), "QR-Code")
         tabs.addTab(self._build_blank_tab(), "Leerseiten")
         tabs.addTab(self._build_cover_tab(), "Deckblatt")
@@ -54,7 +59,131 @@ class LayoutView(QWidget):
         root.addWidget(tabs)
 
     # ------------------------------------------------------------------
-    # Tab 1: QR-Code-Generator
+    # Tab 1: A5 verdoppeln auf A4
+    # ------------------------------------------------------------------
+
+    def _build_a5_tab(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(10)
+
+        file_group = QGroupBox("PDF-Dateien")
+        file_layout = QFormLayout(file_group)
+
+        source_row = QHBoxLayout()
+        self._a5_source_lbl = QLabel("(keine Datei gewaehlt)")
+        self._a5_source_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        source_row.addWidget(self._a5_source_lbl)
+        source_btn = QPushButton("PDF oeffnen...")
+        source_btn.clicked.connect(self._pick_a5_source)
+        source_row.addWidget(source_btn)
+        file_layout.addRow("Quelle:", source_row)
+
+        output_row = QHBoxLayout()
+        self._a5_output_lbl = QLabel("(wird nach Dateiauswahl vorgeschlagen)")
+        self._a5_output_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        output_row.addWidget(self._a5_output_lbl)
+        output_btn = QPushButton("Ziel waehlen...")
+        output_btn.clicked.connect(self._pick_a5_output)
+        output_row.addWidget(output_btn)
+        file_layout.addRow("Ausgabe:", output_row)
+        lay.addWidget(file_group)
+
+        options = QFormLayout()
+        self._a5_margin = QDoubleSpinBox()
+        self._a5_margin.setRange(0.0, 25.0)
+        self._a5_margin.setDecimals(1)
+        self._a5_margin.setSingleStep(0.5)
+        self._a5_margin.setSuffix(" mm")
+        self._a5_margin.setValue(0.0)
+        options.addRow("Sicherheitsrand je A5-Haelfte:", self._a5_margin)
+        lay.addLayout(options)
+
+        btn_row = QHBoxLayout()
+        self._a5_run_btn = QPushButton("A5 verdoppeln auf A4")
+        self._a5_run_btn.clicked.connect(self._run_a5_duplicate)
+        btn_row.addWidget(self._a5_run_btn)
+        btn_row.addStretch()
+        lay.addLayout(btn_row)
+
+        self._a5_status = QLabel("Bereit")
+        self._a5_status.setWordWrap(True)
+        lay.addWidget(self._a5_status)
+
+        info = QLabel(
+            "Erzeugt pro Quellseite ein A4-Blatt mit identischer Kopie oben und unten. "
+            "Gedrehte Quellseiten werden vor der Platzierung rotationsneutral verarbeitet."
+        )
+        info.setObjectName("infoLabel")
+        info.setWordWrap(True)
+        lay.addWidget(info)
+        lay.addStretch()
+        return page
+
+    def _pick_a5_source(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "A5-PDF oeffnen", "", "PDF (*.pdf)")
+        if not path:
+            return
+        self._a5_source_path = path
+        self._a5_source_lbl.setText(path)
+        svc: LayoutToolsService = self._container.resolve(LayoutToolsService)
+        self._a5_output_path = str(svc.default_a5_duplicate_output_path(path))
+        self._a5_output_lbl.setText(self._a5_output_path)
+        self._a5_status.setText("Bereit")
+
+    def _pick_a5_output(self) -> None:
+        start = self._a5_output_path or "noten_A4-2x.pdf"
+        path, _ = QFileDialog.getSaveFileName(self, "A4-Ausgabe speichern", start, "PDF (*.pdf)")
+        if not path:
+            return
+        if not path.lower().endswith(".pdf"):
+            path = f"{path}.pdf"
+        self._a5_output_path = path
+        self._a5_output_lbl.setText(path)
+
+    def _run_a5_duplicate(self) -> None:
+        if not self._a5_source_path:
+            QMessageBox.warning(self, "A5 -> A4", "Bitte zuerst eine PDF-Datei oeffnen.")
+            return
+        if not self._a5_output_path:
+            QMessageBox.warning(self, "A5 -> A4", "Bitte ein Ausgabeziel waehlen.")
+            return
+
+        source = self._a5_source_path
+        output = self._a5_output_path
+        if Path(output).exists():
+            answer = QMessageBox.question(
+                self,
+                "A5 -> A4",
+                f"Die Ausgabedatei existiert bereits:\n{output}\n\nUeberschreiben?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                self._a5_status.setText("Abgebrochen.")
+                return
+
+        margin_mm = float(self._a5_margin.value())
+        svc: LayoutToolsService = self._container.resolve(LayoutToolsService)
+
+        def job() -> str:
+            return str(svc.duplicate_a5_to_a4(source, output_pdf=output, margin_mm=margin_mm, overwrite=True))
+
+        self._a5_run_btn.setEnabled(False)
+        self._a5_status.setText("Verarbeite PDF...")
+        self._worker = BackgroundWorker(job)
+        self._worker.signals.result.connect(self._on_a5_done)
+        self._worker.signals.error.connect(self._on_error)
+        self._worker.signals.finished.connect(lambda: self._a5_run_btn.setEnabled(True))
+        self._worker.start()
+
+    def _on_a5_done(self, data: object) -> None:
+        if not isinstance(data, str):
+            return
+        self._a5_status.setText(f"Gespeichert: {data}")
+        QMessageBox.information(self, "Fertig", f"A5 -> A4 gespeichert:\n{data}")
+
+    # ------------------------------------------------------------------
+    # Tab 2: QR-Code-Generator
     # ------------------------------------------------------------------
 
     def _build_qr_tab(self) -> QWidget:
