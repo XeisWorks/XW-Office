@@ -407,6 +407,55 @@ def test_rechnungen_selection_sets_summary_before_cache_hydration(qtbot: object,
     qtbot.waitUntil(lambda: hydrate_calls == ["quick-select-1"], timeout=1000)
 
 
+def test_rechnungen_open_overview_resolves_wix_classification_and_buyer_notes(qtbot: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+
+    class _OverviewInvoiceService(_FakeInvoiceProcessingService):
+        def resolve_invoice_list_hints(self, reference: str) -> object:
+            note = "Bitte PLC Versandlabel pruefen" if reference == "20910" else "Download-Link bitte senden"
+            return types.SimpleNamespace(buyer_note=note)
+
+    class _OverviewWixClient(_FakeWixOrdersClient):
+        def is_reference_digital_only(self, reference: str) -> bool:
+            return reference == "20911"
+
+    container.register(InvoiceProcessingService, lambda _: _OverviewInvoiceService())
+    container.register(WixOrdersClient, lambda _: _OverviewWixClient())
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    view._summaries = [  # noqa: SLF001
+        InvoiceSummary.model_validate(
+            {
+                "id": "overview-phys",
+                "invoiceNumber": "RE-OV-P",
+                "status": 100,
+                "contact_name": "Phys Kunde",
+                "order_reference": "20910",
+            }
+        ),
+        InvoiceSummary.model_validate(
+            {
+                "id": "overview-digital",
+                "invoiceNumber": "RE-OV-D",
+                "status": 100,
+                "contact_name": "Digital Kunde",
+                "order_reference": "20911",
+            }
+        ),
+    ]
+
+    view._refresh_open_invoice_overview()  # noqa: SLF001
+
+    assert view._open_total.text() == "2"  # noqa: SLF001
+    assert view._open_with_ref.text() == "2"  # noqa: SLF001
+    assert view._open_physical.text() == "0+"  # noqa: SLF001
+    qtbot.waitUntil(lambda: view._open_overview_worker is None, timeout=1000)  # noqa: SLF001
+    assert view._open_physical.text() == "1"  # noqa: SLF001
+    assert view._open_digital.text() == "1"  # noqa: SLF001
+    assert view._open_note.text() == "2"  # noqa: SLF001
+    assert view._open_plc.text() == "1"  # noqa: SLF001
+
+
 def test_plc_dialog_defaults_to_direct_webservice_without_changing_list_action(qtbot: object) -> None:
     container = _build_container()
     summary = InvoiceSummary.model_validate(
