@@ -1152,6 +1152,38 @@ class WixOrdersClient:
         raw_items = cached.get("lineItems")
         return [_parse_order_line_item(item) for item in raw_items if isinstance(item, dict)]
 
+    def get_cached_reference_digital_only(self, reference: str) -> bool | None:
+        """Return cached digital-only classification without calling Wix.
+
+        ``None`` means no usable cache entry exists yet.  Missing orders and
+        cached orders without line items also stay unknown because treating them
+        as physical would make the Rechnungen overview look complete too early.
+        """
+        ref = str(reference or "").strip()
+        if not ref:
+            return None
+        cached = self._cached_order(ref)
+        if not cached:
+            return None
+        raw_items = [
+            item
+            for item in (cached.get("lineItems") if isinstance(cached.get("lineItems"), list) else [])
+            if isinstance(item, dict)
+        ]
+        if not raw_items:
+            return None
+        return all(self.line_item_is_digital(item) for item in raw_items)
+
+    def get_cached_order_buyer_note(self, reference: str) -> str | None:
+        """Return the cached Wix buyer note without calling Wix."""
+        ref = str(reference or "").strip()
+        if not ref:
+            return None
+        cached = self._cached_order(ref)
+        if not cached:
+            return None
+        return str(cached.get("buyerNote") or cached.get("buyerNotes") or "").strip()
+
     def _resolve_order(self, reference: str, *, use_cache: bool = True) -> dict[str, Any]:
         ref = str(reference or "").strip()
         if not ref or not self.has_credentials():

@@ -75,6 +75,12 @@ from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
 from xw_studio.services.sevdesk.refund_client import SevDeskRefundClient
 from xw_studio.services.wix.client import WixOrdersClient
 from xw_studio.ui.modules.rechnungen.offene_sendungen_dialog import OffeneSendungenDialog
+from xw_studio.ui.modules.rechnungen.open_invoice_overview import (
+    OpenInvoiceOverview,
+    overview_from_visible_summaries,
+    overview_payload_from_object,
+    resolve_open_invoice_overview,
+)
 from xw_studio.ui.modules.rechnungen.plc_label_dialog import PlcLabelPrintDialog
 from xw_studio.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 from xw_studio.ui.modules.rechnungen.refund_dialog import RefundDialog
@@ -655,6 +661,7 @@ class RechnungenView(QWidget):
         self._wix_warm_queue: list[str] = []
         self._wix_warm_inflight_refs: set[str] = set()
         self._open_overview_seq = 0
+        self._pending_open_overview_rows: list[InvoiceSummary] = []
         self._hint_seq = 0
         self._hint_draft_queue: list[str] = []
         self._hint_rest_queue: list[str] = []
@@ -681,6 +688,7 @@ class RechnungenView(QWidget):
         self._open_overview_cached_note = 0
         self._open_overview_cached_plc = 0
         self._open_overview_complete = False
+        self._open_overview_products_text = ""
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -818,6 +826,17 @@ class RechnungenView(QWidget):
         form_open.addRow("Mit PLC-Hinweis:", self._open_plc)
         form_open.addRow("Mit Käufernotiz:", self._open_note)
         detail_main.addWidget(self._gb_open)
+
+        self._gb_open_products = QGroupBox("PRINT-PRODUKTE OFFEN")
+        open_products_layout = QVBoxLayout(self._gb_open_products)
+        open_products_layout.setContentsMargins(10, 8, 10, 10)
+        self._open_products_text = QPlainTextEdit()
+        self._open_products_text.setReadOnly(True)
+        self._open_products_text.setMinimumHeight(110)
+        self._open_products_text.setMaximumHeight(190)
+        self._open_products_text.setPlaceholderText("Print-Produkte werden ermittelt...")
+        open_products_layout.addWidget(self._open_products_text)
+        detail_main.addWidget(self._gb_open_products)
 
         self._gb_info = QGroupBox("INFO")
         info_layout = QGridLayout(self._gb_info)
@@ -1544,24 +1563,18 @@ class RechnungenView(QWidget):
 
     def _refresh_open_invoice_overview(self) -> None:
         open_rows = [s for s in self._summaries if s.status_code == 100]
-        total = len(open_rows)
-        with_ref = sum(1 for s in open_rows if s.order_reference.strip())
-        plc = sum(1 for s in open_rows if s.has_plc_label_candidate())
-        with_note = sum(1 for s in open_rows if s.buyer_note.strip())
-        refs = [s.order_reference.strip() for s in open_rows]
-        overview_key = "|".join(
-            sorted(
-                f"{str(s.id or '').strip()}:{s.order_reference.strip()}:{s.buyer_note.strip()}"
-                for s in open_rows
-            )
+        try:
+            wix_client: WixOrdersClient | None = self._container.resolve(WixOrdersClient)
+        except Exception:  # noqa: BLE001 - overview still works with UI cache only.
+            wix_client = None
+        overview = overview_from_visible_summaries(
+            open_rows,
+            digital_cache=self._wix_digital_cache,
+            wix_client=wix_client,
         )
 
-        self._open_total.setText(str(total))
-        self._open_with_ref.setText(str(with_ref))
-        self._open_plc.setText(str(plc))
-        self._open_note.setText(str(with_note))
-
-        if total == 0:
+        if overview.total == 0:
+            self._apply_open_invoice_overview(overview)
             self._open_physical.setText("0")
             self._open_digital.setText("0")
             self._open_overview_key = ""
@@ -1570,53 +1583,40 @@ class RechnungenView(QWidget):
             self._open_overview_cached_note = 0
             self._open_overview_cached_plc = 0
             self._open_overview_complete = True
+            self._open_overview_products_text = ""
             return
 
-        if overview_key and overview_key == self._open_overview_key and self._open_overview_complete:
+        if overview.key and overview.key == self._open_overview_key and self._open_overview_complete:
+            cached = OpenInvoiceOverview(
+                key=overview.key,
+                total=overview.total,
+                with_ref=overview.with_ref,
+                physical=self._open_overview_cached_physical,
+                digital=self._open_overview_cached_digital,
+                unknown=0,
+                with_note=self._open_overview_cached_note,
+                plc=self._open_overview_cached_plc,
+                complete=True,
+                print_products=overview.print_products,
+            )
+            self._apply_open_invoice_overview(cached)
             self._open_physical.setText(str(self._open_overview_cached_physical))
             self._open_digital.setText(str(self._open_overview_cached_digital))
             self._open_plc.setText(str(self._open_overview_cached_plc))
             self._open_note.setText(str(self._open_overview_cached_note))
             return
 
-        known_refs = [ref for ref in refs if ref and ref in self._wix_digital_cache]
-        physical = sum(1 for ref in known_refs if not self._wix_digital_cache.get(ref))
-        digital = sum(1 for ref in known_refs if self._wix_digital_cache.get(ref))
-        unknown = max(0, with_ref - len(known_refs))
-        self._open_overview_key = overview_key
-        self._open_overview_cached_physical = physical
-        self._open_overview_cached_digital = digital
-        self._open_overview_cached_note = with_note
-        self._open_overview_cached_plc = plc
-        self._open_overview_complete = unknown == 0
-        suffix = "+" if unknown else ""
-        self._open_physical.setText(f"{physical}{suffix}")
-        self._open_digital.setText(f"{digital}{suffix}")
-        if unknown:
-            self._start_open_invoice_overview(open_rows, overview_key)
-
-    @staticmethod
-    def _note_has_plc_label_hint(note: str) -> bool:
-        hay = str(note or "").strip().lower()
-        if not hay:
-            return False
-        return any(
-            token in hay
-            for token in (
-                "plc",
-                "post label center",
-                "postlabelcenter",
-                "shipping label",
-                "versandlabel",
-            )
-        )
+        self._apply_open_invoice_overview(overview)
+        if overview.unknown:
+            self._start_open_invoice_overview(open_rows)
 
     def _start_open_invoice_overview(
         self,
         open_rows: list[InvoiceSummary],
-        overview_key: str,
     ) -> None:
         if self._open_overview_worker is not None and self._open_overview_worker.isRunning():
+            self._open_overview_seq += 1
+            self._pending_open_overview_rows = list(open_rows)
             return
         refs = [s.order_reference.strip() for s in open_rows if s.order_reference.strip()]
         if not refs:
@@ -1624,58 +1624,18 @@ class RechnungenView(QWidget):
         self._open_overview_seq += 1
         seq = self._open_overview_seq
         snapshot = list(open_rows)
+        digital_cache = dict(self._wix_digital_cache)
 
-        def job() -> dict[str, object]:
+        def job() -> OpenInvoiceOverview:
             service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             wix_client: WixOrdersClient = self._container.resolve(WixOrdersClient)
-            has_wix_credentials = wix_client.has_credentials()
-            physical = 0
-            digital = 0
-            unknown = 0
-            with_note_count = 0
-            plc_count = 0
-            cache_updates: dict[str, bool] = {}
-            for summary in snapshot:
-                ref = str(summary.order_reference or "").strip()
-                buyer_note = str(summary.buyer_note or "").strip()
-                has_plc = summary.has_plc_label_candidate()
-                if ref:
-                    try:
-                        hints = service.resolve_invoice_list_hints(ref)
-                    except Exception as exc:  # noqa: BLE001 - overview must not break the list.
-                        logger.debug("Open overview hint lookup failed ref=%s: %s", ref, exc)
-                    else:
-                        hint_note = str(getattr(hints, "buyer_note", "") or "").strip()
-                        buyer_note = buyer_note or hint_note
-                        has_plc = has_plc or self._note_has_plc_label_hint(hint_note)
-                    if has_wix_credentials:
-                        try:
-                            is_digital = bool(wix_client.is_reference_digital_only(ref))
-                        except Exception as exc:  # noqa: BLE001 - keep partial counts useful.
-                            logger.debug("Open overview digital lookup failed ref=%s: %s", ref, exc)
-                            unknown += 1
-                        else:
-                            cache_updates[ref] = is_digital
-                            if is_digital:
-                                digital += 1
-                            else:
-                                physical += 1
-                    else:
-                        unknown += 1
-                if buyer_note:
-                    with_note_count += 1
-                if has_plc:
-                    plc_count += 1
-            return {
-                "seq": seq,
-                "overview_key": overview_key,
-                "physical": physical,
-                "digital": digital,
-                "unknown": unknown,
-                "with_note": with_note_count,
-                "plc": plc_count,
-                "cache_updates": cache_updates,
-            }
+            return resolve_open_invoice_overview(
+                snapshot,
+                seq=seq,
+                invoice_service=service,
+                wix_client=wix_client,
+                digital_cache=digital_cache,
+            )
 
         self._open_overview_worker = BackgroundWorker(job)
         self._open_overview_worker.signals.result.connect(self._on_open_overview_result)
@@ -1684,31 +1644,12 @@ class RechnungenView(QWidget):
         self._open_overview_worker.start()
 
     def _on_open_overview_result(self, payload: object) -> None:
-        if not isinstance(payload, dict):
+        overview = overview_payload_from_object(payload)
+        if overview is None:
             return
-        seq = int(payload.get("seq") or 0)
-        if seq != self._open_overview_seq:
+        if overview.seq != self._open_overview_seq:
             return
-        cache_updates = payload.get("cache_updates")
-        if isinstance(cache_updates, dict):
-            for key, value in cache_updates.items():
-                self._wix_digital_cache[str(key)] = bool(value)
-        physical = int(payload.get("physical") or 0)
-        digital = int(payload.get("digital") or 0)
-        unknown = int(payload.get("unknown") or 0)
-        with_note = int(payload.get("with_note") or 0)
-        plc = int(payload.get("plc") or 0)
-        self._open_overview_key = str(payload.get("overview_key") or "")
-        self._open_overview_cached_physical = max(0, physical)
-        self._open_overview_cached_digital = max(0, digital)
-        self._open_overview_cached_note = max(0, with_note)
-        self._open_overview_cached_plc = max(0, plc)
-        self._open_overview_complete = unknown == 0
-        suffix = "+" if unknown else ""
-        self._open_physical.setText(f"{max(0, physical)}{suffix}")
-        self._open_digital.setText(f"{max(0, digital)}{suffix}")
-        self._open_note.setText(str(max(0, with_note)))
-        self._open_plc.setText(str(max(0, plc)))
+        self._apply_open_invoice_overview(overview)
 
     def _on_open_overview_error(self, exc: Exception) -> None:
         logger.warning("Open-overview digital classification failed: %s", exc)
@@ -1722,6 +1663,47 @@ class RechnungenView(QWidget):
 
     def _on_open_overview_finished(self) -> None:
         self._open_overview_worker = None
+        pending = list(self._pending_open_overview_rows)
+        self._pending_open_overview_rows = []
+        if pending:
+            self._start_open_invoice_overview(pending)
+
+    def _apply_open_invoice_overview(self, overview: OpenInvoiceOverview) -> None:
+        for key, value in overview.cache_updates.items():
+            self._wix_digital_cache[str(key)] = bool(value)
+        self._open_total.setText(str(max(0, overview.total)))
+        self._open_with_ref.setText(str(max(0, overview.with_ref)))
+        self._open_physical.setText(f"{max(0, overview.physical)}{overview.suffix}")
+        self._open_digital.setText(f"{max(0, overview.digital)}{overview.suffix}")
+        self._open_note.setText(str(max(0, overview.with_note)))
+        self._open_plc.setText(str(max(0, overview.plc)))
+        self._open_overview_key = overview.key
+        self._open_overview_cached_physical = max(0, overview.physical)
+        self._open_overview_cached_digital = max(0, overview.digital)
+        self._open_overview_cached_note = max(0, overview.with_note)
+        self._open_overview_cached_plc = max(0, overview.plc)
+        self._open_overview_complete = overview.complete
+        self._open_overview_products_text = self._format_open_print_products(overview)
+        self._open_products_text.setPlainText(self._open_overview_products_text)
+
+    @staticmethod
+    def _format_open_print_products(overview: OpenInvoiceOverview) -> str:
+        if overview.unknown and not overview.print_products:
+            return "Print-Produkte werden ermittelt..."
+        if not overview.print_products:
+            return "Keine physischen Print-Produkte in den offenen Rechnungen gefunden."
+        lines: list[str] = []
+        for item in overview.print_products:
+            title = str(item.title or "").strip() or str(item.sku or "").strip() or "Unbenanntes Produkt"
+            description = str(item.description or "").strip() or "-"
+            sku = str(item.sku or "").strip()
+            sku_part = f" [{sku}]" if sku else ""
+            lines.append(f"{item.quantity}x {title}{sku_part}")
+            lines.append(f"   {description}")
+        if overview.unknown:
+            lines.append("")
+            lines.append("Weitere Print-Produkte werden noch ermittelt.")
+        return "\n".join(lines)
 
     def _warm_wix_context_for_summaries(self, summaries: list[InvoiceSummary]) -> None:
         """Prefetch full Wix contexts without delaying the invoice list.
@@ -2208,6 +2190,12 @@ class RechnungenView(QWidget):
     def _select_visible_table_row(self, row: int) -> None:
         if row < 0:
             return
+        selection_model = self._table.selectionModel()
+        selected_before = (
+            [(int(index.row()), int(index.column())) for index in selection_model.selectedRows()]
+            if selection_model is not None
+            else []
+        )
         self._table.selectRow(row)
         model = self._table.model()
         if model is not None:
@@ -2215,7 +2203,13 @@ class RechnungenView(QWidget):
             if index.isValid():
                 self._table.setCurrentIndex(index)
         self._table.viewport().update()
-        self._refresh_detail_for_selection()
+        selected_after = (
+            [(int(index.row()), int(index.column())) for index in selection_model.selectedRows()]
+            if selection_model is not None
+            else []
+        )
+        if selected_after == selected_before:
+            self._refresh_detail_for_selection()
 
     def eventFilter(self, watched: Any, event: QEvent) -> bool:  # type: ignore[override]
         if watched is self._table.viewport() and event.type() in (
@@ -2630,6 +2624,7 @@ class RechnungenView(QWidget):
 
     def _populate_detail_for_summary(self, summary: InvoiceSummary) -> None:
         self._gb_open.hide()
+        self._gb_open_products.hide()
         self._gb_info.show()
         self._gb_shipping.show()
         self._dl_number.setText(summary.invoice_number or "")
@@ -2672,6 +2667,7 @@ class RechnungenView(QWidget):
 
     def _reset_detail(self) -> None:
         self._gb_open.show()
+        self._gb_open_products.show()
         self._gb_info.hide()
         self._gb_shipping.hide()
         for lbl in (

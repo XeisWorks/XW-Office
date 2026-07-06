@@ -374,6 +374,24 @@ def test_get_cached_order_summary_does_not_call_wix(tmp_path, monkeypatch) -> No
                 "firstName": "Cached",
                 "lastName": "Only",
             },
+            "buyerNote": "Bitte PLC pruefen",
+        },
+    )
+    cache.put_order(
+        site_id="site",
+        account_id="",
+        reference="20901",
+        order={
+            "id": "ord-cache-digital",
+            "number": "20901",
+            "lineItems": [
+                {
+                    "id": "line-digital",
+                    "productName": {"original": "Digital Produkt"},
+                    "quantity": 1,
+                    "itemType": {"preset": "DIGITAL"},
+                }
+            ],
         },
     )
     client = WixOrdersClient(secret_service=_SecretService(), order_cache=cache)  # type: ignore[arg-type]
@@ -381,9 +399,13 @@ def test_get_cached_order_summary_does_not_call_wix(tmp_path, monkeypatch) -> No
     summary = client.get_cached_order_summary("20899")
     items = client.get_cached_order_line_items("20899")
     missing_cache_entry = client.get_cached_order_summary("99999")
+    cached_physical = client.get_cached_reference_digital_only("20899")
+    cached_digital = client.get_cached_reference_digital_only("20901")
+    cached_note = client.get_cached_order_buyer_note("20899")
     cache.put_missing(site_id="site", account_id="", reference="missing")
     cached_missing = client.get_cached_order_summary("missing")
     missing_items = client.get_cached_order_line_items("missing")
+    missing_digital = client.get_cached_reference_digital_only("missing")
 
     assert summary is not None
     assert summary["wix_customer_email"] == "cached-only@example.test"
@@ -392,9 +414,13 @@ def test_get_cached_order_summary_does_not_call_wix(tmp_path, monkeypatch) -> No
     assert items[0].sku == "XW-CACHE-1"
     assert items[0].name == "Cache Produkt"
     assert items[0].qty == 2
+    assert cached_physical is False
+    assert cached_digital is True
+    assert cached_note == "Bitte PLC pruefen"
     assert missing_cache_entry is None
     assert cached_missing == {}
     assert missing_items == []
+    assert missing_digital is None
     assert calls == 0
 
 

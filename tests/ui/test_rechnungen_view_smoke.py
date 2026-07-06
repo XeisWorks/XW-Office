@@ -419,6 +419,18 @@ def test_rechnungen_open_overview_resolves_wix_classification_and_buyer_notes(qt
         def is_reference_digital_only(self, reference: str) -> bool:
             return reference == "20911"
 
+        def fetch_order_line_items(self, reference: str) -> list[object]:
+            if reference != "20910":
+                return []
+            return [
+                types.SimpleNamespace(
+                    sku="XW-PHYS",
+                    name="Physisches Produkt",
+                    qty=2,
+                    note="Produktbeschreibung",
+                )
+            ]
+
     container.register(InvoiceProcessingService, lambda _: _OverviewInvoiceService())
     container.register(WixOrdersClient, lambda _: _OverviewWixClient())
     view = RechnungenView(container)
@@ -454,6 +466,8 @@ def test_rechnungen_open_overview_resolves_wix_classification_and_buyer_notes(qt
     assert view._open_digital.text() == "1"  # noqa: SLF001
     assert view._open_note.text() == "2"  # noqa: SLF001
     assert view._open_plc.text() == "1"  # noqa: SLF001
+    assert "2x Physisches Produkt [XW-PHYS]" in view._open_products_text.toPlainText()  # noqa: SLF001
+    assert "Produktbeschreibung" in view._open_products_text.toPlainText()  # noqa: SLF001
 
 
 def test_plc_dialog_defaults_to_direct_webservice_without_changing_list_action(qtbot: object) -> None:
