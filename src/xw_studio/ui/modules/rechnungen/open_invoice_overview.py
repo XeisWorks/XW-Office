@@ -5,7 +5,7 @@ import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
 from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
@@ -63,6 +63,7 @@ def overview_from_visible_summaries(
     *,
     digital_cache: dict[str, bool],
     wix_client: WixOrdersClient | None = None,
+    sku_filter: Callable[[str], bool] | None = None,
 ) -> OpenInvoiceOverview:
     """Build the immediate UI result from already-loaded sevDesk rows and cache."""
     total = len(summaries)
@@ -73,7 +74,7 @@ def overview_from_visible_summaries(
     plc = 0
     known_refs: set[str] = set()
     cache_updates: dict[str, bool] = {}
-    products = _ProductAccumulator()
+    products = _ProductAccumulator(sku_filter=sku_filter)
     for summary in summaries:
         ref = str(summary.order_reference or "").strip()
         buyer_note = str(summary.buyer_note or "").strip()
@@ -136,7 +137,7 @@ def resolve_open_invoice_overview(
     with_ref = 0
     with_note = 0
     plc = 0
-    products = _ProductAccumulator()
+    products = _ProductAccumulator(sku_filter=invoice_service.is_flagged_sku)
     workers = min(8, max(1, len(summaries)))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="open-invoice-overview") as executor:
         rows = list(
@@ -270,14 +271,17 @@ def note_has_plc_label_hint(note: object) -> bool:
 
 
 class _ProductAccumulator:
-    def __init__(self) -> None:
+    def __init__(self, *, sku_filter: Callable[[str], bool] | None = None) -> None:
         self._rows: dict[tuple[str, str, str], int] = defaultdict(int)
+        self._sku_filter = sku_filter
 
     def add_items(self, items: object) -> None:
         if not isinstance(items, list):
             return
         for item in items:
             sku = str(getattr(item, "sku", "") or "").strip().upper()
+            if self._sku_filter is not None and not self._sku_filter(sku):
+                continue
             title = str(getattr(item, "name", "") or "").strip() or sku or "Unbenanntes Produkt"
             description = str(getattr(item, "note", "") or "").strip()
             try:

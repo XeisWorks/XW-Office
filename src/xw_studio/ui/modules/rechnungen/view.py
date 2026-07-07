@@ -1563,6 +1563,7 @@ class RechnungenView(QWidget):
 
     def _refresh_open_invoice_overview(self) -> None:
         open_rows = [s for s in self._summaries if s.status_code == 100]
+        service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
         try:
             wix_client: WixOrdersClient | None = self._container.resolve(WixOrdersClient)
         except Exception:  # noqa: BLE001 - overview still works with UI cache only.
@@ -1571,6 +1572,7 @@ class RechnungenView(QWidget):
             open_rows,
             digital_cache=self._wix_digital_cache,
             wix_client=wix_client,
+            sku_filter=service.is_flagged_sku,
         )
 
         if overview.total == 0:
