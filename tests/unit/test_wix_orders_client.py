@@ -532,3 +532,45 @@ def test_parse_order_line_item_uses_product_variations_note_when_options_missing
     )
 
     assert item.note == "Besetzung: Böhmische Besetzung"
+
+
+def test_parse_order_line_item_filters_rabatt_but_keeps_besetzung() -> None:
+    item = _parse_order_line_item(
+        {
+            "id": "line-3",
+            "quantity": 1,
+            "productName": {"original": "Polka"},
+            "physicalProperties": {"sku": "XW-779"},
+            "productOptions": [
+                {
+                    "name": {"translated": "Besetzung"},
+                    "value": {"translated": "Musikkapelle"},
+                },
+                {
+                    "name": {"translated": "Rabatt"},
+                    "value": {"translated": "B2B-Rabatt 30%"},
+                },
+            ],
+        }
+    )
+
+    assert item.note == "Besetzung: Musikkapelle"
+
+
+def test_parse_order_line_item_drops_rabatt_only_description_lines() -> None:
+    item = _parse_order_line_item(
+        {
+            "id": "line-4",
+            "quantity": 1,
+            "productName": {"original": "Marsch"},
+            "physicalProperties": {"sku": "XW-780"},
+            "descriptionLines": [
+                {
+                    "name": {"translated": "Rabatt"},
+                    "plainText": {"translated": "B2B-Rabatt 25%"},
+                }
+            ],
+        }
+    )
+
+    assert item.note == ""

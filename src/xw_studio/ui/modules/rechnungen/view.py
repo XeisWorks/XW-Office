@@ -1688,15 +1688,15 @@ class RechnungenView(QWidget):
     def _format_open_print_products(overview: OpenInvoiceOverview) -> str:
         style = (
             "<style>"
-            "body { color: #0f172a; font-family: 'Segoe UI', sans-serif; font-size: 12px; }"
+            "body { color: #e2e8f0; font-family: 'Segoe UI', sans-serif; font-size: 12px; }"
             "table { width: 100%; border-collapse: collapse; }"
             "td { vertical-align: top; padding: 3px 0; }"
-            "td.qty { width: 56px; color: #1e293b; font-weight: 600; white-space: nowrap; }"
+            "td.qty { width: 56px; color: #e2e8f0; font-weight: 600; white-space: nowrap; }"
             "td.main { padding-right: 10px; }"
-            "td.sku { width: 110px; color: #475569; white-space: nowrap; text-align: right; }"
-            "div.title { font-weight: 700; color: #0f172a; }"
-            "div.desc { margin-top: 1px; color: #64748b; font-size: 11px; }"
-            "div.msg { color: #475569; }"
+            "td.sku { width: 110px; color: #93c5fd; white-space: nowrap; text-align: right; }"
+            "div.title { font-weight: 700; color: #ffffff; }"
+            "div.desc { margin-top: 1px; color: #cbd5e1; font-size: 11px; }"
+            "div.msg { color: #cbd5e1; }"
             "</style>"
         )
         if overview.unknown and not overview.print_products:
@@ -1706,7 +1706,10 @@ class RechnungenView(QWidget):
         rows: list[str] = []
         for item in overview.print_products:
             title_raw = str(item.title or "").strip() or str(item.sku or "").strip() or "Unbenanntes Produkt"
-            desc_raw = str(item.description or "").strip() or "-"
+            desc_raw = str(item.description or "").strip()
+            desc_parts = [part.strip() for part in desc_raw.split("|") if part.strip()]
+            desc_parts = [part for part in desc_parts if "rabatt" not in part.casefold()]
+            desc_raw = " | ".join(desc_parts) or "Besetzung offen"
             sku_raw = str(item.sku or "").strip() or "-"
             rows.append(
                 "<tr>"

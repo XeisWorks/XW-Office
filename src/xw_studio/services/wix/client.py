@@ -699,9 +699,20 @@ def _option_lines(source: object) -> list[str]:
 
 
 def _line_item_note(raw: dict[str, Any]) -> str:
+    def sanitize(lines: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for line in lines:
+            text = str(line or "").strip()
+            if not text:
+                continue
+            if "rabatt" in text.casefold():
+                continue
+            cleaned.append(text)
+        return cleaned
+
     # Primary source: Wix option payloads (captures "Besetzung"-like variants)
     for key in ("productOptions", "productOption", "productVariations", "productVariation"):
-        lines = _option_lines(raw.get(key))
+        lines = sanitize(_option_lines(raw.get(key)))
         if lines:
             return " | ".join(lines)
 
@@ -719,7 +730,8 @@ def _line_item_note(raw: dict[str, Any]) -> str:
                 parts.append(f"{label}: {value}")
             elif value:
                 parts.append(value)
-        return " | ".join(parts)
+        filtered = sanitize(parts)
+        return " | ".join(filtered)
     return ""
 
 
