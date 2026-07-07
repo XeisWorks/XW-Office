@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import html
 import json
 import logging
 import os
@@ -50,6 +51,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStyle,
     QTableView,
+    QTextBrowser,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -830,7 +832,7 @@ class RechnungenView(QWidget):
         self._gb_open_products = QGroupBox("PRINT-PRODUKTE OFFEN")
         open_products_layout = QVBoxLayout(self._gb_open_products)
         open_products_layout.setContentsMargins(10, 8, 10, 10)
-        self._open_products_text = QPlainTextEdit()
+        self._open_products_text = QTextBrowser()
         self._open_products_text.setReadOnly(True)
         self._open_products_text.setMinimumHeight(110)
         self._open_products_text.setMaximumHeight(190)
@@ -1563,7 +1565,6 @@ class RechnungenView(QWidget):
 
     def _refresh_open_invoice_overview(self) -> None:
         open_rows = [s for s in self._summaries if s.status_code == 100]
-        service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
         try:
             wix_client: WixOrdersClient | None = self._container.resolve(WixOrdersClient)
         except Exception:  # noqa: BLE001 - overview still works with UI cache only.
@@ -1572,7 +1573,7 @@ class RechnungenView(QWidget):
             open_rows,
             digital_cache=self._wix_digital_cache,
             wix_client=wix_client,
-            sku_filter=service.is_flagged_sku,
+            include_print_products=False,
         )
 
         if overview.total == 0:
@@ -1586,22 +1587,14 @@ class RechnungenView(QWidget):
             self._open_overview_cached_plc = 0
             self._open_overview_complete = True
             self._open_overview_products_text = ""
+            self._open_products_text.setHtml(self._format_open_print_products(overview))
             return
 
         if overview.key and overview.key == self._open_overview_key and self._open_overview_complete:
-            cached = OpenInvoiceOverview(
-                key=overview.key,
-                total=overview.total,
-                with_ref=overview.with_ref,
-                physical=self._open_overview_cached_physical,
-                digital=self._open_overview_cached_digital,
-                unknown=0,
-                with_note=self._open_overview_cached_note,
-                plc=self._open_overview_cached_plc,
-                complete=True,
-                print_products=overview.print_products,
-            )
-            self._apply_open_invoice_overview(cached)
+            for key, value in overview.cache_updates.items():
+                self._wix_digital_cache[str(key)] = bool(value)
+            self._open_total.setText(str(max(0, overview.total)))
+            self._open_with_ref.setText(str(max(0, overview.with_ref)))
             self._open_physical.setText(str(self._open_overview_cached_physical))
             self._open_digital.setText(str(self._open_overview_cached_digital))
             self._open_plc.setText(str(self._open_overview_cached_plc))
@@ -1609,7 +1602,10 @@ class RechnungenView(QWidget):
             return
 
         self._apply_open_invoice_overview(overview)
-        if overview.unknown:
+        has_refs = any(str(summary.order_reference or "").strip() for summary in open_rows)
+        if has_refs:
+            self._open_overview_products_text = "Print-Produkte werden ermittelt..."
+            self._open_products_text.setHtml("<div style='color:#475569;'>Print-Produkte werden ermittelt...</div>")
             self._start_open_invoice_overview(open_rows)
 
     def _start_open_invoice_overview(
@@ -1686,26 +1682,45 @@ class RechnungenView(QWidget):
         self._open_overview_cached_plc = max(0, overview.plc)
         self._open_overview_complete = overview.complete
         self._open_overview_products_text = self._format_open_print_products(overview)
-        self._open_products_text.setPlainText(self._open_overview_products_text)
+        self._open_products_text.setHtml(self._open_overview_products_text)
 
     @staticmethod
     def _format_open_print_products(overview: OpenInvoiceOverview) -> str:
+        style = (
+            "<style>"
+            "body { color: #0f172a; font-family: 'Segoe UI', sans-serif; font-size: 12px; }"
+            "table { width: 100%; border-collapse: collapse; }"
+            "td { vertical-align: top; padding: 3px 0; }"
+            "td.qty { width: 56px; color: #1e293b; font-weight: 600; white-space: nowrap; }"
+            "td.main { padding-right: 10px; }"
+            "td.sku { width: 110px; color: #475569; white-space: nowrap; text-align: right; }"
+            "div.title { font-weight: 700; color: #0f172a; }"
+            "div.desc { margin-top: 1px; color: #64748b; font-size: 11px; }"
+            "div.msg { color: #475569; }"
+            "</style>"
+        )
         if overview.unknown and not overview.print_products:
-            return "Print-Produkte werden ermittelt..."
+            return f"{style}<div class='msg'>Print-Produkte werden ermittelt...</div>"
         if not overview.print_products:
-            return "Keine physischen Print-Produkte in den offenen Rechnungen gefunden."
-        lines: list[str] = []
+            return f"{style}<div class='msg'>Keine physischen Print-Produkte in den offenen Rechnungen gefunden.</div>"
+        rows: list[str] = []
         for item in overview.print_products:
-            title = str(item.title or "").strip() or str(item.sku or "").strip() or "Unbenanntes Produkt"
-            description = str(item.description or "").strip() or "-"
-            sku = str(item.sku or "").strip()
-            sku_part = f" [{sku}]" if sku else ""
-            lines.append(f"{item.quantity}x {title}{sku_part}")
-            lines.append(f"   {description}")
+            title_raw = str(item.title or "").strip() or str(item.sku or "").strip() or "Unbenanntes Produkt"
+            desc_raw = str(item.description or "").strip() or "-"
+            sku_raw = str(item.sku or "").strip() or "-"
+            rows.append(
+                "<tr>"
+                f"<td class='qty'>{max(1, int(item.quantity))}x</td>"
+                "<td class='main'>"
+                f"<div class='title'>{html.escape(title_raw)}</div>"
+                f"<div class='desc'>{html.escape(desc_raw)}</div>"
+                "</td>"
+                f"<td class='sku'>{html.escape(sku_raw)}</td>"
+                "</tr>"
+            )
         if overview.unknown:
-            lines.append("")
-            lines.append("Weitere Print-Produkte werden noch ermittelt.")
-        return "\n".join(lines)
+            rows.append("<tr><td colspan='3'><div class='desc'>Weitere Print-Produkte werden noch ermittelt.</div></td></tr>")
+        return f"{style}<table>{''.join(rows)}</table>"
 
     def _warm_wix_context_for_summaries(self, summaries: list[InvoiceSummary]) -> None:
         """Prefetch full Wix contexts without delaying the invoice list.

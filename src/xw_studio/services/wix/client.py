@@ -636,6 +636,93 @@ class WixOrderItem(BaseModel):
     is_unreleased: bool = False
 
 
+def _wix_text(value: object) -> str:
+    if isinstance(value, dict):
+        for key in (
+            "translated",
+            "original",
+            "value",
+            "name",
+            "label",
+            "title",
+            "text",
+        ):
+            text = str(value.get(key) or "").strip()
+            if text:
+                return text
+        return ""
+    return str(value or "").strip()
+
+
+def _format_option_entry(entry: object) -> str:
+    if isinstance(entry, dict):
+        label = _wix_text(
+            entry.get("name")
+            or entry.get("optionName")
+            or entry.get("label")
+            or entry.get("key")
+        )
+        value = _wix_text(
+            entry.get("value")
+            or entry.get("optionValue")
+            or entry.get("selection")
+            or entry.get("choice")
+            or entry.get("plainText")
+        )
+        if label and value:
+            return f"{label}: {value}"
+        return value or label
+    return _wix_text(entry)
+
+
+def _option_lines(source: object) -> list[str]:
+    lines: list[str] = []
+    if isinstance(source, list):
+        for entry in source:
+            text = _format_option_entry(entry)
+            if text:
+                lines.append(text)
+        return lines
+    if isinstance(source, dict):
+        for key, value in source.items():
+            if key in {"id", "sku", "code"}:
+                continue
+            value_text = _wix_text(value)
+            key_text = _wix_text(key)
+            if key_text and value_text:
+                lines.append(f"{key_text}: {value_text}")
+            elif value_text:
+                lines.append(value_text)
+        return lines
+    text = _wix_text(source)
+    return [text] if text else []
+
+
+def _line_item_note(raw: dict[str, Any]) -> str:
+    # Primary source: Wix option payloads (captures "Besetzung"-like variants)
+    for key in ("productOptions", "productOption", "productVariations", "productVariation"):
+        lines = _option_lines(raw.get(key))
+        if lines:
+            return " | ".join(lines)
+
+    # Fallback: legacy description lines
+    desc = raw.get("descriptionLines") or []
+    if isinstance(desc, list):
+        parts: list[str] = []
+        for entry in desc:
+            if not isinstance(entry, dict):
+                continue
+            label = _wix_text(entry.get("name"))
+            value_obj = entry.get("plainText") or entry.get("colorInfo") or {}
+            value = _wix_text(value_obj)
+            if label and value:
+                parts.append(f"{label}: {value}")
+            elif value:
+                parts.append(value)
+        return " | ".join(parts)
+    return ""
+
+
 def _parse_order_line_item(raw: dict[str, Any]) -> WixOrderItem:
     """Extract a normalized WixOrderItem from a Wix ecom lineItem dict."""
     line_item_id = str(raw.get("id") or "").strip()
@@ -696,24 +783,7 @@ def _parse_order_line_item(raw: dict[str, Any]) -> WixOrderItem:
     except (TypeError, ValueError):
         pass
 
-    # Note from line item description or options
-    note = ""
-    desc = raw.get("descriptionLines") or []
-    if isinstance(desc, list):
-        parts: list[str] = []
-        for entry in desc:
-            if not isinstance(entry, dict):
-                continue
-            label = str((entry.get("name") or {}).get("translated") or
-                        (entry.get("name") or {}).get("original") or "").strip()
-            value_obj = entry.get("plainText") or entry.get("colorInfo") or {}
-            value = str((value_obj.get("translated") or value_obj.get("original") or "")
-                        if isinstance(value_obj, dict) else value_obj).strip()
-            if label and value:
-                parts.append(f"{label}: {value}")
-            elif value:
-                parts.append(value)
-        note = " | ".join(parts)
+    note = _line_item_note(raw)
 
     is_unreleased = any(sku.upper().startswith(p) for p in _UNRELEASED_PREFIXES)
 

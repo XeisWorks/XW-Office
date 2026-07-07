@@ -4,6 +4,7 @@ from typing import Any
 import httpx
 
 from xw_studio.services.wix.client import WixOrdersClient
+from xw_studio.services.wix.client import _parse_order_line_item
 from xw_studio.services.wix.order_cache import WixOrderCache
 
 
@@ -487,3 +488,47 @@ def test_fetch_order_line_items_refreshes_incomplete_cache(tmp_path, monkeypatch
     assert len(items) == 1
     assert items[0].sku == "XW-REFRESH"
     assert calls == 1
+
+
+def test_parse_order_line_item_prefers_product_options_note() -> None:
+    item = _parse_order_line_item(
+        {
+            "id": "line-1",
+            "quantity": 1,
+            "productName": {"original": "Polka"},
+            "physicalProperties": {"sku": "XW-777"},
+            "productOptions": [
+                {
+                    "name": {"translated": "Besetzung"},
+                    "value": {"translated": "Mnozil Brass"},
+                }
+            ],
+            "descriptionLines": [
+                {
+                    "name": {"translated": "Alt"},
+                    "plainText": {"translated": "Nicht verwenden"},
+                }
+            ],
+        }
+    )
+
+    assert item.note == "Besetzung: Mnozil Brass"
+
+
+def test_parse_order_line_item_uses_product_variations_note_when_options_missing() -> None:
+    item = _parse_order_line_item(
+        {
+            "id": "line-2",
+            "quantity": 2,
+            "productName": {"original": "Marsch"},
+            "physicalProperties": {"sku": "XW-778"},
+            "productVariations": [
+                {
+                    "name": {"translated": "Besetzung"},
+                    "value": {"translated": "Böhmische Besetzung"},
+                }
+            ],
+        }
+    )
+
+    assert item.note == "Besetzung: Böhmische Besetzung"

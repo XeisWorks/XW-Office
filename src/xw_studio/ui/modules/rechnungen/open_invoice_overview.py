@@ -64,6 +64,7 @@ def overview_from_visible_summaries(
     digital_cache: dict[str, bool],
     wix_client: WixOrdersClient | None = None,
     sku_filter: Callable[[str], bool] | None = None,
+    include_print_products: bool = True,
 ) -> OpenInvoiceOverview:
     """Build the immediate UI result from already-loaded sevDesk rows and cache."""
     total = len(summaries)
@@ -74,7 +75,7 @@ def overview_from_visible_summaries(
     plc = 0
     known_refs: set[str] = set()
     cache_updates: dict[str, bool] = {}
-    products = _ProductAccumulator(sku_filter=sku_filter)
+    products = _ProductAccumulator(sku_filter=sku_filter) if include_print_products else None
     for summary in summaries:
         ref = str(summary.order_reference or "").strip()
         buyer_note = str(summary.buyer_note or "").strip()
@@ -93,9 +94,10 @@ def overview_from_visible_summaries(
                     digital += 1
                 else:
                     physical += 1
-                    cached_items = _cached_order_line_items(wix_client, ref) if wix_client is not None else None
-                    if cached_items is not None:
-                        products.add_items(cached_items)
+                    if products is not None:
+                        cached_items = _cached_order_line_items(wix_client, ref) if wix_client is not None else None
+                        if cached_items is not None:
+                            products.add_items(cached_items)
             cached_note = _cached_order_buyer_note(wix_client, ref) if wix_client is not None else ""
             if cached_note:
                 has_note = True
@@ -116,7 +118,7 @@ def overview_from_visible_summaries(
         plc=plc,
         complete=unknown == 0,
         cache_updates=cache_updates,
-        print_products=products.to_list(),
+        print_products=products.to_list() if products is not None else [],
     )
 
 
@@ -137,7 +139,9 @@ def resolve_open_invoice_overview(
     with_ref = 0
     with_note = 0
     plc = 0
-    products = _ProductAccumulator(sku_filter=invoice_service.is_flagged_sku)
+    sku_filter_candidate = getattr(invoice_service, "is_flagged_sku", None)
+    sku_filter: Callable[[str], bool] | None = sku_filter_candidate if callable(sku_filter_candidate) else None
+    products = _ProductAccumulator(sku_filter=sku_filter)
     workers = min(8, max(1, len(summaries)))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="open-invoice-overview") as executor:
         rows = list(
