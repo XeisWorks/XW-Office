@@ -6,10 +6,11 @@ import logging
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -464,6 +465,8 @@ class PlcLabelPrintDialog(QDialog):
         if isinstance(exc, PlcDuplicateShipmentError):
             archive_path = self._label_archive.find(shipment)
             if archive_path is not None:
+                self._handle_duplicate_archived_label(shipment, archive_path)
+                return
                 answer = QMessageBox.question(
                     self,
                     "PLC-Label erneut drucken",
@@ -500,6 +503,63 @@ class PlcLabelPrintDialog(QDialog):
         logger.warning("PLC send failed invoice=%s: %s", self._summary.id, exc)
         self._status.setText(f"PLC-Fehler: {exc}")
         QMessageBox.critical(self, "PLC Fehler", str(exc))
+
+    def _handle_duplicate_archived_label(
+        self,
+        shipment: PlcShipmentDraft,
+        archive_path: object,
+    ) -> None:
+        box = QMessageBox(self)
+        box.setWindowTitle("PLC-Label bereits gedruckt")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText("PLC-Label bereits gedruckt.")
+        box.setInformativeText(
+            "Label als PDF öffnen oder ein weiteres Label für diese Rechnung erzeugen?\n\n"
+            f"Archiv: {archive_path}"
+        )
+        open_btn = box.addButton("PDF öffnen", QMessageBox.ButtonRole.AcceptRole)
+        additional_btn = box.addButton("Weiteres Label erzeugen", QMessageBox.ButtonRole.ActionRole)
+        box.addButton("Abbrechen", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(open_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is open_btn:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.fspath(archive_path)))
+            self._status.setText("Archiviertes PLC-Label geöffnet")
+            self.accept()
+            return
+        if clicked is additional_btn:
+            next_shipment = self._next_additional_shipment(shipment)
+            self._status.setText(
+                "Erzeuge weiteres PLC-Label mit Referenz "
+                f"{next_shipment.reference} / {next_shipment.invoice_number}"
+            )
+            self._start_send(next_shipment, "webservice")
+
+    def _next_additional_shipment(self, shipment: PlcShipmentDraft) -> PlcShipmentDraft:
+        for index in range(2, 100):
+            suffix = f"L{index}"
+            reference = self._append_reference_suffix(shipment.reference, suffix)
+            invoice_number = self._append_reference_suffix(shipment.invoice_number, suffix)
+            parcels = tuple(
+                replace(parcel, reference=self._append_reference_suffix(parcel.reference or shipment.reference, suffix))
+                for parcel in shipment.parcels
+            )
+            candidate = replace(
+                shipment,
+                reference=reference,
+                invoice_number=invoice_number,
+                parcels=parcels,
+            )
+            if self._label_archive.find(candidate) is None:
+                return candidate
+        raise RuntimeError("Kein freier PLC-Label-Suffix zwischen L2 und L99 gefunden.")
+
+    @staticmethod
+    def _append_reference_suffix(value: object, suffix: str) -> str:
+        base = re.sub(r"-L\d+$", "", clean_reference(value)).strip(" -")
+        next_value = f"{base}-{suffix}" if base else suffix
+        return clean_reference(next_value)
 
     def _queue_webservice_label(self, pdf_path: str | os.PathLike[str], reference: str) -> str:
         printer = self._resolve_plc_printer()

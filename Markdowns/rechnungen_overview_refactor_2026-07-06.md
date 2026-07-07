@@ -51,3 +51,15 @@ Den bestehenden Wix-Kontextfluss vereinheitlichen:
 
 Das reduziert doppelte API-Pfade und macht die Performance bei groesseren
 Rechnungslisten berechenbarer.
+
+## PLC-Mehrfachlabel
+
+Wenn eine PLC-Sendung bereits erstellt wurde und ein Archiv-PDF vorhanden ist,
+fragt der Dialog jetzt explizit:
+
+- PDF oeffnen.
+- Weiteres Label fuer dieselbe Rechnung erzeugen.
+
+Beim weiteren Label bekommen Wix-Referenz, Rechnungsnummer und Paket-Referenz
+einen laufenden Suffix `-L2`, `-L3`, ... . Dadurch bleiben mehrere Sendungen zu
+derselben Rechnung im PLC, im lokalen Archiv und im Druckauftrag unterscheidbar.

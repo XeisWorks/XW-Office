@@ -6,6 +6,7 @@ import pytest
 from xw_studio.services.plc.label_archive import PlcLabelArchive
 from xw_studio.services.plc.models import PlcParcel, PlcShipmentDraft
 from xw_studio.services.plc.polling import ShipmentAddress
+from xw_studio.ui.modules.rechnungen.plc_label_dialog import PlcLabelPrintDialog
 
 
 def _shipment(*, reference: str = "20868", invoice_number: str = "RE-261952") -> PlcShipmentDraft:
@@ -49,3 +50,22 @@ def test_archive_uses_windows_safe_filename_parts(tmp_path) -> None:
 def test_archive_rejects_non_pdf_response(tmp_path) -> None:
     with pytest.raises(ValueError, match="PDF"):
         PlcLabelArchive(tmp_path).save(_shipment(), b"not a PDF")
+
+
+def test_additional_plc_label_uses_suffix_for_order_and_invoice(tmp_path) -> None:
+    dialog = PlcLabelPrintDialog.__new__(PlcLabelPrintDialog)
+    dialog._label_archive = PlcLabelArchive(tmp_path)  # noqa: SLF001
+    original = _shipment()
+    dialog._label_archive.save(original, b"%PDF-1.7\nPLC label")  # noqa: SLF001
+
+    second = dialog._next_additional_shipment(original)  # noqa: SLF001
+
+    assert second.reference == "20868-L2"
+    assert second.invoice_number == "RE-261952-L2"
+    assert second.parcels[0].reference == "20868-L2"
+
+    dialog._label_archive.save(second, b"%PDF-1.7\nPLC label")  # noqa: SLF001
+    third = dialog._next_additional_shipment(original)  # noqa: SLF001
+
+    assert third.reference == "20868-L3"
+    assert third.invoice_number == "RE-261952-L3"
