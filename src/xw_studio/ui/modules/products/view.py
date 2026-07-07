@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -104,7 +105,7 @@ class ProductsView(QWidget):
 
         root.addWidget(self._build_sync_tab())
 
-        self._load_sync_sources()
+        self._load_sync_sources(refresh_sevdesk_cache=True)
 
     # ==================================================================
     # Inventar tab
@@ -438,6 +439,11 @@ class ProductsView(QWidget):
         self._sync_load_btn = QPushButton("Alle Quellen laden")
         self._sync_load_btn.clicked.connect(self._load_sync_sources)
         bar.addWidget(self._sync_load_btn)
+        self._sync_refresh_sevdesk_btn = QPushButton("sevDesk aktualisieren")
+        self._sync_refresh_sevdesk_btn.clicked.connect(
+            lambda: self._load_sync_sources(refresh_sevdesk_cache=True)
+        )
+        bar.addWidget(self._sync_refresh_sevdesk_btn)
         self._sync_fields_btn = QPushButton("Felder fuer Auswahl aendern")
         self._sync_fields_btn.clicked.connect(self._bulk_edit_fields)
         self._sync_fields_btn.setEnabled(False)
@@ -454,6 +460,10 @@ class ProductsView(QWidget):
         self._sync_apply_btn.setEnabled(False)
         bar.addWidget(self._sync_apply_btn)
         lay.addLayout(bar)
+
+        self._sync_sevdesk_cache_lbl = QLabel("sevDesk-Cache: noch nicht aktualisiert")
+        self._sync_sevdesk_cache_lbl.setObjectName("infoLabel")
+        lay.addWidget(self._sync_sevdesk_cache_lbl)
 
         filter_row = QHBoxLayout()
         self._sync_search = SearchBar("Produkte filtern (SKU, Name, Brand, Status)...")
@@ -533,12 +543,16 @@ class ProductsView(QWidget):
         lay.addWidget(plans_group)
         return page
 
-    def _load_sync_sources(self) -> None:
+    def _load_sync_sources(self, _checked: bool = False, *, refresh_sevdesk_cache: bool = False) -> None:
         self._sync_load_btn.setEnabled(False)
+        self._sync_refresh_sevdesk_btn.setEnabled(False)
         self._sync_apply_btn.setEnabled(False)
-        self._sync_status_lbl.setText("Lade lokale Produkte, Wix und sevDesk...")
+        if refresh_sevdesk_cache:
+            self._sync_status_lbl.setText("Lade lokale Produkte, Wix und aktualisiere sevDesk-Cache...")
+        else:
+            self._sync_status_lbl.setText("Lade lokale Produkte, Wix und sevDesk...")
 
-        def job() -> tuple[list[ProductRow], list[WixProduct], list[SevdeskPart]]:
+        def job() -> tuple[list[ProductRow], list[WixProduct], list[SevdeskPart], datetime | None]:
             inv: InventoryService = self._container.resolve(InventoryService)
             wix_client: WixProductsClient = self._container.resolve(WixProductsClient)
             part_client: PartClient = self._container.resolve(PartClient)
@@ -547,10 +561,10 @@ class ProductsView(QWidget):
             wix = wix_client.list_products()
             sevdesk: list[SevdeskPart] = []
             try:
-                sevdesk = part_client.list_parts()
+                sevdesk = part_client.list_parts(refresh_cache=refresh_sevdesk_cache)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("sevDesk products not available for sync: %s", exc)
-            return (local, wix, sevdesk)
+            return (local, wix, sevdesk, part_client.parts_cache_updated_at)
 
         self._sevdesk_worker = BackgroundWorker(job)
         self._sevdesk_worker.signals.result.connect(self._on_sync_sources_loaded)
@@ -559,9 +573,10 @@ class ProductsView(QWidget):
 
     def _on_sync_sources_loaded(self, payload: object) -> None:
         self._sync_load_btn.setEnabled(True)
-        if not isinstance(payload, tuple) or len(payload) != 3:
+        self._sync_refresh_sevdesk_btn.setEnabled(True)
+        if not isinstance(payload, tuple) or len(payload) != 4:
             return
-        local_rows, wix_rows, sevdesk_rows = payload
+        local_rows, wix_rows, sevdesk_rows, cache_updated_at = payload
         if not isinstance(local_rows, list) or not isinstance(wix_rows, list) or not isinstance(sevdesk_rows, list):
             return
         self._all_rows = [r for r in local_rows if isinstance(r, ProductRow)]
@@ -577,15 +592,25 @@ class ProductsView(QWidget):
         self._sync_status_lbl.setText(
             f"Sync-Vergleich geladen: {len(self._sync_rows)} SKU, Konflikte: {conflicts}"
         )
+        self._sync_sevdesk_cache_lbl.setText(
+            f"sevDesk-Cache: {self._format_cache_timestamp(cache_updated_at)}"
+        )
         self._sync_apply_btn.setEnabled(bool(self._wix_rows))
 
     def _on_sync_sources_error(self, exc: BaseException) -> None:
         self._sync_load_btn.setEnabled(True)
+        self._sync_refresh_sevdesk_btn.setEnabled(True)
         self._sync_fields_btn.setEnabled(False)
         self._sync_brand_btn.setEnabled(False)
         self._sync_apply_btn.setEnabled(False)
         self._sync_status_lbl.setText(f"Fehler: {exc}")
         logger.exception("Sync source load failed: %s", exc)
+
+    @staticmethod
+    def _format_cache_timestamp(value: object) -> str:
+        if isinstance(value, datetime):
+            return value.astimezone().strftime("%d.%m.%Y %H:%M:%S")
+        return "noch nicht aktualisiert"
 
     def _build_sync_rows(self) -> list[_SyncRow]:
         local_by_sku = {row.sku: row for row in self._all_rows if row.sku}

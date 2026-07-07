@@ -67,3 +67,50 @@ def test_list_parts_paginates() -> None:
     assert len(conn.calls) == 2
     assert conn.calls[0][0] == "/Part"
     assert conn.calls[1][1]["offset"] == 100
+
+
+def test_list_parts_uses_cache_without_extra_http_calls() -> None:
+    conn = _ConnStub(
+        [
+            {
+                "objects": [
+                    {
+                        "id": "10",
+                        "partNumber": "XW-4-001",
+                        "name": "Etuede A",
+                    }
+                ]
+            }
+        ]
+    )
+    client = PartClient(conn)  # type: ignore[arg-type]
+
+    first = client.list_parts(refresh_cache=True)
+    second = client.list_parts()
+
+    assert len(first) == 1
+    assert len(second) == 1
+    assert len(conn.calls) == 1
+    assert client.parts_cache_updated_at is not None
+
+
+def test_list_parts_without_refresh_does_not_update_cache_timestamp() -> None:
+    conn = _ConnStub(
+        [
+            {
+                "objects": [
+                    {
+                        "id": "11",
+                        "partNumber": "XW-4-002",
+                        "name": "Etuede B",
+                    }
+                ]
+            }
+        ]
+    )
+    client = PartClient(conn)  # type: ignore[arg-type]
+
+    rows = client.list_parts()
+
+    assert len(rows) == 1
+    assert client.parts_cache_updated_at is None

@@ -1,6 +1,7 @@
 """sevDesk Part API client for product sync comparisons."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import logging
 from typing import Any
 
@@ -96,8 +97,29 @@ class PartClient:
 
     def __init__(self, connection: SevdeskConnection) -> None:
         self._conn = connection
+        self._parts_cache: list[SevdeskPart] = []
+        self._parts_cache_updated_at: datetime | None = None
 
-    def list_parts(self, *, max_pages: int = 20) -> list[SevdeskPart]:
+    @property
+    def parts_cache_updated_at(self) -> datetime | None:
+        return self._parts_cache_updated_at
+
+    def list_parts(self, *, max_pages: int = 20, refresh_cache: bool = False) -> list[SevdeskPart]:
+        """Return sevDesk parts.
+
+        - ``refresh_cache=True`` fetches from API and updates in-memory cache.
+        - default returns cache when available.
+        - when cache is empty and refresh is False, data is fetched but cache remains untouched.
+        """
+        if not refresh_cache and self._parts_cache:
+            return list(self._parts_cache)
+        rows = self._fetch_parts(max_pages=max_pages)
+        if refresh_cache:
+            self._parts_cache = list(rows)
+            self._parts_cache_updated_at = datetime.now(timezone.utc)
+        return rows
+
+    def _fetch_parts(self, *, max_pages: int = 20) -> list[SevdeskPart]:
         rows: list[SevdeskPart] = []
         offset = 0
         for _ in range(max_pages):
