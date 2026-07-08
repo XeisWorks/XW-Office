@@ -719,7 +719,10 @@ def test_main_window_rechnungen_warms_drafts_but_defers_open_invoice_contexts(
         lambda: view._get_cached_wix_context("20844") is not None,  # noqa: SLF001
         timeout=5000,
     )
-    assert view._get_cached_wix_context("20845") is None  # noqa: SLF001
+    qtbot.waitUntil(
+        lambda: view._get_cached_wix_context("20845") is not None,  # noqa: SLF001
+        timeout=5000,
+    )
     assert view._wix_warm_queue == []  # noqa: SLF001
 
     header = view._table.horizontalHeader()  # noqa: SLF001

@@ -122,6 +122,7 @@ _OPEN_AUTO_LOAD_LIMIT = 50
 _WIX_CONTEXT_CACHE_TTL_SECONDS = 6 * 60 * 60
 _WIX_WARM_BATCH_SIZE = 6
 _WIX_WARM_MAX_WORKERS = 4
+_WIX_WARM_QUEUE_LIMIT = 24
 
 
 class _HintsIconDelegate(QStyledItemDelegate):
@@ -745,6 +746,7 @@ class RechnungenView(QWidget):
         self._open_overview_products_text = ""
         self._plc_label_archive = PlcLabelArchive()
         self._selected_plc_label_path = ""
+        self._plc_archive_lookup_cache: dict[tuple[str, str], str] = {}
         self._post_load_prefetch_seq = 0
         self._deferred_load_payload: tuple[
             list[dict[str, Any]],
@@ -1890,16 +1892,12 @@ class RechnungenView(QWidget):
     def _warm_wix_context_for_summaries(self, summaries: list[InvoiceSummary]) -> None:
         """Prefetch full Wix contexts without delaying the invoice list.
 
-        Only active drafts are warmed: historical invoices are fetched when the
-        user selects them. Each small batch uses bounded concurrency so the
-        right-hand panel is ready quickly without putting excessive pressure on
-        the Wix API.
+        Visible rows are warmed in bounded batches so row-to-row selection in
+        the right-hand panel is fast without flooding the Wix API.
         """
         service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
         added = 0
         for summary in summaries:
-            if summary.status_code != _DRAFT_STATUS:
-                continue
             ref = str(summary.order_reference or "").strip()
             if not ref or ref in self._wix_warm_queue or ref in self._wix_warm_inflight_refs:
                 continue
@@ -1910,6 +1908,8 @@ class RechnungenView(QWidget):
                 continue
             self._wix_warm_queue.append(ref)
             added += 1
+            if len(self._wix_warm_queue) >= _WIX_WARM_QUEUE_LIMIT:
+                break
         if added:
             logger.info(
                 "Wix context warmup queued refs=%s pending=%s",
@@ -2282,6 +2282,13 @@ class RechnungenView(QWidget):
             recipient_email=recipient_email,
         )
         dlg.exec()
+        self._plc_archive_lookup_cache.pop(
+            (
+                str(summary.order_reference or "").strip(),
+                str(summary.invoice_number or summary.id or "").strip(),
+            ),
+            None,
+        )
 
     def _on_print_music_clicked(self) -> None:
         if not self._print_allowed:
@@ -2646,8 +2653,14 @@ class RechnungenView(QWidget):
         invoice_no = str(summary.invoice_number or summary.id or "").strip()
         if not order_ref or not invoice_no:
             return ""
+        cache_key = (order_ref, invoice_no)
+        cached = self._plc_archive_lookup_cache.get(cache_key)
+        if cached is not None:
+            return cached
         path = self._plc_label_archive.find_for_invoice(order_reference=order_ref, invoice_number=invoice_no)
-        return os.fspath(path) if path is not None else ""
+        resolved = os.fspath(path) if path is not None else ""
+        self._plc_archive_lookup_cache[cache_key] = resolved
+        return resolved
 
     def _on_open_plc_label_clicked(self) -> None:
         path = str(self._selected_plc_label_path or "").strip()
