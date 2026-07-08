@@ -1,6 +1,8 @@
 """FinanzOnline / UVA services."""
 
 from xw_studio.services.finanzonline.client import FinanzOnlineClient
+from xw_studio.services.finanzonline.oss_models import OssLine, OssQuarterResult, OssXmlExport
+from xw_studio.services.finanzonline.oss_service import OssService, SevdeskOssDocumentProvider
 from xw_studio.services.finanzonline.settings import FinanzOnlineSettings
 from xw_studio.services.finanzonline.uva_models import UvaKennzahlen, UvaPayloadResult
 from xw_studio.services.finanzonline.uva_payload_service import UvaPayloadService
@@ -36,7 +38,12 @@ __all__ = [
     "FinanzOnlineFileUploadBackend",
     "FinanzOnlineSettings",
     "MockUvaSoapBackend",
+    "OssLine",
+    "OssQuarterResult",
+    "OssService",
+    "OssXmlExport",
     "SevdeskUvaPreviewProvider",
+    "SevdeskOssDocumentProvider",
     "UvaDocumentSelector",
     "UvaKennzahlen",
     "UvaPayloadResult",

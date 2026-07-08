@@ -1224,13 +1224,40 @@ class InvoiceProcessingService:
         self._payment_check_account_cache[normalized] = account_id
         return account_id
 
-    def _invoice_has_linked_transaction(self, invoice_id: int) -> bool:
+    @staticmethod
+    def _invoice_is_paid(invoice: dict[str, Any]) -> bool:
+        status_raw = str(invoice.get("status") or "").strip()
+        if status_raw == "1000":
+            return True
+        if status_raw.lower() == "paid":
+            return True
+        for key in ("sumOutstanding", "openAmount", "amountOutstanding"):
+            value = invoice.get(key)
+            if value is None or str(value).strip() == "":
+                continue
+            try:
+                if float(str(value).replace(",", ".")) <= 0.0001:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    def _invoice_linked_transaction_ids(self, invoice_id: int) -> list[int]:
         try:
             linked = self._invoices.get_invoice_check_account_transactions(int(invoice_id))
         except Exception as exc:
             logger.warning("Invoice %s: linked-payment lookup failed (%s)", invoice_id, exc)
-            return False
-        return bool(linked)
+            return []
+        tx_ids: list[int] = []
+        for item in linked or []:
+            if not isinstance(item, dict):
+                continue
+            raw_id = item.get("id")
+            try:
+                tx_ids.append(int(str(raw_id)))
+            except (TypeError, ValueError):
+                continue
+        return tx_ids
 
     def _find_existing_transaction_id(
         self,
@@ -1271,8 +1298,9 @@ class InvoiceProcessingService:
         invoice_id = int(str(invoice.get("id") or summary.id or "0") or 0)
         if not invoice_id:
             return self._next_flags(stamped, payment_applicable=True, payment_booked=False)
-        if self._invoice_has_linked_transaction(invoice_id):
+        if self._invoice_is_paid(invoice):
             return self._next_flags(stamped, payment_applicable=True, payment_booked=True)
+        linked_transaction_ids = self._invoice_linked_transaction_ids(invoice_id)
         try:
             order = self._wix_orders.resolve_order(summary.order_reference)
             if not order:
@@ -1302,7 +1330,14 @@ class InvoiceProcessingService:
 
             payment_status = str(payment_details.get("paymentStatus") or "").strip().upper()
             if payment_status and payment_status not in PAYMENT_BOOKABLE_STATUSES:
-                return self._next_flags(stamped, payment_applicable=True, payment_booked=False)
+                return self._next_flags(
+                    stamped,
+                    payment_applicable=True,
+                    payment_booked=False,
+                    last_warning=(
+                        f"Rechnung {invoice_id}: Payment-Status nicht buchbar ({payment_status})"
+                    ),
+                )
 
             provider_ref = self._normalize_provider_id(payment_details.get("providerTransactionId"))
             if not provider_ref:
@@ -1373,6 +1408,9 @@ class InvoiceProcessingService:
             if amount <= 0:
                 return self._next_flags(stamped, payment_applicable=True, payment_booked=False)
 
+            if tx_id is None and linked_transaction_ids:
+                tx_id = linked_transaction_ids[0]
+
             if tx_id is None:
                 raw_payment_amount = payment_details.get("amount")
                 try:
@@ -1391,27 +1429,54 @@ class InvoiceProcessingService:
                 )
 
             booking_ts = int(payment_date.astimezone(timezone.utc).timestamp())
-            self._invoices.book_invoice_with_transaction(
+            book_result = self._invoices.book_invoice_with_transaction(
                 int(invoice_id),
                 float(amount),
                 check_account_id=int(check_account_id),
                 transaction_id=int(tx_id),
                 booking_date=booking_ts,
             )
+            status = str((book_result or {}).get("status") or "").strip().lower()
+            if status in {"booked", "already_booked", "invoice_already_paid"}:
+                logger.info(
+                    "Invoice %s: auto payment booking successful (%s:%s, tx=%s, status=%s)",
+                    invoice_id,
+                    provider,
+                    provider_ref,
+                    tx_id,
+                    status,
+                )
+                return self._next_flags(stamped, payment_applicable=True, payment_booked=True)
+            if status:
+                invoice_status = str((book_result or {}).get("invoice_status") or "").strip()
+                tx_status = str((book_result or {}).get("tx_status") or "").strip()
+                warning = (
+                    f"Rechnung {invoice_id}: Zahlungsbuchung nicht bestaetigt "
+                    f"(status={status}, invoice_status={invoice_status or '-'}, tx_status={tx_status or '-'})"
+                )
+                return self._next_flags(
+                    stamped,
+                    payment_applicable=True,
+                    payment_booked=False,
+                    last_warning=warning,
+                )
+
+            refreshed_invoice = self._fetch_invoice_detail(summary.id)
+            if self._invoice_is_paid(refreshed_invoice):
+                return self._next_flags(stamped, payment_applicable=True, payment_booked=True)
+            return self._next_flags(
+                stamped,
+                payment_applicable=True,
+                payment_booked=False,
+                last_warning=(
+                    f"Rechnung {invoice_id}: Zahlungsbuchung nicht bestaetigt (kein Status aus sevDesk)"
+                ),
+            )
         except Exception as exc:
             message = str(exc or "").strip().lower()
             if "already" in message or "bereits" in message:
                 return self._next_flags(stamped, payment_applicable=True, payment_booked=True)
             return self._next_flags(stamped, payment_applicable=True, payment_booked=False, last_warning=str(exc))
-
-        logger.info(
-            "Invoice %s: auto payment booking successful (%s:%s, tx=%s)",
-            invoice_id,
-            provider,
-            provider_ref,
-            tx_id,
-        )
-        return self._next_flags(stamped, payment_applicable=True, payment_booked=True)
 
     def _run_invoice_print_step(self, summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
         pdf_bytes = self._get_invoice_pdf_bytes(

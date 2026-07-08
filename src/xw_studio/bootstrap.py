@@ -18,6 +18,8 @@ from xw_studio.services.daily_business.service import DailyBusinessService
 from xw_studio.services.expenses.service import ExpenseAuditService
 from xw_studio.services.finanzonline import (
     FinanzOnlineClient,
+    OssService,
+    SevdeskOssDocumentProvider,
     SevdeskUvaPreviewProvider,
     UvaDocumentSelector,
     UvaPayloadService,
@@ -199,6 +201,10 @@ def register_default_services(container: Container) -> None:
             payload_service=c.resolve(UvaPayloadService),
             zm_service=c.resolve(ZmService),
         ),
+    )
+    container.register(
+        OssService,
+        lambda c: OssService(SevdeskOssDocumentProvider(c.resolve(SevdeskConnection))),
     )
     def build_payment_clearing(c: Container) -> PaymentClearingService:
         secrets = c.resolve(SecretService)

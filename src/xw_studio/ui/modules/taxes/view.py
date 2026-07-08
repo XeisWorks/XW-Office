@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -11,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -26,7 +30,7 @@ from xw_studio.core.signals import AppSignals
 from xw_studio.core.worker import BackgroundWorker
 from xw_studio.services.clearing.service import ClearingRow, PaymentClearingService
 from xw_studio.services.expenses.service import ExpenseAuditService, ExpenseRow
-from xw_studio.services.finanzonline import UvaService, UvaSubmitResult
+from xw_studio.services.finanzonline import OssQuarterResult, OssService, OssXmlExport, UvaService, UvaSubmitResult
 from xw_studio.ui.widgets.search_bar import SearchBar
 
 if TYPE_CHECKING:
@@ -42,6 +46,7 @@ class TaxesView(QWidget):
         super().__init__(parent)
         self._container = container
         self._worker: BackgroundWorker | None = None
+        self._oss_worker: BackgroundWorker | None = None
         self._clearing_worker: BackgroundWorker | None = None
         self._expenses_worker: BackgroundWorker | None = None
         self._clearing_rows: list[ClearingRow] = []
@@ -54,6 +59,7 @@ class TaxesView(QWidget):
         tabs = QTabWidget()
 
         tabs.addTab(self._build_uva_tab(), "UVA")
+        tabs.addTab(self._build_oss_tab(), "EU-OSS")
         tabs.addTab(self._build_expenses_tab(), "Ausgaben")
         outer.addWidget(tabs)
 
@@ -128,6 +134,131 @@ class TaxesView(QWidget):
         submit.clicked.connect(on_submit)
         layout.addWidget(preview)
         layout.addWidget(submit)
+        return page
+
+    def _build_oss_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        oss: OssService = self._container.resolve(OssService)
+
+        info = QPlainTextEdit()
+        info.setReadOnly(True)
+        info.setPlainText(oss.describe_capabilities())
+        layout.addWidget(info)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Jahr:"))
+        year = QSpinBox()
+        year.setRange(2021, 2100)
+        year.setValue(2026)
+        row.addWidget(year)
+        row.addWidget(QLabel("Quartal:"))
+        quarter = QComboBox()
+        quarter.addItem("Q1", 1)
+        quarter.addItem("Q2", 2)
+        quarter.addItem("Q3", 3)
+        quarter.addItem("Q4", 4)
+        row.addWidget(quarter)
+        row.addStretch()
+        layout.addLayout(row)
+
+        form = QHBoxLayout()
+        form.addWidget(QLabel("OSS-ID:"))
+        oss_id = QLineEdit()
+        oss_id.setPlaceholderText("z. B. ATU...")
+        default_oss_id = str(self._container.config.finanzonline.hersteller_id or "").strip()
+        if default_oss_id.upper().startswith("ATU"):
+            oss_id.setText(default_oss_id)
+        form.addWidget(oss_id)
+        form.addWidget(QLabel("UID Fixed Est. (optional):"))
+        uid_fixed_est = QLineEdit()
+        uid_fixed_est.setPlaceholderText("optional")
+        form.addWidget(uid_fixed_est)
+        layout.addLayout(form)
+
+        preview_box = QPlainTextEdit()
+        preview_box.setReadOnly(True)
+        layout.addWidget(preview_box)
+
+        buttons = QHBoxLayout()
+        preview = QPushButton("EU-OSS berechnen")
+        export = QPushButton("EU-OSS XML speichern")
+        portal = QPushButton("Testportal oeffnen")
+        buttons.addWidget(preview)
+        buttons.addWidget(export)
+        buttons.addWidget(portal)
+        buttons.addStretch()
+        layout.addLayout(buttons)
+
+        def selected_quarter() -> int:
+            value = quarter.currentData()
+            return int(value) if value is not None else 1
+
+        def on_preview() -> None:
+            def job() -> OssQuarterResult:
+                return oss.calculate_quarter(year.value(), selected_quarter())
+
+            self._oss_worker = BackgroundWorker(job)
+
+            def on_result(res: object) -> None:
+                if not isinstance(res, OssQuarterResult):
+                    return
+                preview_box.setPlainText(oss.render_preview_text(res))
+
+            self._oss_worker.signals.result.connect(on_result)
+            self._oss_worker.signals.error.connect(
+                lambda exc: QMessageBox.information(self, "EU-OSS", f"Fehler: {exc}")
+            )
+            self._oss_worker.start()
+
+        def on_export() -> None:
+            current_oss_id = oss_id.text().strip()
+            if not current_oss_id:
+                QMessageBox.information(self, "EU-OSS", "Bitte zuerst eine OSS-ID eintragen.")
+                return
+
+            def job() -> OssXmlExport:
+                return oss.build_xml_export(
+                    year.value(),
+                    selected_quarter(),
+                    oss_id=current_oss_id,
+                    uid_fixed_est=uid_fixed_est.text().strip(),
+                )
+
+            self._oss_worker = BackgroundWorker(job)
+
+            def on_result(res: object) -> None:
+                if not isinstance(res, OssXmlExport):
+                    return
+                selected_path, _ = QFileDialog.getSaveFileName(
+                    self,
+                    "EU-OSS XML speichern",
+                    res.file_name,
+                    "XML (*.xml);;Alle Dateien (*.*)",
+                )
+                if not selected_path:
+                    return
+                Path(selected_path).write_text(res.xml_payload, encoding="utf-8")
+                preview_box.setPlainText(res.xml_payload)
+                QMessageBox.information(
+                    self,
+                    "EU-OSS",
+                    f"XML gespeichert:\n{selected_path}\n\nDanach im EU-OSS-Portal hochladen und pruefen.",
+                )
+
+            self._oss_worker.signals.result.connect(on_result)
+            self._oss_worker.signals.error.connect(
+                lambda exc: QMessageBox.information(self, "EU-OSS", f"Fehler: {exc}")
+            )
+            self._oss_worker.start()
+
+        def on_portal() -> None:
+            if not QDesktopServices.openUrl(QUrl(oss.portal_url(test_mode=True))):
+                QMessageBox.warning(self, "EU-OSS", "Das Testportal konnte nicht geoeffnet werden.")
+
+        preview.clicked.connect(on_preview)
+        export.clicked.connect(on_export)
+        portal.clicked.connect(on_portal)
         return page
 
     def _build_clearing_tab(self) -> QWidget:

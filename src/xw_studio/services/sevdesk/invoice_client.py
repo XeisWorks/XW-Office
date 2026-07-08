@@ -751,6 +751,44 @@ class InvoiceClient:
                     continue
         raise RuntimeError("sevDesk lieferte keine Transaktions-ID")
 
+    @staticmethod
+    def _is_paid_invoice_object(invoice: dict[str, Any]) -> bool:
+        status_raw = str(invoice.get("status") or "").strip()
+        if status_raw == "1000":
+            return True
+        if status_raw.lower() == "paid":
+            return True
+        for key in ("sumOutstanding", "openAmount", "amountOutstanding"):
+            value = invoice.get(key)
+            if value is None or str(value).strip() == "":
+                continue
+            try:
+                if float(str(value).replace(",", ".")) <= 0.0001:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    def get_check_account_transaction_by_id(self, transaction_id: int) -> dict[str, Any]:
+        response = self._conn.get(f"/CheckAccountTransaction/{int(transaction_id)}")
+        payload = response.json() if response.content else {}
+        if isinstance(payload, dict):
+            objects = payload.get("objects", payload)
+            if isinstance(objects, list):
+                return next((item for item in objects if isinstance(item, dict)), {})
+            if isinstance(objects, dict):
+                return objects
+        if isinstance(payload, list):
+            return next((item for item in payload if isinstance(item, dict)), {})
+        return {}
+
+    def change_check_account_transaction_status(self, transaction_id: int, status: int) -> dict[str, Any]:
+        response = self._conn.put(
+            f"/CheckAccountTransaction/{int(transaction_id)}",
+            json={"status": int(status)},
+        )
+        return response.json() if response.content else {}
+
     def book_invoice_with_transaction(
         self,
         invoice_id: int,
@@ -760,28 +798,82 @@ class InvoiceClient:
         transaction_id: int,
         booking_date: int,
     ) -> dict[str, Any]:
+        invoice_before = self.fetch_invoice_by_id(str(invoice_id))
+        if self._is_paid_invoice_object(invoice_before):
+            return {
+                "status": "invoice_already_paid",
+                "transaction_id": int(transaction_id),
+                "invoice_status": str(invoice_before.get("status") or "").strip(),
+            }
+
+        tx_before = self.get_check_account_transaction_by_id(int(transaction_id))
+        tx_status_before = str(tx_before.get("status") or "").strip()
+        if tx_status_before == "400":
+            return {
+                "status": "already_booked",
+                "transaction_id": int(transaction_id),
+                "tx_status": tx_status_before,
+            }
+
+        tx_account_id = str((tx_before.get("checkAccount") or {}).get("id") or "").strip()
+        if tx_account_id and tx_account_id != str(int(check_account_id)):
+            return {
+                "status": "account_mismatch",
+                "transaction_id": int(transaction_id),
+                "tx_account_id": tx_account_id,
+                "check_account_id": str(int(check_account_id)),
+            }
+
         if self._bookkeeping_system_version() == "1.0":
             response = self._conn.put(
                 f"/CheckAccountTransaction/{int(transaction_id)}/linkInvoice",
                 params={"invoiceId": int(invoice_id)},
                 json={"amount": float(amount), "date": int(booking_date)},
             )
-            return response.json() if response.content else {}
-        response = self._conn.put(
-            f"/Invoice/{int(invoice_id)}/bookAmount",
-            json={
-                "amount": float(amount),
-                "date": int(booking_date),
-                "type": "FULL_PAYMENT",
-                "checkAccount": {"id": int(check_account_id), "objectName": "CheckAccount"},
-                "checkAccountTransaction": {
-                    "id": int(transaction_id),
-                    "objectName": "CheckAccountTransaction",
+            _ = response.json() if response.content else {}
+        else:
+            response = self._conn.put(
+                f"/Invoice/{int(invoice_id)}/bookAmount",
+                json={
+                    "amount": float(amount),
+                    "date": int(booking_date),
+                    "type": "FULL_PAYMENT",
+                    "checkAccount": {"id": int(check_account_id), "objectName": "CheckAccount"},
+                    "checkAccountTransaction": {
+                        "id": int(transaction_id),
+                        "objectName": "CheckAccountTransaction",
+                    },
+                    "createFeed": False,
                 },
-                "createFeed": False,
-            },
-        )
-        return response.json() if response.content else {}
+            )
+            _ = response.json() if response.content else {}
+
+        invoice_after = self.fetch_invoice_by_id(str(invoice_id))
+        tx_after = self.get_check_account_transaction_by_id(int(transaction_id))
+        tx_status_after = str(tx_after.get("status") or "").strip()
+
+        if not self._is_paid_invoice_object(invoice_after):
+            return {
+                "status": "not_booked",
+                "transaction_id": int(transaction_id),
+                "invoice_status": str(invoice_after.get("status") or "").strip(),
+                "tx_status": tx_status_after,
+            }
+
+        if tx_status_after != "400":
+            try:
+                self.change_check_account_transaction_status(int(transaction_id), 400)
+                tx_after = self.get_check_account_transaction_by_id(int(transaction_id))
+                tx_status_after = str(tx_after.get("status") or "").strip()
+            except Exception:
+                pass
+
+        return {
+            "status": "booked" if tx_status_after == "400" else "not_booked",
+            "transaction_id": int(transaction_id),
+            "invoice_status": str(invoice_after.get("status") or "").strip(),
+            "tx_status": tx_status_after,
+        }
 
     def _bookkeeping_system_version(self) -> str:
         if self._bookkeeping_version:

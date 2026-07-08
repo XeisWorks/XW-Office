@@ -21,6 +21,7 @@ class _InvoiceClientStub:
         self.existing_transactions: dict[int, list[dict[str, object]]] = {}
         self.created_transactions: list[dict[str, object]] = []
         self.booked_transactions: list[dict[str, object]] = []
+        self.book_result_status = "booked"
 
     def list_invoice_summaries(
         self,
@@ -146,8 +147,13 @@ class _InvoiceClientStub:
                 "booking_date": booking_date,
             }
         )
-        self.linked_transactions.setdefault(invoice_id, []).append({"id": transaction_id})
-        return {"status": "booked"}
+        if self.book_result_status in {"booked", "already_booked", "invoice_already_paid"}:
+            self.linked_transactions.setdefault(invoice_id, []).append({"id": transaction_id})
+        return {
+            "status": self.book_result_status,
+            "invoice_status": "200" if self.book_result_status == "not_booked" else "1000",
+            "tx_status": "100" if self.book_result_status == "not_booked" else "400",
+        }
 
 
 class _RepoStub:
@@ -761,6 +767,96 @@ def test_retry_fulfillment_step_books_existing_assigned_payment() -> None:
     assert client.created_transactions == []
     assert len(client.booked_transactions) == 1
     assert client.booked_transactions[0]["transaction_id"] == 77
+
+
+def test_payment_step_does_not_short_circuit_on_linked_but_unpaid_invoice() -> None:
+    summary = InvoiceSummary(id="23", invoiceNumber="RE-TEST-23", order_reference="20523", sum_gross="29.90")
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads["23"] = {
+        "id": "23",
+        "invoiceNumber": "RE-TEST-23",
+        "status": 200,
+        "sumOutstanding": "29.90",
+        "sumGross": "29.90",
+        "customerInternalNote": "20523",
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+    client.linked_transactions[23] = [{"id": 701}]
+    wix = _WixOrdersStub()
+    wix.orders["20523"] = {
+        "id": "wix-order-23",
+        "buyerInfo": {"firstName": "Anna", "lastName": "Mair", "email": "anna@example.test"},
+    }
+    wix.payment_details["wix-order-23"] = {
+        "paymentStatus": "PAID",
+        "provider": "mollie",
+        "providerTransactionId": "tr_linked_retry",
+        "paymentCreatedDate": "2026-06-01T11:00:00Z",
+        "amount": "29.90",
+    }
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        _RepoStub({}),
+        wix,  # type: ignore[arg-type]
+        _MailServiceStub(),  # type: ignore[arg-type]
+    )
+
+    result = svc.run_start_fullflow(full_mode=False)
+
+    assert result["successful"] == 1
+    assert len(client.created_transactions) == 0
+    assert len(client.booked_transactions) == 1
+    assert client.booked_transactions[0]["transaction_id"] == 701
+    flags = svc.read_fulfillment_flags("23")
+    assert flags.payment_booked is True
+
+
+def test_payment_step_surfaces_not_booked_status_as_warning() -> None:
+    summary = InvoiceSummary(id="24", invoiceNumber="RE-TEST-24", order_reference="20524", sum_gross="29.90")
+    client = _InvoiceClientStub([summary])
+    client.book_result_status = "not_booked"
+    client.invoice_payloads["24"] = {
+        "id": "24",
+        "invoiceNumber": "RE-TEST-24",
+        "status": 200,
+        "sumOutstanding": "29.90",
+        "sumGross": "29.90",
+        "customerInternalNote": "20524",
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+    wix = _WixOrdersStub()
+    wix.orders["20524"] = {
+        "id": "wix-order-24",
+        "buyerInfo": {"firstName": "Paul", "lastName": "Leitner", "email": "paul@example.test"},
+    }
+    wix.payment_details["wix-order-24"] = {
+        "paymentStatus": "PAID",
+        "provider": "mollie",
+        "providerTransactionId": "tr_notbooked",
+        "paymentCreatedDate": "2026-06-01T11:30:00Z",
+        "amount": "29.90",
+    }
+    repo = _RepoStub(
+        {
+            "rechnungen.fulfillment_status": json.dumps(
+                {"24": {"payment_applicable": True, "payment_booked": False}}
+            )
+        }
+    )
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        repo,
+        wix,  # type: ignore[arg-type]
+        _MailServiceStub(),  # type: ignore[arg-type]
+    )
+
+    flags = svc.retry_fulfillment_step("24", "payment_booked")
+
+    assert len(client.booked_transactions) == 1
+    assert flags.payment_booked is False
+    assert "status=not_booked" in flags.last_warning
 
 
 def test_inventory_requirements_use_only_requested_invoice_ids() -> None:
