@@ -1196,6 +1196,13 @@ class InvoiceProcessingService:
     def _build_payment_payee(order: dict[str, Any], invoice_number: str) -> str:
         buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
         billing = order.get("billingInfo") if isinstance(order.get("billingInfo"), dict) else {}
+        billing_contact = billing.get("contactDetails") if isinstance(billing.get("contactDetails"), dict) else {}
+        shipping = order.get("shippingInfo") if isinstance(order.get("shippingInfo"), dict) else {}
+        logistics = shipping.get("logistics") if isinstance(shipping.get("logistics"), dict) else {}
+        destination = logistics.get("shippingDestination") if isinstance(logistics.get("shippingDestination"), dict) else {}
+        shipping_contact = destination.get("contactDetails") if isinstance(destination.get("contactDetails"), dict) else {}
+        recipient = order.get("recipientInfo") if isinstance(order.get("recipientInfo"), dict) else {}
+        recipient_contact = recipient.get("contactDetails") if isinstance(recipient.get("contactDetails"), dict) else {}
 
         def _full_name(source: dict[str, Any]) -> str:
             first = str(source.get("firstName") or "").strip()
@@ -1204,7 +1211,13 @@ class InvoiceProcessingService:
                 return f"{first} {last}"
             return ""
 
-        full_name = _full_name(buyer) or _full_name(billing)
+        full_name = (
+            _full_name(buyer)
+            or _full_name(billing_contact)
+            or _full_name(shipping_contact)
+            or _full_name(recipient_contact)
+            or _full_name(billing)
+        )
         invoice_ref = str(invoice_number or "").strip()
         if not full_name or not invoice_ref:
             return ""

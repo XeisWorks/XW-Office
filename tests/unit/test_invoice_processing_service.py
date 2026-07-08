@@ -761,6 +761,48 @@ def test_start_fullflow_uses_same_payee_format_for_stripe() -> None:
     assert len(client.booked_transactions) == 1
 
 
+def test_start_fullflow_uses_billing_contact_name_for_payment_payee() -> None:
+    summary = InvoiceSummary(id="26", invoiceNumber="RE-TEST-26", order_reference="20812", sum_gross="30.80")
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads["26"] = {
+        "id": "26",
+        "invoiceNumber": "RE-TEST-26",
+        "sumGross": "30.80",
+        "customerInternalNote": "20812",
+        "contact": {"emails": [{"value": "nina@example.test"}]},
+    }
+    wix = _WixOrdersStub()
+    wix.orders["20812"] = {
+        "id": "wix-order-26",
+        "buyerInfo": {"email": "nina@example.test"},
+        "billingInfo": {
+            "contactDetails": {"firstName": "Nina", "lastName": "Buehler"},
+        },
+    }
+    wix.payment_details["wix-order-26"] = {
+        "paymentStatus": "APPROVED",
+        "provider": "mollie",
+        "providerTransactionId": "ord_example_token",
+        "paymentCreatedDate": "2026-06-12T19:11:19Z",
+        "amount": "30.80",
+    }
+    repo = _RepoStub({})
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        repo,
+        wix,  # type: ignore[arg-type]
+        _MailServiceStub(),  # type: ignore[arg-type]
+    )
+
+    result = svc.run_start_fullflow(full_mode=False)
+
+    assert result["successful"] == 1
+    assert len(client.created_transactions) == 1
+    assert client.created_transactions[0]["payee"] == "Nina Buehler [RE-TEST-26]"
+    assert len(client.booked_transactions) == 1
+
+
 def test_start_fullflow_auto_books_approved_wix_payment() -> None:
     summary = InvoiceSummary(id="221", invoiceNumber="RE-TEST-21A", order_reference="20525", sum_gross="29.90")
     client = _InvoiceClientStub([summary])
