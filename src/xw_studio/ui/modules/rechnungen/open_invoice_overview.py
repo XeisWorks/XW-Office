@@ -139,9 +139,7 @@ def resolve_open_invoice_overview(
     with_ref = 0
     with_note = 0
     plc = 0
-    sku_filter_candidate = getattr(invoice_service, "is_flagged_sku", None)
-    sku_filter: Callable[[str], bool] | None = sku_filter_candidate if callable(sku_filter_candidate) else None
-    products = _ProductAccumulator(sku_filter=sku_filter)
+    products = _ProductAccumulator(sku_filter=None)
     workers = min(8, max(1, len(summaries)))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="open-invoice-overview") as executor:
         rows = list(

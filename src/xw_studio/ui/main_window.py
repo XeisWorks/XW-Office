@@ -95,7 +95,10 @@ class MainWindow(QMainWindow):
             from xw_studio.services.invoice_processing.service import InvoiceProcessingService
 
             service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-            return service.warm_startup_batches(draft_limit=5, open_limit=5)
+            warm = getattr(service, "warm_startup_batches", None)
+            if callable(warm):
+                return warm(draft_limit=5, open_limit=5)
+            return (0, 0)
 
         self._startup_preload_worker = BackgroundWorker(job)
         self._startup_preload_worker.signals.result.connect(self._on_startup_preload_result)
@@ -172,6 +175,12 @@ class MainWindow(QMainWindow):
 
     def _navigate_to(self, module_key: str) -> None:
         if module_key in self._page_factories and module_key not in self._pages:
+            if module_key == ModuleKey.RECHNUNGEN.value:
+                widget = self._page_factories[module_key]()
+                self._register_page(module_key, widget)
+                self._stack.setCurrentWidget(widget)
+                logger.debug("Navigated to %s (materialized)", module_key)
+                return
             placeholder = self._create_placeholder(module_key)
             self._register_page(module_key, placeholder)
             self._stack.setCurrentWidget(placeholder)

@@ -60,12 +60,12 @@ def test_additional_plc_label_uses_suffix_for_order_and_invoice(tmp_path) -> Non
 
     second = dialog._next_additional_shipment(original)  # noqa: SLF001
 
-    assert second.reference == "20868-L2"
-    assert second.invoice_number == "RE-261952-L2"
-    assert second.parcels[0].reference == "20868-L2"
+    assert second.reference == "20868-2"
+    assert second.invoice_number == "RE-261952-2"
+    assert second.parcels[0].reference == "20868-2"
 
     dialog._label_archive.save(second, b"%PDF-1.7\nPLC label")  # noqa: SLF001
     third = dialog._next_additional_shipment(original)  # noqa: SLF001
 
-    assert third.reference == "20868-L3"
-    assert third.invoice_number == "RE-261952-L3"
+    assert third.reference == "20868-3"
+    assert third.invoice_number == "RE-261952-3"

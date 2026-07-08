@@ -410,6 +410,9 @@ class InvoiceSummary(BaseModel):
             row[f"__tooltip__{_TABLE_STATUS_COLUMN}"] = "Entwurf: diese Rechnung muss im Tagesgeschäft abgearbeitet werden"
             row[f"__fg__{_TABLE_STATUS_COLUMN}"] = "#9a3412"
             row[f"__bg__{_TABLE_STATUS_COLUMN}"] = "#fff7ed"
+        row["__draft_remove_enabled__"] = bool(self.status_code == 100 and not str(self.invoice_number or "").strip())
+        if row["__draft_remove_enabled__"]:
+            row["__tooltip__sevDesk"] = "Entwurf löschen"
 
         return row
 
@@ -922,6 +925,10 @@ class InvoiceClient:
         }
         response = self._conn.post("/Invoice/Factory/saveInvoice", json=payload)
         return response.json() if response.content else {}
+
+    def delete_draft_invoice(self, invoice_id: str) -> None:
+        """Delete one draft invoice by id."""
+        self._conn.delete(f"/Invoice/{str(invoice_id).strip()}")
 
     def send_invoice_document(
         self,

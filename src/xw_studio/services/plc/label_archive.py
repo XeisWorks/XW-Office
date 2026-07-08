@@ -45,6 +45,27 @@ class PlcLabelArchive:
         candidate = self.path_for(shipment)
         return candidate if candidate.is_file() else None
 
+    def find_for_invoice(self, *, order_reference: str, invoice_number: str) -> Path | None:
+        """Return newest archived label for one order/invoice pair."""
+        order = _safe_filename_part(order_reference, fallback="")
+        invoice = _safe_filename_part(invoice_number, fallback="")
+        if not order or not invoice:
+            return None
+
+        candidates: list[Path] = []
+        exact = self._root / f"{order} - {invoice}.pdf"
+        if exact.is_file():
+            candidates.append(exact)
+
+        for file_path in self._root.glob(f"{order}* - {invoice}*.pdf"):
+            if file_path.is_file():
+                candidates.append(file_path)
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        return candidates[0]
+
 
 def _safe_filename_part(value: object, *, fallback: str) -> str:
     text = str(value or "").strip()

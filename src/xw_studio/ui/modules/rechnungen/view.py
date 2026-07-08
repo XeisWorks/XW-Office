@@ -70,6 +70,7 @@ from xw_studio.services.draft_invoice.service import (
     ProductPreflightPlan,
 )
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
+from xw_studio.services.plc.label_archive import PlcLabelArchive
 from xw_studio.services.products.print_decision import PieceBlock, PrintDecisionEngine
 from xw_studio.services.secrets.service import SecretService
 from xw_studio.services.sendungen.service import OffeneSendungenService
@@ -111,8 +112,9 @@ _TABLE_COLUMNS = [
 
 _PAGE_SIZE = 10
 _DRAFT_STATUS = 100
-_OPEN_STATUS = 200
-_OPEN_AUTO_LOAD_LIMIT = 5
+_OPEN_STATUS = 1000
+_DRAFT_INITIAL_LOAD_LIMIT = 50
+_OPEN_AUTO_LOAD_LIMIT = 50
 # Contexts are immutable enough for one application session.  The persistent
 # Wix snapshot cache is retained for 180 days; dropping the UI representation
 # after 75 seconds only caused needless conversion work when users revisited a
@@ -272,6 +274,55 @@ class _InvoiceStatusDelegate(QStyledItemDelegate):
         painter.setPen(QColor("#0f172a"))
         painter.setBrush(QColor(color or self._DEFAULT_COLOR))
         painter.drawEllipse(target)
+        painter.restore()
+
+    def sizeHint(self, option, index):  # type: ignore[override]
+        base = super().sizeHint(option, index)
+        if base.height() < 22:
+            base.setHeight(22)
+        return base
+
+
+class _SevdeskDraftActionDelegate(QStyledItemDelegate):
+    """Render a red remove button for drafts without invoice number."""
+
+    @staticmethod
+    def _button_geometry(width: int, height: int) -> tuple[int, int, int]:
+        size = min(18, max(14, height - 6))
+        x = max(4, (width - size) // 2)
+        y = max(2, (height - size) // 2)
+        return x, y, size
+
+    @classmethod
+    def hit_remove_action(cls, *, local_x: float, local_y: float, width: int, height: int) -> bool:
+        x, y, size = cls._button_geometry(width, height)
+        return x <= int(local_x) <= x + size and y <= int(local_y) <= y + size
+
+    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+        row_data = index.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(row_data, dict) or not bool(row_data.get("__draft_remove_enabled__")):
+            super().paint(painter, option, index)
+            return
+
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        painter.save()
+        painter.fillRect(
+            option.rect,
+            option.palette.highlight() if selected else option.palette.base(),
+        )
+        x, y, size = self._button_geometry(option.rect.width(), option.rect.height())
+        target = option.rect.adjusted(0, 0, 0, 0)
+        target.setX(option.rect.x() + x)
+        target.setY(option.rect.y() + y)
+        target.setWidth(size)
+        target.setHeight(size)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#dc2626"))
+        painter.drawEllipse(target)
+        painter.setPen(QColor("white"))
+        painter.drawLine(target.left() + 4, target.top() + 4, target.right() - 4, target.bottom() - 4)
+        painter.drawLine(target.left() + 4, target.bottom() - 4, target.right() - 4, target.top() + 4)
         painter.restore()
 
     def sizeHint(self, option, index):  # type: ignore[override]
@@ -630,6 +681,7 @@ class RechnungenView(QWidget):
         self._hint_worker: BackgroundWorker | None = None
         self._fulfillment_step_worker: BackgroundWorker | None = None
         self._invoice_mail_worker: BackgroundWorker | None = None
+        self._delete_draft_worker: BackgroundWorker | None = None
         self._open_overview_worker: BackgroundWorker | None = None
         self._product_print_worker: BackgroundWorker | None = None
         self._did_initial_load = False
@@ -691,6 +743,8 @@ class RechnungenView(QWidget):
         self._open_overview_cached_plc = 0
         self._open_overview_complete = False
         self._open_overview_products_text = ""
+        self._plc_label_archive = PlcLabelArchive()
+        self._selected_plc_label_path = ""
         self._post_load_prefetch_seq = 0
         self._deferred_load_payload: tuple[
             list[dict[str, Any]],
@@ -774,12 +828,15 @@ class RechnungenView(QWidget):
         )
         self._hints_delegate = _HintsIconDelegate(self._table)
         self._status_delegate = _InvoiceStatusDelegate(self._table)
+        self._sevdesk_delegate = _SevdeskDraftActionDelegate(self._table)
         self._actions_delegate = _ActionsDelegate(self._table)
         self._fulfillment_delegate = _FulfillmentDelegate(self._table)
+        sevdesk_col = _TABLE_COLUMNS.index("sevDesk")
         status_col = 3
         hint_col = _TABLE_COLUMNS.index("Hinweise")
         fulfillment_col = _TABLE_COLUMNS.index("FULFILLMENT")
         actions_col = _TABLE_COLUMNS.index("AKTIONEN")
+        self._table.setItemDelegateForColumn(sevdesk_col, self._sevdesk_delegate)
         self._table.setItemDelegateForColumn(status_col, self._status_delegate)
         self._table.setItemDelegateForColumn(hint_col, self._hints_delegate)
         self._table.setItemDelegateForColumn(fulfillment_col, self._fulfillment_delegate)
@@ -990,6 +1047,13 @@ class RechnungenView(QWidget):
         self._btn_send_invoice.clicked.connect(self._on_send_invoice_clicked)
         self._btn_send_invoice.setEnabled(False)
         actions_layout.addWidget(self._btn_send_invoice, 1, 1)
+
+        self._btn_open_plc_label = QPushButton("PLC-PDF öffnen")
+        self._btn_open_plc_label.setStyleSheet(action_button_style)
+        self._btn_open_plc_label.clicked.connect(self._on_open_plc_label_clicked)
+        self._btn_open_plc_label.setEnabled(False)
+        self._btn_open_plc_label.hide()
+        actions_layout.addWidget(self._btn_open_plc_label, 2, 1)
         self._gb_actions.hide()
         detail_main.addWidget(self._gb_actions)
 
@@ -1193,7 +1257,7 @@ class RechnungenView(QWidget):
         self._open_has_more = False
         self._open_loaded = False
         self._append_mode = False
-        self._start_load()
+        self._start_load(limit=_DRAFT_INITIAL_LOAD_LIMIT)
 
     def _load_more(self) -> None:
         if not self._has_sevdesk_token():
@@ -1296,7 +1360,12 @@ class RechnungenView(QWidget):
         append = bool(self._append_mode)
         if not self.isVisible():
             self._deferred_load_payload = (rows, summaries, has_more, status_filter, append)
-            self._pending_auto_open_load = False
+            self._pending_auto_open_load = (
+                status_filter == _DRAFT_STATUS
+                and not has_more
+                and not self._open_loaded
+                and not self._search_active
+            )
             self._append_mode = False
             signals: AppSignals = self._container.resolve(AppSignals)
             signals.status_message.emit(
@@ -1372,7 +1441,7 @@ class RechnungenView(QWidget):
         self._append_mode = False
         self._refresh_detail_for_selection()
         if allow_background_prefetch:
-            self._schedule_post_load_prefetch(status_filter, summaries)
+            self._schedule_post_load_prefetch(status_filter, list(self._summaries))
         if auto_load_open:
             logger.info("Rechnungen auto-open-load queued limit=%s", _OPEN_AUTO_LOAD_LIMIT)
             self._pending_auto_open_load = True
@@ -1416,7 +1485,7 @@ class RechnungenView(QWidget):
                 self._btn_more.setEnabled(True)
             elif not self._open_loaded:
                 self._btn_more.setText("Weitere Rechnungen laden")
-                self._btn_more.setToolTip("Offene Rechnungen laden")
+                self._btn_more.setToolTip("Abgeschlossene Rechnungen laden")
                 self._btn_more.setEnabled(True)
             else:
                 self._btn_more.setText("Keine weiteren")
@@ -1425,11 +1494,11 @@ class RechnungenView(QWidget):
             return
         if self._open_has_more:
             self._btn_more.setText("Weitere Rechnungen laden")
-            self._btn_more.setToolTip(f"Naechste bis zu {_PAGE_SIZE} offene Rechnungen anhaengen")
+            self._btn_more.setToolTip(f"Naechste bis zu {_PAGE_SIZE} abgeschlossene Rechnungen anhaengen")
             self._btn_more.setEnabled(True)
         else:
             self._btn_more.setText("Keine weiteren")
-            self._btn_more.setToolTip("Keine weiteren offenen Rechnungen")
+            self._btn_more.setToolTip("Keine weiteren abgeschlossenen Rechnungen")
             self._btn_more.setEnabled(False)
 
     def _apply_table_column_layout(self) -> None:
@@ -2048,6 +2117,7 @@ class RechnungenView(QWidget):
             self._btn_print_plc,
             self._btn_print_music,
             self._btn_print_label,
+            self._btn_open_plc_label,
             self._btn_send_invoice,
         ):
             button.setEnabled(False)
@@ -2173,6 +2243,28 @@ class RechnungenView(QWidget):
         self._plc_last.setText(f"Letzter PLC-Druck: {self._last_plc_invoice}")
 
     def _open_plc_post_popup(self, summary: InvoiceSummary) -> None:
+        existing_label_path = self._resolve_plc_archive_path_for_summary(summary)
+        if existing_label_path:
+            box = QMessageBox(self)
+            box.setWindowTitle("PLC-Label vorhanden")
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setText("Für diese Rechnung existiert bereits ein PLC-Label.")
+            box.setInformativeText(
+                "Archiviertes Label öffnen oder neues Label mit Suffix -2 erstellen?\n\n"
+                f"Archiv: {existing_label_path}"
+            )
+            open_btn = box.addButton("Archiv-PDF öffnen", QMessageBox.ButtonRole.AcceptRole)
+            new_btn = box.addButton("Neues Label erstellen", QMessageBox.ButtonRole.ActionRole)
+            box.addButton("Abbrechen", QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(open_btn)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is open_btn:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(existing_label_path))
+                return
+            if clicked is not new_btn:
+                return
+
         selected = self._selected_summary()
         if selected is not None and selected.id == summary.id:
             address_lines = self._current_shipping_lines()
@@ -2349,8 +2441,23 @@ class RechnungenView(QWidget):
                             QApplication.processEvents()
                         return super().eventFilter(watched, event)
                     actions_col = _TABLE_COLUMNS.index("AKTIONEN")
+                    sevdesk_col = _TABLE_COLUMNS.index("sevDesk")
                     if event.type() == QEvent.Type.MouseMove:
-                        if int(index.column()) == actions_col:
+                        if int(index.column()) == sevdesk_col:
+                            rect = self._table.visualRect(index)
+                            row_data = index.data(Qt.ItemDataRole.UserRole)
+                            can_remove = bool(isinstance(row_data, dict) and row_data.get("__draft_remove_enabled__"))
+                            hovered_remove = can_remove and self._sevdesk_delegate.hit_remove_action(
+                                local_x=event.position().x() - rect.x(),
+                                local_y=event.position().y() - rect.y(),
+                                width=rect.width(),
+                                height=rect.height(),
+                            )
+                            if hovered_remove:
+                                self._table.viewport().setCursor(Qt.CursorShape.PointingHandCursor)
+                            else:
+                                self._table.viewport().unsetCursor()
+                        elif int(index.column()) == actions_col:
                             rect = self._table.visualRect(index)
                             action = self._actions_delegate.action_at_x(
                                 local_x=event.position().x() - rect.x(),
@@ -2366,6 +2473,21 @@ class RechnungenView(QWidget):
                         return super().eventFilter(watched, event)
 
                     self._select_visible_table_row(int(index.row()))
+                    if int(index.column()) == sevdesk_col:
+                        rect = self._table.visualRect(index)
+                        row_data = index.data(Qt.ItemDataRole.UserRole)
+                        can_remove = bool(isinstance(row_data, dict) and row_data.get("__draft_remove_enabled__"))
+                        if can_remove and self._sevdesk_delegate.hit_remove_action(
+                            local_x=event.position().x() - rect.x(),
+                            local_y=event.position().y() - rect.y(),
+                            width=rect.width(),
+                            height=rect.height(),
+                        ):
+                            source_index = self._table.model().mapToSource(index)
+                            row = int(source_index.row())
+                            if 0 <= row < len(self._summaries):
+                                self._confirm_delete_draft(self._summaries[row])
+                            return True
                     fulfillment_col = _TABLE_COLUMNS.index("FULFILLMENT")
                     if int(index.column()) == fulfillment_col:
                         rect = self._table.visualRect(index)
@@ -2468,6 +2590,71 @@ class RechnungenView(QWidget):
         if action == "mail":
             self._open_customer_mail(summary)
             return
+
+    def _confirm_delete_draft(self, summary: InvoiceSummary) -> None:
+        if self._delete_draft_worker is not None and self._delete_draft_worker.isRunning():
+            return
+        if summary.status_code != _DRAFT_STATUS or str(summary.invoice_number or "").strip():
+            return
+        answer = QMessageBox.question(
+            self,
+            "Rechnungsentwurf löschen",
+            "Rechnungsentwurf wirklich löschen?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self._overlay.show_with_message("Rechnungsentwurf wird gelöscht…")
+        self._overlay.setGeometry(self.rect())
+        self._overlay.raise_()
+
+        def job() -> dict[str, str]:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            service.delete_draft_invoice(summary.id)
+            return {
+                "label": str(summary.order_reference or summary.id or "").strip(),
+            }
+
+        self._delete_draft_worker = BackgroundWorker(job)
+        self._delete_draft_worker.signals.result.connect(self._on_delete_draft_result)
+        self._delete_draft_worker.signals.error.connect(self._on_delete_draft_error)
+        self._delete_draft_worker.signals.finished.connect(self._on_delete_draft_finished)
+        self._delete_draft_worker.start()
+
+    def _on_delete_draft_result(self, payload: object) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        label = str(data.get("label") or "Entwurf").strip() or "Entwurf"
+        signals: AppSignals = self._container.resolve(AppSignals)
+        signals.status_message.emit(f"Entwurf gelöscht: {label}", 5000)
+        self._reload_first_page()
+
+    def _on_delete_draft_error(self, exc: Exception) -> None:
+        QMessageBox.warning(
+            self,
+            "Rechnungsentwurf löschen",
+            f"Der Rechnungsentwurf konnte nicht gelöscht werden:\n\n{exc}",
+        )
+
+    def _on_delete_draft_finished(self) -> None:
+        self._delete_draft_worker = None
+        self._overlay.hide()
+
+    def _resolve_plc_archive_path_for_summary(self, summary: InvoiceSummary) -> str:
+        order_ref = str(summary.order_reference or "").strip()
+        invoice_no = str(summary.invoice_number or summary.id or "").strip()
+        if not order_ref or not invoice_no:
+            return ""
+        path = self._plc_label_archive.find_for_invoice(order_reference=order_ref, invoice_number=invoice_no)
+        return os.fspath(path) if path is not None else ""
+
+    def _on_open_plc_label_clicked(self) -> None:
+        path = str(self._selected_plc_label_path or "").strip()
+        if not path:
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+            QMessageBox.warning(self, "PLC-PDF öffnen", "Das PLC-Label konnte nicht geöffnet werden.")
 
     def _open_customer_mail(self, summary: InvoiceSummary) -> None:
         if self._customer_mail_worker is not None and self._customer_mail_worker.isRunning():
@@ -3227,12 +3414,20 @@ class RechnungenView(QWidget):
         logger.warning("Wix meta load failed: %s", exc)
 
     def _update_plc_controls(self) -> None:
-        enabled = self._print_allowed and (self._selected_summary() is not None)
+        selected = self._selected_summary()
+        enabled = self._print_allowed and (selected is not None)
         self._btn_print.setEnabled(enabled)
         self._btn_print_plc.setEnabled(enabled)
         self._btn_print_music.setEnabled(enabled)
         self._btn_print_label.setEnabled(enabled and len(self._current_shipping_lines()) >= 2)
-        self._btn_send_invoice.setEnabled(self._selected_summary() is not None)
+        self._btn_send_invoice.setEnabled(selected is not None)
+
+        self._selected_plc_label_path = ""
+        if selected is not None:
+            self._selected_plc_label_path = self._resolve_plc_archive_path_for_summary(selected)
+        has_archived_plc = bool(self._selected_plc_label_path)
+        self._btn_open_plc_label.setVisible(has_archived_plc)
+        self._btn_open_plc_label.setEnabled(has_archived_plc)
 
     @staticmethod
     def _normalize_shipping_lines(lines: list[str] | None) -> list[str]:

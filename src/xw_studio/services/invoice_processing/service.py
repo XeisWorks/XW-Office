@@ -333,6 +333,20 @@ class InvoiceProcessingService:
         rows = [summary.as_table_row() for summary in summaries]
         return self._rows_with_fulfillment(summaries, rows), summaries, searched_days
 
+    def delete_draft_invoice(self, invoice_id: str) -> None:
+        """Delete one sevDesk draft invoice after basic guard checks."""
+        summary = self._load_summary_by_id(invoice_id)
+        if summary.status_code != 100:
+            raise RuntimeError("Nur Entwürfe können gelöscht werden.")
+        if str(summary.invoice_number or "").strip():
+            raise RuntimeError("Entwurf hat bereits eine Rechnungsnummer und wird nicht gelöscht.")
+        self._invoices.delete_draft_invoice(summary.id)
+        invoice_key = str(summary.id or "").strip()
+        if invoice_key:
+            self._invoice_pdf_cache.pop(invoice_key, None)
+            self._invoice_detail_cache.pop(invoice_key, None)
+        self._batch_cache.clear()
+
     def read_fulfillment_flags(self, invoice_id: str) -> FulfillmentFlags:
         all_flags = self._load_fulfillment_flags_map()
         return all_flags.get(str(invoice_id), FulfillmentFlags())

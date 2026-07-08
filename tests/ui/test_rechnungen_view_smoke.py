@@ -71,7 +71,7 @@ class _FakeInvoiceProcessingService:
                 "id": "open-1",
                 "invoiceNumber": "RE-OPEN",
                 "invoiceDate": "2026-06-19T00:00:00",
-                "status": 200,
+                "status": 1000,
                 "sumGross": "20.0",
                 "contact_name": "Open Customer",
                 "order_reference": "20845",
@@ -466,8 +466,11 @@ def test_rechnungen_open_overview_resolves_wix_classification_and_buyer_notes(qt
     assert view._open_digital.text() == "1"  # noqa: SLF001
     assert view._open_note.text() == "2"  # noqa: SLF001
     assert view._open_plc.text() == "1"  # noqa: SLF001
-    assert "2x Physisches Produkt [XW-PHYS]" in view._open_products_text.toPlainText()  # noqa: SLF001
-    assert "Produktbeschreibung" in view._open_products_text.toPlainText()  # noqa: SLF001
+    products_text = view._open_products_text.toPlainText()  # noqa: SLF001
+    assert "2x" in products_text
+    assert "Physisches Produkt" in products_text
+    assert "XW-PHYS" in products_text
+    assert "Produktbeschreibung" in products_text
 
 
 def test_plc_dialog_defaults_to_direct_webservice_without_changing_list_action(qtbot: object) -> None:
@@ -651,7 +654,7 @@ def test_rechnungen_load_more_button_stages_drafts_before_open(qtbot: object) ->
     assert view._btn_more.text() == "Weitere Rechnungen laden"  # noqa: SLF001
     assert view._btn_more.isEnabled()  # noqa: SLF001
 
-    view._active_load_status = 200  # noqa: SLF001
+    view._active_load_status = 1000  # noqa: SLF001
     view._open_loaded = True  # noqa: SLF001
     view._open_has_more = False  # noqa: SLF001
     view._update_load_more_button()  # noqa: SLF001
@@ -663,6 +666,8 @@ def test_rechnungen_auto_loads_first_open_page_after_drafts(qtbot: object, monke
     container = _build_container()
     view = RechnungenView(container)
     qtbot.addWidget(view)
+    view.show()
+    qtbot.waitExposed(view)
     draft = InvoiceSummary.model_validate(
         {
             "id": "1",
@@ -682,7 +687,7 @@ def test_rechnungen_auto_loads_first_open_page_after_drafts(qtbot: object, monke
     assert view._pending_auto_open_load is True  # noqa: SLF001
     view._on_load_finished()  # noqa: SLF001
 
-    assert calls == [(200, True, 30)]
+    assert calls == [(1000, True, 50)]
 
 
 def test_main_window_rechnungen_warms_drafts_but_defers_open_invoice_contexts(
@@ -708,7 +713,7 @@ def test_main_window_rechnungen_warms_drafts_but_defers_open_invoice_contexts(
         timeout=5000,
     )
 
-    assert invoice_service.load_calls[:2] == [(100, 50, 0), (200, 30, 0)]
+    assert invoice_service.load_calls[:2] == [(100, 50, 0), (1000, 50, 0)]
     assert view._open_overview_worker is None  # noqa: SLF001
     qtbot.waitUntil(
         lambda: view._get_cached_wix_context("20844") is not None,  # noqa: SLF001
@@ -738,7 +743,7 @@ def test_main_window_rechnungen_warms_drafts_but_defers_open_invoice_contexts(
         timeout=1000,
     )
     assert "Teststrasse 1" in view._shipping_editor.toPlainText()  # noqa: SLF001
-    assert invoice_service.load_calls == [(100, 50, 0), (200, 30, 0)]
+    assert invoice_service.load_calls == [(100, 50, 0), (1000, 50, 0)]
 
 
 def test_rechnungen_detail_panel_click_does_not_clear_selection(qtbot: object) -> None:

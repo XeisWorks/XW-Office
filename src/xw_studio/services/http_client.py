@@ -128,6 +128,12 @@ class SevdeskConnection:
         raise_for_sevdesk(response)
         return response
 
+    def delete(self, path: str, **kwargs: object) -> httpx.Response:
+        """DELETE *path* (no retry — write operations are not idempotent-safe)."""
+        response: httpx.Response = self.client.delete(path, **kwargs)  # type: ignore[arg-type]
+        raise_for_sevdesk(response)
+        return response
+
 
 def build_sevdesk_connection(config: AppConfig, *, api_token: str | None = None) -> SevdeskConnection:
     """Factory for DI registration."""
