@@ -482,8 +482,14 @@ class SevdeskUvaPreviewProvider:
         any_payment_date: datetime | None = None
         period_payment_date: datetime | None = None
         period_paid_amount = Decimal("0.00")
+        seen_transaction_ids: set[str] = set()
 
         for event in events:
+            tx_id = _extract_payment_event_tx_id(event)
+            if tx_id is not None:
+                if tx_id in seen_transaction_ids:
+                    continue
+                seen_transaction_ids.add(tx_id)
             event_date = _extract_payment_event_date(event)
             if event_date is not None and (any_payment_date is None or event_date > any_payment_date):
                 any_payment_date = event_date
@@ -652,6 +658,18 @@ def _extract_payment_event_amount(event: dict[str, Any]) -> Decimal:
             if amount > Decimal("0.00"):
                 return amount
     return Decimal("0.00")
+
+
+def _extract_payment_event_tx_id(event: dict[str, Any]) -> str | None:
+    for node in _payment_event_nodes(event):
+        for key in ("checkAccountTransactionId", "transactionId", "id"):
+            value = node.get(key)
+            if value in (None, ""):
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+    return None
 
 
 def _payment_event_nodes(event: dict[str, Any]) -> list[dict[str, Any]]:

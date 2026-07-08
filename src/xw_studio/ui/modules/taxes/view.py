@@ -39,6 +39,61 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_UVA_WARNING_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Zahlung außerhalb UVA-Monat", ("Zahlung liegt außerhalb des UVA-Monats",)),
+    ("Fehlender Zahlungsnachweis", ("Ohne Zahlungsnachweis im IST-Modus",)),
+    ("Offen/Entwurf ignoriert", ("Offener/Entwurfs-Beleg",)),
+    ("Storno ignoriert", ("Stornierter Beleg",)),
+    ("Teilzahlungen", ("Teilzahlung anteilig",)),
+    ("Gutschrift-Prüfung", ("Gutschrift ohne Referenzrechnung",)),
+    ("Duplikate", ("Duplikat-Beleg",)),
+    (
+        "Nicht in AT-UVA übernommen",
+        ("Nicht in AT-UVA übernommen", "Ausländische Vorsteuer nicht in AT-UVA übernommen"),
+    ),
+)
+
+
+def _render_grouped_uva_warnings(warnings: list[str]) -> str:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for warning in warnings:
+        text = str(warning).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        cleaned.append(text)
+
+    if not cleaned:
+        return ""
+
+    grouped: dict[str, list[str]] = {name: [] for name, _ in _UVA_WARNING_GROUPS}
+    others: list[str] = []
+
+    for warning in cleaned:
+        assigned = False
+        lowered = warning.lower()
+        for group_name, markers in _UVA_WARNING_GROUPS:
+            if any(marker.lower() in lowered for marker in markers):
+                grouped[group_name].append(warning)
+                assigned = True
+                break
+        if not assigned:
+            others.append(warning)
+
+    total = len(cleaned)
+    lines = [f"Hinweise (gruppiert, {total}):"]
+    for group_name, _markers in _UVA_WARNING_GROUPS:
+        items = grouped[group_name]
+        if not items:
+            continue
+        lines.append(f"- {group_name} ({len(items)}):")
+        lines.extend(f"  - {item}" for item in items)
+    if others:
+        lines.append(f"- Sonstige ({len(others)}):")
+        lines.extend(f"  - {item}" for item in others)
+    return "\n".join(lines)
+
 
 class TaxesView(QWidget):
     """UVA | Clearing | Ausgaben — calls services off the UI thread."""
@@ -138,7 +193,18 @@ class TaxesView(QWidget):
                 preview_text = str(payload.get("preview_text") or "").strip()
                 kennzahlen_text = str(payload.get("kennzahlen_text") or "").strip()
                 zm_text = str(payload.get("zm_text") or "").strip()
-                combined = "\n\n".join(part for part in [preview_text, kennzahlen_text, zm_text] if part)
+                warnings_value = payload.get("warnings")
+                warning_lines = [
+                    str(item)
+                    for item in warnings_value
+                    if isinstance(item, str)
+                ] if isinstance(warnings_value, list) else []
+                grouped_warnings_text = _render_grouped_uva_warnings(warning_lines)
+                combined = "\n\n".join(
+                    part
+                    for part in [preview_text, kennzahlen_text, grouped_warnings_text, zm_text]
+                    if part
+                )
                 if combined:
                     info.appendPlainText("\n\n" + combined)
                     return

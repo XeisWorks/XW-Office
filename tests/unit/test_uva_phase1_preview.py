@@ -499,6 +499,63 @@ class _CreditNoteConnection:
         raise AssertionError(f"Unexpected request: {path} {query}")
 
 
+class _PaymentLogDuplicateTxConnection:
+    def get(self, path: str, params: dict[str, object] | None = None) -> _FakeResponse:
+        query = dict(params or {})
+        if path == "/Invoice":
+            if "startPayDate" in query:
+                return _FakeResponse(
+                    {
+                        "objects": [
+                            {
+                                "id": "9002",
+                                "status": "750",
+                                "invoiceDate": "2026-02-20",
+                                "invoiceNumber": "RE-9002",
+                                "taxText": "MIT 20% MEHRWERTSTEUER",
+                                "sumGross": "120.00",
+                                "sumNet": "100.00",
+                                "sumTax": "20.00",
+                            }
+                        ]
+                    }
+                )
+            return _FakeResponse({"objects": []})
+        if path == "/Invoice/9002/getCheckAccountTransactionLogs":
+            return _FakeResponse(
+                {
+                    "objects": [
+                        {
+                            "checkAccountTransaction": {
+                                "id": "tx-1",
+                                "valueDate": "2026-03-04",
+                                "assignedAmountGross": "60.00",
+                            }
+                        }
+                    ]
+                }
+            )
+        if path == "/Invoice/9002/getCheckAccountTransactions":
+            return _FakeResponse(
+                {
+                    "objects": [
+                        {
+                            "id": "tx-1",
+                            "valueDate": "2026-03-04",
+                            "assignedAmountGross": "60.00",
+                        }
+                    ]
+                }
+            )
+        if path == "/InvoicePos":
+            return _FakeResponse({"objects": []})
+        if path == "/Voucher":
+            return _FakeResponse({"objects": []})
+        if path == "/CreditNote":
+            return _FakeResponse({"objects": []})
+        raise AssertionError(f"Unexpected request: {path} {query}")
+
+
 def test_provider_loads_credit_notes_as_negative_sales() -> None:
     provider = SevdeskUvaPreviewProvider(_CreditNoteConnection())  # type: ignore[arg-type]
     payload_service = UvaPayloadService(UvaPreviewService(provider))
@@ -506,6 +563,15 @@ def test_provider_loads_credit_notes_as_negative_sales() -> None:
     payload = payload_service.build_payload(2026, 3)
 
     assert payload.kennzahlen.A029 == "-100.00"
+
+
+def test_provider_deduplicates_same_transaction_from_two_payment_endpoints() -> None:
+    provider = SevdeskUvaPreviewProvider(_PaymentLogDuplicateTxConnection())  # type: ignore[arg-type]
+    payload_service = UvaPayloadService(UvaPreviewService(provider))
+
+    payload = payload_service.build_payload(2026, 3)
+
+    assert payload.kennzahlen.A022 == "50.00"
 
 
 def _semantic_preview_lines(text: str) -> list[str]:
