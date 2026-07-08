@@ -58,11 +58,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from xw_studio.core.printer_detect import discover_printers_cached as discover_printers
 from xw_studio.core.signals import AppSignals
-from xw_studio.core.printer_detect import discover_printers, evaluate_printer_status
-from xw_studio.core.types import PrinterStatus
 from xw_studio.core.types import ModuleKey
 from xw_studio.core.worker import BackgroundWorker
+from xw_studio.services.background_jobs.service import BackgroundJobManager
 from xw_studio.services.daily_business.service import DailyBusinessService
 from xw_studio.services.draft_invoice.service import (
     DraftInvoiceService,
@@ -72,6 +72,7 @@ from xw_studio.services.draft_invoice.service import (
 )
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
 from xw_studio.services.plc.label_archive import PlcLabelArchive
+from xw_studio.services.printer_status.service import PrinterStatusService
 from xw_studio.services.products.print_decision import PieceBlock, PrintDecisionEngine
 from xw_studio.services.secrets.service import SecretService
 from xw_studio.services.sendungen.service import OffeneSendungenService
@@ -121,9 +122,13 @@ _OPEN_AUTO_LOAD_LIMIT = 50
 # after 75 seconds only caused needless conversion work when users revisited a
 # row in the same list.
 _WIX_CONTEXT_CACHE_TTL_SECONDS = 6 * 60 * 60
-_WIX_WARM_BATCH_SIZE = 6
-_WIX_WARM_MAX_WORKERS = 4
-_WIX_WARM_QUEUE_LIMIT = 24
+_WIX_WARM_BATCH_SIZE = 3
+_WIX_WARM_MAX_WORKERS = 2
+_WIX_WARM_QUEUE_LIMIT = 8
+_SIDE_JOB_QUEUE = "rechnungen-side"
+_PRIORITY_OPEN_OVERVIEW = 10
+_PRIORITY_HINT_PREFETCH = 20
+_PRIORITY_WIX_WARMUP = 30
 
 
 class _HintsIconDelegate(QStyledItemDelegate):
@@ -668,6 +673,7 @@ class RechnungenView(QWidget):
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._container = container
+        self._background_jobs = container.resolve(BackgroundJobManager)
         self._worker: BackgroundWorker | None = None
         self._search_worker: BackgroundWorker | None = None
         self._refund_worker: BackgroundWorker | None = None
@@ -705,6 +711,8 @@ class RechnungenView(QWidget):
         self._pending_auto_open_load = False
         self._load_started_at = 0.0
         self._wix_warm_started_at = 0.0
+        self._invoice_detail_started_at = 0.0
+        self._selected_wix_started_at = 0.0
         self._search_active = False
         self._search_seq = 0
         self._wix_digital_cache: dict[str, bool] = {}
@@ -748,6 +756,7 @@ class RechnungenView(QWidget):
         self._plc_label_archive = PlcLabelArchive()
         self._selected_plc_label_path = ""
         self._plc_archive_lookup_cache: dict[tuple[str, str], str] = {}
+        self._printer_status_initialized = False
         self._post_load_prefetch_seq = 0
         self._deferred_load_payload: tuple[
             list[dict[str, Any]],
@@ -1098,10 +1107,12 @@ class RechnungenView(QWidget):
 
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.printer_status_changed.connect(self._on_printer_status)
-        self._initialize_printer_status()
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
+        if not self._printer_status_initialized:
+            self._printer_status_initialized = True
+            QTimer.singleShot(0, self._initialize_printer_status)
         if not self._did_initial_load:
             self._did_initial_load = True
             if self._has_sevdesk_token():
@@ -1246,10 +1257,8 @@ class RechnungenView(QWidget):
         self._update_plc_controls()
 
     def _initialize_printer_status(self) -> None:
-        names = list(self._container.config.printing.configured_printer_names)
-        discovered = discover_printers()
-        status = evaluate_printer_status(discovered, names)
-        self._on_printer_status(status != PrinterStatus.RED)
+        service: PrinterStatusService = self._container.resolve(PrinterStatusService)
+        self._on_printer_status(service.snapshot().printing_allowed)
 
     def _reload_first_page(self) -> None:
         self._next_offset = 0
@@ -1285,8 +1294,8 @@ class RechnungenView(QWidget):
         append = self._append_mode
         self._load_started_at = time.perf_counter()
         logger.info(
-            "Rechnungen load start status=%s limit=%s offset=%s append=%s",
-            status_filter,
+            "Rechnungen phase=%s start limit=%s offset=%s append=%s",
+            self._load_phase_label(status_filter),
             page_limit,
             offset,
             append,
@@ -1365,8 +1374,8 @@ class RechnungenView(QWidget):
         status_filter = None if status_obj is None else int(status_obj)
         elapsed_ms = int((time.perf_counter() - self._load_started_at) * 1000) if self._load_started_at else 0
         logger.info(
-            "Rechnungen load result status=%s rows=%s has_more=%s elapsed_ms=%s",
-            status_filter,
+            "Rechnungen phase=%s result rows=%s has_more=%s elapsed_ms=%s",
+            self._load_phase_label(status_filter),
             len(summaries),
             has_more,
             elapsed_ms,
@@ -1531,7 +1540,23 @@ class RechnungenView(QWidget):
 
         # Delay side-jobs slightly so navigation/interaction stays snappy
         # right after a fresh table update.
-        QTimer.singleShot(1200, run_prefetch)
+        QTimer.singleShot(2500, run_prefetch)
+
+    def _submit_side_job(
+        self,
+        *,
+        coalesce_key: str,
+        priority: int,
+        start_fn: Callable[[], BackgroundWorker | None],
+        can_start: Callable[[], bool] | None = None,
+    ) -> None:
+        self._background_jobs.submit(
+            queue=_SIDE_JOB_QUEUE,
+            priority=priority,
+            coalesce_key=coalesce_key,
+            start_fn=start_fn,
+            can_start=can_start,
+        )
 
     def _update_load_more_button(self) -> None:
         if self._search_active:
@@ -1833,17 +1858,41 @@ class RechnungenView(QWidget):
         self,
         open_rows: list[InvoiceSummary],
     ) -> None:
+        self._pending_open_overview_rows = list(open_rows)
+        self._submit_side_job(
+            coalesce_key="open-overview",
+            priority=_PRIORITY_OPEN_OVERVIEW,
+            start_fn=self._create_open_overview_worker,
+            can_start=self._can_run_open_overview_job,
+        )
+
+    def _can_run_open_overview_job(self) -> bool:
         if self._open_overview_worker is not None and self._open_overview_worker.isRunning():
-            self._open_overview_seq += 1
-            self._pending_open_overview_rows = list(open_rows)
-            return
+            return False
+        if self._wix_context_worker is not None and self._wix_context_worker.isRunning():
+            return False
+        if self._invoice_detail_worker is not None and self._invoice_detail_worker.isRunning():
+            return False
+        return True
+
+    def _create_open_overview_worker(self) -> BackgroundWorker | None:
+        open_rows = list(self._pending_open_overview_rows)
+        if not open_rows:
+            return None
         refs = [s.order_reference.strip() for s in open_rows if s.order_reference.strip()]
         if not refs:
-            return
+            self._pending_open_overview_rows = []
+            return None
         self._open_overview_seq += 1
         seq = self._open_overview_seq
         snapshot = list(open_rows)
         digital_cache = dict(self._wix_digital_cache)
+        self._pending_open_overview_rows = []
+        logger.debug(
+            "Rechnungen phase=open-overview start rows=%s refs=%s",
+            len(snapshot),
+            len(refs),
+        )
 
         def job() -> OpenInvoiceOverview:
             service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
@@ -1860,7 +1909,7 @@ class RechnungenView(QWidget):
         self._open_overview_worker.signals.result.connect(self._on_open_overview_result)
         self._open_overview_worker.signals.error.connect(self._on_open_overview_error)
         self._open_overview_worker.signals.finished.connect(self._on_open_overview_finished)
-        self._open_overview_worker.start()
+        return self._open_overview_worker
 
     def _on_open_overview_result(self, payload: object) -> None:
         overview = overview_payload_from_object(payload)
@@ -1868,6 +1917,13 @@ class RechnungenView(QWidget):
             return
         if overview.seq != self._open_overview_seq:
             return
+        logger.debug(
+            "Rechnungen phase=open-overview result total=%s physical=%s digital=%s unknown=%s",
+            overview.total,
+            overview.physical,
+            overview.digital,
+            overview.unknown,
+        )
         self._apply_open_invoice_overview(overview)
 
     def _on_open_overview_error(self, exc: Exception) -> None:
@@ -1882,10 +1938,13 @@ class RechnungenView(QWidget):
 
     def _on_open_overview_finished(self) -> None:
         self._open_overview_worker = None
-        pending = list(self._pending_open_overview_rows)
-        self._pending_open_overview_rows = []
-        if pending:
-            self._start_open_invoice_overview(pending)
+        if self._pending_open_overview_rows:
+            self._submit_side_job(
+                coalesce_key="open-overview",
+                priority=_PRIORITY_OPEN_OVERVIEW,
+                start_fn=self._create_open_overview_worker,
+                can_start=self._can_run_open_overview_job,
+            )
 
     def _apply_open_invoice_overview(self, overview: OpenInvoiceOverview) -> None:
         for key, value in overview.cache_updates.items():
@@ -1954,7 +2013,8 @@ class RechnungenView(QWidget):
         """
         service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
         added = 0
-        for summary in summaries:
+        prioritized = self._prioritize_summaries_for_background_prefetch(summaries)
+        for summary in prioritized[:_WIX_WARM_QUEUE_LIMIT]:
             ref = str(summary.order_reference or "").strip()
             if not ref or ref in self._wix_warm_queue or ref in self._wix_warm_inflight_refs:
                 continue
@@ -1976,10 +2036,25 @@ class RechnungenView(QWidget):
         self._start_next_wix_warm_batch()
 
     def _start_next_wix_warm_batch(self) -> None:
+        self._submit_side_job(
+            coalesce_key="wix-warmup",
+            priority=_PRIORITY_WIX_WARMUP,
+            start_fn=self._create_next_wix_warm_worker,
+            can_start=self._can_run_wix_warm_job,
+        )
+
+    def _can_run_wix_warm_job(self) -> bool:
         if self._wix_warm_worker is not None and self._wix_warm_worker.isRunning():
-            return
+            return False
+        if self._wix_context_worker is not None and self._wix_context_worker.isRunning():
+            return False
+        if self._invoice_detail_worker is not None and self._invoice_detail_worker.isRunning():
+            return False
+        return True
+
+    def _create_next_wix_warm_worker(self) -> BackgroundWorker | None:
         if not self._wix_warm_queue:
-            return
+            return None
 
         refs = self._wix_warm_queue[:_WIX_WARM_BATCH_SIZE]
         del self._wix_warm_queue[:_WIX_WARM_BATCH_SIZE]
@@ -2036,7 +2111,7 @@ class RechnungenView(QWidget):
         self._wix_warm_worker.signals.result.connect(self._on_wix_warm_result)
         self._wix_warm_worker.signals.error.connect(self._on_wix_warm_error)
         self._wix_warm_worker.signals.finished.connect(self._on_wix_warm_finished)
-        self._wix_warm_worker.start()
+        return self._wix_warm_worker
 
     def _on_wix_warm_result(self, payload: object) -> None:
         rows = payload if isinstance(payload, list) else []
@@ -2072,7 +2147,7 @@ class RechnungenView(QWidget):
         service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
         draft_refs: list[str] = []
         seen: set[str] = set()
-        for summary in self._summaries:
+        for summary in self._prioritize_summaries_for_background_prefetch(self._summaries):
             ref = str(summary.order_reference or "").strip()
             if not ref or ref in seen:
                 continue
@@ -2089,6 +2164,37 @@ class RechnungenView(QWidget):
         self._hint_rest_queue = []
         self._hint_inflight_ref = ""
         self._start_next_hint_prefetch()
+
+    def _prioritize_summaries_for_background_prefetch(
+        self,
+        summaries: list[InvoiceSummary],
+    ) -> list[InvoiceSummary]:
+        if not summaries:
+            return []
+
+        ordered_rows: list[int] = []
+        seen_rows: set[int] = set()
+
+        selected_row = self._table.selected_source_row()
+        if selected_row is not None and 0 <= selected_row < len(summaries):
+            ordered_rows.append(selected_row)
+            seen_rows.add(selected_row)
+            for delta in (1, -1, 2, -2):
+                neighbor = selected_row + delta
+                if 0 <= neighbor < len(summaries) and neighbor not in seen_rows:
+                    ordered_rows.append(neighbor)
+                    seen_rows.add(neighbor)
+
+        for row in self._table.visible_source_rows(limit=_WIX_WARM_QUEUE_LIMIT):
+            if 0 <= row < len(summaries) and row not in seen_rows:
+                ordered_rows.append(row)
+                seen_rows.add(row)
+
+        for row, _summary in enumerate(summaries):
+            if row not in seen_rows:
+                ordered_rows.append(row)
+
+        return [summaries[row] for row in ordered_rows if 0 <= row < len(summaries)]
 
     def _prioritize_hint_prefetch_for_summary(self, summary: InvoiceSummary) -> None:
         ref = str(summary.order_reference or "").strip()
@@ -2109,8 +2215,15 @@ class RechnungenView(QWidget):
         self._start_next_hint_prefetch()
 
     def _start_next_hint_prefetch(self) -> None:
+        self._submit_side_job(
+            coalesce_key="hint-prefetch",
+            priority=_PRIORITY_HINT_PREFETCH,
+            start_fn=self._create_next_hint_prefetch_worker,
+        )
+
+    def _create_next_hint_prefetch_worker(self) -> BackgroundWorker | None:
         if self._hint_worker is not None and self._hint_worker.isRunning():
-            return
+            return None
         ref = ""
         if self._hint_draft_queue:
             ref = self._hint_draft_queue.pop(0)
@@ -2118,7 +2231,7 @@ class RechnungenView(QWidget):
             ref = self._hint_rest_queue.pop(0)
         if not ref:
             self._hint_inflight_ref = ""
-            return
+            return None
         seq = self._hint_seq
         self._hint_inflight_ref = ref
 
@@ -2135,7 +2248,7 @@ class RechnungenView(QWidget):
         self._hint_worker.signals.result.connect(self._on_hint_prefetch_result)
         self._hint_worker.signals.error.connect(self._on_hint_prefetch_error)
         self._hint_worker.signals.finished.connect(self._on_hint_prefetch_finished)
-        self._hint_worker.start()
+        return self._hint_worker
 
     def _on_hint_prefetch_result(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}
@@ -3146,6 +3259,9 @@ class RechnungenView(QWidget):
             self._queued_invoice_detail_id = invoice_id
             return
 
+        self._invoice_detail_started_at = time.perf_counter()
+        logger.debug("Rechnungen phase=selected-detail-load start invoice_id=%s", invoice_id)
+
         def job() -> dict[str, object]:
             service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             context = service.get_invoice_detail_context(summary)
@@ -3173,12 +3289,23 @@ class RechnungenView(QWidget):
         logger.warning("Invoice detail background load failed: %s", exc)
 
     def _on_invoice_detail_context_finished(self) -> None:
+        if self._invoice_detail_started_at:
+            elapsed_ms = int((time.perf_counter() - self._invoice_detail_started_at) * 1000)
+            logger.debug("Rechnungen phase=selected-detail-load finished elapsed_ms=%s", elapsed_ms)
+            self._invoice_detail_started_at = 0.0
+        self._invoice_detail_worker = None
         queued_id = self._queued_invoice_detail_id.strip()
         self._queued_invoice_detail_id = ""
         if not queued_id:
+            self._start_next_wix_warm_batch()
+            if self._pending_open_overview_rows:
+                self._start_open_invoice_overview(list(self._pending_open_overview_rows))
             return
         selected = self._selected_summary()
         if selected is None or queued_id != str(selected.id or "").strip():
+            self._start_next_wix_warm_batch()
+            if self._pending_open_overview_rows:
+                self._start_open_invoice_overview(list(self._pending_open_overview_rows))
             return
         self._load_invoice_detail_context(selected)
 
@@ -3313,6 +3440,8 @@ class RechnungenView(QWidget):
 
         self._wix_context_seq += 1
         seq = self._wix_context_seq
+        self._selected_wix_started_at = time.perf_counter()
+        logger.debug("Rechnungen phase=selected-wix-context start ref=%s", ref)
         if show_loading:
             self._reset_wix_meta("Lade Wix-Daten...")
         self._pending_wix_reference = ref
@@ -3392,15 +3521,34 @@ class RechnungenView(QWidget):
         self._gb_stuecke.show()
 
     def _on_wix_context_finished(self) -> None:
+        if self._selected_wix_started_at:
+            elapsed_ms = int((time.perf_counter() - self._selected_wix_started_at) * 1000)
+            logger.debug("Rechnungen phase=selected-wix-context finished elapsed_ms=%s", elapsed_ms)
+            self._selected_wix_started_at = 0.0
+        self._wix_context_worker = None
         queued_ref = self._queued_wix_context_ref.strip()
         self._queued_wix_context_ref = ""
         if not queued_ref:
+            self._start_next_wix_warm_batch()
+            if self._pending_open_overview_rows:
+                self._start_open_invoice_overview(list(self._pending_open_overview_rows))
             return
         selected = self._selected_summary()
         current_ref = selected.order_reference.strip() if selected is not None else ""
         if not current_ref or queued_ref != current_ref:
+            self._start_next_wix_warm_batch()
+            if self._pending_open_overview_rows:
+                self._start_open_invoice_overview(list(self._pending_open_overview_rows))
             return
         self._load_wix_context(queued_ref)
+
+    @staticmethod
+    def _load_phase_label(status_filter: int | None) -> str:
+        if status_filter == _DRAFT_STATUS:
+            return "draft-load"
+        if status_filter is None:
+            return "recent-non-draft-load"
+        return f"status-{status_filter}-load"
 
     def _get_cached_wix_context(self, reference: str) -> dict[str, object] | None:
         ref = str(reference or "").strip()

@@ -14,10 +14,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from xw_studio.core.printer_detect import discover_printers, evaluate_printer_status
+from xw_studio.core.printer_detect import discover_printers_cached as discover_printers
 from xw_studio.core.signals import AppSignals
-from xw_studio.core.types import ModuleKey, PrinterStatus
+from xw_studio.core.types import ModuleKey
 from xw_studio.core.worker import BackgroundWorker
+from xw_studio.services.printer_status.service import PrinterStatusService, PrinterStatusSnapshot
 from xw_studio.ui.sidebar import Sidebar
 from xw_studio.ui.status_bar import StudioStatusBar
 from xw_studio.ui.theme import apply_app_theme
@@ -38,11 +39,13 @@ class MainWindow(QMainWindow):
         self._page_factories: dict[str, Callable[[], QWidget]] = {}
         self._loading_pages: set[str] = set()
         self._startup_preload_worker: BackgroundWorker | None = None
+        self._printer_status_worker: BackgroundWorker | None = None
         self._setup_window()
         self._build_ui()
         self._connect_signals()
         self._open_initial_module()
         self._apply_printer_status()
+        self._refresh_printer_status_async()
 
     def _setup_window(self) -> None:
         cfg = self._container.config.app.window
@@ -131,20 +134,34 @@ class MainWindow(QMainWindow):
             logger.warning("Theme switch failed: %s", exc)
 
     def _apply_printer_status(self) -> None:
-        names = list(self._container.config.printing.configured_printer_names)
-        discovered = discover_printers()
-        status = evaluate_printer_status(discovered, names)
+        service: PrinterStatusService = self._container.resolve(PrinterStatusService)
+        self._apply_printer_status_snapshot(service.snapshot())
 
-        if status == PrinterStatus.GREEN:
-            color, tooltip = "green", "Drucker: bereit (Ampel gruen)"
-        elif status == PrinterStatus.YELLOW:
-            color, tooltip = "yellow", "Drucker: teilweise (Ampel gelb)"
-        else:
-            color, tooltip = "red", "Drucker: nicht verfuegbar - Druck deaktiviert (Ampel rot)"
-
-        self._status_bar.set_printer_status(color, tooltip)
+    def _apply_printer_status_snapshot(self, snapshot: PrinterStatusSnapshot) -> None:
+        self._status_bar.set_printer_status(snapshot.color, snapshot.tooltip)
         signals = self._container.resolve(AppSignals)
-        signals.printer_status_changed.emit(status != PrinterStatus.RED)
+        signals.printer_status_changed.emit(snapshot.printing_allowed)
+
+    def _refresh_printer_status_async(self) -> None:
+        if self._printer_status_worker is not None and self._printer_status_worker.isRunning():
+            return
+
+        def job() -> PrinterStatusSnapshot:
+            service: PrinterStatusService = self._container.resolve(PrinterStatusService)
+            return service.refresh(force=True)
+
+        self._printer_status_worker = BackgroundWorker(job)
+        self._printer_status_worker.signals.result.connect(self._on_printer_status_result)
+        self._printer_status_worker.signals.error.connect(self._on_printer_status_error)
+        self._printer_status_worker.signals.finished.connect(lambda: setattr(self, "_printer_status_worker", None))
+        self._printer_status_worker.start()
+
+    def _on_printer_status_result(self, payload: object) -> None:
+        if isinstance(payload, PrinterStatusSnapshot):
+            self._apply_printer_status_snapshot(payload)
+
+    def _on_printer_status_error(self, exc: Exception) -> None:
+        logger.debug("Printer status refresh failed: %s", exc)
 
     def _register_page(self, key: str | ModuleKey, widget: QWidget) -> None:
         key_str = key.value if isinstance(key, ModuleKey) else key

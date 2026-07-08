@@ -773,7 +773,7 @@ def test_main_window_rechnungen_warms_drafts_but_defers_open_invoice_contexts(
     )
 
     assert invoice_service.load_calls[:2] == [("status:100", 50, 0), ("recent", 50, 0)]
-    assert view._open_overview_worker is None  # noqa: SLF001
+    qtbot.waitUntil(lambda: view._open_overview_worker is None, timeout=5000)  # noqa: SLF001
     qtbot.waitUntil(
         lambda: view._get_cached_wix_context("20844") is not None,  # noqa: SLF001
         timeout=5000,

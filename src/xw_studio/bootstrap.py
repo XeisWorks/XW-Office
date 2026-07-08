@@ -5,6 +5,7 @@ from sqlalchemy.orm import sessionmaker as SessionMaker
 
 from xw_studio.core.container import Container
 from xw_studio.core.database import create_session_factory
+from xw_studio.services.background_jobs.service import BackgroundJobManager
 from xw_studio.services.calculation.service import CalculationService
 from xw_studio.services.commission.service import CommissionService, SevdeskCommissionProvider
 from xw_studio.services.clearing.gateways import (
@@ -47,6 +48,7 @@ from xw_studio.services.mailing.service import MailDeliveryService
 from xw_studio.services.printing.print_queue import PrintQueueService
 from xw_studio.services.plc.service import PlcShipmentService
 from xw_studio.services.plc.webservice import PlcWebserviceClient
+from xw_studio.services.printer_status.service import PrinterStatusService
 from xw_studio.services.secrets.service import SecretService
 from xw_studio.services.sevdesk.contact_client import ContactClient
 from xw_studio.services.sevdesk.invoice_client import InvoiceClient
@@ -71,6 +73,8 @@ from xw_studio.repositories import ApiSecretRepository, PcRegistryRepository, Pl
 
 def register_default_services(container: Container) -> None:
     """Wire default singletons (Phase 1–6 baseline)."""
+    container.register(BackgroundJobManager, lambda c: BackgroundJobManager())
+    container.register(PrinterStatusService, lambda c: PrinterStatusService(c.config))
     container.register(
         SecretService,
         lambda c: SecretService(

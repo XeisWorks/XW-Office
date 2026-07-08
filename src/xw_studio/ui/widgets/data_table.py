@@ -7,6 +7,7 @@ from PySide6.QtGui import QBrush, QColor
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
 from PySide6.QtWidgets import QHeaderView, QTableView, QWidget
 from PySide6.QtCore import QItemSelectionModel
+from PySide6.QtCore import QPoint
 
 
 class SimpleTableModel(QAbstractTableModel):
@@ -163,6 +164,33 @@ class DataTable(QTableView):
             dict(self._model.row_data(row))
             for row in range(self._model.rowCount())
         ]
+
+    def visible_source_rows(self, *, limit: int | None = None) -> list[int]:
+        """Visible source-model row indexes in top-to-bottom order."""
+        model = self.model()
+        if model is None or self.viewport().height() <= 0:
+            return []
+        top_index = self.indexAt(QPoint(0, 0))
+        bottom_index = self.indexAt(QPoint(0, max(0, self.viewport().height() - 1)))
+        if not top_index.isValid():
+            return []
+        top_row = int(top_index.row())
+        bottom_row = int(bottom_index.row()) if bottom_index.isValid() else top_row
+        if bottom_row < top_row:
+            bottom_row = top_row
+        rows: list[int] = []
+        for proxy_row in range(top_row, bottom_row + 1):
+            proxy_index = model.index(proxy_row, 0)
+            if not proxy_index.isValid():
+                continue
+            source_index = self._proxy.mapToSource(proxy_index)
+            source_row = int(source_index.row())
+            if source_row < 0:
+                continue
+            rows.append(source_row)
+            if limit is not None and len(rows) >= limit:
+                break
+        return rows
 
     def select_source_row(self, row: int) -> None:
         """Select one source-model row, respecting proxy sorting/filtering."""
