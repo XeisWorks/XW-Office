@@ -157,6 +157,13 @@ class DataTable(QTableView):
     def update_source_row_data(self, row: int, patch: dict[str, Any]) -> None:
         self._model.update_row_data(row, patch)
 
+    def source_rows_data(self) -> list[dict[str, Any]]:
+        """Return all source-model rows in their current source order."""
+        return [
+            dict(self._model.row_data(row))
+            for row in range(self._model.rowCount())
+        ]
+
     def select_source_row(self, row: int) -> None:
         """Select one source-model row, respecting proxy sorting/filtering."""
         if row < 0 or row >= self._model.rowCount():

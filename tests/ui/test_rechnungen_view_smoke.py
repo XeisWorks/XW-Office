@@ -690,6 +690,53 @@ def test_rechnungen_auto_loads_first_open_page_after_drafts(qtbot: object, monke
     assert calls == [(1000, True, 50)]
 
 
+def test_rechnungen_sorts_staged_loads_by_actuality_descending(qtbot: object) -> None:
+    container = _build_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+
+    older_draft = InvoiceSummary.model_validate(
+        {
+            "id": "11",
+            "invoiceNumber": "RE-OLD",
+            "invoiceDate": "2026-06-01T00:00:00",
+            "status": 100,
+            "contact_name": "Older Draft",
+        }
+    )
+    newer_open = InvoiceSummary.model_validate(
+        {
+            "id": "99",
+            "invoiceNumber": "RE-NEW",
+            "invoiceDate": "2026-07-01T00:00:00",
+            "status": 1000,
+            "contact_name": "Newer Open",
+        }
+    )
+
+    view._apply_load_result_data(  # noqa: SLF001
+        [older_draft.as_table_row()],
+        [older_draft],
+        False,
+        100,
+        False,
+        allow_background_prefetch=False,
+    )
+    view._apply_load_result_data(  # noqa: SLF001
+        [newer_open.as_table_row()],
+        [newer_open],
+        False,
+        1000,
+        True,
+        allow_background_prefetch=False,
+    )
+
+    assert [summary.invoice_number for summary in view._summaries[:2]] == [  # noqa: SLF001
+        "RE-NEW",
+        "RE-OLD",
+    ]
+
+
 def test_main_window_rechnungen_warms_drafts_but_defers_open_invoice_contexts(
     qtbot: object,
     monkeypatch,

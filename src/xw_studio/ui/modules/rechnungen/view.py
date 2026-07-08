@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 import html
 import json
 import logging
@@ -1398,13 +1399,20 @@ class RechnungenView(QWidget):
         self._prepare_rows_for_hint_prefetch(rows, summaries)
 
         if append:
-            self._table.append_rows(rows)
-            self._summaries.extend(summaries)
+            combined_rows = self._table.source_rows_data() + list(rows)
+            combined_summaries = list(self._summaries) + list(summaries)
+            sorted_rows, sorted_summaries = self._sort_rows_by_actuality(
+                combined_rows,
+                combined_summaries,
+            )
+            self._table.set_data(sorted_rows)
+            self._summaries = sorted_summaries
         else:
-            self._table.set_data(rows)
-            self._summaries = summaries
-            self._loaded_rows = rows
-            self._loaded_summaries = summaries
+            sorted_rows, sorted_summaries = self._sort_rows_by_actuality(rows, summaries)
+            self._table.set_data(sorted_rows)
+            self._summaries = sorted_summaries
+            self._loaded_rows = sorted_rows
+            self._loaded_summaries = sorted_summaries
             self._loaded_has_more = has_more
 
         if status_filter == _DRAFT_STATUS:
@@ -1447,6 +1455,44 @@ class RechnungenView(QWidget):
         if auto_load_open:
             logger.info("Rechnungen auto-open-load queued limit=%s", _OPEN_AUTO_LOAD_LIMIT)
             self._pending_auto_open_load = True
+
+    def _sort_rows_by_actuality(
+        self,
+        rows: list[dict[str, Any]],
+        summaries: list[InvoiceSummary],
+    ) -> tuple[list[dict[str, Any]], list[InvoiceSummary]]:
+        if not rows or not summaries:
+            return list(rows), list(summaries)
+
+        count = min(len(rows), len(summaries))
+        paired = list(zip(rows[:count], summaries[:count], strict=False))
+        paired.sort(
+            key=lambda pair: self._summary_actuality_key(pair[1]),
+            reverse=True,
+        )
+
+        sorted_rows = [row for row, _summary in paired]
+        sorted_summaries = [summary for _row, summary in paired]
+
+        if len(summaries) > count:
+            sorted_summaries.extend(summaries[count:])
+            sorted_rows.extend(summary.as_table_row() for summary in summaries[count:])
+        elif len(rows) > count:
+            sorted_rows.extend(rows[count:])
+
+        return sorted_rows, sorted_summaries
+
+    def _summary_actuality_key(self, summary: InvoiceSummary) -> tuple[float, int]:
+        raw_date = str(summary.invoice_date or "").strip()
+        timestamp = 0.0
+        if raw_date:
+            normalized = raw_date.replace("Z", "+00:00")
+            try:
+                timestamp = datetime.fromisoformat(normalized).timestamp()
+            except ValueError:
+                timestamp = 0.0
+        id_rank = int(summary.id) if str(summary.id).isdigit() else -1
+        return (timestamp, id_rank)
 
     def _schedule_open_overview_refresh(self) -> None:
         def run_refresh() -> None:
