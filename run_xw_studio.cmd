@@ -10,16 +10,12 @@ set "PY_ARGS="
 if exist "%VENV_PY%" (
     set "PY_EXE=%VENV_PY%"
 ) else (
-    where py >nul 2>&1
-    if not errorlevel 1 (
-        set "PY_EXE=py"
-        set "PY_ARGS=-3.11"
-    ) else (
-        where python >nul 2>&1
-        if not errorlevel 1 (
-            set "PY_EXE=python"
-        )
-    )
+    call :try_candidate "python" ""
+    if "%PY_EXE%"=="" call :try_candidate "py" "-3.14"
+    if "%PY_EXE%"=="" call :try_candidate "py" "-3.13"
+    if "%PY_EXE%"=="" call :try_candidate "py" "-3.12"
+    if "%PY_EXE%"=="" call :try_candidate "py" "-3.11"
+    if "%PY_EXE%"=="" call :try_candidate "py" ""
 )
 
 if "%PY_EXE%"=="" (
@@ -27,7 +23,9 @@ if "%PY_EXE%"=="" (
     echo.
     echo Erwarte entweder:
     echo   1^) "%VENV_PY%" oder
-    echo   2^) Python Launcher ^(py^) oder python im PATH.
+    echo   2^) Einen lauffaehigen Python-Interpreter im PATH.
+    echo.
+    echo Tipp: py -0p zeigt verfuegbare Installationen.
     pause
     exit /b 1
 )
@@ -50,3 +48,19 @@ if not "%EXIT_CODE%"=="0" (
 
 popd
 exit /b %EXIT_CODE%
+
+:try_candidate
+set "CAND_EXE=%~1"
+set "CAND_ARGS=%~2"
+
+if "%CAND_ARGS%"=="" (
+    call "%CAND_EXE%" -c "import sys" >nul 2>&1
+) else (
+    call "%CAND_EXE%" %CAND_ARGS% -c "import sys" >nul 2>&1
+)
+
+if errorlevel 1 goto :eof
+
+set "PY_EXE=%CAND_EXE%"
+set "PY_ARGS=%CAND_ARGS%"
+goto :eof
