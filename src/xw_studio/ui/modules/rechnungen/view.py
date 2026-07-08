@@ -691,6 +691,13 @@ class RechnungenView(QWidget):
         self._open_overview_cached_plc = 0
         self._open_overview_complete = False
         self._open_overview_products_text = ""
+        self._deferred_load_payload: tuple[
+            list[dict[str, Any]],
+            list[InvoiceSummary],
+            bool,
+            int,
+            bool,
+        ] | None = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -1031,6 +1038,17 @@ class RechnungenView(QWidget):
             self._did_initial_load = True
             if self._has_sevdesk_token():
                 self._reload_first_page()
+        if self._deferred_load_payload is not None:
+            rows, summaries, has_more, status_filter, append = self._deferred_load_payload
+            self._deferred_load_payload = None
+            self._apply_load_result_data(
+                rows,
+                summaries,
+                has_more,
+                status_filter,
+                append,
+                allow_background_prefetch=True,
+            )
         if not self._badge_refresh_managed_externally:
             self._refresh_mollie_alert_count()
             self._mollie_timer.start()
@@ -1270,9 +1288,40 @@ class RechnungenView(QWidget):
             has_more,
             elapsed_ms,
         )
+        append = bool(self._append_mode)
+        if not self.isVisible():
+            self._deferred_load_payload = (rows, summaries, has_more, status_filter, append)
+            self._pending_auto_open_load = False
+            self._append_mode = False
+            signals: AppSignals = self._container.resolve(AppSignals)
+            signals.status_message.emit(
+                f"{len(rows)} Rechnungen im Hintergrund geladen",
+                3500,
+            )
+            return
+
+        self._apply_load_result_data(
+            rows,
+            summaries,
+            has_more,
+            status_filter,
+            append,
+            allow_background_prefetch=True,
+        )
+
+    def _apply_load_result_data(
+        self,
+        rows: list[dict[str, Any]],
+        summaries: list[InvoiceSummary],
+        has_more: bool,
+        status_filter: int,
+        append: bool,
+        *,
+        allow_background_prefetch: bool,
+    ) -> None:
         self._prepare_rows_for_hint_prefetch(rows, summaries)
 
-        if self._append_mode:
+        if append:
             self._table.append_rows(rows)
             self._summaries.extend(summaries)
         else:
@@ -1310,16 +1359,17 @@ class RechnungenView(QWidget):
         self._update_load_more_button()
 
         signals: AppSignals = self._container.resolve(AppSignals)
-        mode = "angehaengt" if self._append_mode else "geladen"
+        mode = "angehaengt" if append else "geladen"
         signals.status_message.emit(
             f"{len(rows)} Rechnungen {mode} ({self._next_offset} gesamt in Liste)",
             5000,
         )
         self._append_mode = False
         self._refresh_detail_for_selection()
-        self._warm_wix_context_for_summaries(summaries)
-        if status_filter != _OPEN_STATUS:
-            self._restart_hint_prefetch()
+        if allow_background_prefetch:
+            self._warm_wix_context_for_summaries(summaries)
+            if status_filter != _OPEN_STATUS:
+                self._restart_hint_prefetch()
         if auto_load_open:
             logger.info("Rechnungen auto-open-load queued limit=%s", _OPEN_AUTO_LOAD_LIMIT)
             self._pending_auto_open_load = True
@@ -1499,6 +1549,8 @@ class RechnungenView(QWidget):
     def _on_load_finished(self) -> None:
         self._overlay.hide()
         self._worker = None
+        if not self.isVisible():
+            return
         if self._pending_auto_open_load and not self._search_active:
             self._pending_auto_open_load = False
             self._active_load_status = _OPEN_STATUS
