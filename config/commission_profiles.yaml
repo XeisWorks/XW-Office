@@ -1,0 +1,25 @@
+profiles:
+  - key: musikheroes
+    label: MusikHeroes
+    category_names:
+      - MusikHeroes
+      - MusikHeroes_Noten digital
+      - MusikHeroes_Playalongs digital
+      - MusikHeroes_Print@Home
+    include_credit_notes: true
+    include_cancellation_invoices: true
+    date_policy: invoice_date
+
+  - key: supergroup
+    label: Supergroup
+    category_names: []
+    include_credit_notes: true
+    include_cancellation_invoices: true
+    date_policy: invoice_date
+
+  - key: mnozil
+    label: Mnozil
+    category_names: []
+    include_credit_notes: true
+    include_cancellation_invoices: true
+    date_policy: invoice_date

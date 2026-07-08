@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker as SessionMaker
 from xw_studio.core.container import Container
 from xw_studio.core.database import create_session_factory
 from xw_studio.services.calculation.service import CalculationService
+from xw_studio.services.commission.service import CommissionService, SevdeskCommissionProvider
 from xw_studio.services.clearing.gateways import (
     MollieClearingGateway,
     SevdeskClearingGateway,
@@ -289,6 +290,15 @@ def register_default_services(container: Container) -> None:
         CalculationService,
         lambda c: CalculationService(
             c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
+        ),
+    )
+    container.register(
+        CommissionService,
+        lambda c: CommissionService(
+            SevdeskCommissionProvider(
+                c.resolve(SevdeskConnection),
+                c.resolve(PartClient),
+            )
         ),
     )
     container.register(

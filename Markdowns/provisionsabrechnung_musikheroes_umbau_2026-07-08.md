@@ -3,6 +3,24 @@
 Stand: 2026-07-08  
 Ziel: Legacy-Punkt "Provisionsabrechnung" aus `C:\Users\bernh\GitHub\sevDesk` fachlich sauber in XW-Studio integrieren, zuerst mit der Auswahl "MusikHeroes", ohne die PySide6-App jetzt schon umzubauen.
 
+## Umsetzungsstatus (XW-Studio)
+
+Status am 2026-07-08 (Go fuer MusikHeroes):
+
+- Phase 1 (Commission-Domain + Sign-Logik): umgesetzt
+- Phase 2 (Calculation-UI von Tabs auf vertikale Auswahl): umgesetzt
+- Phase 3 (MusikHeroes-Seite produktiv im Modul): umgesetzt als erster produktiver Scope
+- Phase 4 (weitere Profile + Registry + Exportausbau): offen
+
+Direkte Zielartefakte in XW-Studio:
+
+- Service: `src/xw_studio/services/commission/service.py`
+- DI-Registrierung: `src/xw_studio/bootstrap.py`
+- UI-Integration: `src/xw_studio/ui/modules/calculation/view.py`
+- Tests: `tests/unit/test_commission_service.py`
+
+Damit ist der Legacy-Umbau von "Provisionsabrechnung" nicht nur skizziert, sondern mit MusikHeroes als produktiver erster Eintrag in der neuen PySide6-Struktur verankert.
+
 ## Kurzfazit
 
 Die aktuelle XW-Studio-Seite `Provisionen` ist ein kleiner Tab-Prototyp fuer Artikelliste und Schnellrechner. Das Legacy-Modul ist fachlich breiter: es kombiniert Provisions-/Artikelanalyse, Kategorieauswertungen, Druckrechte, Mindestgebuehr und Beteiligungen. Fuer viele weitere Abrechnungen ist ein Tab-Layout ungeeignet, weil die Breite knapp wird und die Liste der Abrechnungsprofile wachsen wird.
@@ -379,6 +397,67 @@ Stil passend zum bestehenden XW-Studio:
   - bestehende QSS statt Sonderdesign pro Modul
 
 ## Umsetzungsphasen
+
+### Phasenplan mit Definition-of-Done
+
+#### Phase 1: Fachservice stabilisieren (Commission-Domain)
+
+Lieferumfang:
+
+- Profile (zuerst MusikHeroes) als Service-Konfiguration.
+- Aggregation fuer Invoice + SR + CreditNote inklusive Beitragstracking.
+- Korrekte Vorzeichenregeln ohne doppelte Negation bei bereits negativem SR-Betrag.
+- Kategorie-Matching primaer ueber Kategorie-ID, fallback ueber Kategorie-Name.
+- Ergebnisobjekte fuer KPI, Produkt-, Kategorie- und Belegsicht.
+
+Definition-of-Done:
+
+- Juni-SR-Fall reproduzierbar.
+- Keine unerkannte Zeile "negative Menge bei positivem Netto".
+- CreditNote im Standard nach CreditNote-Datum.
+
+#### Phase 2: Modulstruktur modernisieren (UI-Shell)
+
+Lieferumfang:
+
+- `CalculationView` mit linker, gruppierter Auswahl statt horizontalem Tab-Layout.
+- Rechte Seite als Arbeitsflaeche mit eigener Seite pro Kontext.
+- Bestehende Funktionen (Artikelliste, Schnellrechner) bleiben erhalten.
+
+Definition-of-Done:
+
+- Modul startet ohne Regression.
+- Wechsel zwischen Auswahlpunkten stabil.
+- Mehr horizontale Breite fuer Tabellen auf kleineren Fenstern.
+
+#### Phase 3: MusikHeroes produktiv anschliessen
+
+Lieferumfang:
+
+- MusikHeroes-Seite mit Zeitraum, Optionen und Ladeaktionen.
+- KPI-Leiste fuer Menge/Umsatz/Belege/Anomalien.
+- Produkt-, Kategorien-, Beleg- und Problemfallanzeige.
+- BackgroundWorker-Anbindung fuer nicht-blockierende Ladevorgaenge.
+
+Definition-of-Done:
+
+- Durchgaengige Berechnung direkt in XW-Studio.
+- SR- und CreditNote-Logik fachlich nachvollziehbar in Belegsicht.
+- Unit-Tests fuer Kernlogik vorhanden.
+
+#### Phase 4: Skalierung auf weitere Abrechnungsprofile
+
+Lieferumfang:
+
+- Profil-Registry (konfigurierbar) statt Hardcoding in Views.
+- Filter-/Suchfunktion in linker Auswahl.
+- Export- und Copy-Formate pro Profil standardisieren.
+
+Definition-of-Done:
+
+- Neues Profil ohne UI-Umbau aktivierbar.
+- Gemeinsame Grundseite deckt einfache Kategorienprofile ab.
+- Sonderlogik nur dort, wo fachlich zwingend.
 
 ### Phase 1: Fachservice ohne neue UI
 
