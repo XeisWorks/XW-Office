@@ -18,6 +18,14 @@ from xw_studio.services.clearing.models import (
     money,
 )
 from xw_studio.services.http_client import SevdeskConnection
+from xw_studio.services.sevdesk.payment_booking import (
+    book_amount_payload,
+    first_object,
+    is_paid_invoice_object,
+    normalize_booking_amount,
+    raise_on_error_envelope,
+    response_payload,
+)
 
 VIENNA = ZoneInfo("Europe/Vienna")
 TIMEOUT = httpx.Timeout(45.0, connect=10.0)
@@ -483,6 +491,14 @@ class SevdeskClearingGateway:
             customer=str((raw.get("contact") or {}).get("name") or "") if isinstance(raw.get("contact"), dict) else "",
         )
 
+    def get_invoice_by_id(self, invoice_id: int) -> dict[str, Any]:
+        response = self._conn.get(f"/Invoice/{int(invoice_id)}")
+        try:
+            payload = response.json()
+        except ValueError:
+            return {}
+        return first_object(payload)
+
     def find_transaction_by_duplicate_key(
         self,
         account_id: int,
@@ -577,28 +593,109 @@ class SevdeskClearingGateway:
         payment_date: datetime,
         account_id: int,
         transaction_id: int,
-    ) -> None:
+    ) -> dict[str, Any]:
+        invoice_before = self.get_invoice_by_id(int(invoice_id))
+        if is_paid_invoice_object(invoice_before):
+            return {
+                "status": "invoice_already_paid",
+                "transaction_id": int(transaction_id),
+                "invoice_status": str(invoice_before.get("status") or "").strip(),
+            }
+
+        tx_before = self.get_check_account_transaction_by_id(int(transaction_id))
+        tx_status_before = str(tx_before.get("status") or "").strip()
+        if tx_status_before == "400":
+            return {
+                "status": "already_booked",
+                "transaction_id": int(transaction_id),
+                "tx_status": tx_status_before,
+            }
+
+        tx_account_id = str((tx_before.get("checkAccount") or {}).get("id") or "").strip()
+        if tx_account_id and tx_account_id != str(int(account_id)):
+            return {
+                "status": "account_mismatch",
+                "transaction_id": int(transaction_id),
+                "tx_account_id": tx_account_id,
+                "check_account_id": str(int(account_id)),
+            }
+
+        booking_ts = int(payment_date.timestamp())
         if self._bookkeeping_system_version() == "1.0":
-            self._conn.put(
-                f"/CheckAccountTransaction/{transaction_id}/linkInvoice",
-                params={"invoiceId": invoice_id},
-                json={"amount": float(amount), "date": int(payment_date.timestamp())},
+            self._legacy_link_invoice(
+                transaction_id=int(transaction_id),
+                invoice_id=int(invoice_id),
+                amount=amount,
+                booking_date=booking_ts,
             )
-            return
-        self._conn.put(
-            f"/Invoice/{invoice_id}/bookAmount",
-            json={
-                "amount": float(amount),
-                "date": int(payment_date.timestamp()),
-                "type": "FULL_PAYMENT",
-                "checkAccount": {"id": account_id, "objectName": "CheckAccount"},
-                "checkAccountTransaction": {
-                    "id": transaction_id,
-                    "objectName": "CheckAccountTransaction",
-                },
-                "createFeed": False,
-            },
-        )
+        else:
+            response = self._conn.put(
+                f"/Invoice/{int(invoice_id)}/bookAmount",
+                json=book_amount_payload(
+                    amount=amount,
+                    booking_date=booking_ts,
+                    check_account_id=int(account_id),
+                    transaction_id=int(transaction_id),
+                ),
+            )
+            payload = response_payload(response)
+            raise_on_error_envelope(payload, "sevDesk Invoice bookAmount Fehler")
+
+        invoice_after = self.get_invoice_by_id(int(invoice_id))
+        tx_after = self.get_check_account_transaction_by_id(int(transaction_id))
+        tx_status_after = str(tx_after.get("status") or "").strip()
+
+        if not is_paid_invoice_object(invoice_after):
+            return {
+                "status": "not_booked",
+                "transaction_id": int(transaction_id),
+                "invoice_status": str(invoice_after.get("status") or "").strip(),
+                "tx_status": tx_status_after,
+            }
+
+        if tx_status_after != "400":
+            try:
+                self.change_check_account_transaction_status(int(transaction_id), 400)
+                tx_after = self.get_check_account_transaction_by_id(int(transaction_id))
+                tx_status_after = str(tx_after.get("status") or "").strip()
+            except Exception:
+                pass
+
+        return {
+            "status": "booked" if tx_status_after == "400" else "not_booked",
+            "transaction_id": int(transaction_id),
+            "invoice_status": str(invoice_after.get("status") or "").strip(),
+            "tx_status": tx_status_after,
+        }
+
+    def _legacy_link_invoice(
+        self,
+        *,
+        transaction_id: int,
+        invoice_id: int,
+        amount: Decimal,
+        booking_date: int,
+    ) -> dict[str, Any]:
+        params = {"invoiceId": int(invoice_id)}
+        body = {
+            "amount": normalize_booking_amount(amount),
+            "date": int(booking_date),
+        }
+        last_exc: Exception | None = None
+        for method in ("put", "patch"):
+            try:
+                request = self._conn.put if method == "put" else self._conn.patch
+                response = request(
+                    f"/CheckAccountTransaction/{int(transaction_id)}/linkInvoice",
+                    params=params,
+                    json=body,
+                )
+                payload = response_payload(response)
+                raise_on_error_envelope(payload, "sevDesk linkInvoice Fehler")
+                return payload
+            except Exception as exc:
+                last_exc = exc
+        raise RuntimeError(f"sevDesk linkInvoice Fehler: {last_exc}")
 
     def _bookkeeping_system_version(self) -> str:
         if self._bookkeeping_version:

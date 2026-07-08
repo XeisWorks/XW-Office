@@ -57,9 +57,9 @@ Status: teilweise umgesetzt
 - Generischen Background-Job-Manager mit Prioritaeten/Coalescing einfuehren.
   Status: umgesetzt (aktuell fuer Rechnungen-Nebenjobs)
 - Tabellen in Produkte/Clearing/Kalkulation auf Model/View vereinheitlichen.
-  Status: offen
+  Status: teilweise umgesetzt
 - Exporte und weitere Dateioperationen konsequent aus dem UI-Thread ziehen.
-  Status: offen
+  Status: teilweise umgesetzt
 
 ## Bereits umgesetzte Einzelmaßnahmen
 
@@ -74,6 +74,11 @@ Status: teilweise umgesetzt
 - verzogerter Rechnungen-Druckercheck erst nach erstem Paint
 - zentraler `PrinterStatusService` fuer Snapshot + Hintergrundrefresh
 - generischer `BackgroundJobManager` mit Prioritaet und Coalescing, derzeit fuer `open-overview`, `hint-prefetch` und `wix-warmup`
+- Badge-/Count-Refresh fuer Rechnungen/Tagesgeschaeft ueber denselben Job-Manager koordiniert
+- Export-Worker fuer Provisionen CSV/XLSX sowie Steuern CSV umgesetzt; Dateiauswahl bleibt im UI-Thread, Datei-Erzeugung/-Schreiben laeuft im Worker
+- `PaymentClearingView` von `QTableWidget` auf `DataTable`/Model-View migriert
+- `CalculationView` Ergebnis-Tabellen und Legacy-Artikelliste von `QTableWidget` auf `DataTable`/Model-View migriert
+- `ProductsView` Inventar- und Wix-Tabellen von `QTableWidget` auf `DataTable`/Model-View migriert; Sync-Tabelle bleibt vorerst separat
 
 ## Durchgefuehrte Live-Tests
 

@@ -66,7 +66,7 @@ class _FakeBrandService(ProductBrandService):
 
 def test_products_brand_bulk_flow_smoke(qtbot: object, monkeypatch: object) -> None:
     # Avoid async sync loading in constructor; we manually feed the table.
-    monkeypatch.setattr(ProductsView, "_load_sync_sources", lambda self: None)
+    monkeypatch.setattr(ProductsView, "_load_sync_sources", lambda self, *args, **kwargs: None)
 
     container = Container(AppConfig())
     fake_service = _FakeBrandService()

@@ -1605,8 +1605,17 @@ class RechnungenView(QWidget):
         self._table.setColumnWidth(8, 178)  # Fulfillment
 
     def _refresh_mollie_alert_count(self) -> None:
+        self._background_jobs.submit(
+            queue="badge-refresh",
+            priority=20,
+            coalesce_key="rechnungen-mollie-badges",
+            start_fn=self._create_mollie_badge_worker,
+            can_start=lambda: self._mollie_badge_worker is None or not self._mollie_badge_worker.isRunning(),
+        )
+
+    def _create_mollie_badge_worker(self) -> BackgroundWorker | None:
         if self._mollie_badge_worker is not None and self._mollie_badge_worker.isRunning():
-            return
+            return None
 
         def job() -> dict[str, int]:
             service: DailyBusinessService = self._container.resolve(DailyBusinessService)
@@ -1619,7 +1628,8 @@ class RechnungenView(QWidget):
 
         self._mollie_badge_worker = BackgroundWorker(job)
         self._mollie_badge_worker.signals.result.connect(self._on_mollie_badge_result)
-        self._mollie_badge_worker.start()
+        self._mollie_badge_worker.signals.finished.connect(lambda: setattr(self, "_mollie_badge_worker", None))
+        return self._mollie_badge_worker
 
     def _on_mollie_badge_result(self, result: object) -> None:
         if isinstance(result, dict):

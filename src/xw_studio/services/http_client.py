@@ -122,6 +122,12 @@ class SevdeskConnection:
         raise_for_sevdesk(response)
         return response
 
+    def patch(self, path: str, **kwargs: object) -> httpx.Response:
+        """PATCH *path* (no retry; write operations are not idempotent-safe)."""
+        response: httpx.Response = self.client.patch(path, **kwargs)  # type: ignore[arg-type]
+        raise_for_sevdesk(response)
+        return response
+
     def post(self, path: str, **kwargs: object) -> httpx.Response:
         """POST *path* (no retry — write operations are not idempotent-safe)."""
         response: httpx.Response = self.client.post(path, **kwargs)  # type: ignore[arg-type]

@@ -20,8 +20,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSpinBox,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -32,6 +31,7 @@ from xw_studio.core.worker import BackgroundWorker
 from xw_studio.services.clearing.service import ClearingRow, PaymentClearingService
 from xw_studio.services.expenses.service import ExpenseAuditService, ExpenseRow
 from xw_studio.services.finanzonline import OssQuarterResult, OssService, OssXmlExport, UvaService, UvaSubmitResult
+from xw_studio.ui.widgets.data_table import DataTable
 from xw_studio.ui.widgets.search_bar import SearchBar
 
 if TYPE_CHECKING:
@@ -98,6 +98,9 @@ def _render_grouped_uva_warnings(warnings: list[str]) -> str:
 class TaxesView(QWidget):
     """UVA | Clearing | Ausgaben — calls services off the UI thread."""
 
+    _CLEARING_COLUMNS = ["Ref", "Kunde", "Betrag", "Status", "Hinweis"]
+    _EXPENSE_COLUMNS = ["Ref", "Lieferant", "Brutto", "Kategorie", "Status", "Hinweis"]
+
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._container = container
@@ -106,6 +109,7 @@ class TaxesView(QWidget):
         self._oss_worker: BackgroundWorker | None = None
         self._clearing_worker: BackgroundWorker | None = None
         self._expenses_worker: BackgroundWorker | None = None
+        self._export_worker: BackgroundWorker | None = None
         self._clearing_rows: list[ClearingRow] = []
         self._expenses_rows: list[ExpenseRow] = []
         self._uva_progress_bar: QProgressBar | None = None
@@ -486,12 +490,10 @@ class TaxesView(QWidget):
         filters.addWidget(export)
         bl.addLayout(filters)
 
-        self._clearing_table = QTableWidget(0, 5)
-        self._clearing_table.setHorizontalHeaderLabels(["Ref", "Kunde", "Betrag", "Status", "Hinweis"])
+        self._clearing_table = DataTable(self._CLEARING_COLUMNS)
         self._clearing_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._clearing_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        self._clearing_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._clearing_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._clearing_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         bl.addWidget(self._clearing_table)
 
         self._clearing_status = QLabel("Noch nicht geladen.")
@@ -527,14 +529,10 @@ class TaxesView(QWidget):
         filters.addWidget(export)
         bl.addLayout(filters)
 
-        self._expenses_table = QTableWidget(0, 6)
-        self._expenses_table.setHorizontalHeaderLabels(
-            ["Ref", "Lieferant", "Brutto", "Kategorie", "Status", "Hinweis"]
-        )
+        self._expenses_table = DataTable(self._EXPENSE_COLUMNS)
         self._expenses_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._expenses_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        self._expenses_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._expenses_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._expenses_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         bl.addWidget(self._expenses_table)
 
         self._expenses_status = QLabel("Noch nicht geladen.")
@@ -579,18 +577,22 @@ class TaxesView(QWidget):
         self._clearing_status.setText(f"{len(filtered)} von {len(self._clearing_rows)} Eintraegen")
 
     def _populate_clearing_table(self, rows: list[ClearingRow]) -> None:
-        tbl = self._clearing_table
-        tbl.setRowCount(0)
-        for row in rows:
-            r = tbl.rowCount()
-            tbl.insertRow(r)
-            tbl.setItem(r, 0, QTableWidgetItem(row.ref))
-            tbl.setItem(r, 1, QTableWidgetItem(row.customer))
-            tbl.setItem(r, 2, QTableWidgetItem(row.amount))
-            tbl.setItem(r, 3, QTableWidgetItem(row.status))
-            tbl.setItem(r, 4, QTableWidgetItem(row.note))
+        payload = [
+            {
+                "Ref": row.ref,
+                "Kunde": row.customer,
+                "Betrag": row.amount,
+                "Status": row.status,
+                "Hinweis": row.note,
+                "__align__Betrag": "right",
+            }
+            for row in rows
+        ]
+        self._clearing_table.set_data(payload)
 
     def _export_clearing_csv(self) -> None:
+        if self._export_worker is not None and self._export_worker.isRunning():
+            return
         svc: PaymentClearingService = self._container.resolve(PaymentClearingService)
         rows = svc.filter_rows(
             self._clearing_rows,
@@ -601,9 +603,17 @@ class TaxesView(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Clearing CSV speichern", "clearing.csv", "CSV (*.csv)")
         if not path:
             return
-        with open(path, "w", encoding="utf-8", newline="") as fh:
-            fh.write(payload)
-        QMessageBox.information(self, "Clearing", f"CSV exportiert:\n{path}")
+
+        def job() -> str:
+            with open(path, "w", encoding="utf-8", newline="") as fh:
+                fh.write(payload)
+            return path
+
+        self._export_worker = BackgroundWorker(job)
+        self._export_worker.signals.result.connect(lambda saved_path: QMessageBox.information(self, "Clearing", f"CSV exportiert:\n{saved_path}"))
+        self._export_worker.signals.error.connect(lambda exc: QMessageBox.warning(self, "Clearing", f"CSV-Export fehlgeschlagen: {exc}"))
+        self._export_worker.signals.finished.connect(lambda: setattr(self, "_export_worker", None))
+        self._export_worker.start()
 
     def _load_expense_rows(self) -> None:
         if self._expenses_worker is not None and self._expenses_worker.isRunning():
@@ -661,19 +671,23 @@ class TaxesView(QWidget):
         self._expenses_status.setText(f"{len(filtered)} von {len(self._expenses_rows)} Eintraegen")
 
     def _populate_expenses_table(self, rows: list[ExpenseRow]) -> None:
-        tbl = self._expenses_table
-        tbl.setRowCount(0)
-        for row in rows:
-            r = tbl.rowCount()
-            tbl.insertRow(r)
-            tbl.setItem(r, 0, QTableWidgetItem(row.ref))
-            tbl.setItem(r, 1, QTableWidgetItem(row.supplier))
-            tbl.setItem(r, 2, QTableWidgetItem(row.gross_amount))
-            tbl.setItem(r, 3, QTableWidgetItem(row.category))
-            tbl.setItem(r, 4, QTableWidgetItem(row.status))
-            tbl.setItem(r, 5, QTableWidgetItem(row.note))
+        payload = [
+            {
+                "Ref": row.ref,
+                "Lieferant": row.supplier,
+                "Brutto": row.gross_amount,
+                "Kategorie": row.category,
+                "Status": row.status,
+                "Hinweis": row.note,
+                "__align__Brutto": "right",
+            }
+            for row in rows
+        ]
+        self._expenses_table.set_data(payload)
 
     def _export_expenses_csv(self) -> None:
+        if self._export_worker is not None and self._export_worker.isRunning():
+            return
         svc: ExpenseAuditService = self._container.resolve(ExpenseAuditService)
         rows = svc.filter_rows(
             self._expenses_rows,
@@ -684,6 +698,14 @@ class TaxesView(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Ausgaben CSV speichern", "expenses.csv", "CSV (*.csv)")
         if not path:
             return
-        with open(path, "w", encoding="utf-8", newline="") as fh:
-            fh.write(payload)
-        QMessageBox.information(self, "Ausgaben", f"CSV exportiert:\n{path}")
+
+        def job() -> str:
+            with open(path, "w", encoding="utf-8", newline="") as fh:
+                fh.write(payload)
+            return path
+
+        self._export_worker = BackgroundWorker(job)
+        self._export_worker.signals.result.connect(lambda saved_path: QMessageBox.information(self, "Ausgaben", f"CSV exportiert:\n{saved_path}"))
+        self._export_worker.signals.error.connect(lambda exc: QMessageBox.warning(self, "Ausgaben", f"CSV-Export fehlgeschlagen: {exc}"))
+        self._export_worker.signals.finished.connect(lambda: setattr(self, "_export_worker", None))
+        self._export_worker.start()
