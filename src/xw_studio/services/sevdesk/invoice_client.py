@@ -492,6 +492,49 @@ class InvoiceClient:
             )
         return result
 
+    def list_recent_non_draft_summaries(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        embed_contact: bool = True,
+        excluded_statuses: set[int] | None = None,
+    ) -> list[InvoiceSummary]:
+        """Return newest invoices excluding drafts, with offset in filtered space."""
+        excluded = set(excluded_statuses or {100})
+        target_skip = max(0, int(offset))
+        target_limit = max(1, int(limit))
+        raw_offset = 0
+        page_size = max(target_limit, 100)
+        skipped = 0
+        result: list[InvoiceSummary] = []
+
+        while len(result) < target_limit:
+            batch = self.list_invoice_summaries(
+                limit=page_size,
+                offset=raw_offset,
+                embed_contact=embed_contact,
+                status=None,
+            )
+            if not batch:
+                break
+            raw_offset += len(batch)
+
+            for summary in batch:
+                if summary.status_code in excluded:
+                    continue
+                if skipped < target_skip:
+                    skipped += 1
+                    continue
+                result.append(summary)
+                if len(result) >= target_limit:
+                    break
+
+            if len(batch) < page_size:
+                break
+
+        return result
+
     def search_invoice_summaries(
         self,
         query: str,

@@ -54,7 +54,7 @@ class _FakeHint:
 
 class _FakeInvoiceProcessingService:
     def __init__(self) -> None:
-        self.load_calls: list[tuple[int, int, int]] = []
+        self.load_calls: list[tuple[str, int, int]] = []
         self._draft = InvoiceSummary.model_validate(
             {
                 "id": "draft-1",
@@ -85,8 +85,20 @@ class _FakeInvoiceProcessingService:
         limit: int,
         offset: int,
     ) -> tuple[list[dict[str, str]], list[InvoiceSummary]]:
-        self.load_calls.append((status, limit, offset))
+        self.load_calls.append((f"status:{status}", limit, offset))
         summaries = [self._draft] if status == 100 else [self._open]
+        if offset:
+            summaries = []
+        return [summary.as_table_row() for summary in summaries], summaries
+
+    def load_recent_non_draft_batch(
+        self,
+        *,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, str]], list[InvoiceSummary]]:
+        self.load_calls.append(("recent", limit, offset))
+        summaries = [self._open]
         if offset:
             summaries = []
         return [summary.as_table_row() for summary in summaries], summaries
@@ -687,7 +699,7 @@ def test_rechnungen_auto_loads_first_open_page_after_drafts(qtbot: object, monke
     assert view._pending_auto_open_load is True  # noqa: SLF001
     view._on_load_finished()  # noqa: SLF001
 
-    assert calls == [(1000, True, 50)]
+    assert calls == [(None, True, 50)]
 
 
 def test_rechnungen_sorts_staged_loads_by_actuality_descending(qtbot: object) -> None:
@@ -760,7 +772,7 @@ def test_main_window_rechnungen_warms_drafts_but_defers_open_invoice_contexts(
         timeout=5000,
     )
 
-    assert invoice_service.load_calls[:2] == [(100, 50, 0), (1000, 50, 0)]
+    assert invoice_service.load_calls[:2] == [("status:100", 50, 0), ("recent", 50, 0)]
     assert view._open_overview_worker is None  # noqa: SLF001
     qtbot.waitUntil(
         lambda: view._get_cached_wix_context("20844") is not None,  # noqa: SLF001
@@ -793,7 +805,7 @@ def test_main_window_rechnungen_warms_drafts_but_defers_open_invoice_contexts(
         timeout=1000,
     )
     assert "Teststrasse 1" in view._shipping_editor.toPlainText()  # noqa: SLF001
-    assert invoice_service.load_calls == [(100, 50, 0), (1000, 50, 0)]
+    assert invoice_service.load_calls == [("status:100", 50, 0), ("recent", 50, 0)]
 
 
 def test_rechnungen_detail_panel_click_does_not_clear_selection(qtbot: object) -> None:

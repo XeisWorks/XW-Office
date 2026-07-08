@@ -113,7 +113,7 @@ _TABLE_COLUMNS = [
 
 _PAGE_SIZE = 10
 _DRAFT_STATUS = 100
-_OPEN_STATUS = 1000
+_OPEN_STATUS: int | None = None
 _DRAFT_INITIAL_LOAD_LIMIT = 50
 _OPEN_AUTO_LOAD_LIMIT = 50
 # Contexts are immutable enough for one application session.  The persistent
@@ -696,7 +696,7 @@ class RechnungenView(QWidget):
         self._loaded_rows: list[dict[str, Any]] = []
         self._loaded_summaries: list[InvoiceSummary] = []
         self._loaded_has_more = False
-        self._active_load_status = _DRAFT_STATUS
+        self._active_load_status: int | None = _DRAFT_STATUS
         self._draft_offset = 0
         self._open_offset = 0
         self._draft_has_more = False
@@ -753,7 +753,7 @@ class RechnungenView(QWidget):
             list[dict[str, Any]],
             list[InvoiceSummary],
             bool,
-            int,
+            int | None,
             bool,
         ] | None = None
         self._build_ui()
@@ -1298,12 +1298,23 @@ class RechnungenView(QWidget):
         self._overlay.setGeometry(self.rect())
         self._overlay.raise_()
 
-        def job() -> tuple[list[dict[str, str]], list[InvoiceSummary], bool, int]:
-            rows, sums = service.load_invoice_batch(
-                status=status_filter,
-                limit=page_limit,
-                offset=offset,
-            )
+        def job() -> tuple[list[dict[str, str]], list[InvoiceSummary], bool, int | None]:
+            if status_filter == _DRAFT_STATUS:
+                rows, sums = service.load_invoice_batch(
+                    status=status_filter,
+                    limit=page_limit,
+                    offset=offset,
+                )
+            else:
+                recent_loader = getattr(service, "load_recent_non_draft_batch", None)
+                if callable(recent_loader):
+                    rows, sums = recent_loader(limit=page_limit, offset=offset)
+                else:
+                    rows, sums = service.load_invoice_batch(
+                        status=status_filter,
+                        limit=page_limit,
+                        offset=offset,
+                    )
             has_more = len(sums) >= page_limit
             return rows, sums, has_more, status_filter
 
@@ -1351,7 +1362,7 @@ class RechnungenView(QWidget):
         rows: list[dict[str, Any]] = [r for r in rows_obj if isinstance(r, dict)]
         summaries: list[InvoiceSummary] = [s for s in sums_obj if isinstance(s, InvoiceSummary)]
         has_more = bool(has_more_obj)
-        status_filter = int(status_obj)
+        status_filter = None if status_obj is None else int(status_obj)
         elapsed_ms = int((time.perf_counter() - self._load_started_at) * 1000) if self._load_started_at else 0
         logger.info(
             "Rechnungen load result status=%s rows=%s has_more=%s elapsed_ms=%s",
@@ -1391,7 +1402,7 @@ class RechnungenView(QWidget):
         rows: list[dict[str, Any]],
         summaries: list[InvoiceSummary],
         has_more: bool,
-        status_filter: int,
+        status_filter: int | None,
         append: bool,
         *,
         allow_background_prefetch: bool,
@@ -1423,7 +1434,7 @@ class RechnungenView(QWidget):
         elif status_filter == _OPEN_STATUS:
             self._open_loaded = True
             self._open_offset = sum(
-                1 for summary in self._summaries if summary.status_code == _OPEN_STATUS
+                1 for summary in self._summaries if summary.status_code != _DRAFT_STATUS
             )
             self._open_has_more = has_more
 
@@ -1502,7 +1513,7 @@ class RechnungenView(QWidget):
 
         QTimer.singleShot(0, run_refresh)
 
-    def _schedule_post_load_prefetch(self, status_filter: int, summaries: list[InvoiceSummary]) -> None:
+    def _schedule_post_load_prefetch(self, status_filter: int | None, summaries: list[InvoiceSummary]) -> None:
         self._post_load_prefetch_seq += 1
         seq = self._post_load_prefetch_seq
         snapshot = list(summaries)
@@ -1533,7 +1544,7 @@ class RechnungenView(QWidget):
                 self._btn_more.setEnabled(True)
             elif not self._open_loaded:
                 self._btn_more.setText("Weitere Rechnungen laden")
-                self._btn_more.setToolTip("Abgeschlossene Rechnungen laden")
+                self._btn_more.setToolTip("Neueste Rechnungen laden")
                 self._btn_more.setEnabled(True)
             else:
                 self._btn_more.setText("Keine weiteren")
@@ -1542,11 +1553,11 @@ class RechnungenView(QWidget):
             return
         if self._open_has_more:
             self._btn_more.setText("Weitere Rechnungen laden")
-            self._btn_more.setToolTip(f"Naechste bis zu {_PAGE_SIZE} abgeschlossene Rechnungen anhaengen")
+            self._btn_more.setToolTip(f"Naechste bis zu {_PAGE_SIZE} neueste Rechnungen anhaengen")
             self._btn_more.setEnabled(True)
         else:
             self._btn_more.setText("Keine weiteren")
-            self._btn_more.setToolTip("Keine weiteren abgeschlossenen Rechnungen")
+            self._btn_more.setToolTip("Keine weiteren neueren Rechnungen")
             self._btn_more.setEnabled(False)
 
     def _apply_table_column_layout(self) -> None:
