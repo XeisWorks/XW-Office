@@ -2310,9 +2310,6 @@ class RechnungenView(QWidget):
         chip: str,
         flags: object,
     ) -> None:
-        if chip == "payment_booked":
-            QMessageBox.information(self, "Payment", "Payment-Flow ist aktuell noch deaktiviert.")
-            return
         if self._fulfillment_step_worker is not None and self._fulfillment_step_worker.isRunning():
             return
 
@@ -2322,6 +2319,7 @@ class RechnungenView(QWidget):
             "product_ready": "Produkt",
             "mail_sent": "Mail",
             "wix_fulfilled": "Wix",
+            "payment_booked": "Zahlung",
         }
         self._set_detail_actions_busy(f"Retry {labels.get(chip, chip)} laeuft...")
 

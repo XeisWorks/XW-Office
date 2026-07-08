@@ -4,7 +4,7 @@ from __future__ import annotations
 import base64
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 import unicodedata
 from typing import Any
 
@@ -440,6 +440,7 @@ class InvoiceClient:
 
     def __init__(self, connection: SevdeskConnection) -> None:
         self._conn = connection
+        self._bookkeeping_version: str | None = None
 
     def list_invoice_summaries(
         self,
@@ -623,6 +624,179 @@ class InvoiceClient:
                 if isinstance(item, dict):
                     return item
         return {}
+
+    @staticmethod
+    def invoice_reference(invoice: dict[str, Any]) -> str:
+        for ref_key in (
+            "reference",
+            "customerInternalNote",
+            "customerInternalNoteText",
+            "referenceNumber",
+            "orderNumber",
+        ):
+            value = str(invoice.get(ref_key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    def get_check_account_id_by_name(
+        self,
+        name: str,
+        *,
+        preferred_types: tuple[str, ...] = (),
+    ) -> int | None:
+        response = self._conn.get("/CheckAccount", params={"limit": 500, "offset": 0})
+        payload = response.json()
+        objects = payload.get("objects") if isinstance(payload, dict) else []
+        if not isinstance(objects, list):
+            return None
+        wanted = str(name or "").strip().casefold()
+        preferred = {str(item or "").strip().casefold() for item in preferred_types if str(item or "").strip()}
+        fallback_id: int | None = None
+        for raw in objects:
+            if not isinstance(raw, dict):
+                continue
+            account_name = str(raw.get("name") or "").strip().casefold()
+            if account_name != wanted:
+                continue
+            raw_id = raw.get("id")
+            try:
+                parsed_id = int(str(raw_id))
+            except (TypeError, ValueError):
+                continue
+            account_type = str(raw.get("type") or "").strip().casefold()
+            if preferred and account_type in preferred:
+                return parsed_id
+            if fallback_id is None:
+                fallback_id = parsed_id
+        return fallback_id
+
+    def get_invoice_check_account_transactions(self, invoice_id: int) -> list[dict[str, Any]]:
+        response = self._conn.get(f"/Invoice/{int(invoice_id)}/getCheckAccountTransactions")
+        payload = response.json() if response.content else {}
+        if isinstance(payload, dict):
+            objects = payload.get("objects", payload.get("data", []))
+            if isinstance(objects, dict):
+                return [objects]
+            if isinstance(objects, list):
+                return [item for item in objects if isinstance(item, dict)]
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        return []
+
+    def find_check_account_transactions(
+        self,
+        check_account_id: int,
+        *,
+        purpose: str = "",
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, object] = {
+            "checkAccount[id]": int(check_account_id),
+            "checkAccount[objectName]": "CheckAccount",
+            "limit": 500,
+            "offset": 0,
+        }
+        if start_date is not None:
+            params["startDate"] = start_date.astimezone(timezone.utc).isoformat()
+        if end_date is not None:
+            params["endDate"] = end_date.astimezone(timezone.utc).isoformat()
+        response = self._conn.get("/CheckAccountTransaction", params=params)
+        payload = response.json() if response.content else {}
+        objects = payload.get("objects") if isinstance(payload, dict) else []
+        if not isinstance(objects, list):
+            return []
+        exact_purpose = str(purpose or "").strip().casefold()
+        out = [item for item in objects if isinstance(item, dict)]
+        if not exact_purpose:
+            return out
+        return [
+            item
+            for item in out
+            if str(item.get("paymtPurpose") or "").strip().casefold() == exact_purpose
+        ]
+
+    def create_check_account_transaction(
+        self,
+        check_account_id: int,
+        amount: float,
+        *,
+        value_date: datetime,
+        payee: str,
+        purpose: str,
+    ) -> int:
+        iso_value_date = value_date.astimezone(timezone.utc).isoformat()
+        payload = {
+            "valueDate": iso_value_date,
+            "entryDate": iso_value_date,
+            "checkAccount": {"id": int(check_account_id), "objectName": "CheckAccount"},
+            "amount": float(amount),
+            "status": 100,
+            "payeePayerName": str(payee or "").strip(),
+            "paymtPurpose": str(purpose or "").strip(),
+        }
+        response = self._conn.post("/CheckAccountTransaction", json=payload)
+        payload = response.json() if response.content else {}
+        objects = payload.get("objects") if isinstance(payload, dict) else []
+        if isinstance(objects, dict):
+            objects = [objects]
+        if isinstance(objects, list):
+            for item in objects:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    return int(str(item.get("id")))
+                except (TypeError, ValueError):
+                    continue
+        raise RuntimeError("sevDesk lieferte keine Transaktions-ID")
+
+    def book_invoice_with_transaction(
+        self,
+        invoice_id: int,
+        amount: float,
+        *,
+        check_account_id: int,
+        transaction_id: int,
+        booking_date: int,
+    ) -> dict[str, Any]:
+        if self._bookkeeping_system_version() == "1.0":
+            response = self._conn.put(
+                f"/CheckAccountTransaction/{int(transaction_id)}/linkInvoice",
+                params={"invoiceId": int(invoice_id)},
+                json={"amount": float(amount), "date": int(booking_date)},
+            )
+            return response.json() if response.content else {}
+        response = self._conn.put(
+            f"/Invoice/{int(invoice_id)}/bookAmount",
+            json={
+                "amount": float(amount),
+                "date": int(booking_date),
+                "type": "FULL_PAYMENT",
+                "checkAccount": {"id": int(check_account_id), "objectName": "CheckAccount"},
+                "checkAccountTransaction": {
+                    "id": int(transaction_id),
+                    "objectName": "CheckAccountTransaction",
+                },
+                "createFeed": False,
+            },
+        )
+        return response.json() if response.content else {}
+
+    def _bookkeeping_system_version(self) -> str:
+        if self._bookkeeping_version:
+            return self._bookkeeping_version
+        try:
+            response = self._conn.get("/Tools/bookkeepingSystemVersion")
+            payload = response.json()
+            obj = payload.get("objects", payload) if isinstance(payload, dict) else {}
+            if isinstance(obj, list):
+                obj = obj[0] if obj else {}
+            version = str(obj.get("version") or "") if isinstance(obj, dict) else ""
+        except Exception:
+            version = "1.0"
+        self._bookkeeping_version = version or "1.0"
+        return self._bookkeeping_version
 
     def fetch_invoice_positions(self, invoice_id: str) -> list[dict[str, Any]]:
         """Return invoice positions for one invoice."""

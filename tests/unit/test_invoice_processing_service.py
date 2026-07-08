@@ -16,6 +16,11 @@ class _InvoiceClientStub:
         self.invoice_payloads: dict[str, dict[str, object]] = {}
         self.mail_calls: list[dict[str, object]] = []
         self.fail_mail = False
+        self.check_accounts = {"Stripe": 11, "Mollie": 12}
+        self.linked_transactions: dict[int, list[dict[str, object]]] = {}
+        self.existing_transactions: dict[int, list[dict[str, object]]] = {}
+        self.created_transactions: list[dict[str, object]] = []
+        self.booked_transactions: list[dict[str, object]] = []
 
     def list_invoice_summaries(
         self,
@@ -71,6 +76,79 @@ class _InvoiceClientStub:
         )
         return {"ok": True}
 
+    @staticmethod
+    def invoice_reference(invoice: dict[str, object]) -> str:
+        for key in ("reference", "customerInternalNote", "customerInternalNoteText", "referenceNumber", "orderNumber"):
+            value = str(invoice.get(key) or "").strip()
+            if value:
+                return value
+        return ""
+
+    def get_check_account_id_by_name(self, name: str, *, preferred_types: tuple[str, ...] = ()) -> int | None:
+        return self.check_accounts.get(name)
+
+    def get_invoice_check_account_transactions(self, invoice_id: int) -> list[dict[str, object]]:
+        return list(self.linked_transactions.get(invoice_id, []))
+
+    def find_check_account_transactions(
+        self,
+        check_account_id: int,
+        *,
+        purpose: str = "",
+        start_date: object = None,
+        end_date: object = None,
+    ) -> list[dict[str, object]]:
+        rows = list(self.existing_transactions.get(check_account_id, []))
+        if not purpose:
+            return rows
+        exact = str(purpose).strip().casefold()
+        return [row for row in rows if str(row.get("paymtPurpose") or "").strip().casefold() == exact]
+
+    def create_check_account_transaction(
+        self,
+        check_account_id: int,
+        amount: float,
+        *,
+        value_date: object,
+        payee: str,
+        purpose: str,
+    ) -> int:
+        tx_id = 900 + len(self.created_transactions)
+        payload = {
+            "id": tx_id,
+            "check_account_id": check_account_id,
+            "amount": amount,
+            "value_date": value_date,
+            "payee": payee,
+            "purpose": purpose,
+        }
+        self.created_transactions.append(payload)
+        self.existing_transactions.setdefault(check_account_id, []).append(
+            {"id": tx_id, "paymtPurpose": purpose}
+        )
+        return tx_id
+
+    def book_invoice_with_transaction(
+        self,
+        invoice_id: int,
+        amount: float,
+        *,
+        check_account_id: int,
+        transaction_id: int,
+        booking_date: int,
+    ) -> dict[str, object]:
+        self.booked_transactions.append(
+            {
+                "invoice_id": invoice_id,
+                "amount": amount,
+                "check_account_id": check_account_id,
+                "transaction_id": transaction_id,
+                "booking_date": booking_date,
+            }
+        )
+        self.linked_transactions.setdefault(invoice_id, []).append({"id": transaction_id})
+        return {"status": "booked"}
+
 
 class _RepoStub:
     def __init__(self, data: dict[str, str]) -> None:
@@ -92,6 +170,7 @@ class _WixOrdersStub:
         self._fulfillments: list[dict[str, str]] = []
         self.orders: dict[str, dict[str, object]] = {}
         self.line_items: dict[str, list[object]] = {}
+        self.payment_details: dict[str, dict[str, object]] = {}
 
     def has_credentials(self) -> bool:
         return True
@@ -151,6 +230,9 @@ class _WixOrdersStub:
 
     def fetch_order_line_items(self, reference: str) -> list[object]:
         return list(self.line_items.get(reference, []))
+
+    def fetch_order_payment_details(self, order_id: str) -> dict[str, object]:
+        return dict(self.payment_details.get(order_id, {}))
 
 
 class _MailServiceStub:
@@ -590,6 +672,95 @@ def test_start_fullflow_recovers_invoice_by_wix_reference_after_product_creation
     assert result["processed"] == 1
     assert result["successful"] == 1
     assert client.mail_calls[0]["invoice_id"] == "new-11"
+
+
+def test_start_fullflow_auto_books_paid_wix_payment() -> None:
+    summary = InvoiceSummary(id="21", invoiceNumber="RE-TEST-21", order_reference="20519", sum_gross="29.90")
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads["21"] = {
+        "id": "21",
+        "invoiceNumber": "RE-TEST-21",
+        "sumGross": "29.90",
+        "customerInternalNote": "20519",
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+    wix = _WixOrdersStub()
+    wix.orders["20519"] = {
+        "id": "wix-order-21",
+        "buyerInfo": {"firstName": "Max", "lastName": "Mustermann", "email": "max@example.test"},
+    }
+    wix.payment_details["wix-order-21"] = {
+        "paymentStatus": "PAID",
+        "provider": "mollie",
+        "providerTransactionId": "tr_123",
+        "paymentCreatedDate": "2026-06-01T10:00:00Z",
+        "amount": "29.90",
+    }
+    repo = _RepoStub({})
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        repo,
+        wix,  # type: ignore[arg-type]
+        _MailServiceStub(),  # type: ignore[arg-type]
+    )
+
+    result = svc.run_start_fullflow(full_mode=False)
+
+    assert result["successful"] == 1
+    assert len(client.created_transactions) == 1
+    assert len(client.booked_transactions) == 1
+    flags = svc.read_fulfillment_flags("21")
+    assert flags.payment_applicable is True
+    assert flags.payment_booked is True
+
+
+def test_retry_fulfillment_step_books_existing_assigned_payment() -> None:
+    summary = InvoiceSummary(id="22", invoiceNumber="RE-TEST-22", order_reference="20520", sum_gross="29.90")
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads["22"] = {
+        "id": "22",
+        "invoiceNumber": "RE-TEST-22",
+        "sumGross": "29.90",
+        "customerInternalNote": "20520",
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+    client.existing_transactions[12] = [
+        {"id": 77, "paymtPurpose": "order:20520 | mollie:tr_retry | PAYMENT"}
+    ]
+    wix = _WixOrdersStub()
+    wix.orders["20520"] = {
+        "id": "wix-order-22",
+        "buyerInfo": {"firstName": "Birgit", "lastName": "Mayr", "email": "birgit@example.test"},
+    }
+    wix.payment_details["wix-order-22"] = {
+        "paymentStatus": "PAID",
+        "provider": "mollie",
+        "providerTransactionId": "tr_retry",
+        "paymentCreatedDate": "2026-06-01T09:00:00Z",
+        "amount": "29.90",
+    }
+    repo = _RepoStub(
+        {
+            "rechnungen.fulfillment_status": json.dumps(
+                {"22": {"payment_applicable": True, "payment_booked": False}}
+            )
+        }
+    )
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        repo,
+        wix,  # type: ignore[arg-type]
+        _MailServiceStub(),  # type: ignore[arg-type]
+    )
+
+    flags = svc.retry_fulfillment_step("22", "payment_booked")
+
+    assert flags.payment_booked is True
+    assert client.created_transactions == []
+    assert len(client.booked_transactions) == 1
+    assert client.booked_transactions[0]["transaction_id"] == 77
 
 
 def test_inventory_requirements_use_only_requested_invoice_ids() -> None:

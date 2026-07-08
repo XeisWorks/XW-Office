@@ -1513,6 +1513,79 @@ class WixOrdersClient:
                 logger.warning("WixOrdersClient list fulfillments failed: %s", exc)
                 return []
 
+    def fetch_order_payment_details(self, order_id: str) -> dict[str, Any]:
+        real_id = str(order_id or "").strip()
+        if not real_id or not self.has_credentials():
+            return {}
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            try:
+                resp = client.get(
+                    f"{self._orders_base}/payments/orders/{real_id}",
+                    headers=self._headers(),
+                )
+                resp.raise_for_status()
+                payload = resp.json() if resp.content else {}
+            except httpx.HTTPError as exc:
+                logger.warning("WixOrdersClient payment details order_id=%s failed: %s", real_id, exc)
+                return {}
+        if not isinstance(payload, dict):
+            return {}
+        order_transactions = payload.get("orderTransactions")
+        if isinstance(order_transactions, list):
+            source = next((item for item in order_transactions if isinstance(item, dict)), {})
+        elif isinstance(order_transactions, dict):
+            source = order_transactions
+        else:
+            source = payload
+        if not isinstance(source, dict):
+            return {}
+
+        provider_ids: list[str] = []
+        primary_provider_id = ""
+        provider_hint = ""
+        payment_status = ""
+        payment_created = ""
+        payment_updated = ""
+        amount = ""
+        payments = source.get("payments")
+        for payment in payments if isinstance(payments, list) else []:
+            if not isinstance(payment, dict):
+                continue
+            regular = payment.get("regularPaymentDetails") if isinstance(payment.get("regularPaymentDetails"), dict) else {}
+            for key in ("providerTransactionId", "gatewayTransactionId", "paymentOrderId"):
+                candidate = str(regular.get(key) or payment.get(key) or "").strip()
+                if candidate:
+                    provider_ids.append(candidate)
+                    if not primary_provider_id:
+                        primary_provider_id = candidate
+            if not provider_hint:
+                provider_hint = str(payment.get("provider") or regular.get("provider") or source.get("provider") or "").strip()
+            if not payment_status:
+                payment_status = str(payment.get("status") or source.get("paymentStatus") or "").strip()
+            if not payment_created:
+                payment_created = str(payment.get("createdDate") or payment.get("createdAt") or "").strip()
+            if not payment_updated:
+                payment_updated = str(payment.get("updatedDate") or payment.get("updatedAt") or "").strip()
+            amount_obj = payment.get("amount") if isinstance(payment.get("amount"), dict) else {}
+            if not amount:
+                amount = str(amount_obj.get("amount") or amount_obj.get("value") or source.get("amount") or "").strip()
+
+        unique_provider_ids: list[str] = []
+        for candidate in provider_ids:
+            if candidate and candidate not in unique_provider_ids:
+                unique_provider_ids.append(candidate)
+        if not primary_provider_id and unique_provider_ids:
+            primary_provider_id = unique_provider_ids[0]
+        return {
+            "paymentStatus": payment_status or str(source.get("paymentStatus") or "").strip(),
+            "provider": provider_hint,
+            "providerTransactionId": primary_provider_id,
+            "providerTransactionIds": unique_provider_ids,
+            "paymentCreatedDate": payment_created,
+            "paymentUpdatedDate": payment_updated,
+            "amount": amount,
+        }
+
     def get_fulfillable_items(self, reference: str) -> list[dict[str, Any]]:
         started = time.perf_counter()
         order_id = self._resolve_order_id(reference)

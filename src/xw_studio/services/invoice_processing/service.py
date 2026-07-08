@@ -8,7 +8,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from xw_studio.repositories.settings_kv import SettingKvRepository
@@ -29,6 +29,12 @@ except Exception:  # pragma: no cover - optional at import time
     fitz = None
 
 logger = logging.getLogger(__name__)
+
+PAYMENT_PROVIDER_ACCOUNT_NAMES = {
+    "stripe": "Stripe",
+    "mollie": "Mollie",
+}
+PAYMENT_BOOKABLE_STATUSES = {"PAID"}
 
 _SENSITIVE_COUNTRIES_KEY = "rechnungen.sensitive_country_codes"
 _ALLOWED_COUNTRIES_KEY = "rechnungen.allowed_country_codes"
@@ -225,6 +231,7 @@ class InvoiceProcessingService:
         self._wix_digital_cache: dict[str, bool] = {}
         self._wix_order_summary_cache: dict[str, dict[str, str]] = {}
         self._wix_hint_cache: dict[str, InvoiceListHintFlags] = {}
+        self._payment_check_account_cache: dict[str, int | None] = {}
         self._mail_service = mail_service
         self._drafts = draft_invoice_service
 
@@ -432,6 +439,7 @@ class InvoiceProcessingService:
                         printed_copy=(full_mode and not digital_only),
                     ),
                 )
+                flags = run_phase("payment", lambda: self._run_payment_step(summary, flags))
                 if full_mode:
                     if not digital_only:
                         flags = run_phase("invoice_print", lambda: self._run_invoice_print_step(summary, flags))
@@ -550,6 +558,10 @@ class InvoiceProcessingService:
                 )
                 flags = persist(
                     summary,
+                    run_phase(summary, "payment", lambda: self._run_payment_step(summary, flags)),
+                )
+                flags = persist(
+                    summary,
                     run_phase(summary, "invoice_print", lambda: self._run_invoice_print_step(summary, flags)),
                 )
                 if progress_callback is not None:
@@ -587,6 +599,10 @@ class InvoiceProcessingService:
                                 printed_copy=False,
                             ),
                         ),
+                    )
+                    flags = persist(
+                        summary,
+                        run_phase(summary, "payment", lambda: self._run_payment_step(summary, flags)),
                     )
                     self.write_fulfillment_flags(summary.id, flags)
                 flags = run_phase(summary, "wix_fulfillment", lambda: self._run_product_step(summary, flags))
@@ -800,6 +816,8 @@ class InvoiceProcessingService:
             next_flags = self._run_mail_step(summary, flags, recipient_override=mail_recipient_override)
         elif step == "wix_fulfilled":
             next_flags = self._run_product_step(summary, flags)
+        elif step == "payment_booked":
+            next_flags = self._run_payment_step(summary, flags)
         else:
             raise ValueError(f"Unbekannter Schritt: {step}")
         self.write_fulfillment_flags(summary.id, next_flags)
@@ -1132,6 +1150,269 @@ class InvoiceProcessingService:
             mail_sent=self._stamp(flags).mail_sent,
         )
 
+    @staticmethod
+    def _parse_iso_timestamp(value: object) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except Exception:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    @staticmethod
+    def _normalize_provider_id(value: object) -> str:
+        return str(value or "").strip()
+
+    @staticmethod
+    def _infer_payment_provider(provider_id: str, provider_hint: object) -> str:
+        token = str(provider_id or "").strip().lower()
+        if token.startswith("pi_"):
+            return "stripe"
+        if token.startswith("ord_") or token.startswith("tr_"):
+            return "mollie"
+        hint = str(provider_hint or "").strip().lower()
+        if "stripe" in hint:
+            return "stripe"
+        if "mollie" in hint:
+            return "mollie"
+        return ""
+
+    @staticmethod
+    def _build_payment_purpose(order_no: str, provider: str, provider_ref: str) -> str:
+        order_key = str(order_no or "").strip()
+        provider_key = str(provider or "").strip()
+        provider_ref_key = str(provider_ref or "").strip()
+        if not provider_key or not provider_ref_key:
+            return ""
+        if order_key:
+            return f"order:{order_key} | {provider_key}:{provider_ref_key} | PAYMENT"
+        return f"{provider_key}:{provider_ref_key} | UNMATCHED | PAYMENT"
+
+    @staticmethod
+    def _build_payment_payee(order: dict[str, Any], provider: str) -> str:
+        provider_name = str(provider or "").strip().lower() or "payment"
+        buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
+        billing = order.get("billingInfo") if isinstance(order.get("billingInfo"), dict) else {}
+        first = str(buyer.get("firstName") or billing.get("firstName") or "").strip()
+        last = str(buyer.get("lastName") or billing.get("lastName") or "").strip()
+        full_name = " ".join([part for part in (first, last) if part]).strip()
+        email = str(buyer.get("email") or billing.get("email") or "").strip()
+        if full_name and email:
+            return f"{full_name} [{email}]"
+        if full_name:
+            return full_name
+        if email:
+            return f"{provider_name} [{email}]"
+        return f"{provider_name} [no-email]"
+
+    def _resolve_payment_check_account_id(self, provider: str) -> int | None:
+        normalized = str(provider or "").strip().lower()
+        if normalized in self._payment_check_account_cache:
+            return self._payment_check_account_cache[normalized]
+        account_name = PAYMENT_PROVIDER_ACCOUNT_NAMES.get(normalized)
+        if not account_name:
+            self._payment_check_account_cache[normalized] = None
+            return None
+        account_id = self._invoices.get_check_account_id_by_name(
+            account_name,
+            preferred_types=("online",),
+        )
+        self._payment_check_account_cache[normalized] = account_id
+        return account_id
+
+    def _invoice_has_linked_transaction(self, invoice_id: int) -> bool:
+        try:
+            linked = self._invoices.get_invoice_check_account_transactions(int(invoice_id))
+        except Exception as exc:
+            logger.warning("Invoice %s: linked-payment lookup failed (%s)", invoice_id, exc)
+            return False
+        return bool(linked)
+
+    def _find_existing_transaction_id(
+        self,
+        *,
+        check_account_id: int,
+        purpose: str,
+        payment_date: datetime,
+    ) -> int | None:
+        start = payment_date.astimezone(timezone.utc) - timedelta(days=45)
+        end = payment_date.astimezone(timezone.utc) + timedelta(days=5)
+        try:
+            candidates = self._invoices.find_check_account_transactions(
+                int(check_account_id),
+                purpose=purpose,
+                start_date=start,
+                end_date=end,
+            )
+        except Exception as exc:
+            logger.warning("Payment dedup lookup failed: %s", exc)
+            return None
+        exact = str(purpose).strip().casefold()
+        for tx in candidates or []:
+            if str(tx.get("paymtPurpose") or "").strip().casefold() != exact:
+                continue
+            tx_id = tx.get("id")
+            try:
+                return int(str(tx_id))
+            except Exception:
+                continue
+        return None
+
+    def _run_payment_step(self, summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
+        stamped = self._stamp(flags)
+        if not summary.order_reference.strip() or self._wix_orders is None:
+            return self._next_flags(stamped, payment_applicable=False, payment_booked=False)
+
+        invoice = self._fetch_invoice_detail(summary.id)
+        invoice_id = int(str(invoice.get("id") or summary.id or "0") or 0)
+        if not invoice_id:
+            return self._next_flags(stamped, payment_applicable=True, payment_booked=False)
+        if self._invoice_has_linked_transaction(invoice_id):
+            return self._next_flags(stamped, payment_applicable=True, payment_booked=True)
+        try:
+            order = self._wix_orders.resolve_order(summary.order_reference)
+            if not order:
+                return self._next_flags(
+                    stamped,
+                    payment_applicable=True,
+                    payment_booked=False,
+                    last_warning=f"Rechnung {invoice_id}: keine Wix-Bestellung fuer Zahlungsbuchung gefunden",
+                )
+            order_id = str(order.get("id") or order.get("orderId") or order.get("_id") or "").strip()
+            if not order_id:
+                return self._next_flags(
+                    stamped,
+                    payment_applicable=True,
+                    payment_booked=False,
+                    last_warning=f"Rechnung {invoice_id}: keine Wix Order-ID fuer Zahlungsbuchung",
+                )
+
+            payment_details = self._wix_orders.fetch_order_payment_details(order_id)
+            if not payment_details:
+                return self._next_flags(
+                    stamped,
+                    payment_applicable=True,
+                    payment_booked=False,
+                    last_warning=f"Rechnung {invoice_id}: Wix Payment-Details konnten nicht geladen werden",
+                )
+
+            payment_status = str(payment_details.get("paymentStatus") or "").strip().upper()
+            if payment_status and payment_status not in PAYMENT_BOOKABLE_STATUSES:
+                return self._next_flags(stamped, payment_applicable=True, payment_booked=False)
+
+            provider_ref = self._normalize_provider_id(payment_details.get("providerTransactionId"))
+            if not provider_ref:
+                provider_ids = payment_details.get("providerTransactionIds") or []
+                if isinstance(provider_ids, list):
+                    for candidate in provider_ids:
+                        provider_ref = self._normalize_provider_id(candidate)
+                        if provider_ref:
+                            break
+            if not provider_ref:
+                return self._next_flags(
+                    stamped,
+                    payment_applicable=True,
+                    payment_booked=False,
+                    last_warning=f"Rechnung {invoice_id}: keine Provider-Transaction-ID aus Wix Payments",
+                )
+
+            provider = self._infer_payment_provider(provider_ref, payment_details.get("provider"))
+            if provider not in PAYMENT_PROVIDER_ACCOUNT_NAMES:
+                return self._next_flags(
+                    stamped,
+                    payment_applicable=True,
+                    payment_booked=False,
+                    last_warning=(
+                        f"Rechnung {invoice_id}: unbekannter Payment-Provider fuer ID {provider_ref}"
+                    ),
+                )
+
+            check_account_id = self._resolve_payment_check_account_id(provider)
+            if not check_account_id:
+                return self._next_flags(
+                    stamped,
+                    payment_applicable=True,
+                    payment_booked=False,
+                    last_warning=(
+                        f"Rechnung {invoice_id}: sevDesk Konto '{PAYMENT_PROVIDER_ACCOUNT_NAMES.get(provider)}' nicht gefunden"
+                    ),
+                )
+
+            order_no = str(summary.order_reference or "").strip()
+            if not order_no:
+                order_no = str(self._invoices.invoice_reference(invoice) or "").strip()
+            purpose = self._build_payment_purpose(order_no, provider, provider_ref)
+            if not purpose:
+                return self._next_flags(
+                    stamped,
+                    payment_applicable=True,
+                    payment_booked=False,
+                    last_warning=f"Rechnung {invoice_id}: Payment Purpose konnte nicht erzeugt werden",
+                )
+
+            payment_date = (
+                self._parse_iso_timestamp(payment_details.get("paymentCreatedDate"))
+                or self._parse_iso_timestamp(payment_details.get("paymentUpdatedDate"))
+                or datetime.now(timezone.utc)
+            )
+            tx_id = self._find_existing_transaction_id(
+                check_account_id=int(check_account_id),
+                purpose=purpose,
+                payment_date=payment_date,
+            )
+
+            raw_amount = invoice.get("sumGross") or invoice.get("sum") or summary.sum_gross or 0.0
+            try:
+                amount = float(raw_amount)
+            except (TypeError, ValueError):
+                amount = 0.0
+            if amount <= 0:
+                return self._next_flags(stamped, payment_applicable=True, payment_booked=False)
+
+            if tx_id is None:
+                raw_payment_amount = payment_details.get("amount")
+                try:
+                    payment_amount = float(str(raw_payment_amount or "0").replace(",", "."))
+                except (TypeError, ValueError):
+                    payment_amount = 0.0
+                if payment_amount <= 0:
+                    payment_amount = amount
+                payee = self._build_payment_payee(order, provider)
+                tx_id = self._invoices.create_check_account_transaction(
+                    int(check_account_id),
+                    payment_amount,
+                    value_date=payment_date,
+                    payee=payee,
+                    purpose=purpose,
+                )
+
+            booking_ts = int(payment_date.astimezone(timezone.utc).timestamp())
+            self._invoices.book_invoice_with_transaction(
+                int(invoice_id),
+                float(amount),
+                check_account_id=int(check_account_id),
+                transaction_id=int(tx_id),
+                booking_date=booking_ts,
+            )
+        except Exception as exc:
+            message = str(exc or "").strip().lower()
+            if "already" in message or "bereits" in message:
+                return self._next_flags(stamped, payment_applicable=True, payment_booked=True)
+            return self._next_flags(stamped, payment_applicable=True, payment_booked=False, last_warning=str(exc))
+
+        logger.info(
+            "Invoice %s: auto payment booking successful (%s:%s, tx=%s)",
+            invoice_id,
+            provider,
+            provider_ref,
+            tx_id,
+        )
+        return self._next_flags(stamped, payment_applicable=True, payment_booked=True)
+
     def _run_invoice_print_step(self, summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
         pdf_bytes = self._get_invoice_pdf_bytes(
             summary.id,
@@ -1251,7 +1532,18 @@ class InvoiceProcessingService:
             summary,
             recipient_override=recipient_override,
         )
-        return next_flags
+        return FulfillmentFlags(
+            label_printed=flags.label_printed,
+            invoice_printed=flags.invoice_printed,
+            product_ready=flags.product_ready,
+            mail_sent=next_flags.mail_sent,
+            wix_fulfilled=flags.wix_fulfilled,
+            payment_applicable=flags.payment_applicable,
+            payment_booked=flags.payment_booked,
+            last_run_iso=next_flags.last_run_iso,
+            last_error=next_flags.last_error,
+            last_warning=next_flags.last_warning,
+        )
 
     def _shipping_lines_from_invoice(self, invoice: dict[str, Any], summary: InvoiceSummary) -> list[str]:
         if summary.order_reference.strip():
