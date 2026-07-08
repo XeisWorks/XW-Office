@@ -721,6 +721,45 @@ def test_start_fullflow_auto_books_paid_wix_payment() -> None:
     assert flags.payment_booked is True
 
 
+def test_start_fullflow_auto_books_approved_wix_payment() -> None:
+    summary = InvoiceSummary(id="221", invoiceNumber="RE-TEST-21A", order_reference="20525", sum_gross="29.90")
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads["221"] = {
+        "id": "221",
+        "invoiceNumber": "RE-TEST-21A",
+        "sumGross": "29.90",
+        "customerInternalNote": "20525",
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+    wix = _WixOrdersStub()
+    wix.orders["20525"] = {
+        "id": "wix-order-21a",
+        "buyerInfo": {"firstName": "Max", "lastName": "Mustermann", "email": "max@example.test"},
+    }
+    wix.payment_details["wix-order-21a"] = {
+        "paymentStatus": "APPROVED",
+        "provider": "mollie",
+        "providerTransactionId": "tr_approved",
+        "paymentCreatedDate": "2026-06-01T10:00:00Z",
+        "amount": "29.90",
+    }
+    repo = _RepoStub({})
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        repo,
+        wix,  # type: ignore[arg-type]
+        _MailServiceStub(),  # type: ignore[arg-type]
+    )
+
+    flags = svc.retry_fulfillment_step("221", "payment_booked")
+
+    assert flags.payment_applicable is True
+    assert flags.payment_booked is True
+    assert len(client.created_transactions) == 1
+    assert len(client.booked_transactions) == 1
+
+
 def test_retry_fulfillment_step_books_existing_assigned_payment() -> None:
     summary = InvoiceSummary(id="22", invoiceNumber="RE-TEST-22", order_reference="20520", sum_gross="29.90")
     client = _InvoiceClientStub([summary])

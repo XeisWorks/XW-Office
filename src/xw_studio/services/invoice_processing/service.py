@@ -34,7 +34,7 @@ PAYMENT_PROVIDER_ACCOUNT_NAMES = {
     "stripe": "Stripe",
     "mollie": "Mollie",
 }
-PAYMENT_BOOKABLE_STATUSES = {"PAID"}
+PAYMENT_BOOKABLE_STATUSES = {"PAID", "APPROVED"}
 
 _SENSITIVE_COUNTRIES_KEY = "rechnungen.sensitive_country_codes"
 _ALLOWED_COUNTRIES_KEY = "rechnungen.allowed_country_codes"

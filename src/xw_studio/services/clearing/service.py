@@ -32,6 +32,8 @@ from xw_studio.services.clearing.models import (
     InvoiceRecord,
     MatchStatus,
     ProviderTransaction,
+    ResetBatchResult,
+    ResetItemResult,
     SevdeskTransaction,
     TransactionKind,
 )
@@ -580,6 +582,63 @@ class PaymentClearingService:
         result = BookingBatchResult(tuple(results))
         self._write_booking_history(candidates, result)
         return result
+
+    def reset_transactions_in_range(
+        self,
+        start_date: date,
+        end_date: date,
+        *,
+        progress: Callable[[int, str], None] | None = None,
+    ) -> ResetBatchResult:
+        if self._sevdesk is None:
+            raise RuntimeError("sevDesk-Clearing ist nicht konfiguriert.")
+        start = datetime.combine(start_date, time.min, tzinfo=VIENNA)
+        end = datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=VIENNA)
+        if start >= end:
+            raise ValueError("Der Start muss vor dem Ende liegen.")
+
+        accounts = self._sevdesk.account_ids()
+        rows: list[SevdeskTransaction] = []
+        for account_id in accounts.values():
+            rows.extend(self._sevdesk.transactions(account_id, start, end))
+
+        candidates = [row for row in rows if row.status == 200]
+        total = len(candidates)
+        results: list[ResetItemResult] = []
+        for index, row in enumerate(candidates, start=1):
+            if progress:
+                progress(int((index - 1) / max(total, 1) * 100), f"{row.transaction_id} auf 100 setzen")
+            try:
+                before_status = int(row.status)
+                self._sevdesk.change_check_account_transaction_status(row.transaction_id, 100)
+                refreshed = self._sevdesk.get_check_account_transaction_by_id(row.transaction_id)
+                after_status = int(str(refreshed.get("status") or 0))
+                success = after_status == 100
+                message = "Status auf 100 zurueckgesetzt" if success else f"Status nach Reset ist {after_status}"
+                results.append(
+                    ResetItemResult(
+                        transaction_id=row.transaction_id,
+                        account_id=row.account_id,
+                        success=success,
+                        before_status=before_status,
+                        after_status=after_status,
+                        message=message,
+                    )
+                )
+            except Exception as exc:
+                results.append(
+                    ResetItemResult(
+                        transaction_id=row.transaction_id,
+                        account_id=row.account_id,
+                        success=False,
+                        before_status=int(row.status),
+                        after_status=int(row.status),
+                        message=str(exc),
+                    )
+                )
+        if progress:
+            progress(100, "Ruestand abgeschlossen")
+        return ResetBatchResult(tuple(results))
 
     @staticmethod
     def _candidate_purpose(row: ClearingCandidate) -> str:

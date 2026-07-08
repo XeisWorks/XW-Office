@@ -525,6 +525,26 @@ class SevdeskClearingGateway:
             )
         return out
 
+    def get_check_account_transaction_by_id(self, transaction_id: int) -> dict[str, Any]:
+        response = self._conn.get(f"/CheckAccountTransaction/{int(transaction_id)}")
+        payload = response.json() if response.content else {}
+        if isinstance(payload, dict):
+            objects = payload.get("objects", payload)
+            if isinstance(objects, list):
+                return next((item for item in objects if isinstance(item, dict)), {})
+            if isinstance(objects, dict):
+                return objects
+        if isinstance(payload, list):
+            return next((item for item in payload if isinstance(item, dict)), {})
+        return {}
+
+    def change_check_account_transaction_status(self, transaction_id: int, status: int) -> dict[str, Any]:
+        response = self._conn.put(
+            f"/CheckAccountTransaction/{int(transaction_id)}",
+            json={"status": int(status)},
+        )
+        return response.json() if response.content else {}
+
     def create_transaction(
         self,
         *,

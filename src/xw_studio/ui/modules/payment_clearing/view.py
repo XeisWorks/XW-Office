@@ -1,6 +1,7 @@
 """PySide6 payment-clearing workflow."""
 from __future__ import annotations
 
+import calendar
 from dataclasses import replace
 from datetime import date
 from typing import TYPE_CHECKING, cast
@@ -8,6 +9,8 @@ from typing import TYPE_CHECKING, cast
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QDialog,
+    QDialogButtonBox,
     QDateEdit,
     QHBoxLayout,
     QHeaderView,
@@ -27,6 +30,7 @@ from xw_studio.services.clearing import (
     ClearingAnalysis,
     ClearingCandidate,
     PaymentClearingService,
+    ResetBatchResult,
 )
 from xw_studio.ui.widgets.search_bar import SearchBar
 
@@ -90,6 +94,9 @@ class PaymentClearingView(QWidget):
         deselect = QPushButton("Auswahl aufheben")
         deselect.clicked.connect(lambda: self._set_all_bookable(False))
         controls.addWidget(deselect)
+        self._reset_month_btn = QPushButton("Monat auf 100 zuruecksetzen")
+        self._reset_month_btn.clicked.connect(self._reset_month_transactions)
+        controls.addWidget(self._reset_month_btn)
         self._book_btn = QPushButton("Auswahl gesammelt buchen")
         self._book_btn.clicked.connect(self._book)
         controls.addWidget(self._book_btn)
@@ -136,6 +143,7 @@ class PaymentClearingView(QWidget):
     def _set_running(self, running: bool) -> None:
         self._analyze_btn.setEnabled(not running)
         self._book_btn.setEnabled(not running and bool(self._candidates))
+        self._reset_month_btn.setEnabled(not running)
         self._manual_btn.setEnabled(not running and bool(self._candidates))
         self._select_all_btn.setEnabled(not running and bool(self._candidates))
 
@@ -286,6 +294,64 @@ class PaymentClearingView(QWidget):
         ]
         self._refresh_table()
 
+    def _pick_month(self) -> date | None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Monat waehlen")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Bitte den Monat fuer den Reset waehlen."))
+        picker = QDateEdit()
+        picker.setCalendarPopup(True)
+        picker.setDisplayFormat("MMMM yyyy")
+        today = date.today()
+        picker.setDate(QDate(today.year, today.month, 1))
+        layout.addWidget(picker)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        selected = cast(date, picker.date().toPython())
+        return date(selected.year, selected.month, 1)
+
+    def _reset_month_transactions(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
+        month_start = self._pick_month()
+        if month_start is None:
+            return
+        month_last_day = calendar.monthrange(month_start.year, month_start.month)[1]
+        month_end = date(month_start.year, month_start.month, month_last_day)
+        answer = QMessageBox.question(
+            self,
+            "Monat auf 100 zuruecksetzen",
+            f"Alle sevDesk-Transaktionen mit Status 200 im {month_start:%m.%Y} auf 100 zuruecksetzen?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._set_running(True)
+        self._summary.setText("Monats-Reset wird vorbereitet...")
+
+        def job() -> ResetBatchResult:
+            return self._service.reset_transactions_in_range(
+                month_start,
+                month_end,
+                progress=self._emit_worker_progress,
+            )
+
+        self._worker = BackgroundWorker(job)
+        self._worker.signals.progress.connect(
+            lambda value, text: self._summary.setText(f"{text} ({value} %)")
+        )
+        self._worker.signals.result.connect(self._on_reset_result)
+        self._worker.signals.error.connect(
+            lambda exc: QMessageBox.critical(self, "Zahlungsclearing", str(exc))
+        )
+        self._worker.signals.finished.connect(lambda: self._set_running(False))
+        self._worker.start()
+
     def _book(self) -> None:
         selected = [row for row in self._candidates if row.selected and row.is_bookable]
         if not selected:
@@ -340,6 +406,20 @@ class PaymentClearingView(QWidget):
             f"Buchung abgeschlossen: {result.success_count} erfolgreich, "
             f"{result.failure_count} fehlgeschlagen."
         )
+        QMessageBox.information(self, "Zahlungsclearing", self._summary.text())
+
+    def _on_reset_result(self, result: object) -> None:
+        if not isinstance(result, ResetBatchResult):
+            return
+        failures = [item for item in result.items if not item.success]
+        if failures:
+            message = "\n".join(f"{item.transaction_id}: {item.message}" for item in failures[:20])
+            self._summary.setText(
+                f"Monats-Reset abgeschlossen: {result.success_count} erfolgreich, {result.failure_count} fehlgeschlagen."
+            )
+            QMessageBox.warning(self, "Zahlungsclearing", self._summary.text() + ("\n\n" + message if message else ""))
+            return
+        self._summary.setText(f"Monats-Reset abgeschlossen: {result.success_count} Transaktionen auf 100 gesetzt.")
         QMessageBox.information(self, "Zahlungsclearing", self._summary.text())
 
     def has_active_flow(self) -> bool:

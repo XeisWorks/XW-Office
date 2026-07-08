@@ -6,6 +6,8 @@ from xw_studio.services.clearing.models import (
     ClearingCandidate,
     ClearingDuplicateKey,
     MatchStatus,
+    ResetBatchResult,
+    ResetItemResult,
     TransactionKind,
 )
 from xw_studio.services.clearing.service import PaymentClearingService
@@ -17,5 +19,7 @@ __all__ = [
     "ClearingDuplicateKey",
     "MatchStatus",
     "PaymentClearingService",
+    "ResetBatchResult",
+    "ResetItemResult",
     "TransactionKind",
 ]

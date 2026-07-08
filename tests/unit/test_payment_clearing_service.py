@@ -13,6 +13,7 @@ from xw_studio.services.clearing.models import (
     InvoiceRecord,
     MatchStatus,
     ProviderTransaction,
+    ResetBatchResult,
     SevdeskTransaction,
     TransactionKind,
     money,
@@ -47,7 +48,9 @@ class _Sevdesk:
         self.invoice = InvoiceRecord(7, "RE-100", "Wix | 12345", money("29.90"), 200, "Anna")
         self.created: list[dict] = []
         self.booked: list[dict] = []
+        self.reset_calls: list[tuple[int, int]] = []
         self.existing: SevdeskTransaction | None = None
+        self.transactions_by_account: dict[int, list[SevdeskTransaction]] = {}
 
     def account_ids(self) -> dict[str, int]:
         return {"stripe": 11, "mollie": 12}
@@ -56,7 +59,29 @@ class _Sevdesk:
         return [self.invoice]
 
     def transactions(self, account_id: int, start: datetime, end: datetime) -> list:
-        return []
+        return list(self.transactions_by_account.get(account_id, []))
+
+    def get_check_account_transaction_by_id(self, transaction_id: int) -> dict[str, object]:
+        for rows in self.transactions_by_account.values():
+            for row in rows:
+                if row.transaction_id == transaction_id:
+                    return {"id": row.transaction_id, "status": row.status}
+        return {"id": transaction_id, "status": 100}
+
+    def change_check_account_transaction_status(self, transaction_id: int, status: int) -> dict[str, object]:
+        self.reset_calls.append((transaction_id, status))
+        for rows in self.transactions_by_account.values():
+            for index, row in enumerate(rows):
+                if row.transaction_id == transaction_id:
+                    rows[index] = SevdeskTransaction(
+                        row.transaction_id,
+                        row.account_id,
+                        row.amount,
+                        row.value_date,
+                        row.purpose,
+                        status,
+                    )
+        return {"id": transaction_id, "status": status}
 
     def find_invoice(self, invoice_number: str) -> InvoiceRecord | None:
         return self.invoice if invoice_number == self.invoice.invoice_number else None
@@ -229,6 +254,30 @@ def test_booking_does_not_reuse_same_ref_with_wrong_amount(tmp_path: Path) -> No
     assert result.success_count == 1
     assert len(sevdesk.created) == 1
     assert sevdesk.booked[0]["transaction_id"] == 99
+
+
+def test_reset_transactions_in_range_only_resets_linked_entries(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    sevdesk.transactions_by_account = {
+        11: [
+            SevdeskTransaction(1, 11, money("29.90"), datetime(2026, 6, 10, tzinfo=VIENNA), "a", 200),
+            SevdeskTransaction(2, 11, money("29.90"), datetime(2026, 6, 11, tzinfo=VIENNA), "b", 100),
+        ],
+        12: [
+            SevdeskTransaction(3, 12, money("29.90"), datetime(2026, 6, 12, tzinfo=VIENNA), "c", 200),
+        ],
+    }
+    service = _service(sevdesk, [], tmp_path)
+
+    result = service.reset_transactions_in_range(date(2026, 6, 1), date(2026, 6, 30))
+
+    assert isinstance(result, ResetBatchResult)
+    assert result.success_count == 2
+    assert result.failure_count == 0
+    assert sevdesk.reset_calls == [(1, 100), (3, 100)]
+    assert sevdesk.transactions_by_account[11][0].status == 100
+    assert sevdesk.transactions_by_account[11][1].status == 100
+    assert sevdesk.transactions_by_account[12][0].status == 100
 
 
 def test_refund_with_invoice_is_visible_but_not_preselected(tmp_path: Path) -> None:

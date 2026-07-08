@@ -184,3 +184,26 @@ class BookingBatchResult:
     @property
     def failure_count(self) -> int:
         return len(self.items) - self.success_count
+
+
+@dataclass(frozen=True)
+class ResetItemResult:
+    transaction_id: int
+    account_id: int
+    success: bool
+    before_status: int
+    after_status: int
+    message: str
+
+
+@dataclass(frozen=True)
+class ResetBatchResult:
+    items: tuple[ResetItemResult, ...] = field(default_factory=tuple)
+
+    @property
+    def success_count(self) -> int:
+        return sum(item.success for item in self.items)
+
+    @property
+    def failure_count(self) -> int:
+        return len(self.items) - self.success_count
