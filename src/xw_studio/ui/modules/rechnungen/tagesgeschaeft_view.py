@@ -337,7 +337,6 @@ class TagesgeschaeftView(QWidget):
     def hideEvent(self, event: QHideEvent) -> None:
         super().hideEvent(event)
         self._badge_timer.stop()
-        self._wait_for_workers()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._badge_timer.stop()

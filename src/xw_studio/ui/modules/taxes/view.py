@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
@@ -57,6 +57,10 @@ class TaxesView(QWidget):
         self._uva_progress_label: QLabel | None = None
         self._uva_preview_button: QPushButton | None = None
         self._uva_submit_button: QPushButton | None = None
+        self._uva_progress_text = ""
+        self._uva_progress_timer = QTimer(self)
+        self._uva_progress_timer.setInterval(250)
+        self._uva_progress_timer.timeout.connect(self._tick_uva_progress)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -217,17 +221,43 @@ class TaxesView(QWidget):
                 button.setEnabled(not busy)
         if self._uva_progress_bar is not None:
             self._uva_progress_bar.setVisible(busy)
-            if not busy:
+            if busy:
+                if not self._uva_progress_timer.isActive():
+                    self._uva_progress_timer.start()
+            else:
+                self._uva_progress_timer.stop()
                 self._uva_progress_bar.setValue(0)
+        if not busy and self._uva_progress_label is not None:
+            self._uva_progress_label.setText("Bereit")
+            self._uva_progress_text = ""
 
     def _set_uva_progress(self, value: int, text: str) -> None:
         percent = max(0, min(100, int(value)))
         if self._uva_progress_bar is not None:
             self._uva_progress_bar.setValue(percent)
+        self._uva_progress_text = text or self._uva_progress_text
         if self._uva_progress_label is not None and text:
-            self._uva_progress_label.setText(f"{text} ({percent} %)" )
+            self._uva_progress_label.setText(f"{text} ({percent} %)")
         if text:
             self._container.resolve(AppSignals).status_message.emit(f"{text} ({percent} %)", 2500)
+
+    def _tick_uva_progress(self) -> None:
+        if self._uva_progress_bar is None:
+            return
+        running = (
+            (self._uva_preview_worker is not None and self._uva_preview_worker.isRunning())
+            or (self._uva_submit_worker is not None and self._uva_submit_worker.isRunning())
+        )
+        if not running:
+            self._uva_progress_timer.stop()
+            return
+        current = self._uva_progress_bar.value()
+        if current >= 90:
+            return
+        next_value = current + 1
+        self._uva_progress_bar.setValue(next_value)
+        if self._uva_progress_label is not None and self._uva_progress_text:
+            self._uva_progress_label.setText(f"{self._uva_progress_text} ({next_value} %)")
 
     def _emit_uva_preview_progress(self, value: int, text: str) -> None:
         worker = self._uva_preview_worker
