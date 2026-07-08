@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Callable
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -34,6 +35,7 @@ class MainWindow(QMainWindow):
         self._container = container
         self._pages: dict[str, QWidget] = {}
         self._page_factories: dict[str, Callable[[], QWidget]] = {}
+        self._loading_pages: set[str] = set()
         self._setup_window()
         self._build_ui()
         self._connect_signals()
@@ -137,7 +139,12 @@ class MainWindow(QMainWindow):
 
     def _navigate_to(self, module_key: str) -> None:
         if module_key in self._page_factories and module_key not in self._pages:
-            self._register_page(module_key, self._page_factories[module_key]())
+            placeholder = self._create_placeholder(module_key)
+            self._register_page(module_key, placeholder)
+            self._stack.setCurrentWidget(placeholder)
+            self._build_page_async(module_key, placeholder)
+            logger.debug("Navigated to %s (placeholder)", module_key)
+            return
         if module_key in self._pages:
             self._stack.setCurrentWidget(self._pages[module_key])
             logger.debug("Navigated to %s", module_key)
@@ -146,6 +153,30 @@ class MainWindow(QMainWindow):
         placeholder = self._create_placeholder(module_key)
         self._register_page(module_key, placeholder)
         self._stack.setCurrentWidget(placeholder)
+
+    def _build_page_async(self, module_key: str, placeholder: QWidget) -> None:
+        if module_key in self._loading_pages:
+            return
+        factory = self._page_factories.get(module_key)
+        if factory is None:
+            return
+        self._loading_pages.add(module_key)
+
+        def materialize() -> None:
+            try:
+                widget = factory()
+                self._pages[module_key] = widget
+                self._stack.addWidget(widget)
+                if self._stack.currentWidget() is placeholder:
+                    self._stack.setCurrentWidget(widget)
+                self._stack.removeWidget(placeholder)
+                placeholder.deleteLater()
+            except Exception:
+                logger.exception("Failed to build module page: %s", module_key)
+            finally:
+                self._loading_pages.discard(module_key)
+
+        QTimer.singleShot(0, materialize)
 
     def _create_placeholder(self, module_key: str) -> QWidget:
         from PySide6.QtCore import Qt

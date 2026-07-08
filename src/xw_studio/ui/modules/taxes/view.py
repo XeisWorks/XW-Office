@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSpinBox,
     QTableWidget,
@@ -45,12 +46,17 @@ class TaxesView(QWidget):
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._container = container
-        self._worker: BackgroundWorker | None = None
+        self._uva_preview_worker: BackgroundWorker | None = None
+        self._uva_submit_worker: BackgroundWorker | None = None
         self._oss_worker: BackgroundWorker | None = None
         self._clearing_worker: BackgroundWorker | None = None
         self._expenses_worker: BackgroundWorker | None = None
         self._clearing_rows: list[ClearingRow] = []
         self._expenses_rows: list[ExpenseRow] = []
+        self._uva_progress_bar: QProgressBar | None = None
+        self._uva_progress_label: QLabel | None = None
+        self._uva_preview_button: QPushButton | None = None
+        self._uva_submit_button: QPushButton | None = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -86,28 +92,89 @@ class TaxesView(QWidget):
         row.addStretch()
         layout.addLayout(row)
 
+        self._uva_progress_label = QLabel("Bereit")
+        self._uva_progress_label.setStyleSheet("color: #64748b;")
+        layout.addWidget(self._uva_progress_label)
+
+        self._uva_progress_bar = QProgressBar()
+        self._uva_progress_bar.setRange(0, 100)
+        self._uva_progress_bar.setValue(0)
+        self._uva_progress_bar.hide()
+        layout.addWidget(self._uva_progress_bar)
+
         preview = QPushButton("UVA berechnen")
         submit = QPushButton("UVA + ZM an FinanzOnline senden")
+        self._uva_preview_button = preview
+        self._uva_submit_button = submit
+
+        def on_progress(value: int, text: str) -> None:
+            self._set_uva_progress(value, text)
 
         def on_preview() -> None:
-            payload = uva.calculate_month(year.value(), month.value())
-            preview_text = str(payload.get("preview_text") or "").strip()
-            kennzahlen_text = str(payload.get("kennzahlen_text") or "").strip()
-            zm_text = str(payload.get("zm_text") or "").strip()
-            combined = "\n\n".join(part for part in [preview_text, kennzahlen_text, zm_text] if part)
-            if combined:
-                info.appendPlainText("\n\n" + combined)
+            if self._uva_preview_worker is not None and self._uva_preview_worker.isRunning():
                 return
-            info.appendPlainText("\n\n" + repr(payload))
+            if self._uva_submit_worker is not None and self._uva_submit_worker.isRunning():
+                return
+
+            self._set_uva_busy(True)
+            self._set_uva_progress(5, "UVA-Berechnung wird vorbereitet...")
+
+            def job() -> dict[str, object]:
+                self._emit_uva_preview_progress(20, "UVA-Daten werden aus sevDesk geladen...")
+                payload = uva.calculate_month(year.value(), month.value())
+                self._emit_uva_preview_progress(100, "UVA-Berechnung abgeschlossen")
+                return payload
+
+            self._uva_preview_worker = BackgroundWorker(job)
+
+            def on_preview_result(payload: object) -> None:
+                if not isinstance(payload, dict):
+                    info.appendPlainText("\n\nKeine gueltige UVA-Antwort erhalten.")
+                    return
+                preview_text = str(payload.get("preview_text") or "").strip()
+                kennzahlen_text = str(payload.get("kennzahlen_text") or "").strip()
+                zm_text = str(payload.get("zm_text") or "").strip()
+                combined = "\n\n".join(part for part in [preview_text, kennzahlen_text, zm_text] if part)
+                if combined:
+                    info.appendPlainText("\n\n" + combined)
+                    return
+                info.appendPlainText("\n\n" + repr(payload))
+
+            self._uva_preview_worker.signals.progress.connect(on_progress)
+            self._uva_preview_worker.signals.result.connect(on_preview_result)
+            self._uva_preview_worker.signals.error.connect(
+                lambda exc: QMessageBox.warning(self, "UVA", f"Fehler: {exc}")
+            )
+
+            def on_preview_finished() -> None:
+                self._uva_preview_worker = None
+                self._set_uva_busy(False)
+                self._container.resolve(AppSignals).status_message.emit("UVA-Berechnung beendet", 3000)
+
+            self._uva_preview_worker.signals.finished.connect(on_preview_finished)
+            self._uva_preview_worker.start()
 
         def on_submit() -> None:
-            def job() -> UvaSubmitResult:
-                return uva.submit_month(year.value(), month.value())
+            if self._uva_submit_worker is not None and self._uva_submit_worker.isRunning():
+                return
+            if self._uva_preview_worker is not None and self._uva_preview_worker.isRunning():
+                return
 
-            self._worker = BackgroundWorker(job)
+            self._set_uva_busy(True)
+            self._set_uva_progress(5, "UVA/U13 wird vorbereitet...")
+
+            def job() -> UvaSubmitResult:
+                self._emit_uva_submit_progress(20, "UVA-Payload wird erstellt...")
+                self._emit_uva_submit_progress(45, "UVA wird an FinanzOnline gesendet...")
+                result = uva.submit_month(year.value(), month.value())
+                self._emit_uva_submit_progress(100, "Sendevorgang abgeschlossen")
+                return result
+
+            self._uva_submit_worker = BackgroundWorker(job)
 
             def on_uva_result(res: object) -> None:
-                if not isinstance(res, UvaSubmitResult) or not res.ok:
+                if not isinstance(res, UvaSubmitResult):
+                    QMessageBox.warning(self, "UVA + ZM", "Keine gueltige Antwort erhalten.")
                     return
                 text = res.message + (f" (Ref. {res.reference_id})" if res.reference_id else "")
                 if res.zm_ok is not None:
@@ -115,26 +182,62 @@ class TaxesView(QWidget):
                     if res.zm_reference_id:
                         zm_text += f" (Ref. {res.zm_reference_id})"
                     text = f"U30: {text}\nZM/U13: {zm_text}"
-                QMessageBox.information(self, "UVA + ZM", f"Erfolg: {text}")
+                if res.ok:
+                    QMessageBox.information(self, "UVA + ZM", f"Erfolg: {text}")
+                else:
+                    QMessageBox.warning(self, "UVA + ZM", f"Fehler: {text}")
 
-            self._worker.signals.result.connect(on_uva_result)
-            self._worker.signals.error.connect(
-                lambda exc: QMessageBox.information(
+            self._uva_submit_worker.signals.progress.connect(on_progress)
+            self._uva_submit_worker.signals.result.connect(on_uva_result)
+            self._uva_submit_worker.signals.error.connect(
+                lambda exc: QMessageBox.warning(
                     self,
                     "UVA + ZM",
                     f"Fehler: {exc}",
                 )
             )
-            self._worker.signals.finished.connect(
-                lambda: self._container.resolve(AppSignals).status_message.emit("UVA-Job beendet", 3000)
-            )
-            self._worker.start()
+
+            def on_submit_finished() -> None:
+                self._uva_submit_worker = None
+                self._set_uva_busy(False)
+                self._container.resolve(AppSignals).status_message.emit("UVA-Job beendet", 3000)
+
+            self._uva_submit_worker.signals.finished.connect(on_submit_finished)
+            self._uva_submit_worker.start()
 
         preview.clicked.connect(on_preview)
         submit.clicked.connect(on_submit)
         layout.addWidget(preview)
         layout.addWidget(submit)
         return page
+
+    def _set_uva_busy(self, busy: bool) -> None:
+        for button in (self._uva_preview_button, self._uva_submit_button):
+            if button is not None:
+                button.setEnabled(not busy)
+        if self._uva_progress_bar is not None:
+            self._uva_progress_bar.setVisible(busy)
+            if not busy:
+                self._uva_progress_bar.setValue(0)
+
+    def _set_uva_progress(self, value: int, text: str) -> None:
+        percent = max(0, min(100, int(value)))
+        if self._uva_progress_bar is not None:
+            self._uva_progress_bar.setValue(percent)
+        if self._uva_progress_label is not None and text:
+            self._uva_progress_label.setText(f"{text} ({percent} %)" )
+        if text:
+            self._container.resolve(AppSignals).status_message.emit(f"{text} ({percent} %)", 2500)
+
+    def _emit_uva_preview_progress(self, value: int, text: str) -> None:
+        worker = self._uva_preview_worker
+        if worker is not None:
+            worker.signals.progress.emit(value, text)
+
+    def _emit_uva_submit_progress(self, value: int, text: str) -> None:
+        worker = self._uva_submit_worker
+        if worker is not None:
+            worker.signals.progress.emit(value, text)
 
     def _build_oss_tab(self) -> QWidget:
         page = QWidget()
