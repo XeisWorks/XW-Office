@@ -716,9 +716,49 @@ def test_start_fullflow_auto_books_paid_wix_payment() -> None:
     assert result["successful"] == 1
     assert len(client.created_transactions) == 1
     assert len(client.booked_transactions) == 1
+    assert client.created_transactions[0]["payee"] == "Max Mustermann [RE-TEST-21]"
     flags = svc.read_fulfillment_flags("21")
     assert flags.payment_applicable is True
     assert flags.payment_booked is True
+
+
+def test_start_fullflow_uses_same_payee_format_for_stripe() -> None:
+    summary = InvoiceSummary(id="25", invoiceNumber="RE-TEST-25", order_reference="20519", sum_gross="29.90")
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads["25"] = {
+        "id": "25",
+        "invoiceNumber": "RE-TEST-25",
+        "sumGross": "29.90",
+        "customerInternalNote": "20519",
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+    wix = _WixOrdersStub()
+    wix.orders["20519"] = {
+        "id": "wix-order-21s",
+        "buyerInfo": {"firstName": "Max", "lastName": "Mustermann", "email": "max@example.test"},
+    }
+    wix.payment_details["wix-order-21s"] = {
+        "paymentStatus": "PAID",
+        "provider": "stripe",
+        "providerTransactionId": "pi_123",
+        "paymentCreatedDate": "2026-06-01T10:00:00Z",
+        "amount": "29.90",
+    }
+    repo = _RepoStub({})
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        repo,
+        wix,  # type: ignore[arg-type]
+        _MailServiceStub(),  # type: ignore[arg-type]
+    )
+
+    result = svc.run_start_fullflow(full_mode=False)
+
+    assert result["successful"] == 1
+    assert len(client.created_transactions) == 1
+    assert client.created_transactions[0]["payee"] == "Max Mustermann [RE-TEST-25]"
+    assert len(client.booked_transactions) == 1
 
 
 def test_start_fullflow_auto_books_approved_wix_payment() -> None:

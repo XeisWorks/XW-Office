@@ -330,6 +330,50 @@ def test_resolve_order_summary_uses_persistent_cache(tmp_path, monkeypatch) -> N
     assert calls == 1
 
 
+def test_fetch_order_payment_details_uses_top_level_provider_fields(monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "orderTransactions": {
+                    "paymentStatus": "PAID",
+                    "provider": "mollie",
+                    "paymentProviderTransactionId": "tr_order_top_level",
+                    "paymentGatewayTransactionId": "tr_order_gateway",
+                    "externalTransactionId": "tr_order_external",
+                }
+            },
+        )
+
+    class _SecretService:
+        def get_secret(self, name: str) -> str:
+            values = {
+                "WIX_API_KEY": "key",
+                "WIX_SITE_ID": "site",
+                "WIX_ACCOUNT_ID": "",
+            }
+            return values.get(name, "")
+
+    class _Client(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(handler)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    client = WixOrdersClient(secret_service=_SecretService())  # type: ignore[arg-type]
+
+    details = client.fetch_order_payment_details("ord-123")
+
+    assert details["provider"] == "mollie"
+    assert details["paymentStatus"] == "PAID"
+    assert details["providerTransactionId"] == "tr_order_top_level"
+    assert details["providerTransactionIds"] == [
+        "tr_order_top_level",
+        "tr_order_gateway",
+        "tr_order_external",
+    ]
+
+
 def test_get_cached_order_summary_does_not_call_wix(tmp_path, monkeypatch) -> None:
     calls = 0
 

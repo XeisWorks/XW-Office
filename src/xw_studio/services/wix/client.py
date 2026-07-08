@@ -1547,6 +1547,22 @@ class WixOrdersClient:
         payment_created = ""
         payment_updated = ""
         amount = ""
+        for key in ("paymentProviderTransactionId", "paymentGatewayTransactionId", "externalTransactionId"):
+            candidate = str(source.get(key) or payload.get(key) or "").strip()
+            if candidate:
+                provider_ids.append(candidate)
+                if not primary_provider_id:
+                    primary_provider_id = candidate
+        if not provider_hint:
+            provider_hint = str(source.get("provider") or payload.get("provider") or "").strip()
+        if not payment_status:
+            payment_status = str(source.get("paymentStatus") or payload.get("paymentStatus") or "").strip()
+        if not payment_created:
+            payment_created = str(source.get("paymentCreatedDate") or payload.get("paymentCreatedDate") or "").strip()
+        if not payment_updated:
+            payment_updated = str(source.get("paymentUpdatedDate") or payload.get("paymentUpdatedDate") or "").strip()
+        if not amount:
+            amount = str(source.get("amount") or payload.get("amount") or "").strip()
         payments = source.get("payments")
         for payment in payments if isinstance(payments, list) else []:
             if not isinstance(payment, dict):

@@ -1193,21 +1193,22 @@ class InvoiceProcessingService:
         return f"{provider_key}:{provider_ref_key} | UNMATCHED | PAYMENT"
 
     @staticmethod
-    def _build_payment_payee(order: dict[str, Any], provider: str) -> str:
-        provider_name = str(provider or "").strip().lower() or "payment"
+    def _build_payment_payee(order: dict[str, Any], invoice_number: str) -> str:
         buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
         billing = order.get("billingInfo") if isinstance(order.get("billingInfo"), dict) else {}
-        first = str(buyer.get("firstName") or billing.get("firstName") or "").strip()
-        last = str(buyer.get("lastName") or billing.get("lastName") or "").strip()
-        full_name = " ".join([part for part in (first, last) if part]).strip()
-        email = str(buyer.get("email") or billing.get("email") or "").strip()
-        if full_name and email:
-            return f"{full_name} [{email}]"
-        if full_name:
-            return full_name
-        if email:
-            return f"{provider_name} [{email}]"
-        return f"{provider_name} [no-email]"
+
+        def _full_name(source: dict[str, Any]) -> str:
+            first = str(source.get("firstName") or "").strip()
+            last = str(source.get("lastName") or "").strip()
+            if first and last:
+                return f"{first} {last}"
+            return ""
+
+        full_name = _full_name(buyer) or _full_name(billing)
+        invoice_ref = str(invoice_number or "").strip()
+        if not full_name or not invoice_ref:
+            return ""
+        return f"{full_name} [{invoice_ref}]"
 
     def _resolve_payment_check_account_id(self, provider: str) -> int | None:
         normalized = str(provider or "").strip().lower()
@@ -1380,6 +1381,14 @@ class InvoiceProcessingService:
             order_no = str(summary.order_reference or "").strip()
             if not order_no:
                 order_no = str(self._invoices.invoice_reference(invoice) or "").strip()
+            invoice_number = str(summary.invoice_number or invoice.get("invoiceNumber") or "").strip()
+            if not invoice_number:
+                return self._next_flags(
+                    stamped,
+                    payment_applicable=True,
+                    payment_booked=False,
+                    last_warning=f"Rechnung {invoice_id}: Rechnungsnummer fuer Zahlungsbuchung fehlt",
+                )
             purpose = self._build_payment_purpose(order_no, provider, provider_ref)
             if not purpose:
                 return self._next_flags(
@@ -1419,7 +1428,16 @@ class InvoiceProcessingService:
                     payment_amount = 0.0
                 if payment_amount <= 0:
                     payment_amount = amount
-                payee = self._build_payment_payee(order, provider)
+                payee = self._build_payment_payee(order, invoice_number)
+                if not payee:
+                    return self._next_flags(
+                        stamped,
+                        payment_applicable=True,
+                        payment_booked=False,
+                        last_warning=(
+                            f"Rechnung {invoice_id}: Vor- und Nachname fuer Zahlungsbuchung fehlen"
+                        ),
+                    )
                 tx_id = self._invoices.create_check_account_transaction(
                     int(check_account_id),
                     payment_amount,

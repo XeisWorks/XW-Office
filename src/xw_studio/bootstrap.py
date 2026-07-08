@@ -212,11 +212,7 @@ def register_default_services(container: Container) -> None:
             secrets.get_secret("STRIPE_SECRET_KEY")
             or secrets.get_secret("STRIPE_API_KEY")
         )
-        mollie_token = (
-            secrets.get_secret("MOLLIE_ACCESS_TOKEN")
-            or secrets.get_secret("MOLLIE_OAUTH_TOKEN")
-            or secrets.get_secret("MOLLIE_API_KEY")
-        )
+        mollie_token = secrets.get_secret("MOLLIE_OAUTH_TOKEN")
         return PaymentClearingService(
             c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
             stripe=StripeClearingGateway(stripe_key),
