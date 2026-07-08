@@ -1,6 +1,8 @@
 """Smoke tests for ProductsView brand bulk flow."""
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
+
 from xw_studio.core.config import AppConfig
 from xw_studio.core.container import Container
 from xw_studio.services.inventory.service import ProductRow
@@ -140,3 +142,48 @@ def test_products_brand_bulk_flow_smoke(qtbot: object, monkeypatch: object) -> N
     assert brand == "NeuBrand"
     assert sync_wix is True
     assert create_missing is True
+
+
+def test_products_sync_action_click_smoke(qtbot: object, monkeypatch: object) -> None:
+    monkeypatch.setattr(ProductsView, "_load_sync_sources", lambda self, *args, **kwargs: None)
+
+    container = Container(AppConfig())
+    view = ProductsView(container)
+    qtbot.addWidget(view)
+    view.show()
+
+    sync_row_type = __import__("xw_studio.ui.modules.products.view", fromlist=["_SyncRow"])._SyncRow
+    view._sync_rows = [  # noqa: SLF001
+        sync_row_type(
+            sku="XW-901",
+            name="Klicktest",
+            wix_id="w-901",
+            sevdesk_id="",
+            local_present=False,
+            wix_present=True,
+            sevdesk_present=False,
+            local_stock=0,
+            wix_stock=2,
+            sevdesk_stock=None,
+            local_brand="",
+            wix_brand="Neu",
+            local_price="",
+            wix_price="10.00",
+            sevdesk_price="",
+            status="nur Wix",
+            can_create_sevdesk=True,
+        )
+    ]
+    view._populate_sync_table(view._sync_rows)  # noqa: SLF001
+
+    calls: list[str] = []
+    monkeypatch.setattr(view, "_create_selected_wix_product_in_sevdesk", lambda sku: calls.append(sku))
+
+    model = view._sync_table.model()  # noqa: SLF001
+    assert model is not None
+    index = model.index(0, 9)
+    rect = view._sync_table.visualRect(index)  # noqa: SLF001
+
+    qtbot.mouseClick(view._sync_table.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())  # noqa: SLF001
+
+    assert calls == ["XW-901"]

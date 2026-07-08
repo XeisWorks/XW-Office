@@ -78,7 +78,7 @@ Status: teilweise umgesetzt
 - Export-Worker fuer Provisionen CSV/XLSX sowie Steuern CSV umgesetzt; Dateiauswahl bleibt im UI-Thread, Datei-Erzeugung/-Schreiben laeuft im Worker
 - `PaymentClearingView` von `QTableWidget` auf `DataTable`/Model-View migriert
 - `CalculationView` Ergebnis-Tabellen und Legacy-Artikelliste von `QTableWidget` auf `DataTable`/Model-View migriert
-- `ProductsView` Inventar- und Wix-Tabellen von `QTableWidget` auf `DataTable`/Model-View migriert; Sync-Tabelle bleibt vorerst separat
+- `ProductsView` Inventar-, Wix- und Sync-Tabellen von `QTableWidget` auf `DataTable`/Model-View migriert; Sync-Status, Konflikte und sevDesk-Aktion jetzt delegate-basiert ohne Zeilen-Widgets
 
 ## Durchgefuehrte Live-Tests
 
