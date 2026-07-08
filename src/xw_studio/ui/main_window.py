@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from xw_studio.core.printer_detect import discover_printers, evaluate_printer_status
 from xw_studio.core.signals import AppSignals
 from xw_studio.core.types import ModuleKey, PrinterStatus
+from xw_studio.core.worker import BackgroundWorker
 from xw_studio.ui.sidebar import Sidebar
 from xw_studio.ui.status_bar import StudioStatusBar
 from xw_studio.ui.theme import apply_app_theme
@@ -36,6 +37,7 @@ class MainWindow(QMainWindow):
         self._pages: dict[str, QWidget] = {}
         self._page_factories: dict[str, Callable[[], QWidget]] = {}
         self._loading_pages: set[str] = set()
+        self._startup_preload_worker: BackgroundWorker | None = None
         self._setup_window()
         self._build_ui()
         self._connect_signals()
@@ -81,7 +83,38 @@ class MainWindow(QMainWindow):
 
     def _open_initial_module(self) -> None:
         signals = self._container.resolve(AppSignals)
-        signals.navigate_to_module.emit(ModuleKey.RECHNUNGEN.value)
+        # Keep first paint responsive, then preload Rechnungen in background.
+        signals.navigate_to_module.emit(ModuleKey.HOME.value)
+        self._start_startup_preload()
+
+    def _start_startup_preload(self) -> None:
+        if self._startup_preload_worker is not None and self._startup_preload_worker.isRunning():
+            return
+
+        def job() -> tuple[int, int]:
+            from xw_studio.services.invoice_processing.service import InvoiceProcessingService
+
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            return service.warm_startup_batches(draft_limit=5, open_limit=5)
+
+        self._startup_preload_worker = BackgroundWorker(job)
+        self._startup_preload_worker.signals.result.connect(self._on_startup_preload_result)
+        self._startup_preload_worker.signals.error.connect(self._on_startup_preload_error)
+        self._startup_preload_worker.signals.finished.connect(lambda: setattr(self, "_startup_preload_worker", None))
+        self._startup_preload_worker.start()
+
+    def _on_startup_preload_result(self, payload: object) -> None:
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            return
+        draft_count = max(0, int(payload[0]))
+        open_count = max(0, int(payload[1]))
+        self._status_bar.showMessage(
+            f"Rechnungen vorab geladen: {draft_count} Entwuerfe, {open_count} offen",
+            4000,
+        )
+
+    def _on_startup_preload_error(self, exc: Exception) -> None:
+        logger.debug("Startup invoice preload skipped/failed: %s", exc)
 
     def _apply_theme(self, theme_name: str) -> None:
         try:
@@ -271,6 +304,8 @@ class MainWindow(QMainWindow):
         return SettingsView(self._container)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self._startup_preload_worker is not None and self._startup_preload_worker.isRunning():
+            self._startup_preload_worker.wait(2000)
         for widget in self._pages.values():
             has_active_flow = getattr(widget, "has_active_flow", None)
             if callable(has_active_flow) and has_active_flow():

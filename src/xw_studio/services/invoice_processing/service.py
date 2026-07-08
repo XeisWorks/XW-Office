@@ -42,6 +42,7 @@ _SKU_FLAGS_KEY = "rechnungen.sku_flags"
 _FULFILLMENT_STATUS_KEY = "rechnungen.fulfillment_status"
 _FULFILLMENT_MAIL_TEMPLATE_KEY = "rechnungen.fulfillment_mail_template_html"
 _FULFILLMENT_MAIL_SUBJECT_KEY = "rechnungen.fulfillment_mail_subject"
+_BATCH_CACHE_TTL_SECONDS = 30.0
 
 _DEFAULT_SKU_FLAGS = {
     "exact": ["XW-010", "XW-011", "XW-600.0"],
@@ -232,6 +233,10 @@ class InvoiceProcessingService:
         self._wix_order_summary_cache: dict[str, dict[str, str]] = {}
         self._wix_hint_cache: dict[str, InvoiceListHintFlags] = {}
         self._payment_check_account_cache: dict[str, int | None] = {}
+        self._batch_cache: dict[
+            tuple[int | None, int, int],
+            tuple[float, list[dict[str, str]], list[InvoiceSummary]],
+        ] = {}
         self._mail_service = mail_service
         self._drafts = draft_invoice_service
 
@@ -284,6 +289,14 @@ class InvoiceProcessingService:
         offset: int = 0,
     ) -> tuple[list[dict[str, str]], list[InvoiceSummary]]:
         """Return table rows and parallel summaries for detail view."""
+        key = (status, int(limit), int(offset))
+        cached = self._batch_cache.get(key)
+        now = time.perf_counter()
+        if cached is not None:
+            ts, cached_rows, cached_summaries = cached
+            if (now - ts) <= _BATCH_CACHE_TTL_SECONDS:
+                return list(cached_rows), list(cached_summaries)
+
         summaries = self._invoices.list_invoice_summaries(
             limit=limit,
             offset=offset,
@@ -292,7 +305,15 @@ class InvoiceProcessingService:
         self._apply_sensitive_country_flags(summaries)
         self._apply_unreleased_sku_flags(summaries)
         rows = [s.as_table_row() for s in summaries]
-        return self._rows_with_fulfillment(summaries, rows), summaries
+        final_rows = self._rows_with_fulfillment(summaries, rows)
+        self._batch_cache[key] = (now, list(final_rows), list(summaries))
+        return final_rows, summaries
+
+    def warm_startup_batches(self, *, draft_limit: int = 5, open_limit: int = 5) -> tuple[int, int]:
+        """Warm short-lived batch cache for the first Rechnungen screen render."""
+        draft_rows, _ = self.load_invoice_batch(status=100, limit=draft_limit, offset=0)
+        open_rows, _ = self.load_invoice_batch(status=200, limit=open_limit, offset=0)
+        return len(draft_rows), len(open_rows)
 
     def search_invoice_batch(
         self,

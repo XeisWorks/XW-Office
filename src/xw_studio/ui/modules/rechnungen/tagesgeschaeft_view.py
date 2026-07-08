@@ -105,12 +105,8 @@ class _QueueTabView(QWidget):
 
     def hideEvent(self, event: QHideEvent) -> None:
         super().hideEvent(event)
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.wait(2000)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.wait(2000)
         super().closeEvent(event)
 
     def reload(self, fallback_count: int = 0) -> None:

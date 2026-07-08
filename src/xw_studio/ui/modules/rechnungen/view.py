@@ -109,10 +109,10 @@ _TABLE_COLUMNS = [
     "ID",
 ]
 
-_PAGE_SIZE = 50
+_PAGE_SIZE = 10
 _DRAFT_STATUS = 100
 _OPEN_STATUS = 200
-_OPEN_AUTO_LOAD_LIMIT = 30
+_OPEN_AUTO_LOAD_LIMIT = 5
 # Contexts are immutable enough for one application session.  The persistent
 # Wix snapshot cache is retained for 180 days; dropping the UI representation
 # after 75 seconds only caused needless conversion work when users revisited a
@@ -691,6 +691,7 @@ class RechnungenView(QWidget):
         self._open_overview_cached_plc = 0
         self._open_overview_complete = False
         self._open_overview_products_text = ""
+        self._post_load_prefetch_seq = 0
         self._deferred_load_payload: tuple[
             list[dict[str, Any]],
             list[InvoiceSummary],
@@ -1055,6 +1056,7 @@ class RechnungenView(QWidget):
 
     def hideEvent(self, event: QHideEvent) -> None:
         super().hideEvent(event)
+        self._post_load_prefetch_seq += 1
         self._mollie_timer.stop()
         self._stop_mollie_worker()
 
@@ -1134,8 +1136,11 @@ class RechnungenView(QWidget):
         self._gb_start_summary.show()
 
     def _stop_mollie_worker(self) -> None:
-        if self._mollie_badge_worker is not None and self._mollie_badge_worker.isRunning():
-            self._mollie_badge_worker.wait(1000)
+        # Never block module switches on background badge refresh.
+        if self._mollie_badge_worker is None:
+            return
+        if not self._mollie_badge_worker.isRunning():
+            self._mollie_badge_worker = None
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -1353,7 +1358,7 @@ class RechnungenView(QWidget):
         self._rebuild_search_index()
         self._apply_table_column_layout()
         self._table_layout_initialized = True
-        self._refresh_open_invoice_overview()
+        self._schedule_open_overview_refresh()
 
         self._next_offset = len(self._summaries)
         self._update_load_more_button()
@@ -1367,12 +1372,38 @@ class RechnungenView(QWidget):
         self._append_mode = False
         self._refresh_detail_for_selection()
         if allow_background_prefetch:
-            self._warm_wix_context_for_summaries(summaries)
-            if status_filter != _OPEN_STATUS:
-                self._restart_hint_prefetch()
+            self._schedule_post_load_prefetch(status_filter, summaries)
         if auto_load_open:
             logger.info("Rechnungen auto-open-load queued limit=%s", _OPEN_AUTO_LOAD_LIMIT)
             self._pending_auto_open_load = True
+
+    def _schedule_open_overview_refresh(self) -> None:
+        def run_refresh() -> None:
+            if not self.isVisible():
+                return
+            self._refresh_open_invoice_overview()
+
+        QTimer.singleShot(0, run_refresh)
+
+    def _schedule_post_load_prefetch(self, status_filter: int, summaries: list[InvoiceSummary]) -> None:
+        self._post_load_prefetch_seq += 1
+        seq = self._post_load_prefetch_seq
+        snapshot = list(summaries)
+
+        def run_prefetch() -> None:
+            if seq != self._post_load_prefetch_seq:
+                return
+            if not self.isVisible() or self._search_active:
+                return
+            if self._worker is not None and self._worker.isRunning():
+                return
+            self._warm_wix_context_for_summaries(snapshot)
+            if status_filter != _OPEN_STATUS:
+                self._restart_hint_prefetch()
+
+        # Delay side-jobs slightly so navigation/interaction stays snappy
+        # right after a fresh table update.
+        QTimer.singleShot(1200, run_prefetch)
 
     def _update_load_more_button(self) -> None:
         if self._search_active:
@@ -1402,13 +1433,23 @@ class RechnungenView(QWidget):
             self._btn_more.setEnabled(False)
 
     def _apply_table_column_layout(self) -> None:
+        if self._table_layout_initialized:
+            return
         header = self._table.horizontalHeader()
         header.setStretchLastSection(False)
         for idx in range(len(_TABLE_COLUMNS)):
-            header.setSectionResizeMode(idx, QHeaderView.ResizeMode.ResizeToContents)
-        self._table.resizeColumnsToContents()
-        for idx in range(len(_TABLE_COLUMNS)):
             header.setSectionResizeMode(idx, QHeaderView.ResizeMode.Interactive)
+        # Keep layout deterministic and cheap; ResizeToContents on large batches
+        # can stall the UI thread for seconds.
+        self._table.setColumnWidth(0, 120)  # sevDesk
+        self._table.setColumnWidth(1, 96)   # WIX
+        self._table.setColumnWidth(2, 86)   # Datum
+        self._table.setColumnWidth(3, 52)   # Status icon
+        self._table.setColumnWidth(4, 112)  # Betrag
+        self._table.setColumnWidth(5, 260)  # Kunde
+        self._table.setColumnWidth(6, 160)  # Hinweise
+        self._table.setColumnWidth(7, 124)  # Aktionen
+        self._table.setColumnWidth(8, 178)  # Fulfillment
 
     def _refresh_mollie_alert_count(self) -> None:
         if self._mollie_badge_worker is not None and self._mollie_badge_worker.isRunning():
