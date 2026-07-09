@@ -138,7 +138,9 @@ class UvaService:
 
     def submit_month(self, year: int, month: int) -> UvaSubmitResult:
         """Calculate and submit one monthly U30 payload, then U13/ZM when configured."""
-        result = self.submit_uva(self.build_submission_payload(year, month))
+        uva_payload = self.build_submission_payload(year, month)
+        result = self.submit_uva(uva_payload)
+        result.uva_payload = uva_payload
         if not result.ok or self._zm_service is None:
             return result
 
@@ -164,6 +166,7 @@ class UvaService:
             "rows": [row.model_dump() for row in zm.rows],
             "warnings": list(zm.warnings),
         }
+        result.zm_payload = zm_payload
         zm_result = self._client.submit_zm(zm_payload)
         result.zm_ok = zm_result.ok
         result.zm_reference_id = zm_result.reference_id
