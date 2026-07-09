@@ -48,7 +48,7 @@ class UvaService:
             f"Backend-Modus: {mode}\n"
             f"IST-Berechnung: {calculation_mode}\n"
             "sevDesk-Aggregator: nicht als Berechnungsquelle verwendet\n"
-            f"ZM/U13: {'aktiv, Soll-Berechnung aus sevDesk-Rechnungen' if self._zm_service else 'nicht aktiv'}\n"
+            f"ZM/U13: {'aktiv, Soll-Berechnung aus sevDesk-Rechnungen und Gutschriften' if self._zm_service else 'nicht aktiv'}\n"
             f"PostgreSQL: {'konfiguriert' if has_url else 'nicht konfiguriert (nur .env)'}\n"
             f"FinanzOnline-Login: {'vorhanden' if has_fon else 'fehlt (Einstellungen > Token/.env)'}\n"
             f"FinanzOnline-U30-Sendung: {'vollstaendig konfiguriert' if has_submission else 'FASTNR/Hersteller-ID pruefen'}"

@@ -59,6 +59,38 @@ class _Provider:
         ]
 
 
+class _ProviderWithCreditNote:
+    def load_invoices(self, year: int, month: int) -> list[dict[str, object]]:
+        assert (year, month) == (2026, 5)
+        return [
+            {
+                "id": "10",
+                "invoiceNumber": "RE-10",
+                "invoiceDate": "2026-05-02",
+                "status": "1000",
+                "taxType": "eu",
+                "taxRule": {"id": "3"},
+                "sumNet": "500.00",
+                "contact": {"name": "EU Kunde", "vatNumber": "DE136695976"},
+            }
+        ]
+
+    def load_credit_notes(self, year: int, month: int) -> list[dict[str, object]]:
+        assert (year, month) == (2026, 5)
+        return [
+            {
+                "id": "11",
+                "creditNoteNumber": "GU-11",
+                "creditNoteDate": "2026-05-20",
+                "status": "1000",
+                "taxType": "eu",
+                "taxRule": {"id": "3"},
+                "sumNet": "125.40",
+                "contact": {"name": "EU Kunde", "vatNumber": "DE136695976"},
+            }
+        ]
+
+
 def test_zm_service_uses_invoice_date_and_groups_by_uid_and_kind() -> None:
     result = ZmService(_Provider()).calculate_month(2026, 5)  # type: ignore[arg-type]
 
@@ -74,3 +106,14 @@ def test_zm_service_uses_invoice_date_and_groups_by_uid_and_kind() -> None:
         "ungueltige/fehlende UID: Ohne UID (RE-3) -> leer",
         "ungueltige/fehlende UID: AT falsch klassifiziert (RE-5) -> ATU12345678",
     ]
+
+
+def test_zm_service_subtracts_credit_notes_by_credit_note_date() -> None:
+    result = ZmService(_ProviderWithCreditNote()).calculate_month(2026, 5)  # type: ignore[arg-type]
+
+    assert result.considered == 2
+    assert result.selected == 2
+    assert len(result.rows) == 1
+    assert result.rows[0].uid == "DE136695976"
+    assert result.rows[0].amount_eur_int == 375
+    assert result.rows[0].invoice_numbers == ["RE-10", "GU-11"]

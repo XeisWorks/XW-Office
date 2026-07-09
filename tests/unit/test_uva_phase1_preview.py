@@ -267,6 +267,34 @@ def test_overlay_payment_date_includes_cash_basis_document() -> None:
     assert payload.kennzahlen.A029 == "100.00"
 
 
+class _UndatedPaidOverlayProvider:
+    def load_sales_documents(self, year: int, month: int) -> list[dict[str, object]]:
+        assert (year, month) == (2026, 3)
+        return [
+            {
+                "id": 202,
+                "invoiceNumber": "RE-UNDATED-PAID",
+                "status": "1000",
+                "taxText": "MIT 20% MEHRWERTSTEUER",
+                "sumGross": "120.00",
+                "sumNet": "100.00",
+                "sumTax": "20.00",
+            }
+        ]
+
+    def load_purchase_documents(self, year: int, month: int) -> list[dict[str, object]]:
+        assert (year, month) == (2026, 3)
+        return []
+
+
+def test_paid_like_document_without_any_date_is_not_included() -> None:
+    payload_service = UvaPayloadService(UvaPreviewService(_UndatedPaidOverlayProvider()))
+    payload = payload_service.build_payload(2026, 3)
+
+    assert payload.kennzahlen.A022 == "0.00"
+    assert any("zahlungsnachweis" in warning.lower() for warning in payload.warnings)
+
+
 class _LegacyTaxClassificationProvider:
     def load_sales_documents(self, year: int, month: int) -> list[dict[str, object]]:
         assert (year, month) == (2026, 3)

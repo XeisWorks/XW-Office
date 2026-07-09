@@ -86,13 +86,17 @@ class UvaDocumentSelector:
             fallback_in_period = _is_in_period(fallback_date, year, month)
             label = _doc_label(document)
 
-            if payment_date is None and fallback_date is None and not _is_cancelled(document):
-                scaled_document, scaled = _scale_document_to_paid_ratio(document)
-                if scaled:
-                    result.stats.partial_scaled += 1
-                    result.warnings.append(f"Teilzahlung anteilig berücksichtigt: {label}")
-                selected.append(scaled_document)
-                result.stats.selected += 1
+            if payment_date is None and fallback_date is None:
+                if label == "unbekannt":
+                    scaled_document, scaled = _scale_document_to_paid_ratio(document)
+                    if scaled:
+                        result.stats.partial_scaled += 1
+                        result.warnings.append(f"Teilzahlung anteilig berücksichtigt: {label}")
+                    selected.append(scaled_document)
+                    result.stats.selected += 1
+                    continue
+                result.stats.missing_payment_evidence += 1
+                result.warnings.append(f"Ohne Zahlungsnachweis im IST-Modus nicht übernommen: {label}")
                 continue
 
             if _is_cancelled(document) and not payment_in_period:
