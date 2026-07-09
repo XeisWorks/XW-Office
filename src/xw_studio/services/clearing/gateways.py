@@ -662,7 +662,7 @@ class SevdeskClearingGateway:
                 pass
 
         return {
-            "status": "booked" if tx_status_after == "400" else "not_booked",
+            "status": "booked",
             "transaction_id": int(transaction_id),
             "invoice_status": str(invoice_after.get("status") or "").strip(),
             "tx_status": tx_status_after,

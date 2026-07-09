@@ -199,6 +199,50 @@ def test_sevdesk_gateway_book_invoice_uses_v2_book_amount_payload() -> None:
     assert not any(path.endswith("/linkInvoice") for _method, path in calls)
 
 
+def test_sevdesk_gateway_confirms_paid_invoice_even_if_status_400_patch_does_not_stick() -> None:
+    calls: list[tuple[str, str]] = []
+    invoice_reads = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal invoice_reads
+        path = request.url.path
+        calls.append((request.method, path))
+        if request.method == "GET" and path.endswith("/Invoice/7"):
+            invoice_reads += 1
+            status = 200 if invoice_reads == 1 else 1000
+            return httpx.Response(200, json={"objects": {"id": 7, "status": status}})
+        if request.method == "GET" and path.endswith("/CheckAccountTransaction/99"):
+            return httpx.Response(
+                200,
+                json={"objects": {"id": 99, "status": 100, "checkAccount": {"id": 11}}},
+            )
+        if request.method == "GET" and path.endswith("/Tools/bookkeepingSystemVersion"):
+            return httpx.Response(200, json={"objects": {"version": "2.0"}})
+        if request.method == "PUT" and path.endswith("/Invoice/7/bookAmount"):
+            return httpx.Response(200, json={"objects": {}})
+        if request.method == "PUT" and path.endswith("/CheckAccountTransaction/99"):
+            return httpx.Response(200, json={"objects": {"id": 99, "status": 100}})
+        return httpx.Response(404, text=f"unexpected {request.method} {path}")
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://example.test/api/v1",
+    )
+    gateway = SevdeskClearingGateway(SevdeskConnection(client=client, config=AppConfig()))
+
+    result = gateway.book_invoice(
+        invoice_id=7,
+        amount=money("29.90"),
+        payment_date=datetime(2026, 7, 3, 8, 0, tzinfo=ZoneInfo("UTC")),
+        account_id=11,
+        transaction_id=99,
+    )
+
+    assert result["status"] == "booked"
+    assert result["tx_status"] == "100"
+    assert ("PUT", "/api/v1/CheckAccountTransaction/99") in calls
+
+
 def test_sevdesk_gateway_book_invoice_uses_legacy_link_invoice_patch_fallback() -> None:
     calls: list[tuple[str, str]] = []
     invoice_reads = 0
