@@ -221,7 +221,7 @@ class GraphMailClient:
         base_url = f"https://graph.microsoft.com/v1.0/{self._mailbox_segment}/mailFolders/inbox/messages"
         fallback_url = f"https://graph.microsoft.com/v1.0/{self._mailbox_segment}/messages"
         params = {
-            "$select": "id,subject,from,receivedDateTime,bodyPreview,body,conversationId",
+            "$select": "id,internetMessageId,subject,from,receivedDateTime,bodyPreview,body,conversationId,isRead,flag",
             "$orderby": "receivedDateTime desc",
             "$top": str(top),
             "$filter": f"receivedDateTime ge {cutoff}",
@@ -241,6 +241,118 @@ class GraphMailClient:
         payload = response.json()
         values = payload.get("value", []) if isinstance(payload, dict) else []
         return [item for item in values if isinstance(item, dict)]
+
+    def get_message_body(self, message_id: str) -> str:
+        message_id = str(message_id or "").strip()
+        if not message_id:
+            return ""
+        url = f"https://graph.microsoft.com/v1.0/{self._mailbox_segment}/messages/{message_id}"
+        params = {"$select": "body"}
+        response = requests.get(url, headers=self._auth_headers(), params=params, timeout=30)
+        self._raise_for_status(response)
+        payload = response.json() if response.content else {}
+        if not isinstance(payload, dict):
+            return ""
+        body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
+        content = str(body.get("content") or "").strip()
+        content_type = str(body.get("contentType") or "").strip()
+        if _looks_like_html(content, content_type):
+            return html_to_text(content)
+        return content
+
+    def list_pdf_attachments(self, message_id: str) -> list[dict[str, Any]]:
+        message_id = str(message_id or "").strip()
+        if not message_id:
+            return []
+        url = f"https://graph.microsoft.com/v1.0/{self._mailbox_segment}/messages/{message_id}/attachments"
+        params = {"$select": "id,name,contentType,size"}
+        response = requests.get(url, headers=self._auth_headers(), params=params, timeout=30)
+        self._raise_for_status(response)
+        payload = response.json() if response.content else {}
+        values = payload.get("value", []) if isinstance(payload, dict) else []
+        out: list[dict[str, Any]] = []
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            content_type = str(item.get("contentType") or "").lower()
+            name = str(item.get("name") or "")
+            if content_type == "application/pdf" or name.lower().endswith(".pdf"):
+                out.append(item)
+        return out
+
+    def download_attachment_bytes(self, message_id: str, attachment_id: str) -> bytes:
+        message_id = str(message_id or "").strip()
+        attachment_id = str(attachment_id or "").strip()
+        if not message_id or not attachment_id:
+            return b""
+        url = (
+            f"https://graph.microsoft.com/v1.0/{self._mailbox_segment}/messages/{message_id}"
+            f"/attachments/{attachment_id}/$value"
+        )
+        response = requests.get(url, headers=self._auth_headers(), timeout=30)
+        self._raise_for_status(response)
+        return bytes(response.content or b"")
+
+    def get_conversation_thread_text(self, conversation_id: str, *, days: int = 60, top: int = 50) -> str:
+        conversation_id = str(conversation_id or "").strip()
+        if not conversation_id:
+            return ""
+        cutoff = _utc_cutoff_iso(days)
+        url = f"https://graph.microsoft.com/v1.0/{self._mailbox_segment}/messages"
+        params = {
+            "$select": "subject,receivedDateTime,from,body,bodyPreview",
+            "$orderby": "receivedDateTime desc",
+            "$top": str(max(1, min(top, 100))),
+            "$filter": (
+                f"conversationId eq '{conversation_id}' and receivedDateTime ge {cutoff}"
+            ),
+        }
+        response = requests.get(url, headers=self._auth_headers(), params=params, timeout=30)
+        if response.status_code == 400:
+            params["$filter"] = f"conversationId eq '{conversation_id}'"
+            response = requests.get(url, headers=self._auth_headers(), params=params, timeout=30)
+        self._raise_for_status(response)
+        payload = response.json() if response.content else {}
+        values = payload.get("value", []) if isinstance(payload, dict) else []
+        parts: list[str] = []
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            from_obj = item.get("from") if isinstance(item.get("from"), dict) else {}
+            email_obj = (
+                from_obj.get("emailAddress") if isinstance(from_obj.get("emailAddress"), dict) else {}
+            )
+            sender = str(email_obj.get("address") or email_obj.get("name") or "").strip() or "Unbekannt"
+            subject = str(item.get("subject") or "").strip()
+            received = str(item.get("receivedDateTime") or "").strip()
+            body_obj = item.get("body") if isinstance(item.get("body"), dict) else {}
+            content = str(body_obj.get("content") or "").strip()
+            content_type = str(body_obj.get("contentType") or "").strip()
+            body_text = html_to_text(content) if _looks_like_html(content, content_type) else content
+            if not body_text:
+                body_text = str(item.get("bodyPreview") or "").strip()
+            header = f"[{received}] {sender} | {subject}".strip()
+            parts.append(f"{header}\n{body_text}".strip())
+        return "\n\n---\n\n".join(part for part in parts if part).strip()
+
+    def mark_message_followup_complete(self, message_id: str) -> None:
+        message_id = str(message_id or "").strip()
+        if not message_id:
+            raise RuntimeError("Message-ID fehlt")
+        now_utc = datetime.now(timezone.utc).replace(microsecond=0)
+        url = f"https://graph.microsoft.com/v1.0/{self._mailbox_segment}/messages/{message_id}"
+        payload = {
+            "flag": {
+                "flagStatus": "complete",
+                "completedDateTime": {
+                    "dateTime": now_utc.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "timeZone": "UTC",
+                },
+            },
+            "isRead": True,
+        }
+        response = requests.patch(url, headers=self._auth_headers(), json=payload, timeout=30)
+        self._raise_for_status(response)
 
     def send_mail(
         self,

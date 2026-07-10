@@ -2,6 +2,101 @@
 
 Stand: 2026-07-10
 
+## Review + Verbesserung der Skizze (umgesetzt)
+
+Die Skizze war fachlich bereits sehr gut. Fuer die tatsaechliche Umsetzung wurden nur gezielte Praezisierungen vorgenommen:
+
+1. Transfer-Button-Text wurde einheitlich auf `UEBERWEISUNG OFFEN` festgelegt (Singular plus Count), damit die Badge-Darstellung konsistent bleibt.
+2. Silent-Refresh bleibt strikt non-interaktiv: Ohne vorhandenes MSAL-Silent-Token wird immer Cache genutzt; kein Device-Flow aus Badge-Refresh.
+3. Outlook bleibt die fuehrende Done-Quelle: `Ueberweisung durchgefuehrt` markiert zuerst in Graph `flagStatus=complete`; nur bei Erfolg wird lokal als erledigt/auditiert gespeichert.
+4. Transfer-Postfach wurde als eigene Secret-Variable umgesetzt: `MS_GRAPH_TRANSFER_MAILBOX` (Default `transfer@xeisworks.at`).
+5. QR-Erzeugung ist deterministisch via `segno.helpers.make_epc_qr(...)`; OpenAI bleibt nur fuer Zusammenfassung/Extraktion-Fallback.
+
+## Umsetzungsstatus (autonom)
+
+### Phase 1 - Graph und Service-Grundlage
+
+Status: erledigt.
+
+Umgesetzt:
+
+- `GraphMailClient` erweitert um:
+  - `flag`/`internetMessageId` in Inbox-Listing
+  - `get_message_body(...)`
+  - `list_pdf_attachments(...)`
+  - `download_attachment_bytes(...)`
+  - `get_conversation_thread_text(...)`
+  - `mark_message_followup_complete(...)`
+- Neues Service-Paket `src/xw_studio/services/transfers/`:
+  - `models.py`
+  - `payment_qr.py`
+  - `service.py` (`OffeneUeberweisungenService`)
+- Persistenz-Keys fuer Transfers implementiert (`daily_business.open_transfers.*`) plus lokaler Fallback-State.
+
+### Phase 2 - Roter Button im Rechnungen-Untermenue
+
+Status: erledigt.
+
+Umgesetzt:
+
+- Toolbar-Button von Queue-Proxy auf echte Transfer-Funktion umgestellt.
+- Text auf `UEBERWEISUNG OFFEN` umgestellt.
+- Count kommt primaer aus `OffeneUeberweisungenService.refresh_count_from_graph_silent(...)`.
+- Fallback auf vorhandenen Daily-Business-Queue-Count bleibt aktiv.
+- Fester Abstand vor START (`addSpacing(18)`) eingefuegt.
+
+### Phase 3 - PySide6-Dialog ohne QR
+
+Status: erledigt (Basis + produktiv nutzbar).
+
+Umgesetzt:
+
+- Neuer Dialog `offene_ueberweisungen_dialog.py` mit:
+  - Fallliste links
+  - Metadaten/Thread/Summary rechts
+  - Buttons `Rechnung zeigen`, `Spaeter - Alarm bleibt`, `Ueberweisung durchgefuehrt`
+- `Ueberweisung durchgefuehrt` setzt Outlook-Flag via Graph und entfernt Fall erst danach aus offenem Bestand.
+- `Spaeter` erhoeht `defer_count`, setzt `deferred_at`, laesst Fall offen.
+
+### Phase 4 - Payment Extraction und Formular
+
+Status: erledigt (MVP mit Validierung und OpenAI-Fallback).
+
+Umgesetzt:
+
+- Formularfelder fuer Zahlungsdaten sind editierbar.
+- Extraktion aus PDF-Text, Mail/Thread und optional OpenAI-Fallback.
+- Manuelle Werte ueberschreiben erkannte Werte.
+- Feldquellen werden im Payment-Modell gepflegt.
+
+### Phase 5 - QR-Code-Dialog
+
+Status: erledigt.
+
+Umgesetzt:
+
+- `payment_qr_dialog.py` erstellt.
+- QR als PNG wird nach `state/generated/transfer_qr/` geschrieben.
+- Anzeige im Dialog inklusive Zahlungsdaten, `PNG oeffnen`, `Ordner oeffnen`.
+
+### Phase 6 - Politur, Migration, Betrieb
+
+Status: teilweise erledigt.
+
+Umgesetzt:
+
+- Legacy-`open_transfers_state.json` wird nicht importiert.
+- Neue Unit-Tests hinzugefuegt:
+  - `tests/unit/test_offene_ueberweisungen_service.py`
+  - `tests/unit/test_payment_qr.py`
+- Fokus-Tests laufen grün.
+
+Offen fuer Folgeiteration:
+
+- Erweiterte UI-Tests fuer Dialog/Toolbar.
+- Optional OCR/OpenCV-Paritaet wie im Legacy.
+- Detailliertere Audit-Ansichten im UI.
+
 ## Kurzfazit
 
 Die Legacy-Funktion ist nicht nur eine Liste, sondern ein Graph-Mail-Workflow fuer das dedizierte Postfach `transfer@xeisworks.at`, kombiniert mit PDF-Anhang-Analyse und EPC-SEPA-QR-Code-Erzeugung. In XW-Studio gibt es bereits vorbereitete UI-Stellen:

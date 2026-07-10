@@ -52,6 +52,10 @@ _URGENCY_RULES_KEY = "daily_business.urgency_rules"
 _FULFILLMENT_MAIL_TEMPLATE_KEY = "rechnungen.fulfillment_mail_template_html"
 _FULFILLMENT_MAIL_SUBJECT_KEY = "rechnungen.fulfillment_mail_subject"
 _CLICKUP_LIST_ID_KEY = "clickup.default_list_id"
+_TRANSFER_REQUIRED_SCOPES: tuple[str, ...] = (
+    "Mail.ReadWrite",
+    "Mail.ReadWrite.Shared",
+)
 _PLC_SECRET_KEYS: tuple[str, ...] = (
     "PLC_CLIENT_ID",
     "PLC_ORG_UNIT_ID",
@@ -82,6 +86,7 @@ _EXTRA_SECRET_KEYS: tuple[str, ...] = (
     "MS_GRAPH_CLIENT_ID",
     "MS_GRAPH_TENANT_ID",
     "MS_GRAPH_MAILBOX",
+    "MS_GRAPH_TRANSFER_MAILBOX",
     "FON_TEILNEHMER_ID",
     "FON_BENUTZER_ID",
     "FON_PIN",
@@ -254,6 +259,20 @@ class SettingsView(QWidget):
         clickup_form.addRow("", self._clickup_create_btn)
         grid.addWidget(gb_clickup, 1, 1)
 
+        gb_transfer_graph = QGroupBox("Transfer Graph Check (OFFENE UEBERWEISUNGEN)")
+        transfer_form = QFormLayout(gb_transfer_graph)
+        self._transfer_graph_mailbox = QLabel("—")
+        self._transfer_graph_scopes = QLabel("—")
+        self._transfer_graph_status = QLabel("—")
+        self._transfer_graph_status.setStyleSheet("color: #9e9e9e;")
+        btn_transfer_check = QPushButton("Check aktualisieren")
+        btn_transfer_check.clicked.connect(self._refresh_transfer_graph_check)
+        transfer_form.addRow("Mailbox:", self._transfer_graph_mailbox)
+        transfer_form.addRow("Mindest-Scopes:", self._transfer_graph_scopes)
+        transfer_form.addRow("Ampel:", self._transfer_graph_status)
+        transfer_form.addRow("", btn_transfer_check)
+        grid.addWidget(gb_transfer_graph, 2, 0)
+
         gb_secret_edit = QGroupBox("Token-Verwaltung (DB verschluesselt)")
         sec_edit = QFormLayout(gb_secret_edit)
         self._inp_sevdesk = QLineEdit(secret_service.get_secret("SEVDESK_API_TOKEN"))
@@ -282,7 +301,7 @@ class SettingsView(QWidget):
         btn_save_tokens = QPushButton("Tokens sicher speichern")
         btn_save_tokens.clicked.connect(self._save_tokens)
         sec_edit.addRow("", btn_save_tokens)
-        grid.addWidget(gb_secret_edit, 2, 0, 1, 2)
+        grid.addWidget(gb_secret_edit, 3, 0, 1, 2)
 
         gb_plc = QGroupBox("Post Label Center (Direkt-Webservice)")
         plc_form = QFormLayout(gb_plc)
@@ -340,12 +359,67 @@ class SettingsView(QWidget):
         plc_save = QPushButton("PLC-Konfiguration sicher speichern")
         plc_save.clicked.connect(self._save_plc_settings)
         plc_form.addRow("", plc_save)
-        grid.addWidget(gb_plc, 3, 0, 1, 2)
+        grid.addWidget(gb_plc, 4, 0, 1, 2)
+
+        self._refresh_transfer_graph_check()
 
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
-        grid.setRowStretch(4, 1)
+        grid.setRowStretch(5, 1)
         return panel
+
+    def _refresh_transfer_graph_check(self) -> None:
+        secret_service: SecretService = self._container.resolve(SecretService)
+        tenant_id = secret_service.get_secret("MS_GRAPH_TENANT_ID")
+        client_id = secret_service.get_secret("MS_GRAPH_CLIENT_ID")
+        transfer_mailbox = secret_service.get_secret("MS_GRAPH_TRANSFER_MAILBOX")
+        default_mailbox = secret_service.get_secret("MS_GRAPH_MAILBOX")
+
+        mailbox = str(transfer_mailbox or "").strip() or "transfer@xeisworks.at"
+        self._transfer_graph_mailbox.setText(mailbox)
+
+        configured_scopes = {
+            "Mail.Read",
+            "Mail.Read.Shared",
+            "Mail.ReadWrite",
+            "Mail.ReadWrite.Shared",
+            "Mail.Send",
+            "Mail.Send.Shared",
+        }
+        missing_scopes = [scope for scope in _TRANSFER_REQUIRED_SCOPES if scope not in configured_scopes]
+        if missing_scopes:
+            self._transfer_graph_scopes.setText(f"fehlt: {', '.join(missing_scopes)}")
+            self._transfer_graph_scopes.setStyleSheet(_ERR_STYLE)
+        else:
+            self._transfer_graph_scopes.setText("ok: Mail.ReadWrite, Mail.ReadWrite.Shared")
+            self._transfer_graph_scopes.setStyleSheet(_OK_STYLE)
+
+        missing_config = [
+            key
+            for key, value in (
+                ("MS_GRAPH_TENANT_ID", tenant_id),
+                ("MS_GRAPH_CLIENT_ID", client_id),
+            )
+            if not str(value or "").strip()
+        ]
+
+        if missing_config:
+            self._transfer_graph_status.setText(f"ROT - fehlend: {', '.join(missing_config)}")
+            self._transfer_graph_status.setStyleSheet(_ERR_STYLE)
+            return
+        if not transfer_mailbox and default_mailbox:
+            self._transfer_graph_status.setText(
+                "GELB - MS_GRAPH_TRANSFER_MAILBOX fehlt, Fallback auf Default-Mailbox aktiv"
+            )
+            self._transfer_graph_status.setStyleSheet(_WARN_STYLE)
+            return
+        if missing_scopes:
+            self._transfer_graph_status.setText("GELB - Scope-Konfiguration unvollstaendig")
+            self._transfer_graph_status.setStyleSheet(_WARN_STYLE)
+            return
+
+        self._transfer_graph_status.setText("GRUEN - Transfer Graph Startcheck ok")
+        self._transfer_graph_status.setStyleSheet(_OK_STYLE)
 
     def _json_box(self, key: str, placeholder: str, min_height: int) -> tuple[QGroupBox, QPlainTextEdit]:
         box = QGroupBox(key)

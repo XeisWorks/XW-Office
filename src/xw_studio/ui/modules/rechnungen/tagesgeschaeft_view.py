@@ -45,6 +45,7 @@ from xw_studio.services.inventory.service import (
 )
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
 from xw_studio.services.sendungen.service import OffeneSendungenService
+from xw_studio.services.transfers.service import OffeneUeberweisungenService
 from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
 from xw_studio.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 from xw_studio.ui.modules.rechnungen.reprint_dialog import ReprintPreviewDialog
@@ -444,7 +445,7 @@ class TagesgeschaeftView(QWidget):
         self._btn_sendungen_alert.hide()
         bar_lay.addWidget(self._btn_sendungen_alert)
 
-        self._btn_transfer_alert = self._build_alert_button("ÜBERWEISUNGEN")
+        self._btn_transfer_alert = self._build_alert_button("UEBERWEISUNG OFFEN")
         self._btn_transfer_alert.clicked.connect(self._on_transfer_alert_clicked)
         self._btn_transfer_alert.hide()
         bar_lay.addWidget(self._btn_transfer_alert)
@@ -454,6 +455,7 @@ class TagesgeschaeftView(QWidget):
         self._btn_mollie_alert.hide()
         bar_lay.addWidget(self._btn_mollie_alert)
 
+        bar_lay.addSpacing(18)
         bar_lay.addWidget(self._btn_start)
         bar_lay.addWidget(self._btn_stop)
 
@@ -518,7 +520,14 @@ class TagesgeschaeftView(QWidget):
                 self._sendungen_live_refresh_ts = now
             else:
                 counts["sendungen"] = max(0, int(sendungen_service.open_count()))
-            counts["transfer"] = max(0, int(counts.get("transfers", 0)))
+            transfer_service: OffeneUeberweisungenService = self._container.resolve(OffeneUeberweisungenService)
+            try:
+                counts["transfer"] = max(
+                    0,
+                    int(transfer_service.refresh_count_from_graph_silent(lookback_days=60, max_items=150)),
+                )
+            except Exception:  # noqa: BLE001
+                counts["transfer"] = max(0, int(counts.get("transfers", 0)))
             return counts
 
         self._badge_worker = BackgroundWorker(job)
@@ -539,7 +548,7 @@ class TagesgeschaeftView(QWidget):
         self._transfer_count = transfer_count
         self._mollie_count = mollie_count
         self._update_alert_button(self._btn_sendungen_alert, "OFFENE SENDUNGEN", sendungen_count)
-        self._update_alert_button(self._btn_transfer_alert, "ÜBERWEISUNGEN", transfer_count)
+        self._update_alert_button(self._btn_transfer_alert, "UEBERWEISUNG OFFEN", transfer_count)
         self._update_alert_button(self._btn_mollie_alert, "MOLLIE AUTH", mollie_count)
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.badge_updated.emit(ModuleKey.RECHNUNGEN.value, open_count)
@@ -563,12 +572,9 @@ class TagesgeschaeftView(QWidget):
         self._update_alert_button(self._btn_sendungen_alert, "OFFENE SENDUNGEN", self._sendungen_count)
 
     def _on_transfer_alert_clicked(self) -> None:
-        self._rechnungen_view.open_queue_dialog(
-            "transfers",
-            "OFFENE ÜBERWEISUNGEN",
-            fallback_count=self._transfer_count,
-        )
-        self._refresh_badges()
+        count = self._rechnungen_view.open_ueberweisungen_dialog()
+        self._transfer_count = max(0, int(count))
+        self._update_alert_button(self._btn_transfer_alert, "UEBERWEISUNG OFFEN", self._transfer_count)
 
     def _on_mollie_alert_clicked(self) -> None:
         self._rechnungen_view.open_queue_dialog(

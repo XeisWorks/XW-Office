@@ -17,6 +17,7 @@ from xw_studio.services.invoice_processing.service import InvoiceProcessingServi
 from xw_studio.services.products.print_decision import PrintDecisionEngine
 from xw_studio.services.secrets.service import SecretService
 from xw_studio.services.sendungen.service import OffeneSendungenService
+from xw_studio.services.transfers.service import OffeneUeberweisungenService
 from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
 from xw_studio.services.wix.client import WixOrdersClient
 from xw_studio.ui.main_window import MainWindow
@@ -180,6 +181,18 @@ class _FakeOffeneSendungenService:
         return self.open_count()
 
 
+class _FakeOffeneUeberweisungenService:
+    def __init__(self, count: int = 0) -> None:
+        self._count = count
+
+    def open_count(self) -> int:
+        return self._count
+
+    def refresh_count_from_graph_silent(self, *, lookback_days: int = 60, max_items: int = 150) -> int:
+        del lookback_days, max_items
+        return self._count
+
+
 def _build_rechnungen_test_container() -> tuple[Container, _FakeInvoiceProcessingService]:
     container = _build_container()
     invoice_service = _FakeInvoiceProcessingService()
@@ -189,6 +202,7 @@ def _build_rechnungen_test_container() -> tuple[Container, _FakeInvoiceProcessin
     container.register(PrintDecisionEngine, lambda _: _FakePrintDecisionEngine())
     container.register(DailyBusinessService, lambda _: _FakeDailyBusinessService())
     container.register(OffeneSendungenService, lambda _: _FakeOffeneSendungenService())
+    container.register(OffeneUeberweisungenService, lambda _: _FakeOffeneUeberweisungenService())
     return container, invoice_service
 
 
@@ -251,6 +265,39 @@ def test_tagesgeschaeft_alert_buttons_follow_counts(qtbot: object) -> None:
 
     assert view._btn_sendungen_alert.text() == "OFFENE SENDUNGEN (2)"  # noqa: SLF001
     assert not view._btn_sendungen_alert.isHidden()  # noqa: SLF001
+
+
+def test_tagesgeschaeft_transfer_button_label_and_spacing(qtbot: object) -> None:
+    container = _build_container()
+    view = TagesgeschaeftView(container)
+    qtbot.addWidget(view)
+
+    assert view._btn_transfer_alert.text() == "UEBERWEISUNG OFFEN"  # noqa: SLF001
+
+    bar_layout = view._btn_start.parentWidget().layout()  # noqa: SLF001
+    start_idx = -1
+    for idx in range(bar_layout.count()):
+        item = bar_layout.itemAt(idx)
+        if item.widget() is view._btn_start:
+            start_idx = idx
+            break
+    assert start_idx > 0
+    spacer_before_start = bar_layout.itemAt(start_idx - 1)
+    assert spacer_before_start.widget() is None
+    assert spacer_before_start.spacerItem() is not None
+
+
+def test_transfer_alert_click_updates_badge_from_dialog_result(qtbot: object, monkeypatch) -> None:
+    container = _build_container()
+    view = TagesgeschaeftView(container)
+    qtbot.addWidget(view)
+
+    monkeypatch.setattr(view._rechnungen_view, "open_ueberweisungen_dialog", lambda: 3)  # noqa: SLF001
+
+    view._on_transfer_alert_clicked()  # noqa: SLF001
+
+    assert view._btn_transfer_alert.text() == "UEBERWEISUNG OFFEN (3)"  # noqa: SLF001
+    assert not view._btn_transfer_alert.isHidden()  # noqa: SLF001
 
 
 def test_actions_delegate_exposes_mail_action() -> None:

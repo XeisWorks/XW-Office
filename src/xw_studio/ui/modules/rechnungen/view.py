@@ -77,6 +77,7 @@ from xw_studio.services.products.print_decision import PieceBlock, PrintDecision
 from xw_studio.services.secrets.service import SecretService
 from xw_studio.services.sendungen.service import OffeneSendungenService
 from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
+from xw_studio.ui.modules.rechnungen.offene_ueberweisungen_dialog import OffeneUeberweisungenDialog
 from xw_studio.services.sevdesk.refund_client import SevDeskRefundClient
 from xw_studio.services.wix.client import WixOrdersClient
 from xw_studio.ui.modules.rechnungen.offene_sendungen_dialog import OffeneSendungenDialog
@@ -1191,6 +1192,11 @@ class RechnungenView(QWidget):
         count = dlg.open_count()
         self.update_sendungen_alert_count(count)
         return count
+
+    def open_ueberweisungen_dialog(self) -> int:
+        dlg = OffeneUeberweisungenDialog(self._container, self)
+        dlg.exec()
+        return dlg.open_count()
 
     def open_queue_dialog(self, queue_name: str, title: str, fallback_count: int = 0) -> None:
         from xw_studio.ui.modules.rechnungen.tagesgeschaeft_view import QueuePopupDialog

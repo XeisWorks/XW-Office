@@ -43,6 +43,7 @@ from xw_studio.services.inventory.service import InventoryService
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
 from xw_studio.services.draft_invoice.service import DraftInvoiceService
 from xw_studio.services.sendungen.service import OffeneSendungenService
+from xw_studio.services.transfers.service import OffeneUeberweisungenService
 from xw_studio.services.layout.service import LayoutToolsService
 from xw_studio.services.mailing.service import MailDeliveryService
 from xw_studio.services.printing.print_queue import PrintQueueService
@@ -166,6 +167,13 @@ def register_default_services(container: Container) -> None:
     container.register(
         OffeneSendungenService,
         lambda c: OffeneSendungenService(
+            c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
+            c.resolve(SecretService),
+        ),
+    )
+    container.register(
+        OffeneUeberweisungenService,
+        lambda c: OffeneUeberweisungenService(
             c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
             c.resolve(SecretService),
         ),
