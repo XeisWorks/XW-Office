@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import io
 import json
 import logging
 from pathlib import Path
@@ -36,7 +37,10 @@ logger = logging.getLogger(__name__)
 _AMOUNT_RE = re.compile(r"(?<!\d)(\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|\d+(?:[.,]\d{2}))(?!\d)")
 _IBAN_RE = re.compile(r"\b[A-Z]{2}[0-9]{2}[A-Z0-9 ]{10,40}\b")
 _BIC_RE = re.compile(r"\b[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b")
-_INVOICE_RE = re.compile(r"\b(?:RE|RG|INV)[-\s]?[A-Z0-9]{3,}\b", re.IGNORECASE)
+_INVOICE_RE = re.compile(
+    r"\b(?:RE|RG|INV)(?:[-\s]*\d[A-Z0-9-]{2,}|[-\s]+[A-Z0-9-]{2,}\d[A-Z0-9-]*)\b",
+    re.IGNORECASE,
+)
 
 
 class PaymentQrError(RuntimeError):
@@ -129,7 +133,7 @@ def _extract_pdf_text(pdf_bytes: bytes) -> str:
         return ""
     parts: list[str] = []
     try:
-        reader = PdfReader(pdf_bytes)
+        reader = PdfReader(io.BytesIO(pdf_bytes))
         for page in reader.pages[:3]:
             content = page.extract_text() or ""
             if content.strip():
@@ -303,28 +307,33 @@ def extract_payment_data_from_sources(
         result = _merge_payment(result, thread_extracted)
 
     if use_openai_fallback and openai_api_key and (not result.iban or result.amount is None):
-        ai_payload = _openai_fallback(
-            api_key=openai_api_key,
-            context_text=f"MAIL\n{mail_text}\n\nTHREAD\n{thread_text}\n\nPDF\n{pdf_text}",
-        )
-        ai_amount = _parse_amount(str(ai_payload.get("amount") or ""))
-        ai_payment = TransferPaymentData(
-            recipient=str(ai_payload.get("recipient") or "").strip(),
-            iban=str(ai_payload.get("iban") or "").strip(),
-            bic=str(ai_payload.get("bic") or "").strip(),
-            amount=ai_amount,
-            remittance_text=str(ai_payload.get("remittance_text") or "").strip(),
-            invoice_number=str(ai_payload.get("invoice_number") or "").strip(),
-            source_by_field={
-                "recipient": TransferFieldSource.OPENAI,
-                "iban": TransferFieldSource.OPENAI,
-                "bic": TransferFieldSource.OPENAI,
-                "amount": TransferFieldSource.OPENAI,
-                "remittance_text": TransferFieldSource.OPENAI,
-                "invoice_number": TransferFieldSource.OPENAI,
-            },
-        )
-        result = _merge_payment(result, ai_payment)
+        try:
+            ai_payload = _openai_fallback(
+                api_key=openai_api_key,
+                context_text=f"MAIL\n{mail_text}\n\nTHREAD\n{thread_text}\n\nPDF\n{pdf_text}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("OpenAI payment extraction fallback failed: %s", exc)
+            ai_payload = {}
+        if ai_payload:
+            ai_amount = _parse_amount(str(ai_payload.get("amount") or ""))
+            ai_payment = TransferPaymentData(
+                recipient=str(ai_payload.get("recipient") or "").strip(),
+                iban=str(ai_payload.get("iban") or "").strip(),
+                bic=str(ai_payload.get("bic") or "").strip(),
+                amount=ai_amount,
+                remittance_text=str(ai_payload.get("remittance_text") or "").strip(),
+                invoice_number=str(ai_payload.get("invoice_number") or "").strip(),
+                source_by_field={
+                    "recipient": TransferFieldSource.OPENAI,
+                    "iban": TransferFieldSource.OPENAI,
+                    "bic": TransferFieldSource.OPENAI,
+                    "amount": TransferFieldSource.OPENAI,
+                    "remittance_text": TransferFieldSource.OPENAI,
+                    "invoice_number": TransferFieldSource.OPENAI,
+                },
+            )
+            result = _merge_payment(result, ai_payment)
 
     if result.remittance_text == "" and result.invoice_number:
         result.remittance_text = result.invoice_number

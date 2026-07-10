@@ -75,3 +75,43 @@ def test_extract_prefers_existing_epc_qr(monkeypatch) -> None:
     assert payment.amount == Decimal("123.45")
     assert payment.remittance_text == "RE-2026-0042"
     assert payment.source_by_field["iban"].value == "pdf_existing_qr"
+
+
+def test_extract_wraps_pdf_bytes_for_pypdf(monkeypatch) -> None:
+    seen: dict[str, bool] = {}
+
+    class Reader:
+        def __init__(self, source) -> None:
+            seen["seekable"] = hasattr(source, "seek")
+            self.pages = []
+
+    monkeypatch.setattr("xw_studio.services.transfers.payment_qr.PdfReader", Reader)
+
+    extract_payment_data_from_sources(pdf_bytes=b"%PDF", use_openai_fallback=False)
+
+    assert seen["seekable"] is True
+
+
+def test_extract_ignores_openai_fallback_failure(monkeypatch) -> None:
+    def fail_openai(**_kwargs):
+        raise RuntimeError("401 Unauthorized")
+
+    monkeypatch.setattr("xw_studio.services.transfers.payment_qr._openai_fallback", fail_openai)
+
+    payment = extract_payment_data_from_sources(
+        mail_text="Bitte RE-123 bezahlen.",
+        use_openai_fallback=True,
+        openai_api_key="invalid",
+    )
+
+    assert isinstance(payment, TransferPaymentData)
+    assert payment.invoice_number == "RE-123"
+
+
+def test_extract_does_not_treat_rechnung_as_invoice_number() -> None:
+    payment = extract_payment_data_from_sources(
+        mail_text="Anbei sende ich dir die Rechnung fuer Juni 2026.",
+        use_openai_fallback=False,
+    )
+
+    assert payment.invoice_number == ""
