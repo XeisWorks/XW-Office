@@ -467,29 +467,6 @@ class PlcLabelPrintDialog(QDialog):
             if archive_path is not None:
                 self._handle_duplicate_archived_label(shipment, archive_path)
                 return
-                answer = QMessageBox.question(
-                    self,
-                    "PLC-Label erneut drucken",
-                    "Diese PLC-Sendung wurde bereits erstellt.\n\n"
-                    "Das archivierte Original-PDF kann ohne neue PLC-Sendung erneut an den "
-                    "Etikettendrucker gesendet werden.\n\n"
-                    f"Archiv: {archive_path}",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.Yes,
-                )
-                if answer == QMessageBox.StandardButton.Yes:
-                    try:
-                        job_id = self._queue_webservice_label(archive_path, shipment.reference)
-                        service: PlcShipmentService = self._container.resolve(PlcShipmentService)
-                        service.mark_print_queued(shipment, job_id)
-                    except Exception as reprint_exc:  # noqa: BLE001 - recovery error is shown to the user.
-                        self._status.setText("Archivlabel konnte nicht eingereiht werden")
-                        QMessageBox.critical(self, "PLC-Label", str(reprint_exc))
-                        return
-                    self._status.setText(f"Archivlabel erneut eingereiht: {job_id[:8]}…")
-                    QMessageBox.information(self, "PLC-Label", "Das archivierte Original-PDF wurde erneut eingereiht.")
-                    self.accept()
-                return
 
             self._status.setText("PLC-Sendung besteht bereits; kein lokales Archiv-PDF vorhanden")
             QMessageBox.warning(
@@ -514,11 +491,11 @@ class PlcLabelPrintDialog(QDialog):
         box.setIcon(QMessageBox.Icon.Question)
         box.setText("PLC-Label bereits gedruckt.")
         box.setInformativeText(
-            "Label als PDF öffnen oder ein weiteres Label für diese Rechnung erzeugen?\n\n"
+            "Archiviertes Label öffnen oder neues Label mit Suffix -2 erstellen?\n\n"
             f"Archiv: {archive_path}"
         )
-        open_btn = box.addButton("PDF öffnen", QMessageBox.ButtonRole.AcceptRole)
-        additional_btn = box.addButton("Weiteres Label erzeugen", QMessageBox.ButtonRole.ActionRole)
+        open_btn = box.addButton("Archiv-PDF öffnen", QMessageBox.ButtonRole.AcceptRole)
+        additional_btn = box.addButton("Neues Label erstellen", QMessageBox.ButtonRole.ActionRole)
         box.addButton("Abbrechen", QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(open_btn)
         box.exec()
@@ -538,7 +515,7 @@ class PlcLabelPrintDialog(QDialog):
 
     def _next_additional_shipment(self, shipment: PlcShipmentDraft) -> PlcShipmentDraft:
         for index in range(2, 100):
-            suffix = f"L{index}"
+            suffix = str(index)
             reference = self._append_reference_suffix(shipment.reference, suffix)
             invoice_number = self._append_reference_suffix(shipment.invoice_number, suffix)
             parcels = tuple(
@@ -553,11 +530,15 @@ class PlcLabelPrintDialog(QDialog):
             )
             if self._label_archive.find(candidate) is None:
                 return candidate
-        raise RuntimeError("Kein freier PLC-Label-Suffix zwischen L2 und L99 gefunden.")
+        raise RuntimeError("Kein freier PLC-Label-Suffix zwischen -2 und -99 gefunden.")
 
     @staticmethod
     def _append_reference_suffix(value: object, suffix: str) -> str:
-        base = re.sub(r"-L\d+$", "", clean_reference(value)).strip(" -")
+        cleaned = clean_reference(value)
+        match = re.search(r"-(\d{1,2})$", cleaned)
+        if match and 2 <= int(match.group(1)) <= 99:
+            cleaned = cleaned[:match.start()]
+        base = cleaned.strip(" -")
         next_value = f"{base}-{suffix}" if base else suffix
         return clean_reference(next_value)
 

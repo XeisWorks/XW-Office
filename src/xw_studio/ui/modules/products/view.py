@@ -8,10 +8,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
+from PySide6.QtCore import QEvent, QSize, Qt
+from PySide6.QtGui import QColor, QIcon, QImage, QMouseEvent, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QComboBox,
     QGroupBox,
     QHBoxLayout,
@@ -22,8 +21,9 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
-    QTableWidget,
-    QTableWidgetItem,
+    QStyledItemDelegate,
+    QStyle,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
@@ -37,6 +37,7 @@ from xw_studio.services.sevdesk.part_client import PartClient, SevdeskPart
 from xw_studio.services.wix.client import WixProduct, WixProductsClient
 from xw_studio.ui.modules.products.bulk_field_dialog import BulkFieldEditorDialog
 from xw_studio.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
+from xw_studio.ui.widgets.data_table import DataTable
 from xw_studio.ui.widgets.search_bar import SearchBar
 
 if TYPE_CHECKING:
@@ -60,6 +61,246 @@ _SYNC_HEADERS = [
 ]
 
 _ICONS_DIR = Path(__file__).resolve().parents[5] / "icons"
+
+
+class _SyncPresenceDelegate(QStyledItemDelegate):
+    """Paint compact per-system presence icons for the sync table."""
+
+    _ICON_FILES = {
+        "local": "cloud.png",
+        "wix": "wix.png",
+        "sevdesk": "sevdesk.png",
+    }
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._cache: dict[str, QPixmap] = {}
+        self._tinted_cache: dict[str, QPixmap] = {}
+
+    def _icon_for_key(self, key: str) -> QPixmap | None:
+        if key in self._cache:
+            pix = self._cache[key]
+            return pix if not pix.isNull() else None
+        file_name = self._ICON_FILES.get(key)
+        if not file_name:
+            self._cache[key] = QPixmap()
+            return None
+        pix = QPixmap(str(_ICONS_DIR / file_name))
+        self._cache[key] = pix
+        return pix if not pix.isNull() else None
+
+    def _tinted_icon(self, key: str, color: QColor, size: int) -> QPixmap | None:
+        cache_key = f"{key}:{color.name()}:{size}"
+        if cache_key in self._tinted_cache:
+            pix = self._tinted_cache[cache_key]
+            return pix if not pix.isNull() else None
+        source = self._icon_for_key(key)
+        if source is None:
+            self._tinted_cache[cache_key] = QPixmap()
+            return None
+        scaled = source.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        image = QImage(scaled.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        painter.drawPixmap(0, 0, scaled)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(image.rect(), color)
+        painter.end()
+        tinted = QPixmap.fromImage(image)
+        self._tinted_cache[cache_key] = tinted
+        return tinted if not tinted.isNull() else None
+
+    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+        row_data = index.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(row_data, dict):
+            super().paint(painter, option, index)
+            return
+        icons = row_data.get("__icons__Status")
+        if not isinstance(icons, list) or not icons:
+            super().paint(painter, option, index)
+            return
+
+        if option.state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(option.rect, option.palette.highlight())
+        elif option.state & QStyle.StateFlag.State_MouseOver:
+            painter.fillRect(option.rect, option.palette.alternateBase())
+
+        painter.save()
+        size = min(18, max(14, option.rect.height() - 6))
+        gap = 6
+        total_width = len(icons) * size + max(0, len(icons) - 1) * gap
+        x = option.rect.x() + max(4, (option.rect.width() - total_width) // 2)
+        y = option.rect.y() + max(2, (option.rect.height() - size) // 2)
+        for key, present in icons:
+            color = QColor("#16a34a") if present else QColor("#dc2626")
+            target = option.rect.adjusted(0, 0, 0, 0)
+            target.setX(x)
+            target.setY(y)
+            target.setWidth(size)
+            target.setHeight(size)
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawEllipse(target)
+            painter.restore()
+            pix = self._tinted_icon(str(key), QColor("white"), max(8, size - 7))
+            if pix is not None:
+                painter.drawPixmap(x + (size - pix.width()) // 2, y + (size - pix.height()) // 2, pix)
+            x += size + gap
+        painter.restore()
+
+    def sizeHint(self, option, index):  # type: ignore[override]
+        base = super().sizeHint(option, index)
+        if base.height() < 22:
+            base.setHeight(22)
+        return base
+
+
+class _SyncConflictDelegate(QStyledItemDelegate):
+    """Paint conflict icons without embedding QWidget instances per row."""
+
+    _ICON_FILES = {
+        "price": "priceNotSynced.png",
+        "stock": "cloud.png",
+    }
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._cache: dict[str, QPixmap] = {}
+        self._tinted_cache: dict[str, QPixmap] = {}
+
+    def _icon_for_key(self, key: str) -> QPixmap | None:
+        if key in self._cache:
+            pix = self._cache[key]
+            return pix if not pix.isNull() else None
+        file_name = self._ICON_FILES.get(key)
+        if not file_name:
+            self._cache[key] = QPixmap()
+            return None
+        pix = QPixmap(str(_ICONS_DIR / file_name))
+        self._cache[key] = pix
+        return pix if not pix.isNull() else None
+
+    def _tinted_icon(self, key: str, size: int) -> QPixmap | None:
+        cache_key = f"{key}:{size}"
+        if cache_key in self._tinted_cache:
+            pix = self._tinted_cache[cache_key]
+            return pix if not pix.isNull() else None
+        source = self._icon_for_key(key)
+        if source is None:
+            self._tinted_cache[cache_key] = QPixmap()
+            return None
+        scaled = source.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        image = QImage(scaled.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        painter.drawPixmap(0, 0, scaled)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(image.rect(), QColor("white"))
+        painter.end()
+        tinted = QPixmap.fromImage(image)
+        self._tinted_cache[cache_key] = tinted
+        return tinted if not tinted.isNull() else None
+
+    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+        row_data = index.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(row_data, dict):
+            super().paint(painter, option, index)
+            return
+        icons = row_data.get("__icons__Konflikt")
+        if not isinstance(icons, list) or not icons:
+            super().paint(painter, option, index)
+            return
+
+        if option.state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(option.rect, option.palette.highlight())
+        elif option.state & QStyle.StateFlag.State_MouseOver:
+            painter.fillRect(option.rect, option.palette.alternateBase())
+
+        painter.save()
+        size = min(18, max(14, option.rect.height() - 6))
+        gap = 6
+        total_width = len(icons) * size + max(0, len(icons) - 1) * gap
+        x = option.rect.x() + max(4, (option.rect.width() - total_width) // 2)
+        y = option.rect.y() + max(2, (option.rect.height() - size) // 2)
+        for key in icons:
+            target = option.rect.adjusted(0, 0, 0, 0)
+            target.setX(x)
+            target.setY(y)
+            target.setWidth(size)
+            target.setHeight(size)
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#f59e0b"))
+            painter.drawEllipse(target)
+            painter.restore()
+            pix = self._tinted_icon(str(key), max(8, size - 7))
+            if pix is not None:
+                painter.drawPixmap(x + (size - pix.width()) // 2, y + (size - pix.height()) // 2, pix)
+            x += size + gap
+        painter.restore()
+
+    def sizeHint(self, option, index):  # type: ignore[override]
+        base = super().sizeHint(option, index)
+        if base.height() < 22:
+            base.setHeight(22)
+        return base
+
+
+class _SyncActionDelegate(QStyledItemDelegate):
+    """Render a compact sevDesk-create action in the sync table."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._icon = QIcon(str(_ICONS_DIR / "createInSevdesk.png"))
+
+    @staticmethod
+    def _button_geometry(width: int, height: int) -> tuple[int, int, int, int]:
+        button_width = min(28, max(22, width - 10))
+        button_height = min(24, max(18, height - 6))
+        x = max(4, (width - button_width) // 2)
+        y = max(2, (height - button_height) // 2)
+        return x, y, button_width, button_height
+
+    @classmethod
+    def hit_action(cls, *, local_x: float, local_y: float, width: int, height: int) -> bool:
+        x, y, button_width, button_height = cls._button_geometry(width, height)
+        return x <= int(local_x) <= x + button_width and y <= int(local_y) <= y + button_height
+
+    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+        row_data = index.data(Qt.ItemDataRole.UserRole)
+        enabled = isinstance(row_data, dict) and bool(row_data.get("__action_enabled__Aktion"))
+        if not enabled:
+            super().paint(painter, option, index)
+            return
+
+        if option.state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(option.rect, option.palette.highlight())
+        elif option.state & QStyle.StateFlag.State_MouseOver:
+            painter.fillRect(option.rect, option.palette.alternateBase())
+
+        painter.save()
+        x, y, button_width, button_height = self._button_geometry(option.rect.width(), option.rect.height())
+        button_rect = option.rect.adjusted(0, 0, 0, 0)
+        button_rect.setX(option.rect.x() + x)
+        button_rect.setY(option.rect.y() + y)
+        button_rect.setWidth(button_width)
+        button_rect.setHeight(button_height)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QColor("#cbd5e1"))
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawRoundedRect(button_rect, 6, 6)
+        icon_rect = button_rect.adjusted(5, 3, -5, -3)
+        self._icon.paint(painter, icon_rect, Qt.AlignmentFlag.AlignCenter)
+        painter.restore()
+
+    def sizeHint(self, option, index):  # type: ignore[override]
+        base = super().sizeHint(option, index)
+        if base.height() < 24:
+            base.setHeight(24)
+        return base
 
 
 @dataclass(frozen=True)
@@ -99,6 +340,9 @@ class ProductsView(QWidget):
         self._save_worker: BackgroundWorker | None = None
         self._sync_filter_text: str = ""
         self._sync_filter_status: str = ""
+        self._sync_status_delegate = _SyncPresenceDelegate(self)
+        self._sync_conflict_delegate = _SyncConflictDelegate(self)
+        self._sync_action_delegate = _SyncActionDelegate(self)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -149,13 +393,10 @@ class ProductsView(QWidget):
         cat_row.addWidget(self._inv_category_combo, stretch=1)
         lay.addLayout(cat_row)
 
-        self._inv_table = QTableWidget(0, len(_INV_HEADERS))
-        self._inv_table.setHorizontalHeaderLabels(_INV_HEADERS)
+        self._inv_table = DataTable(_INV_HEADERS)
         self._inv_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._inv_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self._inv_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._inv_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._inv_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._inv_table.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)
         self._inv_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         lay.addWidget(self._inv_table)
 
@@ -199,26 +440,23 @@ class ProductsView(QWidget):
         logger.exception("ProductsView inv load failed: %s", exc)
 
     def _populate_inv(self, rows: list[ProductRow]) -> None:
-        tbl = self._inv_table
-        tbl.setRowCount(0)
-        for prod in rows:
-            r = tbl.rowCount()
-            tbl.insertRow(r)
-            tbl.setItem(r, 0, QTableWidgetItem(prod.sku))
-            tbl.setItem(r, 1, QTableWidgetItem(prod.name))
-            tbl.setItem(r, 2, QTableWidgetItem(prod.category))
-            tbl.setItem(r, 3, QTableWidgetItem(prod.brand_name))
-            stock_item = QTableWidgetItem(str(prod.on_hand))
-            stock_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            tbl.setItem(r, 4, stock_item)
-            price_item = QTableWidgetItem(prod.price_eur)
-            price_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            tbl.setItem(r, 5, price_item)
-            tbl.setItem(r, 6, QTableWidgetItem(prod.wix_id))
-            tbl.setItem(r, 7, QTableWidgetItem(prod.sevdesk_id))
-        tbl.resizeColumnToContents(0)
-        for col in (3, 4, 5, 6, 7):
-            tbl.resizeColumnToContents(col)
+        self._inv_table.set_data(
+            [
+                {
+                    "SKU": prod.sku,
+                    "Name": prod.name,
+                    "Kategorie": prod.category,
+                    "Brand": prod.brand_name,
+                    "Bestand": str(prod.on_hand),
+                    "Preis EUR": prod.price_eur,
+                    "Wix-ID": prod.wix_id,
+                    "sevDesk-ID": prod.sevdesk_id,
+                    "__align__Bestand": "center",
+                    "__align__Preis EUR": "right",
+                }
+                for prod in rows
+            ]
+        )
 
     def _apply_inv_filter(self, text: str) -> None:
         self._inv_filter_text = text.lower()
@@ -293,12 +531,9 @@ class ProductsView(QWidget):
         self._wix_search.set_suggestion_provider(self._wix_search_suggestions)
         lay.addWidget(self._wix_search)
 
-        self._wix_table = QTableWidget(0, len(_WIX_HEADERS))
-        self._wix_table.setHorizontalHeaderLabels(_WIX_HEADERS)
+        self._wix_table = DataTable(_WIX_HEADERS)
         self._wix_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self._wix_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._wix_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._wix_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._wix_table.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)
         self._wix_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         lay.addWidget(self._wix_table, stretch=2)
 
@@ -351,34 +586,27 @@ class ProductsView(QWidget):
 
 
     def _populate_wix(self, rows: list[WixProduct]) -> None:
-        tbl = self._wix_table
-        tbl.setRowCount(0)
         inv_skus = {p.sku for p in self._all_rows if p.sku}
+        payload: list[dict[str, object]] = []
         for prod in rows:
-            r = tbl.rowCount()
-            tbl.insertRow(r)
-            tbl.setItem(r, 0, QTableWidgetItem(prod.sku))
-            tbl.setItem(r, 1, QTableWidgetItem(prod.name))
-            tbl.setItem(r, 2, QTableWidgetItem(prod.brand_name))
-            price_item = QTableWidgetItem(prod.price)
-            price_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            tbl.setItem(r, 3, price_item)
-            vis_item = QTableWidgetItem("ja" if prod.visible else "nein")
-            vis_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            tbl.setItem(r, 4, vis_item)
-            qty_item = QTableWidgetItem(str(prod.inventory_quantity))
-            qty_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            tbl.setItem(r, 5, qty_item)
-            tbl.setItem(r, 6, QTableWidgetItem(prod.id))
-            # Status: matched in local DB?
             matched = prod.sku in inv_skus if prod.sku else False
-            status_item = QTableWidgetItem("verknuepft" if matched else "nur Wix")
-            status_item.setForeground(
-                Qt.GlobalColor.green if matched else Qt.GlobalColor.yellow
+            payload.append(
+                {
+                    "SKU": prod.sku,
+                    "Name": prod.name,
+                    "Brand": prod.brand_name,
+                    "Preis": prod.price,
+                    "Sichtbar": "ja" if prod.visible else "nein",
+                    "Bestand": str(prod.inventory_quantity),
+                    "Wix-ID": prod.id,
+                    "Status": "verknuepft" if matched else "nur Wix",
+                    "__align__Preis": "right",
+                    "__align__Sichtbar": "center",
+                    "__align__Bestand": "center",
+                    "__fg__Status": "green" if matched else "yellow",
+                }
             )
-            tbl.setItem(r, 7, status_item)
-        for col in (0, 2, 4, 5, 7):
-            tbl.resizeColumnToContents(col)
+        self._wix_table.set_data(payload)
 
     def _apply_wix_filter(self, text: str) -> None:
         needle = text.lower()
@@ -487,8 +715,7 @@ class ProductsView(QWidget):
         filter_row.addWidget(self._sync_status_combo)
         lay.addLayout(filter_row)
 
-        self._sync_table = QTableWidget(0, len(_SYNC_HEADERS))
-        self._sync_table.setHorizontalHeaderLabels(_SYNC_HEADERS)
+        self._sync_table = DataTable(_SYNC_HEADERS)
         self._sync_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self._sync_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._sync_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
@@ -501,18 +728,11 @@ class ProductsView(QWidget):
         self._sync_table.setColumnWidth(5, 92)
         self._sync_table.setColumnWidth(6, 76)
         self._sync_table.setColumnWidth(9, 44)
-        for index, tooltip in {
-            2: "Systemstatus: lokal, Wix, sevDesk",
-            3: "Konflikte bei Preis oder Bestand",
-            5: "Preis im Format € 0,00",
-            9: "Aktion fuer nur-Wix-Produkte",
-        }.items():
-            header_item = self._sync_table.horizontalHeaderItem(index)
-            if header_item is not None:
-                header_item.setToolTip(tooltip)
-        self._sync_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._sync_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._sync_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._sync_table.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)
+        self._sync_table.setItemDelegateForColumn(2, self._sync_status_delegate)
+        self._sync_table.setItemDelegateForColumn(3, self._sync_conflict_delegate)
+        self._sync_table.setItemDelegateForColumn(9, self._sync_action_delegate)
+        self._sync_table.viewport().installEventFilter(self)
         lay.addWidget(self._sync_table, stretch=1)
 
         tip = QLabel(
@@ -690,95 +910,69 @@ class ProductsView(QWidget):
         return rows
 
     def _populate_sync_table(self, rows: list[_SyncRow]) -> None:
-        tbl = self._sync_table
-        tbl.setRowCount(0)
+        payload: list[dict[str, object]] = []
         for row in rows:
-            r = tbl.rowCount()
-            tbl.insertRow(r)
-            tbl.setItem(r, 0, QTableWidgetItem(row.sku))
-            tbl.setItem(r, 1, QTableWidgetItem(row.name))
-            tbl.setItem(r, 2, QTableWidgetItem(""))
-            tbl.setCellWidget(r, 2, self._build_status_icons_widget(row))
-            tbl.setItem(r, 3, QTableWidgetItem(""))
-            tbl.setCellWidget(r, 3, self._build_conflict_icons_widget(row))
-            tbl.setItem(r, 4, QTableWidgetItem(row.local_brand or row.wix_brand))
-            price_item = QTableWidgetItem(self._format_eur(row.local_price or row.wix_price or row.sevdesk_price))
-            price_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            tbl.setItem(r, 5, price_item)
             stock_value = row.local_stock if row.local_present else (row.wix_stock if row.wix_stock is not None else row.sevdesk_stock)
-            stock_item = QTableWidgetItem("" if stock_value is None else str(stock_value))
-            stock_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            tbl.setItem(r, 6, stock_item)
-            tbl.setItem(r, 7, QTableWidgetItem(row.wix_id))
-            tbl.setItem(r, 8, QTableWidgetItem(row.sevdesk_id))
-            if row.can_create_sevdesk:
-                btn = QPushButton("")
-                btn.setIcon(QIcon(str(_ICONS_DIR / "createInSevdesk.png")))
-                btn.setIconSize(QSize(18, 18))
-                btn.setFixedSize(28, 24)
-                btn.setToolTip("In sevDesk anlegen")
-                btn.setFlat(True)
-                btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                btn.clicked.connect(lambda _checked=False, sku=row.sku: self._create_selected_wix_product_in_sevdesk(sku))
-                tbl.setCellWidget(r, 9, btn)
-            else:
-                tbl.setItem(r, 9, QTableWidgetItem(""))
-        for col in (2, 3, 4, 5, 6, 7, 8, 9):
-            tbl.resizeColumnToContents(col)
-
-    def _build_status_icons_widget(self, row: _SyncRow) -> QWidget:
-        widget = QWidget(self._sync_table)
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(6)
-        layout.addWidget(self._icon_label("cloud.png", QColor("#16a34a") if row.local_present else QColor("#dc2626"), tooltip="Lokal DB"))
-        layout.addWidget(self._icon_label("wix.png", QColor("#16a34a") if row.wix_present else QColor("#dc2626"), tooltip="Wix"))
-        layout.addWidget(self._icon_label("sevdesk.png", QColor("#16a34a") if row.sevdesk_present else QColor("#dc2626"), tooltip="sevDesk"))
-        layout.addStretch(1)
-        return widget
-
-    def _build_conflict_icons_widget(self, row: _SyncRow) -> QWidget:
-        widget = QWidget(self._sync_table)
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(6)
-        for file_name, tooltip in self._conflict_icon_specs(row):
-            layout.addWidget(self._icon_label(file_name, QColor("#f59e0b"), tooltip=tooltip))
-        layout.addStretch(1)
-        return widget
+            conflict_specs = self._conflict_icon_specs(row)
+            payload.append(
+                {
+                    "SKU": row.sku,
+                    "Name": row.name,
+                    "Status": self._sync_presence_sort_key(row),
+                    "Konflikt": "|".join(key for key, _tooltip in conflict_specs),
+                    "Brand": row.local_brand or row.wix_brand,
+                    "Preis": self._format_eur(row.local_price or row.wix_price or row.sevdesk_price),
+                    "Bestand": "" if stock_value is None else str(stock_value),
+                    "Wix-ID": row.wix_id,
+                    "sevDesk-ID": row.sevdesk_id,
+                    "Aktion": row.sku if row.can_create_sevdesk else "",
+                    "__align__Preis": "right",
+                    "__align__Bestand": "center",
+                    "__tooltip__Status": self._sync_presence_tooltip(row),
+                    "__tooltip__Konflikt": self._sync_conflict_tooltip(conflict_specs),
+                    "__tooltip__Aktion": "In sevDesk anlegen" if row.can_create_sevdesk else "",
+                    "__icons__Status": [
+                        ("local", row.local_present),
+                        ("wix", row.wix_present),
+                        ("sevdesk", row.sevdesk_present),
+                    ],
+                    "__icons__Konflikt": [key for key, _tooltip in conflict_specs],
+                    "__action_enabled__Aktion": row.can_create_sevdesk,
+                }
+            )
+        self._sync_table.set_data(payload)
 
     def _conflict_icon_specs(self, row: _SyncRow) -> list[tuple[str, str]]:
         labels: list[tuple[str, str]] = []
         if row.local_present and row.wix_present and (row.local_price or "") != (row.wix_price or ""):
-            labels.append(("priceNotSynced.png", "Preis nicht mit Wix synchron"))
+            labels.append(("price", "Preis nicht mit Wix synchron"))
         if row.local_present and row.sevdesk_present and (row.local_price or "") != (row.sevdesk_price or ""):
-            labels.append(("priceNotSynced.png", "Preis nicht mit sevDesk synchron"))
+            labels.append(("price", "Preis nicht mit sevDesk synchron"))
         if row.local_present and row.wix_present and row.wix_stock != row.local_stock:
-            labels.append(("cloud.png", "Bestand nicht mit Wix synchron"))
+            labels.append(("stock", "Bestand nicht mit Wix synchron"))
         if row.local_present and row.sevdesk_present and row.sevdesk_stock != row.local_stock:
-            labels.append(("cloud.png", "Bestand nicht mit sevDesk synchron"))
+            labels.append(("stock", "Bestand nicht mit sevDesk synchron"))
         return labels
 
-    def _icon_label(self, file_name: str, color: QColor, *, tooltip: str) -> QLabel:
-        label = QLabel()
-        label.setPixmap(self._tinted_icon(file_name, color))
-        label.setToolTip(tooltip)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        return label
+    @staticmethod
+    def _sync_presence_sort_key(row: _SyncRow) -> str:
+        return "".join("1" if present else "0" for present in (row.local_present, row.wix_present, row.sevdesk_present))
 
-    def _tinted_icon(self, file_name: str, color: QColor, *, size: int = 16) -> QPixmap:
-        pix = QPixmap(str(_ICONS_DIR / file_name))
-        if pix.isNull():
-            return QPixmap()
-        scaled = pix.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        image = QImage(scaled.size(), QImage.Format.Format_ARGB32_Premultiplied)
-        image.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(image)
-        painter.drawPixmap(0, 0, scaled)
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-        painter.fillRect(image.rect(), color)
-        painter.end()
-        return QPixmap.fromImage(image)
+    @staticmethod
+    def _sync_presence_tooltip(row: _SyncRow) -> str:
+        return "\n".join(
+            [
+                f"Lokal DB: {'vorhanden' if row.local_present else 'fehlt'}",
+                f"Wix: {'vorhanden' if row.wix_present else 'fehlt'}",
+                f"sevDesk: {'vorhanden' if row.sevdesk_present else 'fehlt'}",
+            ]
+        )
+
+    @staticmethod
+    def _sync_conflict_tooltip(conflicts: list[tuple[str, str]]) -> str:
+        if not conflicts:
+            return "Keine Konflikte"
+        return "\n".join(text for _key, text in conflicts)
 
     @staticmethod
     def _format_eur(value: str) -> str:
@@ -816,16 +1010,7 @@ class ProductsView(QWidget):
         self._populate_sync_table(filtered)
 
     def _selected_product_skus(self) -> list[str]:
-        selected_rows = sorted({item.row() for item in self._sync_table.selectedItems()})
-        skus: list[str] = []
-        for row in selected_rows:
-            sku_item = self._sync_table.item(row, 0)
-            if sku_item is None:
-                continue
-            sku = sku_item.text().strip()
-            if sku:
-                skus.append(sku)
-        return skus
+        return self._selected_skus_from_data_table(self._sync_table)
 
     def _apply_wix_to_local(self) -> None:
         if not self._wix_rows:
@@ -985,10 +1170,23 @@ class ProductsView(QWidget):
         QMessageBox.information(self, "Druckplaene", f"{len(data)} Druckplan-Eintraege gespeichert.")
 
     def _selected_inventory_skus(self) -> list[str]:
+        if hasattr(self, "_inv_table"):
+            return self._selected_skus_from_data_table(self._inv_table)
         return self._selected_product_skus()
 
     def _selected_wix_skus(self) -> list[str]:
+        if hasattr(self, "_wix_table"):
+            return self._selected_skus_from_data_table(self._wix_table)
         return self._selected_product_skus()
+
+    @staticmethod
+    def _selected_skus_from_data_table(table: DataTable) -> list[str]:
+        skus: list[str] = []
+        for row in table.selected_rows_data():
+            sku = str(row.get("SKU") or "").strip()
+            if sku:
+                skus.append(sku)
+        return skus
 
     def _run_bulk_field_dialog(self, skus: list[str], *, source_label: str) -> None:
         if not skus:
@@ -1045,7 +1243,7 @@ class ProductsView(QWidget):
             QMessageBox.warning(self, "Felder aendern - Fehler", f"Fehler: {exc}")
 
     def _bulk_edit_wix_fields(self) -> None:
-        self._run_bulk_field_dialog(self._selected_product_skus(), source_label="Produkte")
+        self._run_bulk_field_dialog(self._selected_wix_skus(), source_label="Wix")
 
     def _create_selected_wix_product_in_sevdesk(self, sku: str) -> None:
         normalized_sku = str(sku or "").strip().upper()
@@ -1213,4 +1411,26 @@ class ProductsView(QWidget):
     def _bulk_edit_fields(self) -> None:
         """Open dialog for bulk product field editing."""
         self._run_bulk_field_dialog(self._selected_product_skus(), source_label="Produkte")
+
+    def eventFilter(self, watched: object, event: QEvent) -> bool:
+        if watched is self._sync_table.viewport() and event.type() == QEvent.Type.MouseButtonRelease:
+            if isinstance(event, QMouseEvent) and event.button() == Qt.MouseButton.LeftButton:
+                index = self._sync_table.indexAt(event.position().toPoint())
+                if index.isValid() and index.column() == 9:
+                    row_data = index.data(Qt.ItemDataRole.UserRole)
+                    if isinstance(row_data, dict) and bool(row_data.get("__action_enabled__Aktion")):
+                        rect = self._sync_table.visualRect(index)
+                        local_x = event.position().x() - rect.x()
+                        local_y = event.position().y() - rect.y()
+                        if self._sync_action_delegate.hit_action(
+                            local_x=local_x,
+                            local_y=local_y,
+                            width=rect.width(),
+                            height=rect.height(),
+                        ):
+                            sku = str(row_data.get("SKU") or "").strip()
+                            if sku:
+                                self._create_selected_wix_product_in_sevdesk(sku)
+                                return True
+        return super().eventFilter(watched, event)
 

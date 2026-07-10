@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from xw_studio.core.signals import AppSignals
 from xw_studio.core.types import ModuleKey
 from xw_studio.core.worker import BackgroundWorker
+from xw_studio.services.background_jobs.service import BackgroundJobManager
 from xw_studio.services.daily_business.service import DailyBusinessService
 from xw_studio.services.draft_invoice.service import (
     DraftInvoiceService,
@@ -57,6 +58,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _QUEUE_COLUMNS = ["Ref", "Kunde", "Betrag", "Status", "Hinweis", "Mark."]
+_BADGE_JOB_QUEUE = "badge-refresh"
 
 
 class _QueueTabView(QWidget):
@@ -301,6 +303,7 @@ class TagesgeschaeftView(QWidget):
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._container = container
+        self._background_jobs = container.resolve(BackgroundJobManager)
         self._badge_worker: BackgroundWorker | None = None
         self._start_worker: BackgroundWorker | None = None
         self._start_product_worker: BackgroundWorker | None = None
@@ -488,8 +491,17 @@ class TagesgeschaeftView(QWidget):
         return button
 
     def _refresh_badges(self) -> None:
+        self._background_jobs.submit(
+            queue=_BADGE_JOB_QUEUE,
+            priority=10,
+            coalesce_key="tagesgeschaeft-badges",
+            start_fn=self._create_badge_refresh_worker,
+            can_start=lambda: self._badge_worker is None or not self._badge_worker.isRunning(),
+        )
+
+    def _create_badge_refresh_worker(self) -> BackgroundWorker | None:
         if self._badge_worker is not None and self._badge_worker.isRunning():
-            return
+            return None
 
         def job() -> dict[str, int]:
             invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
@@ -512,7 +524,8 @@ class TagesgeschaeftView(QWidget):
         self._badge_worker = BackgroundWorker(job)
         self._badge_worker.signals.result.connect(self._on_badges_result)
         self._badge_worker.signals.error.connect(self._on_badges_error)
-        self._badge_worker.start()
+        self._badge_worker.signals.finished.connect(lambda: setattr(self, "_badge_worker", None))
+        return self._badge_worker
 
     def _on_badges_result(self, result: object) -> None:
         counts = result if isinstance(result, dict) else {}

@@ -1,6 +1,7 @@
 """Tests for sevDesk invoice DTO parsing."""
 import base64
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+import json
 import httpx
 
 from xw_studio.core.config import AppConfig
@@ -166,6 +167,47 @@ def test_invoice_client_render_requests_pdf_payload() -> None:
     inv = InvoiceClient(SevdeskConnection(client=client, config=AppConfig()))
 
     assert inv.render_invoice_pdf("123") == {"objects": {"pdf": ""}}
+
+
+def test_invoice_client_confirms_paid_invoice_even_if_status_400_patch_does_not_stick() -> None:
+    invoice_reads = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal invoice_reads
+        path = request.url.path
+        if request.method == "GET" and path.endswith("/Invoice/123"):
+            invoice_reads += 1
+            status = 200 if invoice_reads == 1 else 1000
+            return httpx.Response(200, json={"objects": {"id": 123, "status": status}})
+        if request.method == "GET" and path.endswith("/CheckAccountTransaction/99"):
+            return httpx.Response(
+                200,
+                json={"objects": {"id": 99, "status": 100, "checkAccount": {"id": 11}}},
+            )
+        if request.method == "GET" and path.endswith("/Tools/bookkeepingSystemVersion"):
+            return httpx.Response(200, json={"objects": {"version": "2.0"}})
+        if request.method == "PUT" and path.endswith("/Invoice/123/bookAmount"):
+            payload = json.loads(request.content.decode("utf-8"))
+            assert payload["checkAccountTransaction"] == {"id": 99, "objectName": "CheckAccountTransaction"}
+            return httpx.Response(200, json={"objects": {}})
+        if request.method == "PUT" and path.endswith("/CheckAccountTransaction/99"):
+            return httpx.Response(200, json={"objects": {"id": 99, "status": 100}})
+        return httpx.Response(404, text=f"unexpected {request.method} {path}")
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.Client(transport=transport, base_url="https://example.test/api/v1")
+    inv = InvoiceClient(SevdeskConnection(client=client, config=AppConfig()))
+
+    result = inv.book_invoice_with_transaction(
+        123,
+        29.9,
+        check_account_id=11,
+        transaction_id=99,
+        booking_date=int(datetime(2026, 7, 3, 8, 0, tzinfo=timezone.utc).timestamp()),
+    )
+
+    assert result["status"] == "booked"
+    assert result["tx_status"] == "100"
 
 
 def test_invoice_client_search_matches_wix_order_and_customer_within_initial_window() -> None:

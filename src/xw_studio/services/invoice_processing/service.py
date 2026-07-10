@@ -309,10 +309,33 @@ class InvoiceProcessingService:
         self._batch_cache[key] = (now, list(final_rows), list(summaries))
         return final_rows, summaries
 
+    def load_recent_non_draft_batch(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, str]], list[InvoiceSummary]]:
+        """Return newest non-draft invoices for the Rechnungen history pane."""
+        key = ("recent_non_draft", int(limit), int(offset))
+        cached = self._batch_cache.get(key)  # type: ignore[arg-type]
+        now = time.perf_counter()
+        if cached is not None:
+            ts, cached_rows, cached_summaries = cached
+            if (now - ts) <= _BATCH_CACHE_TTL_SECONDS:
+                return list(cached_rows), list(cached_summaries)
+
+        summaries = self._invoices.list_recent_non_draft_summaries(limit=limit, offset=offset)
+        self._apply_sensitive_country_flags(summaries)
+        self._apply_unreleased_sku_flags(summaries)
+        rows = [s.as_table_row() for s in summaries]
+        final_rows = self._rows_with_fulfillment(summaries, rows)
+        self._batch_cache[key] = (now, list(final_rows), list(summaries))  # type: ignore[index]
+        return final_rows, summaries
+
     def warm_startup_batches(self, *, draft_limit: int = 5, open_limit: int = 5) -> tuple[int, int]:
         """Warm short-lived batch cache for the first Rechnungen screen render."""
         draft_rows, _ = self.load_invoice_batch(status=100, limit=draft_limit, offset=0)
-        open_rows, _ = self.load_invoice_batch(status=200, limit=open_limit, offset=0)
+        open_rows, _ = self.load_recent_non_draft_batch(limit=open_limit, offset=0)
         return len(draft_rows), len(open_rows)
 
     def search_invoice_batch(
@@ -332,6 +355,20 @@ class InvoiceProcessingService:
         self._apply_unreleased_sku_flags(summaries)
         rows = [summary.as_table_row() for summary in summaries]
         return self._rows_with_fulfillment(summaries, rows), summaries, searched_days
+
+    def delete_draft_invoice(self, invoice_id: str) -> None:
+        """Delete one sevDesk draft invoice after basic guard checks."""
+        summary = self._load_summary_by_id(invoice_id)
+        if summary.status_code != 100:
+            raise RuntimeError("Nur Entwürfe können gelöscht werden.")
+        if str(summary.invoice_number or "").strip():
+            raise RuntimeError("Entwurf hat bereits eine Rechnungsnummer und wird nicht gelöscht.")
+        self._invoices.delete_draft_invoice(summary.id)
+        invoice_key = str(summary.id or "").strip()
+        if invoice_key:
+            self._invoice_pdf_cache.pop(invoice_key, None)
+            self._invoice_detail_cache.pop(invoice_key, None)
+        self._batch_cache.clear()
 
     def read_fulfillment_flags(self, invoice_id: str) -> FulfillmentFlags:
         all_flags = self._load_fulfillment_flags_map()

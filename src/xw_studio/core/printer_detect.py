@@ -3,10 +3,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+import time
 
 from xw_studio.core.types import PrinterStatus
 
 logger = logging.getLogger(__name__)
+
+_PRINTER_CACHE_TTL_SECONDS = 60.0
+_PRINTER_CACHE: tuple[float, list[PrinterInfo]] | None = None
 
 
 @dataclass
@@ -37,6 +41,19 @@ def discover_printers() -> list[PrinterInfo]:
     except Exception as exc:
         logger.error("Printer discovery failed: %s", exc)
         return []
+
+
+def discover_printers_cached(*, ttl_seconds: float = _PRINTER_CACHE_TTL_SECONDS) -> list[PrinterInfo]:
+    """Return cached printer discovery results for a short TTL."""
+    global _PRINTER_CACHE
+    now = time.monotonic()
+    if _PRINTER_CACHE is not None:
+        ts, printers = _PRINTER_CACHE
+        if (now - ts) <= max(0.0, float(ttl_seconds)):
+            return list(printers)
+    printers = discover_printers()
+    _PRINTER_CACHE = (now, list(printers))
+    return list(printers)
 
 
 def evaluate_printer_status(

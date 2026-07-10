@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, cast
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QDialog,
     QDialogButtonBox,
     QDateEdit,
@@ -18,8 +17,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
@@ -32,6 +30,7 @@ from xw_studio.services.clearing import (
     PaymentClearingService,
     ResetBatchResult,
 )
+from xw_studio.ui.widgets.data_table import DataTable
 from xw_studio.ui.widgets.search_bar import SearchBar
 
 if TYPE_CHECKING:
@@ -52,6 +51,20 @@ class PaymentClearingView(QWidget):
     COL_AMOUNT = 8
     COL_STATUS = 9
     COL_REASON = 10
+
+    _TABLE_COLUMNS = [
+        "",
+        "Provider",
+        "Art",
+        "Datum",
+        "Provider-Ref",
+        "Wix",
+        "sevDesk",
+        "Kunde",
+        "Betrag",
+        "Status",
+        "Hinweis",
+    ]
 
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -111,27 +124,13 @@ class PaymentClearingView(QWidget):
         filter_row.addWidget(self._manual_btn)
         layout.addLayout(filter_row)
 
-        self._table = QTableWidget(0, 11)
-        self._table.setHorizontalHeaderLabels(
-            [
-                "",
-                "Provider",
-                "Art",
-                "Datum",
-                "Provider-Ref",
-                "Wix",
-                "sevDesk",
-                "Kunde",
-                "Betrag",
-                "Status",
-                "Hinweis",
-            ]
-        )
-        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self._table.itemChanged.connect(self._on_item_changed)
+        self._table = DataTable(self._TABLE_COLUMNS)
+        self._table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+        self._table.clicked.connect(self._on_table_clicked)
         header = self._table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(self.COL_SELECT, QHeaderView.ResizeMode.Fixed)
+        header.resizeSection(self.COL_SELECT, 30)
         header.setSectionResizeMode(self.COL_CUSTOMER, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(self.COL_REASON, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self._table)
@@ -218,44 +217,41 @@ class PaymentClearingView(QWidget):
     def _refresh_table(self) -> None:
         rows = self._filtered()
         self._visible_ids = [row.candidate_id for row in rows]
-        self._table.blockSignals(True)
-        self._table.setRowCount(len(rows))
-        for index, row in enumerate(rows):
-            check = QTableWidgetItem()
-            check.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
-            check.setCheckState(Qt.CheckState.Checked if row.selected else Qt.CheckState.Unchecked)
-            if not row.is_bookable:
-                check.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            check.setData(Qt.ItemDataRole.UserRole, row.candidate_id)
-            self._table.setItem(index, self.COL_SELECT, check)
-            values = (
-                row.provider.title(),
-                row.kind.value,
-                row.payment_date.strftime("%d.%m.%Y"),
-                row.provider_ref,
-                row.order_number,
-                row.invoice_number,
-                row.customer,
-                f"{row.amount:.2f} EUR",
-                row.status.value,
-                row.reason,
+        table_rows: list[dict[str, object]] = []
+        for row in rows:
+            table_rows.append(
+                {
+                    "": "☑" if row.selected else ("☐" if row.is_bookable else "·"),
+                    "Provider": row.provider.title(),
+                    "Art": row.kind.value,
+                    "Datum": row.payment_date.strftime("%d.%m.%Y"),
+                    "Provider-Ref": row.provider_ref,
+                    "Wix": row.order_number,
+                    "sevDesk": row.invoice_number,
+                    "Kunde": row.customer,
+                    "Betrag": f"{row.amount:.2f} EUR",
+                    "Status": row.status.value,
+                    "Hinweis": row.reason,
+                    "__candidate_id__": row.candidate_id,
+                    "__bookable__": row.is_bookable,
+                    "__align__": "center",
+                    "__align__Betrag": "right",
+                }
             )
-            for column, value in enumerate(values, start=1):
-                item = QTableWidgetItem(value)
-                if column == self.COL_AMOUNT:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                self._table.setItem(index, column, item)
-        self._table.blockSignals(False)
+        self._table.set_data(table_rows)
 
-    def _on_item_changed(self, item: QTableWidgetItem) -> None:
-        if item.column() != self.COL_SELECT:
+    def _on_table_clicked(self, index: object) -> None:
+        if not hasattr(index, "column") or int(index.column()) != self.COL_SELECT:
             return
-        candidate_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
-        selected = item.checkState() == Qt.CheckState.Checked
+        row_data = self._table.selected_row_data() or {}
+        candidate_id = str(row_data.get("__candidate_id__") or "")
+        if not candidate_id or not bool(row_data.get("__bookable__")):
+            return
         self._candidates = [
-            replace(row, selected=selected) if row.candidate_id == candidate_id and row.is_bookable else row
+            replace(row, selected=not row.selected) if row.candidate_id == candidate_id and row.is_bookable else row
             for row in self._candidates
         ]
+        self._refresh_table()
 
     def _set_all_bookable(self, selected: bool) -> None:
         self._candidates = [
@@ -265,8 +261,8 @@ class PaymentClearingView(QWidget):
         self._refresh_table()
 
     def _selected_candidate(self) -> ClearingCandidate | None:
-        row_index = self._table.currentRow()
-        if row_index < 0 or row_index >= len(self._visible_ids):
+        row_index = self._table.selected_source_row()
+        if row_index is None or row_index < 0 or row_index >= len(self._visible_ids):
             return None
         candidate_id = self._visible_ids[row_index]
         return next((row for row in self._candidates if row.candidate_id == candidate_id), None)

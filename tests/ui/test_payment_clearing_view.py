@@ -60,4 +60,7 @@ def test_main_window_can_open_payment_clearing(qtbot: object, app_config: object
 
     window._navigate_to(ModuleKey.CLEARING.value)  # noqa: SLF001
 
-    assert isinstance(window._pages[ModuleKey.CLEARING.value], PaymentClearingView)  # noqa: SLF001
+    qtbot.waitUntil(
+        lambda: isinstance(window._pages[ModuleKey.CLEARING.value], PaymentClearingView),  # noqa: SLF001
+        timeout=1000,
+    )

@@ -47,6 +47,9 @@ class ZmInvoiceProvider(Protocol):
     def load_invoices(self, year: int, month: int) -> list[dict[str, Any]]:
         ...
 
+    def load_credit_notes(self, year: int, month: int) -> list[dict[str, Any]]:
+        ...
+
 
 @dataclass(frozen=True)
 class _Bucket:
@@ -65,9 +68,41 @@ class SevdeskZmInvoiceProvider:
         self._contact_cache: dict[str, dict[str, Any]] = {}
 
     def load_invoices(self, year: int, month: int) -> list[dict[str, Any]]:
+        return self._load_dated_resource(
+            "/Invoice",
+            year,
+            month,
+            date_from_key="invoiceDate_from",
+            date_to_key="invoiceDate_to",
+            timestamp_start_key="startDate",
+            timestamp_end_key="endDate",
+        )
+
+    def load_credit_notes(self, year: int, month: int) -> list[dict[str, Any]]:
+        return self._load_dated_resource(
+            "/CreditNote",
+            year,
+            month,
+            date_from_key="creditNoteDate_from",
+            date_to_key="creditNoteDate_to",
+            timestamp_start_key="startDate",
+            timestamp_end_key="endDate",
+        )
+
+    def _load_dated_resource(
+        self,
+        path: str,
+        year: int,
+        month: int,
+        *,
+        date_from_key: str,
+        date_to_key: str,
+        timestamp_start_key: str,
+        timestamp_end_key: str,
+    ) -> list[dict[str, Any]]:
         start, end = _month_bounds(year, month)
         start_ts, end_ts = _month_timestamp_bounds(year, month)
-        invoices: list[dict[str, Any]] = []
+        documents: list[dict[str, Any]] = []
         offset = 0
         page = 0
         while page < self._max_pages:
@@ -75,24 +110,24 @@ class SevdeskZmInvoiceProvider:
                 "embed": "contact",
                 "limit": self._page_size,
                 "offset": offset,
-                "invoiceDate_from": start,
-                "invoiceDate_to": end,
-                "startDate": start_ts,
-                "endDate": end_ts,
+                date_from_key: start,
+                date_to_key: end,
+                timestamp_start_key: start_ts,
+                timestamp_end_key: end_ts,
                 "showAll": "true",
             }
-            response = self._connection.get("/Invoice", params=params)
+            response = self._connection.get(path, params=params)
             payload = response.json()
             objects = payload.get("objects") if isinstance(payload, dict) else None
             batch = [item for item in objects if isinstance(item, dict)] if isinstance(objects, list) else []
             if not batch:
                 break
-            invoices.extend(self._with_contact_fallback(item) for item in batch)
+            documents.extend(self._with_contact_fallback(item) for item in batch)
             if len(batch) < self._page_size:
                 break
             offset += self._page_size
             page += 1
-        return invoices
+        return documents
 
     def _with_contact_fallback(self, invoice: dict[str, Any]) -> dict[str, Any]:
         contact = invoice.get("contact")
@@ -129,53 +164,64 @@ class ZmService:
 
     def calculate_month(self, year: int, month: int) -> ZmCalculationResult:
         invoices = self._provider.load_invoices(year, month)
-        result = ZmCalculationResult(year=year, month=month, considered=len(invoices))
+        load_credit_notes = getattr(self._provider, "load_credit_notes", None)
+        credit_notes = load_credit_notes(year, month) if callable(load_credit_notes) else []
+        result = ZmCalculationResult(year=year, month=month, considered=len(invoices) + len(credit_notes))
         buckets: dict[tuple[str, ZmKind], _Bucket] = {}
 
-        for invoice in invoices:
-            if not _is_final_status(invoice):
-                continue
-            invoice_date = _parse_date(invoice.get("invoiceDate") or invoice.get("date"))
-            if invoice_date is None or invoice_date.year != year or invoice_date.month != month:
-                continue
-            kind = _classify_zm_kind(invoice)
+        def collect_document(document: dict[str, Any], *, date_key: str, amount_sign: Decimal) -> None:
+            if not _is_final_status(document):
+                return
+            document_date = _parse_date(document.get(date_key) or document.get("date"))
+            if document_date is None or document_date.year != year or document_date.month != month:
+                return
+            kind = _classify_zm_kind(document)
             if kind is None:
-                continue
-
+                return
             result.selected += 1
-            contact_raw = invoice.get("contact")
+
+            contact_raw = document.get("contact")
             contact: dict[str, Any] = contact_raw if isinstance(contact_raw, dict) else {}
-            customer = str(contact.get("name") or invoice.get("contactName") or "").strip()
-            invoice_number = str(
-                invoice.get("invoiceNumber") or invoice.get("number") or invoice.get("id") or ""
+            customer = str(contact.get("name") or document.get("contactName") or "").strip()
+            document_number = str(
+                document.get("invoiceNumber")
+                or document.get("creditNoteNumber")
+                or document.get("number")
+                or document.get("id")
+                or ""
             ).strip()
             uid_raw = str(contact.get("vatNumber") or "").strip()
             uid = normalize_uid(uid_raw)
             if not uid or not is_valid_uid(uid):
                 label = f"{customer or 'Unbekannter Kunde'}"
-                if invoice_number:
-                    label += f" ({invoice_number})"
+                if document_number:
+                    label += f" ({document_number})"
                 result.invalid.append(f"ungueltige/fehlende UID: {label} -> {uid_raw or 'leer'}")
-                continue
+                return
 
-            amount = pick_net(invoice)
+            amount = pick_net(document) * amount_sign
             key = (uid, kind)
             current = buckets.get(key)
             if current is None:
                 buckets[key] = _Bucket(
                     amount=amount,
-                    invoices=[invoice_number] if invoice_number else [],
+                    invoices=[document_number] if document_number else [],
                     customer=customer,
                 )
             else:
                 invoices_for_bucket = list(current.invoices)
-                if invoice_number:
-                    invoices_for_bucket.append(invoice_number)
+                if document_number:
+                    invoices_for_bucket.append(document_number)
                 buckets[key] = _Bucket(
                     amount=current.amount + amount,
                     invoices=invoices_for_bucket,
                     customer=current.customer or customer,
                 )
+
+        for invoice in invoices:
+            collect_document(invoice, date_key="invoiceDate", amount_sign=Decimal("1.00"))
+        for credit_note in credit_notes:
+            collect_document(credit_note, date_key="creditNoteDate", amount_sign=Decimal("-1.00"))
 
         rows: list[ZmRow] = []
         for (uid, kind), bucket in sorted(buckets.items()):
@@ -201,7 +247,7 @@ class ZmService:
             "Zusammenfassende Meldung (ZM/U13)",
             f"Periode: {result.year:04d}-{result.month:02d}",
             "Berechnungsart: Soll (Rechnungsdatum)",
-            f"Gepruefte Rechnungen: {result.considered}",
+            f"Gepruefte Belege: {result.considered}",
             f"ZM-relevante Rechnungen: {result.selected}",
             f"UID-Zeilen: {len(result.rows)}",
             f"Gesamtsumme gerundet: {result.total_eur_int} EUR",

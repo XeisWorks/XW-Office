@@ -11,6 +11,13 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from xw_studio.services.http_client import SevdeskConnection
+from xw_studio.services.sevdesk.payment_booking import (
+    book_amount_payload,
+    is_paid_invoice_object,
+    normalize_booking_amount,
+    raise_on_error_envelope,
+    response_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -410,6 +417,9 @@ class InvoiceSummary(BaseModel):
             row[f"__tooltip__{_TABLE_STATUS_COLUMN}"] = "Entwurf: diese Rechnung muss im Tagesgeschäft abgearbeitet werden"
             row[f"__fg__{_TABLE_STATUS_COLUMN}"] = "#9a3412"
             row[f"__bg__{_TABLE_STATUS_COLUMN}"] = "#fff7ed"
+        row["__draft_remove_enabled__"] = bool(self.status_code == 100 and not str(self.invoice_number or "").strip())
+        if row["__draft_remove_enabled__"]:
+            row["__tooltip__sevDesk"] = "Entwurf löschen"
 
         return row
 
@@ -487,6 +497,49 @@ class InvoiceClient:
                 "Status filter %s yielded no rows after parse; API may ignore query param.",
                 status,
             )
+        return result
+
+    def list_recent_non_draft_summaries(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        embed_contact: bool = True,
+        excluded_statuses: set[int] | None = None,
+    ) -> list[InvoiceSummary]:
+        """Return newest invoices excluding drafts, with offset in filtered space."""
+        excluded = set(excluded_statuses or {100})
+        target_skip = max(0, int(offset))
+        target_limit = max(1, int(limit))
+        raw_offset = 0
+        page_size = max(target_limit, 100)
+        skipped = 0
+        result: list[InvoiceSummary] = []
+
+        while len(result) < target_limit:
+            batch = self.list_invoice_summaries(
+                limit=page_size,
+                offset=raw_offset,
+                embed_contact=embed_contact,
+                status=None,
+            )
+            if not batch:
+                break
+            raw_offset += len(batch)
+
+            for summary in batch:
+                if summary.status_code in excluded:
+                    continue
+                if skipped < target_skip:
+                    skipped += 1
+                    continue
+                result.append(summary)
+                if len(result) >= target_limit:
+                    break
+
+            if len(batch) < page_size:
+                break
+
         return result
 
     def search_invoice_summaries(
@@ -753,21 +806,7 @@ class InvoiceClient:
 
     @staticmethod
     def _is_paid_invoice_object(invoice: dict[str, Any]) -> bool:
-        status_raw = str(invoice.get("status") or "").strip()
-        if status_raw == "1000":
-            return True
-        if status_raw.lower() == "paid":
-            return True
-        for key in ("sumOutstanding", "openAmount", "amountOutstanding"):
-            value = invoice.get(key)
-            if value is None or str(value).strip() == "":
-                continue
-            try:
-                if float(str(value).replace(",", ".")) <= 0.0001:
-                    return True
-            except (TypeError, ValueError):
-                continue
-        return False
+        return is_paid_invoice_object(invoice)
 
     def get_check_account_transaction_by_id(self, transaction_id: int) -> dict[str, Any]:
         response = self._conn.get(f"/CheckAccountTransaction/{int(transaction_id)}")
@@ -825,28 +864,24 @@ class InvoiceClient:
             }
 
         if self._bookkeeping_system_version() == "1.0":
-            response = self._conn.put(
-                f"/CheckAccountTransaction/{int(transaction_id)}/linkInvoice",
-                params={"invoiceId": int(invoice_id)},
-                json={"amount": float(amount), "date": int(booking_date)},
+            self._legacy_link_invoice(
+                transaction_id=int(transaction_id),
+                invoice_id=int(invoice_id),
+                amount=amount,
+                booking_date=int(booking_date),
             )
-            _ = response.json() if response.content else {}
         else:
             response = self._conn.put(
                 f"/Invoice/{int(invoice_id)}/bookAmount",
-                json={
-                    "amount": float(amount),
-                    "date": int(booking_date),
-                    "type": "FULL_PAYMENT",
-                    "checkAccount": {"id": int(check_account_id), "objectName": "CheckAccount"},
-                    "checkAccountTransaction": {
-                        "id": int(transaction_id),
-                        "objectName": "CheckAccountTransaction",
-                    },
-                    "createFeed": False,
-                },
+                json=book_amount_payload(
+                    amount=amount,
+                    booking_date=int(booking_date),
+                    check_account_id=int(check_account_id),
+                    transaction_id=int(transaction_id),
+                ),
             )
-            _ = response.json() if response.content else {}
+            payload = response_payload(response)
+            raise_on_error_envelope(payload, "sevDesk Invoice bookAmount Fehler")
 
         invoice_after = self.fetch_invoice_by_id(str(invoice_id))
         tx_after = self.get_check_account_transaction_by_id(int(transaction_id))
@@ -869,11 +904,40 @@ class InvoiceClient:
                 pass
 
         return {
-            "status": "booked" if tx_status_after == "400" else "not_booked",
+            "status": "booked",
             "transaction_id": int(transaction_id),
             "invoice_status": str(invoice_after.get("status") or "").strip(),
             "tx_status": tx_status_after,
         }
+
+    def _legacy_link_invoice(
+        self,
+        *,
+        transaction_id: int,
+        invoice_id: int,
+        amount: float,
+        booking_date: int,
+    ) -> dict[str, Any]:
+        params = {"invoiceId": int(invoice_id)}
+        body = {
+            "amount": normalize_booking_amount(amount),
+            "date": int(booking_date),
+        }
+        last_exc: Exception | None = None
+        for method in ("put", "patch"):
+            try:
+                request = self._conn.put if method == "put" else self._conn.patch
+                response = request(
+                    f"/CheckAccountTransaction/{int(transaction_id)}/linkInvoice",
+                    params=params,
+                    json=body,
+                )
+                payload = response_payload(response)
+                raise_on_error_envelope(payload, "sevDesk linkInvoice Fehler")
+                return payload
+            except Exception as exc:
+                last_exc = exc
+        raise RuntimeError(f"sevDesk linkInvoice Fehler: {last_exc}")
 
     def _bookkeeping_system_version(self) -> str:
         if self._bookkeeping_version:
@@ -922,6 +986,10 @@ class InvoiceClient:
         }
         response = self._conn.post("/Invoice/Factory/saveInvoice", json=payload)
         return response.json() if response.content else {}
+
+    def delete_draft_invoice(self, invoice_id: str) -> None:
+        """Delete one draft invoice by id."""
+        self._conn.delete(f"/Invoice/{str(invoice_id).strip()}")
 
     def send_invoice_document(
         self,

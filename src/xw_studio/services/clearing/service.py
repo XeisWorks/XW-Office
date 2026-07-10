@@ -507,6 +507,7 @@ class PaymentClearingService:
         for index, row in enumerate(selected, start=1):
             if progress:
                 progress(int((index - 1) / max(total, 1) * 100), f"{row.provider_ref} buchen")
+            result_transaction_id = row.transaction_id
             try:
                 transaction_id = row.transaction_id
                 if row.account_id is not None and row.kind != TransactionKind.SEPA:
@@ -531,19 +532,6 @@ class PaymentClearingService:
                 current_invoice: InvoiceRecord | None = None
                 if row.kind in {TransactionKind.PAYMENT, TransactionKind.SEPA}:
                     current_invoice = self._current_invoice_for_booking(row)
-                if transaction_id is None:
-                    if row.account_id is None:
-                        raise RuntimeError("Kein sevDesk-Konto zugeordnet")
-                    transaction_id = self._sevdesk.create_transaction(
-                        account_id=row.account_id,
-                        amount=row.amount,
-                        value_date=row.payment_date,
-                        payee=row.customer or row.provider.title(),
-                        purpose=self._candidate_purpose(row),
-                    )
-                if row.kind in {TransactionKind.PAYMENT, TransactionKind.SEPA}:
-                    if current_invoice is None:
-                        raise RuntimeError("Keine eindeutige Rechnung zugeordnet")
                     if current_invoice.is_paid:
                         results.append(
                             BookingItemResult(
@@ -555,17 +543,53 @@ class PaymentClearingService:
                             )
                         )
                         continue
+                if transaction_id is None:
                     if row.account_id is None:
                         raise RuntimeError("Kein sevDesk-Konto zugeordnet")
-                    self._sevdesk.book_invoice(
+                    transaction_id = self._sevdesk.create_transaction(
+                        account_id=row.account_id,
+                        amount=row.amount,
+                        value_date=row.payment_date,
+                        payee=row.customer or row.provider.title(),
+                        purpose=self._candidate_purpose(row),
+                    )
+                result_transaction_id = transaction_id
+                if row.kind in {TransactionKind.PAYMENT, TransactionKind.SEPA}:
+                    if current_invoice is None:
+                        raise RuntimeError("Keine eindeutige Rechnung zugeordnet")
+                    if row.account_id is None:
+                        raise RuntimeError("Kein sevDesk-Konto zugeordnet")
+                    book_result = self._sevdesk.book_invoice(
                         invoice_id=current_invoice.invoice_id,
                         amount=row.amount,
                         payment_date=row.payment_date,
                         account_id=row.account_id,
                         transaction_id=transaction_id,
                     )
-                    status = MatchStatus.BOOKED
-                    message = f"Rechnung {row.invoice_number} gebucht"
+                    book_status = ""
+                    if isinstance(book_result, dict):
+                        book_status = str(book_result.get("status") or "").strip().lower()
+                    if book_status and book_status not in {
+                        "booked",
+                        "already_booked",
+                        "invoice_already_paid",
+                    }:
+                        invoice_status = str((book_result or {}).get("invoice_status") or "").strip()
+                        tx_status = str((book_result or {}).get("tx_status") or "").strip()
+                        raise RuntimeError(
+                            "Zahlungsbuchung nicht bestaetigt "
+                            f"(status={book_status}, invoice_status={invoice_status or '-'}, "
+                            f"tx_status={tx_status or '-'})"
+                        )
+                    status = MatchStatus.ALREADY_BOOKED if book_status in {
+                        "already_booked",
+                        "invoice_already_paid",
+                    } else MatchStatus.BOOKED
+                    message = (
+                        f"Rechnung {row.invoice_number} war bereits bezahlt"
+                        if status == MatchStatus.ALREADY_BOOKED
+                        else f"Rechnung {row.invoice_number} gebucht"
+                    )
                 else:
                     status = MatchStatus.BOOKED
                     message = f"{row.kind.value} in sevDesk importiert"
@@ -575,7 +599,7 @@ class PaymentClearingService:
             except Exception as exc:
                 logger.exception("Clearing row %s failed", row.candidate_id)
                 results.append(
-                    BookingItemResult(row.candidate_id, False, MatchStatus.ERROR, str(exc), row.transaction_id)
+                    BookingItemResult(row.candidate_id, False, MatchStatus.ERROR, str(exc), result_transaction_id)
                 )
         if progress:
             progress(100, "Buchung abgeschlossen")

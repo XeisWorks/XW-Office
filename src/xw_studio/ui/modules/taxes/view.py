@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -10,6 +12,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -20,8 +23,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSpinBox,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -32,6 +34,7 @@ from xw_studio.core.worker import BackgroundWorker
 from xw_studio.services.clearing.service import ClearingRow, PaymentClearingService
 from xw_studio.services.expenses.service import ExpenseAuditService, ExpenseRow
 from xw_studio.services.finanzonline import OssQuarterResult, OssService, OssXmlExport, UvaService, UvaSubmitResult
+from xw_studio.ui.widgets.data_table import DataTable
 from xw_studio.ui.widgets.search_bar import SearchBar
 
 if TYPE_CHECKING:
@@ -95,8 +98,20 @@ def _render_grouped_uva_warnings(warnings: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _format_euro(value: str) -> str:
+    try:
+        amount = Decimal(str(value).replace(",", "."))
+    except (InvalidOperation, ValueError):
+        return value
+    formatted = f"{amount:,.2f}"
+    return formatted.replace(",", "_").replace(".", ",").replace("_", " ")
+
+
 class TaxesView(QWidget):
     """UVA | Clearing | Ausgaben — calls services off the UI thread."""
+
+    _CLEARING_COLUMNS = ["Ref", "Kunde", "Betrag", "Status", "Hinweis"]
+    _EXPENSE_COLUMNS = ["Ref", "Lieferant", "Brutto", "Kategorie", "Status", "Hinweis"]
 
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -106,12 +121,16 @@ class TaxesView(QWidget):
         self._oss_worker: BackgroundWorker | None = None
         self._clearing_worker: BackgroundWorker | None = None
         self._expenses_worker: BackgroundWorker | None = None
+        self._export_worker: BackgroundWorker | None = None
         self._clearing_rows: list[ClearingRow] = []
         self._expenses_rows: list[ExpenseRow] = []
         self._uva_progress_bar: QProgressBar | None = None
         self._uva_progress_label: QLabel | None = None
         self._uva_preview_button: QPushButton | None = None
         self._uva_submit_button: QPushButton | None = None
+        self._uva_amount_label: QLabel | None = None
+        self._uva_output: QPlainTextEdit | None = None
+        self._zm_output: QPlainTextEdit | None = None
         self._uva_progress_text = ""
         self._uva_progress_timer = QTimer(self)
         self._uva_progress_timer.setInterval(250)
@@ -131,25 +150,69 @@ class TaxesView(QWidget):
     def _build_uva_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
+        layout.setSpacing(10)
         info = QPlainTextEdit()
         uva: UvaService = self._container.resolve(UvaService)
         info.setPlainText(uva.describe_capabilities())
         info.setReadOnly(True)
+        info.setMaximumHeight(115)
         layout.addWidget(info)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Jahr:"))
         year = QSpinBox()
         year.setRange(2000, 2100)
-        year.setValue(2026)
         row.addWidget(year)
         row.addWidget(QLabel("Monat:"))
         month = QSpinBox()
         month.setRange(1, 12)
-        month.setValue(1)
         row.addWidget(month)
+        today = date.today()
+        previous_year = today.year if today.month > 1 else today.year - 1
+        previous_month = today.month - 1 if today.month > 1 else 12
+        year.setValue(previous_year)
+        month.setValue(previous_month)
         row.addStretch()
         layout.addLayout(row)
+
+        amount_frame = QFrame()
+        amount_frame.setObjectName("uvaAmountFrame")
+        amount_frame.setStyleSheet(
+            "#uvaAmountFrame {"
+            "background: #fff7ed;"
+            "border: 1px solid #fdba74;"
+            "border-radius: 8px;"
+            "}"
+        )
+        amount_layout = QVBoxLayout(amount_frame)
+        amount_layout.setContentsMargins(14, 10, 14, 10)
+        amount_title = QLabel("Zu zahlender Betrag UVA")
+        amount_title.setStyleSheet("color: #9a3412; font-weight: 700;")
+        self._uva_amount_label = QLabel("Noch nicht berechnet")
+        self._uva_amount_label.setStyleSheet("color: #7c2d12; font-size: 24px; font-weight: 800;")
+        amount_layout.addWidget(amount_title)
+        amount_layout.addWidget(self._uva_amount_label)
+        layout.addWidget(amount_frame)
+
+        result_row = QHBoxLayout()
+        result_row.setSpacing(10)
+
+        uva_box = QGroupBox("UVA / U30 Auswertung")
+        uva_layout = QVBoxLayout(uva_box)
+        self._uva_output = QPlainTextEdit()
+        self._uva_output.setReadOnly(True)
+        self._uva_output.setPlaceholderText("UVA berechnen, um Kennzahlen und Beträge zu sehen.")
+        uva_layout.addWidget(self._uva_output)
+        result_row.addWidget(uva_box, 3)
+
+        zm_box = QGroupBox("Zusammenfassende Meldung / U13")
+        zm_layout = QVBoxLayout(zm_box)
+        self._zm_output = QPlainTextEdit()
+        self._zm_output.setReadOnly(True)
+        self._zm_output.setPlaceholderText("UVA berechnen, um ZM-Zeilen zu sehen.")
+        zm_layout.addWidget(self._zm_output)
+        result_row.addWidget(zm_box, 2)
+        layout.addLayout(result_row, 1)
 
         self._uva_progress_label = QLabel("Bereit")
         self._uva_progress_label.setStyleSheet("color: #64748b;")
@@ -188,27 +251,9 @@ class TaxesView(QWidget):
 
             def on_preview_result(payload: object) -> None:
                 if not isinstance(payload, dict):
-                    info.appendPlainText("\n\nKeine gueltige UVA-Antwort erhalten.")
+                    self._set_uva_result_text("Keine gueltige UVA-Antwort erhalten.", "")
                     return
-                preview_text = str(payload.get("preview_text") or "").strip()
-                kennzahlen_text = str(payload.get("kennzahlen_text") or "").strip()
-                zm_text = str(payload.get("zm_text") or "").strip()
-                warnings_value = payload.get("warnings")
-                warning_lines = [
-                    str(item)
-                    for item in warnings_value
-                    if isinstance(item, str)
-                ] if isinstance(warnings_value, list) else []
-                grouped_warnings_text = _render_grouped_uva_warnings(warning_lines)
-                combined = "\n\n".join(
-                    part
-                    for part in [preview_text, kennzahlen_text, grouped_warnings_text, zm_text]
-                    if part
-                )
-                if combined:
-                    info.appendPlainText("\n\n" + combined)
-                    return
-                info.appendPlainText("\n\n" + repr(payload))
+                self._set_uva_payload(payload)
 
             self._uva_preview_worker.signals.progress.connect(on_progress)
             self._uva_preview_worker.signals.result.connect(on_preview_result)
@@ -246,16 +291,7 @@ class TaxesView(QWidget):
                 if not isinstance(res, UvaSubmitResult):
                     QMessageBox.warning(self, "UVA + ZM", "Keine gueltige Antwort erhalten.")
                     return
-                text = res.message + (f" (Ref. {res.reference_id})" if res.reference_id else "")
-                if res.zm_ok is not None:
-                    zm_text = res.zm_message or ("ZM erfolgreich" if res.zm_ok else "ZM fehlgeschlagen")
-                    if res.zm_reference_id:
-                        zm_text += f" (Ref. {res.zm_reference_id})"
-                    text = f"U30: {text}\nZM/U13: {zm_text}"
-                if res.ok:
-                    QMessageBox.information(self, "UVA + ZM", f"Erfolg: {text}")
-                else:
-                    QMessageBox.warning(self, "UVA + ZM", f"Fehler: {text}")
+                self._show_uva_submit_result(res)
 
             self._uva_submit_worker.signals.progress.connect(on_progress)
             self._uva_submit_worker.signals.result.connect(on_uva_result)
@@ -277,9 +313,99 @@ class TaxesView(QWidget):
 
         preview.clicked.connect(on_preview)
         submit.clicked.connect(on_submit)
-        layout.addWidget(preview)
-        layout.addWidget(submit)
+        buttons = QHBoxLayout()
+        buttons.addWidget(preview)
+        buttons.addWidget(submit)
+        buttons.addStretch()
+        layout.addLayout(buttons)
         return page
+
+    def _set_uva_payload(self, payload: dict[str, object]) -> None:
+        zahlbetrag = str(payload.get("zahlbetrag") or "").strip()
+        self._set_uva_amount(zahlbetrag)
+
+        preview_text = str(payload.get("preview_text") or "").strip()
+        kennzahlen_text = str(payload.get("kennzahlen_text") or "").strip()
+        warnings_value = payload.get("warnings")
+        warning_lines = [
+            str(item)
+            for item in warnings_value
+            if isinstance(item, str)
+        ] if isinstance(warnings_value, list) else []
+        grouped_warnings_text = _render_grouped_uva_warnings(warning_lines)
+        amount_text = f"ZU ZAHLEN: EUR {_format_euro(zahlbetrag)}" if zahlbetrag else "ZU ZAHLEN: noch nicht ermittelt"
+        uva_text = "\n\n".join(
+            part
+            for part in [amount_text, kennzahlen_text, preview_text, grouped_warnings_text]
+            if part
+        )
+        zm_text = str(payload.get("zm_text") or "").strip()
+        if not zm_text:
+            zm_text = "Keine ZM-Auswertung vorhanden oder ZM/U13 ist nicht aktiv."
+        self._set_uva_result_text(uva_text or repr(payload), zm_text)
+
+    def _set_uva_amount(self, value: str) -> None:
+        if self._uva_amount_label is None:
+            return
+        if not value:
+            self._uva_amount_label.setText("Noch nicht berechnet")
+            return
+        self._uva_amount_label.setText(f"EUR {_format_euro(value)}")
+
+    def _set_uva_result_text(self, uva_text: str, zm_text: str) -> None:
+        if self._uva_output is not None:
+            self._uva_output.setPlainText(uva_text)
+        if self._zm_output is not None:
+            self._zm_output.setPlainText(zm_text)
+
+    def _show_uva_submit_result(self, res: UvaSubmitResult) -> None:
+        uva_state = "erfolgreich" if res.ok else "fehlgeschlagen"
+        lines = [
+            f"U30/UVA: {uva_state}",
+            f"Antwort: {res.message or '-'}",
+            f"Referenz: {res.reference_id or '-'}",
+            f"Modus: {'Testuebermittlung' if res.test_mode else 'Produktivuebermittlung'}",
+            f"XML validiert: {'ja' if res.xml_validated else 'nein'}",
+        ]
+        if res.uva_payload:
+            amount = str(res.uva_payload.get("zahlbetrag") or "").strip()
+            period = str(res.uva_payload.get("zeitraum") or "").strip()
+            if period:
+                lines.insert(0, f"Periode: {period}")
+            if amount:
+                lines.insert(1, f"UVA-Zahlbetrag: EUR {_format_euro(amount)}")
+
+        if res.zm_ok is not None:
+            zm_state = "erfolgreich" if res.zm_ok else "fehlgeschlagen"
+            lines.extend(
+                [
+                    "",
+                    f"U13/ZM: {zm_state}",
+                    f"Antwort: {res.zm_message or '-'}",
+                    f"Referenz: {res.zm_reference_id or '-'}",
+                    f"ZM-Zeilen: {res.zm_rows}",
+                    f"XML validiert: {'ja' if res.zm_xml_validated else 'nein'}",
+                ]
+            )
+
+        detail_parts = []
+        if res.uva_payload:
+            detail_parts.append("Gesendeter U30-Payload:\n" + repr(res.uva_payload))
+        if res.xml_payload:
+            detail_parts.append("Gesendetes U30-XML:\n" + res.xml_payload)
+        if res.zm_payload:
+            detail_parts.append("Gesendeter U13/ZM-Payload:\n" + repr(res.zm_payload))
+        if res.zm_xml_payload:
+            detail_parts.append("Gesendetes U13/ZM-XML:\n" + res.zm_xml_payload)
+
+        box = QMessageBox(self)
+        box.setWindowTitle("UVA + ZM Abgabe")
+        box.setIcon(QMessageBox.Icon.Information if res.ok and (res.zm_ok is not False) else QMessageBox.Icon.Warning)
+        box.setText("Sendevorgang abgeschlossen." if res.ok else "Sendevorgang mit Fehler.")
+        box.setInformativeText("\n".join(lines))
+        if detail_parts:
+            box.setDetailedText("\n\n".join(detail_parts))
+        box.exec()
 
     def _set_uva_busy(self, busy: bool) -> None:
         for button in (self._uva_preview_button, self._uva_submit_button):
@@ -486,12 +612,10 @@ class TaxesView(QWidget):
         filters.addWidget(export)
         bl.addLayout(filters)
 
-        self._clearing_table = QTableWidget(0, 5)
-        self._clearing_table.setHorizontalHeaderLabels(["Ref", "Kunde", "Betrag", "Status", "Hinweis"])
+        self._clearing_table = DataTable(self._CLEARING_COLUMNS)
         self._clearing_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._clearing_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        self._clearing_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._clearing_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._clearing_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         bl.addWidget(self._clearing_table)
 
         self._clearing_status = QLabel("Noch nicht geladen.")
@@ -527,14 +651,10 @@ class TaxesView(QWidget):
         filters.addWidget(export)
         bl.addLayout(filters)
 
-        self._expenses_table = QTableWidget(0, 6)
-        self._expenses_table.setHorizontalHeaderLabels(
-            ["Ref", "Lieferant", "Brutto", "Kategorie", "Status", "Hinweis"]
-        )
+        self._expenses_table = DataTable(self._EXPENSE_COLUMNS)
         self._expenses_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._expenses_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        self._expenses_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._expenses_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._expenses_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         bl.addWidget(self._expenses_table)
 
         self._expenses_status = QLabel("Noch nicht geladen.")
@@ -579,18 +699,22 @@ class TaxesView(QWidget):
         self._clearing_status.setText(f"{len(filtered)} von {len(self._clearing_rows)} Eintraegen")
 
     def _populate_clearing_table(self, rows: list[ClearingRow]) -> None:
-        tbl = self._clearing_table
-        tbl.setRowCount(0)
-        for row in rows:
-            r = tbl.rowCount()
-            tbl.insertRow(r)
-            tbl.setItem(r, 0, QTableWidgetItem(row.ref))
-            tbl.setItem(r, 1, QTableWidgetItem(row.customer))
-            tbl.setItem(r, 2, QTableWidgetItem(row.amount))
-            tbl.setItem(r, 3, QTableWidgetItem(row.status))
-            tbl.setItem(r, 4, QTableWidgetItem(row.note))
+        payload = [
+            {
+                "Ref": row.ref,
+                "Kunde": row.customer,
+                "Betrag": row.amount,
+                "Status": row.status,
+                "Hinweis": row.note,
+                "__align__Betrag": "right",
+            }
+            for row in rows
+        ]
+        self._clearing_table.set_data(payload)
 
     def _export_clearing_csv(self) -> None:
+        if self._export_worker is not None and self._export_worker.isRunning():
+            return
         svc: PaymentClearingService = self._container.resolve(PaymentClearingService)
         rows = svc.filter_rows(
             self._clearing_rows,
@@ -601,9 +725,17 @@ class TaxesView(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Clearing CSV speichern", "clearing.csv", "CSV (*.csv)")
         if not path:
             return
-        with open(path, "w", encoding="utf-8", newline="") as fh:
-            fh.write(payload)
-        QMessageBox.information(self, "Clearing", f"CSV exportiert:\n{path}")
+
+        def job() -> str:
+            with open(path, "w", encoding="utf-8", newline="") as fh:
+                fh.write(payload)
+            return path
+
+        self._export_worker = BackgroundWorker(job)
+        self._export_worker.signals.result.connect(lambda saved_path: QMessageBox.information(self, "Clearing", f"CSV exportiert:\n{saved_path}"))
+        self._export_worker.signals.error.connect(lambda exc: QMessageBox.warning(self, "Clearing", f"CSV-Export fehlgeschlagen: {exc}"))
+        self._export_worker.signals.finished.connect(lambda: setattr(self, "_export_worker", None))
+        self._export_worker.start()
 
     def _load_expense_rows(self) -> None:
         if self._expenses_worker is not None and self._expenses_worker.isRunning():
@@ -661,19 +793,23 @@ class TaxesView(QWidget):
         self._expenses_status.setText(f"{len(filtered)} von {len(self._expenses_rows)} Eintraegen")
 
     def _populate_expenses_table(self, rows: list[ExpenseRow]) -> None:
-        tbl = self._expenses_table
-        tbl.setRowCount(0)
-        for row in rows:
-            r = tbl.rowCount()
-            tbl.insertRow(r)
-            tbl.setItem(r, 0, QTableWidgetItem(row.ref))
-            tbl.setItem(r, 1, QTableWidgetItem(row.supplier))
-            tbl.setItem(r, 2, QTableWidgetItem(row.gross_amount))
-            tbl.setItem(r, 3, QTableWidgetItem(row.category))
-            tbl.setItem(r, 4, QTableWidgetItem(row.status))
-            tbl.setItem(r, 5, QTableWidgetItem(row.note))
+        payload = [
+            {
+                "Ref": row.ref,
+                "Lieferant": row.supplier,
+                "Brutto": row.gross_amount,
+                "Kategorie": row.category,
+                "Status": row.status,
+                "Hinweis": row.note,
+                "__align__Brutto": "right",
+            }
+            for row in rows
+        ]
+        self._expenses_table.set_data(payload)
 
     def _export_expenses_csv(self) -> None:
+        if self._export_worker is not None and self._export_worker.isRunning():
+            return
         svc: ExpenseAuditService = self._container.resolve(ExpenseAuditService)
         rows = svc.filter_rows(
             self._expenses_rows,
@@ -684,6 +820,14 @@ class TaxesView(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Ausgaben CSV speichern", "expenses.csv", "CSV (*.csv)")
         if not path:
             return
-        with open(path, "w", encoding="utf-8", newline="") as fh:
-            fh.write(payload)
-        QMessageBox.information(self, "Ausgaben", f"CSV exportiert:\n{path}")
+
+        def job() -> str:
+            with open(path, "w", encoding="utf-8", newline="") as fh:
+                fh.write(payload)
+            return path
+
+        self._export_worker = BackgroundWorker(job)
+        self._export_worker.signals.result.connect(lambda saved_path: QMessageBox.information(self, "Ausgaben", f"CSV exportiert:\n{saved_path}"))
+        self._export_worker.signals.error.connect(lambda exc: QMessageBox.warning(self, "Ausgaben", f"CSV-Export fehlgeschlagen: {exc}"))
+        self._export_worker.signals.finished.connect(lambda: setattr(self, "_export_worker", None))
+        self._export_worker.start()

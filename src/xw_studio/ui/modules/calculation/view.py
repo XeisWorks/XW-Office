@@ -29,8 +29,8 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QSizePolicy,
+    QTableView,
     QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -43,6 +43,7 @@ from xw_studio.services.calculation.service import (
     CalculationService,
     calculate_royalty,
 )
+from xw_studio.ui.widgets.data_table import DataTable
 
 if TYPE_CHECKING:
     from xw_studio.core.container import Container
@@ -76,6 +77,7 @@ class CalculationView(QWidget):
         self._articles: list[ArticleEntry] = []
         self._worker: BackgroundWorker | None = None
         self._commission_worker: BackgroundWorker | None = None
+        self._export_worker: BackgroundWorker | None = None
         self._last_commission_result: CommissionRunResult | None = None
         self._active_profile_key: str = ""
 
@@ -304,36 +306,29 @@ class CalculationView(QWidget):
         kpi.addStretch()
         lay.addLayout(kpi)
 
-        self._product_table = QTableWidget(0, len(_PRODUCT_HEADERS))
-        self._product_table.setHorizontalHeaderLabels(_PRODUCT_HEADERS)
+        self._product_table = DataTable(_PRODUCT_HEADERS)
         self._product_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._product_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
         self._product_table.horizontalHeader().setSectionResizeMode(9, QHeaderView.ResizeMode.Stretch)
-        self._product_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._product_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._product_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         lay.addWidget(self._product_table, stretch=3)
 
-        self._category_table = QTableWidget(0, len(_CATEGORY_HEADERS))
-        self._category_table.setHorizontalHeaderLabels(_CATEGORY_HEADERS)
+        self._category_table = DataTable(_CATEGORY_HEADERS)
         self._category_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self._category_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._category_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._category_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         lay.addWidget(self._category_table, stretch=1)
 
-        self._doc_table = QTableWidget(0, len(_DOC_HEADERS))
-        self._doc_table.setHorizontalHeaderLabels(_DOC_HEADERS)
-        self._doc_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self._doc_table = DataTable(_DOC_HEADERS)
+        self._doc_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         self._doc_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self._doc_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._doc_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._doc_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         lay.addWidget(self._doc_table, stretch=2)
 
         self._anomaly_label = QLabel("Problemfaelle:")
         lay.addWidget(self._anomaly_label)
-        self._anomaly_table = QTableWidget(0, 1)
-        self._anomaly_table.setHorizontalHeaderLabels(["Hinweis"])
+        self._anomaly_table = DataTable(["Hinweis"])
         self._anomaly_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self._anomaly_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._anomaly_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         lay.addWidget(self._anomaly_table, stretch=1)
 
         return page
@@ -411,56 +406,61 @@ class CalculationView(QWidget):
         if result is None:
             QMessageBox.information(self, "Provisionen", "Bitte zuerst eine Abrechnung laden.")
             return
+        if self._export_worker is not None and self._export_worker.isRunning():
+            return
 
         default_name = f"provision_{result.profile.key}_{result.period.start.isoformat()}_{result.period.end.isoformat()}.csv"
         path, _ = QFileDialog.getSaveFileName(self, "CSV exportieren", default_name, "CSV (*.csv)")
         if not path:
             return
 
-        rows = [
-            [
-                "sku",
-                "name",
-                "sold_quantity",
-                "canceled_quantity",
-                "credited_quantity",
-                "net_quantity",
-                "net_amount",
-                "gross_amount",
-                "categories",
-                "warning",
-            ]
-        ]
-        for row in result.product_rows:
-            rows.append(
+        def job() -> str:
+            rows = [
                 [
-                    row.sku,
-                    row.name,
-                    f"{row.sold_quantity:.2f}",
-                    f"{row.canceled_quantity:.2f}",
-                    f"{row.credited_quantity:.2f}",
-                    f"{row.net_quantity:.2f}",
-                    f"{row.net_amount:.2f}",
-                    f"{row.gross_amount:.2f}",
-                    ", ".join(row.category_names),
-                    row.warning,
+                    "sku",
+                    "name",
+                    "sold_quantity",
+                    "canceled_quantity",
+                    "credited_quantity",
+                    "net_quantity",
+                    "net_amount",
+                    "gross_amount",
+                    "categories",
+                    "warning",
                 ]
-            )
-
-        try:
+            ]
+            for row in result.product_rows:
+                rows.append(
+                    [
+                        row.sku,
+                        row.name,
+                        f"{row.sold_quantity:.2f}",
+                        f"{row.canceled_quantity:.2f}",
+                        f"{row.credited_quantity:.2f}",
+                        f"{row.net_quantity:.2f}",
+                        f"{row.net_amount:.2f}",
+                        f"{row.gross_amount:.2f}",
+                        ", ".join(row.category_names),
+                        row.warning,
+                    ]
+                )
             with Path(path).open("w", encoding="utf-8-sig", newline="") as handle:
                 writer = csv.writer(handle, delimiter=";")
                 writer.writerows(rows)
-        except OSError as exc:
-            QMessageBox.critical(self, "Provisionen", f"CSV-Export fehlgeschlagen: {exc}")
-            return
+            return path
 
-        QMessageBox.information(self, "Provisionen", f"CSV exportiert: {path}")
+        self._export_worker = BackgroundWorker(job)
+        self._export_worker.signals.result.connect(lambda payload: QMessageBox.information(self, "Provisionen", f"CSV exportiert: {payload}"))
+        self._export_worker.signals.error.connect(lambda exc: QMessageBox.critical(self, "Provisionen", f"CSV-Export fehlgeschlagen: {exc}"))
+        self._export_worker.signals.finished.connect(lambda: setattr(self, "_export_worker", None))
+        self._export_worker.start()
 
     def _export_commission_xlsx(self) -> None:
         result = self._last_commission_result
         if result is None:
             QMessageBox.information(self, "Provisionen", "Bitte zuerst eine Abrechnung laden.")
+            return
+        if self._export_worker is not None and self._export_worker.isRunning():
             return
 
         default_name = f"provision_{result.profile.key}_{result.period.start.isoformat()}_{result.period.end.isoformat()}.xlsx"
@@ -468,80 +468,81 @@ class CalculationView(QWidget):
         if not path:
             return
 
-        wb = Workbook()
-        ws_products = wb.active
-        ws_products.title = "Produkte"
-        ws_products.append(
-            [
-                "SKU",
-                "Name",
-                "Verkauft",
-                "Storno",
-                "Gutschrift",
-                "Netto-Menge",
-                "Netto EUR",
-                "Brutto EUR",
-                "Kategorien",
-                "Warnung",
-            ]
-        )
-        for row in result.product_rows:
+        def job() -> str:
+            wb = Workbook()
+            ws_products = wb.active
+            ws_products.title = "Produkte"
             ws_products.append(
                 [
-                    row.sku,
-                    row.name,
-                    row.sold_quantity,
-                    row.canceled_quantity,
-                    row.credited_quantity,
-                    row.net_quantity,
-                    row.net_amount,
-                    row.gross_amount,
-                    ", ".join(row.category_names),
-                    row.warning,
+                    "SKU",
+                    "Name",
+                    "Verkauft",
+                    "Storno",
+                    "Gutschrift",
+                    "Netto-Menge",
+                    "Netto EUR",
+                    "Brutto EUR",
+                    "Kategorien",
+                    "Warnung",
                 ]
             )
+            for row in result.product_rows:
+                ws_products.append(
+                    [
+                        row.sku,
+                        row.name,
+                        row.sold_quantity,
+                        row.canceled_quantity,
+                        row.credited_quantity,
+                        row.net_quantity,
+                        row.net_amount,
+                        row.gross_amount,
+                        ", ".join(row.category_names),
+                        row.warning,
+                    ]
+                )
 
-        ws_categories = wb.create_sheet("Kategorien")
-        ws_categories.append(["Kategorie", "Menge", "Netto EUR", "Brutto EUR", "Anteil Netto %"])
-        for row in result.category_rows:
-            ws_categories.append(
-                [
-                    row.category_name,
-                    row.quantity,
-                    row.net_amount,
-                    row.gross_amount,
-                    row.share_of_net_amount * 100.0,
-                ]
-            )
+            ws_categories = wb.create_sheet("Kategorien")
+            ws_categories.append(["Kategorie", "Menge", "Netto EUR", "Brutto EUR", "Anteil Netto %"])
+            for row in result.category_rows:
+                ws_categories.append(
+                    [
+                        row.category_name,
+                        row.quantity,
+                        row.net_amount,
+                        row.gross_amount,
+                        row.share_of_net_amount * 100.0,
+                    ]
+                )
 
-        ws_docs = wb.create_sheet("Belege")
-        ws_docs.append(["Beleg", "Datum", "Typ", "SKU", "Menge", "Netto", "Regel", "Warnung"])
-        for row in result.document_rows:
-            ws_docs.append(
-                [
-                    row.document_number,
-                    row.document_date,
-                    row.document_type,
-                    row.sku,
-                    row.signed_quantity,
-                    row.signed_net,
-                    row.rule,
-                    row.warning,
-                ]
-            )
+            ws_docs = wb.create_sheet("Belege")
+            ws_docs.append(["Beleg", "Datum", "Typ", "SKU", "Menge", "Netto", "Regel", "Warnung"])
+            for row in result.document_rows:
+                ws_docs.append(
+                    [
+                        row.document_number,
+                        row.document_date,
+                        row.document_type,
+                        row.sku,
+                        row.signed_quantity,
+                        row.signed_net,
+                        row.rule,
+                        row.warning,
+                    ]
+                )
 
-        ws_anomalies = wb.create_sheet("Problemfaelle")
-        ws_anomalies.append(["Hinweis"])
-        for warning in result.anomalies:
-            ws_anomalies.append([warning])
-
-        try:
+            ws_anomalies = wb.create_sheet("Problemfaelle")
+            ws_anomalies.append(["Hinweis"])
+            for warning in result.anomalies:
+                ws_anomalies.append([warning])
             wb.save(path)
-        except OSError as exc:
-            QMessageBox.critical(self, "Provisionen", f"XLSX-Export fehlgeschlagen: {exc}")
-            return
+            return path
 
-        QMessageBox.information(self, "Provisionen", f"XLSX exportiert: {path}")
+        self._export_worker = BackgroundWorker(job)
+        self._export_worker.signals.result.connect(lambda payload: QMessageBox.information(self, "Provisionen", f"XLSX exportiert: {payload}"))
+        self._export_worker.signals.error.connect(lambda exc: QMessageBox.critical(self, "Provisionen", f"XLSX-Export fehlgeschlagen: {exc}"))
+        self._export_worker.signals.finished.connect(lambda: setattr(self, "_export_worker", None))
+        self._export_worker.start()
 
     def _copy_commission_summary(self) -> None:
         result = self._last_commission_result
@@ -571,59 +572,65 @@ class CalculationView(QWidget):
         QMessageBox.information(self, "Provisionen", "Abrechnung in die Zwischenablage kopiert.")
 
     def _populate_product_table(self, result: CommissionRunResult) -> None:
-        tbl = self._product_table
-        tbl.setRowCount(0)
-
-        for row in result.product_rows:
-            idx = tbl.rowCount()
-            tbl.insertRow(idx)
-            tbl.setItem(idx, 0, QTableWidgetItem(row.sku))
-            tbl.setItem(idx, 1, QTableWidgetItem(row.name))
-            tbl.setItem(idx, 2, self._num_item(row.sold_quantity, decimals=2))
-            tbl.setItem(idx, 3, self._num_item(row.canceled_quantity, decimals=2))
-            tbl.setItem(idx, 4, self._num_item(row.credited_quantity, decimals=2))
-            tbl.setItem(idx, 5, self._num_item(row.net_quantity, decimals=2))
-            tbl.setItem(idx, 6, self._num_item(row.net_amount, decimals=2))
-            tbl.setItem(idx, 7, self._num_item(row.gross_amount, decimals=2))
-            tbl.setItem(idx, 8, QTableWidgetItem(", ".join(row.category_names)))
-            tbl.setItem(idx, 9, QTableWidgetItem(row.warning))
-
-        for col in (2, 3, 4, 5, 6, 7):
-            tbl.resizeColumnToContents(col)
+        self._product_table.set_data(
+            [
+                {
+                    "SKU": row.sku,
+                    "Name": row.name,
+                    "Verkauft": f"{row.sold_quantity:.2f}",
+                    "Storno": f"{row.canceled_quantity:.2f}",
+                    "Gutschrift": f"{row.credited_quantity:.2f}",
+                    "Netto-Menge": f"{row.net_quantity:.2f}",
+                    "Netto EUR": f"{row.net_amount:.2f}",
+                    "Brutto EUR": f"{row.gross_amount:.2f}",
+                    "Kategorien": ", ".join(row.category_names),
+                    "Warnung": row.warning,
+                    "__align__Verkauft": "right",
+                    "__align__Storno": "right",
+                    "__align__Gutschrift": "right",
+                    "__align__Netto-Menge": "right",
+                    "__align__Netto EUR": "right",
+                    "__align__Brutto EUR": "right",
+                }
+                for row in result.product_rows
+            ]
+        )
 
     def _populate_category_table(self, result: CommissionRunResult) -> None:
-        tbl = self._category_table
-        tbl.setRowCount(0)
-
-        for row in result.category_rows:
-            idx = tbl.rowCount()
-            tbl.insertRow(idx)
-            tbl.setItem(idx, 0, QTableWidgetItem(row.category_name))
-            tbl.setItem(idx, 1, self._num_item(row.quantity, decimals=2))
-            tbl.setItem(idx, 2, self._num_item(row.net_amount, decimals=2))
-            tbl.setItem(idx, 3, self._num_item(row.gross_amount, decimals=2))
-            tbl.setItem(idx, 4, self._num_item(row.share_of_net_amount * 100.0, decimals=2, suffix=" %"))
-
-        for col in (1, 2, 3, 4):
-            tbl.resizeColumnToContents(col)
+        self._category_table.set_data(
+            [
+                {
+                    "Kategorie": row.category_name,
+                    "Menge": f"{row.quantity:.2f}",
+                    "Netto EUR": f"{row.net_amount:.2f}",
+                    "Brutto EUR": f"{row.gross_amount:.2f}",
+                    "Anteil Netto": f"{row.share_of_net_amount * 100.0:.2f} %",
+                    "__align__Menge": "right",
+                    "__align__Netto EUR": "right",
+                    "__align__Brutto EUR": "right",
+                    "__align__Anteil Netto": "right",
+                }
+                for row in result.category_rows
+            ]
+        )
 
     def _populate_doc_table(self, result: CommissionRunResult) -> None:
-        tbl = self._doc_table
-        tbl.setRowCount(0)
-
-        for item in result.document_rows:
-            idx = tbl.rowCount()
-            tbl.insertRow(idx)
-            tbl.setItem(idx, 0, QTableWidgetItem(item.document_number))
-            tbl.setItem(idx, 1, QTableWidgetItem(item.document_date))
-            tbl.setItem(idx, 2, QTableWidgetItem(item.document_type))
-            tbl.setItem(idx, 3, QTableWidgetItem(item.sku))
-            tbl.setItem(idx, 4, self._num_item(item.signed_quantity, decimals=2))
-            tbl.setItem(idx, 5, self._num_item(item.signed_net, decimals=2))
-            tbl.setItem(idx, 6, QTableWidgetItem(item.rule))
-
-        for col in (0, 1, 2, 4, 5, 6):
-            tbl.resizeColumnToContents(col)
+        self._doc_table.set_data(
+            [
+                {
+                    "Beleg": item.document_number,
+                    "Datum": item.document_date,
+                    "Typ": item.document_type,
+                    "SKU": item.sku,
+                    "Menge": f"{item.signed_quantity:.2f}",
+                    "Netto": f"{item.signed_net:.2f}",
+                    "Regel": item.rule,
+                    "__align__Menge": "right",
+                    "__align__Netto": "right",
+                }
+                for item in result.document_rows
+            ]
+        )
 
     def _populate_anomaly_table(self, result: CommissionRunResult) -> None:
         show = self._show_anomalies.isChecked()
@@ -632,19 +639,7 @@ class CalculationView(QWidget):
         if not show:
             return
 
-        tbl = self._anomaly_table
-        tbl.setRowCount(0)
-        for warning in result.anomalies:
-            idx = tbl.rowCount()
-            tbl.insertRow(idx)
-            tbl.setItem(idx, 0, QTableWidgetItem(warning))
-
-    @staticmethod
-    def _num_item(value: float, *, decimals: int = 2, suffix: str = "") -> QTableWidgetItem:
-        text = f"{value:.{decimals}f}{suffix}"
-        item = QTableWidgetItem(text)
-        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        return item
+        self._anomaly_table.set_data([{"Hinweis": warning} for warning in result.anomalies])
 
     # ------------------------------------------------------------------
     # Legacy page: article list with computed royalties
@@ -665,12 +660,10 @@ class CalculationView(QWidget):
         bar.addWidget(refresh_btn)
         lay.addLayout(bar)
 
-        self._art_table = QTableWidget(0, len(_ARTICLE_HEADERS))
-        self._art_table.setHorizontalHeaderLabels(_ARTICLE_HEADERS)
+        self._art_table = DataTable(_ARTICLE_HEADERS)
         self._art_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._art_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
-        self._art_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._art_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._art_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         self._art_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         lay.addWidget(self._art_table)
 
@@ -702,33 +695,28 @@ class CalculationView(QWidget):
         self._populate_articles(self._articles)
 
     def _populate_articles(self, items: list[ArticleEntry]) -> None:
-        tbl = self._art_table
-        tbl.setRowCount(0)
+        payload: list[dict[str, object]] = []
         for art in items:
             res = calculate_royalty(art.gross_price, vat_pct=art.vat_pct, royalty_pct=art.royalty_pct)
-            r = tbl.rowCount()
-            tbl.insertRow(r)
-            tbl.setItem(r, 0, QTableWidgetItem(art.title))
-
-            def _eur(v: float) -> QTableWidgetItem:
-                item = QTableWidgetItem(f"{v:.2f}")
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                return item
-
-            def _pct(v: float) -> QTableWidgetItem:
-                item = QTableWidgetItem(f"{v:.1f}")
-                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                return item
-
-            tbl.setItem(r, 1, _eur(art.gross_price))
-            tbl.setItem(r, 2, _pct(art.vat_pct))
-            tbl.setItem(r, 3, _pct(art.royalty_pct))
-            tbl.setItem(r, 4, _eur(res.net))
-            tbl.setItem(r, 5, _eur(res.vat_amount))
-            tbl.setItem(r, 6, _eur(res.royalty_amount))
-            tbl.setItem(r, 7, QTableWidgetItem(art.note))
-        for col in range(1, 7):
-            tbl.resizeColumnToContents(col)
+            payload.append(
+                {
+                    "Titel": art.title,
+                    "Brutto EUR": f"{art.gross_price:.2f}",
+                    "MwSt %": f"{art.vat_pct:.1f}",
+                    "Provision %": f"{art.royalty_pct:.1f}",
+                    "Netto EUR": f"{res.net:.2f}",
+                    "MwSt EUR": f"{res.vat_amount:.2f}",
+                    "Provision EUR": f"{res.royalty_amount:.2f}",
+                    "Notiz": art.note,
+                    "__align__Brutto EUR": "right",
+                    "__align__MwSt %": "center",
+                    "__align__Provision %": "center",
+                    "__align__Netto EUR": "right",
+                    "__align__MwSt EUR": "right",
+                    "__align__Provision EUR": "right",
+                }
+            )
+        self._art_table.set_data(payload)
 
     # ------------------------------------------------------------------
     # Legacy page: quick calculator

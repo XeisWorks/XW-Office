@@ -1,13 +1,17 @@
 """Deterministic payment-clearing service tests."""
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import httpx
 import pytest
 
+from xw_studio.core.config import AppConfig
+from xw_studio.services.clearing.gateways import SevdeskClearingGateway, purpose_provider_ref
 from xw_studio.services.clearing.models import (
     ClearingDuplicateKey,
     InvoiceRecord,
@@ -18,8 +22,8 @@ from xw_studio.services.clearing.models import (
     TransactionKind,
     money,
 )
-from xw_studio.services.clearing.gateways import purpose_provider_ref
 from xw_studio.services.clearing.service import PaymentClearingService
+from xw_studio.services.http_client import SevdeskConnection
 
 VIENNA = ZoneInfo("Europe/Vienna")
 
@@ -51,6 +55,7 @@ class _Sevdesk:
         self.reset_calls: list[tuple[int, int]] = []
         self.existing: SevdeskTransaction | None = None
         self.transactions_by_account: dict[int, list[SevdeskTransaction]] = {}
+        self.book_result: object = None
 
     def account_ids(self) -> dict[str, int]:
         return {"stripe": 11, "mollie": 12}
@@ -104,8 +109,9 @@ class _Sevdesk:
         self.created.append(kwargs)
         return 99
 
-    def book_invoice(self, **kwargs: object) -> None:
+    def book_invoice(self, **kwargs: object) -> object:
         self.booked.append(kwargs)
+        return self.book_result
 
 
 def _payment() -> ProviderTransaction:
@@ -137,6 +143,155 @@ def test_money_is_decimal_and_rounded_to_cents() -> None:
 
 def test_payout_purpose_is_idempotently_recognized() -> None:
     assert purpose_provider_ref("payout:stl_123 | 2026-03-01-2026-03-31 | PAYOUT") == "stl_123"
+
+
+def test_sevdesk_gateway_book_invoice_uses_v2_book_amount_payload() -> None:
+    calls: list[tuple[str, str]] = []
+    invoice_reads = 0
+    transaction_reads = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal invoice_reads, transaction_reads
+        path = request.url.path
+        calls.append((request.method, path))
+        if request.method == "GET" and path.endswith("/Invoice/7"):
+            invoice_reads += 1
+            status = 200 if invoice_reads == 1 else 1000
+            return httpx.Response(200, json={"objects": {"id": 7, "status": status}})
+        if request.method == "GET" and path.endswith("/CheckAccountTransaction/99"):
+            transaction_reads += 1
+            status = 100 if transaction_reads == 1 else 400
+            return httpx.Response(
+                200,
+                json={"objects": {"id": 99, "status": status, "checkAccount": {"id": 11}}},
+            )
+        if request.method == "GET" and path.endswith("/Tools/bookkeepingSystemVersion"):
+            return httpx.Response(200, json={"objects": {"version": "2.0"}})
+        if request.method == "PUT" and path.endswith("/Invoice/7/bookAmount"):
+            payload = json.loads(request.content.decode("utf-8"))
+            assert payload == {
+                "amount": 29.9,
+                "date": 1783065600,
+                "type": "FULL_PAYMENT",
+                "checkAccount": {"id": 11, "objectName": "CheckAccount"},
+                "checkAccountTransaction": {"id": 99, "objectName": "CheckAccountTransaction"},
+                "createFeed": False,
+            }
+            return httpx.Response(200, json={"objects": {}})
+        return httpx.Response(404, text=f"unexpected {request.method} {path}")
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://example.test/api/v1",
+    )
+    gateway = SevdeskClearingGateway(SevdeskConnection(client=client, config=AppConfig()))
+
+    result = gateway.book_invoice(
+        invoice_id=7,
+        amount=money("29.90"),
+        payment_date=datetime(2026, 7, 3, 8, 0, tzinfo=ZoneInfo("UTC")),
+        account_id=11,
+        transaction_id=99,
+    )
+
+    assert result["status"] == "booked"
+    assert ("PUT", "/api/v1/Invoice/7/bookAmount") in calls
+    assert not any(path.endswith("/linkInvoice") for _method, path in calls)
+
+
+def test_sevdesk_gateway_confirms_paid_invoice_even_if_status_400_patch_does_not_stick() -> None:
+    calls: list[tuple[str, str]] = []
+    invoice_reads = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal invoice_reads
+        path = request.url.path
+        calls.append((request.method, path))
+        if request.method == "GET" and path.endswith("/Invoice/7"):
+            invoice_reads += 1
+            status = 200 if invoice_reads == 1 else 1000
+            return httpx.Response(200, json={"objects": {"id": 7, "status": status}})
+        if request.method == "GET" and path.endswith("/CheckAccountTransaction/99"):
+            return httpx.Response(
+                200,
+                json={"objects": {"id": 99, "status": 100, "checkAccount": {"id": 11}}},
+            )
+        if request.method == "GET" and path.endswith("/Tools/bookkeepingSystemVersion"):
+            return httpx.Response(200, json={"objects": {"version": "2.0"}})
+        if request.method == "PUT" and path.endswith("/Invoice/7/bookAmount"):
+            return httpx.Response(200, json={"objects": {}})
+        if request.method == "PUT" and path.endswith("/CheckAccountTransaction/99"):
+            return httpx.Response(200, json={"objects": {"id": 99, "status": 100}})
+        return httpx.Response(404, text=f"unexpected {request.method} {path}")
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://example.test/api/v1",
+    )
+    gateway = SevdeskClearingGateway(SevdeskConnection(client=client, config=AppConfig()))
+
+    result = gateway.book_invoice(
+        invoice_id=7,
+        amount=money("29.90"),
+        payment_date=datetime(2026, 7, 3, 8, 0, tzinfo=ZoneInfo("UTC")),
+        account_id=11,
+        transaction_id=99,
+    )
+
+    assert result["status"] == "booked"
+    assert result["tx_status"] == "100"
+    assert ("PUT", "/api/v1/CheckAccountTransaction/99") in calls
+
+
+def test_sevdesk_gateway_book_invoice_uses_legacy_link_invoice_patch_fallback() -> None:
+    calls: list[tuple[str, str]] = []
+    invoice_reads = 0
+    transaction_reads = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal invoice_reads, transaction_reads
+        path = request.url.path
+        calls.append((request.method, path))
+        if request.method == "GET" and path.endswith("/Invoice/8"):
+            invoice_reads += 1
+            status = 200 if invoice_reads == 1 else 1000
+            return httpx.Response(200, json={"objects": {"id": 8, "status": status}})
+        if request.method == "GET" and path.endswith("/CheckAccountTransaction/88"):
+            transaction_reads += 1
+            status = 100 if transaction_reads == 1 else 400
+            return httpx.Response(
+                200,
+                json={"objects": {"id": 88, "status": status, "checkAccount": {"id": 12}}},
+            )
+        if request.method == "GET" and path.endswith("/Tools/bookkeepingSystemVersion"):
+            return httpx.Response(200, json={"objects": {"version": "1.0"}})
+        if request.method == "PUT" and path.endswith("/CheckAccountTransaction/88/linkInvoice"):
+            return httpx.Response(500, text="legacy put failed")
+        if request.method == "PATCH" and path.endswith("/CheckAccountTransaction/88/linkInvoice"):
+            payload = json.loads(request.content.decode("utf-8"))
+            assert payload == {"amount": 29.9, "date": 1783065600}
+            assert request.url.params["invoiceId"] == "8"
+            return httpx.Response(200, json={"objects": {}})
+        return httpx.Response(404, text=f"unexpected {request.method} {path}")
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://example.test/api/v1",
+    )
+    gateway = SevdeskClearingGateway(SevdeskConnection(client=client, config=AppConfig()))
+
+    result = gateway.book_invoice(
+        invoice_id=8,
+        amount=money("29.90"),
+        payment_date=datetime(2026, 7, 3, 8, 0, tzinfo=ZoneInfo("UTC")),
+        account_id=12,
+        transaction_id=88,
+    )
+
+    assert result["status"] == "booked"
+    assert ("PUT", "/api/v1/CheckAccountTransaction/88/linkInvoice") in calls
+    assert ("PATCH", "/api/v1/CheckAccountTransaction/88/linkInvoice") in calls
+    assert not any(path.endswith("/bookAmount") for _method, path in calls)
 
 
 def test_analysis_preselects_exact_provider_wix_invoice_match(tmp_path: Path) -> None:
@@ -179,6 +334,33 @@ def test_confirmed_batch_imports_then_books_once(tmp_path: Path) -> None:
     assert sevdesk.booked[0]["transaction_id"] == 99
     assert len(list(tmp_path.glob("clearing_analysis_*.json"))) == 1
     assert len(list(tmp_path.glob("clearing_booking_*.json"))) == 1
+
+
+def test_confirmed_batch_requires_confirmed_invoice_booking(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    sevdesk.book_result = {"status": "not_booked", "invoice_status": "200", "tx_status": "100"}
+    service = _service(sevdesk, [_payment()], tmp_path)
+    row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
+
+    result = service.book_selected([row])
+
+    assert result.failure_count == 1
+    assert result.items[0].transaction_id == 99
+    assert "status=not_booked" in result.items[0].message
+
+
+def test_booking_recheck_does_not_import_when_invoice_is_now_paid(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    service = _service(sevdesk, [_payment()], tmp_path)
+    row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
+    sevdesk.invoice = InvoiceRecord(7, "RE-100", "Wix | 12345", money("29.90"), 1000, "Anna")
+
+    result = service.book_selected([row])
+
+    assert result.success_count == 1
+    assert result.items[0].status == MatchStatus.ALREADY_BOOKED
+    assert sevdesk.created == []
+    assert sevdesk.booked == []
 
 
 def test_booking_rechecks_current_invoice_wix_order_before_writing(tmp_path: Path) -> None:

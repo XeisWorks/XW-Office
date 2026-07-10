@@ -33,6 +33,8 @@ class UvaSubmitResult(BaseModel):
     zm_rows: int = 0
     zm_xml_validated: bool = False
     zm_xml_payload: str = ""
+    uva_payload: dict[str, Any] = Field(default_factory=dict)
+    zm_payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class UvaSoapBackend(Protocol):
