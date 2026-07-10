@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import json
+from pathlib import Path
 
 from xw_studio.core.config import AppConfig
 from xw_studio.core.exceptions import ConfigError
@@ -105,4 +107,37 @@ class SecretService:
         if key == "WIX_ACCOUNT_ID":
             return (self._config.wix.account_id or "").strip()
         # Generic fallback allows gradual migration of additional env tokens.
-        return (os.getenv(key, "") or "").strip()
+        env_value = (os.getenv(key, "") or "").strip()
+        if env_value:
+            return env_value
+        return self._legacy_graph_fallback(key)
+
+    def _legacy_graph_fallback(self, key: str) -> str:
+        mapping = {
+            "MS_GRAPH_TENANT_ID": "tenant_id",
+            "MS_GRAPH_CLIENT_ID": "client_id",
+            "MS_GRAPH_MAILBOX": "mailbox_user",
+            "MS_GRAPH_TRANSFER_MAILBOX": "transfer_mailbox_user",
+        }
+        legacy_key = mapping.get(key)
+        if not legacy_key:
+            return ""
+        config_path = self._legacy_config_path()
+        if not config_path.exists():
+            return ""
+        try:
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            return ""
+        graph = payload.get("graph") if isinstance(payload, dict) else None
+        if not isinstance(graph, dict):
+            return ""
+        return str(graph.get(legacy_key) or "").strip()
+
+    @staticmethod
+    def _legacy_config_path() -> Path:
+        override = (os.getenv("XW_STUDIO_LEGACY_SEVDESK_CONFIG") or "").strip()
+        if override:
+            return Path(os.path.expandvars(os.path.expanduser(override)))
+        repo_root = Path(__file__).resolve().parents[4]
+        return repo_root.parent / "sevDesk" / "sevdesk_wix_fulfillment" / "config.json"

@@ -182,8 +182,9 @@ class _FakeOffeneSendungenService:
 
 
 class _FakeOffeneUeberweisungenService:
-    def __init__(self, count: int = 0) -> None:
+    def __init__(self, count: int = 0, login_required: bool = False) -> None:
         self._count = count
+        self._login_required = login_required
 
     def open_count(self) -> int:
         return self._count
@@ -191,6 +192,9 @@ class _FakeOffeneUeberweisungenService:
     def refresh_count_from_graph_silent(self, *, lookback_days: int = 60, max_items: int = 150) -> int:
         del lookback_days, max_items
         return self._count
+
+    def needs_interactive_graph_login(self) -> bool:
+        return self._login_required
 
 
 def _build_rechnungen_test_container() -> tuple[Container, _FakeInvoiceProcessingService]:
@@ -297,6 +301,26 @@ def test_transfer_alert_click_updates_badge_from_dialog_result(qtbot: object, mo
     view._on_transfer_alert_clicked()  # noqa: SLF001
 
     assert view._btn_transfer_alert.text() == "UEBERWEISUNG OFFEN (3)"  # noqa: SLF001
+    assert not view._btn_transfer_alert.isHidden()  # noqa: SLF001
+
+
+def test_transfer_alert_shows_login_when_graph_auth_required(qtbot: object) -> None:
+    container = _build_container()
+    view = TagesgeschaeftView(container)
+    qtbot.addWidget(view)
+
+    view._on_badges_result(  # noqa: SLF001
+        {
+            "rechnungen": 0,
+            "mollie": 0,
+            "gutscheine": 0,
+            "sendungen": 0,
+            "transfer": 0,
+            "transfer_login_required": 1,
+        }
+    )
+
+    assert view._btn_transfer_alert.text() == "UEBERWEISUNG LOGIN"  # noqa: SLF001
     assert not view._btn_transfer_alert.isHidden()  # noqa: SLF001
 
 

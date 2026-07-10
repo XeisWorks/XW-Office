@@ -526,8 +526,14 @@ class TagesgeschaeftView(QWidget):
                     0,
                     int(transfer_service.refresh_count_from_graph_silent(lookback_days=60, max_items=150)),
                 )
+                counts["transfer_login_required"] = (
+                    1
+                    if counts["transfer"] == 0 and transfer_service.needs_interactive_graph_login()
+                    else 0
+                )
             except Exception:  # noqa: BLE001
                 counts["transfer"] = max(0, int(counts.get("transfers", 0)))
+                counts["transfer_login_required"] = 0
             return counts
 
         self._badge_worker = BackgroundWorker(job)
@@ -543,12 +549,19 @@ class TagesgeschaeftView(QWidget):
         gutscheine_count = max(0, int(counts.get("gutscheine", 0)))
         sendungen_count = max(0, int(counts.get("sendungen", 0)))
         transfer_count = max(0, int(counts.get("transfer", counts.get("refunds", 0))))
+        transfer_login_required = bool(counts.get("transfer_login_required"))
 
         self._sendungen_count = sendungen_count
         self._transfer_count = transfer_count
         self._mollie_count = mollie_count
         self._update_alert_button(self._btn_sendungen_alert, "OFFENE SENDUNGEN", sendungen_count)
-        self._update_alert_button(self._btn_transfer_alert, "UEBERWEISUNG OFFEN", transfer_count)
+        if transfer_count > 0:
+            self._update_alert_button(self._btn_transfer_alert, "UEBERWEISUNG OFFEN", transfer_count)
+        elif transfer_login_required:
+            self._btn_transfer_alert.setText("UEBERWEISUNG LOGIN")
+            self._btn_transfer_alert.show()
+        else:
+            self._update_alert_button(self._btn_transfer_alert, "UEBERWEISUNG OFFEN", 0)
         self._update_alert_button(self._btn_mollie_alert, "MOLLIE AUTH", mollie_count)
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.badge_updated.emit(ModuleKey.RECHNUNGEN.value, open_count)

@@ -63,7 +63,7 @@ class OffeneUeberweisungenService:
             max_items=max_items,
             allow_interactive_auth=allow_interactive_auth,
         )
-        cases = [self._to_case(msg) for msg in messages]
+        cases = [self._to_case(msg, load_thread=allow_interactive_auth) for msg in messages]
         manual_map = self._load_manual_fields()
         for case in cases:
             self._apply_manual_fields(case, manual_map)
@@ -78,6 +78,15 @@ class OffeneUeberweisungenService:
                 allow_interactive_auth=False,
             )
         )
+
+    def needs_interactive_graph_login(self) -> bool:
+        client = self._graph_client(write=False)
+        if client is None:
+            return False
+        try:
+            return not client.has_silent_token()
+        except Exception:  # noqa: BLE001
+            return True
 
     def summarize_case(self, case_id: str) -> str:
         case = self._find_case(case_id)
@@ -217,7 +226,7 @@ class OffeneUeberweisungenService:
         self._append_done_audit(case, payment, qr_path=qr_path)
 
     def mark_outlook_flag_complete(self, message_id: str) -> None:
-        client = self._graph_client()
+        client = self._graph_client(write=True)
         if client is None:
             raise RuntimeError("MS Graph ist nicht konfiguriert")
         client.mark_message_followup_complete(message_id)
@@ -226,7 +235,7 @@ class OffeneUeberweisungenService:
         case = self._find_case(case_id)
         if case is None:
             return []
-        client = self._graph_client()
+        client = self._graph_client(write=False)
         if client is None:
             return list(case.attachments)
         try:
@@ -251,7 +260,7 @@ class OffeneUeberweisungenService:
         case = self._find_case(case_id)
         if case is None:
             return b""
-        client = self._graph_client()
+        client = self._graph_client(write=False)
         if client is None:
             return b""
         return client.download_attachment_bytes(case.id, attachment_id)
@@ -261,24 +270,25 @@ class OffeneUeberweisungenService:
         mapping[case_id] = payment_to_json_dict(payment)
         self._save_manual_fields(mapping)
 
-    def _graph_client(self) -> GraphMailClient | None:
+    def _graph_client(self, *, write: bool = False) -> GraphMailClient | None:
         tenant_id = self._secrets.get_secret("MS_GRAPH_TENANT_ID")
         client_id = self._secrets.get_secret("MS_GRAPH_CLIENT_ID")
         mailbox = self._secrets.get_secret("MS_GRAPH_TRANSFER_MAILBOX") or _DEFAULT_TRANSFER_MAILBOX
         if not tenant_id or not client_id:
             return None
+        scopes = [
+            "Mail.Read",
+            "Mail.Read.Shared",
+            "Mail.Send",
+            "Mail.Send.Shared",
+        ]
+        if write:
+            scopes.extend(["Mail.ReadWrite", "Mail.ReadWrite.Shared"])
         return GraphMailClient(
             tenant_id=tenant_id,
             client_id=client_id,
             mailbox_user=mailbox,
-            scopes=[
-                "Mail.Read",
-                "Mail.Read.Shared",
-                "Mail.ReadWrite",
-                "Mail.ReadWrite.Shared",
-                "Mail.Send",
-                "Mail.Send.Shared",
-            ],
+            scopes=scopes,
         )
 
     def _fetch_graph_messages(
@@ -288,12 +298,12 @@ class OffeneUeberweisungenService:
         max_items: int,
         allow_interactive_auth: bool,
     ) -> list[dict[str, Any]]:
-        client = self._graph_client()
+        client = self._graph_client(write=False)
         if client is None:
             return self._load_cached_raw_messages()
         if not allow_interactive_auth and not client.has_silent_token():
             logger.info("MS Graph silent token missing; using cached offene Ueberweisungen")
-            return self._load_cached_raw_messages()
+            return self._cached_cases_as_raw_messages() or self._load_cached_raw_messages()
 
         try:
             values = client.list_inbox_messages(days=max(1, lookback_days), top=max(1, min(max_items, 300)))
@@ -322,16 +332,16 @@ class OffeneUeberweisungenService:
     def _is_transfer_candidate(msg: dict[str, Any]) -> bool:
         subject = str(msg.get("subject") or "").strip().lower()
         preview = str(msg.get("bodyPreview") or "").strip().lower()
-        hay = f"{subject} {preview}"
-        if not hay.strip():
-            return False
+        body_obj = msg.get("body") if isinstance(msg.get("body"), dict) else {}
+        body_text = str(body_obj.get("content") or "").strip().lower()
+        hay = f"{subject} {preview} {body_text}"
         if any(token in hay for token in ("automatic reply", "out of office", "undeliverable", "delivery status")):
             return False
         flag_obj = msg.get("flag") if isinstance(msg.get("flag"), dict) else {}
         status = str(flag_obj.get("flagStatus") or "").strip().lower()
         return status != "complete"
 
-    def _to_case(self, msg: dict[str, Any]) -> TransferCase:
+    def _to_case(self, msg: dict[str, Any], *, load_thread: bool = True) -> TransferCase:
         from_obj = msg.get("from") if isinstance(msg.get("from"), dict) else {}
         email_obj = from_obj.get("emailAddress") if isinstance(from_obj.get("emailAddress"), dict) else {}
         sender = str(email_obj.get("address") or email_obj.get("name") or "").strip()
@@ -360,7 +370,7 @@ class OffeneUeberweisungenService:
         completed_at = str(completed_obj.get("dateTime") or "").strip()
 
         thread_text = ""
-        client = self._graph_client()
+        client = self._graph_client(write=False) if load_thread else None
         if client is not None and conversation_id:
             try:
                 thread_text = client.get_conversation_thread_text(conversation_id, days=60, top=20)
@@ -526,6 +536,33 @@ class OffeneUeberweisungenService:
         if not isinstance(data, list):
             return []
         return [item for item in data if isinstance(item, dict)]
+
+    def _cached_cases_as_raw_messages(self) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
+        for case in self.load_open_cases():
+            messages.append(
+                {
+                    "id": case.id,
+                    "internetMessageId": case.internet_message_id,
+                    "receivedDateTime": case.received_at,
+                    "subject": case.subject,
+                    "bodyPreview": case.snippet,
+                    "body": {"content": case.body, "contentType": "text"},
+                    "from": {"emailAddress": {"address": case.sender}},
+                    "conversationId": case.conversation_id,
+                    "flag": {"flagStatus": case.outlook_flag_status or "notFlagged"},
+                    "attachments": [
+                        {
+                            "id": att.id,
+                            "name": att.name,
+                            "contentType": att.content_type,
+                            "size": att.size,
+                        }
+                        for att in case.attachments
+                    ],
+                }
+            )
+        return messages
 
     def _save_raw_messages(self, messages: list[dict[str, Any]]) -> None:
         self._set_value(_RAW_GRAPH_KEY, json.dumps(messages, ensure_ascii=False))
