@@ -183,6 +183,23 @@ def _is_structured_epc_reference(value: str) -> bool:
     return bool(re.fullmatch(r"[A-Z0-9]{1,35}", str(value or "").strip().upper()))
 
 
+def _is_strong_invoice_reference(value: str) -> bool:
+    return bool(_INVOICE_RE.fullmatch(str(value or "").strip()))
+
+
+def _prefer_invoice_number_for_remittance(payment: TransferPaymentData) -> None:
+    if payment.source_by_field.get("remittance_text") == TransferFieldSource.PDF_EXISTING_QR:
+        return
+    invoice_number = str(payment.invoice_number or "").strip()
+    if not invoice_number or not _is_strong_invoice_reference(invoice_number):
+        return
+    payment.remittance_text = invoice_number
+    payment.source_by_field["remittance_text"] = payment.source_by_field.get(
+        "invoice_number",
+        TransferFieldSource.UNKNOWN,
+    )
+
+
 def _extract_from_text(text: str) -> TransferPaymentData:
     out = TransferPaymentData()
     if not text:
@@ -509,6 +526,7 @@ def extract_payment_data_from_sources(
     if result.remittance_text == "" and result.invoice_number:
         result.remittance_text = result.invoice_number
         result.source_by_field.setdefault("remittance_text", TransferFieldSource.UNKNOWN)
+    _prefer_invoice_number_for_remittance(result)
     return result
 
 

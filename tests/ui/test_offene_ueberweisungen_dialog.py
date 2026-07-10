@@ -104,10 +104,15 @@ class _FakeContainer:
         raise KeyError(str(_typ))
 
 
+def _wait_dialog_loaded(qtbot: object, dialog: OffeneUeberweisungenDialog) -> None:
+    qtbot.waitUntil(lambda: dialog._recipient.text() == "XeisWorks GmbH", timeout=3000)  # noqa: SLF001
+
+
 def test_dialog_loads_case_list_and_prefills_fields(qtbot: object) -> None:
     service = _FakeTransferService()
     dialog = OffeneUeberweisungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
     qtbot.addWidget(dialog)
+    _wait_dialog_loaded(qtbot, dialog)
 
     assert service.refresh_called == 1
     assert dialog._status.text() == "1 offene Ueberweisungen"  # noqa: SLF001
@@ -115,10 +120,19 @@ def test_dialog_loads_case_list_and_prefills_fields(qtbot: object) -> None:
     assert dialog._iban.text() == "AT611904300234573201"  # noqa: SLF001
 
 
+def test_dialog_constructor_does_not_refresh_graph_synchronously(qtbot: object) -> None:
+    service = _FakeTransferService()
+    dialog = OffeneUeberweisungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+
+    assert service.refresh_called == 0
+
+
 def test_dialog_defer_calls_service(qtbot: object, monkeypatch) -> None:
     service = _FakeTransferService()
     dialog = OffeneUeberweisungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
     qtbot.addWidget(dialog)
+    _wait_dialog_loaded(qtbot, dialog)
     accepted = {"value": False}
 
     monkeypatch.setattr(dialog, "accept", lambda: accepted.__setitem__("value", True))
@@ -134,6 +148,7 @@ def test_dialog_mark_done_calls_service_after_confirmation(qtbot: object, monkey
     service = _FakeTransferService()
     dialog = OffeneUeberweisungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
     qtbot.addWidget(dialog)
+    _wait_dialog_loaded(qtbot, dialog)
 
     monkeypatch.setattr(
         "xw_studio.ui.modules.rechnungen.offene_ueberweisungen_dialog.QMessageBox.question",
@@ -155,6 +170,7 @@ def test_dialog_generate_qr_uses_manual_form_values(qtbot: object, monkeypatch) 
     service = _FakeTransferService()
     dialog = OffeneUeberweisungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
     qtbot.addWidget(dialog)
+    _wait_dialog_loaded(qtbot, dialog)
 
     monkeypatch.setattr(
         "xw_studio.ui.modules.rechnungen.offene_ueberweisungen_dialog.PaymentQrDialog.exec",

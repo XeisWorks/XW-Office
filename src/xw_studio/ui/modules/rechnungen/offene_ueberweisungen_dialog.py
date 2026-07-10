@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from xw_studio.core.container import Container
+from xw_studio.core.worker import BackgroundWorker
 from xw_studio.services.transfers.models import TransferCase, TransferFieldSource, TransferPaymentData
 from xw_studio.services.transfers.payment_qr import PaymentQrError
 from xw_studio.services.transfers.service import OffeneUeberweisungenService
@@ -39,8 +40,23 @@ class OffeneUeberweisungenDialog(QDialog):
         self._service: OffeneUeberweisungenService = container.resolve(OffeneUeberweisungenService)
         self._cases: list[TransferCase] = []
         self._selected_attachment_id: str | None = None
+        self._load_worker: BackgroundWorker | None = None
+        self._detail_worker: BackgroundWorker | None = None
+        self._detail_workers: list[BackgroundWorker] = []
+        self._load_seq = 0
+        self._detail_seq = 0
         self._build_ui()
-        self._load_cases(refresh=True)
+        QTimer.singleShot(0, lambda: self._load_cases(refresh=True))
+
+    def closeEvent(self, event: QEvent) -> None:  # noqa: N802
+        self._wait_for_workers()
+        super().closeEvent(event)
+
+    def _wait_for_workers(self) -> None:
+        workers = [self._load_worker, self._detail_worker, *self._detail_workers]
+        for worker in workers:
+            if worker is not None and worker.isRunning():
+                worker.wait(3000)
 
     def _build_ui(self) -> None:
         self.setWindowTitle("OFFENE UEBERWEISUNGEN")
@@ -150,9 +166,31 @@ class OffeneUeberweisungenDialog(QDialog):
         return self._service.open_count()
 
     def _load_cases(self, *, refresh: bool) -> None:
-        if refresh:
-            self._service.refresh_from_graph(lookback_days=60, max_items=180)
-        self._cases = self._service.load_open_cases()
+        if self._load_worker is not None and self._load_worker.isRunning():
+            return
+        self._load_seq += 1
+        self._detail_seq += 1
+        seq = self._load_seq
+        self._status.setText("Lade offene Ueberweisungen...")
+        self._list.setEnabled(False)
+        self._list.clear()
+        self._clear_detail("Lade offene Ueberweisungen...")
+
+        def job() -> list[TransferCase]:
+            if refresh:
+                self._service.refresh_from_graph(lookback_days=60, max_items=180)
+            return self._service.load_open_cases()
+
+        self._load_worker = BackgroundWorker(job)
+        self._load_worker.signals.result.connect(lambda result, token=seq: self._on_cases_loaded(token, result))
+        self._load_worker.signals.error.connect(self._on_cases_load_error)
+        self._load_worker.signals.finished.connect(lambda: setattr(self, "_load_worker", None))
+        self._load_worker.start()
+
+    def _on_cases_loaded(self, seq: int, result: object) -> None:
+        if seq != self._load_seq:
+            return
+        self._cases = list(result) if isinstance(result, list) else []
         self._list.clear()
         for case in self._cases:
             marker = ""
@@ -161,11 +199,18 @@ class OffeneUeberweisungenDialog(QDialog):
             item = QListWidgetItem(f"{case.received_at[:16]} | {case.sender} | {case.subject}{marker}")
             item.setData(Qt.ItemDataRole.UserRole, case.id)
             self._list.addItem(item)
+        self._list.setEnabled(True)
         self._status.setText(f"{len(self._cases)} offene Ueberweisungen")
         if self._cases:
             self._list.setCurrentRow(0)
         else:
             self._clear_detail("Keine offenen Ueberweisungen.")
+
+    def _on_cases_load_error(self, exc: Exception) -> None:
+        self._list.setEnabled(True)
+        self._status.setText("Laden fehlgeschlagen")
+        self._clear_detail("Offene Ueberweisungen konnten nicht geladen werden.")
+        QMessageBox.warning(self, "OFFENE UEBERWEISUNGEN", f"Laden fehlgeschlagen:\n\n{exc}")
 
     def _clear_detail(self, message: str) -> None:
         self._meta.setText(message)
@@ -180,6 +225,25 @@ class OffeneUeberweisungenDialog(QDialog):
         self._due_date.setText("")
         self._note.setText("")
         self._source_label.setText("Quelle: -")
+
+    def _set_payment_loading(self, message: str) -> None:
+        self._recipient.setText("")
+        self._iban.setText("")
+        self._bic.setText("")
+        self._amount.setText("")
+        self._remittance.setText("")
+        self._invoice_number.setText("")
+        self._due_date.setText("")
+        self._note.setText("")
+        self._source_label.setText(message)
+        self._btn_show_invoice.setEnabled(False)
+        self._btn_generate_qr.setEnabled(False)
+        self._btn_done.setEnabled(False)
+
+    def _set_payment_actions_enabled(self, enabled: bool, *, has_attachment: bool) -> None:
+        self._btn_show_invoice.setEnabled(enabled and has_attachment)
+        self._btn_generate_qr.setEnabled(enabled)
+        self._btn_done.setEnabled(enabled)
 
     def _current_case(self) -> TransferCase | None:
         idx = self._list.currentRow()
@@ -203,13 +267,53 @@ class OffeneUeberweisungenDialog(QDialog):
             )
         )
         self._thread.setPlainText(case.thread_text or case.body or case.snippet)
+        self._summary.setPlainText("")
+        self._set_payment_loading("Quelle: Lade Anhaenge und Zahlungsdaten...")
 
-        attachments = self._service.list_pdf_attachments(case.id)
-        self._btn_show_invoice.setEnabled(bool(attachments))
+        self._detail_seq += 1
+        seq = self._detail_seq
+        case_id = case.id
+
+        def job() -> tuple[str, list[object], TransferPaymentData]:
+            attachments = self._service.list_pdf_attachments(case_id)
+            attachment_id = attachments[0].id if attachments else None
+            payment = self._service.extract_payment_data(case_id, attachment_id=attachment_id)
+            return case_id, list(attachments), payment
+
+        self._detail_worker = BackgroundWorker(job)
+        worker = self._detail_worker
+        self._detail_workers.append(worker)
+        worker.signals.result.connect(lambda result, token=seq: self._on_case_detail_loaded(token, result))
+        worker.signals.error.connect(lambda exc, token=seq: self._on_case_detail_error(token, exc))
+        worker.signals.finished.connect(lambda w=worker: self._on_detail_worker_finished(w))
+        worker.start()
+
+    def _on_detail_worker_finished(self, worker: BackgroundWorker) -> None:
+        if self._detail_worker is worker:
+            self._detail_worker = None
+        try:
+            self._detail_workers.remove(worker)
+        except ValueError:
+            pass
+
+    def _on_case_detail_loaded(self, seq: int, result: object) -> None:
+        if seq != self._detail_seq or not isinstance(result, tuple) or len(result) != 3:
+            return
+        case_id, attachments, payment = result
+        case = self._current_case()
+        if case is None or case.id != case_id or not isinstance(payment, TransferPaymentData):
+            return
         self._selected_attachment_id = attachments[0].id if attachments else None
-
-        payment = self._service.extract_payment_data(case.id, attachment_id=self._selected_attachment_id)
         self._fill_payment_form(payment)
+        self._set_payment_actions_enabled(True, has_attachment=bool(attachments))
+
+    def _on_case_detail_error(self, seq: int, exc: Exception) -> None:
+        if seq != self._detail_seq:
+            return
+        self._selected_attachment_id = None
+        self._set_payment_actions_enabled(True, has_attachment=False)
+        self._source_label.setText("Quelle: Laden fehlgeschlagen")
+        QMessageBox.warning(self, "OFFENE UEBERWEISUNGEN", f"Zahlungsdaten konnten nicht geladen werden:\n\n{exc}")
 
     def _fill_payment_form(self, payment: TransferPaymentData) -> None:
         self._recipient.setText(payment.recipient)

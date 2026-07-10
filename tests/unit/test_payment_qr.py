@@ -225,6 +225,51 @@ def test_openai_payload_can_override_weak_pdf_text(monkeypatch) -> None:
     assert payment.source_by_field["recipient"].value == "openai"
 
 
+def test_invoice_number_wins_over_generic_openai_remittance(monkeypatch) -> None:
+    def fake_openai(**_kwargs):
+        return {
+            "recipient": "Yannick Herzog IT Services",
+            "iban": "DE92500105175420129425",
+            "bic": "INGDDEFFXXX",
+            "amount": "495,00",
+            "remittance_text": "Rechnung Juni 2026",
+            "invoice_number": "RE-241665",
+        }
+
+    monkeypatch.setattr("xw_studio.services.transfers.payment_qr._openai_fallback", fake_openai)
+
+    payment = extract_payment_data_from_sources(
+        mail_text="WG: Rechnung Juni 2026",
+        use_openai_fallback=True,
+        openai_api_key="key",
+    )
+
+    assert payment.invoice_number == "RE-241665"
+    assert payment.remittance_text == "RE-241665"
+
+
+def test_invoice_number_wins_over_labelled_openai_remittance(monkeypatch) -> None:
+    def fake_openai(**_kwargs):
+        return {
+            "recipient": "Yannick Herzog IT Services",
+            "iban": "DE92500105175420129425",
+            "bic": "INGDDEFFXXX",
+            "amount": "495,00",
+            "remittance_text": "Rechnung Nr. RE-241665",
+            "invoice_number": "RE-241665",
+        }
+
+    monkeypatch.setattr("xw_studio.services.transfers.payment_qr._openai_fallback", fake_openai)
+
+    payment = extract_payment_data_from_sources(
+        mail_text="WG: Rechnung Juni 2026",
+        use_openai_fallback=True,
+        openai_api_key="key",
+    )
+
+    assert payment.remittance_text == "RE-241665"
+
+
 def test_strip_json_fence_for_openai_response() -> None:
     raw = '```json\n{"recipient": "HÖRBST", "amount": "565,00"}\n```'
 
