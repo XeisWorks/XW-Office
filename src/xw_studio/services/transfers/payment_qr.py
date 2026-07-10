@@ -37,9 +37,25 @@ logger = logging.getLogger(__name__)
 _AMOUNT_RE = re.compile(r"(?<!\d)(\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|\d+(?:[.,]\d{2}))(?!\d)")
 _IBAN_RE = re.compile(r"\b[A-Z]{2}[0-9]{2}[A-Z0-9 ]{10,40}\b")
 _BIC_RE = re.compile(r"\b[A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b")
+_LABELLED_BIC_RE = re.compile(r"\b(?:BIC|SWIFT)\s*:?\s*([A-Z0-9 ]{8,20})", re.IGNORECASE)
 _INVOICE_RE = re.compile(
     r"\b(?:RE|RG|INV)(?:[-\s]*\d[A-Z0-9-]{2,}|[-\s]+[A-Z0-9-]{2,}\d[A-Z0-9-]*)\b",
     re.IGNORECASE,
+)
+_INVOICE_LABEL_RE = re.compile(
+    r"\b(?:rechnungs(?:nummer|-?nr\.?)|rechnung\s+nr\.?|rechnung|beleg-?nr\.?|auftragsnr\.?)"
+    r"\s*[:.]?\s*((?=[A-Z0-9/-]*\d)[A-Z0-9][A-Z0-9/-]{2,})\b",
+    re.IGNORECASE,
+)
+_REMITTANCE_RE = re.compile(r"\b(?:verwendungszweck|vermerk)\s*:\s*([A-Z0-9][A-Z0-9/\- ]{2,80})", re.IGNORECASE)
+_AMOUNT_KEYWORDS = (
+    "gesamtbetrag brutto",
+    "endbetrag",
+    "gesamtpreis",
+    "betrag von",
+    "rechnungsbetrag",
+    "zahlbetrag",
+    "gesamtbetrag",
 )
 
 
@@ -71,6 +87,73 @@ def _parse_amount(value: str) -> Decimal | None:
     return amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def _find_valid_iban(text: str) -> str:
+    for match in _IBAN_RE.finditer(str(text or "").upper()):
+        candidate = _normalize_iban(match.group(0))
+        for length in range(min(len(candidate), 34), 14, -1):
+            trimmed = candidate[:length]
+            if stdnum.iban.is_valid(trimmed):
+                return trimmed
+    return ""
+
+
+def _find_valid_bic(text: str) -> str:
+    for label_match in _LABELLED_BIC_RE.finditer(str(text or "").upper()):
+        for match in _BIC_RE.finditer(label_match.group(1)):
+            candidate = match.group(0).strip().upper()
+            if stdnum.bic.is_valid(candidate):
+                return candidate
+    return ""
+
+
+def _normalize_valid_bic(value: str) -> str:
+    match = _BIC_RE.search(str(value or "").upper())
+    if not match:
+        return ""
+    candidate = match.group(0).strip().upper()
+    return candidate if stdnum.bic.is_valid(candidate) else ""
+
+
+def _extract_amount_from_text(text: str) -> Decimal | None:
+    hay = str(text or "")
+    lowered = hay.lower()
+    for keyword in _AMOUNT_KEYWORDS:
+        start = 0
+        found: Decimal | None = None
+        while True:
+            idx = lowered.find(keyword, start)
+            if idx < 0:
+                break
+            window = hay[idx : idx + 140]
+            matches = list(_AMOUNT_RE.finditer(window))
+            if matches:
+                parsed = _parse_amount(matches[-1].group(1))
+                if parsed is not None:
+                    found = parsed
+            start = idx + len(keyword)
+        if found is not None:
+            return found
+    return None
+
+
+def _extract_invoice_number(text: str) -> str:
+    hay = str(text or "")
+    label_match = _INVOICE_LABEL_RE.search(hay)
+    if label_match:
+        return label_match.group(1).strip(" .:-")
+    invoice_match = _INVOICE_RE.search(hay)
+    if invoice_match:
+        return invoice_match.group(0).strip()
+    return ""
+
+
+def _extract_remittance(text: str) -> str:
+    match = _REMITTANCE_RE.search(str(text or ""))
+    if not match:
+        return ""
+    return re.sub(r"\s+", " ", match.group(1)).strip(" .:-")
+
+
 def _validate_payment(payment: TransferPaymentData) -> None:
     if not str(payment.recipient or "").strip():
         raise PaymentQrError("Empfaenger fehlt.")
@@ -100,29 +183,31 @@ def _extract_from_text(text: str) -> TransferPaymentData:
     out = TransferPaymentData()
     if not text:
         return out
-    iban_match = _IBAN_RE.search(text.upper())
-    if iban_match:
-        out.iban = _normalize_iban(iban_match.group(0))
+    iban = _find_valid_iban(text)
+    if iban:
+        out.iban = iban
         out.source_by_field["iban"] = TransferFieldSource.PDF_TEXT
-    bic_match = _BIC_RE.search(text.upper())
-    if bic_match:
-        out.bic = bic_match.group(0).strip().upper()
+    bic = _find_valid_bic(text)
+    if bic:
+        out.bic = bic
         out.source_by_field["bic"] = TransferFieldSource.PDF_TEXT
-    amount_match = _AMOUNT_RE.search(text)
-    if amount_match:
-        amount = _parse_amount(amount_match.group(1))
-        if amount is not None:
-            out.amount = amount
-            out.source_by_field["amount"] = TransferFieldSource.PDF_TEXT
-    invoice_match = _INVOICE_RE.search(text)
-    if invoice_match:
-        out.invoice_number = invoice_match.group(0).strip()
+    amount = _extract_amount_from_text(text)
+    if amount is not None:
+        out.amount = amount
+        out.source_by_field["amount"] = TransferFieldSource.PDF_TEXT
+    invoice_number = _extract_invoice_number(text)
+    if invoice_number:
+        out.invoice_number = invoice_number
         out.source_by_field["invoice_number"] = TransferFieldSource.PDF_TEXT
+    remittance = _extract_remittance(text)
+    if remittance:
+        out.remittance_text = remittance
+        out.source_by_field["remittance_text"] = TransferFieldSource.PDF_TEXT
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if lines:
         out.recipient = lines[0][:70]
         out.source_by_field["recipient"] = TransferFieldSource.PDF_TEXT
-    if out.invoice_number:
+    if not out.remittance_text and out.invoice_number:
         out.remittance_text = out.invoice_number
         out.source_by_field["remittance_text"] = TransferFieldSource.PDF_TEXT
     return out
@@ -253,6 +338,7 @@ def _openai_fallback(*, api_key: str, context_text: str) -> dict[str, Any]:
                 break
     if not raw:
         return {}
+    raw = _strip_json_fence(raw)
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
@@ -260,23 +346,53 @@ def _openai_fallback(*, api_key: str, context_text: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _merge_payment(base: TransferPaymentData, patch: TransferPaymentData) -> TransferPaymentData:
-    if patch.recipient and not base.recipient:
+def _strip_json_fence(raw: str) -> str:
+    text = str(raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    if not text.startswith("{"):
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            text = text[start : end + 1]
+    return text.strip()
+
+
+def _can_prefer(base: TransferPaymentData, field: str, prefer_patch_fields: set[str]) -> bool:
+    return (
+        field in prefer_patch_fields
+        and base.source_by_field.get(field) != TransferFieldSource.PDF_EXISTING_QR
+    )
+
+
+def _merge_payment(
+    base: TransferPaymentData,
+    patch: TransferPaymentData,
+    *,
+    prefer_patch_fields: set[str] | None = None,
+) -> TransferPaymentData:
+    prefer_patch_fields = prefer_patch_fields or set()
+    if patch.recipient and (not base.recipient or _can_prefer(base, "recipient", prefer_patch_fields)):
         base.recipient = patch.recipient
         base.source_by_field["recipient"] = patch.source_by_field.get("recipient", TransferFieldSource.UNKNOWN)
-    if patch.iban and not base.iban:
+    if patch.iban and (not base.iban or _can_prefer(base, "iban", prefer_patch_fields)):
         base.iban = patch.iban
         base.source_by_field["iban"] = patch.source_by_field.get("iban", TransferFieldSource.UNKNOWN)
-    if patch.bic and not base.bic:
+    if patch.bic and (not base.bic or _can_prefer(base, "bic", prefer_patch_fields)):
         base.bic = patch.bic
         base.source_by_field["bic"] = patch.source_by_field.get("bic", TransferFieldSource.UNKNOWN)
-    if patch.amount is not None and base.amount is None:
+    if patch.amount is not None and (base.amount is None or _can_prefer(base, "amount", prefer_patch_fields)):
         base.amount = patch.amount
         base.source_by_field["amount"] = patch.source_by_field.get("amount", TransferFieldSource.UNKNOWN)
-    if patch.remittance_text and not base.remittance_text:
+    if patch.remittance_text and (
+        not base.remittance_text or _can_prefer(base, "remittance_text", prefer_patch_fields)
+    ):
         base.remittance_text = patch.remittance_text
         base.source_by_field["remittance_text"] = patch.source_by_field.get("remittance_text", TransferFieldSource.UNKNOWN)
-    if patch.invoice_number and not base.invoice_number:
+    if patch.invoice_number and (
+        not base.invoice_number or _can_prefer(base, "invoice_number", prefer_patch_fields)
+    ):
         base.invoice_number = patch.invoice_number
         base.source_by_field["invoice_number"] = patch.source_by_field.get("invoice_number", TransferFieldSource.UNKNOWN)
     return base
@@ -306,7 +422,15 @@ def extract_payment_data_from_sources(
             thread_extracted.source_by_field[field] = TransferFieldSource.THREAD
         result = _merge_payment(result, thread_extracted)
 
-    if use_openai_fallback and openai_api_key and (not result.iban or result.amount is None):
+    needs_openai = (
+        not result.recipient
+        or not result.iban
+        or result.amount is None
+        or not result.remittance_text
+        or result.source_by_field.get("recipient")
+        in {TransferFieldSource.PDF_TEXT, TransferFieldSource.THREAD, TransferFieldSource.MAIL}
+    )
+    if use_openai_fallback and openai_api_key and needs_openai:
         try:
             ai_payload = _openai_fallback(
                 api_key=openai_api_key,
@@ -316,24 +440,41 @@ def extract_payment_data_from_sources(
             logger.warning("OpenAI payment extraction fallback failed: %s", exc)
             ai_payload = {}
         if ai_payload:
+            ai_iban = _find_valid_iban(str(ai_payload.get("iban") or ""))
+            ai_bic = _normalize_valid_bic(str(ai_payload.get("bic") or ""))
             ai_amount = _parse_amount(str(ai_payload.get("amount") or ""))
+            source_by_field: dict[str, TransferFieldSource] = {}
+            for key, value in {
+                "recipient": ai_payload.get("recipient"),
+                "iban": ai_iban,
+                "bic": ai_bic,
+                "amount": ai_amount,
+                "remittance_text": ai_payload.get("remittance_text"),
+                "invoice_number": ai_payload.get("invoice_number"),
+            }.items():
+                if value:
+                    source_by_field[key] = TransferFieldSource.OPENAI
             ai_payment = TransferPaymentData(
                 recipient=str(ai_payload.get("recipient") or "").strip(),
-                iban=str(ai_payload.get("iban") or "").strip(),
-                bic=str(ai_payload.get("bic") or "").strip(),
+                iban=ai_iban,
+                bic=ai_bic,
                 amount=ai_amount,
                 remittance_text=str(ai_payload.get("remittance_text") or "").strip(),
                 invoice_number=str(ai_payload.get("invoice_number") or "").strip(),
-                source_by_field={
-                    "recipient": TransferFieldSource.OPENAI,
-                    "iban": TransferFieldSource.OPENAI,
-                    "bic": TransferFieldSource.OPENAI,
-                    "amount": TransferFieldSource.OPENAI,
-                    "remittance_text": TransferFieldSource.OPENAI,
-                    "invoice_number": TransferFieldSource.OPENAI,
+                source_by_field=source_by_field,
+            )
+            result = _merge_payment(
+                result,
+                ai_payment,
+                prefer_patch_fields={
+                    "recipient",
+                    "iban",
+                    "bic",
+                    "amount",
+                    "remittance_text",
+                    "invoice_number",
                 },
             )
-            result = _merge_payment(result, ai_payment)
 
     if result.remittance_text == "" and result.invoice_number:
         result.remittance_text = result.invoice_number

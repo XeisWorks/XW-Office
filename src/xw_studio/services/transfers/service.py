@@ -21,6 +21,7 @@ from xw_studio.services.transfers.models import (
     TransferPaymentData,
 )
 from xw_studio.services.transfers.payment_qr import (
+    _extract_pdf_text,
     create_epc_qr_from_payment_data,
     extract_payment_data_from_sources,
     payment_to_json_dict,
@@ -93,11 +94,38 @@ class OffeneUeberweisungenService:
         if case is None:
             return ""
         context = (case.thread_text or case.body or case.snippet).strip()
-        if not context:
-            return "Keine Mailinhalte verfuegbar."
+        pdf_text = ""
+        pdf_payment = TransferPaymentData()
         api_key = self._secrets.get_secret("OPENAI_API_KEY")
+        if case.attachments:
+            try:
+                pdf_bytes = self.download_attachment_bytes(case.id, case.attachments[0].id)
+                pdf_text = _extract_pdf_text(pdf_bytes)
+                pdf_payment = extract_payment_data_from_sources(
+                    mail_text=context,
+                    pdf_bytes=pdf_bytes,
+                    filename_hint=case.attachments[0].name,
+                    use_openai_fallback=bool(api_key),
+                    openai_api_key=api_key,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Transfer summary PDF context failed for %s: %s", case.id, exc)
+        if not context and not pdf_text:
+            return "Keine Mailinhalte verfuegbar."
         if not api_key:
             return self._fallback_summary(case)
+        payment_context = "\n".join(
+            part
+            for part in (
+                f"Empfaenger: {pdf_payment.recipient}" if pdf_payment.recipient else "",
+                f"IBAN: {pdf_payment.iban}" if pdf_payment.iban else "",
+                f"BIC: {pdf_payment.bic}" if pdf_payment.bic else "",
+                f"Betrag: {pdf_payment.amount} EUR" if pdf_payment.amount is not None else "",
+                f"Referenz: {pdf_payment.remittance_text}" if pdf_payment.remittance_text else "",
+                f"Rechnungsnummer: {pdf_payment.invoice_number}" if pdf_payment.invoice_number else "",
+            )
+            if part
+        )
         prompt = (
             "Fasse den Mailverkehr fuer eine manuelle Ueberweisung zusammen.\n"
             "Nenne:\n"
@@ -109,7 +137,9 @@ class OffeneUeberweisungenService:
             "Antworte auf Deutsch, knapp, sachlich.\n\n"
             f"Betreff: {case.subject}\n"
             f"Von: {case.sender}\n"
-            f"Mailinhalt:\n{context[:12000]}"
+            f"Erkannte Zahlungsdaten:\n{payment_context or '-'}\n\n"
+            f"Mailinhalt:\n{context[:8000] or '-'}\n\n"
+            f"PDF/Rechnungstext:\n{pdf_text[:8000] or '-'}"
         )
         headers = {
             "Authorization": f"Bearer {api_key}",
