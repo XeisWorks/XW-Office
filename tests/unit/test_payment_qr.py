@@ -48,6 +48,28 @@ def test_create_epc_qr_uses_structured_reference_for_plain_reference(tmp_path) -
     assert lines[9] == "129973200353"
 
 
+def test_create_epc_qr_uses_invoice_number_as_payment_reference_not_text(tmp_path) -> None:
+    import cv2
+
+    payment = TransferPaymentData(
+        recipient="Yannick Herzog IT Services",
+        iban="DE92500105175420129425",
+        bic="INGDDEFFXXX",
+        amount=Decimal("495.00"),
+        remittance_text="Rechnung Juni 2026",
+        invoice_number="RE-241665",
+    )
+
+    out = create_epc_qr_from_payment_data(payment, output_dir=tmp_path, filename_hint="re_241665")
+    image = cv2.imread(str(out))
+    payload, _points, _ = cv2.QRCodeDetector().detectAndDecode(image)
+    lines = payload.splitlines()
+
+    assert lines[9] == "RE-241665"
+    assert len(lines) == 10
+    assert "Rechnung Juni 2026" not in payload
+
+
 def test_create_epc_qr_fails_without_valid_iban(tmp_path) -> None:
     payment = TransferPaymentData(
         recipient="XeisWorks GmbH",

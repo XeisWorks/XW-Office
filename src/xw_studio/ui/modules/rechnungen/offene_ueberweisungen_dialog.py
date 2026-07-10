@@ -52,6 +52,18 @@ class OffeneUeberweisungenDialog(QDialog):
         self._wait_for_workers()
         super().closeEvent(event)
 
+    def accept(self) -> None:
+        self._detail_seq += 1
+        self._load_seq += 1
+        self._wait_for_workers()
+        super().accept()
+
+    def reject(self) -> None:
+        self._detail_seq += 1
+        self._load_seq += 1
+        self._wait_for_workers()
+        super().reject()
+
     def _wait_for_workers(self) -> None:
         workers = [self._load_worker, self._detail_worker, *self._detail_workers]
         for worker in workers:
@@ -118,7 +130,7 @@ class OffeneUeberweisungenDialog(QDialog):
         form.addRow("BIC:", self._bic)
         form.addRow("Betrag:", self._amount)
         form.addRow("Waehrung:", self._currency)
-        form.addRow("Referenz:", self._remittance)
+        form.addRow("Zahlungsreferenz:", self._remittance)
         form.addRow("Rechnungsnummer:", self._invoice_number)
         form.addRow("Faelligkeit:", self._due_date)
         form.addRow("Notiz:", self._note)

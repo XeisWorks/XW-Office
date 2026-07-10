@@ -180,18 +180,15 @@ def _validate_payment(payment: TransferPaymentData) -> None:
 
 
 def _is_structured_epc_reference(value: str) -> bool:
-    return bool(re.fullmatch(r"[A-Z0-9]{1,35}", str(value or "").strip().upper()))
-
-
-def _is_strong_invoice_reference(value: str) -> bool:
-    return bool(_INVOICE_RE.fullmatch(str(value or "").strip()))
+    text = str(value or "").strip()
+    return bool(text and "\n" not in text and "\r" not in text and len(text) <= 35)
 
 
 def _prefer_invoice_number_for_remittance(payment: TransferPaymentData) -> None:
     if payment.source_by_field.get("remittance_text") == TransferFieldSource.PDF_EXISTING_QR:
         return
     invoice_number = str(payment.invoice_number or "").strip()
-    if not invoice_number or not _is_strong_invoice_reference(invoice_number):
+    if not invoice_number:
         return
     payment.remittance_text = invoice_number
     payment.source_by_field["remittance_text"] = payment.source_by_field.get(
@@ -544,7 +541,8 @@ def create_epc_qr_from_payment_data(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"epc_qr_{safe_hint}_{ts}.png"
 
-    remittance = payment.remittance_text or ""
+    invoice_number = str(payment.invoice_number or "").strip()
+    remittance = invoice_number or str(payment.remittance_text or "").strip()
     structured_reference = remittance if _is_structured_epc_reference(remittance) else None
     unstructured_text = None if structured_reference else (remittance or None)
 
