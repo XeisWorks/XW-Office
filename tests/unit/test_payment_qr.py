@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 
 from xw_studio.services.transfers.models import TransferPaymentData
 from xw_studio.services.transfers.payment_qr import (
     PaymentQrError,
+    _extract_existing_epc_payload,
+    _extract_pdf_text,
     create_epc_qr_from_payment_data,
     extract_payment_data_from_sources,
     _strip_json_fence,
@@ -24,6 +27,25 @@ def test_create_epc_qr_generates_png(tmp_path) -> None:
 
     assert out.exists()
     assert out.suffix.lower() == ".png"
+
+
+def test_create_epc_qr_uses_structured_reference_for_plain_reference(tmp_path) -> None:
+    import cv2
+
+    payment = TransferPaymentData(
+        recipient="LBG Burgenland Steuerberatung GmbH",
+        iban="AT123200000000332189",
+        bic="RLNWATWWXXX",
+        amount=Decimal("34.20"),
+        remittance_text="129973200353",
+    )
+
+    out = create_epc_qr_from_payment_data(payment, output_dir=tmp_path, filename_hint="hn_1299")
+    image = cv2.imread(str(out))
+    payload, _points, _ = cv2.QRCodeDetector().detectAndDecode(image)
+    lines = payload.splitlines()
+
+    assert lines[9] == "129973200353"
 
 
 def test_create_epc_qr_fails_without_valid_iban(tmp_path) -> None:
@@ -76,6 +98,34 @@ def test_extract_prefers_existing_epc_qr(monkeypatch) -> None:
     assert payment.amount == Decimal("123.45")
     assert payment.remittance_text == "RE-2026-0042"
     assert payment.source_by_field["iban"].value == "pdf_existing_qr"
+
+
+def test_extract_detects_beleg_original_qr_with_crlf_payload() -> None:
+    pdf = Path("docs/invoices/Beleg_020-AR2604363 (1).pdf")
+    assert pdf.exists()
+
+    payload = _extract_existing_epc_payload(pdf.read_bytes())
+    payment = extract_payment_data_from_sources(pdf_bytes=pdf.read_bytes(), use_openai_fallback=False)
+
+    assert payload.startswith("BCD\n")
+    assert payment.recipient == "BENEDIKTINERSTIFT ADMONT"
+    assert payment.iban == "AT623821500007032402"
+    assert payment.bic == "RZSTAT2G215"
+    assert payment.amount == Decimal("988.44")
+    assert payment.remittance_text == "020-AR2604363"
+    assert payment.invoice_number == "020-AR2604363"
+    assert payment.source_by_field["iban"].value == "pdf_existing_qr"
+
+
+def test_extract_pdf_text_uses_pymupdf_footer_bank_data_for_beleg() -> None:
+    pdf = Path("docs/invoices/Beleg_020-AR2604363 (1).pdf")
+    assert pdf.exists()
+
+    text = _extract_pdf_text(pdf.read_bytes())
+
+    assert "IBAN" in text
+    assert "AT623821500007032402" in text.replace(" ", "")
+    assert "RZSTAT2G215" in text
 
 
 def test_extract_wraps_pdf_bytes_for_pypdf(monkeypatch) -> None:

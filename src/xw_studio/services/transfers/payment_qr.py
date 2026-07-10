@@ -179,6 +179,10 @@ def _validate_payment(payment: TransferPaymentData) -> None:
     payment.remittance_text = remittance
 
 
+def _is_structured_epc_reference(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z0-9]{1,35}", str(value or "").strip().upper()))
+
+
 def _extract_from_text(text: str) -> TransferPaymentData:
     out = TransferPaymentData()
     if not text:
@@ -216,16 +220,41 @@ def _extract_from_text(text: str) -> TransferPaymentData:
 def _extract_pdf_text(pdf_bytes: bytes) -> str:
     if not pdf_bytes:
         return ""
-    parts: list[str] = []
+    pypdf_parts: list[str] = []
     try:
         reader = PdfReader(io.BytesIO(pdf_bytes))
         for page in reader.pages[:3]:
             content = page.extract_text() or ""
             if content.strip():
-                parts.append(content)
+                pypdf_parts.append(content)
     except Exception as exc:  # noqa: BLE001
         logger.warning("PDF text extraction failed: %s", exc)
-    return "\n".join(parts).strip()
+    pypdf_text = "\n".join(pypdf_parts).strip()
+
+    if fitz is None:
+        return pypdf_text
+
+    fitz_parts: list[str] = []
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        try:
+            for page_idx in range(min(3, len(doc))):
+                content = doc.load_page(page_idx).get_text("text") or ""
+                if content.strip():
+                    fitz_parts.append(content)
+        finally:
+            doc.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("PyMuPDF text extraction failed: %s", exc)
+    fitz_text = "\n".join(fitz_parts).strip()
+
+    if _find_valid_iban(fitz_text) and not _find_valid_iban(pypdf_text):
+        return fitz_text
+    return fitz_text if len(fitz_text) > len(pypdf_text) else pypdf_text
+
+
+def _normalize_epc_payload(value: str) -> str:
+    return str(value or "").strip().replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _extract_existing_epc_payload(pdf_bytes: bytes) -> str:
@@ -247,13 +276,14 @@ def _extract_existing_epc_payload(pdf_bytes: bytes) -> str:
                 image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
             decoded_single, _points, _ = detector.detectAndDecode(image)
-            if isinstance(decoded_single, str) and decoded_single.strip().startswith("BCD\n"):
-                return decoded_single.strip()
+            single_payload = _normalize_epc_payload(decoded_single)
+            if single_payload.startswith("BCD\n"):
+                return single_payload
 
             ok_multi, decoded_list, _points_multi, _ = detector.detectAndDecodeMulti(image)
             if ok_multi and isinstance(decoded_list, (list, tuple)):
                 for candidate in decoded_list:
-                    text = str(candidate or "").strip()
+                    text = _normalize_epc_payload(str(candidate or ""))
                     if text.startswith("BCD\n"):
                         return text
     except Exception as exc:  # noqa: BLE001
@@ -496,11 +526,16 @@ def create_epc_qr_from_payment_data(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"epc_qr_{safe_hint}_{ts}.png"
 
+    remittance = payment.remittance_text or ""
+    structured_reference = remittance if _is_structured_epc_reference(remittance) else None
+    unstructured_text = None if structured_reference else (remittance or None)
+
     qr = helpers.make_epc_qr(
         name=payment.recipient,
         iban=payment.iban,
         amount=payment.amount,
-        text=(payment.remittance_text or None),
+        text=unstructured_text,
+        reference=structured_reference,
         bic=(payment.bic or None),
     )
     qr.save(output_path, kind="png", scale=10)
