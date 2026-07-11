@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -140,20 +139,16 @@ def resolve_open_invoice_overview(
     with_note = 0
     plc = 0
     products = _ProductAccumulator(sku_filter=None)
-    workers = min(8, max(1, len(summaries)))
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="open-invoice-overview") as executor:
-        rows = list(
-            executor.map(
-                lambda summary: _resolve_one_summary(
-                    summary,
-                    invoice_service=invoice_service,
-                    wix_client=wix_client,
-                    known_digital=known_digital,
-                    has_wix_credentials=has_wix_credentials,
-                ),
-                summaries,
-            )
+    rows = [
+        _resolve_one_summary(
+            summary,
+            invoice_service=invoice_service,
+            wix_client=wix_client,
+            known_digital=known_digital,
+            has_wix_credentials=has_wix_credentials,
         )
+        for summary in summaries
+    ]
 
     cache_updates: dict[str, bool] = {}
     for row in rows:

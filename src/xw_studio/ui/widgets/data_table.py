@@ -13,6 +13,8 @@ from PySide6.QtCore import QPoint
 class SimpleTableModel(QAbstractTableModel):
     """Table model backed by a list of dicts."""
 
+    SORT_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+
     def __init__(self, columns: list[str], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._columns = columns
@@ -46,6 +48,8 @@ class SimpleTableModel(QAbstractTableModel):
             return str(row.get(col, ""))
         if role == Qt.ItemDataRole.UserRole:
             return row
+        if role == self.SORT_ROLE:
+            return row.get(f"__sort__{col}", row.get(col, ""))
         if role == Qt.ItemDataRole.ToolTipRole:
             tip = row.get(f"__tooltip__{col}")
             if tip:
@@ -100,6 +104,7 @@ class DataTable(QTableView):
         self._proxy = QSortFilterProxyModel()
         self._proxy.setSourceModel(self._model)
         self._proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._proxy.setSortRole(SimpleTableModel.SORT_ROLE)
         self.setModel(self._proxy)
 
         self.setSortingEnabled(True)

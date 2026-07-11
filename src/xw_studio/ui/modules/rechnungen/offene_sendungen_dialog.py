@@ -5,7 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl
 from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
@@ -18,8 +18,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QSplitter,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
@@ -37,6 +36,75 @@ from xw_studio.services.sendungen.service import (
 )
 
 
+class _SendungProductsModel(QAbstractTableModel):
+    _headers = ["Menge", "Produkt", "SKU", "Notiz"]
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._rows: list[SendungProductLine] = []
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._rows)
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._headers)
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> object:
+        if not index.isValid() or not (0 <= index.row() < len(self._rows)):
+            return None
+        row = self._rows[index.row()]
+        values = [row.quantity, row.name, row.sku, row.note]
+        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
+            return values[index.column()]
+        return None
+
+    def setData(self, index: QModelIndex, value: object, role: int = Qt.ItemDataRole.EditRole) -> bool:
+        if role != Qt.ItemDataRole.EditRole or not index.isValid() or not (0 <= index.row() < len(self._rows)):
+            return False
+        row = self._rows[index.row()]
+        values = [row.quantity, row.name, row.sku, row.note]
+        values[index.column()] = str(value or "").strip()
+        self._rows[index.row()] = SendungProductLine(
+            quantity=values[0] or "1",
+            name=values[1],
+            sku=values[2],
+            note=values[3],
+        )
+        self.dataChanged.emit(index, index, [role])
+        return True
+
+    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
+        if not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable
+
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> object:
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+            return self._headers[section]
+        return None
+
+    def set_products(self, rows: list[SendungProductLine]) -> None:
+        self.beginResetModel()
+        self._rows = list(rows)
+        self.endResetModel()
+
+    def add_product(self, product: SendungProductLine) -> None:
+        row = len(self._rows)
+        self.beginInsertRows(QModelIndex(), row, row)
+        self._rows.append(product)
+        self.endInsertRows()
+
+    def remove_row(self, row: int) -> None:
+        if not (0 <= row < len(self._rows)):
+            return
+        self.beginRemoveRows(QModelIndex(), row, row)
+        del self._rows[row]
+        self.endRemoveRows()
+
+    def products(self) -> list[SendungProductLine]:
+        return [row for row in self._rows if str(row.name or "").strip()]
+
+
 class OffeneSendungenDialog(QDialog):
     """Sendungen workflow based on legacy Daily-Business behavior, without UI blocking."""
 
@@ -52,6 +120,7 @@ class OffeneSendungenDialog(QDialog):
         self._load_seq = 0
         self._detail_seq = 0
         self._delivery_pdf_by_case: dict[str, Path] = {}
+        self._products_model = _SendungProductsModel(self)
         self._build_ui()
         QTimer.singleShot(0, lambda: self._load_cases(refresh=True))
 
@@ -139,8 +208,8 @@ class OffeneSendungenDialog(QDialog):
         row_products_header.addWidget(self._btn_remove_product)
         right_lay.addLayout(row_products_header)
 
-        self._products = QTableWidget(0, 4)
-        self._products.setHorizontalHeaderLabels(["Menge", "Produkt", "SKU", "Notiz"])
+        self._products = QTableView()
+        self._products.setModel(self._products_model)
         self._products.setMinimumHeight(150)
         self._products.horizontalHeader().setStretchLastSection(True)
         self._products.setColumnWidth(0, 70)
@@ -343,7 +412,7 @@ class OffeneSendungenDialog(QDialog):
         self._summary.setPlainText("Laden...")
         self._detail_status.setText(message)
         self._address.setPlainText("")
-        self._products.setRowCount(0)
+        self._products_model.set_products([])
         self._manual_text.setPlainText("")
         self._set_actions_enabled(False)
 
@@ -353,7 +422,7 @@ class OffeneSendungenDialog(QDialog):
         self._thread.setPlainText("")
         self._detail_status.setText("Quelle: -")
         self._address.setPlainText("")
-        self._products.setRowCount(0)
+        self._products_model.set_products([])
         self._manual_text.setPlainText("")
         self._set_actions_enabled(False)
 
@@ -370,41 +439,27 @@ class OffeneSendungenDialog(QDialog):
             button.setEnabled(enabled)
 
     def _set_products(self, products: list[SendungProductLine]) -> None:
-        self._products.setRowCount(0)
-        for product in products:
-            self._add_product_row(product)
+        self._products_model.set_products(list(products))
         if not products:
             self._add_product_row(SendungProductLine())
 
     def _add_product_row(self, product: SendungProductLine) -> None:
-        row = self._products.rowCount()
-        self._products.insertRow(row)
-        values = [product.quantity, product.name, product.sku, product.note]
-        for col, value in enumerate(values):
-            self._products.setItem(row, col, QTableWidgetItem(str(value or "")))
+        self._products_model.add_product(product)
 
     def _remove_selected_product_row(self) -> None:
-        row = self._products.currentRow()
-        if row >= 0:
-            self._products.removeRow(row)
+        row = self._products.currentIndex().row()
+        self._products_model.remove_row(row)
 
     def _address_lines(self) -> list[str]:
         return [line.strip() for line in self._address.toPlainText().splitlines() if line.strip()]
 
     def _products_from_table(self) -> list[SendungProductLine]:
-        products: list[SendungProductLine] = []
-        for row in range(self._products.rowCount()):
-            quantity = self._cell_text(row, 0) or "1"
-            name = self._cell_text(row, 1)
-            sku = self._cell_text(row, 2)
-            note = self._cell_text(row, 3)
-            if name:
-                products.append(SendungProductLine(quantity=quantity, name=name, sku=sku, note=note))
-        return products
+        return self._products_model.products()
 
     def _cell_text(self, row: int, column: int) -> str:
-        item = self._products.item(row, column)
-        return item.text().strip() if item is not None else ""
+        index = self._products_model.index(row, column)
+        value = index.data(Qt.ItemDataRole.DisplayRole) if index.isValid() else ""
+        return str(value or "").strip()
 
     def _save_current_manual_fields(self) -> None:
         case = self._current_case()

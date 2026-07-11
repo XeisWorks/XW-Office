@@ -18,6 +18,7 @@ from xw_studio.core.signals import AppSignals
 from xw_studio.core.types import ModuleKey
 from xw_studio.core.worker import BackgroundWorker
 from xw_studio.services.printer_status.service import PrinterStatusService, PrinterStatusSnapshot
+from xw_studio.ui.performance import EventLoopWatchdog
 from xw_studio.ui.sidebar import Sidebar
 from xw_studio.ui.status_bar import StudioStatusBar
 from xw_studio.ui.theme import apply_app_theme
@@ -39,12 +40,18 @@ class MainWindow(QMainWindow):
         self._loading_pages: set[str] = set()
         self._startup_preload_worker: BackgroundWorker | None = None
         self._printer_status_worker: BackgroundWorker | None = None
+        self._eventloop_watchdog = EventLoopWatchdog(self)
         self._setup_window()
         self._build_ui()
         self._connect_signals()
         self._open_initial_module()
         self._apply_printer_status()
         self._refresh_printer_status_async()
+        self._eventloop_watchdog.start()
+
+    def performance_snapshot(self) -> list[object]:
+        """Return recent event-loop gaps for diagnostics/tests."""
+        return self._eventloop_watchdog.snapshot()
 
     def _setup_window(self) -> None:
         cfg = self._container.config.app.window

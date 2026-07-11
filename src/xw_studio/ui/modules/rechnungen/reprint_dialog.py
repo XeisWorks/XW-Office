@@ -2,23 +2,17 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QGroupBox,
-    QHeaderView,
     QLabel,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-if TYPE_CHECKING:
-    from xw_studio.services.inventory.service import ReprintPreflight
+from xw_studio.ui.widgets.data_table import DataTable
 
 logger = logging.getLogger(__name__)
 
@@ -53,29 +47,30 @@ class ReprintPreviewDialog(QDialog):
         gb_print = QGroupBox("🖨 ZU DRUCKEN")
         gb_print_layout = QVBoxLayout(gb_print)
 
-        table_print = QTableWidget()
-        table_print.setColumnCount(4)
-        table_print.setHorizontalHeaderLabels(["SKU", "Bestand jetzt", "Drucken", "Bestand nachher"])
-        table_print.horizontalHeader().setStretchLastSection(True)
-        table_print.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        table_print.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        table_print.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        table_print = DataTable(["SKU", "Bestand jetzt", "Drucken", "Bestand nachher"])
+        table_print.setSelectionMode(DataTable.SelectionMode.NoSelection)
         table_print.setMaximumHeight(200)
 
         to_print = [d for d in self.preflight.decisions if d.will_print]
-        table_print.setRowCount(len(to_print))
-
-        for row, decision in enumerate(to_print):
-            new_stock = decision.on_hand_qty + decision.final_print_qty
-            table_print.setItem(row, 0, QTableWidgetItem(decision.sku))
-            table_print.setItem(row, 1, QTableWidgetItem(str(decision.on_hand_qty)))
-            table_print.setItem(row, 2, QTableWidgetItem(str(decision.final_print_qty)))
-            table_print.setItem(row, 3, QTableWidgetItem(str(new_stock)))
-            # Highlight print rows
-            for col in range(4):
-                item = table_print.item(row, col)
-                item.setBackground(Qt.GlobalColor.yellow)
-                item.setForeground(Qt.GlobalColor.black)
+        table_print.set_data(
+            [
+                {
+                    "SKU": decision.sku,
+                    "Bestand jetzt": str(decision.on_hand_qty),
+                    "Drucken": str(decision.final_print_qty),
+                    "Bestand nachher": str(decision.on_hand_qty + decision.final_print_qty),
+                    "__bg__SKU": "#fff59d",
+                    "__bg__Bestand jetzt": "#fff59d",
+                    "__bg__Drucken": "#fff59d",
+                    "__bg__Bestand nachher": "#fff59d",
+                    "__fg__SKU": "#111111",
+                    "__fg__Bestand jetzt": "#111111",
+                    "__fg__Drucken": "#111111",
+                    "__fg__Bestand nachher": "#111111",
+                }
+                for decision in to_print
+            ]
+        )
 
         gb_print_layout.addWidget(table_print)
 
@@ -91,25 +86,24 @@ class ReprintPreviewDialog(QDialog):
         gb_stock = QGroupBox("✓ IM BESTAND (nicht nötig)")
         gb_stock_layout = QVBoxLayout(gb_stock)
 
-        table_stock = QTableWidget()
-        table_stock.setColumnCount(2)
-        table_stock.setHorizontalHeaderLabels(["SKU", "Bestand"])
-        table_stock.horizontalHeader().setStretchLastSection(True)
-        table_stock.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        table_stock.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        table_stock = DataTable(["SKU", "Bestand"])
+        table_stock.setSelectionMode(DataTable.SelectionMode.NoSelection)
         table_stock.setMaximumHeight(150)
 
         in_stock = [d for d in self.preflight.decisions if not d.will_print]
-        table_stock.setRowCount(len(in_stock))
-
-        for row, decision in enumerate(in_stock):
-            table_stock.setItem(row, 0, QTableWidgetItem(decision.sku))
-            table_stock.setItem(row, 1, QTableWidgetItem(str(decision.on_hand_qty)))
-            # Green for in-stock items
-            for col in range(2):
-                item = table_stock.item(row, col)
-                item.setBackground(Qt.GlobalColor.green)
-                item.setForeground(Qt.GlobalColor.white)
+        table_stock.set_data(
+            [
+                {
+                    "SKU": decision.sku,
+                    "Bestand": str(decision.on_hand_qty),
+                    "__bg__SKU": "#16a34a",
+                    "__bg__Bestand": "#16a34a",
+                    "__fg__SKU": "#ffffff",
+                    "__fg__Bestand": "#ffffff",
+                }
+                for decision in in_stock
+            ]
+        )
 
         gb_stock_layout.addWidget(table_stock)
 
