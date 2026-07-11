@@ -31,6 +31,10 @@ def _printing_config() -> PrintingSection:
                 "printer_name": "Brochure",
                 "dpi": 600,
                 "placement_mode": "calibrated",
+                "page_size": "A5",
+                "orientation": "portrait",
+                "scale_mode": "fit",
+                "alignment": "center",
                 "x_offset_mm": -2.0,
                 "y_offset_mm": 0.5,
                 "render_color_mode": "gray",
@@ -89,6 +93,10 @@ def test_print_pdf_by_plan_queues_target_with_parsed_pages_and_copies() -> None:
     assert queue.jobs[0].copies == 3
     assert queue.jobs[0].printer_name == "Brochure"
     assert queue.jobs[0].placement_mode == "calibrated"
+    assert queue.jobs[0].page_size == "A5"
+    assert queue.jobs[0].orientation == "portrait"
+    assert queue.jobs[0].scale_mode == "fit"
+    assert queue.jobs[0].alignment == "center"
     assert queue.jobs[0].x_offset_mm == -2.0
     assert queue.jobs[0].y_offset_mm == 0.5
     assert queue.jobs[0].render_color_mode == "gray"
@@ -120,6 +128,10 @@ def test_minimal_profile_keeps_dpi_optional() -> None:
     assert target.printer_name == "Simplex"
     assert target.dpi is None
     assert target.placement_mode == "paper_origin"
+    assert target.page_size == ""
+    assert target.orientation == ""
+    assert target.scale_mode == "none"
+    assert target.alignment == "top_left"
     assert target.x_offset_mm == 0.0
     assert target.y_offset_mm == 0.0
     assert target.render_color_mode == "auto"

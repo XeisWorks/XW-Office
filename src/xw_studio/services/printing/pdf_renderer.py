@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 import fitz  # PyMuPDF
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtGui import QImage, QPageLayout, QPageSize, QPainter
 from PySide6.QtPrintSupport import QPrinter
 
@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 MUSIC_DPI = 600
 INVOICE_DPI = 300
 PlacementMode = Literal["paper_origin", "printable_origin", "calibrated"]
+ScaleMode = Literal["none", "fit"]
+AlignmentMode = Literal["top_left", "center"]
 PageClass = Literal["notation", "graphic", "mixed"]
 RenderColorMode = Literal["auto", "rgb", "gray"]
 ResolvedRenderColorMode = Literal["rgb", "gray"]
@@ -39,6 +41,8 @@ ResolvedBlackEnhancement = Literal[
     "threshold",
 ]
 _VALID_PLACEMENT_MODES = {"paper_origin", "printable_origin", "calibrated"}
+_VALID_SCALE_MODES = {"none", "fit"}
+_VALID_ALIGNMENT_MODES = {"top_left", "center"}
 _DARKEN_FACTOR = 0.78
 _MILD_DARKEN_FACTOR = 0.90
 
@@ -105,6 +109,38 @@ def _placement_mode(value: str) -> PlacementMode:
     return "paper_origin"
 
 
+def _scale_mode(value: str) -> ScaleMode:
+    normalized = str(value or "none").strip().casefold()
+    if normalized in _VALID_SCALE_MODES:
+        return cast(ScaleMode, normalized)
+    return "none"
+
+
+def _alignment_mode(value: str) -> AlignmentMode:
+    normalized = str(value or "top_left").strip().casefold()
+    if normalized in _VALID_ALIGNMENT_MODES:
+        return cast(AlignmentMode, normalized)
+    return "top_left"
+
+
+def _page_size_id(value: str) -> QPageSize.PageSizeId | None:
+    normalized = str(value or "").strip().upper()
+    if normalized == "A4":
+        return QPageSize.PageSizeId.A4
+    if normalized == "A5":
+        return QPageSize.PageSizeId.A5
+    return None
+
+
+def _orientation(value: str) -> QPageLayout.Orientation | None:
+    normalized = str(value or "").strip().casefold()
+    if normalized == "portrait":
+        return QPageLayout.Orientation.Portrait
+    if normalized == "landscape":
+        return QPageLayout.Orientation.Landscape
+    return None
+
+
 def _render_color_mode(value: str, *, job_kind: str) -> RenderColorMode:
     normalized = str(value or "auto").strip().casefold()
     if normalized in {"auto", "rgb", "gray"}:
@@ -169,6 +205,40 @@ def _safe_layout_rects(printer: QPrinter, dpi: int) -> tuple[tuple[float, float,
 
 def _draw_origin(*, dpi: int, x_offset_mm: float, y_offset_mm: float) -> QPointF:
     return QPointF(mm_to_px(x_offset_mm, dpi), mm_to_px(y_offset_mm, dpi))
+
+
+def _target_rect(
+    *,
+    printer: QPrinter,
+    image: QImage,
+    dpi: int,
+    scale_mode: ScaleMode,
+    alignment: AlignmentMode,
+    x_offset_mm: float,
+    y_offset_mm: float,
+) -> QRectF | QPointF:
+    offset_x = mm_to_px(x_offset_mm, dpi)
+    offset_y = mm_to_px(y_offset_mm, dpi)
+    if scale_mode == "none":
+        return QPointF(offset_x, offset_y)
+
+    full_rect, paint_rect = _safe_layout_rects(printer, dpi)
+    base = paint_rect or full_rect
+    if base is None:
+        return QPointF(offset_x, offset_y)
+
+    base_x, base_y, base_w, base_h = base
+    img_w = max(float(image.width()), 1.0)
+    img_h = max(float(image.height()), 1.0)
+    scale = min(max(float(base_w), 1.0) / img_w, max(float(base_h), 1.0) / img_h)
+    target_w = img_w * scale
+    target_h = img_h * scale
+    target_x = float(base_x) + offset_x
+    target_y = float(base_y) + offset_y
+    if alignment == "center":
+        target_x = float(base_x) + (float(base_w) - target_w) / 2.0 + offset_x
+        target_y = float(base_y) + (float(base_h) - target_h) / 2.0 + offset_y
+    return QRectF(target_x, target_y, target_w, target_h)
 
 
 def _enhance_gray_samples(samples: bytes, enhancement: ResolvedBlackEnhancement, threshold: int) -> bytes:
@@ -331,6 +401,10 @@ def print_pdf_with_qprinter(
     dpi: int | None = None,
     fallback_dpi: int = INVOICE_DPI,
     placement_mode: str = "paper_origin",
+    page_size: str = "",
+    orientation: str = "",
+    scale_mode: str = "none",
+    alignment: str = "top_left",
     x_offset_mm: float = 0.0,
     y_offset_mm: float = 0.0,
     job_kind: str = "invoice",
@@ -348,6 +422,8 @@ def print_pdf_with_qprinter(
     fallback_render_dpi = max(int(fallback_dpi or INVOICE_DPI), 1)
     effective_copies = max(int(copies or 1), 1)
     effective_placement_mode = _placement_mode(placement_mode)
+    effective_scale_mode = _scale_mode(scale_mode)
+    effective_alignment = _alignment_mode(alignment)
     effective_color_mode = _render_color_mode(render_color_mode, job_kind=job_kind)
     effective_black_enhancement = _black_enhancement(black_enhancement, job_kind=job_kind)
     full_page = effective_placement_mode in {"paper_origin", "calibrated"}
@@ -364,9 +440,16 @@ def print_pdf_with_qprinter(
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
             printer.setOutputFormat(QPrinter.OutputFormat.NativeFormat)
             printer.setPrinterName(printer_name)
-            if str(job_kind or "").strip().casefold() == "invoice":
-                printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
-                printer.setPageOrientation(QPageLayout.Orientation.Portrait)
+            explicit_page_size = _page_size_id(page_size)
+            if explicit_page_size is None and str(job_kind or "").strip().casefold() == "invoice":
+                explicit_page_size = QPageSize.PageSizeId.A4
+            if explicit_page_size is not None:
+                printer.setPageSize(QPageSize(explicit_page_size))
+            explicit_orientation = _orientation(orientation)
+            if explicit_orientation is None and str(job_kind or "").strip().casefold() == "invoice":
+                explicit_orientation = QPageLayout.Orientation.Portrait
+            if explicit_orientation is not None:
+                printer.setPageOrientation(explicit_orientation)
             printer.setFullPage(full_page)
             requested_dpi = max(int(dpi), 1) if dpi is not None else None
             if requested_dpi is not None:
@@ -409,7 +492,15 @@ def print_pdf_with_qprinter(
                         black_enhancement=strategy.black_enhancement,
                         black_threshold=black_threshold,
                     )
-                    origin = _draw_origin(dpi=render_dpi, x_offset_mm=x_offset_mm, y_offset_mm=y_offset_mm)
+                    draw_target = _target_rect(
+                        printer=printer,
+                        image=image,
+                        dpi=render_dpi,
+                        scale_mode=effective_scale_mode,
+                        alignment=effective_alignment,
+                        x_offset_mm=x_offset_mm,
+                        y_offset_mm=y_offset_mm,
+                    )
                     _log_page_strategy(
                         printer_name=printer_name,
                         pdf_path=pdf_path,
@@ -430,12 +521,16 @@ def print_pdf_with_qprinter(
                         image=image,
                         x_offset_mm=x_offset_mm,
                         y_offset_mm=y_offset_mm,
-                        draw_origin=origin,
+                        draw_target=draw_target,
+                        page_size=page_size,
+                        orientation=orientation,
+                        scale_mode=effective_scale_mode,
+                        alignment=effective_alignment,
                         render_color_mode=strategy.render_color_mode,
                         black_enhancement=strategy.black_enhancement,
                         black_threshold=black_threshold,
                     )
-                    painter.drawImage(origin, image)
+                    painter.drawImage(draw_target, image)
             finally:
                 painter.end()
             logger.info(
@@ -478,6 +573,10 @@ def print_pdf(
         dpi=dpi,
         fallback_dpi=dpi,
         placement_mode="paper_origin",
+        page_size="",
+        orientation="",
+        scale_mode="none",
+        alignment="top_left",
         job_kind="music",
         render_color_mode="auto",
         black_enhancement="auto_music",
@@ -497,7 +596,11 @@ def _log_page_metrics(
     image: QImage,
     x_offset_mm: float,
     y_offset_mm: float,
-    draw_origin: QPointF,
+    draw_target: QRectF | QPointF,
+    page_size: str,
+    orientation: str,
+    scale_mode: ScaleMode,
+    alignment: AlignmentMode,
     render_color_mode: ResolvedRenderColorMode,
     black_enhancement: ResolvedBlackEnhancement,
     black_threshold: int,
@@ -506,8 +609,9 @@ def _log_page_metrics(
     logger.debug(
         "PDF print page metrics: printer='%s' job_kind=%s placement_mode=%s setFullPage=%s "
         "effective_dpi=%s printer_resolution=%s pdf_page_pt=(%.3f, %.3f) image_px=(%s, %s) "
-        "layout_full_rect_px=%s layout_paint_rect_px=%s qprinter_page_rect_px=%s "
-        "qprinter_paper_rect_px=%s x_offset_mm=%.3f y_offset_mm=%.3f draw_px=(%.3f, %.3f) "
+        "page_size=%s orientation=%s scale_mode=%s alignment=%s layout_full_rect_px=%s "
+        "layout_paint_rect_px=%s qprinter_page_rect_px=%s qprinter_paper_rect_px=%s "
+        "x_offset_mm=%.3f y_offset_mm=%.3f draw_target=%s "
         "render_color_mode=%s black_enhancement=%s black_threshold=%s",
         printer_name,
         job_kind,
@@ -519,14 +623,17 @@ def _log_page_metrics(
         float(page.rect.height),
         image.width(),
         image.height(),
+        page_size or "",
+        orientation or "",
+        scale_mode,
+        alignment,
         full_rect,
         paint_rect,
         _safe_printer_rect(printer, "pageRect"),
         _safe_printer_rect(printer, "paperRect"),
         x_offset_mm,
         y_offset_mm,
-        float(draw_origin.x()),
-        float(draw_origin.y()),
+        _safe_rect_tuple(draw_target) if isinstance(draw_target, QRectF) else (float(draw_target.x()), float(draw_target.y())),
         render_color_mode,
         black_enhancement,
         black_threshold,

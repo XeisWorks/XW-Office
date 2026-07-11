@@ -403,6 +403,7 @@ def prepare_piece_pdf_print(
     *,
     piece: PieceBlock,
     copies: int = 1,
+    wait: bool = False,
 ) -> Callable[[], None] | None:
     """Validate one product print and return the blocking print job."""
     if not _check_printer_runtime(parent, container):
@@ -445,16 +446,17 @@ def prepare_piece_pdf_print(
 
     def job() -> None:
         queue: PrintQueueService = container.resolve(PrintQueueService)
-        print_pdf_by_plan(
-            path,
-            container.config.printing,
-            print_plan=piece.print_plan,
-            profile_id=piece.print_profile_id,
-            copies=effective_copies,
-            page_count=page_count,
-            print_queue=queue,
-            job_kind="product",
-        )
+        kwargs = {
+            "print_plan": piece.print_plan,
+            "profile_id": piece.print_profile_id,
+            "copies": effective_copies,
+            "page_count": page_count,
+            "print_queue": queue,
+            "job_kind": "product",
+        }
+        if wait:
+            kwargs["wait"] = True
+        print_pdf_by_plan(path, container.config.printing, **kwargs)
 
     return job
 

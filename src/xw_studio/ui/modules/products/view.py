@@ -36,14 +36,17 @@ from xw_studio.services.draft_invoice.service import (
     ProductPreflightPlan,
 )
 from xw_studio.services.products.brand_service import BrandBulkUpdateReport, ProductBrandService
+from xw_studio.services.products.catalog import Product
 from xw_studio.services.products.field_bulk_service import (
     FieldBulkUpdateReport,
     ProductFieldBulkService,
 )
+from xw_studio.services.products.print_decision import PieceBlock
 from xw_studio.services.sevdesk.part_client import PartClient, SevdeskPart
 from xw_studio.services.wix.client import WixProduct, WixProductsClient
 from xw_studio.ui.modules.products.bulk_field_dialog import BulkFieldEditorDialog
 from xw_studio.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
+from xw_studio.ui.modules.rechnungen.print_dialog import run_piece_pdf_print
 from xw_studio.ui.widgets.data_table import DataTable
 from xw_studio.ui.widgets.search_bar import SearchBar
 
@@ -692,6 +695,10 @@ class ProductsView(QWidget):
         self._legacy_import_btn = QPushButton("Legacy-Druckdaten importieren")
         self._legacy_import_btn.clicked.connect(self._import_legacy_print_data)
         bar.addWidget(self._legacy_import_btn)
+        self._sync_print_btn = QPushButton("Auswahl drucken")
+        self._sync_print_btn.clicked.connect(self._print_selected_product)
+        self._sync_print_btn.setEnabled(False)
+        bar.addWidget(self._sync_print_btn)
         self._sync_apply_btn = QPushButton("Wix -> Lokal uebernehmen")
         self._sync_apply_btn.clicked.connect(self._apply_wix_to_local)
         self._sync_apply_btn.setEnabled(False)
@@ -815,6 +822,7 @@ class ProductsView(QWidget):
         self._sync_rows = self._build_sync_rows()
         self._sync_fields_btn.setEnabled(bool(self._sync_rows))
         self._sync_brand_btn.setEnabled(bool(self._sync_rows))
+        self._sync_print_btn.setEnabled(bool(self._sync_rows))
         self._sync_search.refresh_suggestions()
         self._apply_sync_filters()
         conflicts = sum(1 for row in self._sync_rows if row.status != "sauber verknuepft")
@@ -831,6 +839,7 @@ class ProductsView(QWidget):
         self._sync_refresh_sevdesk_btn.setEnabled(True)
         self._sync_fields_btn.setEnabled(False)
         self._sync_brand_btn.setEnabled(False)
+        self._sync_print_btn.setEnabled(False)
         self._sync_apply_btn.setEnabled(False)
         self._sync_status_lbl.setText(f"Fehler: {exc}")
         logger.exception("Sync source load failed: %s", exc)
@@ -1020,6 +1029,56 @@ class ProductsView(QWidget):
 
     def _selected_product_skus(self) -> list[str]:
         return self._selected_skus_from_data_table(self._sync_table)
+
+    def _print_selected_product(self) -> None:
+        skus = self._selected_product_skus()
+        if not skus:
+            QMessageBox.information(self, "Produktdruck", "Bitte zuerst ein Produkt auswaehlen.")
+            return
+        sku = skus[0]
+        row = self._local_product_by_sku(sku)
+        if row is None:
+            QMessageBox.information(
+                self,
+                "Produktdruck",
+                "Fuer diese SKU gibt es noch keinen lokalen Produktdatensatz mit Druckkonfiguration.",
+            )
+            return
+        copies, ok = QInputDialog.getInt(self, "Produktdruck", "Anzahl:", 1, 1, 999, 1)
+        if not ok:
+            return
+        piece = self._piece_from_product_row(row)
+        if run_piece_pdf_print(self, self._container, piece=piece, copies=copies):
+            self._sync_status_lbl.setText(f"Produktdruck gestartet: {row.sku} ({copies}x)")
+
+    def _local_product_by_sku(self, sku: str) -> ProductRow | None:
+        wanted = str(sku or "").strip().upper()
+        for row in self._all_rows:
+            if row.sku.strip().upper() == wanted:
+                return row
+        return None
+
+    @staticmethod
+    def _piece_from_product_row(row: ProductRow) -> PieceBlock:
+        product = Product(
+            id=f"settings::{row.sku}",
+            sku=row.sku,
+            name=row.name,
+            category=row.category,
+            brand_name=row.brand_name,
+            brand_id=row.brand_id,
+            sevdesk_part_id=row.sevdesk_id,
+            wix_product_id=row.wix_id,
+            print_file_path=row.print_file_path,
+        )
+        return PieceBlock(
+            sku=row.sku,
+            name=row.name,
+            qty_needed=1,
+            print_profile_id=str(row.print_profile_id or "").strip(),
+            print_plan=[entry for entry in (row.print_plan or []) if isinstance(entry, dict)],
+            product=product,
+        )
 
     def _apply_wix_to_local(self) -> None:
         if not self._wix_rows:

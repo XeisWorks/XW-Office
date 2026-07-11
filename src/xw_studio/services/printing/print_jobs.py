@@ -9,6 +9,10 @@ from uuid import uuid4
 PrintJobKind = Literal["music", "product", "invoice", "label"]
 PlacementMode = Literal["paper_origin", "printable_origin", "calibrated"]
 RenderColorMode = Literal["auto", "rgb", "gray"]
+PageSizeName = Literal["", "A4", "A5"]
+PageOrientationName = Literal["", "portrait", "landscape"]
+ScaleMode = Literal["none", "fit"]
+AlignmentMode = Literal["top_left", "center"]
 BlackEnhancement = Literal[
     "auto",
     "none",
@@ -62,6 +66,10 @@ class PdfPrintJob:
     job_kind: PrintJobKind = "product"
     description: str = ""
     placement_mode: PlacementMode = "paper_origin"
+    page_size: PageSizeName = ""
+    orientation: PageOrientationName = ""
+    scale_mode: ScaleMode = "none"
+    alignment: AlignmentMode = "top_left"
     x_offset_mm: float = 0.0
     y_offset_mm: float = 0.0
     render_color_mode: RenderColorMode = "auto"

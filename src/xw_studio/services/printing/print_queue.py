@@ -154,7 +154,8 @@ class _PrintQueueWorker(QThread):
         if isinstance(job, PdfPrintJob):
             logger.info(
                 "Print job started: id=%s kind=%s printer='%s' file='%s' copies=%s dpi=%s pages=%s "
-                "placement=%s offset_mm=(%s,%s) render_color_mode=%s black_enhancement=%s black_threshold=%s",
+                "placement=%s page_size=%s orientation=%s scale_mode=%s alignment=%s offset_mm=(%s,%s) "
+                "render_color_mode=%s black_enhancement=%s black_threshold=%s",
                 job.id,
                 job.job_kind,
                 job.printer_name,
@@ -163,6 +164,10 @@ class _PrintQueueWorker(QThread):
                 job.dpi if job.dpi is not None else f"queue-default/fallback-{job.effective_dpi}",
                 job.pages,
                 job.placement_mode,
+                job.page_size,
+                job.orientation,
+                job.scale_mode,
+                job.alignment,
                 job.x_offset_mm,
                 job.y_offset_mm,
                 job.effective_render_color_mode,
@@ -177,6 +182,10 @@ class _PrintQueueWorker(QThread):
                 dpi=job.dpi,
                 fallback_dpi=job.effective_dpi,
                 placement_mode=job.placement_mode,
+                page_size=job.page_size,
+                orientation=job.orientation,
+                scale_mode=job.scale_mode,
+                alignment=job.alignment,
                 x_offset_mm=job.x_offset_mm,
                 y_offset_mm=job.y_offset_mm,
                 job_kind=job.job_kind,

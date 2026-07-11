@@ -549,6 +549,7 @@ class PlcLabelPrintDialog(QDialog):
         if not os.path.isfile(pdf_path):
             raise RuntimeError(f"Archiviertes PLC-PDF fehlt: {pdf_path}")
         queue: PrintQueueService = self._container.resolve(PrintQueueService)
+        profile = self._container.config.printing.resolve_profile("plc_label")
         return queue.enqueue(
             PdfPrintJob(
                 pdf_path=os.fspath(pdf_path),
@@ -556,6 +557,14 @@ class PlcLabelPrintDialog(QDialog):
                 copies=1,
                 job_kind="label",
                 description=f"PLC-Label {reference}",
+                page_size=str(getattr(profile, "page_size", "") or "A5"),
+                orientation=str(getattr(profile, "orientation", "") or "portrait"),
+                placement_mode=str(getattr(profile, "placement_mode", "") or "printable_origin"),  # type: ignore[arg-type]
+                scale_mode=str(getattr(profile, "scale_mode", "") or "fit"),  # type: ignore[arg-type]
+                alignment=str(getattr(profile, "alignment", "") or "center"),  # type: ignore[arg-type]
+                dpi=int(profile.dpi) if profile is not None and profile.dpi else None,
+                x_offset_mm=float(getattr(profile, "x_offset_mm", 0.0) or 0.0),
+                y_offset_mm=float(getattr(profile, "y_offset_mm", 0.0) or 0.0),
                 # Preserve the exact PLC response for safe local reprints.
                 cleanup_paths=(),
             )

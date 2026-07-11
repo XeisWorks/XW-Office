@@ -29,6 +29,10 @@ class PlanTarget:
     printer_name: str
     dpi: int | None
     placement_mode: PlacementMode
+    page_size: str
+    orientation: str
+    scale_mode: str
+    alignment: str
     x_offset_mm: float
     y_offset_mm: float
     render_color_mode: RenderColorMode
@@ -94,6 +98,10 @@ def resolve_plan_targets(
                     printer_name=resolved.printer_name.strip(),
                     dpi=int(resolved.dpi) if resolved.dpi else None,
                     placement_mode=_placement_mode(resolved.placement_mode),
+                    page_size=str(resolved.page_size or "").strip(),
+                    orientation=str(resolved.orientation or "").strip(),
+                    scale_mode=_scale_mode(resolved.scale_mode),
+                    alignment=_alignment(resolved.alignment),
                     x_offset_mm=float(resolved.x_offset_mm),
                     y_offset_mm=float(resolved.y_offset_mm),
                     render_color_mode=_render_color_mode(resolved.render_color_mode),
@@ -113,6 +121,10 @@ def resolve_plan_targets(
             printer_name=resolved.printer_name.strip(),
             dpi=int(resolved.dpi) if resolved.dpi else None,
             placement_mode=_placement_mode(resolved.placement_mode),
+            page_size=str(resolved.page_size or "").strip(),
+            orientation=str(resolved.orientation or "").strip(),
+            scale_mode=_scale_mode(resolved.scale_mode),
+            alignment=_alignment(resolved.alignment),
             x_offset_mm=float(resolved.x_offset_mm),
             y_offset_mm=float(resolved.y_offset_mm),
             render_color_mode=_render_color_mode(resolved.render_color_mode),
@@ -159,6 +171,10 @@ def print_pdf_by_plan(
             job_kind=effective_kind,
             description=f"{job_kind}: {pdf_path}",
             placement_mode=target.placement_mode,
+            page_size=target.page_size,  # type: ignore[arg-type]
+            orientation=target.orientation,  # type: ignore[arg-type]
+            scale_mode=target.scale_mode,  # type: ignore[arg-type]
+            alignment=target.alignment,  # type: ignore[arg-type]
             x_offset_mm=target.x_offset_mm,
             y_offset_mm=target.y_offset_mm,
             render_color_mode=target.render_color_mode,
@@ -208,6 +224,20 @@ def _placement_mode(value: str) -> PlacementMode:
     if normalized in {"paper_origin", "printable_origin", "calibrated"}:
         return cast(PlacementMode, normalized)
     return "paper_origin"
+
+
+def _scale_mode(value: str) -> str:
+    normalized = str(value or "none").strip().casefold()
+    if normalized in {"none", "fit"}:
+        return normalized
+    return "none"
+
+
+def _alignment(value: str) -> str:
+    normalized = str(value or "top_left").strip().casefold()
+    if normalized in {"top_left", "center"}:
+        return normalized
+    return "top_left"
 
 
 def _render_color_mode(value: str) -> RenderColorMode:

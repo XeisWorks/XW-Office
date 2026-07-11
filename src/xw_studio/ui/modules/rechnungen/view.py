@@ -4254,10 +4254,11 @@ class RechnungenView(QWidget):
         model_rows: list[dict[str, object]] = []
         for item in self._current_piece_blocks:
             flagged_for_print = bool(item.is_unreleased or invoice_service.is_flagged_sku(item.sku))
+            show_print_controls = not (item.product is not None and item.product.is_digital)
             model_rows.append(
                 {
                     "block": item,
-                    "flagged": flagged_for_print,
+                    "flagged": show_print_controls,
                     "quantity": self._default_piece_print_qty(item),
                     "header": self._piece_header_text(item, flagged_for_print),
                     "details": self._piece_detail_lines(item),
@@ -4359,7 +4360,7 @@ class RechnungenView(QWidget):
         from xw_studio.ui.modules.rechnungen.print_dialog import prepare_piece_pdf_print
 
         qty = max(1, int(quantity or self._default_piece_print_qty(block)))
-        job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty)
+        job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty, wait=True)
         if job is None:
             return
 
