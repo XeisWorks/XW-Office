@@ -140,6 +140,8 @@ def test_dialog_defer_calls_service(qtbot: object, monkeypatch) -> None:
     dialog._note.setText("spaeter")  # noqa: SLF001
     dialog._defer()  # noqa: SLF001
 
+    qtbot.waitUntil(lambda: bool(service.mark_deferred_calls), timeout=2000)
+    qtbot.waitUntil(lambda: accepted["value"], timeout=2000)
     assert service.mark_deferred_calls == [("m1", "spaeter")]
     assert accepted["value"] is True
 
@@ -158,6 +160,7 @@ def test_dialog_mark_done_calls_service_after_confirmation(qtbot: object, monkey
     dialog._note.setText("ok")  # noqa: SLF001
     dialog._mark_done()  # noqa: SLF001
 
+    qtbot.waitUntil(lambda: bool(service.mark_done_calls), timeout=2000)
     assert len(service.mark_done_calls) == 1
     case_id, payment, qr_path, note = service.mark_done_calls[0]
     assert case_id == "m1"
@@ -185,6 +188,7 @@ def test_dialog_generate_qr_uses_manual_form_values(qtbot: object, monkeypatch) 
 
     dialog._generate_qr()  # noqa: SLF001
 
+    qtbot.waitUntil(lambda: service.last_generated_payment is not None, timeout=2000)
     assert service.last_generated_payment is not None
     assert service.last_generated_payment.recipient == "Manual Recipient"
     assert service.last_generated_payment.amount == Decimal("999.99")

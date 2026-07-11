@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from xw_studio.core.printer_detect import discover_printers_cached as discover_printers
 from xw_studio.core.signals import AppSignals
 from xw_studio.core.types import ModuleKey
 from xw_studio.core.worker import BackgroundWorker
@@ -95,8 +94,13 @@ class MainWindow(QMainWindow):
             return
 
         def job() -> tuple[int, int]:
+            from xw_studio.services.secrets.service import SecretService
             from xw_studio.services.invoice_processing.service import InvoiceProcessingService
 
+            secret_service = self._container.resolve(SecretService)
+            preload_secrets = getattr(secret_service, "preload", None)
+            if callable(preload_secrets):
+                preload_secrets()
             service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             warm = getattr(service, "warm_startup_batches", None)
             if callable(warm):
@@ -192,12 +196,6 @@ class MainWindow(QMainWindow):
 
     def _navigate_to(self, module_key: str) -> None:
         if module_key in self._page_factories and module_key not in self._pages:
-            if module_key == ModuleKey.RECHNUNGEN.value:
-                widget = self._page_factories[module_key]()
-                self._register_page(module_key, widget)
-                self._stack.setCurrentWidget(widget)
-                logger.debug("Navigated to %s (materialized)", module_key)
-                return
             placeholder = self._create_placeholder(module_key)
             self._register_page(module_key, placeholder)
             self._stack.setCurrentWidget(placeholder)
@@ -236,6 +234,13 @@ class MainWindow(QMainWindow):
                 self._loading_pages.discard(module_key)
 
         QTimer.singleShot(0, materialize)
+
+    def page(self, module_key: str | ModuleKey) -> QWidget | None:
+        """Return a materialized page, excluding temporary loading shells."""
+        key = module_key.value if isinstance(module_key, ModuleKey) else module_key
+        if key in self._loading_pages:
+            return None
+        return self._pages.get(key)
 
     def _create_placeholder(self, module_key: str) -> QWidget:
         from PySide6.QtCore import Qt

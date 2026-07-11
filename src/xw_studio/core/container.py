@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from threading import RLock
 from typing import Any, Callable, TypeVar
 
 from xw_studio.core.config import AppConfig
@@ -17,6 +18,7 @@ class Container:
         self._config = config
         self._singletons: dict[type, object] = {}
         self._factories: dict[type, Callable[..., Any]] = {}
+        self._lock = RLock()
 
     @property
     def config(self) -> AppConfig:
@@ -24,17 +26,20 @@ class Container:
 
     def register(self, service_type: type[T], factory: Callable[[Container], T]) -> None:
         """Register a factory for a service type."""
-        self._factories[service_type] = factory
+        with self._lock:
+            self._factories[service_type] = factory
 
     def resolve(self, service_type: type[T]) -> T:
         """Resolve a service instance (created once, then cached)."""
-        if service_type not in self._singletons:
-            if service_type not in self._factories:
-                raise KeyError(f"No factory registered for {service_type.__name__}")
-            logger.debug("Creating singleton for %s", service_type.__name__)
-            self._singletons[service_type] = self._factories[service_type](self)
-        return self._singletons[service_type]  # type: ignore[return-value]
+        with self._lock:
+            if service_type not in self._singletons:
+                if service_type not in self._factories:
+                    raise KeyError(f"No factory registered for {service_type.__name__}")
+                logger.debug("Creating singleton for %s", service_type.__name__)
+                self._singletons[service_type] = self._factories[service_type](self)
+            return self._singletons[service_type]  # type: ignore[return-value]
 
     def reset(self) -> None:
         """Clear all cached singletons (for testing)."""
-        self._singletons.clear()
+        with self._lock:
+            self._singletons.clear()

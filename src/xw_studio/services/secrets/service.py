@@ -1,6 +1,8 @@
 """Encrypted secret access (DB-first) with config fallback."""
 from __future__ import annotations
 
+from threading import RLock
+
 import os
 import json
 from pathlib import Path
@@ -64,6 +66,23 @@ class SecretService:
     def __init__(self, config: AppConfig, repo: ApiSecretRepository | None = None) -> None:
         self._config = config
         self._repo = repo
+        self._ciphertext_cache: dict[str, bytes] = {}
+        self._cache_loaded = False
+        self._cache_lock = RLock()
+
+    def preload(self) -> int:
+        """Warm all DB secrets in one background-friendly database query."""
+        self._ensure_cache_loaded()
+        return len(self._ciphertext_cache)
+
+    def _ensure_cache_loaded(self) -> None:
+        if self._cache_loaded or self._repo is None:
+            return
+        with self._cache_lock:
+            if self._cache_loaded:
+                return
+            self._ciphertext_cache = self._repo.get_all_ciphertexts()
+            self._cache_loaded = True
 
     def get_secret(self, name: str) -> str:
         """Return secret value by *name* (DB first, then config/.env fallback)."""
@@ -72,7 +91,8 @@ class SecretService:
             return ""
 
         if self._repo is not None and (self._config.fernet_master_key or "").strip():
-            ciphertext = self._repo.get_ciphertext(key)
+            self._ensure_cache_loaded()
+            ciphertext = self._ciphertext_cache.get(key)
             if ciphertext:
                 return decrypt_secret(ciphertext, self._config.fernet_master_key)
 
@@ -88,9 +108,13 @@ class SecretService:
         if not (self._config.fernet_master_key or "").strip():
             raise ConfigError("FERNET_MASTER_KEY is empty")
 
+        self._ensure_cache_loaded()
         value = (plaintext or "").strip()
         ciphertext = encrypt_secret(value, self._config.fernet_master_key)
         self._repo.upsert_ciphertext(key, ciphertext)
+        with self._cache_lock:
+            self._ciphertext_cache[key] = ciphertext
+            self._cache_loaded = True
 
     @staticmethod
     def supported_keys() -> tuple[str, ...]:

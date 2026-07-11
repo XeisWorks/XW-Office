@@ -187,6 +187,8 @@ class CrmView(QWidget):
     # ------------------------------------------------------------------
 
     def _load_contacts(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
         crm: CrmService = self._container.resolve(CrmService)
         self._sync_btn.setEnabled(False)
         self._status_lbl.setText("Laden…")
@@ -272,9 +274,7 @@ class CrmView(QWidget):
 
         self._worker = BackgroundWorker(job)
         self._worker.signals.result.connect(self._on_scan_done)
-        self._worker.signals.error.connect(
-            lambda e: QMessageBox.warning(self, "CRM", str(e))
-        )
+        self._worker.signals.error.connect(self._on_scan_error)
         self._worker.start()
 
     def _on_scan_done(self, dups: object) -> None:
@@ -302,6 +302,11 @@ class CrmView(QWidget):
             QMessageBox.information(
                 self, "CRM", "Keine Duplikate über dem Schwellwert gefunden."
             )
+
+    def _on_scan_error(self, exc: Exception) -> None:
+        self._scan_btn.setEnabled(True)
+        self._status_lbl.setText(f"Duplikat-Scan fehlgeschlagen: {exc}")
+        QMessageBox.warning(self, "CRM", str(exc))
 
     def _open_merge_wizard(self) -> None:
         idx = self._dup_table.currentRow()

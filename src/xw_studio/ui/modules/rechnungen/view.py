@@ -31,7 +31,6 @@ from PySide6.QtGui import (
     QShowEvent,
 )
 from PySide6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -58,7 +57,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from xw_studio.core.printer_detect import discover_printers_cached as discover_printers
 from xw_studio.core.signals import AppSignals
 from xw_studio.core.types import ModuleKey
 from xw_studio.core.worker import BackgroundWorker
@@ -574,6 +572,8 @@ class _DraftInvoiceDialog(QDialog):
         self._btn_preview.clicked.connect(callback)
 
     def set_preview_result(self, text: str, *, ok: bool) -> None:
+        self._btn_preview.setEnabled(True)
+        self._btn_preview.setText("Vorschau laden")
         self._preview.setPlainText(text)
         self._preview_ok = ok
         if ok:
@@ -582,6 +582,15 @@ class _DraftInvoiceDialog(QDialog):
         else:
             self._status.setText("Vorschau enthält Probleme. Entwurf wird blockiert.")
             self._status.setStyleSheet("color: #b91c1c;")
+
+    def set_preview_loading(self) -> None:
+        """Show immediate feedback while Wix data is loaded."""
+        self._preview_ok = False
+        self._btn_preview.setEnabled(False)
+        self._btn_preview.setText("Vorschau wird geladen...")
+        self._preview.setPlainText("Wix-Order und Produktzuordnungen werden geladen...")
+        self._status.setText("Bitte warten...")
+        self._status.setStyleSheet("color: #64748b;")
 
     def _accept_if_valid(self) -> None:
         value = self.wix_order_number
@@ -680,6 +689,7 @@ class RechnungenView(QWidget):
         self._refund_worker: BackgroundWorker | None = None
         self._draft_worker: BackgroundWorker | None = None
         self._draft_product_worker: BackgroundWorker | None = None
+        self._draft_preview_worker: BackgroundWorker | None = None
         self._mollie_badge_worker: BackgroundWorker | None = None
         self._stuecke_worker: BackgroundWorker | None = None
         self._wix_meta_worker: BackgroundWorker | None = None
@@ -2307,7 +2317,6 @@ class RechnungenView(QWidget):
             self._btn_send_invoice,
         ):
             button.setEnabled(False)
-        QApplication.processEvents()
 
     def _clear_detail_actions_busy(self) -> None:
         self._overlay.hide()
@@ -2512,7 +2521,6 @@ class RechnungenView(QWidget):
 
         self._set_piece_print_controls_enabled(False)
         self._btn_print_music.setEnabled(False)
-        QApplication.processEvents()
         signals: AppSignals = self._container.resolve(AppSignals)
         total_copies = sum(qty for _block, qty, _job in selected_jobs)
         signals.status_message.emit(
@@ -2631,7 +2639,6 @@ class RechnungenView(QWidget):
                             and not multi_select_modifier
                         ):
                             self._select_visible_table_row(int(index.row()))
-                            QApplication.processEvents()
                         return super().eventFilter(watched, event)
                     actions_col = _TABLE_COLUMNS.index("AKTIONEN")
                     sevdesk_col = _TABLE_COLUMNS.index("sevDesk")
@@ -3873,11 +3880,38 @@ class RechnungenView(QWidget):
         if not reference:
             dlg.set_preview_result("Bitte zuerst eine Wix-Order-Nr eingeben.", ok=False)
             return
-        try:
+
+        if self._draft_preview_worker is not None and self._draft_preview_worker.isRunning():
+            self._draft_preview_worker.cancel()
+        dlg.set_preview_loading()
+
+        def job() -> tuple[str, dict[str, object]]:
             service: DraftInvoiceService = self._container.resolve(DraftInvoiceService)
             preview = service.preview_wix_order_number(reference)
-        except Exception as exc:
-            dlg.set_preview_result(f"Vorschau fehlgeschlagen:\n{exc}", ok=False)
+            return reference, preview
+
+        self._draft_preview_worker = BackgroundWorker(job)
+        worker = self._draft_preview_worker
+        worker.signals.result.connect(lambda payload: self._on_draft_preview_result(dlg, payload))
+        worker.signals.error.connect(
+            lambda exc: dlg.set_preview_result(f"Vorschau fehlgeschlagen:\n{exc}", ok=False)
+        )
+        worker.signals.finished.connect(
+            lambda current=worker: self._on_draft_preview_finished(current)
+        )
+        worker.start()
+
+    def _on_draft_preview_finished(self, worker: BackgroundWorker) -> None:
+        if self._draft_preview_worker is worker:
+            self._draft_preview_worker = None
+
+    def _on_draft_preview_result(self, dlg: _DraftInvoiceDialog, payload: object) -> None:
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            dlg.set_preview_result("Keine gueltige Vorschau erhalten.", ok=False)
+            return
+        reference, preview = payload
+        if str(reference) != dlg.wix_order_number or not isinstance(preview, dict):
+            dlg.set_preview_result("Eingabe wurde geaendert. Bitte Vorschau erneut laden.", ok=False)
             return
 
         lines: list[str] = []
@@ -4069,7 +4103,6 @@ class RechnungenView(QWidget):
 
         self._set_piece_print_controls_enabled(False)
         self._btn_print_music.setEnabled(False)
-        QApplication.processEvents()
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.status_message.emit(f"Produktdruck fuer {block.sku} gestartet ({qty}x).", 5000)
 

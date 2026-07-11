@@ -5,7 +5,7 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QCloseEvent, QHideEvent, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -305,6 +305,7 @@ class TagesgeschaeftView(QWidget):
         super().__init__(parent)
         self._container = container
         self._background_jobs = container.resolve(BackgroundJobManager)
+        self._rechnungen_view: RechnungenView | None = None
         self._badge_worker: BackgroundWorker | None = None
         self._start_worker: BackgroundWorker | None = None
         self._start_product_worker: BackgroundWorker | None = None
@@ -366,9 +367,9 @@ class TagesgeschaeftView(QWidget):
                 worker.wait(3000)
 
     def _build_ui(self) -> None:
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        self._main_layout = QVBoxLayout(self)
+        self._main_layout.setContentsMargins(0, 0, 0, 0)
+        self._main_layout.setSpacing(0)
 
         action_bar = QWidget()
         action_bar.setFixedHeight(44)
@@ -379,19 +380,19 @@ class TagesgeschaeftView(QWidget):
         self._btn_refresh = QPushButton("Aktualisieren")
         self._btn_refresh.setToolTip("Erste Rechnungsseite neu laden")
         self._btn_refresh.setFixedHeight(34)
-        self._btn_refresh.clicked.connect(lambda: self._rechnungen_view.reload_first_page())
+        self._btn_refresh.clicked.connect(self._reload_invoice_view)
         bar_lay.addWidget(self._btn_refresh)
 
         self._btn_draft = QPushButton("Entwurf")
         self._btn_draft.setToolTip("Neuen sevDesk-Rechnungsentwurf aus Wix-Order-Nr erstellen")
         self._btn_draft.setFixedHeight(34)
-        self._btn_draft.clicked.connect(lambda: self._rechnungen_view.create_draft_from_wix_order())
+        self._btn_draft.clicked.connect(self._create_invoice_draft)
         bar_lay.addWidget(self._btn_draft)
 
         self._btn_custom_label = QPushButton("Custom-Label")
         self._btn_custom_label.setToolTip("Freie Lieferadresse eingeben und direkt als Label drucken")
         self._btn_custom_label.setFixedHeight(34)
-        self._btn_custom_label.clicked.connect(lambda: self._rechnungen_view.open_custom_label_dialog())
+        self._btn_custom_label.clicked.connect(self._open_custom_label)
         bar_lay.addWidget(self._btn_custom_label)
 
         bar_lay.addStretch()
@@ -472,12 +473,41 @@ class TagesgeschaeftView(QWidget):
         self._btn_beenden.clicked.connect(self._on_beenden_clicked)
         bar_lay.addWidget(self._btn_beenden)
 
-        main_layout.addWidget(action_bar)
+        self._main_layout.addWidget(action_bar)
 
-        self._rechnungen_view = RechnungenView(self._container)
-        self._rechnungen_view.set_badge_refresh_managed_externally(True)
-        self._rechnungen_view.set_top_actions_managed_externally(True)
-        main_layout.addWidget(self._rechnungen_view, stretch=1)
+        self._invoice_loading = QLabel("Rechnungen-Oberflaeche wird vorbereitet...")
+        self._invoice_loading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._invoice_loading.setStyleSheet("font-size: 16px; color: #64748b;")
+        self._main_layout.addWidget(self._invoice_loading, stretch=1)
+        self._set_invoice_ui_ready(False)
+        QTimer.singleShot(0, self._materialize_rechnungen_view)
+
+    def _materialize_rechnungen_view(self) -> None:
+        if self._rechnungen_view is not None:
+            return
+        view = RechnungenView(self._container)
+        view.set_badge_refresh_managed_externally(True)
+        view.set_top_actions_managed_externally(True)
+        self._rechnungen_view = view
+        self._main_layout.replaceWidget(self._invoice_loading, view)
+        self._invoice_loading.deleteLater()
+        self._set_invoice_ui_ready(True)
+
+    def _set_invoice_ui_ready(self, ready: bool) -> None:
+        for button in (self._btn_refresh, self._btn_draft, self._btn_custom_label, self._btn_start):
+            button.setEnabled(ready)
+
+    def _reload_invoice_view(self) -> None:
+        if self._rechnungen_view is not None:
+            self._rechnungen_view.reload_first_page()
+
+    def _create_invoice_draft(self) -> None:
+        if self._rechnungen_view is not None:
+            self._rechnungen_view.create_draft_from_wix_order()
+
+    def _open_custom_label(self) -> None:
+        if self._rechnungen_view is not None:
+            self._rechnungen_view.open_custom_label_dialog()
 
     def _build_alert_button(self, label: str) -> QPushButton:
         button = QPushButton(label)
@@ -580,16 +610,22 @@ class TagesgeschaeftView(QWidget):
         button.hide()
 
     def _on_sendungen_alert_clicked(self) -> None:
+        if self._rechnungen_view is None:
+            return
         count = self._rechnungen_view.open_sendungen_dialog()
         self._sendungen_count = max(0, int(count))
         self._update_alert_button(self._btn_sendungen_alert, "OFFENE SENDUNGEN", self._sendungen_count)
 
     def _on_transfer_alert_clicked(self) -> None:
+        if self._rechnungen_view is None:
+            return
         count = self._rechnungen_view.open_ueberweisungen_dialog()
         self._transfer_count = max(0, int(count))
         self._update_alert_button(self._btn_transfer_alert, "UEBERWEISUNG OFFEN", self._transfer_count)
 
     def _on_mollie_alert_clicked(self) -> None:
+        if self._rechnungen_view is None:
+            return
         self._rechnungen_view.open_queue_dialog(
             "mollie",
             "MOLLIE AUTHORIZATION",
@@ -612,6 +648,8 @@ class TagesgeschaeftView(QWidget):
         self._start_selected_invoice_ids = []
         self._start_selected_summaries = []
         if selected_only:
+            if self._rechnungen_view is None:
+                return
             selected = self._rechnungen_view.selected_summaries()
             self._start_selected_summaries = list(selected)
             self._start_selected_invoice_ids = [
@@ -633,13 +671,14 @@ class TagesgeschaeftView(QWidget):
             if self._start_selected_only
             else "alle offenen Entwuerfe"
         )
-        self._rechnungen_view.show_start_summary(
-            [
-                "START wird vorbereitet.",
-                f"Umfang: {scope}",
-                f"Notendruck: {'ja' if self._start_include_product_print else 'nein'}",
-            ]
-        )
+        if self._rechnungen_view is not None:
+            self._rechnungen_view.show_start_summary(
+                [
+                    "START wird vorbereitet.",
+                    f"Umfang: {scope}",
+                    f"Notendruck: {'ja' if self._start_include_product_print else 'nein'}",
+                ]
+            )
         signals.status_message.emit("Pre-Flight wird erstellt…", 2500)
 
         def job() -> StartPreflight:
@@ -984,7 +1023,8 @@ class TagesgeschaeftView(QWidget):
                 lines.append("Produkt-Hinweise:")
                 lines.extend(f"- {warning}" for warning in product_apply.warnings)
 
-        self._rechnungen_view.show_start_summary(lines)
+        if self._rechnungen_view is not None:
+            self._rechnungen_view.show_start_summary(lines)
 
         if self._start_include_product_print:
             QMessageBox.information(
@@ -993,7 +1033,8 @@ class TagesgeschaeftView(QWidget):
                 "\n".join(lines),
             )
 
-        self._rechnungen_view._reload_first_page()  # noqa: SLF001
+        if self._rechnungen_view is not None:
+            self._rechnungen_view._reload_first_page()  # noqa: SLF001
         self._refresh_badges()
 
     def _on_start_preflight_error(self, exc: Exception) -> None:
@@ -1010,7 +1051,6 @@ class TagesgeschaeftView(QWidget):
         self._btn_start.setEnabled(not running)
         self._btn_start.setText("START..." if running else self._start_button_idle_text)
         self._btn_stop.setEnabled(bool(running and allow_stop))
-        QApplication.processEvents()
 
     def _on_start_stop_clicked(self) -> None:
         running = any(

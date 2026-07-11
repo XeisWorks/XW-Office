@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import subprocess
+from threading import Event
 import types
 
 from PySide6.QtWidgets import QLabel
@@ -12,6 +13,7 @@ from xw_studio.core.container import Container
 from xw_studio.core.signals import AppSignals
 from xw_studio.core.types import ModuleKey
 from xw_studio.services.daily_business.service import DailyBusinessService
+from xw_studio.services.draft_invoice.service import DraftInvoiceService
 from xw_studio.services.inventory.service import StartMode, StartPreflight
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
 from xw_studio.services.products.print_decision import PrintDecisionEngine
@@ -23,7 +25,11 @@ from xw_studio.services.wix.client import WixOrdersClient
 from xw_studio.ui.main_window import MainWindow
 from xw_studio.ui.modules.rechnungen.tagesgeschaeft_view import TagesgeschaeftView, _StartDialog
 from xw_studio.ui.modules.rechnungen.plc_label_dialog import PlcLabelPrintDialog
-from xw_studio.ui.modules.rechnungen.view import RechnungenView, _ActionsDelegate
+from xw_studio.ui.modules.rechnungen.view import (
+    RechnungenView,
+    _ActionsDelegate,
+    _DraftInvoiceDialog,
+)
 
 
 def _build_container() -> Container:
@@ -32,6 +38,46 @@ def _build_container() -> Container:
     container.register(AppSignals, lambda _: AppSignals())
     register_default_services(container)
     return container
+
+
+def _wait_embedded_rechnungen(qtbot: object, view: TagesgeschaeftView) -> RechnungenView:
+    qtbot.waitUntil(lambda: view._rechnungen_view is not None, timeout=3000)  # type: ignore[attr-defined]  # noqa: SLF001
+    assert view._rechnungen_view is not None  # noqa: SLF001
+    return view._rechnungen_view  # noqa: SLF001
+
+
+def test_draft_preview_is_non_blocking(qtbot: object) -> None:
+    container = _build_container()
+    entered = Event()
+    release = Event()
+
+    class _DraftService:
+        def preview_wix_order_number(self, reference: str) -> dict[str, object]:
+            entered.set()
+            release.wait(timeout=2)
+            return {
+                "wix_order_number": reference,
+                "customer": "Testkunde",
+                "email": "test@example.invalid",
+                "items": [],
+                "can_create": True,
+            }
+
+    container.register(DraftInvoiceService, lambda _c: _DraftService())  # type: ignore[arg-type,return-value]
+    view = RechnungenView(container)
+    dialog = _DraftInvoiceDialog(view)
+    qtbot.addWidget(view)
+    qtbot.addWidget(dialog)
+    dialog._order_number.setText("20519")  # noqa: SLF001
+
+    view._run_draft_preview(dialog)  # noqa: SLF001
+
+    assert entered.wait(timeout=1)
+    assert not dialog._btn_preview.isEnabled()  # noqa: SLF001
+    assert "geladen" in dialog._btn_preview.text()  # noqa: SLF001
+    release.set()
+    qtbot.waitUntil(lambda: dialog.preview_ok, timeout=2000)
+    assert dialog._btn_preview.isEnabled()  # noqa: SLF001
 
 
 class _FakeSecretService:
@@ -214,6 +260,7 @@ def test_tagesgeschaeft_contains_rechnungen_view(qtbot: object) -> None:
     container = _build_container()
     view = TagesgeschaeftView(container)
     qtbot.addWidget(view)
+    _wait_embedded_rechnungen(qtbot, view)
     assert hasattr(view, "_rechnungen_view")  # noqa: SLF001
     assert view._btn_start.text() == "▶ START"  # noqa: SLF001
     assert view._btn_start.menu() is not None  # noqa: SLF001
@@ -238,6 +285,7 @@ def test_start_click_disables_start_immediately(qtbot: object, monkeypatch) -> N
     container = _build_container()
     view = TagesgeschaeftView(container)
     qtbot.addWidget(view)
+    _wait_embedded_rechnungen(qtbot, view)
     started = {"value": False}
 
     def fake_start(self) -> None:
@@ -295,6 +343,7 @@ def test_transfer_alert_click_updates_badge_from_dialog_result(qtbot: object, mo
     container = _build_container()
     view = TagesgeschaeftView(container)
     qtbot.addWidget(view)
+    _wait_embedded_rechnungen(qtbot, view)
 
     monkeypatch.setattr(view._rechnungen_view, "open_ueberweisungen_dialog", lambda: 3)  # noqa: SLF001
 
@@ -825,15 +874,20 @@ def test_main_window_rechnungen_warms_drafts_but_defers_open_invoice_contexts(
     monkeypatch,
 ) -> None:
     container, invoice_service = _build_rechnungen_test_container()
-    monkeypatch.setattr("xw_studio.ui.main_window.discover_printers", lambda: [])
-    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.view.discover_printers", lambda: [])
     window = MainWindow(container)
     qtbot.addWidget(window)
     window.show()
 
     window._navigate_to(ModuleKey.RECHNUNGEN.value)  # noqa: SLF001
-    page = window._pages[ModuleKey.RECHNUNGEN.value]  # noqa: SLF001
+    qtbot.waitUntil(
+        lambda: window.page(ModuleKey.RECHNUNGEN) is not None,
+        timeout=5000,
+    )
+    page = window.page(ModuleKey.RECHNUNGEN)
+    assert page is not None
+    qtbot.waitUntil(lambda: page._rechnungen_view is not None, timeout=5000)  # noqa: SLF001
     view = page._rechnungen_view  # noqa: SLF001
+    assert view is not None
 
     qtbot.waitUntil(
         lambda: (

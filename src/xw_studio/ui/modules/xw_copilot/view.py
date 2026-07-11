@@ -1,10 +1,11 @@
 ﻿"""XW-Copilot panel for Outlook add-in integration and text blocks."""
 from __future__ import annotations
 
+from collections.abc import Callable
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -26,9 +27,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from xw_studio.core.worker import BackgroundWorker
 from xw_studio.services.xw_copilot.dry_run import XWCopilotDryRunService
+from xw_studio.services.xw_copilot.contracts import XWCopilotResponse
 from xw_studio.services.xw_copilot.ingress import XWCopilotIngress
-from xw_studio.services.xw_copilot.service import XWCopilotConfig, XWCopilotService
+from xw_studio.services.xw_copilot.service import AuditEntry, XWCopilotConfig, XWCopilotService
 
 if TYPE_CHECKING:
     from xw_studio.core.container import Container
@@ -45,6 +48,7 @@ class XWCopilotView(QWidget):
         self._service: XWCopilotService = container.resolve(XWCopilotService)
         self._dry_run_service: XWCopilotDryRunService = container.resolve(XWCopilotDryRunService)
         self._ingress: XWCopilotIngress = container.resolve(XWCopilotIngress)
+        self._io_worker: BackgroundWorker | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -57,10 +61,57 @@ class XWCopilotView(QWidget):
         tabs.addTab(self._build_notes_tab(), "Integration")
         root.addWidget(tabs)
 
-        self._load_config_into_form()
-        self._load_templates_into_editor()
-        self._reload_history()
+        self._settings_status.setText("Konfiguration wird geladen...")
+        self._templates_status.setText("Bausteine werden geladen...")
+        self._history_status.setText("Verlauf wird geladen...")
+        self._load_initial_data()
         self._ingress.signals.request_received.connect(self._on_ingress_request_received)
+
+    def _load_initial_data(self) -> None:
+        def job() -> tuple[XWCopilotConfig, list[dict[str, str]], list[AuditEntry]]:
+            return (
+                self._service.load_config(),
+                self._service.load_templates(),
+                self._service.load_audit_entries(),
+            )
+
+        self._start_io(job, self._on_initial_data)
+
+    def _on_initial_data(self, payload: object) -> None:
+        if not isinstance(payload, tuple) or len(payload) != 3:
+            return
+        config, templates, entries = payload
+        if isinstance(config, XWCopilotConfig):
+            self._apply_config(config)
+        if isinstance(templates, list):
+            self._apply_templates(templates)
+        if isinstance(entries, list):
+            self._apply_history(entries)
+
+    def _start_io(
+        self,
+        job: Callable[[], Any],
+        on_result: Callable[[object], None],
+        on_error_status: QLabel | None = None,
+    ) -> bool:
+        if self._io_worker is not None and self._io_worker.isRunning():
+            return False
+        self._io_worker = BackgroundWorker(job)
+        self._io_worker.signals.result.connect(on_result)
+        self._io_worker.signals.error.connect(
+            lambda exc: self._on_io_error(exc, on_error_status)
+        )
+        self._io_worker.signals.finished.connect(self._on_io_finished)
+        self._io_worker.start()
+        return True
+
+    def _on_io_finished(self) -> None:
+        self._io_worker = None
+
+    def _on_io_error(self, exc: Exception, status: QLabel | None) -> None:
+        if status is not None:
+            status.setText(f"Fehler: {exc}")
+        logger.warning("XW-Copilot background I/O failed: %s", exc)
 
     def _build_settings_tab(self) -> QWidget:
         page = QWidget()
@@ -283,7 +334,14 @@ class XWCopilotView(QWidget):
         return page
 
     def _load_config_into_form(self) -> None:
-        cfg = self._service.load_config()
+        self._settings_status.setText("Konfiguration wird geladen...")
+        self._start_io(self._service.load_config, self._on_config_loaded, self._settings_status)
+
+    def _on_config_loaded(self, payload: object) -> None:
+        if isinstance(payload, XWCopilotConfig):
+            self._apply_config(payload)
+
+    def _apply_config(self, cfg: XWCopilotConfig) -> None:
         self._enabled.setChecked(cfg.enabled)
         mode_idx = self._mode.findText(cfg.mode)
         self._mode.setCurrentIndex(mode_idx if mode_idx >= 0 else 0)
@@ -309,12 +367,29 @@ class XWCopilotView(QWidget):
             default_project=self._project.text().strip(),
             allowed_ips=self._allowed_ips.text().strip(),
         )
-        self._service.save_config(cfg)
+        self._settings_status.setText("Konfiguration wird gespeichert...")
+
+        def job() -> XWCopilotConfig:
+            self._service.save_config(cfg)
+            return cfg
+
+        self._start_io(job, self._on_config_saved, self._settings_status)
+
+    def _on_config_saved(self, payload: object) -> None:
+        if not isinstance(payload, XWCopilotConfig):
+            return
         self._settings_status.setText("Konfiguration gespeichert")
         QMessageBox.information(self, "XW-Copilot", "Einstellungen gespeichert.")
 
     def _load_templates_into_editor(self) -> None:
-        rows = self._service.load_templates()
+        self._templates_status.setText("Bausteine werden geladen...")
+        self._start_io(self._service.load_templates, self._on_templates_loaded, self._templates_status)
+
+    def _on_templates_loaded(self, payload: object) -> None:
+        if isinstance(payload, list):
+            self._apply_templates(payload)
+
+    def _apply_templates(self, rows: list[object]) -> None:
         self._templates_editor.setPlainText(json.dumps(rows, ensure_ascii=False, indent=2))
         self._templates_status.setText(f"{len(rows)} Bausteine geladen")
 
@@ -331,8 +406,21 @@ class XWCopilotView(QWidget):
         if not isinstance(data, list):
             QMessageBox.warning(self, "XW-Copilot", "Erwartet wird ein JSON-Array aus Objekten.")
             return
-        rows = [row for row in data if isinstance(row, dict)]
-        self._service.save_templates(rows)
+        rows: list[dict[str, str]] = [
+            {str(key): str(value) for key, value in row.items()}
+            for row in data
+            if isinstance(row, dict)
+        ]
+        self._templates_status.setText("Bausteine werden gespeichert...")
+
+        def job() -> list[dict[str, str]]:
+            self._service.save_templates(rows)
+            return rows
+
+        self._start_io(job, self._on_templates_saved, self._templates_status)
+
+    def _on_templates_saved(self, payload: object) -> None:
+        rows = payload if isinstance(payload, list) else []
         self._templates_status.setText(f"{len(rows)} Bausteine gespeichert")
         QMessageBox.information(self, "XW-Copilot", "Bausteine gespeichert.")
 
@@ -341,7 +429,18 @@ class XWCopilotView(QWidget):
         if not raw:
             QMessageBox.warning(self, "XW-Copilot", "Bitte ein Request JSON eingeben.")
             return
-        result = self._dry_run_service.simulate_raw_request(raw)
+        self._dry_run_status.setText("Dry-Run wird ausgefuehrt...")
+        self._start_io(
+            lambda: self._dry_run_service.simulate_raw_request(raw),
+            self._on_dry_run_result,
+            self._dry_run_status,
+        )
+
+    def _on_dry_run_result(self, payload: object) -> None:
+        if not isinstance(payload, XWCopilotResponse):
+            self._dry_run_status.setText("Keine gueltige Dry-Run-Antwort")
+            return
+        result = payload
         self._dry_run_response.setPlainText(json.dumps(result.model_dump(), ensure_ascii=False, indent=2))
         if result.accepted:
             self._dry_run_status.setText(
@@ -369,9 +468,18 @@ class XWCopilotView(QWidget):
         self._dry_run_status.setText("Beispiel-Request geladen")
 
     def _reload_history(self) -> None:
-        entries = self._service.load_audit_entries()
+        self._history_status.setText("Verlauf wird geladen...")
+        self._start_io(self._service.load_audit_entries, self._on_history_loaded, self._history_status)
+
+    def _on_history_loaded(self, payload: object) -> None:
+        entries = payload if isinstance(payload, list) else []
+        self._apply_history(entries)
+
+    def _apply_history(self, entries: list[object]) -> None:
         self._history_table.setRowCount(0)
         for entry in entries:
+            if not isinstance(entry, AuditEntry):
+                continue
             row = self._history_table.rowCount()
             self._history_table.insertRow(row)
             self._history_table.setItem(row, 0, QTableWidgetItem(entry.timestamp))
@@ -385,7 +493,15 @@ class XWCopilotView(QWidget):
         if not self._service.has_storage():
             QMessageBox.warning(self, "XW-Copilot", "Kein DB-Storage verfuegbar.")
             return
-        self._service.clear_audit_log()
+        self._history_status.setText("Verlauf wird geloescht...")
+
+        def job() -> bool:
+            self._service.clear_audit_log()
+            return True
+
+        self._start_io(job, self._on_history_cleared, self._history_status)
+
+    def _on_history_cleared(self, _payload: object) -> None:
         self._history_table.setRowCount(0)
         self._history_status.setText("Verlauf geloescht")
 
@@ -448,8 +564,16 @@ class XWCopilotView(QWidget):
         )
         if not path_str:
             return
-        try:
-            self._service.export_request_schema(Path(path_str))
-            QMessageBox.information(self, "Schema", f"Exportiert nach:\n{path_str}")
-        except Exception as exc:
-            QMessageBox.warning(self, "Schema", f"Fehler beim Export: {exc}")
+        target = Path(path_str)
+
+        def job() -> str:
+            self._service.export_request_schema(target)
+            return str(target)
+
+        self._start_io(
+            job,
+            self._on_schema_exported,
+        )
+
+    def _on_schema_exported(self, payload: object) -> None:
+        QMessageBox.information(self, "Schema", f"Exportiert nach:\n{payload}")

@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import date
 from typing import TYPE_CHECKING, cast
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -280,15 +280,33 @@ class PaymentClearingView(QWidget):
         )
         if not accepted or not invoice_number.strip():
             return
-        try:
-            updated = self._service.assign_invoice(candidate, invoice_number)
-        except Exception as exc:
-            QMessageBox.warning(self, "Zahlungsclearing", str(exc))
+        if self._worker is not None and self._worker.isRunning():
             return
+        normalized_invoice = invoice_number.strip()
+        self._set_running(True)
+        self._summary.setText("Rechnung wird zugeordnet...")
+
+        def job() -> ClearingCandidate:
+            return self._service.assign_invoice(candidate, normalized_invoice)
+
+        self._worker = BackgroundWorker(job)
+        self._worker.signals.result.connect(self._on_invoice_assigned)
+        self._worker.signals.error.connect(
+            lambda exc: QMessageBox.warning(self, "Zahlungsclearing", str(exc))
+        )
+        self._worker.signals.finished.connect(lambda: self._set_running(False))
+        self._worker.start()
+
+    def _on_invoice_assigned(self, payload: object) -> None:
+        if not isinstance(payload, ClearingCandidate):
+            return
+        updated = payload
+        candidate_id = updated.candidate_id
         self._candidates = [
-            updated if row.candidate_id == candidate.candidate_id else row for row in self._candidates
+            updated if row.candidate_id == candidate_id else row for row in self._candidates
         ]
         self._refresh_table()
+        self._summary.setText(f"Rechnung {updated.invoice_number} wurde zugeordnet.")
 
     def _pick_month(self) -> date | None:
         dialog = QDialog(self)

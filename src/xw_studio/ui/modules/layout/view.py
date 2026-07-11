@@ -40,7 +40,7 @@ class LayoutView(QWidget):
         super().__init__(parent)
         self._container = container
         self._qr_bytes: bytes | None = None
-        self._blank_source: bytes | None = None
+        self._blank_source_path: str | None = None
         self._blank_result: bytes | None = None
         self._cover_result: bytes | None = None
         self._a5_source_path: str | None = None
@@ -143,6 +143,8 @@ class LayoutView(QWidget):
         self._a5_output_lbl.setText(path)
 
     def _run_a5_duplicate(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
         if not self._a5_source_path:
             QMessageBox.warning(self, "A5 -> A4", "Bitte zuerst eine PDF-Datei oeffnen.")
             return
@@ -174,6 +176,7 @@ class LayoutView(QWidget):
         self._worker.signals.result.connect(self._on_a5_done)
         self._worker.signals.error.connect(self._on_error)
         self._worker.signals.finished.connect(lambda: self._a5_run_btn.setEnabled(True))
+        self._worker.signals.finished.connect(self._on_worker_finished)
         self._worker.start()
 
     def _on_a5_done(self, data: object) -> None:
@@ -225,6 +228,8 @@ class LayoutView(QWidget):
         return page
 
     def _generate_qr(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
         text = self._qr_text.text().strip()
         if not text:
             QMessageBox.warning(self, "QR-Code", "Bitte einen Text oder eine URL eingeben.")
@@ -240,6 +245,7 @@ class LayoutView(QWidget):
         self._worker = BackgroundWorker(job)
         self._worker.signals.result.connect(self._on_qr_done)
         self._worker.signals.error.connect(self._on_error)
+        self._worker.signals.finished.connect(self._on_worker_finished)
         self._worker.start()
 
     def _on_qr_done(self, data: object) -> None:
@@ -309,14 +315,12 @@ class LayoutView(QWidget):
         if not path:
             return
         self._blank_file_lbl.setText(path)
-        try:
-            with open(path, "rb") as fh:
-                self._blank_source = fh.read()
-        except OSError as exc:
-            QMessageBox.critical(self, "Fehler", str(exc))
+        self._blank_source_path = path
 
     def _run_blank_insert(self) -> None:
-        if not self._blank_source:
+        if self._worker is not None and self._worker.isRunning():
+            return
+        if not self._blank_source_path:
             QMessageBox.warning(self, "Leerseiten", "Bitte zuerst eine PDF-Datei oeffnen.")
             return
         raw = self._blank_positions.text().strip()
@@ -329,16 +333,18 @@ class LayoutView(QWidget):
             QMessageBox.warning(self, "Leerseiten", "Bitte mindestens eine Seitennummer angeben.")
             return
 
-        src = self._blank_source
+        source_path = self._blank_source_path
         svc: LayoutToolsService = self._container.resolve(LayoutToolsService)
 
         def job() -> bytes:
+            src = Path(source_path).read_bytes()
             return svc.insert_blank_pages(src, insert_after=positions)
 
         self._blank_status.setText("Verarbeite...")
         self._worker = BackgroundWorker(job)
         self._worker.signals.result.connect(self._on_blank_done)
         self._worker.signals.error.connect(self._on_error)
+        self._worker.signals.finished.connect(self._on_worker_finished)
         self._worker.start()
 
     def _on_blank_done(self, data: object) -> None:
@@ -400,6 +406,8 @@ class LayoutView(QWidget):
         return page
 
     def _generate_cover(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
         title = self._cover_title.text().strip()
         if not title:
             QMessageBox.warning(self, "Deckblatt", "Bitte einen Titel eingeben.")
@@ -416,6 +424,7 @@ class LayoutView(QWidget):
         self._worker = BackgroundWorker(job)
         self._worker.signals.result.connect(self._on_cover_done)
         self._worker.signals.error.connect(self._on_error)
+        self._worker.signals.finished.connect(self._on_worker_finished)
         self._worker.start()
 
     def _on_cover_done(self, data: object) -> None:
@@ -492,3 +501,6 @@ class LayoutView(QWidget):
     def _on_error(self, exc: BaseException) -> None:
         logger.exception("LayoutView background task failed: %s", exc)
         QMessageBox.critical(self, "Fehler", str(exc))
+
+    def _on_worker_finished(self) -> None:
+        self._worker = None

@@ -1,6 +1,7 @@
 """Gutscheine module view (queue list)."""
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QTimer
@@ -25,9 +26,10 @@ class GutscheineView(QWidget):
         self._container = container
         self._rows: list[dict[str, str]] = []
         self._worker: BackgroundWorker | None = None
+        self._last_loaded_at = 0.0
         self._timer = QTimer(self)
         self._timer.setInterval(60000)
-        self._timer.timeout.connect(self.reload)
+        self._timer.timeout.connect(lambda: self.reload(force=True))
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -47,7 +49,7 @@ class GutscheineView(QWidget):
         self._count_lbl = QLabel("0 Eintraege")
         row.addWidget(self._count_lbl)
         self._btn_refresh = QPushButton("Aktualisieren")
-        self._btn_refresh.clicked.connect(self.reload)
+        self._btn_refresh.clicked.connect(lambda: self.reload(force=True))
         row.addWidget(self._btn_refresh)
         layout.addLayout(row)
 
@@ -58,17 +60,22 @@ class GutscheineView(QWidget):
 
     def showEvent(self, event) -> None:  # type: ignore[override]
         super().showEvent(event)
-        self.reload()
+        self.reload(force=False)
         self._timer.start()
 
     def hideEvent(self, event) -> None:  # type: ignore[override]
         super().hideEvent(event)
         self._timer.stop()
 
-    def reload(self) -> None:
+    def reload(self, *, force: bool = True) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
+        if not force and self._rows and (time.monotonic() - self._last_loaded_at) < 30.0:
+            return
         self._btn_refresh.setEnabled(False)
+        self._btn_refresh.setText("Aktualisiere...")
+        if self._rows:
+            self._count_lbl.setText(f"{len(self._rows)} Eintraege - aktualisiere...")
 
         def job() -> list[dict[str, str]]:
             service: DailyBusinessService = self._container.resolve(DailyBusinessService)
@@ -77,15 +84,21 @@ class GutscheineView(QWidget):
         self._worker = BackgroundWorker(job)
         self._worker.signals.result.connect(self._on_result)
         self._worker.signals.error.connect(lambda _e: self._count_lbl.setText("Fehler"))
-        self._worker.signals.finished.connect(lambda: self._btn_refresh.setEnabled(True))
+        self._worker.signals.finished.connect(self._on_finished)
         self._worker.start()
 
     def _on_result(self, result: object) -> None:
         rows = [r for r in (result if isinstance(result, list) else []) if isinstance(r, dict)]
         self._rows = rows
+        self._last_loaded_at = time.monotonic()
         self._table.set_data(rows)
         self._search.refresh_suggestions()
         self._count_lbl.setText(f"{len(rows)} Eintraege")
+
+    def _on_finished(self) -> None:
+        self._worker = None
+        self._btn_refresh.setEnabled(True)
+        self._btn_refresh.setText("Aktualisieren")
 
     def _search_suggestions(self, query: str) -> list[str]:
         q = query.lower().strip()

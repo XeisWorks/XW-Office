@@ -269,6 +269,8 @@ class LayoutToolsService:
         title: str,
         subtitle: str = "",
         *,
+        author: str = "",
+        isbn: str = "",
         width_pt: float = 595.28,
         height_pt: float = 841.89,
         font_size_title: float = 32.0,
@@ -291,6 +293,14 @@ class LayoutToolsService:
                 subtitle,
                 fontsize=font_size_subtitle,
                 color=(0.3, 0.3, 0.3),
+            )
+        details = [value for value in (author.strip(), isbn.strip()) if value]
+        if details:
+            page.insert_text(
+                (x_title, y_title + font_size_title * 2.6),
+                " | ".join(details),
+                fontsize=12.0,
+                color=(0.35, 0.35, 0.35),
             )
         buf = io.BytesIO()
         doc.save(buf)

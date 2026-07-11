@@ -185,32 +185,32 @@ class XWCopilotService:
     def utc_now() -> str:
         return datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-        # ------------------------------------------------------------------
-        # Template rendering
-        # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Template rendering
+    # ------------------------------------------------------------------
 
-        @staticmethod
-        def render_template(content: str, variables: dict[str, str]) -> str:
-            """Substitute ``{{key}}`` placeholders in *content* with *variables* values.
+    @staticmethod
+    def render_template(content: str, variables: dict[str, str]) -> str:
+        """Substitute ``{{key}}`` placeholders in *content* with *variables* values.
 
-            Unknown keys are left unchanged so partial renders are safe.
-            """
-            def _replacer(match: re.Match[str]) -> str:
-                key = match.group(1).strip()
-                return variables.get(key, match.group(0))
+        Unknown keys are left unchanged so partial renders are safe.
+        """
+        def _replacer(match: re.Match[str]) -> str:
+            key = match.group(1).strip()
+            return variables.get(key, match.group(0))
 
-            return re.sub(r"\{\{([^}]+)\}\}", _replacer, content)
+        return re.sub(r"\{\{([^}]+)\}\}", _replacer, content)
 
-        # ------------------------------------------------------------------
-        # JSON Schema export
-        # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # JSON Schema export
+    # ------------------------------------------------------------------
 
-        @staticmethod
-        def export_request_schema(path: Path) -> None:
-            """Write XWCopilotRequest JSON Schema to *path* (created/overwritten)."""
-            from xw_studio.services.xw_copilot.contracts import XWCopilotRequest
+    @staticmethod
+    def export_request_schema(path: Path) -> None:
+        """Write XWCopilotRequest JSON Schema to *path* (created/overwritten)."""
+        from xw_studio.services.xw_copilot.contracts import XWCopilotRequest
 
-            schema = XWCopilotRequest.model_json_schema()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(schema, indent=2, ensure_ascii=False), encoding="utf-8")
-            logger.info("XWCopilotRequest schema exported to %s", path)
+        schema = XWCopilotRequest.model_json_schema()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(schema, indent=2, ensure_ascii=False), encoding="utf-8")
+        logger.info("XWCopilotRequest schema exported to %s", path)

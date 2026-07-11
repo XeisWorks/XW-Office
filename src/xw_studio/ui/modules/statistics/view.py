@@ -98,6 +98,8 @@ class StatisticsView(QWidget):
     # ------------------------------------------------------------------
 
     def _load(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
         svc: StatisticsService = self._container.resolve(StatisticsService)
         self._refresh_btn.setEnabled(False)
         self._status_lbl.setText("Laden…")

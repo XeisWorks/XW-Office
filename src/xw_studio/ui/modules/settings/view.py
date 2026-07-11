@@ -167,6 +167,9 @@ class SettingsView(QWidget):
         self._db_worker: BackgroundWorker | None = None
         self._clickup_worker: BackgroundWorker | None = None
         self._mail_test_worker: BackgroundWorker | None = None
+        self._queue_worker: BackgroundWorker | None = None
+        self._template_worker: BackgroundWorker | None = None
+        self._secret_worker: BackgroundWorker | None = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -206,7 +209,7 @@ class SettingsView(QWidget):
         row_btn = QHBoxLayout()
         row_btn.addWidget(btn_test)
         row_btn.addStretch()
-        form_db.addRow("", row_btn)  # type: ignore[arg-type]
+        form_db.addRow("", row_btn)
         grid.addWidget(gb_db, 0, 0)
 
         gb_secrets = QGroupBox("API-Zugangsdaten")
@@ -658,39 +661,54 @@ class SettingsView(QWidget):
             self._queue_status.setText("DB-Repository nicht aktiv (DATABASE_URL fehlt oder Migration fehlt).")
             self._queue_status.setStyleSheet(_WARN_STYLE)
             return
+        if self._queue_worker is not None and self._queue_worker.isRunning():
+            return
+        self._queue_status.setText("START-Daten werden aus der DB geladen...")
         repo: SettingKvRepository = self._container.resolve(SettingKvRepository)
-        stock = repo.get_value_json(_INV_STOCK_KEY) or "{}"
-        pending = repo.get_value_json(_PENDING_REQ_KEY) or "{}"
-        pending_counts = repo.get_value_json(_PENDING_COUNTS_KEY) or "{}"
-        queue_mollie = repo.get_value_json(_QUEUE_MOLLIE_KEY) or "[]"
-        queue_gutscheine = repo.get_value_json(_QUEUE_GUTSCHEINE_KEY) or "[]"
-        queue_downloads = repo.get_value_json(_QUEUE_DOWNLOADS_KEY) or "[]"
-        queue_refunds = repo.get_value_json(_QUEUE_REFUNDS_KEY) or "[]"
-        sensitive_countries = repo.get_value_json(_SENSITIVE_COUNTRIES_KEY) or '["AF", "BY", "IQ", "IR", "KP", "RU", "SY"]'
-        allowed_countries = repo.get_value_json(_ALLOWED_COUNTRIES_KEY) or _DEFAULT_ALLOWED_COUNTRIES
-        sku_flags = repo.get_value_json(_SKU_FLAGS_KEY) or '{"exact": ["XW-010", "XW-011", "XW-600.0"], "prefixes": ["XW-4", "XW-6", "XW-7", "XW-12"]}'
-        urgency_rules = repo.get_value_json(_URGENCY_RULES_KEY) or (
-            '{"generic": ["offen", "fehl", "pending", "ueberweis", "überweis"], '
-            '"mollie": ["auth", "authorized", "chargeback", "missing auth"], '
-            '"gutscheine": ["ungueltig", "ungültig", "einloes", "einlös"], '
-            '"downloads": ["link fehlt", "download fehlt", "retry", "fehlgeschlagen"], '
-            '"refunds": ["refund", "rueckerstattung", "rückerstattung", "auszahlung"]}'
+
+        def job() -> dict[str, str]:
+            return {
+                "stock": repo.get_value_json(_INV_STOCK_KEY) or "{}",
+                "pending": repo.get_value_json(_PENDING_REQ_KEY) or "{}",
+                "pending_counts": repo.get_value_json(_PENDING_COUNTS_KEY) or "{}",
+                "mollie": repo.get_value_json(_QUEUE_MOLLIE_KEY) or "[]",
+                "gutscheine": repo.get_value_json(_QUEUE_GUTSCHEINE_KEY) or "[]",
+                "downloads": repo.get_value_json(_QUEUE_DOWNLOADS_KEY) or "[]",
+                "refunds": repo.get_value_json(_QUEUE_REFUNDS_KEY) or "[]",
+                "sensitive": repo.get_value_json(_SENSITIVE_COUNTRIES_KEY) or '["AF", "BY", "IQ", "IR", "KP", "RU", "SY"]',
+                "allowed": repo.get_value_json(_ALLOWED_COUNTRIES_KEY) or _DEFAULT_ALLOWED_COUNTRIES,
+                "sku_flags": repo.get_value_json(_SKU_FLAGS_KEY) or '{"exact": ["XW-010", "XW-011", "XW-600.0"], "prefixes": ["XW-4", "XW-6", "XW-7", "XW-12"]}',
+                "urgency": repo.get_value_json(_URGENCY_RULES_KEY) or '{"generic": ["offen", "fehl", "pending", "ueberweis"]}',
+            }
+
+        self._queue_worker = BackgroundWorker(job)
+        self._queue_worker.signals.result.connect(self._on_queue_settings_loaded)
+        self._queue_worker.signals.error.connect(
+            lambda exc: self._queue_status.setText(f"Laden fehlgeschlagen: {exc}")
         )
-        self._stock_json.setPlainText(stock)
-        self._pending_json.setPlainText(pending)
-        self._pending_counts_json.setPlainText(pending_counts)
-        self._queue_mollie_json.setPlainText(queue_mollie)
-        self._queue_gutscheine_json.setPlainText(queue_gutscheine)
-        self._queue_downloads_json.setPlainText(queue_downloads)
-        self._queue_refunds_json.setPlainText(queue_refunds)
-        self._sensitive_countries_json.setPlainText(sensitive_countries)
-        self._allowed_countries_json.setPlainText(allowed_countries)
-        self._sku_flags_json.setPlainText(sku_flags)
-        self._urgency_rules_json.setPlainText(urgency_rules)
+        self._queue_worker.signals.finished.connect(lambda: setattr(self, "_queue_worker", None))
+        self._queue_worker.start()
+
+    def _on_queue_settings_loaded(self, payload: object) -> None:
+        if not isinstance(payload, dict):
+            return
+        self._stock_json.setPlainText(str(payload.get("stock") or "{}"))
+        self._pending_json.setPlainText(str(payload.get("pending") or "{}"))
+        self._pending_counts_json.setPlainText(str(payload.get("pending_counts") or "{}"))
+        self._queue_mollie_json.setPlainText(str(payload.get("mollie") or "[]"))
+        self._queue_gutscheine_json.setPlainText(str(payload.get("gutscheine") or "[]"))
+        self._queue_downloads_json.setPlainText(str(payload.get("downloads") or "[]"))
+        self._queue_refunds_json.setPlainText(str(payload.get("refunds") or "[]"))
+        self._sensitive_countries_json.setPlainText(str(payload.get("sensitive") or "[]"))
+        self._allowed_countries_json.setPlainText(str(payload.get("allowed") or "[]"))
+        self._sku_flags_json.setPlainText(str(payload.get("sku_flags") or "{}"))
+        self._urgency_rules_json.setPlainText(str(payload.get("urgency") or "{}"))
         self._queue_status.setText("Aktueller Stand aus DB geladen.")
         self._queue_status.setStyleSheet(_OK_STYLE)
 
     def _save_queue_settings(self) -> None:
+        if self._queue_worker is not None and self._queue_worker.isRunning():
+            return
         if not self._has_settings_repo():
             QMessageBox.warning(self, "Fehler", "DB-Repository nicht verfuegbar.")
             return
@@ -783,20 +801,37 @@ class SettingsView(QWidget):
         }
 
         repo: SettingKvRepository = self._container.resolve(SettingKvRepository)
-        repo.set_value_json(_INV_STOCK_KEY, json.dumps(stock_obj))
-        repo.set_value_json(_PENDING_REQ_KEY, json.dumps(pending_obj))
-        repo.set_value_json(_PENDING_COUNTS_KEY, json.dumps(pending_counts_obj))
-        repo.set_value_json(_QUEUE_MOLLIE_KEY, json.dumps(queue_mollie_obj))
-        repo.set_value_json(_QUEUE_GUTSCHEINE_KEY, json.dumps(queue_gutscheine_obj))
-        repo.set_value_json(_QUEUE_DOWNLOADS_KEY, json.dumps(queue_downloads_obj))
-        repo.set_value_json(_QUEUE_REFUNDS_KEY, json.dumps(queue_refunds_obj))
-        repo.set_value_json(_SENSITIVE_COUNTRIES_KEY, json.dumps(normalized_sensitive))
-        repo.set_value_json(_ALLOWED_COUNTRIES_KEY, json.dumps(normalized_allowed_countries, ensure_ascii=False))
-        repo.set_value_json(_SKU_FLAGS_KEY, json.dumps(normalized_sku_flags))
-        repo.set_value_json(_URGENCY_RULES_KEY, json.dumps(normalized_rules))
+        values = {
+            _INV_STOCK_KEY: json.dumps(stock_obj),
+            _PENDING_REQ_KEY: json.dumps(pending_obj),
+            _PENDING_COUNTS_KEY: json.dumps(pending_counts_obj),
+            _QUEUE_MOLLIE_KEY: json.dumps(queue_mollie_obj),
+            _QUEUE_GUTSCHEINE_KEY: json.dumps(queue_gutscheine_obj),
+            _QUEUE_DOWNLOADS_KEY: json.dumps(queue_downloads_obj),
+            _QUEUE_REFUNDS_KEY: json.dumps(queue_refunds_obj),
+            _SENSITIVE_COUNTRIES_KEY: json.dumps(normalized_sensitive),
+            _ALLOWED_COUNTRIES_KEY: json.dumps(normalized_allowed_countries, ensure_ascii=False),
+            _SKU_FLAGS_KEY: json.dumps(normalized_sku_flags),
+            _URGENCY_RULES_KEY: json.dumps(normalized_rules),
+        }
+        self._queue_status.setText("Queue-Daten werden gespeichert...")
+
+        def job() -> bool:
+            for key, value in values.items():
+                repo.set_value_json(key, value)
+            return True
+
+        self._queue_worker = BackgroundWorker(job)
+        self._queue_worker.signals.result.connect(self._on_queue_settings_saved)
+        self._queue_worker.signals.error.connect(
+            lambda exc: self._queue_status.setText(f"Speichern fehlgeschlagen: {exc}")
+        )
+        self._queue_worker.signals.finished.connect(lambda: setattr(self, "_queue_worker", None))
+        self._queue_worker.start()
+
+    def _on_queue_settings_saved(self, _payload: object) -> None:
         self._queue_status.setText("Queue-Daten gespeichert.")
         self._queue_status.setStyleSheet(_OK_STYLE)
-
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.status_message.emit("START-Preflight-Daten gespeichert", 4000)
 
@@ -806,11 +841,32 @@ class SettingsView(QWidget):
             self._mail_template_editor.setPlainText(_DEFAULT_FULFILLMENT_TEMPLATE)
             self._render_fulfillment_preview()
             return
+        if self._template_worker is not None and self._template_worker.isRunning():
+            return
+        self._mail_template_status.setText("Vorlage wird geladen...")
         repo: SettingKvRepository = self._container.resolve(SettingKvRepository)
-        subject = repo.get_value_json(_FULFILLMENT_MAIL_SUBJECT_KEY) or _DEFAULT_FULFILLMENT_SUBJECT
-        raw = repo.get_value_json(_FULFILLMENT_MAIL_TEMPLATE_KEY) or _DEFAULT_FULFILLMENT_TEMPLATE
-        self._mail_subject_editor.setText(subject)
-        self._mail_template_editor.setPlainText(raw)
+
+        def job() -> tuple[str, str]:
+            subject = repo.get_value_json(_FULFILLMENT_MAIL_SUBJECT_KEY) or _DEFAULT_FULFILLMENT_SUBJECT
+            raw = repo.get_value_json(_FULFILLMENT_MAIL_TEMPLATE_KEY) or _DEFAULT_FULFILLMENT_TEMPLATE
+            return subject, raw
+
+        self._template_worker = BackgroundWorker(job)
+        self._template_worker.signals.result.connect(self._on_fulfillment_template_loaded)
+        self._template_worker.signals.error.connect(
+            lambda exc: self._mail_template_status.setText(f"Laden fehlgeschlagen: {exc}")
+        )
+        self._template_worker.signals.finished.connect(
+            lambda: setattr(self, "_template_worker", None)
+        )
+        self._template_worker.start()
+
+    def _on_fulfillment_template_loaded(self, payload: object) -> None:
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            return
+        subject, raw = payload
+        self._mail_subject_editor.setText(str(subject))
+        self._mail_template_editor.setPlainText(str(raw))
         self._render_fulfillment_preview()
 
     def _render_fulfillment_preview(self) -> None:
@@ -842,14 +898,32 @@ class SettingsView(QWidget):
         self._mail_template_status.setStyleSheet(_OK_STYLE)
 
     def _save_fulfillment_mail_template(self) -> None:
+        if self._template_worker is not None and self._template_worker.isRunning():
+            return
         if not self._has_settings_repo():
             QMessageBox.warning(self, "Fehler", "DB-Repository nicht verfuegbar.")
             return
         subject = self._mail_subject_editor.text().strip() or _DEFAULT_FULFILLMENT_SUBJECT
         body = self._mail_template_editor.toPlainText().strip() or _DEFAULT_FULFILLMENT_TEMPLATE
         repo: SettingKvRepository = self._container.resolve(SettingKvRepository)
-        repo.set_value_json(_FULFILLMENT_MAIL_SUBJECT_KEY, subject)
-        repo.set_value_json(_FULFILLMENT_MAIL_TEMPLATE_KEY, body)
+        self._mail_template_status.setText("Vorlage wird gespeichert...")
+
+        def job() -> bool:
+            repo.set_value_json(_FULFILLMENT_MAIL_SUBJECT_KEY, subject)
+            repo.set_value_json(_FULFILLMENT_MAIL_TEMPLATE_KEY, body)
+            return True
+
+        self._template_worker = BackgroundWorker(job)
+        self._template_worker.signals.result.connect(self._on_fulfillment_template_saved)
+        self._template_worker.signals.error.connect(
+            lambda exc: self._mail_template_status.setText(f"Speichern fehlgeschlagen: {exc}")
+        )
+        self._template_worker.signals.finished.connect(
+            lambda: setattr(self, "_template_worker", None)
+        )
+        self._template_worker.start()
+
+    def _on_fulfillment_template_saved(self, _payload: object) -> None:
         self._mail_template_status.setText("Vorlage gespeichert")
         self._mail_template_status.setStyleSheet(_OK_STYLE)
         self._render_fulfillment_preview()
@@ -919,6 +993,8 @@ class SettingsView(QWidget):
         QMessageBox.warning(self, "Test-Mail", f"Senden fehlgeschlagen:\n\n{exc}")
 
     def _save_plc_settings(self) -> None:
+        if self._secret_worker is not None and self._secret_worker.isRunning():
+            return
         values = {
             "PLC_CLIENT_ID": self._plc_client_id.text().strip(),
             "PLC_ORG_UNIT_ID": self._plc_org_unit_id.text().strip(),
@@ -996,18 +1072,31 @@ class SettingsView(QWidget):
             return
 
         service: SecretService = self._container.resolve(SecretService)
-        try:
+        self._plc_status.setText("PLC-Konfiguration wird gespeichert...")
+
+        def job() -> bool:
             for key in _PLC_SECRET_KEYS:
                 service.save_secret(key, values[key])
-        except Exception as exc:
-            self._plc_status.setText(f"Fehler: {exc}")
-            self._plc_status.setStyleSheet(_ERR_STYLE)
-            QMessageBox.warning(self, "PLC-Konfiguration", str(exc))
-            return
+            return True
+
+        self._secret_worker = BackgroundWorker(job)
+        self._secret_worker.signals.result.connect(self._on_plc_settings_saved)
+        self._secret_worker.signals.error.connect(self._on_plc_settings_error)
+        self._secret_worker.signals.finished.connect(lambda: setattr(self, "_secret_worker", None))
+        self._secret_worker.start()
+
+    def _on_plc_settings_saved(self, _payload: object) -> None:
         self._plc_status.setText("PLC-Konfiguration verschlüsselt gespeichert.")
         self._plc_status.setStyleSheet(_OK_STYLE)
 
+    def _on_plc_settings_error(self, exc: Exception) -> None:
+        self._plc_status.setText(f"Fehler: {exc}")
+        self._plc_status.setStyleSheet(_ERR_STYLE)
+        QMessageBox.warning(self, "PLC-Konfiguration", str(exc))
+
     def _save_tokens(self) -> None:
+        if self._secret_worker is not None and self._secret_worker.isRunning():
+            return
         service: SecretService = self._container.resolve(SecretService)
         extra_raw = self._extra_tokens_json.toPlainText().strip() or "{}"
         try:
@@ -1023,26 +1112,42 @@ class SettingsView(QWidget):
             QMessageBox.warning(self, "Formatfehler", "Weitere Tokens muessen ein JSON-Objekt sein.")
             return
 
-        try:
-            service.save_secret("SEVDESK_API_TOKEN", self._inp_sevdesk.text())
-            service.save_secret("WIX_API_KEY", self._inp_wix.text())
-            service.save_secret("WIX_SITE_ID", self._inp_wix_site.text())
-            service.save_secret("WIX_ACCOUNT_ID", self._inp_wix_account.text())
-            for key in _EXTRA_SECRET_KEYS:
-                value = extra_obj.get(key)
-                if value is None:
-                    continue
-                service.save_secret(key, str(value))
-        except Exception as exc:
-            self._secret_status.setText(f"Fehler: {exc}")
-            self._secret_status.setStyleSheet(_ERR_STYLE)
-            QMessageBox.warning(self, "Speichern fehlgeschlagen", str(exc))
-            return
+        values = {
+            "SEVDESK_API_TOKEN": self._inp_sevdesk.text(),
+            "WIX_API_KEY": self._inp_wix.text(),
+            "WIX_SITE_ID": self._inp_wix_site.text(),
+            "WIX_ACCOUNT_ID": self._inp_wix_account.text(),
+        }
+        values.update(
+            {
+                key: str(extra_obj[key])
+                for key in _EXTRA_SECRET_KEYS
+                if extra_obj.get(key) is not None
+            }
+        )
+        self._secret_status.setText("Tokens werden verschluesselt gespeichert...")
 
+        def job() -> bool:
+            for key, value in values.items():
+                service.save_secret(key, value)
+            return True
+
+        self._secret_worker = BackgroundWorker(job)
+        self._secret_worker.signals.result.connect(self._on_tokens_saved)
+        self._secret_worker.signals.error.connect(self._on_tokens_save_error)
+        self._secret_worker.signals.finished.connect(lambda: setattr(self, "_secret_worker", None))
+        self._secret_worker.start()
+
+    def _on_tokens_saved(self, _payload: object) -> None:
         self._secret_status.setText("Tokens verschluesselt gespeichert.")
         self._secret_status.setStyleSheet(_OK_STYLE)
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.status_message.emit("Tokens wurden in der DB gespeichert", 4500)
+
+    def _on_tokens_save_error(self, exc: Exception) -> None:
+        self._secret_status.setText(f"Fehler: {exc}")
+        self._secret_status.setStyleSheet(_ERR_STYLE)
+        QMessageBox.warning(self, "Speichern fehlgeschlagen", str(exc))
 
     def _create_clickup_task(self) -> None:
         if self._clickup_worker is not None and self._clickup_worker.isRunning():

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Any
 
-from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
 from xw_studio.core.container import Container
 from xw_studio.core.worker import BackgroundWorker
@@ -43,12 +46,13 @@ class OffeneUeberweisungenDialog(QDialog):
         self._load_worker: BackgroundWorker | None = None
         self._detail_worker: BackgroundWorker | None = None
         self._detail_workers: list[BackgroundWorker] = []
+        self._action_worker: BackgroundWorker | None = None
         self._load_seq = 0
         self._detail_seq = 0
         self._build_ui()
         QTimer.singleShot(0, lambda: self._load_cases(refresh=True))
 
-    def closeEvent(self, event: QEvent) -> None:  # noqa: N802
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self._wait_for_workers()
         super().closeEvent(event)
 
@@ -65,7 +69,7 @@ class OffeneUeberweisungenDialog(QDialog):
         super().reject()
 
     def _wait_for_workers(self) -> None:
-        workers = [self._load_worker, self._detail_worker, *self._detail_workers]
+        workers = [self._load_worker, self._detail_worker, self._action_worker, *self._detail_workers]
         for worker in workers:
             if worker is not None and worker.isRunning():
                 worker.wait(3000)
@@ -200,6 +204,8 @@ class OffeneUeberweisungenDialog(QDialog):
         self._load_worker.start()
 
     def _on_cases_loaded(self, seq: int, result: object) -> None:
+        if not isValid(self):
+            return
         if seq != self._load_seq:
             return
         self._cases = list(result) if isinstance(result, list) else []
@@ -309,6 +315,8 @@ class OffeneUeberweisungenDialog(QDialog):
             pass
 
     def _on_case_detail_loaded(self, seq: int, result: object) -> None:
+        if not isValid(self):
+            return
         if seq != self._detail_seq or not isinstance(result, tuple) or len(result) != 3:
             return
         case_id, attachments, payment = result
@@ -320,6 +328,8 @@ class OffeneUeberweisungenDialog(QDialog):
         self._set_payment_actions_enabled(True, has_attachment=bool(attachments))
 
     def _on_case_detail_error(self, seq: int, exc: Exception) -> None:
+        if not isValid(self):
+            return
         if seq != self._detail_seq:
             return
         self._selected_attachment_id = None
@@ -383,8 +393,17 @@ class OffeneUeberweisungenDialog(QDialog):
         case = self._current_case()
         if case is None:
             return
-        summary = self._service.summarize_case(case.id)
-        self._summary.setPlainText(summary)
+        case_id = case.id
+
+        def job() -> str:
+            return self._service.summarize_case(case_id)
+
+        self._start_action(
+            self._btn_summary,
+            "Zusammenfassen...",
+            job,
+            lambda payload: self._summary.setPlainText(str(payload)),
+        )
 
     def _show_invoice(self) -> None:
         case = self._current_case()
@@ -414,26 +433,40 @@ class OffeneUeberweisungenDialog(QDialog):
         if case is None:
             return
         payment = self._collect_payment_form()
-        self._service.save_manual_payment(case.id, payment)
-        try:
-            qr_path = self._service.generate_qr(case.id, payment)
-        except PaymentQrError as exc:
-            QMessageBox.warning(self, "QR-Code", str(exc))
-            return
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "QR-Code", f"QR-Erzeugung fehlgeschlagen:\n\n{exc}")
-            return
+        case_id = case.id
 
-        dialog = PaymentQrDialog(qr_path, payment, self)
-        dialog.exec()
+        def job() -> tuple[Path, TransferPaymentData]:
+            self._service.save_manual_payment(case_id, payment)
+            return self._service.generate_qr(case_id, payment), payment
+
+        self._start_action(self._btn_generate_qr, "QR wird erstellt...", job, self._on_qr_generated)
+
+    def _on_qr_generated(self, payload: object) -> None:
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            return
+        qr_path, payment = payload
+        if not isinstance(qr_path, Path) or not isinstance(payment, TransferPaymentData):
+            return
+        PaymentQrDialog(qr_path, payment, self).exec()
 
     def _defer(self) -> None:
         case = self._current_case()
         if case is None:
             self.reject()
             return
-        self._service.mark_deferred(case.id, note=self._note.text().strip())
-        self.accept()
+        case_id = case.id
+        note = self._note.text().strip()
+
+        def job() -> bool:
+            self._service.mark_deferred(case_id, note=note)
+            return True
+
+        self._start_action(
+            self._btn_defer,
+            "Verschiebe...",
+            job,
+            lambda _payload: QTimer.singleShot(0, self.accept),
+        )
 
     def _mark_done(self) -> None:
         case = self._current_case()
@@ -450,22 +483,64 @@ class OffeneUeberweisungenDialog(QDialog):
             return
 
         payment = self._collect_payment_form()
-        self._service.save_manual_payment(case.id, payment)
-        try:
+        case_id = case.id
+        note = self._note.text().strip()
+
+        def job() -> bool:
+            self._service.save_manual_payment(case_id, payment)
             self._service.mark_done_in_outlook(
-                case.id,
+                case_id,
                 payment,
                 qr_path="",
-                note=self._note.text().strip(),
+                note=note,
             )
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(
-                self,
-                "Outlook",
-                f"Outlook konnte nicht als erledigt markiert werden; Alarm bleibt aktiv.\n\n{exc}",
-            )
-            return
+            return True
 
-        self._load_cases(refresh=True)
-        if not self._cases:
-            self.accept()
+        self._start_action(
+            self._btn_done,
+            "Erledige...",
+            job,
+            lambda _payload: self._load_cases(refresh=True),
+        )
+
+    def _start_action(
+        self,
+        button: QPushButton,
+        busy_text: str,
+        job: Callable[[], Any],
+        on_result: Callable[[object], None],
+    ) -> None:
+        if self._action_worker is not None and self._action_worker.isRunning():
+            return
+        idle_text = button.text()
+        button.setEnabled(False)
+        button.setText(busy_text)
+        self._detail_status_for_action(busy_text)
+        self._action_worker = BackgroundWorker(job)
+        worker = self._action_worker
+        worker.signals.result.connect(on_result)
+        worker.signals.error.connect(self._on_action_error)
+        worker.signals.finished.connect(
+            lambda current=worker, target=button, text=idle_text: self._finish_action(
+                current, target, text
+            )
+        )
+        worker.start()
+
+    def _detail_status_for_action(self, text: str) -> None:
+        self._source_label.setText(text)
+
+    def _on_action_error(self, exc: Exception) -> None:
+        title = "QR-Code" if isinstance(exc, PaymentQrError) else "Aktion fehlgeschlagen"
+        QMessageBox.warning(self, title, str(exc))
+
+    def _finish_action(
+        self,
+        worker: BackgroundWorker,
+        button: QPushButton,
+        idle_text: str,
+    ) -> None:
+        if self._action_worker is worker:
+            self._action_worker = None
+        button.setEnabled(True)
+        button.setText(idle_text)

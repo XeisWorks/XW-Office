@@ -134,6 +134,7 @@ def test_products_brand_bulk_flow_smoke(qtbot: object, monkeypatch: object) -> N
 
     view._bulk_set_inventory_brand()  # noqa: SLF001
 
+    qtbot.waitUntil(lambda: fake_service.apply_called, timeout=2000)
     assert fake_service.preview_called is True
     assert fake_service.apply_called is True
     assert fake_service.last_args is not None

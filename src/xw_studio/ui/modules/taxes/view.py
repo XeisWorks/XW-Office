@@ -240,10 +240,12 @@ class TaxesView(QWidget):
 
             self._set_uva_busy(True)
             self._set_uva_progress(5, "UVA-Berechnung wird vorbereitet...")
+            selected_year = year.value()
+            selected_month = month.value()
 
             def job() -> dict[str, object]:
                 self._emit_uva_preview_progress(20, "UVA-Daten werden aus sevDesk geladen...")
-                payload = uva.calculate_month(year.value(), month.value())
+                payload = uva.calculate_month(selected_year, selected_month)
                 self._emit_uva_preview_progress(100, "UVA-Berechnung abgeschlossen")
                 return payload
 
@@ -277,11 +279,13 @@ class TaxesView(QWidget):
 
             self._set_uva_busy(True)
             self._set_uva_progress(5, "UVA/U13 wird vorbereitet...")
+            selected_year = year.value()
+            selected_month = month.value()
 
             def job() -> UvaSubmitResult:
                 self._emit_uva_submit_progress(20, "UVA-Payload wird erstellt...")
                 self._emit_uva_submit_progress(45, "UVA wird an FinanzOnline gesendet...")
-                result = uva.submit_month(year.value(), month.value())
+                result = uva.submit_month(selected_year, selected_month)
                 self._emit_uva_submit_progress(100, "Sendevorgang abgeschlossen")
                 return result
 
@@ -520,8 +524,16 @@ class TaxesView(QWidget):
             return int(value) if value is not None else 1
 
         def on_preview() -> None:
+            if self._oss_worker is not None and self._oss_worker.isRunning():
+                return
+            selected_year = year.value()
+            selected_quarter_value = selected_quarter()
+            preview.setEnabled(False)
+            export.setEnabled(False)
+            preview.setText("Berechne...")
+
             def job() -> OssQuarterResult:
-                return oss.calculate_quarter(year.value(), selected_quarter())
+                return oss.calculate_quarter(selected_year, selected_quarter_value)
 
             self._oss_worker = BackgroundWorker(job)
 
@@ -534,48 +546,70 @@ class TaxesView(QWidget):
             self._oss_worker.signals.error.connect(
                 lambda exc: QMessageBox.information(self, "EU-OSS", f"Fehler: {exc}")
             )
+            self._oss_worker.signals.finished.connect(on_oss_finished)
             self._oss_worker.start()
 
         def on_export() -> None:
+            if self._oss_worker is not None and self._oss_worker.isRunning():
+                return
             current_oss_id = oss_id.text().strip()
             if not current_oss_id:
                 QMessageBox.information(self, "EU-OSS", "Bitte zuerst eine OSS-ID eintragen.")
                 return
 
-            def job() -> OssXmlExport:
-                return oss.build_xml_export(
-                    year.value(),
-                    selected_quarter(),
+            selected_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "EU-OSS XML speichern",
+                f"oss_{year.value()}_Q{selected_quarter()}.xml",
+                "XML (*.xml);;Alle Dateien (*.*)",
+            )
+            if not selected_path:
+                return
+            selected_year = year.value()
+            selected_quarter_value = selected_quarter()
+            selected_uid = uid_fixed_est.text().strip()
+            preview.setEnabled(False)
+            export.setEnabled(False)
+            export.setText("Exportiere...")
+
+            def job() -> tuple[OssXmlExport, str]:
+                result = oss.build_xml_export(
+                    selected_year,
+                    selected_quarter_value,
                     oss_id=current_oss_id,
-                    uid_fixed_est=uid_fixed_est.text().strip(),
+                    uid_fixed_est=selected_uid,
                 )
+                Path(selected_path).write_text(result.xml_payload, encoding="utf-8")
+                return result, selected_path
 
             self._oss_worker = BackgroundWorker(job)
 
-            def on_result(res: object) -> None:
+            def on_result(payload: object) -> None:
+                if not isinstance(payload, tuple) or len(payload) != 2:
+                    return
+                res, saved_path = payload
                 if not isinstance(res, OssXmlExport):
                     return
-                selected_path, _ = QFileDialog.getSaveFileName(
-                    self,
-                    "EU-OSS XML speichern",
-                    res.file_name,
-                    "XML (*.xml);;Alle Dateien (*.*)",
-                )
-                if not selected_path:
-                    return
-                Path(selected_path).write_text(res.xml_payload, encoding="utf-8")
                 preview_box.setPlainText(res.xml_payload)
                 QMessageBox.information(
                     self,
                     "EU-OSS",
-                    f"XML gespeichert:\n{selected_path}\n\nDanach im EU-OSS-Portal hochladen und pruefen.",
+                    f"XML gespeichert:\n{saved_path}\n\nDanach im EU-OSS-Portal hochladen und pruefen.",
                 )
 
             self._oss_worker.signals.result.connect(on_result)
             self._oss_worker.signals.error.connect(
                 lambda exc: QMessageBox.information(self, "EU-OSS", f"Fehler: {exc}")
             )
+            self._oss_worker.signals.finished.connect(on_oss_finished)
             self._oss_worker.start()
+
+        def on_oss_finished() -> None:
+            self._oss_worker = None
+            preview.setEnabled(True)
+            preview.setText("EU-OSS berechnen")
+            export.setEnabled(True)
+            export.setText("EU-OSS XML speichern")
 
         def on_portal() -> None:
             if not QDesktopServices.openUrl(QUrl(oss.portal_url(test_mode=True))):

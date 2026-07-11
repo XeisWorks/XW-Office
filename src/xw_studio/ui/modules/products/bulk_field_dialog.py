@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -13,13 +12,17 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QSpinBox,
     QTextEdit,
     QVBoxLayout,
 )
 
-from xw_studio.services.products.field_bulk_service import FieldOperatorType, ProductFieldBulkService
+from xw_studio.services.products.field_bulk_service import (
+    FieldBulkUpdateReport,
+    FieldOperatorType,
+    ProductFieldBulkService,
+)
 from xw_studio.services.wix.client import WixProduct
+from xw_studio.ui.async_action import UiAsyncAction
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
@@ -33,7 +36,7 @@ class BulkFieldEditorDialog(QDialog):
         self._service = service
         self._selected_field: str = ""
         self._operator_by_field: dict[str, str] = {}
-        self._preview_report = None
+        self._preview_report: FieldBulkUpdateReport | None = None
         self._wix_products: list[WixProduct] = []
         self.setWindowTitle("Produkte: Massenhaft Felder ändern")
         self.setMinimumWidth(600)
@@ -72,9 +75,9 @@ class BulkFieldEditorDialog(QDialog):
         lay.addLayout(form)
 
         # Preview button
-        preview_btn = QPushButton("Vorschau anzeigen")
-        preview_btn.clicked.connect(self._on_preview_clicked)
-        lay.addWidget(preview_btn)
+        self._preview_btn = QPushButton("Vorschau anzeigen")
+        self._preview_btn.clicked.connect(self._on_preview_clicked)
+        lay.addWidget(self._preview_btn)
 
         # Preview output
         self._preview_text = QTextEdit()
@@ -83,6 +86,7 @@ class BulkFieldEditorDialog(QDialog):
         self._preview_text.setMaximumHeight(150)
         lay.addWidget(QLabel("Vorschau:"))
         lay.addWidget(self._preview_text)
+        self._preview_action = UiAsyncAction(self, button=self._preview_btn)
 
         # Wix sync checkbox
         self._wix_sync_cb = QComboBox()
@@ -170,49 +174,63 @@ class BulkFieldEditorDialog(QDialog):
             QMessageBox.warning(self, "Vorschau", "Keine Produkte in der Inventar-Tabelle ausgewählt.")
             return
 
-        try:
-            self._preview_report = self._service.preview_field_update(
+        wix_products = list(self._wix_products)
+
+        def job() -> FieldBulkUpdateReport:
+            return self._service.preview_field_update(
                 skus=skus,
                 field_name=field_name,
                 operator=operator,
                 value=value,
-                wix_products=self._wix_products,
+                wix_products=wix_products,
             )
-            self._show_preview(self._preview_report)
-        except ValueError as exc:
-            QMessageBox.warning(self, "Vorschau", f"Fehler beim Berechnen der Vorschau:\n{exc}")
-            self._preview_report = None
 
-    def _show_preview(self, report: object) -> None:
-        """Display preview report in text area."""
-        if not hasattr(report, "changed"):
-            self._preview_text.setText("Fehler beim Laden der Vorschau")
+        self._preview_action.start(
+            job,
+            action_name="products-field-preview",
+            busy_text="Vorschau wird berechnet...",
+            on_result=self._on_preview_ready,
+            on_error=self._on_preview_error,
+            replace_running=True,
+        )
+
+    def _on_preview_ready(self, payload: object) -> None:
+        if not isinstance(payload, FieldBulkUpdateReport):
+            self._preview_text.setText("Keine gueltige Vorschau erhalten")
             return
+        self._preview_report = payload
+        self._show_preview(payload)
 
+    def _on_preview_error(self, exc: Exception) -> None:
+        QMessageBox.warning(self, "Vorschau", f"Fehler beim Berechnen der Vorschau:\n{exc}")
+        self._preview_report = None
+
+    def _show_preview(self, report: FieldBulkUpdateReport) -> None:
+        """Display preview report in text area."""
         fields = self._service.get_editable_fields()
-        field_def = fields.get(report.field_name, None)  # type: ignore[union-attr]
-        field_label = field_def.label if field_def else report.field_name  # type: ignore[union-attr]
+        field_def = fields.get(report.field_name)
+        field_label = field_def.label if field_def else report.field_name
 
         lines = [
             f"Feld: {field_label}",
-            f"Operation: {report.operator}",  # type: ignore[union-attr]
-            f"Neuer Wert: {report.value}",  # type: ignore[union-attr]
+            f"Operation: {report.operator}",
+            f"Neuer Wert: {report.value}",
             "",
-            f"Angefordert: {report.requested}",  # type: ignore[union-attr]
-            f"Würden geändert: {report.changed}",  # type: ignore[union-attr]
-            f"Übersprungen: {report.skipped}",  # type: ignore[union-attr]
-            f"Fehler: {report.failed}",  # type: ignore[union-attr]
+            f"Angefordert: {report.requested}",
+            f"Würden geändert: {report.changed}",
+            f"Übersprungen: {report.skipped}",
+            f"Fehler: {report.failed}",
         ]
         
-        if report.items:  # type: ignore[union-attr]
+        if report.items:
             lines.append("\nÄnderungen:")
-            for item in report.items[:20]:  # type: ignore[union-attr]
-                if item.status != "skipped":  # type: ignore[attr-defined]
+            for item in report.items[:20]:
+                if item.status != "skipped":
                     lines.append(
-                        f"  {item.sku}: {item.old_value} → {item.new_value} ({item.status})"  # type: ignore[attr-defined]
+                        f"  {item.sku}: {item.old_value} → {item.new_value} ({item.status})"
                     )
-            if len(report.items) > 20:  # type: ignore[union-attr]
-                lines.append(f"  ... und {len(report.items) - 20} weitere")  # type: ignore[union-attr]
+            if len(report.items) > 20:
+                lines.append(f"  ... und {len(report.items) - 20} weitere")
 
         self._preview_text.setText("\n".join(lines))
 

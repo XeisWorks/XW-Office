@@ -17,6 +17,9 @@ class _RepoStub:
     def get_ciphertext(self, name: str) -> bytes | None:
         return self._db.get(name)
 
+    def get_all_ciphertexts(self) -> dict[str, bytes]:
+        return dict(self._db)
+
     def upsert_ciphertext(self, name: str, ciphertext: bytes) -> object:
         self._db[name] = ciphertext
         return object()

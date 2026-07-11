@@ -6,9 +6,9 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QSize, Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QColor, QIcon, QImage, QMouseEvent, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
@@ -30,9 +30,16 @@ from PySide6.QtWidgets import (
 
 from xw_studio.core.worker import BackgroundWorker
 from xw_studio.services.inventory import InventoryService, ProductRow
-from xw_studio.services.draft_invoice.service import DraftInvoiceService, ProductIssueDecision
-from xw_studio.services.products.brand_service import ProductBrandService
-from xw_studio.services.products.field_bulk_service import ProductFieldBulkService
+from xw_studio.services.draft_invoice.service import (
+    DraftInvoiceService,
+    ProductIssueDecision,
+    ProductPreflightPlan,
+)
+from xw_studio.services.products.brand_service import BrandBulkUpdateReport, ProductBrandService
+from xw_studio.services.products.field_bulk_service import (
+    FieldBulkUpdateReport,
+    ProductFieldBulkService,
+)
 from xw_studio.services.sevdesk.part_client import PartClient, SevdeskPart
 from xw_studio.services.wix.client import WixProduct, WixProductsClient
 from xw_studio.ui.modules.products.bulk_field_dialog import BulkFieldEditorDialog
@@ -338,6 +345,8 @@ class ProductsView(QWidget):
         self._wix_worker: BackgroundWorker | None = None
         self._sevdesk_worker: BackgroundWorker | None = None
         self._save_worker: BackgroundWorker | None = None
+        self._brand_worker: BackgroundWorker | None = None
+        self._product_create_worker: BackgroundWorker | None = None
         self._sync_filter_text: str = ""
         self._sync_filter_status: str = ""
         self._sync_status_delegate = _SyncPresenceDelegate(self)
@@ -752,12 +761,12 @@ class ProductsView(QWidget):
         self._plans_editor.setMinimumHeight(130)
         plans_lay.addWidget(self._plans_editor)
         plans_btns = QHBoxLayout()
-        load_plans_btn = QPushButton("Druckplaene laden")
-        load_plans_btn.clicked.connect(self._load_print_plans)
-        plans_btns.addWidget(load_plans_btn)
-        save_plans_btn = QPushButton("Druckplaene speichern")
-        save_plans_btn.clicked.connect(self._save_print_plans)
-        plans_btns.addWidget(save_plans_btn)
+        self._plans_load_btn = QPushButton("Druckplaene laden")
+        self._plans_load_btn.clicked.connect(self._load_print_plans)
+        plans_btns.addWidget(self._plans_load_btn)
+        self._plans_save_btn = QPushButton("Druckplaene speichern")
+        self._plans_save_btn.clicked.connect(self._save_print_plans)
+        plans_btns.addWidget(self._plans_save_btn)
         plans_btns.addStretch()
         plans_lay.addLayout(plans_btns)
         lay.addWidget(plans_group)
@@ -1151,11 +1160,25 @@ class ProductsView(QWidget):
         QMessageBox.warning(self, "Legacy-Druckdaten", str(exc))
 
     def _load_print_plans(self) -> None:
+        if self._save_worker is not None and self._save_worker.isRunning():
+            return
         inv: InventoryService = self._container.resolve(InventoryService)
-        plans = inv.load_print_plans()
+        self._plans_load_btn.setEnabled(False)
+        self._plans_load_btn.setText("Lade...")
+        self._save_worker = BackgroundWorker(inv.load_print_plans)
+        self._save_worker.signals.result.connect(self._on_print_plans_loaded)
+        self._save_worker.signals.error.connect(self._on_print_plans_error)
+        self._save_worker.signals.finished.connect(self._on_print_plans_finished)
+        self._save_worker.start()
+
+    def _on_print_plans_loaded(self, payload: object) -> None:
+        plans = payload if isinstance(payload, list) else []
         self._plans_editor.setPlainText(json.dumps(plans, ensure_ascii=False, indent=2))
+        self._sync_status_lbl.setText(f"{len(plans)} Druckplaene geladen")
 
     def _save_print_plans(self) -> None:
+        if self._save_worker is not None and self._save_worker.isRunning():
+            return
         inv: InventoryService = self._container.resolve(InventoryService)
         raw = self._plans_editor.toPlainText().strip() or "[]"
         try:
@@ -1166,8 +1189,34 @@ class ProductsView(QWidget):
         if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
             QMessageBox.warning(self, "Druckplaene", "Erwartet wird ein JSON-Array aus Objekten.")
             return
-        inv.save_print_plans(data)
-        QMessageBox.information(self, "Druckplaene", f"{len(data)} Druckplan-Eintraege gespeichert.")
+        self._plans_save_btn.setEnabled(False)
+        self._plans_save_btn.setText("Speichere...")
+
+        def job() -> int:
+            inv.save_print_plans(data)
+            return len(data)
+
+        self._save_worker = BackgroundWorker(job)
+        self._save_worker.signals.result.connect(self._on_print_plans_saved)
+        self._save_worker.signals.error.connect(self._on_print_plans_error)
+        self._save_worker.signals.finished.connect(self._on_print_plans_finished)
+        self._save_worker.start()
+
+    def _on_print_plans_saved(self, payload: object) -> None:
+        count = int(payload) if isinstance(payload, int) else 0
+        self._sync_status_lbl.setText(f"{count} Druckplaene gespeichert")
+        QMessageBox.information(self, "Druckplaene", f"{count} Druckplan-Eintraege gespeichert.")
+
+    def _on_print_plans_error(self, exc: Exception) -> None:
+        self._sync_status_lbl.setText(f"Druckplan-Fehler: {exc}")
+        QMessageBox.warning(self, "Druckplaene", str(exc))
+
+    def _on_print_plans_finished(self) -> None:
+        self._save_worker = None
+        self._plans_load_btn.setEnabled(True)
+        self._plans_load_btn.setText("Druckplaene laden")
+        self._plans_save_btn.setEnabled(True)
+        self._plans_save_btn.setText("Druckplaene speichern")
 
     def _selected_inventory_skus(self) -> list[str]:
         if hasattr(self, "_inv_table"):
@@ -1210,42 +1259,71 @@ class ProductsView(QWidget):
             QMessageBox.warning(self, "Felder aendern", "Bitte alle Felder ausfuellen.")
             return
 
-        try:
-            report = service.apply_field_update(
+        wix_products = list(self._wix_rows)
+        self._sync_fields_btn.setEnabled(False)
+        self._sync_status_lbl.setText("Produktfelder werden aktualisiert...")
+
+        def job() -> FieldBulkUpdateReport:
+            return service.apply_field_update(
                 skus=skus,
                 field_name=field_name,
                 operator=operator,
                 value=value,
                 sync_wix=sync_wix,
-                wix_products=self._wix_rows,
+                wix_products=wix_products,
             )
 
-            fields = service.get_editable_fields()
-            field_label = fields.get(field_name).label if field_name in fields else field_name  # type: ignore[union-attr]
-            message = (
-                f"Feld: {field_label}\n"
-                f"Operation: {report.operator}\n"
-                f"Wert: {report.value}\n\n"
-                f"Geaendert (lokal): {report.changed}\n"
-                f"Uebersprungen: {report.skipped}\n"
-                f"Fehler: {report.failed}\n"
-            )
-            if sync_wix:
-                message += (
-                    f"\nWix versucht: {report.wix_attempted}\n"
-                    f"Wix erfolgreich: {report.wix_updated}\n"
-                    f"Wix Fehler: {report.wix_failed}"
-                )
+        self._save_worker = BackgroundWorker(job)
+        self._save_worker.signals.result.connect(
+            lambda payload: self._on_field_update_done(service, field_name, sync_wix, payload)
+        )
+        self._save_worker.signals.error.connect(self._on_field_update_error)
+        self._save_worker.signals.finished.connect(lambda: setattr(self, "_save_worker", None))
+        self._save_worker.start()
 
-            QMessageBox.information(self, "Felder aendern - Abgeschlossen", message)
-            self._load_sync_sources()
-        except ValueError as exc:
-            QMessageBox.warning(self, "Felder aendern - Fehler", f"Fehler: {exc}")
+    def _on_field_update_done(
+        self,
+        service: ProductFieldBulkService,
+        field_name: str,
+        sync_wix: bool,
+        payload: object,
+    ) -> None:
+        self._sync_fields_btn.setEnabled(True)
+        if not isinstance(payload, FieldBulkUpdateReport):
+            self._sync_status_lbl.setText("Produktfeld-Aktualisierung lieferte kein Ergebnis")
+            return
+        fields = service.get_editable_fields()
+        field_definition = fields.get(field_name)
+        field_label = field_definition.label if field_definition is not None else field_name
+        message = (
+            f"Feld: {field_label}\n"
+            f"Operation: {payload.operator}\n"
+            f"Wert: {payload.value}\n\n"
+            f"Geaendert (lokal): {payload.changed}\n"
+            f"Uebersprungen: {payload.skipped}\n"
+            f"Fehler: {payload.failed}\n"
+        )
+        if sync_wix:
+            message += (
+                f"\nWix versucht: {payload.wix_attempted}\n"
+                f"Wix erfolgreich: {payload.wix_updated}\n"
+                f"Wix Fehler: {payload.wix_failed}"
+            )
+        self._sync_status_lbl.setText(f"Produktfelder aktualisiert: {payload.changed} geaendert")
+        QMessageBox.information(self, "Felder aendern - Abgeschlossen", message)
+        self._load_sync_sources()
+
+    def _on_field_update_error(self, exc: Exception) -> None:
+        self._sync_fields_btn.setEnabled(True)
+        self._sync_status_lbl.setText(f"Feld-Aktualisierung fehlgeschlagen: {exc}")
+        QMessageBox.warning(self, "Felder aendern - Fehler", f"Fehler: {exc}")
 
     def _bulk_edit_wix_fields(self) -> None:
         self._run_bulk_field_dialog(self._selected_wix_skus(), source_label="Wix")
 
     def _create_selected_wix_product_in_sevdesk(self, sku: str) -> None:
+        if self._product_create_worker is not None and self._product_create_worker.isRunning():
+            return
         normalized_sku = str(sku or "").strip().upper()
         if not normalized_sku:
             return
@@ -1255,8 +1333,10 @@ class ProductsView(QWidget):
             return
 
         service: DraftInvoiceService = self._container.resolve(DraftInvoiceService)
-        try:
-            plan = service.build_manual_wix_product_plan(
+        self._sync_status_lbl.setText(f"sevDesk-Produktdialog fuer {normalized_sku} wird vorbereitet...")
+
+        def job() -> ProductPreflightPlan:
+            return service.build_manual_wix_product_plan(
                 sku=wix_product.sku,
                 wix_name=wix_product.name,
                 wix_product_id=wix_product.id,
@@ -1264,9 +1344,34 @@ class ProductsView(QWidget):
                 wix_price_gross=float(wix_product.price) if str(wix_product.price or "").strip() else None,
                 is_digital=False,
             )
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "sevDesk", str(exc))
+
+        self._product_create_worker = BackgroundWorker(job)
+        worker = self._product_create_worker
+        worker.signals.result.connect(
+            lambda payload: self._on_sevdesk_product_plan_ready(
+                service, wix_product, payload
+            )
+        )
+        worker.signals.error.connect(self._on_sevdesk_product_error)
+        worker.signals.finished.connect(
+            lambda current=worker: self._clear_product_create_worker(current)
+        )
+        worker.start()
+
+    def _clear_product_create_worker(self, worker: BackgroundWorker) -> None:
+        if self._product_create_worker is worker:
+            self._product_create_worker = None
+
+    def _on_sevdesk_product_plan_ready(
+        self,
+        service: DraftInvoiceService,
+        wix_product: WixProduct,
+        payload: object,
+    ) -> None:
+        if not isinstance(payload, ProductPreflightPlan):
+            self._on_sevdesk_product_error(RuntimeError("Produktplan ist ungueltig"))
             return
+        plan = payload
 
         issue = plan.issues[0] if plan.issues else None
         if issue is None:
@@ -1278,15 +1383,30 @@ class ProductsView(QWidget):
         if decision is None:
             decision = ProductIssueDecision(action="skip", draft=issue.draft)
         if decision.action != "create_part":
+            self._sync_status_lbl.setText("sevDesk-Produktanlage abgebrochen")
             return
 
-        try:
+        self._sync_status_lbl.setText(f"Produkt {wix_product.sku} wird in sevDesk angelegt...")
+
+        def job() -> SevdeskPart:
             created = service.create_part_from_decision(issue, decision)
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "sevDesk", f"Produkt konnte nicht angelegt werden:\n{exc}")
-            return
+            self._upsert_local_product_from_wix(wix_product, sevdesk_id=created.id)
+            return created
 
-        self._upsert_local_product_from_wix(wix_product, sevdesk_id=created.id)
+        self._product_create_worker = BackgroundWorker(job)
+        worker = self._product_create_worker
+        worker.signals.result.connect(self._on_sevdesk_product_created)
+        worker.signals.error.connect(self._on_sevdesk_product_error)
+        worker.signals.finished.connect(
+            lambda current=worker: self._clear_product_create_worker(current)
+        )
+        worker.start()
+
+    def _on_sevdesk_product_created(self, payload: object) -> None:
+        if not isinstance(payload, SevdeskPart):
+            return
+        created = payload
+        self._sync_status_lbl.setText(f"Produkt {created.sku} in sevDesk angelegt")
         QMessageBox.information(
             self,
             "sevDesk",
@@ -1333,6 +1453,8 @@ class ProductsView(QWidget):
         inv.save_products(sorted(local_by_sku.values(), key=lambda row: row.sku))
 
     def _bulk_set_inventory_brand(self) -> None:
+        if self._brand_worker is not None and self._brand_worker.isRunning():
+            return
         skus = self._selected_inventory_skus()
         if not skus:
             QMessageBox.information(self, "Brand-Update", "Bitte zuerst Produkte in der Inventar-Tabelle auswaehlen.")
@@ -1347,8 +1469,41 @@ class ProductsView(QWidget):
             return
 
         service: ProductBrandService = self._container.resolve(ProductBrandService)
-        preview = service.preview_local_brand_update(skus, target_brand)
+        self._sync_brand_btn.setEnabled(False)
+        self._sync_status_lbl.setText("Brand-Vorschau wird berechnet...")
+
+        def job() -> BrandBulkUpdateReport:
+            return service.preview_local_brand_update(skus, target_brand)
+
+        self._brand_worker = BackgroundWorker(job)
+        worker = self._brand_worker
+        worker.signals.result.connect(
+            lambda payload: self._on_brand_preview_ready(service, skus, target_brand, payload)
+        )
+        worker.signals.error.connect(self._on_brand_update_error)
+        worker.signals.finished.connect(
+            lambda current=worker: self._clear_brand_worker_if_current(current)
+        )
+        worker.start()
+
+    def _clear_brand_worker_if_current(self, worker: BackgroundWorker) -> None:
+        if self._brand_worker is worker:
+            self._brand_worker = None
+
+    def _on_brand_preview_ready(
+        self,
+        service: ProductBrandService,
+        skus: list[str],
+        target_brand: str,
+        payload: object,
+    ) -> None:
+        if not isinstance(payload, BrandBulkUpdateReport):
+            self._sync_brand_btn.setEnabled(True)
+            self._sync_status_lbl.setText("Brand-Vorschau lieferte kein Ergebnis")
+            return
+        preview = payload
         if preview.requested == 0:
+            self._sync_brand_btn.setEnabled(True)
             QMessageBox.information(self, "Brand-Update", "Keine gueltigen Ziele gefunden.")
             return
 
@@ -1360,6 +1515,8 @@ class ProductsView(QWidget):
             "Aenderung jetzt speichern?"
         )
         if QMessageBox.question(self, "Brand-Update Vorschau", question) != QMessageBox.StandardButton.Yes:
+            self._sync_brand_btn.setEnabled(True)
+            self._sync_status_lbl.setText("Brand-Update abgebrochen")
             return
 
         sync_choice = QMessageBox.question(
@@ -1384,12 +1541,31 @@ class ProductsView(QWidget):
             )
             create_missing_wix_brand = create_choice == QMessageBox.StandardButton.Yes
 
-        report = service.apply_brand_update(
-            skus,
-            target_brand,
-            sync_wix=sync_wix,
-            create_missing_wix_brand=create_missing_wix_brand,
+        self._sync_status_lbl.setText("Brand wird lokal und in Wix aktualisiert...")
+
+        def job() -> BrandBulkUpdateReport:
+            return service.apply_brand_update(
+                skus,
+                target_brand,
+                sync_wix=sync_wix,
+                create_missing_wix_brand=create_missing_wix_brand,
+            )
+
+        self._brand_worker = BackgroundWorker(job)
+        worker = self._brand_worker
+        worker.signals.result.connect(self._on_brand_update_done)
+        worker.signals.error.connect(self._on_brand_update_error)
+        worker.signals.finished.connect(
+            lambda current=worker: self._clear_brand_worker_if_current(current)
         )
+        worker.start()
+
+    def _on_brand_update_done(self, payload: object) -> None:
+        self._sync_brand_btn.setEnabled(True)
+        if not isinstance(payload, BrandBulkUpdateReport):
+            self._sync_status_lbl.setText("Brand-Update lieferte kein Ergebnis")
+            return
+        report = payload
         self._sync_status_lbl.setText(
             f"Brand-Update: geaendert={report.changed}, uebersprungen={report.skipped}, "
             f"wix_ok={report.wix_updated}, wix_fehler={report.wix_failed}"
@@ -1407,6 +1583,15 @@ class ProductsView(QWidget):
             f"Brand neu angelegt: {'ja' if report.wix_brand_created else 'nein'}",
         )
         self._load_sync_sources()
+
+    def _on_sevdesk_product_error(self, exc: Exception) -> None:
+        self._sync_status_lbl.setText(f"sevDesk-Produktanlage fehlgeschlagen: {exc}")
+        QMessageBox.warning(self, "sevDesk", f"Produkt konnte nicht angelegt werden:\n{exc}")
+
+    def _on_brand_update_error(self, exc: Exception) -> None:
+        self._sync_brand_btn.setEnabled(True)
+        self._sync_status_lbl.setText(f"Brand-Update fehlgeschlagen: {exc}")
+        QMessageBox.warning(self, "Brand-Update", str(exc))
 
     def _bulk_edit_fields(self) -> None:
         """Open dialog for bulk product field editing."""

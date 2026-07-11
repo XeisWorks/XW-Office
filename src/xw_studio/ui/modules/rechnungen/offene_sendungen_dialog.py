@@ -1,10 +1,12 @@
 """Dialog for OFFENE SENDUNGEN workflow."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
-from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
 from xw_studio.core.container import Container
 from xw_studio.core.worker import BackgroundWorker
@@ -45,13 +48,14 @@ class OffeneSendungenDialog(QDialog):
         self._load_worker: BackgroundWorker | None = None
         self._detail_worker: BackgroundWorker | None = None
         self._detail_workers: list[BackgroundWorker] = []
+        self._action_worker: BackgroundWorker | None = None
         self._load_seq = 0
         self._detail_seq = 0
         self._delivery_pdf_by_case: dict[str, Path] = {}
         self._build_ui()
         QTimer.singleShot(0, lambda: self._load_cases(refresh=True))
 
-    def closeEvent(self, event: QEvent) -> None:  # noqa: N802
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self._wait_for_workers()
         super().closeEvent(event)
 
@@ -68,7 +72,7 @@ class OffeneSendungenDialog(QDialog):
         super().reject()
 
     def _wait_for_workers(self) -> None:
-        workers = [self._load_worker, self._detail_worker, *self._detail_workers]
+        workers = [self._load_worker, self._detail_worker, self._action_worker, *self._detail_workers]
         for worker in workers:
             if worker is not None and worker.isRunning():
                 worker.wait(3000)
@@ -208,6 +212,8 @@ class OffeneSendungenDialog(QDialog):
         self._load_worker.start()
 
     def _on_cases_loaded(self, seq: int, result: object) -> None:
+        if not isValid(self):
+            return
         if seq != self._load_seq:
             return
         self._cases = list(result) if isinstance(result, list) else []
@@ -285,6 +291,8 @@ class OffeneSendungenDialog(QDialog):
             pass
 
     def _on_detail_loaded(self, seq: int, result: object) -> None:
+        if not isValid(self):
+            return
         if seq != self._detail_seq or not isinstance(result, tuple) or len(result) != 3:
             return
         case_id, extraction, manual = result
@@ -323,6 +331,8 @@ class OffeneSendungenDialog(QDialog):
         self._set_actions_enabled(True)
 
     def _on_detail_error(self, seq: int, exc: Exception) -> None:
+        if not isValid(self):
+            return
         if seq != self._detail_seq:
             return
         self._detail_status.setText("Quelle: Laden fehlgeschlagen")
@@ -415,16 +425,32 @@ class OffeneSendungenDialog(QDialog):
         if not lines:
             QMessageBox.information(self, "Label", "Keine Adresszeilen vorhanden.")
             return
-        try:
-            self._save_current_manual_fields()
+        case_id = case.id
+        products = self._products_from_table()
+        manual_text = self._manual_text.toPlainText()
+
+        def job() -> bool:
+            self._service.save_manual_fields(
+                case_id,
+                address_lines=lines,
+                products=products,
+                manual_text=manual_text,
+            )
             printer = LabelPrinter(
                 self._container.config.printing,
                 print_queue=self._container.resolve(PrintQueueService),
             )
             printer.print_address(lines)
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "Label", f"Labeldruck fehlgeschlagen:\n\n{exc}")
-            return
+            return True
+
+        self._start_action(
+            self._btn_label,
+            "Drucke...",
+            job,
+            self._on_label_printed,
+        )
+
+    def _on_label_printed(self, _payload: object) -> None:
         QMessageBox.information(self, "Label", "Label erfolgreich an Drucker gesendet.")
 
     def _create_delivery_note(self) -> Path:
@@ -442,39 +468,137 @@ class OffeneSendungenDialog(QDialog):
         return path
 
     def _show_delivery_note(self) -> None:
-        try:
-            path = self._create_delivery_note()
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "Lieferschein", f"Lieferschein konnte nicht erstellt werden:\n\n{exc}")
+        request = self._delivery_note_request()
+        if request is None:
             return
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        case_id, address, products, manual_text, summary = request
+
+        def job() -> Path:
+            return self._service.generate_delivery_note_pdf(
+                case_id,
+                address_lines=address,
+                products=products,
+                manual_text=manual_text,
+                summary=summary,
+            )
+
+        self._start_action(
+            self._btn_delivery_show,
+            "Erstelle...",
+            job,
+            self._on_delivery_note_ready,
+        )
+
+    @staticmethod
+    def _on_delivery_note_ready(payload: object) -> None:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(payload)))
 
     def _print_delivery_note(self) -> None:
-        try:
-            path = self._create_delivery_note()
+        request = self._delivery_note_request()
+        if request is None:
+            return
+        case_id, address, products, manual_text, summary = request
+
+        def job() -> Path:
+            path = self._service.generate_delivery_note_pdf(
+                case_id,
+                address_lines=address,
+                products=products,
+                manual_text=manual_text,
+                summary=summary,
+            )
             self._service.print_delivery_note(
                 path,
                 printing=self._container.config.printing,
                 print_queue=self._container.resolve(PrintQueueService),
             )
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "Lieferschein", f"Lieferschein-Druck fehlgeschlagen:\n\n{exc}")
-            return
-        QMessageBox.information(self, "Lieferschein", "Lieferschein erfolgreich an Rechnungen gesendet.")
+            return path
+
+        self._start_action(
+            self._btn_delivery_print,
+            "Drucke...",
+            job,
+            self._on_delivery_note_printed,
+        )
+
+    def _on_delivery_note_printed(self, _payload: object) -> None:
+        QMessageBox.information(
+            self, "Lieferschein", "Lieferschein erfolgreich an Rechnungen gesendet."
+        )
+
+    def _delivery_note_request(
+        self,
+    ) -> tuple[str, list[str], list[SendungProductLine], str, str] | None:
+        case = self._current_case()
+        if case is None:
+            return None
+        return (
+            case.id,
+            self._address_lines(),
+            self._products_from_table(),
+            self._manual_text.toPlainText(),
+            self._summary.toPlainText(),
+        )
 
     def _mark_done(self) -> None:
         case = self._current_case()
         if case is None:
             return
-        self._save_current_manual_fields()
-        try:
-            self._service.mark_done(case.id, done=True)
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(
-                self,
-                "Sendung erledigen",
-                "Das Outlook-Flag konnte nicht auf 'erledigt' gesetzt werden. "
-                f"Die Sendung bleibt offen.\n\n{exc}",
+        case_id = case.id
+        address = self._address_lines()
+        products = self._products_from_table()
+        manual_text = self._manual_text.toPlainText()
+
+        def job() -> bool:
+            self._service.save_manual_fields(
+                case_id,
+                address_lines=address,
+                products=products,
+                manual_text=manual_text,
             )
+            self._service.mark_done(case_id, done=True)
+            return True
+
+        self._start_action(
+            self._btn_done,
+            "Erledige...",
+            job,
+            lambda _payload: self._load_cases(refresh=False),
+        )
+
+    def _start_action(
+        self,
+        button: QPushButton,
+        busy_text: str,
+        job: Callable[[], Any],
+        on_result: Callable[[object], None],
+    ) -> None:
+        if self._action_worker is not None and self._action_worker.isRunning():
             return
-        self._load_cases(refresh=False)
+        idle_text = button.text()
+        button.setEnabled(False)
+        button.setText(busy_text)
+        self._detail_status.setText(busy_text)
+        self._action_worker = BackgroundWorker(job)
+        worker = self._action_worker
+        worker.signals.result.connect(on_result)
+        worker.signals.error.connect(
+            lambda exc: QMessageBox.warning(self, "Aktion fehlgeschlagen", str(exc))
+        )
+        worker.signals.finished.connect(
+            lambda current=worker, target=button, text=idle_text: self._finish_action(
+                current, target, text
+            )
+        )
+        worker.start()
+
+    def _finish_action(
+        self,
+        worker: BackgroundWorker,
+        button: QPushButton,
+        idle_text: str,
+    ) -> None:
+        if self._action_worker is worker:
+            self._action_worker = None
+        button.setEnabled(True)
+        button.setText(idle_text)

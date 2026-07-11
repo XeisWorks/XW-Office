@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import csv
-from datetime import date
 from io import StringIO
 import logging
 from pathlib import Path
@@ -30,7 +29,6 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QSizePolicy,
     QTableView,
-    QTableWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -364,13 +362,16 @@ class CalculationView(QWidget):
 
         profile_label = commission.get_profile(self._active_profile_key).label
         self._commission_status.setText(f"{profile_label}-Abrechnung wird geladen...")
+        profile_key = self._active_profile_key
+        include_cancellations = self._include_cancellations.isChecked()
+        include_credit_notes = self._include_credit_notes.isChecked()
 
         def job() -> CommissionRunResult:
             return commission.run_profile(
-                self._active_profile_key,
+                profile_key,
                 period,
-                include_cancellation_invoices=self._include_cancellations.isChecked(),
-                include_credit_notes=self._include_credit_notes.isChecked(),
+                include_cancellation_invoices=include_cancellations,
+                include_credit_notes=include_credit_notes,
                 refresh_data=not use_cache,
             )
 

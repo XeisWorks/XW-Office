@@ -30,6 +30,12 @@ class ApiSecretRepository:
             row = session.scalar(select(ApiSecret).where(ApiSecret.name == name))
             return None if row is None else row.ciphertext
 
+    def get_all_ciphertexts(self) -> dict[str, bytes]:
+        """Load all encrypted secrets with one database round-trip."""
+        with self._scope() as session:
+            rows = session.scalars(select(ApiSecret)).all()
+            return {str(row.name): bytes(row.ciphertext) for row in rows}
+
     def upsert_ciphertext(self, name: str, ciphertext: bytes) -> ApiSecret:
         with self._scope() as session:
             row = session.scalar(select(ApiSecret).where(ApiSecret.name == name))

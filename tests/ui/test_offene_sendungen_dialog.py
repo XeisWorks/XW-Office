@@ -129,5 +129,6 @@ def test_dialog_mark_done_saves_manual_fields_and_removes_case(qtbot: object) ->
     dialog._manual_text.setPlainText("Bitte schnell senden")  # noqa: SLF001
     dialog._mark_done()  # noqa: SLF001
 
+    qtbot.waitUntil(lambda: bool(service.mark_done_calls), timeout=2000)
     assert service.mark_done_calls == [("m1", True)]
     assert service.saved_manual[-1]["manual_text"] == "Bitte schnell senden"

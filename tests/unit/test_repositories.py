@@ -69,6 +69,7 @@ def test_api_secret_upsert(session_factory: sessionmaker[Session]) -> None:
     with session_factory() as s:
         repo = ApiSecretRepository(s)
         assert repo.get_ciphertext("SEVDESK") == blob
+        assert repo.get_all_ciphertexts() == {"SEVDESK": blob}
 
     with session_factory() as s:
         repo = ApiSecretRepository(s)

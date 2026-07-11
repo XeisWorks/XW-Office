@@ -1,10 +1,13 @@
 """Smoke-test: MainWindow can be constructed (pytest-qt)."""
 from __future__ import annotations
 
+from PySide6.QtWidgets import QLabel
+
 from xw_studio.bootstrap import register_default_services
 from xw_studio.core.config import AppConfig
 from xw_studio.core.container import Container
 from xw_studio.core.signals import AppSignals
+from xw_studio.core.types import ModuleKey
 from xw_studio.ui.main_window import MainWindow
 
 
@@ -17,3 +20,9 @@ def test_main_window_opens(qtbot: object) -> None:
     qtbot.addWidget(window)
     window.show()
     assert "XeisWorks" in window.windowTitle() or "Studio" in window.windowTitle()
+
+    window._navigate_to(ModuleKey.RECHNUNGEN.value)  # noqa: SLF001
+    assert window.page(ModuleKey.RECHNUNGEN) is None
+    label = window._stack.currentWidget().findChild(QLabel)  # noqa: SLF001
+    assert label is not None
+    assert "wird geladen" in label.text()
