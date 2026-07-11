@@ -70,6 +70,7 @@ from xw_studio.services.draft_invoice.service import (
     ProductPreflightPlan,
 )
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
+from xw_studio.services.digital_licenses import DigitalLicenseService
 from xw_studio.services.plc.label_archive import PlcLabelArchive
 from xw_studio.services.printer_status.service import PrinterStatusService
 from xw_studio.services.products.print_decision import PieceBlock, PrintDecisionEngine
@@ -79,7 +80,9 @@ from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
 from xw_studio.ui.modules.rechnungen.offene_ueberweisungen_dialog import OffeneUeberweisungenDialog
 from xw_studio.services.sevdesk.refund_client import SevDeskRefundClient
 from xw_studio.services.wix.client import WixOrdersClient
+from xw_studio.ui.modules.rechnungen.digital_licenses_dialog import DigitalLicensesDialog
 from xw_studio.ui.modules.rechnungen.offene_sendungen_dialog import OffeneSendungenDialog
+from xw_studio.ui.modules.rechnungen.special_order_dialog import SpecialOrderDialog
 from xw_studio.ui.modules.rechnungen.open_invoice_overview import (
     OpenInvoiceOverview,
     overview_from_visible_summaries,
@@ -894,6 +897,7 @@ class RechnungenView(QWidget):
         self._pending_draft_order_number = ""
         self._mollie_alert_count = 0
         self._sendungen_alert_count = 0
+        self._digital_licenses_alert_count = 0
         self._search_index: list[dict[str, str]] = []
         self._loaded_rows: list[dict[str, Any]] = []
         self._loaded_summaries: list[InvoiceSummary] = []
@@ -991,6 +995,12 @@ class RechnungenView(QWidget):
             tooltip="Freie Lieferadresse eingeben und direkt als Label drucken",
         )
         self._btn_custom_label.clicked.connect(self._on_custom_label_clicked)
+        self._btn_special_order = self._toolbar.add_button(
+            "special_order",
+            "Sonderauftrag",
+            tooltip="Wix Payment Link fuer Sonderauftrag erstellen",
+        )
+        self._btn_special_order.clicked.connect(self._on_special_order_clicked)
         self._toolbar.add_stretch()
         self._btn_sendungen_alert = self._toolbar.add_button(
             "sendungen_alert",
@@ -1006,6 +1016,20 @@ class RechnungenView(QWidget):
         )
         self._btn_sendungen_alert.clicked.connect(self._on_sendungen_alert_clicked)
         self._btn_sendungen_alert.hide()
+        self._btn_digital_licenses_alert = self._toolbar.add_button(
+            "digital_licenses_alert",
+            "DIGITALE LIZENZEN OFFEN",
+            tooltip="Bezahlte digitale Notenlizenzen anzeigen",
+        )
+        self._btn_digital_licenses_alert.setStyleSheet(
+            "QPushButton {"
+            "background-color: #b91c1c; color: white; border-radius: 6px;"
+            "font-weight: bold; padding: 0 14px;"
+            "}"
+            "QPushButton:hover { background-color: #991b1b; }"
+        )
+        self._btn_digital_licenses_alert.clicked.connect(self._on_digital_licenses_alert_clicked)
+        self._btn_digital_licenses_alert.hide()
         self._btn_mollie_alert = self._toolbar.add_button(
             "mollie_alert",
             "💳 MOLLIE AUTH",
@@ -1836,9 +1860,11 @@ class RechnungenView(QWidget):
             service: DailyBusinessService = self._container.resolve(DailyBusinessService)
             counts = service.load_counts(open_invoice_count=0)
             sendungen_service: OffeneSendungenService = self._container.resolve(OffeneSendungenService)
+            digital_licenses: DigitalLicenseService = self._container.resolve(DigitalLicenseService)
             return {
                 "mollie": max(0, int(counts.get("mollie", 0))),
                 "sendungen": max(0, int(sendungen_service.open_count())),
+                "digital_licenses": max(0, int(digital_licenses.open_count())),
             }
 
         self._mollie_badge_worker = BackgroundWorker(job)
@@ -1850,11 +1876,14 @@ class RechnungenView(QWidget):
         if isinstance(result, dict):
             mollie = max(0, int(result.get("mollie") or 0))
             sendungen = max(0, int(result.get("sendungen") or 0))
+            digital_licenses = max(0, int(result.get("digital_licenses") or 0))
         else:
             mollie = max(0, int(result)) if isinstance(result, int) else 0
             sendungen = 0
+            digital_licenses = 0
         self.update_mollie_alert_count(mollie)
         self.update_sendungen_alert_count(sendungen)
+        self.update_digital_licenses_alert_count(digital_licenses)
 
     def update_mollie_alert_count(self, count: int) -> None:
         self._mollie_alert_count = max(0, int(count))
@@ -1872,6 +1901,16 @@ class RechnungenView(QWidget):
             return
         self._btn_sendungen_alert.hide()
 
+    def update_digital_licenses_alert_count(self, count: int) -> None:
+        self._digital_licenses_alert_count = max(0, int(count))
+        if self._digital_licenses_alert_count > 0:
+            self._btn_digital_licenses_alert.setText(
+                f"DIGITALE LIZENZEN OFFEN ({self._digital_licenses_alert_count})"
+            )
+            self._btn_digital_licenses_alert.show()
+            return
+        self._btn_digital_licenses_alert.hide()
+
     def _on_mollie_alert_clicked(self) -> None:
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.navigate_to_module.emit(ModuleKey.MOLLIE.value)
@@ -1880,6 +1919,15 @@ class RechnungenView(QWidget):
         dlg = OffeneSendungenDialog(self._container, self)
         dlg.exec()
         self.update_sendungen_alert_count(dlg.open_count())
+
+    def _on_digital_licenses_alert_clicked(self) -> None:
+        dlg = DigitalLicensesDialog(self._container, self)
+        dlg.exec()
+        self.update_digital_licenses_alert_count(dlg.open_count())
+
+    def _on_special_order_clicked(self) -> None:
+        dlg = SpecialOrderDialog(self._container, self)
+        dlg.exec()
 
     def _selected_summary(self) -> InvoiceSummary | None:
         row = self._table.selected_source_row()

@@ -17,6 +17,7 @@ from xw_studio.services.clearing.gateways import (
 from xw_studio.services.clearing.service import PaymentClearingService
 from xw_studio.services.crm.service import CrmService
 from xw_studio.services.daily_business.service import DailyBusinessService
+from xw_studio.services.digital_licenses import DigitalLicenseService
 from xw_studio.services.expenses.service import ExpenseAuditService
 from xw_studio.services.finanzonline import (
     FinanzOnlineClient,
@@ -43,6 +44,7 @@ from xw_studio.services.inventory.service import InventoryService
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
 from xw_studio.services.draft_invoice.service import DraftInvoiceService
 from xw_studio.services.sendungen.service import OffeneSendungenService
+from xw_studio.services.special_orders import SpecialOrderService
 from xw_studio.services.transfers.service import OffeneUeberweisungenService
 from xw_studio.services.layout.service import LayoutToolsService
 from xw_studio.services.mailing.service import MailDeliveryService
@@ -176,6 +178,13 @@ def register_default_services(container: Container) -> None:
         lambda c: OffeneUeberweisungenService(
             c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
             c.resolve(SecretService),
+        ),
+    )
+    container.register(
+        SpecialOrderService,
+        lambda c: SpecialOrderService(
+            secret_service=c.resolve(SecretService),
+            wix_products=c.resolve(WixProductsClient),
         ),
     )
 
@@ -318,6 +327,18 @@ def register_default_services(container: Container) -> None:
         lambda c: DailyBusinessService(
             c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
             c.resolve(InvoiceProcessingService),
+        ),
+    )
+    container.register(
+        DigitalLicenseService,
+        lambda c: DigitalLicenseService(
+            invoices=c.resolve(InvoiceProcessingService),
+            wix_orders=c.resolve(WixOrdersClient),
+            catalog=c.resolve(ProductCatalogService),
+            layout=c.resolve(LayoutToolsService),
+            secret_service=c.resolve(SecretService),
+            settings_repo=c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
+            inventory=c.resolve(InventoryService),
         ),
     )
     container.register(

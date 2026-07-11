@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 
@@ -20,7 +21,14 @@ class OutlookComposeError(RuntimeError):
     """Raised when Outlook cannot prepare the requested draft."""
 
 
-def compose_outlook_mail(*, to_email: str, subject: str, sender_smtp: str) -> None:
+def compose_outlook_mail(
+    *,
+    to_email: str,
+    subject: str,
+    sender_smtp: str,
+    body: str = "",
+    attachments: list[str] | None = None,
+) -> None:
     """Open an editable Outlook mail draft from *sender_smtp*."""
     sender = str(sender_smtp or "").strip()
     recipient = str(to_email or "").strip()
@@ -48,6 +56,8 @@ def compose_outlook_mail(*, to_email: str, subject: str, sender_smtp: str) -> No
         # inspector/signature. Re-apply after Display so the visible From
         # selector is forced to the configured account.
         _apply_sender(mail, account)
+        _apply_body(mail, body)
+        _apply_attachments(mail, attachments or [])
     finally:
         pythoncom.CoUninitialize()
 
@@ -109,6 +119,25 @@ def _apply_sender(mail: Any, account: Any) -> None:
             pass
 
 
+def _apply_body(mail: Any, body: str) -> None:
+    clean_body = str(body or "").strip()
+    if not clean_body:
+        return
+    try:
+        existing = str(getattr(mail, "Body", "") or "")
+        mail.Body = f"{clean_body}\n\n{existing}".rstrip()
+    except Exception:
+        mail.Body = clean_body
+
+
+def _apply_attachments(mail: Any, attachments: list[str]) -> None:
+    for raw_path in attachments:
+        path = Path(str(raw_path or "").strip()).expanduser()
+        if not path.is_file():
+            raise OutlookComposeError(f"Anhang nicht gefunden: {path}")
+        mail.Attachments.Add(str(path.resolve()))
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -116,6 +145,12 @@ def main() -> int:
             to_email=str(payload.get("to") or ""),
             subject=str(payload.get("subject") or ""),
             sender_smtp=str(payload.get("sender") or ""),
+            body=str(payload.get("body") or ""),
+            attachments=[
+                str(item)
+                for item in (payload.get("attachments") or [])
+                if str(item or "").strip()
+            ],
         )
     except Exception as exc:  # noqa: BLE001
         print(json.dumps({"ok": False, "error": str(exc), "type": type(exc).__name__}))
