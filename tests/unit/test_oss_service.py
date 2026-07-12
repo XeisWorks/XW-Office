@@ -7,7 +7,13 @@ import pytest
 
 from xw_studio.services.finanzonline.oss_models import OssLine, OssQuarterResult
 from xw_studio.services.finanzonline.oss_references import compare_oss_reference, load_oss_references
-from xw_studio.services.finanzonline.oss_service import OssService, SevdeskOssDocumentProvider
+from xw_studio.services.finanzonline.oss_service import (
+    OssService,
+    SevdeskOssDocumentProvider,
+    build_oss_xml,
+    validate_oss_xml,
+)
+from xw_studio.services.finanzonline.oss_snapshot import OssQuarterSnapshotStore
 
 
 class _QuarterProvider:
@@ -198,6 +204,7 @@ class _ParallelPositionProvider(SevdeskOssDocumentProvider):
             return [{"id": str(index), "invoiceNumber": f"RE-{index}"} for index in range(6)]
         return []
 
+
     def _load_positions(self, resource: str, doc_id: str) -> list[dict[str, object]]:
         with self._active_lock:
             self._active += 1
@@ -208,6 +215,15 @@ class _ParallelPositionProvider(SevdeskOssDocumentProvider):
         finally:
             with self._active_lock:
                 self._active -= 1
+
+
+class _CountingQuarterProvider(_QuarterProvider):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def load_sales_documents(self, year: int, quarter: int) -> list[dict[str, object]]:
+        self.calls += 1
+        return super().load_sales_documents(year, quarter)
 
 
 def test_oss_service_collects_foreign_b2c_sales_by_delivery_quarter() -> None:
@@ -285,12 +301,12 @@ def test_oss_xml_export_contains_expected_fields() -> None:
     export = service.build_xml_export(2026, 1, oss_id="ATU73931409")
 
     assert export.file_name == "EU-OSS_2026_Q1.xml"
-    assert "<OSSReturn>" in export.xml_payload
-    assert "<ossId>ATU73931409</ossId>" in export.xml_payload
-    assert "<countryCode>DE</countryCode>" in export.xml_payload
+    assert "<Erklaerungen>" in export.xml_payload
+    assert "<mscon>DE</mscon>" in export.xml_payload
     assert "<goods>true</goods>" in export.xml_payload
     assert "<taxable>100,00</taxable>" in export.xml_payload
     assert "<vatRate>19,00</vatRate>" in export.xml_payload
+    assert "<taxamount>" not in export.xml_payload
 
 
 def test_oss_xml_export_blocks_null_quarter() -> None:
@@ -363,3 +379,94 @@ def test_sevdesk_oss_provider_loads_positions_with_bounded_parallelism() -> None
     assert provider.max_active > 1
     assert provider.max_active <= 3
     assert all(document["xw_positions"] for document in documents)
+
+
+def test_oss_service_reuses_persistent_quarter_snapshot(tmp_path) -> None:
+    store = OssQuarterSnapshotStore(tmp_path / "tax.sqlite")
+    first_provider = _CountingQuarterProvider()
+    first_service = OssService(first_provider, snapshot_store=store)
+
+    first = first_service.calculate_quarter(2026, 1)
+
+    second_provider = _CountingQuarterProvider()
+    second_service = OssService(second_provider, snapshot_store=store)
+    second = second_service.calculate_quarter(2026, 1)
+
+    assert first.cache["source"] == "live"
+    assert second.cache["source"] == "persistent"
+    assert second_provider.calls == 0
+    assert second.goods_lines[0].taxable_amount == "100.00"
+    assert second.cache["snapshot_hash"] == first.cache["snapshot_hash"]
+
+
+def test_oss_service_refresh_bypasses_persistent_snapshot(tmp_path) -> None:
+    store = OssQuarterSnapshotStore(tmp_path / "tax.sqlite")
+    provider = _CountingQuarterProvider()
+    service = OssService(provider, snapshot_store=store)
+
+    service.calculate_quarter(2026, 1)
+    refreshed = service.calculate_quarter(2026, 1, refresh=True)
+
+    assert refreshed.cache["source"] == "live"
+    assert provider.calls == 2
+
+
+def test_oss_xml_validation_blocks_duplicate_country_rate_type() -> None:
+    result = OssQuarterResult(
+        year=2026,
+        quarter=1,
+        goods_lines=[
+            OssLine(
+                country_code="DE",
+                country_name="Germany",
+                vat_rate="7.00",
+                taxable_amount="100.00",
+                tax_amount="7.00",
+            ),
+            OssLine(
+                country_code="DE",
+                country_name="Germany",
+                vat_rate="7.00",
+                taxable_amount="50.00",
+                tax_amount="3.50",
+            ),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="doppelte Zeile"):
+        validate_oss_xml(build_oss_xml(result, oss_id="ATU73931409"))
+
+
+def test_oss_xml_export_skips_zero_percent_lines_with_warning() -> None:
+    service = OssService(_KnownZeroRateProvider())
+
+    with pytest.raises(ValueError, match="0%-Zeilen"):
+        service.build_xml_export(2026, 2, oss_id="ATU73931409")
+
+    mixed = OssQuarterResult(
+        year=2026,
+        quarter=2,
+        goods_lines=[
+            OssLine(
+                country_code="CZ",
+                country_name="Czechia",
+                vat_rate="0.00",
+                taxable_amount="34.80",
+                tax_amount="0.00",
+            ),
+            OssLine(
+                country_code="DE",
+                country_name="Germany",
+                vat_rate="7.00",
+                taxable_amount="100.00",
+                tax_amount="7.00",
+            ),
+        ],
+    )
+
+    export = service.build_xml_export_from_result(mixed)
+
+    assert "<mscon>DE</mscon>" in export.xml_payload
+    assert "<mscon>CZ</mscon>" not in export.xml_payload
+    assert export.line_count == 1
+    assert any("0%-Zeilen" in warning for warning in export.warnings)

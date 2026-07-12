@@ -22,6 +22,7 @@ from xw_studio.services.expenses.service import ExpenseAuditService
 from xw_studio.services.finanzonline import (
     FinanzOnlineClient,
     OssService,
+    OssQuarterSnapshotStore,
     SevdeskOssDocumentProvider,
     SevdeskUvaPreviewProvider,
     TaxMonthlySnapshotStore,
@@ -232,7 +233,14 @@ def register_default_services(container: Container) -> None:
     )
     container.register(
         OssService,
-        lambda c: OssService(SevdeskOssDocumentProvider(c.resolve(SevdeskConnection))),
+        lambda c: OssService(
+            SevdeskOssDocumentProvider(c.resolve(SevdeskConnection)),
+            snapshot_store=c.resolve(OssQuarterSnapshotStore),
+        ),
+    )
+    container.register(
+        OssQuarterSnapshotStore,
+        lambda c: OssQuarterSnapshotStore(),
     )
     def build_payment_clearing(c: Container) -> PaymentClearingService:
         secrets = c.resolve(SecretService)

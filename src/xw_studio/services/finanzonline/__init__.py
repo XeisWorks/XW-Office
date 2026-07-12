@@ -6,6 +6,7 @@ from xw_studio.services.finanzonline.oss_models import OssLine, OssQuarterResult
 from xw_studio.services.finanzonline.oss_service import OssService, SevdeskOssDocumentProvider
 from xw_studio.services.finanzonline.oss_references import compare_oss_reference, load_oss_references
 from xw_studio.services.finanzonline.oss_tax_rules import load_oss_tax_rules
+from xw_studio.services.finanzonline.oss_snapshot import OssQuarterSnapshotStore
 from xw_studio.services.finanzonline.settings import FinanzOnlineSettings
 from xw_studio.services.finanzonline.uva_models import UvaKennzahlen, UvaPayloadResult
 from xw_studio.services.finanzonline.uva_payload_service import UvaPayloadService
@@ -53,6 +54,7 @@ __all__ = [
     "OssLine",
     "OssQuarterResult",
     "OssService",
+    "OssQuarterSnapshotStore",
     "OssXmlExport",
     "SevdeskUvaPreviewProvider",
     "SevdeskOssDocumentProvider",

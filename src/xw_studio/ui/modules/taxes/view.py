@@ -121,6 +121,7 @@ class TaxesView(QWidget):
 
     _CLEARING_COLUMNS = ["Ref", "Kunde", "Betrag", "Status", "Hinweis"]
     _EXPENSE_COLUMNS = ["Ref", "Lieferant", "Brutto", "Kategorie", "Status", "Hinweis"]
+    _OSS_COLUMNS = ["Land", "Satz", "Art", "Netto", "Steuer", "Belege"]
 
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -571,38 +572,98 @@ class TaxesView(QWidget):
         preview_box.setReadOnly(True)
         layout.addWidget(preview_box)
 
+        oss_table = DataTable(self._OSS_COLUMNS)
+        oss_table.setMinimumHeight(170)
+        oss_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        oss_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(oss_table)
+
+        drilldown_box = QPlainTextEdit()
+        drilldown_box.setReadOnly(True)
+        drilldown_box.setPlaceholderText("Zeile auswaehlen, um die Belege zu sehen.")
+        drilldown_box.setMaximumHeight(140)
+        layout.addWidget(drilldown_box)
+
         buttons = QHBoxLayout()
         preview = QPushButton("EU-OSS berechnen")
+        refresh = QPushButton("Neu aus sevDesk laden")
         export = QPushButton("EU-OSS XML speichern")
         portal = QPushButton("Testportal oeffnen")
         buttons.addWidget(preview)
+        buttons.addWidget(refresh)
         buttons.addWidget(export)
         buttons.addWidget(portal)
         buttons.addStretch()
         layout.addLayout(buttons)
 
+        latest_result: OssQuarterResult | None = None
+
         def selected_quarter() -> int:
             value = quarter.currentData()
             return int(value) if value is not None else 1
 
-        def on_preview() -> None:
+        def result_rows(res: OssQuarterResult) -> list[dict[str, object]]:
+            rows: list[dict[str, object]] = []
+            for line in [*res.goods_lines, *res.service_lines]:
+                rows.append(
+                    {
+                        "Land": f"{line.country_code} {line.country_name}",
+                        "Satz": f"{line.vat_rate} %",
+                        "Art": "Waren" if line.goods else "Leistungen",
+                        "Netto": _format_euro(line.taxable_amount),
+                        "Steuer": _format_euro(line.tax_amount),
+                        "Belege": str(len(line.source_docs)),
+                        "__docs": list(line.source_docs),
+                        "__sort__Netto": float(str(line.taxable_amount).replace(",", ".")),
+                        "__sort__Steuer": float(str(line.tax_amount).replace(",", ".")),
+                        "__sort__Belege": len(line.source_docs),
+                    }
+                )
+            return rows
+
+        def apply_result(res: OssQuarterResult) -> None:
+            nonlocal latest_result
+            latest_result = res
+            preview_box.setPlainText(oss.render_preview_text(res))
+            oss_table.set_data(result_rows(res))
+            drilldown_box.clear()
+
+        def show_selected_drilldown() -> None:
+            row = oss_table.selected_row_data()
+            if not row:
+                return
+            docs = row.get("__docs")
+            doc_lines = [str(item) for item in docs] if isinstance(docs, list) else []
+            drilldown_box.setPlainText(
+                "\n".join([
+                    f"{row.get('Land', '')} / {row.get('Satz', '')} / {row.get('Art', '')}",
+                    f"Netto: {row.get('Netto', '')}",
+                    f"Steuer: {row.get('Steuer', '')}",
+                    "",
+                    "Belege:",
+                    *(f"- {doc}" for doc in doc_lines),
+                ]).strip()
+            )
+
+        def on_preview(*, refresh_data: bool = False) -> None:
             if self._oss_worker is not None and self._oss_worker.isRunning():
                 return
             selected_year = year.value()
             selected_quarter_value = selected_quarter()
             preview.setEnabled(False)
+            refresh.setEnabled(False)
             export.setEnabled(False)
-            preview.setText("Berechne...")
+            preview.setText("Berechne..." if not refresh_data else "Lade...")
 
             def job() -> OssQuarterResult:
-                return oss.calculate_quarter(selected_year, selected_quarter_value)
+                return oss.calculate_quarter(selected_year, selected_quarter_value, refresh=refresh_data)
 
             self._oss_worker = BackgroundWorker(job)
 
             def on_result(res: object) -> None:
                 if not isinstance(res, OssQuarterResult):
                     return
-                preview_box.setPlainText(oss.render_preview_text(res))
+                apply_result(res)
 
             self._oss_worker.signals.result.connect(on_result)
             self._oss_worker.signals.error.connect(
@@ -615,9 +676,6 @@ class TaxesView(QWidget):
             if self._oss_worker is not None and self._oss_worker.isRunning():
                 return
             current_oss_id = oss_id.text().strip()
-            if not current_oss_id:
-                QMessageBox.information(self, "EU-OSS", "Bitte zuerst eine OSS-ID eintragen.")
-                return
 
             selected_path, _ = QFileDialog.getSaveFileName(
                 self,
@@ -631,16 +689,28 @@ class TaxesView(QWidget):
             selected_quarter_value = selected_quarter()
             selected_uid = uid_fixed_est.text().strip()
             preview.setEnabled(False)
+            refresh.setEnabled(False)
             export.setEnabled(False)
             export.setText("Exportiere...")
 
             def job() -> tuple[OssXmlExport, str]:
-                result = oss.build_xml_export(
-                    selected_year,
-                    selected_quarter_value,
-                    oss_id=current_oss_id,
-                    uid_fixed_est=selected_uid,
-                )
+                if (
+                    latest_result is not None
+                    and latest_result.year == selected_year
+                    and latest_result.quarter == selected_quarter_value
+                ):
+                    result = oss.build_xml_export_from_result(
+                        latest_result,
+                        oss_id=current_oss_id,
+                        uid_fixed_est=selected_uid,
+                    )
+                else:
+                    result = oss.build_xml_export(
+                        selected_year,
+                        selected_quarter_value,
+                        oss_id=current_oss_id,
+                        uid_fixed_est=selected_uid,
+                    )
                 Path(selected_path).write_text(result.xml_payload, encoding="utf-8")
                 return result, selected_path
 
@@ -670,6 +740,8 @@ class TaxesView(QWidget):
             self._oss_worker = None
             preview.setEnabled(True)
             preview.setText("EU-OSS berechnen")
+            refresh.setEnabled(True)
+            refresh.setText("Neu aus sevDesk laden")
             export.setEnabled(True)
             export.setText("EU-OSS XML speichern")
 
@@ -677,9 +749,11 @@ class TaxesView(QWidget):
             if not QDesktopServices.openUrl(QUrl(oss.portal_url(test_mode=True))):
                 QMessageBox.warning(self, "EU-OSS", "Das Testportal konnte nicht geoeffnet werden.")
 
-        preview.clicked.connect(on_preview)
+        preview.clicked.connect(lambda _checked=False: on_preview(refresh_data=False))
+        refresh.clicked.connect(lambda _checked=False: on_preview(refresh_data=True))
         export.clicked.connect(on_export)
         portal.clicked.connect(on_portal)
+        oss_table.selectionModel().selectionChanged.connect(lambda *_: show_selected_drilldown())
         return page
 
     def _build_clearing_tab(self) -> QWidget:

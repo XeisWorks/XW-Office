@@ -294,6 +294,12 @@ Nach Umsetzung der begrenzten Parallelisierung fuer Positionsabrufe:
 - Q2 liegt damit unter dem Zielwert von 20 Sekunden, Q1 knapp darueber;
 - die Aggregationswerte blieben gegenueber dem seriellen Lauf stabil.
 
+Nach Umsetzung des persistenten Quartalssnapshots:
+
+- Q1 Refresh aus sevDesk: 20,906 Sekunden, Warmstart aus SQLite: 0,001 Sekunden;
+- Q2 Refresh aus sevDesk: 16,537 Sekunden, Warmstart aus SQLite: 0,001 Sekunden;
+- Vorschau und Export koennen denselben Snapshot-Hash verwenden.
+
 Zielwerte:
 
 - erster Quartals-Snapshot unter 20 Sekunden, soweit die API dies erlaubt;
@@ -319,15 +325,31 @@ Abgeschlossen:
 - Phase 5 teilweise: Positionsabrufe laufen begrenzt parallel
   (`max_position_workers=6`), der In-Memory-Positionscache ist fuer parallele
   Zugriffe abgesichert;
+- Phase 5 erweitert: `OssQuarterSnapshotStore` speichert fertige
+  Quartalsergebnisse persistent in `state/xw_studio_cache.sqlite`; Warmstarts
+  laufen ohne sevDesk-API-Zugriff;
+- Phase 6 teilweise: XML-Export wurde von internem `OSSReturn` auf die
+  BMF/USP-Portalstruktur `Erklaerungen/Erklaerung` mit `mscon`, `taxable`,
+  `vatRate` und optionaler `goods`-/`uidFixedEst`-Angabe umgestellt; lokale
+  XSD- und Duplikatvalidierung sind aktiv;
+- Phase 7 teilweise: EU-OSS-UI zeigt Snapshot-Quelle/Hash, eine
+  Soll-Ist-nahe Ergebnis-Tabelle und Drill-down auf die Belegnummern je
+  Land/Satz/Art; Export nutzt den sichtbaren Snapshot, wenn Quartal/Jahr
+  uebereinstimmen;
 - Regressionstests fuer bekannte Regeln, 0-%-CZ, 0-%-Konflikt,
-  Dokumentkopf-Fallback, unbekannte auslaendische Regeln, Referenzvergleich und
-  parallele Positionsabrufe.
+  Dokumentkopf-Fallback, unbekannte auslaendische Regeln, Referenzvergleich,
+  parallele Positionsabrufe, persistenten Snapshot und XML-Validierung.
 
 Noch offen:
 
-- vollstaendiges auditierbares Quartalssnapshot-Modell;
-- persistenter Snapshot und Performance-Ziel unter 20 Sekunden kalt;
-- offizieller XML-XSD-Exporter;
+- vollstaendiges positionsgenaues Auditmodell mit Ausschlussliste;
+- Q1-Refresh liegt mit rund 21 Sekunden noch knapp ueber dem 20-Sekunden-Ziel;
+- Portal-Testupload gegen die BMF-Testanwendung wurde fuer Q2/2026 erfolgreich
+  durchgefuehrt. Ergebnis: `Datei wurde erfolgreich hochgeladen`.
+- Das BMF-Testportal lehnt `vatRate 0,00` mit der Meldung
+  `Das XML-File enthaelt den Steuersatz von 0,0%. Dies ist nicht erlaubt.` ab.
+  Deshalb bleiben 0-%-Zeilen in der Berechnung sichtbar, werden aber nicht in
+  das Portal-XML uebernommen; der Export meldet diesen Ausschluss explizit.
 - UI-Drill-down fuer Referenzvergleich und Ausschlussliste;
 - positionsgenauer Drill-down fuer die verbleibenden Q1/Q2-Deltas.
 

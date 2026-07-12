@@ -15,6 +15,7 @@ from xw_studio.services.http_client import SevdeskConnection
 from xw_studio.services.shipping.countries import country_iso2, country_name_en
 
 from xw_studio.services.finanzonline.oss_models import OssLine, OssQuarterResult, OssXmlExport
+from xw_studio.services.finanzonline.oss_snapshot import OssQuarterSnapshotStore
 from xw_studio.services.finanzonline.oss_tax_rules import (
     OssTaxRule,
     known_oss_rates_by_country,
@@ -26,6 +27,42 @@ logger = logging.getLogger(__name__)
 
 _DECIMAL_2 = Decimal("0.01")
 _PERCENT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*%")
+_OSS_XML_XSD = """<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:element name="Erklaerungen">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Erklaerung" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="goods" type="xs:boolean" minOccurs="0"/>
+              <xs:element name="uidFixedEst" type="xs:string" minOccurs="0"/>
+              <xs:element name="mscon" type="CountryCode"/>
+              <xs:element name="taxable" type="MoneyAmount"/>
+              <xs:element name="vatRate" type="RateAmount"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  <xs:simpleType name="CountryCode">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[A-Z]{2}"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="MoneyAmount">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="-?[0-9]+,[0-9]{2}"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="RateAmount">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[1-9][0-9]*,[0-9]{1,2}|0,[1-9][0-9]?|0,0[1-9]"/>
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>
+"""
 _FOREIGN_MARKERS = (
     "DEUTSCHE",
     "ITALIENISCHE",
@@ -281,10 +318,12 @@ class OssService:
         provider: OssDocumentProvider | None = None,
         *,
         tax_rules: dict[str, OssTaxRule] | None = None,
+        snapshot_store: OssQuarterSnapshotStore | None = None,
     ) -> None:
         self._provider = provider
         self._tax_rules = tax_rules if tax_rules is not None else load_oss_tax_rules()
         self._known_rates_by_country = known_oss_rates_by_country(self._tax_rules)
+        self._snapshot_store = snapshot_store
 
     def describe_capabilities(self) -> str:
         source = "aktiv" if self._provider is not None else "nicht aktiv"
@@ -295,13 +334,23 @@ class OssService:
             "Selektion: primaer deliveryDate/Leistungsdatum, dann invoiceDate; Reverse-Charge, ig Lieferung, Export und AT-Umsaetze werden ausgeschlossen."
         )
 
-    def calculate_quarter(self, year: int, quarter: int) -> OssQuarterResult:
+    def calculate_quarter(self, year: int, quarter: int, *, refresh: bool = False) -> OssQuarterResult:
         if self._provider is None:
             return OssQuarterResult(
                 year=year,
                 quarter=quarter,
                 warnings=["Keine EU-OSS-Datenquelle konfiguriert."],
             )
+        if self._snapshot_store is not None and not refresh:
+            snapshot = self._snapshot_store.get_snapshot(year, quarter)
+            if snapshot is not None:
+                result = snapshot.result.model_copy(deep=True)
+                result.cache = {
+                    "source": "persistent",
+                    "snapshot_hash": snapshot.payload_hash,
+                    "age_seconds": round(snapshot.age_seconds, 3),
+                }
+                return result
 
         documents = self._provider.load_sales_documents(year, quarter)
         start_date, end_date = _quarter_bounds(year, quarter)
@@ -418,7 +467,7 @@ class OssService:
         if not goods_lines and not service_lines:
             warnings.append("Nullquartal: EU-OSS im Portal als Nullmeldung pruefen/einreichen.")
 
-        return OssQuarterResult(
+        result = OssQuarterResult(
             year=year,
             quarter=quarter,
             goods_lines=goods_lines,
@@ -427,6 +476,19 @@ class OssService:
             source_count=source_count,
             excluded_count=excluded_count,
         )
+        if self._snapshot_store is not None:
+            snapshot = self._snapshot_store.put_snapshot(result)
+            if snapshot is not None:
+                result.cache = {
+                    "source": "live",
+                    "snapshot_hash": snapshot.payload_hash,
+                    "age_seconds": 0.0,
+                }
+            else:
+                result.cache = {"source": "live", "snapshot_hash": "", "age_seconds": 0.0}
+        else:
+            result.cache = {"source": "live", "snapshot_hash": "", "age_seconds": 0.0}
+        return result
 
     def render_preview_text(self, result: OssQuarterResult) -> str:
         lines = [
@@ -434,6 +496,13 @@ class OssService:
             f"Gepruefte Belege: {result.source_count}",
             f"Ausgeschlossene Belege: {result.excluded_count}",
         ]
+        cache = result.cache or {}
+        if cache:
+            lines.append(
+                "Snapshot: "
+                f"{cache.get('source') or '-'}"
+                f" / Hash {str(cache.get('snapshot_hash') or '-')[:12]}"
+            )
         for title, entries in (("Waren", result.goods_lines), ("Leistungen", result.service_lines)):
             lines.extend(["", title])
             if not entries:
@@ -457,17 +526,38 @@ class OssService:
         uid_fixed_est: str = "",
     ) -> OssXmlExport:
         result = self.calculate_quarter(year, quarter)
+        return self.build_xml_export_from_result(result, oss_id=oss_id, uid_fixed_est=uid_fixed_est)
+
+    def build_xml_export_from_result(
+        self,
+        result: OssQuarterResult,
+        *,
+        oss_id: str = "",
+        uid_fixed_est: str = "",
+    ) -> OssXmlExport:
         if not result.goods_lines and not result.service_lines:
             raise ValueError("Kein EU-OSS-Umsatz im Quartal. Nullmeldung bitte direkt im Portal einreichen.")
         xml_payload = build_oss_xml(result, oss_id=oss_id, uid_fixed_est=uid_fixed_est)
         validate_oss_xml(xml_payload)
+        xml_lines = _xml_export_lines(result)
+        warnings = list(result.warnings)
+        skipped_zero = [
+            f"{line.country_code} {line.vat_rate}%"
+            for line in [*result.goods_lines, *result.service_lines]
+            if _to_decimal(line.vat_rate) == Decimal("0.00")
+        ]
+        if skipped_zero:
+            warnings.append(
+                "EU-OSS Portal-XML ohne 0%-Zeilen erzeugt; BMF-Testportal lehnt vatRate 0,00 ab: "
+                + ", ".join(skipped_zero)
+            )
         return OssXmlExport(
-            year=year,
-            quarter=quarter,
-            file_name=f"EU-OSS_{year}_Q{quarter}.xml",
+            year=result.year,
+            quarter=result.quarter,
+            file_name=f"EU-OSS_{result.year}_Q{result.quarter}.xml",
             xml_payload=xml_payload,
-            line_count=len(result.goods_lines) + len(result.service_lines),
-            warnings=list(result.warnings),
+            line_count=len(xml_lines),
+            warnings=_dedupe_strings(warnings),
         )
 
     @staticmethod
@@ -477,37 +567,65 @@ class OssService:
         return "https://www.usp.gv.at/themen/steuern-finanzen/umsatzsteuer-ueberblick/weitere-informationen-zur-umsatzsteuer/umsaetze-mit-auslandsbezug/Umsatzsteuer-One-Stop-Shop/EU-OSS/Erklaerung-und-Zahlung-im-EU-OSS.html"
 
 
-def build_oss_xml(result: OssQuarterResult, *, oss_id: str, uid_fixed_est: str = "") -> str:
-    clean_oss_id = str(oss_id or "").strip()
-    if not clean_oss_id:
-        raise ValueError("OSS-ID darf nicht leer sein.")
-    root = ET.Element("OSSReturn")
-    ET.SubElement(root, "ossId").text = clean_oss_id
-    ET.SubElement(root, "year").text = str(result.year)
-    ET.SubElement(root, "quarter").text = str(result.quarter)
-
-    for line in [*result.goods_lines, *result.service_lines]:
-        mscon = ET.SubElement(root, "mscon")
-        ET.SubElement(mscon, "countryCode").text = line.country_code
-        ET.SubElement(mscon, "goods").text = "true" if line.goods else "false"
-        ET.SubElement(mscon, "taxable").text = _comma_amount(line.taxable_amount)
-        ET.SubElement(mscon, "vatRate").text = _comma_amount(line.vat_rate)
-        ET.SubElement(mscon, "taxAmount").text = _comma_amount(line.tax_amount)
+def build_oss_xml(result: OssQuarterResult, *, oss_id: str = "", uid_fixed_est: str = "") -> str:
+    root = ET.Element("Erklaerungen")
+    for line in _xml_export_lines(result):
+        declaration = ET.SubElement(root, "Erklaerung")
+        ET.SubElement(declaration, "goods").text = "true" if line.goods else "false"
         if uid_fixed_est.strip():
-            ET.SubElement(mscon, "uidFixedEst").text = uid_fixed_est.strip()
+            ET.SubElement(declaration, "uidFixedEst").text = uid_fixed_est.strip()
+        ET.SubElement(declaration, "mscon").text = line.country_code
+        ET.SubElement(declaration, "taxable").text = _comma_amount(line.taxable_amount)
+        ET.SubElement(declaration, "vatRate").text = _comma_amount(line.vat_rate)
+    if not list(root):
+        raise ValueError("Kein portalfaehiger EU-OSS-Umsatz im Quartal; 0%-Zeilen sind im BMF-Portal-XML nicht erlaubt.")
 
     return ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
 
 
 def validate_oss_xml(xml_payload: str) -> None:
     xml_doc = ET.fromstring(xml_payload.encode("utf-8"))
-    if xml_doc.tag != "OSSReturn":
-        raise ValueError("OSS-XML hat kein OSSReturn-Wurzelelement.")
-    required = {"ossId", "year", "quarter"}
-    present = {child.tag for child in xml_doc}
-    missing = sorted(required - present)
-    if missing:
-        raise ValueError(f"OSS-XML unvollstaendig: {', '.join(missing)}")
+    if xml_doc.tag != "Erklaerungen":
+        raise ValueError("OSS-XML hat kein Erklaerungen-Wurzelelement.")
+    declarations = [child for child in xml_doc if child.tag == "Erklaerung"]
+    if not declarations:
+        raise ValueError("OSS-XML enthaelt keine Erklaerung.")
+    _validate_oss_xml_schema(xml_payload)
+    seen: set[tuple[str, str, str]] = set()
+    for declaration in declarations:
+        country_node = declaration.find("mscon")
+        vat_rate_node = declaration.find("vatRate")
+        goods_node = declaration.find("goods")
+        if country_node is None or vat_rate_node is None:
+            raise ValueError("OSS-XML-Zeile ist unvollstaendig.")
+        country = str(country_node.text or "").strip()
+        vat_rate = str(vat_rate_node.text or "").strip()
+        goods = str(goods_node.text if goods_node is not None else "true")
+        key = (country, vat_rate, goods)
+        if key in seen:
+            raise ValueError(f"OSS-XML enthaelt doppelte Zeile fuer {country} / {vat_rate} / {goods}.")
+        seen.add(key)
+
+
+def _validate_oss_xml_schema(xml_payload: str) -> None:
+    try:
+        from lxml import etree
+    except ImportError:
+        return
+    schema_doc = etree.XML(_OSS_XML_XSD.encode("utf-8"))
+    schema = etree.XMLSchema(schema_doc)
+    doc = etree.fromstring(xml_payload.encode("utf-8"))
+    if not schema.validate(doc):
+        errors = "; ".join(str(error.message) for error in schema.error_log)
+        raise ValueError(f"OSS-XML verletzt lokale BMF/USP-XSD: {errors}")
+
+
+def _xml_export_lines(result: OssQuarterResult) -> list[OssLine]:
+    return [
+        line
+        for line in [*result.goods_lines, *result.service_lines]
+        if _to_decimal(line.vat_rate) > Decimal("0.00")
+    ]
 
 
 def _quarter_bounds(year: int, quarter: int) -> tuple[date, date]:
