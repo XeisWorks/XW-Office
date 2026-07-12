@@ -12,10 +12,12 @@ from xw_studio.services.finanzonline.client import FinanzOnlineClient
 from xw_studio.services.finanzonline.monthly_snapshot import TaxMonthlySnapshotStore
 from xw_studio.services.finanzonline.uva_payload_service import UvaPayloadService
 from xw_studio.services.finanzonline.uva_preview import UvaPreviewService
+from xw_studio.services.finanzonline.uva_references import compare_uva_reference
 from xw_studio.services.finanzonline.uva_soap import UvaSubmitResult
 from xw_studio.services.finanzonline.zm_service import ZmService
 
 logger = logging.getLogger(__name__)
+_TAX_SNAPSHOT_SCHEMA_VERSION = "uva_zm_snapshot_v4"
 
 
 class UvaService:
@@ -72,7 +74,7 @@ class UvaService:
             return cached
         if not refresh and self._snapshot_store is not None:
             snapshot = self._snapshot_store.get_snapshot(year, month)
-            if snapshot is not None:
+            if snapshot is not None and snapshot.payload.get("snapshot_schema_version") == _TAX_SNAPSHOT_SCHEMA_VERSION:
                 payload = deepcopy(snapshot.payload)
                 payload["cache"] = {
                     "hit": True,
@@ -99,6 +101,7 @@ class UvaService:
             "status": "entwurf",
             "quelle": "xw_studio",
             "berechnungsart": "IST",
+            "snapshot_schema_version": _TAX_SNAPSHOT_SCHEMA_VERSION,
             "preview": preview.model_dump(),
             "preview_text": self._preview_service.render_preview_text(preview),
             "kennzahlen": calculated.kennzahlen.model_dump(),
@@ -111,6 +114,12 @@ class UvaService:
             zm = self._zm_service.calculate_month(year, month)
             payload["zm"] = zm.model_dump()
             payload["zm_text"] = self._zm_service.render_preview_text(zm)
+        payload["reference_comparison"] = compare_uva_reference(
+            year=year,
+            month=month,
+            kennzahlen=payload["kennzahlen"],
+            zahlbetrag=payload["zahlbetrag"],
+        )
         payload["reconciliation"] = build_uva_zm_reconciliation(payload)
         payload["data_quality"] = build_data_quality(payload)
         snapshot_hash = None
@@ -155,12 +164,16 @@ class UvaService:
             zahlbetrag = str(cached.get("zahlbetrag") or "0.00")
             warnings = list(cached.get("warnings") or [])
             rule_version = str(cached.get("rule_version") or "U30_01_2022")
+            data_quality = dict(cached.get("data_quality") or {})
+            cache_meta = dict(cached.get("cache") or {})
         else:
             calculated = self._payload_service.build_payload(year, month)
             kennzahlen = calculated.kennzahlen.model_dump()
             zahlbetrag = calculated.zahlbetrag
             warnings = list(calculated.warnings)
             rule_version = calculated.rule_version
+            data_quality = {}
+            cache_meta = {}
         submission_kennzahlen = {
             "KZ000": kennzahlen.get("A000", "0.00"),
             "KZ011": kennzahlen.get("A011", "0.00"),
@@ -187,10 +200,22 @@ class UvaService:
             "kennzahlen": submission_kennzahlen,
             "zahlbetrag": zahlbetrag,
             "warnings": warnings,
+            "data_quality": data_quality,
+            "snapshot_hash": cache_meta.get("snapshot_hash"),
         }
 
     def submit_month(self, year: int, month: int) -> UvaSubmitResult:
         """Calculate and submit one monthly U30 payload, then U13/ZM when configured."""
+        monthly_payload = self.calculate_month(year, month)
+        data_quality = monthly_payload.get("data_quality")
+        if isinstance(data_quality, dict) and int(data_quality.get("blocking_count") or 0) > 0:
+            blocking = data_quality.get("blocking")
+            details = "; ".join(str(item) for item in blocking) if isinstance(blocking, list) else ""
+            return UvaSubmitResult(
+                ok=False,
+                message=f"UVA nicht gesendet: Datenqualitaet blockiert. {details}".strip(),
+                uva_payload=monthly_payload,
+            )
         uva_payload = self.build_submission_payload(year, month)
         result = self.submit_uva(uva_payload)
         result.uva_payload = uva_payload
@@ -304,10 +329,20 @@ def render_reconciliation_text(reconciliation: dict[str, Any]) -> str:
 def build_data_quality(payload: dict[str, Any]) -> dict[str, Any]:
     warnings = payload.get("warnings")
     warning_items = [str(item) for item in warnings if isinstance(item, str)] if isinstance(warnings, list) else []
+    reference_comparison = payload.get("reference_comparison")
     zm = payload.get("zm")
     zm_invalid = zm.get("invalid") if isinstance(zm, dict) else []
     invalid_items = [str(item) for item in zm_invalid if str(item).strip()] if isinstance(zm_invalid, list) else []
     blocking = list(invalid_items)
+    if isinstance(reference_comparison, dict) and reference_comparison.get("within_tolerance") is False:
+        amount = reference_comparison.get("zahlbetrag")
+        if isinstance(amount, dict):
+            blocking.append(
+                "Golden-Master-Abweichung ausserhalb Toleranz: "
+                f"Live {amount.get('actual')} / Soll {amount.get('expected')} / Delta {amount.get('delta')}"
+            )
+        else:
+            blocking.append("Golden-Master-Abweichung ausserhalb Toleranz")
     status = "abgabebereit"
     if blocking:
         status = "blockiert"
@@ -320,6 +355,11 @@ def build_data_quality(payload: dict[str, Any]) -> dict[str, Any]:
         "blocking": blocking,
         "warnings": warning_items,
         "rule_version": str(payload.get("rule_version") or "U30_01_2022"),
+        "reference_within_tolerance": (
+            reference_comparison.get("within_tolerance")
+            if isinstance(reference_comparison, dict)
+            else None
+        ),
     }
 
 

@@ -1,7 +1,61 @@
 {
-  "2026-06": {
-    "source": "Vom Anwender bestätigte Sollwerte (Grafik, 2026-07-12)",
+  "2026-04": {
+    "source": "Vom Anwender bestaetigte Golden-Master-Werte (Grafik, 2026-07-12)",
+    "immutable_reference": true,
     "kennzahlen": {
+      "A000": "9836.71",
+      "A021": "161.58",
+      "A011": "607.60",
+      "A017": "3252.23",
+      "A022": "0.00",
+      "A029": "5815.30",
+      "A006": "0.00",
+      "A057": "36.81",
+      "B070": "2549.82",
+      "B072": "2549.82",
+      "C060": "313.93",
+      "C065": "509.96",
+      "C066": "36.81",
+      "D090": "0.00"
+    },
+    "reference_only": {
+      "reverse_charge_net": "184.03",
+      "D009": "0.00"
+    },
+    "zahlbetrag": "267.60"
+  },
+  "2026-05": {
+    "source": "Vom Anwender bestaetigte Golden-Master-Werte (Grafik, 2026-07-12)",
+    "immutable_reference": true,
+    "kennzahlen": {
+      "A000": "13155.44",
+      "A021": "127.63",
+      "A011": "651.24",
+      "A017": "2347.53",
+      "A022": "118.83",
+      "A029": "3640.61",
+      "A006": "6269.60",
+      "A057": "25.90",
+      "B070": "118.51",
+      "B072": "118.51",
+      "C060": "202.31",
+      "C065": "23.70",
+      "C066": "25.90",
+      "D090": "0.00"
+    },
+    "reference_only": {
+      "reverse_charge_net": "129.51",
+      "D009": "0.00"
+    },
+    "zahlbetrag": "1000.57"
+  },
+  "2026-06": {
+    "source": "Vom Anwender bestaetigte Golden-Master-Werte (Grafik, 2026-07-12)",
+    "immutable_reference": true,
+    "kennzahlen": {
+      "A000": "21061.38",
+      "A021": "147.60",
+      "A011": "227.38",
       "A017": "3534.30",
       "A022": "3349.56",
       "A029": "4585.57",

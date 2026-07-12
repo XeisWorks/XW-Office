@@ -40,6 +40,7 @@ from xw_studio.services.finanzonline import (
     UvaService,
     UvaSubmitResult,
     render_data_quality_text,
+    render_reference_comparison_text,
     render_reconciliation_text,
 )
 from xw_studio.ui.widgets.data_table import DataTable
@@ -384,12 +385,19 @@ class TaxesView(QWidget):
             if isinstance(data_quality_value, dict)
             else ""
         )
+        reference_value = payload.get("reference_comparison")
+        reference_text = (
+            render_reference_comparison_text(reference_value)
+            if isinstance(reference_value, dict)
+            else ""
+        )
         uva_text = "\n\n".join(
             part
             for part in [
                 amount_text,
                 cache_text,
                 data_quality_text,
+                reference_text,
                 kennzahlen_text,
                 reconciliation_text,
                 preview_text,

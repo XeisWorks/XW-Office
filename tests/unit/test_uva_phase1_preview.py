@@ -5,33 +5,117 @@ from pathlib import Path
 
 from xw_studio.services.finanzonline.uva_payload_service import UvaPayloadService
 from xw_studio.services.finanzonline.uva_preview import SevdeskUvaPreviewProvider, UvaPreviewService
+from xw_studio.services.finanzonline.uva_references import (
+    compare_uva_reference,
+    load_uva_references,
+)
 
 
 class _FakeProvider:
     def load_sales_documents(self, year: int, month: int) -> list[dict[str, object]]:
         assert (year, month) == (2026, 3)
         return [
-            {"taxText": "MIT 0% MEHRWERTSTEUER", "sumGross": "80.87", "sumNet": "80.87", "sumTax": "0.00"},
-            {"taxText": "MIT 10% MEHRWERTSTEUER", "sumGross": "7909.60", "sumNet": "7191.06", "sumTax": "718.54"},
-            {"taxText": "MIT 13% MEHRWERTSTEUER", "sumGross": "1793.73", "sumNet": "1587.37", "sumTax": "206.36"},
-            {"taxText": "MIT 20% MEHRWERTSTEUER", "sumGross": "69.39", "sumNet": "57.83", "sumTax": "11.56"},
-            {"taxText": "STEUERFREIE INNERGEMEINSCHAFTL. LIEFERUNG (EU)", "sumGross": "4825.18", "sumNet": "4825.18", "sumTax": "0.00"},
-            {"taxText": "REVERSE CHARGE", "sumGross": "122.83", "sumNet": "122.83", "sumTax": "0.00"},
-            {"taxText": "DEUTSCHE MWST. 7%", "sumGross": "2438.60", "sumNet": "2272.96", "sumTax": "165.64"},
-            {"taxText": "ITALIENISCHE IVA 4%", "sumGross": "114.90", "sumNet": "110.47", "sumTax": "4.43"},
-            {"taxText": "STEUERFREIE AUSFUHRLIEFERUNG (§ 7 USTG 1994)", "sumGross": "865.13", "sumNet": "865.13", "sumTax": "0.00"},
-            {"taxText": "LUXEMBURGISCHE TVA 3%", "sumGross": "31.80", "sumNet": "30.87", "sumTax": "0.93"},
-            {"taxText": "SCHWEDISCHE MOMS 6%", "sumGross": "24.80", "sumNet": "20.83", "sumTax": "3.97"},
+            {
+                "taxText": "MIT 0% MEHRWERTSTEUER",
+                "sumGross": "80.87",
+                "sumNet": "80.87",
+                "sumTax": "0.00",
+            },
+            {
+                "taxText": "MIT 10% MEHRWERTSTEUER",
+                "sumGross": "7909.60",
+                "sumNet": "7191.06",
+                "sumTax": "718.54",
+            },
+            {
+                "taxText": "MIT 13% MEHRWERTSTEUER",
+                "sumGross": "1793.73",
+                "sumNet": "1587.37",
+                "sumTax": "206.36",
+            },
+            {
+                "taxText": "MIT 20% MEHRWERTSTEUER",
+                "sumGross": "69.39",
+                "sumNet": "57.83",
+                "sumTax": "11.56",
+            },
+            {
+                "taxText": "STEUERFREIE INNERGEMEINSCHAFTL. LIEFERUNG (EU)",
+                "sumGross": "4825.18",
+                "sumNet": "4825.18",
+                "sumTax": "0.00",
+            },
+            {
+                "taxText": "REVERSE CHARGE",
+                "sumGross": "122.83",
+                "sumNet": "122.83",
+                "sumTax": "0.00",
+            },
+            {
+                "taxText": "DEUTSCHE MWST. 7%",
+                "sumGross": "2438.60",
+                "sumNet": "2272.96",
+                "sumTax": "165.64",
+            },
+            {
+                "taxText": "ITALIENISCHE IVA 4%",
+                "sumGross": "114.90",
+                "sumNet": "110.47",
+                "sumTax": "4.43",
+            },
+            {
+                "taxText": "STEUERFREIE AUSFUHRLIEFERUNG (§ 7 USTG 1994)",
+                "sumGross": "865.13",
+                "sumNet": "865.13",
+                "sumTax": "0.00",
+            },
+            {
+                "taxText": "LUXEMBURGISCHE TVA 3%",
+                "sumGross": "31.80",
+                "sumNet": "30.87",
+                "sumTax": "0.93",
+            },
+            {
+                "taxText": "SCHWEDISCHE MOMS 6%",
+                "sumGross": "24.80",
+                "sumNet": "20.83",
+                "sumTax": "3.97",
+            },
         ]
 
     def load_purchase_documents(self, year: int, month: int) -> list[dict[str, object]]:
         assert (year, month) == (2026, 3)
         return [
-            {"taxText": "MIT 0% MEHRWERTSTEUER", "sumGross": "2446.99", "sumNet": "2446.99", "sumTax": "0.00"},
-            {"taxText": "MIT 10% MEHRWERTSTEUER", "sumGross": "1384.93", "sumNet": "1259.03", "sumTax": "125.90"},
-            {"taxText": "MIT 20% MEHRWERTSTEUER", "sumGross": "1048.11", "sumNet": "873.43", "sumTax": "174.68"},
-            {"taxText": "STEUERFREIE INNERGEMEINSCHAFTL. LIEFERUNG (EU)", "sumGross": "76.62", "sumNet": "76.62", "sumTax": "0.00"},
-            {"taxText": "REVERSE CHARGE", "sumGross": "650.82", "sumNet": "650.82", "sumTax": "0.00"},
+            {
+                "taxText": "MIT 0% MEHRWERTSTEUER",
+                "sumGross": "2446.99",
+                "sumNet": "2446.99",
+                "sumTax": "0.00",
+            },
+            {
+                "taxText": "MIT 10% MEHRWERTSTEUER",
+                "sumGross": "1384.93",
+                "sumNet": "1259.03",
+                "sumTax": "125.90",
+            },
+            {
+                "taxText": "MIT 20% MEHRWERTSTEUER",
+                "sumGross": "1048.11",
+                "sumNet": "873.43",
+                "sumTax": "174.68",
+            },
+            {
+                "taxText": "STEUERFREIE INNERGEMEINSCHAFTL. LIEFERUNG (EU)",
+                "sumGross": "76.62",
+                "sumNet": "76.62",
+                "sumTax": "0.00",
+            },
+            {
+                "taxText": "REVERSE CHARGE",
+                "sumGross": "650.82",
+                "sumNet": "650.82",
+                "sumTax": "0.00",
+            },
         ]
 
 
@@ -39,25 +123,95 @@ class _FebruaryProvider:
     def load_sales_documents(self, year: int, month: int) -> list[dict[str, object]]:
         assert (year, month) == (2026, 2)
         return [
-            {"taxText": "MIT 10% MEHRWERTSTEUER", "sumGross": "4173.31", "sumNet": "3794.34", "sumTax": "378.97"},
-            {"taxText": "STEUERFREIE INNERGEMEINSCHAFTL. LIEFERUNG (EU)", "sumGross": "3346.20", "sumNet": "3346.20", "sumTax": "0.00"},
-            {"taxText": "REVERSE CHARGE", "sumGross": "134.00", "sumNet": "134.00", "sumTax": "0.00"},
-            {"taxText": "DEUTSCHE MWST. 7%", "sumGross": "1480.97", "sumNet": "1380.21", "sumTax": "100.76"},
-            {"taxText": "ITALIENISCHE IVA 4%", "sumGross": "264.10", "sumNet": "253.90", "sumTax": "10.20"},
-            {"taxText": "STEUERFREIE AUSFUHRLIEFERUNG (Â§ 7 USTG 1994)", "sumGross": "185.30", "sumNet": "185.30", "sumTax": "0.00"},
-            {"taxText": "LUXEMBURGISCHE TVA 3%", "sumGross": "63.60", "sumNet": "61.74", "sumTax": "1.86"},
-            {"taxText": "SPANISCHE IVA 10%", "sumGross": "5.50", "sumNet": "5.00", "sumTax": "0.50"},
+            {
+                "taxText": "MIT 10% MEHRWERTSTEUER",
+                "sumGross": "4173.31",
+                "sumNet": "3794.34",
+                "sumTax": "378.97",
+            },
+            {
+                "taxText": "STEUERFREIE INNERGEMEINSCHAFTL. LIEFERUNG (EU)",
+                "sumGross": "3346.20",
+                "sumNet": "3346.20",
+                "sumTax": "0.00",
+            },
+            {
+                "taxText": "REVERSE CHARGE",
+                "sumGross": "134.00",
+                "sumNet": "134.00",
+                "sumTax": "0.00",
+            },
+            {
+                "taxText": "DEUTSCHE MWST. 7%",
+                "sumGross": "1480.97",
+                "sumNet": "1380.21",
+                "sumTax": "100.76",
+            },
+            {
+                "taxText": "ITALIENISCHE IVA 4%",
+                "sumGross": "264.10",
+                "sumNet": "253.90",
+                "sumTax": "10.20",
+            },
+            {
+                "taxText": "STEUERFREIE AUSFUHRLIEFERUNG (Â§ 7 USTG 1994)",
+                "sumGross": "185.30",
+                "sumNet": "185.30",
+                "sumTax": "0.00",
+            },
+            {
+                "taxText": "LUXEMBURGISCHE TVA 3%",
+                "sumGross": "63.60",
+                "sumNet": "61.74",
+                "sumTax": "1.86",
+            },
+            {
+                "taxText": "SPANISCHE IVA 10%",
+                "sumGross": "5.50",
+                "sumNet": "5.00",
+                "sumTax": "0.50",
+            },
         ]
 
     def load_purchase_documents(self, year: int, month: int) -> list[dict[str, object]]:
         assert (year, month) == (2026, 2)
         return [
-            {"taxText": "MIT 0% MEHRWERTSTEUER", "sumGross": "4232.91", "sumNet": "4232.91", "sumTax": "0.00"},
-            {"taxText": "MIT 10% MEHRWERTSTEUER", "sumGross": "308.43", "sumNet": "280.39", "sumTax": "28.04"},
-            {"taxText": "MIT 13% MEHRWERTSTEUER", "sumGross": "1130.00", "sumNet": "1000.00", "sumTax": "130.00"},
-            {"taxText": "MIT 20% MEHRWERTSTEUER", "sumGross": "4008.93", "sumNet": "3340.78", "sumTax": "668.15"},
-            {"taxText": "STEUERFREIE INNERGEMEINSCHAFTL. LIEFERUNG (EU)", "sumGross": "5917.67", "sumNet": "5917.67", "sumTax": "0.00"},
-            {"taxText": "REVERSE CHARGE", "sumGross": "2077.90", "sumNet": "2077.90", "sumTax": "0.00"},
+            {
+                "taxText": "MIT 0% MEHRWERTSTEUER",
+                "sumGross": "4232.91",
+                "sumNet": "4232.91",
+                "sumTax": "0.00",
+            },
+            {
+                "taxText": "MIT 10% MEHRWERTSTEUER",
+                "sumGross": "308.43",
+                "sumNet": "280.39",
+                "sumTax": "28.04",
+            },
+            {
+                "taxText": "MIT 13% MEHRWERTSTEUER",
+                "sumGross": "1130.00",
+                "sumNet": "1000.00",
+                "sumTax": "130.00",
+            },
+            {
+                "taxText": "MIT 20% MEHRWERTSTEUER",
+                "sumGross": "4008.93",
+                "sumNet": "3340.78",
+                "sumTax": "668.15",
+            },
+            {
+                "taxText": "STEUERFREIE INNERGEMEINSCHAFTL. LIEFERUNG (EU)",
+                "sumGross": "5917.67",
+                "sumNet": "5917.67",
+                "sumTax": "0.00",
+            },
+            {
+                "taxText": "REVERSE CHARGE",
+                "sumGross": "2077.90",
+                "sumNet": "2077.90",
+                "sumTax": "0.00",
+            },
         ]
 
 
@@ -224,6 +378,38 @@ def test_phase2_uses_cash_basis_partial_payments_and_dedupes_duplicates() -> Non
     assert payload.kennzahlen.C060 == "20.00"
     assert any("storniert" in warning.lower() for warning in payload.warnings)
     assert any("duplik" in warning.lower() for warning in payload.warnings)
+
+
+class _FutureDatedPurchaseProvider:
+    def load_sales_documents(self, year: int, month: int) -> list[dict[str, object]]:
+        return []
+
+    def load_purchase_documents(self, year: int, month: int) -> list[dict[str, object]]:
+        assert (year, month) == (2026, 5)
+        return [
+            {
+                "id": 12,
+                "voucherNumber": "ER-FUTURE-1",
+                "status": "1000",
+                "creditDebit": "C",
+                "voucherDate": "2026-06-02",
+                "payDate": "2026-05-30",
+                "taxText": "MIT 20% MEHRWERTSTEUER",
+                "sumGross": "599.00",
+                "sumNet": "499.17",
+                "sumTax": "99.83",
+            }
+        ]
+
+
+def test_future_dated_purchase_is_not_claimed_in_earlier_uva() -> None:
+    preview_service = UvaPreviewService(_FutureDatedPurchaseProvider())
+    preview = preview_service.build_preview(2026, 5)
+    payload = UvaPayloadService(preview_service).build_payload(2026, 5)
+
+    assert payload.kennzahlen.C060 == "0.00"
+    assert preview.input_tax_stats.future_document_ignored == 1
+    assert any("zukuenftiger eingangsbeleg" in warning.lower() for warning in payload.warnings)
 
 
 class _PaidWithoutDateProvider:
@@ -508,7 +694,9 @@ def test_provider_uses_payment_logs_before_period_filtering() -> None:
 
     assert preview.sales.groups[0].net_amount == "50.00"
     assert payload.kennzahlen.A022 == "50.00"
-    assert any(path == "/Invoice/9001/getCheckAccountTransactionLogs" for path, _ in connection.requests)
+    assert any(
+        path == "/Invoice/9001/getCheckAccountTransactionLogs" for path, _ in connection.requests
+    )
 
 
 class _CreditNoteConnection:
@@ -636,7 +824,9 @@ def test_debit_voucher_is_included_as_output_tax(monkeypatch) -> None:
     monkeypatch.setattr(provider, "_load_resource", lambda *args, **kwargs: [])
     monkeypatch.setattr(provider, "_load_period_overlay", lambda *args, **kwargs: [])
     monkeypatch.setattr(provider, "_load_voucher_candidates", lambda year, month: [debit_voucher])
-    monkeypatch.setattr(provider, "_enrich_payment_metadata", lambda resource, doc, year, month: dict(doc))
+    monkeypatch.setattr(
+        provider, "_enrich_payment_metadata", lambda resource, doc, year, month: dict(doc)
+    )
     monkeypatch.setattr(provider, "_prepare_document", lambda resource, doc: dict(doc))
 
     payload = UvaPayloadService(UvaPreviewService(provider)).build_payload(2026, 3)
@@ -646,12 +836,46 @@ def test_debit_voucher_is_included_as_output_tax(monkeypatch) -> None:
 
 def test_june_2026_golden_master_is_reference_data_only() -> None:
     reference_path = Path("config/uva_reference_values.json")
-    reference = json.loads(reference_path.read_text(encoding="utf-8"))["2026-06"]
+    references = json.loads(reference_path.read_text(encoding="utf-8"))
+    reference = references["2026-06"]
 
+    assert sorted(references) == ["2026-04", "2026-05", "2026-06"]
+    assert references["2026-04"]["zahlbetrag"] == "267.60"
+    assert references["2026-05"]["kennzahlen"]["C065"] == "23.70"
     assert reference["kennzahlen"]["A022"] == "3349.56"
+    assert reference["kennzahlen"]["A000"] == "21061.38"
     assert reference["kennzahlen"]["A006"] == "9216.97"
     assert reference["kennzahlen"]["C060"] == "416.46"
     assert reference["zahlbetrag"] == "1910.22"
+    assert all(item["immutable_reference"] is True for item in references.values())
+
+
+def test_uva_references_are_loaded_as_immutable_mapping() -> None:
+    references = load_uva_references()
+
+    assert references["2026-04"]["zahlbetrag"] == "267.60"
+    try:
+        references["2026-04"] = {}  # type: ignore[index]
+    except TypeError:
+        pass
+    else:  # pragma: no cover - defensive assertion.
+        raise AssertionError("Reference mapping must be immutable")
+
+
+def test_uva_reference_comparison_reports_deltas_without_overriding() -> None:
+    comparison = compare_uva_reference(
+        year=2026,
+        month=6,
+        kennzahlen={"A000": "21195.54", "A017": "3668.46", "A022": "3349.56"},
+        zahlbetrag="1910.30",
+    )
+
+    assert comparison["available"] is True
+    assert comparison["zahlbetrag"]["delta"] == "0.08"
+    assert comparison["zahlbetrag"]["within_tolerance"] is True
+    deltas = {item["field"]: item for item in comparison["deltas"]}
+    assert deltas["A000"]["delta"] == "134.16"
+    assert deltas["A017"]["delta"] == "134.16"
 
 
 def _semantic_preview_lines(text: str) -> list[str]:

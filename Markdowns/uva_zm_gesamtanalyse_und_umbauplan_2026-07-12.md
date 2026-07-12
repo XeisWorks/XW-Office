@@ -106,6 +106,16 @@ Testbedingungen:
 
 Die bestÃ¤tigte Mandantenregel von 20 % fÃ¼r KZ 065 sowie KZ 057/066 bleibt Vorgabe. Der Unterschied A057/C066 ist eine Auswahl-/Basendifferenz, keine Aufforderung zur Ã„nderung des Satzes.
 
+Mehrmonatsvergleich nach Speicherung der Golden Master fuer 04/2026 bis 06/2026:
+
+| Monat | PySide6 live | Golden Master | Delta | Datenqualitaet |
+|---|---:|---:|---:|---|
+| 04/2026 | 267,60 | 267,60 | 0,00 | innerhalb Toleranz |
+| 05/2026 | 997,31 | 1.000,57 | -3,26 | blockiert |
+| 06/2026 | 1.910,30 | 1.910,22 | +0,08 | pruefen, innerhalb Toleranz |
+
+Konsequenz im Code: Monate mit Golden-Master-Abweichung ausserhalb 0,10 EUR werden nicht als abgabebereit behandelt und nicht an FinanzOnline uebermittelt.
+
 ### 3.2 ZM-Ergebnis
 
 - betrachtete Rechnungen und Gutschriften: 140
@@ -448,8 +458,10 @@ Kopfbereich fÃ¼r alle Ansichten:
 
 ### Phase 0 â€“ Golden Masters und Rohsnapshot
 
-- 06/2026 Golden Master behalten;
-- zwei weitere bereits eingereichte UVA-Monate erfassen;
+- umgesetzt: 04/2026, 05/2026 und 06/2026 sind als unveraenderbare Referenzdaten in `config/uva_reference_values.json` gespeichert;
+- umgesetzt: Golden-Master-Werte werden nur verglichen, nie als Rechenergebnis verwendet;
+- umgesetzt: Golden-Master-Deltas erscheinen im Payload/UI;
+- umgesetzt: Zahllast-Abweichung ausserhalb 0,10 EUR blockiert die Abgabe;
 - mindestens einen bestÃ¤tigten U13-Monat erfassen;
 - pseudonymisierte Rohsnapshots erzeugen;
 - positionsgenauen Diff-Report erstellen.
@@ -462,6 +474,7 @@ Kopfbereich fÃ¼r alle Ansichten:
 - Die UI hat zusÃ¤tzlich `Neu aus sevDesk laden`, um den Monatscache bewusst zu erneuern.
 - Umgesetzt: `TaxMonthlySnapshotStore` speichert vollstÃ¤ndige Monatsberechnungen persistent in `state/xw_studio_cache.sqlite`.
 - Umgesetzt: gespeicherte Snapshots enthalten einen stabilen SHA-256-Hash und werden nach App-Neustart in ca. 0,002 Sekunden geladen.
+- Umgesetzt: Snapshot-Schema-Version verhindert, dass alte Snapshots ohne neue Referenz-/Datenqualitaetslogik verwendet werden.
 - Noch offen: inkrementeller Rohdatenloader statt vollstÃ¤ndigem kaltem sevDesk-Neulauf.
 
 - Dokument-, Positions-, Zahlungs-, Contact- und TaxSet-Modelle;
@@ -494,8 +507,10 @@ Kopfbereich fÃ¼r alle Ansichten:
 - umgesetzt: kompakte UVAâ†”ZM-Abstimmung im bestehenden UVA-Textbereich;
 - umgesetzt: DatenqualitÃ¤tsstatus `abgabebereit`, `pruefen`, `blockiert`;
 - umgesetzt: Snapshot-Quelle und Hash in der UI;
+- umgesetzt: `submit_month()` laedt/berechnet zuerst den Monats-Payload und blockiert Uploads bei blockierender Datenqualitaet;
+- umgesetzt: Golden-Master-Abweichungen ausserhalb Toleranz setzen Datenqualitaet auf `blockiert`;
 - offen: eigene dreiteilige UI mit Drill-down-Tabellen;
-- Versand nur vom geprÃ¼ften Snapshot.
+- umgesetzt: U30-/U13-Versand verwendet den geprueften Monats-Payload/Snapshot statt einen zweiten unabhaengigen Rechenweg.
 
 ### Phase 5 â€“ Performance und Parallelbetrieb
 
@@ -551,7 +566,7 @@ Performance/Resilienz:
 - Mindestens ein U13-Monat ist gegen eine bestÃ¤tigte Meldung geprÃ¼ft.
 - ZM verwendet die bestÃ¤tigte Soll-Regel nach Rechnungsdatum/Gutschriftdatum und `status >= 100`.
 - Gemischte ZM-Rechnungen werden positionsbezogen verarbeitet, sobald Positionsdaten im Snapshot vorhanden sind.
-- Vorschau, XML und Versand verwenden denselben Snapshot.
+- Vorschau, XML und Versand verwenden denselben Monats-Payload/Snapshot.
 - UnvollstÃ¤ndige Daten und unbekannte Mappings blockieren die Abgabe.
 - kombinierter kalter Lauf < 20 Sekunden, warmer Lauf < 2 Sekunden.
 - UI zeigt BetrÃ¤ge, DatenqualitÃ¤t, Drill-down und UVAâ†”ZM-Abstimmung Ã¼bersichtlich.
@@ -568,3 +583,22 @@ Nicht zuerst die UI umgestalten. Der hÃ¶chste Nutzen entsteht in dieser Reihen
 6. gemeinsame Abstimmungs- und Drill-down-UI.
 
 Damit werden fachliche Sicherheit und Geschwindigkeit gleichzeitig verbessert: Der Snapshot beseitigt die N+1-Abfragen, schafft Reproduzierbarkeit und liefert zugleich die Grundlage fÃ¼r verstÃ¤ndliche Belegnachweise in der OberflÃ¤che.
+
+## 13. Nachanalyse 04/2026 und 05/2026: belegte C060-Ursache
+
+Die Live-Beleganalyse hat die jeweilige C060-Abweichung vollstaendig und centgenau
+erklaert. sevDesk liefert bei einzelnen Eingangsbelegen ein `payDate`, das vor dem
+eigentlichen `voucherDate` liegt. Dadurch wurden zukuenftig datierte Belege in einer
+frueheren UVA als Vorsteuer beruecksichtigt:
+
+- 04/2026: zwei erst im Mai datierte Belege mit 47,15 EUR und 4,67 EUR Vorsteuer;
+  Summe 51,82 EUR, exakt die C060-Abweichung.
+- 05/2026: drei erst im Juni datierte Belege mit 99,83 EUR, 1,75 EUR und 27,62 EUR
+  Vorsteuer; Summe 129,20 EUR, exakt die C060-Abweichung.
+
+Umgesetzt ist eine Plausibilitaetssperre nur fuer Eingangsbelege: Liegt das
+Belegdatum nach dem UVA-Monat, wird der Beleg trotz eines frueheren Zahlungsdatums
+nicht beruecksichtigt und als Warnung ausgewiesen. Bereits vor dem UVA-Monat
+datierte und im UVA-Monat bezahlte Belege bleiben entsprechend der IST-Logik
+enthalten. Die noch offene Umsatzabweichung 05/2026 von 32,55 EUR ist nicht
+eindeutig belegt und wurde deshalb nicht durch eine Sonderregel korrigiert.

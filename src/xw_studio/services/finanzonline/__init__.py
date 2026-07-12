@@ -7,6 +7,11 @@ from xw_studio.services.finanzonline.oss_service import OssService, SevdeskOssDo
 from xw_studio.services.finanzonline.settings import FinanzOnlineSettings
 from xw_studio.services.finanzonline.uva_models import UvaKennzahlen, UvaPayloadResult
 from xw_studio.services.finanzonline.uva_payload_service import UvaPayloadService
+from xw_studio.services.finanzonline.uva_references import (
+    compare_uva_reference,
+    load_uva_references,
+    render_reference_comparison_text,
+)
 from xw_studio.services.finanzonline.uva_selection import (
     UvaDocumentSelector,
     UvaSelectionResult,
@@ -54,6 +59,8 @@ __all__ = [
     "UvaKennzahlen",
     "UvaPayloadResult",
     "UvaPayloadService",
+    "compare_uva_reference",
+    "load_uva_references",
     "UvaSelectionResult",
     "UvaSelectionStats",
     "UvaPreviewGroup",
@@ -62,6 +69,7 @@ __all__ = [
     "UvaPreviewService",
     "UvaService",
     "render_data_quality_text",
+    "render_reference_comparison_text",
     "render_reconciliation_text",
     "UvaSoapUnavailableError",
     "UvaSubmitResult",
