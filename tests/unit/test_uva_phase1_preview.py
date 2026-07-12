@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from xw_studio.services.finanzonline.uva_payload_service import UvaPayloadService
@@ -600,6 +601,41 @@ def test_provider_deduplicates_same_transaction_from_two_payment_endpoints() -> 
     payload = payload_service.build_payload(2026, 3)
 
     assert payload.kennzahlen.A022 == "50.00"
+
+
+def test_debit_voucher_is_included_as_output_tax(monkeypatch) -> None:
+    provider = SevdeskUvaPreviewProvider(_PaymentLogConnection())  # type: ignore[arg-type]
+    debit_voucher = {
+        "id": "9900",
+        "voucherNumber": "ERLOES-13",
+        "creditDebit": "D",
+        "status": "1000",
+        "paidDate": "2026-03-12",
+        "voucherDate": "2026-03-01",
+        "taxText": "MIT 13% MEHRWERTSTEUER",
+        "sumGross": "1130.00",
+        "sumNet": "1000.00",
+        "sumTax": "130.00",
+    }
+    monkeypatch.setattr(provider, "_load_resource", lambda *args, **kwargs: [])
+    monkeypatch.setattr(provider, "_load_period_overlay", lambda *args, **kwargs: [])
+    monkeypatch.setattr(provider, "_load_voucher_candidates", lambda year, month: [debit_voucher])
+    monkeypatch.setattr(provider, "_enrich_payment_metadata", lambda resource, doc, year, month: dict(doc))
+    monkeypatch.setattr(provider, "_prepare_document", lambda resource, doc: dict(doc))
+
+    payload = UvaPayloadService(UvaPreviewService(provider)).build_payload(2026, 3)
+
+    assert payload.kennzahlen.A006 == "1000.00"
+
+
+def test_june_2026_golden_master_is_reference_data_only() -> None:
+    reference_path = Path("config/uva_reference_values.json")
+    reference = json.loads(reference_path.read_text(encoding="utf-8"))["2026-06"]
+
+    assert reference["kennzahlen"]["A022"] == "3349.56"
+    assert reference["kennzahlen"]["A006"] == "9216.97"
+    assert reference["kennzahlen"]["C060"] == "416.46"
+    assert reference["zahlbetrag"] == "1910.22"
 
 
 def _semantic_preview_lines(text: str) -> list[str]:

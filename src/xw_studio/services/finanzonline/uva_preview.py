@@ -150,6 +150,7 @@ class SevdeskUvaPreviewProvider:
         self._payment_cache: dict[tuple[str, str, int, int], tuple[str | None, str | None]] = {}
         self._position_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self._tax_set_text_cache: dict[str, str] = {}
+        self._voucher_period_cache: dict[tuple[int, int], list[dict[str, Any]]] = {}
 
     def load_sales_documents(self, year: int, month: int) -> list[dict[str, Any]]:
         start_ts, end_ts = self._month_bounds(year, month)
@@ -193,6 +194,13 @@ class SevdeskUvaPreviewProvider:
             self._load_period_overlay("CreditNote", year, month, statuses=("750", "1000")),
         )
 
+        # sevDesk frequently returns an empty/zero taxText on historical documents
+        # although another document with the same TaxSet carries the effective label.
+        # Prime the mapping from the complete candidate set before positions are built;
+        # this mirrors the proven legacy calculation and avoids classifying those
+        # documents as 0% merely because their individual list payload is sparse.
+        self._prime_tax_set_text_cache([*invoice_docs, *credit_note_docs])
+
         result: list[dict[str, Any]] = []
         result.extend(
             self._select_sales_resource(
@@ -213,9 +221,44 @@ class SevdeskUvaPreviewProvider:
                 negative_amounts=True,
             )
         )
+        # sevDesk uses creditDebit=D vouchers for revenue-side tax postings
+        # (notably settlement/participation entries). Legacy UVA includes these
+        # in A022/A006/A021; treating every Voucher as purchase input tax drops
+        # material output VAT.
+        voucher_docs = self._load_voucher_candidates(year, month)
+        self._prime_tax_set_text_cache(voucher_docs)
+        for doc in voucher_docs:
+            if str(doc.get("creditDebit") or "").upper().strip() != "D":
+                continue
+            enriched = self._enrich_payment_metadata("Voucher", doc, year, month)
+            if not self._is_period_match(enriched, year, month, _PAYMENT_DATE_KEYS) and not self._is_period_match(
+                enriched, year, month, _PURCHASE_DOCUMENT_DATE_KEYS
+            ):
+                continue
+            result.append(self._prepare_document("Voucher", enriched))
         return result
 
     def load_purchase_documents(self, year: int, month: int) -> list[dict[str, Any]]:
+        docs = self._load_voucher_candidates(year, month)
+        self._prime_tax_set_text_cache(docs)
+        result: list[dict[str, Any]] = []
+        for doc in docs:
+            enriched = self._enrich_payment_metadata("Voucher", doc, year, month)
+            payment_in_period = self._is_period_match(enriched, year, month, _PAYMENT_DATE_KEYS)
+            document_in_period = self._is_period_match(enriched, year, month, _PURCHASE_DOCUMENT_DATE_KEYS)
+            if not payment_in_period and not document_in_period:
+                continue
+            credit_debit = str(enriched.get("creditDebit") or "").upper().strip()
+            if credit_debit and credit_debit != "C":
+                continue
+            result.append(self._prepare_document("Voucher", enriched))
+        return result
+
+    def _load_voucher_candidates(self, year: int, month: int) -> list[dict[str, Any]]:
+        cache_key = (year, month)
+        cached = self._voucher_period_cache.get(cache_key)
+        if cached is not None:
+            return [dict(document) for document in cached]
         start_ts, end_ts = self._month_bounds(year, month)
         docs = self._merge_documents(
             self._load_resource(
@@ -233,18 +276,8 @@ class SevdeskUvaPreviewProvider:
             ),
             self._load_period_overlay("Voucher", year, month, statuses=("150", "750", "1000")),
         )
-        result: list[dict[str, Any]] = []
-        for doc in docs:
-            enriched = self._enrich_payment_metadata("Voucher", doc, year, month)
-            payment_in_period = self._is_period_match(enriched, year, month, _PAYMENT_DATE_KEYS)
-            document_in_period = self._is_period_match(enriched, year, month, _PURCHASE_DOCUMENT_DATE_KEYS)
-            if not payment_in_period and not document_in_period:
-                continue
-            credit_debit = str(enriched.get("creditDebit") or "").upper().strip()
-            if credit_debit and credit_debit != "C":
-                continue
-            result.append(self._prepare_document("Voucher", enriched))
-        return result
+        self._voucher_period_cache[cache_key] = [dict(document) for document in docs]
+        return docs
 
     def _load_resource(self, path: str, *, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
@@ -329,9 +362,26 @@ class SevdeskUvaPreviewProvider:
         tax_set_id = _get_reference_id(document.get("taxSet"))
         if not tax_set_id:
             return
-        text = self._fetch_tax_set_text(tax_set_id)
+        text = self._tax_set_text_cache.get(tax_set_id) or self._fetch_tax_set_text(tax_set_id)
         if text:
             document["taxText"] = text
+
+    def _prime_tax_set_text_cache(self, documents: list[dict[str, Any]]) -> None:
+        for document in documents:
+            tax_set_id = _get_reference_id(document.get("taxSet"))
+            raw = " ".join(str(document.get("taxText") or "").split()).strip()
+            if not tax_set_id or raw in {"", "-", "0", "0%", "0.0", "0,0"}:
+                continue
+            existing = self._tax_set_text_cache.get(tax_set_id)
+            if existing and existing.casefold() != raw.casefold():
+                logger.warning(
+                    "Mehrdeutiger TaxSet-Text %s: %r / %r; erster Wert bleibt aktiv",
+                    tax_set_id,
+                    existing,
+                    raw,
+                )
+                continue
+            self._tax_set_text_cache[tax_set_id] = raw
 
     def _fetch_tax_set_text(self, tax_set_id: str) -> str:
         if tax_set_id in self._tax_set_text_cache:
