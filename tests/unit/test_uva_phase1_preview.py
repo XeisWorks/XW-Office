@@ -96,6 +96,7 @@ def test_phase2_builds_expected_kennzahlen() -> None:
     payload_service = UvaPayloadService(UvaPreviewService(_FakeProvider()))
     payload = payload_service.build_payload(2026, 3)
 
+    assert payload.rule_version == "U30_01_2022"
     assert payload.kennzahlen.A000 == "14649.40"
     assert payload.kennzahlen.A017 == "4825.18"
     assert payload.kennzahlen.A021 == "122.83"
@@ -109,6 +110,21 @@ def test_phase2_builds_expected_kennzahlen() -> None:
     assert payload.kennzahlen.C060 == "300.58"
     assert payload.kennzahlen.C065 == "15.32"
     assert payload.kennzahlen.C066 == "130.16"
+
+
+def test_phase2_uses_july_2026_rule_version() -> None:
+    class _JulyProvider(_FakeProvider):
+        def load_sales_documents(self, year: int, month: int) -> list[dict[str, object]]:
+            assert (year, month) == (2026, 7)
+            return []
+
+        def load_purchase_documents(self, year: int, month: int) -> list[dict[str, object]]:
+            assert (year, month) == (2026, 7)
+            return []
+
+    payload = UvaPayloadService(UvaPreviewService(_JulyProvider())).build_payload(2026, 7)
+
+    assert payload.rule_version == "U30_07_2026"
 
 
 def test_phase2_kennzahlen_text_mentions_zahllast() -> None:

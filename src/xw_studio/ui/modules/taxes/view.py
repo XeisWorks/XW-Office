@@ -33,7 +33,15 @@ from xw_studio.core.signals import AppSignals
 from xw_studio.core.worker import BackgroundWorker
 from xw_studio.services.clearing.service import ClearingRow, PaymentClearingService
 from xw_studio.services.expenses.service import ExpenseAuditService, ExpenseRow
-from xw_studio.services.finanzonline import OssQuarterResult, OssService, OssXmlExport, UvaService, UvaSubmitResult
+from xw_studio.services.finanzonline import (
+    OssQuarterResult,
+    OssService,
+    OssXmlExport,
+    UvaService,
+    UvaSubmitResult,
+    render_data_quality_text,
+    render_reconciliation_text,
+)
 from xw_studio.ui.widgets.data_table import DataTable
 from xw_studio.ui.widgets.search_bar import SearchBar
 
@@ -135,6 +143,7 @@ class TaxesView(QWidget):
         self._uva_progress_timer = QTimer(self)
         self._uva_progress_timer.setInterval(250)
         self._uva_progress_timer.timeout.connect(self._tick_uva_progress)
+        self._uva_refresh_button: QPushButton | None = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -225,14 +234,16 @@ class TaxesView(QWidget):
         layout.addWidget(self._uva_progress_bar)
 
         preview = QPushButton("UVA berechnen")
+        refresh = QPushButton("Neu aus sevDesk laden")
         submit = QPushButton("UVA + ZM an FinanzOnline senden")
         self._uva_preview_button = preview
+        self._uva_refresh_button = refresh
         self._uva_submit_button = submit
 
         def on_progress(value: int, text: str) -> None:
             self._set_uva_progress(value, text)
 
-        def on_preview() -> None:
+        def start_preview(*, refresh_data: bool) -> None:
             if self._uva_preview_worker is not None and self._uva_preview_worker.isRunning():
                 return
             if self._uva_submit_worker is not None and self._uva_submit_worker.isRunning():
@@ -245,7 +256,7 @@ class TaxesView(QWidget):
 
             def job() -> dict[str, object]:
                 self._emit_uva_preview_progress(20, "UVA-Daten werden aus sevDesk geladen...")
-                payload = uva.calculate_month(selected_year, selected_month)
+                payload = uva.calculate_month(selected_year, selected_month, refresh=refresh_data)
                 self._emit_uva_preview_progress(100, "UVA-Berechnung abgeschlossen")
                 return payload
 
@@ -270,6 +281,12 @@ class TaxesView(QWidget):
 
             self._uva_preview_worker.signals.finished.connect(on_preview_finished)
             self._uva_preview_worker.start()
+
+        def on_preview() -> None:
+            start_preview(refresh_data=False)
+
+        def on_refresh() -> None:
+            start_preview(refresh_data=True)
 
         def on_submit() -> None:
             if self._uva_submit_worker is not None and self._uva_submit_worker.isRunning():
@@ -316,9 +333,11 @@ class TaxesView(QWidget):
             self._uva_submit_worker.start()
 
         preview.clicked.connect(on_preview)
+        refresh.clicked.connect(on_refresh)
         submit.clicked.connect(on_submit)
         buttons = QHBoxLayout()
         buttons.addWidget(preview)
+        buttons.addWidget(refresh)
         buttons.addWidget(submit)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -338,9 +357,44 @@ class TaxesView(QWidget):
         ] if isinstance(warnings_value, list) else []
         grouped_warnings_text = _render_grouped_uva_warnings(warning_lines)
         amount_text = f"ZU ZAHLEN: EUR {_format_euro(zahlbetrag)}" if zahlbetrag else "ZU ZAHLEN: noch nicht ermittelt"
+        cache_text = ""
+        cache_value = payload.get("cache")
+        if isinstance(cache_value, dict):
+            source = str(cache_value.get("source") or "").strip()
+            elapsed = cache_value.get("elapsed_seconds")
+            snapshot_hash = str(cache_value.get("snapshot_hash") or "").strip()
+            if cache_value.get("hit"):
+                if source == "persistent":
+                    cache_text = "Datenstatus: aus persistentem Monats-Snapshot geladen"
+                else:
+                    cache_text = "Datenstatus: aus Monatscache geladen"
+            elif source == "live" and elapsed is not None:
+                cache_text = f"Datenstatus: live geladen in {elapsed} s"
+            if snapshot_hash:
+                cache_text = f"{cache_text}\nSnapshot: {snapshot_hash[:12]}" if cache_text else f"Snapshot: {snapshot_hash[:12]}"
+        reconciliation_value = payload.get("reconciliation")
+        reconciliation_text = (
+            render_reconciliation_text(reconciliation_value)
+            if isinstance(reconciliation_value, dict)
+            else ""
+        )
+        data_quality_value = payload.get("data_quality")
+        data_quality_text = (
+            render_data_quality_text(data_quality_value)
+            if isinstance(data_quality_value, dict)
+            else ""
+        )
         uva_text = "\n\n".join(
             part
-            for part in [amount_text, kennzahlen_text, preview_text, grouped_warnings_text]
+            for part in [
+                amount_text,
+                cache_text,
+                data_quality_text,
+                kennzahlen_text,
+                reconciliation_text,
+                preview_text,
+                grouped_warnings_text,
+            ]
             if part
         )
         zm_text = str(payload.get("zm_text") or "").strip()
@@ -412,7 +466,7 @@ class TaxesView(QWidget):
         box.exec()
 
     def _set_uva_busy(self, busy: bool) -> None:
-        for button in (self._uva_preview_button, self._uva_submit_button):
+        for button in (self._uva_preview_button, self._uva_refresh_button, self._uva_submit_button):
             if button is not None:
                 button.setEnabled(not busy)
         if self._uva_progress_bar is not None:

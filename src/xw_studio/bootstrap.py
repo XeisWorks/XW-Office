@@ -24,6 +24,7 @@ from xw_studio.services.finanzonline import (
     OssService,
     SevdeskOssDocumentProvider,
     SevdeskUvaPreviewProvider,
+    TaxMonthlySnapshotStore,
     UvaDocumentSelector,
     UvaPayloadService,
     UvaPreviewService,
@@ -215,6 +216,10 @@ def register_default_services(container: Container) -> None:
         lambda c: ZmService(SevdeskZmInvoiceProvider(c.resolve(SevdeskConnection))),
     )
     container.register(
+        TaxMonthlySnapshotStore,
+        lambda c: TaxMonthlySnapshotStore(),
+    )
+    container.register(
         UvaService,
         lambda c: UvaService(
             c.config,
@@ -222,6 +227,7 @@ def register_default_services(container: Container) -> None:
             preview_service=c.resolve(UvaPreviewService),
             payload_service=c.resolve(UvaPayloadService),
             zm_service=c.resolve(ZmService),
+            snapshot_store=c.resolve(TaxMonthlySnapshotStore),
         ),
     )
     container.register(
