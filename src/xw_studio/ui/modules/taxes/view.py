@@ -656,7 +656,17 @@ class TaxesView(QWidget):
             preview.setText("Berechne..." if not refresh_data else "Lade...")
 
             def job() -> OssQuarterResult:
-                return oss.calculate_quarter(selected_year, selected_quarter_value, refresh=refresh_data)
+                try:
+                    return oss.calculate_quarter(
+                        selected_year,
+                        selected_quarter_value,
+                        refresh=refresh_data,
+                    )
+                except TypeError as exc:
+                    if "unexpected keyword argument 'refresh'" not in str(exc):
+                        raise
+                    logger.warning("EU-OSS service without refresh support loaded; falling back: %s", exc)
+                    return oss.calculate_quarter(selected_year, selected_quarter_value)
 
             self._oss_worker = BackgroundWorker(job)
 
