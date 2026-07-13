@@ -45,6 +45,7 @@ class BackgroundWorker(QThread):
         self._args = args
         self._kwargs = kwargs
         self._cancelled = Event()
+        self.finished.connect(self.signals.finished.emit)
 
     def cancel(self) -> None:
         """Request cancellation and suppress a result that arrives afterwards.
@@ -71,5 +72,3 @@ class BackgroundWorker(QThread):
             if not self.cancelled:
                 logger.error("Worker error: %s\n%s", exc, traceback.format_exc())
                 self.signals.error.emit(exc)
-        finally:
-            self.signals.finished.emit()
