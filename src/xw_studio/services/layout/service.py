@@ -1,6 +1,7 @@
 """PDF layout tooling facade — QR-Code, blank pages, covers, ISBN."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 import io
 import logging
 from pathlib import Path
@@ -74,6 +75,15 @@ def _normalize_page_rotations(doc: object) -> None:
             page.remove_rotation()
 
 
+@dataclass(frozen=True)
+class SplitLandscapeResult:
+    output_path: Path
+    source_pages: int
+    output_pages: int
+    split_pages: int
+    copied_pages: int
+
+
 class LayoutToolsService:
     """Coordinate layout operations using PyMuPDF and segno."""
 
@@ -84,6 +94,7 @@ class LayoutToolsService:
     def describe_tools(self) -> list[tuple[str, str]]:
         return [
             ("A5 -> A4", "A5-Noten doppelt auf A4 platzieren"),
+            ("Querformat teilen", "Querformatseiten in A4-Hochformatseiten teilen"),
             ("Leerseiten", "PDFs um neutrale Seiten erweitern"),
             ("QR-Code", "URLs/Text als QR erzeugen (segno)"),
             ("Deckblatt", "Titel-Layouts aus Vorlagen"),
@@ -197,6 +208,121 @@ class LayoutToolsService:
                 output_doc.close()
 
         return target_path
+
+    # ------------------------------------------------------------------
+    # Split landscape pages into portrait pages
+    # ------------------------------------------------------------------
+
+    def default_landscape_split_output_path(self, source_pdf: str | Path) -> Path:
+        """Return the conventional sibling output path without touching the file system."""
+        source_path = _clean_pdf_path(source_pdf)
+        return source_path.with_name(f"{source_path.stem}_A4-hoch-geteilt{source_path.suffix or '.pdf'}")
+
+    def split_landscape_pages_to_a4_portrait(
+        self,
+        source_pdf: str | Path,
+        *,
+        output_pdf: str | Path | None = None,
+        overwrite: bool = False,
+    ) -> SplitLandscapeResult:
+        """Split visible landscape pages into left/right A4 portrait pages.
+
+        Portrait pages are copied unchanged. Landscape detection uses the page's
+        visible rectangle after normalizing page rotation, so mixed documents can
+        keep portrait cover/end pages intact.
+        """
+        try:
+            import fitz  # type: ignore[import-untyped]
+        except ImportError as exc:
+            raise RuntimeError("PyMuPDF not installed") from exc
+
+        source_path = _clean_pdf_path(source_pdf).resolve(strict=False)
+        if not source_path.is_file():
+            raise FileNotFoundError(f"PDF nicht gefunden: {source_path}")
+        if source_path.suffix.lower() != ".pdf":
+            raise ValueError("Bitte eine PDF-Datei auswaehlen.")
+
+        target_path = (
+            _clean_pdf_path(output_pdf).resolve(strict=False)
+            if output_pdf is not None
+            else self.default_landscape_split_output_path(source_path).resolve(strict=False)
+        )
+        if target_path.suffix.lower() != ".pdf":
+            target_path = target_path.with_suffix(".pdf")
+        if target_path == source_path:
+            raise ValueError("Ausgabe darf die Quelldatei nicht ueberschreiben.")
+        if target_path.exists() and not overwrite:
+            raise FileExistsError(f"Ausgabe existiert bereits: {target_path}")
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+
+        split_pages = 0
+        copied_pages = 0
+
+        with fitz.open(source_path) as source_doc:
+            if source_doc.needs_pass:
+                raise ValueError("Passwortgeschuetzte PDFs werden nicht unterstuetzt.")
+            if len(source_doc) == 0:
+                raise ValueError("Die PDF-Datei enthaelt keine Seiten.")
+
+            output_doc = fitz.open()
+            try:
+                a4_width, a4_height = fitz.paper_size("a4")
+                full_target = fitz.Rect(0, 0, a4_width, a4_height)
+
+                for page_num in range(len(source_doc)):
+                    page_doc = fitz.open()
+                    try:
+                        page_doc.insert_pdf(source_doc, from_page=page_num, to_page=page_num)
+                        _normalize_page_rotations(page_doc)
+                        normalized_page = page_doc[0]
+                        page_rect = normalized_page.rect
+
+                        if page_rect.width <= page_rect.height:
+                            output_doc.insert_pdf(source_doc, from_page=page_num, to_page=page_num)
+                            copied_pages += 1
+                            continue
+
+                        half_width = page_rect.width / 2.0
+                        clips = (
+                            fitz.Rect(0, 0, half_width, page_rect.height),
+                            fitz.Rect(half_width, 0, page_rect.width, page_rect.height),
+                        )
+                        for clip in clips:
+                            output_page = output_doc.new_page(width=a4_width, height=a4_height)
+                            target_rect = _fit_rect(fitz, full_target, clip.width, clip.height)
+                            output_page.show_pdf_page(
+                                target_rect,
+                                page_doc,
+                                0,
+                                clip=clip,
+                                keep_proportion=True,
+                            )
+                        split_pages += 1
+                    finally:
+                        page_doc.close()
+
+                save_kwargs = {
+                    "garbage": 4,
+                    "deflate": True,
+                    "deflate_images": True,
+                    "deflate_fonts": True,
+                    "use_objstms": 1,
+                }
+                try:
+                    output_doc.save(target_path, **save_kwargs)
+                except TypeError:
+                    save_kwargs.pop("use_objstms", None)
+                    output_doc.save(target_path, **save_kwargs)
+
+                return SplitLandscapeResult(
+                    output_path=target_path,
+                    source_pages=len(source_doc),
+                    output_pages=len(output_doc),
+                    split_pages=split_pages,
+                    copied_pages=copied_pages,
+                )
+            finally:
+                output_doc.close()
 
     # ------------------------------------------------------------------
     # QR-Code generation

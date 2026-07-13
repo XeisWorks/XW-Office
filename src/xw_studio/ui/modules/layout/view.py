@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from xw_studio.core.worker import BackgroundWorker
-from xw_studio.services.layout.service import LayoutToolsService
+from xw_studio.services.layout.service import LayoutToolsService, SplitLandscapeResult
 
 if TYPE_CHECKING:
     from xw_studio.core.container import Container
@@ -45,6 +45,8 @@ class LayoutView(QWidget):
         self._cover_result: bytes | None = None
         self._a5_source_path: str | None = None
         self._a5_output_path: str | None = None
+        self._landscape_source_path: str | None = None
+        self._landscape_output_path: str | None = None
         self._worker: BackgroundWorker | None = None
 
         root = QVBoxLayout(self)
@@ -52,6 +54,7 @@ class LayoutView(QWidget):
 
         tabs = QTabWidget()
         tabs.addTab(self._build_a5_tab(), "A5 -> A4")
+        tabs.addTab(self._build_landscape_split_tab(), "Querformat teilen")
         tabs.addTab(self._build_qr_tab(), "QR-Code")
         tabs.addTab(self._build_blank_tab(), "Leerseiten")
         tabs.addTab(self._build_cover_tab(), "Deckblatt")
@@ -186,7 +189,128 @@ class LayoutView(QWidget):
         QMessageBox.information(self, "Fertig", f"A5 -> A4 gespeichert:\n{data}")
 
     # ------------------------------------------------------------------
-    # Tab 2: QR-Code-Generator
+    # Tab 2: Querformatseiten in A4-Hochformatseiten teilen
+    # ------------------------------------------------------------------
+
+    def _build_landscape_split_tab(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(10)
+
+        file_group = QGroupBox("PDF-Dateien")
+        file_layout = QFormLayout(file_group)
+
+        source_row = QHBoxLayout()
+        self._landscape_source_lbl = QLabel("(keine Datei gewaehlt)")
+        self._landscape_source_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        source_row.addWidget(self._landscape_source_lbl)
+        source_btn = QPushButton("PDF oeffnen...")
+        source_btn.clicked.connect(self._pick_landscape_source)
+        source_row.addWidget(source_btn)
+        file_layout.addRow("Quelle:", source_row)
+
+        output_row = QHBoxLayout()
+        self._landscape_output_lbl = QLabel("(wird nach Dateiauswahl vorgeschlagen)")
+        self._landscape_output_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        output_row.addWidget(self._landscape_output_lbl)
+        output_btn = QPushButton("Ziel waehlen...")
+        output_btn.clicked.connect(self._pick_landscape_output)
+        output_row.addWidget(output_btn)
+        file_layout.addRow("Ausgabe:", output_row)
+        lay.addWidget(file_group)
+
+        btn_row = QHBoxLayout()
+        self._landscape_run_btn = QPushButton("Querformatseiten teilen")
+        self._landscape_run_btn.clicked.connect(self._run_landscape_split)
+        btn_row.addWidget(self._landscape_run_btn)
+        btn_row.addStretch()
+        lay.addLayout(btn_row)
+
+        self._landscape_status = QLabel("Bereit")
+        self._landscape_status.setWordWrap(True)
+        lay.addWidget(self._landscape_status)
+
+        info = QLabel(
+            "Teilt nur echte Querformatseiten in linke und rechte A4-Hochformatseite. "
+            "Hochformatseiten am Anfang, Ende oder dazwischen werden unveraendert uebernommen."
+        )
+        info.setObjectName("infoLabel")
+        info.setWordWrap(True)
+        lay.addWidget(info)
+        lay.addStretch()
+        return page
+
+    def _pick_landscape_source(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "PDF oeffnen", "", "PDF (*.pdf)")
+        if not path:
+            return
+        self._landscape_source_path = path
+        self._landscape_source_lbl.setText(path)
+        svc: LayoutToolsService = self._container.resolve(LayoutToolsService)
+        self._landscape_output_path = str(svc.default_landscape_split_output_path(path))
+        self._landscape_output_lbl.setText(self._landscape_output_path)
+        self._landscape_status.setText("Bereit")
+
+    def _pick_landscape_output(self) -> None:
+        start = self._landscape_output_path or "seiten_A4-hoch-geteilt.pdf"
+        path, _ = QFileDialog.getSaveFileName(self, "Ausgabe speichern", start, "PDF (*.pdf)")
+        if not path:
+            return
+        if not path.lower().endswith(".pdf"):
+            path = f"{path}.pdf"
+        self._landscape_output_path = path
+        self._landscape_output_lbl.setText(path)
+
+    def _run_landscape_split(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
+        if not self._landscape_source_path:
+            QMessageBox.warning(self, "Querformat teilen", "Bitte zuerst eine PDF-Datei oeffnen.")
+            return
+        if not self._landscape_output_path:
+            QMessageBox.warning(self, "Querformat teilen", "Bitte ein Ausgabeziel waehlen.")
+            return
+
+        source = self._landscape_source_path
+        output = self._landscape_output_path
+        if Path(output).exists():
+            answer = QMessageBox.question(
+                self,
+                "Querformat teilen",
+                f"Die Ausgabedatei existiert bereits:\n{output}\n\nUeberschreiben?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                self._landscape_status.setText("Abgebrochen.")
+                return
+
+        svc: LayoutToolsService = self._container.resolve(LayoutToolsService)
+
+        def job() -> SplitLandscapeResult:
+            return svc.split_landscape_pages_to_a4_portrait(source, output_pdf=output, overwrite=True)
+
+        self._landscape_run_btn.setEnabled(False)
+        self._landscape_status.setText("Verarbeite PDF...")
+        self._worker = BackgroundWorker(job)
+        self._worker.signals.result.connect(self._on_landscape_split_done)
+        self._worker.signals.error.connect(self._on_error)
+        self._worker.signals.finished.connect(lambda: self._landscape_run_btn.setEnabled(True))
+        self._worker.signals.finished.connect(self._on_worker_finished)
+        self._worker.start()
+
+    def _on_landscape_split_done(self, data: object) -> None:
+        if not isinstance(data, SplitLandscapeResult):
+            return
+        message = (
+            f"Gespeichert: {data.output_path}\n"
+            f"Quelle: {data.source_pages} Seiten, Ausgabe: {data.output_pages} Seiten, "
+            f"geteilt: {data.split_pages}, unveraendert: {data.copied_pages}"
+        )
+        self._landscape_status.setText(message)
+        QMessageBox.information(self, "Fertig", message)
+
+    # ------------------------------------------------------------------
+    # Tab 3: QR-Code-Generator
     # ------------------------------------------------------------------
 
     def _build_qr_tab(self) -> QWidget:
