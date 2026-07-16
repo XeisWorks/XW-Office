@@ -14,14 +14,17 @@ try:
 except Exception:  # pragma: no cover - optional dependency guard
     etree = None
 
-_LEGACY_U13_XSD = (
-    Path("C:/Users/bernh/GitHub/sevDesk/Finanzonline/xsd/u13")
-    / "BMF_XSD_Schema_Zusammenfassende_Meldung.xsd"
+_BUNDLED_U13_XSD = (
+    Path(__file__).resolve().parents[4]
+    / "resources"
+    / "finanzonline"
+    / "xsd"
+    / "BMF_XSD_Schema_Zusammenfassende_Meldung_2025.xsd"
 )
 
 
 def default_u13_xsd_path() -> Path:
-    return _LEGACY_U13_XSD
+    return _BUNDLED_U13_XSD
 
 
 def build_u13_xml(

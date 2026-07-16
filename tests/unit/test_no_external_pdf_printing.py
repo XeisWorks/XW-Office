@@ -47,9 +47,15 @@ def test_pdf_xchange_builds_silent_native_command_with_pages_and_copies(
     assert len(calls) == 2
     assert calls[0] == [
         str(executable),
-        '/print:default=yes;showui=no;printer="Noten A4 Simplex";pages=1-2,4-5,7',
+        "/print:default=yes;showui=no;printer=Noten A4 Simplex;pages=1-2,4-5,7",
         str(pdf),
     ]
+
+    windows_command_line = subprocess.list2cmdline(calls[0])
+    assert '"/print:default=yes;showui=no;printer=Noten A4 Simplex;pages=1-2,4-5,7"' in (
+        windows_command_line
+    )
+    assert r'printer=\"Noten A4 Simplex\"' not in windows_command_line
 
 
 def test_pdf_xchange_missing_executable_fails_without_qt_fallback(

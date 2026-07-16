@@ -1,7 +1,7 @@
 """Commission calculations with sevDesk-backed document aggregation."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import logging
 from pathlib import Path

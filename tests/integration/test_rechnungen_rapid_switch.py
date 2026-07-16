@@ -5,9 +5,8 @@ Validates that request queueing prevents lost selection when user switches rows
 during active Wix metadata fetch.
 """
 import time
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, Mock, patch
 import pytest
-from PySide6.QtCore import Qt, QTimer
 from xw_studio.ui.modules.rechnungen.view import RechnungenView
 from xw_studio.services.wix.client import WixOrdersClient
 
@@ -148,9 +147,6 @@ class TestRechnungenRapidSwitch:
         view._wix_context_cache = {}
         view._queued_wix_context_ref = None
         
-        # Fetch R-123 starts
-        working_ref = "R-123"
-        
         # Rapid switches
         view._queued_wix_context_ref = "R-456"
         view._queued_wix_context_ref = "R-789"  # Overwrite
@@ -200,7 +196,6 @@ class TestRechnungenRapidSwitch:
         assert current_token_2 == 2
         
         # R-123 worker finishes with token=1 (stale)
-        result_1 = {"ref": "R-123", "data": "old"}
         if current_token_1 < current_token_2:
             # Stale result discarded
             assert True, "Stale token rejected"

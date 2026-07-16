@@ -63,7 +63,14 @@ class NativePdfCliBackend(PdfPrintBackend):
         if not pdf_path.is_file():
             raise RuntimeError(f"Produkt-PDF wurde nicht gefunden: {pdf_path}")
 
-        options = ["default=yes", "showui=no", f'printer="{job.printer_name}"']
+        # Keep the printer value unquoted inside the option. ``subprocess`` wraps
+        # the complete option argument when the name contains spaces. Embedded
+        # quotes would be escaped as \" on Windows and PDF-XChange V11 silently
+        # ignores the resulting printer option. The documented /print command is
+        # intentionally dispatched only once per requested copy: Editor V11 may
+        # return before the Windows spooler starts the physical output, so a
+        # missing immediately-visible queue entry must never trigger a retry.
+        options = ["default=yes", "showui=no", f"printer={job.printer_name}"]
         pages = _pdf_xchange_page_range(job.pages)
         if pages:
             options.append(f"pages={pages}")
@@ -99,6 +106,12 @@ class NativePdfCliBackend(PdfPrintBackend):
                 raise RuntimeError(
                     f"PDF-XChange Druckaufruf fehlgeschlagen (Exit-Code {completed.returncode}){suffix}"
                 )
+            logger.info(
+                "Native PDF print accepted asynchronously: printer='%s' copy=%s/%s",
+                job.printer_name,
+                copy_number + 1,
+                max(int(job.copies), 1),
+            )
 
 
 def backend_for_job(job: PdfPrintJob) -> PdfPrintBackend:

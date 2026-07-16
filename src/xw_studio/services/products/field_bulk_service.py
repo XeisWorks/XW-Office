@@ -7,11 +7,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import logging
 from typing import Any
 
 from xw_studio.services.inventory.service import InventoryService, ProductRow
 from xw_studio.services.wix.client import WixProduct
 from xw_studio.services.wix.product_details_client import WixProductDetailsClient
+
+logger = logging.getLogger(__name__)
 
 
 class FieldOperatorType(str, Enum):
@@ -652,8 +655,3 @@ class ProductFieldBulkService:
                 return round(new_num, 2)
 
         raise ValueError(f"Unknown operator: {operator}")
-
-
-import logging
-
-logger = logging.getLogger(__name__)

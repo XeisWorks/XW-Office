@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Literal
 import httpx
 
 if TYPE_CHECKING:
-    from xw_studio.services.mailing.service import MailDeliveryService
     from xw_studio.services.secrets.service import SecretService
     from xw_studio.services.wix.client import WixProductsClient
 

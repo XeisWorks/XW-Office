@@ -1,12 +1,9 @@
 """Daily Business → Rechnungen Parity Analysis: Corrected Test Suite"""
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
-from datetime import datetime
+from unittest.mock import MagicMock
 
-import pytest
-
-from xw_studio.core.config import AppConfig
+from xw_studio.core.config import AppConfig, load_config
 from xw_studio.services.invoice_processing.service import (
     InvoiceProcessingService,
     FulfillmentFlags,
@@ -174,10 +171,9 @@ class TestPartialImplementations:
     """Test features that are partially implemented."""
 
     def test_mollie_service_exists_but_needs_testing(self) -> None:
-        """Verify Mollie service structure exists but needs live testing."""
-        # The _QueueTabView exists for Mollie but we need live testing
-        # to confirm it works
-        pytest.skip("Mollie tab needs live testing - structure exists")
+        from xw_studio.services.daily_business.service import DailyBusinessService
+
+        assert "mollie" in DailyBusinessService().load_counts()
 
     def test_partial_refunds_backend_exists(self) -> None:
         """Verify partial refund backend exists but UI is missing."""
@@ -187,8 +183,6 @@ class TestPartialImplementations:
 
         # Backend methods exist
         assert hasattr(refund_client, "create_credit_note_from_invoice")
-        # But no UI in view layer for line-item selection
-        pytest.skip("Partial refund UI not implemented (backend only)")
 
     def test_printer_status_simplified(self) -> None:
         """Verify printer status display exists but is simplified."""
@@ -210,32 +204,26 @@ class TestMissingFeatures:
 
     def test_offene_sendungen_not_implemented(self) -> None:
         """Offene Sendungen (email → label) is NOT in UI."""
-        # Search for Microsoft Graph integration in UI modules
-        import os
-        
-        rechnungen_view = os.path.join(
-            os.path.dirname(__file__),
-            "../../src/xw_studio/ui/modules/rechnungen/tagesgeschaeft_view.py"
+        from xw_studio.ui.modules.rechnungen.offene_sendungen_dialog import (
+            OffeneSendungenDialog,
         )
-        
-        with open(rechnungen_view, "r") as f:
-            content = f.read()
-            # Check if Offene Sendungen tab is implemented
-            assert "Sendungen" not in content or "offene" not in content.lower()
-        
-        pytest.skip("Feature missing: Offene Sendungen")
+
+        assert OffeneSendungenDialog is not None
 
     def test_download_links_not_implemented(self) -> None:
-        """Download-Links (customer access) is NOT implemented."""
-        pytest.skip("Feature missing: Download-Links tab/functionality")
+        from xw_studio.services.daily_business.service import DailyBusinessService
+
+        assert "downloads" in DailyBusinessService().load_counts()
 
     def test_rechnungsentwurf_not_implemented(self) -> None:
-        """Rechnungsentwurf (draft invoices) is NOT implemented."""
-        pytest.skip("Feature missing: Rechnungsentwurf (invoice drafting)")
+        from xw_studio.services.draft_invoice.service import DraftInvoiceService
+
+        assert callable(DraftInvoiceService.create_draft_from_wix_order_number)
 
     def test_graph_integration_not_done(self) -> None:
-        """Microsoft Graph integration for emails is NOT implemented."""
-        pytest.skip("Feature missing: Microsoft Graph Outlook integration")
+        from xw_studio.services.mailing.graph_client import GraphMailClient
+
+        assert callable(GraphMailClient.send_mail)
 
 
 # ============================================================================
@@ -258,7 +246,7 @@ class TestConfigurationParity:
 
     def test_legacy_printer_defaults_in_config(self) -> None:
         """Verify legacy printer names are configured (from default.yaml/env)."""
-        config = AppConfig()
+        config = load_config()
         
         # Check if defaults exist (might be empty initially)
         # This is a configuration issue - they should be set in config/default.yaml
@@ -266,11 +254,8 @@ class TestConfigurationParity:
         assert isinstance(config.printing.invoice_printer, str)
         assert isinstance(config.printing.label_printer, str)
         
-        # Document if they're not set
-        if not config.printing.invoice_printer:
-            pytest.skip(
-                "CONFIG ISSUE: invoice_printer not configured in default.yaml"
-            )
+        assert config.printing.invoice_printer
+        assert config.printing.label_printer
 
 
 # ============================================================================

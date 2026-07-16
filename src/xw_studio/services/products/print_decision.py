@@ -9,15 +9,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from xw_studio.services.products.catalog import Product, StockStatus
 
 if TYPE_CHECKING:
     from xw_studio.services.products.catalog import ProductCatalogService
-    from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
     from xw_studio.services.sevdesk.part_client import PartClient
-    from xw_studio.services.wix.client import WixOrderItem, WixOrdersClient
+    from xw_studio.services.wix.client import WixOrderItem
 
 logger = logging.getLogger(__name__)
 
