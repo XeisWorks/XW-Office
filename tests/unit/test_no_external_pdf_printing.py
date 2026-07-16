@@ -1,47 +1,92 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
+import subprocess
+
+import pytest
+
+from xw_studio.services.printing.pdf_backends import (
+    NativePdfCliBackend,
+    QtRasterBackend,
+    backend_for_job,
+)
+from xw_studio.services.printing.print_jobs import PdfPrintJob
 
 
-def test_printing_code_does_not_reference_external_pdf_viewers() -> None:
-    root = Path(__file__).resolve().parents[2]
-    printing_sources = list((root / "src" / "xw_studio" / "services" / "printing").glob("*.py"))
-    printing_sources.append(root / "src" / "xw_studio" / "ui" / "modules" / "rechnungen" / "print_dialog.py")
-    content = "\n".join(path.read_text(encoding="utf-8") for path in printing_sources)
-    forbidden = [
-        "Acrobat",
-        "AcroRd32",
-        "Adobe",
-        "SumatraPDF",
-        "sumatra",
-        "os.startfile",
-        "subprocess.Popen",
-        "ShellExecute",
-        "printto",
-    ]
+def test_qt_raster_remains_the_default_backend() -> None:
+    job = PdfPrintJob(pdf_path="C:/tmp/test.pdf", printer_name="Printer")
 
-    assert not any(token in content for token in forbidden)
+    assert isinstance(backend_for_job(job), QtRasterBackend)
 
 
-def test_planned_pdf_printer_does_not_shell_out(monkeypatch) -> None:
-    from xw_studio.core.config import PrintingSection
-    from xw_studio.services.printing.planned_pdf_printer import print_pdf_by_plan
+def test_pdf_xchange_builds_silent_native_command_with_pages_and_copies(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    executable = tmp_path / "PDFXEdit.exe"
+    executable.write_bytes(b"test")
+    pdf = tmp_path / "sample.pdf"
+    pdf.write_bytes(b"%PDF-test")
+    calls: list[list[str]] = []
 
-    calls: list[object] = []
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
 
-    class QueueStub:
-        def enqueue(self, job: object) -> str:
-            calls.append(job)
-            return "job"
-
-    monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: calls.append("popen"))
-
-    print_pdf_by_plan(
-        "C:/tmp/test.pdf",
-        PrintingSection(print_profiles=[{"id": "p", "label": "P", "printer_name": "Printer"}]),
-        profile_id="p",
-        print_queue=QueueStub(),  # type: ignore[arg-type]
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    job = PdfPrintJob(
+        pdf_path=str(pdf),
+        printer_name="Noten A4 Simplex",
+        pages=[0, 1, 3, 4, 6],
+        copies=2,
+        backend="pdf_xchange",
+        native_pdf_exe=str(executable),
     )
 
-    assert calls and "popen" not in calls
+    backend_for_job(job).print(job)
+
+    assert len(calls) == 2
+    assert calls[0] == [
+        str(executable),
+        '/print:default=yes;showui=no;printer="Noten A4 Simplex";pages=1-2,4-5,7',
+        str(pdf),
+    ]
+
+
+def test_pdf_xchange_missing_executable_fails_without_qt_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    qt_calls: list[object] = []
+    monkeypatch.setattr(
+        "xw_studio.services.printing.pdf_backends.print_pdf_with_qprinter",
+        lambda *args, **kwargs: qt_calls.append((args, kwargs)),
+    )
+    job = PdfPrintJob(
+        pdf_path=str(tmp_path / "sample.pdf"),
+        printer_name="Printer",
+        backend="pdf_xchange",
+        native_pdf_exe=str(tmp_path / "missing.exe"),
+    )
+
+    with pytest.raises(RuntimeError, match="EXE wurde nicht gefunden"):
+        backend_for_job(job).print(job)
+
+    assert qt_calls == []
+
+
+def test_pdf_xchange_nonzero_exit_is_a_print_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    executable = tmp_path / "PDFXEdit.exe"
+    executable.write_bytes(b"test")
+    pdf = tmp_path / "sample.pdf"
+    pdf.write_bytes(b"%PDF-test")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 5, "", "driver error"),
+    )
+
+    with pytest.raises(RuntimeError, match="Exit-Code 5.*driver error"):
+        NativePdfCliBackend(str(executable)).print(
+            PdfPrintJob(pdf_path=str(pdf), printer_name="Printer")
+        )

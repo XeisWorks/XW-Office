@@ -9,6 +9,31 @@ Ausgangslage: Der Code-Stand `11a41ad Improve product and PLC print handling` ha
 - Analysis Panel und Menue Produkte nutzen denselben Produktdruckpfad.
 - Analysis-Produktdruck wartet auf Queue-Bestaetigung, bevor Bestand/sevDesk aktualisiert wird.
 
+## Umsetzungsstand 16. Juli 2026
+
+Die in den Abschnitten 3 und 4 beschriebenen Software-Umbauten sind umgesetzt:
+
+- `PdfPrintBackend` trennt die Druckqueue vom konkreten PDF-Renderer.
+- `QtRasterBackend` bleibt der sichere Standard fuer Rechnung, PLC und alle nicht umgestellten Profile.
+- `NativePdfCliBackend` unterstuetzt PDF-XChange Editor pro Druckprofil mit Seitenauswahl,
+  mehreren Kopien, Silent-Aufruf und klarer Fehlerweitergabe.
+- Bei einem Fehler des nativen Backends gibt es bewusst keinen stillen Qt-Raster-Fallback.
+- PDF-XChange wird erst aktiviert, wenn ein Profil `backend: "pdf_xchange"` und einen
+  existierenden `native_pdf_exe` enthaelt. Auf dem Entwicklungs-PC ist PDF-XChange derzeit
+  nicht installiert; `config/default.yaml` enthaelt daher nur ein auskommentiertes Beispiel.
+- Die Hersteller-Syntax wurde gegen die
+  [PDF-XChange Editor CLI-Dokumentation](https://help.pdf-xchange.com/pdfxe10/command-line-options_ed.html)
+  geprueft. Verwendet wird `/print:default=yes;showui=no;printer="..."`.
+- Im Menue **Produkte** bleibt `Auswahl drucken` ein reiner Druck. Die separate Aktion
+  `Drucken + Bestand` setzt die empfohlene Variante 3 um: Sie wartet auf die Queue-Bestaetigung
+  und erhoeht danach zuerst den sevDesk-Bestand und anschliessend den lokalen Bestandssnapshot.
+  Druckfehler veraendern keinen Bestand; Bestandsfehler werden getrennt gemeldet.
+
+Automatisch geprueft wurden Backend-Auswahl, PDF-XChange-Prozessargumente, Seitensyntax,
+Mehrfachkopien, fehlende EXE, Fehler-Exitcodes, fehlender Raster-Fallback sowie die lokale
+Bestandssynchronisierung. Offen bleiben ausschliesslich die physischen Tests aus Abschnitt 2
+und der Golden-Sample-Vergleich aus Abschnitt 3.
+
 Diese Datei beschreibt nur die Punkte, die auf dem Ziel-PC mit echten Druckern, installierten PDF-Viewern und realen Druckertreibern abgeschlossen werden muessen.
 
 ## 1. Ziel-PC vorbereiten

@@ -5,6 +5,7 @@ import types
 from unittest.mock import MagicMock
 
 from xw_studio.services.printing import print_queue
+from xw_studio.services.printing import pdf_backends
 from xw_studio.services.printing.print_jobs import BrotherLbxLabelJob, PdfPrintJob, PrintJobResult
 
 
@@ -19,7 +20,7 @@ def test_print_queue_worker_executes_jobs_sequentially(monkeypatch) -> None:
     def fake_lbx(_job: BrotherLbxLabelJob) -> None:
         calls.append("lbx")
 
-    monkeypatch.setattr(print_queue, "print_pdf_with_qprinter", fake_pdf)
+    monkeypatch.setattr(pdf_backends, "print_pdf_with_qprinter", fake_pdf)
     monkeypatch.setattr(print_queue, "_execute_brother_lbx_job", fake_lbx)
 
     print_queue._PrintQueueWorker._execute(PdfPrintJob(pdf_path="a.pdf", printer_name="P"))

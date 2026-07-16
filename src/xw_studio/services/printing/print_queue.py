@@ -13,7 +13,7 @@ from typing import TypeAlias
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from xw_studio.services.printing.pdf_renderer import print_pdf_with_qprinter
+from xw_studio.services.printing.pdf_backends import backend_for_job
 from xw_studio.services.printing.print_jobs import BrotherLbxLabelJob, PdfPrintJob, PrintJobResult
 
 logger = logging.getLogger(__name__)
@@ -155,7 +155,7 @@ class _PrintQueueWorker(QThread):
             logger.info(
                 "Print job started: id=%s kind=%s printer='%s' file='%s' copies=%s dpi=%s pages=%s "
                 "placement=%s page_size=%s orientation=%s scale_mode=%s alignment=%s offset_mm=(%s,%s) "
-                "render_color_mode=%s black_enhancement=%s black_threshold=%s",
+                "render_color_mode=%s black_enhancement=%s black_threshold=%s backend=%s",
                 job.id,
                 job.job_kind,
                 job.printer_name,
@@ -173,26 +173,9 @@ class _PrintQueueWorker(QThread):
                 job.effective_render_color_mode,
                 job.effective_black_enhancement,
                 job.black_threshold,
+                job.backend,
             )
-            print_pdf_with_qprinter(
-                job.pdf_path,
-                job.printer_name,
-                pages=job.pages,
-                copies=job.copies,
-                dpi=job.dpi,
-                fallback_dpi=job.effective_dpi,
-                placement_mode=job.placement_mode,
-                page_size=job.page_size,
-                orientation=job.orientation,
-                scale_mode=job.scale_mode,
-                alignment=job.alignment,
-                x_offset_mm=job.x_offset_mm,
-                y_offset_mm=job.y_offset_mm,
-                job_kind=job.job_kind,
-                render_color_mode=job.effective_render_color_mode,
-                black_enhancement=job.effective_black_enhancement,
-                black_threshold=job.black_threshold,
-            )
+            backend_for_job(job).print(job)
             return
         _execute_brother_lbx_job(job)
 

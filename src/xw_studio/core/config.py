@@ -95,6 +95,8 @@ class PrintProfile:
     render_color_mode: str = "auto"
     black_enhancement: str = "auto"
     black_threshold: int = 180
+    backend: str = "qt_raster"
+    native_pdf_exe: str = ""
 
 
 @dataclass(frozen=True)
@@ -114,26 +116,32 @@ class PrintingSection:
     # Named profiles loaded from YAML (list[dict] from YAML → list[PrintProfile] via loader)
     print_profiles: list[dict] = field(default_factory=list)
 
+    @staticmethod
+    def _profile_from_entry(entry: dict[str, Any]) -> PrintProfile:
+        return PrintProfile(
+            id=str(entry.get("id") or ""),
+            label=str(entry.get("label") or ""),
+            printer_name=str(entry.get("printer_name") or ""),
+            dpi=int(entry["dpi"]) if entry.get("dpi") else None,
+            placement_mode=str(entry.get("placement_mode") or "paper_origin"),
+            page_size=str(entry.get("page_size") or ""),
+            orientation=str(entry.get("orientation") or ""),
+            scale_mode=str(entry.get("scale_mode") or "none"),
+            alignment=str(entry.get("alignment") or "top_left"),
+            x_offset_mm=float(entry.get("x_offset_mm") or 0.0),
+            y_offset_mm=float(entry.get("y_offset_mm") or 0.0),
+            render_color_mode=str(entry.get("render_color_mode") or "auto"),
+            black_enhancement=str(entry.get("black_enhancement") or "auto"),
+            black_threshold=int(entry.get("black_threshold") or 180),
+            backend=str(entry.get("backend") or "qt_raster"),
+            native_pdf_exe=str(entry.get("native_pdf_exe") or ""),
+        )
+
     def resolve_profile(self, profile_id: str) -> PrintProfile | None:
         """Return the PrintProfile for *profile_id*, or None if not found."""
         for entry in self.print_profiles:
             if isinstance(entry, dict) and entry.get("id") == profile_id:
-                return PrintProfile(
-                    id=str(entry.get("id") or ""),
-                    label=str(entry.get("label") or ""),
-                    printer_name=str(entry.get("printer_name") or ""),
-                    dpi=int(entry["dpi"]) if entry.get("dpi") else None,
-                    placement_mode=str(entry.get("placement_mode") or "paper_origin"),
-                    page_size=str(entry.get("page_size") or ""),
-                    orientation=str(entry.get("orientation") or ""),
-                    scale_mode=str(entry.get("scale_mode") or "none"),
-                    alignment=str(entry.get("alignment") or "top_left"),
-                    x_offset_mm=float(entry.get("x_offset_mm") or 0.0),
-                    y_offset_mm=float(entry.get("y_offset_mm") or 0.0),
-                    render_color_mode=str(entry.get("render_color_mode") or "auto"),
-                    black_enhancement=str(entry.get("black_enhancement") or "auto"),
-                    black_threshold=int(entry.get("black_threshold") or 180),
-                )
+                return self._profile_from_entry(entry)
         return None
 
     def all_profiles(self) -> list[PrintProfile]:
@@ -141,24 +149,7 @@ class PrintingSection:
         result: list[PrintProfile] = []
         for entry in self.print_profiles:
             if isinstance(entry, dict) and entry.get("id"):
-                result.append(
-                    PrintProfile(
-                        id=str(entry.get("id") or ""),
-                        label=str(entry.get("label") or ""),
-                        printer_name=str(entry.get("printer_name") or ""),
-                        dpi=int(entry["dpi"]) if entry.get("dpi") else None,
-                        placement_mode=str(entry.get("placement_mode") or "paper_origin"),
-                        page_size=str(entry.get("page_size") or ""),
-                        orientation=str(entry.get("orientation") or ""),
-                        scale_mode=str(entry.get("scale_mode") or "none"),
-                        alignment=str(entry.get("alignment") or "top_left"),
-                        x_offset_mm=float(entry.get("x_offset_mm") or 0.0),
-                        y_offset_mm=float(entry.get("y_offset_mm") or 0.0),
-                        render_color_mode=str(entry.get("render_color_mode") or "auto"),
-                        black_enhancement=str(entry.get("black_enhancement") or "auto"),
-                        black_threshold=int(entry.get("black_threshold") or 180),
-                    )
-                )
+                result.append(self._profile_from_entry(entry))
         return result
 
 

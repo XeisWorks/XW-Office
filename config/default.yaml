@@ -76,6 +76,9 @@ printing:
     - id: "noten_simplex"
       label: "Noten A4 Simplex"
       printer_name: "Noten A4 Simplex"
+      # Optional nach erfolgreichem Golden-Sample-Test auf dem Druck-PC:
+      # backend: "pdf_xchange"
+      # native_pdf_exe: "C:/Program Files/Tracker Software/PDF Editor/PDFXEdit.exe"
     - id: "noten_duplex"
       label: "Noten A4 Duplex"
       printer_name: "Noten A4 Duplex"

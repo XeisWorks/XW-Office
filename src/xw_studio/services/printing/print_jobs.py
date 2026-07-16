@@ -13,6 +13,7 @@ PageSizeName = Literal["", "A4", "A5"]
 PageOrientationName = Literal["", "portrait", "landscape"]
 ScaleMode = Literal["none", "fit"]
 AlignmentMode = Literal["top_left", "center"]
+PdfBackendName = Literal["qt_raster", "pdf_xchange"]
 BlackEnhancement = Literal[
     "auto",
     "none",
@@ -75,6 +76,8 @@ class PdfPrintJob:
     render_color_mode: RenderColorMode = "auto"
     black_enhancement: BlackEnhancement = "auto"
     black_threshold: int = 180
+    backend: PdfBackendName = "qt_raster"
+    native_pdf_exe: str = ""
     cleanup_paths: tuple[str, ...] = field(default_factory=tuple)
     id: str = field(default_factory=lambda: uuid4().hex)
 
