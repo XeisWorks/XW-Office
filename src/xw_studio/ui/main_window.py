@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
 from xw_studio.core.signals import AppSignals
 from xw_studio.core.types import ModuleKey
 from xw_studio.core.worker import BackgroundWorker
+from xw_studio.services.background_jobs import BackgroundJobManager
+from xw_studio.services.printing.print_queue import PrintQueueService
 from xw_studio.services.printer_status.service import PrinterStatusService, PrinterStatusSnapshot
 from xw_studio.ui.performance import EventLoopWatchdog
 from xw_studio.ui.sidebar import Sidebar
@@ -342,8 +344,6 @@ class MainWindow(QMainWindow):
         return SettingsView(self._container)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self._startup_preload_worker is not None and self._startup_preload_worker.isRunning():
-            self._startup_preload_worker.wait(2000)
         for widget in self._pages.values():
             has_active_flow = getattr(widget, "has_active_flow", None)
             if callable(has_active_flow) and has_active_flow():
@@ -356,6 +356,33 @@ class MainWindow(QMainWindow):
                 return
         for widget in self._pages.values():
             prepare_shutdown = getattr(widget, "prepare_shutdown", None)
-            if callable(prepare_shutdown):
-                prepare_shutdown()
+            if callable(prepare_shutdown) and prepare_shutdown() is False:
+                self._postpone_shutdown(event)
+                return
+
+        for worker in (self._startup_preload_worker, self._printer_status_worker):
+            if worker is not None and worker.isRunning():
+                worker.cancel()
+                if not worker.wait(30000):
+                    self._postpone_shutdown(event)
+                    return
+
+        background_jobs = self._container.get_if_resolved(BackgroundJobManager)
+        if background_jobs is not None and not background_jobs.shutdown(30000):
+            self._postpone_shutdown(event)
+            return
+        print_queue = self._container.get_if_resolved(PrintQueueService)
+        if print_queue is not None and not print_queue.shutdown(30000):
+            self._postpone_shutdown(event)
+            return
+        self._eventloop_watchdog.stop()
         super().closeEvent(event)
+
+    def _postpone_shutdown(self, event: QCloseEvent) -> None:
+        logger.warning("Application shutdown postponed because a background task is still running")
+        QMessageBox.warning(
+            self,
+            "App beenden",
+            "Eine Hintergrundaufgabe wird noch sicher beendet. Bitte in einigen Sekunden erneut versuchen.",
+        )
+        event.ignore()

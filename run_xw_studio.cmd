@@ -39,8 +39,9 @@ set "EXIT_CODE=%ERRORLEVEL%"
 
 if not "%EXIT_CODE%"=="0" (
     echo.
-    echo [XW-Studio] Start fehlgeschlagen mit Exit-Code %EXIT_CODE%.
-    echo Falls Module fehlen, installiere Abhaengigkeiten im venv:
+    echo [XW-Studio] Anwendung unerwartet beendet ^(Exit-Code %EXIT_CODE%^).
+    echo Details stehen in der aktuellen Datei im Ordner logs.
+    echo Falls direkt beim Start ein Importfehler gemeldet wurde:
     echo   python -m venv .venv
     echo   .venv\Scripts\python -m pip install -e ".[dev]"
     pause

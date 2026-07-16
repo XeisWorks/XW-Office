@@ -93,3 +93,12 @@ def test_enqueue_and_wait_returns_worker_result(monkeypatch) -> None:
 
     assert result.success is True
     assert result.job_id == job.id
+
+
+def test_idle_print_queue_thread_stops_cleanly() -> None:
+    service = print_queue.PrintQueueService()
+    worker = service._ensure_worker()  # noqa: SLF001
+
+    assert worker.isRunning()
+    assert service.shutdown(1000) is True
+    assert worker.isRunning() is False

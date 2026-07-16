@@ -237,11 +237,15 @@ class PrintQueueService(QObject):
             self._results[result.job_id] = result
             self._result_condition.notify_all()
 
-    def shutdown(self, wait_ms: int = 5000) -> None:
+    def shutdown(self, wait_ms: int = 5000) -> bool:
+        """Stop the queue thread, returning false while a backend is still busy."""
         if self._worker is not None and self._worker.isRunning():
             self._worker.stop()
-            self._worker.wait(wait_ms)
+            if not self._worker.wait(max(int(wait_ms), 0)):
+                logger.warning("Print queue worker still running during application shutdown")
+                return False
         self._worker = None
+        return True
 
     def __del__(self) -> None:
         try:

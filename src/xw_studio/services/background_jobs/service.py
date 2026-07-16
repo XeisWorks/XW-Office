@@ -228,6 +228,41 @@ class BackgroundJobManager:
         self._queue_limits[str(queue)] = max(1, int(limit))
         self._try_start(str(queue))
 
+    def shutdown(self, wait_ms: int = 30000) -> bool:
+        """Cancel queued work and wait for every managed QThread to finish.
+
+        ``BackgroundWorker.cancel`` is cooperative and cannot interrupt a
+        blocking network call. Keeping the worker references and reporting a
+        timeout lets the window postpone closing instead of destroying a live
+        ``QThread`` and aborting the process.
+        """
+        for jobs in self._queues.values():
+            for job in jobs:
+                if job.handle is not None:
+                    job.handle.cancel()
+            jobs.clear()
+
+        workers: list[BackgroundWorker] = []
+        seen: set[int] = set()
+        for active in self._active.values():
+            for worker in active:
+                if id(worker) in seen or not worker.isRunning():
+                    continue
+                seen.add(id(worker))
+                workers.append(worker)
+                worker.cancel()
+
+        deadline = time.monotonic() + max(int(wait_ms), 0) / 1000.0
+        for worker in workers:
+            remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+            if worker.isRunning() and not worker.wait(remaining_ms):
+                logger.warning("Background worker still running during application shutdown")
+                return False
+
+        for queue_name in list(self._active):
+            self._prune_finished(queue_name)
+        return True
+
     def _drop_pending(self, queue: str, key: str, *, cancel: bool = False) -> None:
         jobs = self._queues.get(queue, [])
         kept: list[_QueuedJob] = []
