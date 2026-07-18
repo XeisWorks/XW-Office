@@ -44,7 +44,7 @@ Dateien:
 
 - `src/xw_studio/services/invoice_processing/service.py`
 - `src/xw_studio/services/sevdesk/invoice_client.py`
-- `Markdowns/sevdesk_sendviaemail_mailstrategie_2026-05-22.md`
+- `markdowns/sevdesk_sendviaemail_mailstrategie_2026-05-22.md`
 
 Umsetzung:
 

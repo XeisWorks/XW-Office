@@ -5,7 +5,7 @@ Diese Datei bleibt als historischer Verlauf bestehen.
 
 Zweck:
 - Diese Datei ist die klare Abarbeitungsliste fuer die naechsten Umsetzungsphasen.
-- Basis sind die urspruengliche Wunschliste in `Markdowns/umbau auf pyside6 und verbesserungen.txt`
+- Basis sind die urspruengliche Wunschliste in `markdowns/umbau auf pyside6 und verbesserungen.txt`
   plus der Blueprint in `docs/copilot_migration_plan.md`.
 - Fokus: nur offene Punkte, in kleine commit-faehige Pakete zerlegt.
 
