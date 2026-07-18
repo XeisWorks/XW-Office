@@ -341,6 +341,10 @@ class TagesgeschaeftView(QWidget):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._badge_timer.stop()
+        if self._rechnungen_view is not None and self._rechnungen_view.prepare_shutdown() is False:
+            logger.warning("Tagesgeschaeft close postponed because Rechnung jobs are still running")
+            event.ignore()
+            return
         if not self._wait_for_workers():
             logger.warning("Tagesgeschaeft close postponed because a worker is still running")
             event.ignore()
@@ -361,6 +365,8 @@ class TagesgeschaeftView(QWidget):
 
     def prepare_shutdown(self) -> bool:
         self._badge_timer.stop()
+        if self._rechnungen_view is not None and self._rechnungen_view.prepare_shutdown() is False:
+            return False
         return self._wait_for_workers()
 
     def _wait_for_workers(self) -> bool:

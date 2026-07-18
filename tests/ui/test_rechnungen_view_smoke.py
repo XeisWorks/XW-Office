@@ -256,6 +256,21 @@ def _build_rechnungen_test_container() -> tuple[Container, _FakeInvoiceProcessin
     return container, invoice_service
 
 
+def test_rechnungen_shutdown_suppresses_wix_warmup_restart(qtbot: object) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    view._wix_warm_queue = ["20844"]  # noqa: SLF001
+
+    assert view.prepare_shutdown() is True
+    view._warm_wix_context_for_summaries([invoice_service._draft])  # noqa: SLF001
+    view._on_wix_warm_finished()  # noqa: SLF001
+
+    assert view._wix_warm_queue == []  # noqa: SLF001
+    assert view._wix_warm_worker is None  # noqa: SLF001
+    assert view._wix_warm_handle is None  # noqa: SLF001
+
+
 def test_tagesgeschaeft_contains_rechnungen_view(qtbot: object) -> None:
     container = _build_container()
     view = TagesgeschaeftView(container)

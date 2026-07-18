@@ -929,6 +929,7 @@ class RechnungenView(QWidget):
         self._wix_context_seq = 0
         self._wix_warm_queue: list[str] = []
         self._wix_warm_inflight_refs: set[str] = set()
+        self._shutting_down = False
         self._open_overview_seq = 0
         self._pending_open_overview_rows: list[InvoiceSummary] = []
         self._hint_seq = 0
@@ -1407,9 +1408,26 @@ class RechnungenView(QWidget):
         return widget.isVisible() and widget.rect().contains(local_pos)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        self._mollie_timer.stop()
-        self._stop_mollie_worker()
+        self.prepare_shutdown()
         super().closeEvent(event)
+
+    def prepare_shutdown(self) -> bool:
+        self._shutting_down = True
+        self._post_load_prefetch_seq += 1
+        self._hint_seq += 1
+        self._wix_context_seq += 1
+        self._detail_context_seq += 1
+        self._mollie_timer.stop()
+        self._wix_warm_queue.clear()
+        self._wix_warm_inflight_refs.clear()
+        if self._wix_warm_handle is not None:
+            self._wix_warm_handle.cancel()
+        if self._wix_context_handle is not None:
+            self._wix_context_handle.cancel()
+        self._background_jobs.cancel_owner(self)
+        self._background_jobs.cancel_key("wix-warmup")
+        self._stop_mollie_worker()
+        return True
 
     def set_badge_refresh_managed_externally(self, enabled: bool) -> None:
         """Switch badge refresh to parent-managed mode to avoid duplicate polling."""
@@ -2483,6 +2501,8 @@ class RechnungenView(QWidget):
         Visible rows are warmed in bounded batches so row-to-row selection in
         the right-hand panel is fast without flooding the Wix API.
         """
+        if self._shutting_down:
+            return
         service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
         added = 0
         prioritized = self._prioritize_summaries_for_background_prefetch(summaries)
@@ -2508,6 +2528,8 @@ class RechnungenView(QWidget):
         self._start_next_wix_warm_batch()
 
     def _start_next_wix_warm_batch(self) -> None:
+        if self._shutting_down:
+            return
         if not self._can_run_wix_warm_job():
             return
         refs = self._wix_warm_queue[:_WIX_WARM_BATCH_SIZE]
@@ -2533,6 +2555,8 @@ class RechnungenView(QWidget):
         self._wix_warm_worker = handle.worker
 
     def _can_run_wix_warm_job(self) -> bool:
+        if self._shutting_down:
+            return False
         if self._wix_warm_worker is not None and self._wix_warm_worker.isRunning():
             return False
         if self._wix_context_worker is not None and self._wix_context_worker.isRunning():
@@ -2596,6 +2620,8 @@ class RechnungenView(QWidget):
         return rows
 
     def _on_wix_warm_result(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         rows = payload if isinstance(payload, list) else []
         elapsed_ms = int((time.perf_counter() - self._wix_warm_started_at) * 1000) if self._wix_warm_started_at else 0
         logger.info("Wix context warmup result refs=%s elapsed_ms=%s", len(rows), elapsed_ms)
@@ -2623,6 +2649,8 @@ class RechnungenView(QWidget):
         self._wix_warm_worker = None
         self._wix_warm_handle = None
         self._wix_warm_inflight_refs.clear()
+        if self._shutting_down:
+            return
         self._start_next_wix_warm_batch()
 
     def _restart_hint_prefetch(self) -> None:

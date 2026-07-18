@@ -33,3 +33,19 @@ def test_shutdown_keeps_running_worker_alive_after_timeout(qtbot: object) -> Non
     release.set()
     assert manager.shutdown(1000) is True
     assert handle.worker.isRunning() is False
+
+
+def test_shutdown_rejects_new_background_jobs() -> None:
+    manager = BackgroundJobManager()
+
+    assert manager.shutdown(0) is True
+
+    handle = manager.submit_callable(
+        queue="network-background",
+        priority=1,
+        key="late-job",
+        fn=lambda token: "late",
+    )
+
+    assert handle.worker is None
+    assert handle.token.cancelled

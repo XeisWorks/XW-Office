@@ -93,6 +93,7 @@ class BackgroundJobManager:
         self._queues: dict[str, list[_QueuedJob]] = {}
         self._active: dict[str, list[BackgroundWorker]] = {}
         self._active_jobs: dict[str, list[_QueuedJob]] = {}
+        self._shutting_down = False
         self._queue_limits = dict(_DEFAULT_QUEUE_LIMITS)
         if queue_limits:
             self._queue_limits.update({str(key): max(1, int(value)) for key, value in queue_limits.items()})
@@ -117,6 +118,9 @@ class BackgroundJobManager:
         key = str(coalesce_key)
         token = CancelToken()
         handle = JobHandle(key=key, queue=queue_name, token=token)
+        if self._shutting_down:
+            handle.cancel()
+            return handle
         owner_ref = weakref.ref(owner) if owner is not None else None
         if replace == "cancel_previous":
             self.cancel_key(key)
@@ -155,6 +159,9 @@ class BackgroundJobManager:
         """Submit a callable that receives a cooperative cancellation token."""
         token = CancelToken()
         handle = JobHandle(key=str(key), queue=str(queue or "default"), token=token)
+        if self._shutting_down:
+            handle.cancel()
+            return handle
 
         def start_fn() -> BackgroundWorker | None:
             def job() -> Any:
@@ -236,6 +243,7 @@ class BackgroundJobManager:
         timeout lets the window postpone closing instead of destroying a live
         ``QThread`` and aborting the process.
         """
+        self._shutting_down = True
         for jobs in self._queues.values():
             for job in jobs:
                 if job.handle is not None:
