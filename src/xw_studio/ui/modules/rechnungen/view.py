@@ -1449,6 +1449,9 @@ class RechnungenView(QWidget):
     def open_custom_label_dialog(self) -> None:
         self._on_custom_label_clicked()
 
+    def open_special_order_dialog(self) -> None:
+        self._on_special_order_clicked()
+
     def open_sendungen_dialog(self) -> int:
         dlg = OffeneSendungenDialog(self._container, self)
         dlg.exec()

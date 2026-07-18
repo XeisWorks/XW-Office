@@ -416,6 +416,12 @@ class TagesgeschaeftView(QWidget):
         self._btn_custom_label.clicked.connect(self._open_custom_label)
         bar_lay.addWidget(self._btn_custom_label)
 
+        self._btn_special_order = QPushButton("Sonderanfertigung")
+        self._btn_special_order.setToolTip("Wix Payment Link fuer Sonderanfertigung erstellen")
+        self._btn_special_order.setFixedHeight(34)
+        self._btn_special_order.clicked.connect(self._open_special_order)
+        bar_lay.addWidget(self._btn_special_order)
+
         bar_lay.addStretch()
 
         self._btn_start = QToolButton()
@@ -515,7 +521,13 @@ class TagesgeschaeftView(QWidget):
         self._set_invoice_ui_ready(True)
 
     def _set_invoice_ui_ready(self, ready: bool) -> None:
-        for button in (self._btn_refresh, self._btn_draft, self._btn_custom_label, self._btn_start):
+        for button in (
+            self._btn_refresh,
+            self._btn_draft,
+            self._btn_custom_label,
+            self._btn_special_order,
+            self._btn_start,
+        ):
             button.setEnabled(ready)
 
     def _reload_invoice_view(self) -> None:
@@ -529,6 +541,10 @@ class TagesgeschaeftView(QWidget):
     def _open_custom_label(self) -> None:
         if self._rechnungen_view is not None:
             self._rechnungen_view.open_custom_label_dialog()
+
+    def _open_special_order(self) -> None:
+        if self._rechnungen_view is not None:
+            self._rechnungen_view.open_special_order_dialog()
 
     def _build_alert_button(self, label: str) -> QPushButton:
         button = QPushButton(label)
