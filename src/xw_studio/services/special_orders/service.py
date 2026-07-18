@@ -111,9 +111,6 @@ class SpecialOrderService:
             "wix-site-id": self._wix_site_id(),
             "Content-Type": "application/json",
         }
-        account_id = self._wix_account_id()
-        if account_id:
-            headers["wix-account-id"] = account_id
         with httpx.Client(timeout=30.0) as client:
             response = client.post(
                 "https://www.wixapis.com/payment-links/v1/payment-links",
@@ -319,6 +316,3 @@ class SpecialOrderService:
 
     def _wix_site_id(self) -> str:
         return str(self._secrets.get_secret("WIX_SITE_ID") or "").strip()
-
-    def _wix_account_id(self) -> str:
-        return str(self._secrets.get_secret("WIX_ACCOUNT_ID") or "").strip()

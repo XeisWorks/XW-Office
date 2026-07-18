@@ -120,7 +120,7 @@ class WixProductsClient:
     Credentials come from :class:`SecretService` (DB/env):
     - WIX_API_KEY  — bearer token
     - WIX_SITE_ID  — target site
-    - WIX_ACCOUNT_ID — (optional) Wix account header
+    - WIX_ACCOUNT_ID — optional cache scope only; not sent to website-level APIs
     """
 
     def __init__(
@@ -156,15 +156,11 @@ class WixProductsClient:
         return bool(self._api_key() and self._site_id())
 
     def _build_headers(self) -> dict[str, str]:
-        headers: dict[str, str] = {
+        return {
             "Authorization": self._api_key(),
             "wix-site-id": self._site_id(),
             "Content-Type": "application/json",
         }
-        account_id = self._account_id()
-        if account_id:
-            headers["wix-account-id"] = account_id
-        return headers
 
     def _brand_endpoint_candidates(self, suffix: str) -> list[str]:
         base_v3 = self._base_url.rstrip("/")
@@ -913,15 +909,11 @@ class WixOrdersClient:
         return bool(self._api_key() and self._site_id())
 
     def _headers(self) -> dict[str, str]:
-        h: dict[str, str] = {
+        return {
             "Authorization": self._api_key(),
             "wix-site-id": self._site_id(),
             "Content-Type": "application/json",
         }
-        acc = self._account_id()
-        if acc:
-            h["wix-account-id"] = acc
-        return h
 
     @staticmethod
     def _extract_text(value: object) -> str:

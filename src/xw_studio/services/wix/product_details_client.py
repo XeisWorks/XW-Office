@@ -281,14 +281,11 @@ class WixProductDetailsClient:
         return bool(self._api_key() and self._site_id())
 
     def _headers(self) -> dict[str, str]:
-        h: dict[str, str] = {
+        return {
             "Authorization": self._api_key(),
             "wix-site-id": self._site_id(),
             "Content-Type": "application/json",
         }
-        if account_id := self._account_id():
-            h["wix-account-id"] = account_id
-        return h
 
     # ------------------------------------------------------------------
     # Version detection
