@@ -1498,8 +1498,8 @@ class WixOrdersClient:
             return True
         return False
 
-    def is_reference_digital_only(self, reference: str) -> bool:
-        order = self._resolve_order(reference)
+    def is_reference_digital_only(self, reference: str, *, use_cache: bool = True) -> bool:
+        order = self._resolve_order(reference, use_cache=use_cache)
         if not order:
             return False
         raw_items = order.get("lineItems") if isinstance(order.get("lineItems"), list) else []

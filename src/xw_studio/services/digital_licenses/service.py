@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 _COMPLETED_KEY = "digital_licenses.completed"
 _DEFAULT_OUTPUT_DIR = r"C:\Users\bernh\OneDrive - XeisWorks\02 XeisWorks\24 Digitale Lizensierung"
 _HANDLING_TOKENS = ("digital delivery handling",)
+_INVOICE_STATUSES = (100, 1000)
 
 
 @dataclass(slots=True)
@@ -76,7 +77,16 @@ class DigitalLicenseService:
 
     def list_open_cases(self, *, limit: int = 100) -> list[DigitalLicenseCase]:
         completed = self._load_completed()
-        summaries = self._invoices.load_invoice_summaries(status=1000, limit=limit, offset=0)
+        summaries: list[InvoiceSummary] = []
+        seen_invoice_ids: set[str] = set()
+        for status in _INVOICE_STATUSES:
+            for summary in self._invoices.load_invoice_summaries(status=status, limit=limit, offset=0):
+                invoice_id = str(summary.id or "").strip()
+                if invoice_id and invoice_id in seen_invoice_ids:
+                    continue
+                if invoice_id:
+                    seen_invoice_ids.add(invoice_id)
+                summaries.append(summary)
         cases: list[DigitalLicenseCase] = []
         for summary in summaries:
             invoice_id = str(summary.id or "").strip()
@@ -86,7 +96,7 @@ class DigitalLicenseService:
             if not ref:
                 continue
             try:
-                if not self._wix_orders.is_reference_digital_only(ref):
+                if not self._wix_orders.is_reference_digital_only(ref, use_cache=False):
                     continue
                 case = self._build_case(summary)
             except Exception as exc:  # noqa: BLE001

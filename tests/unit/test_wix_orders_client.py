@@ -31,7 +31,7 @@ def test_is_reference_digital_only_checks_all_line_items() -> None:
         def __init__(self) -> None:
             pass
 
-        def _resolve_order(self, reference: str) -> dict[str, Any]:
+        def _resolve_order(self, reference: str, *, use_cache: bool = True) -> dict[str, Any]:
             if reference == "all-digital":
                 return {
                     "lineItems": [

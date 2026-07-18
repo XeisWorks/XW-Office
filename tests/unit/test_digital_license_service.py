@@ -8,12 +8,15 @@ from xw_studio.services.wix.client import WixOrderItem
 
 class _Invoices:
     def load_invoice_summaries(self, *, status: int | None, limit: int, offset: int) -> list[InvoiceSummary]:
-        assert status == 1000
+        if status not in {100, 1000}:
+            return []
+        if status == 1000:
+            return []
         return [
             InvoiceSummary(
                 id="inv-1",
                 invoiceNumber="RE-1",
-                status=1000,
+                status=100,
                 contact_name="Anna Example",
                 order_reference="12345",
             )
@@ -21,7 +24,8 @@ class _Invoices:
 
 
 class _Wix:
-    def is_reference_digital_only(self, reference: str) -> bool:
+    def is_reference_digital_only(self, reference: str, *, use_cache: bool = True) -> bool:
+        assert use_cache is False
         return reference == "12345"
 
     def resolve_order_summary(self, reference: str) -> dict[str, str]:
@@ -32,6 +36,11 @@ class _Wix:
             WixOrderItem(sku="XW-1", name="Playable Piece", qty=1),
             WixOrderItem(sku="HANDLING", name="Digital Delivery Handling", qty=1),
         ]
+
+
+class _WixCustom(_Wix):
+    def fetch_order_line_items(self, reference: str) -> list[WixOrderItem]:
+        return [WixOrderItem(sku="", name="Spezialarrangement", qty=1)]
 
 
 class _Catalog:
@@ -65,10 +74,10 @@ class _Settings:
         self.raw = value_json
 
 
-def _service(settings: _Settings, pdf: Path) -> DigitalLicenseService:
+def _service(settings: _Settings, pdf: Path, wix: object | None = None) -> DigitalLicenseService:
     return DigitalLicenseService(
         invoices=_Invoices(),  # type: ignore[arg-type]
-        wix_orders=_Wix(),  # type: ignore[arg-type]
+        wix_orders=wix or _Wix(),  # type: ignore[arg-type]
         catalog=_Catalog(pdf),  # type: ignore[arg-type]
         layout=_Layout(),  # type: ignore[arg-type]
         secret_service=_Secrets(),  # type: ignore[arg-type]
@@ -96,3 +105,15 @@ def test_list_open_cases_skips_completed_invoice(tmp_path: Path) -> None:
     cases = _service(settings, pdf).list_open_cases()
 
     assert cases == []
+
+
+def test_list_open_cases_keeps_custom_digital_line_without_sku(tmp_path: Path) -> None:
+    pdf = tmp_path / "piece.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+
+    cases = _service(_Settings(), pdf, wix=_WixCustom()).list_open_cases()
+
+    assert len(cases) == 1
+    assert cases[0].lines[0].sku == ""
+    assert cases[0].lines[0].name == "Spezialarrangement"
+    assert cases[0].lines[0].missing_print_file is True
