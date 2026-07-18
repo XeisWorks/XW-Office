@@ -74,6 +74,21 @@ Initial schema covers registry, key-value settings, and encrypted API secrets. A
 
 ## Development
 
+### Verbindliche Multi-PC-Branch-Regel
+
+`origin/main` ist der einzige gemeinsame und dauerhafte Code-Stand fuer alle PCs. Jeder Clone
+soll auf `main` stehen und vor der Arbeit per Fast-Forward aktualisiert werden:
+
+```bash
+git switch main
+git pull --ff-only origin main
+```
+
+Arbeitsbranches (einschliesslich `agent/*`) sind nur temporaer. Fertige, getestete Aenderungen
+werden in `main` integriert und zu `origin/main` gepusht; kein PC soll dauerhaft von einem
+Arbeitsbranch betrieben oder synchronisiert werden. Weitere Details stehen in
+[`docs/multi_pc_betriebsleitfaden.md`](docs/multi_pc_betriebsleitfaden.md).
+
 ```bash
 # Run tests
 pytest tests/

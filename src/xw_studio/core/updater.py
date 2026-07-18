@@ -33,6 +33,22 @@ def check_and_update(*, enabled: bool = True) -> UpdateResult:
 
     repo = find_repo_root()
     try:
+        branch = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=str(repo), capture_output=True, text=True, timeout=10,
+        )
+        current_branch = branch.stdout.strip()
+        if branch.returncode != 0:
+            return UpdateResult(error="Aktueller Git-Branch konnte nicht ermittelt werden.")
+        if current_branch != "main":
+            return UpdateResult(
+                error=(
+                    f"Auto-Update abgebrochen: Aktueller Branch ist '{current_branch or 'DETACHED'}'. "
+                    "Bitte lokale Aenderungen sichern, dann 'git switch main' und "
+                    "'git pull --ff-only origin main' ausfuehren."
+                )
+            )
+
         subprocess.run(
             ["git", "fetch", "origin", "main"],
             cwd=str(repo), capture_output=True, timeout=15,
@@ -46,10 +62,14 @@ def check_and_update(*, enabled: bool = True) -> UpdateResult:
             return UpdateResult()
 
         logger.info("Updates found, pulling...")
-        subprocess.run(
-            ["git", "pull", "origin", "main"],
+        pull = subprocess.run(
+            ["git", "pull", "--ff-only", "origin", "main"],
             cwd=str(repo), capture_output=True, timeout=30,
         )
+        if pull.returncode != 0:
+            return UpdateResult(
+                error="Update nicht als Fast-Forward moeglich. Bitte Git-Stand manuell pruefen."
+            )
 
         req_diff = subprocess.run(
             ["git", "diff", "HEAD~1", "HEAD", "--", "requirements.txt", "pyproject.toml"],

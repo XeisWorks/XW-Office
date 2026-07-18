@@ -45,7 +45,14 @@ Hinweis:
 ## 4) Betrieb auf mehreren PCs
 
 - Betriebsdaten werden zentral in PostgreSQL synchronisiert.
-- Code-Updates laufen ueber GitHub + Auto-Update beim Appstart.
+- `origin/main` ist der einzige verbindliche gemeinsame Code-Stand aller PCs.
+- Jeder PC wird dauerhaft auf dem lokalen Branch `main` betrieben; dessen Upstream ist
+  `origin/main`.
+- Temporaere Arbeitsbranches wie `agent/*` muessen nach Abschluss in `main` integriert werden
+  und duerfen nicht als dauerhafter Betriebsstand eines PCs verbleiben.
+- Code-Updates laufen ueber GitHub + Auto-Update beim Appstart. Das Auto-Update verweigert
+  Updates auf anderen Branches, damit `main` nicht versehentlich in einen Arbeitsbranch
+  gemischt wird.
 - Nach groesseren Updates App neu starten.
 
 Empfehlung Rollenmodell:
@@ -61,10 +68,16 @@ Empfehlung Rollenmodell:
 
 Bei manueller Aktualisierung:
 1. App schliessen.
-2. `git pull origin main`
-3. `.venv\\Scripts\\python.exe -m pip install -e ".[dev]"`
-4. `alembic upgrade head`
-5. App neu starten.
+2. Sicherstellen, dass keine lokalen Aenderungen offen sind: `git status --short`
+3. Auf den gemeinsamen Branch wechseln: `git switch main`
+4. Ausschliesslich als Fast-Forward aktualisieren: `git pull --ff-only origin main`
+5. `.venv\\Scripts\\python.exe -m pip install -e ".[dev]"`
+6. `alembic upgrade head`
+7. App neu starten.
+
+Einrichtung bzw. Reparatur des Upstreams pro PC:
+- `git branch --set-upstream-to=origin/main main`
+- Kontrolle: `git status --short --branch` muss `main...origin/main` anzeigen.
 
 ## 6) Backup und Wiederherstellung
 
