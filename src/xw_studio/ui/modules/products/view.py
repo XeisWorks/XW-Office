@@ -36,14 +36,17 @@ from xw_studio.services.draft_invoice.service import (
     ProductPreflightPlan,
 )
 from xw_studio.services.products.brand_service import BrandBulkUpdateReport, ProductBrandService
+from xw_studio.services.products.catalog import Product
 from xw_studio.services.products.field_bulk_service import (
     FieldBulkUpdateReport,
     ProductFieldBulkService,
 )
+from xw_studio.services.products.print_decision import PieceBlock, PrintDecisionEngine
 from xw_studio.services.sevdesk.part_client import PartClient, SevdeskPart
 from xw_studio.services.wix.client import WixProduct, WixProductsClient
 from xw_studio.ui.modules.products.bulk_field_dialog import BulkFieldEditorDialog
 from xw_studio.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
+from xw_studio.ui.modules.rechnungen.print_dialog import prepare_piece_pdf_print, run_piece_pdf_print
 from xw_studio.ui.widgets.data_table import DataTable
 from xw_studio.ui.widgets.search_bar import SearchBar
 
@@ -347,6 +350,7 @@ class ProductsView(QWidget):
         self._save_worker: BackgroundWorker | None = None
         self._brand_worker: BackgroundWorker | None = None
         self._product_create_worker: BackgroundWorker | None = None
+        self._product_print_worker: BackgroundWorker | None = None
         self._sync_filter_text: str = ""
         self._sync_filter_status: str = ""
         self._sync_status_delegate = _SyncPresenceDelegate(self)
@@ -692,6 +696,17 @@ class ProductsView(QWidget):
         self._legacy_import_btn = QPushButton("Legacy-Druckdaten importieren")
         self._legacy_import_btn.clicked.connect(self._import_legacy_print_data)
         bar.addWidget(self._legacy_import_btn)
+        self._sync_print_btn = QPushButton("Auswahl drucken")
+        self._sync_print_btn.clicked.connect(self._print_selected_product)
+        self._sync_print_btn.setEnabled(False)
+        bar.addWidget(self._sync_print_btn)
+        self._sync_produce_btn = QPushButton("Drucken + Bestand")
+        self._sync_produce_btn.setToolTip(
+            "Druckt die Auswahl und erhoeht den Bestand erst nach bestaetigtem Druck."
+        )
+        self._sync_produce_btn.clicked.connect(self._produce_selected_product)
+        self._sync_produce_btn.setEnabled(False)
+        bar.addWidget(self._sync_produce_btn)
         self._sync_apply_btn = QPushButton("Wix -> Lokal uebernehmen")
         self._sync_apply_btn.clicked.connect(self._apply_wix_to_local)
         self._sync_apply_btn.setEnabled(False)
@@ -815,6 +830,8 @@ class ProductsView(QWidget):
         self._sync_rows = self._build_sync_rows()
         self._sync_fields_btn.setEnabled(bool(self._sync_rows))
         self._sync_brand_btn.setEnabled(bool(self._sync_rows))
+        self._sync_print_btn.setEnabled(bool(self._sync_rows))
+        self._sync_produce_btn.setEnabled(bool(self._sync_rows))
         self._sync_search.refresh_suggestions()
         self._apply_sync_filters()
         conflicts = sum(1 for row in self._sync_rows if row.status != "sauber verknuepft")
@@ -831,6 +848,8 @@ class ProductsView(QWidget):
         self._sync_refresh_sevdesk_btn.setEnabled(True)
         self._sync_fields_btn.setEnabled(False)
         self._sync_brand_btn.setEnabled(False)
+        self._sync_print_btn.setEnabled(False)
+        self._sync_produce_btn.setEnabled(False)
         self._sync_apply_btn.setEnabled(False)
         self._sync_status_lbl.setText(f"Fehler: {exc}")
         logger.exception("Sync source load failed: %s", exc)
@@ -1020,6 +1039,181 @@ class ProductsView(QWidget):
 
     def _selected_product_skus(self) -> list[str]:
         return self._selected_skus_from_data_table(self._sync_table)
+
+    def _print_selected_product(self) -> None:
+        skus = self._selected_product_skus()
+        if not skus:
+            QMessageBox.information(self, "Produktdruck", "Bitte zuerst ein Produkt auswaehlen.")
+            return
+        sku = skus[0]
+        row = self._local_product_by_sku(sku)
+        if row is None:
+            QMessageBox.information(
+                self,
+                "Produktdruck",
+                "Fuer diese SKU gibt es noch keinen lokalen Produktdatensatz mit Druckkonfiguration.",
+            )
+            return
+        copies, ok = QInputDialog.getInt(self, "Produktdruck", "Anzahl:", 1, 1, 999, 1)
+        if not ok:
+            return
+        piece = self._piece_from_product_row(row)
+        if run_piece_pdf_print(self, self._container, piece=piece, copies=copies):
+            self._sync_status_lbl.setText(f"Produktdruck gestartet: {row.sku} ({copies}x)")
+
+    def _produce_selected_product(self) -> None:
+        if self._product_print_worker is not None and self._product_print_worker.isRunning():
+            return
+        skus = self._selected_product_skus()
+        if not skus:
+            QMessageBox.information(self, "Produktion", "Bitte zuerst ein Produkt auswaehlen.")
+            return
+        row = self._local_product_by_sku(skus[0])
+        if row is None:
+            QMessageBox.information(
+                self,
+                "Produktion",
+                "Fuer diese SKU gibt es keinen lokalen Produktdatensatz.",
+            )
+            return
+        if not str(row.sevdesk_id or "").strip():
+            QMessageBox.warning(
+                self,
+                "Produktion",
+                "Drucken + Bestand benoetigt eine sevDesk-Verknuepfung.",
+            )
+            return
+        copies, ok = QInputDialog.getInt(self, "Produktion", "Anzahl:", 1, 1, 999, 1)
+        if not ok:
+            return
+        piece = self._piece_from_product_row(row)
+        print_job = prepare_piece_pdf_print(
+            self,
+            self._container,
+            piece=piece,
+            copies=copies,
+            wait=True,
+        )
+        if print_job is None:
+            return
+
+        self._set_product_print_buttons_enabled(False)
+        self._sync_status_lbl.setText(f"Produktion laeuft: {row.sku} ({copies}x)")
+
+        def worker_job() -> dict[str, object]:
+            print_job()
+            try:
+                engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
+                new_stock = engine.record_print_and_update_sevdesk(
+                    piece,
+                    copies,
+                    invoice_ref="Produkte-Menue",
+                )
+                if new_stock <= 0:
+                    raise RuntimeError("sevDesk-Bestand konnte nicht aktualisiert werden")
+                inventory: InventoryService = self._container.resolve(InventoryService)
+            except Exception as exc:  # noqa: BLE001 - stock systems have varied failures
+                logger.warning("Stock update after production print failed for %s: %s", row.sku, exc)
+                return {
+                    "sku": row.sku,
+                    "quantity": copies,
+                    "new_stock": None,
+                    "stock_warning": str(exc),
+                    "local_warning": "",
+                }
+            local_warning = ""
+            try:
+                inventory.set_product_stock(row.sku, new_stock)
+            except Exception as exc:  # noqa: BLE001 - sevDesk is already authoritative here
+                local_warning = str(exc)
+                logger.warning("Local stock cache update failed for %s: %s", row.sku, exc)
+            return {
+                "sku": row.sku,
+                "quantity": copies,
+                "new_stock": new_stock,
+                "stock_warning": "",
+                "local_warning": local_warning,
+            }
+
+        self._product_print_worker = BackgroundWorker(worker_job)
+        self._product_print_worker.signals.result.connect(self._on_product_production_result)
+        self._product_print_worker.signals.error.connect(self._on_product_production_error)
+        self._product_print_worker.signals.finished.connect(self._on_product_production_finished)
+        self._product_print_worker.start()
+
+    def _on_product_production_result(self, payload: object) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        sku = str(data.get("sku") or "Produkt")
+        quantity = int(data.get("quantity") or 0)
+        warning = str(data.get("stock_warning") or "").strip()
+        if warning:
+            self._sync_status_lbl.setText(
+                f"Druck erfolgreich, Bestand nicht gebucht: {sku} ({quantity}x)"
+            )
+            QMessageBox.warning(
+                self,
+                "Produktion teilweise erfolgreich",
+                f"{sku} wurde {quantity}x gedruckt, der Bestand aber nicht gebucht:\n\n{warning}",
+            )
+            return
+        new_stock = int(data.get("new_stock") or 0)
+        local_warning = str(data.get("local_warning") or "").strip()
+        self._sync_status_lbl.setText(
+            f"Druck erfolgreich, Bestand gebucht: {sku} ({quantity}x, neu {new_stock})"
+        )
+        if local_warning:
+            QMessageBox.warning(
+                self,
+                "Bestand gebucht",
+                "Der sevDesk-Bestand wurde gebucht, der lokale Cache konnte aber nicht "
+                f"aktualisiert werden:\n\n{local_warning}",
+            )
+        self._load_sync_sources(refresh_sevdesk_cache=True)
+
+    def _on_product_production_error(self, exc: BaseException) -> None:
+        self._sync_status_lbl.setText("Druck fehlgeschlagen, Bestand nicht gebucht.")
+        QMessageBox.critical(
+            self,
+            "Produktion fehlgeschlagen",
+            f"Der Druck ist fehlgeschlagen. Der Bestand wurde nicht veraendert:\n\n{exc}",
+        )
+
+    def _on_product_production_finished(self) -> None:
+        self._product_print_worker = None
+        self._set_product_print_buttons_enabled(bool(self._sync_rows))
+
+    def _set_product_print_buttons_enabled(self, enabled: bool) -> None:
+        self._sync_print_btn.setEnabled(enabled)
+        self._sync_produce_btn.setEnabled(enabled)
+
+    def _local_product_by_sku(self, sku: str) -> ProductRow | None:
+        wanted = str(sku or "").strip().upper()
+        for row in self._all_rows:
+            if row.sku.strip().upper() == wanted:
+                return row
+        return None
+
+    @staticmethod
+    def _piece_from_product_row(row: ProductRow) -> PieceBlock:
+        product = Product(
+            id=f"settings::{row.sku}",
+            sku=row.sku,
+            name=row.name,
+            category=row.category,
+            brand_name=row.brand_name,
+            brand_id=row.brand_id,
+            sevdesk_part_id=row.sevdesk_id,
+            wix_product_id=row.wix_id,
+            print_file_path=row.print_file_path,
+        )
+        return PieceBlock(
+            sku=row.sku,
+            name=row.name,
+            qty_needed=1,
+            print_profile_id=str(row.print_profile_id or "").strip(),
+            print_plan=[entry for entry in (row.print_plan or []) if isinstance(entry, dict)],
+            product=product,
+        )
 
     def _apply_wix_to_local(self) -> None:
         if not self._wix_rows:

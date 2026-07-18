@@ -77,6 +77,7 @@ class UvaPayloadService:
             month=preview.month,
             kennzahlen=kennzahlen,
             zahlbetrag=_fmt(zahlbetrag),
+            rule_version=_rule_version(preview.year, preview.month),
             warnings=warnings,
         )
 
@@ -85,6 +86,7 @@ class UvaPayloadService:
         lines = [
             "",
             "UVA-Kennzahlen",
+            f"Regelversion: {payload.rule_version}",
             f"A000: EUR {_euro(kz.A000)}",
             f"A011: EUR {_euro(kz.A011)}",
             f"A017: EUR {_euro(kz.A017)}",
@@ -179,3 +181,7 @@ def _euro(value: str) -> str:
 
 def _is_foreign_label(label: str) -> bool:
     return any(marker in label for marker in _FOREIGN_MARKERS)
+
+
+def _rule_version(year: int, month: int) -> str:
+    return "U30_07_2026" if (int(year), int(month)) >= (2026, 7) else "U30_01_2022"

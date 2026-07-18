@@ -17,7 +17,10 @@ from PySide6.QtWidgets import (
 from xw_studio.core.signals import AppSignals
 from xw_studio.core.types import ModuleKey
 from xw_studio.core.worker import BackgroundWorker
+from xw_studio.services.background_jobs import BackgroundJobManager
+from xw_studio.services.printing.print_queue import PrintQueueService
 from xw_studio.services.printer_status.service import PrinterStatusService, PrinterStatusSnapshot
+from xw_studio.ui.performance import EventLoopWatchdog
 from xw_studio.ui.sidebar import Sidebar
 from xw_studio.ui.status_bar import StudioStatusBar
 from xw_studio.ui.theme import apply_app_theme
@@ -39,12 +42,18 @@ class MainWindow(QMainWindow):
         self._loading_pages: set[str] = set()
         self._startup_preload_worker: BackgroundWorker | None = None
         self._printer_status_worker: BackgroundWorker | None = None
+        self._eventloop_watchdog = EventLoopWatchdog(self)
         self._setup_window()
         self._build_ui()
         self._connect_signals()
         self._open_initial_module()
         self._apply_printer_status()
         self._refresh_printer_status_async()
+        self._eventloop_watchdog.start()
+
+    def performance_snapshot(self) -> list[object]:
+        """Return recent event-loop gaps for diagnostics/tests."""
+        return self._eventloop_watchdog.snapshot()
 
     def _setup_window(self) -> None:
         cfg = self._container.config.app.window
@@ -335,8 +344,6 @@ class MainWindow(QMainWindow):
         return SettingsView(self._container)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self._startup_preload_worker is not None and self._startup_preload_worker.isRunning():
-            self._startup_preload_worker.wait(2000)
         for widget in self._pages.values():
             has_active_flow = getattr(widget, "has_active_flow", None)
             if callable(has_active_flow) and has_active_flow():
@@ -349,6 +356,33 @@ class MainWindow(QMainWindow):
                 return
         for widget in self._pages.values():
             prepare_shutdown = getattr(widget, "prepare_shutdown", None)
-            if callable(prepare_shutdown):
-                prepare_shutdown()
+            if callable(prepare_shutdown) and prepare_shutdown() is False:
+                self._postpone_shutdown(event)
+                return
+
+        for worker in (self._startup_preload_worker, self._printer_status_worker):
+            if worker is not None and worker.isRunning():
+                worker.cancel()
+                if not worker.wait(30000):
+                    self._postpone_shutdown(event)
+                    return
+
+        background_jobs = self._container.get_if_resolved(BackgroundJobManager)
+        if background_jobs is not None and not background_jobs.shutdown(30000):
+            self._postpone_shutdown(event)
+            return
+        print_queue = self._container.get_if_resolved(PrintQueueService)
+        if print_queue is not None and not print_queue.shutdown(30000):
+            self._postpone_shutdown(event)
+            return
+        self._eventloop_watchdog.stop()
         super().closeEvent(event)
+
+    def _postpone_shutdown(self, event: QCloseEvent) -> None:
+        logger.warning("Application shutdown postponed because a background task is still running")
+        QMessageBox.warning(
+            self,
+            "App beenden",
+            "Eine Hintergrundaufgabe wird noch sicher beendet. Bitte in einigen Sekunden erneut versuchen.",
+        )
+        event.ignore()

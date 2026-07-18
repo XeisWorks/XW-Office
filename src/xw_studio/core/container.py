@@ -39,6 +39,12 @@ class Container:
                 self._singletons[service_type] = self._factories[service_type](self)
             return self._singletons[service_type]  # type: ignore[return-value]
 
+    def get_if_resolved(self, service_type: type[T]) -> T | None:
+        """Return an existing singleton without creating it during shutdown."""
+        with self._lock:
+            instance = self._singletons.get(service_type)
+        return instance if isinstance(instance, service_type) else None
+
     def reset(self) -> None:
         """Clear all cached singletons (for testing)."""
         with self._lock:

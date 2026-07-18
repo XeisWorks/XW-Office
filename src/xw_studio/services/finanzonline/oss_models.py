@@ -26,6 +26,7 @@ class OssQuarterResult(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     source_count: int = 0
     excluded_count: int = 0
+    cache: dict[str, object] = Field(default_factory=dict)
 
 
 class OssXmlExport(BaseModel):

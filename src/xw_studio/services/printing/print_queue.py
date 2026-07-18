@@ -13,7 +13,7 @@ from typing import TypeAlias
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from xw_studio.services.printing.pdf_renderer import print_pdf_with_qprinter
+from xw_studio.services.printing.pdf_backends import backend_for_job
 from xw_studio.services.printing.print_jobs import BrotherLbxLabelJob, PdfPrintJob, PrintJobResult
 
 logger = logging.getLogger(__name__)
@@ -154,7 +154,8 @@ class _PrintQueueWorker(QThread):
         if isinstance(job, PdfPrintJob):
             logger.info(
                 "Print job started: id=%s kind=%s printer='%s' file='%s' copies=%s dpi=%s pages=%s "
-                "placement=%s offset_mm=(%s,%s) render_color_mode=%s black_enhancement=%s black_threshold=%s",
+                "placement=%s page_size=%s orientation=%s scale_mode=%s alignment=%s offset_mm=(%s,%s) "
+                "render_color_mode=%s black_enhancement=%s black_threshold=%s backend=%s",
                 job.id,
                 job.job_kind,
                 job.printer_name,
@@ -163,27 +164,18 @@ class _PrintQueueWorker(QThread):
                 job.dpi if job.dpi is not None else f"queue-default/fallback-{job.effective_dpi}",
                 job.pages,
                 job.placement_mode,
+                job.page_size,
+                job.orientation,
+                job.scale_mode,
+                job.alignment,
                 job.x_offset_mm,
                 job.y_offset_mm,
                 job.effective_render_color_mode,
                 job.effective_black_enhancement,
                 job.black_threshold,
+                job.backend,
             )
-            print_pdf_with_qprinter(
-                job.pdf_path,
-                job.printer_name,
-                pages=job.pages,
-                copies=job.copies,
-                dpi=job.dpi,
-                fallback_dpi=job.effective_dpi,
-                placement_mode=job.placement_mode,
-                x_offset_mm=job.x_offset_mm,
-                y_offset_mm=job.y_offset_mm,
-                job_kind=job.job_kind,
-                render_color_mode=job.effective_render_color_mode,
-                black_enhancement=job.effective_black_enhancement,
-                black_threshold=job.black_threshold,
-            )
+            backend_for_job(job).print(job)
             return
         _execute_brother_lbx_job(job)
 
@@ -245,11 +237,15 @@ class PrintQueueService(QObject):
             self._results[result.job_id] = result
             self._result_condition.notify_all()
 
-    def shutdown(self, wait_ms: int = 5000) -> None:
+    def shutdown(self, wait_ms: int = 5000) -> bool:
+        """Stop the queue thread, returning false while a backend is still busy."""
         if self._worker is not None and self._worker.isRunning():
             self._worker.stop()
-            self._worker.wait(wait_ms)
+            if not self._worker.wait(max(int(wait_ms), 0)):
+                logger.warning("Print queue worker still running during application shutdown")
+                return False
         self._worker = None
+        return True
 
     def __del__(self) -> None:
         try:

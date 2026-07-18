@@ -25,6 +25,15 @@ def test_singleton_behavior() -> None:
     assert a is b
 
 
+def test_get_if_resolved_does_not_create_singleton() -> None:
+    container = Container(AppConfig())
+    container.register(_DummyService, lambda c: _DummyService(1))
+
+    assert container.get_if_resolved(_DummyService) is None
+    service = container.resolve(_DummyService)
+    assert container.get_if_resolved(_DummyService) is service
+
+
 def test_missing_factory_raises() -> None:
     container = Container(AppConfig())
     with pytest.raises(KeyError):

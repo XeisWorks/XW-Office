@@ -5,10 +5,11 @@ import pytest
 
 from xw_studio.core.config import AppConfig, FinanzOnlineSection
 from xw_studio.services.finanzonline.client import FinanzOnlineClient
+from xw_studio.services.finanzonline.monthly_snapshot import TaxMonthlySnapshotStore
 from xw_studio.services.finanzonline.u13_xml import build_u13_xml, validate_u13_xml
 from xw_studio.services.finanzonline.u30_xml import build_u30_xml, validate_u30_xml
 from xw_studio.services.finanzonline.uva_models import UvaKennzahlen, UvaPayloadResult
-from xw_studio.services.finanzonline.uva_service import UvaService
+from xw_studio.services.finanzonline.uva_service import UvaService, build_uva_zm_reconciliation
 from xw_studio.services.finanzonline.uva_soap import (
     FinanzOnlineFileUploadBackend,
     MockUvaSoapBackend,
@@ -16,7 +17,7 @@ from xw_studio.services.finanzonline.uva_soap import (
     UvaSubmitResult,
     ZeepUvaSoapBackend,
 )
-from xw_studio.services.finanzonline.zm_service import ZmRow
+from xw_studio.services.finanzonline.zm_service import ZmCalculationResult, ZmRow
 
 
 def test_unconfigured_client_raises() -> None:
@@ -133,6 +134,88 @@ class _ZmServiceStub:
 
     def render_preview_text(self, _result: object) -> str:
         return "ZM preview"
+
+
+class _ZmServiceWithCounter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def calculate_month(self, year: int, month: int) -> ZmCalculationResult:
+        assert (year, month) == (2026, 3)
+        self.calls += 1
+        return ZmCalculationResult(
+            year=year,
+            month=month,
+            rows=[ZmRow(uid="DE123456789", amount_eur_int=124, kind="service")],
+        )
+
+    def render_preview_text(self, _result: object) -> str:
+        return "ZM preview"
+
+
+class _BlockingZmService:
+    def calculate_month(self, year: int, month: int) -> ZmCalculationResult:
+        assert (year, month) == (2026, 3)
+        return ZmCalculationResult(
+            year=year,
+            month=month,
+            invalid=["ungueltige/fehlende UID: Test"],
+        )
+
+    def render_preview_text(self, _result: object) -> str:
+        return "ZM blocked"
+
+
+class _PreviewResultStub:
+    year = 2026
+    month = 3
+    warnings: list[str] = []
+
+    def model_dump(self) -> dict[str, object]:
+        return {"year": self.year, "month": self.month}
+
+
+class _PreviewServiceWithCounter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def build_preview(self, year: int, month: int) -> _PreviewResultStub:
+        assert (year, month) == (2026, 3)
+        self.calls += 1
+        return _PreviewResultStub()
+
+    def render_preview_text(self, _preview: _PreviewResultStub) -> str:
+        return "preview"
+
+
+class _PayloadServiceWithPreviewCounter:
+    def __init__(self) -> None:
+        self.from_preview_calls = 0
+        self.direct_calls = 0
+
+    def build_payload_from_preview(self, preview: _PreviewResultStub) -> UvaPayloadResult:
+        self.from_preview_calls += 1
+        return UvaPayloadResult(
+            year=preview.year,
+            month=preview.month,
+            kennzahlen=UvaKennzahlen(A000="123.45", A029="100.00", C060="10.00"),
+            zahlbetrag="90.00",
+            warnings=["cached-warning"],
+        )
+
+    def build_payload(self, year: int, month: int) -> UvaPayloadResult:
+        assert (year, month) == (2026, 3)
+        self.direct_calls += 1
+        return UvaPayloadResult(
+            year=year,
+            month=month,
+            kennzahlen=UvaKennzahlen(A000="999.99"),
+            zahlbetrag="999.99",
+            warnings=[],
+        )
+
+    def render_kennzahlen_text(self, payload: UvaPayloadResult) -> str:
+        return f"KZ000={payload.kennzahlen.A000}"
 
 
 def test_zeep_backend_calls_operation() -> None:
@@ -354,6 +437,211 @@ def test_uva_service_submit_month_sends_zm_after_successful_u30() -> None:
     assert result.zm_ok is True
     assert [call["meldung"] for call in mock.calls] == ["U30", "U13"]
     assert mock.calls[-1]["rows"][0]["kind"] == "service"
+
+
+def test_uva_service_reuses_month_calculation_for_submission_payload() -> None:
+    mock = MockUvaSoapBackend()
+    client = FinanzOnlineClient(AppConfig(), uva_backend=mock)
+    preview_service = _PreviewServiceWithCounter()
+    payload_service = _PayloadServiceWithPreviewCounter()
+    service = UvaService(
+        AppConfig(),
+        client,
+        preview_service=preview_service,  # type: ignore[arg-type]
+        payload_service=payload_service,  # type: ignore[arg-type]
+    )
+
+    preview_payload = service.calculate_month(2026, 3)
+    submission_payload = service.build_submission_payload(2026, 3)
+    cached_payload = service.calculate_month(2026, 3)
+
+    assert preview_payload["zahlbetrag"] == "90.00"
+    assert submission_payload["zahlbetrag"] == "90.00"
+    assert submission_payload["kennzahlen"]["KZ000"] == "123.45"
+    assert cached_payload["cache"]["hit"] is True
+    assert preview_service.calls == 1
+    assert payload_service.from_preview_calls == 1
+    assert payload_service.direct_calls == 0
+
+
+def test_uva_service_reuses_cached_zm_for_submit_after_preview() -> None:
+    mock = MockUvaSoapBackend()
+    client = FinanzOnlineClient(AppConfig(), uva_backend=mock)
+    preview_service = _PreviewServiceWithCounter()
+    payload_service = _PayloadServiceWithPreviewCounter()
+    zm_service = _ZmServiceWithCounter()
+    service = UvaService(
+        AppConfig(),
+        client,
+        preview_service=preview_service,  # type: ignore[arg-type]
+        payload_service=payload_service,  # type: ignore[arg-type]
+        zm_service=zm_service,  # type: ignore[arg-type]
+    )
+
+    service.calculate_month(2026, 3)
+    result = service.submit_month(2026, 3)
+
+    assert result.ok is True
+    assert [call["meldung"] for call in mock.calls] == ["U30", "U13"]
+    assert zm_service.calls == 1
+
+
+def test_uva_service_blocks_submission_when_data_quality_blocks() -> None:
+    mock = MockUvaSoapBackend()
+    client = FinanzOnlineClient(AppConfig(), uva_backend=mock)
+    service = UvaService(
+        AppConfig(),
+        client,
+        preview_service=_PreviewServiceWithCounter(),  # type: ignore[arg-type]
+        payload_service=_PayloadServiceWithPreviewCounter(),  # type: ignore[arg-type]
+        zm_service=_BlockingZmService(),  # type: ignore[arg-type]
+    )
+
+    result = service.submit_month(2026, 3)
+
+    assert result.ok is False
+    assert "Datenqualitaet blockiert" in result.message
+    assert mock.calls == []
+
+
+class _JunePreviewResultStub(_PreviewResultStub):
+    year = 2026
+    month = 6
+
+
+class _JunePreviewServiceWithCounter(_PreviewServiceWithCounter):
+    def build_preview(self, year: int, month: int) -> _JunePreviewResultStub:
+        assert (year, month) == (2026, 6)
+        self.calls += 1
+        return _JunePreviewResultStub()
+
+
+class _JuneOffReferencePayloadService(_PayloadServiceWithPreviewCounter):
+    def build_payload_from_preview(self, preview: _PreviewResultStub) -> UvaPayloadResult:
+        self.from_preview_calls += 1
+        return UvaPayloadResult(
+            year=preview.year,
+            month=preview.month,
+            kennzahlen=UvaKennzahlen(A000="1.00"),
+            zahlbetrag="1.00",
+            warnings=[],
+        )
+
+
+def test_uva_service_blocks_submission_when_golden_master_delta_is_too_large() -> None:
+    mock = MockUvaSoapBackend()
+    client = FinanzOnlineClient(AppConfig(), uva_backend=mock)
+    service = UvaService(
+        AppConfig(),
+        client,
+        preview_service=_JunePreviewServiceWithCounter(),  # type: ignore[arg-type]
+        payload_service=_JuneOffReferencePayloadService(),  # type: ignore[arg-type]
+    )
+
+    result = service.submit_month(2026, 6)
+
+    assert result.ok is False
+    assert "Golden-Master-Abweichung" in result.message
+    assert mock.calls == []
+
+
+def test_uva_service_reuses_persistent_month_snapshot(tmp_path) -> None:
+    store = TaxMonthlySnapshotStore(tmp_path / "tax.sqlite")
+    mock = MockUvaSoapBackend()
+    client = FinanzOnlineClient(AppConfig(), uva_backend=mock)
+    first_preview = _PreviewServiceWithCounter()
+    first_payload_service = _PayloadServiceWithPreviewCounter()
+    first_service = UvaService(
+        AppConfig(),
+        client,
+        preview_service=first_preview,  # type: ignore[arg-type]
+        payload_service=first_payload_service,  # type: ignore[arg-type]
+        snapshot_store=store,
+    )
+
+    first = first_service.calculate_month(2026, 3)
+
+    second_preview = _PreviewServiceWithCounter()
+    second_payload_service = _PayloadServiceWithPreviewCounter()
+    second_service = UvaService(
+        AppConfig(),
+        client,
+        preview_service=second_preview,  # type: ignore[arg-type]
+        payload_service=second_payload_service,  # type: ignore[arg-type]
+        snapshot_store=store,
+    )
+    second = second_service.calculate_month(2026, 3)
+
+    assert first["cache"]["source"] == "live"
+    assert second["cache"]["source"] == "persistent"
+    assert second["zahlbetrag"] == "90.00"
+    assert second_preview.calls == 0
+    assert second_payload_service.from_preview_calls == 0
+
+
+def test_uva_service_refresh_bypasses_persistent_snapshot(tmp_path) -> None:
+    store = TaxMonthlySnapshotStore(tmp_path / "tax.sqlite")
+    mock = MockUvaSoapBackend()
+    client = FinanzOnlineClient(AppConfig(), uva_backend=mock)
+    preview_service = _PreviewServiceWithCounter()
+    payload_service = _PayloadServiceWithPreviewCounter()
+    service = UvaService(
+        AppConfig(),
+        client,
+        preview_service=preview_service,  # type: ignore[arg-type]
+        payload_service=payload_service,  # type: ignore[arg-type]
+        snapshot_store=store,
+    )
+
+    service.calculate_month(2026, 3)
+    refreshed = service.calculate_month(2026, 3, refresh=True)
+
+    assert refreshed["cache"]["source"] == "live"
+    assert preview_service.calls == 2
+    assert payload_service.from_preview_calls == 2
+
+
+def test_uva_service_ignores_outdated_persistent_snapshot(tmp_path) -> None:
+    store = TaxMonthlySnapshotStore(tmp_path / "tax.sqlite")
+    store.put_snapshot(2026, 3, {"jahr": 2026, "monat": 3, "zahlbetrag": "1.00"})
+    mock = MockUvaSoapBackend()
+    client = FinanzOnlineClient(AppConfig(), uva_backend=mock)
+    preview_service = _PreviewServiceWithCounter()
+    payload_service = _PayloadServiceWithPreviewCounter()
+    service = UvaService(
+        AppConfig(),
+        client,
+        preview_service=preview_service,  # type: ignore[arg-type]
+        payload_service=payload_service,  # type: ignore[arg-type]
+        snapshot_store=store,
+    )
+
+    payload = service.calculate_month(2026, 3)
+
+    assert payload["zahlbetrag"] == "90.00"
+    assert payload["cache"]["source"] == "live"
+    assert preview_service.calls == 1
+
+
+def test_uva_zm_reconciliation_explains_period_differences() -> None:
+    payload = {
+        "jahr": 2026,
+        "monat": 6,
+        "kennzahlen": {"A017": "3668.46", "A021": "147.60"},
+        "zm": {
+            "rows": [
+                {"uid": "DE123456789", "amount_eur_int": 2399, "kind": "delivery"},
+                {"uid": "IT12345678901", "amount_eur_int": 120, "kind": "service"},
+            ]
+        },
+    }
+
+    reconciliation = build_uva_zm_reconciliation(payload)
+
+    assert reconciliation["period"] == "2026-06"
+    assert reconciliation["delivery_delta"] == "1269.46"
+    assert reconciliation["service_delta"] == "27.60"
+    assert any("IST" in note and "Soll" in note for note in reconciliation["notes"])
 
 
 def test_finanzonline_client_uses_configured_wsdl_without_env() -> None:

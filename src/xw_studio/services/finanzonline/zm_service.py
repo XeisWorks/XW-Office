@@ -50,6 +50,9 @@ class ZmInvoiceProvider(Protocol):
     def load_credit_notes(self, year: int, month: int) -> list[dict[str, Any]]:
         ...
 
+    def load_positions(self, resource: str, document_id: str) -> list[dict[str, Any]]:
+        ...
+
 
 @dataclass(frozen=True)
 class _Bucket:
@@ -66,6 +69,7 @@ class SevdeskZmInvoiceProvider:
         self._page_size = page_size
         self._max_pages = max_pages
         self._contact_cache: dict[str, dict[str, Any]] = {}
+        self._position_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
 
     def load_invoices(self, year: int, month: int) -> list[dict[str, Any]]:
         return self._load_dated_resource(
@@ -155,6 +159,34 @@ class SevdeskZmInvoiceProvider:
         enriched["contact"] = cached
         return enriched
 
+    def load_positions(self, resource: str, document_id: str) -> list[dict[str, Any]]:
+        doc_id = str(document_id or "").strip()
+        if not doc_id:
+            return []
+        cache_key = (resource, doc_id)
+        if cache_key in self._position_cache:
+            return [dict(item) for item in self._position_cache[cache_key]]
+        path = ""
+        params: dict[str, Any] = {"embed": "part"}
+        if resource == "Invoice":
+            path = "/InvoicePos"
+            params.update({"invoice[id]": doc_id, "invoice[objectName]": "Invoice"})
+        elif resource == "CreditNote":
+            path = "/CreditNotePos"
+            params.update({"creditNote[id]": doc_id, "creditNote[objectName]": "CreditNote"})
+        else:
+            self._position_cache[cache_key] = []
+            return []
+        try:
+            payload = self._connection.get(path, params=params).json()
+            objects = payload.get("objects") if isinstance(payload, dict) else []
+            positions = [item for item in objects if isinstance(item, dict)] if isinstance(objects, list) else []
+        except Exception as exc:
+            logger.debug("ZM position lookup failed for %s/%s: %s", resource, doc_id, exc)
+            positions = []
+        self._position_cache[cache_key] = [dict(item) for item in positions]
+        return positions
+
 
 class ZmService:
     """Build the monthly ZM using legacy-compatible invoice-date selection."""
@@ -169,14 +201,40 @@ class ZmService:
         result = ZmCalculationResult(year=year, month=month, considered=len(invoices) + len(credit_notes))
         buckets: dict[tuple[str, ZmKind], _Bucket] = {}
 
-        def collect_document(document: dict[str, Any], *, date_key: str, amount_sign: Decimal) -> None:
+        def collect_document(
+            document: dict[str, Any],
+            *,
+            resource: str,
+            date_key: str,
+            amount_sign: Decimal,
+        ) -> None:
             if not _is_final_status(document):
                 return
             document_date = _parse_date(document.get(date_key) or document.get("date"))
             if document_date is None or document_date.year != year or document_date.month != month:
                 return
-            kind = _classify_zm_kind(document)
-            if kind is None:
+            if not _has_positions(document) and _classify_zm_kind(document) is not None:
+                loader = getattr(self._provider, "load_positions", None)
+                doc_id = _ref_id(document.get("id"))
+                if callable(loader) and doc_id:
+                    positions = loader(resource, doc_id)
+                    if positions:
+                        if _positions_match_document_total(document, positions):
+                            document = dict(document)
+                            document["xw_positions"] = positions
+                        else:
+                            number = str(
+                                document.get("invoiceNumber")
+                                or document.get("creditNoteNumber")
+                                or document.get("number")
+                                or doc_id
+                            ).strip()
+                            result.warnings.append(
+                                "ZM-Positionssumme weicht von Dokumentnetto ab; "
+                                f"Dokumentnetto verwendet: {number}"
+                            )
+            facts = _iter_zm_facts(document)
+            if not facts:
                 return
             result.selected += 1
 
@@ -199,18 +257,19 @@ class ZmService:
                 result.invalid.append(f"ungueltige/fehlende UID: {label} -> {uid_raw or 'leer'}")
                 return
 
-            amount = pick_net(document) * amount_sign
-            key = (uid, kind)
-            current = buckets.get(key)
-            if current is None:
-                buckets[key] = _Bucket(
-                    amount=amount,
-                    invoices=[document_number] if document_number else [],
-                    customer=customer,
-                )
-            else:
+            for kind, net_amount in facts:
+                amount = net_amount * amount_sign
+                key = (uid, kind)
+                current = buckets.get(key)
+                if current is None:
+                    buckets[key] = _Bucket(
+                        amount=amount,
+                        invoices=[document_number] if document_number else [],
+                        customer=customer,
+                    )
+                    continue
                 invoices_for_bucket = list(current.invoices)
-                if document_number:
+                if document_number and document_number not in invoices_for_bucket:
                     invoices_for_bucket.append(document_number)
                 buckets[key] = _Bucket(
                     amount=current.amount + amount,
@@ -219,9 +278,14 @@ class ZmService:
                 )
 
         for invoice in invoices:
-            collect_document(invoice, date_key="invoiceDate", amount_sign=Decimal("1.00"))
+            collect_document(invoice, resource="Invoice", date_key="invoiceDate", amount_sign=Decimal("1.00"))
         for credit_note in credit_notes:
-            collect_document(credit_note, date_key="creditNoteDate", amount_sign=Decimal("-1.00"))
+            collect_document(
+                credit_note,
+                resource="CreditNote",
+                date_key="creditNoteDate",
+                amount_sign=Decimal("-1.00"),
+            )
 
         rows: list[ZmRow] = []
         for (uid, kind), bucket in sorted(buckets.items()):
@@ -293,6 +357,55 @@ def pick_net(invoice: dict[str, Any]) -> Decimal:
     return Decimal("0.00")
 
 
+def _iter_zm_facts(document: dict[str, Any]) -> list[tuple[ZmKind, Decimal]]:
+    positions = document.get("xw_positions")
+    if isinstance(positions, list) and positions:
+        facts: list[tuple[ZmKind, Decimal]] = []
+        for position in positions:
+            if not isinstance(position, dict):
+                continue
+            merged = dict(document)
+            for key in ("taxText", "taxRule", "taxType", "taxSet"):
+                if position.get(key) not in (None, "", {}, []):
+                    merged[key] = position.get(key)
+            kind = _classify_zm_kind(merged)
+            if kind is None:
+                continue
+            net = _pick_position_net(position)
+            if net != Decimal("0.00"):
+                facts.append((kind, net))
+        if facts:
+            return facts
+
+    kind = _classify_zm_kind(document)
+    if kind is None:
+        return []
+    return [(kind, pick_net(document))]
+
+
+def _has_positions(document: dict[str, Any]) -> bool:
+    positions = document.get("xw_positions")
+    return isinstance(positions, list) and bool(positions)
+
+
+def _positions_match_document_total(document: dict[str, Any], positions: list[dict[str, Any]]) -> bool:
+    document_net = abs(pick_net(document))
+    if document_net == Decimal("0.00"):
+        return True
+    position_net = sum(abs(_pick_position_net(position)) for position in positions)
+    return abs(position_net - document_net) <= Decimal("0.05")
+
+
+def _pick_position_net(position: dict[str, Any]) -> Decimal:
+    for key in ("sumNet", "sumNetAccounting", "amountNet", "priceNet", "priceNetAccounting", "net"):
+        value = position.get(key)
+        if value not in (None, "", 0, "0", "0.0", "0.00"):
+            return _to_decimal(value)
+    quantity = _to_decimal(position.get("quantity") or 1)
+    price = _to_decimal(position.get("price") or 0)
+    return (quantity * price).quantize(_DECIMAL_2, rounding=ROUND_HALF_UP)
+
+
 def round_commercial(value: Decimal) -> int:
     return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
@@ -324,6 +437,8 @@ def _classify_zm_kind(invoice: dict[str, Any]) -> ZmKind | None:
         return "dreieck"
     if tax_rule in {"5", "21"} or "REVERSE CHARGE" in text or "SONSTIGE LEISTUNG" in text:
         return "service"
+    if "MEHRWERTSTEUER" in text or re.search(r"\b\d+(?:[.,]\d+)?\s*%", text):
+        return None
     if tax_type == "eu" or tax_rule == "3" or ("INNERGEMEINSCHAFT" in text and "LIEFER" in text):
         return "delivery"
     return None

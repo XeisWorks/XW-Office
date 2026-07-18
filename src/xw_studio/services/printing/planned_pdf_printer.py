@@ -7,6 +7,7 @@ from typing import cast
 from xw_studio.core.config import PrintingSection, PrintProfile
 from xw_studio.services.printing.print_jobs import (
     BlackEnhancement,
+    PdfBackendName,
     PdfPrintJob,
     PlacementMode,
     PrintJobKind,
@@ -29,11 +30,17 @@ class PlanTarget:
     printer_name: str
     dpi: int | None
     placement_mode: PlacementMode
+    page_size: str
+    orientation: str
+    scale_mode: str
+    alignment: str
     x_offset_mm: float
     y_offset_mm: float
     render_color_mode: RenderColorMode
     black_enhancement: BlackEnhancement
     black_threshold: int
+    backend: PdfBackendName
+    native_pdf_exe: str
 
 
 def page_indices_from_range_text(range_text: str, *, page_count: int) -> list[int] | None:
@@ -94,11 +101,17 @@ def resolve_plan_targets(
                     printer_name=resolved.printer_name.strip(),
                     dpi=int(resolved.dpi) if resolved.dpi else None,
                     placement_mode=_placement_mode(resolved.placement_mode),
+                    page_size=str(resolved.page_size or "").strip(),
+                    orientation=str(resolved.orientation or "").strip(),
+                    scale_mode=_scale_mode(resolved.scale_mode),
+                    alignment=_alignment(resolved.alignment),
                     x_offset_mm=float(resolved.x_offset_mm),
                     y_offset_mm=float(resolved.y_offset_mm),
                     render_color_mode=_render_color_mode(resolved.render_color_mode),
                     black_enhancement=_black_enhancement(resolved.black_enhancement),
                     black_threshold=int(resolved.black_threshold),
+                    backend=_backend_name(resolved.backend),
+                    native_pdf_exe=str(resolved.native_pdf_exe or "").strip(),
                 )
             )
         if targets:
@@ -113,11 +126,17 @@ def resolve_plan_targets(
             printer_name=resolved.printer_name.strip(),
             dpi=int(resolved.dpi) if resolved.dpi else None,
             placement_mode=_placement_mode(resolved.placement_mode),
+            page_size=str(resolved.page_size or "").strip(),
+            orientation=str(resolved.orientation or "").strip(),
+            scale_mode=_scale_mode(resolved.scale_mode),
+            alignment=_alignment(resolved.alignment),
             x_offset_mm=float(resolved.x_offset_mm),
             y_offset_mm=float(resolved.y_offset_mm),
             render_color_mode=_render_color_mode(resolved.render_color_mode),
             black_enhancement=_black_enhancement(resolved.black_enhancement),
             black_threshold=int(resolved.black_threshold),
+            backend=_backend_name(resolved.backend),
+            native_pdf_exe=str(resolved.native_pdf_exe or "").strip(),
         )
     ]
 
@@ -159,11 +178,17 @@ def print_pdf_by_plan(
             job_kind=effective_kind,
             description=f"{job_kind}: {pdf_path}",
             placement_mode=target.placement_mode,
+            page_size=target.page_size,  # type: ignore[arg-type]
+            orientation=target.orientation,  # type: ignore[arg-type]
+            scale_mode=target.scale_mode,  # type: ignore[arg-type]
+            alignment=target.alignment,  # type: ignore[arg-type]
             x_offset_mm=target.x_offset_mm,
             y_offset_mm=target.y_offset_mm,
             render_color_mode=target.render_color_mode,
             black_enhancement=target.black_enhancement,
             black_threshold=target.black_threshold,
+            backend=target.backend,
+            native_pdf_exe=target.native_pdf_exe,
         )
         if wait:
             result = queue.enqueue_and_wait(job)
@@ -208,6 +233,29 @@ def _placement_mode(value: str) -> PlacementMode:
     if normalized in {"paper_origin", "printable_origin", "calibrated"}:
         return cast(PlacementMode, normalized)
     return "paper_origin"
+
+
+def _scale_mode(value: str) -> str:
+    normalized = str(value or "none").strip().casefold()
+    if normalized in {"none", "fit"}:
+        return normalized
+    return "none"
+
+
+def _backend_name(value: str) -> PdfBackendName:
+    normalized = str(value or "qt_raster").strip().casefold()
+    if normalized in {"qt", "qt_raster", "internal"}:
+        return "qt_raster"
+    if normalized in {"pdf_xchange", "pdf-xchange", "native_pdf_cli"}:
+        return "pdf_xchange"
+    raise RuntimeError(f"Unbekanntes PDF-Druckbackend im Profil: {value}")
+
+
+def _alignment(value: str) -> str:
+    normalized = str(value or "top_left").strip().casefold()
+    if normalized in {"top_left", "center"}:
+        return normalized
+    return "top_left"
 
 
 def _render_color_mode(value: str) -> RenderColorMode:

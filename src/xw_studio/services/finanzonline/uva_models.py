@@ -30,4 +30,5 @@ class UvaPayloadResult(BaseModel):
     month: int
     kennzahlen: UvaKennzahlen
     zahlbetrag: str = "0.00"
+    rule_version: str = "U30_01_2022"
     warnings: list[str] = Field(default_factory=list)

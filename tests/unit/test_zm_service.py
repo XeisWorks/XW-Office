@@ -117,3 +117,60 @@ def test_zm_service_subtracts_credit_notes_by_credit_note_date() -> None:
     assert result.rows[0].uid == "DE136695976"
     assert result.rows[0].amount_eur_int == 375
     assert result.rows[0].invoice_numbers == ["RE-10", "GU-11"]
+
+
+class _ProviderWithMixedPositions:
+    def __init__(self) -> None:
+        self.position_calls: list[tuple[str, str]] = []
+
+    def load_invoices(self, year: int, month: int) -> list[dict[str, object]]:
+        assert (year, month) == (2026, 5)
+        return [
+            {
+                "id": "20",
+                "invoiceNumber": "RE-20",
+                "invoiceDate": "2026-05-08",
+                "status": "100",
+                "taxType": "eu",
+                "taxRule": {"id": "3"},
+                "sumNet": "999.00",
+                "contact": {"name": "EU Kunde", "vatNumber": "DE136695976"},
+            }
+        ]
+
+    def load_positions(self, resource: str, document_id: str) -> list[dict[str, object]]:
+        self.position_calls.append((resource, document_id))
+        return [
+            {"sumNet": "100.40", "taxType": "eu", "taxRule": {"id": "3"}},
+            {"sumNet": "200.50", "taxText": "Reverse Charge sonstige Leistung"},
+            {"sumNet": "698.10", "taxText": "MIT 20% MEHRWERTSTEUER"},
+        ]
+
+
+def test_zm_service_uses_relevant_positions_when_available() -> None:
+    provider = _ProviderWithMixedPositions()
+    result = ZmService(provider).calculate_month(2026, 5)  # type: ignore[arg-type]
+
+    assert result.considered == 1
+    assert result.selected == 1
+    assert provider.position_calls == [("Invoice", "20")]
+    assert [(row.uid, row.kind, row.amount_eur_int, row.invoice_numbers) for row in result.rows] == [
+        ("DE136695976", "delivery", 100, ["RE-20"]),
+        ("DE136695976", "service", 201, ["RE-20"]),
+    ]
+
+
+class _ProviderWithMismatchingPositions(_ProviderWithMixedPositions):
+    def load_invoices(self, year: int, month: int) -> list[dict[str, object]]:
+        rows = super().load_invoices(year, month)
+        rows[0]["sumNet"] = "285.26"
+        return rows
+
+
+def test_zm_service_falls_back_to_document_net_when_positions_do_not_match() -> None:
+    result = ZmService(_ProviderWithMismatchingPositions()).calculate_month(2026, 5)  # type: ignore[arg-type]
+
+    assert [(row.uid, row.kind, row.amount_eur_int) for row in result.rows] == [
+        ("DE136695976", "delivery", 285),
+    ]
+    assert any("Positionssumme" in warning for warning in result.warnings)

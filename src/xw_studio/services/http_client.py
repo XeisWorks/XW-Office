@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from typing import Protocol
 
 import httpx
 
@@ -13,6 +14,13 @@ from xw_studio.core.exceptions import SevdeskApiError
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+
+
+class CancellationToken(Protocol):
+    @property
+    def cancelled(self) -> bool: ...
+
+    def raise_if_cancelled(self) -> None: ...
 
 
 def build_sevdesk_http_client(config: AppConfig, *, api_token: str | None = None) -> httpx.Client:
@@ -65,6 +73,7 @@ def sevdesk_get_with_retry(
     client: httpx.Client,
     config: AppConfig,
     path: str,
+    cancel_token: CancellationToken | None = None,
     **kwargs: object,
 ) -> httpx.Response:
     """GET with retries on transient status codes (safe for read-only calls)."""
@@ -73,6 +82,8 @@ def sevdesk_get_with_retry(
     last_response: httpx.Response | None = None
 
     for attempt in range(max_retries + 1):
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
         response = client.get(path, **kwargs)  # type: ignore[arg-type]
         last_response = response
 
@@ -99,7 +110,11 @@ def sevdesk_get_with_retry(
             max_retries,
             delay,
         )
-        time.sleep(delay)
+        end_at = time.monotonic() + delay
+        while time.monotonic() < end_at:
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
+            time.sleep(min(0.1, max(0.0, end_at - time.monotonic())))
 
     assert last_response is not None
     raise_for_sevdesk(last_response)
@@ -114,7 +129,8 @@ class SevdeskConnection:
 
     def get(self, path: str, **kwargs: object) -> httpx.Response:
         """GET *path* with retry policy from config."""
-        return sevdesk_get_with_retry(self.client, self.config, path, **kwargs)
+        cancel_token = kwargs.pop("cancel_token", None)
+        return sevdesk_get_with_retry(self.client, self.config, path, cancel_token=cancel_token, **kwargs)
 
     def put(self, path: str, **kwargs: object) -> httpx.Response:
         """PUT *path* (no retry — write operations are not idempotent-safe)."""

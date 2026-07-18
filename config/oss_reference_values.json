@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "description": "Unveraenderbare EU-OSS Golden-Master-Referenzen fuer Vergleichstests; keine Berechnungs-Overrides.",
+  "quarters": {
+    "2026-Q1": {
+      "immutable_reference": true,
+      "source": "Vom Anwender bestaetigter Golden Master",
+      "lines": [
+        {"label": "Deutsche MwSt. 7%", "country_code": "DE", "vat_rate_label": "7", "vat": "373.16", "gross": "5549.07", "net": "5175.91"},
+        {"label": "Italienische IVA 4%", "country_code": "IT", "vat_rate_label": "4", "vat": "19.73", "gross": "511.50", "net": "491.77"},
+        {"label": "Niederlaendische BTW 9%", "country_code": "NL", "vat_rate_label": "9", "vat": "8.80", "gross": "106.60", "net": "97.80"},
+        {"label": "Luxemburgische TVA 3%", "country_code": "LU", "vat_rate_label": "3", "vat": "7.24", "gross": "247.50", "net": "240.26"},
+        {"label": "Schwedische MOMS 6%", "country_code": "SE", "vat_rate_label": "6", "vat": "3.97", "gross": "24.80", "net": "20.83"},
+        {"label": "Estnische KM 9%", "country_code": "EE", "vat_rate_label": "9", "vat": "8.10", "gross": "99.00", "net": "90.90"},
+        {"label": "Spanische IVA 10%", "country_code": "ES", "vat_rate_label": "10", "vat": "0.50", "gross": "5.50", "net": "5.00"}
+      ]
+    },
+    "2026-Q2": {
+      "immutable_reference": true,
+      "source": "Vom Anwender bestaetigter Golden Master",
+      "lines": [
+        {"label": "Deutsche MwSt. 7%", "country_code": "DE", "vat_rate_label": "7", "vat": "286.04", "gross": "4322.30", "net": "4036.26"},
+        {"label": "Italienische IVA 4%", "country_code": "IT", "vat_rate_label": "4", "vat": "24.05", "gross": "624.00", "net": "599.95"},
+        {"label": "Niederlaendische BTW 9%", "country_code": "NL", "vat_rate_label": "9", "vat": "24.33", "gross": "294.30", "net": "269.97"},
+        {"label": "Franzoesische TVA 5,5%", "country_code": "FR", "vat_rate_label": "5.5", "vat": "8.11", "gross": "155.60", "net": "147.49"},
+        {"label": "Tschechische DPH 0% (seit 2024)", "country_code": "CZ", "vat_rate_label": "0", "vat": "0.00", "gross": "34.80", "net": "34.80", "reference_note": "Am 2026-07-12 nach Anwenderkorrektur in sevDesk als echter 0%-Fall bestaetigt."}
+      ]
+    }
+  }
+}

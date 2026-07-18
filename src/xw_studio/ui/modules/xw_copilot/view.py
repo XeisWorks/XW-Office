@@ -20,8 +20,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
-    QTableWidget,
-    QTableWidgetItem,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -32,6 +30,7 @@ from xw_studio.services.xw_copilot.dry_run import XWCopilotDryRunService
 from xw_studio.services.xw_copilot.contracts import XWCopilotResponse
 from xw_studio.services.xw_copilot.ingress import XWCopilotIngress
 from xw_studio.services.xw_copilot.service import AuditEntry, XWCopilotConfig, XWCopilotService
+from xw_studio.ui.widgets.data_table import DataTable
 
 if TYPE_CHECKING:
     from xw_studio.core.container import Container
@@ -312,10 +311,7 @@ class XWCopilotView(QWidget):
         lay = QVBoxLayout(page)
 
         cols = ["Zeit", "Action", "Modus", "OK?", "Correlation-ID"]
-        self._history_table = QTableWidget(0, len(cols))
-        self._history_table.setHorizontalHeaderLabels(cols)
-        self._history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._history_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._history_table = DataTable(cols)
         self._history_table.horizontalHeader().setStretchLastSection(True)
         lay.addWidget(self._history_table, stretch=1)
 
@@ -476,18 +472,21 @@ class XWCopilotView(QWidget):
         self._apply_history(entries)
 
     def _apply_history(self, entries: list[object]) -> None:
-        self._history_table.setRowCount(0)
-        for entry in entries:
-            if not isinstance(entry, AuditEntry):
-                continue
-            row = self._history_table.rowCount()
-            self._history_table.insertRow(row)
-            self._history_table.setItem(row, 0, QTableWidgetItem(entry.timestamp))
-            self._history_table.setItem(row, 1, QTableWidgetItem(entry.action))
-            self._history_table.setItem(row, 2, QTableWidgetItem(entry.mode))
-            self._history_table.setItem(row, 3, QTableWidgetItem("Ja" if entry.accepted else "Nein"))
-            self._history_table.setItem(row, 4, QTableWidgetItem(entry.correlation_id))
-        self._history_status.setText(f"{len(entries)} Eintraege geladen")
+        rows = [
+            {
+                "Zeit": entry.timestamp,
+                "Action": entry.action,
+                "Modus": entry.mode,
+                "OK?": "Ja" if entry.accepted else "Nein",
+                "Correlation-ID": entry.correlation_id,
+                "__sort__OK?": 1 if entry.accepted else 0,
+                "__entry__": entry,
+            }
+            for entry in entries
+            if isinstance(entry, AuditEntry)
+        ]
+        self._history_table.set_data(rows)
+        self._history_status.setText(f"{len(rows)} Eintraege geladen")
 
     def _clear_history(self) -> None:
         if not self._service.has_storage():
@@ -502,7 +501,7 @@ class XWCopilotView(QWidget):
         self._start_io(job, self._on_history_cleared, self._history_status)
 
     def _on_history_cleared(self, _payload: object) -> None:
-        self._history_table.setRowCount(0)
+        self._history_table.set_data([])
         self._history_status.setText("Verlauf geloescht")
 
     def _start_ingress(self) -> None:

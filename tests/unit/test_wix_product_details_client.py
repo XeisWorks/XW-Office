@@ -10,7 +10,6 @@ import httpx
 
 from xw_studio.services.wix.product_details_client import (
     CatalogVersion,
-    UpdateResult,
     WixProductDetail,
     WixProductDetailsClient,
     _parse_detail,

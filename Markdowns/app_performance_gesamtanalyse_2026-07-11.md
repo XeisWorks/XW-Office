@@ -37,13 +37,112 @@ Verifikation dieser Phase:
 - Alle geaenderten Dateien bestehen `ruff check`.
 - Der ungefilterte Altbestand erreicht 519 bestandene Tests; 18 bekannte Legacy-/Paritaetstests sind bereits vor diesem Umbau fachlich veraltet und erwarten alte APIs bzw. explizit noch nicht implementierte Funktionen.
 
-Noch offen fuer eine zweite Optimierungsphase:
+## Umsetzungsstand zweite Umbauphase vom 11.07.2026
 
-- grosse `QTableWidget`-Ansichten in CRM, Statistik und Copilot-History vollstaendig auf Models migrieren;
-- dynamische Rechnungs-Produktwidgets durch ListModel/Delegate ersetzen;
-- appweite Parallelitaetslimits und kooperative Cancellation bis in HTTP-/Service-Loops erweitern;
-- persistente stale-while-revalidate Snapshots fuer weitere Module;
-- echte Laufzeit-Baseline auf dem Produktivsystem und Eventloop-Watchdog/Performance-Debugseite.
+Fokus dieser Phase: grosse item-basierte Tabellen in Hauptmodulen abbauen, damit Result-Handler nicht mehr hunderte oder tausende `QTableWidgetItem`-Objekte im GUI-Thread erzeugen und Spalten nach jedem Load neu vermessen.
+
+Umgesetzt:
+
+- `SimpleTableModel` besitzt eine eigene Sortierrolle. Sichtbare Werte koennen formatiert bleiben, waehrend Sortierung auf numerischen oder zeitlichen Rohwerten laeuft.
+- `DataTable` nutzt diese Sortierrolle appweit automatisch.
+- `CRM` verwendet fuer Kontaktliste und Duplikat-Tabelle `DataTable` statt `QTableWidget`.
+- CRM-Duplikatauswahl basiert auf dem Row-Payload statt auf sichtbaren Tabellenindizes. Das bleibt korrekt, wenn die Tabelle sortiert oder gefiltert ist.
+- `Statistik` verwendet fuer die Monatstabelle `DataTable` statt `QTableWidget`; Rechnungsanzahl und Umsatz sortieren ueber Rohwerte.
+- `Statistik` raeumt die Workerreferenz im Finished-Pfad auf, sodass Folge-Refreshs nicht von einer alten Referenz blockiert werden.
+- `XW-Copilot` verwendet fuer den Verlauf `DataTable` statt `QTableWidget`; Laden und Loeschen sind jeweils ein Model-Reset statt zeilenweiser Item-Aufbau.
+- Ein gezielter UI-Test prueft, dass `DataTable` formatierte Werte ueber explizite Rohwerte sortiert.
+
+Verifikation dieser Phase:
+
+- `python -m compileall -q` fuer die geaenderten UI-Dateien bestanden.
+- `python -m ruff check` fuer alle geaenderten Dateien bestanden.
+- `python -m mypy --strict --follow-imports=skip` fuer die geaenderten UI-Dateien bestanden.
+- `PYTHONPATH=src python -m pytest tests/ui -q` bestanden: 50 Tests.
+
+## Umsetzungsstand dritte Umbauphase vom 11.07.2026
+
+Fokus dieser Phase: zentraler JobManager mit Queue-Limits, "latest request wins" und kooperativer Cancellation bis in lange Service-Schleifen.
+
+Umgesetzt:
+
+- `BackgroundJobManager` verwaltet jetzt pro Queue mehrere aktive Jobs mit konfigurierbaren Limits.
+- Neue Standard-Queues: `ui-critical-network`, `network-background`, `database`, `cpu`, `printing`, `export`.
+- `submit_callable()` startet Jobs mit `CancelToken`, Owner-Bezug, Result-/Error-/Finished-Callbacks, Prioritaet und Replace-Policy.
+- `replace="cancel_previous"` cancelt wartende und laufende Jobs mit gleichem Key und unterdrueckt stale Resultate ueber `BackgroundWorker.cancel()`.
+- `cancel_owner()` und `cancel_key()` erlauben View-Lebenszeit- und Auswahlwechsel-Cancellation.
+- Der Rechnungs-Wix-Detailrequest laeuft jetzt ueber `ui-critical-network` und bricht vorherige Detailrequests ab.
+- Wix-Warmup laeuft ueber `network-background`, nicht mehr ueber einen verschachtelten `ThreadPoolExecutor`.
+- Sichtbare Wix-Detailrequests brechen konkurrierende Warmup-Jobs ab, damit Benutzeraktionen Vorrang haben.
+- Wix-Warmup prueft den Cancel-Token zwischen Order-Summary, Line-Items, Piece-Mapping und Hint-Aufloesung.
+- Wix-Order-Service-Methoden `resolve_order_summary()` und `fetch_order_line_items()` akzeptieren optional einen Cancel-Token und pruefen ihn in der Order-Aufloesung und beim Line-Item-Parsing.
+- Wix-Produkt-Paging und Wix-Retry-Backoff akzeptieren optional einen Cancel-Token.
+- sevDesk-GET-Retry akzeptiert optional `cancel_token` und kann Backoff-Schlaf in kleinen Intervallen abbrechen.
+- Neue Unit-Tests pruefen Queue-Limits und `cancel_previous` gegen stale Resultate.
+
+Verifikation dieser Phase:
+
+- `python -m compileall -q` fuer die geaenderten Dateien bestanden.
+- `python -m ruff check` fuer alle geaenderten Dateien bestanden.
+- `python -m mypy --strict --follow-imports=skip` fuer `BackgroundJobManager` und dessen neue Tests bestanden.
+- `PYTHONPATH=src python -m pytest tests/unit/test_background_job_manager.py tests/unit/test_worker_cancellation.py tests/ui/test_rechnungen_view_smoke.py -q` bestanden: 31 Tests.
+
+## Umsetzungsstand vierte Umbauphase vom 11.07.2026
+
+Fokus dieser Phase: Rechnungs-Produktdetails im rechten Detailpanel auf Model/View umstellen, damit Rechnungswechsel mit vielen Wix-Positionen keine dynamischen QWidget-Baeume mehr erzeugt.
+
+Umgesetzt:
+
+- Neues `_PieceListModel` fuer `PieceBlock`-Zeilen, Print-Flag, Menge, Detailtexte, Bestandstext und Aktivzustand.
+- Neuer `_PieceDelegate` malt Produktzeilen, Mengensteuerung, Druck- und Plan-Aktion ohne pro Zeile `QWidget`, `QLabel`, `QSpinBox` oder `QToolButton` zu erzeugen.
+- Die Produktsektion in `RechnungenView` verwendet jetzt `QListView + QAbstractListModel + QStyledItemDelegate`.
+- `_on_stuecke_loaded()` dedupliziert weiter wie bisher, befuellt aber nur noch das Model und zeigt die ListView.
+- Sammeldruck liest Mengen aus dem Model statt aus `QSpinBox`-Instanzen.
+- Einzelproduktdruck und Druckplanpflege laufen ueber Delegate-Events zur bestehenden Druck-/Planlogik.
+- Enable/Disable bei laufendem Druck aktualisiert den Modelzustand und repaintet die ListView.
+- Neuer UI-Test prueft 100 Produktpositionen: 100 Modelzeilen, aber nur noch konstantes Produktlayout (`Hint + QListView`).
+
+Verifikation dieser Phase:
+
+- `python -m compileall -q` fuer `rechnungen/view.py` und den Rechnungen-Smoke-Test bestanden.
+- `python -m ruff check` fuer `rechnungen/view.py` und den Rechnungen-Smoke-Test bestanden.
+- `PYTHONPATH=src python -m pytest tests/ui/test_rechnungen_view_smoke.py -q` bestanden: 29 Tests.
+
+## Abschlussphase vom 11.07.2026
+
+Fokus dieser Phase: die nach Phase 4 noch dokumentierten Restpunkte schliessen und die Umsetzung gegen die urspruengliche Skizze abgleichen.
+
+Umgesetzt:
+
+- `offene_sendungen_dialog.py` verwendet fuer die bearbeitbare Produktliste ein eigenes `QAbstractTableModel + QTableView` statt `QTableWidget`.
+- `reprint_dialog.py` verwendet fuer beide Vorschautabellen `DataTable` statt `QTableWidget`.
+- `print_dialog.py` verwendet fuer den Produkt-Druckplan `QTableView + _PrintPlanModel + _PrintProfileDelegate` statt `QTableWidget` mit Cell-Widgets.
+- `open_invoice_overview.py` enthaelt keinen lokalen `ThreadPoolExecutor` mehr; die Berechnung laeuft seriell im bereits gestarteten Worker und konkurriert nicht mehr mit UI-kritischen Netzwerkjobs.
+- `InvoiceProcessingService` enthaelt keine lokalen `ThreadPoolExecutor`-Bloecke mehr; START-Postprocessing, Inventar-Preflight und Wix-Prefetch laufen seriell innerhalb ihres Background-Jobs.
+- `EventLoopWatchdog` misst Eventloop-Gaps mit 16-ms-Timer, loggt Gaps ab 50 ms bzw. 250 ms und stellt einen Snapshot fuer Debug/Tests bereit.
+- `MainWindow` startet den Watchdog automatisch und bietet `performance_snapshot()` als leichte Debugschnittstelle.
+
+Abschluss-Audit der Skizze:
+
+- P0-Freezes aus Click-Handlern und Navigationspfaden sind in den analysierten Hauptmodulen entfernt oder hinter Worker/Loading-Zustaende gelegt.
+- Rechnungswechsel zeigt Stammdaten sofort, laedt Wix-/Detail-/Produktdaten asynchron und ignoriert stale Resultate.
+- Grosse Haupttabellen in CRM, Statistik und XW-Copilot sind auf Model/View migriert.
+- Rechnungs-Produktdetails sind auf ListModel/Delegate migriert.
+- Zentrales Jobmanagement mit Queue-Limits, latest-wins und Cancellation ist vorhanden und fuer Rechnungs-Wix-Pfade angebunden.
+- Lokale unkontrollierte ThreadPools aus den dokumentierten Rechnungs-Hotspots wurden entfernt.
+- Eventloop-Gaps werden runtime-seitig sichtbar gemacht.
+
+Verifikation dieser Abschlussphase:
+
+- `python -m compileall -q` fuer die geaenderten Abschlussdateien bestanden.
+- `python -m ruff check` fuer die geaenderten Abschlussdateien bestanden.
+- `PYTHONPATH=src python -m pytest tests/ui tests/unit/test_background_job_manager.py tests/unit/test_worker_cancellation.py tests/unit/test_printing_parity_e2e.py -q` bestanden: 66 Tests.
+- Voller Regressionslauf: 547 bestanden, 11 uebersprungen, 18 bekannte Altbestand-/Parity-Fehler ausserhalb dieses Performance-Umbaus.
+- `rg` findet in `offene_sendungen_dialog.py`, `reprint_dialog.py`, `print_dialog.py`, `open_invoice_overview.py` und `invoice_processing/service.py` keine `QTableWidget`-, `setCellWidget`-, `ThreadPoolExecutor`- oder `as_completed`-Treffer mehr.
+
+Noch bewusst offen:
+
+- Produktiv-Benchmark mit echten API-Latenzen und echten Datenmengen. Die technische Instrumentierung ist vorhanden, aber belastbare Zielwert-Bestaetigung braucht eine Messung auf dem Produktivsystem.
+- Weitere stale-while-revalidate-Snapshots koennen nach realer Messung fuer selten genutzte Nebenmodule ergaenzt werden; in den wichtigsten Rechnungs-/Queue-/Refresh-Pfaden ist das Muster bereits umgesetzt.
 
 ## Zielbild
 

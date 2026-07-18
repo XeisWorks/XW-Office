@@ -5,8 +5,6 @@ import subprocess
 from threading import Event
 import types
 
-from PySide6.QtWidgets import QLabel
-
 from xw_studio.bootstrap import register_default_services
 from xw_studio.core.config import AppConfig
 from xw_studio.core.container import Container
@@ -16,7 +14,7 @@ from xw_studio.services.daily_business.service import DailyBusinessService
 from xw_studio.services.draft_invoice.service import DraftInvoiceService
 from xw_studio.services.inventory.service import StartMode, StartPreflight
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
-from xw_studio.services.products.print_decision import PrintDecisionEngine
+from xw_studio.services.products.print_decision import PieceBlock, PrintDecisionEngine
 from xw_studio.services.secrets.service import SecretService
 from xw_studio.services.sendungen.service import OffeneSendungenService
 from xw_studio.services.transfers.service import OffeneUeberweisungenService
@@ -710,13 +708,42 @@ def test_rechnungen_applies_persistent_wix_cache_before_background_load(
     )
     assert "Wixstrasse 7" in view._shipping_editor.toPlainText()  # noqa: SLF001
     assert view._wix_customer.text() == "Wix Kunde"  # noqa: SLF001
-    assert any(
-        "Cache Produkt" in label.text()
-        for label in view._gb_stuecke.findChildren(QLabel)  # noqa: SLF001
-    )
+    assert view._piece_model.rowCount() == 1  # noqa: SLF001
+    assert "Cache Produkt" in str(view._piece_model.index(0, 0).data())  # noqa: SLF001
+    assert not view._piece_list.isHidden()  # noqa: SLF001
     assert not view._gb_stuecke.isHidden()  # noqa: SLF001
     assert view._get_cached_wix_context("20899") is not None  # noqa: SLF001
     assert load_calls == [("20899", False)]
+
+
+def test_rechnungen_piece_details_use_model_instead_of_row_widgets(qtbot: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = InvoiceSummary.model_validate(
+        {
+            "id": "pieces",
+            "invoiceNumber": "RE-PIECES",
+            "invoiceDate": "2026-06-19T00:00:00",
+            "status": 1000,
+            "sumGross": "20.0",
+            "contact_name": "Pieces Customer",
+            "order_reference": "20999",
+        }
+    )
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    view._table.select_source_row(0)  # noqa: SLF001
+
+    pieces = [
+        PieceBlock(sku=f"XW-{index:03d}", name=f"Produkt {index}", qty_needed=1)
+        for index in range(100)
+    ]
+    view._on_stuecke_loaded({"__requested_ref": "20999", "items": pieces})  # noqa: SLF001
+
+    assert view._piece_model.rowCount() == 100  # noqa: SLF001
+    assert view._stuecke_layout.count() == 2  # noqa: SLF001
+    assert not view._piece_list.isHidden()  # noqa: SLF001
 
 
 def test_rechnungen_cached_wix_summary_allows_product_fallback_when_items_missing(

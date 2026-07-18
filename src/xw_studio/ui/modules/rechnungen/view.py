@@ -1,7 +1,6 @@
 """Rechnungen module — invoice list from sevDesk."""
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import html
 import json
@@ -15,7 +14,7 @@ from urllib.parse import quote
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QEvent, QTimer, Qt, QUrl
+from PySide6.QtCore import QAbstractListModel, QEvent, QModelIndex, QRect, QSize, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
     QCloseEvent,
@@ -41,6 +40,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QListView,
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QStyle,
+    QStyleOptionViewItem,
     QTableView,
     QTextBrowser,
     QToolButton,
@@ -60,7 +61,7 @@ from PySide6.QtWidgets import (
 from xw_studio.core.signals import AppSignals
 from xw_studio.core.types import ModuleKey
 from xw_studio.core.worker import BackgroundWorker
-from xw_studio.services.background_jobs.service import BackgroundJobManager
+from xw_studio.services.background_jobs.service import BackgroundJobManager, CancelToken, JobHandle
 from xw_studio.services.daily_business.service import DailyBusinessService
 from xw_studio.services.draft_invoice.service import (
     DraftInvoiceService,
@@ -69,6 +70,7 @@ from xw_studio.services.draft_invoice.service import (
     ProductPreflightPlan,
 )
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
+from xw_studio.services.digital_licenses import DigitalLicenseService
 from xw_studio.services.plc.label_archive import PlcLabelArchive
 from xw_studio.services.printer_status.service import PrinterStatusService
 from xw_studio.services.products.print_decision import PieceBlock, PrintDecisionEngine
@@ -78,7 +80,9 @@ from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
 from xw_studio.ui.modules.rechnungen.offene_ueberweisungen_dialog import OffeneUeberweisungenDialog
 from xw_studio.services.sevdesk.refund_client import SevDeskRefundClient
 from xw_studio.services.wix.client import WixOrdersClient
+from xw_studio.ui.modules.rechnungen.digital_licenses_dialog import DigitalLicensesDialog
 from xw_studio.ui.modules.rechnungen.offene_sendungen_dialog import OffeneSendungenDialog
+from xw_studio.ui.modules.rechnungen.special_order_dialog import SpecialOrderDialog
 from xw_studio.ui.modules.rechnungen.open_invoice_overview import (
     OpenInvoiceOverview,
     overview_from_visible_summaries,
@@ -122,7 +126,6 @@ _OPEN_AUTO_LOAD_LIMIT = 50
 # row in the same list.
 _WIX_CONTEXT_CACHE_TTL_SECONDS = 6 * 60 * 60
 _WIX_WARM_BATCH_SIZE = 3
-_WIX_WARM_MAX_WORKERS = 2
 _WIX_WARM_QUEUE_LIMIT = 8
 _SIDE_JOB_QUEUE = "rechnungen-side"
 _PRIORITY_OPEN_OVERVIEW = 10
@@ -677,6 +680,189 @@ class _CustomLabelDialog(QDialog):
         self._btn_print.setEnabled(True)
 
 
+class _PieceListModel(QAbstractListModel):
+    """List model for Wix order product details in the invoice panel."""
+
+    BLOCK_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+    FLAGGED_ROLE = int(Qt.ItemDataRole.UserRole) + 2
+    QUANTITY_ROLE = int(Qt.ItemDataRole.UserRole) + 3
+    DETAILS_ROLE = int(Qt.ItemDataRole.UserRole) + 4
+    STOCK_ROLE = int(Qt.ItemDataRole.UserRole) + 5
+    STOCK_COLOR_ROLE = int(Qt.ItemDataRole.UserRole) + 6
+    PRINT_ENABLED_ROLE = int(Qt.ItemDataRole.UserRole) + 7
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._rows: list[dict[str, object]] = []
+
+    def set_pieces(self, rows: list[dict[str, object]]) -> None:
+        self.beginResetModel()
+        self._rows = list(rows)
+        self.endResetModel()
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._rows)
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> object:
+        if not index.isValid() or not (0 <= index.row() < len(self._rows)):
+            return None
+        row = self._rows[index.row()]
+        block = row.get("block")
+        if not isinstance(block, PieceBlock):
+            return None
+        if role == Qt.ItemDataRole.DisplayRole:
+            return str(row.get("header") or "")
+        if role == self.BLOCK_ROLE:
+            return block
+        if role == self.FLAGGED_ROLE:
+            return bool(row.get("flagged"))
+        if role == self.QUANTITY_ROLE:
+            return int(row.get("quantity") or 1)
+        if role == self.DETAILS_ROLE:
+            return list(row.get("details") or [])
+        if role == self.STOCK_ROLE:
+            return str(row.get("stock") or "")
+        if role == self.STOCK_COLOR_ROLE:
+            return str(row.get("stock_color") or "#64748b")
+        if role == self.PRINT_ENABLED_ROLE:
+            return bool(row.get("print_enabled"))
+        return None
+
+    def rows(self) -> list[tuple[PieceBlock, int, bool]]:
+        result: list[tuple[PieceBlock, int, bool]] = []
+        for row in self._rows:
+            block = row.get("block")
+            if isinstance(block, PieceBlock):
+                result.append((block, int(row.get("quantity") or 1), bool(row.get("flagged"))))
+        return result
+
+    def set_print_enabled(self, enabled: bool) -> None:
+        if not self._rows:
+            return
+        for row in self._rows:
+            row["print_enabled"] = bool(enabled)
+        self.dataChanged.emit(self.index(0, 0), self.index(len(self._rows) - 1, 0), [self.PRINT_ENABLED_ROLE])
+
+    def adjust_quantity(self, source_row: int, delta: int) -> None:
+        if not (0 <= source_row < len(self._rows)):
+            return
+        row = self._rows[source_row]
+        row["quantity"] = max(1, min(999, max(1, int(row.get("quantity") or 1)) + int(delta)))
+        idx = self.index(source_row, 0)
+        self.dataChanged.emit(idx, idx, [self.QUANTITY_ROLE])
+
+    def quantity_for_block(self, block: PieceBlock) -> int:
+        for row in self._rows:
+            if row.get("block") is block:
+                return max(1, int(row.get("quantity") or 1))
+        return 1
+
+
+class _PieceDelegate(QStyledItemDelegate):
+    """Paint product detail rows and handle lightweight row actions."""
+
+    print_clicked = Signal(object, int)
+    manage_clicked = Signal(object)
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        painter.save()
+        rect = option.rect.adjusted(6, 4, -6, -4)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        painter.fillRect(option.rect, QColor("#e5eefb") if selected else QColor("#ffffff"))
+        painter.setPen(QColor("#cbd5e1"))
+        painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
+
+        flagged = bool(index.data(_PieceListModel.FLAGGED_ROLE))
+        enabled = bool(index.data(_PieceListModel.PRINT_ENABLED_ROLE))
+        quantity = int(index.data(_PieceListModel.QUANTITY_ROLE) or 1)
+        header = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        details = index.data(_PieceListModel.DETAILS_ROLE)
+        detail_lines = [str(line) for line in details] if isinstance(details, list) else []
+        stock = str(index.data(_PieceListModel.STOCK_ROLE) or "")
+        stock_color = QColor(str(index.data(_PieceListModel.STOCK_COLOR_ROLE) or "#64748b"))
+
+        controls_width = 214 if flagged else 0
+        text_rect = QRect(rect.left(), rect.top(), max(80, rect.width() - controls_width - 8), 22)
+        font = painter.font()
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor("#111827"))
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, header)
+
+        font.setBold(False)
+        font.setPointSize(max(8, font.pointSize() - 1))
+        painter.setFont(font)
+        y = text_rect.bottom() + 4
+        painter.setPen(QColor("#64748b"))
+        for line in detail_lines[:3]:
+            painter.drawText(QRect(text_rect.left() + 8, y, text_rect.width() - 8, 18), Qt.AlignmentFlag.AlignLeft, line)
+            y += 18
+        painter.setPen(stock_color)
+        painter.drawText(QRect(text_rect.left() + 8, y, text_rect.width() - 8, 18), Qt.AlignmentFlag.AlignLeft, stock)
+
+        if flagged:
+            for key, button_rect in self._button_rects(option.rect).items():
+                active = enabled or key == "manage"
+                if key in {"minus", "plus"} and not enabled:
+                    active = False
+                painter.setBrush(QColor("#334155") if active else QColor("#e5e7eb"))
+                painter.setPen(QColor("#64748b") if active else QColor("#cbd5e1"))
+                painter.drawRoundedRect(button_rect, 4, 4)
+                painter.setPen(QColor("#ffffff") if active else QColor("#94a3b8"))
+                label = {"minus": "-", "qty": str(quantity), "plus": "+", "print": "Druck", "manage": "Plan"}[key]
+                painter.drawText(button_rect, Qt.AlignmentFlag.AlignCenter, label)
+        painter.restore()
+
+    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+        details = index.data(_PieceListModel.DETAILS_ROLE)
+        detail_count = len(details) if isinstance(details, list) else 0
+        return QSize(option.rect.width(), max(82, 52 + min(3, detail_count) * 18))
+
+    def editorEvent(self, event, model, option, index) -> bool:  # type: ignore[override]
+        if event.type() != QEvent.Type.MouseButtonRelease or not index.isValid():
+            return super().editorEvent(event, model, option, index)
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        rects = self._button_rects(option.rect)
+        block = index.data(_PieceListModel.BLOCK_ROLE)
+        if not isinstance(block, PieceBlock):
+            return False
+        source_model = model
+        source_row = int(index.row())
+        if hasattr(model, "mapToSource"):
+            source_index = model.mapToSource(index)
+            source_model = source_index.model()
+            source_row = int(source_index.row())
+        enabled = bool(index.data(_PieceListModel.PRINT_ENABLED_ROLE))
+        if rects["minus"].contains(pos) and enabled and isinstance(source_model, _PieceListModel):
+            source_model.adjust_quantity(source_row, -1)
+            return True
+        if rects["plus"].contains(pos) and enabled and isinstance(source_model, _PieceListModel):
+            source_model.adjust_quantity(source_row, 1)
+            return True
+        if rects["print"].contains(pos) and enabled:
+            qty = int(index.data(_PieceListModel.QUANTITY_ROLE) or 1)
+            self.print_clicked.emit(block, qty)
+            return True
+        if rects["manage"].contains(pos):
+            self.manage_clicked.emit(block)
+            return True
+        return super().editorEvent(event, model, option, index)
+
+    @staticmethod
+    def _button_rects(row_rect: QRect) -> dict[str, QRect]:
+        top = row_rect.top() + 12
+        right = row_rect.right() - 8
+        height = 24
+        widths = {"manage": 46, "print": 56, "plus": 28, "qty": 42, "minus": 28}
+        rects: dict[str, QRect] = {}
+        cursor = right
+        for key in ("manage", "print", "plus", "qty", "minus"):
+            width = widths[key]
+            rects[key] = QRect(cursor - width + 1, top, width, height)
+            cursor -= width + 6
+        return rects
+
+
 class RechnungenView(QWidget):
     """Load and display sevDesk invoices (non-blocking)."""
 
@@ -697,6 +883,8 @@ class RechnungenView(QWidget):
         self._invoice_detail_worker: BackgroundWorker | None = None
         self._customer_mail_worker: BackgroundWorker | None = None
         self._wix_warm_worker: BackgroundWorker | None = None
+        self._wix_context_handle: JobHandle | None = None
+        self._wix_warm_handle: JobHandle | None = None
         self._hint_worker: BackgroundWorker | None = None
         self._fulfillment_step_worker: BackgroundWorker | None = None
         self._invoice_mail_worker: BackgroundWorker | None = None
@@ -709,6 +897,7 @@ class RechnungenView(QWidget):
         self._pending_draft_order_number = ""
         self._mollie_alert_count = 0
         self._sendungen_alert_count = 0
+        self._digital_licenses_alert_count = 0
         self._search_index: list[dict[str, str]] = []
         self._loaded_rows: list[dict[str, Any]] = []
         self._loaded_summaries: list[InvoiceSummary] = []
@@ -752,6 +941,10 @@ class RechnungenView(QWidget):
         self._piece_print_buttons: list[QPushButton | QToolButton] = []
         self._piece_quantity_inputs: list[QSpinBox] = []
         self._piece_quantity_controls: list[tuple[PieceBlock, QSpinBox]] = []
+        self._piece_model = _PieceListModel(self)
+        self._piece_delegate = _PieceDelegate(self)
+        self._piece_delegate.print_clicked.connect(self._on_product_print_clicked)
+        self._piece_delegate.manage_clicked.connect(self._on_product_manage_clicked)
         self._append_mode = False
         self._queued_wix_context_ref = ""
         self._queued_invoice_detail_id = ""
@@ -802,6 +995,12 @@ class RechnungenView(QWidget):
             tooltip="Freie Lieferadresse eingeben und direkt als Label drucken",
         )
         self._btn_custom_label.clicked.connect(self._on_custom_label_clicked)
+        self._btn_special_order = self._toolbar.add_button(
+            "special_order",
+            "Sonderauftrag",
+            tooltip="Wix Payment Link fuer Sonderauftrag erstellen",
+        )
+        self._btn_special_order.clicked.connect(self._on_special_order_clicked)
         self._toolbar.add_stretch()
         self._btn_sendungen_alert = self._toolbar.add_button(
             "sendungen_alert",
@@ -817,6 +1016,20 @@ class RechnungenView(QWidget):
         )
         self._btn_sendungen_alert.clicked.connect(self._on_sendungen_alert_clicked)
         self._btn_sendungen_alert.hide()
+        self._btn_digital_licenses_alert = self._toolbar.add_button(
+            "digital_licenses_alert",
+            "DIGITALE LIZENZEN OFFEN",
+            tooltip="Bezahlte digitale Notenlizenzen anzeigen",
+        )
+        self._btn_digital_licenses_alert.setStyleSheet(
+            "QPushButton {"
+            "background-color: #b91c1c; color: white; border-radius: 6px;"
+            "font-weight: bold; padding: 0 14px;"
+            "}"
+            "QPushButton:hover { background-color: #991b1b; }"
+        )
+        self._btn_digital_licenses_alert.clicked.connect(self._on_digital_licenses_alert_clicked)
+        self._btn_digital_licenses_alert.hide()
         self._btn_mollie_alert = self._toolbar.add_button(
             "mollie_alert",
             "💳 MOLLIE AUTH",
@@ -1086,6 +1299,16 @@ class RechnungenView(QWidget):
         self._stuecke_hint = QLabel("—")
         self._stuecke_hint.setWordWrap(True)
         self._stuecke_layout.addWidget(self._stuecke_hint)
+        self._piece_list = QListView(self._gb_stuecke)
+        self._piece_list.setModel(self._piece_model)
+        self._piece_list.setItemDelegate(self._piece_delegate)
+        self._piece_list.setUniformItemSizes(False)
+        self._piece_list.setSelectionMode(QListView.SelectionMode.SingleSelection)
+        self._piece_list.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
+        self._piece_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._piece_list.setMinimumHeight(120)
+        self._piece_list.hide()
+        self._stuecke_layout.addWidget(self._piece_list)
         self._gb_stuecke.hide()
         detail_main.addWidget(self._gb_stuecke)
 
@@ -1637,9 +1860,11 @@ class RechnungenView(QWidget):
             service: DailyBusinessService = self._container.resolve(DailyBusinessService)
             counts = service.load_counts(open_invoice_count=0)
             sendungen_service: OffeneSendungenService = self._container.resolve(OffeneSendungenService)
+            digital_licenses: DigitalLicenseService = self._container.resolve(DigitalLicenseService)
             return {
                 "mollie": max(0, int(counts.get("mollie", 0))),
                 "sendungen": max(0, int(sendungen_service.open_count())),
+                "digital_licenses": max(0, int(digital_licenses.open_count())),
             }
 
         self._mollie_badge_worker = BackgroundWorker(job)
@@ -1651,11 +1876,14 @@ class RechnungenView(QWidget):
         if isinstance(result, dict):
             mollie = max(0, int(result.get("mollie") or 0))
             sendungen = max(0, int(result.get("sendungen") or 0))
+            digital_licenses = max(0, int(result.get("digital_licenses") or 0))
         else:
             mollie = max(0, int(result)) if isinstance(result, int) else 0
             sendungen = 0
+            digital_licenses = 0
         self.update_mollie_alert_count(mollie)
         self.update_sendungen_alert_count(sendungen)
+        self.update_digital_licenses_alert_count(digital_licenses)
 
     def update_mollie_alert_count(self, count: int) -> None:
         self._mollie_alert_count = max(0, int(count))
@@ -1673,6 +1901,16 @@ class RechnungenView(QWidget):
             return
         self._btn_sendungen_alert.hide()
 
+    def update_digital_licenses_alert_count(self, count: int) -> None:
+        self._digital_licenses_alert_count = max(0, int(count))
+        if self._digital_licenses_alert_count > 0:
+            self._btn_digital_licenses_alert.setText(
+                f"DIGITALE LIZENZEN OFFEN ({self._digital_licenses_alert_count})"
+            )
+            self._btn_digital_licenses_alert.show()
+            return
+        self._btn_digital_licenses_alert.hide()
+
     def _on_mollie_alert_clicked(self) -> None:
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.navigate_to_module.emit(ModuleKey.MOLLIE.value)
@@ -1681,6 +1919,15 @@ class RechnungenView(QWidget):
         dlg = OffeneSendungenDialog(self._container, self)
         dlg.exec()
         self.update_sendungen_alert_count(dlg.open_count())
+
+    def _on_digital_licenses_alert_clicked(self) -> None:
+        dlg = DigitalLicensesDialog(self._container, self)
+        dlg.exec()
+        self.update_digital_licenses_alert_count(dlg.open_count())
+
+    def _on_special_order_clicked(self) -> None:
+        dlg = SpecialOrderDialog(self._container, self)
+        dlg.exec()
 
     def _selected_summary(self) -> InvoiceSummary | None:
         row = self._table.selected_source_row()
@@ -2062,12 +2309,29 @@ class RechnungenView(QWidget):
         self._start_next_wix_warm_batch()
 
     def _start_next_wix_warm_batch(self) -> None:
-        self._submit_side_job(
-            coalesce_key="wix-warmup",
+        if not self._can_run_wix_warm_job():
+            return
+        refs = self._wix_warm_queue[:_WIX_WARM_BATCH_SIZE]
+        if not refs:
+            return
+        del self._wix_warm_queue[:_WIX_WARM_BATCH_SIZE]
+        self._wix_warm_inflight_refs = set(refs)
+        self._wix_warm_started_at = time.perf_counter()
+        logger.info("Wix context warmup start refs=%s pending=%s", len(refs), len(self._wix_warm_queue))
+        handle = self._background_jobs.submit_callable(
+            queue="network-background",
             priority=_PRIORITY_WIX_WARMUP,
-            start_fn=self._create_next_wix_warm_worker,
+            key="wix-warmup",
+            fn=lambda token, batch=tuple(refs): self._run_wix_warm_batch(batch, token),
+            on_result=self._on_wix_warm_result,
+            on_error=self._on_wix_warm_error,
+            on_finished=self._on_wix_warm_finished,
+            owner=self,
+            replace="coalesce_pending",
             can_start=self._can_run_wix_warm_job,
         )
+        self._wix_warm_handle = handle
+        self._wix_warm_worker = handle.worker
 
     def _can_run_wix_warm_job(self) -> bool:
         if self._wix_warm_worker is not None and self._wix_warm_worker.isRunning():
@@ -2078,66 +2342,59 @@ class RechnungenView(QWidget):
             return False
         return True
 
-    def _create_next_wix_warm_worker(self) -> BackgroundWorker | None:
-        if not self._wix_warm_queue:
-            return None
+    def _run_wix_warm_batch(self, refs: tuple[str, ...], token: CancelToken) -> list[dict[str, object]]:
+        token.raise_if_cancelled()
+        wix_client: WixOrdersClient = self._container.resolve(WixOrdersClient)
+        if not wix_client.has_credentials():
+            return [
+                {
+                    "reference": ref,
+                    "status": "Kein Wix-API-Key konfiguriert.",
+                    "meta": {},
+                    "items": [],
+                    "patch": self._blank_hint_patch(),
+                }
+                for ref in refs
+            ]
 
-        refs = self._wix_warm_queue[:_WIX_WARM_BATCH_SIZE]
-        del self._wix_warm_queue[:_WIX_WARM_BATCH_SIZE]
-        self._wix_warm_inflight_refs = set(refs)
-        self._wix_warm_started_at = time.perf_counter()
-        logger.info("Wix context warmup start refs=%s pending=%s", len(refs), len(self._wix_warm_queue))
-
-        def job() -> list[dict[str, object]]:
-            wix_client: WixOrdersClient = self._container.resolve(WixOrdersClient)
-            if not wix_client.has_credentials():
-                return [
+        engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
+        invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+        rows: list[dict[str, object]] = []
+        for ref in refs:
+            token.raise_if_cancelled()
+            try:
+                # All three operations share WixOrdersClient's persistent
+                # read-through cache, so only the first one can hit Wix.
+                meta = self._resolve_wix_order_summary(wix_client, ref, token)
+                token.raise_if_cancelled()
+                wix_items = self._fetch_wix_order_line_items(wix_client, ref, token)
+                token.raise_if_cancelled()
+                pieces = engine.get_piece_blocks(wix_items, invoice_ref=ref)
+                token.raise_if_cancelled()
+                hints = invoice_service.resolve_invoice_list_hints(ref)
+                rows.append(
                     {
-                        "reference": ref,
-                        "status": "Kein Wix-API-Key konfiguriert.",
-                        "meta": {},
-                        "items": [],
-                        "patch": self._blank_hint_patch(),
-                    }
-                    for ref in refs
-                ]
-
-            engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
-            invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-            def warm_one(ref: str) -> dict[str, object]:
-                try:
-                    # All three operations share WixOrdersClient's persistent
-                    # read-through cache, so only the first one can hit Wix.
-                    meta = wix_client.resolve_order_summary(ref)
-                    wix_items = wix_client.fetch_order_line_items(ref)
-                    pieces = engine.get_piece_blocks(wix_items, invoice_ref=ref)
-                    hints = invoice_service.resolve_invoice_list_hints(ref)
-                    return {
                         "reference": ref,
                         "status": "" if meta else "Wix-Order nicht gefunden",
                         "meta": meta if isinstance(meta, dict) else {},
                         "items": pieces,
                         "patch": hints.as_row_patch(),
                     }
-                except Exception as exc:  # noqa: BLE001 - warmup must not affect the list.
-                    logger.warning("Wix warmup failed ref=%s: %s", ref, exc)
-                    return {
+                )
+            except Exception as exc:  # noqa: BLE001 - warmup must not affect the list.
+                if token.cancelled:
+                    raise
+                logger.warning("Wix warmup failed ref=%s: %s", ref, exc)
+                rows.append(
+                    {
                         "reference": ref,
                         "status": f"Wix-Fehler: {exc}",
                         "meta": {},
                         "items": [],
                         "patch": self._blank_hint_patch(),
                     }
-
-            workers = min(_WIX_WARM_MAX_WORKERS, len(refs))
-            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="wix-warm") as executor:
-                return list(executor.map(warm_one, refs))
-
-        self._wix_warm_worker = BackgroundWorker(job)
-        self._wix_warm_worker.signals.result.connect(self._on_wix_warm_result)
-        self._wix_warm_worker.signals.error.connect(self._on_wix_warm_error)
-        self._wix_warm_worker.signals.finished.connect(self._on_wix_warm_finished)
-        return self._wix_warm_worker
+                )
+        return rows
 
     def _on_wix_warm_result(self, payload: object) -> None:
         rows = payload if isinstance(payload, list) else []
@@ -2165,6 +2422,7 @@ class RechnungenView(QWidget):
 
     def _on_wix_warm_finished(self) -> None:
         self._wix_warm_worker = None
+        self._wix_warm_handle = None
         self._wix_warm_inflight_refs.clear()
         self._start_next_wix_warm_batch()
 
@@ -2496,8 +2754,10 @@ class RechnungenView(QWidget):
 
         selected_jobs: list[tuple[PieceBlock, int, Callable[[], None]]] = []
         skipped: list[str] = []
-        for block, qty_input in self._piece_quantity_controls:
-            qty = max(1, int(qty_input.value() or self._default_piece_print_qty(block)))
+        for block, qty, flagged in self._piece_model.rows():
+            if not flagged:
+                continue
+            qty = max(1, int(qty or self._default_piece_print_qty(block)))
             if not block.has_direct_print_config:
                 skipped.append(block.sku)
                 continue
@@ -3458,8 +3718,9 @@ class RechnungenView(QWidget):
             logger.debug("Wix context warmup reprioritized ref=%s", ref)
 
         if self._wix_context_worker is not None and self._wix_context_worker.isRunning():
-            self._queued_wix_context_ref = ref
-            return
+            self._background_jobs.cancel_key("selected-wix-context")
+        if self._wix_warm_handle is not None and self._wix_warm_handle.running:
+            self._background_jobs.cancel_key("wix-warmup")
 
         self._wix_context_seq += 1
         seq = self._wix_context_seq
@@ -3473,7 +3734,8 @@ class RechnungenView(QWidget):
         self._stuecke_hint.setText("Wird geladen…")
         self._gb_stuecke.show()
 
-        def job() -> dict[str, object]:
+        def job(token: CancelToken) -> dict[str, object]:
+            token.raise_if_cancelled()
             wix_client: WixOrdersClient = self._container.resolve(WixOrdersClient)
             if not wix_client.has_credentials():
                 return {
@@ -3484,10 +3746,13 @@ class RechnungenView(QWidget):
                     "items": [],
                 }
 
-            meta = wix_client.resolve_order_summary(ref)
-            wix_items = wix_client.fetch_order_line_items(ref)
+            meta = self._resolve_wix_order_summary(wix_client, ref, token)
+            token.raise_if_cancelled()
+            wix_items = self._fetch_wix_order_line_items(wix_client, ref, token)
+            token.raise_if_cancelled()
             engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
             pieces = engine.get_piece_blocks(wix_items, invoice_ref=ref)
+            token.raise_if_cancelled()
             return {
                 "seq": seq,
                 "__requested_ref": ref,
@@ -3496,11 +3761,47 @@ class RechnungenView(QWidget):
                 "items": pieces,
             }
 
-        self._wix_context_worker = BackgroundWorker(job)
-        self._wix_context_worker.signals.result.connect(self._on_wix_context_loaded)
-        self._wix_context_worker.signals.error.connect(self._on_wix_context_error)
-        self._wix_context_worker.signals.finished.connect(self._on_wix_context_finished)
-        self._wix_context_worker.start()
+        handle = self._background_jobs.submit_callable(
+            queue="ui-critical-network",
+            priority=0,
+            key="selected-wix-context",
+            fn=job,
+            on_result=self._on_wix_context_loaded,
+            on_error=self._on_wix_context_error,
+            on_finished=self._on_wix_context_finished,
+            owner=self,
+            replace="cancel_previous",
+        )
+        self._wix_context_handle = handle
+        self._wix_context_worker = handle.worker
+
+    @staticmethod
+    def _resolve_wix_order_summary(
+        wix_client: WixOrdersClient,
+        ref: str,
+        token: CancelToken,
+    ) -> dict[str, str]:
+        try:
+            return wix_client.resolve_order_summary(ref, cancel_token=token)
+        except TypeError as exc:
+            if "cancel_token" not in str(exc):
+                raise
+            token.raise_if_cancelled()
+            return wix_client.resolve_order_summary(ref)
+
+    @staticmethod
+    def _fetch_wix_order_line_items(
+        wix_client: WixOrdersClient,
+        ref: str,
+        token: CancelToken,
+    ) -> list[Any]:
+        try:
+            return list(wix_client.fetch_order_line_items(ref, cancel_token=token))
+        except TypeError as exc:
+            if "cancel_token" not in str(exc):
+                raise
+            token.raise_if_cancelled()
+            return list(wix_client.fetch_order_line_items(ref))
 
     def _on_wix_context_loaded(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}
@@ -3950,12 +4251,10 @@ class RechnungenView(QWidget):
         self._piece_print_buttons = []
         self._piece_quantity_inputs = []
         self._piece_quantity_controls = []
+        self._piece_model.set_pieces([])
+        self._piece_list.hide()
         self._stuecke_hint.setText("—")
-        # Remove dynamic item widgets (keep only the hint label)
-        while self._stuecke_layout.count() > 1:
-            item = self._stuecke_layout.takeAt(1)
-            if item and item.widget():
-                item.widget().deleteLater()
+        self._stuecke_hint.show()
         self._gb_stuecke.hide()
 
     def _load_stuecke(self, order_reference: str) -> None:
@@ -3973,13 +4272,11 @@ class RechnungenView(QWidget):
             return
 
         self._gb_stuecke.show()
-        while self._stuecke_layout.count() > 1:
-            item = self._stuecke_layout.takeAt(1)
-            if item and item.widget():
-                item.widget().deleteLater()
         self._piece_print_buttons = []
         self._piece_quantity_inputs = []
         self._piece_quantity_controls = []
+        self._piece_model.set_pieces([])
+        self._piece_list.hide()
         self._stuecke_hint.hide()
         if not isinstance(payload_items, list) or not payload_items:
             self._stuecke_hint.setText("Keine Positionen gefunden.")
@@ -4002,6 +4299,25 @@ class RechnungenView(QWidget):
             deduped.append(piece)
         self._current_piece_blocks = deduped
         invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+        model_rows: list[dict[str, object]] = []
+        for item in self._current_piece_blocks:
+            flagged_for_print = bool(item.is_unreleased or invoice_service.is_flagged_sku(item.sku))
+            show_print_controls = not (item.product is not None and item.product.is_digital)
+            model_rows.append(
+                {
+                    "block": item,
+                    "flagged": show_print_controls,
+                    "quantity": self._default_piece_print_qty(item),
+                    "header": self._piece_header_text(item, flagged_for_print),
+                    "details": self._piece_detail_lines(item),
+                    "stock": self._piece_stock_text(item),
+                    "stock_color": self._piece_stock_color(item),
+                    "print_enabled": self._print_allowed,
+                }
+            )
+        self._piece_model.set_pieces(model_rows)
+        self._piece_list.show()
+        return
         for item in self._current_piece_blocks:
             # Header line: "×2  [XW-001]  Produktname ★"
             flagged_for_print = bool(item.is_unreleased or invoice_service.is_flagged_sku(item.sku))
@@ -4092,7 +4408,7 @@ class RechnungenView(QWidget):
         from xw_studio.ui.modules.rechnungen.print_dialog import prepare_piece_pdf_print
 
         qty = max(1, int(quantity or self._default_piece_print_qty(block)))
-        job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty)
+        job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty, wait=True)
         if job is None:
             return
 
@@ -4150,6 +4466,8 @@ class RechnungenView(QWidget):
         return max(1, int(block.print_qty or block.qty_needed or 1))
 
     def _set_piece_print_controls_enabled(self, enabled: bool) -> None:
+        self._piece_model.set_print_enabled(enabled)
+        self._piece_list.viewport().update()
         for button in self._piece_print_buttons:
             button.setEnabled(enabled)
         for qty_input in self._piece_quantity_inputs:
@@ -4204,6 +4522,18 @@ class RechnungenView(QWidget):
         if block.stock_status.needs_reprint:
             return f"Niedriger Bestand ({on_hand} Stk)"
         return f"Im Lager ({on_hand} Stk)"
+
+    @staticmethod
+    def _piece_stock_color(block: PieceBlock) -> str:
+        if block.product is None:
+            return "#9e9e9e"
+        if block.product.is_digital:
+            return "#64748b"
+        if block.needs_print:
+            return "#ef4444"
+        if block.stock_status is not None and block.stock_status.needs_reprint:
+            return "#f59e0b"
+        return "#16a34a"
 
     @staticmethod
     def _describe_piece_print_config(block: PieceBlock) -> str:

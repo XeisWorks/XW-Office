@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "description": "Versionierte sevDesk-Umsatzsteuerregelungen fuer EU-OSS. Positive OSS-Whitelist; Ausschluesse bleiben dokumentiert.",
+  "rules": [
+    {"label": "Belgische TVA 6%", "country_code": "BE", "vat_rate": "6.00", "oss_eligible": true},
+    {"label": "Spanische IVA 10%", "country_code": "ES", "vat_rate": "10.00", "oss_eligible": true},
+    {"label": "Estnische KM 9%", "country_code": "EE", "vat_rate": "9.00", "oss_eligible": true},
+    {"label": "Finnische ALV 14%", "country_code": "FI", "vat_rate": "14.00", "oss_eligible": true},
+    {"label": "Daenische MOMS 25%", "country_code": "DK", "vat_rate": "25.00", "oss_eligible": true, "aliases": ["Dänische MOMS 25%"]},
+    {"label": "Slowenische DDV 9,5 %", "country_code": "SI", "vat_rate": "9.50", "oss_eligible": true, "aliases": ["Slowenische DDV 9,5%"]},
+    {"label": "Tschechische DPH 0% (seit 2024)", "country_code": "CZ", "vat_rate": "0.00", "oss_eligible": true},
+    {"label": "Niederlaendische BTW 21%", "country_code": "NL", "vat_rate": "21.00", "oss_eligible": true, "aliases": ["Niederländische BTW 21%"]},
+    {"label": "Schwedische MOMS 6%", "country_code": "SE", "vat_rate": "6.00", "oss_eligible": true},
+    {"label": "Litauische PVM 9%", "country_code": "LT", "vat_rate": "9.00", "oss_eligible": true},
+    {"label": "Luxemburgische TVA 3%", "country_code": "LU", "vat_rate": "3.00", "oss_eligible": true},
+    {"label": "Franzoesische TVA 5,5%", "country_code": "FR", "vat_rate": "5.50", "oss_eligible": true, "aliases": ["Französische TVA 5,5%"]},
+    {"label": "Deutsche MwSt. 19%", "country_code": "DE", "vat_rate": "19.00", "oss_eligible": true},
+    {"label": "Deutsche MwSt. 7%", "country_code": "DE", "vat_rate": "7.00", "oss_eligible": true},
+    {"label": "Niederlaendische BTW 9%", "country_code": "NL", "vat_rate": "9.00", "oss_eligible": true, "aliases": ["Niederländische BTW 9%"]},
+    {"label": "Italienische IVA 4%", "country_code": "IT", "vat_rate": "4.00", "oss_eligible": true},
+    {"label": "Steuerfreie innergemeinschaftl. Lieferung (EU)", "country_code": "", "vat_rate": "0.00", "oss_eligible": false, "exclude_reason": "ics"},
+    {"label": "Steuerfreie Ausfuhrlieferung (§ 7 UStG 1994)", "country_code": "", "vat_rate": "0.00", "oss_eligible": false, "exclude_reason": "export"}
+  ]
+}

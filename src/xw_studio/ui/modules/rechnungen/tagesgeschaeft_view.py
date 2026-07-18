@@ -341,7 +341,10 @@ class TagesgeschaeftView(QWidget):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._badge_timer.stop()
-        self._wait_for_workers()
+        if not self._wait_for_workers():
+            logger.warning("Tagesgeschaeft close postponed because a worker is still running")
+            event.ignore()
+            return
         super().closeEvent(event)
 
     def has_active_flow(self) -> bool:
@@ -356,15 +359,27 @@ class TagesgeschaeftView(QWidget):
             )
         )
 
-    def prepare_shutdown(self) -> None:
+    def prepare_shutdown(self) -> bool:
         self._badge_timer.stop()
-        self._wait_for_workers()
+        return self._wait_for_workers()
 
-    def _wait_for_workers(self) -> None:
-        for worker in (self._badge_worker, self._start_worker, self._start_product_worker, self._start_exec_worker,
-                       self._reprint_worker, self._reprint_exec_worker):
+    def _wait_for_workers(self) -> bool:
+        workers = (
+            self._badge_worker,
+            self._start_worker,
+            self._start_product_worker,
+            self._start_exec_worker,
+            self._reprint_worker,
+            self._reprint_exec_worker,
+        )
+        deadline = time.monotonic() + 30.0
+        for worker in workers:
             if worker is not None and worker.isRunning():
-                worker.wait(3000)
+                worker.cancel()
+                remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+                if not worker.wait(remaining_ms):
+                    return False
+        return True
 
     def _build_ui(self) -> None:
         self._main_layout = QVBoxLayout(self)
@@ -1165,41 +1180,4 @@ class TagesgeschaeftView(QWidget):
         if isinstance(window, QWidget):
             window.close()
             return
-        QApplication.quit()
-        running = any(
-            w is not None and w.isRunning()
-            for w in (
-                self._badge_worker,
-                self._start_worker,
-                self._start_exec_worker,
-                self._reprint_worker,
-                self._reprint_exec_worker,
-            )
-        )
-        if running:
-            answer = QMessageBox.question(
-                self,
-                "App beenden",
-                "Es laufen noch Hintergrundaufgaben.\n"
-                "Trotzdem beenden? Laufende Operationen werden abgewartet (max. 5 s).",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-        else:
-            answer = QMessageBox.question(
-                self,
-                "App beenden",
-                "XW-Studio wirklich beenden?\n"
-                "Alle Änderungen sind bereits in PostgreSQL gespeichert.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-
-        logger.info("User requested application shutdown via BEENDEN button.")
-        self._badge_timer.stop()
-        self._wait_for_workers()
         QApplication.quit()

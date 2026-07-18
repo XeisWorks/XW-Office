@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QPushButton
 
 from xw_studio.core.config import AppConfig
 from xw_studio.core.container import Container
@@ -188,3 +189,17 @@ def test_products_sync_action_click_smoke(qtbot: object, monkeypatch: object) ->
     qtbot.mouseClick(view._sync_table.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())  # noqa: SLF001
 
     assert calls == ["XW-901"]
+
+
+def test_products_view_exposes_separate_print_and_production_actions(
+    qtbot: object, monkeypatch: object
+) -> None:
+    monkeypatch.setattr(ProductsView, "_load_sync_sources", lambda self, *args, **kwargs: None)
+    view = ProductsView(Container(AppConfig()))
+    qtbot.addWidget(view)
+
+    labels = {button.text(): button for button in view.findChildren(QPushButton)}
+
+    assert "Auswahl drucken" in labels
+    assert "Drucken + Bestand" in labels
+    assert labels["Auswahl drucken"] is not labels["Drucken + Bestand"]

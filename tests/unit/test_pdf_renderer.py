@@ -4,7 +4,7 @@ import types
 from unittest.mock import MagicMock
 
 import fitz
-from PySide6.QtCore import QPointF, QRect
+from PySide6.QtCore import QPointF, QRect, QRectF
 
 from xw_studio.services.printing import pdf_renderer
 
@@ -471,7 +471,7 @@ def test_print_pdf_with_qprinter_logs_print_metrics(monkeypatch, tmp_path, caplo
     assert "PDF print page metrics" in caplog.text
     assert "placement_mode=calibrated" in caplog.text
     assert "x_offset_mm=-1.500" in caplog.text
-    assert "draw_px=(" in caplog.text
+    assert "draw_target=" in caplog.text
     assert "effective_render_color_mode=gray" in caplog.text
     assert "effective_black_enhancement=adaptive_music" in caplog.text
 
@@ -851,3 +851,31 @@ def test_create_calibration_pdf_contains_one_page(tmp_path) -> None:
         assert len(doc) == 1
     finally:
         doc.close()
+
+
+def test_fit_center_target_rect_uses_printable_area(monkeypatch) -> None:
+    image = pdf_renderer.QImage(100, 200, pdf_renderer.QImage.Format.Format_RGB888)
+
+    class LayoutStub:
+        def fullRectPixels(self, _dpi: int) -> QRect:
+            return QRect(0, 0, 1200, 1200)
+
+        def paintRectPixels(self, _dpi: int) -> QRect:
+            return QRect(100, 50, 1000, 1000)
+
+    class PrinterStub:
+        def pageLayout(self) -> LayoutStub:
+            return LayoutStub()
+
+    target = pdf_renderer._target_rect(
+        printer=PrinterStub(),  # type: ignore[arg-type]
+        image=image,
+        dpi=100,
+        scale_mode="fit",
+        alignment="center",
+        x_offset_mm=0.0,
+        y_offset_mm=0.0,
+    )
+
+    assert isinstance(target, QRectF)
+    assert target == QRectF(350.0, 50.0, 500.0, 1000.0)

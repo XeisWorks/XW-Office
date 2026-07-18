@@ -47,6 +47,8 @@ class LayoutView(QWidget):
         self._a5_output_path: str | None = None
         self._landscape_source_path: str | None = None
         self._landscape_output_path: str | None = None
+        self._watermark_source_path: str | None = None
+        self._watermark_output_dir: str = r"C:\Users\bernh\OneDrive - XeisWorks\02 XeisWorks\24 Digitale Lizensierung"
         self._worker: BackgroundWorker | None = None
 
         root = QVBoxLayout(self)
@@ -59,6 +61,7 @@ class LayoutView(QWidget):
         tabs.addTab(self._build_blank_tab(), "Leerseiten")
         tabs.addTab(self._build_cover_tab(), "Deckblatt")
         tabs.addTab(self._build_isbn_tab(), "ISBN")
+        tabs.addTab(self._build_watermark_tab(), "Wasserzeichen seitlich A4")
         root.addWidget(tabs)
 
     # ------------------------------------------------------------------
@@ -617,6 +620,104 @@ class LayoutView(QWidget):
         palette_role = "color: #4ade80;" if ok else "color: #f87171;"
         self._isbn_result.setStyleSheet(palette_role)
         self._isbn_result.setText(msg)
+
+    # ------------------------------------------------------------------
+    # Tab 6: seitliches A4-Wasserzeichen
+    # ------------------------------------------------------------------
+
+    def _build_watermark_tab(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(10)
+
+        file_group = QGroupBox("PDF-Dateien")
+        file_layout = QFormLayout(file_group)
+
+        source_row = QHBoxLayout()
+        self._watermark_source_lbl = QLabel("(keine Datei gewaehlt)")
+        self._watermark_source_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        source_row.addWidget(self._watermark_source_lbl)
+        source_btn = QPushButton("PDF oeffnen...")
+        source_btn.clicked.connect(self._pick_watermark_source)
+        source_row.addWidget(source_btn)
+        file_layout.addRow("Quelle:", source_row)
+
+        output_row = QHBoxLayout()
+        self._watermark_output_lbl = QLabel(self._watermark_output_dir)
+        self._watermark_output_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        output_row.addWidget(self._watermark_output_lbl)
+        output_btn = QPushButton("Ordner waehlen...")
+        output_btn.clicked.connect(self._pick_watermark_output_dir)
+        output_row.addWidget(output_btn)
+        file_layout.addRow("Ausgabeordner:", output_row)
+        lay.addWidget(file_group)
+
+        form = QFormLayout()
+        self._watermark_name = QLineEdit()
+        self._watermark_name.setPlaceholderText("Vorname Nachname")
+        form.addRow("Lizenzname:", self._watermark_name)
+        lay.addLayout(form)
+
+        btn_row = QHBoxLayout()
+        self._watermark_run_btn = QPushButton("Lizenzierte PDF erzeugen")
+        self._watermark_run_btn.clicked.connect(self._run_watermark)
+        btn_row.addWidget(self._watermark_run_btn)
+        btn_row.addStretch()
+        lay.addLayout(btn_row)
+
+        self._watermark_status = QLabel("Bereit")
+        self._watermark_status.setWordWrap(True)
+        lay.addWidget(self._watermark_status)
+        lay.addStretch()
+        return page
+
+    def _pick_watermark_source(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "PDF oeffnen", "", "PDF (*.pdf)")
+        if not path:
+            return
+        self._watermark_source_path = path
+        self._watermark_source_lbl.setText(path)
+        self._watermark_status.setText("Bereit")
+
+    def _pick_watermark_output_dir(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Ausgabeordner waehlen", self._watermark_output_dir)
+        if not path:
+            return
+        self._watermark_output_dir = path
+        self._watermark_output_lbl.setText(path)
+
+    def _run_watermark(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
+        if not self._watermark_source_path:
+            QMessageBox.warning(self, "Wasserzeichen", "Bitte zuerst eine PDF-Datei oeffnen.")
+            return
+        name = self._watermark_name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Wasserzeichen", "Bitte Vorname und Nachname eingeben.")
+            return
+        svc: LayoutToolsService = self._container.resolve(LayoutToolsService)
+        source = self._watermark_source_path
+        output_dir = self._watermark_output_dir
+
+        def job() -> str:
+            return str(svc.watermark_side_a4_pdf(source, output_dir=output_dir, user_name=name))
+
+        self._watermark_run_btn.setEnabled(False)
+        self._watermark_status.setText("Erzeuge lizenzierte PDF...")
+        self._worker = BackgroundWorker(job)
+        self._worker.signals.result.connect(self._on_watermark_done)
+        self._worker.signals.error.connect(self._on_error)
+        self._worker.signals.finished.connect(lambda: self._watermark_run_btn.setEnabled(True))
+        self._worker.signals.finished.connect(self._on_worker_finished)
+        self._worker.start()
+
+    def _on_watermark_done(self, data: object) -> None:
+        if not isinstance(data, str):
+            return
+        self._watermark_status.setText(f"Gespeichert: {data}")
+        QMessageBox.information(self, "Fertig", f"Lizenzierte PDF gespeichert:\n{data}")
 
     # ------------------------------------------------------------------
     # Shared error handler

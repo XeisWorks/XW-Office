@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 from pydantic import BaseModel, ConfigDict
@@ -24,6 +24,13 @@ _RETRY_BACKOFF_SEC = 0.35
 
 _ORDERS_BASE = "https://www.wixapis.com/ecom/v1"
 _UNRELEASED_PREFIXES = ("XW-600", "XW-010")
+
+
+class CancellationToken(Protocol):
+    @property
+    def cancelled(self) -> bool: ...
+
+    def raise_if_cancelled(self) -> None: ...
 
 
 class WixProduct(BaseModel):
@@ -230,32 +237,48 @@ class WixProductsClient:
         *,
         headers: dict[str, str],
         json_body: dict[str, Any] | None = None,
+        cancel_token: CancellationToken | None = None,
     ) -> httpx.Response:
         last_error: Exception | None = None
         for attempt in range(1, _RETRY_ATTEMPTS + 1):
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
             try:
                 resp = client.request(method, url, headers=headers, json=json_body)
                 if resp.status_code >= 400:
                     if self._is_retryable_status(resp.status_code) and attempt < _RETRY_ATTEMPTS:
-                        time.sleep(_RETRY_BACKOFF_SEC * attempt)
+                        self._sleep_retry(_RETRY_BACKOFF_SEC * attempt, cancel_token)
                         continue
                     resp.raise_for_status()
                 return resp
             except httpx.HTTPError as exc:
                 last_error = exc
                 if attempt < _RETRY_ATTEMPTS:
-                    time.sleep(_RETRY_BACKOFF_SEC * attempt)
+                    self._sleep_retry(_RETRY_BACKOFF_SEC * attempt, cancel_token)
                     continue
                 break
         if last_error is not None:
             raise last_error
         raise RuntimeError(f"HTTP request failed without explicit error: {method} {url}")
 
+    @staticmethod
+    def _sleep_retry(delay: float, cancel_token: CancellationToken | None) -> None:
+        end_at = time.monotonic() + max(0.0, float(delay))
+        while time.monotonic() < end_at:
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
+            time.sleep(min(0.1, max(0.0, end_at - time.monotonic())))
+
     # ------------------------------------------------------------------
     # Products
     # ------------------------------------------------------------------
 
-    def list_products(self, *, include_hidden: bool = True) -> list[WixProduct]:
+    def list_products(
+        self,
+        *,
+        include_hidden: bool = True,
+        cancel_token: CancellationToken | None = None,
+    ) -> list[WixProduct]:
         """Fetch all products from Wix Catalog (paginated).
 
         Returns an empty list when credentials are not configured — no exception.
@@ -273,6 +296,8 @@ class WixProductsClient:
         with httpx.Client(timeout=_TIMEOUT) as client:
             chosen_endpoint = ""
             for endpoint in endpoints:
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
                 try:
                     probe = self._request_with_retry(
                         client,
@@ -280,6 +305,7 @@ class WixProductsClient:
                         endpoint,
                         headers=headers,
                         json_body={"query": {"paging": {"limit": 1}}},
+                        cancel_token=cancel_token,
                     )
                     data_probe = probe.json() if probe.content else {}
                     if self._extract_product_list(data_probe) or probe.status_code < 400:
@@ -300,6 +326,8 @@ class WixProductsClient:
             offset = 0
             page = 0
             while page < max_pages:
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
                 body: dict[str, Any] = {
                     "query": {
                         "paging": {
@@ -318,6 +346,7 @@ class WixProductsClient:
                         chosen_endpoint,
                         headers=headers,
                         json_body=body,
+                        cancel_token=cancel_token,
                     )
                 except Exception:
                     logger.exception("WixProductsClient: HTTP error on page %s", page)
@@ -327,6 +356,8 @@ class WixProductsClient:
                 products = self._extract_product_list(data)
                 count_before = len(results)
                 for raw in products:
+                    if cancel_token is not None:
+                        cancel_token.raise_if_cancelled()
                     parsed = _parse_product(raw)
                     pid = str(parsed.id or "").strip()
                     if pid:
@@ -1266,26 +1297,44 @@ class WixOrdersClient:
             return None
         return str(cached.get("buyerNote") or cached.get("buyerNotes") or "").strip()
 
-    def _resolve_order(self, reference: str, *, use_cache: bool = True) -> dict[str, Any]:
+    def _resolve_order(
+        self,
+        reference: str,
+        *,
+        use_cache: bool = True,
+        cancel_token: CancellationToken | None = None,
+    ) -> dict[str, Any]:
         ref = str(reference or "").strip()
         if not ref or not self.has_credentials():
             return {}
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
         if use_cache:
             cached = self._cached_order(ref)
             if cached is not None:
                 return cached
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
         if self._looks_like_uuid(ref):
             order_by_id = self._get_order_by_id(ref)
             if order_by_id:
                 self._cache_order(ref, order_by_id)
                 return order_by_id
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
         order = self._search_order_by_field("number", ref)
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
         if not order:
             order = self._search_order_by_field("orderNumber", ref)
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
         if not order and not ref.startswith("00"):
             digits = "".join(c for c in ref if c.isdigit())
             if digits and digits != ref:
                 order = self._search_order_by_field("number", digits)
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
                 if not order:
                     order = self._search_order_by_field("orderNumber", digits)
         if order:
@@ -1419,10 +1468,15 @@ class WixOrdersClient:
             "wix_billing_address": "\n".join(billing_lines),
         }
 
-    def resolve_order_summary(self, reference: str) -> dict[str, str]:
+    def resolve_order_summary(
+        self,
+        reference: str,
+        *,
+        cancel_token: CancellationToken | None = None,
+    ) -> dict[str, str]:
         """Return normalized customer/order fields used by the details panel."""
         started = time.perf_counter()
-        order = self._resolve_order(reference)
+        order = self._resolve_order(reference, cancel_token=cancel_token)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         logger.debug(
             "Wix metric summary_ms=%s ref=%s found=%s",
@@ -1432,6 +1486,8 @@ class WixOrdersClient:
         )
         if not order:
             return {}
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
         return self._summary_from_order(order)
 
     def resolve_plc_shipping_context(self, reference: str) -> dict[str, str]:
@@ -1827,7 +1883,12 @@ class WixOrdersClient:
         parts = value.split("-")
         return len(parts) == 5 and len(value) == 36
 
-    def fetch_order_line_items(self, reference: str) -> list[WixOrderItem]:
+    def fetch_order_line_items(
+        self,
+        reference: str,
+        *,
+        cancel_token: CancellationToken | None = None,
+    ) -> list[WixOrderItem]:
         """Resolve a sevDesk order reference to Wix line items.
 
         *reference* can be a Wix order number (digits) or order UUID.
@@ -1838,16 +1899,25 @@ class WixOrdersClient:
         if not ref or not self.has_credentials():
             return []
 
-        order = self._resolve_order(ref)
+        order = self._resolve_order(ref, cancel_token=cancel_token)
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
         if order and not isinstance(order.get("lineItems"), list):
-            order = self._resolve_order(ref, use_cache=False)
+            order = self._resolve_order(ref, use_cache=False, cancel_token=cancel_token)
+        if cancel_token is not None:
+            cancel_token.raise_if_cancelled()
 
         if not order:
             logger.debug("WixOrdersClient: no order found for reference=%r", ref)
             return []
 
         raw_items = order.get("lineItems") or []
-        items = [_parse_order_line_item(item) for item in raw_items if isinstance(item, dict)]
+        items: list[WixOrderItem] = []
+        for item in raw_items:
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
+            if isinstance(item, dict):
+                items.append(_parse_order_line_item(item))
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         logger.debug(
             "Wix metric line_items_ms=%s ref=%s items=%s",

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from xw_studio.core.config import PrintingSection
 from xw_studio.services.printing.print_jobs import PdfPrintJob
 from xw_studio.services.printing.planned_pdf_printer import (
@@ -31,11 +33,17 @@ def _printing_config() -> PrintingSection:
                 "printer_name": "Brochure",
                 "dpi": 600,
                 "placement_mode": "calibrated",
+                "page_size": "A5",
+                "orientation": "portrait",
+                "scale_mode": "fit",
+                "alignment": "center",
                 "x_offset_mm": -2.0,
                 "y_offset_mm": 0.5,
                 "render_color_mode": "gray",
                 "black_enhancement": "threshold",
                 "black_threshold": 200,
+                "backend": "pdf_xchange",
+                "native_pdf_exe": "C:/Program Files/PDFXEdit.exe",
             },
         ]
     )
@@ -89,11 +97,17 @@ def test_print_pdf_by_plan_queues_target_with_parsed_pages_and_copies() -> None:
     assert queue.jobs[0].copies == 3
     assert queue.jobs[0].printer_name == "Brochure"
     assert queue.jobs[0].placement_mode == "calibrated"
+    assert queue.jobs[0].page_size == "A5"
+    assert queue.jobs[0].orientation == "portrait"
+    assert queue.jobs[0].scale_mode == "fit"
+    assert queue.jobs[0].alignment == "center"
     assert queue.jobs[0].x_offset_mm == -2.0
     assert queue.jobs[0].y_offset_mm == 0.5
     assert queue.jobs[0].render_color_mode == "gray"
     assert queue.jobs[0].black_enhancement == "threshold"
     assert queue.jobs[0].black_threshold == 200
+    assert queue.jobs[0].backend == "pdf_xchange"
+    assert queue.jobs[0].native_pdf_exe == "C:/Program Files/PDFXEdit.exe"
 
 
 def test_print_pdf_by_plan_uses_queue_without_shelling_out() -> None:
@@ -120,8 +134,23 @@ def test_minimal_profile_keeps_dpi_optional() -> None:
     assert target.printer_name == "Simplex"
     assert target.dpi is None
     assert target.placement_mode == "paper_origin"
+    assert target.page_size == ""
+    assert target.orientation == ""
+    assert target.scale_mode == "none"
+    assert target.alignment == "top_left"
     assert target.x_offset_mm == 0.0
     assert target.y_offset_mm == 0.0
     assert target.render_color_mode == "auto"
     assert target.black_enhancement == "auto"
     assert target.black_threshold == 180
+    assert target.backend == "qt_raster"
+    assert target.native_pdf_exe == ""
+
+
+def test_unknown_backend_is_rejected_during_plan_resolution() -> None:
+    printing = PrintingSection(
+        print_profiles=[{"id": "broken", "printer_name": "P", "backend": "magic"}]
+    )
+
+    with pytest.raises(RuntimeError, match="Unbekanntes PDF-Druckbackend"):
+        resolve_plan_targets(printing, profile_id="broken")

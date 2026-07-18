@@ -4,9 +4,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 import io
 import logging
+import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+_INVALID_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*]+')
+_DEFAULT_WATERMARK_TEXT = "Licensed Copy for {user_name} - Redistribution Prohibited"
 
 
 def _clean_pdf_path(value: str | Path) -> Path:
@@ -82,6 +85,70 @@ class SplitLandscapeResult:
     output_pages: int
     split_pages: int
     copied_pages: int
+
+
+def _sanitize_filename_component(value: str) -> str:
+    sanitized = _INVALID_FILENAME_CHARS_RE.sub("_", value).strip().rstrip(".")
+    return sanitized or "Licensed Copy"
+
+
+def _next_available_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    for idx in range(2, 1000):
+        candidate = path.with_name(f"{path.stem} ({idx}){path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise FileExistsError(f"Kein freier Dateiname gefunden fuer: {path}")
+
+
+def _watermark_output_path(source_pdf: Path, target_dir: Path, user_name: str) -> Path:
+    safe_name = _sanitize_filename_component(user_name)
+    replacement = f" - {safe_name}"
+    source_name = source_pdf.name
+    output_name = source_name.replace(" GESAMT", replacement)
+    if output_name == source_name:
+        output_name = source_name.replace("GESAMT", replacement)
+    if output_name == source_name:
+        output_name = f"{source_pdf.stem}{replacement}{source_pdf.suffix}"
+    return _next_available_path(target_dir / output_name)
+
+
+def _insert_side_watermark(
+    fitz_module: object,
+    document: object,
+    user_name: str,
+    *,
+    font_size: float = 12.0,
+    side_margin_mm: float = 6.0,
+    opacity: float = 0.5,
+    text_template: str = _DEFAULT_WATERMARK_TEXT,
+) -> None:
+    watermark_text = text_template.format(user_name=user_name.strip())
+    x_offset = _mm_to_points(side_margin_mm)
+    text_width = fitz_module.get_text_length(watermark_text, fontname="helv", fontsize=font_size)
+
+    for page in document:
+        page_width = page.rect.width
+        page_height = page.rect.height
+        y_center = page_height / 2.0
+        insert_kwargs = {
+            "fontsize": font_size,
+            "color": (0, 0, 0),
+            "fill_opacity": opacity,
+        }
+        page.insert_text(
+            (x_offset, y_center + (text_width / 2.0)),
+            watermark_text,
+            rotate=90,
+            **insert_kwargs,
+        )
+        page.insert_text(
+            (page_width - x_offset, y_center - (text_width / 2.0)),
+            watermark_text,
+            rotate=270,
+            **insert_kwargs,
+        )
 
 
 class LayoutToolsService:
@@ -208,6 +275,55 @@ class LayoutToolsService:
                 output_doc.close()
 
         return target_path
+
+    def watermark_side_a4_pdf(
+        self,
+        source_pdf: str | Path,
+        *,
+        output_dir: str | Path,
+        user_name: str,
+        font_size: float = 12.0,
+        side_margin_mm: float = 6.0,
+        opacity: float = 0.5,
+    ) -> Path:
+        """Create a side-watermarked licensed PDF without overwriting existing files."""
+        try:
+            import fitz  # type: ignore[import-untyped]
+        except ImportError as exc:
+            raise RuntimeError("PyMuPDF not installed") from exc
+
+        cleaned_name = str(user_name or "").strip()
+        if not cleaned_name:
+            raise ValueError("Bitte einen Namen fuer das Wasserzeichen eingeben.")
+
+        source_path = _clean_pdf_path(source_pdf).resolve(strict=False)
+        if not source_path.is_file():
+            raise FileNotFoundError(f"PDF nicht gefunden: {source_path}")
+        if source_path.suffix.lower() != ".pdf":
+            raise ValueError("Bitte eine PDF-Datei auswaehlen.")
+
+        target_dir = _clean_pdf_path(output_dir).resolve(strict=False)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        output_path = _watermark_output_path(source_path, target_dir, cleaned_name)
+        if output_path.resolve(strict=False) == source_path.resolve(strict=False):
+            raise ValueError("Ausgabe darf die Quelldatei nicht ueberschreiben.")
+
+        with fitz.open(source_path) as document:
+            if document.needs_pass:
+                raise ValueError("Passwortgeschuetzte PDFs werden nicht unterstuetzt.")
+            if len(document) == 0:
+                raise ValueError("Die PDF-Datei enthaelt keine Seiten.")
+            _insert_side_watermark(
+                fitz,
+                document,
+                cleaned_name,
+                font_size=font_size,
+                side_margin_mm=side_margin_mm,
+                opacity=opacity,
+            )
+            document.save(output_path)
+
+        return output_path
 
     # ------------------------------------------------------------------
     # Split landscape pages into portrait pages

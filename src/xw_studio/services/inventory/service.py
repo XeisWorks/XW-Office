@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 
@@ -548,6 +548,27 @@ class InventoryService:
             if row.sku
         ]
         self._settings_repo.set_value_json(_PRODUCTS_KEY, json.dumps(payload, ensure_ascii=False))
+
+    def set_product_stock(self, sku: str, new_stock: int) -> None:
+        """Keep local product and workflow stock snapshots in sync."""
+        wanted = str(sku or "").strip().upper()
+        if not wanted:
+            raise RuntimeError("SKU fehlt bei der Bestandsaktualisierung")
+        quantity = max(0, int(new_stock))
+        products = self.list_products()
+        updated = False
+        for index, product in enumerate(products):
+            if product.sku.strip().upper() != wanted:
+                continue
+            products[index] = replace(product, on_hand=quantity)
+            updated = True
+            break
+        if not updated:
+            raise RuntimeError(f"Lokaler Produktdatensatz nicht gefunden: {wanted}")
+        self.save_products(products)
+        stock_levels = self.load_stock_levels()
+        stock_levels[wanted] = quantity
+        self._save_stock_levels(stock_levels)
 
     def save_product_print_config(
         self,

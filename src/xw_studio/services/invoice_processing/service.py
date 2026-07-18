@@ -1,7 +1,6 @@
 """Orchestrates invoice-related operations (no UI)."""
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import html
 import json
 import logging
@@ -678,23 +677,19 @@ class InvoiceProcessingService:
 
         if post_tasks:
             post_started = time.perf_counter()
-            workers = min(5, max(1, len(post_tasks)))
-            logger.info("START post-processing start tasks=%s workers=%s", len(post_tasks), workers)
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = {pool.submit(run_post_task, task): task for task in post_tasks}
-                for future in as_completed(futures):
-                    summary_id, flags, success = future.result()
-                    updates[summary_id] = flags
-                    self.write_fulfillment_flags(summary_id, flags)
-                    if success:
-                        successful_ids.add(summary_id)
-                    else:
-                        failed_ids.add(summary_id)
+            logger.info("START post-processing start tasks=%s workers=serial", len(post_tasks))
+            for task in post_tasks:
+                summary_id, flags, success = run_post_task(task)
+                updates[summary_id] = flags
+                self.write_fulfillment_flags(summary_id, flags)
+                if success:
+                    successful_ids.add(summary_id)
+                else:
+                    failed_ids.add(summary_id)
             logger.info(
-                "START post-processing done elapsed_ms=%s tasks=%s workers=%s",
+                "START post-processing done elapsed_ms=%s tasks=%s workers=serial",
                 int((time.perf_counter() - post_started) * 1000),
                 len(post_tasks),
-                workers,
             )
 
         self.write_fulfillment_flags_batch(updates)
@@ -741,30 +736,23 @@ class InvoiceProcessingService:
             return {}
 
         requirements: dict[str, int] = {}
-        workers = max(2, min(8, len(references)))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {
-                pool.submit(self._wix_orders.fetch_order_line_items, reference): reference
-                for reference in references
-            }
-            for future in as_completed(futures):
-                reference = futures[future]
+        for reference in references:
+            try:
+                items = self._wix_orders.fetch_order_line_items(reference)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Wix-Inventar-Preflight fehlgeschlagen fuer Bestellung {reference}: {exc}"
+                ) from exc
+            for item in items or []:
+                sku = str(getattr(item, "sku", "") or "").strip().upper()
+                if not sku:
+                    continue
                 try:
-                    items = future.result()
-                except Exception as exc:
-                    raise RuntimeError(
-                        f"Wix-Inventar-Preflight fehlgeschlagen fuer Bestellung {reference}: {exc}"
-                    ) from exc
-                for item in items or []:
-                    sku = str(getattr(item, "sku", "") or "").strip().upper()
-                    if not sku:
-                        continue
-                    try:
-                        qty = max(0, int(getattr(item, "qty", 0) or 0))
-                    except (TypeError, ValueError):
-                        qty = 0
-                    if qty:
-                        requirements[sku] = requirements.get(sku, 0) + qty
+                    qty = max(0, int(getattr(item, "qty", 0) or 0))
+                except (TypeError, ValueError):
+                    qty = 0
+                if qty:
+                    requirements[sku] = requirements.get(sku, 0) + qty
         return requirements
 
     def _prefetch_wix_order_context(self, summaries: list[InvoiceSummary]) -> None:
@@ -783,9 +771,12 @@ class InvoiceProcessingService:
             return
 
         started = time.perf_counter()
-        workers = max(2, min(8, len(missing)))
 
         def load_ref(ref: str) -> tuple[str, list[str], bool]:
+            if not hasattr(self._wix_orders, "resolve_order"):
+                lines = self._wix_orders.resolve_order_address_lines(ref)
+                digital_only = bool(self._wix_orders.is_reference_digital_only(ref))
+                return ref, list(lines), digital_only
             order = self._wix_orders.resolve_order(ref)
             if not order:
                 return ref, [], False
@@ -798,22 +789,19 @@ class InvoiceProcessingService:
             )
             return ref, lines, bool(digital_only)
 
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(load_ref, ref) for ref in missing]
-            for fut in as_completed(futures):
-                try:
-                    ref, lines, digital_only = fut.result()
-                    self._wix_address_cache[ref] = list(lines)
-                    self._wix_digital_cache[ref] = digital_only
-                except Exception as exc:
-                    logger.warning("Wix prefetch failed: %s", exc)
+        for ref_to_load in missing:
+            try:
+                ref, lines, digital_only = load_ref(ref_to_load)
+                self._wix_address_cache[ref] = list(lines)
+                self._wix_digital_cache[ref] = digital_only
+            except Exception as exc:
+                logger.warning("Wix prefetch failed: %s", exc)
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         logger.info(
-            "START metric wix_prefetch_ms=%s refs=%s workers=%s",
+            "START metric wix_prefetch_ms=%s refs=%s workers=serial",
             elapsed_ms,
             len(missing),
-            workers,
         )
 
     def _get_wix_address_lines_cached(self, reference: str) -> list[str]:
@@ -1367,7 +1355,11 @@ class InvoiceProcessingService:
             return self._next_flags(stamped, payment_applicable=False, payment_booked=False)
 
         invoice = self._fetch_invoice_detail(summary.id)
-        invoice_id = int(str(invoice.get("id") or summary.id or "0") or 0)
+        raw_invoice_id = str(invoice.get("id") or summary.id or "").strip()
+        try:
+            invoice_id = int(raw_invoice_id or "0")
+        except ValueError:
+            invoice_id = 0
         if not invoice_id:
             return self._next_flags(stamped, payment_applicable=True, payment_booked=False)
         if self._invoice_is_paid(invoice):

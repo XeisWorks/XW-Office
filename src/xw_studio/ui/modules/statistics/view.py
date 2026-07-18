@@ -1,25 +1,22 @@
-"""Statistik module — live KPI cards and monthly revenue table."""
+"""Statistik module - live KPI cards and monthly revenue table."""
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QPushButton,
     QSizePolicy,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from xw_studio.core.worker import BackgroundWorker
 from xw_studio.services.statistics import StatsSummary, StatisticsService
+from xw_studio.ui.widgets.data_table import DataTable
 
 if TYPE_CHECKING:
     from xw_studio.core.container import Container
@@ -46,7 +43,7 @@ def _kpi_card(title: str, value: str, *, accent: bool = False) -> QFrame:
 
 
 class StatisticsView(QWidget):
-    """Business analytics — KPI cards + monthly revenue table."""
+    """Business analytics - KPI cards + monthly revenue table."""
 
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -57,9 +54,8 @@ class StatisticsView(QWidget):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(10)
 
-        # --- header ---
         bar = QHBoxLayout()
-        self._status_lbl = QLabel("Statistiken werden geladen…")
+        self._status_lbl = QLabel("Statistiken werden geladen...")
         self._status_lbl.setObjectName("statsStatusLabel")
         bar.addWidget(self._status_lbl)
         bar.addStretch()
@@ -68,41 +64,33 @@ class StatisticsView(QWidget):
         bar.addWidget(self._refresh_btn)
         root.addLayout(bar)
 
-        # --- KPI cards row ---
         self._cards_row = QHBoxLayout()
         self._cards_row.setSpacing(10)
-        self._card_total = _kpi_card("Rechnungen gesamt", "—")
-        self._card_paid = _kpi_card("Bezahlt", "—")
-        self._card_open = _kpi_card("Offen", "—")
-        self._card_gross = _kpi_card("Gesamtumsatz (Brutto)", "—", accent=True)
+        self._card_total = _kpi_card("Rechnungen gesamt", "-")
+        self._card_paid = _kpi_card("Bezahlt", "-")
+        self._card_open = _kpi_card("Offen", "-")
+        self._card_gross = _kpi_card("Gesamtumsatz (Brutto)", "-", accent=True)
         for card in (self._card_total, self._card_paid, self._card_open, self._card_gross):
             self._cards_row.addWidget(card)
         self._cards_row.addStretch()
         root.addLayout(self._cards_row)
 
-        # --- monthly table ---
         monthly_lbl = QLabel("Umsatz nach Monat")
         monthly_lbl.setObjectName("sectionLabel")
         root.addWidget(monthly_lbl)
 
-        self._table = QTableWidget(0, 3)
-        self._table.setHorizontalHeaderLabels(["Monat", "Rechnungen", "Brutto EUR"])
-        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._table = DataTable(["Monat", "Rechnungen", "Brutto EUR"])
         self._table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         root.addWidget(self._table)
 
         self._load()
-
-    # ------------------------------------------------------------------
 
     def _load(self) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
         svc: StatisticsService = self._container.resolve(StatisticsService)
         self._refresh_btn.setEnabled(False)
-        self._status_lbl.setText("Laden…")
+        self._status_lbl.setText("Laden...")
 
         def job() -> StatsSummary:
             return svc.load_summary()
@@ -110,7 +98,11 @@ class StatisticsView(QWidget):
         self._worker = BackgroundWorker(job)
         self._worker.signals.result.connect(self._on_loaded)
         self._worker.signals.error.connect(self._on_error)
+        self._worker.signals.finished.connect(self._on_worker_finished)
         self._worker.start()
+
+    def _on_worker_finished(self) -> None:
+        self._worker = None
 
     def _on_loaded(self, summary: object) -> None:
         self._refresh_btn.setEnabled(True)
@@ -118,7 +110,7 @@ class StatisticsView(QWidget):
             return
         src_tag = "sevDesk" if summary.source == "live" else "Mock"
         self._status_lbl.setText(
-            f"Quelle: {src_tag} — {summary.total_invoices} Rechnungen analysiert"
+            f"Quelle: {src_tag} - {summary.total_invoices} Rechnungen analysiert"
         )
         self._update_cards(summary)
         self._populate_table(summary)
@@ -130,7 +122,11 @@ class StatisticsView(QWidget):
 
     def _update_cards(self, s: StatsSummary) -> None:
         def _val(card: QFrame) -> QLabel:
-            return card.findChild(QLabel, "kpiCardValue") or card.findChild(QLabel, "kpiCardValueAccent")  # type: ignore[return-value]
+            return cast(
+                "QLabel",
+                card.findChild(QLabel, "kpiCardValue")
+                or card.findChild(QLabel, "kpiCardValueAccent"),
+            )
 
         lbl_total = _val(self._card_total)
         if lbl_total:
@@ -143,21 +139,20 @@ class StatisticsView(QWidget):
             lbl_open.setText(str(s.open_invoices))
         lbl_gross = _val(self._card_gross)
         if lbl_gross:
-            lbl_gross.setText(f"€ {s.total_gross:,.2f}")
+            lbl_gross.setText(f"EUR {s.total_gross:,.2f}")
 
     def _populate_table(self, s: StatsSummary) -> None:
-        tbl = self._table
-        tbl.setRowCount(0)
-        for row in reversed(s.by_month):
-            r = tbl.rowCount()
-            tbl.insertRow(r)
-            tbl.setItem(r, 0, QTableWidgetItem(row.year_month))
-            cnt_item = QTableWidgetItem(str(row.invoice_count))
-            cnt_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            tbl.setItem(r, 1, cnt_item)
-            gross_item = QTableWidgetItem(f"€ {row.gross_total:,.2f}")
-            gross_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            tbl.setItem(r, 2, gross_item)
-        tbl.resizeColumnToContents(1)
-        tbl.resizeColumnToContents(2)
-
+        self._table.set_data(
+            [
+                {
+                    "Monat": row.year_month,
+                    "Rechnungen": str(row.invoice_count),
+                    "Brutto EUR": f"EUR {row.gross_total:,.2f}",
+                    "__sort__Rechnungen": row.invoice_count,
+                    "__sort__Brutto EUR": row.gross_total,
+                    "__align__Rechnungen": "center",
+                    "__align__Brutto EUR": "right",
+                }
+                for row in reversed(s.by_month)
+            ]
+        )

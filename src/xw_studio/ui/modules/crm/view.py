@@ -2,21 +2,17 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
     QSizePolicy,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +20,7 @@ from PySide6.QtWidgets import (
 from xw_studio.core.worker import BackgroundWorker
 from xw_studio.services.crm import ContactRecord, CrmService, MergeResult
 from xw_studio.services.crm.types import DuplicateCandidate
+from xw_studio.ui.widgets.data_table import DataTable
 from xw_studio.ui.widgets.search_bar import SearchBar
 
 if TYPE_CHECKING:
@@ -147,13 +144,7 @@ class CrmView(QWidget):
         contact_lbl.setObjectName("sectionLabel")
         root.addWidget(contact_lbl)
 
-        self._contacts_table = QTableWidget(0, 4)
-        self._contacts_table.setHorizontalHeaderLabels(["ID", "Name", "E-Mail", "Telefon"])
-        self._contacts_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
-        )
-        self._contacts_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._contacts_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._contacts_table = DataTable(["ID", "Name", "E-Mail", "Telefon"])
         self._contacts_table.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -164,16 +155,7 @@ class CrmView(QWidget):
         dup_lbl.setObjectName("sectionLabel")
         root.addWidget(dup_lbl)
 
-        self._dup_table = QTableWidget(0, len(_HEADERS))
-        self._dup_table.setHorizontalHeaderLabels(_HEADERS)
-        self._dup_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
-        )
-        self._dup_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.Stretch
-        )
-        self._dup_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._dup_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._dup_table = DataTable(_HEADERS)
         self._dup_table.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
@@ -195,7 +177,7 @@ class CrmView(QWidget):
 
         def job() -> list[ContactRecord]:
             if crm.has_live_connection():
-                return crm.fetch_live_contacts()
+                return cast("list[ContactRecord]", crm.fetch_live_contacts())
             return list(_DEMO_CONTACTS)
 
         self._worker = BackgroundWorker(job)
@@ -206,7 +188,7 @@ class CrmView(QWidget):
     def _on_contacts_loaded(self, contacts: object) -> None:
         if not isinstance(contacts, list):
             return
-        self._contacts = contacts  # type: ignore[assignment]
+        self._contacts = [row for row in contacts if isinstance(row, ContactRecord)]
         crm: CrmService = self._container.resolve(CrmService)
         src = "sevDesk" if crm.has_live_connection() else "Demo"
         self._status_lbl.setText(f"{len(self._contacts)} Kontakte geladen ({src})")
@@ -224,17 +206,18 @@ class CrmView(QWidget):
     # ------------------------------------------------------------------
 
     def _populate_contacts_table(self, rows: list[ContactRecord]) -> None:
-        tbl = self._contacts_table
-        tbl.setRowCount(0)
-        for rec in rows:
-            r = tbl.rowCount()
-            tbl.insertRow(r)
-            tbl.setItem(r, 0, QTableWidgetItem(rec.id))
-            tbl.setItem(r, 1, QTableWidgetItem(rec.name))
-            tbl.setItem(r, 2, QTableWidgetItem(rec.email or ""))
-            tbl.setItem(r, 3, QTableWidgetItem(rec.phone or ""))
-        for col in (0, 3):
-            tbl.resizeColumnToContents(col)
+        self._contacts_table.set_data(
+            [
+                {
+                    "ID": rec.id,
+                    "Name": rec.name,
+                    "E-Mail": rec.email or "",
+                    "Telefon": rec.phone or "",
+                    "__record__": rec,
+                }
+                for rec in rows
+            ]
+        )
 
     def _apply_filter(self, text: str) -> None:
         needle = text.lower()
@@ -270,7 +253,7 @@ class CrmView(QWidget):
         contacts_snapshot = list(self._contacts)
 
         def job() -> list[DuplicateCandidate]:
-            return crm.find_duplicates_in_memory(contacts_snapshot)
+            return cast("list[DuplicateCandidate]", crm.find_duplicates_in_memory(contacts_snapshot))
 
         self._worker = BackgroundWorker(job)
         self._worker.signals.result.connect(self._on_scan_done)
@@ -283,21 +266,23 @@ class CrmView(QWidget):
             return
         self._dup_candidates = [d for d in dups if isinstance(d, DuplicateCandidate)]
         self._merge_btn.setEnabled(bool(self._dup_candidates))
-        tbl = self._dup_table
-        tbl.setRowCount(0)
+        table_rows: list[dict[str, object]] = []
         for dup in dups:
             if not isinstance(dup, DuplicateCandidate):
                 continue
-            r = tbl.rowCount()
-            tbl.insertRow(r)
-            score_item = QTableWidgetItem(str(dup.score))
-            score_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            tbl.setItem(r, 0, score_item)
-            tbl.setItem(r, 1, QTableWidgetItem(dup.a.name))
-            tbl.setItem(r, 2, QTableWidgetItem(dup.b.name))
-            tbl.setItem(r, 3, QTableWidgetItem(dup.a.email or ""))
-            tbl.setItem(r, 4, QTableWidgetItem(dup.b.email or ""))
-        tbl.resizeColumnToContents(0)
+            table_rows.append(
+                {
+                    "Score": str(dup.score),
+                    "Kontakt A": dup.a.name,
+                    "Kontakt B": dup.b.name,
+                    "E-Mail A": dup.a.email or "",
+                    "E-Mail B": dup.b.email or "",
+                    "__sort__Score": dup.score,
+                    "__align__Score": "center",
+                    "__candidate__": dup,
+                }
+            )
+        self._dup_table.set_data(table_rows)
         if not dups:
             QMessageBox.information(
                 self, "CRM", "Keine Duplikate über dem Schwellwert gefunden."
@@ -309,11 +294,11 @@ class CrmView(QWidget):
         QMessageBox.warning(self, "CRM", str(exc))
 
     def _open_merge_wizard(self) -> None:
-        idx = self._dup_table.currentRow()
-        if idx < 0 or idx >= len(self._dup_candidates):
+        row = self._dup_table.selected_row_data() or {}
+        candidate = row.get("__candidate__")
+        if not isinstance(candidate, DuplicateCandidate):
             QMessageBox.information(self, "CRM", "Bitte zuerst ein Duplikat in der Tabelle waehlen.")
             return
-        candidate = self._dup_candidates[idx]
         dlg = _MergeWizardDialog(candidate, self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return

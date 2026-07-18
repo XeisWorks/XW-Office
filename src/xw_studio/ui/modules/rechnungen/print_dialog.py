@@ -6,7 +6,9 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import fitz
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter, QPrinterInfo
+from PySide6.QtWidgets import QStyledItemDelegate
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -18,8 +20,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
@@ -38,6 +39,98 @@ if TYPE_CHECKING:
     from xw_studio.core.container import Container
 
 logger = logging.getLogger(__name__)
+
+
+class _PrintPlanModel(QAbstractTableModel):
+    _headers = ["Seitenbereich", "Druckprofil"]
+
+    def __init__(self, profiles: list[tuple[str, str]], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._profiles = profiles
+        self._rows: list[dict[str, str]] = []
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._rows)
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return 0 if parent.isValid() else 2
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> object:
+        if not index.isValid() or not (0 <= index.row() < len(self._rows)):
+            return None
+        row = self._rows[index.row()]
+        if role == Qt.ItemDataRole.DisplayRole:
+            if index.column() == 0:
+                return row.get("range", "Alle Seiten")
+            profile_id = row.get("profile_id", "")
+            return self._label_for_profile(profile_id)
+        if role == Qt.ItemDataRole.EditRole:
+            return row.get("range", "Alle Seiten") if index.column() == 0 else row.get("profile_id", "")
+        return None
+
+    def setData(self, index: QModelIndex, value: object, role: int = Qt.ItemDataRole.EditRole) -> bool:
+        if role != Qt.ItemDataRole.EditRole or not index.isValid() or not (0 <= index.row() < len(self._rows)):
+            return False
+        if index.column() == 0:
+            self._rows[index.row()]["range"] = str(value or "").strip() or "Alle Seiten"
+        else:
+            self._rows[index.row()]["profile_id"] = str(value or "").strip()
+        self.dataChanged.emit(index, index, [role, Qt.ItemDataRole.DisplayRole])
+        return True
+
+    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
+        if not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable
+
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> object:
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+            return self._headers[section]
+        return None
+
+    def add_row(self, range_text: str, profile_id: str) -> None:
+        row = len(self._rows)
+        self.beginInsertRows(QModelIndex(), row, row)
+        self._rows.append({"range": str(range_text or "Alle Seiten").strip() or "Alle Seiten", "profile_id": str(profile_id or "").strip()})
+        self.endInsertRows()
+
+    def remove_row(self, row: int) -> None:
+        if not (0 <= row < len(self._rows)):
+            return
+        self.beginRemoveRows(QModelIndex(), row, row)
+        del self._rows[row]
+        self.endRemoveRows()
+
+    def plan(self) -> list[dict[str, str]]:
+        return [dict(row) for row in self._rows]
+
+    def _label_for_profile(self, profile_id: str) -> str:
+        for candidate_id, label in self._profiles:
+            if candidate_id == profile_id:
+                return label
+        return ""
+
+
+class _PrintProfileDelegate(QStyledItemDelegate):
+    def __init__(self, profiles: list[tuple[str, str]], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._profiles = profiles
+
+    def createEditor(self, parent: QWidget, _option, _index: QModelIndex) -> QComboBox:  # type: ignore[override]
+        combo = QComboBox(parent)
+        for candidate_id, label in self._profiles:
+            combo.addItem(label, candidate_id)
+        return combo
+
+    def setEditorData(self, editor: QWidget, index: QModelIndex) -> None:
+        if isinstance(editor, QComboBox):
+            current = str(index.data(Qt.ItemDataRole.EditRole) or "")
+            found = editor.findData(current)
+            editor.setCurrentIndex(max(0, found))
+
+    def setModelData(self, editor: QWidget, model: QAbstractTableModel, index: QModelIndex) -> None:
+        if isinstance(editor, QComboBox):
+            model.setData(index, str(editor.currentData() or ""))
 
 
 class ProductPrintConfigDialog(QDialog):
@@ -70,8 +163,10 @@ class ProductPrintConfigDialog(QDialog):
             if profile.id
         ]
         root.addWidget(QLabel("Druckplan:"))
-        self._plan_table = QTableWidget(0, 2)
-        self._plan_table.setHorizontalHeaderLabels(["Seitenbereich", "Druckprofil"])
+        self._plan_model = _PrintPlanModel(self._profiles, self)
+        self._plan_table = QTableView(self)
+        self._plan_table.setModel(self._plan_model)
+        self._plan_table.setItemDelegateForColumn(1, _PrintProfileDelegate(self._profiles, self._plan_table))
         self._plan_table.horizontalHeader().setStretchLastSection(True)
         self._plan_table.setMinimumHeight(130)
         root.addWidget(self._plan_table)
@@ -131,34 +226,16 @@ class ProductPrintConfigDialog(QDialog):
             self._add_plan_row("Alle Seiten", str(self._piece.print_profile_id or "").strip())
 
     def _add_plan_row(self, range_text: str, profile_id: str) -> None:
-        row = self._plan_table.rowCount()
-        self._plan_table.insertRow(row)
-        range_item = QTableWidgetItem(str(range_text or "Alle Seiten").strip() or "Alle Seiten")
-        self._plan_table.setItem(row, 0, range_item)
-
-        combo = QComboBox()
-        for candidate_id, label in self._profiles:
-            combo.addItem(label, candidate_id)
-        if profile_id:
-            index = combo.findData(profile_id)
-            if index >= 0:
-                combo.setCurrentIndex(index)
-        self._plan_table.setCellWidget(row, 1, combo)
+        self._plan_model.add_row(range_text, profile_id)
 
     def _remove_selected_plan_row(self) -> None:
-        row = self._plan_table.currentRow()
-        if row >= 0:
-            self._plan_table.removeRow(row)
+        self._plan_model.remove_row(self._plan_table.currentIndex().row())
 
     def _parse_plan(self) -> list[dict[str, str]]:
         plan: list[dict[str, str]] = []
-        for row in range(self._plan_table.rowCount()):
-            range_item = self._plan_table.item(row, 0)
-            range_text = str(range_item.text() if range_item is not None else "").strip() or "Alle Seiten"
-            profile_widget = self._plan_table.cellWidget(row, 1)
-            profile_id = ""
-            if isinstance(profile_widget, QComboBox):
-                profile_id = str(profile_widget.currentData() or "").strip()
+        for row in self._plan_model.plan():
+            range_text = str(row.get("range") or "").strip() or "Alle Seiten"
+            profile_id = str(row.get("profile_id") or "").strip()
             if not profile_id:
                 raise RuntimeError("Jede Druckplan-Zeile braucht ein Druckprofil.")
             plan.append({"range": range_text, "profile_id": profile_id})
@@ -326,6 +403,7 @@ def prepare_piece_pdf_print(
     *,
     piece: PieceBlock,
     copies: int = 1,
+    wait: bool = False,
 ) -> Callable[[], None] | None:
     """Validate one product print and return the blocking print job."""
     if not _check_printer_runtime(parent, container):
@@ -368,16 +446,17 @@ def prepare_piece_pdf_print(
 
     def job() -> None:
         queue: PrintQueueService = container.resolve(PrintQueueService)
-        print_pdf_by_plan(
-            path,
-            container.config.printing,
-            print_plan=piece.print_plan,
-            profile_id=piece.print_profile_id,
-            copies=effective_copies,
-            page_count=page_count,
-            print_queue=queue,
-            job_kind="product",
-        )
+        kwargs = {
+            "print_plan": piece.print_plan,
+            "profile_id": piece.print_profile_id,
+            "copies": effective_copies,
+            "page_count": page_count,
+            "print_queue": queue,
+            "job_kind": "product",
+        }
+        if wait:
+            kwargs["wait"] = True
+        print_pdf_by_plan(path, container.config.printing, **kwargs)
 
     return job
 

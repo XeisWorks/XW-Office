@@ -238,3 +238,20 @@ def test_execute_start_workflow_skips_stock_increment_when_print_config_missing(
     mock_print.assert_not_called()
     stock_after = json.loads(repo.values["inventory.stock_levels"])
     assert stock_after["XW-6-003"] == 0
+
+
+def test_set_product_stock_updates_product_and_workflow_snapshots(tmp_path: Path) -> None:
+    repo = _RepoStub(
+        {
+            "inventory.products": _product_payload(tmp_path / "score.pdf"),
+            "inventory.stock_levels": json.dumps({"XW-6-003": 1, "OTHER": 4}),
+        }
+    )
+    service = InventoryService(AppConfig(), repo)
+
+    service.set_product_stock("xw-6-003", 7)
+
+    products = json.loads(repo.values["inventory.products"])
+    stock_levels = json.loads(repo.values["inventory.stock_levels"])
+    assert products[0]["on_hand"] == 7
+    assert stock_levels == {"XW-6-003": 7, "OTHER": 4}

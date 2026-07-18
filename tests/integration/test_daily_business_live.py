@@ -159,7 +159,7 @@ class TestWorkflowLiveExecution:
         invoice_ids = ["TEST-INV-001", "TEST-INV-002", "TEST-INV-003"]
         
         for inv_id in invoice_ids:
-            invoice = invoice_client.get_invoice(inv_id)
+            invoice_client.get_invoice(inv_id)
             pdf = invoice_client.get_invoice_pdf(inv_id)
             printer.print_pdf_bytes(pdf)
         

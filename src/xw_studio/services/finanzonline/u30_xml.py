@@ -14,14 +14,17 @@ except Exception:  # pragma: no cover - optional dependency guard
     etree = None
 
 _DECIMAL_2 = Decimal("0.01")
-_LEGACY_U30_XSD = (
-    Path("C:/Users/bernh/GitHub/sevDesk/Finanzonline/xsd/u30")
-    / "BMF_ERKLAERUNGS_UEBERMITTLUNG_U30_01_2022.xsd"
+_BUNDLED_U30_XSD = (
+    Path(__file__).resolve().parents[4]
+    / "resources"
+    / "finanzonline"
+    / "xsd"
+    / "BMF_ERKLAERUNGS_UEBERMITTLUNG_U30_07_2026.xsd"
 )
 
 
 def default_u30_xsd_path() -> Path:
-    return _LEGACY_U30_XSD
+    return _BUNDLED_U30_XSD
 
 
 def parse_fastnr(value: str) -> str:

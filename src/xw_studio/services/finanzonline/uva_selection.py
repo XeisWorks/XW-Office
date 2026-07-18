@@ -1,4 +1,5 @@
 """Cash-basis document selection helpers for UVA preview/payload generation."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -33,6 +34,7 @@ class UvaSelectionStats(BaseModel):
     draft_or_open_ignored: int = 0
     payment_out_of_period: int = 0
     missing_payment_evidence: int = 0
+    future_document_ignored: int = 0
 
 
 class UvaSelectionResult(BaseModel):
@@ -46,7 +48,9 @@ class UvaSelectionResult(BaseModel):
 class UvaDocumentSelector:
     """Approximate legacy IST-mode selection without the monolithic UVA service."""
 
-    def select_sales_documents(self, year: int, month: int, documents: list[dict[str, Any]]) -> UvaSelectionResult:
+    def select_sales_documents(
+        self, year: int, month: int, documents: list[dict[str, Any]]
+    ) -> UvaSelectionResult:
         return self._select_documents(
             year,
             month,
@@ -55,13 +59,16 @@ class UvaDocumentSelector:
             dedupe=False,
         )
 
-    def select_purchase_documents(self, year: int, month: int, documents: list[dict[str, Any]]) -> UvaSelectionResult:
+    def select_purchase_documents(
+        self, year: int, month: int, documents: list[dict[str, Any]]
+    ) -> UvaSelectionResult:
         return self._select_documents(
             year,
             month,
             documents,
             fallback_date_keys=_PURCHASE_FALLBACK_DATE_KEYS,
             dedupe=True,
+            reject_future_documents=True,
         )
 
     def _select_documents(
@@ -72,6 +79,7 @@ class UvaDocumentSelector:
         *,
         fallback_date_keys: tuple[str, ...],
         dedupe: bool,
+        reject_future_documents: bool = False,
     ) -> UvaSelectionResult:
         result = UvaSelectionResult()
         selected: list[dict[str, Any]] = []
@@ -86,6 +94,24 @@ class UvaDocumentSelector:
             fallback_in_period = _is_in_period(fallback_date, year, month)
             label = _doc_label(document)
 
+            # sevDesk may expose a payDate that precedes the voucher itself. Such
+            # a future-dated purchase cannot belong to an earlier UVA period,
+            # even when that implausible payDate happens to fall into the month.
+            if (
+                reject_future_documents
+                and fallback_date is not None
+                and (fallback_date.year, fallback_date.month)
+                > (
+                    year,
+                    month,
+                )
+            ):
+                result.stats.future_document_ignored += 1
+                result.warnings.append(
+                    f"Zukuenftiger Eingangsbeleg trotz frueherem Zahlungsdatum ignoriert: {label}"
+                )
+                continue
+
             if payment_date is None and fallback_date is None:
                 if label == "unbekannt":
                     scaled_document, scaled = _scale_document_to_paid_ratio(document)
@@ -96,7 +122,9 @@ class UvaDocumentSelector:
                     result.stats.selected += 1
                     continue
                 result.stats.missing_payment_evidence += 1
-                result.warnings.append(f"Ohne Zahlungsnachweis im IST-Modus nicht übernommen: {label}")
+                result.warnings.append(
+                    f"Ohne Zahlungsnachweis im IST-Modus nicht übernommen: {label}"
+                )
                 continue
 
             if _is_cancelled(document) and not payment_in_period:
@@ -106,7 +134,9 @@ class UvaDocumentSelector:
 
             if _is_open_or_draft(document) and not payment_in_period:
                 result.stats.draft_or_open_ignored += 1
-                result.warnings.append(f"Offener/Entwurfs-Beleg ohne Periodenzahlung ignoriert: {label}")
+                result.warnings.append(
+                    f"Offener/Entwurfs-Beleg ohne Periodenzahlung ignoriert: {label}"
+                )
                 continue
 
             if payment_in_period:
@@ -127,7 +157,9 @@ class UvaDocumentSelector:
 
             if fallback_in_period:
                 result.stats.missing_payment_evidence += 1
-                result.warnings.append(f"Ohne Zahlungsnachweis im IST-Modus nicht übernommen: {label}")
+                result.warnings.append(
+                    f"Ohne Zahlungsnachweis im IST-Modus nicht übernommen: {label}"
+                )
 
         if dedupe:
             selected, removed, warnings = self._dedupe_documents(selected)
@@ -139,7 +171,9 @@ class UvaDocumentSelector:
         result.warnings = _dedupe_warning_lines(result.warnings)
         return result
 
-    def _dedupe_documents(self, documents: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int, list[str]]:
+    def _dedupe_documents(
+        self, documents: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], int, list[str]]:
         seen: dict[tuple[str, ...], dict[str, Any]] = {}
         deduped: list[dict[str, Any]] = []
         warnings: list[str] = []
@@ -183,7 +217,10 @@ def _doc_label(document: dict[str, Any]) -> str:
 
 
 def _is_credit_note(document: dict[str, Any]) -> bool:
-    return any(key in document for key in ("creditNoteNumber", "refSrcInvoice", "refSrcInvoiceId", "refInvoiceId"))
+    return any(
+        key in document
+        for key in ("creditNoteNumber", "refSrcInvoice", "refSrcInvoiceId", "refInvoiceId")
+    )
 
 
 def _has_credit_reference(document: dict[str, Any]) -> bool:
@@ -263,7 +300,14 @@ def _scale_position_to_ratio(position: dict[str, Any], ratio: Decimal) -> dict[s
 
 
 def _extract_paid_amount(document: dict[str, Any], gross_amount: Decimal) -> Decimal:
-    for key in ("xw_paid_amount", "xw_period_paid_amount", "paidAmount", "sumPaid", "sumPaidAccounting", "paidValue"):
+    for key in (
+        "xw_paid_amount",
+        "xw_period_paid_amount",
+        "paidAmount",
+        "sumPaid",
+        "sumPaidAccounting",
+        "paidValue",
+    ):
         value = document.get(key)
         amount = _to_decimal(value)
         if amount > _EPS:

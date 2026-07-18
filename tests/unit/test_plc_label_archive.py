@@ -6,6 +6,7 @@ import pytest
 from xw_studio.services.plc.label_archive import PlcLabelArchive
 from xw_studio.services.plc.models import PlcParcel, PlcShipmentDraft
 from xw_studio.services.plc.polling import ShipmentAddress
+from xw_studio.services.printing.print_jobs import PdfPrintJob
 from xw_studio.ui.modules.rechnungen.plc_label_dialog import PlcLabelPrintDialog
 
 
@@ -69,3 +70,40 @@ def test_additional_plc_label_uses_suffix_for_order_and_invoice(tmp_path) -> Non
 
     assert third.reference == "20868-3"
     assert third.invoice_number == "RE-261952-3"
+
+
+def test_webservice_label_queue_uses_explicit_a5_layout(tmp_path) -> None:
+    pdf_path = tmp_path / "label.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\nPLC label")
+    queued: list[PdfPrintJob] = []
+
+    class QueueStub:
+        def enqueue(self, job: PdfPrintJob) -> str:
+            queued.append(job)
+            return job.id
+
+    class PrintingStub:
+        def resolve_profile(self, _profile_id: str) -> None:
+            return None
+
+    class ConfigStub:
+        printing = PrintingStub()
+
+    class ContainerStub:
+        config = ConfigStub()
+
+        def resolve(self, cls: object) -> object:
+            return QueueStub()
+
+    dialog = PlcLabelPrintDialog.__new__(PlcLabelPrintDialog)
+    dialog._container = ContainerStub()  # noqa: SLF001
+    dialog._resolve_plc_printer = lambda: "Paketmarke A5"  # type: ignore[method-assign]  # noqa: SLF001
+
+    dialog._queue_webservice_label(pdf_path, "20868")  # noqa: SLF001
+
+    assert len(queued) == 1
+    assert queued[0].page_size == "A5"
+    assert queued[0].orientation == "portrait"
+    assert queued[0].placement_mode == "printable_origin"
+    assert queued[0].scale_mode == "fit"
+    assert queued[0].alignment == "center"
