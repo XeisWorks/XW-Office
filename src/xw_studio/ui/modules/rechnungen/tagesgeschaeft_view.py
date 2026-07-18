@@ -416,8 +416,8 @@ class TagesgeschaeftView(QWidget):
         self._btn_custom_label.clicked.connect(self._open_custom_label)
         bar_lay.addWidget(self._btn_custom_label)
 
-        self._btn_special_order = QPushButton("Sonderanfertigung")
-        self._btn_special_order.setToolTip("Wix Payment Link fuer Sonderanfertigung erstellen")
+        self._btn_special_order = QPushButton("Sonderauftrag")
+        self._btn_special_order.setToolTip("Wix Payment Link fuer Sonderauftrag erstellen")
         self._btn_special_order.setFixedHeight(34)
         self._btn_special_order.clicked.connect(self._open_special_order)
         bar_lay.addWidget(self._btn_special_order)
