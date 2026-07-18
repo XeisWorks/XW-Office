@@ -6,6 +6,8 @@ import logging
 import os
 from pathlib import Path
 import subprocess
+import tempfile
+import threading
 import time
 
 from xw_studio.services.printing.pdf_renderer import print_pdf_with_qprinter
@@ -56,60 +58,53 @@ class NativePdfCliBackend(PdfPrintBackend):
 
     def print(self, job: PdfPrintJob) -> None:
         executable = Path(self._executable_path)
-        if not self._executable_path or not executable.is_file():
-            raise RuntimeError(
-                "PDF-XChange Editor wurde fuer dieses Druckprofil konfiguriert, "
-                f"aber die EXE wurde nicht gefunden: {self._executable_path or '(kein Pfad)'}"
-            )
         pdf_path = Path(job.pdf_path)
         if not pdf_path.is_file():
             raise RuntimeError(f"Produkt-PDF wurde nicht gefunden: {pdf_path}")
 
-        # The PDF-XChange command line accepts printer names with spaces when
-        # the value inside /print is quoted. Avoid default=yes here: Tracker
-        # support notes that this can reuse/mix the Editor's last print state
-        # and can prevent a target printer option from behaving predictably.
-        options = ["showui=no", f'printer="{_pdf_xchange_escape_option_value(job.printer_name)}"']
-        pages = _pdf_xchange_page_range(job.pages)
-        if pages:
-            options.append(f"pages={pages}")
-        command = [str(executable), f"/print:{';'.join(options)}", str(pdf_path)]
-        command_line = subprocess.list2cmdline(command)
+        prepared_pdf = _prepare_native_print_pdf(str(pdf_path), job.pages)
 
-        # PDF-XChange's /print switch has no copies parameter. Repeating the
-        # documented silent command keeps the configured driver profile intact.
-        for copy_number in range(max(int(job.copies), 1)):
+        try:
+            if not self._executable_path or not executable.is_file():
+                raise RuntimeError(
+                    "PDF-XChange Editor wurde fuer dieses Druckprofil konfiguriert, "
+                    f"aber die EXE wurde nicht gefunden: {self._executable_path or '(kein Pfad)'}"
+                )
+            self._print_with_pdf_xchange(job, str(executable), prepared_pdf.path)
+            return
+        except Exception as exc:  # noqa: BLE001 - Acrobat is the explicit fallback.
+            logger.warning(
+                "PDF-XChange native print failed; trying Acrobat fallback: printer='%s' file='%s' error=%s",
+                job.printer_name,
+                prepared_pdf.path,
+                exc,
+            )
+            _print_with_acrobat_fallback(job, prepared_pdf.path, timeout_seconds=self._timeout_seconds)
+        finally:
+            prepared_pdf.schedule_cleanup()
+
+    def _print_with_pdf_xchange(self, job: PdfPrintJob, executable: str, pdf_path: str) -> None:
+        command = _pdf_xchange_print_command(executable, job.printer_name, pdf_path)
+        command_line = subprocess.list2cmdline(command)
+        copies = max(int(job.copies), 1)
+        for copy_number in range(copies):
             spooler_before = _windows_print_job_snapshot(job.printer_name)
             logger.info(
-                "Native PDF print dispatch: backend=pdf_xchange printer='%s' copy=%s/%s command=%s",
+                "Native PDF print dispatch: backend=pdf_xchange_printto printer='%s' copy=%s/%s command=%s",
                 job.printer_name,
                 copy_number + 1,
-                max(int(job.copies), 1),
+                copies,
                 command_line,
             )
-            try:
-                completed = subprocess.run(  # noqa: S603 - executable is explicit profile config
-                    command,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=self._timeout_seconds,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise RuntimeError(
-                    f"PDF-XChange Druckaufruf hat nach {self._timeout_seconds:.0f} Sekunden nicht geantwortet"
-                ) from exc
-            except OSError as exc:
-                raise RuntimeError(f"PDF-XChange konnte nicht gestartet werden: {exc}") from exc
+            completed = _run_print_command(command, timeout_seconds=self._timeout_seconds)
+            stdout = (completed.stdout or "").strip()
+            stderr = (completed.stderr or "").strip()
             if completed.returncode != 0:
-                detail = (completed.stderr or completed.stdout or "").strip()
+                detail = (stderr or stdout).strip()
                 suffix = f": {detail}" if detail else ""
                 raise RuntimeError(
                     f"PDF-XChange Druckaufruf fehlgeschlagen (Exit-Code {completed.returncode}){suffix}"
                 )
-            stdout = (completed.stdout or "").strip()
-            stderr = (completed.stderr or "").strip()
             if stdout or stderr:
                 logger.info(
                     "Native PDF print process output: printer='%s' stdout=%r stderr=%r",
@@ -125,17 +120,17 @@ class NativePdfCliBackend(PdfPrintBackend):
                     spooler_after,
                 )
             else:
-                logger.warning(
-                    "Native PDF print was accepted by PDF-XChange but no Windows spooler job was observed "
-                    "for printer='%s' within the diagnostic window. command=%s",
+                logger.info(
+                    "Native PDF print handed to PDF-XChange; no spooler job was visible in the diagnostic window "
+                    "for printer='%s'. This can be normal when the driver accepts the job immediately. command=%s",
                     job.printer_name,
                     command_line,
                 )
             logger.info(
-                "Native PDF print accepted asynchronously: printer='%s' copy=%s/%s",
+                "Native PDF print accepted: backend=pdf_xchange_printto printer='%s' copy=%s/%s",
                 job.printer_name,
                 copy_number + 1,
-                max(int(job.copies), 1),
+                copies,
             )
 
 
@@ -148,28 +143,167 @@ def backend_for_job(job: PdfPrintJob) -> PdfPrintBackend:
     raise RuntimeError(f"Unbekanntes PDF-Druckbackend: {job.backend}")
 
 
-def _pdf_xchange_page_range(pages: list[int] | None) -> str:
-    """Convert zero-based page indices to a compact PDF-XChange range."""
+def _pdf_xchange_print_command(
+    executable: str,
+    printer_name: str,
+    pdf_path: str,
+) -> list[str]:
+    """Build the reliable PDF-XChange print command for this PC.
+
+    The installed PDF-XChange file association registers:
+    ``PXCEditor.exe /printto "<printer>" "<file>"``.  Use that route for
+    all native print dispatches. Page-restricted print plans are converted to
+    temporary PDFs before this command is built.
+    """
+    return [executable, "/printto", printer_name, pdf_path]
+
+
+def _run_print_command(command: list[str], *, timeout_seconds: float) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(  # noqa: S603 - executables are explicit print backend config.
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"Druckaufruf hat nach {timeout_seconds:.0f} Sekunden nicht geantwortet") from exc
+    except OSError as exc:
+        raise RuntimeError(f"Druckprogramm konnte nicht gestartet werden: {exc}") from exc
+
+
+class _PreparedNativePdf:
+    def __init__(self, *, path: str, cleanup: bool) -> None:
+        self.path = path
+        self._cleanup = cleanup
+
+    def schedule_cleanup(self) -> None:
+        if not self._cleanup:
+            return
+        path = self.path
+
+        def cleanup() -> None:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+        timer = threading.Timer(180.0, cleanup)
+        timer.daemon = True
+        timer.start()
+
+
+def _prepare_native_print_pdf(pdf_path: str, pages: list[int] | None) -> _PreparedNativePdf:
     if pages is None:
-        return ""
-    numbers = sorted({int(page) + 1 for page in pages if int(page) >= 0})
-    if not numbers:
-        return ""
-    ranges: list[str] = []
-    start = previous = numbers[0]
-    for number in numbers[1:]:
-        if number == previous + 1:
-            previous = number
-            continue
-        ranges.append(str(start) if start == previous else f"{start}-{previous}")
-        start = previous = number
-    ranges.append(str(start) if start == previous else f"{start}-{previous}")
-    return ",".join(ranges)
+        return _PreparedNativePdf(path=str(pdf_path), cleanup=False)
+    temp_path = _extract_pdf_pages(pdf_path, pages)
+    if not temp_path or temp_path == str(pdf_path):
+        return _PreparedNativePdf(path=str(pdf_path), cleanup=False)
+    return _PreparedNativePdf(path=temp_path, cleanup=True)
 
 
-def _pdf_xchange_escape_option_value(value: str) -> str:
-    """Escape one quoted PDF-XChange /print option value."""
-    return str(value or "").replace('"', '\\"')
+def _extract_pdf_pages(pdf_path: str, pages: list[int]) -> str:
+    page_indices = sorted({int(page) for page in pages if int(page) >= 0})
+    if not page_indices:
+        return str(pdf_path)
+    try:
+        import fitz  # type: ignore[import-untyped]
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("Seitenauswahl fuer nativen PDF-Druck erfordert PyMuPDF/fitz") from exc
+    source = fitz.open(str(pdf_path))
+    target = fitz.open()
+    try:
+        max_page = source.page_count - 1
+        for page_index in page_indices:
+            if page_index <= max_page:
+                target.insert_pdf(source, from_page=page_index, to_page=page_index)
+        if target.page_count == 0:
+            raise RuntimeError("Seitenauswahl enthaelt keine gueltigen PDF-Seiten")
+        handle = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="xw_print_pages_")
+        temp_path = handle.name
+        handle.close()
+        target.save(temp_path)
+        return temp_path
+    finally:
+        target.close()
+        source.close()
+
+
+def _print_with_acrobat_fallback(job: PdfPrintJob, pdf_path: str, *, timeout_seconds: float) -> None:
+    executable = _acrobat_executable()
+    if not executable:
+        raise RuntimeError(
+            "PDF-XChange konnte nicht drucken und Acrobat wurde nicht gefunden."
+        )
+    printer_info = _windows_printer_driver_port(job.printer_name)
+    command = [executable, "/t", pdf_path, job.printer_name]
+    if printer_info.get("driver"):
+        command.append(printer_info["driver"])
+    if printer_info.get("port"):
+        command.append(printer_info["port"])
+    copies = max(int(job.copies), 1)
+    for copy_number in range(copies):
+        logger.info(
+            "Native PDF print fallback dispatch: backend=acrobat_t printer='%s' copy=%s/%s command=%s",
+            job.printer_name,
+            copy_number + 1,
+            copies,
+            subprocess.list2cmdline(command),
+        )
+        try:
+            subprocess.Popen(  # noqa: S603 - Acrobat path is discovered from known install paths/env.
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except OSError as exc:
+            raise RuntimeError(f"Acrobat-Fallback konnte nicht gestartet werden: {exc}") from exc
+        time.sleep(min(2.0, max(float(timeout_seconds), 0.1)))
+
+
+def _acrobat_executable() -> str:
+    candidates = [
+        os.getenv("XW_STUDIO_ACROBAT_EXE", ""),
+        r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
+        r"C:\Program Files (x86)\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
+        r"C:\Program Files\Adobe\Acrobat 2020\Acrobat\Acrobat.exe",
+        r"C:\Program Files (x86)\Adobe\Acrobat 2020\Acrobat\Acrobat.exe",
+        r"C:\Program Files\Adobe\Acrobat 2017\Acrobat\Acrobat.exe",
+        r"C:\Program Files (x86)\Adobe\Acrobat 2017\Acrobat\Acrobat.exe",
+        r"C:\Program Files\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe",
+        r"C:\Program Files (x86)\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe",
+        r"C:\Program Files\Adobe\Reader\AcroRd32.exe",
+        r"C:\Program Files (x86)\Adobe\Reader\AcroRd32.exe",
+    ]
+    for candidate in candidates:
+        path = Path(str(candidate or "").strip())
+        if path.is_file():
+            return str(path)
+    return ""
+
+
+def _windows_printer_driver_port(printer_name: str) -> dict[str, str]:
+    if os.name != "nt":
+        return {}
+    try:
+        import win32print  # type: ignore[import-untyped]
+
+        handle = win32print.OpenPrinter(str(printer_name or ""))
+        try:
+            info = win32print.GetPrinter(handle, 2)
+        finally:
+            win32print.ClosePrinter(handle)
+        return {
+            "driver": str(info.get("pDriverName") or "").strip(),
+            "port": str(info.get("pPortName") or "").strip(),
+        }
+    except Exception as exc:  # noqa: BLE001 - Acrobat can still try with printer name only.
+        logger.debug("Printer driver/port lookup failed for '%s': %s", printer_name, exc)
+        return {}
+
 
 
 def _windows_print_job_snapshot(printer_name: str) -> str:
