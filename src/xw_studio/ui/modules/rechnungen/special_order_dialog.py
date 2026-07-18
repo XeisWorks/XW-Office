@@ -1,6 +1,8 @@
 """Dialog for creating special-order Wix payment links."""
 from __future__ import annotations
 
+import re
+
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -37,6 +39,7 @@ class SpecialOrderDialog(QDialog):
         self._container = container
         self._service: SpecialOrderService = container.resolve(SpecialOrderService)
         self._products: list[object] = []
+        self._selected_products: list[object] = []
         self._worker: BackgroundWorker | None = None
         self._build_ui()
         QTimer.singleShot(0, self._load_products)
@@ -50,7 +53,7 @@ class SpecialOrderDialog(QDialog):
         self._mode = QComboBox()
         self._mode.addItem("Physische Sonderanfertigung", "physical_custom")
         self._mode.addItem("Digitale Sonderanfertigung", "digital_custom")
-        self._mode.addItem("Bestehende Noten digital liefern", "digital_sheet_music")
+        self._mode.addItem("Bestehende Artikel digital liefern", "digital_sheet_music")
         self._mode.currentIndexChanged.connect(self._update_mode)
         form.addRow("Art:", self._mode)
 
@@ -78,16 +81,28 @@ class SpecialOrderDialog(QDialog):
         form.addRow("Menge:", self._qty)
         root.addLayout(form)
 
-        self._product_label = QLabel("Wix-Produkte fuer digitale Noten:")
+        self._product_label = QLabel("Wix-Artikel suchen:")
         root.addWidget(self._product_label)
         self._product_filter = QLineEdit()
         self._product_filter.setPlaceholderText("SKU oder Name suchen")
         self._product_filter.textChanged.connect(self._filter_products)
         root.addWidget(self._product_filter)
         self._product_list = QListWidget()
-        self._product_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
-        self._product_list.itemSelectionChanged.connect(self._sync_price_from_selection)
+        self._product_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._product_list.itemClicked.connect(self._add_selected_product)
         root.addWidget(self._product_list, stretch=1)
+
+        self._selected_label = QLabel("Ausgewaehlte Artikel:")
+        root.addWidget(self._selected_label)
+        self._selected_list = QListWidget()
+        self._selected_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        root.addWidget(self._selected_list, stretch=1)
+        selected_row = QHBoxLayout()
+        selected_row.addStretch(1)
+        self._remove_selected_btn = QPushButton("Auswahl entfernen")
+        self._remove_selected_btn.clicked.connect(self._remove_selected_product)
+        selected_row.addWidget(self._remove_selected_btn)
+        root.addLayout(selected_row)
 
         row = QHBoxLayout()
         self._status = QLabel("-")
@@ -123,6 +138,10 @@ class SpecialOrderDialog(QDialog):
         for product in self._products:
             sku = str(getattr(product, "sku", "") or "")
             name = str(getattr(product, "name", "") or "")
+            if name.strip().casefold() == _HANDLING_NAME.casefold():
+                continue
+            if self._is_selected_product(product):
+                continue
             if query and query not in f"{sku} {name}".casefold():
                 continue
             price = str(getattr(product, "price", "") or "")
@@ -135,17 +154,45 @@ class SpecialOrderDialog(QDialog):
         self._product_label.setVisible(is_digital_sheet)
         self._product_filter.setVisible(is_digital_sheet)
         self._product_list.setVisible(is_digital_sheet)
+        self._selected_label.setVisible(is_digital_sheet)
+        self._selected_list.setVisible(is_digital_sheet)
+        self._remove_selected_btn.setVisible(is_digital_sheet)
         self._price.setEnabled(not is_digital_sheet)
         self._qty.setEnabled(not is_digital_sheet)
+
+    def _add_selected_product(self, item: QListWidgetItem) -> None:
+        product = item.data(256)
+        if product is None or self._is_selected_product(product):
+            return
+        self._selected_products.append(product)
+        self._refresh_selected_products()
+        self._product_filter.clear()
+        self._filter_products()
+
+    def _remove_selected_product(self) -> None:
+        row = self._selected_list.currentRow()
+        if row < 0 or row >= len(self._selected_products):
+            return
+        del self._selected_products[row]
+        self._refresh_selected_products()
+        self._filter_products()
+
+    def _refresh_selected_products(self) -> None:
+        self._selected_list.clear()
+        for product in self._selected_products:
+            sku = str(getattr(product, "sku", "") or "")
+            name = str(getattr(product, "name", "") or "")
+            price = str(getattr(product, "price", "") or "")
+            item = QListWidgetItem(f"{sku} | {name} | {price} EUR")
+            item.setData(256, product)
+            self._selected_list.addItem(item)
+        self._sync_price_from_selection()
 
     def _sync_price_from_selection(self) -> None:
         if self._mode.currentData() != "digital_sheet_music":
             return
         total = 0.0
-        for item in self._product_list.selectedItems():
-            product = item.data(256)
-            if str(getattr(product, "name", "") or "").strip().casefold() == _HANDLING_NAME.casefold():
-                continue
+        for product in self._selected_products:
             price = self._product_price(product)
             if price > 0:
                 total += price
@@ -194,9 +241,9 @@ class SpecialOrderDialog(QDialog):
         if mode == "digital_sheet_music":
             items: list[SpecialOrderItem] = []
             selected_products = [
-                selected.data(256)
-                for selected in self._product_list.selectedItems()
-                if str(getattr(selected.data(256), "name", "") or "").strip().casefold() != _HANDLING_NAME.casefold()
+                product
+                for product in self._selected_products
+                if str(getattr(product, "name", "") or "").strip().casefold() != _HANDLING_NAME.casefold()
             ]
             if not selected_products:
                 raise RuntimeError("Bitte mindestens ein Wix-Produkt auswaehlen.")
@@ -251,6 +298,18 @@ class SpecialOrderDialog(QDialog):
                 return product
         return None
 
+    def _is_selected_product(self, product: object) -> bool:
+        product_id = str(getattr(product, "id", "") or "").strip()
+        product_sku = str(getattr(product, "sku", "") or "").strip()
+        for selected in self._selected_products:
+            selected_id = str(getattr(selected, "id", "") or "").strip()
+            selected_sku = str(getattr(selected, "sku", "") or "").strip()
+            if product_id and selected_id and product_id == selected_id:
+                return True
+            if product_sku and selected_sku and product_sku == selected_sku:
+                return True
+        return False
+
     @staticmethod
     def _product_price(product: object) -> float:
         try:
@@ -259,7 +318,7 @@ class SpecialOrderDialog(QDialog):
             return 0.0
 
     def _on_link_created(self, payload: object) -> None:
-        url = str(payload or "").strip()
+        url = self._https_url(str(payload or ""))
         if url:
             QApplication.clipboard().setText(url)
         self._status.setText(f"Payment Link erstellt: {url}")
@@ -268,3 +327,10 @@ class SpecialOrderDialog(QDialog):
     def _on_link_error(self, exc: Exception) -> None:
         self._status.setText("Fehler")
         QMessageBox.warning(self, "Sonderauftrag", str(exc))
+
+    @staticmethod
+    def _https_url(text: str) -> str:
+        match = re.search(r"https://\S+", text)
+        if not match:
+            return ""
+        return match.group(0).rstrip(".,;:)]}\"'")
