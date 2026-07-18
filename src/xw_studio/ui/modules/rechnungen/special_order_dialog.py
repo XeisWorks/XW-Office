@@ -259,10 +259,17 @@ class SpecialOrderDialog(QDialog):
             ]
             if not selected_products:
                 raise RuntimeError("Bitte mindestens ein Wix-Produkt auswaehlen.")
+            handling = self._find_handling_product()
+            if handling is None:
+                raise RuntimeError("Wix-Produkt 'Digital Delivery Handling' wurde nicht gefunden.")
+            handling_price = self._product_price(handling)
+            if handling_price <= 0:
+                raise RuntimeError("Wix-Bruttopreis fuer 'Digital Delivery Handling' fehlt oder ist 0.")
             for product in selected_products:
                 price = self._product_price(product)
+                product_title = str(getattr(product, "name", "") or "").strip()
                 if price <= 0:
-                    name = str(getattr(product, "name", "") or "ausgewaehltes Produkt")
+                    name = product_title or "ausgewaehltes Produkt"
                     raise RuntimeError(f"Wix-Bruttopreis fuer '{name}' fehlt oder ist 0.")
                 description = (
                     "Licensed digital sheet music delivery. "
@@ -273,27 +280,21 @@ class SpecialOrderDialog(QDialog):
                         type="CATALOG",
                         catalog_item_id=str(getattr(product, "id", "") or ""),
                         sku=str(getattr(product, "sku", "") or ""),
-                        name=str(getattr(product, "name", "") or ""),
+                        name=product_title,
                         description=description,
                         price=f"{price:.2f}",
                     )
                 )
-            handling = self._find_handling_product()
-            if handling is None:
-                raise RuntimeError("Wix-Produkt 'Digital Delivery Handling' wurde nicht gefunden.")
-            handling_price = self._product_price(handling)
-            if handling_price <= 0:
-                raise RuntimeError("Wix-Bruttopreis fuer 'Digital Delivery Handling' fehlt oder ist 0.")
-            items.append(
-                SpecialOrderItem(
-                    type="CATALOG",
-                    catalog_item_id=str(getattr(handling, "id", "") or ""),
-                    sku=str(getattr(handling, "sku", "") or ""),
-                    name=str(getattr(handling, "name", "") or _HANDLING_NAME),
-                    description="Digital delivery handling for licensed PDF fulfillment.",
-                    price=f"{handling_price:.2f}",
+                items.append(
+                    SpecialOrderItem(
+                        type="CATALOG",
+                        catalog_item_id=str(getattr(handling, "id", "") or ""),
+                        sku=str(getattr(handling, "sku", "") or ""),
+                        name=str(getattr(handling, "name", "") or _HANDLING_NAME),
+                        description=f"Digital delivery handling for: {product_title}",
+                        price=f"{handling_price:.2f}",
+                    )
                 )
-            )
             return items
         return [
             SpecialOrderItem(
