@@ -76,9 +76,8 @@ printing:
     - id: "noten_simplex"
       label: "Noten A4 Simplex"
       printer_name: "Noten A4 Simplex"
-      # Optional nach erfolgreichem Golden-Sample-Test auf dem Druck-PC:
-      # backend: "pdf_xchange"
-      # native_pdf_exe: "C:/Program Files/PDF-XChange/PDF Editor/PXCEditor.exe"
+      backend: "pdf_xchange"
+      native_pdf_exe: "C:/Program Files/PDF-XChange/PDF Editor/PXCEditor.exe"
     - id: "noten_native_pilot"
       label: "Noten A4 Simplex (PDF-XChange Pilot)"
       printer_name: "Noten A4 Simplex"
@@ -87,12 +86,18 @@ printing:
     - id: "noten_duplex"
       label: "Noten A4 Duplex"
       printer_name: "Noten A4 Duplex"
+      backend: "pdf_xchange"
+      native_pdf_exe: "C:/Program Files/PDF-XChange/PDF Editor/PXCEditor.exe"
     - id: "brochure_mono"
       label: "Canon Broschüre Mono"
       printer_name: "Canon Broschüre Mono"
+      backend: "pdf_xchange"
+      native_pdf_exe: "C:/Program Files/PDF-XChange/PDF Editor/PXCEditor.exe"
     - id: "brochure_duo"
       label: "Canon Broschüre Duo"
       printer_name: "Canon Broschüre Duo"
+      backend: "pdf_xchange"
+      native_pdf_exe: "C:/Program Files/PDF-XChange/PDF Editor/PXCEditor.exe"
 
 inventory:
   alarm_threshold: 5

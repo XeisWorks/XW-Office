@@ -25,6 +25,12 @@ _STOCK_KEY = "inventory.stock_levels"
 _REQUIREMENTS_KEY = "daily_business.pending_requirements"
 _PRODUCTS_KEY = "inventory.products"
 _PRINT_PLANS_KEY = "inventory.print_plans"
+_LEGACY_PRINT_PROFILE_MAP = {
+    "noten_a4_simplex": "noten_simplex",
+    "noten_a4_duplex": "noten_duplex",
+    "canon_brochure_mono": "brochure_mono",
+    "canon_brochure_duo": "brochure_duo",
+}
 
 
 @dataclass(frozen=True)
@@ -677,9 +683,6 @@ class InventoryService:
         title_configs_imported = 0
 
         valid_profile_ids = {profile.id for profile in self._config.printing.all_profiles()}
-        valid_profile_ids.update(
-            {"noten_a4_simplex", "noten_a4_duplex", "canon_brochure_mono", "canon_brochure_duo"}
-        )
 
         for raw_sku, raw_record in records.items():
             if not isinstance(raw_record, dict):
@@ -772,7 +775,7 @@ class InventoryService:
         return {
             "path": resolved_path,
             "_raw_path": raw_path,
-            "profile_id": str(raw.get("profile_id") or "").strip(),
+            "profile_id": InventoryService._normalize_legacy_profile_id(raw.get("profile_id")),
             "print_plan": InventoryService._normalize_print_plan(raw.get("print_plan")),
         }
 
@@ -807,11 +810,16 @@ class InventoryService:
             if not isinstance(raw, dict):
                 continue
             range_text = str(raw.get("range") or "").strip() or "Alle Seiten"
-            profile_id = str(raw.get("profile_id") or "").strip()
+            profile_id = InventoryService._normalize_legacy_profile_id(raw.get("profile_id"))
             if not profile_id:
                 continue
             plan.append({"range": range_text, "profile_id": profile_id})
         return plan
+
+    @staticmethod
+    def _normalize_legacy_profile_id(raw_profile_id: object) -> str:
+        profile_id = str(raw_profile_id or "").strip()
+        return _LEGACY_PRINT_PROFILE_MAP.get(profile_id, profile_id)
 
     @staticmethod
     def _detect_legacy_inventory_store_path() -> Path | None:

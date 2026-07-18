@@ -73,9 +73,11 @@ def test_import_legacy_print_data_persists_default_and_title_configs(monkeypatch
     row = raw[0]
     assert row["sku"] == "XW-6213"
     assert row["print_file_path"] == str(pdf_default)
-    assert row["print_profile_id"] == "noten_a4_duplex"
-    assert row["print_plan"] == [{"range": "Alle Seiten", "profile_id": "noten_a4_duplex"}]
+    assert row["print_profile_id"] == "noten_duplex"
+    assert row["print_plan"] == [{"range": "Alle Seiten", "profile_id": "noten_duplex"}]
     assert row["title_print_configs"]["Sidonje Polka"]["path"] == str(pdf_title)
+    assert row["title_print_configs"]["Sidonje Polka"]["profile_id"] == "brochure_mono"
+    assert row["title_print_configs"]["Sidonje Polka"]["print_plan"] == [{"range": "1-2", "profile_id": "brochure_mono"}]
 
 
 def test_save_product_print_config_persists_title_and_default_when_missing() -> None:

@@ -782,8 +782,10 @@ class _PieceDelegate(QStyledItemDelegate):
         detail_lines = [str(line) for line in details] if isinstance(details, list) else []
         stock = str(index.data(_PieceListModel.STOCK_ROLE) or "")
         stock_color = QColor(str(index.data(_PieceListModel.STOCK_COLOR_ROLE) or "#64748b"))
+        block = index.data(_PieceListModel.BLOCK_ROLE)
+        has_print_config = isinstance(block, PieceBlock) and block.has_direct_print_config
 
-        controls_width = 214 if flagged else 0
+        controls_width = 172 if flagged else 0
         text_rect = QRect(rect.left(), rect.top(), max(80, rect.width() - controls_width - 8), 22)
         font = painter.font()
         font.setBold(True)
@@ -803,7 +805,7 @@ class _PieceDelegate(QStyledItemDelegate):
         painter.drawText(QRect(text_rect.left() + 8, y, text_rect.width() - 8, 18), Qt.AlignmentFlag.AlignLeft, stock)
 
         if flagged:
-            for key, button_rect in self._button_rects(option.rect).items():
+            for key, button_rect in self._button_rects(option.rect, has_print_config=has_print_config).items():
                 active = enabled or key == "manage"
                 if key in {"minus", "plus"} and not enabled:
                     active = False
@@ -824,10 +826,10 @@ class _PieceDelegate(QStyledItemDelegate):
         if event.type() != QEvent.Type.MouseButtonRelease or not index.isValid():
             return super().editorEvent(event, model, option, index)
         pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
-        rects = self._button_rects(option.rect)
         block = index.data(_PieceListModel.BLOCK_ROLE)
         if not isinstance(block, PieceBlock):
             return False
+        rects = self._button_rects(option.rect, has_print_config=block.has_direct_print_config)
         source_model = model
         source_row = int(index.row())
         if hasattr(model, "mapToSource"):
@@ -841,24 +843,25 @@ class _PieceDelegate(QStyledItemDelegate):
         if rects["plus"].contains(pos) and enabled and isinstance(source_model, _PieceListModel):
             source_model.adjust_quantity(source_row, 1)
             return True
-        if rects["print"].contains(pos) and enabled:
+        if "print" in rects and rects["print"].contains(pos) and enabled:
             qty = int(index.data(_PieceListModel.QUANTITY_ROLE) or 1)
             self.print_clicked.emit(block, qty)
             return True
-        if rects["manage"].contains(pos):
+        if "manage" in rects and rects["manage"].contains(pos):
             self.manage_clicked.emit(block)
             return True
         return super().editorEvent(event, model, option, index)
 
     @staticmethod
-    def _button_rects(row_rect: QRect) -> dict[str, QRect]:
+    def _button_rects(row_rect: QRect, *, has_print_config: bool) -> dict[str, QRect]:
         top = row_rect.top() + 12
         right = row_rect.right() - 8
         height = 24
-        widths = {"manage": 46, "print": 56, "plus": 28, "qty": 42, "minus": 28}
+        action = "print" if has_print_config else "manage"
+        widths = {action: 56, "plus": 28, "qty": 42, "minus": 28}
         rects: dict[str, QRect] = {}
         cursor = right
-        for key in ("manage", "print", "plus", "qty", "minus"):
+        for key in (action, "plus", "qty", "minus"):
             width = widths[key]
             rects[key] = QRect(cursor - width + 1, top, width, height)
             cursor -= width + 6

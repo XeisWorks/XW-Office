@@ -46,7 +46,11 @@ from xw_studio.services.sevdesk.part_client import PartClient, SevdeskPart
 from xw_studio.services.wix.client import WixProduct, WixProductsClient
 from xw_studio.ui.modules.products.bulk_field_dialog import BulkFieldEditorDialog
 from xw_studio.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
-from xw_studio.ui.modules.rechnungen.print_dialog import prepare_piece_pdf_print, run_piece_pdf_print
+from xw_studio.ui.modules.rechnungen.print_dialog import (
+    _configure_missing_piece_print,
+    prepare_piece_pdf_print,
+    run_piece_pdf_print,
+)
 from xw_studio.ui.widgets.data_table import DataTable
 from xw_studio.ui.widgets.search_bar import SearchBar
 
@@ -68,6 +72,7 @@ _SYNC_HEADERS = [
     "Wix-ID",
     "sevDesk-ID",
     "Aktion",
+    "Druck",
 ]
 
 _ICONS_DIR = Path(__file__).resolve().parents[5] / "icons"
@@ -260,11 +265,14 @@ class _SyncConflictDelegate(QStyledItemDelegate):
 
 
 class _SyncActionDelegate(QStyledItemDelegate):
-    """Render a compact sevDesk-create action in the sync table."""
+    """Render a compact per-product action in the sync table."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._icon = QIcon(str(_ICONS_DIR / "createInSevdesk.png"))
+        self._icons = {
+            "create_sevdesk": QIcon(str(_ICONS_DIR / "createInSevdesk.png")),
+            "print_config": QIcon(str(_ICONS_DIR / "printondemand.png")),
+        }
 
     @staticmethod
     def _button_geometry(width: int, height: int) -> tuple[int, int, int, int]:
@@ -281,7 +289,8 @@ class _SyncActionDelegate(QStyledItemDelegate):
 
     def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
         row_data = index.data(Qt.ItemDataRole.UserRole)
-        enabled = isinstance(row_data, dict) and bool(row_data.get("__action_enabled__Aktion"))
+        field = str(index.model().headerData(index.column(), Qt.Orientation.Horizontal) or "")
+        enabled = isinstance(row_data, dict) and bool(row_data.get(f"__action_enabled__{field}"))
         if not enabled:
             super().paint(painter, option, index)
             return
@@ -303,7 +312,9 @@ class _SyncActionDelegate(QStyledItemDelegate):
         painter.setBrush(QColor("#ffffff"))
         painter.drawRoundedRect(button_rect, 6, 6)
         icon_rect = button_rect.adjusted(5, 3, -5, -3)
-        self._icon.paint(painter, icon_rect, Qt.AlignmentFlag.AlignCenter)
+        action_kind = str(row_data.get(f"__action_kind__{field}") or "create_sevdesk") if isinstance(row_data, dict) else ""
+        icon = self._icons.get(action_kind) or self._icons["create_sevdesk"]
+        icon.paint(painter, icon_rect, Qt.AlignmentFlag.AlignCenter)
         painter.restore()
 
     def sizeHint(self, option, index):  # type: ignore[override]
@@ -747,15 +758,18 @@ class ProductsView(QWidget):
         self._sync_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
         self._sync_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
         self._sync_table.horizontalHeader().setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
+        self._sync_table.horizontalHeader().setSectionResizeMode(10, QHeaderView.ResizeMode.Fixed)
         self._sync_table.setColumnWidth(2, 86)
         self._sync_table.setColumnWidth(3, 72)
         self._sync_table.setColumnWidth(5, 92)
         self._sync_table.setColumnWidth(6, 76)
         self._sync_table.setColumnWidth(9, 44)
+        self._sync_table.setColumnWidth(10, 44)
         self._sync_table.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)
         self._sync_table.setItemDelegateForColumn(2, self._sync_status_delegate)
         self._sync_table.setItemDelegateForColumn(3, self._sync_conflict_delegate)
         self._sync_table.setItemDelegateForColumn(9, self._sync_action_delegate)
+        self._sync_table.setItemDelegateForColumn(10, self._sync_action_delegate)
         self._sync_table.viewport().installEventFilter(self)
         lay.addWidget(self._sync_table, stretch=1)
 
@@ -767,7 +781,7 @@ class ProductsView(QWidget):
         tip.setObjectName("infoLabel")
         lay.addWidget(tip)
 
-        plans_group = QGroupBox("Druckplaene (JSON)")
+        plans_group = QGroupBox("Druckplaene (JSON, veraltet)")
         plans_lay = QVBoxLayout(plans_group)
         self._plans_editor = QPlainTextEdit()
         self._plans_editor.setPlaceholderText(
@@ -784,6 +798,7 @@ class ProductsView(QWidget):
         plans_btns.addWidget(self._plans_save_btn)
         plans_btns.addStretch()
         plans_lay.addLayout(plans_btns)
+        plans_group.setVisible(False)
         lay.addWidget(plans_group)
         return page
 
@@ -954,11 +969,17 @@ class ProductsView(QWidget):
                     "Wix-ID": row.wix_id,
                     "sevDesk-ID": row.sevdesk_id,
                     "Aktion": row.sku if row.can_create_sevdesk else "",
+                    "Druck": row.sku if row.local_present else "",
                     "__align__Preis": "right",
                     "__align__Bestand": "center",
                     "__tooltip__Status": self._sync_presence_tooltip(row),
                     "__tooltip__Konflikt": self._sync_conflict_tooltip(conflict_specs),
                     "__tooltip__Aktion": "In sevDesk anlegen" if row.can_create_sevdesk else "",
+                    "__tooltip__Druck": (
+                        "PDF-Pfad und Druckplan direkt fuer dieses Produkt pflegen"
+                        if row.local_present
+                        else ""
+                    ),
                     "__icons__Status": [
                         ("local", row.local_present),
                         ("wix", row.wix_present),
@@ -966,6 +987,9 @@ class ProductsView(QWidget):
                     ],
                     "__icons__Konflikt": [key for key, _tooltip in conflict_specs],
                     "__action_enabled__Aktion": row.can_create_sevdesk,
+                    "__action_kind__Aktion": "create_sevdesk",
+                    "__action_enabled__Druck": row.local_present,
+                    "__action_kind__Druck": "print_config",
                 }
             )
         self._sync_table.set_data(payload)
@@ -1192,6 +1216,25 @@ class ProductsView(QWidget):
             if row.sku.strip().upper() == wanted:
                 return row
         return None
+
+    def _manage_product_print_config(self, sku: str) -> None:
+        row = self._local_product_by_sku(sku)
+        if row is None:
+            QMessageBox.information(
+                self,
+                "Druckplan",
+                "Fuer diese SKU gibt es noch keinen lokalen Produktdatensatz.",
+            )
+            return
+        piece = self._piece_from_product_row(row)
+        if not _configure_missing_piece_print(self, self._container, piece):
+            self._sync_status_lbl.setText(f"Druckkonfiguration fuer {row.sku} nicht geaendert.")
+            return
+        inv: InventoryService = self._container.resolve(InventoryService)
+        self._all_rows = inv.list_products()
+        self._sync_rows = self._build_sync_rows()
+        self._apply_sync_filters()
+        self._sync_status_lbl.setText(f"Druckkonfiguration fuer {row.sku} gespeichert.")
 
     @staticmethod
     def _piece_from_product_row(row: ProductRow) -> PieceBlock:
@@ -1795,9 +1838,10 @@ class ProductsView(QWidget):
         if watched is self._sync_table.viewport() and event.type() == QEvent.Type.MouseButtonRelease:
             if isinstance(event, QMouseEvent) and event.button() == Qt.MouseButton.LeftButton:
                 index = self._sync_table.indexAt(event.position().toPoint())
-                if index.isValid() and index.column() == 9:
+                if index.isValid() and index.column() in {9, 10}:
                     row_data = index.data(Qt.ItemDataRole.UserRole)
-                    if isinstance(row_data, dict) and bool(row_data.get("__action_enabled__Aktion")):
+                    field = str(index.model().headerData(index.column(), Qt.Orientation.Horizontal) or "")
+                    if isinstance(row_data, dict) and bool(row_data.get(f"__action_enabled__{field}")):
                         rect = self._sync_table.visualRect(index)
                         local_x = event.position().x() - rect.x()
                         local_y = event.position().y() - rect.y()
@@ -1809,7 +1853,11 @@ class ProductsView(QWidget):
                         ):
                             sku = str(row_data.get("SKU") or "").strip()
                             if sku:
-                                self._create_selected_wix_product_in_sevdesk(sku)
+                                action_kind = str(row_data.get(f"__action_kind__{field}") or "").strip()
+                                if action_kind == "print_config":
+                                    self._manage_product_print_config(sku)
+                                else:
+                                    self._create_selected_wix_product_in_sevdesk(sku)
                                 return True
         return super().eventFilter(watched, event)
 

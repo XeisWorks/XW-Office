@@ -2,6 +2,25 @@
 
 Stand: 2026-07-18
 
+## Umsetzungsstand 2026-07-18
+
+Erledigt:
+
+- `PRINT-PRODUKTE OFFEN` zeigt echte Produktzeilen mit Print-/Settings-Aktion.
+- `PRINT-PRODUKTE OFFEN` filtert auf die bestehende HINWEISE-Print-Flag-Logik.
+- Ausgewaehlte Rechnungsprodukte zeigen Druckaktionen nur noch fuer geflaggte Print-Produkte.
+- Ausgewaehlte Rechnungsprodukte zeigen jetzt exklusiv entweder `Druck` oder `Plan`.
+- Im PRODUKTE-Modul gibt es pro lokalem Produkt eine eigene Spalte `Druck` fuer die Druckplan-Pflege.
+- Das alte JSON-Freitextfeld `inventory.print_plans` ist im normalen Produkt-Workflow ausgeblendet.
+- Legacy-Profil-IDs werden beim Import auf die aktuellen Profil-IDs gemappt.
+- Die Produktdruckprofile `noten_simplex`, `noten_duplex`, `brochure_mono` und `brochure_duo` sind in `config/default.yaml` auf PDF-XChange Native gesetzt.
+
+Noch als spaetere Haertung offen:
+
+- Der Druckplan-Dialog kann noch weiter verbessert werden: PDF-Seitenzahl direkt anzeigen, Explorer/PDF-oeffnen, Profil-/Drucker-/Backend-Live-Zusammenfassung.
+- Ein eigener Resolver-DTO fuer `ready/missing/invalid` wuerde die UI-Entscheidung weiter zentralisieren; aktuell wird die bestehende Produktkatalog-/PieceBlock-Logik wiederverwendet.
+- Silent-Print kann weiterhin nur Jobannahme, nicht physisch fertig gedrucktes Papier bestaetigen.
+
 ## Bestaetigte Entscheidungen
 
 - Die Druckplaene werden zentral am Produkt gepflegt und von dort in allen Rechnungs-Flows verwendet.

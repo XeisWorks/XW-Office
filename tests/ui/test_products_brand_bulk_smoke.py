@@ -191,6 +191,67 @@ def test_products_sync_action_click_smoke(qtbot: object, monkeypatch: object) ->
     assert calls == ["XW-901"]
 
 
+def test_products_sync_print_action_opens_product_print_config(qtbot: object, monkeypatch: object) -> None:
+    monkeypatch.setattr(ProductsView, "_load_sync_sources", lambda self, *args, **kwargs: None)
+
+    container = Container(AppConfig())
+    view = ProductsView(container)
+    qtbot.addWidget(view)
+    view.show()
+
+    row = ProductRow(
+        sku="XW-902",
+        name="Drucktest",
+        category="Kat",
+        on_hand=1,
+        price_eur="12.00",
+        wix_id="w-902",
+        sevdesk_id="s-902",
+        brand_name="",
+        brand_id="",
+        print_file_path="",
+        print_profile_id="",
+        print_plan=[],
+        title_print_configs={},
+    )
+    view._all_rows = [row]  # noqa: SLF001
+    sync_row_type = __import__("xw_studio.ui.modules.products.view", fromlist=["_SyncRow"])._SyncRow
+    view._sync_rows = [  # noqa: SLF001
+        sync_row_type(
+            sku="XW-902",
+            name="Drucktest",
+            wix_id="w-902",
+            sevdesk_id="s-902",
+            local_present=True,
+            wix_present=True,
+            sevdesk_present=True,
+            local_stock=1,
+            wix_stock=1,
+            sevdesk_stock=1,
+            local_brand="",
+            wix_brand="",
+            local_price="12.00",
+            wix_price="12.00",
+            sevdesk_price="12.00",
+            status="sauber verknuepft",
+            can_create_sevdesk=False,
+        )
+    ]
+    view._populate_sync_table(view._sync_rows)  # noqa: SLF001
+
+    calls: list[str] = []
+    monkeypatch.setattr(view, "_manage_product_print_config", lambda sku: calls.append(sku))
+
+    model = view._sync_table.model()  # noqa: SLF001
+    assert model is not None
+    index = model.index(0, 10)
+    rect = view._sync_table.visualRect(index)  # noqa: SLF001
+
+    qtbot.mouseClick(view._sync_table.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())  # noqa: SLF001
+
+    assert calls == ["XW-902"]
+
+
 def test_products_view_exposes_separate_print_and_production_actions(
     qtbot: object, monkeypatch: object
 ) -> None:
