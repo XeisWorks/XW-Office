@@ -4,6 +4,7 @@ from __future__ import annotations
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -91,7 +92,7 @@ class SpecialOrderDialog(QDialog):
         row = QHBoxLayout()
         self._status = QLabel("-")
         row.addWidget(self._status, stretch=1)
-        self._create_btn = QPushButton("Payment Link erstellen + Mail vorbereiten")
+        self._create_btn = QPushButton("Payment Link erstellen + kopieren")
         self._create_btn.clicked.connect(self._create_link)
         row.addWidget(self._create_btn)
         root.addLayout(row)
@@ -178,12 +179,6 @@ class SpecialOrderDialog(QDialog):
                 customer_first_name=first_name,
                 customer_last_name=last_name,
             )
-            self._service.open_link_mail_draft(
-                to_email=email,
-                first_name=first_name,
-                title=title,
-                link=link,
-            )
             return link.url
 
         self._create_btn.setEnabled(False)
@@ -264,8 +259,11 @@ class SpecialOrderDialog(QDialog):
             return 0.0
 
     def _on_link_created(self, payload: object) -> None:
-        self._status.setText(f"Payment Link erstellt: {payload}")
-        QMessageBox.information(self, "Sonderauftrag", f"Payment Link erstellt und Outlook-Entwurf geoeffnet:\n{payload}")
+        url = str(payload or "").strip()
+        if url:
+            QApplication.clipboard().setText(url)
+        self._status.setText(f"Payment Link erstellt: {url}")
+        QMessageBox.information(self, "Sonderauftrag", f"Payment Link erstellt und in die Zwischenablage kopiert:\n{url}")
 
     def _on_link_error(self, exc: Exception) -> None:
         self._status.setText("Fehler")
