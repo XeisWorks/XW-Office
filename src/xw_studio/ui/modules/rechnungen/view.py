@@ -73,6 +73,7 @@ from xw_studio.services.invoice_processing.service import InvoiceProcessingServi
 from xw_studio.services.digital_licenses import DigitalLicenseService
 from xw_studio.services.plc.label_archive import PlcLabelArchive
 from xw_studio.services.printer_status.service import PrinterStatusService
+from xw_studio.services.products.catalog import Product, ProductCatalogService
 from xw_studio.services.products.print_decision import PieceBlock, PrintDecisionEngine
 from xw_studio.services.secrets.service import SecretService
 from xw_studio.services.sendungen.service import OffeneSendungenService
@@ -85,6 +86,7 @@ from xw_studio.ui.modules.rechnungen.offene_sendungen_dialog import OffeneSendun
 from xw_studio.ui.modules.rechnungen.special_order_dialog import SpecialOrderDialog
 from xw_studio.ui.modules.rechnungen.open_invoice_overview import (
     OpenInvoiceOverview,
+    PrintProductAggregate,
     overview_from_visible_summaries,
     overview_payload_from_object,
     resolve_open_invoice_overview,
@@ -957,6 +959,7 @@ class RechnungenView(QWidget):
         self._open_overview_cached_plc = 0
         self._open_overview_complete = False
         self._open_overview_products_text = ""
+        self._open_overview_products: list[PrintProductAggregate] = []
         self._plc_label_archive = PlcLabelArchive()
         self._selected_plc_label_path = ""
         self._plc_archive_lookup_cache: dict[tuple[str, str], str] = {}
@@ -1133,12 +1136,18 @@ class RechnungenView(QWidget):
         self._gb_open_products = QGroupBox("PRINT-PRODUKTE OFFEN")
         open_products_layout = QVBoxLayout(self._gb_open_products)
         open_products_layout.setContentsMargins(10, 8, 10, 10)
+        self._open_products_status = QLabel("Print-Produkte werden ermittelt...")
+        self._open_products_status.setWordWrap(True)
+        self._open_products_status.setStyleSheet("color: #cbd5e1;")
+        open_products_layout.addWidget(self._open_products_status)
+        self._open_products_rows = QWidget()
+        self._open_products_rows_layout = QVBoxLayout(self._open_products_rows)
+        self._open_products_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._open_products_rows_layout.setSpacing(6)
+        open_products_layout.addWidget(self._open_products_rows)
         self._open_products_text = QTextBrowser()
         self._open_products_text.setReadOnly(True)
-        self._open_products_text.setMinimumHeight(110)
-        self._open_products_text.setMaximumHeight(190)
-        self._open_products_text.setPlaceholderText("Print-Produkte werden ermittelt...")
-        open_products_layout.addWidget(self._open_products_text)
+        self._open_products_text.hide()
         detail_main.addWidget(self._gb_open_products)
 
         self._gb_info = QGroupBox("INFO")
@@ -2106,7 +2115,8 @@ class RechnungenView(QWidget):
             self._open_overview_cached_plc = 0
             self._open_overview_complete = True
             self._open_overview_products_text = ""
-            self._open_products_text.setHtml(self._format_open_print_products(overview))
+            self._open_overview_products = []
+            self._render_open_print_products(overview)
             return
 
         if overview.key and overview.key == self._open_overview_key and self._open_overview_complete:
@@ -2124,7 +2134,8 @@ class RechnungenView(QWidget):
         has_refs = any(str(summary.order_reference or "").strip() for summary in open_rows)
         if has_refs:
             self._open_overview_products_text = "Print-Produkte werden ermittelt..."
-            self._open_products_text.setHtml("<div style='color:#475569;'>Print-Produkte werden ermittelt...</div>")
+            self._open_overview_products = []
+            self._set_open_products_message("Print-Produkte werden ermittelt...")
             self._start_open_invoice_overview(open_rows)
 
     def _start_open_invoice_overview(
@@ -2176,6 +2187,7 @@ class RechnungenView(QWidget):
                 invoice_service=service,
                 wix_client=wix_client,
                 digital_cache=digital_cache,
+                sku_filter=service.is_flagged_sku,
             )
 
         self._open_overview_worker = BackgroundWorker(job)
@@ -2235,7 +2247,176 @@ class RechnungenView(QWidget):
         self._open_overview_cached_plc = max(0, overview.plc)
         self._open_overview_complete = overview.complete
         self._open_overview_products_text = self._format_open_print_products(overview)
-        self._open_products_text.setHtml(self._open_overview_products_text)
+        self._open_overview_products = list(overview.print_products)
+        self._render_open_print_products(overview)
+
+    def _clear_open_print_product_rows(self) -> None:
+        while self._open_products_rows_layout.count():
+            item = self._open_products_rows_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _set_open_products_message(self, message: str) -> None:
+        self._clear_open_print_product_rows()
+        self._open_products_status.setText(message)
+        self._open_products_status.show()
+        self._open_products_text.setPlainText(message)
+
+    def _render_open_print_products(self, overview: OpenInvoiceOverview) -> None:
+        if overview.unknown and not overview.print_products:
+            self._set_open_products_message("Print-Produkte werden ermittelt...")
+            return
+        if not overview.print_products:
+            self._set_open_products_message("Keine geflaggten Print-Produkte in den offenen Rechnungen gefunden.")
+            return
+        self._clear_open_print_product_rows()
+        self._open_products_status.hide()
+        plain_lines: list[str] = []
+        for item in overview.print_products:
+            row = self._build_open_print_product_row(item)
+            self._open_products_rows_layout.addWidget(row)
+            plain_lines.append(self._plain_open_print_product_line(item))
+        if overview.unknown:
+            note = QLabel("Weitere Print-Produkte werden noch ermittelt.")
+            note.setStyleSheet("color: #94a3b8; font-size: 11px;")
+            self._open_products_rows_layout.addWidget(note)
+            plain_lines.append("Weitere Print-Produkte werden noch ermittelt.")
+        self._open_products_rows_layout.addStretch(1)
+        self._open_products_text.setPlainText("\n".join(plain_lines))
+
+    def _build_open_print_product_row(self, item: PrintProductAggregate) -> QWidget:
+        row = QWidget()
+        row.setStyleSheet(
+            "QWidget { background-color: #1f2933; border: 1px solid #334155; border-radius: 4px; }"
+            "QLabel { border: none; background: transparent; }"
+        )
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(8)
+
+        qty_label = QLabel(f"{max(1, int(item.quantity or 1))}x")
+        qty_label.setStyleSheet("color: #ffffff; font-weight: 700;")
+        qty_label.setMinimumWidth(32)
+        layout.addWidget(qty_label)
+
+        text_col = QVBoxLayout()
+        text_col.setContentsMargins(0, 0, 0, 0)
+        text_col.setSpacing(1)
+        title = QLabel(str(item.title or item.sku or "Unbenanntes Produkt"))
+        title.setWordWrap(True)
+        title.setStyleSheet("color: #ffffff; font-weight: 700;")
+        description = QLabel(self._open_product_description(item))
+        description.setWordWrap(True)
+        description.setStyleSheet("color: #cbd5e1; font-size: 11px;")
+        text_col.addWidget(title)
+        text_col.addWidget(description)
+        layout.addLayout(text_col, stretch=1)
+
+        sku_label = QLabel(str(item.sku or "-"))
+        sku_label.setStyleSheet("color: #93c5fd;")
+        sku_label.setMinimumWidth(74)
+        layout.addWidget(sku_label)
+
+        action = QToolButton()
+        action.setFixedSize(32, 28)
+        action.setEnabled(self._print_allowed)
+        action.setStyleSheet(
+            "QToolButton { background-color: #334155; border: 1px solid #64748b; border-radius: 4px; }"
+            "QToolButton:hover { background-color: #475569; border-color: #94a3b8; }"
+            "QToolButton:disabled { background-color: #1f2937; border-color: #334155; }"
+        )
+        if self._open_print_product_ready(item):
+            action.setIcon(QIcon(str(Path(__file__).resolve().parents[5] / "icons" / "print.png")))
+            action.setToolTip("Druckplan ohne Rueckfrage ausfuehren")
+            action.clicked.connect(lambda _checked=False, aggregate=item: self._on_open_product_print_clicked(aggregate))
+        else:
+            action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+            action.setToolTip("Druckplan/PDF fuer dieses Produkt einrichten")
+            action.clicked.connect(lambda _checked=False, aggregate=item: self._on_open_product_manage_clicked(aggregate))
+        layout.addWidget(action)
+        return row
+
+    @staticmethod
+    def _open_product_description(item: PrintProductAggregate) -> str:
+        desc_raw = str(item.description or "").strip()
+        desc_parts = [part.strip() for part in desc_raw.split("|") if part.strip()]
+        desc_parts = [part for part in desc_parts if "rabatt" not in part.casefold()]
+        return " | ".join(desc_parts) or "Besetzung offen"
+
+    def _plain_open_print_product_line(self, item: PrintProductAggregate) -> str:
+        return (
+            f"{max(1, int(item.quantity or 1))}x "
+            f"{str(item.title or item.sku or 'Unbenanntes Produkt').strip()} "
+            f"{str(item.sku or '-').strip()} "
+            f"{self._open_product_description(item)}"
+        )
+
+    def _open_print_product_ready(self, item: PrintProductAggregate) -> bool:
+        try:
+            catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
+            config = catalog.resolve_print_config(item.sku, title=item.title)
+        except Exception as exc:  # noqa: BLE001 - invalid config should show settings.
+            logger.debug("Open print product config lookup failed sku=%s: %s", item.sku, exc)
+            return False
+        path = str(config.get("path") or "").strip()
+        plan = config.get("print_plan")
+        profile_id = str(config.get("profile_id") or "").strip()
+        if not path or not Path(path).exists():
+            return False
+        return bool(profile_id or (isinstance(plan, list) and any(isinstance(entry, dict) for entry in plan)))
+
+    def _piece_block_from_open_product(self, item: PrintProductAggregate) -> PieceBlock:
+        sku = str(item.sku or "").strip().upper()
+        title = str(item.title or "").strip() or sku
+        description = str(item.description or "").strip()
+        product: Product | None = None
+        config: dict[str, object] = {}
+        try:
+            catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
+            product = catalog.resolve_sku(sku)
+            config = catalog.resolve_print_config(sku, title=title)
+        except Exception as exc:  # noqa: BLE001 - dialog can still create config.
+            logger.debug("Open print product catalog lookup failed sku=%s: %s", sku, exc)
+        path = str(config.get("path") or "").strip()
+        if product is None and path:
+            product = Product(id=f"settings::{sku}", sku=sku, name=title, print_file_path=path)
+        elif product is not None and path and not product.print_file_path.strip():
+            product.print_file_path = path
+        return PieceBlock(
+            sku=sku,
+            name=title,
+            qty_needed=max(1, int(item.quantity or 1)),
+            note=description,
+            is_unreleased=True,
+            print_profile_id=str(config.get("profile_id") or "").strip(),
+            print_plan=[
+                entry for entry in (config.get("print_plan") or [])
+                if isinstance(entry, dict)
+            ],
+            product=product,
+            stock_status=None,
+        )
+
+    def _on_open_product_manage_clicked(self, item: PrintProductAggregate) -> None:
+        from xw_studio.ui.modules.rechnungen.print_dialog import _configure_missing_piece_print
+
+        block = self._piece_block_from_open_product(item)
+        signals: AppSignals = self._container.resolve(AppSignals)
+        if _configure_missing_piece_print(self, self._container, block):
+            signals.status_message.emit(f"Druckkonfiguration fuer {block.sku} gespeichert.", 5000)
+        else:
+            signals.status_message.emit(
+                f"Druckkonfiguration fuer {block.sku} nicht geaendert.",
+                5000,
+            )
+        self._refresh_open_invoice_overview()
+
+    def _on_open_product_print_clicked(self, item: PrintProductAggregate) -> None:
+        self._on_product_print_clicked(
+            self._piece_block_from_open_product(item),
+            max(1, int(item.quantity or 1)),
+        )
 
     @staticmethod
     def _format_open_print_products(overview: OpenInvoiceOverview) -> str:
@@ -4306,7 +4487,7 @@ class RechnungenView(QWidget):
             model_rows.append(
                 {
                     "block": item,
-                    "flagged": show_print_controls,
+                    "flagged": bool(flagged_for_print and show_print_controls),
                     "quantity": self._default_piece_print_qty(item),
                     "header": self._piece_header_text(item, flagged_for_print),
                     "details": self._piece_detail_lines(item),

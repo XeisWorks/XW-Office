@@ -5,6 +5,8 @@ import subprocess
 from threading import Event
 import types
 
+from PySide6.QtWidgets import QToolButton
+
 from xw_studio.bootstrap import register_default_services
 from xw_studio.core.config import AppConfig
 from xw_studio.core.container import Container
@@ -545,6 +547,9 @@ def test_rechnungen_open_overview_resolves_wix_classification_and_buyer_notes(qt
             note = "Bitte PLC Versandlabel pruefen" if reference == "20910" else "Download-Link bitte senden"
             return types.SimpleNamespace(buyer_note=note)
 
+        def is_flagged_sku(self, sku: str) -> bool:
+            return sku == "XW-PHYS"
+
     class _OverviewWixClient(_FakeWixOrdersClient):
         def is_reference_digital_only(self, reference: str) -> bool:
             return reference == "20911"
@@ -601,6 +606,7 @@ def test_rechnungen_open_overview_resolves_wix_classification_and_buyer_notes(qt
     assert "Physisches Produkt" in products_text
     assert "XW-PHYS" in products_text
     assert "Produktbeschreibung" in products_text
+    assert any(button.toolTip() == "Druckplan/PDF fuer dieses Produkt einrichten" for button in view._gb_open_products.findChildren(QToolButton))  # noqa: SLF001
 
 
 def test_plc_dialog_defaults_to_direct_webservice_without_changing_list_action(qtbot: object) -> None:

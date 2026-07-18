@@ -128,6 +128,7 @@ def resolve_open_invoice_overview(
     invoice_service: InvoiceProcessingService,
     wix_client: WixOrdersClient,
     digital_cache: dict[str, bool] | None = None,
+    sku_filter: Callable[[str], bool] | None = None,
 ) -> OpenInvoiceOverview:
     """Resolve Wix-backed overview values without blocking the UI thread."""
     known_digital = dict(digital_cache or {})
@@ -138,7 +139,7 @@ def resolve_open_invoice_overview(
     with_ref = 0
     with_note = 0
     plc = 0
-    products = _ProductAccumulator(sku_filter=None)
+    products = _ProductAccumulator(sku_filter=sku_filter)
     rows = [
         _resolve_one_summary(
             summary,
