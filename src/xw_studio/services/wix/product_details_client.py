@@ -91,6 +91,7 @@ class WixProductDetail(BaseModel):
     ribbon: str = ""
     inventory_quantity: int = 0
     category_ids: list[str] = field(default_factory=list)
+    category_names_by_id: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -179,8 +180,9 @@ def _parse_detail(raw: dict[str, Any]) -> WixProductDetail:
             pass
 
     # categories
-    raw_cats = raw.get("categories") or raw.get("categoryIds") or []
+    raw_cats = raw.get("categories") or raw.get("categoryIds") or raw.get("collectionIds") or []
     category_ids: list[str] = []
+    category_names_by_id: dict[str, str] = {}
     if isinstance(raw_cats, list):
         for cat in raw_cats:
             if isinstance(cat, str) and cat.strip():
@@ -189,6 +191,32 @@ def _parse_detail(raw: dict[str, Any]) -> WixProductDetail:
                 cid = str(cat.get("id") or cat.get("categoryId") or "").strip()
                 if cid:
                     category_ids.append(cid)
+                    name = str(
+                        cat.get("name")
+                        or cat.get("displayName")
+                        or cat.get("label")
+                        or cat.get("title")
+                        or ""
+                    ).strip()
+                    if name:
+                        category_names_by_id[cid] = name
+    main_category_id = str(raw.get("mainCategoryId") or raw.get("main_category_id") or "").strip()
+    if main_category_id and main_category_id not in category_ids:
+        category_ids.insert(0, main_category_id)
+    main_category_raw = raw.get("mainCategory")
+    if isinstance(main_category_raw, dict):
+        cid = str(main_category_raw.get("id") or main_category_raw.get("categoryId") or main_category_id or "").strip()
+        name = str(
+            main_category_raw.get("name")
+            or main_category_raw.get("displayName")
+            or main_category_raw.get("label")
+            or main_category_raw.get("title")
+            or ""
+        ).strip()
+        if cid and cid not in category_ids:
+            category_ids.insert(0, cid)
+        if cid and name:
+            category_names_by_id[cid] = name
 
     return WixProductDetail(
         id=pid,
@@ -206,6 +234,7 @@ def _parse_detail(raw: dict[str, Any]) -> WixProductDetail:
         ribbon=ribbon,
         inventory_quantity=qty,
         category_ids=category_ids,
+        category_names_by_id=category_names_by_id,
     )
 
 
@@ -337,6 +366,60 @@ class WixProductDetailsClient:
         """Return the current revision string for a product (needed for v3 updates)."""
         detail = self.get_product(product_id)
         return detail.revision if detail is not None else ""
+
+    def query_category_names(self) -> dict[str, str]:
+        """Return Wix category/collection display names by ID.
+
+        Wix uses Catalog V3 categories on newer stores and Stores V1
+        collections on older catalogs. The UI presents both as categories.
+        """
+        if not self.has_credentials():
+            return {}
+        headers = self._headers()
+        endpoints = [
+            (f"{self._V3_BASE}/catalog/categories/query", {"query": {"paging": {"limit": 100}}}),
+            (f"{self._V3_BASE}/categories/query", {"query": {"paging": {"limit": 100}}}),
+            (
+                f"{self._V1_BASE}/collections/query",
+                {"query": {}, "includeNumberOfProducts": False, "includeDescription": False},
+            ),
+        ]
+        names: dict[str, str] = {}
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            for url, body in endpoints:
+                try:
+                    resp = client.post(url, headers=headers, json=body)
+                    if resp.status_code >= 400:
+                        continue
+                    data = resp.json() if resp.content else {}
+                except Exception as exc:  # noqa: BLE001 - category fallback must stay best-effort.
+                    logger.debug("WixProductDetailsClient category query failed at %s: %s", url, exc)
+                    continue
+                for raw in self._extract_category_rows(data):
+                    cid = str(raw.get("id") or raw.get("categoryId") or "").strip()
+                    name = str(
+                        raw.get("name")
+                        or raw.get("displayName")
+                        or raw.get("label")
+                        or raw.get("title")
+                        or ""
+                    ).strip()
+                    if cid and name:
+                        names[cid] = name
+                if names:
+                    return names
+        return names
+
+    @staticmethod
+    def _extract_category_rows(data: object) -> list[dict[str, Any]]:
+        if not isinstance(data, dict):
+            return []
+        rows: list[dict[str, Any]] = []
+        for key in ("categories", "collections", "items", "results"):
+            raw_rows = data.get(key)
+            if isinstance(raw_rows, list):
+                rows.extend(item for item in raw_rows if isinstance(item, dict))
+        return rows
 
     # ------------------------------------------------------------------
     # Write: field-specific update methods

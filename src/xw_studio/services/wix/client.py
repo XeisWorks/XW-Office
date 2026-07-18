@@ -657,6 +657,7 @@ class WixOrderItem(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     line_item_id: str = ""
+    catalog_item_id: str = ""
     sku: str = ""
     name: str = ""
     qty: int = 1
@@ -769,15 +770,21 @@ def _line_item_note(raw: dict[str, Any]) -> str:
 def _parse_order_line_item(raw: dict[str, Any]) -> WixOrderItem:
     """Extract a normalized WixOrderItem from a Wix ecom lineItem dict."""
     line_item_id = str(raw.get("id") or "").strip()
+    catalog = raw.get("catalogReference") if isinstance(raw.get("catalogReference"), dict) else {}
+    catalog_item_id = str(
+        catalog.get("catalogItemId")
+        or catalog.get("catalogProductId")
+        or catalog.get("productId")
+        or ""
+    ).strip()
     # SKU is nested: physicalProperties.sku or catalogReference.catalogItemOptions.sku
     sku = ""
     phys = raw.get("physicalProperties")
     if isinstance(phys, dict):
         sku = str(phys.get("sku") or "").strip()
     if not sku:
-        cat = raw.get("catalogReference") or {}
-        if isinstance(cat, dict):
-            opts = cat.get("catalogItemOptions") or {}
+        if isinstance(catalog, dict):
+            opts = catalog.get("catalogItemOptions") or {}
             if isinstance(opts, dict):
                 sku = str(opts.get("sku") or "").strip()
 
@@ -832,6 +839,7 @@ def _parse_order_line_item(raw: dict[str, Any]) -> WixOrderItem:
 
     return WixOrderItem(
         line_item_id=line_item_id,
+        catalog_item_id=catalog_item_id,
         sku=sku,
         name=name,
         qty=qty,

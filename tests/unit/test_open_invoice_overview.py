@@ -137,6 +137,51 @@ def test_open_invoice_overview_filters_print_products_by_sku() -> None:
     ]
 
 
+def test_open_invoice_overview_uses_category_label_when_variant_note_missing() -> None:
+    summaries = [
+        InvoiceSummary.model_validate(
+            {
+                "id": "phys",
+                "invoiceNumber": "RE-P",
+                "status": 100,
+                "order_reference": "20910",
+            }
+        ),
+    ]
+
+    class _CachedWix:
+        def get_cached_reference_digital_only(self, reference: str) -> bool | None:
+            return False if reference == "20910" else None
+
+        def get_cached_order_line_items(self, reference: str) -> list[object] | None:
+            if reference != "20910":
+                return None
+            return [
+                types.SimpleNamespace(
+                    sku="XW-PRINT",
+                    name="Print Produkt",
+                    qty=2,
+                    note="",
+                    catalog_item_id="product-1",
+                )
+            ]
+
+        def get_cached_order_buyer_note(self, _reference: str) -> str:
+            return ""
+
+    overview = overview_from_visible_summaries(
+        summaries,
+        digital_cache={},
+        wix_client=_CachedWix(),  # type: ignore[arg-type]
+        sku_filter=lambda sku: sku == "XW-PRINT",
+        category_label_resolver=lambda item: "Noten A4",
+    )
+
+    assert [(item.sku, item.description, item.category_label, item.quantity) for item in overview.print_products] == [
+        ("XW-PRINT", "", "Noten A4", 2)
+    ]
+
+
 def test_open_invoice_overview_resolves_wix_notes_and_skips_cached_digital_lookup() -> None:
     summaries = [
         InvoiceSummary.model_validate(
