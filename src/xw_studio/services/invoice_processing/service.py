@@ -46,6 +46,7 @@ _BATCH_CACHE_TTL_SECONDS = 30.0
 _DEFAULT_SKU_FLAGS = {
     "exact": ["XW-010", "XW-011", "XW-600.0"],
     "prefixes": ["XW-4", "XW-6", "XW-7", "XW-12"],
+    "suffixes": ["-P"],
 }
 _DEFAULT_ALLOWED_COUNTRIES = [
     "Austria",
@@ -2164,13 +2165,13 @@ class InvoiceProcessingService:
         return " ".join(left_norm) != " ".join(right_norm)
 
     def _order_has_flagged_sku(self, order: dict[str, Any]) -> bool:
-        exact, prefixes = self._load_sku_flags()
+        exact, prefixes, suffixes = self._load_sku_flags()
         raw_items = order.get("lineItems") if isinstance(order.get("lineItems"), list) else []
         for raw_item in raw_items:
             if not isinstance(raw_item, dict):
                 continue
             sku = self._line_item_sku(raw_item)
-            if sku in exact or any(sku.startswith(prefix) for prefix in prefixes):
+            if self._sku_matches_flags(sku, exact=exact, prefixes=prefixes, suffixes=suffixes):
                 return True
         return False
 
@@ -2178,8 +2179,25 @@ class InvoiceProcessingService:
         normalized = str(sku or "").strip().upper()
         if not normalized:
             return False
-        exact, prefixes = self._load_sku_flags()
-        return normalized in exact or any(normalized.startswith(prefix) for prefix in prefixes)
+        exact, prefixes, suffixes = self._load_sku_flags()
+        return self._sku_matches_flags(normalized, exact=exact, prefixes=prefixes, suffixes=suffixes)
+
+    @staticmethod
+    def _sku_matches_flags(
+        sku: str,
+        *,
+        exact: set[str],
+        prefixes: tuple[str, ...],
+        suffixes: tuple[str, ...],
+    ) -> bool:
+        normalized = str(sku or "").strip().upper()
+        if not normalized:
+            return False
+        return (
+            normalized in exact
+            or any(normalized.startswith(prefix) for prefix in prefixes)
+            or any(normalized.endswith(suffix) for suffix in suffixes)
+        )
 
     @staticmethod
     def _line_item_sku(raw_item: dict[str, Any]) -> str:
@@ -2217,7 +2235,7 @@ class InvoiceProcessingService:
             delivery_code = summary.delivery_country_code.strip().upper()
             summary.is_sensitive_country = code in sensitive_codes or delivery_code in sensitive_codes
 
-    def _load_sku_flags(self) -> tuple[set[str], tuple[str, ...]]:
+    def _load_sku_flags(self) -> tuple[set[str], tuple[str, ...], tuple[str, ...]]:
         if self._settings_repo is None:
             return self._default_sku_flags()
         raw = self._settings_repo.get_value_json(_SKU_FLAGS_KEY)
@@ -2232,22 +2250,27 @@ class InvoiceProcessingService:
 
         exact_raw = data.get("exact")
         prefixes_raw = data.get("prefixes")
+        suffixes_raw = data.get("suffixes", _DEFAULT_SKU_FLAGS["suffixes"])
         if not isinstance(exact_raw, list) or not isinstance(prefixes_raw, list):
             return self._default_sku_flags()
+        if not isinstance(suffixes_raw, list):
+            suffixes_raw = _DEFAULT_SKU_FLAGS["suffixes"]
 
         exact = {str(item).strip().upper() for item in exact_raw if str(item).strip()}
         prefixes = tuple(str(item).strip().upper() for item in prefixes_raw if str(item).strip())
-        if not exact and not prefixes:
+        suffixes = tuple(str(item).strip().upper() for item in suffixes_raw if str(item).strip())
+        if not exact and not prefixes and not suffixes:
             return self._default_sku_flags()
-        return exact, prefixes
+        return exact, prefixes, suffixes
 
-    def _default_sku_flags(self) -> tuple[set[str], tuple[str, ...]]:
+    def _default_sku_flags(self) -> tuple[set[str], tuple[str, ...], tuple[str, ...]]:
         exact = {str(item).strip().upper() for item in _DEFAULT_SKU_FLAGS["exact"]}
         prefixes = tuple(str(item).strip().upper() for item in _DEFAULT_SKU_FLAGS["prefixes"])
-        return exact, prefixes
+        suffixes = tuple(str(item).strip().upper() for item in _DEFAULT_SKU_FLAGS["suffixes"])
+        return exact, prefixes, suffixes
 
     def _apply_unreleased_sku_flags(self, summaries: list[InvoiceSummary]) -> None:
-        exact, prefixes = self._load_sku_flags()
+        exact, prefixes, suffixes = self._load_sku_flags()
         for summary in summaries:
             hay = " ".join(
                 [
@@ -2259,6 +2282,6 @@ class InvoiceProcessingService:
             )
             tokens = {match.group(0).upper() for match in _SKU_TOKEN_RE.finditer(hay)}
             summary.has_unreleased_sku = any(
-                token in exact or any(token.startswith(prefix) for prefix in prefixes)
+                self._sku_matches_flags(token, exact=exact, prefixes=prefixes, suffixes=suffixes)
                 for token in tokens
             )

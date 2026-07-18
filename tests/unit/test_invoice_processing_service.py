@@ -365,7 +365,40 @@ def test_is_flagged_sku_uses_same_settings_as_hint_logic() -> None:
 
     assert svc.is_flagged_sku("XW-6213") is True
     assert svc.is_flagged_sku("XW-123") is True
+    assert svc.is_flagged_sku("XW-561.14-P") is True
     assert svc.is_flagged_sku("XW-9999") is False
+
+
+def test_sku_flags_support_custom_suffixes_for_hints_and_orders() -> None:
+    rows = [
+        InvoiceSummary(
+            id="3p",
+            invoice_number="R-3P",
+            order_reference="WIX XW-561.14-P",
+            has_unreleased_sku=False,
+        )
+    ]
+    repo = _RepoStub(
+        {
+            "rechnungen.sku_flags": json.dumps(
+                {
+                    "exact": [],
+                    "prefixes": [],
+                    "suffixes": ["-P"],
+                }
+            )
+        }
+    )
+    svc = InvoiceProcessingService(AppConfig(), _InvoiceClientStub(rows), repo)  # type: ignore[arg-type]
+
+    result = svc.load_invoice_summaries()
+
+    assert result[0].has_unreleased_sku is True
+    assert svc.is_flagged_sku("XW-561.14-P") is True
+    assert svc._order_has_flagged_sku(  # noqa: SLF001
+        {"lineItems": [{"physicalProperties": {"sku": "XW-561.14-P"}}]}
+    ) is True
+    assert svc.is_flagged_sku("XW-561.14") is False
 
 
 def test_unreleased_sku_flags_fall_back_to_defaults() -> None:

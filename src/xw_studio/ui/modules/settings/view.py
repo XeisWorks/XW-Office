@@ -677,7 +677,7 @@ class SettingsView(QWidget):
                 "refunds": repo.get_value_json(_QUEUE_REFUNDS_KEY) or "[]",
                 "sensitive": repo.get_value_json(_SENSITIVE_COUNTRIES_KEY) or '["AF", "BY", "IQ", "IR", "KP", "RU", "SY"]',
                 "allowed": repo.get_value_json(_ALLOWED_COUNTRIES_KEY) or _DEFAULT_ALLOWED_COUNTRIES,
-                "sku_flags": repo.get_value_json(_SKU_FLAGS_KEY) or '{"exact": ["XW-010", "XW-011", "XW-600.0"], "prefixes": ["XW-4", "XW-6", "XW-7", "XW-12"]}',
+                "sku_flags": repo.get_value_json(_SKU_FLAGS_KEY) or '{"exact": ["XW-010", "XW-011", "XW-600.0"], "prefixes": ["XW-4", "XW-6", "XW-7", "XW-12"], "suffixes": ["-P"]}',
                 "urgency": repo.get_value_json(_URGENCY_RULES_KEY) or '{"generic": ["offen", "fehl", "pending", "ueberweis"]}',
             }
 
@@ -760,13 +760,16 @@ class SettingsView(QWidget):
 
         exact_raw = sku_flags_obj.get("exact") if isinstance(sku_flags_obj, dict) else None
         prefixes_raw = sku_flags_obj.get("prefixes") if isinstance(sku_flags_obj, dict) else None
+        suffixes_raw = sku_flags_obj.get("suffixes", ["-P"]) if isinstance(sku_flags_obj, dict) else None
         if not isinstance(exact_raw, list) or not isinstance(prefixes_raw, list):
             QMessageBox.warning(
                 self,
                 "Formatfehler",
-                "SKU-Flags braucht das Format: {\"exact\": [...], \"prefixes\": [...]}.",
+                "SKU-Flags braucht das Format: {\"exact\": [...], \"prefixes\": [...], \"suffixes\": [...]}.",
             )
             return
+        if not isinstance(suffixes_raw, list):
+            suffixes_raw = ["-P"]
 
         normalized_sensitive = [
             str(code).strip().upper()
@@ -787,6 +790,11 @@ class SettingsView(QWidget):
             "prefixes": [
                 str(code).strip().upper()
                 for code in prefixes_raw
+                if str(code).strip()
+            ],
+            "suffixes": [
+                str(code).strip().upper()
+                for code in suffixes_raw
                 if str(code).strip()
             ],
         }
