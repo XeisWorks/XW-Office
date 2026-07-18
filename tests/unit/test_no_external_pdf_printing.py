@@ -33,6 +33,11 @@ def test_pdf_xchange_builds_silent_native_command_with_pages_and_copies(
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("xw_studio.services.printing.pdf_backends._windows_print_job_snapshot", lambda _printer: "")
+    monkeypatch.setattr(
+        "xw_studio.services.printing.pdf_backends._wait_for_spooler_change",
+        lambda _printer, previous_snapshot: '{"ID":1,"DocumentName":"sample.pdf","JobStatus":"Printing"}',
+    )
     job = PdfPrintJob(
         pdf_path=str(pdf),
         printer_name="Noten A4 Simplex",
@@ -47,15 +52,13 @@ def test_pdf_xchange_builds_silent_native_command_with_pages_and_copies(
     assert len(calls) == 2
     assert calls[0] == [
         str(executable),
-        "/print:default=yes;showui=no;printer=Noten A4 Simplex;pages=1-2,4-5,7",
+        '/print:showui=no;printer="Noten A4 Simplex";pages=1-2,4-5,7',
         str(pdf),
     ]
 
     windows_command_line = subprocess.list2cmdline(calls[0])
-    assert '"/print:default=yes;showui=no;printer=Noten A4 Simplex;pages=1-2,4-5,7"' in (
-        windows_command_line
-    )
-    assert r'printer=\"Noten A4 Simplex\"' not in windows_command_line
+    assert "default=yes" not in windows_command_line
+    assert r'printer=\"Noten A4 Simplex\"' in windows_command_line
 
 
 def test_pdf_xchange_missing_executable_fails_without_qt_fallback(
@@ -91,6 +94,7 @@ def test_pdf_xchange_nonzero_exit_is_a_print_failure(
         "run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 5, "", "driver error"),
     )
+    monkeypatch.setattr("xw_studio.services.printing.pdf_backends._windows_print_job_snapshot", lambda _printer: "")
 
     with pytest.raises(RuntimeError, match="Exit-Code 5.*driver error"):
         NativePdfCliBackend(str(executable)).print(

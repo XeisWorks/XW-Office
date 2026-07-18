@@ -4622,6 +4622,12 @@ class RechnungenView(QWidget):
 
         def worker_job() -> dict[str, object]:
             job()
+            if block.product is None or not str(block.product.sevdesk_part_id or "").strip():
+                return {
+                    "sku": block.sku,
+                    "quantity": qty,
+                    "stock_warning": "kein sevDesk-Part fuer Bestandsbuchung hinterlegt",
+                }
             try:
                 engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
                 engine.record_print_and_update_sevdesk(block, qty, invoice_ref=invoice_ref)
@@ -4643,9 +4649,9 @@ class RechnungenView(QWidget):
         warning = str(data.get("stock_warning") or "").strip()
         signals: AppSignals = self._container.resolve(AppSignals)
         if warning:
-            signals.status_message.emit(f"{sku}: {qty}x gedruckt; Bestand nicht aktualisiert.", 8000)
+            signals.status_message.emit(f"{sku}: Druckauftrag {qty}x uebergeben; Bestand nicht gebucht.", 8000)
         else:
-            signals.status_message.emit(f"{sku}: {qty}x gedruckt und Bestand aktualisiert.", 5000)
+            signals.status_message.emit(f"{sku}: Druckauftrag {qty}x uebergeben; Bestand aktualisiert.", 5000)
 
     def _on_product_print_error(self, exc: Exception) -> None:
         QMessageBox.critical(

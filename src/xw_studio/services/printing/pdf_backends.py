@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import logging
+import os
 from pathlib import Path
 import subprocess
+import time
 
 from xw_studio.services.printing.pdf_renderer import print_pdf_with_qprinter
 from xw_studio.services.printing.print_jobs import PdfPrintJob
@@ -63,27 +65,27 @@ class NativePdfCliBackend(PdfPrintBackend):
         if not pdf_path.is_file():
             raise RuntimeError(f"Produkt-PDF wurde nicht gefunden: {pdf_path}")
 
-        # Keep the printer value unquoted inside the option. ``subprocess`` wraps
-        # the complete option argument when the name contains spaces. Embedded
-        # quotes would be escaped as \" on Windows and PDF-XChange V11 silently
-        # ignores the resulting printer option. The documented /print command is
-        # intentionally dispatched only once per requested copy: Editor V11 may
-        # return before the Windows spooler starts the physical output, so a
-        # missing immediately-visible queue entry must never trigger a retry.
-        options = ["default=yes", "showui=no", f"printer={job.printer_name}"]
+        # The PDF-XChange command line accepts printer names with spaces when
+        # the value inside /print is quoted. Avoid default=yes here: Tracker
+        # support notes that this can reuse/mix the Editor's last print state
+        # and can prevent a target printer option from behaving predictably.
+        options = ["showui=no", f'printer="{_pdf_xchange_escape_option_value(job.printer_name)}"']
         pages = _pdf_xchange_page_range(job.pages)
         if pages:
             options.append(f"pages={pages}")
         command = [str(executable), f"/print:{';'.join(options)}", str(pdf_path)]
+        command_line = subprocess.list2cmdline(command)
 
         # PDF-XChange's /print switch has no copies parameter. Repeating the
         # documented silent command keeps the configured driver profile intact.
         for copy_number in range(max(int(job.copies), 1)):
+            spooler_before = _windows_print_job_snapshot(job.printer_name)
             logger.info(
-                "Native PDF print dispatch: backend=pdf_xchange printer='%s' copy=%s/%s",
+                "Native PDF print dispatch: backend=pdf_xchange printer='%s' copy=%s/%s command=%s",
                 job.printer_name,
                 copy_number + 1,
                 max(int(job.copies), 1),
+                command_line,
             )
             try:
                 completed = subprocess.run(  # noqa: S603 - executable is explicit profile config
@@ -105,6 +107,29 @@ class NativePdfCliBackend(PdfPrintBackend):
                 suffix = f": {detail}" if detail else ""
                 raise RuntimeError(
                     f"PDF-XChange Druckaufruf fehlgeschlagen (Exit-Code {completed.returncode}){suffix}"
+                )
+            stdout = (completed.stdout or "").strip()
+            stderr = (completed.stderr or "").strip()
+            if stdout or stderr:
+                logger.info(
+                    "Native PDF print process output: printer='%s' stdout=%r stderr=%r",
+                    job.printer_name,
+                    stdout,
+                    stderr,
+                )
+            spooler_after = _wait_for_spooler_change(job.printer_name, previous_snapshot=spooler_before)
+            if spooler_after:
+                logger.info(
+                    "Native PDF print spooler observed: printer='%s' jobs=%s",
+                    job.printer_name,
+                    spooler_after,
+                )
+            else:
+                logger.warning(
+                    "Native PDF print was accepted by PDF-XChange but no Windows spooler job was observed "
+                    "for printer='%s' within the diagnostic window. command=%s",
+                    job.printer_name,
+                    command_line,
                 )
             logger.info(
                 "Native PDF print accepted asynchronously: printer='%s' copy=%s/%s",
@@ -140,3 +165,57 @@ def _pdf_xchange_page_range(pages: list[int] | None) -> str:
         start = previous = number
     ranges.append(str(start) if start == previous else f"{start}-{previous}")
     return ",".join(ranges)
+
+
+def _pdf_xchange_escape_option_value(value: str) -> str:
+    """Escape one quoted PDF-XChange /print option value."""
+    return str(value or "").replace('"', '\\"')
+
+
+def _windows_print_job_snapshot(printer_name: str) -> str:
+    """Return a compact active Windows spooler snapshot for diagnostics."""
+    if os.name != "nt":
+        return ""
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        (
+            "$p=$env:XW_PRINT_DIAG_PRINTER; "
+            "Get-PrintJob -PrinterName $p -ErrorAction SilentlyContinue | "
+            "Select-Object ID,DocumentName,JobStatus | ConvertTo-Json -Compress"
+        ),
+    ]
+    env = dict(os.environ)
+    env["XW_PRINT_DIAG_PRINTER"] = str(printer_name or "")
+    try:
+        completed = subprocess.run(  # noqa: S603 - PowerShell is used for Windows print diagnostics.
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            env=env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not break printing.
+        logger.debug("Windows spooler diagnostic failed for printer='%s': %s", printer_name, exc)
+        return ""
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        if detail:
+            logger.debug("Windows spooler diagnostic returned %s: %s", completed.returncode, detail)
+        return ""
+    return (completed.stdout or "").strip()
+
+
+def _wait_for_spooler_change(printer_name: str, *, previous_snapshot: str) -> str:
+    """Poll briefly for a visible spooler entry after PDF-XChange returns."""
+    deadline = time.monotonic() + 8.0
+    latest = ""
+    while time.monotonic() < deadline:
+        latest = _windows_print_job_snapshot(printer_name)
+        if latest and latest != previous_snapshot:
+            return latest
+        time.sleep(0.4)
+    return latest if latest and latest != previous_snapshot else ""

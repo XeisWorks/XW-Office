@@ -17,6 +17,8 @@ Erledigt:
 - Der Druckplan-Dialog zeigt PDF-Status/Seitenzahl, PDF-/Ordner-Buttons, echte Profilnamen, Drucker, Backend und Live-Zusammenfassung.
 - Das alte Pilotprofil `noten_native_pilot` wurde entfernt; `Noten A4 Simplex` ist nur noch einmal vorhanden.
 - Nach Speichern eines offenen Print-Produkts wird die offene Produktliste neu gerendert, damit Settings direkt zu Print wechseln kann.
+- Der PDF-XChange-Aufruf protokolliert die exakte Commandline und einen Windows-Spooler-Befund in `logs/xw_studio.log`.
+- Die Statusmeldung nach Direktdruck sagt jetzt "Druckauftrag uebergeben" statt "gedruckt", weil PDF-XChange nur die Annahme des Jobs bestaetigt.
 
 Noch als spaetere Haertung offen:
 
