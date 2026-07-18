@@ -39,7 +39,7 @@ class SpecialOrderLink:
 
 
 class SpecialOrderService:
-    """Thin client for the website's authenticated special-payment-link endpoint."""
+    """Create Wix payment links for special-order workflows."""
 
     def __init__(
         self,
@@ -65,12 +65,6 @@ class SpecialOrderService:
         customer_last_name: str,
         expiration_date: str = "",
     ) -> SpecialOrderLink:
-        endpoint = self._endpoint()
-        secret = self._secret()
-        if not endpoint:
-            raise RuntimeError("XW_SPECIAL_ORDER_ENDPOINT fehlt")
-        if not secret:
-            raise RuntimeError("XW_SPECIAL_ORDER_SECRET fehlt")
         payload = {
             "mode": mode,
             "title": title.strip(),
@@ -85,6 +79,17 @@ class SpecialOrderService:
             },
             "items": [self._item_payload(item) for item in items],
         }
+        if self._wix_api_key() and self._wix_site_id():
+            return self._create_payment_link_rest(payload, fallback_title=title)
+        return self._create_payment_link_via_endpoint(payload, fallback_title=title)
+
+    def _create_payment_link_via_endpoint(self, payload: dict[str, object], *, fallback_title: str) -> SpecialOrderLink:
+        endpoint = self._endpoint()
+        secret = self._secret()
+        if not endpoint:
+            raise RuntimeError("XW_SPECIAL_ORDER_ENDPOINT fehlt")
+        if not secret:
+            raise RuntimeError("XW_SPECIAL_ORDER_SECRET fehlt")
         with httpx.Client(timeout=30.0) as client:
             response = client.post(
                 endpoint,
@@ -97,16 +102,115 @@ class SpecialOrderService:
             data = self._response_json(response)
             if response.status_code >= 400:
                 raise RuntimeError(self._response_error_message(response, data))
+        return self._link_from_endpoint_response(data, fallback_title=fallback_title)
+
+    def _create_payment_link_rest(self, payload: dict[str, object], *, fallback_title: str) -> SpecialOrderLink:
+        payment_link = self._payment_link_payload(payload)
+        headers = {
+            "Authorization": self._wix_api_key(),
+            "wix-site-id": self._wix_site_id(),
+            "Content-Type": "application/json",
+        }
+        account_id = self._wix_account_id()
+        if account_id:
+            headers["wix-account-id"] = account_id
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                "https://www.wixapis.com/payment-links/v1/payment-links",
+                headers=headers,
+                json={"paymentLink": payment_link},
+            )
+            data = self._response_json(response)
+            if response.status_code >= 400:
+                raise RuntimeError(self._response_error_message(response, data, prefix="Wix Payment Links API"))
+        return self._link_from_rest_response(data, fallback_title=fallback_title)
+
+    def _payment_link_payload(self, payload: dict[str, object]) -> dict[str, object]:
+        mode = str(payload.get("mode") or "").strip()
+        normalized_items = [self._line_item_for_rest(item, mode) for item in payload.get("items", []) if isinstance(item, dict)]
+        payment_link: dict[str, object] = {
+            "title": str(payload.get("title") or "").strip(),
+            "description": str(payload.get("description") or "").strip() or None,
+            "currency": str(payload.get("currency") or "EUR").strip() or "EUR",
+            "paymentsLimit": 1,
+            "type": "ECOM",
+            "ecomPaymentLink": {
+                "lineItems": normalized_items,
+            },
+            "note": {
+                "text": json.dumps(
+                    {
+                        "source": "XW-Studio",
+                        "mode": mode,
+                        "clientRequestKey": str(payload.get("clientRequestKey") or ""),
+                    },
+                    ensure_ascii=False,
+                )
+            },
+        }
+        expiration_date = str(payload.get("expirationDate") or "").strip()
+        if expiration_date:
+            payment_link["expirationDate"] = expiration_date
+        return payment_link
+
+    @staticmethod
+    def _line_item_for_rest(item: dict[str, object], mode: str) -> dict[str, object]:
+        shippable = mode == "physical_custom"
+        name = str(item.get("name") or "").strip()
+        if not name:
+            raise RuntimeError("Position ohne Name")
+        try:
+            price = float(str(item.get("price") or "0").replace(",", "."))
+        except ValueError as exc:
+            raise RuntimeError(f"Ungueltiger Preis fuer '{name}'") from exc
+        if price <= 0:
+            raise RuntimeError(f"Preis fuer '{name}' muss groesser als 0 sein")
+        custom_item: dict[str, object] = {
+            "quantity": int(item.get("quantity") or 1),
+            "name": name,
+            "price": f"{price:.2f}",
+            "physicalProperties": {
+                "sku": str(item.get("sku") or "").strip() or None,
+                "shippable": shippable,
+            },
+        }
+        description = str(item.get("description") or "").strip()
+        if description:
+            custom_item["description"] = description
+        return {
+            "type": "CUSTOM",
+            "customItem": custom_item,
+        }
+
+    @staticmethod
+    def _link_from_endpoint_response(data: object, *, fallback_title: str) -> SpecialOrderLink:
         if not isinstance(data, dict) or not data.get("ok"):
             raise RuntimeError(str(data.get("message") or data.get("error") or "Payment Link fehlgeschlagen"))
         link = SpecialOrderLink(
             id=str(data.get("id") or ""),
             url=str(data.get("url") or ""),
             status=str(data.get("status") or ""),
-            title=str(data.get("title") or title),
+            title=str(data.get("title") or fallback_title),
         )
         if not link.url:
             raise RuntimeError("Website lieferte keinen Payment-Link-URL")
+        return link
+
+    @staticmethod
+    def _link_from_rest_response(data: object, *, fallback_title: str) -> SpecialOrderLink:
+        if not isinstance(data, dict):
+            raise RuntimeError("Wix Payment Links API lieferte keine JSON-Antwort")
+        payment_link = data.get("paymentLink") if isinstance(data.get("paymentLink"), dict) else data
+        links = payment_link.get("links") if isinstance(payment_link, dict) and isinstance(payment_link.get("links"), dict) else {}
+        url = str(links.get("url") or links.get("originalUrl") or payment_link.get("url") or "").strip()
+        link = SpecialOrderLink(
+            id=str(payment_link.get("_id") or payment_link.get("id") or ""),
+            url=url,
+            status=str(payment_link.get("status") or ""),
+            title=str(payment_link.get("title") or fallback_title),
+        )
+        if not link.url:
+            raise RuntimeError("Wix Payment Links API lieferte keinen Payment-Link-URL")
         return link
 
     def open_link_mail_draft(
@@ -187,7 +291,7 @@ class SpecialOrderService:
             return None
 
     @staticmethod
-    def _response_error_message(response: httpx.Response, data: object) -> str:
+    def _response_error_message(response: httpx.Response, data: object, *, prefix: str = "Payment-Link-Endpunkt") -> str:
         message = ""
         error = ""
         if isinstance(data, dict):
@@ -197,7 +301,7 @@ class SpecialOrderService:
             message = response.text.strip()
         if len(message) > 1000:
             message = f"{message[:1000]}..."
-        prefix = f"Payment-Link-Endpunkt {response.status_code}"
+        prefix = f"{prefix} {response.status_code}"
         if error and message and error != message:
             return f"{prefix}: {error} - {message}"
         if message:
@@ -209,3 +313,12 @@ class SpecialOrderService:
 
     def _secret(self) -> str:
         return str(self._secrets.get_secret("XW_SPECIAL_ORDER_SECRET") or "").strip()
+
+    def _wix_api_key(self) -> str:
+        return str(self._secrets.get_secret("WIX_API_KEY") or "").strip()
+
+    def _wix_site_id(self) -> str:
+        return str(self._secrets.get_secret("WIX_SITE_ID") or "").strip()
+
+    def _wix_account_id(self) -> str:
+        return str(self._secrets.get_secret("WIX_ACCOUNT_ID") or "").strip()
