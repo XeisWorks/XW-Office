@@ -94,8 +94,9 @@ class SpecialOrderService:
                 },
                 json=payload,
             )
-            response.raise_for_status()
-            data = response.json()
+            data = self._response_json(response)
+            if response.status_code >= 400:
+                raise RuntimeError(self._response_error_message(response, data))
         if not isinstance(data, dict) or not data.get("ok"):
             raise RuntimeError(str(data.get("message") or data.get("error") or "Payment Link fehlgeschlagen"))
         link = SpecialOrderLink(
@@ -177,6 +178,31 @@ class SpecialOrderService:
             "Best regards,\n"
             "XeisWorks"
         )
+
+    @staticmethod
+    def _response_json(response: httpx.Response) -> object:
+        try:
+            return response.json()
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _response_error_message(response: httpx.Response, data: object) -> str:
+        message = ""
+        error = ""
+        if isinstance(data, dict):
+            message = str(data.get("message") or "").strip()
+            error = str(data.get("error") or "").strip()
+        if not message:
+            message = response.text.strip()
+        if len(message) > 1000:
+            message = f"{message[:1000]}..."
+        prefix = f"Payment-Link-Endpunkt {response.status_code}"
+        if error and message and error != message:
+            return f"{prefix}: {error} - {message}"
+        if message:
+            return f"{prefix}: {message}"
+        return prefix
 
     def _endpoint(self) -> str:
         return str(self._secrets.get_secret("XW_SPECIAL_ORDER_ENDPOINT") or "").strip()
