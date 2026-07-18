@@ -76,6 +76,10 @@ def _parse_product(raw: dict[str, Any]) -> WixProduct:
         pricing = v.get("priceData") or {}
         if isinstance(pricing, dict):
             price = str(pricing.get("price") or "")
+    if not price:
+        pricing = raw.get("priceData") or {}
+        if isinstance(pricing, dict):
+            price = str(pricing.get("price") or "")
     if not sku:
         sku = str(raw.get("sku") or "")
     brand_name = ""

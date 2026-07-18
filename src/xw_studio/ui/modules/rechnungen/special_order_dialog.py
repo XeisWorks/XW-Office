@@ -140,14 +140,14 @@ class SpecialOrderDialog(QDialog):
     def _sync_price_from_selection(self) -> None:
         if self._mode.currentData() != "digital_sheet_music":
             return
-        selected = self._product_list.selectedItems()
         total = 0.0
-        for item in selected:
+        for item in self._product_list.selectedItems():
             product = item.data(256)
-            try:
-                total += float(str(getattr(product, "price", "") or "0").replace(",", "."))
-            except ValueError:
-                pass
+            if str(getattr(product, "name", "") or "").strip().casefold() == _HANDLING_NAME.casefold():
+                continue
+            price = self._product_price(product)
+            if price > 0:
+                total += price
         if total > 0:
             self._price.setValue(total)
 
@@ -198,32 +198,46 @@ class SpecialOrderDialog(QDialog):
     def _build_items(self, mode: str) -> list[SpecialOrderItem]:
         if mode == "digital_sheet_music":
             items: list[SpecialOrderItem] = []
-            for selected in self._product_list.selectedItems():
-                product = selected.data(256)
-                if str(getattr(product, "name", "") or "").strip().casefold() == _HANDLING_NAME.casefold():
-                    continue
-                price = str(getattr(product, "price", "") or "").replace(",", ".")
+            selected_products = [
+                selected.data(256)
+                for selected in self._product_list.selectedItems()
+                if str(getattr(selected.data(256), "name", "") or "").strip().casefold() != _HANDLING_NAME.casefold()
+            ]
+            if not selected_products:
+                raise RuntimeError("Bitte mindestens ein Wix-Produkt auswaehlen.")
+            for product in selected_products:
+                price = self._product_price(product)
+                if price <= 0:
+                    name = str(getattr(product, "name", "") or "ausgewaehltes Produkt")
+                    raise RuntimeError(f"Wix-Bruttopreis fuer '{name}' fehlt oder ist 0.")
+                description = (
+                    "Licensed digital sheet music delivery. "
+                    "Physical shipment and stock handling are intentionally bypassed."
+                )
                 items.append(
                     SpecialOrderItem(
                         type="CATALOG",
                         catalog_item_id=str(getattr(product, "id", "") or ""),
                         sku=str(getattr(product, "sku", "") or ""),
                         name=str(getattr(product, "name", "") or ""),
-                        price=price,
+                        description=description,
+                        price=f"{price:.2f}",
                     )
                 )
-            if not items:
-                raise RuntimeError("Bitte mindestens ein Wix-Produkt auswaehlen.")
             handling = self._find_handling_product()
             if handling is None:
                 raise RuntimeError("Wix-Produkt 'Digital Delivery Handling' wurde nicht gefunden.")
+            handling_price = self._product_price(handling)
+            if handling_price <= 0:
+                raise RuntimeError("Wix-Bruttopreis fuer 'Digital Delivery Handling' fehlt oder ist 0.")
             items.append(
                 SpecialOrderItem(
                     type="CATALOG",
                     catalog_item_id=str(getattr(handling, "id", "") or ""),
                     sku=str(getattr(handling, "sku", "") or ""),
                     name=str(getattr(handling, "name", "") or _HANDLING_NAME),
-                    price=str(getattr(handling, "price", "") or "0").replace(",", "."),
+                    description="Digital delivery handling for licensed PDF fulfillment.",
+                    price=f"{handling_price:.2f}",
                 )
             )
             return items
@@ -241,6 +255,13 @@ class SpecialOrderDialog(QDialog):
             if str(getattr(product, "name", "") or "").strip().casefold() == _HANDLING_NAME.casefold():
                 return product
         return None
+
+    @staticmethod
+    def _product_price(product: object) -> float:
+        try:
+            return float(str(getattr(product, "price", "") or "0").replace(",", "."))
+        except ValueError:
+            return 0.0
 
     def _on_link_created(self, payload: object) -> None:
         self._status.setText(f"Payment Link erstellt: {payload}")
