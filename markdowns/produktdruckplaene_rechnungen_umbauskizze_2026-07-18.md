@@ -14,10 +14,12 @@ Erledigt:
 - Das alte JSON-Freitextfeld `inventory.print_plans` ist im normalen Produkt-Workflow ausgeblendet.
 - Legacy-Profil-IDs werden beim Import auf die aktuellen Profil-IDs gemappt.
 - Die Produktdruckprofile `noten_simplex`, `noten_duplex`, `brochure_mono` und `brochure_duo` sind in `config/default.yaml` auf PDF-XChange Native gesetzt.
+- Der Druckplan-Dialog zeigt PDF-Status/Seitenzahl, PDF-/Ordner-Buttons, echte Profilnamen, Drucker, Backend und Live-Zusammenfassung.
+- Das alte Pilotprofil `noten_native_pilot` wurde entfernt; `Noten A4 Simplex` ist nur noch einmal vorhanden.
+- Nach Speichern eines offenen Print-Produkts wird die offene Produktliste neu gerendert, damit Settings direkt zu Print wechseln kann.
 
 Noch als spaetere Haertung offen:
 
-- Der Druckplan-Dialog kann noch weiter verbessert werden: PDF-Seitenzahl direkt anzeigen, Explorer/PDF-oeffnen, Profil-/Drucker-/Backend-Live-Zusammenfassung.
 - Ein eigener Resolver-DTO fuer `ready/missing/invalid` wuerde die UI-Entscheidung weiter zentralisieren; aktuell wird die bestehende Produktkatalog-/PieceBlock-Logik wiederverwendet.
 - Silent-Print kann weiterhin nur Jobannahme, nicht physisch fertig gedrucktes Papier bestaetigen.
 

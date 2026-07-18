@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import fitz
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter, QPrinterInfo
 from PySide6.QtWidgets import QStyledItemDelegate
 from PySide6.QtWidgets import (
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QTableView,
+    QHeaderView,
     QVBoxLayout,
     QWidget,
 )
@@ -40,11 +43,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_PRODUCT_PRINT_PROFILE_IDS = {"noten_simplex", "noten_duplex", "brochure_mono", "brochure_duo"}
+
 
 class _PrintPlanModel(QAbstractTableModel):
-    _headers = ["Seitenbereich", "Druckprofil"]
+    _headers = ["Seitenbereich", "Druckprofil", "Drucker", "Backend"]
 
-    def __init__(self, profiles: list[tuple[str, str]], parent: QWidget | None = None) -> None:
+    def __init__(self, profiles: list[tuple[str, str, str, str]], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._profiles = profiles
         self._rows: list[dict[str, str]] = []
@@ -53,7 +58,7 @@ class _PrintPlanModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(self._rows)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return 0 if parent.isValid() else 2
+        return 0 if parent.isValid() else 4
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> object:
         if not index.isValid() or not (0 <= index.row() < len(self._rows)):
@@ -63,6 +68,10 @@ class _PrintPlanModel(QAbstractTableModel):
             if index.column() == 0:
                 return row.get("range", "Alle Seiten")
             profile_id = row.get("profile_id", "")
+            if index.column() == 2:
+                return self._printer_for_profile(profile_id)
+            if index.column() == 3:
+                return self._backend_for_profile(profile_id)
             return self._label_for_profile(profile_id)
         if role == Qt.ItemDataRole.EditRole:
             return row.get("range", "Alle Seiten") if index.column() == 0 else row.get("profile_id", "")
@@ -73,15 +82,20 @@ class _PrintPlanModel(QAbstractTableModel):
             return False
         if index.column() == 0:
             self._rows[index.row()]["range"] = str(value or "").strip() or "Alle Seiten"
-        else:
+        elif index.column() == 1:
             self._rows[index.row()]["profile_id"] = str(value or "").strip()
+        else:
+            return False
         self.dataChanged.emit(index, index, [role, Qt.ItemDataRole.DisplayRole])
         return True
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
-        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable
+        flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        if index.column() in {0, 1}:
+            flags |= Qt.ItemFlag.ItemIsEditable
+        return flags
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> object:
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
@@ -105,21 +119,35 @@ class _PrintPlanModel(QAbstractTableModel):
         return [dict(row) for row in self._rows]
 
     def _label_for_profile(self, profile_id: str) -> str:
-        for candidate_id, label in self._profiles:
+        for candidate_id, label, _printer, _backend in self._profiles:
             if candidate_id == profile_id:
                 return label
         return ""
 
+    def _printer_for_profile(self, profile_id: str) -> str:
+        for candidate_id, _label, printer, _backend in self._profiles:
+            if candidate_id == profile_id:
+                return printer
+        return ""
+
+    def _backend_for_profile(self, profile_id: str) -> str:
+        for candidate_id, _label, _printer, backend in self._profiles:
+            if candidate_id == profile_id:
+                return backend
+        return ""
+
 
 class _PrintProfileDelegate(QStyledItemDelegate):
-    def __init__(self, profiles: list[tuple[str, str]], parent: QWidget | None = None) -> None:
+    def __init__(self, profiles: list[tuple[str, str, str, str]], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._profiles = profiles
 
     def createEditor(self, parent: QWidget, _option, _index: QModelIndex) -> QComboBox:  # type: ignore[override]
         combo = QComboBox(parent)
-        for candidate_id, label in self._profiles:
+        for candidate_id, label, printer, backend in self._profiles:
+            display = f"{label} | {printer} | {backend}"
             combo.addItem(label, candidate_id)
+            combo.setItemText(combo.count() - 1, display)
         return combo
 
     def setEditorData(self, editor: QWidget, index: QModelIndex) -> None:
@@ -139,6 +167,7 @@ class ProductPrintConfigDialog(QDialog):
         self.setWindowTitle(f"Druck konfigurieren - {piece.sku}")
         self._container = container
         self._piece = piece
+        self._page_count: int | None = None
 
         root = QVBoxLayout(self)
         root.setSpacing(10)
@@ -149,25 +178,46 @@ class ProductPrintConfigDialog(QDialog):
 
         form = QFormLayout()
         self._path_edit = QLineEdit(str(piece.print_file_path or ""))
+        self._path_edit.textChanged.connect(self._refresh_pdf_status)
         browse_row = QHBoxLayout()
         browse_row.addWidget(self._path_edit, stretch=1)
         browse_btn = QPushButton("PDF waehlen")
         browse_btn.clicked.connect(self._browse_pdf)
         browse_row.addWidget(browse_btn)
+        open_pdf_btn = QPushButton("PDF oeffnen")
+        open_pdf_btn.clicked.connect(self._open_pdf)
+        browse_row.addWidget(open_pdf_btn)
+        open_folder_btn = QPushButton("Ordner")
+        open_folder_btn.clicked.connect(self._open_pdf_folder)
+        browse_row.addWidget(open_folder_btn)
         form.addRow("Druckpfad:", browse_row)
+        self._pdf_status = QLabel("")
+        self._pdf_status.setWordWrap(True)
+        form.addRow("PDF-Status:", self._pdf_status)
         root.addLayout(form)
 
         self._profiles = [
-            (profile.id, f"{profile.id} - {profile.label or profile.printer_name}".strip())
+            (
+                profile.id,
+                profile.label or profile.printer_name or profile.id,
+                profile.printer_name or "-",
+                self._backend_label(profile.backend),
+            )
             for profile in container.config.printing.all_profiles()
-            if profile.id
+            if profile.id in _PRODUCT_PRINT_PROFILE_IDS
         ]
         root.addWidget(QLabel("Druckplan:"))
         self._plan_model = _PrintPlanModel(self._profiles, self)
         self._plan_table = QTableView(self)
         self._plan_table.setModel(self._plan_model)
         self._plan_table.setItemDelegateForColumn(1, _PrintProfileDelegate(self._profiles, self._plan_table))
-        self._plan_table.horizontalHeader().setStretchLastSection(True)
+        self._plan_model.dataChanged.connect(lambda *_args: self._refresh_plan_summary())
+        self._plan_model.rowsInserted.connect(lambda *_args: self._refresh_plan_summary())
+        self._plan_model.rowsRemoved.connect(lambda *_args: self._refresh_plan_summary())
+        self._plan_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self._plan_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._plan_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self._plan_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self._plan_table.setMinimumHeight(130)
         root.addWidget(self._plan_table)
         plan_buttons = QHBoxLayout()
@@ -180,6 +230,11 @@ class ProductPrintConfigDialog(QDialog):
         plan_buttons.addStretch()
         root.addLayout(plan_buttons)
         self._load_initial_plan_rows()
+        self._plan_summary = QLabel("")
+        self._plan_summary.setWordWrap(True)
+        root.addWidget(self._plan_summary)
+        self._refresh_pdf_status()
+        self._refresh_plan_summary()
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
@@ -206,12 +261,36 @@ class ProductPrintConfigDialog(QDialog):
         if not profile_id and not plan:
             QMessageBox.warning(self, "Druck konfigurieren", "Bitte Profil oder Druckplan angeben.")
             return
+        pdf_path = self._pdf_path()
+        if not pdf_path.is_file():
+            QMessageBox.warning(self, "Druck konfigurieren", "Die gewaehlte PDF-Datei existiert nicht.")
+            return
+        if self._page_count is None:
+            self._refresh_pdf_status()
+        if self._page_count is None:
+            QMessageBox.warning(self, "Druck konfigurieren", "Die PDF-Datei konnte nicht geoeffnet werden.")
+            return
         super().accept()
 
     def _browse_pdf(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Produkt-PDF waehlen", self._path_edit.text(), "PDF (*.pdf)")
         if path:
             self._path_edit.setText(path)
+
+    def _open_pdf(self) -> None:
+        if not self._path_edit.text().strip():
+            return
+        path = self._pdf_path()
+        if path.is_file():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _open_pdf_folder(self) -> None:
+        if not self._path_edit.text().strip():
+            return
+        path = self._pdf_path()
+        target = path.parent if path.parent.exists() else None
+        if target is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
 
     def _load_initial_plan_rows(self) -> None:
         if self._piece.print_plan:
@@ -240,6 +319,77 @@ class ProductPrintConfigDialog(QDialog):
                 raise RuntimeError("Jede Druckplan-Zeile braucht ein Druckprofil.")
             plan.append({"range": range_text, "profile_id": profile_id})
         return plan
+
+    def _pdf_path(self) -> Path:
+        return Path(self._path_edit.text().strip())
+
+    def _refresh_pdf_status(self) -> None:
+        raw_path = self._path_edit.text().strip()
+        self._page_count = None
+        if not raw_path:
+            self._pdf_status.setText("Kein PDF-Pfad gewaehlt.")
+            self._refresh_plan_summary()
+            return
+        path = Path(raw_path)
+        if not path.is_file():
+            self._pdf_status.setText(f"Datei fehlt: {path}")
+            self._refresh_plan_summary()
+            return
+        doc = None
+        try:
+            doc = fitz.open(str(path))
+            self._page_count = len(doc)
+        except Exception as exc:  # noqa: BLE001 - shown to user as validation status.
+            self._pdf_status.setText(f"PDF kann nicht gelesen werden: {exc}")
+            self._refresh_plan_summary()
+            return
+        finally:
+            try:
+                if doc is not None:
+                    doc.close()
+            except Exception:
+                pass
+        self._pdf_status.setText(f"PDF gefunden: {path.name} ({self._page_count} Seite(n))")
+        self._refresh_plan_summary()
+
+    def _refresh_plan_summary(self) -> None:
+        if not hasattr(self, "_plan_summary"):
+            return
+        lines: list[str] = []
+        for row in self._plan_model.plan():
+            profile_id = str(row.get("profile_id") or "").strip()
+            range_text = str(row.get("range") or "").strip() or "Alle Seiten"
+            label = self._profile_label(profile_id)
+            printer = self._profile_printer(profile_id)
+            backend = self._profile_backend(profile_id)
+            lines.append(f"{range_text} -> {label} -> {printer} -> {backend}")
+        suffix = f" | PDF: {self._page_count} Seite(n)" if self._page_count is not None else ""
+        self._plan_summary.setText("Druckplan: " + ("; ".join(lines) if lines else "kein Plan") + suffix)
+
+    def _profile_label(self, profile_id: str) -> str:
+        for candidate_id, label, _printer, _backend in self._profiles:
+            if candidate_id == profile_id:
+                return label
+        return profile_id or "-"
+
+    def _profile_printer(self, profile_id: str) -> str:
+        for candidate_id, _label, printer, _backend in self._profiles:
+            if candidate_id == profile_id:
+                return printer
+        return "-"
+
+    def _profile_backend(self, profile_id: str) -> str:
+        for candidate_id, _label, _printer, backend in self._profiles:
+            if candidate_id == profile_id:
+                return backend
+        return "-"
+
+    @staticmethod
+    def _backend_label(raw_backend: str) -> str:
+        backend = str(raw_backend or "qt_raster").strip().lower()
+        if backend == "pdf_xchange":
+            return "BACKEND: PDF-XCHANGE NATIV"
+        return "BACKEND: Qt Raster"
 
 
 def _check_printer_runtime(parent: QWidget, container: Container, printer: QPrinter | None = None) -> bool:

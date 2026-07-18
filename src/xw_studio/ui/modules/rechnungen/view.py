@@ -2131,6 +2131,20 @@ class RechnungenView(QWidget):
             self._open_digital.setText(str(self._open_overview_cached_digital))
             self._open_plc.setText(str(self._open_overview_cached_plc))
             self._open_note.setText(str(self._open_overview_cached_note))
+            if self._open_overview_products:
+                cached_overview = OpenInvoiceOverview(
+                    key=self._open_overview_key,
+                    total=overview.total,
+                    with_ref=overview.with_ref,
+                    physical=self._open_overview_cached_physical,
+                    digital=self._open_overview_cached_digital,
+                    unknown=0,
+                    with_note=self._open_overview_cached_note,
+                    plc=self._open_overview_cached_plc,
+                    complete=True,
+                    print_products=list(self._open_overview_products),
+                )
+                self._render_open_print_products(cached_overview)
             return
 
         self._apply_open_invoice_overview(overview)

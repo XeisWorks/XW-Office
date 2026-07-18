@@ -87,11 +87,10 @@ PLC-Testlabel ueber `Paketmarke A5` mit A5/Portrait/Printable-Origin/Fit/Center.
 | 10 | Noten A4 Simplex | OK | OK |
 
 Alle drei Windows-Queues meldeten vor dem Test `Normal`; nach dem Test waren keine haengenden
-Druckjobs vorhanden. Der interne A4-Simplex-Druck wurde als optimal bestaetigt. Da fuer den
-nativen Pfad bislang kein sichtbarer Qualitaetsvorteil gegenueber dem robusten internen Pfad
-festgestellt wurde und dessen Ausgabe zeitversetzt erfolgt, bleiben die bestehenden
-Produktionsprofile bewusst auf `qt_raster`. `noten_native_pilot` steht fuer gezielte Vergleiche
-separat zur Verfuegung; es gibt keinen automatischen Qualitaets-Fallback und keinen Retry.
+Druckjobs vorhanden. Hinweis 2026-07-18: Die damalige Entscheidung fuer `qt_raster` ist ueberholt.
+Nach erneutem Qualitaetsentscheid laufen die Produktdruckprofile `noten_simplex`, `noten_duplex`,
+`brochure_mono` und `brochure_duo` jetzt ueber PDF-XChange Native. Das separate Pilotprofil
+`noten_native_pilot` wurde aus der aktiven Konfiguration entfernt.
 
 ### Automatische Abschlusspruefung
 
@@ -381,6 +380,6 @@ Die offenen Punkte gelten als abgeschlossen, wenn:
 
 Status 16. Juli 2026: Die Kriterien sind erfuellt. PLC bestand zehn Wechseltests, beide
 A4-Backends lieferten ihre markierten Testpakete, der interne Simplex-Pfad wurde als optimal
-bestaetigt, die Produktionsprofile bleiben deshalb auf `qt_raster`, und die explizite Aktion
+bestaetigt. Hinweis 2026-07-18: Diese Backend-Entscheidung wurde spaeter geaendert; die Produktdruckprofile laufen jetzt auf PDF-XChange Native. Die explizite Aktion
 `Drucken + Bestand` setzt die gewaehlte Bestandsvariante um.
 

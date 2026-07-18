@@ -158,11 +158,22 @@ def test_prepare_piece_pdf_print_prompts_for_missing_print_config(monkeypatch, t
 
 def test_product_print_config_dialog_builds_plan_rows_with_start_end(qtbot: object, tmp_path) -> None:
     pdf_path = tmp_path / "piece.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4\n")
+    doc = fitz.open()
+    doc.new_page(width=595, height=842)
+    doc.new_page(width=595, height=842)
+    doc.save(pdf_path)
+    doc.close()
     config = AppConfig(
         printing=PrintingSection(
             print_profiles=[
+                {"id": "invoice", "label": "Rechnungsdruck", "printer_name": "Rechnungen"},
                 {"id": "noten_duplex", "label": "Noten Duplex", "printer_name": "Printer A"},
+                {
+                    "id": "noten_native_pilot",
+                    "label": "Pilot",
+                    "printer_name": "Printer A",
+                    "backend": "pdf_xchange",
+                },
                 {"id": "brochure_mono", "label": "Broschuere", "printer_name": "Printer B"},
             ]
         )
@@ -184,3 +195,10 @@ def test_product_print_config_dialog_builds_plan_rows_with_start_end(qtbot: obje
     assert path == str(pdf_path)
     assert profile_id == "brochure_mono"
     assert plan == [{"range": "START-END", "profile_id": "brochure_mono"}]
+    assert "2 Seite(n)" in dialog._pdf_status.text()  # noqa: SLF001
+    assert "Broschuere" in dialog._plan_summary.text()  # noqa: SLF001
+    assert "Printer B" in dialog._plan_summary.text()  # noqa: SLF001
+    assert "BACKEND: Qt Raster" in dialog._plan_summary.text()  # noqa: SLF001
+    profile_ids = [profile_id for profile_id, _label, _printer, _backend in dialog._profiles]  # noqa: SLF001
+    assert "invoice" not in profile_ids
+    assert "noten_native_pilot" not in profile_ids
