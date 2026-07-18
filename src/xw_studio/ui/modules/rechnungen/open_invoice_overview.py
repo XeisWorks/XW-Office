@@ -65,7 +65,6 @@ def overview_from_visible_summaries(
     wix_client: WixOrdersClient | None = None,
     sku_filter: Callable[[str], bool] | None = None,
     include_print_products: bool = True,
-    category_label_resolver: Callable[[Any], str] | None = None,
 ) -> OpenInvoiceOverview:
     """Build the immediate UI result from already-loaded sevDesk rows and cache."""
     total = len(summaries)
@@ -76,11 +75,7 @@ def overview_from_visible_summaries(
     plc = 0
     known_refs: set[str] = set()
     cache_updates: dict[str, bool] = {}
-    products = (
-        _ProductAccumulator(sku_filter=sku_filter, category_label_resolver=category_label_resolver)
-        if include_print_products
-        else None
-    )
+    products = _ProductAccumulator(sku_filter=sku_filter) if include_print_products else None
     for summary in summaries:
         ref = str(summary.order_reference or "").strip()
         buyer_note = str(summary.buyer_note or "").strip()
@@ -135,7 +130,6 @@ def resolve_open_invoice_overview(
     wix_client: WixOrdersClient,
     digital_cache: dict[str, bool] | None = None,
     sku_filter: Callable[[str], bool] | None = None,
-    category_label_resolver: Callable[[Any], str] | None = None,
 ) -> OpenInvoiceOverview:
     """Resolve Wix-backed overview values without blocking the UI thread."""
     known_digital = dict(digital_cache or {})
@@ -146,7 +140,7 @@ def resolve_open_invoice_overview(
     with_ref = 0
     with_note = 0
     plc = 0
-    products = _ProductAccumulator(sku_filter=sku_filter, category_label_resolver=category_label_resolver)
+    products = _ProductAccumulator(sku_filter=sku_filter)
     rows = [
         _resolve_one_summary(
             summary,
@@ -280,11 +274,9 @@ class _ProductAccumulator:
         self,
         *,
         sku_filter: Callable[[str], bool] | None = None,
-        category_label_resolver: Callable[[Any], str] | None = None,
     ) -> None:
         self._rows: dict[tuple[str, str, str, str], int] = defaultdict(int)
         self._sku_filter = sku_filter
-        self._category_label_resolver = category_label_resolver
 
     def add_items(self, items: object) -> None:
         if not isinstance(items, list):
@@ -295,12 +287,7 @@ class _ProductAccumulator:
                 continue
             title = str(getattr(item, "name", "") or "").strip() or sku or "Unbenanntes Produkt"
             description = str(getattr(item, "note", "") or "").strip()
-            category_label = ""
-            if not description and self._category_label_resolver is not None:
-                try:
-                    category_label = str(self._category_label_resolver(item) or "").strip()
-                except Exception as exc:  # noqa: BLE001 - product overview should remain usable.
-                    logger.debug("Open overview category fallback failed sku=%s: %s", sku, exc)
+            category_label = str(getattr(item, "category_label", "") or "").strip()
             try:
                 qty = max(1, int(getattr(item, "qty", 1) or 1))
             except (TypeError, ValueError):

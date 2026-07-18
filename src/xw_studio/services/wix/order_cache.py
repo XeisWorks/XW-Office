@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 # stay valid until an explicit cache clear/prune.
 DEFAULT_ORDER_TTL_SECONDS: float | None = None
 DEFAULT_MISSING_TTL_SECONDS: float | None = None
+DEFAULT_PRODUCT_META_TTL_SECONDS: float | None = 7 * 24 * 60 * 60
 
 
 def _repo_root() -> Path:
@@ -180,6 +181,75 @@ class WixOrderCache:
             except sqlite3.Error as exc:
                 logger.warning("Wix order cache missing-write failed: %s", exc)
 
+    def get_product_category_label(
+        self,
+        *,
+        site_id: str,
+        account_id: str,
+        product_id: str,
+        max_age_seconds: float | None = DEFAULT_PRODUCT_META_TTL_SECONDS,
+    ) -> str | None:
+        product = str(product_id or "").strip()
+        if not product:
+            return None
+        site = str(site_id or "").strip()
+        account = str(account_id or "").strip()
+        with self._lock:
+            try:
+                self._ensure_schema()
+                with self._connect() as con:
+                    row = con.execute(
+                        """
+                        SELECT category_label, fetched_at
+                        FROM wix_product_meta_cache
+                        WHERE site_id = ? AND account_id = ? AND product_id = ?
+                        """,
+                        (site, account, product),
+                    ).fetchone()
+            except sqlite3.Error as exc:
+                logger.warning("Wix product meta cache read failed: %s", exc)
+                return None
+        if row is None:
+            return None
+        fetched_at = float(row["fetched_at"] or 0.0)
+        age = max(0.0, time.time() - fetched_at)
+        if max_age_seconds is not None and age > max_age_seconds:
+            return None
+        return str(row["category_label"] or "").strip()
+
+    def put_product_category_label(
+        self,
+        *,
+        site_id: str,
+        account_id: str,
+        product_id: str,
+        category_label: str,
+    ) -> None:
+        product = str(product_id or "").strip()
+        if not product:
+            return
+        site = str(site_id or "").strip()
+        account = str(account_id or "").strip()
+        label = str(category_label or "").strip()
+        with self._lock:
+            try:
+                self._ensure_schema()
+                with self._connect() as con:
+                    con.execute(
+                        """
+                        INSERT INTO wix_product_meta_cache (
+                            site_id, account_id, product_id, category_label, fetched_at
+                        )
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(site_id, account_id, product_id) DO UPDATE SET
+                            category_label = excluded.category_label,
+                            fetched_at = excluded.fetched_at
+                        """,
+                        (site, account, product, label, time.time()),
+                    )
+            except sqlite3.Error as exc:
+                logger.warning("Wix product meta cache write failed: %s", exc)
+
     def clear(self) -> None:
         with self._lock:
             try:
@@ -238,6 +308,18 @@ class WixOrderCache:
             con.execute(
                 "CREATE INDEX IF NOT EXISTS ix_wix_order_cache_order_number "
                 "ON wix_order_cache(site_id, account_id, order_number)"
+            )
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS wix_product_meta_cache (
+                    site_id TEXT NOT NULL,
+                    account_id TEXT NOT NULL DEFAULT '',
+                    product_id TEXT NOT NULL,
+                    category_label TEXT NOT NULL DEFAULT '',
+                    fetched_at REAL NOT NULL,
+                    PRIMARY KEY (site_id, account_id, product_id)
+                )
+                """
             )
         self._initialized = True
 

@@ -2205,7 +2205,6 @@ class RechnungenView(QWidget):
                 wix_client=wix_client,
                 digital_cache=digital_cache,
                 sku_filter=service.is_flagged_sku,
-                category_label_resolver=self._open_product_category_label_resolver(),
             )
 
         self._open_overview_worker = BackgroundWorker(job)
@@ -2361,88 +2360,10 @@ class RechnungenView(QWidget):
         desc_parts = [part.strip() for part in desc_raw.split("|") if part.strip()]
         desc_parts = [part for part in desc_parts if "rabatt" not in part.casefold()]
         if desc_parts:
-            return " | ".join(desc_parts)
+            text = " | ".join(desc_parts)
+            return text if text.casefold().startswith("besetzung:") else f"Besetzung: {text}"
         category = str(getattr(item, "category_label", "") or "").strip()
-        return f"Haupt-Kategorie: {category}" if category else "Haupt-Kategorie: unbekannt"
-
-    def _open_product_category_label_resolver(self) -> Callable[[object], str]:
-        main_category_ids = {
-            "033996b3-d79b-5e09-e398-1ab118108b58",
-            "d855e175-a905-415b-b2f3-90ee321493dd",
-            "db5f373c-61a5-2aa6-27cb-7ddbd29d3ab2",
-            "979e514c-9890-c5ad-b1a1-07c84846160a",
-            "12e9a041-adf3-dbfd-7be6-918a9c83f1ec",
-            "3b489d36-13c3-aabc-1d9a-e66d659a8702",
-            "9f510e18-9542-f278-ef75-7dd0e69f7fe3",
-            "45b79d25-394f-1dcc-cc2a-05571a03cea3",
-            "98158053-171d-4aa6-988d-ebeb66c78c07",
-            "93f754b2-b917-2643-3cc3-ddf0454f6e0b",
-            "98d95571-686b-8321-7ea1-452c72dee8d0",
-            "47139091-34c8-581e-721e-ae94f6076c67",
-            "b2f979c1-bdbf-4609-57e3-0161ac704609",
-        }
-        product_by_sku: dict[str, Product | None] = {}
-        product_detail_by_id: dict[str, object | None] = {}
-        category_names_by_id: dict[str, str] | None = None
-
-        def category_names() -> dict[str, str]:
-            nonlocal category_names_by_id
-            if category_names_by_id is None:
-                try:
-                    from xw_studio.services.wix.product_details_client import WixProductDetailsClient
-
-                    category_names_by_id = self._container.resolve(WixProductDetailsClient).query_category_names()
-                except Exception as exc:  # noqa: BLE001 - category fallback is non-critical.
-                    logger.debug("Open print product category-name query failed: %s", exc)
-                    category_names_by_id = {}
-            return category_names_by_id
-
-        def local_product(sku: str) -> Product | None:
-            if sku not in product_by_sku:
-                try:
-                    catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
-                    product_by_sku[sku] = catalog.resolve_sku(sku)
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("Open print product catalog lookup failed sku=%s: %s", sku, exc)
-                    product_by_sku[sku] = None
-            return product_by_sku.get(sku)
-
-        def resolve(item: object) -> str:
-            sku = str(getattr(item, "sku", "") or "").strip().upper()
-            product_id = str(getattr(item, "catalog_item_id", "") or "").strip()
-            if not product_id and sku:
-                product = local_product(sku)
-                if product is not None:
-                    local_category = str(product.category or "").strip()
-                    if local_category and local_category not in main_category_ids:
-                        return local_category
-                    product_id = str(product.wix_product_id or "").strip()
-            if product_id:
-                if product_id not in product_detail_by_id:
-                    try:
-                        from xw_studio.services.wix.product_details_client import WixProductDetailsClient
-
-                        product_detail_by_id[product_id] = self._container.resolve(WixProductDetailsClient).get_product(product_id)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.debug("Open print product Wix product lookup failed product_id=%s: %s", product_id, exc)
-                        product_detail_by_id[product_id] = None
-                detail = product_detail_by_id.get(product_id)
-                detail_names = getattr(detail, "category_names_by_id", {}) if detail is not None else {}
-                detail_ids = list(getattr(detail, "category_ids", []) or []) if detail is not None else []
-                for category_id in detail_ids:
-                    cid = str(category_id or "").strip()
-                    if cid in main_category_ids:
-                        name = str(detail_names.get(cid) or category_names().get(cid) or "").strip()
-                        return name or cid
-            if sku:
-                product = local_product(sku)
-                if product is not None:
-                    local_category = str(product.category or "").strip()
-                    if local_category:
-                        return category_names().get(local_category, local_category)
-            return ""
-
-        return resolve
+        return f"Besetzung: {category}" if category else "Besetzung: unbekannt"
 
     def _plain_open_print_product_line(self, item: PrintProductAggregate) -> str:
         return (

@@ -163,6 +163,7 @@ def test_open_invoice_overview_uses_category_label_when_variant_note_missing() -
                     qty=2,
                     note="",
                     catalog_item_id="product-1",
+                    category_label="Noten A4",
                 )
             ]
 
@@ -174,7 +175,6 @@ def test_open_invoice_overview_uses_category_label_when_variant_note_missing() -
         digital_cache={},
         wix_client=_CachedWix(),  # type: ignore[arg-type]
         sku_filter=lambda sku: sku == "XW-PRINT",
-        category_label_resolver=lambda item: "Noten A4",
     )
 
     assert [(item.sku, item.description, item.category_label, item.quantity) for item in overview.print_products] == [

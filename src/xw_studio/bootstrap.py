@@ -132,6 +132,7 @@ def register_default_services(container: Container) -> None:
         lambda c: WixOrdersClient(
             secret_service=c.resolve(SecretService),
             order_cache=c.resolve(WixOrderCache),
+            product_details_client=c.resolve(WixProductDetailsClient),
         ),
     )
     container.register(

@@ -618,3 +618,60 @@ def test_parse_order_line_item_drops_rabatt_only_description_lines() -> None:
     )
 
     assert item.note == ""
+
+
+def test_parse_order_line_item_reads_enriched_category_label() -> None:
+    item = _parse_order_line_item(
+        {
+            "id": "line-5",
+            "quantity": 1,
+            "productName": {"original": "Marsch"},
+            "physicalProperties": {"sku": "XW-781"},
+            "catalogReference": {"catalogItemId": "product-1"},
+            "xwMainCategoryLabel": "Musikkapelle",
+        }
+    )
+
+    assert item.catalog_item_id == "product-1"
+    assert item.category_label == "Musikkapelle"
+
+
+def test_cached_order_line_items_are_enriched_with_cached_category_label(tmp_path) -> None:
+    class _SecretService:
+        def get_secret(self, name: str) -> str:
+            return {"WIX_API_KEY": "key", "WIX_SITE_ID": "site", "WIX_ACCOUNT_ID": ""}.get(name, "")
+
+    cache = WixOrderCache(tmp_path / "cache.sqlite")
+    cache.put_order(
+        site_id="site",
+        account_id="",
+        reference="20910",
+        order={
+            "id": "order-1",
+            "number": "20910",
+            "lineItems": [
+                {
+                    "id": "line-1",
+                    "quantity": 1,
+                    "productName": {"original": "Polka"},
+                    "physicalProperties": {"sku": "XW-779"},
+                    "catalogReference": {"catalogItemId": "product-1"},
+                }
+            ],
+        },
+    )
+    cache.put_product_category_label(
+        site_id="site",
+        account_id="",
+        product_id="product-1",
+        category_label="Böhmische Besetzung",
+    )
+    client = WixOrdersClient(secret_service=_SecretService(), order_cache=cache)  # type: ignore[arg-type]
+
+    items = client.get_cached_order_line_items("20910")
+    cached_order = cache.get_order(site_id="site", account_id="", reference="20910")
+
+    assert items is not None
+    assert items[0].category_label == "Böhmische Besetzung"
+    assert cached_order is not None
+    assert cached_order.order["lineItems"][0]["xwMainCategoryLabel"] == "Böhmische Besetzung"

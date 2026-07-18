@@ -14,6 +14,7 @@ from xw_studio.services.wix.order_cache import WixOrderCache
 
 if TYPE_CHECKING:
     from xw_studio.services.secrets.service import SecretService
+    from xw_studio.services.wix.product_details_client import WixProductDetailsClient
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,21 @@ _RETRY_BACKOFF_SEC = 0.35
 
 _ORDERS_BASE = "https://www.wixapis.com/ecom/v1"
 _UNRELEASED_PREFIXES = ("XW-600", "XW-010")
+_MAIN_CATEGORY_IDS = {
+    "033996b3-d79b-5e09-e398-1ab118108b58",
+    "d855e175-a905-415b-b2f3-90ee321493dd",
+    "db5f373c-61a5-2aa6-27cb-7ddbd29d3ab2",
+    "979e514c-9890-c5ad-b1a1-07c84846160a",
+    "12e9a041-adf3-dbfd-7be6-918a9c83f1ec",
+    "3b489d36-13c3-aabc-1d9a-e66d659a8702",
+    "9f510e18-9542-f278-ef75-7dd0e69f7fe3",
+    "45b79d25-394f-1dcc-cc2a-05571a03cea3",
+    "98158053-171d-4aa6-988d-ebeb66c78c07",
+    "93f754b2-b917-2643-3cc3-ddf0454f6e0b",
+    "98d95571-686b-8321-7ea1-452c72dee8d0",
+    "47139091-34c8-581e-721e-ae94f6076c67",
+    "b2f979c1-bdbf-4609-57e3-0161ac704609",
+}
 
 
 class CancellationToken(Protocol):
@@ -662,6 +678,7 @@ class WixOrderItem(BaseModel):
     name: str = ""
     qty: int = 1
     note: str = ""
+    category_label: str = ""
     unit_price_gross: float = 0.0
     currency: str = "EUR"
     unit_weight_kg: float = 0.0
@@ -834,6 +851,12 @@ def _parse_order_line_item(raw: dict[str, Any]) -> WixOrderItem:
         pass
 
     note = _line_item_note(raw)
+    category_label = str(
+        raw.get("xwMainCategoryLabel")
+        or raw.get("xw_main_category_label")
+        or raw.get("mainCategoryLabel")
+        or ""
+    ).strip()
 
     is_unreleased = any(sku.upper().startswith(p) for p in _UNRELEASED_PREFIXES)
 
@@ -844,6 +867,7 @@ def _parse_order_line_item(raw: dict[str, Any]) -> WixOrderItem:
         name=name,
         qty=qty,
         note=note,
+        category_label=category_label,
         unit_price_gross=unit_price_gross,
         currency=currency,
         unit_weight_kg=unit_weight_kg,
@@ -863,10 +887,14 @@ class WixOrdersClient:
         secret_service: "SecretService | None" = None,
         orders_base: str = _ORDERS_BASE,
         order_cache: WixOrderCache | None = None,
+        product_details_client: "WixProductDetailsClient | None" = None,
     ) -> None:
         self._secrets = secret_service
         self._orders_base = orders_base.rstrip("/")
         self._order_cache = order_cache
+        self._product_details_client = product_details_client
+        self._product_category_memory: dict[str, str] = {}
+        self._category_names_memory: dict[str, str] | None = None
 
     def _api_key(self) -> str:
         return self._secrets.get_secret("WIX_API_KEY") if self._secrets else ""
@@ -1238,6 +1266,108 @@ class WixOrdersClient:
             return
         cache.put_missing(site_id=site_id, account_id=account_id, reference=reference)
 
+    def _order_with_enriched_line_item_categories(
+        self,
+        reference: str,
+        order: dict[str, Any],
+    ) -> dict[str, Any]:
+        raw_items = order.get("lineItems") if isinstance(order.get("lineItems"), list) else []
+        if not raw_items:
+            return order
+        changed = False
+        enriched_items: list[Any] = []
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                enriched_items.append(raw_item)
+                continue
+            if str(raw_item.get("xwMainCategoryLabel") or "").strip():
+                enriched_items.append(raw_item)
+                continue
+            catalog = raw_item.get("catalogReference") if isinstance(raw_item.get("catalogReference"), dict) else {}
+            product_id = str(
+                catalog.get("catalogItemId")
+                or catalog.get("catalogProductId")
+                or catalog.get("productId")
+                or ""
+            ).strip()
+            label = self._category_label_for_product(product_id)
+            if label:
+                item_copy = dict(raw_item)
+                item_copy["xwMainCategoryLabel"] = label
+                enriched_items.append(item_copy)
+                changed = True
+            else:
+                enriched_items.append(raw_item)
+        if not changed:
+            return order
+        order_copy = dict(order)
+        order_copy["lineItems"] = enriched_items
+        self._cache_order(reference, order_copy)
+        return order_copy
+
+    def _category_label_for_product(self, product_id: str) -> str:
+        pid = str(product_id or "").strip()
+        if not pid:
+            return ""
+        if pid in self._product_category_memory:
+            return self._product_category_memory[pid]
+        site_id, account_id = self._cache_scope()
+        cache = getattr(self, "_order_cache", None)
+        if cache is not None and site_id:
+            cached = cache.get_product_category_label(
+                site_id=site_id,
+                account_id=account_id,
+                product_id=pid,
+            )
+            if cached is not None:
+                self._product_category_memory[pid] = cached
+                return cached
+        label = self._fetch_category_label_for_product(pid)
+        self._product_category_memory[pid] = label
+        if cache is not None and site_id:
+            cache.put_product_category_label(
+                site_id=site_id,
+                account_id=account_id,
+                product_id=pid,
+                category_label=label,
+            )
+        return label
+
+    def _fetch_category_label_for_product(self, product_id: str) -> str:
+        client = getattr(self, "_product_details_client", None)
+        if client is None:
+            return ""
+        try:
+            detail = client.get_product(product_id)
+        except Exception as exc:  # noqa: BLE001 - category fallback must never break order fetch.
+            logger.debug("Wix product detail lookup failed product_id=%s: %s", product_id, exc)
+            return ""
+        if detail is None:
+            return ""
+        detail_names = getattr(detail, "category_names_by_id", {}) or {}
+        category_ids = list(getattr(detail, "category_ids", []) or [])
+        for category_id in category_ids:
+            cid = str(category_id or "").strip()
+            if cid not in _MAIN_CATEGORY_IDS:
+                continue
+            name = str(detail_names.get(cid) or self._category_names().get(cid) or "").strip()
+            return name or cid
+        return ""
+
+    def _category_names(self) -> dict[str, str]:
+        if self._category_names_memory is not None:
+            return self._category_names_memory
+        client = getattr(self, "_product_details_client", None)
+        if client is None:
+            self._category_names_memory = {}
+            return self._category_names_memory
+        try:
+            self._category_names_memory = client.query_category_names()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Wix category-name lookup failed: %s", exc)
+            self._category_names_memory = {}
+        return self._category_names_memory
+
     def get_cached_order_summary(self, reference: str) -> dict[str, str] | None:
         """Return a normalized order summary from the persistent cache only.
 
@@ -1270,6 +1400,7 @@ class WixOrdersClient:
             return []
         if not isinstance(cached.get("lineItems"), list):
             return None
+        cached = self._order_with_enriched_line_item_categories(ref, cached)
         raw_items = cached.get("lineItems")
         return [_parse_order_line_item(item) for item in raw_items if isinstance(item, dict)]
 
@@ -1326,6 +1457,7 @@ class WixOrdersClient:
         if self._looks_like_uuid(ref):
             order_by_id = self._get_order_by_id(ref)
             if order_by_id:
+                order_by_id = self._order_with_enriched_line_item_categories(ref, order_by_id)
                 self._cache_order(ref, order_by_id)
                 return order_by_id
         if cancel_token is not None:
@@ -1346,6 +1478,7 @@ class WixOrdersClient:
                 if not order:
                     order = self._search_order_by_field("orderNumber", digits)
         if order:
+            order = self._order_with_enriched_line_item_categories(ref, order)
             self._cache_order(ref, order)
         elif use_cache:
             self._cache_missing_order(ref)

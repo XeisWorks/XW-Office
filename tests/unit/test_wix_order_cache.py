@@ -70,3 +70,28 @@ def test_wix_order_cache_keeps_missing_orders_until_explicitly_expired(tmp_path:
     assert hit.found is False
     assert hit.order == {}
     assert explicitly_expired is None
+
+
+def test_wix_order_cache_persists_product_category_label_with_ttl(tmp_path: Path) -> None:
+    cache = WixOrderCache(tmp_path / "cache.sqlite")
+
+    cache.put_product_category_label(
+        site_id="site",
+        account_id="",
+        product_id="product-1",
+        category_label="Böhmische Besetzung",
+    )
+
+    assert (
+        cache.get_product_category_label(site_id="site", account_id="", product_id="product-1")
+        == "Böhmische Besetzung"
+    )
+    with sqlite3.connect(cache.path) as con:
+        con.execute("UPDATE wix_product_meta_cache SET fetched_at = 0")
+
+    assert cache.get_product_category_label(
+        site_id="site",
+        account_id="",
+        product_id="product-1",
+        max_age_seconds=1,
+    ) is None
