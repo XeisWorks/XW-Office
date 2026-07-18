@@ -1,4 +1,4 @@
-"""Dialog for DIGITALE LIZENZEN OFFEN."""
+"""Dialog for external paid digital order fulfillment."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -33,13 +33,14 @@ class DigitalLicensesDialog(QDialog):
         self._container = container
         self._service: DigitalLicenseService = container.resolve(DigitalLicenseService)
         self._cases: list[DigitalLicenseCase] = []
+        self._loaded_once = False
         self._load_worker: BackgroundWorker | None = None
         self._action_worker: BackgroundWorker | None = None
         self._build_ui()
         QTimer.singleShot(0, self._load_cases)
 
     def _build_ui(self) -> None:
-        self.setWindowTitle("DIGITALE LIZENZEN OFFEN")
+        self.setWindowTitle("Externe Bestellung")
         self.setMinimumSize(1020, 650)
 
         root = QVBoxLayout(self)
@@ -61,7 +62,7 @@ class DigitalLicensesDialog(QDialog):
 
         right = QWidget()
         right_lay = QVBoxLayout(right)
-        self._meta = QLabel("Keine Lizenz ausgewaehlt")
+        self._meta = QLabel("Keine externe Bestellung ausgewaehlt")
         self._meta.setWordWrap(True)
         right_lay.addWidget(self._meta)
         self._details = QPlainTextEdit()
@@ -72,7 +73,7 @@ class DigitalLicensesDialog(QDialog):
         self._btn_pick_missing = QPushButton("Fehlende Druck-PDF zuordnen")
         self._btn_pick_missing.clicked.connect(self._pick_missing_pdf)
         row.addWidget(self._btn_pick_missing)
-        self._btn_prepare = QPushButton("Lizenzieren && Mail vorbereiten")
+        self._btn_prepare = QPushButton("PDFs erstellen && Mail vorbereiten")
         self._btn_prepare.clicked.connect(self._prepare_selected)
         row.addWidget(self._btn_prepare)
         row.addStretch(1)
@@ -90,12 +91,14 @@ class DigitalLicensesDialog(QDialog):
         root.addWidget(buttons)
 
     def open_count(self) -> int:
-        return self._service.open_count()
+        if self._loaded_once:
+            return len(self._cases)
+        return self._service.open_count(limit=30, use_cache=True)
 
     def _load_cases(self) -> None:
         if self._load_worker is not None and self._load_worker.isRunning():
             return
-        self._status.setText("Lade digitale Lizenzen...")
+        self._status.setText("Lade externe Bestellungen...")
         self._load_worker = BackgroundWorker(self._service.list_open_cases)
         self._load_worker.signals.result.connect(self._on_cases_loaded)
         self._load_worker.signals.error.connect(self._on_error)
@@ -104,6 +107,7 @@ class DigitalLicensesDialog(QDialog):
 
     def _on_cases_loaded(self, payload: object) -> None:
         self._cases = list(payload) if isinstance(payload, list) else []
+        self._loaded_once = True
         self._list.clear()
         for case in self._cases:
             item = QListWidgetItem(f"{case.order_reference or '-'} | {case.customer_name or '-'}")
@@ -128,7 +132,7 @@ class DigitalLicensesDialog(QDialog):
         self._btn_prepare.setEnabled(enabled)
         self._btn_done.setEnabled(enabled)
         if case is None:
-            self._meta.setText("Keine Lizenz ausgewaehlt")
+            self._meta.setText("Keine externe Bestellung ausgewaehlt")
             self._details.clear()
             return
         self._meta.setText(
@@ -170,9 +174,9 @@ class DigitalLicensesDialog(QDialog):
             return
         missing = [line for line in case.lines if line.missing_print_file]
         if missing:
-            QMessageBox.warning(self, "Digitale Lizenz", "Bitte zuerst alle fehlenden Druck-PDFs zuordnen.")
+            QMessageBox.warning(self, "Externe Bestellung", "Bitte zuerst alle fehlenden Druck-PDFs zuordnen.")
             return
-        self._run_action(lambda: self._service.prepare_license_mail(case), "Lizenzierte PDFs werden erstellt...")
+        self._run_action(lambda: self._service.prepare_license_mail(case), "Personalisierte PDFs werden erstellt...")
 
     def _mark_selected_done(self) -> None:
         case = self._selected_case()
@@ -180,7 +184,7 @@ class DigitalLicensesDialog(QDialog):
             return
         if QMessageBox.question(
             self,
-            "Digitale Lizenz",
+            "Externe Bestellung",
             "Versand als erledigt markieren und Wix-Fulfillment bestaetigen?",
         ) != QMessageBox.StandardButton.Yes:
             return
@@ -198,4 +202,4 @@ class DigitalLicensesDialog(QDialog):
 
     def _on_error(self, exc: Exception) -> None:
         self._status.setText("Fehler")
-        QMessageBox.warning(self, "Digitale Lizenz", str(exc))
+        QMessageBox.warning(self, "Externe Bestellung", str(exc))

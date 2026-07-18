@@ -1507,6 +1507,26 @@ class WixOrdersClient:
             return False
         return all(self.line_item_is_digital(item) for item in raw_items if isinstance(item, dict))
 
+    @staticmethod
+    def line_item_is_paylink_custom(raw: dict[str, Any]) -> bool:
+        if raw.get("customLineItem") is True:
+            return True
+        item_type = raw.get("itemType") if isinstance(raw.get("itemType"), dict) else {}
+        custom = str(item_type.get("custom") or "").strip().upper()
+        return custom == "PAYLINK_ITEM"
+
+    def is_reference_manual_digital_license(self, reference: str, *, use_cache: bool = True) -> bool:
+        order = self._resolve_order(reference, use_cache=use_cache)
+        if not order:
+            return False
+        raw_items = order.get("lineItems") if isinstance(order.get("lineItems"), list) else []
+        valid_items = [item for item in raw_items if isinstance(item, dict)]
+        if not valid_items:
+            return False
+        if not all(self.line_item_is_digital(item) for item in valid_items):
+            return False
+        return any(self.line_item_is_paylink_custom(item) for item in valid_items)
+
     def fulfillment_status(self, reference: str) -> str:
         order = self._resolve_order(reference, use_cache=False)
         return str(order.get("fulfillmentStatus") or "").strip().upper() if isinstance(order, dict) else ""

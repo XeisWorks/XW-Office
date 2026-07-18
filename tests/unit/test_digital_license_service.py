@@ -24,7 +24,7 @@ class _Invoices:
 
 
 class _Wix:
-    def is_reference_digital_only(self, reference: str, *, use_cache: bool = True) -> bool:
+    def is_reference_manual_digital_license(self, reference: str, *, use_cache: bool = True) -> bool:
         assert use_cache is False
         return reference == "12345"
 
@@ -41,6 +41,12 @@ class _Wix:
 class _WixCustom(_Wix):
     def fetch_order_line_items(self, reference: str) -> list[WixOrderItem]:
         return [WixOrderItem(sku="", name="Spezialarrangement", qty=1)]
+
+
+class _WixRegularDigital(_Wix):
+    def is_reference_manual_digital_license(self, reference: str, *, use_cache: bool = True) -> bool:
+        assert use_cache is False
+        return False
 
 
 class _Catalog:
@@ -117,3 +123,12 @@ def test_list_open_cases_keeps_custom_digital_line_without_sku(tmp_path: Path) -
     assert cases[0].lines[0].sku == ""
     assert cases[0].lines[0].name == "Spezialarrangement"
     assert cases[0].lines[0].missing_print_file is True
+
+
+def test_list_open_cases_ignores_regular_wix_digital_products(tmp_path: Path) -> None:
+    pdf = tmp_path / "piece.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+
+    cases = _service(_Settings(), pdf, wix=_WixRegularDigital()).list_open_cases()
+
+    assert cases == []

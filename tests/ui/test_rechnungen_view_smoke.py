@@ -13,6 +13,7 @@ from xw_studio.core.container import Container
 from xw_studio.core.signals import AppSignals
 from xw_studio.core.types import ModuleKey
 from xw_studio.services.daily_business.service import DailyBusinessService
+from xw_studio.services.digital_licenses import DigitalLicenseService
 from xw_studio.services.draft_invoice.service import DraftInvoiceService
 from xw_studio.services.inventory.service import StartMode, StartPreflight
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
@@ -243,6 +244,16 @@ class _FakeOffeneUeberweisungenService:
         return self._login_required
 
 
+class _FakeDigitalLicenseService:
+    def open_count(self, *, limit: int = 30, use_cache: bool = True) -> int:
+        del limit, use_cache
+        return 0
+
+    def list_open_cases(self, *, limit: int = 100, use_cache: bool = False) -> list[object]:
+        del limit, use_cache
+        return []
+
+
 def _build_rechnungen_test_container() -> tuple[Container, _FakeInvoiceProcessingService]:
     container = _build_container()
     invoice_service = _FakeInvoiceProcessingService()
@@ -252,6 +263,7 @@ def _build_rechnungen_test_container() -> tuple[Container, _FakeInvoiceProcessin
     container.register(PrintDecisionEngine, lambda _: _FakePrintDecisionEngine())
     container.register(DailyBusinessService, lambda _: _FakeDailyBusinessService())
     container.register(OffeneSendungenService, lambda _: _FakeOffeneSendungenService())
+    container.register(DigitalLicenseService, lambda _: _FakeDigitalLicenseService())  # type: ignore[arg-type,return-value]
     container.register(OffeneUeberweisungenService, lambda _: _FakeOffeneUeberweisungenService())
     return container, invoice_service
 

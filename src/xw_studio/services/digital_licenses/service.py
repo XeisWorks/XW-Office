@@ -72,10 +72,15 @@ class DigitalLicenseService:
         self._inventory = inventory
         self._output_dir = output_dir
 
-    def open_count(self) -> int:
-        return len(self.list_open_cases())
+    def open_count(self, *, limit: int = 30, use_cache: bool = True) -> int:
+        """Return a lightweight badge count for open external digital orders.
 
-    def list_open_cases(self, *, limit: int = 100) -> list[DigitalLicenseCase]:
+        The full dialog can run uncached lookups.  Header badges are refreshed
+        often and must not trigger a long live Wix scan on every refresh.
+        """
+        return len(self.list_open_cases(limit=limit, use_cache=use_cache))
+
+    def list_open_cases(self, *, limit: int = 100, use_cache: bool = False) -> list[DigitalLicenseCase]:
         completed = self._load_completed()
         summaries: list[InvoiceSummary] = []
         seen_invoice_ids: set[str] = set()
@@ -96,7 +101,7 @@ class DigitalLicenseService:
             if not ref:
                 continue
             try:
-                if not self._wix_orders.is_reference_digital_only(ref, use_cache=False):
+                if not self._wix_orders.is_reference_manual_digital_license(ref, use_cache=use_cache):
                     continue
                 case = self._build_case(summary)
             except Exception as exc:  # noqa: BLE001

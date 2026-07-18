@@ -14,10 +14,12 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Invoice analysis only uses immutable order snapshot data (items, buyer and
-# shipping address).  Positive snapshots and missing-order markers therefore
-# stay valid until an explicit cache clear/prune.
+# shipping address). Positive snapshots stay valid until an explicit cache
+# clear/prune. Missing-order markers expire quickly because they can be caused
+# by a temporary API/site-id misconfiguration or by sevDesk receiving an order
+# before the Wix order lookup endpoint can resolve it.
 DEFAULT_ORDER_TTL_SECONDS: float | None = None
-DEFAULT_MISSING_TTL_SECONDS: float | None = None
+DEFAULT_MISSING_TTL_SECONDS: float | None = 5 * 60
 DEFAULT_PRODUCT_META_TTL_SECONDS: float | None = 7 * 24 * 60 * 60
 
 

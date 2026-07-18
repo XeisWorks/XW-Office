@@ -55,6 +55,51 @@ def test_is_reference_digital_only_checks_all_line_items() -> None:
     assert client.is_reference_digital_only("missing") is False
 
 
+def test_is_reference_manual_digital_license_requires_paylink_custom_item() -> None:
+    class _Client(WixOrdersClient):
+        def __init__(self) -> None:
+            pass
+
+        def _resolve_order(self, reference: str, *, use_cache: bool = True) -> dict[str, Any]:
+            if reference == "regular-digital":
+                return {
+                    "lineItems": [
+                        {
+                            "itemType": {"preset": "DIGITAL"},
+                            "digitalFile": {"id": "file-1"},
+                            "physicalProperties": {"shippable": False},
+                        }
+                    ]
+                }
+            if reference == "paylink-digital":
+                return {
+                    "lineItems": [
+                        {
+                            "itemType": {"custom": "PAYLINK_ITEM"},
+                            "customLineItem": True,
+                            "physicalProperties": {"shippable": False},
+                        }
+                    ]
+                }
+            if reference == "paylink-physical":
+                return {
+                    "lineItems": [
+                        {
+                            "itemType": {"custom": "PAYLINK_ITEM"},
+                            "customLineItem": True,
+                            "physicalProperties": {"shippable": True},
+                        }
+                    ]
+                }
+            return {}
+
+    client = _Client()
+
+    assert client.is_reference_manual_digital_license("regular-digital") is False
+    assert client.is_reference_manual_digital_license("paylink-digital") is True
+    assert client.is_reference_manual_digital_license("paylink-physical") is False
+
+
 def test_best_address_lines_prefers_shipping_then_billing() -> None:
     order_shipping = {
         "buyerInfo": {"firstName": "Max", "lastName": "Mustermann"},

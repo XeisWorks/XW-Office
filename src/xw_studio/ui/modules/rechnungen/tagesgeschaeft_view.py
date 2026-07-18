@@ -380,7 +380,7 @@ class TagesgeschaeftView(QWidget):
             self._reprint_worker,
             self._reprint_exec_worker,
         )
-        deadline = time.monotonic() + 30.0
+        deadline = time.monotonic() + 5.0
         for worker in workers:
             if worker is not None and worker.isRunning():
                 worker.cancel()
@@ -475,7 +475,7 @@ class TagesgeschaeftView(QWidget):
         self._btn_sendungen_alert.hide()
         bar_lay.addWidget(self._btn_sendungen_alert)
 
-        self._btn_digital_licenses_alert = self._build_alert_button("DIGITALE LIZENZEN")
+        self._btn_digital_licenses_alert = self._build_alert_button("EXTERNE BESTELLUNG")
         self._btn_digital_licenses_alert.clicked.connect(self._on_digital_licenses_alert_clicked)
         self._btn_digital_licenses_alert.hide()
         bar_lay.addWidget(self._btn_digital_licenses_alert)
@@ -595,7 +595,7 @@ class TagesgeschaeftView(QWidget):
             else:
                 counts["sendungen"] = max(0, int(sendungen_service.open_count()))
             digital_licenses: DigitalLicenseService = self._container.resolve(DigitalLicenseService)
-            counts["digital_licenses"] = max(0, int(digital_licenses.open_count()))
+            counts["digital_licenses"] = max(0, int(digital_licenses.open_count(limit=30, use_cache=True)))
             transfer_service: OffeneUeberweisungenService = self._container.resolve(OffeneUeberweisungenService)
             try:
                 counts["transfer"] = max(
@@ -635,7 +635,7 @@ class TagesgeschaeftView(QWidget):
         self._update_alert_button(self._btn_sendungen_alert, "OFFENE SENDUNGEN", sendungen_count)
         self._update_alert_button(
             self._btn_digital_licenses_alert,
-            "DIGITALE LIZENZEN OFFEN",
+            "EXTERNE BESTELLUNG",
             digital_licenses_count,
         )
         if transfer_count > 0:
@@ -676,7 +676,7 @@ class TagesgeschaeftView(QWidget):
         self._digital_licenses_count = max(0, int(count))
         self._update_alert_button(
             self._btn_digital_licenses_alert,
-            "DIGITALE LIZENZEN OFFEN",
+            "EXTERNE BESTELLUNG",
             self._digital_licenses_count,
         )
 

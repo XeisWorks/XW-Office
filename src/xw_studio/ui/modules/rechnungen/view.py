@@ -1025,8 +1025,8 @@ class RechnungenView(QWidget):
         self._btn_sendungen_alert.hide()
         self._btn_digital_licenses_alert = self._toolbar.add_button(
             "digital_licenses_alert",
-            "DIGITALE LIZENZEN OFFEN",
-            tooltip="Bezahlte digitale Notenlizenzen anzeigen",
+            "EXTERNE BESTELLUNG",
+            tooltip="Bezahlte externe digitale Bestellungen anzeigen",
         )
         self._btn_digital_licenses_alert.setStyleSheet(
             "QPushButton {"
@@ -1904,7 +1904,7 @@ class RechnungenView(QWidget):
             return {
                 "mollie": max(0, int(counts.get("mollie", 0))),
                 "sendungen": max(0, int(sendungen_service.open_count())),
-                "digital_licenses": max(0, int(digital_licenses.open_count())),
+                "digital_licenses": max(0, int(digital_licenses.open_count(limit=30, use_cache=True))),
             }
 
         self._mollie_badge_worker = BackgroundWorker(job)
@@ -1945,7 +1945,7 @@ class RechnungenView(QWidget):
         self._digital_licenses_alert_count = max(0, int(count))
         if self._digital_licenses_alert_count > 0:
             self._btn_digital_licenses_alert.setText(
-                f"DIGITALE LIZENZEN OFFEN ({self._digital_licenses_alert_count})"
+                f"EXTERNE BESTELLUNG ({self._digital_licenses_alert_count})"
             )
             self._btn_digital_licenses_alert.show()
             return
