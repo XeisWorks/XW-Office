@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fitz
+from PySide6.QtCore import Qt
 
 from xw_studio.core.config import AppConfig, PrintingSection
 from xw_studio.core.container import Container
@@ -196,9 +197,11 @@ def test_product_print_config_dialog_builds_plan_rows_with_start_end(qtbot: obje
     assert profile_id == "brochure_mono"
     assert plan == [{"range": "START-END", "profile_id": "brochure_mono"}]
     assert "2 Seite(n)" in dialog._pdf_status.text()  # noqa: SLF001
-    assert "Broschuere" in dialog._plan_summary.text()  # noqa: SLF001
     assert "Printer B" in dialog._plan_summary.text()  # noqa: SLF001
-    assert "BACKEND: Qt Raster" in dialog._plan_summary.text()  # noqa: SLF001
+    assert "Broschuere" not in dialog._plan_summary.text()  # noqa: SLF001
+    assert "BACKEND" not in dialog._plan_summary.text()  # noqa: SLF001
+    assert dialog._plan_model.columnCount() == 2  # noqa: SLF001
+    assert dialog._plan_model.headerData(1, Qt.Orientation.Horizontal) == "Drucker"  # noqa: SLF001
     profile_ids = [profile_id for profile_id, _label, _printer, _backend in dialog._profiles]  # noqa: SLF001
     assert "invoice" not in profile_ids
     assert "noten_native_pilot" not in profile_ids

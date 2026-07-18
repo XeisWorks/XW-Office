@@ -47,7 +47,7 @@ _PRODUCT_PRINT_PROFILE_IDS = {"noten_simplex", "noten_duplex", "brochure_mono", 
 
 
 class _PrintPlanModel(QAbstractTableModel):
-    _headers = ["Seitenbereich", "Druckprofil", "Drucker", "Backend"]
+    _headers = ["Seitenbereich", "Drucker"]
 
     def __init__(self, profiles: list[tuple[str, str, str, str]], parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -58,7 +58,7 @@ class _PrintPlanModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(self._rows)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return 0 if parent.isValid() else 4
+        return 0 if parent.isValid() else 2
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> object:
         if not index.isValid() or not (0 <= index.row() < len(self._rows)):
@@ -68,11 +68,7 @@ class _PrintPlanModel(QAbstractTableModel):
             if index.column() == 0:
                 return row.get("range", "Alle Seiten")
             profile_id = row.get("profile_id", "")
-            if index.column() == 2:
-                return self._printer_for_profile(profile_id)
-            if index.column() == 3:
-                return self._backend_for_profile(profile_id)
-            return self._label_for_profile(profile_id)
+            return self._printer_for_profile(profile_id)
         if role == Qt.ItemDataRole.EditRole:
             return row.get("range", "Alle Seiten") if index.column() == 0 else row.get("profile_id", "")
         return None
@@ -118,22 +114,10 @@ class _PrintPlanModel(QAbstractTableModel):
     def plan(self) -> list[dict[str, str]]:
         return [dict(row) for row in self._rows]
 
-    def _label_for_profile(self, profile_id: str) -> str:
-        for candidate_id, label, _printer, _backend in self._profiles:
-            if candidate_id == profile_id:
-                return label
-        return ""
-
     def _printer_for_profile(self, profile_id: str) -> str:
         for candidate_id, _label, printer, _backend in self._profiles:
             if candidate_id == profile_id:
                 return printer
-        return ""
-
-    def _backend_for_profile(self, profile_id: str) -> str:
-        for candidate_id, _label, _printer, backend in self._profiles:
-            if candidate_id == profile_id:
-                return backend
         return ""
 
 
@@ -144,10 +128,9 @@ class _PrintProfileDelegate(QStyledItemDelegate):
 
     def createEditor(self, parent: QWidget, _option, _index: QModelIndex) -> QComboBox:  # type: ignore[override]
         combo = QComboBox(parent)
-        for candidate_id, label, printer, backend in self._profiles:
-            display = f"{label} | {printer} | {backend}"
-            combo.addItem(label, candidate_id)
-            combo.setItemText(combo.count() - 1, display)
+        for candidate_id, label, printer, _backend in self._profiles:
+            display = printer or label or candidate_id
+            combo.addItem(display, candidate_id)
         return combo
 
     def setEditorData(self, editor: QWidget, index: QModelIndex) -> None:
@@ -216,8 +199,6 @@ class ProductPrintConfigDialog(QDialog):
         self._plan_model.rowsRemoved.connect(lambda *_args: self._refresh_plan_summary())
         self._plan_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self._plan_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self._plan_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self._plan_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self._plan_table.setMinimumHeight(130)
         root.addWidget(self._plan_table)
         plan_buttons = QHBoxLayout()
@@ -259,7 +240,7 @@ class ProductPrintConfigDialog(QDialog):
             QMessageBox.warning(self, "Druck konfigurieren", "Bitte einen PDF-Druckpfad waehlen.")
             return
         if not profile_id and not plan:
-            QMessageBox.warning(self, "Druck konfigurieren", "Bitte Profil oder Druckplan angeben.")
+            QMessageBox.warning(self, "Druck konfigurieren", "Bitte Drucker oder Druckplan angeben.")
             return
         pdf_path = self._pdf_path()
         if not pdf_path.is_file():
@@ -316,7 +297,7 @@ class ProductPrintConfigDialog(QDialog):
             range_text = str(row.get("range") or "").strip() or "Alle Seiten"
             profile_id = str(row.get("profile_id") or "").strip()
             if not profile_id:
-                raise RuntimeError("Jede Druckplan-Zeile braucht ein Druckprofil.")
+                raise RuntimeError("Jede Druckplan-Zeile braucht einen Drucker.")
             plan.append({"range": range_text, "profile_id": profile_id})
         return plan
 
@@ -359,29 +340,15 @@ class ProductPrintConfigDialog(QDialog):
         for row in self._plan_model.plan():
             profile_id = str(row.get("profile_id") or "").strip()
             range_text = str(row.get("range") or "").strip() or "Alle Seiten"
-            label = self._profile_label(profile_id)
             printer = self._profile_printer(profile_id)
-            backend = self._profile_backend(profile_id)
-            lines.append(f"{range_text} -> {label} -> {printer} -> {backend}")
+            lines.append(f"{range_text} -> {printer}")
         suffix = f" | PDF: {self._page_count} Seite(n)" if self._page_count is not None else ""
         self._plan_summary.setText("Druckplan: " + ("; ".join(lines) if lines else "kein Plan") + suffix)
-
-    def _profile_label(self, profile_id: str) -> str:
-        for candidate_id, label, _printer, _backend in self._profiles:
-            if candidate_id == profile_id:
-                return label
-        return profile_id or "-"
 
     def _profile_printer(self, profile_id: str) -> str:
         for candidate_id, _label, printer, _backend in self._profiles:
             if candidate_id == profile_id:
                 return printer
-        return "-"
-
-    def _profile_backend(self, profile_id: str) -> str:
-        for candidate_id, _label, _printer, backend in self._profiles:
-            if candidate_id == profile_id:
-                return backend
         return "-"
 
     @staticmethod
