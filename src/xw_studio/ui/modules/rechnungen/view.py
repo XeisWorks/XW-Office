@@ -1459,6 +1459,13 @@ class RechnungenView(QWidget):
         self.update_sendungen_alert_count(count)
         return count
 
+    def open_digital_licenses_dialog(self) -> int:
+        dlg = DigitalLicensesDialog(self._container, self)
+        dlg.exec()
+        count = dlg.open_count()
+        self.update_digital_licenses_alert_count(count)
+        return count
+
     def open_ueberweisungen_dialog(self) -> int:
         dlg = OffeneUeberweisungenDialog(self._container, self)
         dlg.exec()

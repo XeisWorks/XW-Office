@@ -44,6 +44,7 @@ from xw_studio.services.inventory.service import (
     StartPreflight,
 )
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
+from xw_studio.services.digital_licenses import DigitalLicenseService
 from xw_studio.services.sendungen.service import OffeneSendungenService
 from xw_studio.services.transfers.service import OffeneUeberweisungenService
 from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
@@ -319,6 +320,7 @@ class TagesgeschaeftView(QWidget):
         self._start_selected_summaries: list[InvoiceSummary] = []
         self._start_selected_only = False
         self._sendungen_count = 0
+        self._digital_licenses_count = 0
         self._transfer_count = 0
         self._mollie_count = 0
         self._sendungen_live_refresh_ts = 0.0
@@ -473,6 +475,11 @@ class TagesgeschaeftView(QWidget):
         self._btn_sendungen_alert.hide()
         bar_lay.addWidget(self._btn_sendungen_alert)
 
+        self._btn_digital_licenses_alert = self._build_alert_button("DIGITALE LIZENZEN")
+        self._btn_digital_licenses_alert.clicked.connect(self._on_digital_licenses_alert_clicked)
+        self._btn_digital_licenses_alert.hide()
+        bar_lay.addWidget(self._btn_digital_licenses_alert)
+
         self._btn_transfer_alert = self._build_alert_button("UEBERWEISUNG OFFEN")
         self._btn_transfer_alert.clicked.connect(self._on_transfer_alert_clicked)
         self._btn_transfer_alert.hide()
@@ -587,6 +594,8 @@ class TagesgeschaeftView(QWidget):
                 self._sendungen_live_refresh_ts = now
             else:
                 counts["sendungen"] = max(0, int(sendungen_service.open_count()))
+            digital_licenses: DigitalLicenseService = self._container.resolve(DigitalLicenseService)
+            counts["digital_licenses"] = max(0, int(digital_licenses.open_count()))
             transfer_service: OffeneUeberweisungenService = self._container.resolve(OffeneUeberweisungenService)
             try:
                 counts["transfer"] = max(
@@ -615,13 +624,20 @@ class TagesgeschaeftView(QWidget):
         mollie_count = max(0, int(counts.get("mollie", 0)))
         gutscheine_count = max(0, int(counts.get("gutscheine", 0)))
         sendungen_count = max(0, int(counts.get("sendungen", 0)))
+        digital_licenses_count = max(0, int(counts.get("digital_licenses", 0)))
         transfer_count = max(0, int(counts.get("transfer", counts.get("refunds", 0))))
         transfer_login_required = bool(counts.get("transfer_login_required"))
 
         self._sendungen_count = sendungen_count
+        self._digital_licenses_count = digital_licenses_count
         self._transfer_count = transfer_count
         self._mollie_count = mollie_count
         self._update_alert_button(self._btn_sendungen_alert, "OFFENE SENDUNGEN", sendungen_count)
+        self._update_alert_button(
+            self._btn_digital_licenses_alert,
+            "DIGITALE LIZENZEN OFFEN",
+            digital_licenses_count,
+        )
         if transfer_count > 0:
             self._update_alert_button(self._btn_transfer_alert, "UEBERWEISUNG OFFEN", transfer_count)
         elif transfer_login_required:
@@ -652,6 +668,17 @@ class TagesgeschaeftView(QWidget):
         count = self._rechnungen_view.open_sendungen_dialog()
         self._sendungen_count = max(0, int(count))
         self._update_alert_button(self._btn_sendungen_alert, "OFFENE SENDUNGEN", self._sendungen_count)
+
+    def _on_digital_licenses_alert_clicked(self) -> None:
+        if self._rechnungen_view is None:
+            return
+        count = self._rechnungen_view.open_digital_licenses_dialog()
+        self._digital_licenses_count = max(0, int(count))
+        self._update_alert_button(
+            self._btn_digital_licenses_alert,
+            "DIGITALE LIZENZEN OFFEN",
+            self._digital_licenses_count,
+        )
 
     def _on_transfer_alert_clicked(self) -> None:
         if self._rechnungen_view is None:
