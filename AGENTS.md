@@ -11,3 +11,12 @@
   vorher committen oder gezielt stashen.
 - Kein Force-Push auf `main`.
 
+# Geschuetztes Architekturarchiv
+
+- `markdowns/XeisWorks_Content_Studio_Originalkonzept_2026-07-19_UNVERAENDERT.md` ist eine
+  unveraenderliche historische Quelle. Diese Datei weder bearbeiten noch umbenennen.
+- Fuer Content-Studio-Entscheidungen gilt stattdessen
+  `markdowns/XeisWorks_Content_Studio_Zielarchitektur_und_Umbauplan_2026-07-20.md`.
+- Eine beabsichtigte Aenderung des Archivs erfordert eine ausdrueckliche Benutzeranweisung und
+  eine bewusste Aktualisierung der zugehoerigen SHA-256-Pruefung.
+

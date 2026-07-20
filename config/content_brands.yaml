@@ -1,0 +1,51 @@
+brands:
+  - id: xeisworks
+    display_name: XeisWorks
+    language: de-AT
+    tone:
+      primary: fachlich-nahbar
+      secondary:
+        - österreichisch
+        - musikpraktisch
+        - bodenständig
+        - dezent humorvoll
+    forbidden_traits:
+      - marktschreierisch
+      - sterile Konzernsprache
+      - unbelegte Superlative
+    preferred_terms:
+      - Notenausgabe
+      - Arrangement
+      - Musikverein
+      - aus der Praxis
+    avoid_terms:
+      - revolutionär
+      - bahnbrechend
+      - garantiert
+    emoji_maximum: 3
+    hashtag_maximum: 8
+
+  - id: musikheroes
+    display_name: MusikHeroes
+    language: de-AT
+    tone:
+      primary: motivierend
+      secondary:
+        - locker
+        - praxisnah
+        - spielerisch
+    forbidden_traits:
+      - künstliche Jugendsprache
+      - belehrend
+      - kindisch
+    preferred_terms:
+      - gemeinsam musizieren
+      - ausprobieren
+      - Probe
+      - Musikschule
+    avoid_terms:
+      - revolutionär
+      - bahnbrechend
+      - garantiert
+    emoji_maximum: 4
+    hashtag_maximum: 8

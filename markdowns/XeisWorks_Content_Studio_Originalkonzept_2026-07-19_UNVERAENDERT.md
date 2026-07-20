@@ -1,3 +1,10 @@
+# ARCHIV: XeisWorks Content Studio – Originalkonzept
+
+> **Unveränderliche historische Ausgangsbasis (Stand 19. Juli 2026).**  
+> Dieses Dokument wird nicht fortgeschrieben. Analyse, Zielarchitektur und der aktuelle
+> Umsetzungsplan stehen in `XeisWorks_Content_Studio_Zielarchitektur_und_Umbauplan_2026-07-20.md`.
+> Eine CI-Prüfung schützt den Inhalt gegen versehentliche Änderungen.
+
 # XeisWorks Content Studio
 ## Vollständiges Software-, Architektur- und Umsetzungskonzept
 

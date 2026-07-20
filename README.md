@@ -15,6 +15,29 @@ PySide6 desktop application for XeisWorks music publishing business management.
 - **Marketing:** Content planning, social media (scaffold)
 - **Notensatz:** Music notation tools (scaffold)
 
+## Content Studio Web (Phase 1)
+
+The repository also contains the separately deployable web foundation for the future mobile
+Content Studio. It does not replace the PySide6 desktop application or its printing workflows.
+
+```bash
+# Configure at least the temporary Phase-1 API protection
+set XW_CONTENT_BOOTSTRAP_TOKEN=replace-with-a-long-random-value
+
+# Start on http://127.0.0.1:8000
+python -m xw_studio.web
+```
+
+Public routes:
+
+- `/` – data-free landing page
+- `/health` – Railway health check
+
+The versioned `/api/v1/content/*` routes require the bootstrap bearer token. This token is an
+interim deployment safeguard, not the later user login. Railway deployment settings are in
+`railway.toml`; the recommended custom domain and phased roadmap are documented in
+[`markdowns/XeisWorks_Content_Studio_Zielarchitektur_und_Umbauplan_2026-07-20.md`](markdowns/XeisWorks_Content_Studio_Zielarchitektur_und_Umbauplan_2026-07-20.md).
+
 ## Setup
 
 ```bash

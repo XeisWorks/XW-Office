@@ -41,6 +41,8 @@ dependencies = [
     "tqdm>=4.66",
     "tzdata>=2024.1",
     "icalendar>=5.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
     "truststore>=0.10; sys_platform == 'win32'",
 ]
 
@@ -50,10 +52,12 @@ dev = [
     "pytest-qt>=4.3",
     "mypy>=1.8",
     "ruff>=0.3",
+    "types-PyYAML>=6.0",
 ]
 
 [project.scripts]
 xw-studio = "xw_studio.__main__:main"
+xw-content-web = "xw_studio.web.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
