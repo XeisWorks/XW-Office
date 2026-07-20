@@ -1,9 +1,8 @@
 [build]
-builder = "RAILPACK"
-buildCommand = "python -m pip install --no-cache-dir -r requirements-web.txt"
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.web"
 
 [deploy]
-startCommand = "python -m uvicorn xw_studio.web.app:app --app-dir src --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/health"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"

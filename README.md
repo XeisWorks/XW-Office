@@ -36,7 +36,8 @@ Public routes:
 The versioned `/api/v1/content/*` routes require the bootstrap bearer token. This token is an
 interim deployment safeguard, not the later user login. Railway deployment settings are in
 `railway.toml`; `requirements-web.txt` deliberately keeps desktop and printing packages out of
-the server image. The recommended custom domain and phased roadmap are documented in
+the server image, and `Dockerfile.web` makes that image reproducible without desktop imports.
+The recommended custom domain and phased roadmap are documented in
 [`markdowns/XeisWorks_Content_Studio_Zielarchitektur_und_Umbauplan_2026-07-20.md`](markdowns/XeisWorks_Content_Studio_Zielarchitektur_und_Umbauplan_2026-07-20.md).
 
 ## Setup

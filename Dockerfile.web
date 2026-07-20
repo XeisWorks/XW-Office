@@ -1,0 +1,17 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/src
+
+WORKDIR /app
+
+COPY requirements-web.txt ./requirements-web.txt
+RUN python -m pip install --no-cache-dir -r requirements-web.txt
+
+COPY src ./src
+COPY config/content_brands.yaml ./config/content_brands.yaml
+
+EXPOSE 8000
+
+CMD ["sh", "-c", "python -m uvicorn xw_studio.web.app:app --host 0.0.0.0 --port ${PORT:-8000}"]
