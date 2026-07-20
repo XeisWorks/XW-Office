@@ -6,6 +6,43 @@
 
 ---
 
+## 0. Übergabestatus für die Weiterführung
+
+**Stand der Umsetzung:** Phase 0 und Phase 1 sind abgeschlossen.
+
+Der aktuelle Produktionsdienst läuft auf Railway im Service `XW-Content-Web` und ist über
+`https://studio.xeisworks.at` erreichbar. Die Custom Domain ist in Railway verifiziert; CNAME und
+TXT sind beim DNS-Provider gesetzt. `/health` antwortet produktiv mit Status `ok`.
+
+Der nächste Arbeitsschritt ist **Phase 2 – Owner-Anmeldung und mobile Content Inbox**. Phase 2 soll
+nicht mit KI-Erzeugung beginnen, sondern zuerst den geschützten Erfassungsfluss herstellen:
+
+- Owner-Login mit sicherer Session,
+- Content-Inbox-Datenmodell und Migration,
+- mobile Text- und Bild-Erfassung,
+- Consent-/Sensitivitätsstatus,
+- persistente Speicherung und Anzeige am PC.
+
+Bekannter Teststand zum Abschluss von Phase 1:
+
+- gezielte neue Tests für Content-Brands, Web-API und Archivschutz grün,
+- Ruff für die geänderten Dateien grün,
+- MyPy für die neuen Module grün,
+- produktiver Railway-Smoke-Test über `studio.xeisworks.at/health` grün,
+- vollständiger Repo-Pytest-Lauf hatte vier bereits bestehende, fachfremde Altfehler außerhalb des
+  Content-Studio-Umfangs.
+
+Wichtige technische Entscheidungen aus Phase 1:
+
+- FastAPI-Webdienst bleibt Teil dieses Repositories,
+- Desktop-App und Rechnungs-/Druckabläufe bleiben unverändert,
+- Railway-Deployment läuft über `Dockerfile.web`,
+- `XW_CONTENT_BOOTSTRAP_TOKEN` ist nur ein temporärer Phase-1-Schutz und wird in Phase 2 durch echte
+  Anmeldung ersetzt,
+- `XW_CONTENT_PUBLIC_URL` ist auf `https://studio.xeisworks.at` gesetzt.
+
+---
+
 ## 1. Zweck dieses Dokuments
 
 Dieses Dokument bewertet das ursprüngliche Gesamtkonzept, gleicht es mit dem bestehenden
