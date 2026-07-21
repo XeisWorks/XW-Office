@@ -105,3 +105,40 @@ def test_save_product_print_config_persists_title_and_default_when_missing() -> 
             "print_plan": [{"range": "Alle Seiten", "profile_id": "noten_duplex"}],
         }
     }
+
+
+def test_save_product_print_config_replaces_existing_multi_printer_plan() -> None:
+    repo = _RepoStub()
+    repo.data["inventory.products"] = json.dumps(
+        [
+            {
+                "sku": "XW-6014",
+                "name": "Mnoschil",
+                "print_file_path": "C:/scores/old.pdf",
+                "print_profile_id": "brochure_mono",
+                "print_plan": [
+                    {"range": "1-8", "profile_id": "brochure_mono"},
+                    {"range": "9-END", "profile_id": "brochure_mono"},
+                ],
+                "title_print_configs": {},
+            }
+        ]
+    )
+    svc = InventoryService(AppConfig(), repo)
+    replacement = [
+        {"range": "1-8", "profile_id": "brochure_mono"},
+        {"range": "9-END", "profile_id": "noten_duplex"},
+    ]
+
+    svc.save_product_print_config(
+        sku="XW-6014",
+        name="Mnoschil",
+        print_file_path="C:/scores/new.pdf",
+        print_profile_id="brochure_mono",
+        print_plan=replacement,
+    )
+
+    row = svc.list_products()[0]
+    assert row.print_file_path == "C:/scores/new.pdf"
+    assert row.print_plan == replacement
+    assert row.title_print_configs["Mnoschil"]["print_plan"] == replacement

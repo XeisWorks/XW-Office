@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fitz
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QComboBox, QStyleOptionViewItem
 
 from xw_studio.core.config import AppConfig, PrintingSection
 from xw_studio.core.container import Container
@@ -205,3 +206,48 @@ def test_product_print_config_dialog_builds_plan_rows_with_start_end(qtbot: obje
     profile_ids = [profile_id for profile_id, _label, _printer, _backend in dialog._profiles]  # noqa: SLF001
     assert "invoice" not in profile_ids
     assert "noten_native_pilot" not in profile_ids
+
+
+def test_print_plan_printer_selection_commits_immediately(qtbot: object, tmp_path) -> None:
+    pdf_path = tmp_path / "piece.pdf"
+    doc = fitz.open()
+    doc.new_page(width=595, height=842)
+    doc.save(pdf_path)
+    doc.close()
+    config = AppConfig(
+        printing=PrintingSection(
+            print_profiles=[
+                {"id": "noten_duplex", "label": "Noten Duplex", "printer_name": "Printer A"},
+                {"id": "brochure_mono", "label": "Broschuere", "printer_name": "Printer B"},
+            ]
+        )
+    )
+    container = Container(config)
+    piece = PieceBlock(
+        sku="XW-6014",
+        name="Mnoschil",
+        qty_needed=1,
+        print_plan=[
+            {"range": "1-8", "profile_id": "brochure_mono"},
+            {"range": "9-END", "profile_id": "brochure_mono"},
+        ],
+        product=Product(id="p1", sku="XW-6014", name="Mnoschil", print_file_path=str(pdf_path)),
+    )
+    dialog = ProductPrintConfigDialog(None, container, piece)
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    model = dialog._plan_model  # noqa: SLF001
+    index = model.index(1, 1)
+    delegate = dialog._plan_table.itemDelegateForColumn(1)  # noqa: SLF001
+    editor = delegate.createEditor(dialog, QStyleOptionViewItem(), index)
+    assert isinstance(editor, QComboBox)
+    delegate.commitData.connect(
+        lambda current_editor: delegate.setModelData(current_editor, model, index)
+    )
+    delegate.setEditorData(editor, index)
+
+    editor.setCurrentIndex(editor.findData("noten_duplex"))
+
+    assert model.plan() == [
+        {"range": "1-8", "profile_id": "brochure_mono"},
+        {"range": "9-END", "profile_id": "noten_duplex"},
+    ]

@@ -629,13 +629,23 @@ class InventoryService:
             price_eur=current.price_eur,
             wix_id=current.wix_id,
             sevdesk_id=current.sevdesk_id,
-            print_file_path=current.print_file_path or clean_path,
-            print_profile_id=current.print_profile_id or clean_profile,
-            print_plan=list(current.print_plan or clean_plan),
+            # This method is the explicit editor/save path. Existing values
+            # must be replaced; otherwise a corrected multi-printer plan can
+            # never overwrite a previously stored plan.
+            print_file_path=clean_path,
+            print_profile_id=clean_profile,
+            print_plan=list(clean_plan),
             title_print_configs=title_configs,
         )
         by_sku[clean_sku] = updated
         self.save_products(sorted(by_sku.values(), key=lambda row: row.sku))
+        logger.info(
+            "Product print config saved: sku=%s title=%r profile_id=%s print_plan=%s",
+            clean_sku,
+            title,
+            clean_profile,
+            clean_plan,
+        )
         return updated
 
     def load_print_plans(self) -> list[dict[str, object]]:

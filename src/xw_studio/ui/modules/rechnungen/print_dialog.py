@@ -138,6 +138,11 @@ class _PrintProfileDelegate(QStyledItemDelegate):
             current = str(index.data(Qt.ItemDataRole.EditRole) or "")
             found = editor.findData(current)
             editor.setCurrentIndex(max(0, found))
+            if not bool(editor.property("xw_print_plan_commit_connected")):
+                editor.currentIndexChanged.connect(
+                    lambda _selected, combo=editor: self.commitData.emit(combo)
+                )
+                editor.setProperty("xw_print_plan_commit_connected", True)
 
     def setModelData(self, editor: QWidget, model: QAbstractTableModel, index: QModelIndex) -> None:
         if isinstance(editor, QComboBox):
