@@ -56,14 +56,18 @@ def test_pdf_xchange_builds_silent_native_command_with_pages_and_copies(
     backend_for_job(job).print(job)
 
     assert len(calls) == 2
-    assert calls[0] == [str(executable), "/printto", "Noten A4 Simplex", str(pages_pdf)]
+    assert calls[0] == [
+        str(executable),
+        '/print:default=yes;showui=no;printer="Noten A4 Simplex"',
+        str(pages_pdf),
+    ]
 
     windows_command_line = subprocess.list2cmdline(calls[0])
-    assert "/print:" not in windows_command_line
-    assert "/printto" in windows_command_line
+    assert "/print:default=yes;showui=no" in windows_command_line
+    assert "/printto" not in windows_command_line
 
 
-def test_pdf_xchange_uses_registered_printto_command_for_full_document(
+def test_pdf_xchange_uses_explicit_silent_printer_for_full_document(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     executable = tmp_path / "PXCEditor.exe"
@@ -91,7 +95,21 @@ def test_pdf_xchange_uses_registered_printto_command_for_full_document(
     )
     backend_for_job(job).print(job)
 
-    assert calls[0] == [str(executable), "/printto", "Noten A4 Duplex", str(pdf)]
+    assert calls[0] == [
+        str(executable),
+        '/print:default=yes;showui=no;printer="Noten A4 Duplex"',
+        str(pdf),
+    ]
+
+
+def test_pdf_xchange_command_keeps_each_plan_printer_explicit() -> None:
+    from xw_studio.services.printing.pdf_backends import _pdf_xchange_print_command
+
+    first = _pdf_xchange_print_command("PDFXEdit.exe", "Simplex", "score.pdf")
+    second = _pdf_xchange_print_command("PDFXEdit.exe", "Duplex", "score.pdf")
+
+    assert first[1] == '/print:default=yes;showui=no;printer="Simplex"'
+    assert second[1] == '/print:default=yes;showui=no;printer="Duplex"'
 
 
 def test_pdf_xchange_without_visible_spooler_job_is_accepted(

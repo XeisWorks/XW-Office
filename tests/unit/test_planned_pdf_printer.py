@@ -110,6 +110,27 @@ def test_print_pdf_by_plan_queues_target_with_parsed_pages_and_copies() -> None:
     assert queue.jobs[0].native_pdf_exe == "C:/Program Files/PDFXEdit.exe"
 
 
+def test_print_pdf_by_plan_keeps_different_printers_for_multiple_rows() -> None:
+    printing = _printing_config()
+    queue = _QueueStub()
+
+    print_pdf_by_plan(
+        "C:/tmp/test.pdf",
+        printing,
+        print_plan=[
+            {"range": "1-2", "profile_id": "noten_simplex"},
+            {"range": "3-END", "profile_id": "noten_duplex"},
+        ],
+        page_count=5,
+        print_queue=queue,  # type: ignore[arg-type]
+    )
+
+    assert [(job.printer_name, job.pages) for job in queue.jobs] == [
+        ("Simplex", [0, 1]),
+        ("Duplex", [2, 3, 4]),
+    ]
+
+
 def test_print_pdf_by_plan_uses_queue_without_shelling_out() -> None:
     printing = _printing_config()
     queue = _QueueStub()

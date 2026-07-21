@@ -1098,6 +1098,8 @@ class TagesgeschaeftView(QWidget):
             )
 
         if self._rechnungen_view is not None:
+            if processed > 0:
+                self._rechnungen_view.mark_print_products_last_run()
             self._rechnungen_view._reload_first_page()  # noqa: SLF001
         self._refresh_badges()
 

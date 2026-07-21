@@ -90,7 +90,7 @@ class NativePdfCliBackend(PdfPrintBackend):
         for copy_number in range(copies):
             spooler_before = _windows_print_job_snapshot(job.printer_name)
             logger.info(
-                "Native PDF print dispatch: backend=pdf_xchange_printto printer='%s' copy=%s/%s command=%s",
+                "Native PDF print dispatch: backend=pdf_xchange_print printer='%s' copy=%s/%s command=%s",
                 job.printer_name,
                 copy_number + 1,
                 copies,
@@ -127,7 +127,7 @@ class NativePdfCliBackend(PdfPrintBackend):
                     command_line,
                 )
             logger.info(
-                "Native PDF print accepted: backend=pdf_xchange_printto printer='%s' copy=%s/%s",
+                "Native PDF print accepted: backend=pdf_xchange_print printer='%s' copy=%s/%s",
                 job.printer_name,
                 copy_number + 1,
                 copies,
@@ -148,14 +148,20 @@ def _pdf_xchange_print_command(
     printer_name: str,
     pdf_path: str,
 ) -> list[str]:
-    """Build the reliable PDF-XChange print command for this PC.
+    """Build an explicit, silent PDF-XChange print command.
 
-    The installed PDF-XChange file association registers:
-    ``PXCEditor.exe /printto "<printer>" "<file>"``.  Use that route for
-    all native print dispatches. Page-restricted print plans are converted to
-    temporary PDFs before this command is built.
+    ``/printto`` can hand subsequent invocations to an already running editor
+    instance, where the first printer selection may remain active.  PDF-XChange's
+    documented ``/print`` command accepts the target printer as part of each
+    invocation.  ``default=yes`` also prevents settings from a previous editor
+    print operation from leaking into the job, while ``showui=no`` keeps the
+    editor and print dialog hidden.
+
+    Page-restricted print plans are converted to temporary PDFs before this
+    command is built.
     """
-    return [executable, "/printto", printer_name, pdf_path]
+    options = f'/print:default=yes;showui=no;printer="{printer_name}"'
+    return [executable, options, pdf_path]
 
 
 def _run_print_command(command: list[str], *, timeout_seconds: float) -> subprocess.CompletedProcess[str]:

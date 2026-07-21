@@ -24,6 +24,10 @@ from xw_studio.services.transfers.service import OffeneUeberweisungenService
 from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
 from xw_studio.services.wix.client import WixOrdersClient
 from xw_studio.ui.main_window import MainWindow
+from xw_studio.ui.modules.rechnungen.open_invoice_overview import (
+    OpenInvoiceOverview,
+    PrintProductAggregate,
+)
 from xw_studio.ui.modules.rechnungen.tagesgeschaeft_view import TagesgeschaeftView, _StartDialog
 from xw_studio.ui.modules.rechnungen.plc_label_dialog import PlcLabelPrintDialog
 from xw_studio.ui.modules.rechnungen.view import (
@@ -634,6 +638,75 @@ def test_rechnungen_open_overview_resolves_wix_classification_and_buyer_notes(qt
     assert "XW-PHYS" in products_text
     assert "Produktbeschreibung" in products_text
     assert any(button.toolTip() == "Druckplan/PDF fuer dieses Produkt einrichten" for button in view._gb_open_products.findChildren(QToolButton))  # noqa: SLF001
+
+
+def test_print_products_remain_for_session_after_completed_run(qtbot: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    first = PrintProductAggregate(
+        sku="XW-FIRST",
+        title="Erstes Produkt",
+        description="Besetzung A",
+        quantity=2,
+    )
+    second = PrintProductAggregate(
+        sku="XW-SECOND",
+        title="Zweites Produkt",
+        description="Besetzung B",
+        quantity=1,
+    )
+
+    view._apply_open_invoice_overview(  # noqa: SLF001
+        OpenInvoiceOverview(
+            key="run-1",
+            total=1,
+            with_ref=1,
+            physical=1,
+            digital=0,
+            unknown=0,
+            with_note=0,
+            plc=0,
+            complete=True,
+            print_products=[first],
+        )
+    )
+    view.mark_print_products_last_run()
+    view._apply_open_invoice_overview(  # noqa: SLF001
+        OpenInvoiceOverview(
+            key="empty",
+            total=0,
+            with_ref=0,
+            physical=0,
+            digital=0,
+            unknown=0,
+            with_note=0,
+            plc=0,
+            complete=True,
+        )
+    )
+
+    assert view._gb_open_products.title() == "PRINT PRODUKTE (last run)"  # noqa: SLF001
+    assert "Erstes Produkt" in view._open_products_text.toPlainText()  # noqa: SLF001
+
+    view._apply_open_invoice_overview(  # noqa: SLF001
+        OpenInvoiceOverview(
+            key="run-2",
+            total=1,
+            with_ref=1,
+            physical=1,
+            digital=0,
+            unknown=0,
+            with_note=0,
+            plc=0,
+            complete=True,
+            print_products=[second],
+        )
+    )
+
+    text = view._open_products_text.toPlainText()  # noqa: SLF001
+    assert "Erstes Produkt" in text
+    assert "Zweites Produkt" in text
 
 
 def test_plc_dialog_defaults_to_direct_webservice_without_changing_list_action(qtbot: object) -> None:

@@ -964,6 +964,8 @@ class RechnungenView(QWidget):
         self._open_overview_complete = False
         self._open_overview_products_text = ""
         self._open_overview_products: list[PrintProductAggregate] = []
+        self._session_print_products: list[PrintProductAggregate] = []
+        self._print_products_last_run = False
         self._plc_label_archive = PlcLabelArchive()
         self._selected_plc_label_path = ""
         self._plc_archive_lookup_cache: dict[tuple[str, str], str] = {}
@@ -2147,7 +2149,6 @@ class RechnungenView(QWidget):
             self._open_overview_complete = True
             self._open_overview_products_text = ""
             self._open_overview_products = []
-            self._render_open_print_products(overview)
             return
 
         if overview.key and overview.key == self._open_overview_key and self._open_overview_complete:
@@ -2159,7 +2160,7 @@ class RechnungenView(QWidget):
             self._open_digital.setText(str(self._open_overview_cached_digital))
             self._open_plc.setText(str(self._open_overview_cached_plc))
             self._open_note.setText(str(self._open_overview_cached_note))
-            if self._open_overview_products:
+            if self._open_overview_products or self._print_products_last_run:
                 cached_overview = OpenInvoiceOverview(
                     key=self._open_overview_key,
                     total=overview.total,
@@ -2172,7 +2173,7 @@ class RechnungenView(QWidget):
                     complete=True,
                     print_products=list(self._open_overview_products),
                 )
-                self._render_open_print_products(cached_overview)
+                self._render_open_print_products(self._print_product_display_overview(cached_overview))
             return
 
         self._apply_open_invoice_overview(overview)
@@ -2180,7 +2181,8 @@ class RechnungenView(QWidget):
         if has_refs:
             self._open_overview_products_text = "Print-Produkte werden ermittelt..."
             self._open_overview_products = []
-            self._set_open_products_message("Print-Produkte werden ermittelt...")
+            if not self._print_products_last_run:
+                self._set_open_products_message("Print-Produkte werden ermittelt...")
             self._start_open_invoice_overview(open_rows)
 
     def _start_open_invoice_overview(
@@ -2293,7 +2295,70 @@ class RechnungenView(QWidget):
         self._open_overview_complete = overview.complete
         self._open_overview_products_text = self._format_open_print_products(overview)
         self._open_overview_products = list(overview.print_products)
+        self._merge_session_print_products(overview.print_products)
+        self._render_open_print_products(self._print_product_display_overview(overview))
+
+    def mark_print_products_last_run(self) -> None:
+        """Keep the accumulated product list visible after a completed START run."""
+        self._print_products_last_run = True
+        self._gb_open_products.setTitle("PRINT PRODUKTE (last run)")
+        overview = OpenInvoiceOverview(
+            key="session-last-run",
+            total=0,
+            with_ref=0,
+            physical=0,
+            digital=0,
+            unknown=0,
+            with_note=0,
+            plc=0,
+            complete=True,
+            print_products=list(self._session_print_products),
+        )
         self._render_open_print_products(overview)
+
+    def _merge_session_print_products(self, products: list[PrintProductAggregate]) -> None:
+        """Append new products and retain the largest quantity seen this session."""
+        positions = {
+            self._print_product_session_key(item): index
+            for index, item in enumerate(self._session_print_products)
+        }
+        for item in products:
+            key = self._print_product_session_key(item)
+            index = positions.get(key)
+            if index is None:
+                positions[key] = len(self._session_print_products)
+                self._session_print_products.append(item)
+                continue
+            previous = self._session_print_products[index]
+            if int(item.quantity or 0) > int(previous.quantity or 0):
+                self._session_print_products[index] = item
+
+    @staticmethod
+    def _print_product_session_key(item: PrintProductAggregate) -> tuple[str, str, str, str]:
+        return (
+            str(item.sku or "").strip().casefold(),
+            str(item.title or "").strip().casefold(),
+            str(item.description or "").strip().casefold(),
+            str(item.category_label or "").strip().casefold(),
+        )
+
+    def _print_product_display_overview(self, overview: OpenInvoiceOverview) -> OpenInvoiceOverview:
+        if not self._print_products_last_run:
+            return overview
+        return OpenInvoiceOverview(
+            key=overview.key,
+            total=overview.total,
+            with_ref=overview.with_ref,
+            physical=overview.physical,
+            digital=overview.digital,
+            unknown=0,
+            with_note=overview.with_note,
+            plc=overview.plc,
+            complete=overview.complete,
+            cache_updates=overview.cache_updates,
+            print_products=list(self._session_print_products),
+            seq=overview.seq,
+        )
 
     def _clear_open_print_product_rows(self) -> None:
         while self._open_products_rows_layout.count():
