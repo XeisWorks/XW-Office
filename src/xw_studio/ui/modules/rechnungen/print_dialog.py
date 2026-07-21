@@ -29,7 +29,9 @@ from PySide6.QtWidgets import (
 )
 
 from xw_studio.core.printer_detect import discover_printers, evaluate_printer_status
+from xw_studio.core.signals import AppSignals
 from xw_studio.core.types import PrinterStatus
+from xw_studio.services.background_jobs import BackgroundJobManager
 from xw_studio.services.inventory import InventoryService
 from xw_studio.services.products.catalog import Product, ProductCatalogService
 from xw_studio.services.products.print_decision import PieceBlock
@@ -496,15 +498,6 @@ def _configure_missing_piece_print(parent: QWidget, container: Container, piece:
         return False
     path, profile_id, plan = dialog.values()
 
-    inv: InventoryService = container.resolve(InventoryService)
-    inv.save_product_print_config(
-        sku=piece.sku,
-        name=piece.name,
-        print_file_path=path,
-        print_profile_id=profile_id,
-        print_plan=plan,
-    )
-
     if piece.product is None:
         piece.product = Product(id=f"settings::{piece.sku}", sku=piece.sku, name=piece.name, print_file_path=path)
     else:
@@ -512,10 +505,50 @@ def _configure_missing_piece_print(parent: QWidget, container: Container, piece:
     piece.print_profile_id = profile_id
     piece.print_plan = plan
 
+    inv: InventoryService = container.resolve(InventoryService)
     try:
+        signals: AppSignals | None = container.resolve(AppSignals)
+    except KeyError:
+        signals = None
+
+    def persist(_token: object) -> str:
+        inv.save_product_print_config(
+            sku=piece.sku,
+            name=piece.name,
+            print_file_path=path,
+            print_profile_id=profile_id,
+            print_plan=plan,
+        )
         container.resolve(ProductCatalogService).reload_from_settings()
-    except Exception as exc:
-        logger.debug("Product catalog reload after print config save failed: %s", exc)
+        return piece.sku
+
+    def saved(_payload: object) -> None:
+        if signals is not None:
+            signals.inventory_changed.emit()
+            signals.status_message.emit(f"Druckkonfiguration gespeichert: {piece.sku}", 5000)
+
+    def failed(exc: Exception) -> None:
+        logger.error("Product print config save failed for %s: %s", piece.sku, exc)
+        if signals is not None:
+            signals.task_error.emit("Druckkonfiguration", str(exc))
+            signals.status_message.emit(f"Druckkonfiguration konnte nicht gespeichert werden: {piece.sku}", 12000)
+
+    try:
+        background_jobs = container.resolve(BackgroundJobManager)
+    except KeyError:
+        persist(object())
+        saved(piece.sku)
+    else:
+        background_jobs.submit_callable(
+            queue="database",
+            priority=20,
+            key=f"save-product-print-config:{piece.sku}",
+            fn=persist,
+            on_result=saved,
+            on_error=failed,
+            owner=parent,
+            replace="allow_parallel",
+        )
     return True
 
 

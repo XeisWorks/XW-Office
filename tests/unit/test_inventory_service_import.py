@@ -16,6 +16,11 @@ class _RepoStub:
     def set_value_json(self, key: str, value_json: str) -> None:
         self.data[key] = value_json
 
+    def mutate_value_json(self, key: str, mutator) -> str:
+        updated = mutator(self.data.get(key))
+        self.data[key] = updated
+        return updated
+
 
 def test_import_legacy_print_data_persists_default_and_title_configs(monkeypatch, tmp_path) -> None:
     pdf_default = tmp_path / "default.pdf"
@@ -142,3 +147,27 @@ def test_save_product_print_config_replaces_existing_multi_printer_plan() -> Non
     assert row.print_file_path == "C:/scores/new.pdf"
     assert row.print_plan == replacement
     assert row.title_print_configs["Mnoschil"]["print_plan"] == replacement
+
+
+def test_atomic_field_update_preserves_unrelated_product_and_print_fields() -> None:
+    repo = _RepoStub()
+    repo.data["inventory.products"] = json.dumps(
+        [
+            {
+                "sku": "XW-1",
+                "name": "One",
+                "brand_name": "Old",
+                "print_plan": [{"range": "1-2", "profile_id": "brochure_mono"}],
+            },
+            {"sku": "XW-2", "name": "Two", "brand_name": "Untouched"},
+        ]
+    )
+    svc = InventoryService(AppConfig(), repo)
+
+    changed = svc.update_product_fields({"xw-1": {"brand_name": "New"}})
+
+    assert changed == 1
+    payload = json.loads(repo.data["inventory.products"])
+    assert payload[0]["brand_name"] == "New"
+    assert payload[0]["print_plan"] == [{"range": "1-2", "profile_id": "brochure_mono"}]
+    assert payload[1] == {"sku": "XW-2", "name": "Two", "brand_name": "Untouched"}

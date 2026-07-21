@@ -70,7 +70,7 @@ python -m xw_studio
 
 - **UI Framework:** PySide6 + qt-material
 - **Database:** PostgreSQL on Railway
-- **Printing:** QPrinter + PyMuPDF at 600 DPI
+- **Printing:** QPrinter fuer Rechnungen/Labels; nativer PDF-XChange-Vektordruck fuer Noten/Produkte mit Windows-Spooler-Bestaetigung (kein automatischer Acrobat-/Raster-Fallback)
 - **Config:** YAML defaults + .env secrets + DB settings
 - **Auto-Update:** git pull + pip install at startup
 

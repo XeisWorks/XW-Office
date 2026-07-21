@@ -193,6 +193,7 @@ class ProductFieldBulkService:
         wix_products: list[WixProduct] | None = None,
     ) -> FieldBulkUpdateReport:
         """Preview field update without persisting changes."""
+        local_products = self._inventory.list_products()
         return self._build_report(
             skus=skus,
             field_name=field_name,
@@ -200,6 +201,7 @@ class ProductFieldBulkService:
             value=value,
             dry_run=True,
             wix_products=wix_products,
+            local_products=local_products,
         )
 
     def apply_field_update(
@@ -213,6 +215,7 @@ class ProductFieldBulkService:
         wix_products: list[WixProduct] | None = None,
     ) -> FieldBulkUpdateReport:
         """Apply field update locally and optionally write to Wix."""
+        local_products = self._inventory.list_products()
         report = self._build_report(
             skus=skus,
             field_name=field_name,
@@ -220,6 +223,7 @@ class ProductFieldBulkService:
             value=value,
             dry_run=False,
             wix_products=wix_products,
+            local_products=local_products,
         )
         field_def = BULK_EDITABLE_FIELDS.get(field_name)
         if field_def is None:
@@ -228,20 +232,39 @@ class ProductFieldBulkService:
         if report.changed <= 0:
             return report
 
+        local_skus = {row.sku.strip().upper() for row in local_products}
         if (not sync_wix) and (
             (not field_def.writable_local)
             or any(
-                item.status == "changed" and item.sku.strip().upper() not in {row.sku.strip().upper() for row in self._inventory.list_products()}
+                item.status == "changed" and item.sku.strip().upper() not in local_skus
                 for item in report.items
             )
         ):
             raise ValueError("Diese Auswahl erfordert Wix Writeback.")
 
         if field_def.writable_local:
-            self._persist_local_changes(report, field_name, operator=str(operator), value=value)
+            self._persist_local_changes(
+                report,
+                field_name,
+                operator=str(operator),
+                value=value,
+                local_products=local_products,
+            )
 
         if sync_wix and field_def.writable_wix:
-            return self._apply_wix_field_update(report, wix_products=wix_products)
+            # Reflect locally changed values without another database round-trip.
+            effective_products = self._updated_local_rows(
+                local_products,
+                report,
+                field_name,
+                operator=str(operator),
+                value=value,
+            ) if field_def.writable_local else local_products
+            return self._apply_wix_field_update(
+                report,
+                wix_products=wix_products,
+                local_products=effective_products,
+            )
         return report
 
     def _persist_local_changes(
@@ -251,15 +274,44 @@ class ProductFieldBulkService:
         *,
         operator: str,
         value: str,
+        local_products: list[ProductRow],
     ) -> None:
         """Persist locally writable field changes to the inventory store."""
         selected = {item.sku.strip().upper() for item in report.items if item.status == "changed"}
         if not selected:
             return
 
-        updated_rows: list[ProductRow] = []
+        updated_rows = self._updated_local_rows(
+            local_products,
+            report,
+            field_name,
+            operator=operator,
+            value=value,
+        )
+        updates: dict[str, dict[str, object]] = {}
+        for row in updated_rows:
+            sku = row.sku.strip().upper()
+            if sku not in selected:
+                continue
+            updates[sku] = {field_name: self._get_field_value(row, field_name)}
+        atomic_update = getattr(self._inventory, "update_product_fields", None)
+        if callable(atomic_update):
+            atomic_update(updates)
+        else:
+            self._inventory.save_products(updated_rows)
 
-        for row in self._inventory.list_products():
+    def _updated_local_rows(
+        self,
+        local_products: list[ProductRow],
+        report: FieldBulkUpdateReport,
+        field_name: str,
+        *,
+        operator: str,
+        value: str,
+    ) -> list[ProductRow]:
+        selected = {item.sku.strip().upper() for item in report.items if item.status == "changed"}
+        updated_rows: list[ProductRow] = []
+        for row in local_products:
             sku = row.sku.strip().upper()
             if sku not in selected:
                 updated_rows.append(row)
@@ -270,13 +322,14 @@ class ProductFieldBulkService:
             updated_row = self._set_field_on_row(row, field_name, new_val)
             updated_rows.append(updated_row)
 
-        self._inventory.save_products(updated_rows)
+        return updated_rows
 
     def _apply_wix_field_update(
         self,
         local_report: FieldBulkUpdateReport,
         *,
         wix_products: list[WixProduct] | None = None,
+        local_products: list[ProductRow],
     ) -> FieldBulkUpdateReport:
         """Write field updates to Wix via WixProductDetailsClient (version-aware)."""
         if not self._wix_client.has_credentials():
@@ -296,7 +349,7 @@ class ProductFieldBulkService:
         }
         local_by_sku = {
             row.sku.strip().upper(): row
-            for row in self._inventory.list_products()
+            for row in local_products
             if row.sku.strip()
         }
 
@@ -386,10 +439,12 @@ class ProductFieldBulkService:
         value: str,
         dry_run: bool,
         wix_products: list[WixProduct] | None = None,
+        local_products: list[ProductRow] | None = None,
     ) -> FieldBulkUpdateReport:
         """Build a report by simulating the update on all selected products."""
         selected = [sku.strip().upper() for sku in skus if sku.strip()]
-        local_by_sku = {row.sku.strip().upper(): row for row in self._inventory.list_products() if row.sku.strip()}
+        rows = local_products if local_products is not None else self._inventory.list_products()
+        local_by_sku = {row.sku.strip().upper(): row for row in rows if row.sku.strip()}
         wix_by_sku = {row.sku.strip().upper(): row for row in (wix_products or []) if row.sku.strip()}
         items: list[FieldUpdateItem] = []
         changed_count = 0

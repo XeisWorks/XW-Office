@@ -120,16 +120,9 @@ class DigitalLicenseService:
         if self._inventory is None:
             return
         try:
-            rows = self._inventory.list_products()
-            updated = []
-            found = False
-            for row in rows:
-                if row.sku.strip().upper() == clean_sku:
-                    row.print_file_path = clean_path
-                    found = True
-                updated.append(row)
-            if found:
-                self._inventory.save_products(updated)
+            self._inventory.update_product_fields(
+                {clean_sku: {"print_file_path": clean_path}}
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Persisting print path failed for %s: %s", clean_sku, exc)
 

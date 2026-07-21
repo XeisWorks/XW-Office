@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
@@ -491,44 +491,40 @@ class InventoryService:
         for item in data:
             if not isinstance(item, dict):
                 continue
-            try:
-                on_hand = int(item.get("on_hand") or 0)
-            except (TypeError, ValueError):
-                on_hand = 0
-            title_configs: dict[str, dict[str, object]] = {}
-            raw_title_configs = item.get("title_print_configs")
-            if isinstance(raw_title_configs, dict):
-                for title, config in raw_title_configs.items():
-                    if not isinstance(config, dict):
-                        continue
-                    resolved_config = dict(config)
-                    resolved_config["path"] = resolve_shared_path(
-                        str(resolved_config.get("path") or "")
-                    )
-                    title_configs[str(title)] = resolved_config
-            rows.append(
-                ProductRow(
-                    sku=str(item.get("sku") or ""),
-                    name=str(item.get("name") or ""),
-                    category=str(item.get("category") or ""),
-                    on_hand=on_hand,
-                    price_eur=str(item.get("price_eur") or ""),
-                    brand_name=str(item.get("brand_name") or item.get("brand") or ""),
-                    brand_id=str(item.get("brand_id") or ""),
-                    wix_id=str(item.get("wix_id") or ""),
-                    sevdesk_id=str(item.get("sevdesk_id") or ""),
-                    print_file_path=resolve_shared_path(
-                        str(item.get("print_file_path") or "")
-                    ),
-                    print_profile_id=str(item.get("print_profile_id") or ""),
-                    print_plan=[
-                        entry for entry in (item.get("print_plan") or [])
-                        if isinstance(entry, dict)
-                    ],
-                    title_print_configs=title_configs,
-                )
-            )
+            rows.append(self._product_row_from_payload(item))
         return rows
+
+    @staticmethod
+    def _product_row_from_payload(item: dict[str, object]) -> ProductRow:
+        try:
+            on_hand = int(item.get("on_hand") or 0)
+        except (TypeError, ValueError):
+            on_hand = 0
+        title_configs: dict[str, dict[str, object]] = {}
+        raw_title_configs = item.get("title_print_configs")
+        if isinstance(raw_title_configs, dict):
+            for title, config in raw_title_configs.items():
+                if not isinstance(config, dict):
+                    continue
+                resolved_config = dict(config)
+                resolved_config["path"] = resolve_shared_path(str(resolved_config.get("path") or ""))
+                title_configs[str(title)] = resolved_config
+        raw_plan = item.get("print_plan")
+        return ProductRow(
+            sku=str(item.get("sku") or ""),
+            name=str(item.get("name") or ""),
+            category=str(item.get("category") or ""),
+            on_hand=on_hand,
+            price_eur=str(item.get("price_eur") or ""),
+            brand_name=str(item.get("brand_name") or item.get("brand") or ""),
+            brand_id=str(item.get("brand_id") or ""),
+            wix_id=str(item.get("wix_id") or ""),
+            sevdesk_id=str(item.get("sevdesk_id") or ""),
+            print_file_path=resolve_shared_path(str(item.get("print_file_path") or "")),
+            print_profile_id=str(item.get("print_profile_id") or ""),
+            print_plan=[entry for entry in raw_plan if isinstance(entry, dict)] if isinstance(raw_plan, list) else [],
+            title_print_configs=title_configs,
+        )
 
     def save_products(self, rows: list[ProductRow]) -> None:
         """Persist ``inventory.products`` rows to settings repository."""
@@ -553,28 +549,86 @@ class InventoryService:
             for row in rows
             if row.sku
         ]
-        self._settings_repo.set_value_json(_PRODUCTS_KEY, json.dumps(payload, ensure_ascii=False))
+        serialized = json.dumps(payload, ensure_ascii=False)
+        atomic_mutator = getattr(self._settings_repo, "mutate_value_json", None)
+        if callable(atomic_mutator):
+            atomic_mutator(_PRODUCTS_KEY, lambda _current: serialized)
+        else:
+            self._settings_repo.set_value_json(_PRODUCTS_KEY, serialized)
+
+    def update_product_fields(self, updates: dict[str, dict[str, object]]) -> int:
+        """Atomically merge selected fields into existing SKUs.
+
+        This is the safe path for bulk edits: it preserves unrelated product
+        fields and changes committed concurrently by another workstation.
+        """
+        if self._settings_repo is None:
+            return 0
+        clean_updates = {
+            str(sku or "").strip().upper(): dict(fields)
+            for sku, fields in updates.items()
+            if str(sku or "").strip() and isinstance(fields, dict)
+        }
+        if not clean_updates:
+            return 0
+        changed = 0
+
+        def mutate(raw: str | None) -> str:
+            nonlocal changed
+            try:
+                payload = json.loads(raw) if raw else []
+            except json.JSONDecodeError:
+                payload = []
+            if not isinstance(payload, list):
+                payload = []
+            changed = 0
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                fields = clean_updates.get(str(item.get("sku") or "").strip().upper())
+                if fields is None:
+                    continue
+                for field_name, value in fields.items():
+                    if item.get(field_name) != value:
+                        item[field_name] = value
+                changed += 1
+            return json.dumps(payload, ensure_ascii=False)
+
+        atomic_mutator = getattr(self._settings_repo, "mutate_value_json", None)
+        if callable(atomic_mutator):
+            atomic_mutator(_PRODUCTS_KEY, mutate)
+        else:
+            current_raw = self._settings_repo.get_value_json(_PRODUCTS_KEY)
+            self._settings_repo.set_value_json(_PRODUCTS_KEY, mutate(current_raw))
+        return changed
 
     def set_product_stock(self, sku: str, new_stock: int) -> None:
-        """Keep local product and workflow stock snapshots in sync."""
+        """Mirror an authoritative external stock value into local snapshots."""
         wanted = str(sku or "").strip().upper()
         if not wanted:
             raise RuntimeError("SKU fehlt bei der Bestandsaktualisierung")
         quantity = max(0, int(new_stock))
-        products = self.list_products()
-        updated = False
-        for index, product in enumerate(products):
-            if product.sku.strip().upper() != wanted:
-                continue
-            products[index] = replace(product, on_hand=quantity)
-            updated = True
-            break
-        if not updated:
+        if self.update_product_fields({wanted: {"on_hand": quantity}}) <= 0:
             raise RuntimeError(f"Lokaler Produktdatensatz nicht gefunden: {wanted}")
-        self.save_products(products)
-        stock_levels = self.load_stock_levels()
-        stock_levels[wanted] = quantity
-        self._save_stock_levels(stock_levels)
+        if self._settings_repo is None:
+            return
+
+        def mutate_stock(raw: str | None) -> str:
+            try:
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            payload[wanted] = quantity
+            return json.dumps(payload, ensure_ascii=False)
+
+        atomic_mutator = getattr(self._settings_repo, "mutate_value_json", None)
+        if callable(atomic_mutator):
+            atomic_mutator(_STOCK_KEY, mutate_stock)
+        else:
+            current_raw = self._settings_repo.get_value_json(_STOCK_KEY)
+            self._settings_repo.set_value_json(_STOCK_KEY, mutate_stock(current_raw))
 
     def save_product_print_config(
         self,
@@ -597,48 +651,73 @@ class InventoryService:
         if not clean_profile and not clean_plan:
             raise RuntimeError("Druckplan oder Profil fehlt")
 
-        rows = self.list_products()
-        by_sku = {row.sku.strip().upper(): row for row in rows if row.sku.strip()}
-        current = by_sku.get(clean_sku)
-        if current is None:
-            current = ProductRow(
-                sku=clean_sku,
-                name=str(name or clean_sku).strip(),
-                category="",
-                on_hand=0,
-                price_eur="",
-                wix_id="",
-                sevdesk_id="",
-            )
-
-        title_configs = dict(current.title_print_configs or {})
-        title = str(name or current.name or "").strip()
+        title = str(name or "").strip()
         title_config = {
             "path": clean_path,
             "profile_id": clean_profile,
             "print_plan": clean_plan,
         }
-        if title:
-            title_configs[title] = title_config
+        if self._settings_repo is None:
+            raise RuntimeError("Produktkonfiguration kann ohne Datenbank nicht gespeichert werden")
 
-        updated = ProductRow(
-            sku=current.sku or clean_sku,
-            name=current.name or title or clean_sku,
-            category=current.category,
-            on_hand=current.on_hand,
-            price_eur=current.price_eur,
-            wix_id=current.wix_id,
-            sevdesk_id=current.sevdesk_id,
-            # This method is the explicit editor/save path. Existing values
-            # must be replaced; otherwise a corrected multi-printer plan can
-            # never overwrite a previously stored plan.
-            print_file_path=clean_path,
-            print_profile_id=clean_profile,
-            print_plan=list(clean_plan),
-            title_print_configs=title_configs,
-        )
-        by_sku[clean_sku] = updated
-        self.save_products(sorted(by_sku.values(), key=lambda row: row.sku))
+        saved_payload: dict[str, object] = {}
+
+        def mutate(raw: str | None) -> str:
+            try:
+                payload = json.loads(raw) if raw else []
+            except json.JSONDecodeError:
+                payload = []
+            if not isinstance(payload, list):
+                payload = []
+            product: dict[str, object] | None = None
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("sku") or "").strip().upper() == clean_sku:
+                    product = item
+                    break
+            if product is None:
+                product = {
+                    "sku": clean_sku,
+                    "name": title or clean_sku,
+                    "category": "",
+                    "on_hand": 0,
+                    "price_eur": "",
+                    "wix_id": "",
+                    "sevdesk_id": "",
+                }
+                payload.append(product)
+
+            resolved_title = title or str(product.get("name") or "").strip()
+            title_configs = product.get("title_print_configs")
+            if not isinstance(title_configs, dict):
+                title_configs = {}
+            else:
+                title_configs = dict(title_configs)
+            if resolved_title:
+                title_configs[resolved_title] = title_config
+
+            # Merge only this SKU's print fields while holding the repository's
+            # advisory lock. Unrelated edits from another PC remain untouched.
+            product["print_file_path"] = clean_path
+            product["print_profile_id"] = clean_profile
+            product["print_plan"] = list(clean_plan)
+            product["title_print_configs"] = title_configs
+            saved_payload.clear()
+            saved_payload.update(product)
+            payload.sort(key=lambda item: str(item.get("sku") or "") if isinstance(item, dict) else "")
+            return json.dumps(payload, ensure_ascii=False)
+
+        atomic_mutator = getattr(self._settings_repo, "mutate_value_json", None)
+        if callable(atomic_mutator):
+            atomic_mutator(_PRODUCTS_KEY, mutate)
+        else:
+            current_raw = self._settings_repo.get_value_json(_PRODUCTS_KEY)
+            self._settings_repo.set_value_json(_PRODUCTS_KEY, mutate(current_raw))
+
+        if not saved_payload:
+            raise RuntimeError(f"Gespeicherte Produktkonfiguration nicht gefunden: {clean_sku}")
+        updated = self._product_row_from_payload(saved_payload)
         logger.info(
             "Product print config saved: sku=%s title=%r profile_id=%s print_plan=%s",
             clean_sku,

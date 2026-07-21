@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import threading
-import time
+from typing import Any
 
 from xw_studio.services.printing.pdf_renderer import print_pdf_with_qprinter
 from xw_studio.services.printing.print_jobs import PdfPrintJob
@@ -71,15 +71,6 @@ class NativePdfCliBackend(PdfPrintBackend):
                     f"aber die EXE wurde nicht gefunden: {self._executable_path or '(kein Pfad)'}"
                 )
             self._print_with_pdf_xchange(job, str(executable), prepared_pdf.path)
-            return
-        except Exception as exc:  # noqa: BLE001 - Acrobat is the explicit fallback.
-            logger.warning(
-                "PDF-XChange native print failed; trying Acrobat fallback: printer='%s' file='%s' error=%s",
-                job.printer_name,
-                prepared_pdf.path,
-                exc,
-            )
-            _print_with_acrobat_fallback(job, prepared_pdf.path, timeout_seconds=self._timeout_seconds)
         finally:
             prepared_pdf.schedule_cleanup()
 
@@ -88,23 +79,24 @@ class NativePdfCliBackend(PdfPrintBackend):
         command_line = subprocess.list2cmdline(command)
         copies = max(int(job.copies), 1)
         for copy_number in range(copies):
-            spooler_before = _windows_print_job_snapshot(job.printer_name)
-            logger.info(
-                "Native PDF print dispatch: backend=pdf_xchange_print printer='%s' copy=%s/%s command=%s",
-                job.printer_name,
-                copy_number + 1,
-                copies,
-                command_line,
-            )
-            completed = _run_print_command(command, timeout_seconds=self._timeout_seconds)
-            stdout = (completed.stdout or "").strip()
-            stderr = (completed.stderr or "").strip()
-            if completed.returncode != 0:
-                detail = (stderr or stdout).strip()
-                suffix = f": {detail}" if detail else ""
-                raise RuntimeError(
-                    f"PDF-XChange Druckaufruf fehlgeschlagen (Exit-Code {completed.returncode}){suffix}"
+            with _WindowsSpoolerWatcher(job.printer_name) as spooler:
+                logger.info(
+                    "Native PDF print dispatch: backend=pdf_xchange_printto printer='%s' copy=%s/%s command=%s",
+                    job.printer_name,
+                    copy_number + 1,
+                    copies,
+                    command_line,
                 )
+                completed = _run_print_command(command, timeout_seconds=self._timeout_seconds)
+                stdout = (completed.stdout or "").strip()
+                stderr = (completed.stderr or "").strip()
+                if completed.returncode != 0:
+                    detail = (stderr or stdout).strip()
+                    suffix = f": {detail}" if detail else ""
+                    raise RuntimeError(
+                        f"PDF-XChange Druckaufruf fehlgeschlagen (Exit-Code {completed.returncode}){suffix}"
+                    )
+                spooler_confirmed = spooler.wait(timeout_seconds=10.0)
             if stdout or stderr:
                 logger.info(
                     "Native PDF print process output: printer='%s' stdout=%r stderr=%r",
@@ -112,22 +104,14 @@ class NativePdfCliBackend(PdfPrintBackend):
                     stdout,
                     stderr,
                 )
-            spooler_after = _wait_for_spooler_change(job.printer_name, previous_snapshot=spooler_before)
-            if spooler_after:
-                logger.info(
-                    "Native PDF print spooler observed: printer='%s' jobs=%s",
-                    job.printer_name,
-                    spooler_after,
-                )
-            else:
-                logger.info(
-                    "Native PDF print handed to PDF-XChange; no spooler job was visible in the diagnostic window "
-                    "for printer='%s'. This can be normal when the driver accepts the job immediately. command=%s",
-                    job.printer_name,
-                    command_line,
+            if not spooler_confirmed:
+                raise RuntimeError(
+                    "PDF-XChange hat keinen Druckauftrag an den Windows-Spooler des "
+                    f"Druckers '{job.printer_name}' uebergeben. Der Auftrag wurde abgebrochen; "
+                    "es erfolgt keine Bestandsbuchung."
                 )
             logger.info(
-                "Native PDF print accepted: backend=pdf_xchange_print printer='%s' copy=%s/%s",
+                "Native PDF print confirmed by spooler: backend=pdf_xchange_printto printer='%s' copy=%s/%s",
                 job.printer_name,
                 copy_number + 1,
                 copies,
@@ -148,26 +132,13 @@ def _pdf_xchange_print_command(
     printer_name: str,
     pdf_path: str,
 ) -> list[str]:
-    """Build an explicit, silent PDF-XChange print command.
+    """Build PDF-XChange's dedicated silent print-to command.
 
-    ``/printto`` can hand subsequent invocations to an already running editor
-    instance, where the first printer selection may remain active.  PDF-XChange's
-    documented ``/print`` command accepts the target printer as part of each
-    invocation.  ``default=yes`` also prevents settings from a previous editor
-    print operation from leaking into the job, while ``showui=no`` keeps the
-    editor and print dialog hidden.
-
-    Page-restricted print plans are converted to temporary PDFs before this
-    command is built.
+    The printer is a separate argument, so spaces and non-ASCII characters are
+    quoted by Windows without becoming part of PDF-XChange's option parser.
+    Every invocation therefore carries its own explicit target printer.
     """
-    # PDF-XChange requires the *whole* options list to be quoted when a value
-    # contains spaces. Passing embedded quotes around just the printer makes
-    # subprocess escape them as ``\"`` and current Editor versions silently
-    # accept the command without creating a spooler job. Keeping the value
-    # unquoted here lets ``subprocess.list2cmdline`` quote the complete argv
-    # element correctly.
-    options = f"/print:default=yes;showui=no;printer={printer_name}"
-    return [executable, options, pdf_path]
+    return [executable, "/printto:default=yes;showui=no", printer_name, pdf_path]
 
 
 def _run_print_command(command: list[str], *, timeout_seconds: float) -> subprocess.CompletedProcess[str]:
@@ -243,125 +214,82 @@ def _extract_pdf_pages(pdf_path: str, pages: list[int]) -> str:
         source.close()
 
 
-def _print_with_acrobat_fallback(job: PdfPrintJob, pdf_path: str, *, timeout_seconds: float) -> None:
-    executable = _acrobat_executable()
-    if not executable:
-        raise RuntimeError(
-            "PDF-XChange konnte nicht drucken und Acrobat wurde nicht gefunden."
-        )
-    printer_info = _windows_printer_driver_port(job.printer_name)
-    command = [executable, "/t", pdf_path, job.printer_name]
-    if printer_info.get("driver"):
-        command.append(printer_info["driver"])
-    if printer_info.get("port"):
-        command.append(printer_info["port"])
-    copies = max(int(job.copies), 1)
-    for copy_number in range(copies):
-        logger.info(
-            "Native PDF print fallback dispatch: backend=acrobat_t printer='%s' copy=%s/%s command=%s",
-            job.printer_name,
-            copy_number + 1,
-            copies,
-            subprocess.list2cmdline(command),
-        )
+class _WindowsSpoolerWatcher:
+    """Observe a new job on one printer without spawning PowerShell polls."""
+
+    def __init__(self, printer_name: str) -> None:
+        self._printer_name = str(printer_name or "").strip()
+        self._win32print: Any = None
+        self._winspool: Any = None
+        self._kernel32: Any = None
+        self._printer_handle: Any = None
+        self._notification_handle: Any = None
         try:
-            subprocess.Popen(  # noqa: S603 - Acrobat path is discovered from known install paths/env.
-                command,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            import win32print  # type: ignore[import-untyped]
+            import ctypes
+            from ctypes import wintypes
+
+            self._win32print = win32print
+            self._printer_handle = win32print.OpenPrinter(self._printer_name)
+            self._winspool = ctypes.WinDLL("winspool.drv", use_last_error=True)
+            self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            find_first = self._winspool.FindFirstPrinterChangeNotification
+            find_first.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID]
+            find_first.restype = wintypes.HANDLE
+            self._notification_handle = find_first(
+                int(self._printer_handle),
+                0x00000100,  # PRINTER_CHANGE_ADD_JOB
+                0,
+                None,
             )
-        except OSError as exc:
-            raise RuntimeError(f"Acrobat-Fallback konnte nicht gestartet werden: {exc}") from exc
-        time.sleep(min(2.0, max(float(timeout_seconds), 0.1)))
+            if not self._notification_handle or int(self._notification_handle) == -1:
+                raise ctypes.WinError(ctypes.get_last_error())
+        except Exception as exc:  # noqa: BLE001 - converted to a user-facing print failure.
+            self.close()
+            raise RuntimeError(
+                f"Windows-Spooler fuer Drucker '{self._printer_name}' konnte nicht ueberwacht werden: {exc}"
+            ) from exc
 
+    def __enter__(self) -> _WindowsSpoolerWatcher:
+        return self
 
-def _acrobat_executable() -> str:
-    candidates = [
-        os.getenv("XW_STUDIO_ACROBAT_EXE", ""),
-        r"C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
-        r"C:\Program Files (x86)\Adobe\Acrobat DC\Acrobat\Acrobat.exe",
-        r"C:\Program Files\Adobe\Acrobat 2020\Acrobat\Acrobat.exe",
-        r"C:\Program Files (x86)\Adobe\Acrobat 2020\Acrobat\Acrobat.exe",
-        r"C:\Program Files\Adobe\Acrobat 2017\Acrobat\Acrobat.exe",
-        r"C:\Program Files (x86)\Adobe\Acrobat 2017\Acrobat\Acrobat.exe",
-        r"C:\Program Files\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe",
-        r"C:\Program Files (x86)\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe",
-        r"C:\Program Files\Adobe\Reader\AcroRd32.exe",
-        r"C:\Program Files (x86)\Adobe\Reader\AcroRd32.exe",
-    ]
-    for candidate in candidates:
-        path = Path(str(candidate or "").strip())
-        if path.is_file():
-            return str(path)
-    return ""
+    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        self.close()
 
-
-def _windows_printer_driver_port(printer_name: str) -> dict[str, str]:
-    if os.name != "nt":
-        return {}
-    try:
-        import win32print  # type: ignore[import-untyped]
-
-        handle = win32print.OpenPrinter(str(printer_name or ""))
+    def wait(self, *, timeout_seconds: float) -> bool:
         try:
-            info = win32print.GetPrinter(handle, 2)
-        finally:
-            win32print.ClosePrinter(handle)
-        return {
-            "driver": str(info.get("pDriverName") or "").strip(),
-            "port": str(info.get("pPortName") or "").strip(),
-        }
-    except Exception as exc:  # noqa: BLE001 - Acrobat can still try with printer name only.
-        logger.debug("Printer driver/port lookup failed for '%s': %s", printer_name, exc)
-        return {}
+            import ctypes
+            from ctypes import wintypes
 
+            wait_for_single = self._kernel32.WaitForSingleObject
+            wait_for_single.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            wait_for_single.restype = wintypes.DWORD
+            result = wait_for_single(
+                self._notification_handle,
+                max(1, int(float(timeout_seconds) * 1000)),
+            )
+            if result == 0:  # WAIT_OBJECT_0
+                return True
+            if result == 0x00000102:  # WAIT_TIMEOUT
+                return False
+            raise ctypes.WinError(ctypes.get_last_error())
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"Windows-Spooler-Bestaetigung fuer '{self._printer_name}' ist fehlgeschlagen: {exc}"
+            ) from exc
 
-
-def _windows_print_job_snapshot(printer_name: str) -> str:
-    """Return a compact active Windows spooler snapshot for diagnostics."""
-    if os.name != "nt":
-        return ""
-    command = [
-        "powershell",
-        "-NoProfile",
-        "-Command",
-        (
-            "$p=$env:XW_PRINT_DIAG_PRINTER; "
-            "Get-PrintJob -PrinterName $p -ErrorAction SilentlyContinue | "
-            "Select-Object ID,DocumentName,JobStatus | ConvertTo-Json -Compress"
-        ),
-    ]
-    env = dict(os.environ)
-    env["XW_PRINT_DIAG_PRINTER"] = str(printer_name or "")
-    try:
-        completed = subprocess.run(  # noqa: S603 - PowerShell is used for Windows print diagnostics.
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=2.0,
-            env=env,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except Exception as exc:  # noqa: BLE001 - diagnostics must not break printing.
-        logger.debug("Windows spooler diagnostic failed for printer='%s': %s", printer_name, exc)
-        return ""
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "").strip()
-        if detail:
-            logger.debug("Windows spooler diagnostic returned %s: %s", completed.returncode, detail)
-        return ""
-    return (completed.stdout or "").strip()
-
-
-def _wait_for_spooler_change(printer_name: str, *, previous_snapshot: str) -> str:
-    """Poll briefly for a visible spooler entry after PDF-XChange returns."""
-    deadline = time.monotonic() + 8.0
-    latest = ""
-    while time.monotonic() < deadline:
-        latest = _windows_print_job_snapshot(printer_name)
-        if latest and latest != previous_snapshot:
-            return latest
-        time.sleep(0.4)
-    return latest if latest and latest != previous_snapshot else ""
+    def close(self) -> None:
+        notification = self._notification_handle
+        self._notification_handle = None
+        if notification is not None:
+            try:
+                self._winspool.FindClosePrinterChangeNotification(notification)
+            except Exception:
+                pass
+        printer = self._printer_handle
+        self._printer_handle = None
+        if printer is not None:
+            try:
+                self._win32print.ClosePrinter(printer)
+            except Exception:
+                pass

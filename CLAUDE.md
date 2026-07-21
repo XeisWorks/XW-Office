@@ -10,7 +10,7 @@ Multi-PC sync via PostgreSQL on Railway.
 - **Services:** Business logic layer with DI container
 - **Data:** PostgreSQL (Railway) for all operational data
 - **Config:** YAML + .env + DB settings
-- **Printing:** QPrinter + PyMuPDF at 600 DPI (no Acrobat)
+- **Printing:** Rechnungen/Labels via QPrinter; qualitaetskritische Noten-/Produkt-PDFs nativ und vektorbasiert via PDF-XChange. Erfolg erst nach Windows-Spooler-Bestaetigung; kein automatischer Acrobat- oder Raster-Fallback.
 
 ## Code Conventions
 - **Language:** English code (variables, classes, comments), German UI labels

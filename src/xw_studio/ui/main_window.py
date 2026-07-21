@@ -91,6 +91,35 @@ class MainWindow(QMainWindow):
         signals.show_home.connect(lambda: self._navigate_to(ModuleKey.HOME.value))
         signals.status_message.connect(self._status_bar.showMessage)
         signals.theme_changed.connect(self._apply_theme)
+        print_queue = self._container.resolve(PrintQueueService)
+        print_queue.job_queued.connect(self._on_print_job_queued)
+        print_queue.job_started.connect(self._on_print_job_started)
+        print_queue.job_finished.connect(self._on_print_job_finished)
+        print_queue.job_failed.connect(self._on_print_job_failed)
+
+    def _on_print_job_queued(self, job: object) -> None:
+        printer = str(getattr(job, "printer_name", "") or "Drucker")
+        self._status_bar.showMessage(f"Druckauftrag eingereiht: {printer}", 5000)
+        self._container.resolve(AppSignals).print_job_queued.emit(str(getattr(job, "id", "")))
+
+    def _on_print_job_started(self, job: object) -> None:
+        printer = str(getattr(job, "printer_name", "") or "Drucker")
+        self._status_bar.showMessage(f"Druckauftrag wird uebergeben: {printer}", 0)
+
+    def _on_print_job_finished(self, result: object) -> None:
+        printer = str(getattr(result, "printer_name", "") or "Drucker")
+        self._status_bar.showMessage(f"Druckauftrag vom Windows-Spooler bestaetigt: {printer}", 8000)
+        self._container.resolve(AppSignals).print_job_completed.emit(str(getattr(result, "job_id", "")))
+
+    def _on_print_job_failed(self, result: object) -> None:
+        printer = str(getattr(result, "printer_name", "") or "Drucker")
+        message = str(getattr(result, "message", "") or "Unbekannter Druckfehler")
+        self._status_bar.showMessage(f"Druck fehlgeschlagen: {printer}", 12000)
+        QMessageBox.critical(
+            self,
+            "Druck fehlgeschlagen",
+            f"Der Auftrag fuer '{printer}' wurde nicht bestaetigt.\n\n{message}",
+        )
 
     def _open_initial_module(self) -> None:
         signals = self._container.resolve(AppSignals)

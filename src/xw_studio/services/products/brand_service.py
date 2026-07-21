@@ -4,7 +4,7 @@ Centralizes preview + apply logic so UI modules keep orchestration-only code.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from xw_studio.services.inventory.service import InventoryService, ProductRow
 from xw_studio.services.wix.client import WixProductsClient
@@ -63,30 +63,19 @@ class ProductBrandService:
 
         selected = {sku.strip().upper() for sku in skus if sku.strip()}
         target_brand = new_brand.strip()
-        updated_rows: list[ProductRow] = []
-        for row in self._inventory.list_products():
+        updates: dict[str, dict[str, object]] = {}
+        rows = self._inventory.list_products()
+        for row in rows:
             sku = row.sku.strip().upper()
             if sku in selected and (row.brand_name or "").strip() != target_brand:
-                updated_rows.append(
-                    ProductRow(
-                        sku=row.sku,
-                        name=row.name,
-                        category=row.category,
-                        on_hand=row.on_hand,
-                        price_eur=row.price_eur,
-                        wix_id=row.wix_id,
-                        sevdesk_id=row.sevdesk_id,
-                        brand_name=target_brand,
-                        brand_id=row.brand_id,
-                        print_file_path=row.print_file_path,
-                        print_profile_id=row.print_profile_id,
-                        print_plan=list(row.print_plan or []),
-                        title_print_configs=dict(row.title_print_configs or {}),
-                    )
-                )
-            else:
-                updated_rows.append(row)
-        self._inventory.save_products(updated_rows)
+                updates[sku] = {"brand_name": target_brand}
+        atomic_update = getattr(self._inventory, "update_product_fields", None)
+        if callable(atomic_update):
+            atomic_update(updates)
+        else:
+            self._inventory.save_products(
+                [replace(row, brand_name=target_brand) if row.sku.strip().upper() in updates else row for row in rows]
+            )
         return report
 
     def apply_brand_update(

@@ -13,6 +13,21 @@ from xw_studio.services.printing.pdf_backends import (
 from xw_studio.services.printing.print_jobs import PdfPrintJob
 
 
+class _FakeSpoolerWatcher:
+    def __init__(self, _printer_name: str, *, confirmed: bool = True) -> None:
+        self.confirmed = confirmed
+
+    def __enter__(self) -> "_FakeSpoolerWatcher":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def wait(self, *, timeout_seconds: float) -> bool:
+        assert timeout_seconds > 0
+        return self.confirmed
+
+
 def test_qt_raster_remains_the_default_backend() -> None:
     job = PdfPrintJob(pdf_path="C:/tmp/test.pdf", printer_name="Printer")
 
@@ -39,11 +54,7 @@ def test_pdf_xchange_builds_silent_native_command_with_pages_and_copies(
         "xw_studio.services.printing.pdf_backends._extract_pdf_pages",
         lambda _pdf_path, _pages: str(pages_pdf),
     )
-    monkeypatch.setattr("xw_studio.services.printing.pdf_backends._windows_print_job_snapshot", lambda _printer: "")
-    monkeypatch.setattr(
-        "xw_studio.services.printing.pdf_backends._wait_for_spooler_change",
-        lambda _printer, previous_snapshot: '{"ID":1,"DocumentName":"sample.pdf","JobStatus":"Printing"}',
-    )
+    monkeypatch.setattr("xw_studio.services.printing.pdf_backends._WindowsSpoolerWatcher", _FakeSpoolerWatcher)
     job = PdfPrintJob(
         pdf_path=str(pdf),
         printer_name="Noten A4 Simplex",
@@ -58,13 +69,13 @@ def test_pdf_xchange_builds_silent_native_command_with_pages_and_copies(
     assert len(calls) == 2
     assert calls[0] == [
         str(executable),
-        "/print:default=yes;showui=no;printer=Noten A4 Simplex",
+        "/printto:default=yes;showui=no",
+        "Noten A4 Simplex",
         str(pages_pdf),
     ]
 
     windows_command_line = subprocess.list2cmdline(calls[0])
-    assert "/print:default=yes;showui=no" in windows_command_line
-    assert "/printto" not in windows_command_line
+    assert "/printto:default=yes;showui=no" in windows_command_line
 
 
 def test_pdf_xchange_uses_explicit_silent_printer_for_full_document(
@@ -81,11 +92,7 @@ def test_pdf_xchange_uses_explicit_silent_printer_for_full_document(
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr("xw_studio.services.printing.pdf_backends._windows_print_job_snapshot", lambda _printer: "")
-    monkeypatch.setattr(
-        "xw_studio.services.printing.pdf_backends._wait_for_spooler_change",
-        lambda _printer, previous_snapshot: '{"ID":1,"DocumentName":"sample.pdf","JobStatus":"Printing"}',
-    )
+    monkeypatch.setattr("xw_studio.services.printing.pdf_backends._WindowsSpoolerWatcher", _FakeSpoolerWatcher)
 
     job = PdfPrintJob(
         pdf_path=str(pdf),
@@ -97,7 +104,8 @@ def test_pdf_xchange_uses_explicit_silent_printer_for_full_document(
 
     assert calls[0] == [
         str(executable),
-        "/print:default=yes;showui=no;printer=Noten A4 Duplex",
+        "/printto:default=yes;showui=no",
+        "Noten A4 Duplex",
         str(pdf),
     ]
 
@@ -108,11 +116,11 @@ def test_pdf_xchange_command_keeps_each_plan_printer_explicit() -> None:
     first = _pdf_xchange_print_command("PDFXEdit.exe", "Simplex", "score.pdf")
     second = _pdf_xchange_print_command("PDFXEdit.exe", "Duplex", "score.pdf")
 
-    assert first[1] == "/print:default=yes;showui=no;printer=Simplex"
-    assert second[1] == "/print:default=yes;showui=no;printer=Duplex"
+    assert first[1:] == ["/printto:default=yes;showui=no", "Simplex", "score.pdf"]
+    assert second[1:] == ["/printto:default=yes;showui=no", "Duplex", "score.pdf"]
 
 
-def test_pdf_xchange_without_visible_spooler_job_is_accepted(
+def test_pdf_xchange_without_spooler_confirmation_fails_closed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     executable = tmp_path / "PXCEditor.exe"
@@ -124,44 +132,23 @@ def test_pdf_xchange_without_visible_spooler_job_is_accepted(
         "run",
         lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, "", ""),
     )
-    monkeypatch.setattr("xw_studio.services.printing.pdf_backends._windows_print_job_snapshot", lambda _printer: "")
     monkeypatch.setattr(
-        "xw_studio.services.printing.pdf_backends._wait_for_spooler_change",
-        lambda _printer, previous_snapshot: "",
+        "xw_studio.services.printing.pdf_backends._WindowsSpoolerWatcher",
+        lambda printer: _FakeSpoolerWatcher(printer, confirmed=False),
     )
 
-    NativePdfCliBackend(str(executable)).print(
-        PdfPrintJob(
-            pdf_path=str(pdf),
-            printer_name="Noten A4 Duplex",
-            backend="pdf_xchange",
-            native_pdf_exe=str(executable),
+    with pytest.raises(RuntimeError, match="keinen Druckauftrag"):
+        NativePdfCliBackend(str(executable)).print(
+            PdfPrintJob(
+                pdf_path=str(pdf),
+                printer_name="Noten A4 Duplex",
+                backend="pdf_xchange",
+                native_pdf_exe=str(executable),
+            )
         )
-    )
 
 
-def test_pdf_xchange_missing_executable_uses_acrobat_fallback(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    qt_calls: list[object] = []
-    popen_calls: list[list[str]] = []
-    monkeypatch.setattr(
-        "xw_studio.services.printing.pdf_backends.print_pdf_with_qprinter",
-        lambda *args, **kwargs: qt_calls.append((args, kwargs)),
-    )
-    monkeypatch.setattr(
-        "xw_studio.services.printing.pdf_backends._acrobat_executable",
-        lambda: str(tmp_path / "Acrobat.exe"),
-    )
-    monkeypatch.setattr(
-        "xw_studio.services.printing.pdf_backends._windows_printer_driver_port",
-        lambda _printer: {"driver": "Driver", "port": "Port"},
-    )
-    monkeypatch.setattr(
-        subprocess,
-        "Popen",
-        lambda command, **_kwargs: popen_calls.append(command),
-    )
+def test_pdf_xchange_missing_executable_fails_without_fallback(tmp_path: Path) -> None:
     job = PdfPrintJob(
         pdf_path=str(tmp_path / "sample.pdf"),
         printer_name="Printer",
@@ -170,43 +157,30 @@ def test_pdf_xchange_missing_executable_uses_acrobat_fallback(
     )
     Path(job.pdf_path).write_bytes(b"%PDF-test")
 
-    backend_for_job(job).print(job)
-
-    assert qt_calls == []
-    assert popen_calls == [[str(tmp_path / "Acrobat.exe"), "/t", job.pdf_path, "Printer", "Driver", "Port"]]
+    with pytest.raises(RuntimeError, match="EXE wurde nicht gefunden"):
+        backend_for_job(job).print(job)
 
 
-def test_pdf_xchange_nonzero_exit_uses_acrobat_fallback(
+def test_pdf_xchange_nonzero_exit_fails_without_fallback(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     executable = tmp_path / "PDFXEdit.exe"
     executable.write_bytes(b"test")
     pdf = tmp_path / "sample.pdf"
     pdf.write_bytes(b"%PDF-test")
-    popen_calls: list[list[str]] = []
     monkeypatch.setattr(
         subprocess,
         "run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 5, "", "driver error"),
     )
-    monkeypatch.setattr(
-        "xw_studio.services.printing.pdf_backends._acrobat_executable",
-        lambda: str(tmp_path / "Acrobat.exe"),
-    )
-    monkeypatch.setattr(
-        "xw_studio.services.printing.pdf_backends._windows_printer_driver_port",
-        lambda _printer: {},
-    )
-    monkeypatch.setattr(subprocess, "Popen", lambda command, **_kwargs: popen_calls.append(command))
-    monkeypatch.setattr("xw_studio.services.printing.pdf_backends._windows_print_job_snapshot", lambda _printer: "")
+    monkeypatch.setattr("xw_studio.services.printing.pdf_backends._WindowsSpoolerWatcher", _FakeSpoolerWatcher)
 
-    NativePdfCliBackend(str(executable)).print(
-        PdfPrintJob(
-            pdf_path=str(pdf),
-            printer_name="Printer",
-            backend="pdf_xchange",
-            native_pdf_exe=str(executable),
+    with pytest.raises(RuntimeError, match="Exit-Code 5"):
+        NativePdfCliBackend(str(executable)).print(
+            PdfPrintJob(
+                pdf_path=str(pdf),
+                printer_name="Printer",
+                backend="pdf_xchange",
+                native_pdf_exe=str(executable),
+            )
         )
-    )
-
-    assert popen_calls == [[str(tmp_path / "Acrobat.exe"), "/t", str(pdf), "Printer"]]

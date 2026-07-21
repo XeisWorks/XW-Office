@@ -71,6 +71,7 @@ from xw_studio.services.draft_invoice.service import (
 )
 from xw_studio.services.invoice_processing.service import InvoiceProcessingService
 from xw_studio.services.digital_licenses import DigitalLicenseService
+from xw_studio.services.inventory import InventoryService
 from xw_studio.services.plc.label_archive import PlcLabelArchive
 from xw_studio.services.printer_status.service import PrinterStatusService
 from xw_studio.services.products.catalog import Product, ProductCatalogService
@@ -4734,11 +4735,22 @@ class RechnungenView(QWidget):
                 }
             try:
                 engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
-                engine.record_print_and_update_sevdesk(block, qty, invoice_ref=invoice_ref)
+                new_stock = engine.record_print_and_update_sevdesk(block, qty, invoice_ref=invoice_ref)
             except Exception as exc:
                 logger.warning("Stock update after product print failed: %s", exc)
                 return {"sku": block.sku, "quantity": qty, "stock_warning": str(exc)}
-            return {"sku": block.sku, "quantity": qty, "stock_warning": ""}
+            local_warning = ""
+            try:
+                self._container.resolve(InventoryService).set_product_stock(block.sku, new_stock)
+            except Exception as exc:
+                local_warning = str(exc)
+                logger.warning("Local stock mirror update failed for %s: %s", block.sku, exc)
+            return {
+                "sku": block.sku,
+                "quantity": qty,
+                "stock_warning": "",
+                "local_warning": local_warning,
+            }
 
         self._product_print_worker = BackgroundWorker(worker_job)
         self._product_print_worker.signals.result.connect(self._on_product_print_result)
@@ -4751,11 +4763,17 @@ class RechnungenView(QWidget):
         sku = str(data.get("sku") or "").strip() or "Produkt"
         qty = str(data.get("quantity") or "").strip() or "?"
         warning = str(data.get("stock_warning") or "").strip()
+        local_warning = str(data.get("local_warning") or "").strip()
         signals: AppSignals = self._container.resolve(AppSignals)
         if warning:
-            signals.status_message.emit(f"{sku}: Druckauftrag {qty}x uebergeben; Bestand nicht gebucht.", 8000)
+            signals.status_message.emit(f"{sku}: Druckauftrag {qty}x bestaetigt; Bestand nicht gebucht.", 8000)
+        elif local_warning:
+            signals.status_message.emit(
+                f"{sku}: Druck bestaetigt und sevDesk gebucht; lokaler Spiegel konnte nicht aktualisiert werden.",
+                10000,
+            )
         else:
-            signals.status_message.emit(f"{sku}: Druckauftrag {qty}x uebergeben; Bestand aktualisiert.", 5000)
+            signals.status_message.emit(f"{sku}: Druckauftrag {qty}x bestaetigt; Bestand aktualisiert.", 5000)
 
     def _on_product_print_error(self, exc: Exception) -> None:
         QMessageBox.critical(
