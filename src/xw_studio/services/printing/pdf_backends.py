@@ -160,7 +160,13 @@ def _pdf_xchange_print_command(
     Page-restricted print plans are converted to temporary PDFs before this
     command is built.
     """
-    options = f'/print:default=yes;showui=no;printer="{printer_name}"'
+    # PDF-XChange requires the *whole* options list to be quoted when a value
+    # contains spaces. Passing embedded quotes around just the printer makes
+    # subprocess escape them as ``\"`` and current Editor versions silently
+    # accept the command without creating a spooler job. Keeping the value
+    # unquoted here lets ``subprocess.list2cmdline`` quote the complete argv
+    # element correctly.
+    options = f"/print:default=yes;showui=no;printer={printer_name}"
     return [executable, options, pdf_path]
 
 

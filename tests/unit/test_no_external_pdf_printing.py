@@ -58,7 +58,7 @@ def test_pdf_xchange_builds_silent_native_command_with_pages_and_copies(
     assert len(calls) == 2
     assert calls[0] == [
         str(executable),
-        '/print:default=yes;showui=no;printer="Noten A4 Simplex"',
+        "/print:default=yes;showui=no;printer=Noten A4 Simplex",
         str(pages_pdf),
     ]
 
@@ -97,7 +97,7 @@ def test_pdf_xchange_uses_explicit_silent_printer_for_full_document(
 
     assert calls[0] == [
         str(executable),
-        '/print:default=yes;showui=no;printer="Noten A4 Duplex"',
+        "/print:default=yes;showui=no;printer=Noten A4 Duplex",
         str(pdf),
     ]
 
@@ -108,8 +108,8 @@ def test_pdf_xchange_command_keeps_each_plan_printer_explicit() -> None:
     first = _pdf_xchange_print_command("PDFXEdit.exe", "Simplex", "score.pdf")
     second = _pdf_xchange_print_command("PDFXEdit.exe", "Duplex", "score.pdf")
 
-    assert first[1] == '/print:default=yes;showui=no;printer="Simplex"'
-    assert second[1] == '/print:default=yes;showui=no;printer="Duplex"'
+    assert first[1] == "/print:default=yes;showui=no;printer=Simplex"
+    assert second[1] == "/print:default=yes;showui=no;printer=Duplex"
 
 
 def test_pdf_xchange_without_visible_spooler_job_is_accepted(

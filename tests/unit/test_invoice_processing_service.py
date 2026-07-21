@@ -494,6 +494,69 @@ def test_mail_step_uses_saved_template_when_available() -> None:
     assert client.render_calls == []
 
 
+def test_sevdesk_mail_receives_html_with_planned_line_breaks() -> None:
+    summary = InvoiceSummary(id="7-html", invoiceNumber="RE-HTML-1", contact_name="Max Mustermann")
+    client = _InvoiceClientStub([summary])
+    repo = _RepoStub(
+        {
+            "rechnungen.fulfillment_mail_subject": "Ihre Rechnung {{invoice_number}}",
+            "rechnungen.fulfillment_mail_template_html": (
+                "Guten Tag,\n\nIhre Bestellung wurde versendet.\n\n"
+                "Mit freundlichen Grüßen\nXeisWorks\nMag. Bernhard Holl"
+            ),
+        }
+    )
+    svc = InvoiceProcessingService(  # type: ignore[arg-type]
+        AppConfig(), client, repo, None, _MailServiceStub()
+    )
+
+    svc.send_invoice_mail_for_invoice(summary)
+
+    rendered = str(client.mail_calls[0]["text"])
+    assert "<p>Guten Tag,</p>" in rendered
+    assert "<p>Ihre Bestellung wurde versendet.</p>" in rendered
+    assert "Mit freundlichen Grüßen<br>XeisWorks<br>Mag. Bernhard Holl" in rendered
+
+
+def test_finalize_refreshes_invoice_number_before_mail_subject() -> None:
+    summary = InvoiceSummary(id="7-number", invoiceNumber="", contact_name="Max Mustermann")
+    client = _InvoiceClientStub([summary])
+    repo = _RepoStub(
+        {
+            "rechnungen.fulfillment_mail_subject": "Ihre Rechnung {{invoice_number}}",
+            "rechnungen.fulfillment_mail_template_html": "Guten Tag",
+        }
+    )
+    svc = InvoiceProcessingService(  # type: ignore[arg-type]
+        AppConfig(), client, repo, None, _MailServiceStub()
+    )
+    svc._invoice_detail_cache[summary.id] = {  # noqa: SLF001
+        "id": summary.id,
+        "header": "Rechnung",
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+
+    svc._run_finalize_step(  # noqa: SLF001
+        summary,
+        svc.read_fulfillment_flags(summary.id),
+        printed_copy=True,
+    )
+    client.invoice_payloads[summary.id] = {
+        "id": summary.id,
+        "invoiceNumber": "RE-262060",
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+    svc.send_invoice_mail_for_invoice(summary)
+
+    assert client.mail_calls[0]["subject"] == "Ihre Rechnung RE-262060"
+
+
+def test_invoice_header_is_not_used_as_invoice_number() -> None:
+    summary = InvoiceSummary(id="fallback-id", invoiceNumber="")
+
+    assert InvoiceProcessingService._invoice_number(summary, {"header": "Rechnung"}) == "fallback-id"  # noqa: SLF001
+
+
 def test_mail_step_honors_recipient_override() -> None:
     summary = InvoiceSummary(id="8", invoiceNumber="RE-TEST-2", contact_name="Max Mustermann")
     client = _InvoiceClientStub([summary])

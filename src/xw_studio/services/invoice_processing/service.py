@@ -934,7 +934,7 @@ class InvoiceProcessingService:
                     summary.id,
                     to_email=to_email,
                     subject=subject,
-                    text=text_body,
+                    text=html_body,
                     copy=False,
                 )
             except TypeError:
@@ -943,7 +943,7 @@ class InvoiceProcessingService:
                         summary.id,
                         to=to_email,
                         subject=subject,
-                        text=text_body,
+                        text=html_body,
                         copy=False,
                     )
                 except Exception as exc:  # noqa: BLE001 - Graph fallback below.
@@ -1191,6 +1191,10 @@ class InvoiceProcessingService:
             logger.info("Invoice %s: digital-only finalization delegated to sendViaEmail", summary.id)
         else:
             logger.info("Invoice %s: mail-only finalization delegated to sendViaEmail", summary.id)
+        # Finalization can assign the definitive invoice number. Do not let a
+        # draft-era detail response (often containing only header="Rechnung")
+        # leak into the subsequent mail subject/template rendering.
+        self._invoice_detail_cache.pop(str(summary.id or "").strip(), None)
         return self._next_flags(
             flags,
             payment_applicable=(self._stamp(flags).payment_applicable or bool(summary.order_reference.strip())),
@@ -1743,7 +1747,6 @@ class InvoiceProcessingService:
             summary.invoice_number,
             invoice.get("invoiceNumber"),
             invoice.get("number"),
-            invoice.get("header"),
             summary.id,
         ):
             text = str(value or "").strip()
