@@ -43,6 +43,7 @@ from xw_studio.services.plc.models import (
     clean_reference,
     parse_shipment_address_lines,
 )
+from xw_studio.services.plc.pricing import quote_plc_price
 from xw_studio.services.plc.label_archive import PlcLabelArchive
 from xw_studio.services.plc.service import PlcDuplicateShipmentError, PlcShipmentService
 from xw_studio.services.plc.webservice import PlcWebserviceResult, webservice_settings_from_secrets
@@ -126,6 +127,15 @@ class PlcLabelPrintDialog(QDialog):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
+
+        price_row = QHBoxLayout()
+        price_row.addStretch()
+        self._price_label = QLabel("Preis: —")
+        self._price_label.setStyleSheet(
+            "font-size: 18px; font-weight: bold; color: #0f766e; padding: 4px 8px;"
+        )
+        price_row.addWidget(self._price_label)
+        root.addLayout(price_row)
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
@@ -290,15 +300,18 @@ class PlcLabelPrintDialog(QDialog):
     def _on_product_selected(self, _value: str) -> None:
         self._product_user_set = True
         self._update_customs_visibility()
+        self._update_price()
 
     def _on_address_edit(self) -> None:
         self._address_edited = True
         if not self._product_user_set:
             self._sync_product_options()
         self._update_customs_visibility()
+        self._update_price()
 
     def _on_weight_edit(self, _value: str) -> None:
         self._weight_user_set = True
+        self._update_price()
 
     def _on_country_completed(self, value: str) -> None:
         self._country_combo.setEditText(country_name_en(value))
@@ -352,6 +365,22 @@ class PlcLabelPrintDialog(QDialog):
     def _current_country(self) -> str:
         return self._parse_address(self._current_address_lines()).country_iso2
 
+    def _update_price(self) -> None:
+        product = self._find_product()
+        quote = quote_plc_price(
+            product_id=product.get("product_id"),
+            country_iso2=self._current_country(),
+            weight_kg=self._weight_edit.text(),
+        )
+        if quote is None:
+            self._price_label.setText("Preis: —")
+            self._price_label.setToolTip("Für diese Kombination ist kein Preis hinterlegt.")
+            return
+        price = f"{quote.price_eur:.2f}".replace(".", ",")
+        self._price_label.setText(f"Preis: {price} €")
+        max_weight = f"{quote.max_weight_kg:f}".replace(".", ",")
+        self._price_label.setToolTip(f"{quote.tariff_name}, bis {max_weight} kg")
+
     def _sync_product_options(self) -> None:
         group = self._country_group(self._current_country())
         options = [item for item in self._product_catalog if group in item.get("regions", set())]
@@ -363,6 +392,7 @@ class PlcLabelPrintDialog(QDialog):
         if labels:
             self._product_combo.setCurrentIndex(labels.index(current) if self._product_user_set and current in labels else 0)
         self._product_combo.blockSignals(False)
+        self._update_price()
 
     def _update_customs_visibility(self) -> None:
         needs_customs = self._country_group(self._current_country()) == "NON_EU"

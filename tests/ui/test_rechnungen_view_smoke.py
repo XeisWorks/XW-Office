@@ -29,7 +29,10 @@ from xw_studio.ui.modules.rechnungen.open_invoice_overview import (
     PrintProductAggregate,
 )
 from xw_studio.ui.modules.rechnungen.tagesgeschaeft_view import TagesgeschaeftView, _StartDialog
-from xw_studio.ui.modules.rechnungen.plc_label_dialog import PlcLabelPrintDialog
+from xw_studio.ui.modules.rechnungen.plc_label_dialog import (
+    PlcLabelPrintDialog,
+    _PlcDialogContext,
+)
 from xw_studio.ui.modules.rechnungen.view import (
     RechnungenView,
     _ActionsDelegate,
@@ -737,6 +740,17 @@ def test_plc_dialog_defaults_to_direct_webservice_without_changing_list_action(q
     assert dialog._recipient_email.text() == "customer@example.test"  # noqa: SLF001
     assert not hasattr(dialog, "_recipient_phone")
 
+    dialog._on_context_loaded(  # noqa: SLF001
+        _PlcDialogContext(
+            order_number="20856",
+            address_lines=["PLC Customer", "Teststrasse 1", "1030 Wien", "AUSTRIA"],
+            weight_kg=4.01,
+            items=[],
+        )
+    )
+
+    assert dialog._price_label.text() == "Preis: 7,21 €"  # noqa: SLF001
+
 
 def test_manual_plc_dialog_uses_structured_address_and_office_email(qtbot: object) -> None:
     dialog = PlcLabelPrintDialog(_build_container(), None)
@@ -758,6 +772,30 @@ def test_manual_plc_dialog_uses_structured_address_and_office_email(qtbot: objec
     assert dialog._recipient_email.text() == "office@xeisworks.at"  # noqa: SLF001
     assert not hasattr(dialog, "_recipient_phone")
     assert "Österreich" in dialog._country_combo.completer().model().stringList()  # noqa: SLF001
+
+
+def test_manual_plc_dialog_updates_price_from_country_and_weight(qtbot: object) -> None:
+    dialog = PlcLabelPrintDialog(_build_container(), None)
+    qtbot.addWidget(dialog)
+
+    dialog._name_edit.setText("Max Mustermann")  # noqa: SLF001
+    dialog._street_edit.setText("Teststraße 1")  # noqa: SLF001
+    dialog._postal_city_edit.setText("1030 Wien")  # noqa: SLF001
+    dialog._country_combo.setEditText("Austria")  # noqa: SLF001
+    dialog._weight_edit.setText("2,01")  # noqa: SLF001
+
+    assert dialog._price_label.text() == "Preis: 6,39 €"  # noqa: SLF001
+
+    dialog._weight_edit.setText("8")  # noqa: SLF001
+
+    assert dialog._price_label.text() == "Preis: 7,21 €"  # noqa: SLF001
+
+    dialog._country_combo.setEditText("Switzerland")  # noqa: SLF001
+    dialog._weight_edit.setText("4")  # noqa: SLF001
+
+    assert dialog._product_combo.currentData() is None  # noqa: SLF001
+    assert dialog._product_combo.currentText() == "Paket Plus Int. Outbound"  # noqa: SLF001
+    assert dialog._price_label.text() == "Preis: 19,88 €"  # noqa: SLF001
 
 
 def test_rechnungen_caches_stale_wix_context_result(qtbot: object) -> None:
