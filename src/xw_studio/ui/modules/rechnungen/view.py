@@ -1458,6 +1458,9 @@ class RechnungenView(QWidget):
     def open_custom_label_dialog(self) -> None:
         self._on_custom_label_clicked()
 
+    def open_manual_plc_label_dialog(self) -> None:
+        self._on_manual_plc_label_clicked()
+
     def open_special_order_dialog(self) -> None:
         self._on_special_order_clicked()
 

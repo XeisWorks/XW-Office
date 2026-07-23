@@ -418,6 +418,14 @@ class TagesgeschaeftView(QWidget):
         self._btn_custom_label.clicked.connect(self._open_custom_label)
         bar_lay.addWidget(self._btn_custom_label)
 
+        self._btn_manual_plc_label = QPushButton("PLC-Label")
+        self._btn_manual_plc_label.setToolTip(
+            "PLC-Label mit manuell eingegebener Empfängeradresse erstellen"
+        )
+        self._btn_manual_plc_label.setFixedHeight(34)
+        self._btn_manual_plc_label.clicked.connect(self._open_manual_plc_label)
+        bar_lay.addWidget(self._btn_manual_plc_label)
+
         self._btn_special_order = QPushButton("Sonderauftrag")
         self._btn_special_order.setToolTip("Wix Payment Link fuer Sonderauftrag erstellen")
         self._btn_special_order.setFixedHeight(34)
@@ -532,6 +540,7 @@ class TagesgeschaeftView(QWidget):
             self._btn_refresh,
             self._btn_draft,
             self._btn_custom_label,
+            self._btn_manual_plc_label,
             self._btn_special_order,
             self._btn_start,
         ):
@@ -548,6 +557,10 @@ class TagesgeschaeftView(QWidget):
     def _open_custom_label(self) -> None:
         if self._rechnungen_view is not None:
             self._rechnungen_view.open_custom_label_dialog()
+
+    def _open_manual_plc_label(self) -> None:
+        if self._rechnungen_view is not None:
+            self._rechnungen_view.open_manual_plc_label_dialog()
 
     def _open_special_order(self) -> None:
         if self._rechnungen_view is not None:
