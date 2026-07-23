@@ -239,6 +239,16 @@ _COUNTRY_BY_NAME = {
     "weissrussland": "Belarus",
 }
 
+_COUNTRY_COMPLETION_ALIASES = {
+    "Dänemark",
+    "Färöer-Inseln",
+    "Großbritannien",
+    "Österreich",
+    "Rumänien",
+    "Türkei",
+    "Weißrussland",
+}
+
 
 def _extract_text(value: object) -> str:
     if value is None:
@@ -290,6 +300,19 @@ def country_name_en(value: object) -> str:
     if mapped:
         return mapped
     return _COUNTRY_BY_NAME.get(normalized_country_key(text), text)
+
+
+def country_names_en() -> tuple[str, ...]:
+    """Return canonical English country names for recipient-entry controls."""
+    return tuple(sorted(set(_COUNTRY_BY_CODE.values())))
+
+
+def country_search_names() -> tuple[str, ...]:
+    """Return English and localized aliases suitable for country completion."""
+    names = set(country_names_en())
+    names.update(name.title() for name in _COUNTRY_BY_NAME)
+    names.update(_COUNTRY_COMPLETION_ALIASES)
+    return tuple(sorted(names, key=lambda value: (value.casefold(), value)))
 
 
 def country_iso2(value: object) -> str:

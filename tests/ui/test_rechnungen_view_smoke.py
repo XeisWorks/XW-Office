@@ -526,6 +526,7 @@ def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
     assert view._btn_more.text() == "Weitere Rechnungen laden"  # noqa: SLF001
     assert view._btn_draft.text() == "Rechnungs-Entwurf"  # noqa: SLF001
     assert view._btn_custom_label.text() == "CUSTOM-LABEL"  # noqa: SLF001
+    assert view._btn_manual_plc_label.text() == "PLC-LABEL"  # noqa: SLF001
     assert view._btn_print.text() == "Rechnung drucken"  # noqa: SLF001
     assert view._btn_print_label.toolTip() == "Label drucken"  # noqa: SLF001
     assert view._btn_print_plc.text() == "PLC-Label drucken"  # noqa: SLF001
@@ -732,6 +733,28 @@ def test_plc_dialog_defaults_to_direct_webservice_without_changing_list_action(q
     assert dialog._transport_combo.count() == 2  # noqa: SLF001
     assert dialog._address_edit.toPlainText().endswith("AUSTRIA")  # noqa: SLF001
     assert dialog._recipient_email.text() == "customer@example.test"  # noqa: SLF001
+
+
+def test_manual_plc_dialog_uses_structured_address_and_office_email(qtbot: object) -> None:
+    dialog = PlcLabelPrintDialog(_build_container(), None)
+    qtbot.addWidget(dialog)
+
+    dialog._company_edit.setText("XeisWorks")  # noqa: SLF001
+    dialog._name_edit.setText("Max Mustermann")  # noqa: SLF001
+    dialog._street_edit.setText("Teststraße 1")  # noqa: SLF001
+    dialog._postal_city_edit.setText("1030 Wien")  # noqa: SLF001
+    dialog._country_combo.setEditText("Österreich")  # noqa: SLF001
+
+    assert dialog._current_address_lines() == [  # noqa: SLF001
+        "XeisWorks",
+        "Max Mustermann",
+        "Teststraße 1",
+        "1030 Wien",
+        "Austria",
+    ]
+    assert dialog._recipient_email.text() == "office@xeisworks.at"  # noqa: SLF001
+    assert not hasattr(dialog, "_recipient_phone")
+    assert "Österreich" in dialog._country_combo.completer().model().stringList()  # noqa: SLF001
 
 
 def test_rechnungen_caches_stale_wix_context_result(qtbot: object) -> None:

@@ -1005,6 +1005,12 @@ class RechnungenView(QWidget):
             tooltip="Freie Lieferadresse eingeben und direkt als Label drucken",
         )
         self._btn_custom_label.clicked.connect(self._on_custom_label_clicked)
+        self._btn_manual_plc_label = self._toolbar.add_button(
+            "manual_plc_label",
+            "PLC-LABEL",
+            tooltip="PLC-Label mit manuell eingegebener Empfängeradresse erstellen",
+        )
+        self._btn_manual_plc_label.clicked.connect(self._on_manual_plc_label_clicked)
         self._btn_special_order = self._toolbar.add_button(
             "special_order",
             "Sonderauftrag",
@@ -2976,6 +2982,9 @@ class RechnungenView(QWidget):
         if not self._print_allowed:
             dlg._status.setText("Druckerstatus ist derzeit nicht bestaetigt. Druckversuch ist trotzdem moeglich.")  # noqa: SLF001
         dlg.exec()
+
+    def _on_manual_plc_label_clicked(self) -> None:
+        PlcLabelPrintDialog(self._container, None, self).exec()
 
     def _on_print_plc_selected(self) -> None:
         if not self._print_allowed:

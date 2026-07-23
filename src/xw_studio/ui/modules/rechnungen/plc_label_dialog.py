@@ -13,6 +13,7 @@ from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
+    QCompleter,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -49,6 +50,11 @@ from xw_studio.services.printing.print_jobs import PdfPrintJob
 from xw_studio.services.printing.print_queue import PrintQueueService
 from xw_studio.services.secrets.service import SecretService
 from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
+from xw_studio.services.shipping.countries import (
+    country_name_en,
+    country_names_en,
+    country_search_names,
+)
 from xw_studio.services.wix.client import WixOrderItem, WixOrdersClient
 
 if TYPE_CHECKING:
@@ -67,7 +73,6 @@ class _PlcDialogContext:
     weight_kg: float
     items: list[WixOrderItem]
     email: str = ""
-    phone: str = ""
 
 
 @dataclass(frozen=True)
@@ -84,7 +89,7 @@ class PlcLabelPrintDialog(QDialog):
     def __init__(
         self,
         container: Container,
-        summary: InvoiceSummary,
+        summary: InvoiceSummary | None,
         parent: QWidget | None = None,
         *,
         address_override_lines: list[str] | None = None,
@@ -92,7 +97,8 @@ class PlcLabelPrintDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._container = container
-        self._summary = summary
+        self._manual_entry = summary is None
+        self._summary = summary or InvoiceSummary(id="")
         self._load_worker: BackgroundWorker | None = None
         self._send_worker: BackgroundWorker | None = None
         self._context = _PlcDialogContext(order_number="", address_lines=[], weight_kg=0.0, items=[])
@@ -105,13 +111,18 @@ class PlcLabelPrintDialog(QDialog):
         self.setWindowTitle("PLC Label Print")
         self.setMinimumWidth(700)
         self._build_ui()
-        if address_override_lines:
+        self._recipient_email.setText(str(recipient_email or "office@xeisworks.at").strip())
+        if address_override_lines and not self._manual_entry:
             self._address_edit.blockSignals(True)
             self._address_edit.setPlainText("\n".join(str(line).strip() for line in address_override_lines if str(line).strip()))
             self._address_edit.blockSignals(False)
-            self._recipient_email.setText(str(recipient_email or "").strip())
             self._status.setText("Adresse aus VERSANDADRESSE übernommen")
-        self._load_context()
+        if self._manual_entry:
+            self._sync_product_options()
+            self._update_customs_visibility()
+            self._status.setText("Adresse und Paketgewicht eingeben")
+        else:
+            self._load_context()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -149,17 +160,53 @@ class PlcLabelPrintDialog(QDialog):
         self._customs_edit.setFixedHeight(72)
         form.addRow("Zollbeschreibung:", self._customs_edit)
 
-        self._address_edit = QPlainTextEdit()
-        self._address_edit.setPlaceholderText("Adresszeilen")
-        self._address_edit.setFixedHeight(140)
-        self._address_edit.textChanged.connect(self._on_address_edit)
-        form.addRow("Lieferadresse:", self._address_edit)
+        if self._manual_entry:
+            self._company_edit = QLineEdit()
+            self._company_edit.setPlaceholderText("FIRMA (optional)")
+            self._company_edit.textChanged.connect(self._on_address_edit)
+            form.addRow("Firma:", self._company_edit)
 
-        self._recipient_phone = QLineEdit()
-        self._recipient_phone.setPlaceholderText("für Nicht-EU: Telefon oder E-Mail erforderlich")
-        form.addRow("Empfänger Telefon:", self._recipient_phone)
+            self._name_edit = QLineEdit()
+            self._name_edit.setPlaceholderText("VOR- UND NACHNAME")
+            self._name_edit.textChanged.connect(self._on_address_edit)
+            form.addRow("Name:", self._name_edit)
+
+            self._street_edit = QLineEdit()
+            self._street_edit.setPlaceholderText("STRASSE UND HAUSNUMMER")
+            self._street_edit.textChanged.connect(self._on_address_edit)
+            form.addRow("Straße:", self._street_edit)
+
+            self._postal_city_edit = QLineEdit()
+            self._postal_city_edit.setPlaceholderText("PLZ ORT")
+            self._postal_city_edit.textChanged.connect(self._on_address_edit)
+            form.addRow("PLZ / Ort:", self._postal_city_edit)
+
+            self._country_combo = QComboBox()
+            self._country_combo.setEditable(True)
+            self._country_combo.addItems(country_names_en())
+            self._country_combo.setCurrentIndex(-1)
+            country_line_edit = self._country_combo.lineEdit()
+            if country_line_edit is not None:
+                country_line_edit.setPlaceholderText("LAND (English) – z. B. Austria")
+            country_completer = QCompleter(country_search_names(), self._country_combo)
+            country_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            country_completer.setFilterMode(Qt.MatchFlag.MatchStartsWith)
+            country_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+            country_completer.activated[str].connect(self._on_country_completed)
+            self._country_combo.setCompleter(country_completer)
+            self._country_combo.editTextChanged.connect(self._on_address_edit)
+            form.addRow("Land:", self._country_combo)
+        else:
+            self._address_edit = QPlainTextEdit()
+            self._address_edit.setPlaceholderText(
+                "FIRMA (optional)\nVOR- UND NACHNAME\nSTRASSE UND HAUSNUMMER\nPLZ ORT\nLAND (English)"
+            )
+            self._address_edit.setFixedHeight(140)
+            self._address_edit.textChanged.connect(self._on_address_edit)
+            form.addRow("Lieferadresse:", self._address_edit)
+
         self._recipient_email = QLineEdit()
-        self._recipient_email.setPlaceholderText("für Nicht-EU: Telefon oder E-Mail erforderlich")
+        self._recipient_email.setPlaceholderText("office@xeisworks.at")
         form.addRow("Empfänger E-Mail:", self._recipient_email)
 
         self._status = QLabel("Lade Analyse...")
@@ -182,7 +229,6 @@ class PlcLabelPrintDialog(QDialog):
             items: list[WixOrderItem] = []
             weight = 0.0
             email = ""
-            phone = ""
             ref = self._summary.order_reference.strip()
             if ref:
                 wix: WixOrdersClient = self._container.resolve(WixOrdersClient)
@@ -194,7 +240,6 @@ class PlcLabelPrintDialog(QDialog):
                     if isinstance(plc_context, dict):
                         order_number = str(plc_context.get("order_number") or order_number).strip()
                         email = str(plc_context.get("email") or "").strip()
-                        phone = str(plc_context.get("phone") or "").strip()
                     shipping = str(meta.get("wix_shipping_address") or "").strip()
                     if shipping:
                         address_lines = [ln.strip() for ln in shipping.splitlines() if ln.strip()]
@@ -212,7 +257,6 @@ class PlcLabelPrintDialog(QDialog):
                 weight_kg=weight,
                 items=items,
                 email=email,
-                phone=phone,
             )
 
         self._load_worker = BackgroundWorker(job)
@@ -231,8 +275,6 @@ class PlcLabelPrintDialog(QDialog):
             self._address_edit.blockSignals(False)
         if result.weight_kg > 0 and not self._weight_user_set:
             self._weight_edit.setText(f"{result.weight_kg:.2f}".replace(".", ","))
-        if result.phone and not self._recipient_phone.text().strip():
-            self._recipient_phone.setText(result.phone)
         if result.email and not self._recipient_email.text().strip():
             self._recipient_email.setText(result.email)
         self._sync_product_options()
@@ -258,13 +300,17 @@ class PlcLabelPrintDialog(QDialog):
     def _on_weight_edit(self, _value: str) -> None:
         self._weight_user_set = True
 
+    def _on_country_completed(self, value: str) -> None:
+        self._country_combo.setEditText(country_name_en(value))
+
     def _current_mode(self) -> str:
         return "LIVE" if self._mode_live.isChecked() else "TEST"
 
     def _build_reference(self) -> str:
         if self._context.order_number:
             return clean_reference(self._context.order_number)
-        slug = re.sub(r"[^A-Za-z0-9]+", "", (self._summary.contact_name or ""))[:12]
+        contact_name = self._name_edit.text().strip() if self._manual_entry else self._summary.contact_name
+        slug = re.sub(r"[^A-Za-z0-9]+", "", contact_name or "")[:12]
         day = time.strftime("%Y%m%d")
         count = self._mail_ref_counters.get(day, 0) + 1
         self._mail_ref_counters[day] = count
@@ -272,6 +318,19 @@ class PlcLabelPrintDialog(QDialog):
         return clean_reference(value)
 
     def _current_address_lines(self) -> list[str]:
+        if self._manual_entry:
+            country = country_name_en(self._country_combo.currentText()).strip()
+            return [
+                value
+                for value in (
+                    self._company_edit.text().strip(),
+                    self._name_edit.text().strip(),
+                    self._street_edit.text().strip(),
+                    self._postal_city_edit.text().strip(),
+                    country,
+                )
+                if value
+            ]
         return [ln.strip() for ln in self._address_edit.toPlainText().splitlines() if ln.strip()]
 
     def _parse_address(self, lines: list[str]):
@@ -279,7 +338,7 @@ class PlcLabelPrintDialog(QDialog):
             lines,
             fallback_name=self._summary.contact_name,
             email=self._recipient_email.text().strip(),
-            phone=self._recipient_phone.text().strip(),
+            phone="",
         )
 
     def _country_group(self, iso2: str) -> str:
@@ -333,6 +392,25 @@ class PlcLabelPrintDialog(QDialog):
         return out
 
     def _send_to_plc(self) -> None:
+        if self._manual_entry:
+            missing_fields = [
+                label
+                for label, value in (
+                    ("Vor- und Nachname", self._name_edit.text()),
+                    ("Straße und Hausnummer", self._street_edit.text()),
+                    ("PLZ und Ort", self._postal_city_edit.text()),
+                    ("Land", self._country_combo.currentText()),
+                )
+                if not value.strip()
+            ]
+            if missing_fields:
+                QMessageBox.warning(
+                    self,
+                    "PLC",
+                    "Bitte folgende Empfängerdaten eingeben: " + ", ".join(missing_fields),
+                )
+                return
+
         lines = self._current_address_lines()
         if not lines:
             QMessageBox.warning(self, "PLC", "Bitte Lieferadresse eingeben.")
@@ -363,17 +441,25 @@ class PlcLabelPrintDialog(QDialog):
             return
 
         ref = self._build_reference()
+        invoice_id = self._summary.id or ref
+        invoice_number = self._summary.invoice_number or self._summary.id or ref
         articles: list[PlcCustomsArticle] = []
         if self._country_group(address.country_iso2) == "NON_EU":
             articles = self._build_customs_articles()
             if not articles:
-                QMessageBox.warning(self, "PLC", "Für Nicht-EU werden Wix-Positionen benötigt.")
+                message = (
+                    "Für Nicht-EU werden Zollartikel benötigt; deren manuelle Eingabe ist "
+                    "in diesem Dialog noch nicht verfügbar."
+                    if self._manual_entry
+                    else "Für Nicht-EU werden Wix-Positionen benötigt."
+                )
+                QMessageBox.warning(self, "PLC", message)
                 return
 
         shipment = PlcShipmentDraft(
             reference=ref,
-            invoice_id=self._summary.id,
-            invoice_number=self._summary.invoice_number or self._summary.id,
+            invoice_id=invoice_id,
+            invoice_number=invoice_number,
             mode=self._current_mode(),
             product_id=product_id,
             recipient=address,
