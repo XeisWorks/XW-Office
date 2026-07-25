@@ -93,6 +93,8 @@ from xw_studio.ui.modules.rechnungen.open_invoice_overview import (
     resolve_open_invoice_overview,
 )
 from xw_studio.ui.modules.rechnungen.plc_label_dialog import PlcLabelPrintDialog
+from xw_studio.ui.modules.rechnungen.plc_statistics_dialog import PlcStatisticsDialog
+from xw_studio.services.plc.statistics import PlcStatisticsService
 from xw_studio.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 from xw_studio.ui.modules.rechnungen.refund_dialog import RefundDialog
 from xw_studio.ui.widgets.data_table import DataTable
@@ -1011,6 +1013,12 @@ class RechnungenView(QWidget):
             tooltip="PLC-Label mit manuell eingegebener Empfängeradresse erstellen",
         )
         self._btn_manual_plc_label.clicked.connect(self._on_manual_plc_label_clicked)
+        self._btn_plc_statistics = self._toolbar.add_button(
+            "plc_statistics",
+            "PLC-ÜBERSICHT",
+            tooltip="Wochen-, Monats- und Jahresstatistik der gedruckten PLC-Labels",
+        )
+        self._btn_plc_statistics.clicked.connect(self._on_plc_statistics_clicked)
         self._btn_special_order = self._toolbar.add_button(
             "special_order",
             "Sonderauftrag",
@@ -1460,6 +1468,9 @@ class RechnungenView(QWidget):
 
     def open_manual_plc_label_dialog(self) -> None:
         self._on_manual_plc_label_clicked()
+
+    def open_plc_statistics_dialog(self) -> None:
+        self._on_plc_statistics_clicked()
 
     def open_special_order_dialog(self) -> None:
         self._on_special_order_clicked()
@@ -2988,6 +2999,9 @@ class RechnungenView(QWidget):
 
     def _on_manual_plc_label_clicked(self) -> None:
         PlcLabelPrintDialog(self._container, None, self).exec()
+
+    def _on_plc_statistics_clicked(self) -> None:
+        PlcStatisticsDialog(self._container.resolve(PlcStatisticsService), self).exec()
 
     def _on_print_plc_selected(self) -> None:
         if not self._print_allowed:

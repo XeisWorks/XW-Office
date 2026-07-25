@@ -3,10 +3,12 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import datetime
+from decimal import Decimal
 import json
 from collections.abc import Generator
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_studio.core.database import session_scope
@@ -17,6 +19,15 @@ from xw_studio.models.plc_shipment import PlcShipment
 class PlcShipmentReservation:
     state: str
     shipment: PlcShipment
+
+
+@dataclass(frozen=True)
+class PlcPrintedShipment:
+    country_iso2: str
+    product_code: str
+    weight_kg: Decimal | None
+    price_eur: Decimal | None
+    printed_at: datetime.datetime
 
 
 class PlcShipmentRepository:
@@ -44,6 +55,8 @@ class PlcShipmentRepository:
         transport: str,
         product_code: str,
         country_iso2: str,
+        weight_kg: Decimal | None = None,
+        price_eur: Decimal | None = None,
     ) -> PlcShipmentReservation:
         with self._scope() as session:
             bind = session.get_bind()
@@ -61,6 +74,8 @@ class PlcShipmentRepository:
                 row.status = "sending"
                 row.error_code = ""
                 row.error_message = ""
+                row.weight_kg = weight_kg
+                row.price_eur = price_eur
                 return PlcShipmentReservation("reserved", row)
 
             row = PlcShipment(
@@ -72,6 +87,8 @@ class PlcShipmentRepository:
                 transport=transport,
                 product_code=product_code,
                 country_iso2=country_iso2,
+                weight_kg=weight_kg,
+                price_eur=price_eur,
                 status="sending",
             )
             session.add(row)
@@ -96,6 +113,46 @@ class PlcShipmentRepository:
 
     def mark_print_queued(self, request_key: str, print_job_id: str) -> PlcShipment | None:
         return self._mark(request_key, status="print_queued", print_job_id=print_job_id)
+
+    def mark_printed_by_job_id(self, print_job_id: str) -> PlcShipment | None:
+        with self._scope() as session:
+            row = session.scalar(
+                select(PlcShipment).where(PlcShipment.print_job_id == str(print_job_id or ""))
+            )
+            if row is None:
+                return None
+            row.status = "printed"
+            row.printed_at = func.now()
+            session.flush()
+            return row
+
+    def list_printed_since(self, since: datetime.datetime) -> list[PlcPrintedShipment]:
+        with self._scope() as session:
+            rows = session.execute(
+                select(
+                    PlcShipment.country_iso2,
+                    PlcShipment.product_code,
+                    PlcShipment.weight_kg,
+                    PlcShipment.price_eur,
+                    PlcShipment.printed_at,
+                )
+                .where(PlcShipment.status == "printed")
+                .where(PlcShipment.mode == "LIVE")
+                .where(PlcShipment.printed_at.is_not(None))
+                .where(PlcShipment.printed_at >= since)
+                .order_by(PlcShipment.printed_at)
+            ).all()
+            return [
+                PlcPrintedShipment(
+                    country_iso2=str(row.country_iso2 or ""),
+                    product_code=str(row.product_code or ""),
+                    weight_kg=Decimal(row.weight_kg) if row.weight_kg is not None else None,
+                    price_eur=Decimal(row.price_eur) if row.price_eur is not None else None,
+                    printed_at=row.printed_at,
+                )
+                for row in rows
+                if row.printed_at is not None
+            ]
 
     def mark_failed(self, request_key: str, *, error_code: str, error_message: str) -> PlcShipment | None:
         return self._mark(

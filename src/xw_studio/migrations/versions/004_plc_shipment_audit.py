@@ -19,27 +19,44 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "plc_shipment",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
-        sa.Column("request_key", sa.String(length=64), nullable=False),
-        sa.Column("invoice_id", sa.String(length=128), nullable=False, server_default=""),
-        sa.Column("reference", sa.String(length=100), nullable=False, server_default=""),
-        sa.Column("invoice_number", sa.String(length=100), nullable=False, server_default=""),
-        sa.Column("mode", sa.String(length=8), nullable=False, server_default="LIVE"),
-        sa.Column("transport", sa.String(length=32), nullable=False, server_default="webservice"),
-        sa.Column("product_code", sa.String(length=50), nullable=False, server_default=""),
-        sa.Column("country_iso2", sa.String(length=2), nullable=False, server_default=""),
-        sa.Column("status", sa.String(length=32), nullable=False, server_default="sending"),
-        sa.Column("tracking_codes_json", sa.Text(), nullable=False, server_default="[]"),
-        sa.Column("label_sha256", sa.String(length=64), nullable=False, server_default=""),
-        sa.Column("print_job_id", sa.String(length=64), nullable=False, server_default=""),
-        sa.Column("error_code", sa.String(length=64), nullable=False, server_default=""),
-        sa.Column("error_message", sa.Text(), nullable=False, server_default=""),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-    )
-    op.create_index("ix_plc_shipment_request_key", "plc_shipment", ["request_key"], unique=True)
+    inspector = sa.inspect(op.get_bind())
+    if "plc_shipment" not in inspector.get_table_names():
+        op.create_table(
+            "plc_shipment",
+            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
+            sa.Column("request_key", sa.String(length=64), nullable=False),
+            sa.Column("invoice_id", sa.String(length=128), nullable=False, server_default=""),
+            sa.Column("reference", sa.String(length=100), nullable=False, server_default=""),
+            sa.Column("invoice_number", sa.String(length=100), nullable=False, server_default=""),
+            sa.Column("mode", sa.String(length=8), nullable=False, server_default="LIVE"),
+            sa.Column("transport", sa.String(length=32), nullable=False, server_default="webservice"),
+            sa.Column("product_code", sa.String(length=50), nullable=False, server_default=""),
+            sa.Column("country_iso2", sa.String(length=2), nullable=False, server_default=""),
+            sa.Column("status", sa.String(length=32), nullable=False, server_default="sending"),
+            sa.Column("tracking_codes_json", sa.Text(), nullable=False, server_default="[]"),
+            sa.Column("label_sha256", sa.String(length=64), nullable=False, server_default=""),
+            sa.Column("print_job_id", sa.String(length=64), nullable=False, server_default=""),
+            sa.Column("error_code", sa.String(length=64), nullable=False, server_default=""),
+            sa.Column("error_message", sa.Text(), nullable=False, server_default=""),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.text("now()"),
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.text("now()"),
+            ),
+        )
+        op.create_index("ix_plc_shipment_request_key", "plc_shipment", ["request_key"], unique=True)
+        return
+
+    index_names = {str(index.get("name") or "") for index in inspector.get_indexes("plc_shipment")}
+    if "ix_plc_shipment_request_key" not in index_names:
+        op.create_index("ix_plc_shipment_request_key", "plc_shipment", ["request_key"], unique=True)
 
 
 def downgrade() -> None:

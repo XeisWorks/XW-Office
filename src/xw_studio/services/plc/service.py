@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import hashlib
+from decimal import Decimal
 import threading
 
 from xw_studio.repositories.plc_shipment import PlcShipmentRepository
 from xw_studio.services.plc.models import PlcShipmentDraft
+from xw_studio.services.plc.pricing import quote_plc_price
 from xw_studio.services.plc.webservice import (
     PlcWebserviceClient,
     PlcWebserviceError,
@@ -77,8 +79,19 @@ class PlcShipmentService:
             with self._memory_lock:
                 self._memory_states[request_key] = "print_queued"
 
+    def mark_printed_by_job_id(self, print_job_id: str) -> bool:
+        if self._audit_repository is None:
+            return False
+        return self._audit_repository.mark_printed_by_job_id(print_job_id) is not None
+
     def _reserve(self, request_key: str, shipment: PlcShipmentDraft) -> None:
         if self._audit_repository is not None:
+            weight_kg = Decimal(str(sum(float(parcel.weight_kg) for parcel in shipment.parcels)))
+            quote = quote_plc_price(
+                product_id=shipment.product_id,
+                country_iso2=shipment.country_iso2,
+                weight_kg=weight_kg,
+            )
             reservation = self._audit_repository.reserve(
                 request_key=request_key,
                 invoice_id=shipment.invoice_id,
@@ -88,6 +101,8 @@ class PlcShipmentService:
                 transport="webservice",
                 product_code=shipment.product_id,
                 country_iso2=shipment.country_iso2,
+                weight_kg=weight_kg,
+                price_eur=quote.price_eur if quote is not None else None,
             )
             if reservation.state == "already_created":
                 raise PlcDuplicateShipmentError(

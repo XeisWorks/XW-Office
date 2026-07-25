@@ -19,6 +19,7 @@ from xw_studio.core.types import ModuleKey
 from xw_studio.core.worker import BackgroundWorker
 from xw_studio.services.background_jobs import BackgroundJobManager
 from xw_studio.services.printing.print_queue import PrintQueueService
+from xw_studio.services.plc.service import PlcShipmentService
 from xw_studio.services.printer_status.service import PrinterStatusService, PrinterStatusSnapshot
 from xw_studio.ui.performance import EventLoopWatchdog
 from xw_studio.ui.sidebar import Sidebar
@@ -108,8 +109,24 @@ class MainWindow(QMainWindow):
 
     def _on_print_job_finished(self, result: object) -> None:
         printer = str(getattr(result, "printer_name", "") or "Drucker")
+        job_id = str(getattr(result, "job_id", "") or "")
         self._status_bar.showMessage(f"Druckauftrag vom Windows-Spooler bestaetigt: {printer}", 8000)
-        self._container.resolve(AppSignals).print_job_completed.emit(str(getattr(result, "job_id", "")))
+        self._container.resolve(AppSignals).print_job_completed.emit(job_id)
+        if job_id and (self._container.config.database_url or "").strip():
+            jobs = self._container.resolve(BackgroundJobManager)
+            jobs.submit_callable(
+                queue="database",
+                priority=10,
+                key=f"plc-print-success:{job_id}",
+                fn=lambda _token: self._container.resolve(PlcShipmentService).mark_printed_by_job_id(
+                    job_id
+                ),
+                on_error=lambda exc: logger.warning(
+                    "PLC print success could not be persisted job_id=%s: %s", job_id, exc
+                ),
+                owner=self,
+                replace="coalesce_pending",
+            )
 
     def _on_print_job_failed(self, result: object) -> None:
         printer = str(getattr(result, "printer_name", "") or "Drucker")

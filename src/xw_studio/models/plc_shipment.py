@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
 import uuid
 
-from sqlalchemy import DateTime, String, Text, Uuid, func
+from sqlalchemy import DateTime, Numeric, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from xw_studio.models.base import Base
@@ -24,6 +25,8 @@ class PlcShipment(Base):
     transport: Mapped[str] = mapped_column(String(32), default="webservice", nullable=False)
     product_code: Mapped[str] = mapped_column(String(50), default="", nullable=False)
     country_iso2: Mapped[str] = mapped_column(String(2), default="", nullable=False)
+    weight_kg: Mapped[Decimal | None] = mapped_column(Numeric(8, 3), nullable=True)
+    price_eur: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="sending", nullable=False)
     tracking_codes_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     label_sha256: Mapped[str] = mapped_column(String(64), default="", nullable=False)
@@ -35,4 +38,7 @@ class PlcShipment(Base):
     )
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    printed_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=True
     )

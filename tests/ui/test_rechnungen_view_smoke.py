@@ -307,12 +307,14 @@ def test_tagesgeschaeft_contains_rechnungen_view(qtbot: object) -> None:
     assert view._btn_draft.text() == "Entwurf"  # noqa: SLF001
     assert view._btn_custom_label.text() == "Custom-Label"  # noqa: SLF001
     assert view._btn_manual_plc_label.text() == "PLC-Label"  # noqa: SLF001
+    assert view._btn_plc_statistics.text() == "PLC-Übersicht"  # noqa: SLF001
     assert view._btn_stop.text() == "STOP"  # noqa: SLF001
     assert not view._btn_stop.isEnabled()  # noqa: SLF001
     assert not view._rechnungen_view._toolbar.isVisible()  # noqa: SLF001
     bar_layout = view._btn_start.parentWidget().layout()  # noqa: SLF001
     widgets = [bar_layout.itemAt(i).widget() for i in range(bar_layout.count())]
-    assert widgets.index(view._btn_manual_plc_label) == widgets.index(view._btn_special_order) - 1  # noqa: SLF001
+    assert widgets.index(view._btn_manual_plc_label) == widgets.index(view._btn_plc_statistics) - 1  # noqa: SLF001
+    assert widgets.index(view._btn_plc_statistics) == widgets.index(view._btn_special_order) - 1  # noqa: SLF001
     assert widgets.index(view._btn_start) == widgets.index(view._btn_stop) - 1  # noqa: SLF001
     assert widgets.index(view._btn_stop) == widgets.index(view._btn_beenden) - 1  # noqa: SLF001
 
@@ -532,6 +534,7 @@ def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
     assert view._btn_draft.text() == "Rechnungs-Entwurf"  # noqa: SLF001
     assert view._btn_custom_label.text() == "CUSTOM-LABEL"  # noqa: SLF001
     assert view._btn_manual_plc_label.text() == "PLC-LABEL"  # noqa: SLF001
+    assert view._btn_plc_statistics.text() == "PLC-ÜBERSICHT"  # noqa: SLF001
     assert view._btn_print.text() == "Rechnung drucken"  # noqa: SLF001
     assert view._btn_print_label.toolTip() == "Label drucken"  # noqa: SLF001
     assert view._btn_print_plc.text() == "PLC-Label drucken"  # noqa: SLF001
