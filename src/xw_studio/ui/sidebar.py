@@ -45,7 +45,6 @@ SIDEBAR_ENTRIES: list[SidebarEntry] = [
     SidebarEntry(ModuleKey.CALCULATION, "Provisionen", "calculation", "Finanzen"),
     SidebarEntry(ModuleKey.LAYOUT, "Layout", "layout", "Medien"),
     SidebarEntry(ModuleKey.WUEDARAMUSI, "WuedaraMusi", "wuedaramusi", "Medien"),
-    SidebarEntry(ModuleKey.TRAVEL_COSTS, "Reisekosten", "travel_costs", "Tools"),
     SidebarEntry(ModuleKey.MARKETING, "Marketing", "marketing", "Tools"),
     SidebarEntry(ModuleKey.NOTATION, "Notensatz", "notation", "Tools"),
     SidebarEntry(ModuleKey.XW_COPILOT, "XW-Copilot", "xw_copilot", "Tools"),

@@ -2,19 +2,25 @@
 
 **Datum:** 2026-07-25
 **Scope:** Vergleich `C:\Users\XeisWorks\GitHub\sevDesk` (Legacy, Tkinter/CLI) vs. `C:\Users\XeisWorks\GitHub\XW-Studio` (PySide6-Neubau)
-**Status:** Analyse/Skizze — **keine Code-Umsetzung**, keine offenen Fragen an den Nutzer. Alle Empfehlungen sind Vorschläge zur Priorisierung durch den Nutzer.
+**Status:** Verifizierter Übernahmeplan. Nutzerentscheidungen vom 2026-07-25 sind eingearbeitet; die sichtbare Reisekosten-Navigation wurde aus XW-Studio entfernt.
+
+**Verbindliche Entscheidungen:**
+
+- **Reisekosten werden nicht in XW-Studio integriert.** Die Legacy-Funktion bleibt außerhalb dieses Produkts und ist kein späterer Migrationspunkt.
+- **Noten- und qualitätskritischer Produktdruck bleiben bewusst auf PDF-XChange.** Acrobat und automatischer Raster-Fallback gehören nicht zum Zielpfad.
+- Bei widersprüchlichen älteren Planungsdokumenten gilt der aktuelle Code-Stand als Ist-Quelle; eine alte Audit-Feststellung wird nicht ungeprüft als noch offen übernommen.
 
 ---
 
 ## 0. Methodik und Quellenlage
 
-Diese Analyse basiert auf drei parallelen Recherchen:
+Diese Analyse basiert auf drei Recherchesträngen:
 
 1. Vollständige Funktionskatalogisierung des Legacy-Repos (`sevdesk_wix_fulfillment/`, `UVA.py`, `Zusammenfassende Meldung.py`, `travel_costs/`, `wix_products/`, `Finanzonline/`, `zahlungsabgleich.py` u.a.)
 2. Vollständige Katalogisierung des aktuellen XW-Studio-Stands (`services/`, `ui/modules/`, `core/`, Datenmodell, Tests)
 3. Synthese der **bereits existierenden 35 Planungs-Dokumente** in `markdowns/` und `docs/`
 
-Punkt 3 ist wichtig: Es wurde in diesem Projekt bereits sehr diszipliniert dokumentiert, was übernommen wurde, was bewusst *nicht* übernommen wurde, und was noch offen ist — besonders für Rechnungen/Tagesgeschäft, Druck, Produkte, Steuern (UVA/ZM/OSS) und Zahlungsclearing. Dieses Dokument **wiederholt diese Analysen nicht**, sondern:
+Punkt 3 ist wichtig: Es wurde in diesem Projekt bereits sehr diszipliniert dokumentiert, was übernommen wurde, was bewusst *nicht* übernommen wurde, und was noch offen ist — besonders für Rechnungen/Tagesgeschäft, Druck, Produkte, Steuern (UVA/ZM/OSS) und Zahlungsclearing. Da einzelne Auditbefunde durch spätere Commits bereits behoben wurden, werden Planungsdokumente hier immer gegen den aktuellen Code geprüft. Dieses Dokument:
 
 - fasst deren Kernaussagen kurz zusammen (Abschnitt 2–3), mit Quellenverweis,
 - konzentriert sich auf das, was in den bestehenden Docs **noch nicht oder nur am Rande behandelt wurde**: sinnvolle Legacy-Funktionen, die im Neubau fehlen, dünn sind, oder als reine UI-Mockups ohne Fachlogik existieren (Abschnitt 4 — der Hauptteil dieses Dokuments).
@@ -32,13 +38,12 @@ Alle Quellen sind in Abschnitt 8 aufgelistet.
 - **Aber:** mehrere früh als "DONE" deklarierte Bereiche wurden durch spätere, gründlichere Analysen widerlegt (UVA-SOAP "fertig" im April → 1.868 € Berechnungsfehler im Juli gefunden; Brand-Bulk "fertig" im Juni → Concurrency-Bugs im Juli gefunden). Das ist ein wiederkehrendes Muster, kein Einzelfall — siehe Abschnitt 2.2.
 - Mehrere Architekturprinzipien, die früh sauber definiert wurden (Single-Write-Location, Pydantic-only, DI-only, Advisory-Lock bei Concurrent-Writes, max. ~800 Zeilen/Datei), werden in den am schnellsten gewachsenen Modulen bereits wieder verletzt.
 
-**Kernfrage 2 — Welche sinnvollen Legacy-Funktionen fehlen noch?** Abschnitt 4 listet 15 konkrete Kandidaten, u.a.:
+**Kernfrage 2 — Welche sinnvollen Legacy-Funktionen fehlen noch?** Abschnitt 4 bewertet 15 Funktionsbereiche; nach dem bewussten Ausschluss der Reisekosten bleiben 14 mögliche Übernahmekandidaten, u. a.:
 
 - **Ausgaben-Check**: im Neubau nur ein 89-Zeilen-Skelett, im Legacy ein ausgereiftes Reconciliation-System mit Fuzzy-Ignore-Regeln und Perioden-Verschiebung.
-- **Reisekosten**: im Neubau eine reine Platzhalter-UI, die auf ein nicht vorhandenes Submodul wartet — im Legacy bereits die architektonisch fortschrittlichste Komponente überhaupt (hexagonal, mit Domain/Adapter/Persistence-Trennung).
 - **Cover-Erzeugung** und **Audio-Beispiel-Erzeugung**: im Neubau leere Platzhalter-Pakete (`services/graphics`, `services/audio`), im Legacy funktionierende Tools.
 - **Druckrechte-Lizenzrechner**: existiert im Neubau an keiner Stelle.
-- CRM-Merge-Kaskade, Zahlungsabgleich-Fehlerkatalog, WüdaraMusi-Zweitmandant, u.a. — jeweils mit konkretem Integrationsvorschlag, der **nicht** 1:1-Portierung ist, sondern die Logik in die bestehenden XW-Studio-Muster (Services, DI, Pydantic, BackgroundWorker, SettingKV/Migrations, Dry-Run/Live-Split) einbettet.
+- CRM-Merge-Absicherung, Zahlungsabgleich-Fehlerkatalog, WüdaraMusi-Zweitmandant u. a. — jeweils mit konkretem Integrationsvorschlag, der **nicht** 1:1-Portierung ist, sondern die Logik in die bestehenden XW-Studio-Muster (Services, DI, Pydantic, BackgroundWorker, SettingKV/Migrations, Dry-Run/Live-Split) einbettet.
 
 ---
 
@@ -48,40 +53,40 @@ Alle Quellen sind in Abschnitt 8 aufgelistet.
 
 | Stärke | Beleg |
 |---|---|
-| Kern-Fulfillment-Pfad ist reif und aktiv (jüngste 5 Commits alle PLC-bezogen) | Servicekatalog XW-Studio, Migrationen 004/005 vom 23.–25.07.2026 |
+| Kern-Fulfillment-Pfad ist reif und aktiv | Servicekatalog XW-Studio, Migrationen 004/005 vom 23.–25.07.2026 |
 | Echtes relationales Datenmodell für Produkte statt Legacy-JSON-Dateien | Migrationen 002/003 (`product`, `sku_alias`, `print_rule`, `print_plan`, `inventory_movement`) |
 | Konsequente DI/BackgroundWorker-Architektur in den reifen Modulen | `core/container.py`, `core/worker.py`, `BackgroundJobManager` (Prioritätswarteschlangen, Cancel-Token) |
 | Golden-Master-Validierung für Steuerlogik statt "es sieht plausibel aus" | `config/uva_reference_values.json`, `config/oss_reference_values.json`, `tests/expected/UVA *.txt` |
 | Explizite "Übernommen/Nicht übernommen"-Sektionen in praktisch jedem Umbau-Dokument | z. B. `uva_ist_berechnung_umbau_2026-06-16.md`, `zahlungsclearing_book_invoice_haertung_2026-07-08.md` |
 | Bewusste Architekturentscheidung, wo Legacy-Semantik *exakt* erhalten werden muss (z. B. sevDesk-Buchungsablauf) vs. wo neu gedacht wird | `zahlungsclearing_book_invoice_haertung_2026-07-08.md`: "PySide6-Flow führend für Analyse/Matching, Legacy führend für den konkreten sevDesk-Buchungsaufruf" |
-| 94 Testdateien, mypy --strict auf 14 Modulen sauber | `app_performance_gesamtanalyse_2026-07-11.md` |
+| Umfangreiche automatisierte Tests und typisierte Kernmodule | `tests/`, `app_performance_gesamtanalyse_2026-07-11.md` |
 
 ### 2.2 Schwächen / Risikofelder
 
 **a) Wiederkehrendes Muster: verfrühte "erledigt"-Meldungen, die spätere, gründlichere Analyse widerlegt.**
 Die frühen Statusdokumente (`umsetzung_phasen_todo.md`, `umbau_checkliste_prioritaet.md`, beide 2026-04-02) markieren praktisch alles als DONE — inklusive "UVA SOAP live". Die Realität laut `uva_06_2026_testlauf_und_umbau_2026-07-12.md`: die Live-Berechnung wich um **1.868,04 €** von der (nutzerbestätigten) Legacy-Referenz ab, weil zwei Steuerbasen (A022, A006) komplett verloren gingen. Ähnlich beim Brand-Bulk-Feature: im Juni als "alle 6 Phasen DONE" markiert, im Juli-Audit als Quelle realer Concurrency-Bugs (K3) identifiziert. **Empfehlung für die Zukunft:** Checklisten-Status ("☑ done") nur für triviale Features vertrauen; für alles mit Geld-/Rechtsrelevanz grundsätzlich Golden-Master- oder Audit-Validierung verlangen, bevor "done" gilt.
 
-**b) Architektur-Dokumentation und Implementierung laufen auseinander — ausgerechnet an der kritischsten Stelle.**
-`CLAUDE.md` (dieses Repo) beschreibt den Druckpfad noch als "PDF-XChange nativ und vektorbasiert … kein automatischer Acrobat- oder Raster-Fallback". Der Audit vom 2026-07-21 (`rechnungen_print_produkte_architektur_audit_2026-07-21.md`, Finding K1) zeigt: der Notendruck läuft inzwischen über einen PDF-XChange-CLI-Subprozess mit einem **stillen, ungeprüften Acrobat-Fallback** (kein `.wait()`, kein Exit-Code-Check) — ohne automatischen Rückfall auf den dokumentierten sicheren QtRaster-Pfad. Das bedeutet: ein Lizenz-/Update-Dialog von Acrobat kann zu **stillem Nichtdrucken führen, das die App als Erfolg loggt.** Das ist der wirtschaftlich sensibelste Pfad der ganzen App (Notendruck = Kerngeschäft) und der einzige, bei dem Dokumentation und Praxis so weit auseinanderlaufen.
+**b) Notendruck: Auditbefund behoben, PDF-XChange ist die bewusste Zielentscheidung.**
+Der Audit vom 2026-07-21 (`rechnungen_print_produkte_architektur_audit_2026-07-21.md`, Finding K1) beschrieb einen stillen, ungeprüften Acrobat-Fallback. Dieser Befund ist im aktuellen Code **nicht mehr offen**: `services/printing/pdf_backends.py` verwendet für native Profile ausschließlich PDF-XChange, prüft Prozess-Timeout und Exit-Code und verlangt eine neue Jobmeldung des ausgewählten Windows-Spoolers. Ohne Spooler-Bestätigung wird der Auftrag als Fehler behandelt und es erfolgt keine Bestandsbuchung. `CLAUDE.md` dokumentiert inzwischen genau diese Architektur. Die bewusste Produktentscheidung lautet daher nicht „zurück zu QtRaster“, sondern **PDF-XChange als vektorbasierten Notendruckpfad beibehalten und mit Hardware-/Golden-Master-Drucktests absichern**.
 
-**c) Multi-PC-Sync — ein zentrales Architekturversprechen — hat einen nachgewiesenen Bruch.**
-Bulk-Schreiboperationen am Produktkatalog umgehen laut Audit (Finding K3) den etablierten `mutate_value_json()`-Advisory-Lock-Mechanismus. Damit können zwei PCs sich gegenseitig überschreiben — genau das, was "Multi-PC sync via PostgreSQL" (laut `CLAUDE.md`) verhindern soll.
+**c) Multi-PC-Bulk-Write: Auditbefund behoben, Restdisziplin weiterhin nötig.**
+Finding K3 des Audits beschrieb verlorene Updates bei Feld- und Marken-Bulkänderungen. Der aktuelle Code führt diese Änderungen über `InventoryService.update_product_fields()` und `SettingsRepository.mutate_value_json()` unter PostgreSQL-Advisory-Lock aus. Auch gezielte Bestandswerte und produktspezifische Druckkonfigurationen nutzen atomare Mutationen. Der konkrete K3-Befund ist damit **behoben**; neue Schreibpfade müssen weiterhin denselben atomaren Weg verwenden.
 
 **d) Zwei parallele Bestandsführungen.**
 `PrintDecisionEngine` (sevDesk-Bestand) und `InventoryService` (lokaler KV-Bestand) können laut Audit (Finding K2) auseinanderlaufen und beeinflussen direkt Über-/Unterdruck-Entscheidungen.
 
 **e) Frühe Architekturprinzipien erodieren mit wachsender Codebasis.**
-Beispiele aus dem Audit: `transfers`, `sendungen`, `digital_licenses` verwenden Dataclasses statt der vorgeschriebenen Pydantic-Modelle (X5); `LabelPrinter` wird in zwei Dialogen direkt instanziiert statt über den Container aufgelöst (X4); `rechnungen/view.py` ist mit 4.764 Zeilen ca. 6x über der eigenen ~800-Zeilen-Richtlinie, `products/view.py` mit 1.863 Zeilen ca. 2,3x (X7) — **dasselbe Monolith-Muster, das im Legacy-System explizit als Problem galt** (`UVA.py` 5.456 Zeilen, `ui_wix_products.py` 5.084 Zeilen), tritt im Neubau an anderer Stelle wieder auf.
+Beispiele aus dem Audit: `transfers`, `sendungen`, `digital_licenses` verwenden Dataclasses statt der für externe API-Antworten vorgeschriebenen Pydantic-Modelle (X5); `LabelPrinter` wird in zwei Dialogen direkt instanziiert statt über den Container aufgelöst (X4); `rechnungen/view.py` ist aktuell mit rund 4.900 Zeilen mehr als 6x über der eigenen ~800-Zeilen-Richtlinie, `products/view.py` mit 1.863 Zeilen ca. 2,3x (X7) — **dasselbe Monolith-Muster, das im Legacy-System explizit als Problem galt** (`UVA.py` 5.456 Zeilen, `ui_wix_products.py` 5.084 Zeilen), tritt im Neubau an anderer Stelle wieder auf.
 
 **f) Steuer-Modul (UVA/ZM/OSS) ist noch nicht "abgabesicher".**
 `uva_zm_gesamtanalyse_und_umbauplan_2026-07-12.md` benennt explizit 6 ungelöste P0-Grundsatzprobleme: kein validierter Snapshot-Zustandsautomat, Zahlungsdatum-Auswahl "best effort" statt kanonisches Ledger, textbasierte statt versionierte Steuer-Klassifikation, unvollständiges/hartkodiertes Kennzahlen-Modell (relevant, da sich die U30-Regeln ab Juli 2026 erneut ändern), ZM klassifiziert pro Rechnung statt pro Position, UID-Prüfung nur Format/Checksumme statt VIES-Echtzeitabfrage.
 
 **g) Mehrere Legacy-Module existieren im Neubau nur als Platzhalter oder gar nicht.**
-Siehe Abschnitt 4 im Detail: Ausgaben-Check (Skelett), Reisekosten (Platzhalter-UI), WüdaraMusi (Mockup mit `_SAMPLE_PIECES`), Cover-/Audio-Erzeugung (leere Stub-Pakete).
+Siehe Abschnitt 4 im Detail: Ausgaben-Check (Skelett), WüdaraMusi (Mockup mit `_SAMPLE_PIECES`), Cover-/Audio-Erzeugung (leere Stub-Pakete). Die bisherige Reisekosten-Platzhalter-UI wird bewusst nicht als offene Lücke behandelt und ist aus der sichtbaren Navigation entfernt.
 
 ### 2.3 Gesamturteil
 
-Die Migration des Kerngeschäfts ist **fachlich und architektonisch ein Erfolg** — insbesondere im Vergleich zur Legacy-Codequalität (Tkinter-Monolithe, `threading.Thread`, dateibasierte Caches, `float` für Geldbeträge). Sie ist aber **nicht abgeschlossen**: Die größten verbleibenden Risiken liegen nicht in "fehlenden Features" im klassischen Sinn, sondern darin, dass ausgerechnet die drei sensibelsten Pfade — Steuererklärung, Notendruck, Mehr-PC-Schreibzugriff — von der eigenen dokumentierten Architektur abweichen. Diese sind in bestehenden Dokumenten bereits identifiziert (Abschnitt 3) und sollten vor neuen Funktionsübernahmen priorisiert werden. Der vorliegende Übernahmeplan (Abschnitt 4) ergänzt diese Arbeit um die Dimension "welche fachlich wertvolle Legacy-Logik geht verloren, wenn sie nicht bewusst nachgezogen wird."
+Die Migration des Kerngeschäfts ist **fachlich und architektonisch ein Erfolg** — insbesondere im Vergleich zur Legacy-Codequalität (Tkinter-Monolithe, `threading.Thread`, dateibasierte Caches, `float` für Geldbeträge). Sie ist aber **nicht abgeschlossen**. Die größten verifizierten Risiken liegen derzeit bei Steuer-/Abgabesicherheit und der noch nicht konsolidierten Bestandsführung; beim Notendruck und bei Bulk-Produktwrites wurden die im Audit beschriebenen Architekturabweichungen inzwischen behoben. Der vorliegende Übernahmeplan ergänzt diese Arbeit um die Dimension „welche fachlich wertvolle Legacy-Logik geht verloren, wenn sie nicht bewusst nachgezogen wird“ — mit Reisekosten als ausdrücklicher Negativentscheidung.
 
 ---
 
@@ -94,12 +99,12 @@ Diese Punkte sind in bestehenden Dokumenten bereits vollständig analysiert — 
 | UVA-Berechnungskorrektheit | Nicht abgabesicher, 6 offene P0-Punkte | `uva_zm_gesamtanalyse_und_umbauplan_2026-07-12.md` |
 | ZM pro-Position statt pro-Rechnung | Offen (P0) | dito |
 | UID-Prüfung nur Format, keine VIES-Live-Prüfung | Offen (P0) | dito |
-| Notendruck-Backend weicht von Dokumentation ab, kein Fallback-Netz | Kritisch, offen | `rechnungen_print_produkte_architektur_audit_2026-07-21.md` (K1) |
+| Notendruck über PDF-XChange | Bewusster Zielpfad; alter Acrobat-Fallback entfernt, Exit-Code und Spooler werden geprüft | aktueller `services/printing/pdf_backends.py`; Audit K1 ist überholt |
 | Zwei divergierende Bestandssysteme | Kritisch, offen | dito (K2) |
-| Bulk-Produktschreibvorgänge umgehen Advisory-Lock | Kritisch, offen | dito (K3) |
+| Bulk-Produktschreibvorgänge | K3 behoben: gezielte Änderungen laufen atomar über `mutate_value_json()` | aktueller `InventoryService.update_product_fields()` |
 | Rechnungsentwurf (Draft-Invoice) — volle Parität unklar | Letzter expliziter Stand: fehlend (April), nur vage spätere Erwähnung | `daily_business_migration_final_report.md`; `rechnungen_daily_business_ui_umbau_2026-06-30.md` |
 | Partielle/Positions-Rückerstattungen UI | Plan vom 08.07. wirkt laut Audit vom 21.07. nicht ausgeliefert | `rueckerstattungen_aktionen_legacy_integration_2026-07-08.md` vs. `rechnungen_print_produkte_architektur_audit_2026-07-21.md` |
-| CRM-Merge Live-Writeback | Stand April: "in-memory merge; live writeback follows" — keine spätere Bestätigung gefunden | `umsetzung_phasen_todo.md` |
+| CRM-Merge Live-Writeback | Vorhanden; es fehlen vor allem Preflight, Sperrregeln, Auditierbarkeit und robuste Verlierer-Policy | aktueller `services/crm/service.py` |
 | Provisionsprofile jenseits MusikHeroes | Offen (Phase 4) | `provisionsabrechnung_musikheroes_umbau_2026-07-08.md` |
 | ZM/U13 als eigener sichtbarer UI-Bereich | Offen | `zm_u13_steuer_modul_umbau_2026-07-08.md` |
 
@@ -107,7 +112,7 @@ Diese Punkte sind in bestehenden Dokumenten bereits vollständig analysiert — 
 
 ---
 
-## 4. Sinnvolle Legacy-Funktionen, die noch zu übernehmen sind
+## 4. Bewertete Legacy-Funktionen und Übernahmeentscheidungen
 
 Für jede Funktion: Geschäftswert, Fundort im Legacy, aktueller Zustand in XW-Studio, und ein Vorschlag zur **intelligenten Integration** — d. h. wie die Logik in bestehende XW-Studio-Muster (Services + DI, Pydantic-Modelle, BackgroundWorker/-JobManager, SettingKV/Alembic-Migrationen, Dry-Run/Live-Split) eingebettet würde, statt Dateien zu kopieren.
 
@@ -134,7 +139,7 @@ Ebenso wiederverwendbar: das in `xw_copilot` bereits etablierte **Dry-Run/Live-D
 
 **Integrationsvorschlag:**
 - `IgnoreRule` und `ShiftEntry` als **echte Tabellen** modellieren (neue Alembic-Migration, analog zum PLC-Audit-Trail-Muster aus Migration 004), nicht als flache JSON-Dateien wie im Legacy — das bringt Multi-PC-Sync automatisch mit, was die Legacy-Variante nie hatte.
-- Da der Audit vom 21.07. gezeigt hat, dass KV-Store-Schreibzugriffe ohne konsequenten Advisory-Lock zu Bugs führen (Finding K3): für Ausgaben-Check von Anfang an echte Tabellen statt `SettingKV`-JSON verwenden, nicht das gleiche Risiko ein weiteres Mal einbauen.
+- Da der inzwischen behobene Auditbefund K3 gezeigt hat, wie leicht komplette KV-Listen bei konkurrierenden Schreibzugriffen verloren gehen: für Ausgaben-Check von Anfang an echte Tabellen statt `SettingKV`-JSON verwenden, nicht erneut eine gemeinsam überschriebene Gesamtliste einführen.
 - Fuzzy-Match-Schwellwert und Normalisierungs-Regex als getestete, reine Funktionen in `core/text_normalize.py`/`core/fuzzy_match.py` (siehe 4.0) — wiederverwendbar für CRM und Produkte-unreleased.
 - Aktionen (`ignore_once`, `ignore_forever`, `shift`, `flag`) als kleines State-Machine-Enum am `ExpenseCheckEntry`-Modell, nicht als lose Strings wie im Legacy.
 
@@ -142,21 +147,21 @@ Ebenso wiederverwendbar: das in `xw_copilot` bereits etablierte **Dry-Run/Live-D
 
 ---
 
-### 4.2 Reisekosten (Travel Costs) — Domain-Layer übernehmen, Persistence & UI neu
+### 4.2 Reisekosten (Travel Costs) — bewusst ausgeschlossen
 
-**Geschäftswert:** Reisekostenabrechnung (Kilometergeld, Fahrgemeinschaften, Tourenplanung) für Musiker bei Proben/Auftritten — regelmäßig genutzter Abrechnungsprozess.
+**Entscheidung:** Reisekosten werden **nicht** in XW-Studio integriert. Die Qualität oder Wiederverwendbarkeit des Legacy-Moduls ändert diese Produktentscheidung nicht.
 
-**Legacy:** `travel_costs/` ist mit Abstand die architektonisch fortschrittlichste Komponente im gesamten Legacy-Repo — bereits hexagonal aufgebaut (`domain/`, `adapters/`, `persistence/`, `services/`, `ui/`), mit einer klaren 7-Stufen-Pipeline (`raw → clean → ready → reviewed → tour → carpool → final`), konfigurierbaren Prüfregeln (`ReviewService`), austauschbaren Distanz-Providern (Dummy für Tests vs. echte Google-Maps-Distance-Matrix-API) und manuell überschreibbaren Tour-/Fahrgemeinschafts-Zuordnungen mit eigenem Audit-Trail. Bereits als **externe** PySide6-App aus dem Tkinter-Fenster heraus gestartet — d. h. UI-technisch bereits nicht mehr Tkinter. Allerdings selbst noch mitten in einer "Strangler Fig"-Migration: `adapters/legacy_bundle.py` schiebt Aufrufe an ein noch älteres, gebündeltes Tool mit eigener `.venv` weiter.
-**XW-Studio-Zustand:** `ui/modules/travel_costs/view.py` versucht dynamisch ein externes `reisekosten`-Submodul zu importieren (`reisekosten.bridge:create_widget` o. ä.), das in diesem Checkout **nicht vorhanden** ist (kein `.gitmodules`-Eintrag) — fällt auf einen deutschsprachigen Platzhaltertext zurück. Laut `copilot_migration_plan.md` als "Phase 4" vertagt.
+**Konsequenzen für XW-Studio:**
 
-**Integrationsvorschlag:** Dies ist der einzige Fall im gesamten Vergleich, bei dem **direktere Übernahme statt Neuentwicklung** empfohlen wird — und zwar gezielt nur der `domain/`-Schicht, weil diese bereits framework-agnostisch ist (keine Tkinter-Abhängigkeit, reine Geschäftslogik: Kilometergeld-Berechnung, Touren-/Fahrgemeinschafts-Splitting, Stufen-Pipeline):
-- `domain/` möglichst unverändert als eigenes Package unter `services/travel_costs/domain/` übernehmen.
-- `persistence/` (aktuell nummerierte JSON-Snapshot-Dateien pro Stufe) durch echte Tabellen ersetzen — das ist der eine echte Schwachpunkt der sonst guten Legacy-Architektur (kein Multi-PC-Sync), und exakt das Problem, das XW-Studios Postgres-Architektur lösen soll.
-- `adapters/legacy_bundle.py` (die zweite, ältere Legacy-Schicht) **nicht mitnehmen** — die Strangler-Fig-Migration jetzt zu Ende führen, statt einen zweifach verschachtelten Legacy-Wrapper zu erben.
-- `ui/` komplett neu in PySide6 nach denselben Mustern wie Rechnungen/Produkte (DataTable, BackgroundWorker, bestehende Dialog-Patterns) — nicht das externe Fenster-Konzept übernehmen, sondern als reguläres Sidebar-Modul.
-- Google-Maps-Distance-Matrix-Integration nach dem gleichen Provider-Pattern wie andere externe HTTP-Clients (`services/http_client.py`) einbinden, `DummyDistanceMatrixClient` für Tests direkt mitnehmen (guter, bereits vorhandener Test-Baustein).
+- kein Sidebar-Eintrag und keine Dashboard-Karte,
+- keine Lazy-Page-Registrierung in `MainWindow`,
+- kein Git-Submodul, kein Bridge-Import und keine Datenmigration,
+- keine Reisekosten-Tabellen, Secrets oder Google-Distance-Matrix-Abhängigkeiten,
+- keine Aufnahme in Priorisierung, Aufwandsschätzung oder Definition of Done dieses Plans.
 
-**Priorität:** P1 — größter noch fehlender Funktionsblock mit echtem, regelmäßigem Nutzungsbedarf; mehrwöchiger Aufwand, aber der wiederverwendbare Anteil (Domain-Logik) reduziert ihn erheblich gegenüber einer Neuentwicklung von Null.
+Der vorhandene Legacy-Code in `C:\Users\XeisWorks\GitHub\sevDesk\travel_costs\` bleibt eine separate historische bzw. eigenständige Anwendung. Im XW-Studio-Quellbaum noch vorhandene, nicht registrierte Bridge-Dateien sind kein zugesagtes Feature und können in einer späteren, rein technischen Bereinigung entfernt werden.
+
+**Priorität:** **OUT OF SCOPE / NICHT ÜBERNEHMEN.**
 
 ---
 
@@ -204,14 +209,14 @@ Ebenso wiederverwendbar: das in `xw_copilot` bereits etablierte **Dry-Run/Live-D
 **Geschäftswert:** Zuverlässiges, nachvollziehbares Zusammenführen doppelter sevDesk-Kontakte (entstanden aus Jahren manueller Rechnungserstellung + Wix-Import), ohne versehentlich Rechnungen an falsche/gesperrte Kontakte umzuhängen.
 
 **Legacy:** `sevdesk_wix_fulfillment/crm/crm_engine.py` — mehrstufige Match-Kaskade mit **benannten Konfidenzgründen** (`wixCustomerId-unique` = hohe Konfidenz bei eindeutigem Custom-Field-Match, `highest-customerNumber` = mittlere Konfidenz als Fallback); beim Merge werden problematische Rechnungen (finalisiert/"enshrined", `invoiceDate < deliveryDate`, nicht-numerische Referenz) **vom Verschieben ausgeschlossen und mit Grund protokolliert**, statt den ganzen Merge abzubrechen; konfigurierbare Verlierer-Behandlung (löschen wenn ohne Dokumente möglich, sonst archivieren mit Namenspräfix `[MERGED]`, oder nur ignorieren); Legacy-Kundennummern des Verlierers werden am Gewinner für die Nachvollziehbarkeit hinterlegt.
-**XW-Studio-Zustand:** `services/crm/matching.py` — paarweises `rapidfuzz`-Scoring (Namens-Token-Sort + Bonus für E-Mail/Telefon-Match), laut eigenem README "O(n²), für überschaubare Kontaktlisten ok". Laut `umsetzung_phasen_todo.md` (April) war der Merge zu diesem Zeitpunkt "in-memory merge; live writeback follows" — kein späteres Dokument bestätigt, dass das Live-Schreiben nach sevDesk seither umgesetzt wurde.
+**XW-Studio-Zustand:** `services/crm/matching.py` verwendet paarweises `rapidfuzz`-Scoring (Namens-Token-Sort + Bonus für E-Mail/Telefon-Match). Anders als im ersten Entwurf angenommen ist der Live-Writeback inzwischen vorhanden: `CrmService.merge_contacts()` delegiert bei konfiguriertem `ContactClient` an sevDesk. Noch nicht sichtbar sind jedoch die Legacy-Preflight-Sperrregeln, eine begründete Match-Kaskade, ein vollständiger Merge-Report und eine konfigurierbare Verlierer-Policy.
 
 **Integrationsvorschlag:**
 - Die Kaskade nicht als eine monolithische Funktion portieren, sondern als Abfolge benannter `MatchStrategy`-Implementierungen (E-Mail-exakt, WixCustomerId-Lookup, Fuzzy-Fallback aus 4.0), jede mit typisiertem `MatchResult(confidence, reason)` — erhält die im Legacy wertvolle "warum wurde gematcht"-Nachvollziehbarkeit, ohne die Kaskade als Ganzes zu duplizieren.
-- Bevor Live-Writeback aktiviert wird: die Legacy-Sperrregeln (enshrined, `invoiceDate < deliveryDate`) als **Preflight-Validierung** implementieren, die dem Nutzer einen Report zur Bestätigung zeigt, bevor irgendetwas geschrieben wird — das ist exakt das bereits in `xw_copilot` etablierte Dry-Run/Live-Split-Muster (4.0), hier wiederverwendet statt neu erfunden.
+- Vor dem bereits aktiven Live-Writeback: die Legacy-Sperrregeln (enshrined, `invoiceDate < deliveryDate`) als **Preflight-Validierung** implementieren, die dem Nutzer einen Report zur Bestätigung zeigt, bevor irgendetwas geschrieben wird — das ist exakt das bereits in `xw_copilot` etablierte Dry-Run/Live-Split-Muster (4.0), hier wiederverwendet statt neu erfunden.
 - Verlierer-Behandlung (löschen/archivieren/ignorieren) als konfigurierbare Policy analog zum Legacy, aber über `SettingKV`/Config statt Merge-Config-Datei.
 
-**Priorität:** P1 — betrifft Datenintegrität in der zentralen Kundenverwaltung; falls Live-Writeback tatsächlich noch fehlt, ist das die dringendere Teil-Lücke.
+**Priorität:** P1 — betrifft Datenintegrität in der zentralen Kundenverwaltung; die Absicherung des bereits vorhandenen Live-Writebacks ist dringender als zusätzliche Match-Komfortfunktionen.
 
 ---
 
@@ -220,14 +225,14 @@ Ebenso wiederverwendbar: das in `xw_copilot` bereits etablierte **Dry-Run/Live-D
 **Geschäftswert:** Vollständige, nachvollziehbare Zahlungszuordnung — inkl. der Fälle, die *nicht* automatisch zugeordnet werden können.
 
 **Legacy:** `zahlungsabgleich.py`/`payments.py` — über 30 benannte Skip-/Fehlergründe (`mollie_currency`, `mollie_settlements_oauth_required`, `stripe_refund`, `rechnungsentwurf`, `provider_id_collision`, `booked_tx_ambiguous` u. v. a.) — praktisch eine dokumentierte Sammlung aller in 2+ Jahren Produktivbetrieb aufgetretenen Grenzfälle; SEPA-Überweisungen erhalten ein breiteres Nachschlagefenster (`SEPA_LOOKBACK_DAYS = 45`) als Karten-/PSP-Zahlungen, da sie langsamer verbucht werden; `PAYMENT_EPS = 0.005` als Toleranz für Betragsvergleiche; **Mollie-Payouts benötigen zwingend OAuth** (API-Key allein reicht laut Legacy-Fehlercode nicht).
-**XW-Studio-Zustand:** `services/clearing/` — bereits mit `Decimal` statt `float` neu aufgesetzt (laut `zahlungsclearing_umbauphasen_2026-06-12.md`), Gateway-pro-Anbieter-Abstraktion (`MollieClearingGateway`, `StripeClearingGateway`, `SevdeskClearingGateway`, `WixClearingGateway`) — solide Grundlage, aber ob der Legacy-Fehlerkatalog und der Mollie-OAuth-Flow bereits vollständig übernommen wurden, ist unklar.
+**XW-Studio-Zustand:** `services/clearing/` ist bereits mit `Decimal`, Gateway-pro-Anbieter-Abstraktion und typisiertem `MatchStatus` neu aufgesetzt. Kandidaten enthalten sichtbare Freitext-Begründungen; Refund- und Payout-Fälle werden grundsätzlich unterschieden. Nicht vorhanden sind ein vollständiger typisierter Legacy-Fehlerkatalog und ein Mollie-OAuth-Flow. Der aktuelle Mollie-Gateway versucht Settlements mit dem vorhandenen Client und degradiert Fehler auf eine leere Settlement-Liste; dadurch kann ein Authentifizierungsproblem fachlich zu wenig sichtbar bleiben.
 
 **Integrationsvorschlag:**
 - Den 30+-Fehlerkatalog nicht erst über Monate erneut in der Produktion "wiederentdecken" lassen, sondern direkt als typisiertes `ClearingSkipReason`-Enum (ggf. ein kleineres Enum pro Gateway) aus dem Legacy-Katalog übernehmen, an `ClearingResult` hängen und in der Clearing-UI sichtbar machen — schließt gleichzeitig die im Audit vom 21.07. genannte Lücke (PP-M1: Jobergebnisse geben aktuell kein Feedback).
 - SEPA-Lookback-Fenster als konfigurierbare Konstante pro Gateway übernehmen statt hartkodiert.
-- Mollie-OAuth-Flow für Payouts explizit in `MollieClearingGateway` einbauen, falls noch nicht vorhanden — ohne ihn können reale Mollie-Settlements strukturell nicht abgeglichen werden, das ist keine Komfortfunktion, sondern eine echte Funktionslücke, falls sie besteht.
+- Mollie-OAuth-Flow für Payouts explizit in `MollieClearingGateway` einbauen und fehlende Berechtigung als eigenen sichtbaren Fehlergrund melden — ohne ihn können reale Mollie-Settlements strukturell nicht zuverlässig abgeglichen werden.
 
-**Priorität:** P0/P1 — direkt zahlungsrelevant; genaue Lückenbestimmung (was ist schon da) sollte vor Umsetzung kurz geprüft werden, da `services/clearing/` bereits eine solide Basis hat.
+**Priorität:** P1 — direkt zahlungsrelevant, aber kein Neubau des Clearing-Moduls: vorhandene Status-/Reason-Struktur erweitern, Mollie-Authentifizierung härten und mit Legacy-Grenzfällen testen.
 
 ---
 
@@ -236,11 +241,11 @@ Ebenso wiederverwendbar: das in `xw_copilot` bereits etablierte **Dry-Run/Live-D
 **Geschäftswert:** Ordnet direkte SEPA-Überweisungen (B2B, ohne Wix-Bezug) automatisch sevDesk-Rechnungen zu, indem die 6-stellige Rechnungsnummer (mit Jahres-Präfix) aus dem Verwendungszweck extrahiert wird.
 
 **Legacy:** `b2b-bank-transfer.py` — Regex-Extraktion, Normalisierung auf `RE-NNNNNN`, monatliches Caching.
-**XW-Studio-Zustand:** `services/transfers/service.py` (Offene Überweisungen) deckt laut Katalog primär mail-gestützten Abgleich ab — ob der direkte Verwendungszweck-Scan (unabhängig von E-Mails) bereits als Fallback existiert, ist unklar.
+**XW-Studio-Zustand:** Der direkte SEPA-Scan existiert bereits im Clearing, ist aber auf **5-stellige Wix-Ordernummern** ausgelegt (`_ORDER_NUMBER` in `services/clearing/service.py`). Die Legacy-B2B-Logik sucht dagegen 6-stellige Rechnungsnummern, prüft zulässige Jahrespräfixe, normalisiert auf `RE-NNNNNN` und unterstützt mehrere Rechnungen in einer Überweisung. Diese fachlich andere Variante fehlt.
 
-**Integrationsvorschlag:** Falls nicht vorhanden: kleine, sichere, reine Funktion `extract_invoice_reference(purpose: str) -> str | None` in `services/transfers/`, als Fallback-Matcher, wenn der primäre (mail-basierte) Weg keine Referenz liefert. Die bereits im Legacy-Repo vorhandenen zwei Jahre gecachter Verwendungszwecke (`sevDesk/json/b2b-bank-transfer-*.json`) eignen sich hervorragend als **Testfixtures**, nicht als Laufzeitdaten.
+**Integrationsvorschlag:** Eine sichere, reine Funktion `extract_b2b_invoice_numbers(purpose: str, year_prefixes: set[str]) -> tuple[str, ...]` im Clearing-Kontext ergänzen. Sie darf nicht mit dem bestehenden Wix-Ordernummern-Parser vermischt werden. Mehrfachzuordnungen müssen nur dann automatisch freigegeben werden, wenn die Summe der offenen Rechnungen exakt zum Überweisungsbetrag passt. Die bereits im Legacy-Repo vorhandenen zwei Jahre gecachter Verwendungszwecke (`sevDesk/json/b2b-bank-transfer-*.json`) eignen sich als anonymisierte **Testfixtures**, nicht als Laufzeitdaten.
 
-**Priorität:** P2 — kleiner, risikoarmer Nachtrag, sofern die Lücke tatsächlich besteht.
+**Priorität:** P1 — die Lücke ist verifiziert und zahlungsrelevant; der reine Parser ist klein, die sichere Mehrfachzuordnung braucht jedoch eigene Tests.
 
 ---
 
@@ -249,11 +254,11 @@ Ebenso wiederverwendbar: das in `xw_copilot` bereits etablierte **Dry-Run/Live-D
 **Geschäftswert:** Drei kleine, aber geschäftskritische Konventionen: (1) Sonderanfertigungs-SKUs (`XW-600.x`) mit Komponisten-Auswahl + Freitext-Stücktitel aus Wix-Custom-Feld, (2) SKU-Präfix → Besetzungs-Label-Zuordnung für Packzettel, (3) die Konvention "Referenznummer beginnt mit 2 → B2C, beginnt mit 1 → B2B", die quer durch Fulfillment, Rückerstattungen und PLC-Labeling verwendet wird.
 
 **Legacy:** `sevdesk_wix_fulfillment/rules/sku_rules.py` + verstreute Prüfungen in `services/invoice_processor.py` — bereits im Legacy **ad hoc über mehrere Dateien verteilt**, nicht zentralisiert.
-**XW-Studio-Zustand:** `services/products/print_decision.py`/`catalog.py` modellieren SKU-/Druckregeln bereits generisch, aber unklar, ob die B2C/B2B-Präfixkonvention und die Sonderanfertigungs-/Besetzungsregeln bereits (und wo) abgebildet sind. Genau die Art von "klein, leicht zu vergessen, aber tragend" Regel, die bei einer Neuentwicklung stillschweigend verloren gehen kann.
+**XW-Studio-Zustand:** Teilweise vorhanden: `XW-600.0` gehört zu den konfigurierbaren Sonder-SKUs; Wix-Optionen liefern Besetzungsdaten, und der Rechnungsbereich zeigt sie an. Eine zentrale `B2B`/`B2C`-Klassifikation anhand des Referenzpräfixes wurde im Neubau nicht gefunden. Die vorhandenen Regeln sind außerdem über Wix-, Rechnungs- und Produktcode verteilt.
 
 **Integrationsvorschlag:** Als explizite, benannte, testbare Regel-Objekte in `services/products/classification_rules.py` bündeln — **einmal** definiert, von allen drei Konsumenten (Fulfillment, Rückerstattung, PLC) referenziert, statt wie im Legacy an drei Stellen einzeln nachgebaut. Das behebt gleichzeitig einen Legacy-eigenen Schwachpunkt (Streuung), nicht nur eine Neubau-Lücke.
 
-**Priorität:** P1 — falls diese Konventionen im Neubau tatsächlich fehlen, ist das ein stiller Korrektheitsrisiko in Fulfillment/PLC/Rückerstattung, nicht nur eine fehlende Komfortfunktion. Sollte kurzfristig verifiziert werden.
+**Priorität:** P1 — gezielt die fehlende B2B/B2C-Klassifikation und die Zentralisierung angehen; vorhandene Sonder-SKU- und Besetzungslogik nicht doppelt implementieren.
 
 ---
 
@@ -286,7 +291,7 @@ Ebenso wiederverwendbar: das in `xw_copilot` bereits etablierte **Dry-Run/Live-D
 **Geschäftswert:** Ordnet Freitext-Bestellzeilen (z. B. Auftragswerke, die vor Katalogisierung verkauft werden) einer kleinen, handgepflegten Liste noch nicht veröffentlichter Stücke inkl. Komponist/Eigentümer zu.
 
 **Legacy:** `products_unreleased/matcher.py` — `rapidfuzz`, Auto-Match-Schwelle 85, bis zu 5 Kandidaten bei Unklarheit.
-**XW-Studio-Zustand:** Die neue Produkt-Pipeline ist grundsätzlich SKU-basiert (`ProductCatalogService`); ob es ein Äquivalent für Titel ohne SKU gibt, ist unklar.
+**XW-Studio-Zustand:** Eine partielle Kennzeichnung existiert: Wix-Positionen mit Präfix `XW-600`/`XW-010` werden als `is_unreleased` markiert und im Druckworkflow besonders behandelt. Es fehlt aber das Legacy-Äquivalent für eine handgepflegte Titelliste ohne verlässliche SKU sowie die fuzzy Kandidatenauswahl mit manueller Bestätigung.
 
 **Integrationsvorschlag:** "Unreleased" als Lifecycle-Status (`status: released | unreleased | preview`) am bereits existierenden `Product`-Modell (Migration 002 hat bereits eine echte Produkttabelle) statt einer separaten parallelen JSON-Liste + eigenem Matcher. Freitext-Matching nutzt die gleiche gemeinsame Fuzzy-Match-Utility aus 4.0 — nicht eine dritte, separat parametrisierte `rapidfuzz`-Aufrufstelle.
 
@@ -343,12 +348,14 @@ Diese Muster sind im Legacy-System klar erkennbar problematisch und sollten bei 
 - **Einzelne globale Boolean-Flag-Datei** (`config_flags.py`, eine Zeile) — die vorhandene YAML-/`.env`-/DB-Konfigurationsstruktur konsequent weiterverwenden, keine Parallelstruktur für neue Flags schaffen.
 - **Ad-hoc-Diagnose-Skripte im Repo-Root** (`dump_open_invoices.py`, `debug_invoice_chain.py`, `wix_fulfillment_debug.py` etc.) — als Entwicklerwerkzeuge okay, aber nicht mit Architektur verwechseln; falls vergleichbare Diagnosewerkzeuge im Neubau gebraucht werden, gehören sie nach `scripts/`, nicht in die Service-Schicht.
 - **Verstreute, unbenannte Ad-hoc-Regeln** (SKU-Präfix-Konventionen quer über mehrere Dateien, siehe 4.9) — auch wenn dies ein Legacy-Muster ist: es sollte bei der Portierung *behoben*, nicht mitübernommen werden.
+- **Reisekosten als XW-Studio-Modul** — weder Domain-Code noch UI, Bridge, Submodul oder Persistence übernehmen; siehe verbindliche Entscheidung 4.2.
+- **Acrobat als automatischer Notendruck-Fallback** — PDF-XChange bleibt der bewusst gewählte Vektorpfad. Ein Fehler muss sichtbar abbrechen und darf keine Bestandsbuchung auslösen; ein Qualitätswechsel auf Raster darf nicht still erfolgen.
 
 ---
 
 ## 6. Übergreifende Architektur-Empfehlungen für die Umsetzung von Abschnitt 4
 
-1. **Vor jeder neuen Portierung: kurz verifizieren, was tatsächlich schon existiert.** Mehrere Punkte in Abschnitt 4 (4.7 Zahlungsabgleich-Fehlerkatalog, 4.8 B2B-Referenzextraktion, 4.9 SKU-Regelwerk) sind als "unklar, ob bereits vorhanden" markiert — die vorliegende Analyse basiert auf Servicenamen/Docstrings, nicht auf vollständiger Codeprüfung jeder Methode. Ein kurzer, gezielter Check (z. B. Grep auf die genannten Legacy-Begriffe/Konstanten im Neubau) vor Umsetzungsbeginn spart Doppelarbeit.
+1. **Vor jeder neuen Portierung den konkreten Teilumfang erneut am Code abgrenzen.** Die Nachprüfung dieses Plans hat bereits mehrere Teilimplementierungen gefunden (CRM-Live-Writeback, Clearing-Reason-Strings, Unreleased-Kennzeichnung, Sonder-SKU-/Besetzungslogik). Umgesetzt werden nur die jeweils ausdrücklich als fehlend beschriebenen Teile, nicht der ganze Legacy-Block.
 2. **Golden-Master-Prinzip auf neue Portierungen ausweiten**, überall dort, wo eine Legacy-Zahl/-Entscheidung als Referenz vorliegt (Druckrechte-Rechner, Zahlungsabgleich-Kategorisierung) — nach dem in Steuer-/OSS-Modulen bereits etablierten Muster, gerade weil Checklisten-"done" sich in diesem Projekt wiederholt als trügerisch erwiesen hat (2.2a).
 3. **Dry-Run/Live-Split (aus `xw_copilot`) als Standardmuster für jede Portierung mit Schreibwirkung** (CRM-Merge, Ausgaben-Ignore-Regeln, SKU-Regelwerk-Änderungen an Fulfillment) etablieren, statt für jede Funktion einzeln ein Bestätigungsmuster neu zu entwerfen.
 4. **Dateigrößen-Richtlinie technisch durchsetzen, nicht nur dokumentieren** — z. B. ein einfacher CI-Check/Lint-Regel, der bei Überschreiten der ~800-Zeilen-Grenze warnt, da die rein dokumentarische Regel bereits zweimal überschritten wurde (Legacy und `rechnungen/view.py`). Das ist keine Empfehlung aus Abschnitt 4, aber eine Voraussetzung dafür, dass die dort vorgeschlagenen neuen Module nicht denselben Weg gehen.
@@ -359,16 +366,19 @@ Diese Muster sind im Legacy-System klar erkennbar problematisch und sollten bei 
 ## 7. Vorgeschlagene Priorisierung (Reihenfolge)
 
 **P0 — vor allem Weiteren (bereits in bestehenden Docs identifiziert, hier nur zur Einordnung, siehe Abschnitt 3):**
-Steuerkorrektheit (UVA/ZM/OSS), Notendruck-Fallback-Sicherheit (K1), Multi-PC-Schreibsicherheit (K3), Bestandsdivergenz (K2).
+Steuerkorrektheit (UVA/ZM/OSS) und Konsolidierung der zwei Bestandsquellen (K2). PDF-XChange-/Spooler-Regressionstests bleiben eine Betriebsanforderung, sind aber keine offene Legacy-Portierung. K1 und K3 sind im aktuellen Code behoben.
 
 **P1 — hoher Geschäftswert, aktuell fehlend oder unwirksam (Kern dieses Dokuments):**
-4.1 Ausgaben-Check, 4.2 Reisekosten, 4.6 CRM-Merge-Absicherung, 4.7 Zahlungsabgleich-Fehlerkatalog/Mollie-OAuth (nach Lückenprüfung), 4.9 SKU-Regelwerk-Konsolidierung (nach Lückenprüfung).
+4.1 Ausgaben-Check, 4.6 CRM-Merge-Absicherung, 4.7 Zahlungsabgleich-Fehlerkatalog/Mollie-OAuth, 4.8 B2B-Rechnungsreferenzen, 4.9 gezielte SKU-/B2B-B2C-Regelkonsolidierung.
 
 **P2 — Vervollständigung, moderater Aufwand:**
-4.3 Cover-Erzeugung, 4.4 Audio-Beispiele, 4.5 Druckrechte-Rechner, 4.8 B2B-Referenzextraktion (nach Lückenprüfung), 4.12 Produkte-unreleased, 4.15 Statistik-Vertiefung.
+4.3 Cover-Erzeugung, 4.4 Audio-Beispiele, 4.5 Druckrechte-Rechner, 4.12 Produkte-unreleased-Freitextmatching, 4.15 Statistik-Vertiefung.
 
 **P3 — sinnvoll, aber klar nachrangig:**
 4.10 WüdaraMusi-Mandantenfähigkeit, 4.11 Google-Kalender-Integration, 4.13 Wix-Abkürzungsassistent, 4.14 FinanzOnline-DataBox-Protokollabruf.
+
+**Nicht einplanen:**
+4.2 Reisekosten.
 
 ---
 

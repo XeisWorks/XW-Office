@@ -243,7 +243,6 @@ class MainWindow(QMainWindow):
         self._register_page_factory(ModuleKey.CALCULATION, self._build_calculation_page)
         self._register_page_factory(ModuleKey.LAYOUT, self._build_layout_page)
         self._register_page_factory(ModuleKey.WUEDARAMUSI, self._build_wuedaramusi_page)
-        self._register_page_factory(ModuleKey.TRAVEL_COSTS, self._build_travel_costs_page)
         self._register_page_factory(ModuleKey.MARKETING, self._build_marketing_page)
         self._register_page_factory(ModuleKey.NOTATION, self._build_notation_page)
         self._register_page_factory(ModuleKey.XW_COPILOT, self._build_xw_copilot_page)
@@ -363,11 +362,6 @@ class MainWindow(QMainWindow):
         from xw_studio.ui.modules.wuedaramusi.view import WuedaraMusiView
 
         return WuedaraMusiView(self._container)
-
-    def _build_travel_costs_page(self) -> QWidget:
-        from xw_studio.ui.modules.travel_costs.view import TravelCostsView
-
-        return TravelCostsView(self._container)
 
     def _build_marketing_page(self) -> QWidget:
         from xw_studio.ui.modules.marketing.view import MarketingView

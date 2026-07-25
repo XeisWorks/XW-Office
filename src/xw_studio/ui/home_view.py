@@ -32,7 +32,6 @@ DASHBOARD_CARDS = [
     {"key": ModuleKey.STATISTICS, "title": "Statistik", "subtitle": "Umsatzanalysen, Charts, Export", "color": "#ab47bc"},
     {"key": ModuleKey.LAYOUT, "title": "Layout", "subtitle": "Covers, QR-Codes, Wasserzeichen, Leerseiten", "color": "#26c6da"},
     {"key": ModuleKey.CALCULATION, "title": "Provisionen", "subtitle": "Kalkulation, Druckrechte, Beteiligungen", "color": "#8d6e63"},
-    {"key": ModuleKey.TRAVEL_COSTS, "title": "Reisekosten", "subtitle": "Reisekostenabrechnung", "color": "#78909c"},
     {"key": ModuleKey.WUEDARAMUSI, "title": "WuedaraMusi", "subtitle": "WuedaraMusi Rechnungen", "color": "#d4e157"},
     {"key": ModuleKey.MARKETING, "title": "Marketing", "subtitle": "Content, Social Media, Newsletter", "color": "#ff7043"},
     {"key": ModuleKey.NOTATION, "title": "Notensatz", "subtitle": "Etueden, Transpositionen, Digitalisierung", "color": "#5c6bc0"},
