@@ -35,6 +35,28 @@ class MatchStatus(str, Enum):
     BOOKED = "booked"
 
 
+class ClearingSkipReason(str, Enum):
+    """Machine-readable classification of why a candidate needs manual review.
+
+    A shared, filterable vocabulary distilled from the ~30-entry legacy
+    skip/error-reason catalog (``zahlungsabgleich.py``), kept alongside —
+    not replacing — the existing human-readable ``reason`` text.
+    """
+
+    NO_ORDER_REFERENCE = "no_order_reference"
+    INVOICE_NOT_FOUND = "invoice_not_found"
+    INVOICE_IS_DRAFT = "invoice_is_draft"
+    INVOICE_ALREADY_ASSIGNED = "invoice_already_assigned"
+    ALREADY_PAID = "already_paid"
+    AMOUNT_MISMATCH = "amount_mismatch"
+    DUPLICATE_REFERENCE = "duplicate_reference"
+    ACCOUNT_MISSING = "account_missing"
+    REFUND_NO_ORDER_REFERENCE = "refund_no_order_reference"
+    REFUND_NO_INVOICE = "refund_no_invoice"
+    REFUND_DRAFT_INVOICE = "refund_draft_invoice"
+    MOLLIE_SETTLEMENTS_PERMISSION_MISSING = "mollie_settlements_permission_missing"
+
+
 @dataclass(frozen=True)
 class ProviderTransaction:
     provider: str
@@ -127,6 +149,7 @@ class ClearingCandidate:
     account_id: int | None = None
     transaction_id: int | None = None
     stable_key: str = ""
+    skip_reason: ClearingSkipReason | None = None
 
     @property
     def is_bookable(self) -> bool:
@@ -143,6 +166,7 @@ class ClearingCandidate:
             status=status,
             reason="Manuell zugeordnet",
             selected=status == MatchStatus.READY,
+            skip_reason=None,
         )
 
 

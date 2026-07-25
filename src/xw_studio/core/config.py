@@ -163,12 +163,37 @@ class InventorySection:
 class CrmSection:
     fuzzy_match_threshold: int = 75
     duplicate_scan_on_sync: bool = True
+    # Legacy merge-loser handling: "delete_if_empty" tries to delete the
+    # duplicate and archives it (name-prefixed) if sevDesk refuses because
+    # it still has linked documents; "archive_always" never deletes;
+    # "ignore" only writes the merged fields to the master and leaves the
+    # duplicate untouched.
+    merge_loser_policy: str = "delete_if_empty"
+
+
+@dataclass(frozen=True)
+class ClearingSection:
+    """Payment-clearing tuning knobs that used to be literals in the legacy script."""
+
+    # Legacy ``SEPA_LOOKBACK_DAYS`` — SEPA transfers post to sevDesk slower
+    # than card/PSP payments, so invoices/transactions are fetched from
+    # further back than the requested analysis window.
+    sepa_lookback_days: int = 45
+    # Accepted 2-digit invoice-year prefixes for direct B2B bank-transfer
+    # invoice-number matching (see xw_studio.services.clearing.b2b_reference).
+    b2b_year_prefixes: list[str] = field(default_factory=lambda: ["24", "25", "26", "27"])
 
 
 @dataclass(frozen=True)
 class SkuRulesSection:
     print_prefixes: list[str] = field(default_factory=lambda: ["XW-4", "XW-6", "XW-7"])
     unreleased_prefixes: list[str] = field(default_factory=lambda: ["XW-600"])
+    # Legacy convention: reference starting with "1" = B2B, "2" = B2C — a
+    # simple but load-bearing numbering scheme used across fulfillment,
+    # refunds, and PLC labeling. Kept configurable since it's a business
+    # decision, not a code constant.
+    b2b_reference_prefixes: list[str] = field(default_factory=lambda: ["1"])
+    b2c_reference_prefixes: list[str] = field(default_factory=lambda: ["2"])
 
 
 @dataclass(frozen=True)
@@ -181,6 +206,7 @@ class AppConfig:
     printing: PrintingSection = field(default_factory=PrintingSection)
     inventory: InventorySection = field(default_factory=InventorySection)
     crm: CrmSection = field(default_factory=CrmSection)
+    clearing: ClearingSection = field(default_factory=ClearingSection)
     sku_rules: SkuRulesSection = field(default_factory=SkuRulesSection)
     database_url: str = ""
     fernet_master_key: str = ""

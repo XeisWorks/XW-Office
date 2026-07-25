@@ -62,6 +62,7 @@ from xw_studio.services.sevdesk.part_client import PartClient
 from xw_studio.services.sevdesk.refund_client import SevDeskRefundClient
 from xw_studio.services.statistics.service import StatisticsService
 from xw_studio.services.products.catalog import ProductCatalogService
+from xw_studio.services.products.classification_rules import ReferenceClassifier
 from xw_studio.services.products.brand_service import ProductBrandService
 from xw_studio.services.products.field_bulk_service import ProductFieldBulkService
 from xw_studio.services.products.print_decision import PrintDecisionEngine
@@ -74,7 +75,13 @@ from xw_studio.services.xw_copilot.dry_run import XWCopilotDryRunService
 from xw_studio.services.xw_copilot.ingress import XWCopilotIngress
 from xw_studio.services.xw_copilot.live_dispatch import XWCopilotLiveDispatcher
 from xw_studio.services.xw_copilot.service import XWCopilotService
-from xw_studio.repositories import ApiSecretRepository, PcRegistryRepository, PlcShipmentRepository, SettingKvRepository
+from xw_studio.repositories import (
+    ApiSecretRepository,
+    ExpenseCheckRepository,
+    PcRegistryRepository,
+    PlcShipmentRepository,
+    SettingKvRepository,
+)
 
 
 def register_default_services(container: Container) -> None:
@@ -123,6 +130,10 @@ def register_default_services(container: Container) -> None:
             catalog=c.resolve(ProductCatalogService),
             part_client=c.resolve(PartClient),
         ),
+    )
+    container.register(
+        ReferenceClassifier,
+        lambda c: ReferenceClassifier.from_config(c.config.sku_rules),
     )
     container.register(
         WixOrderCache,
@@ -266,6 +277,8 @@ def register_default_services(container: Container) -> None:
                 secrets.get_secret("WIX_SITE_ID"),
             ),
             sevdesk=SevdeskClearingGateway(c.resolve(SevdeskConnection)),
+            sepa_lookback_days=c.config.clearing.sepa_lookback_days,
+            b2b_year_prefixes=c.config.clearing.b2b_year_prefixes,
         )
 
     container.register(PaymentClearingService, build_payment_clearing)
@@ -273,6 +286,9 @@ def register_default_services(container: Container) -> None:
         ExpenseAuditService,
         lambda c: ExpenseAuditService(
             c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
+            expense_check_repo=(
+                c.resolve(ExpenseCheckRepository) if (c.config.database_url or "").strip() else None
+            ),
         ),
     )
     container.register(
@@ -322,6 +338,7 @@ def register_default_services(container: Container) -> None:
         lambda c: CrmService(
             c.config,
             c.resolve(ContactClient) if (c.config.sevdesk.api_token or "").strip() else None,
+            c.resolve(InvoiceClient) if (c.config.sevdesk.api_token or "").strip() else None,
         ),
     )
     container.register(LayoutToolsService, lambda c: LayoutToolsService())
@@ -410,4 +427,8 @@ def register_default_services(container: Container) -> None:
         container.register(
             ApiSecretRepository,
             lambda c: ApiSecretRepository(c.resolve(SessionMaker)),
+        )
+        container.register(
+            ExpenseCheckRepository,
+            lambda c: ExpenseCheckRepository(c.resolve(SessionMaker)),
         )

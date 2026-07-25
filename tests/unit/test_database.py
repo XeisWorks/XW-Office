@@ -22,7 +22,14 @@ def test_ensure_core_tables_creates_missing_tables() -> None:
 
     try:
         created_tables = ensure_core_tables(engine)
-        expected = {"api_secret", "pc_registry", "plc_shipment", "setting_kv"}
+        expected = {
+            "api_secret",
+            "expense_ignore_rule",
+            "expense_shift_entry",
+            "pc_registry",
+            "plc_shipment",
+            "setting_kv",
+        }
         assert set(created_tables) == expected
         assert expected.issubset(
             set(inspect(engine).get_table_names())

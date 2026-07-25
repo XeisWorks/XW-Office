@@ -101,7 +101,15 @@ inventory:
 crm:
   fuzzy_match_threshold: 75
   duplicate_scan_on_sync: true
+  merge_loser_policy: "delete_if_empty"
+
+clearing:
+  sepa_lookback_days: 45
+  b2b_year_prefixes: ["24", "25", "26", "27"]
 
 sku_rules:
   print_prefixes: ["XW-4", "XW-6", "XW-7"]
   unreleased_prefixes: ["XW-600"]
+  # Legacy convention: reference starting with "1" = B2B, "2" = B2C.
+  b2b_reference_prefixes: ["1"]
+  b2c_reference_prefixes: ["2"]

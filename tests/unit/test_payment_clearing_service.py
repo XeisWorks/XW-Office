@@ -11,9 +11,14 @@ import httpx
 import pytest
 
 from xw_studio.core.config import AppConfig
-from xw_studio.services.clearing.gateways import SevdeskClearingGateway, purpose_provider_ref
+from xw_studio.services.clearing.gateways import (
+    MollieClearingGateway,
+    SevdeskClearingGateway,
+    purpose_provider_ref,
+)
 from xw_studio.services.clearing.models import (
     ClearingDuplicateKey,
+    ClearingSkipReason,
     InvoiceRecord,
     MatchStatus,
     ProviderTransaction,
@@ -482,3 +487,151 @@ def test_refund_with_invoice_is_visible_but_not_preselected(tmp_path: Path) -> N
     assert row.selected is False
     assert row.is_bookable is True
     assert "Gutschrift" in row.reason
+
+
+def test_manual_candidate_carries_typed_skip_reason(tmp_path: Path) -> None:
+    payment = ProviderTransaction(
+        provider="stripe",
+        provider_ref="ch_2",
+        provider_order_id="",
+        kind=TransactionKind.PAYMENT,
+        amount=money("10.00"),
+        created_at=datetime(2026, 5, 10, 12, 0, tzinfo=VIENNA),
+        customer="Ohne Referenz",
+    )
+    sevdesk = _Sevdesk()
+    service = _service(sevdesk, [payment], tmp_path)
+
+    row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
+
+    assert row.status == MatchStatus.MANUAL
+    assert row.skip_reason == ClearingSkipReason.NO_ORDER_REFERENCE
+
+
+def test_sepa_b2b_reference_matches_direct_invoice_number(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    sevdesk.invoice = InvoiceRecord(7, "RE-261234", "kein-wix-bezug", money("50.00"), 200, "Musikkapelle")
+    sevdesk.transactions_by_account = {
+        11: [
+            SevdeskTransaction(
+                101,
+                11,
+                money("50.00"),
+                datetime(2026, 5, 12, tzinfo=VIENNA),
+                "Rechnung RE-261234 Musikkapelle",
+                100,
+            )
+        ],
+    }
+    service = _service(sevdesk, [], tmp_path)
+
+    analysis = service.analyze(date(2026, 5, 1), date(2026, 5, 31))
+
+    assert len(analysis.candidates) == 1
+    row = analysis.candidates[0]
+    assert row.provider == "sepa"
+    assert row.order_number == "RE-261234"
+    assert row.status == MatchStatus.READY
+    assert row.selected is True
+    assert row.skip_reason is None
+
+
+def test_sepa_transfer_without_any_reference_stays_invisible(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    sevdesk.transactions_by_account = {
+        11: [
+            SevdeskTransaction(
+                102, 11, money("50.00"), datetime(2026, 5, 12, tzinfo=VIENNA), "Miete Buero", 100
+            )
+        ],
+    }
+    service = _service(sevdesk, [], tmp_path)
+
+    analysis = service.analyze(date(2026, 5, 1), date(2026, 5, 31))
+
+    assert analysis.candidates == ()
+
+
+def test_custom_sepa_lookback_days_changes_fetch_window(tmp_path: Path) -> None:
+    calls: list[tuple[datetime, datetime]] = []
+
+    class _RecordingSevdesk(_Sevdesk):
+        def invoices(self, start: datetime, end: datetime) -> list[InvoiceRecord]:
+            calls.append((start, end))
+            return super().invoices(start, end)
+
+    sevdesk = _RecordingSevdesk()
+    service = PaymentClearingService(
+        stripe=_Provider([]),  # type: ignore[arg-type]
+        mollie=_Provider([]),  # type: ignore[arg-type]
+        wix=_Wix(),  # type: ignore[arg-type]
+        sevdesk=sevdesk,  # type: ignore[arg-type]
+        history_dir=tmp_path,
+        sepa_lookback_days=10,
+    )
+
+    service.analyze(date(2026, 5, 1), date(2026, 5, 31))
+
+    assert calls
+    start, _end = calls[0]
+    assert start.date() == date(2026, 4, 21)
+
+
+class _WarningProvider:
+    """Duck-typed gateway stub exposing ``last_warning`` like MollieClearingGateway."""
+
+    def __init__(self, warning: str) -> None:
+        self.last_warning = warning
+
+    def available(self) -> bool:
+        return True
+
+    def fetch(self, start: datetime, end: datetime) -> list[ProviderTransaction]:
+        return []
+
+
+def test_analyze_surfaces_gateway_last_warning(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    service = PaymentClearingService(
+        stripe=_Provider([]),  # type: ignore[arg-type]
+        mollie=_WarningProvider("Mollie-Settlements nicht abrufbar (403 - fehlende Berechtigung)."),  # type: ignore[arg-type]
+        wix=_Wix(),  # type: ignore[arg-type]
+        sevdesk=sevdesk,  # type: ignore[arg-type]
+        history_dir=tmp_path,
+    )
+
+    analysis = service.analyze(date(2026, 5, 1), date(2026, 5, 31))
+
+    assert any("403" in warning for warning in analysis.warnings)
+
+
+def test_mollie_gateway_surfaces_403_settlements_as_last_warning() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = str(request.url)
+        if "/orders" in path:
+            return httpx.Response(200, json={"_embedded": {"orders": []}})
+        if "/refunds" in path:
+            return httpx.Response(200, json={"_embedded": {"refunds": []}})
+        if "/settlements" in path:
+            return httpx.Response(403, json={"detail": "no permission"})
+        return httpx.Response(404, text=f"unexpected {request.method} {path}")
+
+    gateway = MollieClearingGateway("token-without-settlements-scope")
+    original = httpx.Client
+
+    class _Mock(httpx.Client):
+        def __init__(self, *a: object, **kw: object) -> None:
+            kw["transport"] = httpx.MockTransport(handler)
+            super().__init__(*a, **kw)  # type: ignore[arg-type]
+
+    httpx.Client = _Mock  # type: ignore[misc, assignment]
+    try:
+        rows = gateway.fetch(
+            datetime(2026, 5, 1, tzinfo=VIENNA), datetime(2026, 5, 31, tzinfo=VIENNA)
+        )
+    finally:
+        httpx.Client = original  # type: ignore[misc, assignment]
+
+    assert rows == []
+    assert "403" in gateway.last_warning
+    assert "OAuth" in gateway.last_warning

@@ -10,10 +10,20 @@ from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_studio.core.config import AppConfig
-from xw_studio.models import ApiSecret, Base, PcRegistry, PlcShipment, SettingKV
+from xw_studio.models import (
+    ApiSecret,
+    Base,
+    ExpenseIgnoreRule,
+    ExpenseShiftEntry,
+    PcRegistry,
+    PlcShipment,
+    SettingKV,
+)
 
 _CORE_TABLES = (
     ApiSecret.__table__,
+    ExpenseIgnoreRule.__table__,
+    ExpenseShiftEntry.__table__,
     PcRegistry.__table__,
     PlcShipment.__table__,
     SettingKV.__table__,

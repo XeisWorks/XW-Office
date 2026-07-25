@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from rapidfuzz import fuzz
 
-from xw_studio.services.crm.types import ContactRecord, DuplicateCandidate
+from xw_studio.services.crm.types import ContactRecord, DuplicateCandidate, MatchReason
 
 
 def contact_match_score(a: ContactRecord, b: ContactRecord) -> int:
@@ -30,6 +30,20 @@ def _normalize_phone(value: str) -> str:
     return "".join(ch for ch in value if ch.isdigit())
 
 
+def classify_match_reason(a: ContactRecord, b: ContactRecord) -> MatchReason:
+    """Named cascade step: prefer the strongest available signal.
+
+    An exact, case-insensitive email match is the highest-confidence
+    signal available on the current contact model (sevDesk's
+    ``wixCustomerId`` custom field is not modeled yet — see
+    :class:`~xw_studio.services.crm.types.ContactRecord`); everything else
+    falls back to the fuzzy name/phone/city score.
+    """
+    if a.email and b.email and a.email.strip().casefold() == b.email.strip().casefold():
+        return MatchReason.EMAIL_EXACT
+    return MatchReason.FUZZY_NAME
+
+
 def find_duplicate_candidates(
     contacts: list[ContactRecord],
     *,
@@ -41,6 +55,8 @@ def find_duplicate_candidates(
         for b in contacts[i + 1 :]:
             score = contact_match_score(a, b)
             if score >= threshold:
-                out.append(DuplicateCandidate(a=a, b=b, score=score))
+                out.append(
+                    DuplicateCandidate(a=a, b=b, score=score, reason=classify_match_reason(a, b))
+                )
     out.sort(key=lambda c: c.score, reverse=True)
     return out

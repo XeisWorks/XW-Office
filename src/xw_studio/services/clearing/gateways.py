@@ -180,6 +180,7 @@ class StripeClearingGateway:
 class MollieClearingGateway:
     def __init__(self, access_token: str) -> None:
         self._token = access_token.strip()
+        self.last_warning: str = ""
 
     def available(self) -> bool:
         return bool(self._token)
@@ -207,6 +208,7 @@ class MollieClearingGateway:
         return money(raw.get("value"))
 
     def fetch(self, start: datetime, end: datetime) -> list[ProviderTransaction]:
+        self.last_warning = ""
         if not self.available():
             return []
         headers = {"Authorization": f"Bearer {self._token}"}
@@ -276,6 +278,13 @@ class MollieClearingGateway:
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 403:
                     settlements = []
+                    # Mollie payouts/settlements require an OAuth-scoped token;
+                    # a plain API key returns 403 here. Surface this instead of
+                    # silently dropping payouts from the clearing analysis.
+                    self.last_warning = (
+                        "Mollie-Settlements nicht abrufbar (403 - fehlende Berechtigung). "
+                        "Mollie-Payouts benoetigen einen OAuth-Token, ein API-Key allein reicht nicht."
+                    )
                 else:
                     raise
             for raw in settlements:

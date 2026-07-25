@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -15,6 +16,7 @@ from typing import Callable
 from zoneinfo import ZoneInfo
 
 from xw_studio.repositories.settings_kv import SettingKvRepository
+from xw_studio.services.clearing.b2b_reference import extract_b2b_invoice_numbers
 from xw_studio.services.clearing.gateways import (
     MollieClearingGateway,
     SevdeskClearingGateway,
@@ -29,6 +31,7 @@ from xw_studio.services.clearing.models import (
     ClearingAnalysis,
     ClearingCandidate,
     ClearingDuplicateKey,
+    ClearingSkipReason,
     InvoiceRecord,
     MatchStatus,
     ProviderTransaction,
@@ -109,6 +112,7 @@ def _candidate_to_dict(row: ClearingCandidate) -> dict[str, object]:
         "account_id": row.account_id,
         "transaction_id": row.transaction_id,
         "stable_key": row.stable_key,
+        "skip_reason": row.skip_reason.value if row.skip_reason is not None else None,
     }
 
 
@@ -158,6 +162,8 @@ class PaymentClearingService:
         wix: WixClearingGateway | None = None,
         sevdesk: SevdeskClearingGateway | None = None,
         history_dir: Path | None = None,
+        sepa_lookback_days: int = 45,
+        b2b_year_prefixes: Sequence[str] = ("24", "25", "26", "27"),
     ) -> None:
         self._repo = settings_repo
         self._stripe = stripe
@@ -165,6 +171,8 @@ class PaymentClearingService:
         self._wix = wix
         self._sevdesk = sevdesk
         self._history_dir = history_dir or default_clearing_history_dir()
+        self._sepa_lookback_days = max(1, int(sepa_lookback_days))
+        self._b2b_year_prefixes = tuple(b2b_year_prefixes)
 
     def describe(self) -> str:
         return (
@@ -208,6 +216,10 @@ class PaymentClearingService:
             except Exception as exc:
                 logger.exception("%s clearing read failed", label)
                 warnings.append(f"{label}-Daten konnten nicht geladen werden: {exc}")
+            else:
+                gateway_warning = str(getattr(gateway, "last_warning", "") or "")
+                if gateway_warning:
+                    warnings.append(gateway_warning)
 
         if progress:
             progress(35, "Wix-Bestellungen und Zahlungsreferenzen laden")
@@ -227,15 +239,17 @@ class PaymentClearingService:
         missing_accounts = [name.title() for name in ("stripe", "mollie") if name not in accounts]
         if missing_accounts:
             warnings.append("sevDesk-Onlinekonto fehlt: " + ", ".join(missing_accounts))
-        invoices = self._sevdesk.invoices(start - timedelta(days=45), end + timedelta(days=5))
+        sepa_lookback = timedelta(days=self._sepa_lookback_days)
+        invoices = self._sevdesk.invoices(start - sepa_lookback, end + timedelta(days=5))
         invoice_by_ref, duplicate_refs = self._invoice_index(invoices)
+        invoice_by_number = self._invoice_index_by_number(invoices)
 
         if progress:
             progress(65, "Vorhandene sevDesk-Transaktionen pruefen")
         existing_by_duplicate: dict[tuple[str, str, str, str, Decimal], SevdeskTransaction] = {}
         all_existing: list[SevdeskTransaction] = []
         for account_id in accounts.values():
-            rows = self._sevdesk.transactions(account_id, start - timedelta(days=45), end + timedelta(days=5))
+            rows = self._sevdesk.transactions(account_id, start - sepa_lookback, end + timedelta(days=5))
             all_existing.extend(rows)
             for row in rows:
                 key = transaction_duplicate_key(row)
@@ -285,12 +299,21 @@ class PaymentClearingService:
             ):
                 continue
             order_no = _order_number(sepa_tx.purpose)
-            if not order_no:
+            invoice = invoice_by_ref.get(order_no) if order_no else None
+            if invoice is None:
+                # Fallback: direct B2B transfer referencing the sevDesk invoice
+                # number itself (e.g. "RE-261234"), not a Wix order number.
+                b2b_refs = extract_b2b_invoice_numbers(
+                    sepa_tx.purpose, year_prefixes=self._b2b_year_prefixes
+                )
+                if len(b2b_refs) == 1:
+                    b2b_invoice = invoice_by_number.get(b2b_refs[0])
+                    if b2b_invoice is not None:
+                        invoice = b2b_invoice
+                        order_no = b2b_refs[0]
+            if not order_no or invoice is None or invoice.invoice_id in seen_invoice_ids:
                 continue
-            invoice = invoice_by_ref.get(order_no)
-            if invoice is None or invoice.invoice_id in seen_invoice_ids:
-                continue
-            status, reason = self._invoice_match_status(
+            status, reason, skip_reason = self._invoice_match_status(
                 invoice,
                 sepa_tx.amount,
                 duplicate_refs,
@@ -315,6 +338,7 @@ class PaymentClearingService:
                     account_id=sepa_tx.account_id,
                     transaction_id=sepa_tx.transaction_id,
                     stable_key=f"sepa|{sepa_tx.transaction_id}",
+                    skip_reason=skip_reason,
                 )
             )
             if selected:
@@ -351,21 +375,39 @@ class PaymentClearingService:
         return by_ref, duplicates
 
     @staticmethod
+    def _invoice_index_by_number(invoices: list[InvoiceRecord]) -> dict[str, InvoiceRecord]:
+        """Index by sevDesk invoice number, for direct B2B reference matching."""
+        by_number: dict[str, InvoiceRecord] = {}
+        for invoice in invoices:
+            number = invoice.invoice_number.strip().upper()
+            if number:
+                by_number[number] = invoice
+        return by_number
+
+    @staticmethod
     def _invoice_match_status(
         invoice: InvoiceRecord,
         amount: Decimal,
         duplicate_refs: set[str],
         order_no: str,
-    ) -> tuple[MatchStatus, str]:
+    ) -> tuple[MatchStatus, str, ClearingSkipReason | None]:
         if order_no in duplicate_refs:
-            return MatchStatus.MANUAL, "Mehrere sevDesk-Rechnungen mit derselben Referenz"
+            return (
+                MatchStatus.MANUAL,
+                "Mehrere sevDesk-Rechnungen mit derselben Referenz",
+                ClearingSkipReason.DUPLICATE_REFERENCE,
+            )
         if invoice.is_paid:
-            return MatchStatus.ALREADY_BOOKED, "Rechnung ist bereits bezahlt"
+            return MatchStatus.ALREADY_BOOKED, "Rechnung ist bereits bezahlt", ClearingSkipReason.ALREADY_PAID
         if invoice.is_draft:
-            return MatchStatus.MANUAL, "Rechnung ist noch ein Entwurf"
+            return MatchStatus.MANUAL, "Rechnung ist noch ein Entwurf", ClearingSkipReason.INVOICE_IS_DRAFT
         if invoice.amount != amount:
-            return MatchStatus.MANUAL, f"Betrag weicht ab: Zahlung {amount:.2f}, Rechnung {invoice.amount:.2f}"
-        return MatchStatus.READY, "Eindeutiger Treffer"
+            return (
+                MatchStatus.MANUAL,
+                f"Betrag weicht ab: Zahlung {amount:.2f}, Rechnung {invoice.amount:.2f}",
+                ClearingSkipReason.AMOUNT_MISMATCH,
+            )
+        return MatchStatus.READY, "Eindeutiger Treffer", None
 
     def _match_provider_transaction(
         self,
@@ -380,40 +422,51 @@ class PaymentClearingService:
     ) -> ClearingCandidate:
         status = MatchStatus.MANUAL
         reason = "Keine passende Wix-Bestellung gefunden"
+        skip_reason: ClearingSkipReason | None = ClearingSkipReason.NO_ORDER_REFERENCE
         selected = False
         if account_id is None:
             status, reason = MatchStatus.ERROR, f"sevDesk-Konto {tx.provider.title()} fehlt"
+            skip_reason = ClearingSkipReason.ACCOUNT_MISSING
         elif tx.kind == TransactionKind.PAYOUT:
             status = MatchStatus.IMPORT_ONLY
             reason = "Wird als Auszahlung importiert"
+            skip_reason = None
             selected = True
         elif tx.kind == TransactionKind.REFUND:
             if not order_no:
                 status, reason = MatchStatus.REFUND_REVIEW, "Refund: keine eindeutige Wix-Bestellnummer"
+                skip_reason = ClearingSkipReason.REFUND_NO_ORDER_REFERENCE
             elif invoice is None:
                 status, reason = MatchStatus.REFUND_REVIEW, "Refund: keine sevDesk-Rechnung gefunden; Gutschrift fehlt?"
+                skip_reason = ClearingSkipReason.REFUND_NO_INVOICE
             elif invoice.is_draft:
                 status, reason = MatchStatus.REFUND_REVIEW, "Refund: Rechnung ist noch Entwurf; Gutschrift/Storno pruefen"
+                skip_reason = ClearingSkipReason.REFUND_DRAFT_INVOICE
             else:
                 status = MatchStatus.REFUND_IMPORT
                 reason = (
                     f"Refund: Rechnung {invoice.invoice_number} gefunden; "
                     "Transaktion kann importiert werden, Gutschrift/Storno separat pruefen"
                 )
+                skip_reason = None
                 selected = False
         elif not order_no:
             status, reason = MatchStatus.MANUAL, "Keine eindeutige Wix-Bestellnummer"
+            skip_reason = ClearingSkipReason.NO_ORDER_REFERENCE
         elif invoice is None:
             status, reason = MatchStatus.MANUAL, "Keine sevDesk-Rechnung zur Wix-Bestellnummer"
+            skip_reason = ClearingSkipReason.INVOICE_NOT_FOUND
         elif invoice_already_used:
             status, reason = MatchStatus.MANUAL, "Rechnung wurde bereits einer anderen Zahlung zugeordnet"
+            skip_reason = ClearingSkipReason.INVOICE_ALREADY_ASSIGNED
         else:
-            status, reason = self._invoice_match_status(invoice, tx.amount, duplicate_refs, order_no)
+            status, reason, skip_reason = self._invoice_match_status(invoice, tx.amount, duplicate_refs, order_no)
             selected = status == MatchStatus.READY
 
         transaction_id = existing.transaction_id if existing else None
         if transaction_id and existing is not None and existing.status == 400:
             status, reason, selected = MatchStatus.ALREADY_BOOKED, "Transaktion ist bereits gebucht", False
+            skip_reason = ClearingSkipReason.ALREADY_PAID
 
         return ClearingCandidate(
             candidate_id=_candidate_id(tx),
@@ -432,6 +485,7 @@ class PaymentClearingService:
             account_id=account_id,
             transaction_id=transaction_id,
             stable_key=tx.stable_key,
+            skip_reason=skip_reason,
         )
 
     def assign_invoice(

@@ -120,6 +120,7 @@ class InvoiceSummary(BaseModel):
     id: str
     invoice_number: str = Field(default="", alias="invoiceNumber")
     invoice_date: str | None = Field(default=None, alias="invoiceDate")
+    delivery_date: str | None = Field(default=None, alias="deliveryDate")
     status_code: int | None = Field(default=None, alias="status")
     sum_gross: str | float | None = Field(default=None, alias="sumGross")
     contact_name: str = ""
@@ -498,6 +499,31 @@ class InvoiceClient:
                 status,
             )
         return result
+
+    def list_invoice_summaries_for_contact(
+        self,
+        contact_id: str,
+        *,
+        limit: int = 200,
+    ) -> list[InvoiceSummary]:
+        """Return invoices linked to one sevDesk contact.
+
+        Used by CRM merge preflight to decide which of a duplicate contact's
+        invoices can be safely reassigned before the duplicate is deleted or
+        archived.
+        """
+        params: dict[str, str | int] = {
+            "contact[id]": str(contact_id).strip(),
+            "contact[objectName]": "Contact",
+            "limit": limit,
+            "embed": "contact",
+        }
+        response = self._conn.get("/Invoice", params=params)
+        payload = response.json()
+        objects = payload.get("objects")
+        if not isinstance(objects, list):
+            return []
+        return [InvoiceSummary.from_api_object(obj) for obj in objects if isinstance(obj, dict)]
 
     def list_recent_non_draft_summaries(
         self,

@@ -119,21 +119,46 @@ class ContactClient:
         response = self._conn.client.delete(f"/Contact/{contact_id}")
         raise_for_sevdesk(response)
 
-    def merge_contacts(self, master: ContactRecord, duplicate: ContactRecord) -> None:
-        """Write merge result to sevDesk: update master and delete duplicate."""
-        payload: dict[str, Any] = {"name": master.name}
-        if master.email:
-            payload["emails"] = [{"value": master.email, "type": "work"}]
-        if master.phone:
-            payload["phones"] = [{"value": master.phone, "type": "work"}]
-        if master.city:
-            payload["addresses"] = [{"city": master.city}]
+    def update_contact_fields(self, record: ContactRecord) -> None:
+        """Write name/email/phone/city to sevDesk, falling back to a minimal payload."""
+        payload: dict[str, Any] = {"name": record.name}
+        if record.email:
+            payload["emails"] = [{"value": record.email, "type": "work"}]
+        if record.phone:
+            payload["phones"] = [{"value": record.phone, "type": "work"}]
+        if record.city:
+            payload["addresses"] = [{"city": record.city}]
 
         # Try rich payload first; on API-schema mismatch, fallback to minimal update.
         try:
-            self.update_contact(master.id, payload)
+            self.update_contact(record.id, payload)
         except Exception:
-            logger.warning("Contact rich update failed for %s; retry with minimal payload", master.id)
-            self.update_contact(master.id, {"name": master.name})
+            logger.warning("Contact rich update failed for %s; retry with minimal payload", record.id)
+            self.update_contact(record.id, {"name": record.name})
 
+    def archive_contact(
+        self,
+        contact_id: str,
+        *,
+        current_name: str,
+        name_prefix: str = "[MERGED] ",
+    ) -> None:
+        """Best-effort archive marker for a merge loser sevDesk refuses to delete.
+
+        sevDesk blocks deleting a contact with linked documents. Rather than
+        letting that surface as a raw API error, mark the loser's name so
+        it's clearly recognizable and excluded from future duplicate scans
+        by convention.
+        """
+        marked_name = current_name if current_name.startswith(name_prefix) else f"{name_prefix}{current_name}".strip()
+        self.update_contact(contact_id, {"name": marked_name})
+
+    def merge_contacts(self, master: ContactRecord, duplicate: ContactRecord) -> None:
+        """Write merge result to sevDesk: update master and delete duplicate.
+
+        Simple unconditional merge, kept for direct callers that don't need
+        the preflight/loser-policy split — see ``CrmService.merge_contacts``
+        for the safer default flow.
+        """
+        self.update_contact_fields(master)
         self.delete_contact(duplicate.id)
