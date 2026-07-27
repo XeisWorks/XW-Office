@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QTimer, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -65,6 +66,7 @@ logger = logging.getLogger(__name__)
 
 _EU_PRODUCT_ID = "45"
 _DEFAULT_ITEM_WEIGHT_KG = 0.30
+_SUCCESS_OVERLAY_MS = 700
 
 
 @dataclass
@@ -108,6 +110,7 @@ class PlcLabelPrintDialog(QDialog):
         self._product_user_set = False
         self._address_edited = bool(address_override_lines)
         self._weight_user_set = False
+        self._success_overlay: QFrame | None = None
 
         self.setWindowTitle("PLC Label Print")
         self.setMinimumWidth(700)
@@ -539,13 +542,7 @@ class PlcLabelPrintDialog(QDialog):
             return
         if result.transport == "polling":
             self._status.setText(f"Importdatei abgelegt: {result.polling_path}")
-            QMessageBox.information(
-                self,
-                "PLC-Dateiimport",
-                "Die Importdatei wurde abgelegt. Ondot Data Exchange verarbeitet sie zeitversetzt; "
-                "dies ist der explizite Fallback, nicht der direkte Druck.",
-            )
-            self.accept()
+            self._show_success_overlay("Importdatei erstellt")
             return
 
         if result.webservice_result is None:
@@ -568,14 +565,68 @@ class PlcLabelPrintDialog(QDialog):
 
         tracking = ", ".join(result.webservice_result.tracking_codes) or "ohne Trackingcode"
         self._status.setText(f"PLC-Label archiviert; Druckauftrag {job_id[:8]}…")
-        QMessageBox.information(
-            self,
-            "PLC-Label",
-            "Label direkt erstellt, vor dem Druck archiviert und zum Druck eingereiht.\n"
-            f"Tracking: {tracking}\n"
-            f"Archiv: {archive_path}",
+        logger.info(
+            "PLC label created reference=%s tracking=%s archive=%s print_job=%s",
+            shipment.reference,
+            tracking,
+            archive_path,
+            job_id,
         )
-        self.accept()
+        self._show_success_overlay("PLC-Label erstellt")
+
+    def _show_success_overlay(self, message: str) -> None:
+        if self._success_overlay is not None:
+            self._success_overlay.deleteLater()
+
+        overlay = QFrame(self)
+        overlay.setObjectName("plcSuccessOverlay")
+        overlay.setGeometry(self.rect())
+        overlay.setStyleSheet(
+            "QFrame#plcSuccessOverlay {"
+            "background-color: rgba(15, 23, 42, 220);"
+            "border-radius: 10px;"
+            "}"
+            "QFrame#plcSuccessCard {"
+            "background-color: #f8fafc;"
+            "border: 2px solid #22c55e;"
+            "border-radius: 16px;"
+            "}"
+            "QLabel#plcSuccessCheck {"
+            "background-color: #16a34a;"
+            "color: white;"
+            "border-radius: 42px;"
+            "font-size: 52px;"
+            "font-weight: bold;"
+            "}"
+            "QLabel#plcSuccessText {"
+            "color: #14532d;"
+            "font-size: 17px;"
+            "font-weight: bold;"
+            "}"
+        )
+        overlay_layout = QVBoxLayout(overlay)
+        overlay_layout.addStretch()
+        card = QFrame(overlay)
+        card.setObjectName("plcSuccessCard")
+        card.setFixedSize(240, 170)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(24, 20, 24, 18)
+        check = QLabel("✓", card)
+        check.setObjectName("plcSuccessCheck")
+        check.setFixedSize(84, 84)
+        check.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_layout.addWidget(check, alignment=Qt.AlignmentFlag.AlignCenter)
+        text = QLabel(message, card)
+        text.setObjectName("plcSuccessText")
+        text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_layout.addWidget(text)
+        overlay_layout.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
+        overlay_layout.addStretch()
+
+        self._success_overlay = overlay
+        overlay.raise_()
+        overlay.show()
+        QTimer.singleShot(_SUCCESS_OVERLAY_MS, self.accept)
 
     def _on_send_error(self, shipment: PlcShipmentDraft, exc: Exception) -> None:
         if isinstance(exc, PlcDuplicateShipmentError):
