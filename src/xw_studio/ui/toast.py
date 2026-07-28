@@ -18,7 +18,7 @@ class Toast(QFrame):
         self.setStyleSheet("""
             Toast {
                 background-color: #2a2a4a;
-                border: 1px solid #4fc3f7;
+                border: 1px solid #c9a24d;
                 border-radius: 8px;
                 padding: 12px 16px;
             }

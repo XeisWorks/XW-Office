@@ -68,8 +68,9 @@ class SidebarButton(QPushButton):
     def _apply_theme(self, *, is_light: bool) -> None:
         text_color = "#1f2937" if is_light else "#e8e8e8"
         checked_color = "#0f172a" if is_light else "#ffffff"
-        checked_bg = "rgba(29, 78, 216, 0.14)" if is_light else "rgba(79, 195, 247, 0.15)"
-        hover_bg = "rgba(29, 78, 216, 0.08)" if is_light else "rgba(79, 195, 247, 0.10)"
+        accent = "#9c7a2e" if is_light else "#c9a24d"
+        checked_bg = "rgba(156, 122, 46, 0.14)" if is_light else "rgba(201, 162, 77, 0.15)"
+        hover_bg = "rgba(156, 122, 46, 0.08)" if is_light else "rgba(201, 162, 77, 0.10)"
         self.setStyleSheet(
             "QPushButton {"
             "text-align: left;"
@@ -80,7 +81,7 @@ class SidebarButton(QPushButton):
             f"color: {text_color};"
             "}"
             "QPushButton:checked {"
-            "border-left: 3px solid #4fc3f7;"
+            f"border-left: 3px solid {accent};"
             "font-weight: bold;"
             f"color: {checked_color};"
             f"background-color: {checked_bg};"
@@ -230,15 +231,3 @@ class Sidebar(QFrame):
             btn.apply_theme_name(self._current_theme)
         icon = "○" if "light" in self._current_theme else "◉"
         self._theme_btn.setText(icon)
-
-        def _toggle_theme(self) -> None:
-            """Cycle between dark and light variant of the current material palette."""
-            if "dark" in self._current_theme:
-                self._current_theme = self._current_theme.replace("dark", "light")
-            else:
-                self._current_theme = self._current_theme.replace("light", "dark")
-            from xw_studio.core.signals import AppSignals
-
-            self._container.resolve(AppSignals).theme_changed.emit(self._current_theme)
-            icon = "â—‹" if "light" in self._current_theme else "â—‰"
-            self._theme_btn.setText(icon)

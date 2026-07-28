@@ -1,5 +1,5 @@
 /* XeisWorks Studio — Dark Theme Overrides */
-/* Applied on top of qt-material dark_teal theme */
+/* Applied on top of qt-material dark_gold theme */
 
 /* Sidebar specific */
 Sidebar {
@@ -12,7 +12,7 @@ SidebarButton {
 }
 
 SidebarButton:checked {
-    background-color: rgba(79, 195, 247, 0.15);
+    background-color: rgba(201, 162, 77, 0.15);
 }
 
 /* Dashboard cards */
@@ -23,7 +23,7 @@ DashboardCard {
 /* Toast notifications */
 Toast {
     background-color: #2a2a4a;
-    border: 1px solid #4fc3f7;
+    border: 1px solid #c9a24d;
 }
 
 /* Data tables */
@@ -32,18 +32,18 @@ QTableView {
     }
 
     QTableView::item:selected {
-        background-color: rgba(79, 195, 247, 0.22);
+        background-color: rgba(201, 162, 77, 0.22);
         color: #e8e8e8;
     }
 
     QTableView::item:selected:!active {
-        background-color: rgba(79, 195, 247, 0.10);
+        background-color: rgba(201, 162, 77, 0.10);
         color: #b0bec5;
     }
 
     QTableView {
     gridline-color: #2a2a4a;
-    selection-background-color: rgba(79, 195, 247, 0.2);
+    selection-background-color: rgba(201, 162, 77, 0.2);
 }
 
 QTableView::item:alternate {
@@ -63,7 +63,7 @@ SearchBar {
 }
 
 SearchBar:focus {
-    border-color: #4fc3f7;
+    border-color: #c9a24d;
 }
 
 /* Scroll bars */

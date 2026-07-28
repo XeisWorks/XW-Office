@@ -15,7 +15,7 @@ class Card(QFrame):
         self,
         title: str,
         subtitle: str = "",
-        accent_color: str = "#4fc3f7",
+        accent_color: str = "#c9a24d",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)

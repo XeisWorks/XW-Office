@@ -9,10 +9,21 @@ from PySide6.QtWidgets import QApplication
 logger = logging.getLogger(__name__)
 
 
+def _themes_dir() -> Path:
+    return Path(__file__).resolve().parents[3] / "resources" / "themes"
+
+
 def _theme_override_path(theme_name: str) -> Path:
-    root = Path(__file__).resolve().parents[3]
     qss_name = "light.qss" if "light" in theme_name.lower() else "dark.qss"
-    return root / "resources" / "themes" / qss_name
+    return _themes_dir() / qss_name
+
+
+def _resolve_material_theme(theme_name: str) -> str:
+    """Resolve to a project-local XML theme if one exists, else a bundled qt-material name."""
+    custom_path = _themes_dir() / f"{theme_name}.xml"
+    if custom_path.exists():
+        return str(custom_path)
+    return f"{theme_name}.xml"
 
 
 def apply_app_theme(app: QApplication, theme_name: str) -> None:
@@ -20,7 +31,7 @@ def apply_app_theme(app: QApplication, theme_name: str) -> None:
     try:
         from qt_material import apply_stylesheet
 
-        apply_stylesheet(app, theme=f"{theme_name}.xml")
+        apply_stylesheet(app, theme=_resolve_material_theme(theme_name))
     except Exception as exc:  # pragma: no cover - UI fallback
         logger.warning("Theme switch failed: %s", exc)
         return

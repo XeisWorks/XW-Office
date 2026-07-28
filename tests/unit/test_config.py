@@ -5,7 +5,7 @@ from xw_studio.core.config import AppConfig, load_config
 def test_default_config_values() -> None:
     config = AppConfig()
     assert config.app.name == "XeisWorks Studio"
-    assert config.app.theme == "dark_teal"
+    assert config.app.theme == "dark_gold"
     assert config.printing.music_dpi == 600
     assert config.printing.invoice_dpi == 300
     assert config.printing.buffer_quantity == 3

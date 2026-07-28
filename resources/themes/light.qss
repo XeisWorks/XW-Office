@@ -1,5 +1,5 @@
 /* XeisWorks Studio — Light Theme Overrides */
-/* Applied on top of qt-material light_blue theme */
+/* Applied on top of qt-material light_gold theme */
 
 QWidget {
     color: #1e293b;
@@ -17,7 +17,7 @@ SidebarButton {
 
 SidebarButton:checked {
     color: #0f172a;
-    background-color: rgba(29, 78, 216, 0.14);
+    background-color: rgba(156, 122, 46, 0.14);
 }
 
 QLabel {
@@ -31,12 +31,12 @@ QPushButton {
 }
 
 QPushButton:hover {
-    background-color: #eef4ff;
-    border-color: #93c5fd;
+    background-color: #f7f0df;
+    border-color: #d9bd7e;
 }
 
 QPushButton:pressed {
-    background-color: #dbeafe;
+    background-color: #f0e0bd;
 }
 
 QPushButton:disabled {
@@ -68,17 +68,17 @@ QTableView {
     color: #0f172a;
     background-color: #ffffff;
     gridline-color: #dbe4ef;
-    selection-background-color: rgba(29, 78, 216, 0.14);
+    selection-background-color: rgba(156, 122, 46, 0.14);
     selection-color: #0f172a;
 }
 
 QTableView::item:selected {
-    background-color: rgba(29, 78, 216, 0.16);
+    background-color: rgba(156, 122, 46, 0.16);
     color: #0f172a;
 }
 
 QTableView::item:selected:!active {
-    background-color: rgba(29, 78, 216, 0.10);
+    background-color: rgba(156, 122, 46, 0.10);
     color: #1f2937;
 }
 
@@ -111,7 +111,7 @@ DashboardCard {
 
 Toast {
     background-color: #ffffff;
-    border: 1px solid #38bdf8;
+    border: 1px solid #c9a24d;
 }
 
 QScrollBar:vertical {
@@ -135,12 +135,12 @@ QToolButton {
 }
 
 QToolButton:hover {
-    background-color: #eef4ff;
-    border-color: #93c5fd;
+    background-color: #f7f0df;
+    border-color: #d9bd7e;
 }
 
 QToolButton:pressed {
-    background-color: #dbeafe;
+    background-color: #f0e0bd;
 }
 
 QToolButton:disabled {
@@ -174,8 +174,8 @@ QMenu::item {
 }
 
 QMenu::item:selected {
-    background-color: #eff6ff;
-    color: #1d4ed8;
+    background-color: #f7f0df;
+    color: #7a5f22;
 }
 
 QMenu::item:disabled {
