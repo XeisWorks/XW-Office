@@ -115,7 +115,15 @@ class PlcLabelPrintDialog(QDialog):
         self.setWindowTitle("PLC Label Print")
         self.setMinimumWidth(700)
         self._build_ui()
-        self._recipient_email.setText(str(recipient_email or "office@xeisworks.at").strip())
+        if self._manual_entry:
+            # Header "PLC-Label" button: no invoice/customer context, so the
+            # office mailbox is the correct default recipient.
+            self._recipient_email.setText(str(recipient_email or "office@xeisworks.at").strip())
+        else:
+            # Invoice-linked PLC send: leave blank if not yet resolved so the
+            # customer's email (from cache or _load_context below) fills it in
+            # instead of falling back to the office mailbox.
+            self._recipient_email.setText(str(recipient_email or "").strip())
         if address_override_lines and not self._manual_entry:
             self._address_edit.blockSignals(True)
             self._address_edit.setPlainText("\n".join(str(line).strip() for line in address_override_lines if str(line).strip()))

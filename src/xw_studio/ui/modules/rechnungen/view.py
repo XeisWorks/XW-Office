@@ -3162,6 +3162,28 @@ class RechnungenView(QWidget):
         self._last_plc_invoice = summary.invoice_number or summary.id
         self._plc_last.setText(f"Letzter PLC-Druck: {self._last_plc_invoice}")
 
+    def _cached_customer_email_for_summary(self, summary: InvoiceSummary) -> str:
+        """Resolve the customer's email from already-fetched Wix data (no fresh API call)."""
+        ref = str(summary.order_reference or "").strip()
+        if not ref:
+            return ""
+        cached_ctx = self._wix_context_cache.get(ref)
+        if isinstance(cached_ctx, dict):
+            meta = cached_ctx.get("meta")
+            if isinstance(meta, dict):
+                email = str(meta.get("wix_customer_email") or "").strip()
+                if email:
+                    return email
+        try:
+            wix_client: WixOrdersClient = self._container.resolve(WixOrdersClient)
+            meta = wix_client.get_cached_order_summary(ref)
+        except Exception as exc:  # noqa: BLE001 - cache lookup must never block the PLC popup.
+            logger.debug("Cached Wix customer-email lookup failed ref=%s: %s", ref, exc)
+            return ""
+        if isinstance(meta, dict):
+            return str(meta.get("wix_customer_email") or "").strip()
+        return ""
+
     def _open_plc_post_popup(self, summary: InvoiceSummary) -> None:
         existing_label_path = self._resolve_plc_archive_path_for_summary(summary)
         if existing_label_path:
@@ -3188,12 +3210,9 @@ class RechnungenView(QWidget):
         selected = self._selected_summary()
         if selected is not None and selected.id == summary.id:
             address_lines = self._current_shipping_lines()
-            recipient_email = str(self._wix_customer_email.text() or "").strip()
-            if recipient_email in {"—", "---"}:
-                recipient_email = ""
         else:
             address_lines = list(self._shipping_address_overrides.get(summary.id, []))
-            recipient_email = ""
+        recipient_email = self._cached_customer_email_for_summary(summary)
         dlg = PlcLabelPrintDialog(
             self._container,
             summary,
