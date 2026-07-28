@@ -1,4 +1,4 @@
-# Technische Spezifikation: QR-Code-Untermenü für die XeisWorks-PySide6-App
+﻿# Technische Spezifikation: QR-Code-Untermenü für die XeisWorks-PySide6-App
 
 **Status:** Umsetzungsentwurf für AI-Extensions in VS Code  
 **Quelldatei:** `QR-Codes Online.xlsx`  
@@ -95,7 +95,7 @@ Für das angeforderte QR-Untermenü sind primär die Register 1, 2, 5, 6 und 7 r
 |---|---|---|---|
 | `A5` | sichtbares Kürzel / Serienkennung | `UUU#2` | `series_code` |
 | `B5` | Instrument-Kürzel | `pos` | `instrument_slug` |
-| `C5` | URL-Präfix | `https://www.xeisworks.at/mh-oa/uuu2/pos/` | berechnet, aber editierbar |
+| `C5` | URL-Präfix | `https://www.xeisworks.at/mh-player/p?e=uuu2&i=pos&t=` | berechnet, aber editierbar; Nummer wird als Query-Parameter `t` angehängt |
 | `F5:F115` | laufende Nummern | `01` bis `111` | Start, Ende, Schritt, Mindestbreite |
 | `G5` | Trennzeichen für Bulk-Import | `,` | `manifest_separator` |
 | `K5:K9` | Instrument-Vorschläge | `trp`, `pos`, `ftb`, `btb`, `hrn` | editierbare ComboBox |
@@ -104,10 +104,10 @@ Die Datenvalidierung in `B5` verweist auf `K5:K10`. `K10` ist leer. In der App s
 
 ### 4.2 Excel-Formeln
 
-**URL-Präfix:**
+**URL-Präfix / kanonischer Player-Router:**
 
 ```excel
-="https://www.xeisworks.at/mh-oa/uuu2/"&B5&"/"
+="https://www.xeisworks.at/mh-player/p?e=uuu2&i="&B5&"&t="
 ```
 
 **Logische ID:**
@@ -119,7 +119,7 @@ Die Datenvalidierung in `B5` verweist auf `K5:K10`. `K10` ist leer. In der App s
 **Ziel-URL:**
 
 ```excel
-=$C$5&F5
+=$C$5&VALUE(F5)
 ```
 
 **Bulk-Import-Zeile:**
@@ -134,23 +134,23 @@ Erster Datensatz:
 
 ```text
 ID:       UUU#2-POS/01
-URL:      https://www.xeisworks.at/mh-oa/uuu2/pos/01
-Bulk:     UUU#2-POS/01,https://www.xeisworks.at/mh-oa/uuu2/pos/01
+URL:      https://www.xeisworks.at/mh-player/p?e=uuu2&i=pos&t=1
+Bulk:     UUU#2-POS/01,https://www.xeisworks.at/mh-player/p?e=uuu2&i=pos&t=1
 ```
 
 Letzter Datensatz:
 
 ```text
 ID:       UUU#2-POS/111
-URL:      https://www.xeisworks.at/mh-oa/uuu2/pos/111
-Bulk:     UUU#2-POS/111,https://www.xeisworks.at/mh-oa/uuu2/pos/111
+URL:      https://www.xeisworks.at/mh-player/p?e=uuu2&i=pos&t=111
+Bulk:     UUU#2-POS/111,https://www.xeisworks.at/mh-player/p?e=uuu2&i=pos&t=111
 ```
 
 Die Variante erzeugt aktuell **111 Datensätze**.
 
 ### 4.4 Nummernformat
 
-Die Werte `01` bis `09` sind in Excel als Text mit führender Null gespeichert. Ab `10` werden normale Zahlen verwendet. Die App darf daher nicht starr auf zwei Zeichen kürzen. Die korrekte Regel lautet:
+Die Werte `01` bis `09` sind in Excel als Text mit führender Null gespeichert. Ab `10` werden normale Zahlen verwendet. Die App darf daher nicht starr auf zwei Zeichen kürzen. Die korrekte Regel für sichtbare IDs und Dateinamen lautet:
 
 ```python
 formatted_number = str(number).zfill(2)
@@ -167,11 +167,27 @@ Beispiele:
 111 -> 111
 ```
 
-Die Einstellung sollte intern `minimum_number_width = 2` heißen, nicht `number_length = 2`.
+Die Einstellung sollte intern `minimum_number_width = 2` heißen, nicht `number_length = 2`. Für kanonische Player-URLs wird separat `url_track_number = str(int(number))` verwendet, damit `01` als `t=1` ausgegeben wird.
 
 ---
 
 ## 5. Kritische Besonderheiten und Excel-Risiken
+### 5.0 Aktueller Router-Vertrag für Player-QR-Codes
+
+Für neue Print-QR-Codes zum aktuellen MusikHeroes-Player ist nicht mehr die alte Pfadform `/mh-oa/{edition}/{instrument}/{track}` als primäre Ziel-URL zu verwenden, sondern der kanonische Wix-Router:
+
+```text
+https://www.xeisworks.at/mh-player/p?e={edition_slug}&i={instrument_slug}&t={track_number}
+```
+
+Regeln:
+
+- `e`: stabiler Editions-/Projekt-Slug, z. B. `uuu2`, `ow1`, `sk-h`.
+- `i`: stabiler Instrument-Slug, aktuell `trp`, `pos`, `ftb`, `btb`, `hrn`, zusätzlich je nach Edition `gs` oder `ens`.
+- `t`: Tracknummer ohne unnötige führende Null, z. B. `1` statt `01`. Die sichtbare ID und Dateinamen dürfen weiterhin `01` verwenden.
+- Parameterreihenfolge beim Erzeugen: immer `e`, dann `i`, dann `t`.
+
+Die ältere produktive Route `/mh-oa/{edition}/{instrument}/{track}` bleibt als Legacy-/SEO-Pfad relevant, ist aber nicht mehr die empfohlene Vorlage für neu gedruckte QR-Codes, wenn der QR-Code direkt den aktuellen Playerzustand adressieren soll.
 
 ### 5.1 Kürzel und URL-Slug sind nicht gekoppelt
 
@@ -190,9 +206,9 @@ Empfohlene Felder:
 - `project_slug`: `uuu2`
 - `instrument_slug`: `pos`
 - `base_domain`: `https://www.xeisworks.at`
-- `base_path_template`: `/mh-oa/{project_slug}/{instrument_slug}/`
+- `base_path_template`: `/mh-player/p?e={project_slug}&i={instrument_slug}&t=`
 
-Die URL darf aus diesen Feldern automatisch zusammengesetzt werden. Zusätzlich soll ein Schalter **„URL-Präfix manuell bearbeiten“** vorgesehen werden, um Sonderfälle abzubilden.
+Die URL darf aus diesen Feldern automatisch zusammengesetzt werden. Für neue Player-QR-Codes ist der aktuelle kanonische Router `https://www.xeisworks.at/mh-player/p?e={edition_slug}&i={instrument_slug}&t={track_number}` zu verwenden. Die Query-Parameter werden immer in der Reihenfolge `e`, `i`, `t` ausgegeben. `track_number` wird ohne unnötige führende Null in die URL geschrieben; der Router normalisiert intern z. B. `t=1` zu Track `01`. Zusätzlich soll ein Schalter **„URL-Präfix manuell bearbeiten“** vorgesehen werden, um Sonderfälle abzubilden.
 
 ### 5.2 Logische ID ist kein gültiger Windows-Dateiname
 
@@ -206,7 +222,7 @@ Der Schrägstrich ist unter Windows als Dateinamenzeichen unzulässig. Deshalb m
 
 ```text
 logical_id:     UUU#2-POS/01
-payload_url:    https://www.xeisworks.at/mh-oa/uuu2/pos/01
+payload_url:    https://www.xeisworks.at/mh-player/p?e=uuu2&i=pos&t=1
 output_filename: UUU#2-POS_01.png
 ```
 
@@ -221,7 +237,7 @@ Nicht jede sichtbare Ergebniszelle enthält eine eigenständige Formelzeichenfol
 Im Register steht zusätzlich:
 
 ```text
-https://www.xeisworks.at/mh-oa/uuu1/trp/02
+https://www.xeisworks.at/mh-player/p?e=uuu1&i=trp&t=2
 ```
 
 Dieser Eintrag ist nicht mit der Haupttabelle verbunden. Er wird als Beispiel-/Notizzelle behandelt und nicht als aktive Datenquelle übernommen.
@@ -242,10 +258,10 @@ Wichtig: Die Registerbezeichnungen und die tatsächlich erzeugten Sequenzen sind
 | Schritt | 1 |
 | Mindestbreite | 2 |
 | ID-Muster | `{series_code}-{instrument_upper}/{number}` |
-| URL-Muster | `{base_url}{number}` |
+| URL-Muster | `{base_url}{url_track_number}` mit `base_url = https://www.xeisworks.at/mh-player/p?e={project_slug}&i={instrument_slug}&t=` |
 | Aktuelles Kürzel | `UUU#2` |
 | Aktuelles Instrument | `pos` |
-| Aktuelle URL-Basis | `https://www.xeisworks.at/mh-oa/uuu2/pos/` |
+| Aktuelle URL-Basis | `https://www.xeisworks.at/mh-player/p?e=uuu2&i=pos&t=` |
 | Anzahl | 111 |
 
 ### 6.2 Variante „Gesamtspielchen“
@@ -281,7 +297,7 @@ Bulk-Zeile, Beispiel:
 01 Euphonium,https://www.xeisworks.at/dl-gesspiel/euph
 ```
 
-Diese Variante benötigt in der App eine editierbare Tabelle und keine Start-/Endfelder.
+Diese Variante benötigt in der App eine editierbare Tabelle und keine Start-/Endfelder. Soll sie direkt den aktuellen Player öffnen, darf die alte `dl-gesspiel`-URL nicht pauschal übernommen werden; jede Zeile braucht eine eindeutige Mapping-Spalte auf `edition_slug`, `instrument_slug` und `track_number` für den kanonischen Router.
 
 ### 6.3 Variante „Ungerade Zahlen“ – Excel-Logik
 
@@ -342,6 +358,18 @@ Gerade Zahlen (Excel-Logik: 01, 03, …, 25)
 | Beispiel-ID | `04d-CLIP` |
 | Beispiel-URL | `https://www.xeisworks.at/wu1-clips-trp/04d` |
 | Anzahl | 6 |
+
+---
+
+### 6.6 Hinweis zu Legacy-Sonderpfaden
+
+Die in den Varianten `Gesamtspielchen`, `Ungerade Zahlen`, `Gerade Zahlen` und `Jede 4.Zahl` enthaltenen Legacy-Zielpfade (`/dl-gesspiel/...`, `/loes-wu1-pos/...`, `/wu1-check-trp/...`, `/wu1-clips-trp/...`) sind nicht automatisch äquivalent zu Player-Track-URLs. Für neue QR-Codes, die exakt einen Track im aktuellen Player öffnen sollen, ist eine fachliche Zuordnung auf den kanonischen Vertrag erforderlich:
+
+```text
+https://www.xeisworks.at/mh-player/p?e={edition_slug}&i={instrument_slug}&t={track_number}
+```
+
+Ohne diese Mapping-Tabelle soll die App diese Varianten als Legacy-URL-Serie kennzeichnen und nicht stillschweigend in Player-URLs umwandeln.
 
 ---
 
@@ -605,8 +633,8 @@ Die aktuellen Excel-Daten sollen nicht nur als grauer `placeholderText`, sondern
 | Instrument | editierbare `QComboBox` | `pos` | nicht leer, Kleinbuchstaben empfohlen |
 | Instrumentvorschläge | Combo-Einträge | `trp`, `pos`, `ftb`, `btb`, `hrn` | keine leere Zeile |
 | Domain | `QLineEdit` | `https://www.xeisworks.at` | gültige HTTPS-URL |
-| Pfadvorlage | `QLineEdit` | `/mh-oa/{project_slug}/{instrument_slug}/` | muss unterstützte Platzhalter enthalten |
-| URL-Präfix | `QLineEdit` | berechnet | standardmäßig read-only |
+| Pfad-/Queryvorlage | `QLineEdit` | `/mh-player/p?e={project_slug}&i={instrument_slug}&t=` | muss unterstützte Platzhalter enthalten; Nummer wird angehängt |
+| URL-Präfix | `QLineEdit` | berechnet | standardmäßig read-only; endet bei Player-URLs mit `&t=` |
 | manuelle URL | `QCheckBox` | aus | bei Aktivierung URL-Präfix editierbar |
 | Start | `QSpinBox` | `1` | >= 0 |
 | Ende | `QSpinBox` | `111` | >= Start |
@@ -621,7 +649,7 @@ Die aktuellen Excel-Daten sollen nicht nur als grauer `placeholderText`, sondern
 Unter dem URL-Präfix:
 
 ```text
-Beispiel: https://www.xeisworks.at/mh-oa/uuu2/pos/01
+Beispiel: https://www.xeisworks.at/mh-player/p?e=uuu2&i=pos&t=1
 ```
 
 ### 11.2 ID-Vorschau
@@ -640,7 +668,7 @@ Dateiname: UUU#2-POS_01.png
 | Feld | Erststartwert |
 |---|---|
 | Basis-Domain | `https://www.xeisworks.at` |
-| Basispfad | `/dl-gesspiel/` |
+| Basispfad | vorläufig Legacy: `/dl-gesspiel/`; für Player-QRs Mapping auf `/mh-player/p?e={edition_slug}&i=gs&t={track_number}` erforderlich |
 | Trennzeichen | `,` |
 | Ausgabeordner | zuletzt verwendet |
 
@@ -751,7 +779,7 @@ PRESETS = {
         generation_mode="numeric",
         sequence=NumericSequenceSpec(1, 111, 1, 2),
         base_domain="https://www.xeisworks.at",
-        base_path="/mh-oa/{project_slug}/{instrument_slug}/",
+        base_path="/mh-player/p?e={project_slug}&i={instrument_slug}&t=",
         id_template="{series_code}-{instrument_upper}/{number}",
         default_series_code="UUU#2",
         default_project_slug="uuu2",
@@ -1014,7 +1042,7 @@ symbol_size = module_count * module_px
 Für:
 
 ```text
-https://www.xeisworks.at/mh-oa/uuu2/pos/01
+https://www.xeisworks.at/mh-player/p?e=uuu2&i=pos&t=1
 ```
 
 ergab ein technischer Prototyp:
@@ -1388,7 +1416,7 @@ class QrRecordBuilder:
 ```python
 number = "01"
 logical_id = "UUU#2-POS/01"
-payload_url = "https://www.xeisworks.at/mh-oa/uuu2/pos/01"
+payload_url = "https://www.xeisworks.at/mh-player/p?e=uuu2&i=pos&t=1"
 output_filename = "UUU#2-POS_01.png"
 ```
 
@@ -1437,21 +1465,21 @@ def test_whole_scale_matches_excel_defaults():
 
     assert len(records) == 111
     assert records[0].logical_id == "UUU#2-POS/01"
-    assert records[0].payload_url == "https://www.xeisworks.at/mh-oa/uuu2/pos/01"
+    assert records[0].payload_url == "https://www.xeisworks.at/mh-player/p?e=uuu2&i=pos&t=1"
     assert records[0].output_filename == "UUU#2-POS_01.png"
 
     assert records[-1].logical_id == "UUU#2-POS/111"
-    assert records[-1].payload_url == "https://www.xeisworks.at/mh-oa/uuu2/pos/111"
+    assert records[-1].payload_url == "https://www.xeisworks.at/mh-player/p?e=uuu2&i=pos&t=111"
 ```
 
-### 31.2 Gesamtspielchen
+### 31.2 Gesamtspielchen – Legacy-URL-Serie bis zur Player-Mapping-Tabelle
 
 ```python
 assert len(records) == 12
 assert records[0].logical_id == "01 Euphonium"
-assert records[0].payload_url == "https://www.xeisworks.at/dl-gesspiel/euph"
+assert records[0].payload_url == "https://www.xeisworks.at/dl-gesspiel/euph"  # Legacy, nicht automatisch Player-URL
 assert records[-1].logical_id == "12 Trompete + Flügelhorn"
-assert records[-1].payload_url == "https://www.xeisworks.at/dl-gesspiel/trp"
+assert records[-1].payload_url == "https://www.xeisworks.at/dl-gesspiel/trp"  # Legacy, nicht automatisch Player-URL
 ```
 
 ### 31.3 Ungerade Zahlen – Excel-Logik
@@ -1661,8 +1689,8 @@ Die Funktion ist abnahmefähig, wenn:
 - [ ] Pro Lauf ist genau eine Variante aktiv.
 - [ ] Ganze Skala lädt beim Erststart `UUU#2`, `uuu2`, `pos`, Start 1, Ende 111.
 - [ ] Die Vorschau erzeugt exakt 111 Zeilen.
-- [ ] Erste URL ist `https://www.xeisworks.at/mh-oa/uuu2/pos/01`.
-- [ ] Letzte URL ist `https://www.xeisworks.at/mh-oa/uuu2/pos/111`.
+- [ ] Erste URL ist `https://www.xeisworks.at/mh-player/p?e=uuu2&i=pos&t=1`.
+- [ ] Letzte URL ist `https://www.xeisworks.at/mh-player/p?e=uuu2&i=pos&t=111`.
 - [ ] Logische IDs behalten `/`; PNG-Dateinamen ersetzen `/` sicher.
 - [ ] Gesamtspielchen enthält die zwölf Excel-Instrumente.
 - [ ] Die beiden widersprüchlich benannten Excel-Varianten werden exakt reproduziert und klar gekennzeichnet.
@@ -1747,3 +1775,5 @@ Qualitätsprüfung:    optional ZXing-C++
 ```
 
 Die Excel-Datei soll nach der Integration nicht mehr für die tägliche QR-Erzeugung benötigt werden. Sie bleibt Referenz für Presetwerte und Kompatibilitätstests.
+
+
