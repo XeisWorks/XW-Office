@@ -49,6 +49,7 @@ from xw_studio.services.sendungen.service import OffeneSendungenService
 from xw_studio.services.special_orders import SpecialOrderService
 from xw_studio.services.transfers.service import OffeneUeberweisungenService
 from xw_studio.services.layout.service import LayoutToolsService
+from xw_studio.services.qr_codes.service import QrCodeService
 from xw_studio.services.mailing.service import MailDeliveryService
 from xw_studio.services.printing.print_queue import PrintQueueService
 from xw_studio.services.plc.service import PlcShipmentService
@@ -342,6 +343,12 @@ def register_default_services(container: Container) -> None:
         ),
     )
     container.register(LayoutToolsService, lambda c: LayoutToolsService())
+    container.register(
+        QrCodeService,
+        lambda c: QrCodeService(
+            settings_repo=c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
+        ),
+    )
     container.register(
         MailDeliveryService,
         lambda c: MailDeliveryService(secret_service=c.resolve(SecretService)),

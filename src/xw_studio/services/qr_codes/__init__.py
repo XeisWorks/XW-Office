@@ -1,0 +1,62 @@
+"""QR-code series generator: Excel-exact presets, rendering, and batch orchestration."""
+from xw_studio.services.qr_codes.filename_sanitizer import sanitize_windows_filename
+from xw_studio.services.qr_codes.models import (
+    CollisionPolicy,
+    GesamtspielchenRow,
+    NumericSequenceSpec,
+    QrBatchRequest,
+    QrBatchSummary,
+    QrConfigurationError,
+    QrGenerationResult,
+    QrModuleError,
+    QrOutputError,
+    QrPresetError,
+    QrRecord,
+    QrRenderError,
+    QrRenderSettings,
+    QrVariantPreset,
+    QrVerificationError,
+)
+from xw_studio.services.qr_codes.presets import (
+    GESAMTSPIELCHEN_DEFAULT_ROWS,
+    INSTRUMENT_SUGGESTIONS,
+    PRESETS,
+    NumericQrFormData,
+    build_numeric_records,
+    build_table_records,
+    default_numeric_form,
+    generate_numbers,
+    get_preset,
+)
+from xw_studio.services.qr_codes.renderer import SegnoLogoQrRenderer
+from xw_studio.services.qr_codes.service import QrCodeService
+
+__all__ = [
+    "CollisionPolicy",
+    "GESAMTSPIELCHEN_DEFAULT_ROWS",
+    "GesamtspielchenRow",
+    "INSTRUMENT_SUGGESTIONS",
+    "NumericQrFormData",
+    "NumericSequenceSpec",
+    "PRESETS",
+    "QrBatchRequest",
+    "QrBatchSummary",
+    "QrCodeService",
+    "QrConfigurationError",
+    "QrGenerationResult",
+    "QrModuleError",
+    "QrOutputError",
+    "QrPresetError",
+    "QrRecord",
+    "QrRenderError",
+    "QrRenderSettings",
+    "QrVariantPreset",
+    "QrVerificationError",
+    "SegnoLogoQrRenderer",
+    "build_numeric_records",
+    "build_table_records",
+    "default_numeric_form",
+    "generate_numbers",
+    "get_preset",
+    "sanitize_windows_filename",
+]

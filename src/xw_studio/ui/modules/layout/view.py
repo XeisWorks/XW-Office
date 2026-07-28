@@ -5,8 +5,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QUrl, Qt
+from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
@@ -26,6 +26,9 @@ from PySide6.QtWidgets import (
 
 from xw_studio.core.worker import BackgroundWorker
 from xw_studio.services.layout.service import LayoutToolsService, SplitLandscapeResult
+from xw_studio.services.qr_codes.service import QrCodeService
+from xw_studio.ui.modules.layout.qr_batch_dialog import QrCodeBatchDialog
+from xw_studio.ui.modules.layout.qr_settings_dialog import QrSettingsDialog
 
 if TYPE_CHECKING:
     from xw_studio.core.container import Container
@@ -58,6 +61,7 @@ class LayoutView(QWidget):
         tabs.addTab(self._build_a5_tab(), "A5 -> A4")
         tabs.addTab(self._build_landscape_split_tab(), "Querformat teilen")
         tabs.addTab(self._build_qr_tab(), "QR-Code")
+        tabs.addTab(self._build_qr_series_tab(), "QR-Code-Serien")
         tabs.addTab(self._build_blank_tab(), "Leerseiten")
         tabs.addTab(self._build_cover_tab(), "Deckblatt")
         tabs.addTab(self._build_isbn_tab(), "ISBN")
@@ -398,6 +402,64 @@ class LayoutView(QWidget):
                 QMessageBox.information(self, "Gespeichert", f"QR-Code gespeichert:\n{path}")
             except OSError as exc:
                 QMessageBox.critical(self, "Fehler", str(exc))
+
+    # ------------------------------------------------------------------
+    # Tab: QR-Code-Serien (Batch-Generator fuer die Excel-Register)
+    # ------------------------------------------------------------------
+
+    def _build_qr_series_tab(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(10)
+
+        info = QLabel(
+            "Erzeugt ganze QR-Code-Serien (Ganze Skala, Gesamtspielchen, Ungerade/Gerade Zahlen, "
+            "Jede 4. Zahl) mit Mittellogo, nativ und offline - reproduziert die Excel-Arbeitsmappe "
+            "\"QR-Codes Online.xlsx\"."
+        )
+        info.setWordWrap(True)
+        lay.addWidget(info)
+
+        generate_btn = QPushButton("QR-Code-Serie erzeugen...")
+        generate_btn.clicked.connect(self._open_qr_batch_dialog)
+        lay.addWidget(generate_btn)
+
+        settings_btn = QPushButton("QR-Code-Einstellungen...")
+        settings_btn.clicked.connect(self._open_qr_settings_dialog)
+        lay.addWidget(settings_btn)
+
+        self._open_qr_output_dir_btn = QPushButton("Letzten Ausgabeordner oeffnen")
+        self._open_qr_output_dir_btn.clicked.connect(self._open_last_qr_output_dir)
+        lay.addWidget(self._open_qr_output_dir_btn)
+        self._refresh_qr_output_dir_button()
+
+        lay.addStretch()
+        return page
+
+    def _refresh_qr_output_dir_button(self) -> None:
+        svc: QrCodeService = self._container.resolve(QrCodeService)
+        last_dir = svc.load_settings().last_output_directory
+        self._open_qr_output_dir_btn.setEnabled(bool(last_dir) and Path(last_dir).is_dir())
+
+    def _open_qr_batch_dialog(self) -> None:
+        dialog = QrCodeBatchDialog(self._container, self)
+        dialog.exec()
+        self._refresh_qr_output_dir_button()
+
+    def _open_qr_settings_dialog(self) -> None:
+        svc: QrCodeService = self._container.resolve(QrCodeService)
+        dialog = QrSettingsDialog(svc, svc.load_settings(), self)
+        dialog.exec()
+
+    def _open_last_qr_output_dir(self) -> None:
+        svc: QrCodeService = self._container.resolve(QrCodeService)
+        last_dir = svc.load_settings().last_output_directory
+        if not last_dir or not Path(last_dir).is_dir():
+            QMessageBox.information(self, "QR-Code-Serien", "Es ist noch kein Ausgabeordner gespeichert.")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(last_dir)):
+            QMessageBox.warning(self, "QR-Code-Serien", "Der Ordner konnte nicht geoeffnet werden.")
 
     # ------------------------------------------------------------------
     # Tab 2: Leerseiten einfuegen
