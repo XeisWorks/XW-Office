@@ -969,6 +969,7 @@ class RechnungenView(QWidget):
         self._open_overview_products: list[PrintProductAggregate] = []
         self._session_print_products: list[PrintProductAggregate] = []
         self._print_products_last_run = False
+        self._last_print_all_products_key: tuple[tuple[str, str, str, int], ...] | None = None
         self._plc_label_archive = PlcLabelArchive()
         self._selected_plc_label_path = ""
         self._plc_archive_lookup_cache: dict[tuple[str, str], str] = {}
@@ -1157,6 +1158,15 @@ class RechnungenView(QWidget):
         self._gb_open_products = QGroupBox("PRINT-PRODUKTE OFFEN")
         open_products_layout = QVBoxLayout(self._gb_open_products)
         open_products_layout.setContentsMargins(10, 8, 10, 10)
+        open_products_header = QHBoxLayout()
+        open_products_header.setContentsMargins(0, 0, 0, 0)
+        open_products_header.addStretch(1)
+        self._btn_print_all_products = QPushButton("PRINT ALL PRODUCTS")
+        self._btn_print_all_products.setToolTip("Alle angezeigten Print-Produkte in der angezeigten Menge drucken")
+        self._btn_print_all_products.setFixedHeight(26)
+        self._btn_print_all_products.clicked.connect(self._on_print_all_open_products_clicked)
+        open_products_header.addWidget(self._btn_print_all_products, alignment=Qt.AlignmentFlag.AlignRight)
+        open_products_layout.addLayout(open_products_header)
         self._open_products_status = QLabel("Print-Produkte werden ermittelt...")
         self._open_products_status.setWordWrap(True)
         self._open_products_status.setStyleSheet("color: #cbd5e1;")
@@ -1556,6 +1566,7 @@ class RechnungenView(QWidget):
         self._set_piece_print_controls_enabled(
             printing_allowed and not (self._product_print_worker is not None and self._product_print_worker.isRunning())
         )
+        self._update_print_all_products_button()
         self._update_plc_controls()
 
     def _initialize_printer_status(self) -> None:
@@ -2397,9 +2408,11 @@ class RechnungenView(QWidget):
     def _render_open_print_products(self, overview: OpenInvoiceOverview) -> None:
         if overview.unknown and not overview.print_products:
             self._set_open_products_message("Print-Produkte werden ermittelt...")
+            self._update_print_all_products_button()
             return
         if not overview.print_products:
             self._set_open_products_message("Keine geflaggten Print-Produkte in den offenen Rechnungen gefunden.")
+            self._update_print_all_products_button()
             return
         self._clear_open_print_product_rows()
         self._open_products_status.hide()
@@ -2415,6 +2428,131 @@ class RechnungenView(QWidget):
             plain_lines.append("Weitere Print-Produkte werden noch ermittelt.")
         self._open_products_rows_layout.addStretch(1)
         self._open_products_text.setPlainText("\n".join(plain_lines))
+        self._update_print_all_products_button()
+
+    def _displayed_print_products(self) -> list[PrintProductAggregate]:
+        products = self._session_print_products if self._print_products_last_run else self._open_overview_products
+        return [item for item in products if str(item.sku or "").strip()]
+
+    def _update_print_all_products_button(self) -> None:
+        if not hasattr(self, "_btn_print_all_products"):
+            return
+        running = self._product_print_worker is not None and self._product_print_worker.isRunning()
+        self._btn_print_all_products.setEnabled(
+            bool(self._print_allowed and self._displayed_print_products() and not running)
+        )
+
+    @staticmethod
+    def _print_all_products_key(products: list[PrintProductAggregate]) -> tuple[tuple[str, str, str, int], ...]:
+        return tuple(
+            (
+                str(item.sku or "").strip().casefold(),
+                str(item.title or "").strip().casefold(),
+                str(item.description or "").strip().casefold(),
+                max(1, int(item.quantity or 1)),
+            )
+            for item in products
+        )
+
+    def _on_print_all_open_products_clicked(self) -> None:
+        if not self._print_allowed or (self._product_print_worker is not None and self._product_print_worker.isRunning()):
+            return
+        products = self._displayed_print_products()
+        if not products:
+            QMessageBox.information(
+                self,
+                "PRINT ALL PRODUCTS",
+                "Keine Print-Produkte in der aktuellen Liste gefunden.",
+            )
+            return
+        products_key = self._print_all_products_key(products)
+        if products_key == self._last_print_all_products_key:
+            answer = QMessageBox.question(
+                self,
+                "PRINT ALL PRODUCTS",
+                "Produkte bereits gedruckt.\n\nErneut drucken?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        from xw_studio.ui.modules.rechnungen.print_dialog import (
+            _configure_missing_piece_print,
+            prepare_piece_pdf_print,
+        )
+
+        prepared_jobs: list[tuple[PieceBlock, int, Callable[[], None]]] = []
+        for item in products:
+            block = self._piece_block_from_open_product(item)
+            qty = max(1, int(item.quantity or 1))
+            if not self._open_print_product_ready(item) and not _configure_missing_piece_print(
+                self,
+                self._container,
+                block,
+            ):
+                signals: AppSignals = self._container.resolve(AppSignals)
+                signals.status_message.emit(
+                    f"PRINT ALL PRODUCTS abgebrochen: {block.sku} wurde nicht konfiguriert.",
+                    8000,
+                )
+                return
+            job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty, wait=True)
+            if job is None:
+                signals: AppSignals = self._container.resolve(AppSignals)
+                signals.status_message.emit(
+                    f"PRINT ALL PRODUCTS abgebrochen: {block.sku} ist nicht druckbereit.",
+                    8000,
+                )
+                return
+            prepared_jobs.append((block, qty, job))
+
+        if not prepared_jobs:
+            return
+
+        self._btn_print_all_products.setEnabled(False)
+        self._set_piece_print_controls_enabled(False)
+        total_copies = sum(qty for _block, qty, _job in prepared_jobs)
+        signals: AppSignals = self._container.resolve(AppSignals)
+        signals.status_message.emit(
+            f"PRINT ALL PRODUCTS gestartet: {len(prepared_jobs)} Produkt(e), {total_copies}x.",
+            5000,
+        )
+
+        def worker_job() -> dict[str, object]:
+            printed: list[str] = []
+            warnings: list[str] = []
+            for block, qty, job in prepared_jobs:
+                job()
+                printed.append(f"{block.sku} ({qty}x)")
+                if block.product is None or not str(block.product.sevdesk_part_id or "").strip():
+                    warnings.append(f"{block.sku}: kein sevDesk-Part fuer Bestandsbuchung hinterlegt")
+                    continue
+                try:
+                    engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
+                    new_stock = engine.record_print_and_update_sevdesk(block, qty)
+                    self._container.resolve(InventoryService).set_product_stock(block.sku, new_stock)
+                except Exception as exc:
+                    logger.warning("Stock update after PRINT ALL PRODUCTS failed for %s: %s", block.sku, exc)
+                    warnings.append(f"{block.sku}: {exc}")
+            return {
+                "sku": f"{len(printed)} Produkt(e)",
+                "quantity": total_copies,
+                "stock_warning": "\n".join(warnings),
+                "printed": ", ".join(printed),
+                "print_all_key": products_key,
+            }
+
+        self._product_print_worker = BackgroundWorker(worker_job)
+        self._product_print_worker.signals.result.connect(self._on_product_print_result)
+        self._product_print_worker.signals.result.connect(self._on_print_all_open_products_result)
+        self._product_print_worker.signals.error.connect(self._on_product_print_error)
+        self._product_print_worker.signals.finished.connect(self._on_product_print_finished)
+        self._product_print_worker.start()
+
+    def _on_print_all_open_products_result(self, payload: object) -> None:
+        if isinstance(payload, dict) and isinstance(payload.get("print_all_key"), tuple):
+            self._last_print_all_products_key = payload["print_all_key"]
 
     def _build_open_print_product_row(self, item: PrintProductAggregate) -> QWidget:
         row = QWidget()
@@ -4811,6 +4949,7 @@ class RechnungenView(QWidget):
     def _on_product_print_finished(self) -> None:
         self._product_print_worker = None
         self._set_piece_print_controls_enabled(self._print_allowed)
+        self._update_print_all_products_button()
         self._update_plc_controls()
 
     @staticmethod

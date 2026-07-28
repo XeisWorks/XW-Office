@@ -5,7 +5,7 @@ import subprocess
 from threading import Event
 import types
 
-from PySide6.QtWidgets import QToolButton
+from PySide6.QtWidgets import QMessageBox, QToolButton
 
 from xw_studio.bootstrap import register_default_services
 from xw_studio.core.config import AppConfig
@@ -716,6 +716,163 @@ def test_print_products_remain_for_session_after_completed_run(qtbot: object) ->
     text = view._open_products_text.toPlainText()  # noqa: SLF001
     assert "Erstes Produkt" in text
     assert "Zweites Produkt" in text
+
+
+def test_print_all_products_button_prints_displayed_quantities(qtbot: object, monkeypatch: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    products = [
+        PrintProductAggregate(sku="XW-FIRST", title="Erstes Produkt", description="Besetzung A", quantity=2),
+        PrintProductAggregate(sku="XW-SECOND", title="Zweites Produkt", description="Besetzung B", quantity=3),
+    ]
+    prepared: list[tuple[str, int, bool]] = []
+    printed: list[tuple[str, int]] = []
+
+    view._open_print_product_ready = lambda _item: True  # type: ignore[method-assign]  # noqa: SLF001
+
+    def fake_piece(item: PrintProductAggregate) -> PieceBlock:
+        return PieceBlock(sku=str(item.sku), name=str(item.title), qty_needed=int(item.quantity))
+
+    def fake_prepare(_parent: object, _container: object, *, piece: PieceBlock, copies: int, wait: bool = False):
+        prepared.append((piece.sku, copies, wait))
+
+        def job() -> None:
+            printed.append((piece.sku, copies))
+
+        return job
+
+    monkeypatch.setattr(view, "_piece_block_from_open_product", fake_piece)
+    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.print_dialog.prepare_piece_pdf_print", fake_prepare)
+
+    view._apply_open_invoice_overview(  # noqa: SLF001
+        OpenInvoiceOverview(
+            key="print-all",
+            total=1,
+            with_ref=1,
+            physical=1,
+            digital=0,
+            unknown=0,
+            with_note=0,
+            plc=0,
+            complete=True,
+            print_products=products,
+        )
+    )
+    view._on_printer_status(True)  # noqa: SLF001
+
+    assert view._btn_print_all_products.isEnabled()  # noqa: SLF001
+
+    view._on_print_all_open_products_clicked()  # noqa: SLF001
+
+    qtbot.waitUntil(lambda: view._product_print_worker is None, timeout=2000)  # noqa: SLF001
+    assert prepared == [("XW-FIRST", 2, True), ("XW-SECOND", 3, True)]
+    assert printed == [("XW-FIRST", 2), ("XW-SECOND", 3)]
+    assert view._last_print_all_products_key is not None  # noqa: SLF001
+
+
+def test_print_all_products_warns_before_reprint(qtbot: object, monkeypatch: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    product = PrintProductAggregate(
+        sku="XW-FIRST",
+        title="Erstes Produkt",
+        description="Besetzung A",
+        quantity=2,
+    )
+    print_calls: list[str] = []
+    questions: list[str] = []
+
+    view._open_print_product_ready = lambda _item: True  # type: ignore[method-assign]  # noqa: SLF001
+    monkeypatch.setattr(
+        view,
+        "_piece_block_from_open_product",
+        lambda item: PieceBlock(sku=str(item.sku), name=str(item.title), qty_needed=int(item.quantity)),
+    )
+
+    def fake_prepare(_parent: object, _container: object, *, piece: PieceBlock, copies: int, wait: bool = False):
+        def job() -> None:
+            print_calls.append(f"{piece.sku}:{copies}:{wait}")
+
+        return job
+
+    def fake_question(*args: object, **_kwargs: object) -> QMessageBox.StandardButton:
+        questions.append(str(args[2]))
+        return QMessageBox.StandardButton.No
+
+    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.print_dialog.prepare_piece_pdf_print", fake_prepare)
+    monkeypatch.setattr(QMessageBox, "question", fake_question)
+
+    view._apply_open_invoice_overview(  # noqa: SLF001
+        OpenInvoiceOverview(
+            key="print-all-repeat",
+            total=1,
+            with_ref=1,
+            physical=1,
+            digital=0,
+            unknown=0,
+            with_note=0,
+            plc=0,
+            complete=True,
+            print_products=[product],
+        )
+    )
+    view._on_printer_status(True)  # noqa: SLF001
+
+    view._on_print_all_open_products_clicked()  # noqa: SLF001
+    qtbot.waitUntil(lambda: view._product_print_worker is None, timeout=2000)  # noqa: SLF001
+    view._on_print_all_open_products_clicked()  # noqa: SLF001
+
+    assert print_calls == ["XW-FIRST:2:True"]
+    assert questions == ["Produkte bereits gedruckt.\n\nErneut drucken?"]
+
+
+def test_print_all_products_configures_missing_products_in_order(qtbot: object, monkeypatch: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    products = [
+        PrintProductAggregate(sku="XW-FIRST", title="Erstes Produkt", description="", quantity=1),
+        PrintProductAggregate(sku="XW-SECOND", title="Zweites Produkt", description="", quantity=1),
+    ]
+    configured: list[str] = []
+
+    view._open_print_product_ready = lambda _item: False  # type: ignore[method-assign]  # noqa: SLF001
+    monkeypatch.setattr(
+        view,
+        "_piece_block_from_open_product",
+        lambda item: PieceBlock(sku=str(item.sku), name=str(item.title), qty_needed=int(item.quantity)),
+    )
+    monkeypatch.setattr(
+        "xw_studio.ui.modules.rechnungen.print_dialog._configure_missing_piece_print",
+        lambda _parent, _container, piece: configured.append(piece.sku) or True,
+    )
+    monkeypatch.setattr(
+        "xw_studio.ui.modules.rechnungen.print_dialog.prepare_piece_pdf_print",
+        lambda *_args, **_kwargs: (lambda: None),
+    )
+
+    view._apply_open_invoice_overview(  # noqa: SLF001
+        OpenInvoiceOverview(
+            key="print-all-missing",
+            total=1,
+            with_ref=1,
+            physical=1,
+            digital=0,
+            unknown=0,
+            with_note=0,
+            plc=0,
+            complete=True,
+            print_products=products,
+        )
+    )
+    view._on_printer_status(True)  # noqa: SLF001
+
+    view._on_print_all_open_products_clicked()  # noqa: SLF001
+    qtbot.waitUntil(lambda: view._product_print_worker is None, timeout=2000)  # noqa: SLF001
+
+    assert configured == ["XW-FIRST", "XW-SECOND"]
 
 
 def test_plc_dialog_defaults_to_direct_webservice_without_changing_list_action(qtbot: object) -> None:
