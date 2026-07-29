@@ -2,6 +2,12 @@
 
 Stand: 11. Juli 2026
 
+Update 2026-07-29: Der PDF-XChange-Produktdruck ist auf echter Hardware abgenommen. Testlauf QA-01 bis QA-04
+(`noten_simplex`, `noten_duplex`, `brochure_mono`, `brochure_duo`) wurde ueber den produktiven
+`print_pdf_by_plan()`-/PDF-XChange-Pfad an die Windows-Spooler uebergeben. Nutzerkontrolle auf Papier:
+Simplex und Duplex funktionieren, Schaerfe und Zentrierung sind absolut ok. Der PDF-XChange-Pilot fuer
+Noten-/Produktdruck ist damit fachlich abgeschlossen; PDF-XChange bleibt der Zielpfad.
+
 ## Ziel und Kurzfazit
 
 Rechnungsdruck und Brother-Adressetikettendruck bleiben unverändert, weil sie laut Praxis zuverlässig funktionieren. Für die beiden offenen Qualitätsprobleme und die fehlende UI-Parität ist eine gezielte Trennung der Backends sinnvoll:
@@ -26,7 +32,7 @@ Erledigt im Code:
 
 Noch offen:
 
-- PDF-XChange-/Acrobat-/Native-Backend-Pilot fuer wirklich hochwertigen Notendruck; das erfordert Installation, Lizenzentscheidung und Hardware-A/B-Druck.
+- PDF-XChange-/Native-Backend-Pilot fuer hochwertigen Notendruck: abgeschlossen am 2026-07-29; Simplex/Duplex, Schaerfe und Zentrierung auf Papier abgenommen.
 - Hardware-Abnahme PLC: zehn Drucke nach wechselnden A4/A5-Jobs auf dem echten `Paketmarke A5`-Drucker.
 - Entscheidung, ob der Produktdruck im Menue **Produkte** Lagerbestand erhoehen soll. Aktuell startet er bewusst nur den Druck, weil dort kein Rechnungs-/Produktionskontext vorhanden ist.
 
@@ -359,6 +365,8 @@ Adapter wandeln `PieceBlock` und `ProductRow` in dasselbe `ProductPrintRequest`-
 - kein zusätzlicher „Fit“-Effekt im Treiber
 
 ### Hardware-Abnahme Noten
+
+Status 2026-07-29: QA-01 bis QA-04 gedruckt und durch Nutzer auf Papier geprueft. Simplex/Duplex funktionieren; Schaerfe und Zentrierung sind absolut ok.
 
 - kleine Notenköpfe, Linien und Fonts mindestens gleichwertig mit Acrobat-Referenz
 - Cover-Schatten ohne harte Stufen, Clipping oder ungewollte Graukonvertierung
