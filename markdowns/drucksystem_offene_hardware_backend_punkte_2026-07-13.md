@@ -4,7 +4,7 @@ Stand: 13. Juli 2026
 
 Ausgangslage: Der Code-Stand `11a41ad Improve product and PLC print handling` hat die lokalen Softwarephasen bereits umgesetzt:
 
-- PLC-Jobs enthalten explizit A5 Portrait, `printable_origin`, `fit`, `center`.
+- PLC-Jobs enthalten explizit A5 Portrait, `printable_origin`, `none`, `center` (seit Hardwaretest `PLC-QA-04` am 2026-07-29).
 - Druckprofile, Queue, Planresolver und Renderer kennen `page_size`, `orientation`, `scale_mode` und `alignment`.
 - Analysis Panel und Menue Produkte nutzen denselben Produktdruckpfad.
 - Analysis-Produktdruck wartet auf Queue-Bestaetigung, bevor Bestand/sevDesk aktualisiert wird.
@@ -213,7 +213,7 @@ printing:
       page_size: "A5"
       orientation: "portrait"
       placement_mode: "printable_origin"
-      scale_mode: "fit"
+      scale_mode: "none"
       alignment: "center"
       x_offset_mm: 0.0
       y_offset_mm: 0.0

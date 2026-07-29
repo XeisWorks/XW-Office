@@ -105,5 +105,5 @@ def test_webservice_label_queue_uses_explicit_a5_layout(tmp_path) -> None:
     assert queued[0].page_size == "A5"
     assert queued[0].orientation == "portrait"
     assert queued[0].placement_mode == "printable_origin"
-    assert queued[0].scale_mode == "fit"
+    assert queued[0].scale_mode == "none"
     assert queued[0].alignment == "center"

@@ -24,7 +24,7 @@ Vor einer endgültigen Backend-Entscheidung ist ein realer A/B-Test auf den vorh
 Erledigt im Code:
 
 - Phase 1/2 teilweise umgesetzt: `PdfPrintJob`, Druckprofile, Queue, Planresolver und Renderer kennen jetzt `page_size`, `orientation`, `scale_mode` und `alignment`.
-- PLC-Webservice-/Archivdruck erzeugt jetzt explizit A5 Portrait, `printable_origin`, `fit`, `center`; das Profil `plc_label` traegt dieselben Defaults.
+- PLC-Webservice-/Archivdruck erzeugt jetzt explizit A5 Portrait, `printable_origin`, `none`, `center`; das Profil `plc_label` traegt dieselben Defaults. Diese Einstellung entspricht dem am 2026-07-29 auf Papier bevorzugten Test `PLC-QA-04`.
 - Analysis Panel zeigt Produkt-Druck/Plan nicht mehr nur fuer markierte SKUs, sondern fuer alle nicht-digitalen Positionen.
 - Manueller Produktdruck aus dem Analysis Panel wartet auf die Queue-Bestaetigung, bevor Bestand/sevDesk aktualisiert wird.
 - Menue **Produkte** hat eine Aktion `Auswahl drucken`, die denselben `run_piece_pdf_print()`-/`ProductPrintConfigDialog`-/`print_pdf_by_plan()`-Pfad nutzt.
@@ -33,7 +33,7 @@ Erledigt im Code:
 Noch offen:
 
 - PDF-XChange-/Native-Backend-Pilot fuer hochwertigen Notendruck: abgeschlossen am 2026-07-29; Simplex/Duplex, Schaerfe und Zentrierung auf Papier abgenommen.
-- Hardware-Abnahme PLC: zehn Drucke nach wechselnden A4/A5-Jobs auf dem echten `Paketmarke A5`-Drucker.
+- Hardware-Abnahme PLC: Layoutvariante `PLC-QA-04` (`printable_origin`, `scale_mode=none`, `center`) wurde am 2026-07-29 als beste A5-Ausnutzung bestaetigt; der umfangreiche zehnmalige Wechseltest bleibt optionaler Regressionstest.
 - Entscheidung, ob der Produktdruck im Menue **Produkte** Lagerbestand erhoehen soll. Aktuell startet er bewusst nur den Druck, weil dort kein Rechnungs-/Produktionskontext vorhanden ist.
 
 ## Untersuchte Bereiche
@@ -89,7 +89,7 @@ Qt weist ausdrücklich darauf hin, dass bei Full-Page-Ausgabe der Ursprung zwar 
 
 ### Weitere Schwachstellen
 
-- Das Profil `plc_label` in `default.yaml` enthält derzeit nur Druckername und Label. A5, Hochformat, Skalierungsregel und Offset sind nicht deklarativ festgelegt.
+- Das Profil `plc_label` in `default.yaml` enthält inzwischen A5, Hochformat, Platzierung, Skalierungsregel und Alignment deklarativ. Die aktuelle Hardware-abgenommene Skalierung ist `scale_mode=none`.
 - Ein Secret `PLC_LABEL_PRINTER` überschreibt das Profil vollständig; damit gehen künftig auch Profilattribute verloren, sofern weiterhin nur ein String aufgelöst wird.
 - Die manuelle Funktion `run_plc_label_pdf_print()` zeigt zwar einen Windows-Dialog, überträgt danach aber nur Druckername und Seitenbereich in einen neuen Job. Im Dialog gewählte Kopien, Layout-/Treiberparameter oder Auflösung werden nicht vollständig als Job-Snapshot erhalten.
 - `QPrinter.isValid()` und die vom Treiber akzeptierte Seitengröße werden vor dem Druck nicht hart validiert.
@@ -101,7 +101,7 @@ Qt weist ausdrücklich darauf hin, dass bei Full-Page-Ausgabe der Ursprung zwar 
 1. `PdfPrintJob` um explizite Layoutsemantik erweitern: `page_size`, `orientation`, `scaling_mode`, `alignment`, optional `margins_mm`.
 2. Eigenes Profil `plc_label` verbindlich konfigurieren:
    - A5, Portrait
-   - bevorzugt `fit_to_printable_area` mit Seitenverhältnis und Zentrierung; alternativ `actual_size_centered`, falls der Paketmarkendrucker randlos A5 kann
+   - hardwareabgenommen am 2026-07-29: `printable_origin`, `scale_mode=none`, `alignment=center` (`PLC-QA-04`)
    - keinerlei Treiber-„Fit to page“-Doppelskalierung
    - kalibrierbare X/Y-Offsets nur nach einem Messdruck
 3. Vor `painter.begin()` A5 und Orientierung setzen; danach tatsächlich akzeptierte `pageLayout()`-Werte lesen und bei grober Abweichung abbrechen statt falsch zu drucken.
@@ -218,7 +218,7 @@ printing:
       backend: qt_raster
       paper_size: A5
       orientation: portrait
-      scaling_mode: fit_printable
+      scaling_mode: none
       alignment: center
 ```
 
@@ -357,6 +357,8 @@ Adapter wandeln `PieceBlock` und `ProductRow` in dasselbe `ProductPrintRequest`-
 - Pfade mit Leerzeichen/Umlauten und Druckernamen mit Sonderzeichen.
 
 ### Hardware-Abnahme PLC
+
+Status 2026-07-29: Vier A5-Skalierungsvarianten wurden auf `Paketmarke A5` gedruckt. Nutzerfeedback: `PLC-QA-04` passt am besten (`placement=printable_origin`, `scale_mode=none`, `alignment=center`).
 
 - zehn aufeinanderfolgende A5-Labels identische Position ±0,5 mm
 - je fünf A5-Labels nach zuvor gedrucktem A4-Rechnungs- und Notenjob

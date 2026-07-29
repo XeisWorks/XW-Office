@@ -735,7 +735,7 @@ class PlcLabelPrintDialog(QDialog):
                 page_size=str(getattr(profile, "page_size", "") or "A5"),
                 orientation=str(getattr(profile, "orientation", "") or "portrait"),
                 placement_mode=str(getattr(profile, "placement_mode", "") or "printable_origin"),  # type: ignore[arg-type]
-                scale_mode=str(getattr(profile, "scale_mode", "") or "fit"),  # type: ignore[arg-type]
+                scale_mode=str(getattr(profile, "scale_mode", "") or "none"),  # type: ignore[arg-type]
                 alignment=str(getattr(profile, "alignment", "") or "center"),  # type: ignore[arg-type]
                 dpi=int(profile.dpi) if profile is not None and profile.dpi else None,
                 x_offset_mm=float(getattr(profile, "x_offset_mm", 0.0) or 0.0),

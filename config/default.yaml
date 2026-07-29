@@ -71,7 +71,7 @@ printing:
       page_size: "A5"
       orientation: "portrait"
       placement_mode: "printable_origin"
-      scale_mode: "fit"
+      scale_mode: "none"
       alignment: "center"
     - id: "noten_simplex"
       label: "Noten A4 Simplex"
