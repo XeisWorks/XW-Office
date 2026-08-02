@@ -17,7 +17,7 @@ Erledigt:
 - Der Druckplan-Dialog zeigt PDF-Status/Seitenzahl, PDF-/Ordner-Buttons, echte Profilnamen, Drucker, Backend und Live-Zusammenfassung.
 - Das alte Pilotprofil `noten_native_pilot` wurde entfernt; `Noten A4 Simplex` ist nur noch einmal vorhanden.
 - Nach Speichern eines offenen Print-Produkts wird die offene Produktliste neu gerendert, damit Settings direkt zu Print wechseln kann.
-- Der PDF-XChange-Aufruf protokolliert die exakte Commandline und einen Windows-Spooler-Befund in `logs/xw_studio.log`.
+- Der PDF-XChange-Aufruf protokolliert die exakte Commandline und einen Windows-Spooler-Befund in `logs/xw_office.log`.
 - Die Statusmeldung nach Direktdruck sagt jetzt "Druckauftrag uebergeben" statt "gedruckt", weil PDF-XChange nur die Annahme des Jobs bestaetigt.
 
 Noch als spaetere Haertung offen:
@@ -40,15 +40,15 @@ Noch als spaetere Haertung offen:
 
 Relevante Dateien:
 
-- `src/xw_studio/ui/modules/products/view.py`
-- `src/xw_studio/ui/modules/rechnungen/view.py`
-- `src/xw_studio/ui/modules/rechnungen/print_dialog.py`
-- `src/xw_studio/ui/modules/rechnungen/open_invoice_overview.py`
-- `src/xw_studio/services/inventory/service.py`
-- `src/xw_studio/services/products/catalog.py`
-- `src/xw_studio/services/products/print_decision.py`
-- `src/xw_studio/services/printing/planned_pdf_printer.py`
-- `src/xw_studio/services/printing/pdf_backends.py`
+- `src/xw_office/ui/modules/products/view.py`
+- `src/xw_office/ui/modules/rechnungen/view.py`
+- `src/xw_office/ui/modules/rechnungen/print_dialog.py`
+- `src/xw_office/ui/modules/rechnungen/open_invoice_overview.py`
+- `src/xw_office/services/inventory/service.py`
+- `src/xw_office/services/products/catalog.py`
+- `src/xw_office/services/products/print_decision.py`
+- `src/xw_office/services/printing/planned_pdf_printer.py`
+- `src/xw_office/services/printing/pdf_backends.py`
 - `config/default.yaml`
 
 Vorarbeit ist bereits vorhanden:

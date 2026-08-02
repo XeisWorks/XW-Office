@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from xw_studio.services.calculation.service import (
+from xw_office.services.calculation.service import (
     ArticleEntry,
     CalculationService,
     calculate_royalty,

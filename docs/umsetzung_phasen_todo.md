@@ -1,4 +1,4 @@
-# XW-Studio - To-do nach Wunschliste + Blueprint (Ist-Stand 2026-04-02)
+# XW-Office - To-do nach Wunschliste + Blueprint (Ist-Stand 2026-04-02)
 
 Hinweis (2026-04-03): Verbindliche Source of Truth fuer Daily-Business + Rechnungen ist `docs/phase_master_daily_rechnungen.md`.
 Diese Datei bleibt als historischer Verlauf bestehen.

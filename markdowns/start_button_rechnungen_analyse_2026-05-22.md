@@ -4,7 +4,7 @@ Stand: 2026-05-22
 
 ## Kurzfazit
 
-Aktualisiert nach Umsetzung am 2026-05-22: Der neue START-Button in XW-Studio kann fuer den ersten Test verwendet werden. Die sicherheitskritischen Luecken gegenueber Legacy sind jetzt geschlossen:
+Aktualisiert nach Umsetzung am 2026-05-22: Der neue START-Button in XW-Office kann fuer den ersten Test verwendet werden. Die sicherheitskritischen Luecken gegenueber Legacy sind jetzt geschlossen:
 
 1. `sendBy VM` wird im START-Pfad nicht mehr verwendet. Digital-only und "Nur Rechnungen" versenden primaer ueber sevDesk `sendViaEmail`.
 2. Das neue sevDesk-PDF-Format aus dem Q1-2026-Update wird verarbeitet: `objects.pdf` und `pdf` werden als Base64-PDF erkannt, `render` fragt `getAsPdf=true` an, und der START-Flow nutzt das Render-PDF direkt. Zusaetzlich gibt es wie im Legacy-Flow mehrere PDF-Versuche.
@@ -22,10 +22,10 @@ Status: umgesetzt.
 
 Dateien:
 
-- `src/xw_studio/ui/widgets/data_table.py`
-- `src/xw_studio/ui/modules/rechnungen/view.py`
-- `src/xw_studio/ui/modules/rechnungen/tagesgeschaeft_view.py`
-- `src/xw_studio/services/invoice_processing/service.py`
+- `src/xw_office/ui/widgets/data_table.py`
+- `src/xw_office/ui/modules/rechnungen/view.py`
+- `src/xw_office/ui/modules/rechnungen/tagesgeschaeft_view.py`
+- `src/xw_office/services/invoice_processing/service.py`
 
 Umsetzung:
 
@@ -42,8 +42,8 @@ Status: umgesetzt.
 
 Dateien:
 
-- `src/xw_studio/services/invoice_processing/service.py`
-- `src/xw_studio/services/sevdesk/invoice_client.py`
+- `src/xw_office/services/invoice_processing/service.py`
+- `src/xw_office/services/sevdesk/invoice_client.py`
 - `markdowns/sevdesk_sendviaemail_mailstrategie_2026-05-22.md`
 
 Umsetzung:
@@ -59,10 +59,10 @@ Status: umgesetzt und per Test abgesichert.
 
 Dateien:
 
-- `src/xw_studio/services/inventory/service.py`
-- `src/xw_studio/services/printing/planned_pdf_printer.py`
-- `src/xw_studio/ui/modules/rechnungen/print_dialog.py`
-- `src/xw_studio/ui/modules/rechnungen/view.py`
+- `src/xw_office/services/inventory/service.py`
+- `src/xw_office/services/printing/planned_pdf_printer.py`
+- `src/xw_office/ui/modules/rechnungen/print_dialog.py`
+- `src/xw_office/ui/modules/rechnungen/view.py`
 - `tests/unit/test_planned_pdf_printer.py`
 - `tests/unit/test_inventory_start_workflow.py`
 
@@ -75,7 +75,7 @@ Umsetzung:
 - Wenn PDF-Pfad, Datei oder Druckprofil fehlen, wird kein Bestand hochgezaehlt; stattdessen erscheint ein Hinweis im Ergebnisdialog.
 - Test `test_print_pdf_by_plan_uses_internal_renderer_without_shelling_out` stellt sicher, dass weder `subprocess.Popen` noch `os.startfile` verwendet werden.
 
-Ergebnis: Kein Acrobat-Flackern aus XW-Studio fuer den Notendruckpfad.
+Ergebnis: Kein Acrobat-Flackern aus XW-Office fuer den Notendruckpfad.
 
 ### Phase 4: Preflight, Ergebnisdialoge und Tests
 
@@ -83,7 +83,7 @@ Status: umgesetzt.
 
 Dateien:
 
-- `src/xw_studio/ui/modules/rechnungen/tagesgeschaeft_view.py`
+- `src/xw_office/ui/modules/rechnungen/tagesgeschaeft_view.py`
 - `tests/unit/test_invoice_processing_service.py`
 - `tests/unit/test_invoice_client.py`
 - `tests/unit/test_printing_parity_e2e.py`
@@ -135,15 +135,15 @@ Legacy-Ablauf START ALL:
 10. Kundenmail fuer physische Rechnungen ueber sevDesk `sendViaEmail` senden.
 11. Ergebnis im rechten Analysis-Panel als Verarbeitungslog anzeigen.
 
-## XW-Studio: START
+## XW-Office: START
 
 Codepfad:
 
-- `src/xw_studio/ui/modules/rechnungen/tagesgeschaeft_view.py`
+- `src/xw_office/ui/modules/rechnungen/tagesgeschaeft_view.py`
   - `_on_start_clicked()` erstellt den ersten Preflight.
   - `_on_start_preflight_ready()` zeigt den START-Dialog.
   - `_on_start_product_preflight_ready()` fuehrt Produktplan und Batch aus.
-- `src/xw_studio/services/invoice_processing/service.py`
+- `src/xw_office/services/invoice_processing/service.py`
   - `run_start_fullflow()` verarbeitet alle offenen Entwuerfe.
   - `_run_finalize_step()` triggert sevDesk `sendBy`.
   - `_run_invoice_print_step()` druckt die Rechnung.
@@ -195,7 +195,7 @@ Wichtige Interaktionen:
   - `CHECK PRODUCTS`: Produktcheck ohne START.
   - `STOP`: Abbruch vor der naechsten Rechnung.
 
-## Invoice-List-Buttons: XW-Studio
+## Invoice-List-Buttons: XW-Office
 
 Die XW-Rechnungsliste hat eigene Aktions- und Statusspalten:
 
@@ -223,7 +223,7 @@ Die XW-Rechnungsliste hat eigene Aktions- und Statusspalten:
 
 sevDesk liefert bei `render`, `changeParameter` und `sendByWithRender` keine `thumbs`/`pages` mehr, sondern ein vollstaendiges Base64-PDF in `pdf`. Laut Update konnte man sich vorher bereits mit `getAsPdf=true` vorbereiten.
 
-Umgesetzt in XW-Studio:
+Umgesetzt in XW-Office:
 
 - `InvoiceClient.render_invoice_pdf()` sendet `getAsPdf=true`.
 - `InvoiceClient.extract_pdf_from_payload()` erkennt `pdf`, `base64`, `pdfBase64`, `documentBase64`, Data-URI-PDFs und `objects.pdf`.
@@ -231,35 +231,35 @@ Umgesetzt in XW-Studio:
 
 ### OAuth 2.0 fuer sevDesk-Mailversand
 
-Das Update betrifft den sevDesk-internen Versand ueber Microsoft 365/Outlook. Es hilft besonders dann, wenn XW-Studio den sevDesk-Endpunkt `sendViaEmail` nutzt.
+Das Update betrifft den sevDesk-internen Versand ueber Microsoft 365/Outlook. Es hilft besonders dann, wenn XW-Office den sevDesk-Endpunkt `sendViaEmail` nutzt.
 
 Aktueller Stand nach Fix:
 
 - Digital-only und "Nur Rechnungen" nutzen sevDesk `sendViaEmail`; hier hilft die sevDesk-OAuth-Konfiguration direkt.
-- Physische Vollflow-Rechnungen nutzen nach Druck/Fulfillment ebenfalls primaer sevDesk `sendViaEmail`. Wenn sevDesk-Mail scheitert, fallbackt XW-Studio auf Microsoft Graph.
+- Physische Vollflow-Rechnungen nutzen nach Druck/Fulfillment ebenfalls primaer sevDesk `sendViaEmail`. Wenn sevDesk-Mail scheitert, fallbackt XW-Office auf Microsoft Graph.
 
 ## Umgesetzt
 
 Geaenderte Dateien:
 
-- `src/xw_studio/services/invoice_processing/service.py`
+- `src/xw_office/services/invoice_processing/service.py`
   - entfernt `sendBy VM` aus dem START-Pfad.
   - nutzt sevDesk `sendViaEmail` als primaeren Mailweg.
   - nutzt Graph nur noch als Mail-Fallback.
   - nutzt Render-PDFs direkt.
   - fuehrt PDF-Retry mit Backoff ein.
   - verarbeitet optional nur selektierte Rechnungs-IDs.
-- `src/xw_studio/services/sevdesk/invoice_client.py`
+- `src/xw_office/services/sevdesk/invoice_client.py`
   - fragt `getAsPdf=true` an.
   - dekodiert neues `objects.pdf`/`pdf`-Format.
-- `src/xw_studio/ui/widgets/data_table.py`
+- `src/xw_office/ui/widgets/data_table.py`
   - liefert selektierte Source-Zeilen und Row-Payloads.
-- `src/xw_studio/ui/modules/rechnungen/view.py`
+- `src/xw_office/ui/modules/rechnungen/view.py`
   - aktiviert Mehrfachauswahl und liefert selektierte Rechnungs-Summaries.
-- `src/xw_studio/ui/modules/rechnungen/tagesgeschaeft_view.py`
+- `src/xw_office/ui/modules/rechnungen/tagesgeschaeft_view.py`
   - ergaenzt `START SELECTED`.
   - zeigt Druck-/Inventarhinweise im Ergebnis.
-- `src/xw_studio/services/inventory/service.py`
+- `src/xw_office/services/inventory/service.py`
   - druckt START-/Nachdruck-Produkt-PDFs ueber das neue Printmodul.
   - verhindert Bestandserhoehung, wenn der physische Notendruck nicht ausgefuehrt werden konnte.
 - `tests/unit/test_printing_parity_e2e.py`
@@ -309,7 +309,7 @@ Vor dem Klick:
 1. In sevDesk pruefen, wie viele Rechnungen aktuell Status `Entwurf`/`100` haben. START nimmt alle.
 2. Drucker `Rechnungen` und `Brother QL-800` pruefen.
 3. Fuer Rechnungsmails sicherstellen, dass sevDesk E-Mail/OAuth fuer M365 eingerichtet ist.
-4. Graph in XW-Studio ist nur noch Fallback; falls moeglich trotzdem Auth pruefen.
+4. Graph in XW-Office ist nur noch Fallback; falls moeglich trotzdem Auth pruefen.
 5. Fuer den ersten Test Rechnungen markieren und im START-Menue `START SELECTED (markierte Rechnungen)` waehlen.
 
 Empfohlener erster Lauf:
@@ -324,4 +324,4 @@ Empfohlener erster Lauf:
   - Noten-PDFs wurden ohne Acrobat-Fenster gedruckt.
   - Wix-Fulfillment gesetzt.
   - Kundenmail angekommen oder im Graph/sevDesk-Sent-Ordner sichtbar.
-  - Fulfillment-Chips in XW-Studio gruen bzw. Fehlertext plausibel.
+  - Fulfillment-Chips in XW-Office gruen bzw. Fehlertext plausibel.

@@ -1,7 +1,7 @@
 # XW-Copilot + Outlook Add-in Integrationsskizze (verbessert)
 
 Basis:
-- Uebernommen aus externem Plan: `copilot-ready_xw-studio_plan_e4946c1d.plan.md`
+- Uebernommen aus externem Plan: `copilot-ready_xw-office_plan_e4946c1d.plan.md`
 - Diese Datei erweitert den Plan um konkrete Architekturentscheidungen fuer Outlook-Add-in Integration.
 
 ## Warum ein eigenes XW-Copilot Panel sinnvoll ist
@@ -35,7 +35,7 @@ Ja, das ist sinnvoll, weil:
 - Pflichtfelder: tenant, mailbox, action, payload_version.
 - Request signing (HMAC) als Mindestschutz fuer Webhook-Modus.
 
-2. XW-Copilot Orchestrator in XW-Studio
+2. XW-Copilot Orchestrator in XW-Office
 - Mapping: Action -> Service-Aufruf (Rechnungen, CRM, Produkte, etc).
 - Modus-Schalter:
   - `dry_run`: nur Vorschau + Logging
@@ -70,7 +70,7 @@ Ja, das ist sinnvoll, weil:
 
 ## DoD fuer Outlook-Integration Phase 1
 
-- Add-in Request kommt in XW-Studio an und wird validiert.
+- Add-in Request kommt in XW-Office an und wird validiert.
 - Dry-Run Antwort mit nachvollziehbarer Vorschau.
 - Konfiguration komplett im XW-Copilot Panel pflegbar.
 - Testabdeckung fuer Config/Bausteine + Request-Validation.

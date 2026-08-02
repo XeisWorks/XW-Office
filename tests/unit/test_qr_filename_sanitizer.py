@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from xw_studio.services.qr_codes.filename_sanitizer import sanitize_windows_filename
-from xw_studio.services.qr_codes.models import QrConfigurationError
+from xw_office.services.qr_codes.filename_sanitizer import sanitize_windows_filename
+from xw_office.services.qr_codes.models import QrConfigurationError
 
 
 def test_replaces_windows_invalid_characters() -> None:

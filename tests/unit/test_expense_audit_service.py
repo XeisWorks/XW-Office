@@ -7,9 +7,9 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from xw_studio.models.base import Base
-from xw_studio.repositories.expense_check import ExpenseCheckRepository
-from xw_studio.services.expenses.service import ExpenseAction, ExpenseAuditService, ExpenseRow
+from xw_office.models.base import Base
+from xw_office.repositories.expense_check import ExpenseCheckRepository
+from xw_office.services.expenses.service import ExpenseAction, ExpenseAuditService, ExpenseRow
 
 
 class _SettingsRepoStub:

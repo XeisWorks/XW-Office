@@ -208,7 +208,7 @@ Zahlung erfolgen im Mitgliedstaat der Identifizierung. Die EU-OSS-Erklaerung
 ist quartalsweise einzureichen; die Aufzeichnungen muessen die Steuerberechnung
 nachvollziehbar tragen.
 
-Fuer XW-Studio bedeutet das:
+Fuer XW-Office bedeutet das:
 
 - nur belegte EU-B2C-OSS-Umsaetze aufnehmen;
 - AT, Export, innergemeinschaftliche B2B-Lieferung und Reverse Charge trennen;
@@ -326,7 +326,7 @@ Abgeschlossen:
   (`max_position_workers=6`), der In-Memory-Positionscache ist fuer parallele
   Zugriffe abgesichert;
 - Phase 5 erweitert: `OssQuarterSnapshotStore` speichert fertige
-  Quartalsergebnisse persistent in `state/xw_studio_cache.sqlite`; Warmstarts
+  Quartalsergebnisse persistent in `state/xw_office_cache.sqlite`; Warmstarts
   laufen ohne sevDesk-API-Zugriff;
 - Phase 6 teilweise: XML-Export wurde von internem `OSSReturn` auf die
   BMF/USP-Portalstruktur `Erklaerungen/Erklaerung` mit `mscon`, `taxable`,

@@ -1,1 +1,1 @@
-"""XeisWorks Studio test suite."""
+"""XeisWorks Office test suite."""

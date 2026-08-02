@@ -1,4 +1,4 @@
-# XW-Studio Umbau Checkliste (Prioritaet + autonome Abarbeitung)
+# XW-Office Umbau Checkliste (Prioritaet + autonome Abarbeitung)
 
 Hinweis (2026-04-03): Diese Datei ist historisch.
 Verbindlicher Status und Phasenstand liegen in `docs/phase_master_daily_rechnungen.md`.
@@ -23,7 +23,7 @@ Legende:
 - Warum: Ohne reproduzierbare Umgebung entstehen auf jedem PC andere Fehler.
 - Aufgaben:
   - Python-Version fixieren und in README + pyproject dokumentieren.
-  - Startpfad `python -m xw_studio` als einzige Startmethode festlegen.
+  - Startpfad `python -m xw_office` als einzige Startmethode festlegen.
   - Fehlerlogging und Startdiagnose beim App-Boot verifizieren.
 - DoD:
   - Frisches Setup auf 1 Referenz-PC funktioniert ohne Handarbeit.

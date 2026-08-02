@@ -6,8 +6,8 @@ import json
 
 from cryptography.fernet import Fernet
 
-from xw_studio.core.config import AppConfig, SevdeskSection, WixSection
-from xw_studio.services.secrets.service import SecretService
+from xw_office.core.config import AppConfig, SevdeskSection, WixSection
+from xw_office.services.secrets.service import SecretService
 
 
 class _RepoStub:
@@ -68,7 +68,7 @@ def test_graph_keys_fall_back_to_legacy_config(monkeypatch, tmp_path) -> None:
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("XW_STUDIO_LEGACY_SEVDESK_CONFIG", str(legacy_config))
+    monkeypatch.setenv("XW_OFFICE_LEGACY_SEVDESK_CONFIG", str(legacy_config))
     monkeypatch.delenv("MS_GRAPH_TENANT_ID", raising=False)
     monkeypatch.delenv("MS_GRAPH_CLIENT_ID", raising=False)
     monkeypatch.delenv("MS_GRAPH_MAILBOX", raising=False)

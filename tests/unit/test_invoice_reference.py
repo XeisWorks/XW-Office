@@ -1,5 +1,5 @@
 """Tests for Wix order-number extraction from sevDesk references."""
-from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 
 
 def test_b2b_reference_uses_wix_order_number_after_customer_po() -> None:

@@ -69,9 +69,9 @@ Validierung vor QR-Erzeugung:
 
 - QR-Ausgabe: `state/generated/transfer_qr/`
 - Temporaere PDF-Anzeige: `state/tmp/`
-- Hauptservice: `src/xw_studio/services/transfers/service.py`
-- QR-Kern: `src/xw_studio/services/transfers/payment_qr.py`
-- Dialog: `src/xw_studio/ui/modules/rechnungen/offene_ueberweisungen_dialog.py`
+- Hauptservice: `src/xw_office/services/transfers/service.py`
+- QR-Kern: `src/xw_office/services/transfers/payment_qr.py`
+- Dialog: `src/xw_office/ui/modules/rechnungen/offene_ueberweisungen_dialog.py`
 
 ## Troubleshooting
 

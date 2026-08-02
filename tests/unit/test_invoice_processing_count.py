@@ -1,9 +1,9 @@
 """Tests for invoice counting without UI hard limits."""
 from __future__ import annotations
 
-from xw_studio.core.config import AppConfig
-from xw_studio.services.invoice_processing.service import InvoiceProcessingService
-from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.core.config import AppConfig
+from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 
 
 class _InvoiceClientStub:

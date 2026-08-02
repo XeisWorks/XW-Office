@@ -7,33 +7,33 @@ import types
 
 from PySide6.QtWidgets import QMessageBox, QToolButton
 
-from xw_studio.bootstrap import register_default_services
-from xw_studio.core.config import AppConfig
-from xw_studio.core.container import Container
-from xw_studio.core.signals import AppSignals
-from xw_studio.core.types import ModuleKey
-from xw_studio.services.daily_business.service import DailyBusinessService
-from xw_studio.services.digital_licenses import DigitalLicenseService
-from xw_studio.services.draft_invoice.service import DraftInvoiceService
-from xw_studio.services.inventory.service import StartMode, StartPreflight
-from xw_studio.services.invoice_processing.service import InvoiceProcessingService
-from xw_studio.services.products.print_decision import PieceBlock, PrintDecisionEngine
-from xw_studio.services.secrets.service import SecretService
-from xw_studio.services.sendungen.service import OffeneSendungenService
-from xw_studio.services.transfers.service import OffeneUeberweisungenService
-from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
-from xw_studio.services.wix.client import WixOrdersClient
-from xw_studio.ui.main_window import MainWindow
-from xw_studio.ui.modules.rechnungen.open_invoice_overview import (
+from xw_office.bootstrap import register_default_services
+from xw_office.core.config import AppConfig
+from xw_office.core.container import Container
+from xw_office.core.signals import AppSignals
+from xw_office.core.types import ModuleKey
+from xw_office.services.daily_business.service import DailyBusinessService
+from xw_office.services.digital_licenses import DigitalLicenseService
+from xw_office.services.draft_invoice.service import DraftInvoiceService
+from xw_office.services.inventory.service import StartMode, StartPreflight
+from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.services.products.print_decision import PieceBlock, PrintDecisionEngine
+from xw_office.services.secrets.service import SecretService
+from xw_office.services.sendungen.service import OffeneSendungenService
+from xw_office.services.transfers.service import OffeneUeberweisungenService
+from xw_office.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.services.wix.client import WixOrdersClient
+from xw_office.ui.main_window import MainWindow
+from xw_office.ui.modules.rechnungen.open_invoice_overview import (
     OpenInvoiceOverview,
     PrintProductAggregate,
 )
-from xw_studio.ui.modules.rechnungen.tagesgeschaeft_view import TagesgeschaeftView, _StartDialog
-from xw_studio.ui.modules.rechnungen.plc_label_dialog import (
+from xw_office.ui.modules.rechnungen.tagesgeschaeft_view import TagesgeschaeftView, _StartDialog
+from xw_office.ui.modules.rechnungen.plc_label_dialog import (
     PlcLabelPrintDialog,
     _PlcDialogContext,
 )
-from xw_studio.ui.modules.rechnungen.view import (
+from xw_office.ui.modules.rechnungen.view import (
     RechnungenView,
     _ActionsDelegate,
     _DraftInvoiceDialog,
@@ -330,7 +330,7 @@ def test_start_click_disables_start_immediately(qtbot: object, monkeypatch) -> N
         started["value"] = True
 
     monkeypatch.setattr(
-        "xw_studio.ui.modules.rechnungen.tagesgeschaeft_view.BackgroundWorker.start",
+        "xw_office.ui.modules.rechnungen.tagesgeschaeft_view.BackgroundWorker.start",
         fake_start,
     )
 
@@ -429,7 +429,7 @@ def test_customer_mail_action_opens_mailto_url(qtbot: object, monkeypatch) -> No
         return True
 
     monkeypatch.setattr(
-        "xw_studio.ui.modules.rechnungen.view.QDesktopServices.openUrl",
+        "xw_office.ui.modules.rechnungen.view.QDesktopServices.openUrl",
         fake_open_url,
     )
 
@@ -468,7 +468,7 @@ def test_customer_mail_outlook_runs_in_subprocess(qtbot: object, monkeypatch) ->
         return types.SimpleNamespace(returncode=0, stdout='{"ok": true}', stderr="")
 
     summary = invoice_service._draft  # noqa: SLF001
-    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.view.subprocess.run", fake_run)
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.view.subprocess.run", fake_run)
 
     assert view._open_customer_mail_outlook("kunde@example.test", view._customer_mail_subject(summary)) is True  # noqa: SLF001
     assert calls
@@ -487,7 +487,7 @@ def test_customer_mail_outlook_timeout_falls_back(qtbot: object, monkeypatch) ->
         raise subprocess.TimeoutExpired(cmd="outlook", timeout=20)
 
     summary = invoice_service._draft  # noqa: SLF001
-    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.view.subprocess.run", fake_run)
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.view.subprocess.run", fake_run)
 
     assert view._open_customer_mail_outlook("kunde@example.test", view._customer_mail_subject(summary)) is False  # noqa: SLF001
 
@@ -517,7 +517,7 @@ def test_plain_start_skips_inventory_dialog(qtbot: object, monkeypatch) -> None:
         return 0
 
     monkeypatch.setattr(view, "_start_missing_product_check", fake_product_check)
-    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.tagesgeschaeft_view._StartDialog.exec", fake_exec)
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.tagesgeschaeft_view._StartDialog.exec", fake_exec)
 
     view._start_include_product_print = False  # noqa: SLF001
     view._on_start_preflight_ready(preflight)  # noqa: SLF001
@@ -743,7 +743,7 @@ def test_print_all_products_button_prints_displayed_quantities(qtbot: object, mo
         return job
 
     monkeypatch.setattr(view, "_piece_block_from_open_product", fake_piece)
-    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.print_dialog.prepare_piece_pdf_print", fake_prepare)
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.print_dialog.prepare_piece_pdf_print", fake_prepare)
 
     view._apply_open_invoice_overview(  # noqa: SLF001
         OpenInvoiceOverview(
@@ -801,7 +801,7 @@ def test_print_all_products_warns_before_reprint(qtbot: object, monkeypatch: obj
         questions.append(str(args[2]))
         return QMessageBox.StandardButton.No
 
-    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.print_dialog.prepare_piece_pdf_print", fake_prepare)
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.print_dialog.prepare_piece_pdf_print", fake_prepare)
     monkeypatch.setattr(QMessageBox, "question", fake_question)
 
     view._apply_open_invoice_overview(  # noqa: SLF001
@@ -845,11 +845,11 @@ def test_print_all_products_configures_missing_products_in_order(qtbot: object, 
         lambda item: PieceBlock(sku=str(item.sku), name=str(item.title), qty_needed=int(item.quantity)),
     )
     monkeypatch.setattr(
-        "xw_studio.ui.modules.rechnungen.print_dialog._configure_missing_piece_print",
+        "xw_office.ui.modules.rechnungen.print_dialog._configure_missing_piece_print",
         lambda _parent, _container, piece: configured.append(piece.sku) or True,
     )
     monkeypatch.setattr(
-        "xw_studio.ui.modules.rechnungen.print_dialog.prepare_piece_pdf_print",
+        "xw_office.ui.modules.rechnungen.print_dialog.prepare_piece_pdf_print",
         lambda *_args, **_kwargs: (lambda: None),
     )
 
@@ -1330,7 +1330,7 @@ def test_custom_label_dialog_opens_even_when_print_status_is_unknown(qtbot: obje
         called["count"] += 1
         return 0
 
-    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.view._CustomLabelDialog.exec", fake_exec)
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.view._CustomLabelDialog.exec", fake_exec)
 
     view._print_allowed = False  # noqa: SLF001
     view._on_custom_label_clicked()  # noqa: SLF001

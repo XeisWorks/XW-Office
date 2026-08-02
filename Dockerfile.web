@@ -14,4 +14,4 @@ COPY config/content_brands.yaml ./config/content_brands.yaml
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "python -m uvicorn xw_studio.web.app:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "python -m uvicorn xw_office.web.app:app --host 0.0.0.0 --port ${PORT:-8000}"]

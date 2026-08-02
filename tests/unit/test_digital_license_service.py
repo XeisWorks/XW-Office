@@ -1,9 +1,9 @@
 import json
 from pathlib import Path
 
-from xw_studio.services.digital_licenses import DigitalLicenseService
-from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
-from xw_studio.services.wix.client import WixOrderItem
+from xw_office.services.digital_licenses import DigitalLicenseService
+from xw_office.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.services.wix.client import WixOrderItem
 
 
 class _Invoices:

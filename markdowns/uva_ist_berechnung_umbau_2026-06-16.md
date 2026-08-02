@@ -4,7 +4,7 @@ Stand: 2026-06-16
 
 ## Ziel
 
-Die monatliche Umsatzsteuerberechnung in XW-Studio soll eine einzige, nachvollziehbare
+Die monatliche Umsatzsteuerberechnung in XW-Office soll eine einzige, nachvollziehbare
 IST-Berechnung verwenden. Die Legacy-Trennung zwischen ausfuehrlicher Eigenberechnung
 und alternativer sevDesk-Aggregator-Berechnung wird nicht uebernommen.
 
@@ -107,10 +107,10 @@ Automatisierte Tests:
 .venv\Scripts\python.exe -m pytest tests/unit/test_tax_services.py tests/ui/test_main_window_smoke.py tests/unit/test_uva_phase1_preview.py tests/unit/test_uva_soap_mock.py -q
 27 passed
 
-.venv\Scripts\python.exe -m ruff check src/xw_studio/services/finanzonline src/xw_studio/ui/modules/taxes tests/unit/test_uva_phase1_preview.py tests/unit/test_uva_soap_mock.py
+.venv\Scripts\python.exe -m ruff check src/xw_office/services/finanzonline src/xw_office/ui/modules/taxes tests/unit/test_uva_phase1_preview.py tests/unit/test_uva_soap_mock.py
 All checks passed
 
-.venv\Scripts\python.exe -m mypy src/xw_studio/services/finanzonline --ignore-missing-imports
+.venv\Scripts\python.exe -m mypy src/xw_office/services/finanzonline --ignore-missing-imports
 Success: no issues found
 ```
 
@@ -157,7 +157,7 @@ Payment-Log-Details nachgeladen werden.
 
 ## Betriebsregel
 
-Eine UVA darf in XW-Studio nur auf Basis der ausgewiesenen IST-Monatsberechnung
+Eine UVA darf in XW-Office nur auf Basis der ausgewiesenen IST-Monatsberechnung
 weitergegeben werden. Wenn Warnungen zu fehlendem Zahlungsnachweis, auslaendischer VAT
 oder unklassifizierten Positionen erscheinen, ist der Monat vor FinanzOnline-Uebermittlung
 fachlich zu pruefen.

@@ -2,8 +2,8 @@
 import pytest
 from cryptography.fernet import Fernet
 
-from xw_studio.core.exceptions import ConfigError
-from xw_studio.core.token_crypto import decrypt_secret, encrypt_secret
+from xw_office.core.exceptions import ConfigError
+from xw_office.core.token_crypto import decrypt_secret, encrypt_secret
 
 
 def test_round_trip() -> None:

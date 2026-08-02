@@ -1,4 +1,4 @@
-# XW-Studio Product Pipeline Masterplan — Final Spec
+# XW-Office Product Pipeline Masterplan — Final Spec
 
 > Letzte Aktualisierung: 2026-04-03  
 > Alle Design-Entscheidungen durch User-Interview bestätigt.

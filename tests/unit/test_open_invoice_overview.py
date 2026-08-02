@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import types
 
-from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
-from xw_studio.ui.modules.rechnungen.open_invoice_overview import (
+from xw_office.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.ui.modules.rechnungen.open_invoice_overview import (
     overview_from_visible_summaries,
     resolve_open_invoice_overview,
 )

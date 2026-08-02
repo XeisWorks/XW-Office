@@ -3,13 +3,13 @@
 Stand: 11.07.2026  
 Betroffene Projekte:
 
-- `C:\Users\bernh\GitHub\XW-Studio`
+- `C:\Users\bernh\GitHub\XW-Office`
 - `C:\Users\bernh\GitHub\XW-Website_v2`
 - Legacy-Referenz: `C:\Users\bernh\GitHub\sevDesk`
 
 ## 1. Zielbild
 
-XW-Studio erhält einen zentralen Workflow für individuell bepreiste Aufträge und digitale Sonderlieferungen, ohne für jeden Auftrag ein dauerhaftes Wix-Produkt anlegen zu müssen.
+XW-Office erhält einen zentralen Workflow für individuell bepreiste Aufträge und digitale Sonderlieferungen, ohne für jeden Auftrag ein dauerhaftes Wix-Produkt anlegen zu müssen.
 
 Es gibt drei explizite Auftragsarten:
 
@@ -17,11 +17,11 @@ Es gibt drei explizite Auftragsarten:
 2. **Digitale Sonderanfertigung**
 3. **Bestehende Musiknote als digitale Sonderlieferung**
 
-XW-Studio erzeugt einen einmal verwendbaren Wix Payment Link, öffnet danach einen vollständig bearbeitbaren englischen Outlook-Classic-Mailentwurf und überlässt das endgültige Absenden dem Benutzer.
+XW-Office erzeugt einen einmal verwendbaren Wix Payment Link, öffnet danach einen vollständig bearbeitbaren englischen Outlook-Classic-Mailentwurf und überlässt das endgültige Absenden dem Benutzer.
 
 Nach erfolgreicher Zahlung erscheinen digital auszuliefernde Bestellungen im Rechnungs-Untermenü als Alarm **DIGITALE LIZENZEN OFFEN**. Dort wird pro bestelltem Musiknotenprodukt die hinterlegte Druck-PDF gefunden, mit dem Kundennamen lizenziert, im festgelegten Lizenzordner gespeichert und einem englischen Outlook-Entwurf angehängt.
 
-Der bestehende externe Wix-sevDesk-Mechanismus erstellt weiterhin den sevDesk-Rechnungsentwurf. XW-Studio erzeugt keinen zweiten Entwurf.
+Der bestehende externe Wix-sevDesk-Mechanismus erstellt weiterhin den sevDesk-Rechnungsentwurf. XW-Office erzeugt keinen zweiten Entwurf.
 
 ## 2. Verbindliche fachliche Entscheidungen
 
@@ -32,7 +32,7 @@ Der bestehende externe Wix-sevDesk-Mechanismus erstellt weiterhin den sevDesk-Re
 - Es wird immer der vollständige Betrag online bezahlt.
 - Sonderaufträge werden nicht mit normalen Warenkorbprodukten vermischt.
 - Eine vollständige echte Rechnungsadresse ist Pflicht.
-- Die Mail wird nicht automatisch versendet; XW-Studio öffnet Outlook Classic mit einem bearbeitbaren Entwurf.
+- Die Mail wird nicht automatisch versendet; XW-Office öffnet Outlook Classic mit einem bearbeitbaren Entwurf.
 - Änderungen an Betrag oder Leistung erzeugen einen neuen Payment Link; der alte Link wird deaktiviert.
 
 ### 2.2 Preis
@@ -89,7 +89,7 @@ Die bestehende öffentliche Seite kann nach erfolgreichem Rollout deaktiviert od
 ## 4. Gesamtarchitektur
 
 ```text
-XW-Studio: Auftrag anlegen
+XW-Office: Auftrag anlegen
         |
         | HTTPS, authentisiert, idempotenter Client-Request-Key
         v
@@ -105,7 +105,7 @@ Wix eCommerce Order + Payment Status
         |                         |
         | bestehende Integration | Wix Orders API
         v                         v
-sevDesk-Entwurf             XW-Studio Poll/Cache
+sevDesk-Entwurf             XW-Office Poll/Cache
                                   |
                                   v
                        DIGITALE LIZENZEN OFFEN
@@ -197,7 +197,7 @@ Der Dialog durchsucht den Wix-Katalog. Angezeigt werden mindestens:
 - Preis
 - Produktbild
 - Wix-Produkt-ID
-- vorhandener XW-Studio-Druckpfad
+- vorhandener XW-Office-Druckpfad
 - sevDesk-Artikelstatus, soweit lokal verfügbar
 
 ## 6. Entscheidung zur lagerneutralen Wix-Abbildung
@@ -247,7 +247,7 @@ Risiko:
 4. sevDesk-Entwurf auf Artikelverknüpfung prüfen.
 5. Falls der Bestand unverändert bleibt: Variante A verwenden.
 6. Falls der Bestand sinkt: Variante B verwenden.
-7. Falls Variante B den sevDesk-Artikel nicht verknüpft: XW-Studio repariert ausschließlich die Artikelreferenz im bereits automatisch erzeugten sevDesk-Entwurf anhand der SKU. Es erzeugt keinen neuen Entwurf und verändert weder Preis noch Steuer noch Beschreibung.
+7. Falls Variante B den sevDesk-Artikel nicht verknüpft: XW-Office repariert ausschließlich die Artikelreferenz im bereits automatisch erzeugten sevDesk-Entwurf anhand der SKU. Es erzeugt keinen neuen Entwurf und verändert weder Preis noch Steuer noch Beschreibung.
 
 Ein automatisches nachträgliches Zurückbuchen von Wix-Bestand ist nicht die bevorzugte Lösung. Das wäre fehleranfällig bei Parallelbestellungen, Stornos und Retries.
 
@@ -291,7 +291,7 @@ Steuer wird nicht allein aus dem Land abgeleitet, sondern aus:
 
 ### 7.4 sevDesk-Entwurf
 
-Der bestehende Wix-sevDesk-Prozess bleibt Eigentümer der Entwurfserstellung. XW-Studio darf danach nur gezielt korrigieren, wenn der automatisch erzeugte Entwurf die fachlich falsche Steuerregel oder eine fehlende Artikelverknüpfung besitzt.
+Der bestehende Wix-sevDesk-Prozess bleibt Eigentümer der Entwurfserstellung. XW-Office darf danach nur gezielt korrigieren, wenn der automatisch erzeugte Entwurf die fachlich falsche Steuerregel oder eine fehlende Artikelverknüpfung besitzt.
 
 Korrekturen müssen idempotent sein und vor dem Schreiben prüfen:
 
@@ -303,7 +303,7 @@ Korrekturen müssen idempotent sein und vor dem Schreiben prüfen:
 
 Bei Abweichungen wird kein stiller Patch durchgeführt. Der Fall erhält im Alarmdialog den Status **sevDesk-Prüfung erforderlich**.
 
-## 8. XW-Studio: neues Modul „Sonderauftrag“
+## 8. XW-Office: neues Modul „Sonderauftrag“
 
 ### 8.1 Platzierung
 
@@ -357,10 +357,10 @@ Der Dialog besitzt oben drei große Auswahlkarten:
 
 Ein Doppelklick oder Timeout darf nicht mehrere Links erzeugen.
 
-- XW-Studio generiert vor dem Request eine UUID `client_request_id`.
+- XW-Office generiert vor dem Request eine UUID `client_request_id`.
 - Das Website-Backend persistiert Request-ID und resultierende Wix-Payment-Link-ID.
 - Wiederholte Requests mit gleicher ID geben denselben Link zurück.
-- Nach unklarem Timeout fragt XW-Studio zuerst den Requeststatus ab.
+- Nach unklarem Timeout fragt XW-Office zuerst den Requeststatus ab.
 
 ## 9. XW-Website_v2: Backend
 
@@ -394,7 +394,7 @@ Keine fachlichen IDs hart im Seiten-Code verteilen. Benötigt werden zentrale Ei
 - Payment-Link-Ablaufdauer
 - erlaubte Währung `EUR`
 - API-HMAC-Secret im Wix Secrets Manager
-- optional erlaubte XW-Studio-Client-ID
+- optional erlaubte XW-Office-Client-ID
 
 ### 9.4 Sicherheitsregeln
 
@@ -406,7 +406,7 @@ Keine fachlichen IDs hart im Seiten-Code verteilen. Benötigt werden zentrale Ei
 - Logging ohne vollständige personenbezogene Daten und ohne Secrets.
 - Audit enthält Request-ID, Modus, Produkt-IDs, Betrag, Link-ID, Zeitpunkt und Ergebnis.
 
-## 10. Lokales Datenmodell in XW-Studio
+## 10. Lokales Datenmodell in XW-Office
 
 Vorschlag für neue Tabellen oder äquivalente persistente Modelle.
 
@@ -612,7 +612,7 @@ Ohne gültige Datei bleibt der Fall offen; die übrigen Produkte dürfen optiona
 
 Vorschlag:
 
-- `src/xw_studio/services/layout/pdf_licensing.py`
+- `src/xw_office/services/layout/pdf_licensing.py`
 
 Der Service wird sowohl vom Layout-Register als auch vom Alarmdialog benutzt.
 
@@ -673,7 +673,7 @@ Die nächste freie Nummer wird atomar reserviert. Ein paralleler Worker darf nic
 
 Einbau in:
 
-- `src/xw_studio/ui/modules/layout/view.py`
+- `src/xw_office/ui/modules/layout/view.py`
 
 Empfohlene Position: direkt nach `A5 -> A4`.
 
@@ -699,7 +699,7 @@ Das Register ist ein manuelles Werkzeug und verändert keine Orders, Produktpfad
 
 Bestehende Datei:
 
-- `src/xw_studio/services/mailing/outlook_compose.py`
+- `src/xw_office/services/mailing/outlook_compose.py`
 
 Neue Parameter:
 
@@ -890,7 +890,7 @@ Bei falscher Steuerregel:
 
 ## 20. Tests
 
-### 20.1 Unit Tests XW-Studio
+### 20.1 Unit Tests XW-Office
 
 - Auftragsmodus-Validierung
 - Handling-Produkt genau einmal
@@ -959,7 +959,7 @@ Mit Testprodukt, Testbestand und kleinem Betrag:
 
 ### Aktueller Umsetzungsstand 2026-07-11
 
-Phase 1 wurde in XW-Studio umgesetzt:
+Phase 1 wurde in XW-Office umgesetzt:
 
 - Legacy-Funktion `Wasserzeichen seitlich A4` nach PySide6 portiert.
 - Dateikollisionen werden mit `(2)`, `(3)` usw. geloest; vorhandene Dateien werden nicht still ueberschrieben.
@@ -992,7 +992,7 @@ Naechste technische Phase:
 
 - Datenbankmigrationen
 - Payment-Link-Backend
-- XW-Studio-Client und Auth
+- XW-Office-Client und Auth
 - zentraler PDF-Lizenzierungsservice
 - Outlook-Composer mit HTML und Anhängen
 - neues Layout-Register

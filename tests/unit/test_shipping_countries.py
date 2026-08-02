@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from xw_studio.services.shipping.countries import country_label_for_address, country_name_en
+from xw_office.services.shipping.countries import country_label_for_address, country_name_en
 
 
 def test_country_name_en_resolves_codes_and_german_names() -> None:

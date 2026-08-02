@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from xw_studio.services.inventory.service import ProductRow
-from xw_studio.services.products.brand_service import ProductBrandService
+from xw_office.services.inventory.service import ProductRow
+from xw_office.services.products.brand_service import ProductBrandService
 
 
 class _InventoryStub:

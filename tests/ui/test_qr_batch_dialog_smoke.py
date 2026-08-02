@@ -3,20 +3,20 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QTableWidgetItem
 
-from xw_studio.bootstrap import register_default_services
-from xw_studio.core.config import AppConfig
-from xw_studio.core.container import Container
-from xw_studio.core.signals import AppSignals
-from xw_studio.services.qr_codes.presets import (
+from xw_office.bootstrap import register_default_services
+from xw_office.core.config import AppConfig
+from xw_office.core.container import Container
+from xw_office.core.signals import AppSignals
+from xw_office.services.qr_codes.presets import (
     GERADE_ZAHLEN_EXCEL,
     GESAMTSPIELCHEN,
     JEDE_4_ZAHL,
     UNGERADE_ZAHLEN_EXCEL,
     WHOLE_SCALE,
 )
-from xw_studio.services.qr_codes.service import QrCodeService
-from xw_studio.ui.modules.layout.qr_batch_dialog import QrCodeBatchDialog
-from xw_studio.ui.modules.layout.qr_settings_dialog import QrSettingsDialog
+from xw_office.services.qr_codes.service import QrCodeService
+from xw_office.ui.modules.layout.qr_batch_dialog import QrCodeBatchDialog
+from xw_office.ui.modules.layout.qr_settings_dialog import QrSettingsDialog
 
 
 def _build_container() -> Container:

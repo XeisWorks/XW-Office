@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import types
 
-from xw_studio.services.mailing import outlook_compose
+from xw_office.services.mailing import outlook_compose
 
 
 def test_create_mail_item_prefers_target_account_drafts_folder() -> None:

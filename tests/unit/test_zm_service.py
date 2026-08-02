@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from xw_studio.services.finanzonline.zm_service import ZmService
+from xw_office.services.finanzonline.zm_service import ZmService
 
 
 class _Provider:

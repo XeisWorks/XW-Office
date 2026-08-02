@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from xw_studio.services.draft_invoice.service import ProductDraft, ProductIssue
-from xw_studio.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
+from xw_office.services.draft_invoice.service import ProductDraft, ProductIssue
+from xw_office.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 
 
 def test_product_preflight_displays_wix_gross_price_in_german_currency_format(qtbot: object) -> None:

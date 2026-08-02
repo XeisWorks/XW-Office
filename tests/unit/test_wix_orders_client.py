@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Any
 import httpx
 
-from xw_studio.services.wix.client import WixOrdersClient
-from xw_studio.services.wix.client import _parse_order_line_item
-from xw_studio.services.wix.order_cache import WixOrderCache
+from xw_office.services.wix.client import WixOrdersClient
+from xw_office.services.wix.client import _parse_order_line_item
+from xw_office.services.wix.order_cache import WixOrderCache
 
 
 def test_pick_exact_order_match_uses_exact_number() -> None:

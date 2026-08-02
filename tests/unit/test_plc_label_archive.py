@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import pytest
 
-from xw_studio.services.plc.label_archive import PlcLabelArchive
-from xw_studio.services.plc.models import PlcParcel, PlcShipmentDraft
-from xw_studio.services.plc.polling import ShipmentAddress
-from xw_studio.services.printing.print_jobs import PdfPrintJob
-from xw_studio.ui.modules.rechnungen.plc_label_dialog import PlcLabelPrintDialog
+from xw_office.services.plc.label_archive import PlcLabelArchive
+from xw_office.services.plc.models import PlcParcel, PlcShipmentDraft
+from xw_office.services.plc.polling import ShipmentAddress
+from xw_office.services.printing.print_jobs import PdfPrintJob
+from xw_office.ui.modules.rechnungen.plc_label_dialog import PlcLabelPrintDialog
 
 
 def _shipment(*, reference: str = "20868", invoice_number: str = "RE-261952") -> PlcShipmentDraft:

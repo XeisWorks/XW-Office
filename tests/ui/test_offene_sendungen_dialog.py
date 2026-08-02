@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from xw_studio.core.config import AppConfig, PrintingSection
-from xw_studio.services.printing.print_queue import PrintQueueService
-from xw_studio.services.sendungen.service import (
+from xw_office.core.config import AppConfig, PrintingSection
+from xw_office.services.printing.print_queue import PrintQueueService
+from xw_office.services.sendungen.service import (
     OffeneSendungenService,
     SendungCase,
     SendungExtraction,
     SendungProductLine,
 )
-from xw_studio.ui.modules.rechnungen.offene_sendungen_dialog import OffeneSendungenDialog
+from xw_office.ui.modules.rechnungen.offene_sendungen_dialog import OffeneSendungenDialog
 
 
 class _FakeSendungenService:

@@ -1,7 +1,7 @@
 """Tests for TTL cache."""
 import time
 
-from xw_studio.core.cache import TtlCache
+from xw_office.core.cache import TtlCache
 
 
 def test_set_and_get() -> None:

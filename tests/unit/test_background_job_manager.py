@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from threading import Event
 
-from xw_studio.services.background_jobs.service import BackgroundJobManager
+from xw_office.services.background_jobs.service import BackgroundJobManager
 
 
 def test_manager_respects_queue_limit(qtbot) -> None:  # type: ignore[no-untyped-def]

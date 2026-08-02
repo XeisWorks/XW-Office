@@ -8,7 +8,7 @@ import json
 import pytest
 import httpx
 
-from xw_studio.services.wix.product_details_client import (
+from xw_office.services.wix.product_details_client import (
     CatalogVersion,
     WixProductDetail,
     WixProductDetailsClient,

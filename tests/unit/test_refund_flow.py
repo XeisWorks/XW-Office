@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from xw_studio.services.sevdesk.refund_client import SevDeskRefundClient
-from xw_studio.services.wix.client import WixOrdersClient
+from xw_office.services.sevdesk.refund_client import SevDeskRefundClient
+from xw_office.services.wix.client import WixOrdersClient
 
 
 class _FakeResponse:

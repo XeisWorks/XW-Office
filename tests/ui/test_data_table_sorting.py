@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 
-from xw_studio.ui.widgets.data_table import DataTable
+from xw_office.ui.widgets.data_table import DataTable
 
 
 def test_data_table_uses_explicit_sort_values(qtbot) -> None:  # type: ignore[no-untyped-def]

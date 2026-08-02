@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from xw_studio.services.draft_invoice.service import DraftInvoiceService, ProductIssueDecision, ProductIssueTarget
-from xw_studio.services.sevdesk.part_client import SevdeskPart
+from xw_office.services.draft_invoice.service import DraftInvoiceService, ProductIssueDecision, ProductIssueTarget
+from xw_office.services.sevdesk.part_client import SevdeskPart
 
 
 class _ConnectionStub:
@@ -64,7 +64,7 @@ class _WixOrdersStub:
         return dict(self.order)
 
     def fetch_order_line_items(self, reference: str) -> list[object]:
-        from xw_studio.services.wix.client import _parse_order_line_item
+        from xw_office.services.wix.client import _parse_order_line_item
 
         return [_parse_order_line_item(self.order["lineItems"][0])]
 

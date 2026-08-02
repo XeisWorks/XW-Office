@@ -37,7 +37,7 @@ All services automatically validated:
 
 ### 1. Add Console Output for Debugging
 
-**File:** `src/xw_studio/ui/modules/rechnungen/tagesgeschaeft_view.py`
+**File:** `src/xw_office/ui/modules/rechnungen/tagesgeschaeft_view.py`
 
 **Enhancement:** Add progress logging to START button
 
@@ -66,14 +66,14 @@ logger.debug(f"  ✓ Mail step completed")
 
 ### 2. Add Printer Detection Validation
 
-**File:** `src/xw_studio/core/printer_detect.py`
+**File:** `src/xw_office/core/printer_detect.py`
 
 **Enhancement:** Add validation at startup
 
 ```python
 def validate_configured_printers():
     """Validate that configured printers are available"""
-    from xw_studio.core.config import config
+    from xw_office.core.config import config
     
     configured_printers = [
         config.printing.invoice_printer,
@@ -115,14 +115,14 @@ validate_configured_printers()
 
 ### 3. Add Configuration Validation at Startup
 
-**File:** `src/xw_studio/bootstrap.py`
+**File:** `src/xw_office/bootstrap.py`
 
 **Enhancement:** Add config validation function
 
 ```python
 def validate_required_configuration():
     """Validate all required configuration is present"""
-    from xw_studio.core.config import config
+    from xw_office.core.config import config
     
     required_keys = [
         ("printing.invoice_printer", config.printing.invoice_printer),
@@ -156,7 +156,7 @@ if not validate_required_configuration():
 
 ### 4. Add Fulfillment Progress UI Enhancement
 
-**File:** `src/xw_studio/ui/modules/rechnungen/tagesgeschaeft_view.py`
+**File:** `src/xw_office/ui/modules/rechnungen/tagesgeschaeft_view.py`
 
 **Enhancement:** Show real-time progress for batch operations
 
@@ -188,7 +188,7 @@ self.progress_bar.setValue(100)
 
 ### 5. Add Mollie Payment Status Check
 
-**File:** `src/xw_studio/services/mollie/client.py` (new or enhance)
+**File:** `src/xw_office/services/mollie/client.py` (new or enhance)
 
 **Enhancement:** Add payment status check function
 
@@ -256,7 +256,7 @@ for payment in payments:
 def process_email_for_labels(email_id: str):
     """Process email attachment as label template"""
     
-    from xw_studio.services.graph.client import GraphClient
+    from xw_office.services.graph.client import GraphClient
     
     # 1. Fetch email attachment from Outlook
     graph = GraphClient(self.config.graph.token)
@@ -385,7 +385,7 @@ Der Link ist 30 Tage gültig.
 ### Printer Not Found
 1. Check printer name matches exactly (case-sensitive on Linux)
 2. Verify printer is connected and powered on
-3. Run: python -m xw_studio.core.printer_detect
+3. Run: python -m xw_office.core.printer_detect
 4. Check logs for list of available printers
 
 ### API Timeout
@@ -401,7 +401,7 @@ Der Link ist 30 Tage gültig.
 
 ### Add Application Telemetry
 
-**File:** `src/xw_studio/core/telemetry.py` (new)
+**File:** `src/xw_office/core/telemetry.py` (new)
 
 ```python
 class OperationMetrics:

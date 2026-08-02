@@ -1,4 +1,4 @@
-# XeisWorks Studio
+# XeisWorks Office
 
 PySide6 desktop application for XeisWorks music publishing business management.
 
@@ -25,7 +25,7 @@ Content Studio. It does not replace the PySide6 desktop application or its print
 set XW_CONTENT_BOOTSTRAP_TOKEN=replace-with-a-long-random-value
 
 # Start on http://127.0.0.1:8000
-python -m xw_studio.web
+python -m xw_office.web
 ```
 
 Public routes:
@@ -44,8 +44,8 @@ The recommended custom domain and phased roadmap are documented in
 
 ```bash
 # Clone with submodules
-git clone --recurse-submodules https://github.com/XeisWorks/XW-Studio.git
-cd XW-Studio
+git clone --recurse-submodules https://github.com/XeisWorks/XW-Office.git
+cd XW-Office
 
 # Create virtual environment
 python -m venv venv
@@ -59,7 +59,7 @@ copy .env.example .env
 # Edit .env with your credentials
 
 # Run
-python -m xw_studio
+python -m xw_office
 ```
 
 ## Roadmap / Copilot
@@ -86,7 +86,7 @@ Initial schema covers registry, key-value settings, and encrypted API secrets. A
 
 ## Performance notes
 
-- Network and heavy CPU work run off the UI thread via workers (see `xw_studio.core.worker`).
+- Network and heavy CPU work run off the UI thread via workers (see `xw_office.core.worker`).
 - CRM duplicate detection is pairwise O(n²); intended for modest contact lists until a batched strategy is added.
 
 ## Performance SLOs

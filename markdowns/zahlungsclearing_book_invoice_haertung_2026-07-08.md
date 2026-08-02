@@ -23,11 +23,11 @@ Legacy:
 
 Aktuelle App:
 
-- `src/xw_studio/services/clearing/service.py`
-- `src/xw_studio/services/clearing/gateways.py`
-- `src/xw_studio/services/sevdesk/invoice_client.py`
-- `src/xw_studio/services/invoice_processing/service.py`
-- `src/xw_studio/ui/modules/payment_clearing/view.py`
+- `src/xw_office/services/clearing/service.py`
+- `src/xw_office/services/clearing/gateways.py`
+- `src/xw_office/services/sevdesk/invoice_client.py`
+- `src/xw_office/services/invoice_processing/service.py`
+- `src/xw_office/ui/modules/payment_clearing/view.py`
 
 ## Legacy-Verhalten
 
@@ -98,7 +98,7 @@ Dieser Ablauf bleibt erhalten.
 
 Neu:
 
-- `src/xw_studio/services/sevdesk/payment_booking.py`
+- `src/xw_office/services/sevdesk/payment_booking.py`
 
 Dieser Helper kapselt die Legacy-relevanten Details:
 

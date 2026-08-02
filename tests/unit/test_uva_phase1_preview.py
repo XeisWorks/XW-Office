@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from xw_studio.services.finanzonline.uva_payload_service import UvaPayloadService
-from xw_studio.services.finanzonline.uva_preview import SevdeskUvaPreviewProvider, UvaPreviewService
-from xw_studio.services.finanzonline.uva_references import (
+from xw_office.services.finanzonline.uva_payload_service import UvaPayloadService
+from xw_office.services.finanzonline.uva_preview import SevdeskUvaPreviewProvider, UvaPreviewService
+from xw_office.services.finanzonline.uva_references import (
     compare_uva_reference,
     load_uva_references,
 )

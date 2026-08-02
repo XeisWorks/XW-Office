@@ -1,4 +1,4 @@
-# Klick-Performance-Analyse XW-Studio
+# Klick-Performance-Analyse XW-Office
 
 Datum: 2026-07-08  
 Scope: Klickverhalten, Modulwechsel, Untermenues, Rechnungen/Tagesgeschaeft, Tabellen, Background-Work, weitere Performance-Umbauten.
@@ -88,7 +88,7 @@ Status: teilweise umgesetzt
 - `QT_QPA_PLATFORM=offscreen`
 - `PYTHONPATH=src`
 - PySide6/pytest-qt UI-Tests mit Fake-Services fuer reproduzierbare Klickpfade
-- Lokale Logs aus `logs/xw_studio.log`
+- Lokale Logs aus `logs/xw_office.log`
 - Keine externen API-Aktionen im Testlauf ausgeloest, um keine echten sevDesk/Wix/Graph-Seiteneffekte zu erzeugen.
 
 ### pytest-qt Lauf
@@ -165,7 +165,7 @@ Interpretation:
 
 ## Reale Log-Auswertung
 
-Relevante Ausschnitte aus `logs/xw_studio.log`:
+Relevante Ausschnitte aus `logs/xw_office.log`:
 
 | Ereignis | Beobachtung |
 |---|---:|
@@ -193,7 +193,7 @@ Interpretation:
 
 ### MainWindow und Modulwechsel
 
-Datei: `src/xw_studio/ui/main_window.py`
+Datei: `src/xw_office/ui/main_window.py`
 
 - `MainWindow.__init__` baut Sidebar, Home, Statusbar und ruft `_apply_printer_status()` synchron.
 - `_apply_printer_status()` ruft `discover_printers()` synchron.
@@ -210,8 +210,8 @@ Risiko:
 
 Dateien:
 
-- `src/xw_studio/ui/modules/rechnungen/tagesgeschaeft_view.py`
-- `src/xw_studio/ui/modules/rechnungen/view.py`
+- `src/xw_office/ui/modules/rechnungen/tagesgeschaeft_view.py`
+- `src/xw_office/ui/modules/rechnungen/view.py`
 
 Bereits gut:
 
@@ -233,7 +233,7 @@ Risiken:
 
 ### Produkte
 
-Datei: `src/xw_studio/ui/modules/products/view.py`
+Datei: `src/xw_office/ui/modules/products/view.py`
 
 Risiken:
 
@@ -251,7 +251,7 @@ Empfehlung:
 
 ### Zahlungsclearing
 
-Datei: `src/xw_studio/ui/modules/payment_clearing/view.py`
+Datei: `src/xw_office/ui/modules/payment_clearing/view.py`
 
 Bereits gut:
 
@@ -271,7 +271,7 @@ Empfehlung:
 
 ### Provisionen/Kalkulation
 
-Datei: `src/xw_studio/ui/modules/calculation/view.py`
+Datei: `src/xw_office/ui/modules/calculation/view.py`
 
 Bereits gut:
 

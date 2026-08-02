@@ -5,14 +5,14 @@ from datetime import datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from xw_studio.core.container import Container
-from xw_studio.core.signals import AppSignals
-from xw_studio.core.types import ModuleKey
-from xw_studio.bootstrap import register_default_services
-from xw_studio.ui.main_window import MainWindow
-from xw_studio.services.clearing.models import ClearingCandidate, MatchStatus, TransactionKind
-from xw_studio.services.clearing.service import PaymentClearingService
-from xw_studio.ui.modules.payment_clearing.view import PaymentClearingView
+from xw_office.core.container import Container
+from xw_office.core.signals import AppSignals
+from xw_office.core.types import ModuleKey
+from xw_office.bootstrap import register_default_services
+from xw_office.ui.main_window import MainWindow
+from xw_office.services.clearing.models import ClearingCandidate, MatchStatus, TransactionKind
+from xw_office.services.clearing.service import PaymentClearingService
+from xw_office.ui.modules.payment_clearing.view import PaymentClearingView
 
 
 def _candidate(candidate_id: str, status: MatchStatus) -> ClearingCandidate:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from xw_studio.services.plc.pricing import quote_plc_price
+from xw_office.services.plc.pricing import quote_plc_price
 
 
 def test_austria_price_uses_next_matching_weight_bracket() -> None:

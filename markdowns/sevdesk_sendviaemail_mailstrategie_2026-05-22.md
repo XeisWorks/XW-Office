@@ -4,15 +4,15 @@ Stand: 2026-05-22
 
 ## Entscheidung
 
-XW-Studio soll Rechnungsmails primaer ueber sevDesk `sendViaEmail` versenden. Microsoft Graph bleibt als Fallback und manueller Notanker erhalten.
+XW-Office soll Rechnungsmails primaer ueber sevDesk `sendViaEmail` versenden. Microsoft Graph bleibt als Fallback und manueller Notanker erhalten.
 
 Begruendung:
 
 - sevDesk `sendViaEmail` ist der offizielle API-Endpunkt fuer den Rechnungsversand per Mail.
 - sevDesk setzt beim Versand per Mail den Rechnungsstatus selbst weiter und haengt die Rechnung als PDF an.
-- Die Mailkonfiguration liegt damit in sevDesk. Aenderungen an Microsoft 365/OAuth, SMTP und Absenderpflege muessen nicht doppelt in XW-Studio gewartet werden.
+- Die Mailkonfiguration liegt damit in sevDesk. Aenderungen an Microsoft 365/OAuth, SMTP und Absenderpflege muessen nicht doppelt in XW-Office gewartet werden.
 - Das neue sevDesk-OAuth-2.0-Update fuer Microsoft 365 passt genau zu diesem Ziel: sevDesk ist mit dem Microsoft-365-Konto verbunden und uebernimmt den Versand.
-- Legacy hat physische Rechnungsmails bereits ueber sevDesk `sendViaEmail` versendet; XW-Studio rueckt damit naeher an den bewahrten Ablauf.
+- Legacy hat physische Rechnungsmails bereits ueber sevDesk `sendViaEmail` versendet; XW-Office rueckt damit naeher an den bewahrten Ablauf.
 
 ## Zielablauf
 
@@ -109,4 +109,4 @@ Die verbleibenden 11 Fehler liegen in `tests/unit/test_daily_business_parity.py`
 
 ## Offener Praxischeck
 
-Vor dem produktiven Versand sollte mit einer Testrechnung geprueft werden, ob sevDesk `sendViaEmail` bei API-Aufruf die in XW-Studio uebergebenen Texte verwendet oder ob leere/fehlende Texte die sevDesk-Webvorlage ziehen. XW-Studio uebergibt aktuell bewusst Betreff und Text, damit der API-Aufruf deterministisch bleibt.
+Vor dem produktiven Versand sollte mit einer Testrechnung geprueft werden, ob sevDesk `sendViaEmail` bei API-Aufruf die in XW-Office uebergebenen Texte verwendet oder ob leere/fehlende Texte die sevDesk-Webvorlage ziehen. XW-Office uebergibt aktuell bewusst Betreff und Text, damit der API-Aufruf deterministisch bleibt.

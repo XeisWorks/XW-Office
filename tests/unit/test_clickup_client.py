@@ -4,7 +4,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from xw_studio.services.clickup.client import ClickUpClient
+from xw_office.services.clickup.client import ClickUpClient
 
 
 class _SecretServiceStub:
@@ -62,7 +62,7 @@ def test_create_task_posts_expected_payload(monkeypatch: pytest.MonkeyPatch) -> 
             )
 
     monkeypatch.setattr(
-        "xw_studio.services.clickup.client.httpx.Client",
+        "xw_office.services.clickup.client.httpx.Client",
         lambda timeout: _DummyClient(),
     )
 
@@ -72,7 +72,7 @@ def test_create_task_posts_expected_payload(monkeypatch: pytest.MonkeyPatch) -> 
         description="Beschreibung",
         list_id="list-42",
         priority=2,
-        tags=["studio"],
+        tags=["office"],
     )
 
     assert task.id == "task-1"
@@ -81,7 +81,7 @@ def test_create_task_posts_expected_payload(monkeypatch: pytest.MonkeyPatch) -> 
         "name": "Neue Aufgabe",
         "description": "Beschreibung",
         "priority": 2,
-        "tags": ["studio"],
+        "tags": ["office"],
     }
     assert captured["headers"] == {
         "Authorization": "token-123",

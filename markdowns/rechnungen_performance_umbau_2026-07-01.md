@@ -186,7 +186,7 @@ Geplante Tests:
 
 Gelaufen am 2026-07-01:
 
-- `python -m py_compile src/xw_studio/ui/modules/rechnungen/view.py src/xw_studio/ui/modules/rechnungen/tagesgeschaeft_view.py src/xw_studio/services/invoice_processing/service.py tests/ui/test_rechnungen_view_smoke.py`
+- `python -m py_compile src/xw_office/ui/modules/rechnungen/view.py src/xw_office/ui/modules/rechnungen/tagesgeschaeft_view.py src/xw_office/services/invoice_processing/service.py tests/ui/test_rechnungen_view_smoke.py`
 - `python -m pytest tests/ui/test_rechnungen_view_smoke.py tests/unit/test_wix_orders_client.py` -> 35 passed
 - `python -m pytest tests/unit/test_invoice_processing_service.py tests/unit/test_invoice_processing_fullflow.py tests/unit/test_invoice_processing_count.py` -> 28 passed
 - `python -m pytest tests/unit/test_rechnungen_product_print.py` -> 3 passed
@@ -196,8 +196,8 @@ Gelaufen am 2026-07-01:
 
 ## Umgesetzte Dateien
 
-- `src/xw_studio/ui/modules/rechnungen/tagesgeschaeft_view.py`
-- `src/xw_studio/ui/modules/rechnungen/view.py`
-- `src/xw_studio/services/invoice_processing/service.py`
+- `src/xw_office/ui/modules/rechnungen/tagesgeschaeft_view.py`
+- `src/xw_office/ui/modules/rechnungen/view.py`
+- `src/xw_office/services/invoice_processing/service.py`
 - `tests/ui/test_rechnungen_view_smoke.py`
-- bestehender Wix-Incomplete-Cache-Fix in `src/xw_studio/services/wix/client.py` und `tests/unit/test_wix_orders_client.py` blieb erhalten.
+- bestehender Wix-Incomplete-Cache-Fix in `src/xw_office/services/wix/client.py` und `tests/unit/test_wix_orders_client.py` blieb erhalten.

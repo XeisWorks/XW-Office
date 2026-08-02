@@ -1,7 +1,7 @@
 """Tests for SearchBar debounce and typeahead behavior."""
 from __future__ import annotations
 
-from xw_studio.ui.widgets.search_bar import SearchBar
+from xw_office.ui.widgets.search_bar import SearchBar
 
 
 def test_search_bar_min_chars_gate(qtbot: object) -> None:

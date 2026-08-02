@@ -1,12 +1,12 @@
 """Unit tests for ProductFieldBulkService."""
 import pytest
 
-from xw_studio.services.inventory.service import ProductRow
-from xw_studio.services.products.field_bulk_service import (
+from xw_office.services.inventory.service import ProductRow
+from xw_office.services.products.field_bulk_service import (
     FieldOperatorType,
     ProductFieldBulkService,
 )
-from xw_studio.services.wix.product_details_client import UpdateResult
+from xw_office.services.wix.product_details_client import UpdateResult
 
 
 class _FakeInventoryService:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from xw_studio.services.commission.service import CommissionService
+from xw_office.services.commission.service import CommissionService
 
 
 class _ProviderStub:

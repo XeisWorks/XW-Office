@@ -1,4 +1,4 @@
-# XW-Studio Bedienung: Brand gezielt und im Bulk bearbeiten
+# XW-Office Bedienung: Brand gezielt und im Bulk bearbeiten
 
 ## Voraussetzungen
 - Produkte sind im Tab Inventar vorhanden.

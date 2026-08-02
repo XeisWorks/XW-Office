@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import json
 
-from xw_studio.services.daily_business.service import DailyBusinessService
-from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.services.daily_business.service import DailyBusinessService
+from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 
 
 class _RepoStub:

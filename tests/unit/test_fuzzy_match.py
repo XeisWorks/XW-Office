@@ -1,7 +1,7 @@
 """Tests for the shared fuzzy-matching utility."""
 from __future__ import annotations
 
-from xw_studio.core.fuzzy_match import best_match, fuzzy_ratio, is_fuzzy_match, token_set_ratio
+from xw_office.core.fuzzy_match import best_match, fuzzy_ratio, is_fuzzy_match, token_set_ratio
 
 
 def test_fuzzy_ratio_identical_strings_is_one() -> None:

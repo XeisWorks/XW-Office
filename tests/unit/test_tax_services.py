@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import json
 
-from xw_studio.services.clearing.service import PaymentClearingService
-from xw_studio.services.expenses.service import ExpenseAuditService
+from xw_office.services.clearing.service import PaymentClearingService
+from xw_office.services.expenses.service import ExpenseAuditService
 
 
 class _RepoStub:

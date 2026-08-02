@@ -1,7 +1,7 @@
-﻿# UVA und ZM/U13 in PySide6: Gesamtanalyse, Live-Tests und Umbauplan
+# UVA und ZM/U13 in PySide6: Gesamtanalyse, Live-Tests und Umbauplan
 
 Stand: 12.07.2026
-Ziel: ein fachlich sauberes, schnelles und Ã¼bersichtliches Modul `Steuern > UVA / ZM` in XW-Studio
+Ziel: ein fachlich sauberes, schnelles und Ã¼bersichtliches Modul `Steuern > UVA / ZM` in XW-Office
 Status dieses Dokuments: Analyse, Umsetzungsplan und laufende Umbaudokumentation. Die Vorgaben vom 12.07.2026 sind eingearbeitet: ZM/U13 bleibt eine Soll-Berechnung rein nach Rechnungsdatum bzw. Gutschriftdatum; `status >= 100` bleibt bewusst die Mandantenregel.
 
 ## 1. Management Summary
@@ -16,7 +16,7 @@ Die groÃŸen Kennzahlen A022, A029 und A006 sowie B070/B072 und C065 stimmen ex
 
 Fachlich ist die Berechnung trotzdem noch nicht allgemein abgabesicher. Sie basiert auf Text-/TaxSet-Heuristiken, einer vereinfachten Kennzahlenmatrix, einem Best-Effort-Zahlungsabgleich und nicht versionierten U30-Regeln. Die gute Ãœbereinstimmung eines Monats darf daher nicht mit allgemeiner Korrektheit gleichgesetzt werden.
 
-Die ZM/U13 liefert fÃ¼r 06/2026 vier UID-Zeilen Ã¼ber insgesamt 2.399 EUR. Ihre Grundstruktur â€“ Sollprinzip nach Rechnungsdatum, Gruppierung je UID und GeschÃ¤ftsart, ganzzahlige kaufmÃ¤nnische Rundung und U13-XML â€“ ist die fachliche Zielrichtung fÃ¼r XW-Studio. Die Mandantenregel lautet ausdrÃ¼cklich: `status >= 100` bleibt zulÃ¤ssig.
+Die ZM/U13 liefert fÃ¼r 06/2026 vier UID-Zeilen Ã¼ber insgesamt 2.399 EUR. Ihre Grundstruktur â€“ Sollprinzip nach Rechnungsdatum, Gruppierung je UID und GeschÃ¤ftsart, ganzzahlige kaufmÃ¤nnische Rundung und U13-XML â€“ ist die fachliche Zielrichtung fÃ¼r XW-Office. Die Mandantenregel lautet ausdrÃ¼cklich: `status >= 100` bleibt zulÃ¤ssig.
 
 - eine komplette Rechnung erhielt bisher genau eine GeschÃ¤ftsart;
 - der Nettobetrag kommt aus der Dokumentgesamtsumme statt aus ZM-relevanten Positionen;
@@ -38,29 +38,29 @@ Das Zielbild ist ein gemeinsamer Monats-Snapshot: Dokumente, Positionen, Zahlung
 
 UVA:
 
-- `src/xw_studio/services/finanzonline/uva_preview.py`
+- `src/xw_office/services/finanzonline/uva_preview.py`
   - sevDesk-Kandidaten, Zahlungsmetadaten, Positionen und Steuergruppen
-- `src/xw_studio/services/finanzonline/uva_selection.py`
+- `src/xw_office/services/finanzonline/uva_selection.py`
   - IST-Auswahl und Teilzahlungsquoten
-- `src/xw_studio/services/finanzonline/uva_payload_service.py`
+- `src/xw_office/services/finanzonline/uva_payload_service.py`
   - Ãœberleitung der Gruppen auf U30-Kennzahlen und Zahllast
-- `src/xw_studio/services/finanzonline/uva_models.py`
+- `src/xw_office/services/finanzonline/uva_models.py`
   - derzeit nur ein Teil der U30-Kennzahlen
-- `src/xw_studio/services/finanzonline/u30_xml.py`
+- `src/xw_office/services/finanzonline/u30_xml.py`
   - XML und XSD-Validierung
 
 ZM:
 
-- `src/xw_studio/services/finanzonline/zm_service.py`
+- `src/xw_office/services/finanzonline/zm_service.py`
   - Rechnungsauswahl, UID-PrÃ¼fung, Art, Gruppierung und Rundung
-- `src/xw_studio/services/finanzonline/u13_xml.py`
+- `src/xw_office/services/finanzonline/u13_xml.py`
   - U13-XML und XSD-Validierung
-- `src/xw_studio/services/finanzonline/uva_service.py`
+- `src/xw_office/services/finanzonline/uva_service.py`
   - gekoppelte Berechnung und Abgabe: zuerst U30, anschlieÃŸend U13
 
 UI:
 
-- `src/xw_studio/ui/modules/taxes/view.py`
+- `src/xw_office/ui/modules/taxes/view.py`
   - gemeinsamer UVA-Berechnen-Button, UVA- und ZM-Textfelder, Fortschritt und kombinierte Abgabe
 
 ### 2.2 Positiver Bestand
@@ -206,7 +206,7 @@ Interpretation:
 
 - ZM-pflichtig sind innergemeinschaftliche Warenlieferungen sowie bestimmte im Ã¼brigen Gemeinschaftsgebiet steuerpflichtige sonstige Leistungen, fÃ¼r die der EmpfÃ¤nger nach Art. 196 MwSt-RL die Steuer schuldet. Quelle: RIS, Art. 21 UStG-Binnenmarkt.
   https://ris.bka.gv.at/NormDokument.wxe?Abfrage=Bundesnormen&Artikel=21&Gesetzesnummer=10004929
-- FÃ¼r Warenlieferungen gilt grundsÃ¤tzlich der Meldezeitraum der Rechnung, spÃ¤testens der Monat nach AusfÃ¼hrung. FÃ¼r sonstige Leistungen nennt Art. 21 Abs. 7 den Zeitraum der LeistungsausfÃ¼hrung. FÃ¼r XW-Studio gilt abweichend die bestÃ¤tigte Mandantenregel: ZM/U13 wird rein nach Rechnungsdatum bzw. Gutschriftdatum bestimmt, weil das der gewÃ¼nschten Soll-Auswertung und dem Legacy-Verhalten entspricht. Quelle fÃ¼r die allgemeine Rechtslage: RIS, Art. 21 Abs. 7.
+- FÃ¼r Warenlieferungen gilt grundsÃ¤tzlich der Meldezeitraum der Rechnung, spÃ¤testens der Monat nach AusfÃ¼hrung. FÃ¼r sonstige Leistungen nennt Art. 21 Abs. 7 den Zeitraum der LeistungsausfÃ¼hrung. FÃ¼r XW-Office gilt abweichend die bestÃ¤tigte Mandantenregel: ZM/U13 wird rein nach Rechnungsdatum bzw. Gutschriftdatum bestimmt, weil das der gewÃ¼nschten Soll-Auswertung und dem Legacy-Verhalten entspricht. Quelle fÃ¼r die allgemeine Rechtslage: RIS, Art. 21 Abs. 7.
 - Dienstleistungen an Nichtunternehmer ohne UID sowie Leistungen auÃŸerhalb der B2B-Grundregel gehÃ¶ren nicht in die ZM. Quelle: USP/BMF.
   https://www.usp.gv.at/themen/steuern-finanzen/umsatzsteuer-ueberblick/weitere-informationen-zur-umsatzsteuer/umsaetze-mit-auslandsbezug/grenzueberschreitende-dienstleistungen.html
 - Die Steuerfreiheit innergemeinschaftlicher Lieferungen hÃ¤ngt auch an einer vollstÃ¤ndigen/richtigen ZM bzw. ordnungsgemÃ¤ÃŸer Berichtigung. Quelle: USP/BMF.
@@ -472,7 +472,7 @@ Kopfbereich fÃ¼r alle Ansichten:
 - Anzeige und spÃ¤terer U30-Submission-Payload verwenden dadurch dieselben berechneten Kennzahlen, wenn zuvor berechnet wurde.
 - Die UI zeigt an, ob der Lauf live geladen oder aus dem Monatscache gelesen wurde.
 - Die UI hat zusÃ¤tzlich `Neu aus sevDesk laden`, um den Monatscache bewusst zu erneuern.
-- Umgesetzt: `TaxMonthlySnapshotStore` speichert vollstÃ¤ndige Monatsberechnungen persistent in `state/xw_studio_cache.sqlite`.
+- Umgesetzt: `TaxMonthlySnapshotStore` speichert vollstÃ¤ndige Monatsberechnungen persistent in `state/xw_office_cache.sqlite`.
 - Umgesetzt: gespeicherte Snapshots enthalten einen stabilen SHA-256-Hash und werden nach App-Neustart in ca. 0,002 Sekunden geladen.
 - Umgesetzt: Snapshot-Schema-Version verhindert, dass alte Snapshots ohne neue Referenz-/Datenqualitaetslogik verwendet werden.
 - Noch offen: inkrementeller Rohdatenloader statt vollstÃ¤ndigem kaltem sevDesk-Neulauf.

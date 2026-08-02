@@ -5,7 +5,7 @@ from threading import Event
 
 from PySide6.QtWidgets import QLabel, QPushButton, QWidget
 
-from xw_studio.ui.async_action import UiAsyncAction
+from xw_office.ui.async_action import UiAsyncAction
 
 
 def test_async_action_sets_and_restores_busy_state(qtbot: object) -> None:

@@ -168,7 +168,7 @@ sku_besetzung.json                     → Product instrumentation config
 
 ### No Database Tables
 - Old sevDesk is file-based only
-- New XW-Studio will use PostgreSQL for multi-PC sync
+- New XW-Office will use PostgreSQL for multi-PC sync
 
 ---
 
@@ -361,7 +361,7 @@ SEVDESK_MSAL_CACHE_PATH=...
 
 ---
 
-## Quick Start for XW-Studio Migration
+## Quick Start for XW-Office Migration
 
 1. **Services Layer** → Already migrated (keep services, add DI container)
 2. **UI Layer** → Rebuild with PySide6:
@@ -380,5 +380,5 @@ SEVDESK_MSAL_CACHE_PATH=...
 ---
 
 **Last Updated:** April 4, 2026  
-**For:** XW-Studio PySide6 Rebuild  
+**For:** XW-Office PySide6 Rebuild  
 **From:** XeisWorks/sevDesk Legacy Analysis

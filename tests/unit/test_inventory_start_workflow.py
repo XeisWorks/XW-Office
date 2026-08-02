@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from xw_studio.core.config import AppConfig, PrintingSection
-from xw_studio.services.inventory.service import (
+from xw_office.core.config import AppConfig, PrintingSection
+from xw_office.services.inventory.service import (
     InventoryService,
     StartMode,
 )
@@ -92,7 +92,7 @@ def test_execute_full_mode_updates_stock_with_buffer_and_consumption(tmp_path: P
     service = InventoryService(cfg, repo)
 
     preflight = service.build_start_preflight(open_invoice_count=4)
-    with patch("xw_studio.services.inventory.service.print_pdf_by_plan") as mock_print:
+    with patch("xw_office.services.inventory.service.print_pdf_by_plan") as mock_print:
         report = service.execute_start_workflow(preflight, StartMode.INVOICES_AND_PRINT)
 
     assert report.stock_updated is True
@@ -120,7 +120,7 @@ def test_print_only_then_consumption_does_not_print_twice(tmp_path: Path) -> Non
     service = InventoryService(AppConfig(printing=_printing_config()), repo)
     preflight = service.build_start_preflight(open_invoice_count=1)
 
-    with patch("xw_studio.services.inventory.service.print_pdf_by_plan") as mock_print:
+    with patch("xw_office.services.inventory.service.print_pdf_by_plan") as mock_print:
         print_report = service.execute_start_workflow(preflight, StartMode.PRINT_ONLY)
         consume_report = service.execute_start_workflow(
             preflight,
@@ -154,7 +154,7 @@ def test_execute_invoices_mode_keeps_stock_unchanged() -> None:
 
 
 def test_build_reprint_preflight_identifies_low_stock() -> None:
-    from xw_studio.services.inventory.service import ReprintPreflight
+    from xw_office.services.inventory.service import ReprintPreflight
 
     repo = _RepoStub(
         {
@@ -181,7 +181,7 @@ def test_build_reprint_preflight_identifies_low_stock() -> None:
 
 
 def test_execute_reprint_workflow_only_adds_printed_stock(tmp_path: Path) -> None:
-    from xw_studio.services.inventory.service import ReprintDecision, ReprintPreflight
+    from xw_office.services.inventory.service import ReprintDecision, ReprintPreflight
 
     pdf_path = tmp_path / "score.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n")
@@ -205,7 +205,7 @@ def test_execute_reprint_workflow_only_adds_printed_stock(tmp_path: Path) -> Non
         )
     ]
     preflight = ReprintPreflight(decisions=decisions, missing_position_data=False)
-    with patch("xw_studio.services.inventory.service.print_pdf_by_plan") as mock_print:
+    with patch("xw_office.services.inventory.service.print_pdf_by_plan") as mock_print:
         report = service.execute_reprint_workflow(preflight)
 
     assert report.stock_updated is True
@@ -228,7 +228,7 @@ def test_execute_start_workflow_skips_stock_increment_when_print_config_missing(
     service = InventoryService(AppConfig(printing=_printing_config()), repo)
 
     preflight = service.build_start_preflight(open_invoice_count=1)
-    with patch("xw_studio.services.inventory.service.print_pdf_by_plan") as mock_print:
+    with patch("xw_office.services.inventory.service.print_pdf_by_plan") as mock_print:
         report = service.execute_start_workflow(preflight, StartMode.INVOICES_AND_PRINT)
 
     assert report.stock_updated is True

@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from xw_studio.services.sendungen.service import OffeneSendungenService, SendungProductLine
+from xw_office.services.sendungen.service import OffeneSendungenService, SendungProductLine
 
 
 class _Repo:
@@ -61,7 +61,7 @@ def test_refresh_count_from_graph_silent_uses_cache_without_silent_token(monkeyp
         def list_inbox_messages(self, **_kwargs: object) -> list[dict[str, Any]]:
             raise AssertionError("silent refresh must not start Graph reads without silent token")
 
-    monkeypatch.setattr("xw_studio.services.sendungen.service.GraphMailClient", _GraphClient)
+    monkeypatch.setattr("xw_office.services.sendungen.service.GraphMailClient", _GraphClient)
     repo = _Repo()
     repo.values["daily_business.offene_sendungen.cases.raw_graph"] = json.dumps(
         [_message("m1", "Versand bitte an neue Adresse", "Bestellung 20868")]
@@ -88,7 +88,7 @@ def test_refresh_count_from_graph_silent_applies_keywords_and_outlook_flag(monke
                 _message("m3", "Shipment vorbereiten", flag_status="complete"),
             ]
 
-    monkeypatch.setattr("xw_studio.services.sendungen.service.GraphMailClient", _GraphClient)
+    monkeypatch.setattr("xw_office.services.sendungen.service.GraphMailClient", _GraphClient)
     service = OffeneSendungenService(_Repo(), _Secrets())  # type: ignore[arg-type]
 
     assert service.refresh_count_from_graph_silent() == 1
@@ -106,7 +106,7 @@ def test_mark_done_sets_outlook_flag_before_local_done(monkeypatch) -> None:
         def mark_message_followup_complete(self, message_id: str) -> None:
             patched.append(message_id)
 
-    monkeypatch.setattr("xw_studio.services.sendungen.service.GraphMailClient", _GraphClient)
+    monkeypatch.setattr("xw_office.services.sendungen.service.GraphMailClient", _GraphClient)
     repo = _Repo()
     repo.values["daily_business.offene_sendungen.cases"] = json.dumps(
         [
@@ -138,7 +138,7 @@ def test_mark_done_keeps_case_open_when_outlook_flag_fails(monkeypatch) -> None:
         def mark_message_followup_complete(self, _message_id: str) -> None:
             raise RuntimeError("Graph PATCH failed")
 
-    monkeypatch.setattr("xw_studio.services.sendungen.service.GraphMailClient", _GraphClient)
+    monkeypatch.setattr("xw_office.services.sendungen.service.GraphMailClient", _GraphClient)
     repo = _Repo()
     repo.values["daily_business.offene_sendungen.cases"] = json.dumps(
         [

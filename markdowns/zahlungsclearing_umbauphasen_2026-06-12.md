@@ -204,8 +204,8 @@ Abgedeckt:
 ### Statische Pruefungen
 
 ```text
-mypy src/xw_studio/services/clearing
-     src/xw_studio/ui/modules/payment_clearing --ignore-missing-imports
+mypy src/xw_office/services/clearing
+     src/xw_office/ui/modules/payment_clearing --ignore-missing-imports
 ruff check <Clearing-Quellen und -Tests>
 python -m compileall -q src tests
 ```
@@ -327,10 +327,10 @@ Verifikation:
 .venv\Scripts\python.exe -m pytest tests/unit/test_payment_clearing_service.py tests/ui/test_payment_clearing_view.py tests/ui/test_main_window_smoke.py -q
 14 passed
 
-.venv\Scripts\python.exe -m ruff check src/xw_studio/services/clearing tests/unit/test_payment_clearing_service.py
+.venv\Scripts\python.exe -m ruff check src/xw_office/services/clearing tests/unit/test_payment_clearing_service.py
 All checks passed
 
-.venv\Scripts\python.exe -m mypy src/xw_studio/services/clearing --ignore-missing-imports
+.venv\Scripts\python.exe -m mypy src/xw_office/services/clearing --ignore-missing-imports
 Success: no issues found
 ```
 

@@ -1,8 +1,8 @@
 """Tests for XW-Copilot dry-run request contract execution."""
 from __future__ import annotations
 
-from xw_studio.services.xw_copilot.dry_run import XWCopilotDryRunService
-from xw_studio.services.xw_copilot.service import XWCopilotConfig
+from xw_office.services.xw_copilot.dry_run import XWCopilotDryRunService
+from xw_office.services.xw_copilot.service import XWCopilotConfig
 
 
 class _ConfigServiceStub:

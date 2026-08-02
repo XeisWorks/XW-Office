@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from xw_studio.services.qr_codes.models import NumericSequenceSpec, QrConfigurationError
-from xw_studio.services.qr_codes.presets import generate_numbers
+from xw_office.services.qr_codes.models import NumericSequenceSpec, QrConfigurationError
+from xw_office.services.qr_codes.presets import generate_numbers
 
 
 def test_generate_numbers_pads_single_digits_but_not_longer_numbers() -> None:

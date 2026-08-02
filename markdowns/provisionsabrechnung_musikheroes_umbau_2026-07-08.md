@@ -1,9 +1,9 @@
 # Provisionsabrechnung MusikHeroes - Umbauskizze
 
 Stand: 2026-07-08  
-Ziel: Legacy-Punkt "Provisionsabrechnung" aus `C:\Users\bernh\GitHub\sevDesk` fachlich sauber in XW-Studio integrieren, zuerst mit der Auswahl "MusikHeroes", ohne die PySide6-App jetzt schon umzubauen.
+Ziel: Legacy-Punkt "Provisionsabrechnung" aus `C:\Users\bernh\GitHub\sevDesk` fachlich sauber in XW-Office integrieren, zuerst mit der Auswahl "MusikHeroes", ohne die PySide6-App jetzt schon umzubauen.
 
-## Umsetzungsstatus (XW-Studio)
+## Umsetzungsstatus (XW-Office)
 
 Status am 2026-07-08 (Go fuer MusikHeroes):
 
@@ -12,18 +12,18 @@ Status am 2026-07-08 (Go fuer MusikHeroes):
 - Phase 3 (MusikHeroes-Seite produktiv im Modul): umgesetzt als erster produktiver Scope
 - Phase 4 (weitere Profile + Registry + Exportausbau): offen
 
-Direkte Zielartefakte in XW-Studio:
+Direkte Zielartefakte in XW-Office:
 
-- Service: `src/xw_studio/services/commission/service.py`
-- DI-Registrierung: `src/xw_studio/bootstrap.py`
-- UI-Integration: `src/xw_studio/ui/modules/calculation/view.py`
+- Service: `src/xw_office/services/commission/service.py`
+- DI-Registrierung: `src/xw_office/bootstrap.py`
+- UI-Integration: `src/xw_office/ui/modules/calculation/view.py`
 - Tests: `tests/unit/test_commission_service.py`
 
 Damit ist der Legacy-Umbau von "Provisionsabrechnung" nicht nur skizziert, sondern mit MusikHeroes als produktiver erster Eintrag in der neuen PySide6-Struktur verankert.
 
 ## Kurzfazit
 
-Die aktuelle XW-Studio-Seite `Provisionen` ist ein kleiner Tab-Prototyp fuer Artikelliste und Schnellrechner. Das Legacy-Modul ist fachlich breiter: es kombiniert Provisions-/Artikelanalyse, Kategorieauswertungen, Druckrechte, Mindestgebuehr und Beteiligungen. Fuer viele weitere Abrechnungen ist ein Tab-Layout ungeeignet, weil die Breite knapp wird und die Liste der Abrechnungsprofile wachsen wird.
+Die aktuelle XW-Office-Seite `Provisionen` ist ein kleiner Tab-Prototyp fuer Artikelliste und Schnellrechner. Das Legacy-Modul ist fachlich breiter: es kombiniert Provisions-/Artikelanalyse, Kategorieauswertungen, Druckrechte, Mindestgebuehr und Beteiligungen. Fuer viele weitere Abrechnungen ist ein Tab-Layout ungeeignet, weil die Breite knapp wird und die Liste der Abrechnungsprofile wachsen wird.
 
 Empfohlener Umbau: Die Seite `Provisionen` bleibt ein Hauptmodul, bekommt aber links eine vertikale, gruppierte Auswahl und rechts einen `QStackedWidget`-Arbeitsbereich. "MusikHeroes" wird als erstes produktives Abrechnungsprofil umgesetzt. Weitere Profile werden spaeter als Konfiguration und eigene Detailseiten ergaenzt, nicht als neue Tabs.
 
@@ -35,7 +35,7 @@ Empfohlener Umbau: Die Seite `Provisionen` bleibt ein Hauptmodul, bekommt aber l
   - Baut zwei Spalten:
     - links `ArticleAnalysisApp`
     - rechts `KalkulationApp`
-  - Das ist fuer Tk/ttkbootstrap pragmatisch, in XW-Studio aber zu breit und schwer erweiterbar.
+  - Das ist fuer Tk/ttkbootstrap pragmatisch, in XW-Office aber zu breit und schwer erweiterbar.
 
 - `sevdesk_wix_fulfillment/ui/article_analysis_app.py`
   - Enthalten sind Zeitraumwahl, Basisdatum, Kategorie-/Artikelanalyse, Suchfelder, Fortschritt, Ergebnistext, Copy-Feld, Produkt- und Rechnungslisten.
@@ -52,23 +52,23 @@ Empfohlener Umbau: Die Seite `Provisionen` bleibt ein Hauptmodul, bekommt aber l
 
 - `sevdesk_wix_fulfillment/ui/kalkulation_app.py`
   - Enthalten sind Kalkulation Druckrechte, Mindestgebuehr, Beteiligungen.
-  - Diese Funktionen sollten in XW-Studio nicht mit der Provisionsabrechnung vermischt werden, sondern als eigene Auswahlgruppe im selben Modul erscheinen.
+  - Diese Funktionen sollten in XW-Office nicht mit der Provisionsabrechnung vermischt werden, sondern als eigene Auswahlgruppe im selben Modul erscheinen.
 
-### Aktueller XW-Studio-Stand
+### Aktueller XW-Office-Stand
 
-- `src/xw_studio/ui/modules/calculation/view.py`
+- `src/xw_office/ui/modules/calculation/view.py`
   - Nutzt derzeit `QTabWidget` mit "Artikelliste" und "Schnellrechner".
   - Fuer viele Provisionen/Kunden ist das Layout nicht skalierbar.
 
-- `src/xw_studio/services/calculation/service.py`
+- `src/xw_office/services/calculation/service.py`
   - Enthalten sind nur einfache Royalty-Helfer und persistierte Artikel aus `calculation.articles`.
   - Es gibt noch keine echte Provisionsabrechnung gegen sevDesk-Belege.
 
-- `src/xw_studio/services/sevdesk/invoice_client.py`
+- `src/xw_office/services/sevdesk/invoice_client.py`
   - Kann Rechnungen und einzelne Rechnungspositionen lesen.
   - Fuer die Legacy-Paritaet fehlen Bulk-Provider fuer `InvoicePos`, `CreditNote`, `CreditNotePos`, sowie ein jahrweiser Cache.
 
-- `src/xw_studio/services/sevdesk/part_client.py`
+- `src/xw_office/services/sevdesk/part_client.py`
   - Kann Parts und Part-Kategorien lesen.
   - Kann fuer Kategoriezuordnung und Profilauflosung genutzt werden.
 
@@ -97,7 +97,7 @@ Ergebnis: negative Stueckzahl, aber positiver Umsatz. Genau dieses Muster sieht 
 
 Zusaetzlicher Legacy-Risiko-Punkt: `_credit_note_in_period()` ordnet CreditNotes zuerst dem Datum der Ursprungsrechnung zu und erst danach dem CreditNote-Datum. Das kann spaeter dazu fuehren, dass eine Gutschrift aus Juli in eine Juni-Abrechnung faellt, wenn die Ursprungsrechnung im Juni war. Fuer Provisionsabrechnung sollte das explizit steuerbar sein.
 
-## Zielbild fuer XW-Studio
+## Zielbild fuer XW-Office
 
 ### Navigationsstruktur
 
@@ -203,7 +203,7 @@ Problemfaelle sollten sichtbar und nicht in einem Debugtext versteckt sein. Beis
 
 ### Neue Domain-Modelle
 
-Vorschlag: Service unter `src/xw_studio/services/calculation/commission_service.py` oder eigener Namespace `src/xw_studio/services/commission/`.
+Vorschlag: Service unter `src/xw_office/services/calculation/commission_service.py` oder eigener Namespace `src/xw_office/services/commission/`.
 
 Kernmodelle:
 
@@ -322,7 +322,7 @@ Neue Regel:
 
 ### Provider
 
-Ein neuer Provider sollte die Legacy-Bulk-Abfragen sauber in XW-Studio kapseln:
+Ein neuer Provider sollte die Legacy-Bulk-Abfragen sauber in XW-Office kapseln:
 
 - `list_invoices_for_year(year)`
 - `list_invoice_positions(year)`
@@ -335,7 +335,7 @@ Der Provider kann intern `SevdeskConnection` direkt nutzen, statt die bestehende
 
 ### Cache
 
-Der Legacy-Cache `analysis_cache/analysis_data_year_2026.json` zeigt, dass jahrweises Caching sinnvoll ist. In XW-Studio sollte der Cache aber klar versioniert und app-intern liegen, z. B.:
+Der Legacy-Cache `analysis_cache/analysis_data_year_2026.json` zeigt, dass jahrweises Caching sinnvoll ist. In XW-Office sollte der Cache aber klar versioniert und app-intern liegen, z. B.:
 
 - `state/commission/analysis_data_year_2026.json`
 - mit `created_at`
@@ -382,7 +382,7 @@ UI-Verhalten:
 
 ### Optik
 
-Stil passend zum bestehenden XW-Studio:
+Stil passend zum bestehenden XW-Office:
 
 - ruhige Finanz-/Arbeitsoberflaeche, keine Marketing-Karten
 - 6-8 px Radius maximal
@@ -441,7 +441,7 @@ Lieferumfang:
 
 Definition-of-Done:
 
-- Durchgaengige Berechnung direkt in XW-Studio.
+- Durchgaengige Berechnung direkt in XW-Office.
 - SR- und CreditNote-Logik fachlich nachvollziehbar in Belegsicht.
 - Unit-Tests fuer Kernlogik vorhanden.
 

@@ -1,4 +1,4 @@
-# XW-Studio Multi-PC Betriebsleitfaden
+# XW-Office Multi-PC Betriebsleitfaden
 
 Ziel:
 - Jeder Windows-PC kann reproduzierbar installiert, aktualisiert und betrieben werden.
@@ -14,7 +14,7 @@ Ziel:
 ## 2) Erstinstallation
 
 1. Repo klonen:
-   - `git clone --recurse-submodules https://github.com/XeisWorks/XW-Studio.git`
+   - `git clone --recurse-submodules https://github.com/XeisWorks/XW-Office.git`
 2. In Projektordner wechseln.
 3. Virtuelle Umgebung erstellen:
    - `python -m venv .venv`
@@ -26,7 +26,7 @@ Ziel:
 7. Migrationen ausfuehren:
    - `alembic upgrade head`
 8. App starten:
-   - `python -m xw_studio`
+   - `python -m xw_office`
 
 ## 3) Pflichtvariablen (.env oder Secret-Store)
 

@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "xw-studio"
+name = "xw-office"
 version = "0.1.0"
-description = "XeisWorks Studio — PySide6 desktop application for music publishing business management"
+description = "XeisWorks Office — PySide6 desktop application for music publishing business management"
 requires-python = ">=3.11"
 authors = [{name = "Bernhard Holl", email = "bernhard.holl@gmx.at"}]
 
@@ -56,8 +56,8 @@ dev = [
 ]
 
 [project.scripts]
-xw-studio = "xw_studio.__main__:main"
-xw-content-web = "xw_studio.web.__main__:main"
+xw-office = "xw_office.__main__:main"
+xw-content-web = "xw_office.web.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -3,12 +3,12 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from xw_studio.core.config import AppConfig, load_config
-from xw_studio.services.invoice_processing.service import (
+from xw_office.core.config import AppConfig, load_config
+from xw_office.services.invoice_processing.service import (
     InvoiceProcessingService,
     FulfillmentFlags,
 )
-from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 
 
 # ============================================================================
@@ -128,8 +128,8 @@ class TestCriticalPathImplemented:
 
     def test_printing_classes_available(self) -> None:
         """Verify InvoicePrinter and LabelPrinter classes exist."""
-        from xw_studio.services.printing.invoice_printer import InvoicePrinter
-        from xw_studio.services.printing.label_printer import LabelPrinter
+        from xw_office.services.printing.invoice_printer import InvoicePrinter
+        from xw_office.services.printing.label_printer import LabelPrinter
 
         config = AppConfig()
         
@@ -141,7 +141,7 @@ class TestCriticalPathImplemented:
 
     def test_gutscheine_service_available(self) -> None:
         """Verify Gutscheine (coupon) service exists."""
-        from xw_studio.services.daily_business.service import DailyBusinessService
+        from xw_office.services.daily_business.service import DailyBusinessService
 
         # Gutscheine are loaded via DailyBusinessService.load_queue_rows()
         service = DailyBusinessService(
@@ -154,7 +154,7 @@ class TestCriticalPathImplemented:
 
     def test_refund_client_available(self) -> None:
         """Verify refund processing is available."""
-        from xw_studio.services.sevdesk.refund_client import SevDeskRefundClient
+        from xw_office.services.sevdesk.refund_client import SevDeskRefundClient
 
         refund_client = SevDeskRefundClient(MagicMock())
 
@@ -171,13 +171,13 @@ class TestPartialImplementations:
     """Test features that are partially implemented."""
 
     def test_mollie_service_exists_but_needs_testing(self) -> None:
-        from xw_studio.services.daily_business.service import DailyBusinessService
+        from xw_office.services.daily_business.service import DailyBusinessService
 
         assert "mollie" in DailyBusinessService().load_counts()
 
     def test_partial_refunds_backend_exists(self) -> None:
         """Verify partial refund backend exists but UI is missing."""
-        from xw_studio.services.sevdesk.refund_client import SevDeskRefundClient
+        from xw_office.services.sevdesk.refund_client import SevDeskRefundClient
 
         refund_client = SevDeskRefundClient(MagicMock())
 
@@ -204,24 +204,24 @@ class TestMissingFeatures:
 
     def test_offene_sendungen_not_implemented(self) -> None:
         """Offene Sendungen (email → label) is NOT in UI."""
-        from xw_studio.ui.modules.rechnungen.offene_sendungen_dialog import (
+        from xw_office.ui.modules.rechnungen.offene_sendungen_dialog import (
             OffeneSendungenDialog,
         )
 
         assert OffeneSendungenDialog is not None
 
     def test_download_links_not_implemented(self) -> None:
-        from xw_studio.services.daily_business.service import DailyBusinessService
+        from xw_office.services.daily_business.service import DailyBusinessService
 
         assert "downloads" in DailyBusinessService().load_counts()
 
     def test_rechnungsentwurf_not_implemented(self) -> None:
-        from xw_studio.services.draft_invoice.service import DraftInvoiceService
+        from xw_office.services.draft_invoice.service import DraftInvoiceService
 
         assert callable(DraftInvoiceService.create_draft_from_wix_order_number)
 
     def test_graph_integration_not_done(self) -> None:
-        from xw_studio.services.mailing.graph_client import GraphMailClient
+        from xw_office.services.mailing.graph_client import GraphMailClient
 
         assert callable(GraphMailClient.send_mail)
 
@@ -268,7 +268,7 @@ class TestWorkflowIntegration:
 
     def test_complete_print_workflow_structure(self) -> None:
         """Verify print workflow components exist."""
-        from xw_studio.ui.modules.rechnungen.print_dialog import (
+        from xw_office.ui.modules.rechnungen.print_dialog import (
             run_invoice_pdf_print,
             run_label_pdf_print,
         )

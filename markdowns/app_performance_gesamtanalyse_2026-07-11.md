@@ -1,4 +1,4 @@
-# XW-Studio: Gesamtanalyse Klick- und Navigationsperformance
+# XW-Office: Gesamtanalyse Klick- und Navigationsperformance
 
 Stand: 11.07.2026  
 Scope: alle Eintraege der Sidebar, das Untermenue `RECHNUNGEN`, zugehoerige Dialoge, gemeinsame UI-Widgets und Background-Infrastruktur
@@ -206,7 +206,7 @@ Die groessten verbleibenden Hebel sind:
 
 ### 1. Navigation: aktuelles Lazy Loading blockiert weiterhin
 
-Fundstellen: `src/xw_studio/ui/main_window.py:193-238`.
+Fundstellen: `src/xw_office/ui/main_window.py:193-238`.
 
 `_navigate_to()` zeigt fuer die meisten Module zuerst einen Placeholder. Danach ruft `_build_page_async()` ueber `QTimer.singleShot(0, materialize)` die Factory auf. Der Placeholder kann dadurch zwar einen Frame erhalten, aber Import, Konstruktor, Tab-Aufbau, Service-Aufloesung und initiale DB-Lesevorgaenge laufen anschliessend vollstaendig im GUI-Thread.
 
@@ -239,7 +239,7 @@ Ein seitenweites, mausblockierendes Overlay ist nur fuer atomare Transaktionen s
 
 ### 3. Background-Infrastruktur
 
-Fundstellen: `src/xw_studio/core/worker.py`, `src/xw_studio/services/background_jobs/service.py`.
+Fundstellen: `src/xw_office/core/worker.py`, `src/xw_office/services/background_jobs/service.py`.
 
 Positiv:
 

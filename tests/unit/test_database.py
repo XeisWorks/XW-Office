@@ -3,8 +3,8 @@ from sqlalchemy import create_engine, inspect
 
 import pytest
 
-from xw_studio.core.config import AppConfig
-from xw_studio.core.database import create_engine_from_config, ensure_core_tables
+from xw_office.core.config import AppConfig
+from xw_office.core.database import create_engine_from_config, ensure_core_tables
 
 
 def test_create_engine_requires_database_url() -> None:

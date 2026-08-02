@@ -4,13 +4,13 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 from datetime import UTC, datetime
 
-from xw_studio.core.config import AppConfig, PrintingSection, load_config
-from xw_studio.services.invoice_processing.service import (
+from xw_office.core.config import AppConfig, PrintingSection, load_config
+from xw_office.services.invoice_processing.service import (
     InvoiceProcessingService,
     FulfillmentFlags,
 )
-from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
-from xw_studio.services.daily_business.service import DailyBusinessService
+from xw_office.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.services.daily_business.service import DailyBusinessService
 
 
 # ============================================================================
@@ -57,7 +57,7 @@ class TestCoreOperations:
 
     def test_check_products_preflight_validation(self) -> None:
         """Verify current inventory preflight detects missing requirement data."""
-        from xw_studio.services.inventory.service import InventoryService
+        from xw_office.services.inventory.service import InventoryService
 
         preflight = InventoryService(AppConfig()).build_start_preflight(open_invoice_count=1)
 
@@ -97,7 +97,7 @@ class TestCoreOperations:
 
     def test_stop_operation_abort_not_implemented(self) -> None:
         """Print queue exposes the supported cooperative shutdown contract."""
-        from xw_studio.services.printing.print_queue import PrintQueueService
+        from xw_office.services.printing.print_queue import PrintQueueService
 
         assert callable(PrintQueueService.shutdown)
 
@@ -112,7 +112,7 @@ class TestPrintingFeatures:
 
     def test_invoice_printing_600_dpi(self) -> None:
         """Verify invoice printing uses correct DPI (600)."""
-        from xw_studio.services.printing.invoice_printer import InvoicePrinter
+        from xw_office.services.printing.invoice_printer import InvoicePrinter
 
         queue = MagicMock()
         printer = InvoicePrinter(
@@ -128,7 +128,7 @@ class TestPrintingFeatures:
 
     def test_label_printing_legacy_printer_name(self) -> None:
         """Verify label printing uses legacy printer name (Brother QL-800)."""
-        from xw_studio.services.printing.label_printer import LabelPrinter
+        from xw_office.services.printing.label_printer import LabelPrinter
 
         printer = LabelPrinter(PrintingSection(label_printer="Brother QL-800"))
         name = printer._printer_name()
@@ -137,7 +137,7 @@ class TestPrintingFeatures:
 
     def test_product_preflight_validation_logic(self) -> None:
         """Verify product preflight checks work correctly."""
-        from xw_studio.services.inventory.service import InventoryService
+        from xw_office.services.inventory.service import InventoryService
 
         service = InventoryService(AppConfig())
         preflight = service.build_start_preflight(
@@ -152,9 +152,9 @@ class TestPrintingFeatures:
     def test_reprint_dialog_shows_sku_changes(self) -> None:
         """Verify reprint dialog displays SKU changes correctly."""
         # This test verifies the ReprintPreviewDialog data structure
-        from xw_studio.services.inventory.service import ReprintPreflight
+        from xw_office.services.inventory.service import ReprintPreflight
 
-        from xw_studio.services.inventory.service import ReprintDecision
+        from xw_office.services.inventory.service import ReprintDecision
 
         preflight = ReprintPreflight(
             decisions=[
@@ -178,14 +178,14 @@ class TestAuxiliaryPanels:
     """Test missing/partial auxiliary panels."""
 
     def test_offene_sendungen_tab_missing(self) -> None:
-        from xw_studio.ui.modules.rechnungen.offene_sendungen_dialog import (
+        from xw_office.ui.modules.rechnungen.offene_sendungen_dialog import (
             OffeneSendungenDialog,
         )
 
         assert OffeneSendungenDialog is not None
 
     def test_offene_ueberweisungen_tab_missing(self) -> None:
-        from xw_studio.ui.modules.rechnungen.offene_ueberweisungen_dialog import (
+        from xw_office.ui.modules.rechnungen.offene_ueberweisungen_dialog import (
             OffeneUeberweisungenDialog,
         )
 
@@ -193,7 +193,7 @@ class TestAuxiliaryPanels:
 
     def test_mollie_tab_exists_but_needs_validation(self) -> None:
         """Verify Mollie tab structure exists."""
-        from xw_studio.services.daily_business.service import DailyBusinessService
+        from xw_office.services.daily_business.service import DailyBusinessService
 
         service = DailyBusinessService()
 
@@ -201,7 +201,7 @@ class TestAuxiliaryPanels:
 
     def test_gutscheine_module_has_generation(self) -> None:
         """Verify Gutscheine (coupons) can be generated."""
-        from xw_studio.services.wix.client import WixProductsClient
+        from xw_office.services.wix.client import WixProductsClient
 
         wix_client = WixProductsClient(secret_service=MagicMock())
 
@@ -209,7 +209,7 @@ class TestAuxiliaryPanels:
 
     def test_refund_full_flow_implemented(self) -> None:
         """Verify full refund flow works (sevDesk + Wix)."""
-        from xw_studio.services.sevdesk.refund_client import SevDeskRefundClient
+        from xw_office.services.sevdesk.refund_client import SevDeskRefundClient
 
         refund_client = SevDeskRefundClient(MagicMock())
 
@@ -217,7 +217,7 @@ class TestAuxiliaryPanels:
         assert hasattr(refund_client, "create_credit_note_from_invoice")
 
     def test_refund_partial_ui_missing(self) -> None:
-        from xw_studio.services.sevdesk.refund_client import SevDeskRefundClient
+        from xw_office.services.sevdesk.refund_client import SevDeskRefundClient
 
         assert callable(SevDeskRefundClient.create_credit_note_from_invoice)
 
@@ -225,7 +225,7 @@ class TestAuxiliaryPanels:
         assert "downloads" in DailyBusinessService().load_counts()
 
     def test_rechnungsentwurf_missing(self) -> None:
-        from xw_studio.services.draft_invoice.service import DraftInvoiceService
+        from xw_office.services.draft_invoice.service import DraftInvoiceService
 
         assert callable(DraftInvoiceService.create_draft_from_wix_order_number)
 

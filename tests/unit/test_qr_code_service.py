@@ -4,19 +4,19 @@ from pathlib import Path
 
 import pytest
 
-from xw_studio.services.qr_codes.models import (
+from xw_office.services.qr_codes.models import (
     QrBatchRequest,
     QrOutputError,
     QrRecord,
     QrRenderSettings,
 )
-from xw_studio.services.qr_codes.presets import (
+from xw_office.services.qr_codes.presets import (
     WHOLE_SCALE,
     build_numeric_records,
     default_numeric_form,
     get_preset,
 )
-from xw_studio.services.qr_codes.service import QrCodeService
+from xw_office.services.qr_codes.service import QrCodeService
 
 
 class _FakeSettingsRepo:
@@ -209,7 +209,7 @@ def test_generate_batch_continues_after_single_record_render_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A known QrModuleError on one record is logged, and the batch continues."""
-    from xw_studio.services.qr_codes.models import QrRenderError
+    from xw_office.services.qr_codes.models import QrRenderError
 
     service = QrCodeService()
     records = _sample_records(3)

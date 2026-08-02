@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import pytest
 
-from xw_studio.services.qr_codes.models import GesamtspielchenRow, QrConfigurationError
-from xw_studio.services.qr_codes.presets import (
+from xw_office.services.qr_codes.models import GesamtspielchenRow, QrConfigurationError
+from xw_office.services.qr_codes.presets import (
     GERADE_ZAHLEN_EXCEL,
     GESAMTSPIELCHEN,
     JEDE_4_ZAHL,

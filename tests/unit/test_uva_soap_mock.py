@@ -3,21 +3,21 @@ from __future__ import annotations
 
 import pytest
 
-from xw_studio.core.config import AppConfig, FinanzOnlineSection
-from xw_studio.services.finanzonline.client import FinanzOnlineClient
-from xw_studio.services.finanzonline.monthly_snapshot import TaxMonthlySnapshotStore
-from xw_studio.services.finanzonline.u13_xml import build_u13_xml, validate_u13_xml
-from xw_studio.services.finanzonline.u30_xml import build_u30_xml, validate_u30_xml
-from xw_studio.services.finanzonline.uva_models import UvaKennzahlen, UvaPayloadResult
-from xw_studio.services.finanzonline.uva_service import UvaService, build_uva_zm_reconciliation
-from xw_studio.services.finanzonline.uva_soap import (
+from xw_office.core.config import AppConfig, FinanzOnlineSection
+from xw_office.services.finanzonline.client import FinanzOnlineClient
+from xw_office.services.finanzonline.monthly_snapshot import TaxMonthlySnapshotStore
+from xw_office.services.finanzonline.u13_xml import build_u13_xml, validate_u13_xml
+from xw_office.services.finanzonline.u30_xml import build_u30_xml, validate_u30_xml
+from xw_office.services.finanzonline.uva_models import UvaKennzahlen, UvaPayloadResult
+from xw_office.services.finanzonline.uva_service import UvaService, build_uva_zm_reconciliation
+from xw_office.services.finanzonline.uva_soap import (
     FinanzOnlineFileUploadBackend,
     MockUvaSoapBackend,
     UvaSoapUnavailableError,
     UvaSubmitResult,
     ZeepUvaSoapBackend,
 )
-from xw_studio.services.finanzonline.zm_service import ZmCalculationResult, ZmRow
+from xw_office.services.finanzonline.zm_service import ZmCalculationResult, ZmRow
 
 
 def test_unconfigured_client_raises() -> None:
@@ -264,7 +264,7 @@ def test_u13_xml_validates_against_legacy_xsd() -> None:
             ZmRow(uid="IT12345678901", amount_eur_int=200, kind="delivery"),
         ],
         fastnr="989999999",
-        kundeninfo="XW-Studio ZM 2026-05",
+        kundeninfo="XW-Office ZM 2026-05",
     )
 
     validate_u13_xml(xml)

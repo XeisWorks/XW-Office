@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 
-from xw_studio.services.xw_copilot.security import (
+from xw_office.services.xw_copilot.security import (
     generate_hmac_signature,
     is_within_replay_window,
     verify_hmac_signature,

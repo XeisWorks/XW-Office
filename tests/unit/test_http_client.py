@@ -2,9 +2,9 @@
 import httpx
 import pytest
 
-from xw_studio.core.config import AppConfig
-from xw_studio.core.exceptions import SevdeskApiError
-from xw_studio.services.http_client import (
+from xw_office.core.config import AppConfig
+from xw_office.core.exceptions import SevdeskApiError
+from xw_office.services.http_client import (
     humanize_sevdesk_error,
     raise_for_sevdesk,
     sevdesk_get_with_retry,
@@ -30,7 +30,7 @@ def test_raise_for_sevdesk_raises_on_error() -> None:
 
 def test_sevdesk_get_retries_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "xw_studio.services.http_client.time.sleep",
+        "xw_office.services.http_client.time.sleep",
         lambda _s: None,
     )
 

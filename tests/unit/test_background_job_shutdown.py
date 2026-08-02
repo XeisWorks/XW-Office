@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from threading import Event
 
-from xw_studio.core.worker import BackgroundWorker
-from xw_studio.services.background_jobs import BackgroundJobManager
+from xw_office.core.worker import BackgroundWorker
+from xw_office.services.background_jobs import BackgroundJobManager
 
 
 def test_shutdown_keeps_running_worker_alive_after_timeout(qtbot: object) -> None:

@@ -6,7 +6,7 @@ Die Rechnungsansicht soll Zeilenauswahl und Analysis-Panel sofort reagieren lass
 
 ## Phase 1: Lokaler Wix-Order-Cache
 
-- SQLite-Datei unter `state/xw_studio_cache.sqlite`.
+- SQLite-Datei unter `state/xw_office_cache.sqlite`.
 - Speicherung der rohen Wix-Order pro Site/Account/Reference.
 - Abgeleitete Daten wie Adresse, Summary, Digitalstatus und Line-Items werden aus derselben Order berechnet.
 - Negative Lookups werden nur kurz gecacht, damit frisch synchronisierte Orders nicht blockiert werden.

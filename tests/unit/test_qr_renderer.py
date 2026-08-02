@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from xw_studio.services.qr_codes.models import QrRenderError, QrRenderSettings
-from xw_studio.services.qr_codes.renderer import SegnoLogoQrRenderer
+from xw_office.services.qr_codes.models import QrRenderError, QrRenderSettings
+from xw_office.services.qr_codes.renderer import SegnoLogoQrRenderer
 
 PAYLOAD = "https://www.xeisworks.at/mh-player/p?e=uuu2&i=pos&t=1"
 
@@ -43,9 +43,12 @@ def test_render_without_logo_is_decodable() -> None:
     assert _decode(png_bytes) == PAYLOAD
 
 
-def test_render_with_default_logo_proportions_is_decodable() -> None:
+def test_render_with_default_logo_proportions_is_decodable(tmp_path: Path) -> None:
+    logo_path = tmp_path / "default-logo.png"
+    Image.new("RGB", (400, 160), (10, 20, 30)).save(logo_path)
+
     renderer = SegnoLogoQrRenderer()
-    settings = _settings(logo_enabled=True)
+    settings = _settings(logo_enabled=True, logo_path=str(logo_path))
     png_bytes = renderer.render(PAYLOAD, settings)
 
     assert _decode(png_bytes) == PAYLOAD

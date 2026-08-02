@@ -10,13 +10,13 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from xw_studio.core.config import AppConfig
-from xw_studio.services.clearing.gateways import (
+from xw_office.core.config import AppConfig
+from xw_office.services.clearing.gateways import (
     MollieClearingGateway,
     SevdeskClearingGateway,
     purpose_provider_ref,
 )
-from xw_studio.services.clearing.models import (
+from xw_office.services.clearing.models import (
     ClearingDuplicateKey,
     ClearingSkipReason,
     InvoiceRecord,
@@ -27,8 +27,8 @@ from xw_studio.services.clearing.models import (
     TransactionKind,
     money,
 )
-from xw_studio.services.clearing.service import PaymentClearingService
-from xw_studio.services.http_client import SevdeskConnection
+from xw_office.services.clearing.service import PaymentClearingService
+from xw_office.services.http_client import SevdeskConnection
 
 VIENNA = ZoneInfo("Europe/Vienna")
 

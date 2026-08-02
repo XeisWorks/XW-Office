@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from subprocess import CompletedProcess
 
-from xw_studio.core import updater
+from xw_office.core import updater
 
 
 def test_update_refuses_non_main_branch(monkeypatch, tmp_path: Path) -> None:

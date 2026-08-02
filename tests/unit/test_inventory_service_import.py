@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from xw_studio.core.config import AppConfig
-from xw_studio.services.inventory.service import InventoryService
+from xw_office.core.config import AppConfig
+from xw_office.services.inventory.service import InventoryService
 
 
 class _RepoStub:

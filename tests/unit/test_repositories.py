@@ -7,8 +7,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from xw_studio.models.base import Base
-from xw_studio.repositories import ApiSecretRepository, PcRegistryRepository, PlcShipmentRepository, SettingKvRepository
+from xw_office.models.base import Base
+from xw_office.repositories import ApiSecretRepository, PcRegistryRepository, PlcShipmentRepository, SettingKvRepository
 
 
 @pytest.fixture

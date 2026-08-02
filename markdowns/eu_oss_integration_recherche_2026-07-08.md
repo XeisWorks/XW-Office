@@ -4,7 +4,7 @@ Stand: 2026-07-08
 
 ## Kurzfazit
 
-EU-OSS kann in XW-Studio sinnvoll als Berechnung, Preview und XML-Export nachgeruestet
+EU-OSS kann in XW-Office sinnvoll als Berechnung, Preview und XML-Export nachgeruestet
 werden. Eine U30-aehnliche direkte SOAP/FileUpload-Einreichung ueber den
 FinanzOnline-Webservice ist nach den aktuellen BMF/USP-Unterlagen aber nicht vorgesehen.
 Der produktive Ablauf ist: XML in der App erzeugen, lokal validieren, dann im EU-OSS-Portal
@@ -24,15 +24,15 @@ einreichen.
 - FinanzOnline FileUpload-Webservice: `art` kennt U30, U13, VAT usw.; kein OSS-Code.
   Live-XSD: https://finanzonline.bmf.gv.at/fon/ws/fileupload.xsd
 
-## Bestand in XW-Studio
+## Bestand in XW-Office
 
-- `src/xw_studio/services/finanzonline/uva_soap.py`
+- `src/xw_office/services/finanzonline/uva_soap.py`
   - `FinanzOnlineFileUploadBackend` macht Login -> Upload -> Logout.
   - `submit_uva()` baut und validiert U30-XML und sendet `art="U30"`.
   - `submit_zm()` baut und validiert U13-XML und sendet `art="U13"`.
-- `src/xw_studio/services/finanzonline/u30_xml.py`
+- `src/xw_office/services/finanzonline/u30_xml.py`
   - U30-XML-Builder mit FASTNR und KZ-Struktur.
-- `src/xw_studio/services/finanzonline/uva_payload_service.py`
+- `src/xw_office/services/finanzonline/uva_payload_service.py`
   - Fremdsteuer/OSS-nahe Labels werden aus der AT-UVA herausgehalten und als Warnung
     markiert.
 
@@ -58,7 +58,7 @@ werden.
 
 ## Fachliche Abgrenzung zur U30
 
-Die U30 ist in XW-Studio als IST-Monatsberechnung umgesetzt. EU-OSS ist anders:
+Die U30 ist in XW-Office als IST-Monatsberechnung umgesetzt. EU-OSS ist anders:
 
 - Zeitraum ist das Kalendervierteljahr.
 - Laut USP sind die unter EU-OSS fallenden Umsaetze in jenes Quartal aufzunehmen, in dem

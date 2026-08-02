@@ -46,7 +46,7 @@ Wichtige technische Entscheidungen aus Phase 1:
 ## 1. Zweck dieses Dokuments
 
 Dieses Dokument bewertet das ursprüngliche Gesamtkonzept, gleicht es mit dem bestehenden
-XW-Studio ab und ersetzt dessen Umsetzungsempfehlung durch einen schrittweisen, wirtschaftlich
+XW-Office ab und ersetzt dessen Umsetzungsempfehlung durch einen schrittweisen, wirtschaftlich
 vertretbaren Umbauplan.
 
 Das Originalkonzept bleibt absichtlich unverändert erhalten. Es ist die Ideensammlung und
@@ -54,7 +54,7 @@ langfristige Vision, aber kein unmittelbar abzuarbeitendes Pflichtenheft.
 
 Die verbindliche Leitentscheidung lautet:
 
-> Das Content Studio wird als separat deploybarer Webbereich im bestehenden XW-Studio-Repository
+> Das Content Studio wird als separat deploybarer Webbereich im bestehenden XW-Office-Repository
 > aufgebaut. Es ersetzt nicht die PySide6-Anwendung und übernimmt keine drucker- oder
 > arbeitsplatzgebundenen Abläufe.
 
@@ -111,11 +111,11 @@ Insbesondere gilt:
 
 ---
 
-## 3. Einordnung in das bestehende XW-Studio
+## 3. Einordnung in das bestehende XW-Office
 
 ### 3.1 Das Content Studio ist eine Erweiterung
 
-XW-Studio enthält bereits:
+XW-Office enthält bereits:
 
 - ein Marketing-Menü mit Ideen- und Content-Planung,
 - eine zwischen PCs geteilte Marketing-Ideenliste,
@@ -201,7 +201,7 @@ Smartphone / Tablet / Browser
              |
      optionale REST-Aufrufe
              |
-   bestehendes PySide6 XW-Studio
+   bestehendes PySide6 XW-Office
 ```
 
 ### 5.2 Repository-Struktur
@@ -209,7 +209,7 @@ Smartphone / Tablet / Browser
 Die Struktur wird evolutionär erweitert, nicht in ein neues Groß-Monorepo umgebaut:
 
 ```text
-src/xw_studio/
+src/xw_office/
 ├── content/              # Qt-unabhängiges Content-Fachmodell
 ├── web/                  # FastAPI-Einstieg und serverseitige API
 ├── services/             # vorhandene und neue Integrationen
@@ -348,10 +348,10 @@ Empfehlung:
 
 1. **`studio.xeisworks.at`** als dauerhafte Benutzeroberfläche des Content Studios.
 2. Alternativ **`content.xeisworks.at`**, wenn der Marketingzweck ausdrücklich sichtbar sein soll.
-3. **`web.xeisworks.at`** nur dann, wenn dort später mehrere XW-Studio-Webmodule unter einem
+3. **`web.xeisworks.at`** nur dann, wenn dort später mehrere XW-Office-Webmodule unter einem
    gemeinsamen Portal zusammengeführt werden sollen.
 
-Da die Anwendung „XW-Studio“ heißt und später weitere mobile Werkzeuge aufnehmen könnte, ist
+Da die Anwendung „XW-Office“ heißt und später weitere mobile Werkzeuge aufnehmen könnte, ist
 `studio.xeisworks.at` die ausgewogenste Wahl. Technisch funktioniert die Implementierung mit
 jeder der drei Domains; konfiguriert wird sie über `XW_CONTENT_PUBLIC_URL`.
 
@@ -359,7 +359,7 @@ jeder der drei Domains; konfiguriert wird sie über `XW_CONTENT_PUBLIC_URL`.
 
 Im Railway-Webservice:
 
-1. Repository `XW-Studio` und Branch `main` verbinden.
+1. Repository `XW-Office` und Branch `main` verbinden.
 2. Startkommando aus `railway.toml` verwenden.
 3. `PORT` nicht statisch erzwingen; Railway stellt den Wert bereit.
 4. Zunächst eine Railway-Domain erzeugen und `/health` prüfen.
@@ -402,7 +402,7 @@ bereitstellen, ohne operative Desktop-Funktionen anzutasten.
 
 Umfang:
 
-- FastAPI-Anwendung unter `xw_studio.web`,
+- FastAPI-Anwendung unter `xw_office.web`,
 - Railway-kompatibler Start über `0.0.0.0:$PORT`,
 - öffentliche Routen `/` und `/health` ohne Geschäftsdaten,
 - versionierte API unter `/api/v1`,

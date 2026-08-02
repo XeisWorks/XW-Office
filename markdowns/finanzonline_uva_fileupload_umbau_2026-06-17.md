@@ -6,7 +6,7 @@ Stand: 2026-06-17
 
 Die neue PySide6-App soll die bereits berechnete IST-UVA als U30 an FinanzOnline
 uebermitteln koennen. Die Berechnung bleibt die einzige IST-Monatsberechnung aus
-XW-Studio; fuer FinanzOnline wird keine zweite Berechnung eingefuehrt.
+XW-Office; fuer FinanzOnline wird keine zweite Berechnung eingefuehrt.
 
 ## Offizielle Recherche
 
@@ -51,25 +51,25 @@ Nicht uebernommen:
   UVA-Schritts.
 - monolithische Legacy-Receipt-/Dateiablage.
 
-## Umsetzung in XW-Studio
+## Umsetzung in XW-Office
 
 Neue/erweiterte Anschlussstellen:
 
-- `src/xw_studio/services/finanzonline/u30_xml.py`
+- `src/xw_office/services/finanzonline/u30_xml.py`
   - baut U30-XML aus dem berechneten UVA-Payload
   - validiert gegen U30-XSD
-- `src/xw_studio/services/finanzonline/uva_soap.py`
+- `src/xw_office/services/finanzonline/uva_soap.py`
   - `FinanzOnlineFileUploadBackend`
   - Login, Upload, Logout
-- `src/xw_studio/services/finanzonline/client.py`
+- `src/xw_office/services/finanzonline/client.py`
   - liest Credentials aus SecretService/.env
   - aktiviert FileUpload-Backend bei vollstaendiger U30-Konfiguration
-- `src/xw_studio/core/config.py`
+- `src/xw_office/core/config.py`
   - Session-/Upload-WSDL
   - FASTNR
   - Hersteller-ID
   - U30-XSD-Pfad
-- `src/xw_studio/ui/modules/taxes/view.py`
+- `src/xw_office/ui/modules/taxes/view.py`
   - nutzt weiterhin `submit_month()`, damit exakt die berechneten Kennzahlen gesendet
     werden.
 
@@ -134,10 +134,10 @@ Automatisierte Tests:
 .venv\Scripts\python.exe -m pytest tests/unit/test_tax_services.py tests/ui/test_main_window_smoke.py tests/unit/test_uva_soap_mock.py tests/unit/test_uva_phase1_preview.py -q
 30 passed
 
-.venv\Scripts\python.exe -m ruff check src/xw_studio/services/finanzonline src/xw_studio/core/config.py tests/unit/test_uva_soap_mock.py tests/unit/test_uva_phase1_preview.py
+.venv\Scripts\python.exe -m ruff check src/xw_office/services/finanzonline src/xw_office/core/config.py tests/unit/test_uva_soap_mock.py tests/unit/test_uva_phase1_preview.py
 All checks passed
 
-.venv\Scripts\python.exe -m mypy src/xw_studio/services/finanzonline --ignore-missing-imports
+.venv\Scripts\python.exe -m mypy src/xw_office/services/finanzonline --ignore-missing-imports
 Success: no issues found
 ```
 
@@ -188,6 +188,6 @@ Live-U30-Testuebermittlung fuer Mai 2026:
 ## Betriebsregel
 
 Solange `finanzonline.test_mode=true` bzw. `FON_SOAP_TEST_MODE` nicht explizit auf
-false gesetzt wird, sendet XW-Studio mit `uebermittlung=T`. Fuer eine produktive
+false gesetzt wird, sendet XW-Office mit `uebermittlung=T`. Fuer eine produktive
 UVA-Sendung muss vorher die berechnete Monats-UVA fachlich geprueft und die FASTNR
 konfiguriert sein.

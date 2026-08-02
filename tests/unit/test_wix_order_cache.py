@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sqlite3
 
-from xw_studio.services.wix.order_cache import WixOrderCache
+from xw_office.services.wix.order_cache import WixOrderCache
 
 
 def test_wix_order_cache_persists_order_aliases(tmp_path: Path) -> None:
@@ -51,25 +51,25 @@ def test_wix_order_cache_keeps_successful_orders_until_explicitly_pruned(tmp_pat
     assert explicitly_expired is None
 
 
-def test_wix_order_cache_keeps_missing_orders_until_explicitly_expired(tmp_path: Path) -> None:
+def test_wix_order_cache_expires_missing_orders_by_default(tmp_path: Path) -> None:
     cache = WixOrderCache(tmp_path / "cache.sqlite")
 
     cache.put_missing(site_id="site", account_id="", reference="missing")
     with sqlite3.connect(cache.path) as con:
         con.execute("UPDATE wix_order_cache SET fetched_at = 0")
 
-    hit = cache.get_order(site_id="site", account_id="", reference="missing")
-    explicitly_expired = cache.get_order(
+    default_expired = cache.get_order(site_id="site", account_id="", reference="missing")
+    permanent_hit = cache.get_order(
         site_id="site",
         account_id="",
         reference="missing",
-        missing_ttl_seconds=1,
+        missing_ttl_seconds=None,
     )
 
-    assert hit is not None
-    assert hit.found is False
-    assert hit.order == {}
-    assert explicitly_expired is None
+    assert default_expired is None
+    assert permanent_hit is not None
+    assert permanent_hit.found is False
+    assert permanent_hit.order == {}
 
 
 def test_wix_order_cache_persists_product_category_label_with_ttl(tmp_path: Path) -> None:

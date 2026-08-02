@@ -38,18 +38,18 @@ Noch offen:
 
 ## Untersuchte Bereiche
 
-- `src/xw_studio/services/printing/pdf_renderer.py`
-- `src/xw_studio/services/printing/print_queue.py`
-- `src/xw_studio/services/printing/print_jobs.py`
-- `src/xw_studio/services/printing/planned_pdf_printer.py`
-- `src/xw_studio/services/printing/invoice_printer.py`
-- `src/xw_studio/services/printing/label_printer.py`
-- `src/xw_studio/ui/modules/rechnungen/print_dialog.py`
-- `src/xw_studio/ui/modules/rechnungen/plc_label_dialog.py`
-- `src/xw_studio/ui/modules/rechnungen/view.py`
-- `src/xw_studio/ui/modules/products/view.py`
-- `src/xw_studio/services/inventory/service.py`
-- `src/xw_studio/services/products/print_decision.py`
+- `src/xw_office/services/printing/pdf_renderer.py`
+- `src/xw_office/services/printing/print_queue.py`
+- `src/xw_office/services/printing/print_jobs.py`
+- `src/xw_office/services/printing/planned_pdf_printer.py`
+- `src/xw_office/services/printing/invoice_printer.py`
+- `src/xw_office/services/printing/label_printer.py`
+- `src/xw_office/ui/modules/rechnungen/print_dialog.py`
+- `src/xw_office/ui/modules/rechnungen/plc_label_dialog.py`
+- `src/xw_office/ui/modules/rechnungen/view.py`
+- `src/xw_office/ui/modules/products/view.py`
+- `src/xw_office/services/inventory/service.py`
+- `src/xw_office/services/products/print_decision.py`
 - `config/default.yaml` und die druckbezogenen Unit-/UI-Tests
 - sieben Noten-/Produkt-PDFs in `docs/` sowie `resources/api_specs/plc/PLC-Test-Label.pdf`
 - Legacy-Hinweise und bestehende Umbaupläne im Repository

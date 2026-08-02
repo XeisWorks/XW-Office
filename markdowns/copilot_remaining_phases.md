@@ -1,4 +1,4 @@
-# XW-Studio — Offene Phasen nach Ist-Stand (Phase 2–6)
+# XW-Office — Offene Phasen nach Ist-Stand (Phase 2–6)
 
 ## Quick test evidence (lokal)
 - `pytest tests/`: **grün** (29 bestanden).
@@ -78,7 +78,7 @@ Setze alle **offenen** Punkte aus “Ist-Stand vs Blueprint” um, jeweils als k
 ### Arbeitspakete (empfohlene Reihenfolge)
 
 #### Paket A (Phase 2): Zeep-UVA Backend + Tests
-1. In `src/xw_studio/services/finanzonline/uva_soap.py`:
+1. In `src/xw_office/services/finanzonline/uva_soap.py`:
    - Implementiere einen `ZeepUvaSoapBackend` (oder ergänzende Backend-Klasse).
    - Mapping: Payload (internes dict oder besser: Pydantic) → SOAP Calls.
    - Nutze WSDL/Endpoints + Credentials aus Config/DB (zuerst Env, später DB-Provider).
@@ -86,14 +86,14 @@ Setze alle **offenen** Punkte aus “Ist-Stand vs Blueprint” um, jeweils als k
    - Füge Tests hinzu, die zeep calls **mocken** (z.B. “zeep.Client.service.…”).
    - Stelle sicher, dass pro “Meldungstyp” korrekt die Call-Signatur gewählt wird (filing-type Varianten).
 3. UI:
-   - Aktualisiere den Button-Text in `src/xw_studio/ui/modules/taxes/view.py` (kein “noch nicht implementiert”, sobald Backend verfügbar ist).
+   - Aktualisiere den Button-Text in `src/xw_office/ui/modules/taxes/view.py` (kein “noch nicht implementiert”, sobald Backend verfügbar ist).
 
 Abnahmekriterien:
 - `pytest tests/` grün.
 - UVA Submit kann in “Echt-Modus” (mit Zeep backend konfiguriert) eine `UvaSubmitResult(ok=True, ...)` zurückgeben.
 
 #### Paket B (Phase 3): CRM Merge-Wizard (Service zuerst)
-1. In `src/xw_studio/services/crm/service.py`:
+1. In `src/xw_office/services/crm/service.py`:
    - Ergänze eine Merge-Funktion, z.B. `merge_contacts(master: ContactRecord, duplicate: ContactRecord, strategy: ...)`.
    - Nutze den bestehenden `ContactClient` (sevDesk) und Pydantic DTOs.
 2. In UI:
@@ -109,7 +109,7 @@ Abnahmekriterien:
 - Keine UI-Blocking Calls.
 
 #### Paket C (Phase 4): Travel-Costs Bridge (optional Submodule)
-1. In `src/xw_studio/ui/modules/travel_costs/view.py`:
+1. In `src/xw_office/ui/modules/travel_costs/view.py`:
    - Implementiere einen Loader:
      - Wenn Submodule vorhanden: importiere dessen Qt-Widget und zeige es ein.
      - Sonst: Placeholder bleibt.
@@ -121,16 +121,16 @@ Abnahmekriterien:
 - Sobald Submodule vorhanden ist, funktioniert das Laden.
 
 #### Paket D (Phase 5): DB-secrets provider + Integration in sevDesk HTTP
-1. Neue Service-Komponente (z.B. `src/xw_studio/services/secrets/token_provider.py`):
+1. Neue Service-Komponente (z.B. `src/xw_office/services/secrets/token_provider.py`):
    - Verantwortlich für:
      - `FERNET_MASTER_KEY` Validierung
      - Lesen von Tokens aus `ApiSecretRepository`
      - Verschlüsseln/Entschlüsseln mit `token_crypto`
      - Env-Fallback (wenn DB leer) und optional “seed to DB”
 2. Integrationspunkt:
-   - Aktualisiere `src/xw_studio/services/http_client.py`:
+   - Aktualisiere `src/xw_office/services/http_client.py`:
      - `build_sevdesk_http_client()` nimmt nicht mehr direkt `config.sevdesk.api_token`, sondern TokenProvider/Repo.
-   - Aktualisiere DI (`src/xw_studio/bootstrap.py`) entsprechend.
+   - Aktualisiere DI (`src/xw_office/bootstrap.py`) entsprechend.
 3. Migration/DB:
    - Prüfe, ob die Alembic Migration(en) ausreichen.
    - Bei Bedarf: neue Revisionen.

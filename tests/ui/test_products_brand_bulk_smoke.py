@@ -4,15 +4,15 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QPushButton
 
-from xw_studio.core.config import AppConfig
-from xw_studio.core.container import Container
-from xw_studio.services.inventory.service import ProductRow
-from xw_studio.services.products.brand_service import (
+from xw_office.core.config import AppConfig
+from xw_office.core.container import Container
+from xw_office.services.inventory.service import ProductRow
+from xw_office.services.products.brand_service import (
     BrandBulkUpdateReport,
     BrandUpdateItem,
     ProductBrandService,
 )
-from xw_studio.ui.modules.products.view import ProductsView
+from xw_office.ui.modules.products.view import ProductsView
 
 
 class _FakeBrandService(ProductBrandService):
@@ -94,7 +94,7 @@ def test_products_brand_bulk_flow_smoke(qtbot: object, monkeypatch: object) -> N
         title_print_configs={},
     )
     view._all_rows = [row]  # noqa: SLF001
-    sync_row_type = __import__("xw_studio.ui.modules.products.view", fromlist=["_SyncRow"])._SyncRow
+    sync_row_type = __import__("xw_office.ui.modules.products.view", fromlist=["_SyncRow"])._SyncRow
     view._sync_rows = [  # noqa: SLF001
         sync_row_type(
             sku="XW-900",
@@ -119,7 +119,7 @@ def test_products_brand_bulk_flow_smoke(qtbot: object, monkeypatch: object) -> N
     view._populate_sync_table(view._sync_rows)  # noqa: SLF001
     view._sync_table.selectRow(0)  # noqa: SLF001
 
-    monkeypatch.setattr("xw_studio.ui.modules.products.view.QInputDialog.getText", lambda *args, **kwargs: ("NeuBrand", True))
+    monkeypatch.setattr("xw_office.ui.modules.products.view.QInputDialog.getText", lambda *args, **kwargs: ("NeuBrand", True))
 
     answers = [
         int(__import__("PySide6.QtWidgets", fromlist=["QMessageBox"]).QMessageBox.StandardButton.Yes),
@@ -130,8 +130,8 @@ def test_products_brand_bulk_flow_smoke(qtbot: object, monkeypatch: object) -> N
     def _question(*args, **kwargs):
         return answers.pop(0)
 
-    monkeypatch.setattr("xw_studio.ui.modules.products.view.QMessageBox.question", _question)
-    monkeypatch.setattr("xw_studio.ui.modules.products.view.QMessageBox.information", lambda *args, **kwargs: None)
+    monkeypatch.setattr("xw_office.ui.modules.products.view.QMessageBox.question", _question)
+    monkeypatch.setattr("xw_office.ui.modules.products.view.QMessageBox.information", lambda *args, **kwargs: None)
 
     view._bulk_set_inventory_brand()  # noqa: SLF001
 
@@ -154,7 +154,7 @@ def test_products_sync_action_click_smoke(qtbot: object, monkeypatch: object) ->
     qtbot.addWidget(view)
     view.show()
 
-    sync_row_type = __import__("xw_studio.ui.modules.products.view", fromlist=["_SyncRow"])._SyncRow
+    sync_row_type = __import__("xw_office.ui.modules.products.view", fromlist=["_SyncRow"])._SyncRow
     view._sync_rows = [  # noqa: SLF001
         sync_row_type(
             sku="XW-901",
@@ -215,7 +215,7 @@ def test_products_sync_print_action_opens_product_print_config(qtbot: object, mo
         title_print_configs={},
     )
     view._all_rows = [row]  # noqa: SLF001
-    sync_row_type = __import__("xw_studio.ui.modules.products.view", fromlist=["_SyncRow"])._SyncRow
+    sync_row_type = __import__("xw_office.ui.modules.products.view", fromlist=["_SyncRow"])._SyncRow
     view._sync_rows = [  # noqa: SLF001
         sync_row_type(
             sku="XW-902",

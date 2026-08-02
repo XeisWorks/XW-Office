@@ -1,11 +1,11 @@
 # Zusammenfassende Meldung U13 - Umbauskizze fuer Steuern
 
 Stand: 2026-07-08  
-Ziel: Die funktionierende Legacy-Zusammenfassende Meldung aus `C:\Users\bernh\GitHub\sevDesk` kontrolliert, verbessert und als eigenstaendiger Bereich im PySide6-Modul `Steuern` von XW-Studio nutzbar machen, inklusive U13-Sendung an FinanzOnline.
+Ziel: Die funktionierende Legacy-Zusammenfassende Meldung aus `C:\Users\bernh\GitHub\sevDesk` kontrolliert, verbessert und als eigenstaendiger Bereich im PySide6-Modul `Steuern` von XW-Office nutzbar machen, inklusive U13-Sendung an FinanzOnline.
 
 ## Kurzfazit
 
-In XW-Studio gibt es bereits gute technische Vorarbeit fuer ZM/U13: `ZmService`, `u13_xml.py`, FileUpload-Backend und eine gekoppelte `UVA + ZM`-Sendung. Was fehlt, ist die vollwertige Legacy-Paritaet als eigener UI-Bereich im Untermenue `Steuern`.
+In XW-Office gibt es bereits gute technische Vorarbeit fuer ZM/U13: `ZmService`, `u13_xml.py`, FileUpload-Backend und eine gekoppelte `UVA + ZM`-Sendung. Was fehlt, ist die vollwertige Legacy-Paritaet als eigener UI-Bereich im Untermenue `Steuern`.
 
 Die Legacy-App hatte unter `Steuern-Management` einen eigenen Modus `Zusammenfassende Meldung` mit:
 
@@ -19,7 +19,7 @@ Die Legacy-App hatte unter `Steuern-Management` einen eigenen Modus `Zusammenfas
 - DataBox-Protokollabruf,
 - Preflight gegen bereits eingereichte U13-Meldungen.
 
-Empfehlung: In XW-Studio bleibt `Steuern` das Hauptmodul, aber ZM/U13 bekommt einen eigenen, sichtbaren Arbeitsbereich neben UVA und EU-OSS. Die bestehende automatische U13-Nachsendung nach U30 sollte optional bleiben, aber die neue Hauptbedienung fuer U13 wird eigenstaendig und kontrollierbar.
+Empfehlung: In XW-Office bleibt `Steuern` das Hauptmodul, aber ZM/U13 bekommt einen eigenen, sichtbaren Arbeitsbereich neben UVA und EU-OSS. Die bestehende automatische U13-Nachsendung nach U30 sollte optional bleiben, aber die neue Hauptbedienung fuer U13 wird eigenstaendig und kontrollierbar.
 
 ## Offizielle Kontrollpunkte
 
@@ -31,7 +31,7 @@ Diese Punkte wurden am 2026-07-08 kurz gegen offizielle Quellen geprueft:
 - Laut USP/BMF sind in die ZM innergemeinschaftliche Lieferungen, Verbringungen und bestimmte grenzueberschreitende Dienstleistungen aufzunehmen; pro UID ist der Gesamtwert fuer den Meldezeitraum anzugeben. Wenn keine meldepflichtigen Umsaetze vorhanden sind, ist keine ZM zu uebermitteln. Die ZM ist elektronisch ueber FinanzOnline einzureichen. Quelle: USP, "Zusammenfassende Meldung (ZM)", letzte Aktualisierung 2026-01-01  
   https://www.usp.gv.at/themen/steuern-finanzen/umsatzsteuer-ueberblick/weitere-informationen-zur-umsatzsteuer/umsaetze-mit-auslandsbezug/zusammenfassende-meldung-zm.html
 
-Konsequenz fuer die App: Ein erfolgreicher SOAP/FileUpload-Rueckgabecode reicht als UI-Erfolg nicht aus. XW-Studio sollte Upload, DataBox-Protokoll und Einbringungsstatus getrennt anzeigen.
+Konsequenz fuer die App: Ein erfolgreicher SOAP/FileUpload-Rueckgabecode reicht als UI-Erfolg nicht aus. XW-Office sollte Upload, DataBox-Protokoll und Einbringungsstatus getrennt anzeigen.
 
 ## Relevante Legacy-Funde
 
@@ -128,13 +128,13 @@ Kernfunktionen:
 - `send_u13_to_finanzonline()`
 - Protokollspeicherung unter `analysis_cache/finanzonline/protocols`
 
-Wichtig: Legacy kapselt Upload und Protokollsuche staerker als die aktuelle XW-Studio-U13-Sendung.
+Wichtig: Legacy kapselt Upload und Protokollsuche staerker als die aktuelle XW-Office-U13-Sendung.
 
-## Aktueller XW-Studio-Stand
+## Aktueller XW-Office-Stand
 
 ### UI
 
-Datei: `src/xw_studio/ui/modules/taxes/view.py`
+Datei: `src/xw_office/ui/modules/taxes/view.py`
 
 Aktuell:
 
@@ -158,7 +158,7 @@ Problem:
 
 ### Services
 
-Datei: `src/xw_studio/services/finanzonline/zm_service.py`
+Datei: `src/xw_office/services/finanzonline/zm_service.py`
 
 Bereits gut:
 
@@ -178,7 +178,7 @@ Wichtige Luecke gegenueber Legacy:
 - UID-Korrekturen koennen nicht gepflegt oder persistent angewandt werden.
 - Detailzeilen je Rechnung/CreditNote fehlen als strukturiertes Ergebnis.
 
-Datei: `src/xw_studio/services/finanzonline/u13_xml.py`
+Datei: `src/xw_office/services/finanzonline/u13_xml.py`
 
 Bereits gut:
 
@@ -188,7 +188,7 @@ Bereits gut:
 - `DREIECK=J` fuer Dreieck.
 - Kundinfo wird gekuerzt.
 
-Datei: `src/xw_studio/services/finanzonline/uva_soap.py`
+Datei: `src/xw_office/services/finanzonline/uva_soap.py`
 
 Bereits gut:
 
@@ -198,12 +198,12 @@ Bereits gut:
 
 Luecken:
 
-- Kein DataBox-Download im XW-Studio-FinanzOnline-Backend.
+- Kein DataBox-Download im XW-Office-FinanzOnline-Backend.
 - Kein Preflight gegen bereits eingereichte U13.
 - `UvaSubmitResult` hat kein eigenes Protokollfeld fuer gespeicherte U13-Protokolle.
 - Upload-Rueckmeldung und endgueltiger Einbringungsstatus werden nicht sauber getrennt.
 
-Datei: `src/xw_studio/services/finanzonline/uva_service.py`
+Datei: `src/xw_office/services/finanzonline/uva_service.py`
 
 Aktuell:
 
@@ -318,7 +318,7 @@ ZM/U13 bleibt eine Soll-Berechnung nach Rechnungsdatum.
 
 Nicht mit UVA-IST verwechseln:
 
-- UVA in XW-Studio: IST nach Zahlungsdaten.
+- UVA in XW-Office: IST nach Zahlungsdaten.
 - ZM/U13: Soll nach `invoiceDate` bzw. `creditNoteDate`.
 
 Die UI muss das sichtbar sagen, damit man Monatsabweichungen zwischen UVA und ZM nicht als Fehler interpretiert.
@@ -371,7 +371,7 @@ UI:
 
 ### CreditNotes
 
-Legacy `_run_zm_v2()` beruecksichtigt CreditNotes. XW-Studio sollte das wieder tun.
+Legacy `_run_zm_v2()` beruecksichtigt CreditNotes. XW-Office sollte das wieder tun.
 
 Regeln:
 
@@ -382,7 +382,7 @@ Regeln:
   - Kontakt-Fallback laden.
   - optional Ursprungrechnung laden, aber im Ergebnis als Fallback kennzeichnen.
 
-Wichtig: Die aktuelle XW-Studio-Implementierung hat diesen Teil nicht vollstaendig. Das ist der groesste fachliche Paritaets-Gap gegenueber der funktionierenden Legacy.
+Wichtig: Die aktuelle XW-Office-Implementierung hat diesen Teil nicht vollstaendig. Das ist der groesste fachliche Paritaets-Gap gegenueber der funktionierenden Legacy.
 
 ### Nullmeldung
 
@@ -684,7 +684,7 @@ Keine UI-Aenderung ausser optionaler interner Nutzung.
 
 ### Phase 2: Eigenstaendige ZM/U13-UI
 
-- Neues Widget `ZmU13View` unter `src/xw_studio/ui/modules/taxes/`.
+- Neues Widget `ZmU13View` unter `src/xw_office/ui/modules/taxes/`.
 - `TaxesView` bindet ZM-Seite ein.
 - Tabellen statt reiner Textausgabe.
 - UID-Korrekturdialog.

@@ -1,4 +1,4 @@
-# XW-Studio: Architektur- und Performance-Audit RECHNUNGEN, Print-Pipeline, Produkte-Flow
+# XW-Office: Architektur- und Performance-Audit RECHNUNGEN, Print-Pipeline, Produkte-Flow
 
 Stand: 21.07.2026
 Scope: `ui/modules/rechnungen/` (Hauptview, Tagesgeschaeft-View, alle 11 Dialoge), die komplette Print-Pipeline (`services/printing/*` plus alle Druck-Dialoge), der zentrale Produkte-Flow (`services/products/*`, `ui/modules/products/`)
@@ -90,7 +90,7 @@ Analysiert: `view.py` (4764 Zeilen), `tagesgeschaeft_view.py` (1183 Zeilen), 7 P
 
 **[MITTEL] R-M2 — Handgestrickter TTL-Cache statt vorhandenem `TtlCache`**
 `view.py:926, 4076-4106`
-`_wix_context_cache` reimplementiert TTL-Caching manuell (eigenes `ts`-Feld, `time.monotonic()`-Vergleich) statt `xw_studio.core.cache.TtlCache` zu importieren. Keine proaktive Eviction, keine einheitliche `.invalidate()`-Semantik. `TtlCache` wird app-weit an keiner einzigen Stelle instanziiert — siehe X2.
+`_wix_context_cache` reimplementiert TTL-Caching manuell (eigenes `ts`-Feld, `time.monotonic()`-Vergleich) statt `xw_office.core.cache.TtlCache` zu importieren. Keine proaktive Eviction, keine einheitliche `.invalidate()`-Semantik. `TtlCache` wird app-weit an keiner einzigen Stelle instanziiert — siehe X2.
 
 **[MITTEL] R-M3 — Wiederholtes volles Paging der Rechnungsliste per Timer statt lokaler Zaehlung**
 `view.py:939-941` (120s-Timer) · `tagesgeschaeft_view.py:328-330` (60s-Timer) -> `invoice_processing/service.py:2065-2081`

@@ -1,7 +1,7 @@
 """Security and health contract for the Phase-1 Content web service."""
 from fastapi.testclient import TestClient
 
-from xw_studio.web import ContentWebSettings, create_app
+from xw_office.web import ContentWebSettings, create_app
 
 
 def test_health_and_landing_are_public_and_data_free() -> None:

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from xw_studio.services.products.catalog import ProductCatalogService
-from xw_studio.services.products.print_decision import PrintDecisionEngine
-from xw_studio.services.wix.client import WixOrderItem
+from xw_office.services.products.catalog import ProductCatalogService
+from xw_office.services.products.print_decision import PrintDecisionEngine
+from xw_office.services.wix.client import WixOrderItem
 
 
 class _PartClientStub:

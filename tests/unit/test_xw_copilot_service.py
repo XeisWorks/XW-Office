@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from xw_studio.services.xw_copilot.service import XWCopilotConfig, XWCopilotService
+from xw_office.services.xw_copilot.service import XWCopilotConfig, XWCopilotService
 
 
 class _RepoStub:

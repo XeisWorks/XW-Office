@@ -166,7 +166,7 @@ Geeignet sind:
 
 ### Testablauf
 
-1. XW-Studio starten.
+1. XW-Office starten.
 2. Zuerst einen normalen A4-Druckjob ausloesen, zum Beispiel Rechnung oder beliebiges A4-PDF.
 3. Direkt danach ein PLC-Label drucken.
 4. Danach erneut einen anderen A4-Druckjob ausloesen.
@@ -274,7 +274,7 @@ Aus `docs/` drei PDF-Typen auswaehlen:
 
 Fuer jedes PDF drei Ausdrucke erzeugen:
 
-1. aktueller XW-Studio interner Druckpfad
+1. aktueller XW-Office interner Druckpfad
 2. PDF-XChange CLI
 3. falls installiert: Acrobat als Referenz
 

@@ -1,12 +1,12 @@
-# Legacy → XW-Studio: Gesamtanalyse der Migration und Übernahmeplan für verbleibende Funktionen
+# Legacy → XW-Office: Gesamtanalyse der Migration und Übernahmeplan für verbleibende Funktionen
 
 **Datum:** 2026-07-25
-**Scope:** Vergleich `C:\Users\XeisWorks\GitHub\sevDesk` (Legacy, Tkinter/CLI) vs. `C:\Users\XeisWorks\GitHub\XW-Studio` (PySide6-Neubau)
-**Status:** Verifizierter Übernahmeplan. Nutzerentscheidungen vom 2026-07-25 sind eingearbeitet; die sichtbare Reisekosten-Navigation wurde aus XW-Studio entfernt.
+**Scope:** Vergleich `C:\Users\XeisWorks\GitHub\sevDesk` (Legacy, Tkinter/CLI) vs. `C:\Users\XeisWorks\GitHub\XW-Office` (PySide6-Neubau)
+**Status:** Verifizierter Übernahmeplan. Nutzerentscheidungen vom 2026-07-25 sind eingearbeitet; die sichtbare Reisekosten-Navigation wurde aus XW-Office entfernt.
 
 **Verbindliche Entscheidungen:**
 
-- **Reisekosten werden nicht in XW-Studio integriert.** Die Legacy-Funktion bleibt außerhalb dieses Produkts und ist kein späterer Migrationspunkt.
+- **Reisekosten werden nicht in XW-Office integriert.** Die Legacy-Funktion bleibt außerhalb dieses Produkts und ist kein späterer Migrationspunkt.
 - **Noten- und qualitätskritischer Produktdruck bleiben bewusst auf PDF-XChange.** Acrobat und automatischer Raster-Fallback gehören nicht zum Zielpfad.
 - Bei widersprüchlichen älteren Planungsdokumenten gilt der aktuelle Code-Stand als Ist-Quelle; eine alte Audit-Feststellung wird nicht ungeprüft als noch offen übernommen.
 
@@ -17,7 +17,7 @@
 Diese Analyse basiert auf drei Recherchesträngen:
 
 1. Vollständige Funktionskatalogisierung des Legacy-Repos (`sevdesk_wix_fulfillment/`, `UVA.py`, `Zusammenfassende Meldung.py`, `travel_costs/`, `wix_products/`, `Finanzonline/`, `zahlungsabgleich.py` u.a.)
-2. Vollständige Katalogisierung des aktuellen XW-Studio-Stands (`services/`, `ui/modules/`, `core/`, Datenmodell, Tests)
+2. Vollständige Katalogisierung des aktuellen XW-Office-Stands (`services/`, `ui/modules/`, `core/`, Datenmodell, Tests)
 3. Synthese der **bereits existierenden 35 Planungs-Dokumente** in `markdowns/` und `docs/`
 
 Punkt 3 ist wichtig: Es wurde in diesem Projekt bereits sehr diszipliniert dokumentiert, was übernommen wurde, was bewusst *nicht* übernommen wurde, und was noch offen ist — besonders für Rechnungen/Tagesgeschäft, Druck, Produkte, Steuern (UVA/ZM/OSS) und Zahlungsclearing. Da einzelne Auditbefunde durch spätere Commits bereits behoben wurden, werden Planungsdokumente hier immer gegen den aktuellen Code geprüft. Dieses Dokument:
@@ -33,7 +33,7 @@ Alle Quellen sind in Abschnitt 8 aufgelistet.
 
 **Kernfrage 1 — Ist die Migration sinnvoll gelaufen?** Ja, im Kern sehr gut, mit klaren Einschränkungen:
 
-- Der geschäftskritische Pfad (Tagesgeschäft/Rechnungen, Druck, Produkte/Inventar, PLC-Versandlabels) ist in XW-Studio **reif, aktiv weiterentwickelt und in Teilen architektonisch besser als das Legacy-System** (echtes relationales Produkt-Datenmodell, DI-Container, BackgroundWorker/-JobManager statt raw Threads, HMAC-gesichertes Copilot-Ingress, Golden-Master-Validierung für Steuerberechnungen).
+- Der geschäftskritische Pfad (Tagesgeschäft/Rechnungen, Druck, Produkte/Inventar, PLC-Versandlabels) ist in XW-Office **reif, aktiv weiterentwickelt und in Teilen architektonisch besser als das Legacy-System** (echtes relationales Produkt-Datenmodell, DI-Container, BackgroundWorker/-JobManager statt raw Threads, HMAC-gesichertes Copilot-Ingress, Golden-Master-Validierung für Steuerberechnungen).
 - Die Migrationsdisziplin ("nie blind kopieren, nur Verhalten studieren, Übernommen/Nicht-übernommen explizit dokumentieren") ist ungewöhnlich hoch und hat sich in der Praxis bewährt.
 - **Aber:** mehrere früh als "DONE" deklarierte Bereiche wurden durch spätere, gründlichere Analysen widerlegt (UVA-SOAP "fertig" im April → 1.868 € Berechnungsfehler im Juli gefunden; Brand-Bulk "fertig" im Juni → Concurrency-Bugs im Juli gefunden). Das ist ein wiederkehrendes Muster, kein Einzelfall — siehe Abschnitt 2.2.
 - Mehrere Architekturprinzipien, die früh sauber definiert wurden (Single-Write-Location, Pydantic-only, DI-only, Advisory-Lock bei Concurrent-Writes, max. ~800 Zeilen/Datei), werden in den am schnellsten gewachsenen Modulen bereits wieder verletzt.
@@ -43,7 +43,7 @@ Alle Quellen sind in Abschnitt 8 aufgelistet.
 - **Ausgaben-Check**: im Neubau nur ein 89-Zeilen-Skelett, im Legacy ein ausgereiftes Reconciliation-System mit Fuzzy-Ignore-Regeln und Perioden-Verschiebung.
 - **Cover-Erzeugung** und **Audio-Beispiel-Erzeugung**: im Neubau leere Platzhalter-Pakete (`services/graphics`, `services/audio`), im Legacy funktionierende Tools.
 - **Druckrechte-Lizenzrechner**: existiert im Neubau an keiner Stelle.
-- CRM-Merge-Absicherung, Zahlungsabgleich-Fehlerkatalog, WüdaraMusi-Zweitmandant u. a. — jeweils mit konkretem Integrationsvorschlag, der **nicht** 1:1-Portierung ist, sondern die Logik in die bestehenden XW-Studio-Muster (Services, DI, Pydantic, BackgroundWorker, SettingKV/Migrations, Dry-Run/Live-Split) einbettet.
+- CRM-Merge-Absicherung, Zahlungsabgleich-Fehlerkatalog, WüdaraMusi-Zweitmandant u. a. — jeweils mit konkretem Integrationsvorschlag, der **nicht** 1:1-Portierung ist, sondern die Logik in die bestehenden XW-Office-Muster (Services, DI, Pydantic, BackgroundWorker, SettingKV/Migrations, Dry-Run/Live-Split) einbettet.
 
 ---
 
@@ -53,7 +53,7 @@ Alle Quellen sind in Abschnitt 8 aufgelistet.
 
 | Stärke | Beleg |
 |---|---|
-| Kern-Fulfillment-Pfad ist reif und aktiv | Servicekatalog XW-Studio, Migrationen 004/005 vom 23.–25.07.2026 |
+| Kern-Fulfillment-Pfad ist reif und aktiv | Servicekatalog XW-Office, Migrationen 004/005 vom 23.–25.07.2026 |
 | Echtes relationales Datenmodell für Produkte statt Legacy-JSON-Dateien | Migrationen 002/003 (`product`, `sku_alias`, `print_rule`, `print_plan`, `inventory_movement`) |
 | Konsequente DI/BackgroundWorker-Architektur in den reifen Modulen | `core/container.py`, `core/worker.py`, `BackgroundJobManager` (Prioritätswarteschlangen, Cancel-Token) |
 | Golden-Master-Validierung für Steuerlogik statt "es sieht plausibel aus" | `config/uva_reference_values.json`, `config/oss_reference_values.json`, `tests/expected/UVA *.txt` |
@@ -114,7 +114,7 @@ Diese Punkte sind in bestehenden Dokumenten bereits vollständig analysiert — 
 
 ## 4. Bewertete Legacy-Funktionen und Übernahmeentscheidungen
 
-Für jede Funktion: Geschäftswert, Fundort im Legacy, aktueller Zustand in XW-Studio, und ein Vorschlag zur **intelligenten Integration** — d. h. wie die Logik in bestehende XW-Studio-Muster (Services + DI, Pydantic-Modelle, BackgroundWorker/-JobManager, SettingKV/Alembic-Migrationen, Dry-Run/Live-Split) eingebettet würde, statt Dateien zu kopieren.
+Für jede Funktion: Geschäftswert, Fundort im Legacy, aktueller Zustand in XW-Office, und ein Vorschlag zur **intelligenten Integration** — d. h. wie die Logik in bestehende XW-Office-Muster (Services + DI, Pydantic-Modelle, BackgroundWorker/-JobManager, SettingKV/Alembic-Migrationen, Dry-Run/Live-Split) eingebettet würde, statt Dateien zu kopieren.
 
 ### 4.0 Querschnittsempfehlung, die mehrere Punkte unten betrifft
 
@@ -135,7 +135,7 @@ Ebenso wiederverwendbar: das in `xw_copilot` bereits etablierte **Dry-Run/Live-D
 
 **Legacy:** `sevdesk_wix_fulfillment/ausgaben_check/` — ausgereift: `IgnoreManager` mit Fuzzy-Substring-Abgleich (`difflib.SequenceMatcher` Ratio ≥ 0,68) gegen normalisierten Buchungstext, sodass leicht variierende wiederkehrende Buchungen (z. B. unterschiedliche Rechnungsnummer pro Monat) erkannt werden; `ShiftManager` erlaubt das manuelle Verschieben einer Buchung in eine andere Periode bei Audit-Trail; Buchungstext-Normalisierung speziell auf österreichische Bankauszugsformate zugeschnitten (SEPA-Mandatsreferenzen, IBAN-Fragmente, Datums-/Zeitmuster).
 
-**XW-Studio-Zustand:** `services/expenses/service.py` ist laut eigenem Docstring explizit ein "skeleton" (89 Zeilen) — nur DB-Liste, Filter, CSV-Export. Keine Klassifikations-, Ignore- oder Shift-Logik.
+**XW-Office-Zustand:** `services/expenses/service.py` ist laut eigenem Docstring explizit ein "skeleton" (89 Zeilen) — nur DB-Liste, Filter, CSV-Export. Keine Klassifikations-, Ignore- oder Shift-Logik.
 
 **Integrationsvorschlag:**
 - `IgnoreRule` und `ShiftEntry` als **echte Tabellen** modellieren (neue Alembic-Migration, analog zum PLC-Audit-Trail-Muster aus Migration 004), nicht als flache JSON-Dateien wie im Legacy — das bringt Multi-PC-Sync automatisch mit, was die Legacy-Variante nie hatte.
@@ -149,9 +149,9 @@ Ebenso wiederverwendbar: das in `xw_copilot` bereits etablierte **Dry-Run/Live-D
 
 ### 4.2 Reisekosten (Travel Costs) — bewusst ausgeschlossen
 
-**Entscheidung:** Reisekosten werden **nicht** in XW-Studio integriert. Die Qualität oder Wiederverwendbarkeit des Legacy-Moduls ändert diese Produktentscheidung nicht.
+**Entscheidung:** Reisekosten werden **nicht** in XW-Office integriert. Die Qualität oder Wiederverwendbarkeit des Legacy-Moduls ändert diese Produktentscheidung nicht.
 
-**Konsequenzen für XW-Studio:**
+**Konsequenzen für XW-Office:**
 
 - kein Sidebar-Eintrag und keine Dashboard-Karte,
 - keine Lazy-Page-Registrierung in `MainWindow`,
@@ -159,7 +159,7 @@ Ebenso wiederverwendbar: das in `xw_copilot` bereits etablierte **Dry-Run/Live-D
 - keine Reisekosten-Tabellen, Secrets oder Google-Distance-Matrix-Abhängigkeiten,
 - keine Aufnahme in Priorisierung, Aufwandsschätzung oder Definition of Done dieses Plans.
 
-Der vorhandene Legacy-Code in `C:\Users\XeisWorks\GitHub\sevDesk\travel_costs\` bleibt eine separate historische bzw. eigenständige Anwendung. Im XW-Studio-Quellbaum noch vorhandene, nicht registrierte Bridge-Dateien sind kein zugesagtes Feature und können in einer späteren, rein technischen Bereinigung entfernt werden.
+Der vorhandene Legacy-Code in `C:\Users\XeisWorks\GitHub\sevDesk\travel_costs\` bleibt eine separate historische bzw. eigenständige Anwendung. Im XW-Office-Quellbaum noch vorhandene, nicht registrierte Bridge-Dateien sind kein zugesagtes Feature und können in einer späteren, rein technischen Bereinigung entfernt werden.
 
 **Priorität:** **OUT OF SCOPE / NICHT ÜBERNEHMEN.**
 
@@ -170,7 +170,7 @@ Der vorhandene Legacy-Code in `C:\Users\XeisWorks\GitHub\sevDesk\travel_costs\` 
 **Geschäftswert:** Automatisierte Erzeugung von Produkt-Titelbildern (Komponist/Titel/Arrangeur/Ausgabe-Text-Overlay) für den Notenkatalog.
 
 **Legacy:** `sevdesk_wix_fulfillment/graphics/cover_creator.py` — Text-Overlay auf Hintergrundbild, mehrere Layoutmodi, automatischer Textumbruch.
-**XW-Studio-Zustand:** `services/graphics/` ist wörtlich `"""Service placeholder."""` — leer.
+**XW-Office-Zustand:** `services/graphics/` ist wörtlich `"""Service placeholder."""` — leer.
 
 **Integrationsvorschlag:** Als `CoverGeneratorService` implementieren, der in die bestehende `services/layout`-PDF-Pipeline eingehängt wird (gleiche Font-/Asset-Auflösung wiederverwenden statt duplizieren), und konzeptionell als **Asset-Resolver-Schritt** in der bereits im `product_pipeline_masterplan.md` definierten Pipeline-Architektur verankert wird (dort explizit als zukünftiger Baustein vorgesehen) — statt als isoliertes Einzeltool wie im Legacy. Auslösung über eine "Cover erzeugen"-Aktion im Produkte-Modul, per BackgroundWorker (Bildgenerierung blockiert sonst die UI).
 
@@ -183,7 +183,7 @@ Der vorhandene Legacy-Code in `C:\Users\XeisWorks\GitHub\sevDesk\travel_costs\` 
 **Geschäftswert:** Erzeugt standardisierte Hörbeispiele aus Audio-/Videoquellen für Produktlistings.
 
 **Legacy:** `sevdesk_wix_fulfillment/audio_examples/generator.py` — ffmpeg-Pipeline (mp3/wav/mp4/mkv → Hörbeispiel), mit hartkodierter Pfadnormalisierung für einige bekannte Windows-Benutzerprofile (OneDrive-Pfad-Hack).
-**XW-Studio-Zustand:** `services/audio/` ist ebenfalls ein leerer Platzhalter.
+**XW-Office-Zustand:** `services/audio/` ist ebenfalls ein leerer Platzhalter.
 
 **Integrationsvorschlag:** `AudioExampleService` als ffmpeg-Subprozess-Wrapper, nach demselben defensiven Subprozess-Muster wie der bereits vorhandene isolierte Outlook-COM-Composer (`outlook_compose.py`: Timeout, nicht-blockierend via BackgroundWorker, strukturierte Fehlerrückgabe). Die hartkodierte Pfad-Normalisierung für bekannte Benutzernamen **nicht** übernehmen — stattdessen das bereits vorhandene `core/shared_paths.py` (Multi-PC-OneDrive-Pfadauflösung) nutzen, das genau dieses Problem bereits sauber löst.
 
@@ -196,7 +196,7 @@ Der vorhandene Legacy-Code in `C:\Users\XeisWorks\GitHub\sevDesk\travel_costs\` 
 **Geschäftswert:** Berechnet die an einen Rechteinhaber zu zahlende Lizenzgebühr für Notendruck, basierend auf Stimmenanzahl pro Instrument, Nettopreis, Rechte-Prozentsatz, Titel-pro-Kapelle und einer Liste geschützter Titel, mit Mindestgebühren-Untergrenze.
 
 **Legacy:** `sevdesk_wix_fulfillment/ui/kalkulation_app.py`, Abschnitt "Druckrechte" innerhalb "Provision & Kalkulation".
-**XW-Studio-Zustand:** `services/calculation/service.py` (allgemeine Provisions-/Tantiemenberechnung) und `services/commission/service.py` (sevDesk-gestützte Provisionsberechnung mit Profilen) decken beide etwas anderes ab — keiner der beiden modelliert den spezifischen Druckrechte-Lizenzgebühren-Fall mit Mindestgebühr und geschützter-Titel-Liste. Diese Funktion scheint im Neubau **an keiner Stelle** zu existieren.
+**XW-Office-Zustand:** `services/calculation/service.py` (allgemeine Provisions-/Tantiemenberechnung) und `services/commission/service.py` (sevDesk-gestützte Provisionsberechnung mit Profilen) decken beide etwas anderes ab — keiner der beiden modelliert den spezifischen Druckrechte-Lizenzgebühren-Fall mit Mindestgebühr und geschützter-Titel-Liste. Diese Funktion scheint im Neubau **an keiner Stelle** zu existieren.
 
 **Integrationsvorschlag:** Als reines, I/O-freies Berechnungsmodul `services/calculation/print_rights.py` mit Pydantic-Request/-Result (`PrintRightsRequest`/`PrintRightsResult`) — vollständig unit-testbar ohne Mocking. UI-seitig kein neues Sidebar-Modul, sondern ein zusätzlicher Bereich/Tab im bestehenden `ui/modules/calculation/view.py`, konsistent mit der übrigen Provisions-/Kalkulationsfunktion. Die Liste geschützter Titel über `SettingKV` persistieren (wie andere Konfigurationsdaten im Neubau), nicht als eigene JSON-Datei wie im Legacy.
 
@@ -209,7 +209,7 @@ Der vorhandene Legacy-Code in `C:\Users\XeisWorks\GitHub\sevDesk\travel_costs\` 
 **Geschäftswert:** Zuverlässiges, nachvollziehbares Zusammenführen doppelter sevDesk-Kontakte (entstanden aus Jahren manueller Rechnungserstellung + Wix-Import), ohne versehentlich Rechnungen an falsche/gesperrte Kontakte umzuhängen.
 
 **Legacy:** `sevdesk_wix_fulfillment/crm/crm_engine.py` — mehrstufige Match-Kaskade mit **benannten Konfidenzgründen** (`wixCustomerId-unique` = hohe Konfidenz bei eindeutigem Custom-Field-Match, `highest-customerNumber` = mittlere Konfidenz als Fallback); beim Merge werden problematische Rechnungen (finalisiert/"enshrined", `invoiceDate < deliveryDate`, nicht-numerische Referenz) **vom Verschieben ausgeschlossen und mit Grund protokolliert**, statt den ganzen Merge abzubrechen; konfigurierbare Verlierer-Behandlung (löschen wenn ohne Dokumente möglich, sonst archivieren mit Namenspräfix `[MERGED]`, oder nur ignorieren); Legacy-Kundennummern des Verlierers werden am Gewinner für die Nachvollziehbarkeit hinterlegt.
-**XW-Studio-Zustand:** `services/crm/matching.py` verwendet paarweises `rapidfuzz`-Scoring (Namens-Token-Sort + Bonus für E-Mail/Telefon-Match). Anders als im ersten Entwurf angenommen ist der Live-Writeback inzwischen vorhanden: `CrmService.merge_contacts()` delegiert bei konfiguriertem `ContactClient` an sevDesk. Noch nicht sichtbar sind jedoch die Legacy-Preflight-Sperrregeln, eine begründete Match-Kaskade, ein vollständiger Merge-Report und eine konfigurierbare Verlierer-Policy.
+**XW-Office-Zustand:** `services/crm/matching.py` verwendet paarweises `rapidfuzz`-Scoring (Namens-Token-Sort + Bonus für E-Mail/Telefon-Match). Anders als im ersten Entwurf angenommen ist der Live-Writeback inzwischen vorhanden: `CrmService.merge_contacts()` delegiert bei konfiguriertem `ContactClient` an sevDesk. Noch nicht sichtbar sind jedoch die Legacy-Preflight-Sperrregeln, eine begründete Match-Kaskade, ein vollständiger Merge-Report und eine konfigurierbare Verlierer-Policy.
 
 **Integrationsvorschlag:**
 - Die Kaskade nicht als eine monolithische Funktion portieren, sondern als Abfolge benannter `MatchStrategy`-Implementierungen (E-Mail-exakt, WixCustomerId-Lookup, Fuzzy-Fallback aus 4.0), jede mit typisiertem `MatchResult(confidence, reason)` — erhält die im Legacy wertvolle "warum wurde gematcht"-Nachvollziehbarkeit, ohne die Kaskade als Ganzes zu duplizieren.
@@ -225,7 +225,7 @@ Der vorhandene Legacy-Code in `C:\Users\XeisWorks\GitHub\sevDesk\travel_costs\` 
 **Geschäftswert:** Vollständige, nachvollziehbare Zahlungszuordnung — inkl. der Fälle, die *nicht* automatisch zugeordnet werden können.
 
 **Legacy:** `zahlungsabgleich.py`/`payments.py` — über 30 benannte Skip-/Fehlergründe (`mollie_currency`, `mollie_settlements_oauth_required`, `stripe_refund`, `rechnungsentwurf`, `provider_id_collision`, `booked_tx_ambiguous` u. v. a.) — praktisch eine dokumentierte Sammlung aller in 2+ Jahren Produktivbetrieb aufgetretenen Grenzfälle; SEPA-Überweisungen erhalten ein breiteres Nachschlagefenster (`SEPA_LOOKBACK_DAYS = 45`) als Karten-/PSP-Zahlungen, da sie langsamer verbucht werden; `PAYMENT_EPS = 0.005` als Toleranz für Betragsvergleiche; **Mollie-Payouts benötigen zwingend OAuth** (API-Key allein reicht laut Legacy-Fehlercode nicht).
-**XW-Studio-Zustand:** `services/clearing/` ist bereits mit `Decimal`, Gateway-pro-Anbieter-Abstraktion und typisiertem `MatchStatus` neu aufgesetzt. Kandidaten enthalten sichtbare Freitext-Begründungen; Refund- und Payout-Fälle werden grundsätzlich unterschieden. Nicht vorhanden sind ein vollständiger typisierter Legacy-Fehlerkatalog und ein Mollie-OAuth-Flow. Der aktuelle Mollie-Gateway versucht Settlements mit dem vorhandenen Client und degradiert Fehler auf eine leere Settlement-Liste; dadurch kann ein Authentifizierungsproblem fachlich zu wenig sichtbar bleiben.
+**XW-Office-Zustand:** `services/clearing/` ist bereits mit `Decimal`, Gateway-pro-Anbieter-Abstraktion und typisiertem `MatchStatus` neu aufgesetzt. Kandidaten enthalten sichtbare Freitext-Begründungen; Refund- und Payout-Fälle werden grundsätzlich unterschieden. Nicht vorhanden sind ein vollständiger typisierter Legacy-Fehlerkatalog und ein Mollie-OAuth-Flow. Der aktuelle Mollie-Gateway versucht Settlements mit dem vorhandenen Client und degradiert Fehler auf eine leere Settlement-Liste; dadurch kann ein Authentifizierungsproblem fachlich zu wenig sichtbar bleiben.
 
 **Integrationsvorschlag:**
 - Den 30+-Fehlerkatalog nicht erst über Monate erneut in der Produktion "wiederentdecken" lassen, sondern direkt als typisiertes `ClearingSkipReason`-Enum (ggf. ein kleineres Enum pro Gateway) aus dem Legacy-Katalog übernehmen, an `ClearingResult` hängen und in der Clearing-UI sichtbar machen — schließt gleichzeitig die im Audit vom 21.07. genannte Lücke (PP-M1: Jobergebnisse geben aktuell kein Feedback).
@@ -241,7 +241,7 @@ Der vorhandene Legacy-Code in `C:\Users\XeisWorks\GitHub\sevDesk\travel_costs\` 
 **Geschäftswert:** Ordnet direkte SEPA-Überweisungen (B2B, ohne Wix-Bezug) automatisch sevDesk-Rechnungen zu, indem die 6-stellige Rechnungsnummer (mit Jahres-Präfix) aus dem Verwendungszweck extrahiert wird.
 
 **Legacy:** `b2b-bank-transfer.py` — Regex-Extraktion, Normalisierung auf `RE-NNNNNN`, monatliches Caching.
-**XW-Studio-Zustand:** Der direkte SEPA-Scan existiert bereits im Clearing, ist aber auf **5-stellige Wix-Ordernummern** ausgelegt (`_ORDER_NUMBER` in `services/clearing/service.py`). Die Legacy-B2B-Logik sucht dagegen 6-stellige Rechnungsnummern, prüft zulässige Jahrespräfixe, normalisiert auf `RE-NNNNNN` und unterstützt mehrere Rechnungen in einer Überweisung. Diese fachlich andere Variante fehlt.
+**XW-Office-Zustand:** Der direkte SEPA-Scan existiert bereits im Clearing, ist aber auf **5-stellige Wix-Ordernummern** ausgelegt (`_ORDER_NUMBER` in `services/clearing/service.py`). Die Legacy-B2B-Logik sucht dagegen 6-stellige Rechnungsnummern, prüft zulässige Jahrespräfixe, normalisiert auf `RE-NNNNNN` und unterstützt mehrere Rechnungen in einer Überweisung. Diese fachlich andere Variante fehlt.
 
 **Integrationsvorschlag:** Eine sichere, reine Funktion `extract_b2b_invoice_numbers(purpose: str, year_prefixes: set[str]) -> tuple[str, ...]` im Clearing-Kontext ergänzen. Sie darf nicht mit dem bestehenden Wix-Ordernummern-Parser vermischt werden. Mehrfachzuordnungen müssen nur dann automatisch freigegeben werden, wenn die Summe der offenen Rechnungen exakt zum Überweisungsbetrag passt. Die bereits im Legacy-Repo vorhandenen zwei Jahre gecachter Verwendungszwecke (`sevDesk/json/b2b-bank-transfer-*.json`) eignen sich als anonymisierte **Testfixtures**, nicht als Laufzeitdaten.
 
@@ -254,7 +254,7 @@ Der vorhandene Legacy-Code in `C:\Users\XeisWorks\GitHub\sevDesk\travel_costs\` 
 **Geschäftswert:** Drei kleine, aber geschäftskritische Konventionen: (1) Sonderanfertigungs-SKUs (`XW-600.x`) mit Komponisten-Auswahl + Freitext-Stücktitel aus Wix-Custom-Feld, (2) SKU-Präfix → Besetzungs-Label-Zuordnung für Packzettel, (3) die Konvention "Referenznummer beginnt mit 2 → B2C, beginnt mit 1 → B2B", die quer durch Fulfillment, Rückerstattungen und PLC-Labeling verwendet wird.
 
 **Legacy:** `sevdesk_wix_fulfillment/rules/sku_rules.py` + verstreute Prüfungen in `services/invoice_processor.py` — bereits im Legacy **ad hoc über mehrere Dateien verteilt**, nicht zentralisiert.
-**XW-Studio-Zustand:** Teilweise vorhanden: `XW-600.0` gehört zu den konfigurierbaren Sonder-SKUs; Wix-Optionen liefern Besetzungsdaten, und der Rechnungsbereich zeigt sie an. Eine zentrale `B2B`/`B2C`-Klassifikation anhand des Referenzpräfixes wurde im Neubau nicht gefunden. Die vorhandenen Regeln sind außerdem über Wix-, Rechnungs- und Produktcode verteilt.
+**XW-Office-Zustand:** Teilweise vorhanden: `XW-600.0` gehört zu den konfigurierbaren Sonder-SKUs; Wix-Optionen liefern Besetzungsdaten, und der Rechnungsbereich zeigt sie an. Eine zentrale `B2B`/`B2C`-Klassifikation anhand des Referenzpräfixes wurde im Neubau nicht gefunden. Die vorhandenen Regeln sind außerdem über Wix-, Rechnungs- und Produktcode verteilt.
 
 **Integrationsvorschlag:** Als explizite, benannte, testbare Regel-Objekte in `services/products/classification_rules.py` bündeln — **einmal** definiert, von allen drei Konsumenten (Fulfillment, Rückerstattung, PLC) referenziert, statt wie im Legacy an drei Stellen einzeln nachgebaut. Das behebt gleichzeitig einen Legacy-eigenen Schwachpunkt (Streuung), nicht nur eine Neubau-Lücke.
 
@@ -267,7 +267,7 @@ Der vorhandene Legacy-Code in `C:\Users\XeisWorks\GitHub\sevDesk\travel_costs\` 
 **Geschäftswert:** Kontaktverwaltung für den zweiten sevDesk-Account ("WüdaraMusi").
 
 **Legacy:** OCR- + KI-gestützte Kontaktextraktion aus gescannten Belegen, Fuzzy-Matching (`rapidfuzz.token_set_ratio`) gegen bestehende Kontakte des zweiten Mandanten, Upsert mit Diff-Anzeige bei Unklarheit.
-**XW-Studio-Zustand:** `ui/modules/wuedaramusi/view.py` ist reines UI-Mockup mit `_SAMPLE_PIECES`-Platzhalterdaten, expliziter In-App-Hinweis "Status: Migration aus Altprojekt laufend", keine Backing-Service.
+**XW-Office-Zustand:** `ui/modules/wuedaramusi/view.py` ist reines UI-Mockup mit `_SAMPLE_PIECES`-Platzhalterdaten, expliziter In-App-Hinweis "Status: Migration aus Altprojekt laufend", keine Backing-Service.
 
 **Integrationsvorschlag:** Keinen zweiten, parallelen CRM-Stack für WüdaraMusi bauen. Stattdessen den ohnehin für 4.6 überarbeiteten `services/crm/` **mandantenfähig** machen (ein `SevdeskAccount`-Konzept, das die bereits vorhandene Pro-Integration-Konfiguration im Container aufgreift) — WüdaraMusi wird dann einfach ein zweiter konfigurierter Account, der dieselben `MatchStrategy`-Klassen nutzt. Das macht aus "ein ganzes separates Legacy-Modul portieren" die deutlich kleinere Aufgabe "Multi-Tenancy zu einem Modul hinzufügen, das ohnehin überarbeitet wird."
 
@@ -291,7 +291,7 @@ Der vorhandene Legacy-Code in `C:\Users\XeisWorks\GitHub\sevDesk\travel_costs\` 
 **Geschäftswert:** Ordnet Freitext-Bestellzeilen (z. B. Auftragswerke, die vor Katalogisierung verkauft werden) einer kleinen, handgepflegten Liste noch nicht veröffentlichter Stücke inkl. Komponist/Eigentümer zu.
 
 **Legacy:** `products_unreleased/matcher.py` — `rapidfuzz`, Auto-Match-Schwelle 85, bis zu 5 Kandidaten bei Unklarheit.
-**XW-Studio-Zustand:** Eine partielle Kennzeichnung existiert: Wix-Positionen mit Präfix `XW-600`/`XW-010` werden als `is_unreleased` markiert und im Druckworkflow besonders behandelt. Es fehlt aber das Legacy-Äquivalent für eine handgepflegte Titelliste ohne verlässliche SKU sowie die fuzzy Kandidatenauswahl mit manueller Bestätigung.
+**XW-Office-Zustand:** Eine partielle Kennzeichnung existiert: Wix-Positionen mit Präfix `XW-600`/`XW-010` werden als `is_unreleased` markiert und im Druckworkflow besonders behandelt. Es fehlt aber das Legacy-Äquivalent für eine handgepflegte Titelliste ohne verlässliche SKU sowie die fuzzy Kandidatenauswahl mit manueller Bestätigung.
 
 **Integrationsvorschlag:** "Unreleased" als Lifecycle-Status (`status: released | unreleased | preview`) am bereits existierenden `Product`-Modell (Migration 002 hat bereits eine echte Produkttabelle) statt einer separaten parallelen JSON-Liste + eigenem Matcher. Freitext-Matching nutzt die gleiche gemeinsame Fuzzy-Match-Utility aus 4.0 — nicht eine dritte, separat parametrisierte `rapidfuzz`-Aufrufstelle.
 
@@ -315,7 +315,7 @@ Der vorhandene Legacy-Code in `C:\Users\XeisWorks\GitHub\sevDesk\travel_costs\` 
 **Geschäftswert:** Abruf der Einreichungsprotokolle/PDF-Bestätigungen aus der FinanzOnline-DataBox nach einer UVA-Einreichung, für die Compliance-Ablage.
 
 **Legacy:** vorhanden.
-**XW-Studio-Zustand:** Laut `finanzonline_uva_fileupload_umbau_2026-06-17.md` **bewusst nicht übernommen** ("DataBox-Download-als-Pflichtschritt" explizit verworfen) — das ist im Unterschied zu allen anderen Punkten in diesem Abschnitt keine Lücke, sondern eine **getroffene Entscheidung**.
+**XW-Office-Zustand:** Laut `finanzonline_uva_fileupload_umbau_2026-06-17.md` **bewusst nicht übernommen** ("DataBox-Download-als-Pflichtschritt" explizit verworfen) — das ist im Unterschied zu allen anderen Punkten in diesem Abschnitt keine Lücke, sondern eine **getroffene Entscheidung**.
 
 **Integrationsvorschlag:** Nicht die Pflichtschritt-Variante zurückholen, aber den reinen **Bestätigungsprotokoll-Abruf** (nicht blockierend, nur für die Ablage) erneut erwägen — der SOAP-Client dafür existiert bereits, der Zusatzaufwand wäre gering, der Compliance-Nutzen (Nachweis der erfolgreichen Einreichung) real.
 
@@ -328,7 +328,7 @@ Der vorhandene Legacy-Code in `C:\Users\XeisWorks\GitHub\sevDesk\travel_costs\` 
 **Geschäftswert:** Verkaufsanalyse-Dashboard mit Zeitraumvergleich.
 
 **Legacy:** `sevdesk_wix_fulfillment/statistik/` — sauber faktorisiert, reine Funktionen: Umschalten der Analyseachse zwischen Rechnungs- und Zahlungsdatum, vorzeichenbewusste Aggregation (Gutschriften/Retouren gehen automatisch negativ in die Summe ein, über ein `record.sign`-Konzept), deutsche Textnormalisierung für Freitextsuche.
-**XW-Studio-Zustand:** `services/statistics/service.py` ist laut Katalog das "am wenigsten komplexe" Finanzmodul, ohne dedizierten Unit-Test.
+**XW-Office-Zustand:** `services/statistics/service.py` ist laut Katalog das "am wenigsten komplexe" Finanzmodul, ohne dedizierten Unit-Test.
 
 **Integrationsvorschlag:** Datum-Modus (Rechnungsdatum/Zahlungsdatum) als Enum-Parameter der Service-Methode statt globaler Konfiguration; Vorzeichen-Logik nicht als Kopie von `record.sign`, sondern als berechnete Property auf einem pydantic `StatisticsRecord`, abgeleitet aus dem sevDesk-Dokumenttyp; deutsche Textnormalisierung aus der gemeinsamen Utility (4.0); Export über die bereits vorhandene `services/layout`-PDF-Fassade statt eines eigenen Exporters.
 
@@ -348,7 +348,7 @@ Diese Muster sind im Legacy-System klar erkennbar problematisch und sollten bei 
 - **Einzelne globale Boolean-Flag-Datei** (`config_flags.py`, eine Zeile) — die vorhandene YAML-/`.env`-/DB-Konfigurationsstruktur konsequent weiterverwenden, keine Parallelstruktur für neue Flags schaffen.
 - **Ad-hoc-Diagnose-Skripte im Repo-Root** (`dump_open_invoices.py`, `debug_invoice_chain.py`, `wix_fulfillment_debug.py` etc.) — als Entwicklerwerkzeuge okay, aber nicht mit Architektur verwechseln; falls vergleichbare Diagnosewerkzeuge im Neubau gebraucht werden, gehören sie nach `scripts/`, nicht in die Service-Schicht.
 - **Verstreute, unbenannte Ad-hoc-Regeln** (SKU-Präfix-Konventionen quer über mehrere Dateien, siehe 4.9) — auch wenn dies ein Legacy-Muster ist: es sollte bei der Portierung *behoben*, nicht mitübernommen werden.
-- **Reisekosten als XW-Studio-Modul** — weder Domain-Code noch UI, Bridge, Submodul oder Persistence übernehmen; siehe verbindliche Entscheidung 4.2.
+- **Reisekosten als XW-Office-Modul** — weder Domain-Code noch UI, Bridge, Submodul oder Persistence übernehmen; siehe verbindliche Entscheidung 4.2.
 - **Acrobat als automatischer Notendruck-Fallback** — PDF-XChange bleibt der bewusst gewählte Vektorpfad. Ein Fehler muss sichtbar abbrechen und darf keine Bestandsbuchung auslösen; ein Qualitätswechsel auf Raster darf nicht still erfolgen.
 
 ---
@@ -414,4 +414,4 @@ Steuerkorrektheit (UVA/ZM/OSS) und Konsolidierung der zwei Bestandsquellen (K2).
 
 **Codebasis-Fundstellen (Legacy):** `sevdesk_wix_fulfillment/` (gesamtes Paket inkl. `ui/`, `services/`, `crm/`, `ausgaben_check/`, `copilot/`, `statistik/`, `rules/`, `graphics/`, `audio_examples/`, `notes_layout/`, `printing/`, `inventory/`), `UVA.py`, `Zusammenfassende Meldung.py`, `matching.py`, `payments.py`, `zahlungsabgleich.py`, `b2b-bank-transfer.py`, `travel_costs/`, `wix_products/`, `products_unreleased/`, `Finanzonline/`.
 
-**Codebasis-Fundstellen (XW-Studio):** `src/xw_studio/services/*`, `src/xw_studio/ui/modules/*`, `src/xw_studio/core/*`, `src/xw_studio/models/*`, `src/xw_studio/repositories/*`, `src/xw_studio/migrations/versions/*`, `tests/unit/*`, `tests/ui/*`.
+**Codebasis-Fundstellen (XW-Office):** `src/xw_office/services/*`, `src/xw_office/ui/modules/*`, `src/xw_office/core/*`, `src/xw_office/models/*`, `src/xw_office/repositories/*`, `src/xw_office/migrations/versions/*`, `tests/unit/*`, `tests/ui/*`.

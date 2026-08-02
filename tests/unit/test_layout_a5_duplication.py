@@ -6,7 +6,7 @@ import pytest
 
 fitz = pytest.importorskip("fitz")
 
-from xw_studio.services.layout.service import (  # noqa: E402
+from xw_office.services.layout.service import (  # noqa: E402
     LayoutToolsService,
     _build_a5_target_rects,
 )

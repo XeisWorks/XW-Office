@@ -1,7 +1,7 @@
 """Tests for XW-Copilot audit log service methods."""
 from __future__ import annotations
 
-from xw_studio.services.xw_copilot.service import AuditEntry, XWCopilotService
+from xw_office.services.xw_copilot.service import AuditEntry, XWCopilotService
 
 
 class _RepoStub:
@@ -67,8 +67,8 @@ def test_audit_no_storage_is_safe() -> None:
 
 
 def test_audit_written_by_dry_run() -> None:
-    from xw_studio.services.xw_copilot.dry_run import XWCopilotDryRunService
-    from xw_studio.services.xw_copilot.service import XWCopilotConfig
+    from xw_office.services.xw_copilot.dry_run import XWCopilotDryRunService
+    from xw_office.services.xw_copilot.service import XWCopilotConfig
 
     class _CfgStub:
         def load_config(self) -> XWCopilotConfig:

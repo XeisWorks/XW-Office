@@ -6,9 +6,9 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from xw_studio.models.base import Base
-from xw_studio.repositories import SettingKvRepository
-from xw_studio.services.ideas.store import IdeaEntry, IdeasStore
+from xw_office.models.base import Base
+from xw_office.repositories import SettingKvRepository
+from xw_office.services.ideas.store import IdeaEntry, IdeasStore
 
 
 @pytest.fixture

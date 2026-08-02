@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from xw_studio.services.sevdesk.part_client import PartClient
+from xw_office.services.sevdesk.part_client import PartClient
 
 
 class _ResponseStub:

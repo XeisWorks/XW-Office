@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import json
 
-from xw_studio.core.config import AppConfig
-from xw_studio.services.invoice_processing.service import InvoiceProcessingService
-from xw_studio.services.invoice_processing.service import FulfillmentFlags
+from xw_office.core.config import AppConfig
+from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.services.invoice_processing.service import FulfillmentFlags
 
 
 class _RepoStub:

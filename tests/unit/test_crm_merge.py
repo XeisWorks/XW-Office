@@ -5,10 +5,10 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from xw_studio.core.config import AppConfig, CrmSection
-from xw_studio.services.crm.service import CrmService, MergeBlockedError
-from xw_studio.services.crm.types import ContactRecord
-from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.core.config import AppConfig, CrmSection
+from xw_office.services.crm.service import CrmService, MergeBlockedError
+from xw_office.services.crm.types import ContactRecord
+from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 
 
 def _config(*, merge_loser_policy: str = "delete_if_empty") -> AppConfig:

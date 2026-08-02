@@ -1,7 +1,7 @@
 """Shared path resolution tests."""
 from pathlib import Path
 
-from xw_studio.core.shared_paths import resolve_shared_path
+from xw_office.core.shared_paths import resolve_shared_path
 
 
 def test_resolve_shared_path_maps_other_windows_profile(

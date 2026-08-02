@@ -57,15 +57,15 @@ Verbessert:
 
 ## Umsetzung
 
-- `src/xw_studio/services/finanzonline/zm_service.py`
+- `src/xw_office/services/finanzonline/zm_service.py`
   - berechnet ZM-Zeilen aus sevDesk-Rechnungen nach Soll-Prinzip
-- `src/xw_studio/services/finanzonline/u13_xml.py`
+- `src/xw_office/services/finanzonline/u13_xml.py`
   - baut und validiert U13-XML
-- `src/xw_studio/services/finanzonline/uva_soap.py`
+- `src/xw_office/services/finanzonline/uva_soap.py`
   - FileUpload-Backend sendet `U30` und `U13`
-- `src/xw_studio/services/finanzonline/uva_service.py`
+- `src/xw_office/services/finanzonline/uva_service.py`
   - orchestriert U30 zuerst, dann ZM
-- `src/xw_studio/ui/modules/taxes/view.py`
+- `src/xw_office/ui/modules/taxes/view.py`
   - Button und Rueckmeldung zeigen `UVA + ZM`
 
 ## Betriebsregel
@@ -85,10 +85,10 @@ Automatisierte Tests:
 .venv\Scripts\python.exe -m pytest tests/unit/test_tax_services.py tests/ui/test_main_window_smoke.py tests/unit/test_uva_soap_mock.py tests/unit/test_uva_phase1_preview.py tests/unit/test_zm_service.py -q
 34 passed
 
-.venv\Scripts\python.exe -m ruff check src/xw_studio/services/finanzonline src/xw_studio/core/config.py src/xw_studio/bootstrap.py src/xw_studio/ui/modules/taxes/view.py tests/unit/test_uva_soap_mock.py tests/unit/test_zm_service.py
+.venv\Scripts\python.exe -m ruff check src/xw_office/services/finanzonline src/xw_office/core/config.py src/xw_office/bootstrap.py src/xw_office/ui/modules/taxes/view.py tests/unit/test_uva_soap_mock.py tests/unit/test_zm_service.py
 All checks passed
 
-.venv\Scripts\python.exe -m mypy src/xw_studio/services/finanzonline --ignore-missing-imports
+.venv\Scripts\python.exe -m mypy src/xw_office/services/finanzonline --ignore-missing-imports
 Success: no issues found
 ```
 

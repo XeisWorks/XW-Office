@@ -1,7 +1,7 @@
 """Tests for direct B2B bank-transfer invoice reference extraction."""
 from __future__ import annotations
 
-from xw_studio.services.clearing.b2b_reference import extract_b2b_invoice_numbers
+from xw_office.services.clearing.b2b_reference import extract_b2b_invoice_numbers
 
 YEARS = ("24", "25", "26", "27")
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from xw_studio.services.products.catalog import Product, ProductCatalogService
-from xw_studio.services.products.pdf_bulk_mapper import PdfBulkMapper, ProductMatch
+from xw_office.services.products.catalog import Product, ProductCatalogService
+from xw_office.services.products.pdf_bulk_mapper import PdfBulkMapper, ProductMatch
 
 
 def test_bulk_mapper_auto_matches_and_applies(tmp_path: Path) -> None:

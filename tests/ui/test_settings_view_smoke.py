@@ -1,12 +1,12 @@
 """Smoke tests for SettingsView transfer graph status."""
 from __future__ import annotations
 
-from xw_studio.bootstrap import register_default_services
-from xw_studio.core.config import AppConfig
-from xw_studio.core.container import Container
-from xw_studio.core.signals import AppSignals
-from xw_studio.services.secrets.service import SecretService
-from xw_studio.ui.modules.settings.view import SettingsView
+from xw_office.bootstrap import register_default_services
+from xw_office.core.config import AppConfig
+from xw_office.core.container import Container
+from xw_office.core.signals import AppSignals
+from xw_office.services.secrets.service import SecretService
+from xw_office.ui.modules.settings.view import SettingsView
 
 
 class _FakeSecretService:

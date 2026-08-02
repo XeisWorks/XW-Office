@@ -1080,11 +1080,11 @@ wix-site-id: {site_id}
 
 ---
 
-## Integration with XW-Studio
+## Integration with XW-Office
 
 ### Mapping Old Features to New Architecture
 
-**Old (sevDesk) → New (XW-Studio)**
+**Old (sevDesk) → New (XW-Office)**
 
 | Old Feature | Old Location | New Feature | New Location |
 |-------------|--------------|------------|--------------|
@@ -1099,7 +1099,7 @@ wix-site-id: {site_id}
 | Product Preflight | ProductPreflightService | Product Validation | services/products/ |
 | Payment Mollie | MollieClient | Payment Service | services/payments/ |
 
-### Migration Notes for XW-Studio
+### Migration Notes for XW-Office
 
 1. **Configuration**: Port config.json settings to database/Railway for multi-PC sync
 2. **Services**: Migrate services to DI container pattern (already done)

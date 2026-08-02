@@ -5,15 +5,15 @@ import time
 
 import pytest
 
-from xw_studio.services.finanzonline.oss_models import OssLine, OssQuarterResult
-from xw_studio.services.finanzonline.oss_references import compare_oss_reference, load_oss_references
-from xw_studio.services.finanzonline.oss_service import (
+from xw_office.services.finanzonline.oss_models import OssLine, OssQuarterResult
+from xw_office.services.finanzonline.oss_references import compare_oss_reference, load_oss_references
+from xw_office.services.finanzonline.oss_service import (
     OssService,
     SevdeskOssDocumentProvider,
     build_oss_xml,
     validate_oss_xml,
 )
-from xw_studio.services.finanzonline.oss_snapshot import OssQuarterSnapshotStore
+from xw_office.services.finanzonline.oss_snapshot import OssQuarterSnapshotStore
 
 
 class _QuarterProvider:

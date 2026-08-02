@@ -23,11 +23,11 @@ Nach Klick auf den abschliessenden Button laeuft die Ausfuehrung im Hintergrund.
 Neue App:
 
 - `icons/refund.png` existiert.
-- `src/xw_studio/ui/modules/rechnungen/refund_dialog.py` existiert als einfacher Full-Refund-Dialog.
-- `src/xw_studio/services/sevdesk/refund_client.py` kann:
+- `src/xw_office/ui/modules/rechnungen/refund_dialog.py` existiert als einfacher Full-Refund-Dialog.
+- `src/xw_office/services/sevdesk/refund_client.py` kann:
   - `cancel_invoice(invoice_id)`
   - `create_credit_note_from_invoice(invoice_id)`
-- `src/xw_studio/services/wix/client.py` kann:
+- `src/xw_office/services/wix/client.py` kann:
   - `get_order_refundability(order_id)`
   - `refund_order_payments(order_id, payment_refunds, ...)`
   - `refund_full_order(reference, ...)`
@@ -37,7 +37,7 @@ Neue App:
 
 Aktuelle `RECHNUNGEN`-Integration:
 
-- `_ActionsDelegate` in `src/xw_studio/ui/modules/rechnungen/view.py` rendert aktuell `post`, `wix`, `mail`.
+- `_ActionsDelegate` in `src/xw_office/ui/modules/rechnungen/view.py` rendert aktuell `post`, `wix`, `mail`.
 - `_run_row_action()` behandelt aktuell `post`, `wix`, `mail`.
 - `_open_refund_dialog()` existiert bereits, wird aber aus der `AKTIONEN`-Spalte nicht erreicht.
 - Der vorhandene Dialog ist Full-Refund-only und nutzt `cancel_invoice()` plus `refund_full_order()`.
@@ -128,7 +128,7 @@ Intelligent uebernehmen:
 Vorschlag: neuer Service unter:
 
 ```text
-src/xw_studio/services/refunds/
+src/xw_office/services/refunds/
   __init__.py
   models.py
   service.py
@@ -233,7 +233,7 @@ Empfehlung: Langfristig einen eigenen `CreditNoteClient` statt immer mehr Method
 Datei:
 
 ```text
-src/xw_studio/ui/modules/rechnungen/refund_dialog.py
+src/xw_office/ui/modules/rechnungen/refund_dialog.py
 ```
 
 Den bestehenden Dialog nicht einfach aufblasen, sondern zu einem Workflow-Dialog umbauen oder durch `RefundWorkflowDialog` ersetzen.
@@ -346,7 +346,7 @@ Validierungsfehler vor Start schliessen den Dialog nicht, weil der Nutzer sie ko
 Datei:
 
 ```text
-src/xw_studio/ui/modules/rechnungen/view.py
+src/xw_office/ui/modules/rechnungen/view.py
 ```
 
 ### Delegate erweitern

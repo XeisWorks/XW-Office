@@ -5,17 +5,17 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QDialog, QLabel, QMessageBox
 
-from xw_studio.bootstrap import register_default_services
-from xw_studio.core.config import AppConfig
-from xw_studio.core.container import Container
-from xw_studio.core.signals import AppSignals
-from xw_studio.services.plc.label_archive import PlcLabelArchive
-from xw_studio.services.plc.models import PlcParcel, PlcShipmentDraft
-from xw_studio.services.plc.polling import ShipmentAddress
-from xw_studio.services.plc.service import PlcShipmentService
-from xw_studio.services.plc.webservice import PlcWebserviceResult
-from xw_studio.ui.modules.rechnungen import plc_label_dialog as plc_dialog_module
-from xw_studio.ui.modules.rechnungen.plc_label_dialog import (
+from xw_office.bootstrap import register_default_services
+from xw_office.core.config import AppConfig
+from xw_office.core.container import Container
+from xw_office.core.signals import AppSignals
+from xw_office.services.plc.label_archive import PlcLabelArchive
+from xw_office.services.plc.models import PlcParcel, PlcShipmentDraft
+from xw_office.services.plc.polling import ShipmentAddress
+from xw_office.services.plc.service import PlcShipmentService
+from xw_office.services.plc.webservice import PlcWebserviceResult
+from xw_office.ui.modules.rechnungen import plc_label_dialog as plc_dialog_module
+from xw_office.ui.modules.rechnungen.plc_label_dialog import (
     PlcLabelPrintDialog,
     _PlcSendResult,
 )

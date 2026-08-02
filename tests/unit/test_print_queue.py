@@ -4,9 +4,9 @@ import threading
 import types
 from unittest.mock import MagicMock
 
-from xw_studio.services.printing import print_queue
-from xw_studio.services.printing import pdf_backends
-from xw_studio.services.printing.print_jobs import BrotherLbxLabelJob, PdfPrintJob, PrintJobResult
+from xw_office.services.printing import print_queue
+from xw_office.services.printing import pdf_backends
+from xw_office.services.printing.print_jobs import BrotherLbxLabelJob, PdfPrintJob, PrintJobResult
 
 
 def test_print_queue_worker_executes_jobs_sequentially(monkeypatch) -> None:

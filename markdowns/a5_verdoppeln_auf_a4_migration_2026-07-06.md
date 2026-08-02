@@ -17,7 +17,7 @@ Stand: 2026-07-06
 - Rotationsmetadaten einzelner Quellseiten werden in einer Arbeitskopie entfernt, damit gemischte PDFs lesbar bleiben.
 - Ausgabe folgt weiter dem etablierten Suffix `_A4-2x.pdf`.
 
-## Verbesserungen in XW-Studio
+## Verbesserungen in XW-Office
 
 - Der Ablauf ist jetzt im zentralen `LayoutToolsService` gekapselt.
 - Die UI liegt unter `MEDIEN > LAYOUT` als erstes Register vor `QR-Code`.

@@ -1,4 +1,4 @@
-# XW-Studio Masterplan Daily-Business + Rechnungen
+# XW-Office Masterplan Daily-Business + Rechnungen
 
 Stand: 2026-04-03
 Statusquelle: Diese Datei ist die verbindliche Source of Truth fuer den Umbau- und Rollout-Status.

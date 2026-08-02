@@ -1,10 +1,10 @@
 """CRM matching tests."""
-from xw_studio.services.crm.matching import (
+from xw_office.services.crm.matching import (
     classify_match_reason,
     contact_match_score,
     find_duplicate_candidates,
 )
-from xw_studio.services.crm.types import ContactRecord, MatchReason
+from xw_office.services.crm.types import ContactRecord, MatchReason
 
 
 def test_identical_records_high_score() -> None:

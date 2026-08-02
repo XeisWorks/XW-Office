@@ -5,12 +5,12 @@ import subprocess
 
 import pytest
 
-from xw_studio.services.printing.pdf_backends import (
+from xw_office.services.printing.pdf_backends import (
     NativePdfCliBackend,
     QtRasterBackend,
     backend_for_job,
 )
-from xw_studio.services.printing.print_jobs import PdfPrintJob
+from xw_office.services.printing.print_jobs import PdfPrintJob
 
 
 class _FakeSpoolerWatcher:
@@ -51,10 +51,10 @@ def test_pdf_xchange_builds_silent_native_command_with_pages_and_copies(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(
-        "xw_studio.services.printing.pdf_backends._extract_pdf_pages",
+        "xw_office.services.printing.pdf_backends._extract_pdf_pages",
         lambda _pdf_path, _pages: str(pages_pdf),
     )
-    monkeypatch.setattr("xw_studio.services.printing.pdf_backends._WindowsSpoolerWatcher", _FakeSpoolerWatcher)
+    monkeypatch.setattr("xw_office.services.printing.pdf_backends._WindowsSpoolerWatcher", _FakeSpoolerWatcher)
     job = PdfPrintJob(
         pdf_path=str(pdf),
         printer_name="Noten A4 Simplex",
@@ -92,7 +92,7 @@ def test_pdf_xchange_uses_explicit_silent_printer_for_full_document(
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr("xw_studio.services.printing.pdf_backends._WindowsSpoolerWatcher", _FakeSpoolerWatcher)
+    monkeypatch.setattr("xw_office.services.printing.pdf_backends._WindowsSpoolerWatcher", _FakeSpoolerWatcher)
 
     job = PdfPrintJob(
         pdf_path=str(pdf),
@@ -111,7 +111,7 @@ def test_pdf_xchange_uses_explicit_silent_printer_for_full_document(
 
 
 def test_pdf_xchange_command_keeps_each_plan_printer_explicit() -> None:
-    from xw_studio.services.printing.pdf_backends import _pdf_xchange_print_command
+    from xw_office.services.printing.pdf_backends import _pdf_xchange_print_command
 
     first = _pdf_xchange_print_command("PDFXEdit.exe", "Simplex", "score.pdf")
     second = _pdf_xchange_print_command("PDFXEdit.exe", "Duplex", "score.pdf")
@@ -133,7 +133,7 @@ def test_pdf_xchange_without_spooler_confirmation_fails_closed(
         lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, "", ""),
     )
     monkeypatch.setattr(
-        "xw_studio.services.printing.pdf_backends._WindowsSpoolerWatcher",
+        "xw_office.services.printing.pdf_backends._WindowsSpoolerWatcher",
         lambda printer: _FakeSpoolerWatcher(printer, confirmed=False),
     )
 
@@ -173,7 +173,7 @@ def test_pdf_xchange_nonzero_exit_fails_without_fallback(
         "run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 5, "", "driver error"),
     )
-    monkeypatch.setattr("xw_studio.services.printing.pdf_backends._WindowsSpoolerWatcher", _FakeSpoolerWatcher)
+    monkeypatch.setattr("xw_office.services.printing.pdf_backends._WindowsSpoolerWatcher", _FakeSpoolerWatcher)
 
     with pytest.raises(RuntimeError, match="Exit-Code 5"):
         NativePdfCliBackend(str(executable)).print(

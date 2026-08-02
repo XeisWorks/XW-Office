@@ -1,7 +1,7 @@
 """Tests for XW-Copilot live action dispatcher."""
 from __future__ import annotations
 
-from xw_studio.services.xw_copilot.live_dispatch import XWCopilotLiveDispatcher
+from xw_office.services.xw_copilot.live_dispatch import XWCopilotLiveDispatcher
 
 
 # ---------------------------------------------------------------------------
@@ -13,7 +13,7 @@ class _FakeCrm:
         return True
 
     def fetch_live_contacts(self):  # type: ignore[return]
-        from xw_studio.services.crm.types import ContactRecord
+        from xw_office.services.crm.types import ContactRecord
         return [
             ContactRecord(id="1", name="Max Mustermann", email="max@test.at"),
             ContactRecord(id="2", name="Erika Muster", email="erika@test.at"),
@@ -22,7 +22,7 @@ class _FakeCrm:
 
 class _FakeInvoiceProcessing:
     def load_invoice_summaries(self, *, limit: int = 50, offset: int = 0, status=None):  # type: ignore[return]
-        from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
+        from xw_office.services.sevdesk.invoice_client import InvoiceSummary
         return [
             InvoiceSummary(id="inv1", invoiceNumber="XW-001"),
             InvoiceSummary(id="inv2", invoiceNumber="XW-002"),
@@ -31,7 +31,7 @@ class _FakeInvoiceProcessing:
 
 class _FakeInventory:
     def build_start_preflight(self, open_invoice_count: int):  # type: ignore[return]
-        from xw_studio.services.inventory.service import StartDecision, StartPreflight
+        from xw_office.services.inventory.service import StartDecision, StartPreflight
         return StartPreflight(
             open_invoice_count=open_invoice_count,
             decisions=[
@@ -114,8 +114,8 @@ def test_missing_crm_service_returns_error() -> None:
 
 def test_live_mode_used_in_dry_run_service() -> None:
     """When mode is live and live dispatcher is available, it takes priority."""
-    from xw_studio.services.xw_copilot.dry_run import XWCopilotDryRunService
-    from xw_studio.services.xw_copilot.service import XWCopilotConfig
+    from xw_office.services.xw_copilot.dry_run import XWCopilotDryRunService
+    from xw_office.services.xw_copilot.service import XWCopilotConfig
 
     class _CfgStub:
         def load_config(self) -> XWCopilotConfig:

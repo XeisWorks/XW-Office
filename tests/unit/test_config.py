@@ -1,10 +1,10 @@
 """Tests for configuration loading."""
-from xw_studio.core.config import AppConfig, load_config
+from xw_office.core.config import AppConfig, load_config
 
 
 def test_default_config_values() -> None:
     config = AppConfig()
-    assert config.app.name == "XeisWorks Studio"
+    assert config.app.name == "XeisWorks Office"
     assert config.app.theme == "dark_gold"
     assert config.printing.music_dpi == 600
     assert config.printing.invoice_dpi == 300
@@ -17,7 +17,7 @@ def test_default_config_values() -> None:
 
 def test_load_config_with_missing_file() -> None:
     config = load_config("nonexistent.yaml")
-    assert config.app.name == "XeisWorks Studio"
+    assert config.app.name == "XeisWorks Office"
 
 
 def test_product_print_profiles_use_pdf_xchange_native_backend() -> None:

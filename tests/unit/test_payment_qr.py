@@ -3,8 +3,8 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
-from xw_studio.services.transfers.models import TransferPaymentData
-from xw_studio.services.transfers.payment_qr import (
+from xw_office.services.transfers.models import TransferPaymentData
+from xw_office.services.transfers.payment_qr import (
     PaymentQrError,
     _extract_existing_epc_payload,
     _extract_pdf_text,
@@ -103,11 +103,11 @@ def test_extract_prefers_existing_epc_qr(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        "xw_studio.services.transfers.payment_qr._extract_existing_epc_payload",
+        "xw_office.services.transfers.payment_qr._extract_existing_epc_payload",
         lambda _pdf_bytes: epc_payload,
     )
     monkeypatch.setattr(
-        "xw_studio.services.transfers.payment_qr._extract_pdf_text",
+        "xw_office.services.transfers.payment_qr._extract_pdf_text",
         lambda _pdf_bytes: "AT001234567890 Betrag 9,99",
     )
 
@@ -158,7 +158,7 @@ def test_extract_wraps_pdf_bytes_for_pypdf(monkeypatch) -> None:
             seen["seekable"] = hasattr(source, "seek")
             self.pages = []
 
-    monkeypatch.setattr("xw_studio.services.transfers.payment_qr.PdfReader", Reader)
+    monkeypatch.setattr("xw_office.services.transfers.payment_qr.PdfReader", Reader)
 
     extract_payment_data_from_sources(pdf_bytes=b"%PDF", use_openai_fallback=False)
 
@@ -169,7 +169,7 @@ def test_extract_ignores_openai_fallback_failure(monkeypatch) -> None:
     def fail_openai(**_kwargs):
         raise RuntimeError("401 Unauthorized")
 
-    monkeypatch.setattr("xw_studio.services.transfers.payment_qr._openai_fallback", fail_openai)
+    monkeypatch.setattr("xw_office.services.transfers.payment_qr._openai_fallback", fail_openai)
 
     payment = extract_payment_data_from_sources(
         mail_text="Bitte RE-123 bezahlen.",
@@ -227,7 +227,7 @@ def test_openai_payload_can_override_weak_pdf_text(monkeypatch) -> None:
             "invoice_number": "199/1820",
         }
 
-    monkeypatch.setattr("xw_studio.services.transfers.payment_qr._openai_fallback", fake_openai)
+    monkeypatch.setattr("xw_office.services.transfers.payment_qr._openai_fallback", fake_openai)
 
     payment = extract_payment_data_from_sources(
         mail_text=(
@@ -258,7 +258,7 @@ def test_invoice_number_wins_over_generic_openai_remittance(monkeypatch) -> None
             "invoice_number": "RE-241665",
         }
 
-    monkeypatch.setattr("xw_studio.services.transfers.payment_qr._openai_fallback", fake_openai)
+    monkeypatch.setattr("xw_office.services.transfers.payment_qr._openai_fallback", fake_openai)
 
     payment = extract_payment_data_from_sources(
         mail_text="WG: Rechnung Juni 2026",
@@ -281,7 +281,7 @@ def test_invoice_number_wins_over_labelled_openai_remittance(monkeypatch) -> Non
             "invoice_number": "RE-241665",
         }
 
-    monkeypatch.setattr("xw_studio.services.transfers.payment_qr._openai_fallback", fake_openai)
+    monkeypatch.setattr("xw_office.services.transfers.payment_qr._openai_fallback", fake_openai)
 
     payment = extract_payment_data_from_sources(
         mail_text="WG: Rechnung Juni 2026",

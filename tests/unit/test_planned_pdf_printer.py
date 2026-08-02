@@ -4,9 +4,9 @@ from unittest.mock import patch
 
 import pytest
 
-from xw_studio.core.config import PrintingSection
-from xw_studio.services.printing.print_jobs import PdfPrintJob
-from xw_studio.services.printing.planned_pdf_printer import (
+from xw_office.core.config import PrintingSection
+from xw_office.services.printing.print_jobs import PdfPrintJob
+from xw_office.services.printing.planned_pdf_printer import (
     page_indices_from_range_text,
     print_pdf_by_plan,
     resolve_plan_targets,

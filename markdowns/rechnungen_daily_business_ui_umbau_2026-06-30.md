@@ -39,7 +39,7 @@ Neue PySide6-App:
 - hat bereits `OffeneSendungenService` und `OffeneSendungenDialog`.
 - hat bereits `DailyBusinessService` mit Queue-Kanälen `mollie`, `gutscheine`, `downloads`, `refunds`.
 - hat eine generische `_QueueTabView` in `tagesgeschaeft_view.py`, die Queue-Zeilen aus `DailyBusinessService` anzeigen kann.
-- echte Live-Mollie-Aktionen wie `create_shipment_for_remaining_lines` sind noch nicht als XW-Studio-Service vorhanden.
+- echte Live-Mollie-Aktionen wie `create_shipment_for_remaining_lines` sind noch nicht als XW-Office-Service vorhanden.
 
 ## Umsetzung in Phasen
 
@@ -151,4 +151,4 @@ Für echte Live-Funktionen:
 - Stripe-Clearing:
   - `STRIPE_SECRET_KEY`
 
-Hinweis: XW-Studio kann aktuell Mollie-Clearing lesen und Queue-Zeilen anzeigen, aber das Legacy-Feature “Authorized Order versenden” ist noch kein vollwertiger PySide6-Service. Dafür wäre eine eigene Phase nötig.
+Hinweis: XW-Office kann aktuell Mollie-Clearing lesen und Queue-Zeilen anzeigen, aber das Legacy-Feature “Authorized Order versenden” ist noch kein vollwertiger PySide6-Service. Dafür wäre eine eigene Phase nötig.

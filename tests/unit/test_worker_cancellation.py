@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from threading import Event
 
-from xw_studio.core.worker import BackgroundWorker
+from xw_office.core.worker import BackgroundWorker
 
 
 def test_cancelled_worker_suppresses_result(qtbot: object) -> None:

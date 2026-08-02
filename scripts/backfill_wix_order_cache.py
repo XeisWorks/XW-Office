@@ -18,12 +18,12 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from xw_studio.bootstrap import register_default_services  # noqa: E402
-from xw_studio.core.config import load_config  # noqa: E402
-from xw_studio.core.container import Container  # noqa: E402
-from xw_studio.services.invoice_processing.service import InvoiceProcessingService  # noqa: E402
-from xw_studio.services.wix.client import WixOrdersClient  # noqa: E402
-from xw_studio.services.wix.order_cache import WixOrderCache  # noqa: E402
+from xw_office.bootstrap import register_default_services  # noqa: E402
+from xw_office.core.config import load_config  # noqa: E402
+from xw_office.core.container import Container  # noqa: E402
+from xw_office.services.invoice_processing.service import InvoiceProcessingService  # noqa: E402
+from xw_office.services.wix.client import WixOrdersClient  # noqa: E402
+from xw_office.services.wix.order_cache import WixOrderCache  # noqa: E402
 
 
 logger = logging.getLogger(__name__)

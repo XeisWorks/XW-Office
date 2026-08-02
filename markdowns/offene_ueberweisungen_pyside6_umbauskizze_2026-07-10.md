@@ -1,4 +1,4 @@
-# OFFENE UEBERWEISUNGEN in XW-Studio / PySide6 - Umbauskizze
+# OFFENE UEBERWEISUNGEN in XW-Office / PySide6 - Umbauskizze
 
 Stand: 2026-07-10
 
@@ -27,7 +27,7 @@ Umgesetzt:
   - `download_attachment_bytes(...)`
   - `get_conversation_thread_text(...)`
   - `mark_message_followup_complete(...)`
-- Neues Service-Paket `src/xw_studio/services/transfers/`:
+- Neues Service-Paket `src/xw_office/services/transfers/`:
   - `models.py`
   - `payment_qr.py`
   - `service.py` (`OffeneUeberweisungenService`)
@@ -99,16 +99,16 @@ Offen fuer Folgeiteration:
 
 ## Kurzfazit
 
-Die Legacy-Funktion ist nicht nur eine Liste, sondern ein Graph-Mail-Workflow fuer das dedizierte Postfach `transfer@xeisworks.at`, kombiniert mit PDF-Anhang-Analyse und EPC-SEPA-QR-Code-Erzeugung. In XW-Studio gibt es bereits vorbereitete UI-Stellen:
+Die Legacy-Funktion ist nicht nur eine Liste, sondern ein Graph-Mail-Workflow fuer das dedizierte Postfach `transfer@xeisworks.at`, kombiniert mit PDF-Anhang-Analyse und EPC-SEPA-QR-Code-Erzeugung. In XW-Office gibt es bereits vorbereitete UI-Stellen:
 
-- `src/xw_studio/ui/modules/rechnungen/tagesgeschaeft_view.py`
+- `src/xw_office/ui/modules/rechnungen/tagesgeschaeft_view.py`
   - roter Alert-Button fuer Ueberweisungen ist bereits vorbereitet und versteckt.
   - Position ist bereits links von `START`, `STOP`, `Beenden`.
-- `src/xw_studio/services/daily_business/service.py`
+- `src/xw_office/services/daily_business/service.py`
   - Queue-Kanal `transfers` existiert, ist aber nur eine Stichwort-Klassifikation aus offenen sevDesk-Rechnungen.
-- `src/xw_studio/ui/modules/rechnungen/offene_sendungen_dialog.py`
+- `src/xw_office/ui/modules/rechnungen/offene_sendungen_dialog.py`
   - gutes PySide6-Muster fuer mailbasierte offene Aufgaben.
-- `src/xw_studio/services/mailing/graph_client.py`
+- `src/xw_office/services/mailing/graph_client.py`
   - MS-Graph-Grundlage existiert, ist fuer Ueberweisungen aber noch zu schmal.
 
 Empfehlung: Die neue Funktion als eigenen PySide6-Service `OffeneUeberweisungenService` plus eigenen Dialog bauen. Nicht den generischen `QueuePopupDialog` weiter ausdehnen. Der generische Dialog ist fuer einfache Tabellen gut, aber fuer Rechnungsanhang, Zahlungsfelder, Zusammenfassung, manuelle Korrektur, QR-Vorschau, "spaeter" und "durchgefuehrt" zu begrenzt.
@@ -144,8 +144,8 @@ Empfohlene Konsequenz:
 
 - Outlook ist die fuehrende Erledigt-Quelle.
 - Der PySide6-Alarm zaehlt alle Mails aus `transfer@xeisworks.at`, deren `flag.flagStatus != "complete"` ist.
-- Wenn du eine Mail direkt in Outlook Classic als erledigt markierst, verschwindet sie nach dem naechsten Graph-Refresh auch aus XW-Studio.
-- Wenn du im PySide6-Dialog `Ueberweisung durchgefuehrt` klickst, setzt XW-Studio per Graph `flag.flagStatus = "complete"` und speichert zusaetzlich einen lokalen Audit-Snapshot.
+- Wenn du eine Mail direkt in Outlook Classic als erledigt markierst, verschwindet sie nach dem naechsten Graph-Refresh auch aus XW-Office.
+- Wenn du im PySide6-Dialog `Ueberweisung durchgefuehrt` klickst, setzt XW-Office per Graph `flag.flagStatus = "complete"` und speichert zusaetzlich einen lokalen Audit-Snapshot.
 - Wenn der Graph-PATCH fehlschlaegt, bleibt der Fall offen. Kein stilles lokales "done", weil sonst Outlook und PySide6 auseinanderlaufen.
 
 Graph-Payload fuer `Ueberweisung durchgefuehrt`:
@@ -301,16 +301,16 @@ Wichtige Bausteine:
 - vorhandenen EPC-QR im PDF erkennen und uebernehmen, wenn OpenCV verfuegbar ist.
 - QR-Erzeugung via `segno.helpers.make_epc_qr(...)`.
 
-Das ist fachlich ein guter Kern. Fuer XW-Studio sollte er aber in eine PySide6-taugliche Service-Schicht umgezogen und entschlackt werden.
+Das ist fachlich ein guter Kern. Fuer XW-Office sollte er aber in eine PySide6-taugliche Service-Schicht umgezogen und entschlackt werden.
 
-## XW-Studio-Analyse
+## XW-Office-Analyse
 
 ### Bereits vorbereitete UI
 
 Relevante Datei:
 
 ```text
-src/xw_studio/ui/modules/rechnungen/tagesgeschaeft_view.py
+src/xw_office/ui/modules/rechnungen/tagesgeschaeft_view.py
 ```
 
 Ist-Zustand:
@@ -334,7 +334,7 @@ Empfohlene Anpassung:
 Relevante Datei:
 
 ```text
-src/xw_studio/services/daily_business/service.py
+src/xw_office/services/daily_business/service.py
 ```
 
 Ist-Zustand:
@@ -360,7 +360,7 @@ Soll-Zustand:
 Relevante Datei:
 
 ```text
-src/xw_studio/services/mailing/graph_client.py
+src/xw_office/services/mailing/graph_client.py
 ```
 
 Ist-Zustand:
@@ -380,15 +380,15 @@ Fehlt fuer Ueberweisungen:
 Empfehlung:
 
 - Diese Methoden aus dem Legacy-Client uebernehmen und sauber typisieren.
-- Dabei die XW-Studio-Variante als zentrale Quelle behalten, nicht einen zweiten Graph-Client importieren.
+- Dabei die XW-Office-Variante als zentrale Quelle behalten, nicht einen zweiten Graph-Client importieren.
 
 ### Bereits vorhandenes PySide6-Muster
 
 Relevante Dateien:
 
 ```text
-src/xw_studio/services/sendungen/service.py
-src/xw_studio/ui/modules/rechnungen/offene_sendungen_dialog.py
+src/xw_office/services/sendungen/service.py
+src/xw_office/ui/modules/rechnungen/offene_sendungen_dialog.py
 ```
 
 Gut uebernehmbar:
@@ -538,28 +538,28 @@ Abhaengigkeiten:
 ### Neue Paketstruktur
 
 ```text
-src/xw_studio/services/transfers/
+src/xw_office/services/transfers/
   __init__.py
   models.py
   service.py
   payment_qr.py
 
-src/xw_studio/ui/modules/rechnungen/
+src/xw_office/ui/modules/rechnungen/
   offene_ueberweisungen_dialog.py
   payment_qr_dialog.py
 ```
 
 Alternative:
 
-- `payment_qr_dialog.py` kann auch unter `src/xw_studio/ui/dialogs/` liegen, wenn spaeter andere Module QR-Codes nutzen.
-- `payment_qr.py` kann unter `src/xw_studio/services/payments/` liegen, wenn der bestehende `services/payments`-Namespace fachlich bevorzugt wird.
+- `payment_qr_dialog.py` kann auch unter `src/xw_office/ui/dialogs/` liegen, wenn spaeter andere Module QR-Codes nutzen.
+- `payment_qr.py` kann unter `src/xw_office/services/payments/` liegen, wenn der bestehende `services/payments`-Namespace fachlich bevorzugt wird.
 
 ### Datenmodelle
 
 Datei:
 
 ```text
-src/xw_studio/services/transfers/models.py
+src/xw_office/services/transfers/models.py
 ```
 
 Vorschlag:
@@ -663,7 +663,7 @@ state/open_transfers_state.json
 
 Empfehlung:
 
-- In XW-Studio konsequent `SettingKvRepository` verwenden, wenn DB konfiguriert ist.
+- In XW-Office konsequent `SettingKvRepository` verwenden, wenn DB konfiguriert ist.
 - Bei fehlender DB lokal in `state/open_transfers_state.json` fallbacken.
 - Legacy-State nicht importieren.
 - Der lokale Done-/Audit-State darf den Outlook-Status nicht ersetzen. Wenn eine Mail in Outlook nicht `complete` ist, bleibt sie offen.
@@ -726,7 +726,7 @@ Anpassungen:
 Datei:
 
 ```text
-src/xw_studio/services/transfers/service.py
+src/xw_office/services/transfers/service.py
 ```
 
 Konstruktor:
@@ -928,7 +928,7 @@ UI-Anzeige:
 Datei:
 
 ```text
-src/xw_studio/ui/modules/rechnungen/offene_ueberweisungen_dialog.py
+src/xw_office/ui/modules/rechnungen/offene_ueberweisungen_dialog.py
 ```
 
 Layout:
@@ -1076,7 +1076,7 @@ Optional:
 Datei:
 
 ```text
-src/xw_studio/ui/modules/rechnungen/tagesgeschaeft_view.py
+src/xw_office/ui/modules/rechnungen/tagesgeschaeft_view.py
 ```
 
 Geplante Aenderungen:
@@ -1084,7 +1084,7 @@ Geplante Aenderungen:
 1. Import:
 
 ```python
-from xw_studio.services.transfers.service import OffeneUeberweisungenService
+from xw_office.services.transfers.service import OffeneUeberweisungenService
 ```
 
 2. In `_refresh_badges()`:
@@ -1132,7 +1132,7 @@ def _on_transfer_alert_clicked(self) -> None:
 Datei:
 
 ```text
-src/xw_studio/ui/modules/rechnungen/view.py
+src/xw_office/ui/modules/rechnungen/view.py
 ```
 
 Neue Methode:
@@ -1151,7 +1151,7 @@ Bestehender `open_queue_dialog("transfers", ...)` bleibt als Fallback fuer einfa
 Datei:
 
 ```text
-src/xw_studio/bootstrap.py
+src/xw_office/bootstrap.py
 ```
 
 Registrierung:
@@ -1178,7 +1178,7 @@ C:/Users/bernh/GitHub/sevDesk/sevdesk_wix_fulfillment/services/payment_qr.py
 Ziel:
 
 ```text
-src/xw_studio/services/transfers/payment_qr.py
+src/xw_office/services/transfers/payment_qr.py
 ```
 
 Portierungsstrategie:
@@ -1263,7 +1263,7 @@ Tests fuer Service:
 - `Ueberweisung durchgefuehrt` ruft Graph `PATCH` mit `flag.flagStatus = "complete"` auf.
 - Bei erfolgreichem Graph-Update wird ein Audit-Snapshot geschrieben.
 - Bei fehlgeschlagenem Graph-Update bleibt der Fall offen.
-- In Outlook Classic manuell erledigte Mails verschwinden nach Refresh aus XW-Studio.
+- In Outlook Classic manuell erledigte Mails verschwinden nach Refresh aus XW-Office.
 - Silent Refresh ohne Token nutzt Cache und startet keinen Device Flow.
 - Transfer-Postfach kommt aus `MS_GRAPH_TRANSFER_MAILBOX`.
 - Transfer-Graph-Client verwendet `Mail.ReadWrite` bzw. `Mail.ReadWrite.Shared`.
@@ -1470,7 +1470,7 @@ Akzeptanz:
 
 - Manuell in Outlook Classic als erledigt markiert:
   - Beim naechsten Refresh wird `flag.flagStatus == "complete"` erkannt.
-  - Fall verschwindet aus XW-Studio.
+  - Fall verschwindet aus XW-Office.
   - Lokaler Audit-Snapshot kann fehlen; das ist ok, weil Outlook fuehrend ist.
 - Mail ohne PDF:
   - Thread anzeigen.

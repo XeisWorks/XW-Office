@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import httpx
 
-from xw_studio.services.wix.client import WixProductsClient
+from xw_office.services.wix.client import WixProductsClient
 
 
 class _SecretService:

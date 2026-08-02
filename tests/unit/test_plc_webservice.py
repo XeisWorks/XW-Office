@@ -5,16 +5,16 @@ import base64
 
 import pytest
 
-from xw_studio.services.plc.models import (
+from xw_office.services.plc.models import (
     PlcCustomsArticle,
     PlcParcel,
     PlcShipmentDraft,
     build_polling_lines,
     parse_shipment_address_lines,
 )
-from xw_studio.services.plc.polling import PlcConfig, ShipmentAddress
-from xw_studio.services.plc.service import PlcDuplicateShipmentError, PlcShipmentService
-from xw_studio.services.plc.webservice import (
+from xw_office.services.plc.polling import PlcConfig, ShipmentAddress
+from xw_office.services.plc.service import PlcDuplicateShipmentError, PlcShipmentService
+from xw_office.services.plc.webservice import (
     PlcWebserviceClient,
     PlcWebserviceRejectedError,
     PlcWebserviceSettings,

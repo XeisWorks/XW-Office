@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import fitz
 from PySide6.QtCore import QPointF, QRect, QRectF
 
-from xw_studio.services.printing import pdf_renderer
+from xw_office.services.printing import pdf_renderer
 
 
 def test_print_pdf_with_qprinter_draws_image_without_scaling(monkeypatch, tmp_path) -> None:
@@ -457,7 +457,7 @@ def test_print_pdf_with_qprinter_logs_print_metrics(monkeypatch, tmp_path, caplo
         lambda _page: pdf_renderer.PagePrintAnalysis("notation", 0.9, 0.03, 0.04, 0.0, reason="test"),
     )
 
-    with caplog.at_level("DEBUG", logger="xw_studio.services.printing.pdf_renderer"):
+    with caplog.at_level("DEBUG", logger="xw_office.services.printing.pdf_renderer"):
         pdf_renderer.print_pdf_with_qprinter(
             str(pdf_path),
             "Printer",

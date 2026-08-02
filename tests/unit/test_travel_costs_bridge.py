@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from PySide6.QtWidgets import QLabel
 
-from xw_studio.ui.modules.travel_costs.view import load_travel_costs_widget
+from xw_office.ui.modules.travel_costs.view import load_travel_costs_widget
 
 
 def test_load_travel_costs_widget_from_factory(monkeypatch) -> None:
@@ -14,7 +14,7 @@ def test_load_travel_costs_widget_from_factory(monkeypatch) -> None:
             return SimpleNamespace(create_widget=lambda: QLabel("ok"))
         raise ModuleNotFoundError(name)
 
-    monkeypatch.setattr("xw_studio.ui.modules.travel_costs.view.importlib.import_module", fake_import)
+    monkeypatch.setattr("xw_office.ui.modules.travel_costs.view.importlib.import_module", fake_import)
 
     widget, attempts = load_travel_costs_widget()
 
@@ -27,7 +27,7 @@ def test_load_travel_costs_widget_returns_none_when_missing(monkeypatch) -> None
     def fake_import(name: str):
         raise ModuleNotFoundError(name)
 
-    monkeypatch.setattr("xw_studio.ui.modules.travel_costs.view.importlib.import_module", fake_import)
+    monkeypatch.setattr("xw_office.ui.modules.travel_costs.view.importlib.import_module", fake_import)
 
     widget, attempts = load_travel_costs_widget()
 

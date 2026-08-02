@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from xw_studio.content import BrandProfileCatalog
+from xw_office.content import BrandProfileCatalog
 
 
 def test_repository_brand_profiles_are_valid() -> None:

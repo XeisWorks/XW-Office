@@ -4,15 +4,15 @@ import fitz
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QStyleOptionViewItem
 
-from xw_studio.core.config import AppConfig, PrintingSection
-from xw_studio.core.container import Container
-from xw_studio.services.inventory import InventoryService
-from xw_studio.services.products.catalog import Product
-from xw_studio.services.products.catalog import ProductCatalogService
-from xw_studio.services.products.print_decision import PieceBlock
-from xw_studio.services.printing.print_queue import PrintQueueService
-from xw_studio.ui.modules.rechnungen import print_dialog
-from xw_studio.ui.modules.rechnungen.print_dialog import ProductPrintConfigDialog, prepare_piece_pdf_print
+from xw_office.core.config import AppConfig, PrintingSection
+from xw_office.core.container import Container
+from xw_office.services.inventory import InventoryService
+from xw_office.services.products.catalog import Product
+from xw_office.services.products.catalog import ProductCatalogService
+from xw_office.services.products.print_decision import PieceBlock
+from xw_office.services.printing.print_queue import PrintQueueService
+from xw_office.ui.modules.rechnungen import print_dialog
+from xw_office.ui.modules.rechnungen.print_dialog import ProductPrintConfigDialog, prepare_piece_pdf_print
 
 
 def test_prepare_piece_pdf_print_uses_requested_copy_count(monkeypatch, tmp_path) -> None:
@@ -34,7 +34,7 @@ def test_prepare_piece_pdf_print_uses_requested_copy_count(monkeypatch, tmp_path
     container.register(PrintQueueService, lambda _container: queue)  # type: ignore[return-value]
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.print_dialog._check_printer_runtime", lambda *_args: True)
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.print_dialog._check_printer_runtime", lambda *_args: True)
 
     def fake_print_pdf_by_plan(
         pdf_path_arg: str,
@@ -58,7 +58,7 @@ def test_prepare_piece_pdf_print_uses_requested_copy_count(monkeypatch, tmp_path
             }
         )
 
-    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.print_dialog.print_pdf_by_plan", fake_print_pdf_by_plan)
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.print_dialog.print_pdf_by_plan", fake_print_pdf_by_plan)
 
     job = prepare_piece_pdf_print(None, container, piece=piece, copies=7)  # type: ignore[arg-type]
 
@@ -114,8 +114,8 @@ def test_prepare_piece_pdf_print_prompts_for_missing_print_config(monkeypatch, t
 
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.print_dialog._check_printer_runtime", lambda *_args: True)
-    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.print_dialog.ProductPrintConfigDialog", DialogStub)
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.print_dialog._check_printer_runtime", lambda *_args: True)
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.print_dialog.ProductPrintConfigDialog", DialogStub)
     container.register(InventoryService, lambda _container: InventoryStub())  # type: ignore[return-value]
     container.register(ProductCatalogService, lambda _container: CatalogStub())  # type: ignore[return-value]
 
@@ -142,7 +142,7 @@ def test_prepare_piece_pdf_print_prompts_for_missing_print_config(monkeypatch, t
             }
         )
 
-    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.print_dialog.print_pdf_by_plan", fake_print_pdf_by_plan)
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.print_dialog.print_pdf_by_plan", fake_print_pdf_by_plan)
 
     job = prepare_piece_pdf_print(None, container, piece=piece, copies=2)  # type: ignore[arg-type]
 

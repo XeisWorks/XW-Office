@@ -1,4 +1,4 @@
-# XW-Studio Umbauplan: Produkte Brands gezielt + Bulk bearbeiten
+# XW-Office Umbauplan: Produkte Brands gezielt + Bulk bearbeiten
 
 ## Zielbild
 - Brands im neuen PySide6-Projekt zentral und sicher bearbeiten.

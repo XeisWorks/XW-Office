@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import time
 
-from xw_studio.bootstrap import register_default_services
-from xw_studio.core.config import AppConfig
-from xw_studio.core.container import Container
-from xw_studio.core.signals import AppSignals
-from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
-from xw_studio.ui.modules.rechnungen.view import RechnungenView
+from xw_office.bootstrap import register_default_services
+from xw_office.core.config import AppConfig
+from xw_office.core.container import Container
+from xw_office.core.signals import AppSignals
+from xw_office.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.ui.modules.rechnungen.view import RechnungenView
 
 
 def _build_container() -> Container:

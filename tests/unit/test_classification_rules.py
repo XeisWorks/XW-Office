@@ -1,8 +1,8 @@
 """Tests for the centralized B2B/B2C reference classification rules."""
 from __future__ import annotations
 
-from xw_studio.core.config import AppConfig, SkuRulesSection
-from xw_studio.services.products.classification_rules import (
+from xw_office.core.config import AppConfig, SkuRulesSection
+from xw_office.services.products.classification_rules import (
     ReferenceClass,
     ReferenceClassifier,
     classify_reference,

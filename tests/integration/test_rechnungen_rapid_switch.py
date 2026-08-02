@@ -7,8 +7,8 @@ during active Wix metadata fetch.
 import time
 from unittest.mock import AsyncMock, Mock, patch
 import pytest
-from xw_studio.ui.modules.rechnungen.view import RechnungenView
-from xw_studio.services.wix.client import WixOrdersClient
+from xw_office.ui.modules.rechnungen.view import RechnungenView
+from xw_office.services.wix.client import WixOrdersClient
 
 
 @pytest.mark.integration
@@ -43,7 +43,7 @@ class TestRechnungenRapidSwitch:
         client.fetch_order_line_items = slow_fetch_items
         return client
 
-    @patch("xw_studio.ui.modules.rechnungen.view.WixOrdersClient")
+    @patch("xw_office.ui.modules.rechnungen.view.WixOrdersClient")
     def test_rapid_switch_queues_request(self, mock_wix_class, mock_wix_client):
         """
         Test that rapid row switching queues the second request.
@@ -93,7 +93,7 @@ class TestRechnungenRapidSwitch:
         time_delta = fetch_calls[1][2] - fetch_calls[0][2]
         assert time_delta < 0.05, f"Queue should happen within 50ms, took {time_delta:.3f}s"
 
-    @patch("xw_studio.ui.modules.rechnungen.view.WixOrdersClient")
+    @patch("xw_office.ui.modules.rechnungen.view.WixOrdersClient")
     def test_queued_request_replayed_after_worker(self, mock_wix_class, mock_wix_client):
         """
         Test that queued request is replayed after current worker finishes.
@@ -129,7 +129,7 @@ class TestRechnungenRapidSwitch:
         assert executed_refs == ["R-123", "R-456"]
         assert view._queued_wix_context_ref is None
 
-    @patch("xw_studio.ui.modules.rechnungen.view.WixOrdersClient")
+    @patch("xw_office.ui.modules.rechnungen.view.WixOrdersClient")
     def test_multiple_rapid_switches_queue_last(self, mock_wix_class, mock_wix_client):
         """
         Test that multiple rapid switches queue only the LAST reference.
@@ -161,7 +161,7 @@ class TestRechnungenRapidSwitch:
         
         assert final_fetched == "R-789"
 
-    @patch("xw_studio.ui.modules.rechnungen.view.WixOrdersClient")
+    @patch("xw_office.ui.modules.rechnungen.view.WixOrdersClient")
     def test_stale_result_rejected_after_queue_replay(self, mock_wix_class, mock_wix_client):
         """
         Test that stale results (old sequence tokens) are discarded even after queueing.
@@ -214,7 +214,7 @@ class TestRechnungenRapidSwitch:
         assert "R-456" in view._loaded_wix_contexts
         assert "R-123" not in view._loaded_wix_contexts
 
-    @patch("xw_studio.ui.modules.rechnungen.view.WixOrdersClient")
+    @patch("xw_office.ui.modules.rechnungen.view.WixOrdersClient")
     def test_no_queue_if_no_worker_running(self, mock_wix_class, mock_wix_client):
         """
         Test that selecting a new row while no worker is running starts new worker directly

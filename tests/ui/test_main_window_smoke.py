@@ -3,14 +3,14 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QLabel
 
-from xw_studio.bootstrap import register_default_services
-from xw_studio.core.config import AppConfig
-from xw_studio.core.container import Container
-from xw_studio.core.signals import AppSignals
-from xw_studio.core.types import ModuleKey
-from xw_studio.ui.home_view import DASHBOARD_CARDS
-from xw_studio.ui.main_window import MainWindow
-from xw_studio.ui.sidebar import SIDEBAR_ENTRIES
+from xw_office.bootstrap import register_default_services
+from xw_office.core.config import AppConfig
+from xw_office.core.container import Container
+from xw_office.core.signals import AppSignals
+from xw_office.core.types import ModuleKey
+from xw_office.ui.home_view import DASHBOARD_CARDS
+from xw_office.ui.main_window import MainWindow
+from xw_office.ui.sidebar import SIDEBAR_ENTRIES
 
 
 def test_main_window_opens(qtbot: object) -> None:
@@ -21,7 +21,7 @@ def test_main_window_opens(qtbot: object) -> None:
     window = MainWindow(container)
     qtbot.addWidget(window)
     window.show()
-    assert "XeisWorks" in window.windowTitle() or "Studio" in window.windowTitle()
+    assert "XeisWorks" in window.windowTitle() or "Office" in window.windowTitle()
 
     window._navigate_to(ModuleKey.RECHNUNGEN.value)  # noqa: SLF001
     assert window.page(ModuleKey.RECHNUNGEN) is None

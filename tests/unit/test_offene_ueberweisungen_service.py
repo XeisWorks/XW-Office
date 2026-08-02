@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from xw_studio.services.transfers.service import OffeneUeberweisungenService
+from xw_office.services.transfers.service import OffeneUeberweisungenService
 
 
 class _Repo:
@@ -59,7 +59,7 @@ def test_refresh_count_from_graph_silent_uses_cache_without_silent_token(monkeyp
             del conversation_id, days, top
             return ""
 
-    monkeypatch.setattr("xw_studio.services.transfers.service.GraphMailClient", _GraphClient)
+    monkeypatch.setattr("xw_office.services.transfers.service.GraphMailClient", _GraphClient)
 
     repo = _Repo()
     repo.values["daily_business.open_transfers.raw_graph"] = json.dumps([_message("m1")])
@@ -91,7 +91,7 @@ def test_refresh_filters_out_complete_flag(monkeypatch) -> None:
             calls["threads"] += 1
             return ""
 
-    monkeypatch.setattr("xw_studio.services.transfers.service.GraphMailClient", _GraphClient)
+    monkeypatch.setattr("xw_office.services.transfers.service.GraphMailClient", _GraphClient)
 
     service = OffeneUeberweisungenService(_Repo(), _Secrets())  # type: ignore[arg-type]
 
@@ -122,7 +122,7 @@ def test_refresh_counts_blank_not_completed_mail_in_transfer_mailbox(monkeypatch
         def get_conversation_thread_text(self, conversation_id: str, *, days: int = 60, top: int = 20) -> str:
             raise AssertionError("silent count must not load conversation threads")
 
-    monkeypatch.setattr("xw_studio.services.transfers.service.GraphMailClient", _GraphClient)
+    monkeypatch.setattr("xw_office.services.transfers.service.GraphMailClient", _GraphClient)
 
     service = OffeneUeberweisungenService(_Repo(), _Secrets())  # type: ignore[arg-type]
 
@@ -143,7 +143,7 @@ def test_silent_refresh_preserves_cached_cases_when_token_missing(monkeypatch) -
         def get_conversation_thread_text(self, conversation_id: str, *, days: int = 60, top: int = 20) -> str:
             raise AssertionError("silent refresh must not load conversation threads")
 
-    monkeypatch.setattr("xw_studio.services.transfers.service.GraphMailClient", _GraphClient)
+    monkeypatch.setattr("xw_office.services.transfers.service.GraphMailClient", _GraphClient)
 
     repo = _Repo()
     service = OffeneUeberweisungenService(repo, _Secrets())  # type: ignore[arg-type]
@@ -187,12 +187,12 @@ def test_mark_done_in_outlook_requires_successful_graph_patch(monkeypatch) -> No
         def mark_message_followup_complete(self, message_id: str) -> None:
             raise RuntimeError(f"patch failed for {message_id}")
 
-    monkeypatch.setattr("xw_studio.services.transfers.service.GraphMailClient", _GraphClient)
+    monkeypatch.setattr("xw_office.services.transfers.service.GraphMailClient", _GraphClient)
 
     service = OffeneUeberweisungenService(_Repo(), _Secrets())  # type: ignore[arg-type]
     service.refresh_count_from_graph_silent()
 
-    from xw_studio.services.transfers.models import TransferPaymentData
+    from xw_office.services.transfers.models import TransferPaymentData
 
     try:
         service.mark_done_in_outlook("m1", TransferPaymentData())

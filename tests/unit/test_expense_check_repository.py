@@ -5,8 +5,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from xw_studio.models.base import Base
-from xw_studio.repositories.expense_check import ExpenseCheckRepository
+from xw_office.models.base import Base
+from xw_office.repositories.expense_check import ExpenseCheckRepository
 
 
 @pytest.fixture

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from xw_studio.services.layout.service import _watermark_output_path
+from xw_office.services.layout.service import _watermark_output_path
 
 
 def test_watermark_output_replaces_gesamt_token(tmp_path: Path) -> None:

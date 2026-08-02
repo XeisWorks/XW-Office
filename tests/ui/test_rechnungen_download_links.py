@@ -1,13 +1,13 @@
 """UI test: DOWNLOAD-LINKS action opens Wix dashboard URL."""
 from __future__ import annotations
 
-from xw_studio.bootstrap import register_default_services
-from xw_studio.core.config import AppConfig
-from xw_studio.core.container import Container
-from xw_studio.core.signals import AppSignals
-from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
-from xw_studio.services.wix.client import WixOrdersClient
-from xw_studio.ui.modules.rechnungen.view import RechnungenView
+from xw_office.bootstrap import register_default_services
+from xw_office.core.config import AppConfig
+from xw_office.core.container import Container
+from xw_office.core.signals import AppSignals
+from xw_office.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.services.wix.client import WixOrdersClient
+from xw_office.ui.modules.rechnungen.view import RechnungenView
 
 
 class _FakeWixOrdersClient:
@@ -58,7 +58,7 @@ def test_download_links_action_opens_url(qtbot: object, monkeypatch: object) -> 
         called["url"] = qurl.toString()
         return True
 
-    monkeypatch.setattr("xw_studio.ui.modules.rechnungen.view.QDesktopServices.openUrl", open_url_spy)
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.view.QDesktopServices.openUrl", open_url_spy)
 
     view._open_wix_download_links(summary)  # noqa: SLF001
 

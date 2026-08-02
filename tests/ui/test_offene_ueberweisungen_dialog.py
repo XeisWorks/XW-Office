@@ -5,14 +5,14 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QMessageBox
 
-from xw_studio.services.transfers.models import (
+from xw_office.services.transfers.models import (
     TransferAttachment,
     TransferCase,
     TransferFieldSource,
     TransferPaymentData,
 )
-from xw_studio.services.transfers.service import OffeneUeberweisungenService
-from xw_studio.ui.modules.rechnungen.offene_ueberweisungen_dialog import OffeneUeberweisungenDialog
+from xw_office.services.transfers.service import OffeneUeberweisungenService
+from xw_office.ui.modules.rechnungen.offene_ueberweisungen_dialog import OffeneUeberweisungenDialog
 
 
 class _FakeTransferService:
@@ -153,7 +153,7 @@ def test_dialog_mark_done_calls_service_after_confirmation(qtbot: object, monkey
     _wait_dialog_loaded(qtbot, dialog)
 
     monkeypatch.setattr(
-        "xw_studio.ui.modules.rechnungen.offene_ueberweisungen_dialog.QMessageBox.question",
+        "xw_office.ui.modules.rechnungen.offene_ueberweisungen_dialog.QMessageBox.question",
         lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
     )
 
@@ -176,7 +176,7 @@ def test_dialog_generate_qr_uses_manual_form_values(qtbot: object, monkeypatch) 
     _wait_dialog_loaded(qtbot, dialog)
 
     monkeypatch.setattr(
-        "xw_studio.ui.modules.rechnungen.offene_ueberweisungen_dialog.PaymentQrDialog.exec",
+        "xw_office.ui.modules.rechnungen.offene_ueberweisungen_dialog.PaymentQrDialog.exec",
         lambda self: 0,
     )
 

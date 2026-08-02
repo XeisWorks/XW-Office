@@ -1,10 +1,10 @@
-"""Shared test fixtures for XeisWorks Studio."""
+"""Shared test fixtures for XeisWorks Office."""
 from __future__ import annotations
 
 import pytest
 
-from xw_studio.core.config import AppConfig
-from xw_studio.core.container import Container
+from xw_office.core.config import AppConfig
+from xw_office.core.container import Container
 
 
 @pytest.fixture

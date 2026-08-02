@@ -1,10 +1,10 @@
-# Umbau-Skizze: Umsatzsteuervoranmeldung in XW-Studio
+# Umbau-Skizze: Umsatzsteuervoranmeldung in XW-Office
 
 Stand: 2026-04-19
 
 ## 1. Ausgangslage
 
-Ziel ist die saubere Integration der österreichischen Umsatzsteuervoranmeldung (UVA / U30) in XW-Studio auf Basis der Legacy-Logik aus `sevDesk/UVA.py`, aber **nicht als 1:1-Port**, sondern fachlich bereinigt, modularisiert und auf die XW-Studio-Architektur angepasst.
+Ziel ist die saubere Integration der österreichischen Umsatzsteuervoranmeldung (UVA / U30) in XW-Office auf Basis der Legacy-Logik aus `sevDesk/UVA.py`, aber **nicht als 1:1-Port**, sondern fachlich bereinigt, modularisiert und auf die XW-Office-Architektur angepasst.
 
 Vom Auftraggeber bestätigt:
 
@@ -46,7 +46,7 @@ Die Legacy-Datei enthält bereits einige gute und für Österreich passende Grun
 
 ## 2.2 Fachliche Korrekturen und Schwachstellen
 
-Die Legacy-Logik ist **für viele Standardfälle brauchbar**, aber **nicht vollständig sauber genug**, um sie unverändert in XW-Studio zu übernehmen.
+Die Legacy-Logik ist **für viele Standardfälle brauchbar**, aber **nicht vollständig sauber genug**, um sie unverändert in XW-Office zu übernehmen.
 
 ### A. EU-B2B-Leistungen und innergemeinschaftliche Lieferungen bleiben in der österreichischen UVA sichtbar
 
@@ -87,7 +87,7 @@ Die interne Logik ist dort teilweise brauchbar, die **Benennung/Dokumentation ab
 ### D. Teilweiser oder ausgeschlossener Vorsteuerabzug ist nicht sauber modelliert
 
 Die Altlogik geht praktisch von einem voll abzugsfähigen Standardfall aus.
-Für XW-Studio sollte das fachlich vorbereitet werden, auch wenn die erste Version zunächst auf den Vollabzug optimiert ist.
+Für XW-Office sollte das fachlich vorbereitet werden, auch wenn die erste Version zunächst auf den Vollabzug optimiert ist.
 
 ### E. Die Legacy-Datei ist architektonisch nicht übernehmbar
 
@@ -102,15 +102,15 @@ Für XW-Studio sollte das fachlich vorbereitet werden, auch wenn die erste Versi
 
 alles in einem Modul.
 
-Das widerspricht der Zielarchitektur von XW-Studio.
+Das widerspricht der Zielarchitektur von XW-Office.
 
 ---
 
 ## 3. Recherche-Fazit zur fachlichen Zielberechnung
 
-Die Zielberechnung für XW-Studio soll sich an folgendem fachlichen Verhalten orientieren:
+Die Zielberechnung für XW-Office soll sich an folgendem fachlichen Verhalten orientieren:
 
-| Fall | Behandlung in XW-Studio | UVA-Relevanz |
+| Fall | Behandlung in XW-Office | UVA-Relevanz |
 | --- | --- | --- |
 | Österreichische Ausgangsrechnungen 20/10/13 % | nach Zahlung im Zeitraum berücksichtigen | ja |
 | Inländisches Reverse Charge (Ausgangsseite) | getrennt erfassen | ja |
@@ -124,15 +124,15 @@ Die Zielberechnung für XW-Studio soll sich an folgendem fachlichen Verhalten or
 
 ---
 
-## 4. Empfohlenes Zielmodell in XW-Studio
+## 4. Empfohlenes Zielmodell in XW-Office
 
-Die bereits vorhandenen Platzhalter in XW-Studio sind sinnvoll und sollen ausgebaut werden:
+Die bereits vorhandenen Platzhalter in XW-Office sind sinnvoll und sollen ausgebaut werden:
 
-- `src/xw_studio/services/finanzonline/uva_service.py`
-- `src/xw_studio/services/finanzonline/uva_soap.py`
-- `src/xw_studio/services/finanzonline/client.py`
-- `src/xw_studio/ui/modules/taxes/view.py`
-- `src/xw_studio/bootstrap.py`
+- `src/xw_office/services/finanzonline/uva_service.py`
+- `src/xw_office/services/finanzonline/uva_soap.py`
+- `src/xw_office/services/finanzonline/client.py`
+- `src/xw_office/ui/modules/taxes/view.py`
+- `src/xw_office/bootstrap.py`
 
 ### Neue fachliche Zielstruktur
 
@@ -177,7 +177,7 @@ Kapselt die FinanzOnline-Übermittlung:
 - sichere Rückmeldung an UI
 
 #### 4.5 `uva_validation_service.py`
-Vergleicht XW-Studio-Berechnung mit bereits eingereichten Monaten:
+Vergleicht XW-Office-Berechnung mit bereits eingereichten Monaten:
 
 - Monats-Snapshot laden
 - Soll/Ist-Differenzen anzeigen
@@ -226,7 +226,7 @@ Vergleicht XW-Studio-Berechnung mit bereits eingereichten Monaten:
 
 ---
 
-## 6. Präziser Umbauplan für XW-Studio
+## 6. Präziser Umbauplan für XW-Office
 
 ## Phase 1 – Legacy sauber zerlegen
 
@@ -244,14 +244,14 @@ Arbeiten:
 
 **Ergebnis:** klar testbare Fachlogik.
 
-## Phase 2 – neue UVA-Domain in XW-Studio aufbauen
+## Phase 2 – neue UVA-Domain in XW-Office aufbauen
 
 Neue Module:
 
-- `src/xw_studio/services/finanzonline/uva_rules.py`
-- `src/xw_studio/services/finanzonline/uva_models.py`
-- `src/xw_studio/services/finanzonline/uva_payload_service.py`
-- optional `src/xw_studio/services/finanzonline/uva_validation_service.py`
+- `src/xw_office/services/finanzonline/uva_rules.py`
+- `src/xw_office/services/finanzonline/uva_models.py`
+- `src/xw_office/services/finanzonline/uva_payload_service.py`
+- optional `src/xw_office/services/finanzonline/uva_validation_service.py`
 
 **Ergebnis:** modulares, typisiertes UVA-Fundament.
 
@@ -302,7 +302,7 @@ Da bereits echte Einreichungsmonate vorhanden sind, wird die Berechnung **nicht 
 Vorgehen:
 
 1. 2–3 bereits eingereichte Monate auswählen
-2. XW-Studio-Berechnung dagegen laufen lassen
+2. XW-Office-Berechnung dagegen laufen lassen
 3. Abweichung je Kennzahl dokumentieren
 4. Fachregeln nachschärfen
 5. erst danach Live-Übermittlung freischalten
@@ -364,7 +364,7 @@ Die Integration gilt erst dann als fachlich bereit, wenn alle folgenden Punkte e
 
 **Die Legacy-Datei ist ein guter fachlicher Startpunkt, aber kein geeigneter Direkt-Port.**
 
-Für XW-Studio sollte umgesetzt werden:
+Für XW-Office sollte umgesetzt werden:
 
 - **fachlich korrigierte** UVA-Logik
 - **modularisierte Services** statt Monolith

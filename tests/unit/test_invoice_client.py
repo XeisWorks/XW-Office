@@ -4,9 +4,9 @@ from datetime import date, datetime, timedelta, timezone
 import json
 import httpx
 
-from xw_studio.core.config import AppConfig
-from xw_studio.services.http_client import SevdeskConnection
-from xw_studio.services.sevdesk.invoice_client import InvoiceClient, InvoiceSummary
+from xw_office.core.config import AppConfig
+from xw_office.services.http_client import SevdeskConnection
+from xw_office.services.sevdesk.invoice_client import InvoiceClient, InvoiceSummary
 
 
 def test_invoice_summary_from_api_object() -> None:

@@ -1,7 +1,7 @@
 """Tests for printer traffic-light evaluation."""
 
-from xw_studio.core.printer_detect import PrinterInfo, evaluate_printer_status
-from xw_studio.core.types import PrinterStatus
+from xw_office.core.printer_detect import PrinterInfo, evaluate_printer_status
+from xw_office.core.types import PrinterStatus
 
 
 def test_no_config_and_no_available_is_red() -> None:

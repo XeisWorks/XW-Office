@@ -5,12 +5,12 @@ from dataclasses import replace
 import json
 from unittest.mock import patch
 
-from xw_studio.core.config import AppConfig
-from xw_studio.services.invoice_processing.service import (
+from xw_office.core.config import AppConfig
+from xw_office.services.invoice_processing.service import (
     FulfillmentFlags,
     InvoiceProcessingService,
 )
-from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 
 
 class _InvoiceClientE2E:
@@ -187,8 +187,8 @@ def test_invoice_print_step_uses_legacy_printer() -> None:
     mailer = _MailServiceStub()
     service = InvoiceProcessingService(config, invoice_client, repo, None, mailer)
 
-    with patch("xw_studio.services.printing.invoice_printer.InvoicePrinter._queue_file") as mock_print, patch(
-        "xw_studio.services.printing.invoice_printer.InvoicePrinter._printer_name"
+    with patch("xw_office.services.printing.invoice_printer.InvoicePrinter._queue_file") as mock_print, patch(
+        "xw_office.services.printing.invoice_printer.InvoicePrinter._printer_name"
     ) as mock_printer_name:
         mock_printer_name.return_value = "TestPrinter"
         summary = InvoiceSummary(id="INV-001", invoice_number="R-001", contact_name="John Doe")
@@ -281,12 +281,12 @@ def test_fullflow_invoice_and_label_steps() -> None:
         )
     ]
 
-    with patch("xw_studio.services.printing.invoice_printer.InvoicePrinter._queue_file") as mock_inv_print, patch(
-        "xw_studio.services.printing.label_printer.LabelPrinter.print_address"
+    with patch("xw_office.services.printing.invoice_printer.InvoicePrinter._queue_file") as mock_inv_print, patch(
+        "xw_office.services.printing.label_printer.LabelPrinter.print_address"
     ) as mock_label_print, patch(
-        "xw_studio.services.printing.invoice_printer.InvoicePrinter._printer_name"
+        "xw_office.services.printing.invoice_printer.InvoicePrinter._printer_name"
     ) as mock_printer_name, patch(
-        "xw_studio.services.printing.label_printer.LabelPrinter._printer_name"
+        "xw_office.services.printing.label_printer.LabelPrinter._printer_name"
     ) as mock_label_printer_name:
         mock_printer_name.return_value = "TestPrinter"
         mock_label_printer_name.return_value = "TestLabelPrinter"
@@ -425,8 +425,8 @@ def test_fullflow_skips_print_for_digital_only_wix_orders() -> None:
         )
     ]
 
-    with patch("xw_studio.services.printing.invoice_printer.InvoicePrinter._queue_file") as mock_inv_print, patch(
-        "xw_studio.services.printing.label_printer.LabelPrinter.print_address"
+    with patch("xw_office.services.printing.invoice_printer.InvoicePrinter._queue_file") as mock_inv_print, patch(
+        "xw_office.services.printing.label_printer.LabelPrinter.print_address"
     ) as mock_label_print:
         result = service.run_start_fullflow(full_mode=True)
 
@@ -529,7 +529,7 @@ def test_print_label_for_invoice_uses_override_lines_and_persists_flag() -> None
     mailer = _MailServiceStub()
     service = InvoiceProcessingService(config, invoice_client, repo, None, mailer)
 
-    with patch("xw_studio.services.printing.label_printer.LabelPrinter.print_address") as mock_label_print:
+    with patch("xw_office.services.printing.label_printer.LabelPrinter.print_address") as mock_label_print:
         result = service.print_label_for_invoice(
             "INV-001",
             override_lines=["John Doe", "Edited Street 9", "6020 Innsbruck", "AT"],

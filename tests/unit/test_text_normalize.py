@@ -1,7 +1,7 @@
 """Tests for shared German text normalization utilities."""
 from __future__ import annotations
 
-from xw_studio.core.text_normalize import clean_bank_purpose, normalize_german_text
+from xw_office.core.text_normalize import clean_bank_purpose, normalize_german_text
 
 
 def test_normalize_german_text_transliterates_umlauts() -> None:

@@ -1,8 +1,8 @@
 """Tests for CRM merge preflight (blocked-invoice classification)."""
 from __future__ import annotations
 
-from xw_studio.services.crm.preflight import build_preflight_report, classify_invoice_for_merge
-from xw_studio.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.services.crm.preflight import build_preflight_report, classify_invoice_for_merge
+from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 
 
 def _invoice(

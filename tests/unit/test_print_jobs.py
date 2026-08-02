@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from xw_studio.services.printing.print_jobs import PdfPrintJob
+from xw_office.services.printing.print_jobs import PdfPrintJob
 
 
 def test_pdf_print_job_defaults_dpi_by_kind() -> None:

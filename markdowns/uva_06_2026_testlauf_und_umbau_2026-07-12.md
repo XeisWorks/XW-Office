@@ -1,12 +1,12 @@
 # UVA 06/2026: Testlauf, Fehleranalyse und Umbauplan
 
 Stand: 12.07.2026  
-Scope: `Steuern > UVA` in XW-Studio (PySide6) gegen das Legacy-Modul in `C:\Users\bernh\GitHub\sevDesk`  
+Scope: `Steuern > UVA` in XW-Office (PySide6) gegen das Legacy-Modul in `C:\Users\bernh\GitHub\sevDesk`  
 Wichtig: Es wurden ausschließlich Berechnungen gegen sevDesk ausgeführt. Es wurde nichts an FinanzOnline gesendet.
 
 ## 1. Kurzfazit
 
-Der in XW-Studio angezeigte Betrag von **42,18 EUR ist klar falsch**. Der Legacy-Wert von **1.910,22 EUR liegt nach Anwenderabgleich sehr nahe am echten Ergebnis** und ist deshalb der maßgebliche Referenzkorridor. XW unterschätzt die Zahllast um **1.868,04 EUR**.
+Der in XW-Office angezeigte Betrag von **42,18 EUR ist klar falsch**. Der Legacy-Wert von **1.910,22 EUR liegt nach Anwenderabgleich sehr nahe am echten Ergebnis** und ist deshalb der maßgebliche Referenzkorridor. XW unterschätzt die Zahllast um **1.868,04 EUR**.
 
 Die Differenz ist rechnerisch nahezu vollständig erklärt: XW verliert gegenüber Legacy die Bemessungsgrundlagen **A022 = 3.349,56 EUR** und **A006 = 9.216,97 EUR**. Daraus fehlen **669,91 EUR Umsatzsteuer zu 20 %** und **1.198,21 EUR Umsatzsteuer zu 13 %**, zusammen **1.868,12 EUR**. Die C060-Abweichung von 0,08 EUR reduziert das Gesamtdelta auf exakt **1.868,04 EUR**. Die primäre Fehlerstelle liegt daher in Auswahl, Positionsaggregation oder Klassifikation der Ausgangsumsätze – nicht in KZ 057/065.
 
@@ -24,7 +24,7 @@ Empfehlung: Die Legacy-Berechnung für 06/2026 als Referenz verwenden und zuerst
 
 ## 2. Reproduzierter Testlauf 06/2026
 
-### 2.1 XW-Studio
+### 2.1 XW-Office
 
 Ausgeführt wurde derselbe Service, den die PySide6-Oberfläche über `UvaService.calculate_month(2026, 6)` verwendet:
 
@@ -35,7 +35,7 @@ Ausgeführt wurde derselbe Service, den die PySide6-Oberfläche über `UvaServic
 
 Laufzeit des beobachteten Live-Laufs: ca. 135 Sekunden.
 
-| Kennzahl | XW-Studio |
+| Kennzahl | XW-Office |
 |---|---:|
 | A000 | 8.481,41 |
 | A011 | 227,38 |
@@ -111,7 +111,7 @@ Legacy-Audit:
 
 Der `getTax`-Diagnosewert ist für diesen Vergleich ungeeignet. Er bildet nicht dieselbe vollständige Kennzahlenlogik wie das theoretische Legacy-Ergebnis ab und darf weder Sollwert noch Optimierungsziel sein.
 
-## 3. Was aus XW-Studio beibehalten werden soll
+## 3. Was aus XW-Office beibehalten werden soll
 
 ### 3.1 AT-UVA und ausländische B2C-/OSS-Steuer trennen
 
@@ -307,7 +307,7 @@ U30RuleEngine(period) ----> kennzahlen + formula trace + validation result
 
 ### 6.2 Dateischnitt
 
-Vorgeschlagen unter `src/xw_studio/services/finanzonline/uva/`:
+Vorgeschlagen unter `src/xw_office/services/finanzonline/uva/`:
 
 - `models.py`
 - `snapshot_collector.py`

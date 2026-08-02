@@ -4,9 +4,9 @@ Stand: 2026-06-24
 
 ## Entscheidung
 
-XW-Studio soll die **Post-Labelcenter-Webservice-Schnittstelle** als neuen Standardweg fuer PLC-Labels integrieren. Der bisherige Dateiimport bleibt waehrend der Einfuehrung als expliziter Fallback erhalten und wird erst nach einem belastbaren Parallelbetrieb deaktiviert.
+XW-Office soll die **Post-Labelcenter-Webservice-Schnittstelle** als neuen Standardweg fuer PLC-Labels integrieren. Der bisherige Dateiimport bleibt waehrend der Einfuehrung als expliziter Fallback erhalten und wird erst nach einem belastbaren Parallelbetrieb deaktiviert.
 
-Der Webservice ist fuer XW-Studio sinnvoll, weil `ImportShipment` das erzeugte Label als `pdfData` direkt in der synchronen Antwort liefert. Das beseitigt die Wartezeit durch Ondot Data Exchange, das den Importordner zyklisch abarbeitet. Die verbleibende Zeit besteht nur aus Webservice-Antwort und lokalem Druckauftrag, typischerweise Sekunden statt bis zu fuenf Minuten.
+Der Webservice ist fuer XW-Office sinnvoll, weil `ImportShipment` das erzeugte Label als `pdfData` direkt in der synchronen Antwort liefert. Das beseitigt die Wartezeit durch Ondot Data Exchange, das den Importordner zyklisch abarbeitet. Die verbleibende Zeit besteht nur aus Webservice-Antwort und lokalem Druckauftrag, typischerweise Sekunden statt bis zu fuenf Minuten.
 
 Die aktuelle Klickflaeche in der Aktionsspalte bleibt unveraendert. Das linke Post-Icon oeffnet weiterhin den PLC-Dialog. Innerhalb dieses Dialogs wird der Senden-Schritt von Dateiimport auf Webservice umgestellt.
 
@@ -16,7 +16,7 @@ Am 2026-06-24 wurden die lokalen Dateien unter `resources/api_specs/plc` gegen d
 
 - `PLC_API_Beschreibung.xlsx`, Version **2.0 vom 26.02.2025**, ist die fachliche Referenz. Sie bestaetigt `ImportShipment` mit `ShipmentRow`, `pdfData`, `zplLabelData`, `shipmentDocuments`, `errorCode` und `errorMessage`.
 - `request.txt` zeigt den produktiven Datenvertrag mit `ClientID`, `OrgUnitID`, `OrgUnitGuid`, `DeliveryServiceThirdPartyID`, Empfaenger/Absender, `ColloList` und `PrinterObject`.
-- Gültige Druckwerte sind `LanguageID=PDF`, `LabelFormatID=100x200` und unter anderem `PaperLayoutID=100x200` oder `2xA5inA4`. XW-Studio verwendet fuer den Direktdruck ein einzelnes `100x200`-PDF; der Drucker ist separat konfigurierbar.
+- Gültige Druckwerte sind `LanguageID=PDF`, `LabelFormatID=100x200` und unter anderem `PaperLayoutID=100x200` oder `2xA5inA4`. XW-Office verwendet fuer den Direktdruck ein einzelnes `100x200`-PDF; der Drucker ist separat konfigurierbar.
 - `PLC-Test-Label.pdf` ist A5. Das bestaetigt, dass das von PLC gelieferte PDF unmittelbar an die lokale Druckwarteschlange gehen kann.
 - Die Spezifikation nennt fuer Nicht-EU seit 2019 zwingend: Telefon oder E-Mail von Absender **und** Empfaenger sowie pro Artikel Inhalt, Ursprung, Waehrung, Warenwert, Zolltarifnummer, Nettogewicht und Menge. `DeclarationOfOrigin` ist am Artikelobjekt ein Pflichtfeld.
 - Die Fehlercodes differenzieren fachliche Ablehnung und technischen Transportfehler. Insbesondere darf ein Timeout nicht wie eine sichere Ablehnung behandelt werden.
@@ -28,7 +28,7 @@ Folgerungen fuer den Bauplan: Die direkte PDF-Rueckgabe ist eindeutig der richti
 Die Phasen 1 bis 3 sind im Arbeitsstand umgesetzt:
 
 - Druck-Recovery ergänzt: Das direkt von PLC gelieferte PDF wird vor dem physischen Druck unter `state/plc_labels/<Wix-Order> - <Rechnungsnummer>.pdf` archiviert. Bei einem späteren Klick auf dieselbe gesperrte PLC-Sendung kann dieses Original-PDF erneut eingereiht werden, ohne eine zweite Sendung zu erzeugen. Der senkrechte Strich aus der Wunschbezeichnung wird durch einen Bindestrich ersetzt, weil Windows `|` in Dateinamen verbietet.
-- Für den Drucker `Paketmarke A5` fordert XW-Studio `PaperLayoutID=A5` an. `LabelFormatID` bleibt `100x200`; das Webservice-PDF wird lokal gedruckt, nicht über einen in der PLC-Oberfläche konfigurierten Drucker.
+- Für den Drucker `Paketmarke A5` fordert XW-Office `PaperLayoutID=A5` an. `LabelFormatID` bleibt `100x200`; das Webservice-PDF wird lokal gedruckt, nicht über einen in der PLC-Oberfläche konfigurierten Drucker.
 
 - Kanonisches Modell `PlcShipmentDraft` fuer Adresse, Paket, Zollartikel und Referenz; die Datei- und SOAP-Adapter verwenden dieselbe Validierung.
 - Zentrale ISO-2-Normalisierung: etwa `AUSTRIA` wird zu `AT`; ein ausgeschriebener Landesname kann nicht mehr in `CountryID` gelangen.
@@ -48,9 +48,9 @@ Offen bleiben ausschliesslich die zugangs- und vertragsabhaengigen Abnahmeschrit
 - Der produktive SOAP-WSDL-Endpunkt ist `https://plc.post.at/Post.Webservice/ShippingService.svc?wsdl`; der im WSDL angegebene sichere SOAP-Endpunkt ist `https://plc.post.at/Post.Webservice/ShippingService.svc/secure`.
 - Die Testumgebung ist `https://abn-plc.post.at/DataService/Post.Webservice/ShippingService.svc?wsdl` bzw. der sichere Pfad `/secure`.
 - Der WSDL bietet unter anderem `ImportShipment`, `ImportShipmentAndGenerateBarcode`, `CancelShipments`, `GetAllowedServicesForCountry` und `PerformEndOfDay`.
-- `ImportShipment` antwortet mit Sendungsdaten sowie `pdfData`, `zplLabelData`, `shipmentDocuments`, `errorCode` und `errorMessage`. Fuer XW-Studio ist `pdfData` der direkte Weg zum Drucker.
+- `ImportShipment` antwortet mit Sendungsdaten sowie `pdfData`, `zplLabelData`, `shipmentDocuments`, `errorCode` und `errorMessage`. Fuer XW-Office ist `pdfData` der direkte Weg zum Drucker.
 - Die Zugangskennung fuer den Versand besteht aus `ClientID`, `OrgUnitID` (in Fremdsystemen auch UnitID genannt) und `OrgUnitGuid`. Sie ist im PLC unter **Geraetekonfiguration -> Organisation -> API** abrufbar. [Einrichtungsreferenz](https://docs.reybex.com/kb/anbindung-post-oesterreich/)
-- Der WSDL verlangt HTTPS, aber kein Client-Zertifikat. Die Mandantenkennung liegt im `ShipmentRow`-Payload, nicht in XW-Studio-Quellcode oder Logausgaben.
+- Der WSDL verlangt HTTPS, aber kein Client-Zertifikat. Die Mandantenkennung liegt im `ShipmentRow`-Payload, nicht in XW-Office-Quellcode oder Logausgaben.
 
 ### Legacy-Polling: verifizierter Ist-Zustand
 
@@ -114,7 +114,7 @@ Das Profil `plc_label` ist in `config/default.yaml` angelegt; ohne expliziten `P
 
 Der SOAP-Aufruf nutzt das `ShipmentRow`-Modell aus dem produktiven WSDL:
 
-| PLC-Feld | Quelle in XW-Studio | Regel |
+| PLC-Feld | Quelle in XW-Office | Regel |
 |---|---|---|
 | `ClientID`, `OrgUnitID`, `OrgUnitGuid` | verschluesselte PLC-Geheimnisse | vor dem Versand vollstaendig validieren |
 | `Number` | Wix-Ordernummer, sonst deterministischer Fallback | Idempotenzschluessel, max. 40 Zeichen |
@@ -125,7 +125,7 @@ Der SOAP-Aufruf nutzt das `ShipmentRow`-Modell aus dem produktiven WSDL:
 | `ColloArticleList` | Wix-Positionen | nur Nicht-EU; SKU, Menge, Ursprung, HS-Code, Wert, Waehrung |
 | `OUShipperReference1/2` | Wix-Order und Rechnungsnummer | fuer Suche, Support und Abgleich |
 | `PrinterObject` | `PDF`, `100x200`, `100x200` | lokaler API-Abgleich; erzwingt Rueckgabe von `pdfData` |
-| `CustomerProduct` | `XW-Studio` + Version | Support-/Audit-Kennung |
+| `CustomerProduct` | `XW-Office` + Version | Support-/Audit-Kennung |
 
 Vor dem ersten LIVE-Aufruf ist das reale WSDL gegen die freigeschalteten Versandprodukte zu pruefen. Produktcode `45` ist nicht pauschal fuer jede EU-Sendung korrekt; die Webservice-Antwort ist die fachliche Autoritaet.
 
