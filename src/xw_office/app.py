@@ -24,6 +24,17 @@ from xw_office.ui.theme import apply_app_theme
 logger = logging.getLogger(__name__)
 
 
+def _retain_main_window(app: QApplication, window: object) -> None:
+    """Keep the Python wrapper for the top-level window alive with the app.
+
+    Qt does not parent top-level windows to ``QApplication``.  Without an
+    explicit Python reference, signal cycles can be garbage-collected while
+    child ``QThread`` instances are still running, which makes Qt abort the
+    process with ``QThread: Destroyed while thread is still running``.
+    """
+    app._xw_main_window = window  # type: ignore[attr-defined]
+
+
 def _check_database_connection(config: AppConfig) -> str | None:
     """Return an error string when DB ping fails, else ``None``."""
     if not (config.database_url or "").strip():
@@ -118,6 +129,7 @@ def create_application() -> QApplication:
 
     from xw_office.ui.main_window import MainWindow
     window = MainWindow(container)
+    _retain_main_window(app, window)
     window.showMaximized()
 
     return app
