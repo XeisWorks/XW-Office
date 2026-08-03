@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import fitz
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRect, Qt
 from PySide6.QtWidgets import QComboBox, QStyleOptionViewItem
 
 from xw_office.core.config import AppConfig, PrintingSection
@@ -13,6 +13,14 @@ from xw_office.services.products.print_decision import PieceBlock
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.ui.modules.rechnungen import print_dialog
 from xw_office.ui.modules.rechnungen.print_dialog import ProductPrintConfigDialog, prepare_piece_pdf_print
+from xw_office.ui.modules.rechnungen.view import _PieceDelegate
+
+
+def test_selected_product_delegate_has_exactly_one_print_or_settings_action() -> None:
+    row = QRect(0, 0, 420, 82)
+
+    assert set(_PieceDelegate._button_rects(row, has_print_config=True)) == {"print"}
+    assert set(_PieceDelegate._button_rects(row, has_print_config=False)) == {"manage"}
 
 
 def test_prepare_piece_pdf_print_uses_requested_copy_count(monkeypatch, tmp_path) -> None:

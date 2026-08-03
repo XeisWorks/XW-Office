@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+import unicodedata
 from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
@@ -25,6 +26,7 @@ _RETRY_BACKOFF_SEC = 0.35
 
 _ORDERS_BASE = "https://www.wixapis.com/ecom/v1"
 _UNRELEASED_PREFIXES = ("XW-600", "XW-010")
+_UNRELEASED_TITLE_FIELD = "name des stuckes der stucke"
 _MAIN_CATEGORY_IDS = {
     "033996b3-d79b-5e09-e398-1ab118108b58",
     "d855e175-a905-415b-b2f3-90ee321493dd",
@@ -784,6 +786,50 @@ def _line_item_note(raw: dict[str, Any]) -> str:
     return ""
 
 
+def _normalized_custom_field_name(value: object) -> str:
+    text = unicodedata.normalize("NFKD", _wix_text(value))
+    text = "".join(char for char in text if not unicodedata.combining(char)).casefold()
+    text = text.replace("stueck", "stuck")
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", text).split())
+
+
+def _unreleased_piece_text(raw: dict[str, Any]) -> str:
+    """Read the legacy 'Name des Stueckes / der Stuecke' Wix field."""
+
+    fields = raw.get("customTextFields")
+    if isinstance(fields, dict):
+        for key, value in fields.items():
+            if _normalized_custom_field_name(key) == _UNRELEASED_TITLE_FIELD:
+                return _wix_text(value)
+    elif isinstance(fields, list):
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            if _normalized_custom_field_name(field.get("title")) == _UNRELEASED_TITLE_FIELD:
+                return _wix_text(field.get("value"))
+
+    catalog = raw.get("catalogReference") if isinstance(raw.get("catalogReference"), dict) else {}
+    options = catalog.get("options") if isinstance(catalog.get("options"), dict) else {}
+    nested_fields = options.get("customTextFields")
+    if isinstance(nested_fields, dict):
+        for key, value in nested_fields.items():
+            if _normalized_custom_field_name(key) == _UNRELEASED_TITLE_FIELD:
+                return _wix_text(value)
+
+    lines = raw.get("descriptionLines")
+    if isinstance(lines, list):
+        for line in lines:
+            if not isinstance(line, dict):
+                continue
+            if _normalized_custom_field_name(line.get("name")) != _UNRELEASED_TITLE_FIELD:
+                continue
+            value = line.get("plainTextValue") or line.get("plainText")
+            text = _wix_text(value)
+            if text:
+                return text
+    return ""
+
+
 def _parse_order_line_item(raw: dict[str, Any]) -> WixOrderItem:
     """Extract a normalized WixOrderItem from a Wix ecom lineItem dict."""
     line_item_id = str(raw.get("id") or "").strip()
@@ -859,6 +905,10 @@ def _parse_order_line_item(raw: dict[str, Any]) -> WixOrderItem:
     ).strip()
 
     is_unreleased = any(sku.upper().startswith(p) for p in _UNRELEASED_PREFIXES)
+    if is_unreleased:
+        piece_text = _unreleased_piece_text(raw)
+        if piece_text:
+            name = piece_text
 
     return WixOrderItem(
         line_item_id=line_item_id,

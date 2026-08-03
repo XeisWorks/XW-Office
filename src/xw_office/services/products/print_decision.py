@@ -8,7 +8,7 @@ Integrates:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -217,6 +217,7 @@ class PrintDecisionEngine:
         product = self._catalog.resolve_sku(item.sku)
         stock_status: StockStatus | None = None
         direct_cfg = self._catalog.resolve_print_config(item.sku, title=item.name)
+        resolved_name = self._catalog.resolve_product_title(item.sku, item.name)
 
         if product is None:
             fallback_part = self._part_client.find_part_by_sku(item.sku)
@@ -230,10 +231,11 @@ class PrintDecisionEngine:
                     print_file_path=str(direct_cfg.get("path") or "").strip(),
                 )
 
-        if product is not None and not product.print_file_path.strip():
-            direct_pdf = str(direct_cfg.get("path") or "").strip()
-            if direct_pdf:
-                product.print_file_path = direct_pdf
+        direct_pdf = str(direct_cfg.get("path") or "").strip()
+        if product is not None and direct_pdf:
+            # Title-specific generic SKUs must not mutate the shared product's
+            # default PDF; the next invoice may refer to a different piece.
+            product = replace(product, name=resolved_name or product.name, print_file_path=direct_pdf)
 
         if product is not None and not product.is_digital and product.sevdesk_part_id:
             on_hand = self._fetch_stock_safe(product.sevdesk_part_id)
@@ -260,7 +262,7 @@ class PrintDecisionEngine:
 
         return PieceBlock(
             sku=item.sku,
-            name=item.name,
+            name=resolved_name or item.name,
             qty_needed=item.qty,
             note=item.note,
             is_unreleased=item.is_unreleased,

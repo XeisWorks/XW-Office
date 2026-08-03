@@ -98,3 +98,63 @@ def test_piece_block_uses_legacy_normalized_title_matching(tmp_path) -> None:
     assert str(block.print_file_path) == str(pdf_path)
     assert block.print_profile_id == "noten_a4_duplex"
     assert block.print_plan == [{"range": "Alle Seiten", "profile_id": "noten_a4_duplex"}]
+
+
+def test_xw_010_fuzzy_title_resolves_matching_unreleased_pdf(tmp_path) -> None:
+    folder = tmp_path / "17 Unreleased" / "01 BH"
+    folder.mkdir(parents=True)
+    default_pdf = folder / "Gabriellas Song BH.pdf"
+    matched_pdf = folder / "Jubelkl\u00e4nge BH.pdf"
+    default_pdf.write_bytes(b"%PDF-1.4 default")
+    matched_pdf.write_bytes(b"%PDF-1.4 matched")
+    repo = _RepoStub(
+        {
+            "inventory.products": json.dumps(
+                [
+                    {
+                        "sku": "XW-010",
+                        "name": "Diverse Noten unveroeffentlicht",
+                        "print_file_path": str(default_pdf),
+                        "print_profile_id": "noten_a4_duplex",
+                        "print_plan": [{"range": "Alle Seiten", "profile_id": "noten_a4_duplex"}],
+                        "title_print_configs": {},
+                    }
+                ]
+            )
+        }
+    )
+
+    engine = PrintDecisionEngine(ProductCatalogService(repo), _PartClientStub())
+    blocks = engine.get_piece_blocks(
+        [WixOrderItem(sku="XW-010", name="Junelkl\u00e4nge Marsch", qty=1, is_unreleased=True)]
+    )
+
+    assert len(blocks) == 1
+    assert blocks[0].name == "Jubelkl\u00e4nge"
+    assert blocks[0].print_file_path == matched_pdf
+    assert blocks[0].print_profile_id == "noten_a4_duplex"
+
+
+def test_xw_010_unknown_title_does_not_fall_back_to_unrelated_default_pdf(tmp_path) -> None:
+    default_pdf = tmp_path / "Gabriellas Song BH.pdf"
+    default_pdf.write_bytes(b"%PDF-1.4 default")
+    repo = _RepoStub(
+        {
+            "inventory.products": json.dumps(
+                [
+                    {
+                        "sku": "XW-010",
+                        "name": "Diverse Noten unveroeffentlicht",
+                        "print_file_path": str(default_pdf),
+                        "print_profile_id": "noten_a4_duplex",
+                        "print_plan": [{"range": "Alle Seiten", "profile_id": "noten_a4_duplex"}],
+                        "title_print_configs": {},
+                    }
+                ]
+            )
+        }
+    )
+
+    catalog = ProductCatalogService(repo)
+
+    assert catalog.resolve_print_config("XW-010", title="Vollkommen anderer Titel") == {}

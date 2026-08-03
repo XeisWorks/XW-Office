@@ -74,7 +74,7 @@ from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.inventory import InventoryService
 from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.printer_status.service import PrinterStatusService
-from xw_office.services.products.catalog import Product, ProductCatalogService
+from xw_office.services.products.catalog import Product, ProductCatalogService, normalize_legacy_title
 from xw_office.services.products.print_decision import PieceBlock, PrintDecisionEngine
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sendungen.service import OffeneSendungenService
@@ -769,61 +769,97 @@ class _PieceDelegate(QStyledItemDelegate):
     print_clicked = Signal(object, int)
     manage_clicked = Signal(object)
 
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        icons_dir = Path(__file__).resolve().parents[5] / "icons"
+        self._print_icon = QIcon(str(icons_dir / "print.png"))
+        self._manage_icon = QIcon(str(icons_dir / "printondemand.png"))
+
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
         painter.save()
-        rect = option.rect.adjusted(6, 4, -6, -4)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = option.rect.adjusted(3, 3, -3, -3)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
-        painter.fillRect(option.rect, QColor("#e5eefb") if selected else QColor("#ffffff"))
-        painter.setPen(QColor("#cbd5e1"))
-        painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
+        painter.setPen(QColor("#60a5fa") if selected else QColor("#334155"))
+        painter.setBrush(QColor("#26364a") if selected else QColor("#1e293b"))
+        painter.drawRoundedRect(rect, 6, 6)
 
         flagged = bool(index.data(_PieceListModel.FLAGGED_ROLE))
         enabled = bool(index.data(_PieceListModel.PRINT_ENABLED_ROLE))
         quantity = int(index.data(_PieceListModel.QUANTITY_ROLE) or 1)
-        header = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
         details = index.data(_PieceListModel.DETAILS_ROLE)
         detail_lines = [str(line) for line in details] if isinstance(details, list) else []
         stock = str(index.data(_PieceListModel.STOCK_ROLE) or "")
         stock_color = QColor(str(index.data(_PieceListModel.STOCK_COLOR_ROLE) or "#64748b"))
         block = index.data(_PieceListModel.BLOCK_ROLE)
         has_print_config = isinstance(block, PieceBlock) and block.has_direct_print_config
+        if not isinstance(block, PieceBlock):
+            painter.restore()
+            return
 
-        controls_width = 172 if flagged else 0
-        text_rect = QRect(rect.left(), rect.top(), max(80, rect.width() - controls_width - 8), 22)
+        qty_rect = QRect(rect.left() + 8, rect.top() + 8, 32, 22)
         font = painter.font()
         font.setBold(True)
         painter.setFont(font)
-        painter.setPen(QColor("#111827"))
-        painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, header)
+        painter.setPen(QColor("#ffffff"))
+        painter.drawText(qty_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"{quantity}x")
+
+        action_width = 40 if flagged else 0
+        sku_width = 76
+        text_left = qty_rect.right() + 4
+        text_width = max(80, rect.right() - text_left - sku_width - action_width - 14)
+        title_rect = QRect(text_left, rect.top() + 7, text_width, 22)
+        painter.drawText(
+            title_rect,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            str(block.name or block.sku or "Unbenanntes Produkt"),
+        )
 
         font.setBold(False)
         font.setPointSize(max(8, font.pointSize() - 1))
         painter.setFont(font)
-        y = text_rect.bottom() + 4
-        painter.setPen(QColor("#64748b"))
-        for line in detail_lines[:3]:
-            painter.drawText(QRect(text_rect.left() + 8, y, text_rect.width() - 8, 18), Qt.AlignmentFlag.AlignLeft, line)
-            y += 18
+        description = " | ".join(line for line in detail_lines if line)
+        painter.setPen(QColor("#cbd5e1"))
+        painter.drawText(
+            QRect(text_left, title_rect.bottom() + 2, text_width, 18),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            description,
+        )
         painter.setPen(stock_color)
-        painter.drawText(QRect(text_rect.left() + 8, y, text_rect.width() - 8, 18), Qt.AlignmentFlag.AlignLeft, stock)
+        painter.drawText(
+            QRect(text_left, title_rect.bottom() + 20, text_width, 18),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            stock,
+        )
+
+        sku_right = rect.right() - action_width - 8
+        painter.setPen(QColor("#93c5fd"))
+        painter.drawText(
+            QRect(sku_right - sku_width, rect.top() + 8, sku_width, 24),
+            Qt.AlignmentFlag.AlignCenter,
+            str(block.sku or "-"),
+        )
 
         if flagged:
-            for key, button_rect in self._button_rects(option.rect, has_print_config=has_print_config).items():
-                active = enabled or key == "manage"
-                if key in {"minus", "plus"} and not enabled:
-                    active = False
-                painter.setBrush(QColor("#334155") if active else QColor("#e5e7eb"))
-                painter.setPen(QColor("#64748b") if active else QColor("#cbd5e1"))
-                painter.drawRoundedRect(button_rect, 4, 4)
-                painter.setPen(QColor("#ffffff") if active else QColor("#94a3b8"))
-                label = {"minus": "-", "qty": str(quantity), "plus": "+", "print": "Druck", "manage": "Plan"}[key]
-                painter.drawText(button_rect, Qt.AlignmentFlag.AlignCenter, label)
+            key = "print" if has_print_config else "manage"
+            button_rect = self._button_rects(option.rect, has_print_config=has_print_config)[key]
+            active = enabled if key == "print" else True
+            painter.setBrush(QColor("#334155") if active else QColor("#1f2937"))
+            painter.setPen(QColor("#64748b") if active else QColor("#334155"))
+            painter.drawRoundedRect(button_rect, 4, 4)
+            icon = self._print_icon if key == "print" else self._manage_icon
+            pixmap = icon.pixmap(18, 18)
+            if not pixmap.isNull():
+                painter.setOpacity(1.0 if active else 0.45)
+                painter.drawPixmap(
+                    button_rect.center().x() - pixmap.width() // 2,
+                    button_rect.center().y() - pixmap.height() // 2,
+                    pixmap,
+                )
         painter.restore()
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
-        details = index.data(_PieceListModel.DETAILS_ROLE)
-        detail_count = len(details) if isinstance(details, list) else 0
-        return QSize(option.rect.width(), max(82, 52 + min(3, detail_count) * 18))
+        return QSize(option.rect.width(), 82)
 
     def editorEvent(self, event, model, option, index) -> bool:  # type: ignore[override]
         if event.type() != QEvent.Type.MouseButtonRelease or not index.isValid():
@@ -833,19 +869,7 @@ class _PieceDelegate(QStyledItemDelegate):
         if not isinstance(block, PieceBlock):
             return False
         rects = self._button_rects(option.rect, has_print_config=block.has_direct_print_config)
-        source_model = model
-        source_row = int(index.row())
-        if hasattr(model, "mapToSource"):
-            source_index = model.mapToSource(index)
-            source_model = source_index.model()
-            source_row = int(source_index.row())
         enabled = bool(index.data(_PieceListModel.PRINT_ENABLED_ROLE))
-        if rects["minus"].contains(pos) and enabled and isinstance(source_model, _PieceListModel):
-            source_model.adjust_quantity(source_row, -1)
-            return True
-        if rects["plus"].contains(pos) and enabled and isinstance(source_model, _PieceListModel):
-            source_model.adjust_quantity(source_row, 1)
-            return True
         if "print" in rects and rects["print"].contains(pos) and enabled:
             qty = int(index.data(_PieceListModel.QUANTITY_ROLE) or 1)
             self.print_clicked.emit(block, qty)
@@ -857,18 +881,11 @@ class _PieceDelegate(QStyledItemDelegate):
 
     @staticmethod
     def _button_rects(row_rect: QRect, *, has_print_config: bool) -> dict[str, QRect]:
-        top = row_rect.top() + 12
-        right = row_rect.right() - 8
-        height = 24
+        top = row_rect.top() + 26
+        right = row_rect.right() - 10
+        height = 28
         action = "print" if has_print_config else "manage"
-        widths = {action: 56, "plus": 28, "qty": 42, "minus": 28}
-        rects: dict[str, QRect] = {}
-        cursor = right
-        for key in (action, "plus", "qty", "minus"):
-            width = widths[key]
-            rects[key] = QRect(cursor - width + 1, top, width, height)
-            cursor -= width + 6
-        return rects
+        return {action: QRect(right - 31, top, 32, height)}
 
 
 class RechnungenView(QWidget):
@@ -5010,7 +5027,11 @@ class RechnungenView(QWidget):
         parts = [part.strip() for part in note.split(" | ") if part.strip()]
         sku = str(block.sku or "").strip().upper()
         if sku in {"XW-010", "XW-011"}:
-            return [f"Stücke: {block.name}", *parts]
+            return [
+                part
+                for part in parts
+                if not normalize_legacy_title(part).startswith("name des stuckes der stucke")
+            ]
         return parts
 
     @staticmethod

@@ -681,6 +681,28 @@ def test_parse_order_line_item_reads_enriched_category_label() -> None:
     assert item.category_label == "Musikkapelle"
 
 
+def test_parse_order_line_item_uses_unreleased_custom_piece_title() -> None:
+    item = _parse_order_line_item(
+        {
+            "id": "line-xw-010",
+            "quantity": 1,
+            "productName": {"original": "Diverse Noten unveroeffentlicht"},
+            "physicalProperties": {"sku": "XW-010"},
+            "catalogReference": {
+                "options": {
+                    "customTextFields": {
+                        "Name des Stueckes / der Stuecke": "Junelklaenge Marsch ",
+                        "Sonstige Bemerkungen": "",
+                    }
+                }
+            },
+        }
+    )
+
+    assert item.name == "Junelklaenge Marsch"
+    assert item.is_unreleased is True
+
+
 def test_cached_order_line_items_are_enriched_with_cached_category_label(tmp_path) -> None:
     class _SecretService:
         def get_secret(self, name: str) -> str:
