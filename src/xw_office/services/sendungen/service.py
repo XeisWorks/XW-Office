@@ -25,7 +25,9 @@ _DONE_CASES_KEY = "daily_business.offene_sendungen.done"
 _EXTRACTIONS_KEY = "daily_business.offene_sendungen.extractions"
 _MANUAL_KEY = "daily_business.offene_sendungen.manual"
 _DEFAULT_MODEL = "gpt-4.1-mini"
-_SENDUNG_KEYWORDS = ("sendung", "versand", "etikett", "label", "shipment")
+_EXCLUDED_WIX_SENDER = "no-reply@mystore.wix.com"
+_EXCLUDED_ORDER_SENDER = "office@xeisworks.at"
+_EXCLUDED_ORDER_SUBJECT_PREFIX = "neue bestellung"
 _FOOTER_LINES = [
     "XeisWorks",
     "Musikverlag Mag. Bernhard Holl",
@@ -344,16 +346,27 @@ class OffeneSendungenService:
 
     @staticmethod
     def _is_sendung_candidate(msg: dict[str, Any]) -> bool:
+        """Apply the legacy Offene-Sendungen inbox exclusions.
+
+        The legacy Daily Business panel treated every non-system inbox mail as
+        actionable. Requiring shipping keywords here hid legitimate replies
+        whose subject and preview only contained an order or invoice reference.
+        """
         if not str(msg.get("id") or "").strip():
             return False
         flag_obj = msg.get("flag") if isinstance(msg.get("flag"), dict) else {}
         flag_status = str(flag_obj.get("flagStatus") or "").strip().lower()
         if flag_status == "complete":
             return False
-        subject = str(msg.get("subject") or "").lower()
-        preview = str(msg.get("bodyPreview") or "").lower()
-        haystack = f"{subject} {preview}"
-        return any(keyword in haystack for keyword in _SENDUNG_KEYWORDS)
+        from_obj = msg.get("from") if isinstance(msg.get("from"), dict) else {}
+        email_obj = from_obj.get("emailAddress") if isinstance(from_obj.get("emailAddress"), dict) else {}
+        sender = str(email_obj.get("address") or "").strip().lower()
+        subject = str(msg.get("subject") or "").strip().lower()
+        if sender == _EXCLUDED_WIX_SENDER:
+            return False
+        if sender == _EXCLUDED_ORDER_SENDER and subject.startswith(_EXCLUDED_ORDER_SUBJECT_PREFIX):
+            return False
+        return True
 
     def _to_case(self, msg: dict[str, Any]) -> SendungCase:
         from_obj = msg.get("from") if isinstance(msg.get("from"), dict) else {}

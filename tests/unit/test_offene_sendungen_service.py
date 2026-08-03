@@ -37,6 +37,7 @@ def _message(
     preview: str = "",
     *,
     flag_status: str = "notFlagged",
+    sender: str = "kunde@example.test",
 ) -> dict[str, Any]:
     return {
         "id": msg_id,
@@ -44,7 +45,7 @@ def _message(
         "subject": subject,
         "bodyPreview": preview,
         "body": {"content": preview, "contentType": "text"},
-        "from": {"emailAddress": {"address": "kunde@example.test"}},
+        "from": {"emailAddress": {"address": sender}},
         "conversationId": f"thread-{msg_id}",
         "flag": {"flagStatus": flag_status},
     }
@@ -73,7 +74,7 @@ def test_refresh_count_from_graph_silent_uses_cache_without_silent_token(monkeyp
     assert service.open_count() == 1
 
 
-def test_refresh_count_from_graph_silent_applies_keywords_and_outlook_flag(monkeypatch) -> None:
+def test_refresh_count_from_graph_silent_uses_legacy_inbox_scope_and_outlook_flag(monkeypatch) -> None:
     class _GraphClient:
         def __init__(self, **_kwargs: object) -> None:
             pass
@@ -91,9 +92,31 @@ def test_refresh_count_from_graph_silent_applies_keywords_and_outlook_flag(monke
     monkeypatch.setattr("xw_office.services.sendungen.service.GraphMailClient", _GraphClient)
     service = OffeneSendungenService(_Repo(), _Secrets())  # type: ignore[arg-type]
 
-    assert service.refresh_count_from_graph_silent() == 1
+    assert service.refresh_count_from_graph_silent() == 2
     cases = service.load_open_cases()
-    assert [case.id for case in cases] == ["m1"]
+    assert [case.id for case in cases] == ["m1", "m2"]
+
+
+def test_refresh_count_from_graph_silent_excludes_legacy_system_messages(monkeypatch) -> None:
+    class _GraphClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def has_silent_token(self) -> bool:
+            return True
+
+        def list_inbox_messages(self, **_kwargs: object) -> list[dict[str, Any]]:
+            return [
+                _message("m1", "Neue Bestellung 21029", sender="office@xeisworks.at"),
+                _message("m2", "Your order was placed", sender="no-reply@mystore.wix.com"),
+                _message("m3", "AW: Ihre Rechnung RE-262067", sender="office@xeisworks.at"),
+            ]
+
+    monkeypatch.setattr("xw_office.services.sendungen.service.GraphMailClient", _GraphClient)
+    service = OffeneSendungenService(_Repo(), _Secrets())  # type: ignore[arg-type]
+
+    assert service.refresh_count_from_graph_silent() == 1
+    assert [case.id for case in service.load_open_cases()] == ["m3"]
 
 
 def test_mark_done_sets_outlook_flag_before_local_done(monkeypatch) -> None:
