@@ -156,6 +156,24 @@ def test_post_eu_exception_territories_require_customs() -> None:
     assert not requires_customs_declaration("ES", postal_code="28001", city="Madrid")
 
 
+def test_customs_net_weight_must_not_exceed_manual_package_gross_weight() -> None:
+    shipment = _shipment(
+        country="CH",
+        articles=(
+            PlcCustomsArticle(
+                sku="XW-4582",
+                name="Printed sheet music book",
+                quantity=2,
+                net_weight_kg=0.3,
+                customs_value_eur=19.9,
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Nettogewicht"):
+        shipment.validate()
+
+
 def test_polling_fallback_uses_same_canonical_shipment_data() -> None:
     lines = build_polling_lines(PlcConfig(mode="TEST", import_dir="C:/ignored"), _shipment())
 

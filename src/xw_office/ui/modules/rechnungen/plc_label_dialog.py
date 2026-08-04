@@ -124,7 +124,7 @@ class PlcLabelPrintDialog(QDialog):
 
         self.setWindowTitle("PLC Label Print")
         self.setMinimumWidth(960)
-        self.resize(1180, 820)
+        self.resize(1180, 680)
         self._build_ui()
         if self._manual_entry:
             # Header "PLC-Label" button: no invoice/customer context, so the
@@ -253,8 +253,9 @@ class PlcLabelPrintDialog(QDialog):
         self._customs_group = QGroupBox("Zollerklärung (CN23)")
         customs_layout = QVBoxLayout(self._customs_group)
         customs_hint = QLabel(
-            "Wix liefert Anzahl, Einzelpreis und Produktgewicht. Bitte Nettogewicht und Warenwert "
-            "vor dem Senden prüfen; das Paketgewicht enthält zusätzlich die Verpackung."
+            "Das manuell korrigierte Paketgewicht ist das Bruttogewicht. Wix liefert automatisch "
+            "Anzahl, Einzelpreis und grobes Nettogewicht je Produkt; Einzelgewichte können in den "
+            "Artikeldetails korrigiert werden."
         )
         customs_hint.setWordWrap(True)
         customs_hint.setStyleSheet("color: #64748b;")
@@ -264,21 +265,32 @@ class PlcLabelPrintDialog(QDialog):
         customs_layout.addLayout(customs_form)
 
         self._customs_summary = QLabel("Noch keine Zollartikel geladen")
+        self._customs_summary.setWordWrap(True)
         self._customs_summary.setStyleSheet("font-weight: 600;")
         customs_layout.addWidget(self._customs_summary)
 
-        self._customs_table = QTableWidget(0, 8, self._customs_group)
+        self._customs_details_btn = QPushButton("Artikeldetails anzeigen")
+        self._customs_details_btn.setCheckable(True)
+        self._customs_details_btn.toggled.connect(self._set_customs_details_visible)
+        customs_layout.addWidget(self._customs_details_btn)
+
+        self._customs_details = QWidget(self._customs_group)
+        details_layout = QVBoxLayout(self._customs_details)
+        details_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._customs_table = QTableWidget(0, 8, self._customs_details)
         self._customs_table.setHorizontalHeaderLabels(
             ["Artikel (Englisch)", "SKU", "Anzahl", "Netto kg/Stk", "Wert/Stk", "Währung", "Ursprung", "Zolltarif-Nr."]
         )
         self._customs_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._customs_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._customs_table.setMinimumHeight(190)
         self._customs_table.verticalHeader().setVisible(False)
         header = self._customs_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._customs_table.itemChanged.connect(self._update_customs_summary)
-        customs_layout.addWidget(self._customs_table)
+        details_layout.addWidget(self._customs_table)
 
         customs_buttons = QHBoxLayout()
         add_customs = QPushButton("Artikel hinzufügen")
@@ -288,7 +300,9 @@ class PlcLabelPrintDialog(QDialog):
         customs_buttons.addWidget(add_customs)
         customs_buttons.addWidget(remove_customs)
         customs_buttons.addStretch()
-        customs_layout.addLayout(customs_buttons)
+        details_layout.addLayout(customs_buttons)
+        customs_layout.addWidget(self._customs_details)
+        self._set_customs_details_visible(False)
         root.addWidget(self._customs_group)
         self._customs_group.setVisible(False)
 
@@ -391,6 +405,7 @@ class PlcLabelPrintDialog(QDialog):
     def _on_weight_edit(self, _value: str) -> None:
         self._weight_user_set = True
         self._update_price()
+        self._update_customs_summary()
 
     def _on_country_completed(self, value: str) -> None:
         self._country_combo.setEditText(country_name_en(value))
@@ -484,6 +499,9 @@ class PlcLabelPrintDialog(QDialog):
     def _update_customs_visibility(self) -> None:
         needs_customs = self._current_country_group() == "NON_EU"
         self._customs_group.setVisible(needs_customs)
+        self._send_btn.setText(
+            "PLC-Marke + Zollformular drucken" if needs_customs else "PLC-Marke drucken"
+        )
         if needs_customs and not self._customs_edit.toPlainText().strip():
             self._customs_edit.setPlainText(_CUSTOMS_DESCRIPTION)
         if needs_customs and self._manual_entry and self._customs_table.rowCount() == 0:
@@ -547,10 +565,12 @@ class PlcLabelPrintDialog(QDialog):
             )
         self._customs_table.blockSignals(False)
         self._update_customs_summary()
+        self._set_customs_details_visible(not self._customs_rows_complete())
 
     def _add_empty_customs_row(self) -> None:
         self._append_customs_row()
         self._update_customs_summary()
+        self._set_customs_details_visible(True)
 
     def _remove_selected_customs_row(self) -> None:
         row = self._customs_table.currentRow()
@@ -562,12 +582,45 @@ class PlcLabelPrintDialog(QDialog):
         cell = self._customs_table.item(row, column)
         return str(cell.text() if cell is not None else "").strip()
 
+    def _set_customs_details_visible(self, visible: bool) -> None:
+        expanded = bool(visible)
+        self._customs_details.setVisible(expanded)
+        self._customs_details_btn.blockSignals(True)
+        self._customs_details_btn.setChecked(expanded)
+        self._customs_details_btn.setText(
+            "Artikeldetails ausblenden" if expanded else "Artikeldetails anzeigen"
+        )
+        self._customs_details_btn.blockSignals(False)
+
+    def _customs_rows_complete(self) -> bool:
+        if self._customs_table.rowCount() == 0:
+            return False
+        for row in range(self._customs_table.rowCount()):
+            if not all(self._customs_text(row, column) for column in (0, 2, 3, 4, 5, 6, 7)):
+                return False
+            try:
+                qty = int(self._customs_text(row, 2))
+                weight = float(self._customs_text(row, 3).replace(",", "."))
+                value = float(self._customs_text(row, 4).replace(",", "."))
+            except ValueError:
+                return False
+            if qty <= 0 or weight <= 0 or value <= 0:
+                return False
+        return True
+
+    def _gross_weight_kg(self) -> float | None:
+        try:
+            value = float(self._weight_edit.text().strip().replace(",", "."))
+        except ValueError:
+            return None
+        return value if value > 0 else None
+
     def _update_customs_summary(self, _item: object = None) -> None:
         quantity = 0
         net_weight = 0.0
         customs_value = 0.0
         currencies: set[str] = set()
-        incomplete = 0
+        incomplete = 1 if self._customs_table.rowCount() == 0 else 0
         for row in range(self._customs_table.rowCount()):
             try:
                 qty = int(self._customs_text(row, 2))
@@ -582,7 +635,12 @@ class PlcLabelPrintDialog(QDialog):
             currency = self._customs_text(row, 5).upper()
             if currency:
                 currencies.add(currency)
-            if not all(self._customs_text(row, column) for column in (0, 2, 3, 4, 5, 6, 7)):
+            if (
+                qty <= 0
+                or weight <= 0
+                or value <= 0
+                or not all(self._customs_text(row, column) for column in (0, 2, 3, 4, 5, 6, 7))
+            ):
                 incomplete += 1
         currency_label = (
             next(iter(currencies))
@@ -591,10 +649,26 @@ class PlcLabelPrintDialog(QDialog):
             if not currencies
             else "gemischte Währung"
         )
-        summary = f"{quantity} Stk. · Nettogewicht {net_weight:.3f} kg · Warenwert {customs_value:.2f} {currency_label}"
+        gross_weight = self._gross_weight_kg()
+        summary = f"{quantity} Stk. · Zoll-Netto {net_weight:.3f} kg"
+        if gross_weight is not None:
+            packaging_weight = gross_weight - net_weight
+            summary += (
+                f" · Paket-Brutto {gross_weight:.3f} kg"
+                f" · Verpackung/Differenz {packaging_weight:.3f} kg"
+            )
+        else:
+            packaging_weight = None
+            summary += " · Paket-Brutto fehlt"
+        summary += f" · Warenwert {customs_value:.2f} {currency_label}"
         if incomplete:
             summary += f" · {incomplete} Zeile(n) unvollständig"
             self._customs_summary.setStyleSheet("font-weight: 600; color: #b45309;")
+        elif packaging_weight is None:
+            self._customs_summary.setStyleSheet("font-weight: 600; color: #b45309;")
+        elif packaging_weight < -0.001:
+            summary += " · Zoll-Netto ist höher als Paket-Brutto – Gewichte prüfen"
+            self._customs_summary.setStyleSheet("font-weight: 600; color: #b91c1c;")
         else:
             self._customs_summary.setStyleSheet("font-weight: 600; color: #0f766e;")
         self._customs_summary.setText(summary)

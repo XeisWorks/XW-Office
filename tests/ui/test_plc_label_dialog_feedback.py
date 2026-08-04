@@ -138,6 +138,7 @@ def test_send_error_remains_modal_and_keeps_plc_dialog_open(
 def test_customs_table_uses_only_physical_wix_items_and_builds_cn23_values(qtbot: object) -> None:
     dialog = PlcLabelPrintDialog(_container(), None)
     qtbot.addWidget(dialog)
+    dialog._weight_edit.setText("0,65")  # noqa: SLF001
 
     dialog._populate_customs_table(  # noqa: SLF001
         [
@@ -163,3 +164,27 @@ def test_customs_table_uses_only_physical_wix_items_and_builds_cn23_values(qtbot
     assert articles[0].hs_tariff_number == "49040000"
     assert "2 Stk." in dialog._customs_summary.text()  # noqa: SLF001
     assert "39.80 EUR" in dialog._customs_summary.text()  # noqa: SLF001
+    assert "Paket-Brutto 0.650 kg" in dialog._customs_summary.text()  # noqa: SLF001
+    assert "Verpackung/Differenz 0.150 kg" in dialog._customs_summary.text()  # noqa: SLF001
+    assert dialog._customs_details.isHidden()  # noqa: SLF001
+
+    dialog._customs_details_btn.click()  # noqa: SLF001
+    assert not dialog._customs_details.isHidden()  # noqa: SLF001
+
+    dialog._customs_table.item(0, 3).setText("0,200")  # noqa: SLF001
+    edited = dialog._build_customs_articles()  # noqa: SLF001
+    assert edited[0].net_weight_kg == 0.2
+    assert "Verpackung/Differenz 0.250 kg" in dialog._customs_summary.text()  # noqa: SLF001
+
+
+def test_incomplete_wix_customs_weight_expands_details_automatically(qtbot: object) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+    dialog._weight_edit.setText("0,50")  # noqa: SLF001
+
+    dialog._populate_customs_table(  # noqa: SLF001
+        [WixOrderItem(sku="XW-400", name="Alpenmarsch", qty=1, unit_price_gross=19.9)]
+    )
+
+    assert not dialog._customs_details.isHidden()  # noqa: SLF001
+    assert "unvollständig" in dialog._customs_summary.text()  # noqa: SLF001

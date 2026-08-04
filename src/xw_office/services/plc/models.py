@@ -177,6 +177,14 @@ class PlcShipmentDraft:
             currencies = {article.currency.strip().upper() for article in self.articles}
             if len(currencies) != 1:
                 raise ValueError("Alle PLC-Zollartikel müssen dieselbe Währung verwenden")
+            total_net_weight = sum(
+                article.net_weight_kg * article.quantity for article in self.articles
+            )
+            total_gross_weight = sum(parcel.weight_kg for parcel in self.parcels)
+            if total_net_weight > total_gross_weight + 0.001:
+                raise ValueError(
+                    "PLC-Zoll-Nettogewicht darf nicht höher als das Paket-Bruttogewicht sein"
+                )
 
 
 def clean_reference(value: object, *, max_length: int = 50) -> str:
