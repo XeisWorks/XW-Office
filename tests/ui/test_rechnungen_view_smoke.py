@@ -898,7 +898,7 @@ def test_plc_dialog_defaults_to_direct_webservice_without_changing_list_action(q
     assert dialog._transport_combo.count() == 2  # noqa: SLF001
     assert dialog._address_edit.toPlainText().endswith("AUSTRIA")  # noqa: SLF001
     assert dialog._recipient_email.text() == "customer@example.test"  # noqa: SLF001
-    assert not hasattr(dialog, "_recipient_phone")
+    assert dialog._recipient_phone.text() == ""  # noqa: SLF001
 
     dialog._on_context_loaded(  # noqa: SLF001
         _PlcDialogContext(
@@ -930,7 +930,7 @@ def test_manual_plc_dialog_uses_structured_address_and_office_email(qtbot: objec
         "Austria",
     ]
     assert dialog._recipient_email.text() == "office@xeisworks.at"  # noqa: SLF001
-    assert not hasattr(dialog, "_recipient_phone")
+    assert dialog._recipient_phone.text() == ""  # noqa: SLF001
     assert "Österreich" in dialog._country_combo.completer().model().stringList()  # noqa: SLF001
 
 

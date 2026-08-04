@@ -1,6 +1,8 @@
 """Unit coverage for persistent PLC label PDF recovery."""
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from xw_office.services.plc.label_archive import PlcLabelArchive
@@ -51,6 +53,17 @@ def test_archive_uses_windows_safe_filename_parts(tmp_path) -> None:
 def test_archive_rejects_non_pdf_response(tmp_path) -> None:
     with pytest.raises(ValueError, match="PDF"):
         PlcLabelArchive(tmp_path).save(_shipment(), b"not a PDF")
+
+
+def test_archive_keeps_customs_form_separate_from_label_lookup(tmp_path) -> None:
+    archive = PlcLabelArchive(tmp_path)
+    shipment = _shipment()
+
+    path = archive.save_customs_document(shipment, b"%PDF-1.7\nCN23")
+
+    assert path == tmp_path / "customs" / "20868 - RE-261952 - Zollformular.pdf"
+    assert archive.find_customs_document(shipment) == path
+    assert archive.find(shipment) is None
 
 
 def test_additional_plc_label_uses_suffix_for_order_and_invoice(tmp_path) -> None:
@@ -106,4 +119,54 @@ def test_webservice_label_queue_uses_explicit_a5_layout(tmp_path) -> None:
     assert queued[0].orientation == "portrait"
     assert queued[0].placement_mode == "printable_origin"
     assert queued[0].scale_mode == "none"
+    assert queued[0].alignment == "center"
+
+
+def test_customs_document_queue_uses_zollformular_at_90_percent(tmp_path) -> None:
+    pdf_path = tmp_path / "cn23.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\nCN23")
+    queued: list[PdfPrintJob] = []
+
+    class QueueStub:
+        def enqueue(self, job: PdfPrintJob) -> str:
+            queued.append(job)
+            return job.id
+
+    profile = SimpleNamespace(
+        printer_name="Zollformular",
+        page_size="A4",
+        orientation="portrait",
+        placement_mode="printable_origin",
+        scale_mode="fit",
+        scale_percent=90.0,
+        alignment="center",
+        dpi=None,
+        x_offset_mm=0.0,
+        y_offset_mm=0.0,
+    )
+
+    class PrintingStub:
+        def resolve_profile(self, profile_id: str) -> object:
+            assert profile_id == "plc_customs"
+            return profile
+
+    class ConfigStub:
+        printing = PrintingStub()
+
+    class ContainerStub:
+        config = ConfigStub()
+
+        def resolve(self, _cls: object) -> object:
+            return QueueStub()
+
+    dialog = PlcLabelPrintDialog.__new__(PlcLabelPrintDialog)
+    dialog._container = ContainerStub()  # noqa: SLF001
+
+    dialog._queue_customs_document(pdf_path, "20868")  # noqa: SLF001
+
+    assert len(queued) == 1
+    assert queued[0].printer_name == "Zollformular"
+    assert queued[0].page_size == "A4"
+    assert queued[0].scale_mode == "fit"
+    assert queued[0].scale_percent == pytest.approx(90.0)
     assert queued[0].alignment == "center"

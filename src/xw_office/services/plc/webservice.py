@@ -263,6 +263,10 @@ def build_import_shipment_row(settings: PlcWebserviceSettings, shipment: PlcShip
             "PaperLayoutID": settings.paper_layout_id,
         },
     }
+    if shipment.country_group == "NON_EU":
+        # The PLC API only returns the generated CN23 in
+        # ``shipmentDocuments`` when it is explicitly requested here.
+        row["BusinessDocumentEntryList"] = {"string": ["CustomsDeclaration"]}
     if shipment.customs_description.strip():
         row["CustomsDescription"] = shipment.customs_description.strip()
     return row

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 import httpx
+import pytest
 
 from xw_office.services.wix.client import WixOrdersClient
 from xw_office.services.wix.client import _parse_order_line_item
@@ -817,6 +818,51 @@ def test_parse_order_line_item_reads_enriched_category_label() -> None:
 
     assert item.catalog_item_id == "product-1"
     assert item.category_label == "Musikkapelle"
+
+
+def test_parse_order_line_item_normalizes_wix_weight_and_currency_for_customs() -> None:
+    item = _parse_order_line_item(
+        {
+            "quantity": 2,
+            "productName": {"original": "Marsch"},
+            "physicalProperties": {"sku": "XW-782", "weight": 1.5},
+            "price": {"amount": "19.90"},
+        },
+        weight_unit="LB",
+        currency="CHF",
+    )
+
+    assert item.unit_weight_kg == pytest.approx(0.680388555)
+    assert item.unit_price_gross == pytest.approx(19.9)
+    assert item.currency == "CHF"
+    assert item.is_digital is False
+
+
+def test_parse_order_line_item_marks_digital_items_for_customs_filtering() -> None:
+    item = _parse_order_line_item(
+        {
+            "productName": {"original": "PDF Download"},
+            "itemType": {"preset": "DIGITAL"},
+            "price": {"amount": "9.90"},
+        }
+    )
+
+    assert item.is_digital is True
+    assert item.unit_weight_kg == 0.0
+
+
+def test_parse_order_line_item_uses_discounted_transaction_value_for_customs() -> None:
+    item = _parse_order_line_item(
+        {
+            "quantity": 2,
+            "productName": {"original": "Polka"},
+            "price": {"amount": "15.00"},
+            "lineItemPrice": {"amount": "30.00"},
+            "totalDiscount": {"amount": "6.00"},
+        }
+    )
+
+    assert item.unit_price_gross == pytest.approx(12.0)
 
 
 def test_parse_order_line_item_uses_unreleased_custom_piece_title() -> None:

@@ -40,3 +40,16 @@ def test_product_print_profiles_use_pdf_xchange_native_backend() -> None:
         assert profile.printer_name == printer_name
         assert profile.backend == "pdf_xchange"
         assert profile.native_pdf_exe.endswith("PXCEditor.exe")
+
+
+def test_plc_customs_profile_uses_dedicated_printer_and_90_percent_scale() -> None:
+    config = load_config("config/default.yaml")
+
+    profile = config.printing.resolve_profile("plc_customs")
+
+    assert profile is not None
+    assert profile.printer_name == "Zollformular"
+    assert profile.page_size == "A4"
+    assert profile.scale_mode == "fit"
+    assert profile.scale_percent == 90.0
+    assert "Zollformular" in config.printing.configured_printer_names

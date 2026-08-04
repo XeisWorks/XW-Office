@@ -39,6 +39,7 @@ class QtRasterBackend(PdfPrintBackend):
             page_size=job.page_size,
             orientation=job.orientation,
             scale_mode=job.scale_mode,
+            scale_percent=job.scale_percent,
             alignment=job.alignment,
             x_offset_mm=job.x_offset_mm,
             y_offset_mm=job.y_offset_mm,

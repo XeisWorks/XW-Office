@@ -46,6 +46,33 @@ EU_COUNTRIES = frozenset(
 )
 
 
+def requires_customs_declaration(
+    country_iso2_value: object,
+    *,
+    postal_code: object = "",
+    city: object = "",
+) -> bool:
+    """Return whether Post customs data is required for the destination."""
+    code = str(country_iso2_value or "").strip().upper()
+    if code not in EU_COUNTRIES:
+        return bool(code)
+    postal = re.sub(r"\s+", "", str(postal_code or "")).upper()
+    city_key = str(city or "").strip().casefold()
+    if code == "DE":
+        return postal in {"27498", "78266"} or any(name in city_key for name in ("helgoland", "büsingen", "buesingen"))
+    if code == "FI":
+        return postal.startswith("22") or "åland" in city_key or "aland" in city_key
+    if code == "GR":
+        return postal == "63086" or any(name in city_key for name in ("athos", "agion oros"))
+    if code == "IT":
+        return postal in {"22061", "23041"} or any(name in city_key for name in ("campione", "livigno"))
+    if code == "ES":
+        return postal.startswith(("35", "38", "51", "52")) or any(
+            name in city_key for name in ("ceuta", "melilla", "canarias", "canary")
+        )
+    return False
+
+
 @dataclass(frozen=True)
 class PlcParcel:
     """One physical parcel sent to PLC; weight is expressed in kilograms."""
@@ -65,7 +92,7 @@ class PlcCustomsArticle:
     net_weight_kg: float
     customs_value_eur: float
     origin_iso2: str = "AT"
-    hs_tariff_number: str = "49019900"
+    hs_tariff_number: str = "49040000"
     unit_id: str = "PCE"
     currency: str = "EUR"
     customs_option_id: int = 1
@@ -93,7 +120,11 @@ class PlcShipmentDraft:
     def country_group(self) -> str:
         if self.country_iso2 == "AT":
             return "AT"
-        if self.country_iso2 in EU_COUNTRIES:
+        if not requires_customs_declaration(
+            self.country_iso2,
+            postal_code=self.recipient.zip,
+            city=self.recipient.city,
+        ):
             return "EU"
         return "NON_EU"
 
@@ -139,6 +170,13 @@ class PlcShipmentDraft:
                     raise ValueError("PLC-Zollartikel benÃ¶tigt Gewicht und Warenwert")
                 if len(article.origin_iso2.strip()) != 2 or not article.hs_tariff_number.strip():
                     raise ValueError("PLC-Zollartikel benÃ¶tigt Ursprung und HS-Code")
+                if not re.fullmatch(r"\d{6,10}", article.hs_tariff_number.strip()):
+                    raise ValueError("PLC-Zolltarifnummer muss aus 6 bis 10 Ziffern bestehen")
+                if not re.fullmatch(r"[A-Z]{3}", article.currency.strip().upper()):
+                    raise ValueError("PLC-Zollartikel benötigt einen ISO-Währungscode")
+            currencies = {article.currency.strip().upper() for article in self.articles}
+            if len(currencies) != 1:
+                raise ValueError("Alle PLC-Zollartikel müssen dieselbe Währung verwenden")
 
 
 def clean_reference(value: object, *, max_length: int = 50) -> str:

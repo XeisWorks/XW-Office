@@ -684,6 +684,7 @@ class WixOrderItem(BaseModel):
     unit_price_gross: float = 0.0
     currency: str = "EUR"
     unit_weight_kg: float = 0.0
+    is_digital: bool = False
     is_unreleased: bool = False
 
 
@@ -830,7 +831,56 @@ def _unreleased_piece_text(raw: dict[str, Any]) -> str:
     return ""
 
 
-def _parse_order_line_item(raw: dict[str, Any]) -> WixOrderItem:
+def _line_item_is_digital(raw: dict[str, Any]) -> bool:
+    product_type = str(raw.get("productType") or "").strip().lower()
+    item_type = raw.get("itemType") if isinstance(raw.get("itemType"), dict) else {}
+    physical_props = raw.get("physicalProperties") if isinstance(raw.get("physicalProperties"), dict) else {}
+    shippable_raw = physical_props.get("shippable")
+    shippable = str(shippable_raw).strip().lower() if shippable_raw is not None else ""
+    return bool(
+        product_type == "digital"
+        or str(item_type.get("preset") or "").strip().lower() == "digital"
+        or shippable in ("false", "0", "no")
+        or raw.get("digitalFile")
+    )
+
+
+def _weight_to_kg(value: float, unit: object) -> float:
+    normalized = str(unit or "KG").strip().upper()
+    factors = {
+        "KG": 1.0,
+        "KILOGRAM": 1.0,
+        "KILOGRAMS": 1.0,
+        "G": 0.001,
+        "GRAM": 0.001,
+        "GRAMS": 0.001,
+        "LB": 0.45359237,
+        "LBS": 0.45359237,
+        "POUND": 0.45359237,
+        "POUNDS": 0.45359237,
+        "OZ": 0.028349523125,
+        "OUNCE": 0.028349523125,
+        "OUNCES": 0.028349523125,
+    }
+    return max(float(value), 0.0) * factors.get(normalized, 1.0)
+
+
+def _money_amount(value: object) -> float | None:
+    candidate = value
+    if isinstance(candidate, dict):
+        candidate = candidate.get("amount") or candidate.get("value") or candidate.get("price")
+    try:
+        return float(str(candidate).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_order_line_item(
+    raw: dict[str, Any],
+    *,
+    weight_unit: object = "KG",
+    currency: object = "EUR",
+) -> WixOrderItem:
     """Extract a normalized WixOrderItem from a Wix ecom lineItem dict."""
     line_item_id = str(raw.get("id") or "").strip()
     catalog = raw.get("catalogReference") if isinstance(raw.get("catalogReference"), dict) else {}
@@ -870,29 +920,30 @@ def _parse_order_line_item(raw: dict[str, Any]) -> WixOrderItem:
     # Gross line-item price is required when a non-EU PLC label needs customs
     # declarations. Wix has used several representations across API versions.
     unit_price_gross = 0.0
-    currency = "EUR"
-    for key in ("price", "lineItemPrice", "priceBeforeDiscountsAndTax", "priceBeforeDiscounts"):
-        candidate = raw.get(key)
-        if isinstance(candidate, dict):
-            candidate = candidate.get("amount") or candidate.get("value") or candidate.get("price")
-        try:
-            parsed = float(str(candidate).replace(",", "."))
-        except (TypeError, ValueError):
-            continue
-        if parsed >= 0:
-            unit_price_gross = parsed
-            break
+    currency_code = str(currency or "EUR").strip().upper() or "EUR"
+    line_total = _money_amount(raw.get("lineItemPrice"))
+    total_discount = _money_amount(raw.get("totalDiscount")) or 0.0
+    if line_total is not None and line_total >= 0:
+        # Wix keeps GLOBAL coupon discounts at line-item level. Use the actual
+        # transaction value per unit for customs instead of the catalogue price.
+        unit_price_gross = max(line_total - max(total_discount, 0.0), 0.0) / qty
+    else:
+        for key in ("price", "priceBeforeDiscountsAndTax", "priceBeforeDiscounts"):
+            parsed = _money_amount(raw.get(key))
+            if parsed is not None and parsed >= 0:
+                unit_price_gross = parsed
+                break
     for key in ("currency", "currencyCode"):
         value = str(raw.get(key) or "").strip().upper()
         if value:
-            currency = value
+            currency_code = value
             break
     unit_weight_kg = 0.0
     raw_weight = phys.get("weight") if isinstance(phys, dict) else None
     if isinstance(raw_weight, dict):
         raw_weight = raw_weight.get("value") or raw_weight.get("amount")
     try:
-        unit_weight_kg = max(float(str(raw_weight).replace(",", ".")), 0.0)
+        unit_weight_kg = _weight_to_kg(float(str(raw_weight).replace(",", ".")), weight_unit)
     except (TypeError, ValueError):
         pass
 
@@ -919,8 +970,9 @@ def _parse_order_line_item(raw: dict[str, Any]) -> WixOrderItem:
         note=note,
         category_label=category_label,
         unit_price_gross=unit_price_gross,
-        currency=currency,
+        currency=currency_code,
         unit_weight_kg=unit_weight_kg,
+        is_digital=_line_item_is_digital(raw),
         is_unreleased=is_unreleased,
     )
 
@@ -1480,7 +1532,15 @@ class WixOrdersClient:
             return None
         cached = self._order_with_enriched_line_item_categories(ref, cached)
         raw_items = cached.get("lineItems")
-        return [_parse_order_line_item(item) for item in raw_items if isinstance(item, dict)]
+        return [
+            _parse_order_line_item(
+                item,
+                weight_unit=cached.get("weightUnit") or "KG",
+                currency=cached.get("currency") or "EUR",
+            )
+            for item in raw_items
+            if isinstance(item, dict)
+        ]
 
     def get_cached_reference_digital_only(self, reference: str) -> bool | None:
         """Return cached digital-only classification without calling Wix.
@@ -1564,21 +1624,7 @@ class WixOrdersClient:
 
     @staticmethod
     def line_item_is_digital(raw: dict[str, Any]) -> bool:
-        product_type = str(raw.get("productType") or "").strip().lower()
-        if product_type == "digital":
-            return True
-        item_type = raw.get("itemType") if isinstance(raw.get("itemType"), dict) else {}
-        preset = str(item_type.get("preset") or "").strip().lower()
-        if preset == "digital":
-            return True
-        physical_props = raw.get("physicalProperties") if isinstance(raw.get("physicalProperties"), dict) else {}
-        shippable_raw = physical_props.get("shippable")
-        shippable = str(shippable_raw).strip().lower() if shippable_raw is not None else ""
-        if shippable in ("false", "0", "no"):
-            return True
-        if raw.get("digitalFile"):
-            return True
-        return False
+        return _line_item_is_digital(raw)
 
     def is_reference_digital_only(self, reference: str, *, use_cache: bool = True) -> bool:
         order = self._resolve_order(reference, use_cache=use_cache)
@@ -2302,7 +2348,13 @@ class WixOrdersClient:
             if cancel_token is not None:
                 cancel_token.raise_if_cancelled()
             if isinstance(item, dict):
-                items.append(_parse_order_line_item(item))
+                items.append(
+                    _parse_order_line_item(
+                        item,
+                        weight_unit=order.get("weightUnit") or "KG",
+                        currency=order.get("currency") or "EUR",
+                    )
+                )
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         logger.debug(
             "Wix metric line_items_ms=%s ref=%s items=%s",

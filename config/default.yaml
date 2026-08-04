@@ -56,6 +56,7 @@ printing:
     - "Canon Broschüre Duo"
     - "Brother QL-800"
     - "Paketmarke A5"
+    - "Zollformular"
   # Named print profiles: map a logical role to a specific printer + DPI.
   # Use profile "id" when calling print_pdf() via product print rules.
   print_profiles:
@@ -72,6 +73,15 @@ printing:
       orientation: "portrait"
       placement_mode: "printable_origin"
       scale_mode: "none"
+      alignment: "center"
+    - id: "plc_customs"
+      label: "PLC-Zollformular"
+      printer_name: "Zollformular"
+      page_size: "A4"
+      orientation: "portrait"
+      placement_mode: "printable_origin"
+      scale_mode: "fit"
+      scale_percent: 90
       alignment: "center"
     - id: "noten_simplex"
       label: "Noten A4 Simplex"

@@ -216,6 +216,7 @@ def _target_rect(
     alignment: AlignmentMode,
     x_offset_mm: float,
     y_offset_mm: float,
+    scale_percent: float = 100.0,
 ) -> QRectF | QPointF:
     offset_x = mm_to_px(x_offset_mm, dpi)
     offset_y = mm_to_px(y_offset_mm, dpi)
@@ -231,6 +232,7 @@ def _target_rect(
     img_w = max(float(image.width()), 1.0)
     img_h = max(float(image.height()), 1.0)
     scale = min(max(float(base_w), 1.0) / img_w, max(float(base_h), 1.0) / img_h)
+    scale *= max(min(float(scale_percent), 1000.0), 1.0) / 100.0
     target_w = img_w * scale
     target_h = img_h * scale
     target_x = float(base_x) + offset_x
@@ -404,6 +406,7 @@ def print_pdf_with_qprinter(
     page_size: str = "",
     orientation: str = "",
     scale_mode: str = "none",
+    scale_percent: float = 100.0,
     alignment: str = "top_left",
     x_offset_mm: float = 0.0,
     y_offset_mm: float = 0.0,
@@ -500,6 +503,7 @@ def print_pdf_with_qprinter(
                         alignment=effective_alignment,
                         x_offset_mm=x_offset_mm,
                         y_offset_mm=y_offset_mm,
+                        scale_percent=scale_percent,
                     )
                     _log_page_strategy(
                         printer_name=printer_name,

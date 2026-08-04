@@ -89,6 +89,7 @@ class PrintProfile:
     page_size: str = ""
     orientation: str = ""
     scale_mode: str = "none"
+    scale_percent: float = 100.0
     alignment: str = "top_left"
     x_offset_mm: float = 0.0
     y_offset_mm: float = 0.0
@@ -127,6 +128,7 @@ class PrintingSection:
             page_size=str(entry.get("page_size") or ""),
             orientation=str(entry.get("orientation") or ""),
             scale_mode=str(entry.get("scale_mode") or "none"),
+            scale_percent=float(entry.get("scale_percent") or 100.0),
             alignment=str(entry.get("alignment") or "top_left"),
             x_offset_mm=float(entry.get("x_offset_mm") or 0.0),
             y_offset_mm=float(entry.get("y_offset_mm") or 0.0),

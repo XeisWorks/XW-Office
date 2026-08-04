@@ -11,6 +11,7 @@ from xw_office.services.plc.models import (
     PlcShipmentDraft,
     build_polling_lines,
     parse_shipment_address_lines,
+    requires_customs_declaration,
 )
 from xw_office.services.plc.polling import PlcConfig, ShipmentAddress
 from xw_office.services.plc.service import PlcDuplicateShipmentError, PlcShipmentService
@@ -143,9 +144,16 @@ def test_non_eu_shipment_requires_complete_customs_values() -> None:
     valid.validate()
     row = build_import_shipment_row(_settings(), valid)
     article = row["ColloList"]["ColloRow"][0]["ColloArticleList"]["ColloArticleRow"][0]  # type: ignore[index]
-    assert article["HSTariffNumber"] == "49019900"
+    assert article["HSTariffNumber"] == "49040000"
     assert article["ValueOfGoodsPerUnit"] == pytest.approx(19.9)
     assert article["DeclarationOfOrigin"] is False
+    assert row["BusinessDocumentEntryList"] == {"string": ["CustomsDeclaration"]}
+
+
+def test_post_eu_exception_territories_require_customs() -> None:
+    assert requires_customs_declaration("ES", postal_code="35001", city="Las Palmas")
+    assert requires_customs_declaration("DE", postal_code="27498", city="Helgoland")
+    assert not requires_customs_declaration("ES", postal_code="28001", city="Madrid")
 
 
 def test_polling_fallback_uses_same_canonical_shipment_data() -> None:
@@ -158,6 +166,7 @@ def test_polling_fallback_uses_same_canonical_shipment_data() -> None:
 
 def test_webservice_client_decodes_pdf_and_tracking_codes() -> None:
     pdf = b"%PDF-1.4\nlabel"
+    customs_pdf = b"%PDF-1.4\nCN23"
     calls: list[dict[str, object]] = []
 
     class FakeSoap:
@@ -165,6 +174,7 @@ def test_webservice_client_decodes_pdf_and_tracking_codes() -> None:
             calls.append(row)
             return {
                 "pdfData": base64.b64encode(pdf).decode("ascii"),
+                "shipmentDocuments": base64.b64encode(customs_pdf).decode("ascii"),
                 "ImportShipmentResult": [{"ColloCodeList": [{"Code": "1000000500113230110301"}]}],
             }
 
@@ -173,6 +183,7 @@ def test_webservice_client_decodes_pdf_and_tracking_codes() -> None:
 
     assert result.pdf_bytes == pdf
     assert result.tracking_codes == ("1000000500113230110301",)
+    assert result.shipment_documents == customs_pdf
     assert calls[0]["Number"] == "20856"
 
 

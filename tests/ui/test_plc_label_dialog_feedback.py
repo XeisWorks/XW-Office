@@ -14,6 +14,7 @@ from xw_office.services.plc.models import PlcParcel, PlcShipmentDraft
 from xw_office.services.plc.polling import ShipmentAddress
 from xw_office.services.plc.service import PlcShipmentService
 from xw_office.services.plc.webservice import PlcWebserviceResult
+from xw_office.services.wix.client import WixOrderItem
 from xw_office.ui.modules.rechnungen import plc_label_dialog as plc_dialog_module
 from xw_office.ui.modules.rechnungen.plc_label_dialog import (
     PlcLabelPrintDialog,
@@ -132,3 +133,33 @@ def test_send_error_remains_modal_and_keeps_plc_dialog_open(
     assert critical_calls == ["PLC nicht erreichbar"]
     assert dialog.isVisible()
     assert dialog.result() != int(QDialog.DialogCode.Accepted)
+
+
+def test_customs_table_uses_only_physical_wix_items_and_builds_cn23_values(qtbot: object) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+
+    dialog._populate_customs_table(  # noqa: SLF001
+        [
+            WixOrderItem(
+                sku="XW-400",
+                name="Alpenmarsch",
+                qty=2,
+                unit_weight_kg=0.25,
+                unit_price_gross=19.9,
+                currency="EUR",
+            ),
+            WixOrderItem(name="PDF Download", qty=1, unit_price_gross=9.9, is_digital=True),
+        ]
+    )
+
+    articles = dialog._build_customs_articles()  # noqa: SLF001
+    assert len(articles) == 1
+    assert articles[0].name == "Printed sheet music book – Alpenmarsch"
+    assert articles[0].quantity == 2
+    assert articles[0].net_weight_kg == 0.25
+    assert articles[0].customs_value_eur == 19.9
+    assert articles[0].origin_iso2 == "AT"
+    assert articles[0].hs_tariff_number == "49040000"
+    assert "2 Stk." in dialog._customs_summary.text()  # noqa: SLF001
+    assert "39.80 EUR" in dialog._customs_summary.text()  # noqa: SLF001

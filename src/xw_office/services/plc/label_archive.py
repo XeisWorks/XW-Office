@@ -43,6 +43,27 @@ class PlcLabelArchive:
         os.replace(temp_path, target)
         return target
 
+    def customs_path_for(self, shipment: PlcShipmentDraft) -> Path:
+        order = _safe_filename_part(shipment.reference, fallback="unbekannte-bestellung")
+        invoice = _safe_filename_part(shipment.invoice_number, fallback="unbekannte-rechnung")
+        return self._root / "customs" / f"{order} - {invoice} - Zollformular.pdf"
+
+    def save_customs_document(self, shipment: PlcShipmentDraft, pdf_bytes: bytes) -> Path:
+        """Archive the generated CN23 separately from the reprintable label."""
+        if not bytes(pdf_bytes).startswith(b"%PDF-"):
+            raise ValueError("PLC-Zollformulararchiv erwartet ein gültiges PDF")
+        target = self.customs_path_for(shipment)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=target.parent, delete=False, suffix=".tmp") as handle:
+            handle.write(pdf_bytes)
+            temp_path = Path(handle.name)
+        os.replace(temp_path, target)
+        return target
+
+    def find_customs_document(self, shipment: PlcShipmentDraft) -> Path | None:
+        candidate = self.customs_path_for(shipment)
+        return candidate if candidate.is_file() else None
+
     def find(self, shipment: PlcShipmentDraft) -> Path | None:
         candidate = self.path_for(shipment)
         return candidate if candidate.is_file() else None

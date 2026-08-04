@@ -12,17 +12,23 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QTimer, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QCompleter,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
     QFrame,
+    QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPlainTextEdit,
+    QPushButton,
     QRadioButton,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
     QLineEdit,
@@ -36,13 +42,13 @@ from xw_office.services.plc.polling import (
     write_import_file,
 )
 from xw_office.services.plc.models import (
-    EU_COUNTRIES,
     PlcCustomsArticle,
     PlcParcel,
     PlcShipmentDraft,
     build_polling_lines,
     clean_reference,
     parse_shipment_address_lines,
+    requires_customs_declaration,
 )
 from xw_office.services.plc.pricing import quote_plc_price
 from xw_office.services.plc.label_archive import PlcLabelArchive
@@ -65,7 +71,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _EU_PRODUCT_ID = "45"
-_DEFAULT_ITEM_WEIGHT_KG = 0.30
+_CUSTOMS_DESCRIPTION = "Printed sheet music books"
+_CUSTOMS_ARTICLE_NAME = "Printed sheet music book"
+_CUSTOMS_ORIGIN_ISO2 = "AT"
+_CUSTOMS_HS_TARIFF = "49040000"
 _SUCCESS_OVERLAY_MS = 700
 
 
@@ -76,6 +85,7 @@ class _PlcDialogContext:
     weight_kg: float
     items: list[WixOrderItem]
     email: str = ""
+    phone: str = ""
 
 
 @dataclass(frozen=True)
@@ -113,7 +123,8 @@ class PlcLabelPrintDialog(QDialog):
         self._success_overlay: QFrame | None = None
 
         self.setWindowTitle("PLC Label Print")
-        self.setMinimumWidth(700)
+        self.setMinimumWidth(960)
+        self.resize(1180, 820)
         self._build_ui()
         if self._manual_entry:
             # Header "PLC-Label" button: no invoice/customer context, so the
@@ -177,9 +188,8 @@ class PlcLabelPrintDialog(QDialog):
         form.addRow("Gewicht (kg):", self._weight_edit)
 
         self._customs_edit = QPlainTextEdit()
-        self._customs_edit.setPlaceholderText("Zollbeschreibung")
+        self._customs_edit.setPlaceholderText(_CUSTOMS_DESCRIPTION)
         self._customs_edit.setFixedHeight(72)
-        form.addRow("Zollbeschreibung:", self._customs_edit)
 
         if self._manual_entry:
             self._company_edit = QLineEdit()
@@ -230,11 +240,57 @@ class PlcLabelPrintDialog(QDialog):
         self._recipient_email.setPlaceholderText("office@xeisworks.at")
         form.addRow("Empfänger E-Mail:", self._recipient_email)
 
+        self._recipient_phone = QLineEdit()
+        self._recipient_phone.setPlaceholderText("Aus Wix, falls vorhanden")
+        form.addRow("Empfänger Telefon:", self._recipient_phone)
+
         self._status = QLabel("Lade Analyse...")
         self._status.setStyleSheet("color: #64748b;")
         form.addRow("Status:", self._status)
 
         root.addLayout(form)
+
+        self._customs_group = QGroupBox("Zollerklärung (CN23)")
+        customs_layout = QVBoxLayout(self._customs_group)
+        customs_hint = QLabel(
+            "Wix liefert Anzahl, Einzelpreis und Produktgewicht. Bitte Nettogewicht und Warenwert "
+            "vor dem Senden prüfen; das Paketgewicht enthält zusätzlich die Verpackung."
+        )
+        customs_hint.setWordWrap(True)
+        customs_hint.setStyleSheet("color: #64748b;")
+        customs_layout.addWidget(customs_hint)
+        customs_form = QFormLayout()
+        customs_form.addRow("Inhaltsangabe (Englisch):", self._customs_edit)
+        customs_layout.addLayout(customs_form)
+
+        self._customs_summary = QLabel("Noch keine Zollartikel geladen")
+        self._customs_summary.setStyleSheet("font-weight: 600;")
+        customs_layout.addWidget(self._customs_summary)
+
+        self._customs_table = QTableWidget(0, 8, self._customs_group)
+        self._customs_table.setHorizontalHeaderLabels(
+            ["Artikel (Englisch)", "SKU", "Anzahl", "Netto kg/Stk", "Wert/Stk", "Währung", "Ursprung", "Zolltarif-Nr."]
+        )
+        self._customs_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._customs_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._customs_table.verticalHeader().setVisible(False)
+        header = self._customs_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._customs_table.itemChanged.connect(self._update_customs_summary)
+        customs_layout.addWidget(self._customs_table)
+
+        customs_buttons = QHBoxLayout()
+        add_customs = QPushButton("Artikel hinzufügen")
+        remove_customs = QPushButton("Ausgewählten Artikel entfernen")
+        add_customs.clicked.connect(self._add_empty_customs_row)
+        remove_customs.clicked.connect(self._remove_selected_customs_row)
+        customs_buttons.addWidget(add_customs)
+        customs_buttons.addWidget(remove_customs)
+        customs_buttons.addStretch()
+        customs_layout.addLayout(customs_buttons)
+        root.addWidget(self._customs_group)
+        self._customs_group.setVisible(False)
 
         buttons = QDialogButtonBox(self)
         self._send_btn = buttons.addButton("Senden an PLC", QDialogButtonBox.ButtonRole.AcceptRole)
@@ -250,6 +306,7 @@ class PlcLabelPrintDialog(QDialog):
             items: list[WixOrderItem] = []
             weight = 0.0
             email = ""
+            phone = ""
             ref = self._summary.order_reference.strip()
             if ref:
                 wix: WixOrdersClient = self._container.resolve(WixOrdersClient)
@@ -261,6 +318,7 @@ class PlcLabelPrintDialog(QDialog):
                     if isinstance(plc_context, dict):
                         order_number = str(plc_context.get("order_number") or order_number).strip()
                         email = str(plc_context.get("email") or "").strip()
+                        phone = str(plc_context.get("phone") or "").strip()
                     shipping = str(meta.get("wix_shipping_address") or "").strip()
                     if shipping:
                         address_lines = [ln.strip() for ln in shipping.splitlines() if ln.strip()]
@@ -269,8 +327,9 @@ class PlcLabelPrintDialog(QDialog):
                     items = wix.fetch_order_line_items(ref)
                     weight = sum(
                         max(1, int(item.qty or 1))
-                        * (float(item.unit_weight_kg or 0) or _DEFAULT_ITEM_WEIGHT_KG)
+                        * float(item.unit_weight_kg or 0)
                         for item in items
+                        if not item.is_digital
                     )
             return _PlcDialogContext(
                 order_number=order_number,
@@ -278,6 +337,7 @@ class PlcLabelPrintDialog(QDialog):
                 weight_kg=weight,
                 items=items,
                 email=email,
+                phone=phone,
             )
 
         self._load_worker = BackgroundWorker(job)
@@ -298,9 +358,17 @@ class PlcLabelPrintDialog(QDialog):
             self._weight_edit.setText(f"{result.weight_kg:.2f}".replace(".", ","))
         if result.email and not self._recipient_email.text().strip():
             self._recipient_email.setText(result.email)
+        if result.phone and not self._recipient_phone.text().strip():
+            self._recipient_phone.setText(result.phone)
+        self._populate_customs_table(result.items)
         self._sync_product_options()
         self._update_customs_visibility()
-        self._status.setText("Bereit")
+        physical_count = sum(max(1, int(item.qty or 1)) for item in result.items if not item.is_digital)
+        self._status.setText(
+            f"Bereit – {physical_count} physische Notenhefte aus Wix; Paketgewicht/Verpackung prüfen"
+            if physical_count
+            else "Bereit – keine physischen Wix-Positionen gefunden"
+        )
 
     def _on_context_error(self, exc: Exception) -> None:
         logger.warning("PLC context load failed: %s", exc)
@@ -362,19 +430,27 @@ class PlcLabelPrintDialog(QDialog):
             lines,
             fallback_name=self._summary.contact_name,
             email=self._recipient_email.text().strip(),
-            phone="",
+            phone=self._recipient_phone.text().strip(),
         )
 
-    def _country_group(self, iso2: str) -> str:
+    def _country_group(self, iso2: str, *, postal_code: str = "", city: str = "") -> str:
         code = str(iso2 or "").upper().strip()
         if code == "AT":
             return "AT"
-        if code and code in EU_COUNTRIES:
+        if code and not requires_customs_declaration(code, postal_code=postal_code, city=city):
             return "EU"
         return "NON_EU"
 
     def _current_country(self) -> str:
         return self._parse_address(self._current_address_lines()).country_iso2
+
+    def _current_country_group(self) -> str:
+        address = self._parse_address(self._current_address_lines())
+        return self._country_group(
+            address.country_iso2,
+            postal_code=address.zip,
+            city=address.city,
+        )
 
     def _update_price(self) -> None:
         product = self._find_product()
@@ -393,7 +469,7 @@ class PlcLabelPrintDialog(QDialog):
         self._price_label.setToolTip(f"{quote.tariff_name}, bis {max_weight} kg")
 
     def _sync_product_options(self) -> None:
-        group = self._country_group(self._current_country())
+        group = self._current_country_group()
         options = [item for item in self._product_catalog if group in item.get("regions", set())]
         labels = [str(item["label"]) for item in options]
         current = self._product_combo.currentText().strip()
@@ -406,8 +482,12 @@ class PlcLabelPrintDialog(QDialog):
         self._update_price()
 
     def _update_customs_visibility(self) -> None:
-        needs_customs = self._country_group(self._current_country()) == "NON_EU"
-        self._customs_edit.setVisible(needs_customs)
+        needs_customs = self._current_country_group() == "NON_EU"
+        self._customs_group.setVisible(needs_customs)
+        if needs_customs and not self._customs_edit.toPlainText().strip():
+            self._customs_edit.setPlainText(_CUSTOMS_DESCRIPTION)
+        if needs_customs and self._manual_entry and self._customs_table.rowCount() == 0:
+            self._add_empty_customs_row()
 
     def _find_product(self) -> dict:
         label = self._product_combo.currentText().strip()
@@ -416,18 +496,128 @@ class PlcLabelPrintDialog(QDialog):
                 return item
         return {}
 
+    @staticmethod
+    def _customs_cell(value: object) -> QTableWidgetItem:
+        return QTableWidgetItem(str(value or ""))
+
+    def _append_customs_row(
+        self,
+        *,
+        name: str = _CUSTOMS_ARTICLE_NAME,
+        sku: str = "",
+        quantity: int = 1,
+        weight_kg: float = 0.0,
+        value: float = 0.0,
+        currency: str = "EUR",
+        origin: str = _CUSTOMS_ORIGIN_ISO2,
+        tariff: str = _CUSTOMS_HS_TARIFF,
+    ) -> None:
+        row = self._customs_table.rowCount()
+        self._customs_table.insertRow(row)
+        values = (
+            name,
+            sku,
+            str(max(int(quantity or 1), 1)),
+            f"{weight_kg:.3f}" if weight_kg > 0 else "",
+            f"{value:.2f}" if value > 0 else "",
+            currency,
+            origin,
+            tariff,
+        )
+        for column, value_text in enumerate(values):
+            self._customs_table.setItem(row, column, self._customs_cell(value_text))
+
+    def _populate_customs_table(self, items: list[WixOrderItem]) -> None:
+        self._customs_table.blockSignals(True)
+        self._customs_table.setRowCount(0)
+        for item in items:
+            if item.is_digital:
+                continue
+            title = str(item.name or "").strip()
+            description = _CUSTOMS_ARTICLE_NAME
+            if title and title.casefold() != _CUSTOMS_ARTICLE_NAME.casefold():
+                description = f"{_CUSTOMS_ARTICLE_NAME} – {title}"[:100]
+            self._append_customs_row(
+                name=description,
+                sku=str(item.sku or ""),
+                quantity=max(1, int(item.qty or 1)),
+                weight_kg=float(item.unit_weight_kg or 0),
+                value=float(item.unit_price_gross or 0),
+                currency=str(item.currency or "EUR").upper(),
+            )
+        self._customs_table.blockSignals(False)
+        self._update_customs_summary()
+
+    def _add_empty_customs_row(self) -> None:
+        self._append_customs_row()
+        self._update_customs_summary()
+
+    def _remove_selected_customs_row(self) -> None:
+        row = self._customs_table.currentRow()
+        if row >= 0:
+            self._customs_table.removeRow(row)
+        self._update_customs_summary()
+
+    def _customs_text(self, row: int, column: int) -> str:
+        cell = self._customs_table.item(row, column)
+        return str(cell.text() if cell is not None else "").strip()
+
+    def _update_customs_summary(self, _item: object = None) -> None:
+        quantity = 0
+        net_weight = 0.0
+        customs_value = 0.0
+        currencies: set[str] = set()
+        incomplete = 0
+        for row in range(self._customs_table.rowCount()):
+            try:
+                qty = int(self._customs_text(row, 2))
+                weight = float(self._customs_text(row, 3).replace(",", "."))
+                value = float(self._customs_text(row, 4).replace(",", "."))
+            except ValueError:
+                incomplete += 1
+                continue
+            quantity += max(qty, 0)
+            net_weight += max(qty, 0) * max(weight, 0.0)
+            customs_value += max(qty, 0) * max(value, 0.0)
+            currency = self._customs_text(row, 5).upper()
+            if currency:
+                currencies.add(currency)
+            if not all(self._customs_text(row, column) for column in (0, 2, 3, 4, 5, 6, 7)):
+                incomplete += 1
+        currency_label = (
+            next(iter(currencies))
+            if len(currencies) == 1
+            else "EUR"
+            if not currencies
+            else "gemischte Währung"
+        )
+        summary = f"{quantity} Stk. · Nettogewicht {net_weight:.3f} kg · Warenwert {customs_value:.2f} {currency_label}"
+        if incomplete:
+            summary += f" · {incomplete} Zeile(n) unvollständig"
+            self._customs_summary.setStyleSheet("font-weight: 600; color: #b45309;")
+        else:
+            self._customs_summary.setStyleSheet("font-weight: 600; color: #0f766e;")
+        self._customs_summary.setText(summary)
+
     def _build_customs_articles(self) -> list[PlcCustomsArticle]:
         out: list[PlcCustomsArticle] = []
-        for item in self._context.items:
-            qty = max(1, int(item.qty or 1))
+        for row in range(self._customs_table.rowCount()):
+            try:
+                qty = int(self._customs_text(row, 2))
+                weight = float(self._customs_text(row, 3).replace(",", "."))
+                value = float(self._customs_text(row, 4).replace(",", "."))
+            except ValueError as exc:
+                raise ValueError(f"Zollartikel {row + 1}: Anzahl, Gewicht oder Wert ist ungültig") from exc
             out.append(
                 PlcCustomsArticle(
-                    sku=str(item.sku or ""),
-                    name=str(item.name or item.sku or ""),
+                    sku=self._customs_text(row, 1),
+                    name=self._customs_text(row, 0)[:100],
                     quantity=qty,
-                    net_weight_kg=round(float(item.unit_weight_kg or 0) or _DEFAULT_ITEM_WEIGHT_KG, 3),
-                    customs_value_eur=round(float(item.unit_price_gross or 0), 2),
-                    currency=str(item.currency or "EUR").upper(),
+                    net_weight_kg=round(weight, 3),
+                    customs_value_eur=round(value, 2),
+                    currency=self._customs_text(row, 5).upper(),
+                    origin_iso2=self._customs_text(row, 6).upper(),
+                    hs_tariff_number=self._customs_text(row, 7),
                 )
             )
         return out
@@ -465,7 +655,12 @@ class PlcLabelPrintDialog(QDialog):
         product = self._find_product()
         product_id = str(product.get("product_id") or "").strip()
         pakettyp = str(product.get("pakettyp") or "PC").strip() or "PC"
-        if self._country_group(address.country_iso2) == "EU" and product_id != _EU_PRODUCT_ID:
+        address_group = self._country_group(
+            address.country_iso2,
+            postal_code=address.zip,
+            city=address.city,
+        )
+        if address_group == "EU" and product_id != _EU_PRODUCT_ID:
             product_id = _EU_PRODUCT_ID
         if not product_id:
             QMessageBox.warning(self, "PLC", "Versandprodukt ist nicht konfiguriert.")
@@ -485,16 +680,14 @@ class PlcLabelPrintDialog(QDialog):
         invoice_id = self._summary.id or ref
         invoice_number = self._summary.invoice_number or self._summary.id or ref
         articles: list[PlcCustomsArticle] = []
-        if self._country_group(address.country_iso2) == "NON_EU":
-            articles = self._build_customs_articles()
+        if address_group == "NON_EU":
+            try:
+                articles = self._build_customs_articles()
+            except ValueError as exc:
+                QMessageBox.warning(self, "PLC", str(exc))
+                return
             if not articles:
-                message = (
-                    "Für Nicht-EU werden Zollartikel benötigt; deren manuelle Eingabe ist "
-                    "in diesem Dialog noch nicht verfügbar."
-                    if self._manual_entry
-                    else "Für Nicht-EU werden Wix-Positionen benötigt."
-                )
-                QMessageBox.warning(self, "PLC", message)
+                QMessageBox.warning(self, "PLC", "Für dieses Zielland wird mindestens ein Zollartikel benötigt.")
                 return
 
         shipment = PlcShipmentDraft(
@@ -561,6 +754,19 @@ class PlcLabelPrintDialog(QDialog):
             job_id = self._queue_webservice_label(archive_path, shipment.reference)
             service: PlcShipmentService = self._container.resolve(PlcShipmentService)
             service.mark_print_queued(shipment, job_id)
+            customs_path = None
+            customs_job_id = ""
+            if shipment.country_group == "NON_EU":
+                if not result.webservice_result.shipment_documents:
+                    raise RuntimeError(
+                        "PLC hat trotz angeforderter Zollerklärung kein CN23-PDF zurückgegeben. "
+                        "Das Versandlabel wurde bereits eingereiht."
+                    )
+                customs_path = self._label_archive.save_customs_document(
+                    shipment,
+                    result.webservice_result.shipment_documents,
+                )
+                customs_job_id = self._queue_customs_document(customs_path, shipment.reference)
         except Exception as exc:  # noqa: BLE001 - shipment was created; preserve the recovery message.
             self._status.setText("PLC-Sendung erstellt, Druckauftrag fehlgeschlagen")
             QMessageBox.warning(
@@ -572,15 +778,24 @@ class PlcLabelPrintDialog(QDialog):
             return
 
         tracking = ", ".join(result.webservice_result.tracking_codes) or "ohne Trackingcode"
-        self._status.setText(f"PLC-Label archiviert; Druckauftrag {job_id[:8]}…")
+        if customs_job_id:
+            self._status.setText(
+                f"PLC-Label und Zollformular archiviert; Druckaufträge {job_id[:8]}… / {customs_job_id[:8]}…"
+            )
+        else:
+            self._status.setText(f"PLC-Label archiviert; Druckauftrag {job_id[:8]}…")
         logger.info(
-            "PLC label created reference=%s tracking=%s archive=%s print_job=%s",
+            "PLC label created reference=%s tracking=%s archive=%s print_job=%s customs_archive=%s customs_job=%s",
             shipment.reference,
             tracking,
             archive_path,
             job_id,
+            customs_path,
+            customs_job_id,
         )
-        self._show_success_overlay("PLC-Label erstellt")
+        self._show_success_overlay(
+            "PLC-Label + Zollformular erstellt" if customs_job_id else "PLC-Label erstellt"
+        )
 
     def _show_success_overlay(self, message: str) -> None:
         if self._success_overlay is not None:
@@ -741,6 +956,34 @@ class PlcLabelPrintDialog(QDialog):
                 x_offset_mm=float(getattr(profile, "x_offset_mm", 0.0) or 0.0),
                 y_offset_mm=float(getattr(profile, "y_offset_mm", 0.0) or 0.0),
                 # Preserve the exact PLC response for safe local reprints.
+                cleanup_paths=(),
+            )
+        )
+
+    def _queue_customs_document(self, pdf_path: str | os.PathLike[str], reference: str) -> str:
+        profile = self._container.config.printing.resolve_profile("plc_customs")
+        printer = str(getattr(profile, "printer_name", "") or "Zollformular").strip()
+        if not printer:
+            raise RuntimeError("Drucker 'Zollformular' ist nicht konfiguriert")
+        if not os.path.isfile(pdf_path):
+            raise RuntimeError(f"Archiviertes PLC-Zollformular fehlt: {pdf_path}")
+        queue: PrintQueueService = self._container.resolve(PrintQueueService)
+        return queue.enqueue(
+            PdfPrintJob(
+                pdf_path=os.fspath(pdf_path),
+                printer_name=printer,
+                copies=1,
+                job_kind="invoice",
+                description=f"Zollformular {reference}",
+                page_size=str(getattr(profile, "page_size", "") or "A4"),
+                orientation=str(getattr(profile, "orientation", "") or "portrait"),
+                placement_mode=str(getattr(profile, "placement_mode", "") or "printable_origin"),  # type: ignore[arg-type]
+                scale_mode=str(getattr(profile, "scale_mode", "") or "fit"),  # type: ignore[arg-type]
+                scale_percent=float(getattr(profile, "scale_percent", 90.0) or 90.0),
+                alignment=str(getattr(profile, "alignment", "") or "center"),  # type: ignore[arg-type]
+                dpi=int(profile.dpi) if profile is not None and profile.dpi else None,
+                x_offset_mm=float(getattr(profile, "x_offset_mm", 0.0) or 0.0),
+                y_offset_mm=float(getattr(profile, "y_offset_mm", 0.0) or 0.0),
                 cleanup_paths=(),
             )
         )

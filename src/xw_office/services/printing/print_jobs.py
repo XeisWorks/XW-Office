@@ -70,6 +70,7 @@ class PdfPrintJob:
     page_size: PageSizeName = ""
     orientation: PageOrientationName = ""
     scale_mode: ScaleMode = "none"
+    scale_percent: float = 100.0
     alignment: AlignmentMode = "top_left"
     x_offset_mm: float = 0.0
     y_offset_mm: float = 0.0

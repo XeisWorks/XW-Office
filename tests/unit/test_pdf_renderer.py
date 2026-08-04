@@ -879,3 +879,31 @@ def test_fit_center_target_rect_uses_printable_area(monkeypatch) -> None:
 
     assert isinstance(target, QRectF)
     assert target == QRectF(350.0, 50.0, 500.0, 1000.0)
+
+
+def test_fit_center_target_rect_applies_explicit_scale_percent() -> None:
+    image = pdf_renderer.QImage(100, 200, pdf_renderer.QImage.Format.Format_RGB888)
+
+    class LayoutStub:
+        def fullRectPixels(self, _dpi: int) -> QRect:
+            return QRect(0, 0, 1200, 1200)
+
+        def paintRectPixels(self, _dpi: int) -> QRect:
+            return QRect(100, 50, 1000, 1000)
+
+    class PrinterStub:
+        def pageLayout(self) -> LayoutStub:
+            return LayoutStub()
+
+    target = pdf_renderer._target_rect(
+        printer=PrinterStub(),  # type: ignore[arg-type]
+        image=image,
+        dpi=100,
+        scale_mode="fit",
+        alignment="center",
+        x_offset_mm=0.0,
+        y_offset_mm=0.0,
+        scale_percent=90.0,
+    )
+
+    assert target == QRectF(375.0, 100.0, 450.0, 900.0)
