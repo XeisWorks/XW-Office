@@ -1,4 +1,5 @@
 """Tests for configuration loading."""
+
 from xw_office.core.config import AppConfig, load_config
 
 
@@ -22,10 +23,7 @@ def test_load_config_with_missing_file() -> None:
 
 def test_product_print_profiles_use_pdf_xchange_native_backend() -> None:
     config = load_config("config/default.yaml")
-    profiles = {
-        profile.id: profile
-        for profile in config.printing.all_profiles()
-    }
+    profiles = {profile.id: profile for profile in config.printing.all_profiles()}
 
     expected_printers = {
         "noten_simplex": "Noten A4 Simplex",
@@ -49,7 +47,7 @@ def test_plc_customs_profile_uses_dedicated_printer_and_90_percent_scale() -> No
 
     assert profile is not None
     assert profile.printer_name == "Zollformular"
-    assert profile.page_size == "A4"
+    assert profile.page_size == "A5"
     assert profile.scale_mode == "fit"
     assert profile.scale_percent == 90.0
     assert "Zollformular" in config.printing.configured_printer_names

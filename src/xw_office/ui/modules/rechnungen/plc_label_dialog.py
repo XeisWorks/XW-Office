@@ -78,6 +78,80 @@ _CUSTOMS_HS_TARIFF = "49040000"
 _SUCCESS_OVERLAY_MS = 700
 
 
+def queue_archived_plc_label(
+    container: Container,
+    pdf_path: str | os.PathLike[str],
+    reference: str,
+) -> str:
+    """Queue an already archived PLC label without contacting PLC again."""
+    secrets: SecretService = container.resolve(SecretService)
+    printer = secrets.get_secret("PLC_LABEL_PRINTER").strip()
+    profile = container.config.printing.resolve_profile("plc_label")
+    if not printer and profile is None:
+        profile = container.config.printing.resolve_profile("label")
+    if not printer and profile is not None:
+        printer = profile.printer_name.strip()
+    if not printer:
+        printer = str(container.config.printing.label_printer or "").strip()
+    if not printer:
+        raise RuntimeError("PLC-Labeldrucker ist nicht konfiguriert")
+    if not os.path.isfile(pdf_path):
+        raise RuntimeError(f"Archiviertes PLC-PDF fehlt: {pdf_path}")
+    queue: PrintQueueService = container.resolve(PrintQueueService)
+    return queue.enqueue(
+        PdfPrintJob(
+            pdf_path=os.fspath(pdf_path),
+            printer_name=printer,
+            copies=1,
+            job_kind="label",
+            description=f"PLC-Label {reference}",
+            page_size=str(getattr(profile, "page_size", "") or "A5"),
+            orientation=str(getattr(profile, "orientation", "") or "portrait"),
+            placement_mode=str(getattr(profile, "placement_mode", "") or "printable_origin"),  # type: ignore[arg-type]
+            scale_mode=str(getattr(profile, "scale_mode", "") or "none"),  # type: ignore[arg-type]
+            alignment=str(getattr(profile, "alignment", "") or "center"),  # type: ignore[arg-type]
+            dpi=int(profile.dpi) if profile is not None and profile.dpi else None,
+            x_offset_mm=float(getattr(profile, "x_offset_mm", 0.0) or 0.0),
+            y_offset_mm=float(getattr(profile, "y_offset_mm", 0.0) or 0.0),
+            cleanup_paths=(),
+        )
+    )
+
+
+def queue_archived_plc_customs(
+    container: Container,
+    pdf_path: str | os.PathLike[str],
+    reference: str,
+) -> str:
+    """Queue an already archived customs PDF on the dedicated A5 printer."""
+    profile = container.config.printing.resolve_profile("plc_customs")
+    printer = str(getattr(profile, "printer_name", "") or "Zollformular").strip()
+    if not printer:
+        raise RuntimeError("Drucker 'Zollformular' ist nicht konfiguriert")
+    if not os.path.isfile(pdf_path):
+        raise RuntimeError(f"Archiviertes PLC-Zollformular fehlt: {pdf_path}")
+    queue: PrintQueueService = container.resolve(PrintQueueService)
+    return queue.enqueue(
+        PdfPrintJob(
+            pdf_path=os.fspath(pdf_path),
+            printer_name=printer,
+            copies=1,
+            job_kind="invoice",
+            description=f"Zollformular {reference}",
+            page_size=str(getattr(profile, "page_size", "") or "A5"),
+            orientation=str(getattr(profile, "orientation", "") or "portrait"),
+            placement_mode=str(getattr(profile, "placement_mode", "") or "printable_origin"),  # type: ignore[arg-type]
+            scale_mode=str(getattr(profile, "scale_mode", "") or "fit"),  # type: ignore[arg-type]
+            scale_percent=float(getattr(profile, "scale_percent", 90.0) or 90.0),
+            alignment=str(getattr(profile, "alignment", "") or "center"),  # type: ignore[arg-type]
+            dpi=int(profile.dpi) if profile is not None and profile.dpi else None,
+            x_offset_mm=float(getattr(profile, "x_offset_mm", 0.0) or 0.0),
+            y_offset_mm=float(getattr(profile, "y_offset_mm", 0.0) or 0.0),
+            cleanup_paths=(),
+        )
+    )
+
+
 @dataclass
 class _PlcDialogContext:
     order_number: str
@@ -823,31 +897,46 @@ class PlcLabelPrintDialog(QDialog):
         if result.webservice_result is None:
             self._on_send_error(shipment, RuntimeError("PLC-Webservice lieferte kein Label"))
             return
+        archive_path = None
+        customs_path = None
+        job_id = ""
+        customs_job_id = ""
         try:
+            customs_pdf = result.webservice_result.shipment_documents
+            if shipment.country_group == "NON_EU" and not customs_pdf:
+                raise RuntimeError(
+                    "PLC hat trotz angeforderter Zollerklärung kein CN23-PDF zurückgegeben. "
+                    "Es wurde noch kein Druckauftrag gestartet."
+                )
+
+            # Both remote responses must be safe locally before either print
+            # job starts. Printer/profile errors can then be retried without
+            # creating another PLC shipment.
             archive_path = self._label_archive.save(shipment, result.webservice_result.pdf_bytes)
+            if shipment.country_group == "NON_EU":
+                customs_path = self._label_archive.save_customs_document(shipment, customs_pdf)
+
             job_id = self._queue_webservice_label(archive_path, shipment.reference)
             service: PlcShipmentService = self._container.resolve(PlcShipmentService)
             service.mark_print_queued(shipment, job_id)
-            customs_path = None
-            customs_job_id = ""
-            if shipment.country_group == "NON_EU":
-                if not result.webservice_result.shipment_documents:
-                    raise RuntimeError(
-                        "PLC hat trotz angeforderter Zollerklärung kein CN23-PDF zurückgegeben. "
-                        "Das Versandlabel wurde bereits eingereiht."
-                    )
-                customs_path = self._label_archive.save_customs_document(
-                    shipment,
-                    result.webservice_result.shipment_documents,
-                )
+            if customs_path is not None:
                 customs_job_id = self._queue_customs_document(customs_path, shipment.reference)
         except Exception as exc:  # noqa: BLE001 - shipment was created; preserve the recovery message.
             self._status.setText("PLC-Sendung erstellt, Druckauftrag fehlgeschlagen")
+            archived = "\n".join(
+                f"- {path}" for path in (archive_path, customs_path) if path is not None
+            )
+            archive_note = (
+                f"\n\nLokal archiviert:\n{archived}"
+                if archived
+                else "\n\nDie gelieferten PDFs konnten nicht vollständig lokal archiviert werden."
+            )
             QMessageBox.warning(
                 self,
                 "PLC-Label erstellt",
-                "Die Sendung wurde von PLC erstellt, aber der lokale Druckauftrag konnte nicht eingereiht werden.\n\n"
-                f"Details: {exc}",
+                "Die Sendung wurde von PLC erstellt, aber mindestens ein lokaler Druckauftrag "
+                "konnte nicht eingereiht werden."
+                f"{archive_note}\n\nDetails: {exc}",
             )
             return
 
@@ -951,23 +1040,50 @@ class PlcLabelPrintDialog(QDialog):
         archive_path: object,
     ) -> None:
         box = QMessageBox(self)
-        box.setWindowTitle("PLC-Label bereits gedruckt")
+        customs_path = self._label_archive.find_customs_document(shipment)
+        box.setWindowTitle("PLC-Sendung bereits erstellt")
         box.setIcon(QMessageBox.Icon.Question)
-        box.setText("PLC-Label bereits gedruckt.")
+        box.setText("Für diese Sendung existieren bereits lokale PLC-Dokumente.")
+        archive_lines = [f"Label: {archive_path}"]
+        if customs_path is not None:
+            archive_lines.append(f"Zollformular: {customs_path}")
         box.setInformativeText(
-            "Archiviertes Label öffnen oder neues Label mit Suffix -2 erstellen?\n\n"
-            f"Archiv: {archive_path}"
+            "Die archivierten PDFs können ohne neue PLC-Sendung erneut gedruckt werden.\n\n"
+            + "\n".join(archive_lines)
         )
-        open_btn = box.addButton("Archiv-PDF öffnen", QMessageBox.ButtonRole.AcceptRole)
+        reprint_label = "Beide PDFs erneut drucken" if customs_path is not None else "Label erneut drucken"
+        reprint_btn = box.addButton(reprint_label, QMessageBox.ButtonRole.AcceptRole)
+        open_btn = box.addButton("Label-PDF öffnen", QMessageBox.ButtonRole.ActionRole)
+        customs_open_btn = None
+        if customs_path is not None:
+            customs_open_btn = box.addButton("Zoll-PDF öffnen", QMessageBox.ButtonRole.ActionRole)
         additional_btn = box.addButton("Neues Label erstellen", QMessageBox.ButtonRole.ActionRole)
         box.addButton("Abbrechen", QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(open_btn)
+        box.setDefaultButton(reprint_btn)
         box.exec()
         clicked = box.clickedButton()
+        if clicked is reprint_btn:
+            try:
+                label_job_id = self._queue_webservice_label(archive_path, shipment.reference)
+                customs_job_id = ""
+                if customs_path is not None:
+                    customs_job_id = self._queue_customs_document(customs_path, shipment.reference)
+            except Exception as exc:  # noqa: BLE001 - keep the archived recovery path visible.
+                QMessageBox.warning(self, "PLC-Nachdruck", f"Nachdruck konnte nicht eingereiht werden:\n\n{exc}")
+                return
+            jobs = label_job_id[:8] + "…"
+            if customs_job_id:
+                jobs += " / " + customs_job_id[:8] + "…"
+            self._status.setText(f"Archivierter PLC-Nachdruck eingereiht: {jobs}")
+            self._show_success_overlay("PLC-Dokumente erneut eingereiht")
+            return
         if clicked is open_btn:
             QDesktopServices.openUrl(QUrl.fromLocalFile(os.fspath(archive_path)))
             self._status.setText("Archiviertes PLC-Label geöffnet")
-            self.accept()
+            return
+        if customs_open_btn is not None and clicked is customs_open_btn and customs_path is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.fspath(customs_path)))
+            self._status.setText("Archiviertes Zollformular geöffnet")
             return
         if clicked is additional_btn:
             next_shipment = self._next_additional_shipment(shipment)
@@ -1007,72 +1123,10 @@ class PlcLabelPrintDialog(QDialog):
         return clean_reference(next_value)
 
     def _queue_webservice_label(self, pdf_path: str | os.PathLike[str], reference: str) -> str:
-        printer = self._resolve_plc_printer()
-        if not printer:
-            raise RuntimeError("PLC-Labeldrucker ist nicht konfiguriert")
-        if not os.path.isfile(pdf_path):
-            raise RuntimeError(f"Archiviertes PLC-PDF fehlt: {pdf_path}")
-        queue: PrintQueueService = self._container.resolve(PrintQueueService)
-        profile = self._container.config.printing.resolve_profile("plc_label")
-        return queue.enqueue(
-            PdfPrintJob(
-                pdf_path=os.fspath(pdf_path),
-                printer_name=printer,
-                copies=1,
-                job_kind="label",
-                description=f"PLC-Label {reference}",
-                page_size=str(getattr(profile, "page_size", "") or "A5"),
-                orientation=str(getattr(profile, "orientation", "") or "portrait"),
-                placement_mode=str(getattr(profile, "placement_mode", "") or "printable_origin"),  # type: ignore[arg-type]
-                scale_mode=str(getattr(profile, "scale_mode", "") or "none"),  # type: ignore[arg-type]
-                alignment=str(getattr(profile, "alignment", "") or "center"),  # type: ignore[arg-type]
-                dpi=int(profile.dpi) if profile is not None and profile.dpi else None,
-                x_offset_mm=float(getattr(profile, "x_offset_mm", 0.0) or 0.0),
-                y_offset_mm=float(getattr(profile, "y_offset_mm", 0.0) or 0.0),
-                # Preserve the exact PLC response for safe local reprints.
-                cleanup_paths=(),
-            )
-        )
+        return queue_archived_plc_label(self._container, pdf_path, reference)
 
     def _queue_customs_document(self, pdf_path: str | os.PathLike[str], reference: str) -> str:
-        profile = self._container.config.printing.resolve_profile("plc_customs")
-        printer = str(getattr(profile, "printer_name", "") or "Zollformular").strip()
-        if not printer:
-            raise RuntimeError("Drucker 'Zollformular' ist nicht konfiguriert")
-        if not os.path.isfile(pdf_path):
-            raise RuntimeError(f"Archiviertes PLC-Zollformular fehlt: {pdf_path}")
-        queue: PrintQueueService = self._container.resolve(PrintQueueService)
-        return queue.enqueue(
-            PdfPrintJob(
-                pdf_path=os.fspath(pdf_path),
-                printer_name=printer,
-                copies=1,
-                job_kind="invoice",
-                description=f"Zollformular {reference}",
-                page_size=str(getattr(profile, "page_size", "") or "A4"),
-                orientation=str(getattr(profile, "orientation", "") or "portrait"),
-                placement_mode=str(getattr(profile, "placement_mode", "") or "printable_origin"),  # type: ignore[arg-type]
-                scale_mode=str(getattr(profile, "scale_mode", "") or "fit"),  # type: ignore[arg-type]
-                scale_percent=float(getattr(profile, "scale_percent", 90.0) or 90.0),
-                alignment=str(getattr(profile, "alignment", "") or "center"),  # type: ignore[arg-type]
-                dpi=int(profile.dpi) if profile is not None and profile.dpi else None,
-                x_offset_mm=float(getattr(profile, "x_offset_mm", 0.0) or 0.0),
-                y_offset_mm=float(getattr(profile, "y_offset_mm", 0.0) or 0.0),
-                cleanup_paths=(),
-            )
-        )
-
-    def _resolve_plc_printer(self) -> str:
-        secrets: SecretService = self._container.resolve(SecretService)
-        configured = secrets.get_secret("PLC_LABEL_PRINTER").strip()
-        if configured:
-            return configured
-        profile = self._container.config.printing.resolve_profile("plc_label")
-        if profile is None:
-            profile = self._container.config.printing.resolve_profile("label")
-        if profile is not None and profile.printer_name.strip():
-            return profile.printer_name.strip()
-        return str(self._container.config.printing.label_printer or "").strip()
+        return queue_archived_plc_customs(self._container, pdf_path, reference)
 
     @staticmethod
     def _load_products() -> list[dict]:

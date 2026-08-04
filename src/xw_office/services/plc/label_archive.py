@@ -1,4 +1,5 @@
 """Local archival of PLC PDF labels before they are sent to a printer."""
+
 from __future__ import annotations
 
 import os
@@ -14,7 +15,13 @@ class PlcLabelArchive:
 
     def __init__(self, root_dir: str | Path | None = None) -> None:
         configured = str(os.getenv("PLC_LABEL_ARCHIVE_DIR") or "").strip()
-        root = Path(root_dir) if root_dir is not None else Path(configured) if configured else self._default_root()
+        root = (
+            Path(root_dir)
+            if root_dir is not None
+            else Path(configured)
+            if configured
+            else self._default_root()
+        )
         self._root = root.expanduser().resolve()
         self._index_by_pair: dict[tuple[str, str], Path] = {}
         self._index_snapshot: tuple[int, int] = (-1, -1)
@@ -63,6 +70,44 @@ class PlcLabelArchive:
     def find_customs_document(self, shipment: PlcShipmentDraft) -> Path | None:
         candidate = self.customs_path_for(shipment)
         return candidate if candidate.is_file() else None
+
+    def find_customs_for_invoice(self, *, order_reference: str, invoice_number: str) -> Path | None:
+        """Return the newest archived customs PDF for one order/invoice pair."""
+        order = _safe_filename_part(order_reference, fallback="")
+        invoice = _safe_filename_part(invoice_number, fallback="")
+        if not order or not invoice:
+            return None
+
+        customs_root = self._root / "customs"
+        if not customs_root.is_dir():
+            return None
+
+        candidates: list[Path] = []
+        exact = customs_root / f"{order} - {invoice} - Zollformular.pdf"
+        if exact.is_file():
+            candidates.append(exact)
+
+        expected_pair = (_strip_numeric_suffix(order), _strip_numeric_suffix(invoice))
+        suffix = " - Zollformular"
+        for file_path in customs_root.glob("*.pdf"):
+            if not file_path.is_file() or not file_path.stem.endswith(suffix):
+                continue
+            pair_stem = file_path.stem[: -len(suffix)]
+            if " - " not in pair_stem:
+                continue
+            raw_order, raw_invoice = pair_stem.split(" - ", 1)
+            candidate_pair = (
+                _strip_numeric_suffix(_safe_filename_part(raw_order, fallback="")),
+                _strip_numeric_suffix(_safe_filename_part(raw_invoice, fallback="")),
+            )
+            if candidate_pair == expected_pair:
+                candidates.append(file_path)
+
+        if not candidates:
+            return None
+        candidates = list(dict.fromkeys(candidates))
+        candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        return candidates[0]
 
     def find(self, shipment: PlcShipmentDraft) -> Path | None:
         candidate = self.path_for(shipment)

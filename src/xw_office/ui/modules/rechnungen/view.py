@@ -93,7 +93,11 @@ from xw_office.ui.modules.rechnungen.open_invoice_overview import (
     overview_payload_from_object,
     resolve_open_invoice_overview,
 )
-from xw_office.ui.modules.rechnungen.plc_label_dialog import PlcLabelPrintDialog
+from xw_office.ui.modules.rechnungen.plc_label_dialog import (
+    PlcLabelPrintDialog,
+    queue_archived_plc_customs,
+    queue_archived_plc_label,
+)
 from xw_office.ui.modules.rechnungen.plc_statistics_dialog import PlcStatisticsDialog
 from xw_office.services.plc.statistics import PlcStatisticsService
 from xw_office.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
@@ -3205,22 +3209,66 @@ class RechnungenView(QWidget):
     def _open_plc_post_popup(self, summary: InvoiceSummary) -> None:
         existing_label_path = self._resolve_plc_archive_path_for_summary(summary)
         if existing_label_path:
+            existing_customs_path = self._resolve_plc_customs_archive_path_for_summary(summary)
             box = QMessageBox(self)
-            box.setWindowTitle("PLC-Label vorhanden")
+            box.setWindowTitle("PLC-Dokumente vorhanden")
             box.setIcon(QMessageBox.Icon.Question)
-            box.setText("Für diese Rechnung existiert bereits ein PLC-Label.")
+            box.setText("Für diese Rechnung existieren bereits lokale PLC-Dokumente.")
+            archive_lines = [f"Label: {existing_label_path}"]
+            if existing_customs_path:
+                archive_lines.append(f"Zollformular: {existing_customs_path}")
             box.setInformativeText(
-                "Archiviertes Label öffnen oder neues Label mit Suffix -2 erstellen?\n\n"
-                f"Archiv: {existing_label_path}"
+                "Die archivierten PDFs können ohne neue PLC-Sendung erneut gedruckt werden.\n\n"
+                + "\n".join(archive_lines)
             )
-            open_btn = box.addButton("Archiv-PDF öffnen", QMessageBox.ButtonRole.AcceptRole)
+            reprint_label = "Beide PDFs erneut drucken" if existing_customs_path else "Label erneut drucken"
+            reprint_btn = box.addButton(reprint_label, QMessageBox.ButtonRole.AcceptRole)
+            open_btn = box.addButton("Label-PDF öffnen", QMessageBox.ButtonRole.ActionRole)
+            customs_open_btn = None
+            if existing_customs_path:
+                customs_open_btn = box.addButton("Zoll-PDF öffnen", QMessageBox.ButtonRole.ActionRole)
             new_btn = box.addButton("Neues Label erstellen", QMessageBox.ButtonRole.ActionRole)
             box.addButton("Abbrechen", QMessageBox.ButtonRole.RejectRole)
-            box.setDefaultButton(open_btn)
+            box.setDefaultButton(reprint_btn)
             box.exec()
             clicked = box.clickedButton()
+            if clicked is reprint_btn:
+                reference = str(summary.order_reference or summary.invoice_number or summary.id or "").strip()
+                try:
+                    label_job_id = queue_archived_plc_label(
+                        self._container,
+                        existing_label_path,
+                        reference,
+                    )
+                    customs_job_id = ""
+                    if existing_customs_path:
+                        customs_job_id = queue_archived_plc_customs(
+                            self._container,
+                            existing_customs_path,
+                            reference,
+                        )
+                except Exception as exc:  # noqa: BLE001 - archives remain available for manual recovery.
+                    QMessageBox.warning(
+                        self,
+                        "PLC-Nachdruck",
+                        "Der Nachdruck konnte nicht vollständig eingereiht werden. "
+                        f"Die archivierten PDFs bleiben erhalten.\n\n{exc}",
+                    )
+                    return
+                job_text = label_job_id[:8] + "…"
+                if customs_job_id:
+                    job_text += " / " + customs_job_id[:8] + "…"
+                QMessageBox.information(
+                    self,
+                    "PLC-Nachdruck",
+                    f"Archivierter Nachdruck eingereiht: {job_text}",
+                )
+                return
             if clicked is open_btn:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(existing_label_path))
+                return
+            if customs_open_btn is not None and clicked is customs_open_btn and existing_customs_path:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(existing_customs_path))
                 return
             if clicked is not new_btn:
                 return
@@ -3618,6 +3666,17 @@ class RechnungenView(QWidget):
         resolved = os.fspath(path) if path is not None else ""
         self._plc_archive_lookup_cache[cache_key] = resolved
         return resolved
+
+    def _resolve_plc_customs_archive_path_for_summary(self, summary: InvoiceSummary) -> str:
+        order_ref = str(summary.order_reference or "").strip()
+        invoice_no = str(summary.invoice_number or summary.id or "").strip()
+        if not order_ref or not invoice_no:
+            return ""
+        path = self._plc_label_archive.find_customs_for_invoice(
+            order_reference=order_ref,
+            invoice_number=invoice_no,
+        )
+        return os.fspath(path) if path is not None else ""
 
     def _on_open_plc_label_clicked(self) -> None:
         path = str(self._selected_plc_label_path or "").strip()

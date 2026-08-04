@@ -77,7 +77,7 @@ printing:
     - id: "plc_customs"
       label: "PLC-Zollformular"
       printer_name: "Zollformular"
-      page_size: "A4"
+      page_size: "A5"
       orientation: "portrait"
       placement_mode: "printable_origin"
       scale_mode: "fit"

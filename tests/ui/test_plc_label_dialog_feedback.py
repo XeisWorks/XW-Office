@@ -1,6 +1,8 @@
 """Success and error feedback behavior for the PLC label dialog."""
+
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtWidgets import QDialog, QLabel, QMessageBox
@@ -10,7 +12,7 @@ from xw_office.core.config import AppConfig
 from xw_office.core.container import Container
 from xw_office.core.signals import AppSignals
 from xw_office.services.plc.label_archive import PlcLabelArchive
-from xw_office.services.plc.models import PlcParcel, PlcShipmentDraft
+from xw_office.services.plc.models import PlcCustomsArticle, PlcParcel, PlcShipmentDraft
 from xw_office.services.plc.polling import ShipmentAddress
 from xw_office.services.plc.service import PlcShipmentService
 from xw_office.services.plc.webservice import PlcWebserviceResult
@@ -45,6 +47,24 @@ def _shipment() -> PlcShipmentDraft:
             country_iso2="AT",
         ),
         parcels=(PlcParcel(weight_kg=0.5, reference="20868"),),
+    )
+
+
+def _customs_shipment() -> PlcShipmentDraft:
+    shipment = _shipment()
+    return replace(
+        shipment,
+        recipient=replace(shipment.recipient, country_iso2="CH"),
+        customs_description="Printed sheet music books",
+        articles=(
+            PlcCustomsArticle(
+                sku="XW-400",
+                name="Printed sheet music book – Alpenmarsch",
+                quantity=1,
+                net_weight_kg=0.4,
+                customs_value_eur=19.9,
+            ),
+        ),
     )
 
 
@@ -112,6 +132,93 @@ def test_successful_webservice_result_uses_overlay_without_information_popup(
 
     assert shown == ["PLC-Label erstellt"]
     assert plc_service.marked_jobs == ["print-job-1"]
+
+
+def test_customs_result_archives_both_pdfs_before_first_print_job(
+    qtbot: object,
+    tmp_path: Path,
+) -> None:
+    class PlcServiceStub:
+        def mark_print_queued(self, _shipment: PlcShipmentDraft, _job_id: str) -> None:
+            return
+
+    container = _container()
+    container.register(PlcShipmentService, lambda _: PlcServiceStub())  # type: ignore[arg-type,return-value]
+    dialog = PlcLabelPrintDialog(container, None)
+    qtbot.addWidget(dialog)
+    dialog._label_archive = PlcLabelArchive(tmp_path)  # noqa: SLF001
+    shipment = _customs_shipment()
+    queue_order: list[str] = []
+
+    def queue_label(_path: object, _reference: str) -> str:
+        assert dialog._label_archive.find(shipment) is not None  # noqa: SLF001
+        assert dialog._label_archive.find_customs_document(shipment) is not None  # noqa: SLF001
+        queue_order.append("label")
+        return "label-job"
+
+    def queue_customs(_path: object, _reference: str) -> str:
+        assert dialog._label_archive.find(shipment) is not None  # noqa: SLF001
+        assert dialog._label_archive.find_customs_document(shipment) is not None  # noqa: SLF001
+        queue_order.append("customs")
+        return "customs-job"
+
+    dialog._queue_webservice_label = queue_label  # type: ignore[method-assign]  # noqa: SLF001
+    dialog._queue_customs_document = queue_customs  # type: ignore[method-assign]  # noqa: SLF001
+    dialog._show_success_overlay = lambda _message: None  # type: ignore[method-assign]  # noqa: SLF001
+
+    dialog._on_send_result(  # noqa: SLF001
+        shipment,
+        _PlcSendResult(
+            transport="webservice",
+            reference=shipment.reference,
+            webservice_result=PlcWebserviceResult(
+                pdf_bytes=b"%PDF-1.7\nPLC label",
+                tracking_codes=(),
+                shipment_documents=b"%PDF-1.7\nCN23",
+            ),
+        ),
+    )
+
+    assert queue_order == ["label", "customs"]
+
+
+def test_customs_result_keeps_both_archives_when_first_print_queue_fails(
+    qtbot: object,
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+    dialog._label_archive = PlcLabelArchive(tmp_path)  # noqa: SLF001
+    shipment = _customs_shipment()
+    warnings: list[str] = []
+
+    def fail_queue(_path: object, _reference: str) -> str:
+        raise RuntimeError("Drucker offline")
+
+    dialog._queue_webservice_label = fail_queue  # type: ignore[method-assign]  # noqa: SLF001
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda _parent, _title, message: warnings.append(str(message)),
+    )
+
+    dialog._on_send_result(  # noqa: SLF001
+        shipment,
+        _PlcSendResult(
+            transport="webservice",
+            reference=shipment.reference,
+            webservice_result=PlcWebserviceResult(
+                pdf_bytes=b"%PDF-1.7\nPLC label",
+                tracking_codes=(),
+                shipment_documents=b"%PDF-1.7\nCN23",
+            ),
+        ),
+    )
+
+    assert dialog._label_archive.find(shipment) is not None  # noqa: SLF001
+    assert dialog._label_archive.find_customs_document(shipment) is not None  # noqa: SLF001
+    assert warnings and "Lokal archiviert" in warnings[0]
 
 
 def test_send_error_remains_modal_and_keeps_plc_dialog_open(

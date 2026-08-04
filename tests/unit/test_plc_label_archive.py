@@ -1,4 +1,5 @@
 """Unit coverage for persistent PLC label PDF recovery."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -9,6 +10,8 @@ from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.plc.models import PlcParcel, PlcShipmentDraft
 from xw_office.services.plc.polling import ShipmentAddress
 from xw_office.services.printing.print_jobs import PdfPrintJob
+from xw_office.services.printing.print_queue import PrintQueueService
+from xw_office.services.secrets.service import SecretService
 from xw_office.ui.modules.rechnungen.plc_label_dialog import PlcLabelPrintDialog
 
 
@@ -45,7 +48,9 @@ def test_archive_keeps_the_exact_plc_pdf_under_order_and_invoice_number(tmp_path
 def test_archive_uses_windows_safe_filename_parts(tmp_path) -> None:
     archive = PlcLabelArchive(tmp_path)
 
-    path = archive.save(_shipment(reference="20868/1", invoice_number="RE:261952"), b"%PDF-1.7\nPLC label")
+    path = archive.save(
+        _shipment(reference="20868/1", invoice_number="RE:261952"), b"%PDF-1.7\nPLC label"
+    )
 
     assert path.name == "20868-1 - RE-261952.pdf"
 
@@ -64,6 +69,21 @@ def test_archive_keeps_customs_form_separate_from_label_lookup(tmp_path) -> None
     assert path == tmp_path / "customs" / "20868 - RE-261952 - Zollformular.pdf"
     assert archive.find_customs_document(shipment) == path
     assert archive.find(shipment) is None
+
+
+def test_customs_archive_lookup_finds_newest_suffixed_shipment(tmp_path) -> None:
+    archive = PlcLabelArchive(tmp_path)
+    original = _shipment()
+    second = _shipment(reference="20868-2", invoice_number="RE-261952-2")
+    archive.save_customs_document(original, b"%PDF-1.7\nCN23 original")
+    second_path = archive.save_customs_document(second, b"%PDF-1.7\nCN23 second")
+
+    found = archive.find_customs_for_invoice(
+        order_reference="20868",
+        invoice_number="RE-261952",
+    )
+
+    assert found == second_path
 
 
 def test_additional_plc_label_uses_suffix_for_order_and_invoice(tmp_path) -> None:
@@ -106,11 +126,13 @@ def test_webservice_label_queue_uses_explicit_a5_layout(tmp_path) -> None:
         config = ConfigStub()
 
         def resolve(self, cls: object) -> object:
+            if cls is SecretService:
+                return SimpleNamespace(get_secret=lambda _key: "Paketmarke A5")
+            assert cls is PrintQueueService
             return QueueStub()
 
     dialog = PlcLabelPrintDialog.__new__(PlcLabelPrintDialog)
     dialog._container = ContainerStub()  # noqa: SLF001
-    dialog._resolve_plc_printer = lambda: "Paketmarke A5"  # type: ignore[method-assign]  # noqa: SLF001
 
     dialog._queue_webservice_label(pdf_path, "20868")  # noqa: SLF001
 
@@ -134,7 +156,7 @@ def test_customs_document_queue_uses_zollformular_at_90_percent(tmp_path) -> Non
 
     profile = SimpleNamespace(
         printer_name="Zollformular",
-        page_size="A4",
+        page_size="A5",
         orientation="portrait",
         placement_mode="printable_origin",
         scale_mode="fit",
@@ -166,7 +188,7 @@ def test_customs_document_queue_uses_zollformular_at_90_percent(tmp_path) -> Non
 
     assert len(queued) == 1
     assert queued[0].printer_name == "Zollformular"
-    assert queued[0].page_size == "A4"
+    assert queued[0].page_size == "A5"
     assert queued[0].scale_mode == "fit"
     assert queued[0].scale_percent == pytest.approx(90.0)
     assert queued[0].alignment == "center"
