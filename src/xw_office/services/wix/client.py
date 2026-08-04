@@ -1641,6 +1641,142 @@ class WixOrdersClient:
             return []
         return self.best_address_lines_from_order(order)
 
+    @staticmethod
+    def _customer_match_text(value: object) -> str:
+        text = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii")
+        text = re.sub(r"\b(?:dr|prof|mag|dipl|ing|herr|frau)\.?\b", " ", text, flags=re.IGNORECASE)
+        return " ".join(re.findall(r"[a-z0-9]+", text.casefold()))
+
+    @classmethod
+    def _order_customer_names(cls, order: dict[str, Any]) -> set[str]:
+        buyer = cls._nested_dict(order, "buyerInfo")
+        billing = cls._billing_address_parts_from_order(order)
+        shipping = cls._shipping_address_parts_from_order(order)
+        buyer_name = " ".join(
+            part for part in (cls._norm_text(buyer.get("firstName")), cls._norm_text(buyer.get("lastName"))) if part
+        )
+        values = {
+            buyer_name,
+            billing.get("name", ""),
+            shipping.get("name", ""),
+            shipping.get("person_name", ""),
+            shipping.get("company", ""),
+        }
+        return {normalized for value in values if (normalized := cls._customer_match_text(value))}
+
+    @classmethod
+    def _order_customer_emails(cls, order: dict[str, Any]) -> set[str]:
+        buyer = cls._nested_dict(order, "buyerInfo")
+        shipping = cls._nested_dict(order, "shippingInfo")
+        destination = cls._nested_dict(order, "shippingInfo", "shippingDestination")
+        logistics_destination = cls._nested_dict(
+            order, "shippingInfo", "logistics", "shippingDestination"
+        )
+        contacts = [
+            buyer,
+            destination.get("contactDetails"),
+            logistics_destination.get("contactDetails"),
+            shipping.get("shipmentDetails"),
+        ]
+        return {
+            email
+            for node in contacts
+            if isinstance(node, dict)
+            for email in [str(node.get("email") or node.get("emailAddress") or "").strip().casefold()]
+            if email
+        }
+
+    @classmethod
+    def _order_matches_customer(cls, order: dict[str, Any], *, customer_name: str, email: str) -> bool:
+        wanted_email = str(email or "").strip().casefold()
+        if wanted_email and wanted_email in cls._order_customer_emails(order):
+            return True
+        wanted_name = cls._customer_match_text(customer_name)
+        if not wanted_name:
+            return False
+        wanted_tokens = set(wanted_name.split())
+        for candidate in cls._order_customer_names(order):
+            candidate_tokens = set(candidate.split())
+            if wanted_name == candidate or (len(wanted_tokens) >= 2 and wanted_tokens <= candidate_tokens):
+                return True
+        return False
+
+    def _search_orders(self, field: str | None = None, value: str = "", *, limit: int = 100) -> list[dict[str, Any]]:
+        search: dict[str, Any] = {
+            "sort": [{"fieldName": "createdDate", "order": "DESC"}],
+            "cursorPaging": {"limit": max(1, min(int(limit), 100))},
+        }
+        if field and value:
+            search["filter"] = {field: {"$eq": value}}
+        try:
+            with httpx.Client(timeout=_TIMEOUT) as client:
+                resp = client.post(
+                    f"{self._orders_base}/orders/search",
+                    headers=self._headers(),
+                    json={"search": search},
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+        except httpx.HTTPError as exc:
+            logger.warning("WixOrdersClient customer order search failed: %s", exc)
+            return []
+        orders = payload.get("orders") if isinstance(payload, dict) else None
+        return [item for item in orders if isinstance(item, dict)] if isinstance(orders, list) else []
+
+    def resolve_latest_shipping_address(
+        self,
+        *,
+        reference: str = "",
+        customer_name: str = "",
+        email: str = "",
+    ) -> dict[str, object]:
+        """Resolve the latest *shipping* address, using persistent cache first."""
+        if not self.has_credentials():
+            return {}
+        ref = str(reference or "").strip()
+        if ref:
+            cached = self._cached_order(ref)
+            if cached:
+                lines = self.shipping_address_lines_from_order(cached)
+                if lines:
+                    return {"address_lines": lines, "order_number": str(cached.get("number") or ref), "source": "wix-cache"}
+            order = self._resolve_order(ref)
+            lines = self.shipping_address_lines_from_order(order)
+            if lines:
+                return {"address_lines": lines, "order_number": str(order.get("number") or ref), "source": "wix-order"}
+
+        cache = getattr(self, "_order_cache", None)
+        site_id, account_id = self._cache_scope()
+        cached_orders = cache.get_recent_orders(site_id=site_id, account_id=account_id) if cache is not None and site_id else []
+        cached_orders.sort(key=lambda item: str(item.get("createdDate") or item.get("purchasedDate") or ""), reverse=True)
+        for order in cached_orders:
+            if self._order_matches_customer(order, customer_name=customer_name, email=email):
+                lines = self.shipping_address_lines_from_order(order)
+                if lines:
+                    return {"address_lines": lines, "order_number": str(order.get("number") or ""), "source": "wix-customer-cache"}
+
+        searches: list[tuple[str | None, str, int]] = []
+        if email:
+            searches.append(("buyerInfo.email", email.strip(), 25))
+        normalized_name = self._customer_match_text(customer_name)
+        if normalized_name:
+            searches.append(("billingInfo.contactDetails.lastName", normalized_name.split()[-1], 25))
+        searches.append((None, "", 100))
+        seen: set[str] = set()
+        for field, value, limit in searches:
+            for order in self._search_orders(field, value, limit=limit):
+                order_id = str(order.get("id") or order.get("number") or "").strip()
+                if order_id in seen:
+                    continue
+                seen.add(order_id)
+                self._cache_order(str(order.get("number") or order_id), order)
+                if not self._order_matches_customer(order, customer_name=customer_name, email=email):
+                    continue
+                lines = self.shipping_address_lines_from_order(order)
+                if lines:
+                    return {"address_lines": lines, "order_number": str(order.get("number") or ""), "source": "wix-customer"}
+        return {}
+
     @classmethod
     def _summary_from_order(cls, order: dict[str, Any]) -> dict[str, str]:
         buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}

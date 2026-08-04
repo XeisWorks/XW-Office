@@ -183,6 +183,50 @@ class WixOrderCache:
             except sqlite3.Error as exc:
                 logger.warning("Wix order cache missing-write failed: %s", exc)
 
+    def get_recent_orders(
+        self,
+        *,
+        site_id: str,
+        account_id: str,
+        limit: int = 750,
+    ) -> list[dict[str, Any]]:
+        """Return unique cached snapshots for cache-first customer matching."""
+        site = str(site_id or "").strip()
+        account = str(account_id or "").strip()
+        with self._lock:
+            try:
+                self._ensure_schema()
+                with self._connect() as con:
+                    rows = con.execute(
+                        """
+                        SELECT order_json
+                        FROM wix_order_cache
+                        WHERE site_id = ? AND account_id = ? AND found = 1
+                        ORDER BY fetched_at DESC
+                        LIMIT ?
+                        """,
+                        (site, account, max(1, min(int(limit), 5000))),
+                    ).fetchall()
+            except sqlite3.Error as exc:
+                logger.warning("Wix order cache customer-search read failed: %s", exc)
+                return []
+        orders: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            try:
+                payload = json.loads(str(row["order_json"] or "{}"))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict) or not payload:
+                continue
+            identity = str(payload.get("id") or payload.get("number") or "").strip()
+            if identity and identity in seen:
+                continue
+            if identity:
+                seen.add(identity)
+            orders.append(payload)
+        return orders
+
     def get_product_category_label(
         self,
         *,

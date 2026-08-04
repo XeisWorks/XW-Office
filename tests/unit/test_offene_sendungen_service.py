@@ -274,7 +274,16 @@ def test_generate_delivery_note_pdf_contains_lieferschein_text(tmp_path, monkeyp
     path = service.generate_delivery_note_pdf(
         "m1",
         address_lines=["Max Muster", "Hauptstrasse 1", "1010 Wien"],
-        products=[SendungProductLine(quantity="1", name="Musikbuch Alpen", sku="XW-42")],
+        products=[
+            SendungProductLine(
+                quantity="1",
+                name="Musikbuch Alpen",
+                sku="XW-42",
+                free_delivery=False,
+                delivery_price="5,90",
+                no_return_required=False,
+            )
+        ],
         manual_text="Danke fuer die Bestellung.",
         summary="Kurzfassung",
     )
@@ -286,3 +295,50 @@ def test_generate_delivery_note_pdf_contains_lieferschein_text(tmp_path, monkeyp
     assert "LIEFERSCHEIN" in text
     assert "Musikbuch Alpen" in text
     assert "XeisWorks" in text
+    assert "Lieferkosten:" in text
+    assert "5,90" in text
+    assert "Rücksendung eingetroffen" in text
+
+
+def test_wix_shipping_address_is_preferred_and_cached_per_case() -> None:
+    repo = _Repo()
+    repo.values["daily_business.offene_sendungen.cases"] = json.dumps(
+        [
+            {
+                "id": "m1",
+                "received_at": "2026-06-30T10:00:00Z",
+                "sender": "kunde@example.test",
+                "subject": "Bestellung 20868",
+                "snippet": "",
+                "body": "Lieferadresse:\nFalsche Adresse\nAltweg 1\n1000 Altstadt",
+                "thread_id": "thread-m1",
+                "order_number": "20868",
+            }
+        ]
+    )
+
+    class _Wix:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def resolve_latest_shipping_address(self, **kwargs: object) -> dict[str, object]:
+            self.calls += 1
+            assert kwargs["reference"] == "20868"
+            return {
+                "address_lines": ["Max Muster", "Neuweg 2", "1010 Wien", "Österreich"],
+                "order_number": "20868",
+                "source": "wix-order",
+            }
+
+    wix = _Wix()
+    service = OffeneSendungenService(repo, _Secrets(), wix)  # type: ignore[arg-type]
+    service._secrets.values["OPENAI_API_KEY"] = ""  # noqa: SLF001
+    service._secrets.values["MS_GRAPH_TENANT_ID"] = ""  # noqa: SLF001
+
+    first = service.extract_case_details("m1")
+    second = service.extract_case_details("m1")
+
+    assert first.address_lines[1] == "Neuweg 2"
+    assert second.address_lines == first.address_lines
+    assert "wix-order" in first.source
+    assert wix.calls == 1

@@ -193,6 +193,7 @@ def register_default_services(container: Container) -> None:
         lambda c: OffeneSendungenService(
             c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
             c.resolve(SecretService),
+            c.resolve(WixOrdersClient),
         ),
     )
     container.register(

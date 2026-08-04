@@ -17,6 +17,7 @@ from xw_office.services.mailing.graph_client import GraphMailClient, html_to_tex
 from xw_office.services.printing.invoice_printer import InvoicePrinter
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.secrets.service import SecretService
+from xw_office.services.wix.client import WixOrdersClient
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ _OPEN_CASES_KEY = "daily_business.offene_sendungen.cases"
 _DONE_CASES_KEY = "daily_business.offene_sendungen.done"
 _EXTRACTIONS_KEY = "daily_business.offene_sendungen.extractions"
 _MANUAL_KEY = "daily_business.offene_sendungen.manual"
+_WIX_ADDRESS_KEY = "daily_business.offene_sendungen.wix_addresses"
 _DEFAULT_MODEL = "gpt-4.1-mini"
 _EXCLUDED_WIX_SENDER = "no-reply@mystore.wix.com"
 _EXCLUDED_ORDER_SENDER = "office@xeisworks.at"
@@ -57,6 +59,9 @@ class SendungProductLine:
     name: str = ""
     sku: str = ""
     note: str = ""
+    free_delivery: bool = True
+    delivery_price: str = "5,90"
+    no_return_required: bool = True
 
 
 @dataclass(frozen=True)
@@ -74,9 +79,15 @@ class SendungExtraction:
 class OffeneSendungenService:
     """Manage open shipping requests with persistence and optional AI support."""
 
-    def __init__(self, settings_repo: SettingKvRepository | None, secrets: SecretService) -> None:
+    def __init__(
+        self,
+        settings_repo: SettingKvRepository | None,
+        secrets: SecretService,
+        wix_orders: WixOrdersClient | None = None,
+    ) -> None:
         self._repo = settings_repo
         self._secrets = secrets
+        self._wix_orders = wix_orders
 
     def open_count(self) -> int:
         return len(self.load_open_cases())
@@ -161,18 +172,20 @@ class OffeneSendungenService:
         if not force:
             cached = self._load_saved_extraction(cid)
             if cached is not None:
-                return cached
+                return self._with_wix_shipping_address(case, cached)
 
         api_key = self._secrets.get_secret("OPENAI_API_KEY")
         if api_key:
             try:
                 extraction = self._openai_extract(case, api_key)
+                extraction = self._with_wix_shipping_address(case, extraction, refresh=force)
                 self._save_extraction(cid, extraction)
                 return extraction
             except Exception as exc:  # noqa: BLE001
                 logger.warning("OpenAI sendung extraction failed for %s: %s", cid, exc)
 
         extraction = self._fallback_extract(case)
+        extraction = self._with_wix_shipping_address(case, extraction, refresh=force)
         self._save_extraction(cid, extraction)
         return extraction
 
@@ -479,6 +492,87 @@ class OffeneSendungenService:
             thread_text=text,
         )
 
+    def _with_wix_shipping_address(
+        self,
+        case: SendungCase,
+        extraction: SendungExtraction,
+        *,
+        refresh: bool = False,
+    ) -> SendungExtraction:
+        """Prefer the newest strict Wix shipping address and cache it per case.
+
+        A direct order-number lookup wins.  If no order number is available,
+        Wix is searched by the sender email and then by the extracted recipient
+        name.  Billing addresses are deliberately never used here.
+        """
+        wix = self._wix_orders
+        if wix is None:
+            return extraction
+        cache = self._load_json_map(_WIX_ADDRESS_KEY)
+        cached = cache.get(case.id)
+        if not refresh and isinstance(cached, dict):
+            lines = self._normalize_address_lines(cached.get("address_lines"))
+            if lines:
+                address_source = str(cached.get("source") or "wix-cache").strip()
+                combined_source = extraction.source
+                if address_source not in combined_source.split("+"):
+                    combined_source = f"{combined_source}+{address_source}"
+                return SendungExtraction(
+                    summary=extraction.summary,
+                    address_lines=lines,
+                    products=extraction.products,
+                    order_number=str(cached.get("order_number") or extraction.order_number).strip(),
+                    confidence_notes=extraction.confidence_notes,
+                    source=combined_source,
+                    updated_at=extraction.updated_at,
+                    thread_text=extraction.thread_text,
+                )
+            if cached.get("not_found") is True:
+                return extraction
+
+        recipient_name = extraction.address_lines[0] if extraction.address_lines else ""
+        sender_email = (
+            case.sender
+            if "@" in case.sender and not case.sender.casefold().endswith("@xeisworks.at")
+            else ""
+        )
+        try:
+            result = wix.resolve_latest_shipping_address(
+                reference=extraction.order_number or case.order_number,
+                customer_name=recipient_name,
+                email=sender_email,
+            )
+        except Exception as exc:  # noqa: BLE001 - address enrichment must not block the workflow.
+            logger.warning("Wix shipping-address lookup failed for sendung %s: %s", case.id, exc)
+            return extraction
+        lines = self._normalize_address_lines(result.get("address_lines")) if isinstance(result, dict) else []
+        if not lines:
+            cache[case.id] = {"not_found": True, "updated_at": self._utc_now_iso()}
+            self._save_json_map(_WIX_ADDRESS_KEY, cache)
+            return extraction
+        order_number = str(result.get("order_number") or extraction.order_number or case.order_number).strip()
+        source = str(result.get("source") or "wix").strip()
+        cache[case.id] = {
+            "address_lines": lines,
+            "order_number": order_number,
+            "source": source,
+            "updated_at": self._utc_now_iso(),
+        }
+        self._save_json_map(_WIX_ADDRESS_KEY, cache)
+        combined_source = extraction.source
+        if source not in combined_source.split("+"):
+            combined_source = f"{combined_source}+{source}"
+        return SendungExtraction(
+            summary=extraction.summary,
+            address_lines=lines,
+            products=extraction.products,
+            order_number=order_number,
+            confidence_notes=extraction.confidence_notes,
+            source=combined_source,
+            updated_at=extraction.updated_at,
+            thread_text=extraction.thread_text,
+        )
+
     @staticmethod
     def _response_text(payload: dict[str, Any]) -> str:
         text = str(payload.get("output_text") or "").strip()
@@ -535,12 +629,23 @@ class OffeneSendungenService:
                     name=str(item.get("name") or "").strip(),
                     sku=str(item.get("sku") or "").strip(),
                     note=str(item.get("note") or "").strip(),
+                    free_delivery=self._as_bool(item.get("free_delivery"), default=True),
+                    delivery_price=str(item.get("delivery_price") or "5,90").strip() or "5,90",
+                    no_return_required=self._as_bool(item.get("no_return_required"), default=True),
                 )
             else:
                 product = SendungProductLine(name=str(item or "").strip())
             if product.name:
                 products.append(product)
         return products
+
+    @staticmethod
+    def _as_bool(value: object, *, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        return str(value).strip().casefold() not in {"", "0", "false", "no", "nein", "off"}
 
     @staticmethod
     def _extract_address_block(text: str) -> list[str]:
@@ -661,20 +766,37 @@ class OffeneSendungenService:
         y = 318
         table_x = margin
         table_w = 495
-        row_h = 28
+        row_h = 36
         page.draw_rect(fitz.Rect(table_x, y, table_x + table_w, y + row_h), color=(0.84, 0.09, 0.09), fill=(0.84, 0.09, 0.09))
         page.insert_text((table_x + 10, y + 18), "Menge", fontsize=10, color=(1, 1, 1))
         page.insert_text((table_x + 72, y + 18), "Produkt", fontsize=10, color=(1, 1, 1))
-        page.insert_text((table_x + 390, y + 18), "SKU / Notiz", fontsize=10, color=(1, 1, 1))
+        page.insert_text((table_x + 360, y + 18), "Versand / Rücksendung", fontsize=9.5, color=(1, 1, 1))
         y += row_h
         rows = products or [SendungProductLine(quantity="", name="Produkte bitte ergaenzen")]
-        for idx, product in enumerate(rows[:14]):
+        for idx, product in enumerate(rows[:8]):
             fill = (0.97, 0.97, 0.97) if idx % 2 else (1, 1, 1)
             page.draw_rect(fitz.Rect(table_x, y, table_x + table_w, y + row_h), color=(0.88, 0.88, 0.88), fill=fill)
             page.insert_textbox(fitz.Rect(table_x + 10, y + 7, table_x + 60, y + row_h), product.quantity, fontsize=10)
-            page.insert_textbox(fitz.Rect(table_x + 72, y + 7, table_x + 382, y + row_h), product.name, fontsize=10)
+            product_text = product.name
             sku_note = " | ".join(part for part in (product.sku, product.note) if part)
-            page.insert_textbox(fitz.Rect(table_x + 390, y + 7, table_x + table_w - 8, y + row_h), sku_note, fontsize=9)
+            if sku_note:
+                product_text = f"{product_text}\n{sku_note}"
+            page.insert_textbox(fitz.Rect(table_x + 72, y + 6, table_x + 350, y + row_h), product_text, fontsize=9.5)
+            delivery_text = (
+                "Kostenlose Lieferung"
+                if product.free_delivery
+                else f"Lieferkosten: € {str(product.delivery_price or '5,90').strip()}"
+            )
+            return_text = (
+                "Keine Rücksendung erforderlich"
+                if product.no_return_required
+                else "Rücksendung eingetroffen"
+            )
+            page.insert_textbox(
+                fitz.Rect(table_x + 360, y + 5, table_x + table_w - 6, y + row_h),
+                f"{delivery_text}\n{return_text}",
+                fontsize=8.4,
+            )
             y += row_h
 
         if manual_text.strip():
@@ -817,12 +939,15 @@ class OffeneSendungenService:
         }
 
     @staticmethod
-    def _product_to_dict(product: SendungProductLine) -> dict[str, str]:
+    def _product_to_dict(product: SendungProductLine) -> dict[str, object]:
         return {
             "quantity": str(product.quantity or "").strip(),
             "name": str(product.name or "").strip(),
             "sku": str(product.sku or "").strip(),
             "note": str(product.note or "").strip(),
+            "free_delivery": bool(product.free_delivery),
+            "delivery_price": str(product.delivery_price or "5,90").strip() or "5,90",
+            "no_return_required": bool(product.no_return_required),
         }
 
     @staticmethod

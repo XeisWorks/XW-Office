@@ -8,6 +8,42 @@ from xw_office.services.wix.client import _parse_order_line_item
 from xw_office.services.wix.order_cache import WixOrderCache
 
 
+def test_latest_shipping_address_uses_newest_matching_cached_order(tmp_path, monkeypatch) -> None:
+    cache = WixOrderCache(tmp_path / "cache.sqlite")
+
+    def order(number: str, created: str, street: str) -> dict[str, Any]:
+        return {
+            "id": f"id-{number}",
+            "number": number,
+            "createdDate": created,
+            "buyerInfo": {"email": "max@example.test", "firstName": "Max", "lastName": "Muster"},
+            "shippingInfo": {
+                "logistics": {
+                    "shippingDestination": {
+                        "address": {"addressLine": street, "postalCode": "1010", "city": "Wien", "country": "AT"},
+                        "contactDetails": {"firstName": "Max", "lastName": "Muster"},
+                    }
+                }
+            },
+        }
+
+    cache.put_order(site_id="site", account_id="account", reference="100", order=order("100", "2026-01-01", "Altweg 1"))
+    cache.put_order(site_id="site", account_id="account", reference="200", order=order("200", "2026-07-01", "Neuweg 2"))
+
+    class _Secrets:
+        def get_secret(self, key: str) -> str:
+            return {"WIX_API_KEY": "key", "WIX_SITE_ID": "site", "WIX_ACCOUNT_ID": "account"}.get(key, "")
+
+    client = WixOrdersClient(secret_service=_Secrets(), order_cache=cache)  # type: ignore[arg-type]
+    monkeypatch.setattr(client, "_search_orders", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("API must not be called")))
+
+    result = client.resolve_latest_shipping_address(customer_name="Max Muster", email="max@example.test")
+
+    assert result["order_number"] == "200"
+    assert "Neuweg 2" in result["address_lines"]
+    assert result["source"] == "wix-customer-cache"
+
+
 def test_pick_exact_order_match_uses_exact_number() -> None:
     orders: list[dict[str, Any]] = [
         {"id": "a", "number": "20463"},

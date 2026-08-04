@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,8 @@ from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QAbstractItemView,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -18,6 +21,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QSplitter,
+    QScrollArea,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -37,7 +41,15 @@ from xw_office.services.sendungen.service import (
 
 
 class _SendungProductsModel(QAbstractTableModel):
-    _headers = ["Menge", "Produkt", "SKU", "Notiz"]
+    _headers = [
+        "Menge",
+        "Produkt",
+        "SKU",
+        "Notiz",
+        "Kostenlose Lieferung",
+        "Lieferpreis (€)",
+        "Keine Rücksendung erforderlich",
+    ]
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -53,30 +65,58 @@ class _SendungProductsModel(QAbstractTableModel):
         if not index.isValid() or not (0 <= index.row() < len(self._rows)):
             return None
         row = self._rows[index.row()]
-        values = [row.quantity, row.name, row.sku, row.note]
+        if index.column() in (4, 6) and role == Qt.ItemDataRole.CheckStateRole:
+            checked = row.free_delivery if index.column() == 4 else row.no_return_required
+            return Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        values = [row.quantity, row.name, row.sku, row.note, "", row.delivery_price, ""]
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             return values[index.column()]
+        if role == Qt.ItemDataRole.TextAlignmentRole and index.column() in (0, 4, 5, 6):
+            return int(Qt.AlignmentFlag.AlignCenter)
         return None
 
     def setData(self, index: QModelIndex, value: object, role: int = Qt.ItemDataRole.EditRole) -> bool:
-        if role != Qt.ItemDataRole.EditRole or not index.isValid() or not (0 <= index.row() < len(self._rows)):
+        if not index.isValid() or not (0 <= index.row() < len(self._rows)):
             return False
         row = self._rows[index.row()]
+        if role == Qt.ItemDataRole.CheckStateRole and index.column() in (4, 6):
+            checked = value == Qt.CheckState.Checked or value == Qt.CheckState.Checked.value
+            if index.column() == 4:
+                self._rows[index.row()] = replace(row, free_delivery=checked)
+                right = self.index(index.row(), 5)
+                self.dataChanged.emit(index, right, [role, Qt.ItemDataRole.DisplayRole])
+            else:
+                self._rows[index.row()] = replace(row, no_return_required=checked)
+                self.dataChanged.emit(index, index, [role])
+            return True
+        if role != Qt.ItemDataRole.EditRole or index.column() in (4, 6):
+            return False
         values = [row.quantity, row.name, row.sku, row.note]
-        values[index.column()] = str(value or "").strip()
-        self._rows[index.row()] = SendungProductLine(
-            quantity=values[0] or "1",
-            name=values[1],
-            sku=values[2],
-            note=values[3],
-        )
+        if index.column() <= 3:
+            values[index.column()] = str(value or "").strip()
+            self._rows[index.row()] = replace(
+                row,
+                quantity=values[0] or "1",
+                name=values[1],
+                sku=values[2],
+                note=values[3],
+            )
+        elif index.column() == 5 and not row.free_delivery:
+            self._rows[index.row()] = replace(row, delivery_price=str(value or "").strip())
+        else:
+            return False
         self.dataChanged.emit(index, index, [role])
         return True
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
-        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable
+        base = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        if index.column() in (4, 6):
+            return base | Qt.ItemFlag.ItemIsUserCheckable
+        if index.column() == 5 and self._rows[index.row()].free_delivery:
+            return base
+        return base | Qt.ItemFlag.ItemIsEditable
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> object:
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
@@ -148,7 +188,8 @@ class OffeneSendungenDialog(QDialog):
 
     def _build_ui(self) -> None:
         self.setWindowTitle("OFFENE SENDUNGEN")
-        self.setMinimumSize(1160, 720)
+        self.setMinimumSize(980, 640)
+        self.resize(1420, 860)
 
         root = QVBoxLayout(self)
 
@@ -169,8 +210,20 @@ class OffeneSendungenDialog(QDialog):
         left_lay.addWidget(self._list)
         splitter.addWidget(left)
 
-        right = QWidget()
-        right_lay = QVBoxLayout(right)
+        right_panel = QWidget()
+        right_outer_lay = QVBoxLayout(right_panel)
+        right_outer_lay.setContentsMargins(0, 0, 0, 0)
+        right_outer_lay.setSpacing(8)
+        right = QScrollArea()
+        right.setWidgetResizable(True)
+        right.setFrameShape(QFrame.Shape.NoFrame)
+        right.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_content = QWidget()
+        right_lay = QVBoxLayout(right_content)
+        right_lay.setContentsMargins(10, 0, 10, 0)
+        right_lay.setSpacing(8)
+        right.setWidget(right_content)
+        right_outer_lay.addWidget(right, stretch=1)
 
         self._meta = QLabel("Keine Sendung ausgewaehlt")
         self._meta.setWordWrap(True)
@@ -179,13 +232,15 @@ class OffeneSendungenDialog(QDialog):
         self._summary = QPlainTextEdit()
         self._summary.setReadOnly(True)
         self._summary.setPlaceholderText("OpenAI-Zusammenfassung")
-        self._summary.setMinimumHeight(95)
+        self._summary.setMinimumHeight(78)
+        self._summary.setMaximumHeight(105)
         right_lay.addWidget(self._summary)
 
         self._thread = QPlainTextEdit()
         self._thread.setReadOnly(True)
         self._thread.setPlaceholderText("Mailverlauf / Inhalt")
-        self._thread.setMinimumHeight(130)
+        self._thread.setMinimumHeight(105)
+        self._thread.setMaximumHeight(160)
         right_lay.addWidget(self._thread)
 
         self._detail_status = QLabel("Quelle: -")
@@ -194,7 +249,8 @@ class OffeneSendungenDialog(QDialog):
 
         right_lay.addWidget(QLabel("Lieferadresse fuer Label (bearbeitbar, eine Zeile pro Zeile):"))
         self._address = QPlainTextEdit()
-        self._address.setMinimumHeight(92)
+        self._address.setMinimumHeight(78)
+        self._address.setMaximumHeight(105)
         right_lay.addWidget(self._address)
 
         row_products_header = QHBoxLayout()
@@ -210,16 +266,22 @@ class OffeneSendungenDialog(QDialog):
 
         self._products = QTableView()
         self._products.setModel(self._products_model)
-        self._products.setMinimumHeight(150)
-        self._products.horizontalHeader().setStretchLastSection(True)
+        self._products.setMinimumHeight(155)
+        self._products.setMaximumHeight(210)
+        self._products.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self._products.setColumnWidth(0, 70)
-        self._products.setColumnWidth(1, 330)
-        self._products.setColumnWidth(2, 130)
+        self._products.setColumnWidth(1, 280)
+        self._products.setColumnWidth(2, 110)
+        self._products.setColumnWidth(3, 220)
+        self._products.setColumnWidth(4, 150)
+        self._products.setColumnWidth(5, 105)
+        self._products.setColumnWidth(6, 205)
         right_lay.addWidget(self._products)
 
         right_lay.addWidget(QLabel("Manueller Text fuer Lieferschein:"))
         self._manual_text = QPlainTextEdit()
-        self._manual_text.setMinimumHeight(70)
+        self._manual_text.setMinimumHeight(58)
+        self._manual_text.setMaximumHeight(85)
         right_lay.addWidget(self._manual_text)
 
         row_actions = QHBoxLayout()
@@ -243,9 +305,9 @@ class OffeneSendungenDialog(QDialog):
         self._btn_done = QPushButton("Sendung erledigt")
         self._btn_done.clicked.connect(self._mark_done)
         row_actions.addWidget(self._btn_done)
-        right_lay.addLayout(row_actions)
+        right_outer_lay.addLayout(row_actions)
 
-        splitter.addWidget(right)
+        splitter.addWidget(right_panel)
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 4)
         root.addWidget(splitter)
@@ -386,6 +448,9 @@ class OffeneSendungenDialog(QDialog):
                         name=str(item.get("name") or "").strip(),
                         sku=str(item.get("sku") or "").strip(),
                         note=str(item.get("note") or "").strip(),
+                        free_delivery=self._manual_bool(item.get("free_delivery"), default=True),
+                        delivery_price=str(item.get("delivery_price") or "5,90").strip() or "5,90",
+                        no_return_required=self._manual_bool(item.get("no_return_required"), default=True),
                     )
                     for item in manual_products
                     if isinstance(item, dict) and str(item.get("name") or "").strip()
@@ -455,6 +520,35 @@ class OffeneSendungenDialog(QDialog):
 
     def _products_from_table(self) -> list[SendungProductLine]:
         return self._products_model.products()
+
+    @staticmethod
+    def _manual_bool(value: object, *, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        return str(value).strip().casefold() not in {"", "0", "false", "no", "nein", "off"}
+
+    def _validated_products(self) -> list[SendungProductLine] | None:
+        products = self._products_from_table()
+        for row, product in enumerate(products, start=1):
+            if product.free_delivery:
+                continue
+            raw = str(product.delivery_price or "").strip().replace("€", "").replace(" ", "")
+            try:
+                amount = float(raw.replace(".", "").replace(",", "."))
+            except ValueError:
+                amount = 0.0
+            if amount <= 0:
+                QMessageBox.information(
+                    self,
+                    "Lieferpreis fehlt",
+                    f"Bitte in Produktzeile {row} einen Lieferpreis eingeben (Standard: € 5,90).",
+                )
+                self._products.setCurrentIndex(self._products_model.index(row - 1, 5))
+                self._products.edit(self._products_model.index(row - 1, 5))
+                return None
+        return products
 
     def _cell_text(self, row: int, column: int) -> str:
         index = self._products_model.index(row, column)
@@ -587,10 +681,13 @@ class OffeneSendungenDialog(QDialog):
         case = self._current_case()
         if case is None:
             return None
+        products = self._validated_products()
+        if products is None:
+            return None
         return (
             case.id,
             self._address_lines(),
-            self._products_from_table(),
+            products,
             self._manual_text.toPlainText(),
             self._summary.toPlainText(),
         )
