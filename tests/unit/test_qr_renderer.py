@@ -92,6 +92,34 @@ def test_quiet_zone_stays_background_color() -> None:
     assert image.getpixel((999, 999)) == (255, 255, 255)
 
 
+def test_logo_backplate_snaps_to_module_grid(tmp_path: Path) -> None:
+    # A fully transparent logo makes only the white backplate square visible against
+    # the module grid, so its edge is easy to locate by scanning for the first non-
+    # white pixel. That edge must land exactly on a module boundary - otherwise a
+    # black module is sliced in half, leaving a jagged sliver (see renderer.py
+    # _composite_logo).
+    logo_path = tmp_path / "transparent.png"
+    Image.new("RGBA", (10, 10), (0, 0, 0, 0)).save(logo_path)
+
+    settings = _settings(logo_enabled=True, logo_path=str(logo_path))
+    renderer = SegnoLogoQrRenderer()
+
+    module_count = renderer._render_module_grid(PAYLOAD, settings).width  # noqa: SLF001
+    module_px = min(settings.width_px, settings.height_px) // module_count
+    symbol_size = module_count * module_px
+    offset_x = (settings.width_px - symbol_size) // 2
+
+    png_bytes = renderer.render(PAYLOAD, settings)
+    image = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+
+    y = settings.height_px // 2
+    x = settings.width_px // 2
+    while image.getpixel((x, y)) == (255, 255, 255):
+        x -= 1
+    boundary = x + 1
+    assert (boundary - offset_x) % module_px == 0
+
+
 def test_missing_logo_raises_render_error() -> None:
     settings = _settings(logo_enabled=True, logo_path=r"C:\does\not\exist\logo.png")
     renderer = SegnoLogoQrRenderer()

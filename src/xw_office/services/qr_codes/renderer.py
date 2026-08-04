@@ -56,7 +56,7 @@ class SegnoLogoQrRenderer:
         canvas.paste(symbol_image, offset)
 
         if settings.logo_enabled:
-            self._composite_logo(canvas, symbol_size, offset, settings)
+            self._composite_logo(canvas, symbol_size, offset, settings, module_px)
 
         buf = io.BytesIO()
         canvas.save(buf, format="PNG")
@@ -99,20 +99,32 @@ class SegnoLogoQrRenderer:
         symbol_size: int,
         symbol_offset: tuple[int, int],
         settings: QrRenderSettings,
+        module_px: int,
     ) -> None:
         logo = self._load_logo(settings.logo_path)
 
-        backplate_size = max(1, round(symbol_size * settings.logo_backplate_width_percent / 100))
+        # Snap the backplate to whole QR modules so it never slices a module in half -
+        # a raw pixel-percentage size lands mid-module and leaves jagged black slivers
+        # along the cutout edge (see markdowns/QR_Code_Untermenue_PySide6_Spezifikation.md
+        # section 19 - no antialiasing/interpolation is allowed on the module grid).
+        module_count = symbol_size // module_px
+        raw_modules = symbol_size * settings.logo_backplate_width_percent / 100 / module_px
+        backplate_modules = max(1, round(raw_modules))
+        if backplate_modules % 2 == 0:
+            backplate_modules += 1
+        backplate_modules = min(backplate_modules, module_count)
+        backplate_size = backplate_modules * module_px
+        start_col = (module_count - backplate_modules) // 2
+        backplate_x = symbol_offset[0] + start_col * module_px
+        backplate_y = symbol_offset[1] + start_col * module_px
+
         content_max = max(1, round(symbol_size * settings.logo_max_width_percent / 100))
 
         center_x = symbol_offset[0] + symbol_size // 2
         center_y = symbol_offset[1] + symbol_size // 2
 
         backplate = Image.new("RGB", (backplate_size, backplate_size), settings.background_color)
-        canvas.paste(
-            backplate,
-            (center_x - backplate_size // 2, center_y - backplate_size // 2),
-        )
+        canvas.paste(backplate, (backplate_x, backplate_y))
 
         logo_fitted = logo.copy()
         logo_fitted.thumbnail((content_max, content_max), Image.Resampling.LANCZOS)
