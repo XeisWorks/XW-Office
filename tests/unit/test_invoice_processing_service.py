@@ -433,6 +433,31 @@ def test_shipping_lines_prefer_wix_when_available() -> None:
     assert wix.calls == 1
 
 
+def test_shipping_lines_prefer_invoice_panel_address_over_wix_when_complete() -> None:
+    summary = InvoiceSummary(id="5a", invoiceNumber="R-5A", order_reference="12345")
+    wix = _WixOrdersStub()
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        _InvoiceClientStub([summary]),  # type: ignore[arg-type]
+        None,
+        wix,  # type: ignore[arg-type]
+    )
+
+    lines = svc._shipping_lines_from_invoice(  # noqa: SLF001
+        {
+            "deliveryName": "Anja Gundermann",
+            "deliveryStreet": "Storchenblick 30",
+            "deliveryZip": "21243",
+            "deliveryCity": "Winsen",
+            "deliveryAddressCountry": "Germany",
+        },
+        summary,
+    )
+
+    assert lines == ["Anja Gundermann", "Storchenblick 30", "21243 Winsen", "GERMANY"]
+    assert wix.calls == 1
+
+
 def test_shipping_lines_use_wix_cache_for_same_reference() -> None:
     summary = InvoiceSummary(id="6", invoiceNumber="R-6", order_reference="12345")
     wix = _WixOrdersStub()

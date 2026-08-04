@@ -1697,12 +1697,45 @@ class InvoiceProcessingService:
         )
 
     def _shipping_lines_from_invoice(self, invoice: dict[str, Any], summary: InvoiceSummary) -> list[str]:
+        invoice_lines = self._shipping_lines_from_invoice_data(invoice, summary)
         if summary.order_reference.strip():
             wix_lines = self._get_wix_address_lines_cached(summary.order_reference)
-            if wix_lines:
-                return wix_lines
+            return self._best_shipping_lines(invoice_lines, wix_lines)
 
-        return self._shipping_lines_from_invoice_data(invoice, summary)
+        return invoice_lines
+
+    @classmethod
+    def _best_shipping_lines(cls, preferred_lines: list[str], fallback_lines: list[str]) -> list[str]:
+        preferred = [str(line or "").strip() for line in preferred_lines if str(line or "").strip()]
+        fallback = [str(line or "").strip() for line in fallback_lines if str(line or "").strip()]
+        if not preferred:
+            return fallback
+        if not fallback:
+            return preferred
+        preferred_score = cls._address_quality_score(preferred)
+        fallback_score = cls._address_quality_score(fallback)
+        if fallback_score > preferred_score:
+            return fallback
+        return preferred
+
+    @staticmethod
+    def _address_quality_score(lines: list[str]) -> int:
+        normalized = [str(line or "").strip() for line in lines if str(line or "").strip()]
+        if not normalized:
+            return 0
+        score = min(len(normalized), 5)
+        has_street = any(re.search(r"\d", line) and not re.match(r"^\d{4,6}\b", line) for line in normalized[1:])
+        has_postal_city = any(re.search(r"\b\d{4,6}\b", line) and re.search(r"[A-Za-z]", line) for line in normalized)
+        has_country = len(normalized) >= 3 and bool(re.match(r"^[A-Z][A-Z\s.-]{1,}$", normalized[-1]))
+        if has_street:
+            score += 5
+        if has_postal_city:
+            score += 4
+        if has_country:
+            score += 2
+        if len(normalized) <= 1:
+            score -= 8
+        return score
 
     def _shipping_lines_from_invoice_data(self, invoice: dict[str, Any], summary: InvoiceSummary) -> list[str]:
         """Build shipping lines from sevDesk invoice/contact data only."""

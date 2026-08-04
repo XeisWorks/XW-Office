@@ -1046,6 +1046,14 @@ def test_rechnungen_applies_persistent_wix_cache_before_background_load(
     assert load_calls == [("20899", False)]
 
 
+def test_shipping_editor_keeps_complete_panel_address_over_name_only_wix() -> None:
+    panel_lines = ["Anja Gundermann", "Storchenblick 30", "21243 Winsen", "GERMANY"]
+    wix_lines = ["Dr. Werner Scheitzeneider"]
+
+    assert RechnungenView._should_replace_shipping_lines(panel_lines, wix_lines) is False  # noqa: SLF001
+    assert RechnungenView._should_replace_shipping_lines([], wix_lines) is True  # noqa: SLF001
+
+
 def test_rechnungen_piece_details_use_model_instead_of_row_widgets(qtbot: object) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)

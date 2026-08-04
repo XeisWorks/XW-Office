@@ -6,6 +6,7 @@ import html
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -4451,7 +4452,13 @@ class RechnungenView(QWidget):
         override_lines: list[str] = []
         if selected is not None:
             override_lines = list(self._shipping_address_overrides.get(selected.id, []))
-        self._set_shipping_editor_lines(override_lines or shipping_lines)
+        current_lines = self._current_shipping_lines()
+        if override_lines:
+            self._set_shipping_editor_lines(override_lines)
+        elif self._should_replace_shipping_lines(current_lines, shipping_lines):
+            self._set_shipping_editor_lines(shipping_lines)
+        elif current_lines and shipping_lines and current_lines != shipping_lines:
+            self._shipping_status.setText("Versandadresse aus Rechnung verwendet; Wix-Adresse abweichend/unsicher")
 
     def _on_wix_meta_error(self, exc: Exception) -> None:
         if not self._current_shipping_lines():
@@ -4493,6 +4500,35 @@ class RechnungenView(QWidget):
 
     def _current_shipping_lines(self) -> list[str]:
         return self._normalize_shipping_lines(self._shipping_editor.toPlainText().splitlines())
+
+    @classmethod
+    def _should_replace_shipping_lines(cls, current_lines: list[str], candidate_lines: list[str]) -> bool:
+        current = cls._normalize_shipping_lines(current_lines)
+        candidate = cls._normalize_shipping_lines(candidate_lines)
+        if not candidate:
+            return False
+        if not current:
+            return True
+        return cls._address_quality_score(candidate) > cls._address_quality_score(current)
+
+    @staticmethod
+    def _address_quality_score(lines: list[str]) -> int:
+        normalized = [str(line or "").strip() for line in lines if str(line or "").strip()]
+        if not normalized:
+            return 0
+        score = min(len(normalized), 5)
+        has_street = any(re.search(r"\d", line) and not re.match(r"^\d{4,6}\b", line) for line in normalized[1:])
+        has_postal_city = any(re.search(r"\b\d{4,6}\b", line) and re.search(r"[A-Za-z]", line) for line in normalized)
+        has_country = len(normalized) >= 3 and bool(re.match(r"^[A-Z][A-Z\s.-]{1,}$", normalized[-1]))
+        if has_street:
+            score += 5
+        if has_postal_city:
+            score += 4
+        if has_country:
+            score += 2
+        if len(normalized) <= 1:
+            score -= 8
+        return score
 
     def _adjust_shipping_editor_height(self) -> None:
         lines = max(5, min(7, self._shipping_editor.blockCount()))
