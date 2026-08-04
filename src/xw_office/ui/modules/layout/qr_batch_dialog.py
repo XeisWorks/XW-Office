@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QTimer, QUrl, Qt
+from PySide6.QtCore import QModelIndex, QTimer, QUrl, Qt
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
@@ -64,6 +64,7 @@ logger = logging.getLogger(__name__)
 
 _VARIANT_ORDER = (WHOLE_SCALE, GESAMTSPIELCHEN, UNGERADE_ZAHLEN_EXCEL, GERADE_ZAHLEN_EXCEL, JEDE_4_ZAHL)
 _PREVIEW_COLUMNS = ["Nr.", "Nummer", "ID", "URL", "Dateiname", "Status"]
+_PREVIEW_URL_COLUMN = _PREVIEW_COLUMNS.index("URL")
 _PREVIEW_DEBOUNCE_MS = 200
 
 
@@ -150,6 +151,9 @@ class QrCodeBatchDialog(QDialog):
         preview_layout = QVBoxLayout(preview_group)
         self._preview_table = DataTable(_PREVIEW_COLUMNS)
         self._preview_table.setMinimumHeight(220)
+        self._preview_table.setMouseTracking(True)
+        self._preview_table.entered.connect(self._on_preview_table_hovered)
+        self._preview_table.clicked.connect(self._on_preview_table_clicked)
         preview_layout.addWidget(self._preview_table)
         root.addWidget(preview_group, stretch=1)
 
@@ -439,6 +443,8 @@ class QrCodeBatchDialog(QDialog):
                 "URL": record.payload_url,
                 "Dateiname": record.output_filename,
                 "Status": record.warning or "OK",
+                "__fg__URL": "#1a5fb4",
+                "__tooltip__URL": f"Klicken, um im Standardbrowser zu öffnen:\n{record.payload_url}",
             }
             if record.warning:
                 row["__fg__Status"] = "#c0392b"
@@ -451,6 +457,18 @@ class QrCodeBatchDialog(QDialog):
             count_text += " Achtung: Kollisionen vorhanden (Regel 'Abbrechen') - Erzeugen ist deaktiviert."
         self._count_label.setText(count_text)
         self._generate_btn.setEnabled(bool(records) and bool(output_dir_text) and not has_blocking_warning)
+
+    def _on_preview_table_hovered(self, index: QModelIndex) -> None:
+        is_url_cell = index.isValid() and index.column() == _PREVIEW_URL_COLUMN
+        cursor = Qt.CursorShape.PointingHandCursor if is_url_cell else Qt.CursorShape.ArrowCursor
+        self._preview_table.viewport().setCursor(cursor)
+
+    def _on_preview_table_clicked(self, index: QModelIndex) -> None:
+        if not index.isValid() or index.column() != _PREVIEW_URL_COLUMN:
+            return
+        url_text = str(index.data(Qt.ItemDataRole.DisplayRole) or "").strip()
+        if url_text:
+            QDesktopServices.openUrl(QUrl(url_text))
 
     # ------------------------------------------------------------------
     # Output directory / settings

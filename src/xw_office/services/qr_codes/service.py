@@ -78,6 +78,10 @@ class QrCodeService:
             _SETTINGS_KEY, json.dumps(asdict(settings), ensure_ascii=False, sort_keys=True)
         )
 
+    def render_preview(self, payload: str, settings: QrRenderSettings) -> bytes:
+        """Render one example QR PNG for the live settings preview. Raises QrModuleError."""
+        return self._renderer.render(payload, settings)
+
     # ------------------------------------------------------------------
     # Precheck (used to annotate the live preview table before generation)
     # ------------------------------------------------------------------
