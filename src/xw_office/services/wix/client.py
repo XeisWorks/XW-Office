@@ -1001,11 +1001,12 @@ class WixOrdersClient:
     @classmethod
     def _first_address_node(cls, order: dict[str, Any]) -> dict[str, Any]:
         paths = (
-            ("shippingInfo", "shippingAddress"),
+            ("shippingInfo", "shippingAddress", "address"),
             ("shippingInfo", "address"),
             ("shippingInfo", "shippingDestination", "address"),
             ("shippingInfo", "deliveryAddress"),
             ("shippingInfo", "logistics", "shippingDestination", "address"),
+            ("shippingInfo", "shippingAddress"),
         )
         for path in paths:
             node = cls._nested_dict(order, *path)
@@ -1020,6 +1021,10 @@ class WixOrdersClient:
     @classmethod
     def _street_line_from_value(cls, value: object) -> str:
         if isinstance(value, dict):
+            for key in ("addressLine1", "addressLine", "street", "formattedAddress"):
+                text = cls._extract_text(value.get(key))
+                if text:
+                    return text
             name = cls._extract_text(value.get("name"))
             number = cls._extract_text(value.get("number"))
             apt = cls._extract_text(value.get("apt"))
@@ -1068,6 +1073,7 @@ class WixOrdersClient:
             return {}
         buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
         shipping = order.get("shippingInfo") if isinstance(order.get("shippingInfo"), dict) else {}
+        shipping_address = shipping.get("shippingAddress") if isinstance(shipping.get("shippingAddress"), dict) else {}
         shipment_details = shipping.get("shipmentDetails") if isinstance(shipping.get("shipmentDetails"), dict) else {}
         destination = shipping.get("shippingDestination") if isinstance(shipping.get("shippingDestination"), dict) else {}
         destination_address = destination.get("address") if isinstance(destination.get("address"), dict) else {}
@@ -1081,6 +1087,7 @@ class WixOrdersClient:
             shipment_details,
             destination_contact,
             logistics_contact,
+            shipping_address,
             buyer,
             shipping,
             keys=("firstName", "givenName", "firstname", "givenname", "surename", "name"),
@@ -1089,6 +1096,7 @@ class WixOrdersClient:
             shipment_details,
             destination_contact,
             logistics_contact,
+            shipping_address,
             buyer,
             shipping,
             keys=("lastName", "familyName", "familyname", "surname", "lastname"),
@@ -1097,6 +1105,7 @@ class WixOrdersClient:
             shipment_details,
             destination_contact,
             logistics_contact,
+            shipping_address,
             shipping,
             keys=("company", "companyName", "businessName", "addressName"),
         )
@@ -1179,6 +1188,29 @@ class WixOrdersClient:
             "city": city,
             "country": country,
         }
+
+    @staticmethod
+    def _has_usable_address_location(parts: dict[str, str]) -> bool:
+        street = str(parts.get("street1") or parts.get("street2") or "").strip()
+        postal_or_city = str(parts.get("postal_code") or parts.get("city") or "").strip()
+        return bool(street or postal_or_city)
+
+    @classmethod
+    def _shipping_address_is_name_only(cls, order: dict[str, Any]) -> bool:
+        shipping = order.get("shippingInfo") if isinstance(order, dict) else {}
+        if not isinstance(shipping, dict) or not shipping:
+            return False
+        parts = cls._shipping_address_parts_from_order(order)
+        if not parts or cls._has_usable_address_location(parts):
+            return False
+        return bool(
+            str(
+                parts.get("name")
+                or parts.get("company")
+                or parts.get("person_name")
+                or ""
+            ).strip()
+        )
 
     @classmethod
     def _billing_address_parts_from_order(cls, order: dict[str, Any]) -> dict[str, str]:
@@ -1596,7 +1628,7 @@ class WixOrdersClient:
     @classmethod
     def shipping_address_lines_from_order(cls, order: dict[str, Any]) -> list[str]:
         parts = cls._shipping_address_parts_from_order(order)
-        if not parts:
+        if not parts or not cls._has_usable_address_location(parts):
             return []
         name = parts.get("name", "")
         company = parts.get("company", "")
@@ -1639,7 +1671,13 @@ class WixOrdersClient:
         order = self._resolve_order(reference)
         if not order:
             return []
-        return self.best_address_lines_from_order(order)
+        lines = self.best_address_lines_from_order(order)
+        if lines:
+            return lines
+        if self._shipping_address_is_name_only(order):
+            refreshed = self._resolve_order(reference, use_cache=False)
+            return self.best_address_lines_from_order(refreshed)
+        return []
 
     @staticmethod
     def _customer_match_text(value: object) -> str:
@@ -1829,6 +1867,10 @@ class WixOrdersClient:
         )
         if not order:
             return {}
+        if self._shipping_address_is_name_only(order):
+            refreshed = self._resolve_order(reference, use_cache=False, cancel_token=cancel_token)
+            if refreshed:
+                order = refreshed
         if cancel_token is not None:
             cancel_token.raise_if_cancelled()
         return self._summary_from_order(order)

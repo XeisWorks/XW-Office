@@ -232,6 +232,108 @@ def test_shipping_address_lines_include_company_and_contact_name() -> None:
     ]
 
 
+def test_shipping_address_lines_read_nested_shipping_address_payload() -> None:
+    order = {
+        "shippingInfo": {
+            "shippingAddress": {
+                "name": "Dr. Werner Scheitzeneider",
+                "address": {
+                    "addressLine1": "Hauptstrasse 15",
+                    "postalCode": "8912",
+                    "city": "Admont",
+                    "countryCode": "AT",
+                },
+            }
+        }
+    }
+
+    lines = WixOrdersClient.shipping_address_lines_from_order(order)
+
+    assert lines == [
+        "Dr. Werner Scheitzeneider",
+        "Hauptstrasse 15",
+        "8912 Admont",
+        "AUSTRIA",
+    ]
+
+
+def test_best_address_lines_falls_back_when_shipping_only_has_name() -> None:
+    order = {
+        "shippingInfo": {
+            "shippingAddress": {
+                "name": "Dr. Werner Scheitzeneider",
+            }
+        },
+        "billingInfo": {
+            "contactDetails": {"firstName": "Werner", "lastName": "Scheitzeneider"},
+            "address": {
+                "addressLine1": "Rechnungsweg 7",
+                "postalCode": "5020",
+                "city": "Salzburg",
+                "countryCode": "AT",
+            },
+        },
+    }
+
+    lines = WixOrdersClient.best_address_lines_from_order(order)
+
+    assert lines == [
+        "Werner Scheitzeneider",
+        "Rechnungsweg 7",
+        "5020 Salzburg",
+        "AUSTRIA",
+    ]
+
+
+def test_resolve_order_address_lines_refreshes_name_only_shipping() -> None:
+    class _Client(WixOrdersClient):
+        def __init__(self) -> None:
+            self.calls: list[bool] = []
+
+        def has_credentials(self) -> bool:
+            return True
+
+        def _resolve_order(
+            self,
+            reference: str,
+            *,
+            use_cache: bool = True,
+            cancel_token: object | None = None,
+        ) -> dict[str, Any]:
+            self.calls.append(use_cache)
+            if use_cache:
+                return {
+                    "shippingInfo": {
+                        "shippingAddress": {"name": "Dr. Werner Scheitzeneider"}
+                    }
+                }
+            return {
+                "shippingInfo": {
+                    "shippingAddress": {
+                        "name": "Dr. Werner Scheitzeneider",
+                        "address": {
+                            "addressLine1": "Hauptstrasse 15",
+                            "postalCode": "8912",
+                            "city": "Admont",
+                            "countryCode": "AT",
+                        },
+                    }
+                }
+            }
+
+    client = _Client()
+
+    lines = client.resolve_order_address_lines("12345")
+
+    assert lines == [
+        "Dr. Werner Scheitzeneider",
+        "Hauptstrasse 15",
+        "8912 Admont",
+        "AUSTRIA",
+    ]
+    assert client.calls == [True, False]
+
+
 def test_shipping_address_lines_translate_german_country_for_label() -> None:
     order = {
         "buyerInfo": {"firstName": "Nora", "lastName": "Nord"},
