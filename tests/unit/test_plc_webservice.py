@@ -95,6 +95,7 @@ def test_address_parser_keeps_multi_word_city_out_of_austrian_postal_code() -> N
         ("CH-8000 Zürich", "SWITZERLAND", "8000", "Zürich"),
         ("SW1A 1AA London", "UNITED KINGDOM", "SW1A 1AA", "London"),
         ("1234 AB Amsterdam", "NETHERLANDS", "1234 AB", "Amsterdam"),
+        ("1017ZD Amsterdam", "NETHERLANDS", "1017 ZD", "Amsterdam"),
     ],
 )
 def test_address_parser_supports_postal_codes_containing_prefixes_or_spaces(
@@ -109,6 +110,37 @@ def test_address_parser_supports_postal_codes_containing_prefixes_or_spaces(
 
     assert address.zip == expected_zip
     assert address.city == expected_city
+
+
+def test_address_parser_accepts_compact_dutch_street_and_postcode_line() -> None:
+    address = parse_shipment_address_lines(
+        [
+            "Max Mustermann",
+            "Tweede Weteringplantsoen 21, 1017 ZD Amsterdam",
+            "NETHERLANDS",
+        ]
+    )
+
+    assert address.street == "Tweede Weteringplantsoen"
+    assert address.house_no == "21"
+    assert address.zip == "1017 ZD"
+    assert address.city == "Amsterdam"
+    assert address.country_iso2 == "NL"
+
+
+def test_shipment_validation_rejects_postcode_that_does_not_match_country() -> None:
+    shipment = _shipment()
+    shipment = PlcShipmentDraft(
+        **{
+            **shipment.__dict__,
+            "recipient": ShipmentAddress(
+                **{**shipment.recipient.__dict__, "zip": "4362 Bad"}
+            ),
+        }
+    )
+
+    with pytest.raises(ValueError, match="passt nicht zum Zielland AT"):
+        shipment.validate()
 
 
 def test_test_settings_accept_the_existing_test_plc_environment_aliases() -> None:

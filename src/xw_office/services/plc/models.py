@@ -153,6 +153,11 @@ class PlcShipmentDraft:
             raise ValueError("PLC-Sendung unvollstÃ¤ndig: " + ", ".join(missing))
         if len(str(recipient.country_iso2).strip()) != 2:
             raise ValueError("PLC-Land muss ein ISO-2-Code sein")
+        if not _postal_code_is_plausible(recipient.zip, recipient.country_iso2):
+            raise ValueError(
+                f"PLC-Postleitzahl '{recipient.zip}' passt nicht zum Zielland "
+                f"{str(recipient.country_iso2).strip().upper()}"
+            )
         if not self.parcels:
             raise ValueError("PLC-Sendung benÃ¶tigt mindestens ein Paket")
         for parcel in self.parcels:
@@ -212,7 +217,43 @@ def _split_postal_city(value: str, country: str) -> tuple[str, str]:
     match = re.match(pattern, text, flags=re.IGNORECASE)
     if not match:
         return "", text
-    return match.group(1).strip().upper(), match.group(2).strip()
+    postal = re.sub(r"\s+", "", match.group(1)).upper()
+    if code == "NL" and len(postal) == 6:
+        postal = f"{postal[:4]} {postal[4:]}"
+    elif code in {"GB", "CA", "IE"} and len(postal) > 3:
+        postal = f"{postal[:-3]} {postal[-3:]}"
+    return postal, match.group(2).strip()
+
+
+def _expand_compact_address_lines(lines: list[str], country: str) -> list[str]:
+    """Expand ``street number, postcode city`` into the canonical two lines."""
+    if len(lines) < 2 or "," not in lines[-2]:
+        return lines
+    street_line, postal_city = (part.strip() for part in lines[-2].rsplit(",", 1))
+    postal_code, city = _split_postal_city(postal_city, country)
+    if not street_line or not postal_code or not city:
+        return lines
+    return [*lines[:-2], street_line, postal_city, lines[-1]]
+
+
+def _postal_code_is_plausible(postal_code: str, country: str) -> bool:
+    """Validate well-defined common PLC destination formats locally."""
+    postal = re.sub(r"\s+", " ", str(postal_code or "").strip().upper())
+    code = str(country or "").strip().upper()
+    patterns = {
+        "AT": r"\d{4}",
+        "CH": r"\d{4}",
+        "LI": r"\d{4}",
+        "NL": r"\d{4} [A-Z]{2}",
+        "DE": r"\d{5}",
+        "GB": r"[A-Z]{1,2}\d[A-Z\d]? \d[A-Z]{2}",
+        "CA": r"[A-Z]\d[A-Z] \d[A-Z]\d",
+        "US": r"\d{5}(?:-\d{4})?",
+    }
+    pattern = patterns.get(code)
+    if pattern:
+        return bool(re.fullmatch(pattern, postal))
+    return bool(re.fullmatch(r"[A-Z0-9][A-Z0-9 -]{1,11}", postal))
 
 
 def parse_shipment_address_lines(
@@ -231,6 +272,7 @@ def parse_shipment_address_lines(
     cleaned = [str(line or "").strip() for line in lines if str(line or "").strip()]
     country_raw = cleaned[-1] if cleaned else ""
     country = country_iso2(country_raw)
+    cleaned = _expand_compact_address_lines(cleaned, country)
     postal_city = cleaned[-2] if len(cleaned) >= 2 else ""
     street_line = cleaned[-3] if len(cleaned) >= 3 else ""
     names = cleaned[:-3] if len(cleaned) >= 3 else cleaned[:1]
