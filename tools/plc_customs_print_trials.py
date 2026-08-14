@@ -108,14 +108,34 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--printer", default="Zollformular")
     parser.add_argument("--print", action="store_true", dest="print_trials")
+    parser.add_argument(
+        "--codes",
+        nargs="*",
+        default=[],
+        help="Optional trial codes to generate/print, for example: --codes AA AB",
+    )
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    selected_codes = {str(code).strip().upper() for code in args.codes if str(code).strip()}
+    selected_trials = tuple(trial for trial in TRIALS if not selected_codes or trial.code in selected_codes)
+    if selected_codes - {trial.code for trial in selected_trials}:
+        unknown = ", ".join(sorted(selected_codes - {trial.code for trial in selected_trials}))
+        parser.error(f"unknown trial code(s): {unknown}")
+
+    qt_app = None
+    if args.print_trials:
+        # QPrinter requires a live Qt application. Without it, Qt terminates
+        # the stand-alone helper at the first job before it reaches Windows.
+        from PySide6.QtWidgets import QApplication
+
+        qt_app = QApplication.instance() or QApplication([])
+
     backend = QtRasterBackend()
-    for trial in TRIALS:
+    for trial in selected_trials:
         output_path = args.output_dir / f"Zollerklaerung_TEST_{trial.code}.pdf"
         _create_trial(args.source, output_path, trial)
-        print(f"created {output_path}")
+        print(f"created {output_path}", flush=True)
         if args.print_trials:
             backend.print(
                 PdfPrintJob(
@@ -136,8 +156,13 @@ def main() -> None:
             )
             print(
                 f"printed TEST {trial.code}: scale={trial.scale_percent}% "
-                f"offset=({trial.x_offset_mm}, {trial.y_offset_mm}) mm"
+                f"offset=({trial.x_offset_mm}, {trial.y_offset_mm}) mm",
+                flush=True,
             )
+
+    # Keep the application strongly referenced until all QPrinter instances
+    # have finalized their native Windows print jobs.
+    _ = qt_app
 
 
 if __name__ == "__main__":
