@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,9 @@ from xw_office.services.printing.print_jobs import PdfPrintJob
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.secrets.service import SecretService
 from xw_office.ui.modules.rechnungen.plc_label_dialog import PlcLabelPrintDialog
+
+
+CUSTOMS_SAMPLE = Path("resources/api_specs/plc/Zollerklaerung_TEST.pdf")
 
 
 def _shipment(*, reference: str = "20868", invoice_number: str = "RE-261952") -> PlcShipmentDraft:
@@ -69,6 +73,21 @@ def test_archive_keeps_customs_form_separate_from_label_lookup(tmp_path) -> None
     assert path == tmp_path / "customs" / "20868 - RE-261952 - Zollformular.pdf"
     assert archive.find_customs_document(shipment) == path
     assert archive.find(shipment) is None
+
+
+def test_archive_keeps_original_and_calibrated_customs_print_pdf(tmp_path) -> None:
+    archive = PlcLabelArchive(tmp_path)
+    shipment = _shipment()
+    original_bytes = CUSTOMS_SAMPLE.read_bytes()
+    original = archive.save_customs_document(shipment, original_bytes)
+
+    print_ready = archive.ensure_customs_print_document(shipment)
+
+    assert original.read_bytes() == original_bytes
+    assert print_ready == tmp_path / "customs" / "print_ready" / (
+        "20868 - RE-261952 - Zollformular - A5.pdf"
+    )
+    assert archive.find_customs_print_document(shipment) == print_ready
 
 
 def test_customs_archive_lookup_finds_newest_suffixed_shipment(tmp_path) -> None:
@@ -144,9 +163,9 @@ def test_webservice_label_queue_uses_explicit_a5_layout(tmp_path) -> None:
     assert queued[0].alignment == "center"
 
 
-def test_customs_document_queue_uses_zollformular_at_90_percent(tmp_path) -> None:
+def test_customs_document_queue_uses_af_pdf_on_dedicated_100_percent_queue(tmp_path) -> None:
     pdf_path = tmp_path / "cn23.pdf"
-    pdf_path.write_bytes(b"%PDF-1.7\nCN23")
+    pdf_path.write_bytes(CUSTOMS_SAMPLE.read_bytes())
     queued: list[PdfPrintJob] = []
 
     class QueueStub:
@@ -155,13 +174,13 @@ def test_customs_document_queue_uses_zollformular_at_90_percent(tmp_path) -> Non
             return job.id
 
     profile = SimpleNamespace(
-        printer_name="Zollformular",
+        printer_name="Zollformular XW 100",
         page_size="A5",
         orientation="portrait",
-        placement_mode="printable_origin",
+        placement_mode="paper_origin",
         scale_mode="fit",
-        scale_percent=90.0,
-        alignment="center",
+        scale_percent=100.0,
+        alignment="top_left",
         dpi=None,
         x_offset_mm=0.0,
         y_offset_mm=0.0,
@@ -187,8 +206,10 @@ def test_customs_document_queue_uses_zollformular_at_90_percent(tmp_path) -> Non
     dialog._queue_customs_document(pdf_path, "20868")  # noqa: SLF001
 
     assert len(queued) == 1
-    assert queued[0].printer_name == "Zollformular"
+    assert queued[0].printer_name == "Zollformular XW 100"
+    assert Path(queued[0].pdf_path).parent.name == "print_ready"
     assert queued[0].page_size == "A5"
+    assert queued[0].placement_mode == "paper_origin"
     assert queued[0].scale_mode == "fit"
-    assert queued[0].scale_percent == pytest.approx(90.0)
-    assert queued[0].alignment == "center"
+    assert queued[0].scale_percent == pytest.approx(100.0)
+    assert queued[0].alignment == "top_left"

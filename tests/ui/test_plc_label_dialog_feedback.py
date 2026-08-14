@@ -24,6 +24,9 @@ from xw_office.ui.modules.rechnungen.plc_label_dialog import (
 )
 
 
+CUSTOMS_SAMPLE = Path("resources/api_specs/plc/Zollerklaerung_TEST.pdf")
+
+
 def _container() -> Container:
     container = Container(AppConfig())
     container.register(AppSignals, lambda _: AppSignals())
@@ -153,12 +156,14 @@ def test_customs_result_archives_both_pdfs_before_first_print_job(
     def queue_label(_path: object, _reference: str) -> str:
         assert dialog._label_archive.find(shipment) is not None  # noqa: SLF001
         assert dialog._label_archive.find_customs_document(shipment) is not None  # noqa: SLF001
+        assert dialog._label_archive.find_customs_print_document(shipment) is not None  # noqa: SLF001
         queue_order.append("label")
         return "label-job"
 
-    def queue_customs(_path: object, _reference: str) -> str:
+    def queue_customs(print_path: object, _reference: str) -> str:
         assert dialog._label_archive.find(shipment) is not None  # noqa: SLF001
         assert dialog._label_archive.find_customs_document(shipment) is not None  # noqa: SLF001
+        assert Path(str(print_path)).parent.name == "print_ready"
         queue_order.append("customs")
         return "customs-job"
 
@@ -174,7 +179,7 @@ def test_customs_result_archives_both_pdfs_before_first_print_job(
             webservice_result=PlcWebserviceResult(
                 pdf_bytes=b"%PDF-1.7\nPLC label",
                 tracking_codes=(),
-                shipment_documents=b"%PDF-1.7\nCN23",
+                shipment_documents=CUSTOMS_SAMPLE.read_bytes(),
             ),
         ),
     )
@@ -211,13 +216,14 @@ def test_customs_result_keeps_both_archives_when_first_print_queue_fails(
             webservice_result=PlcWebserviceResult(
                 pdf_bytes=b"%PDF-1.7\nPLC label",
                 tracking_codes=(),
-                shipment_documents=b"%PDF-1.7\nCN23",
+                shipment_documents=CUSTOMS_SAMPLE.read_bytes(),
             ),
         ),
     )
 
     assert dialog._label_archive.find(shipment) is not None  # noqa: SLF001
     assert dialog._label_archive.find_customs_document(shipment) is not None  # noqa: SLF001
+    assert dialog._label_archive.find_customs_print_document(shipment) is not None  # noqa: SLF001
     assert warnings and "Lokal archiviert" in warnings[0]
 
 

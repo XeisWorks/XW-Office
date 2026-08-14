@@ -1,5 +1,11 @@
 """PLC integration helpers for post label center exports."""
 
+from xw_office.services.plc.customs_document import (
+    PlcCustomsDocumentError,
+    build_customs_a5_print_pdf,
+    customs_a5_print_path,
+    ensure_customs_a5_print_file,
+)
 from xw_office.services.plc.polling import (
     DEFAULT_PLC_IMPORT_DIR,
     DEFAULT_TEST_PLC_IMPORT_DIR,
@@ -29,6 +35,7 @@ from xw_office.services.plc.webservice import (
 __all__ = [
     "DEFAULT_PLC_IMPORT_DIR",
     "DEFAULT_TEST_PLC_IMPORT_DIR",
+    "PlcCustomsDocumentError",
     "PlcConfig",
     "ShipmentAddress",
     "build_postdefaultport_lines",
@@ -38,7 +45,10 @@ __all__ = [
     "PlcParcel",
     "PlcShipmentDraft",
     "build_polling_lines",
+    "build_customs_a5_print_pdf",
     "clean_reference",
+    "customs_a5_print_path",
+    "ensure_customs_a5_print_file",
     "parse_shipment_address_lines",
     "PlcShipmentService",
     "PlcLabelArchive",

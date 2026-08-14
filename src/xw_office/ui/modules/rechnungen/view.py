@@ -73,6 +73,7 @@ from xw_office.services.draft_invoice.service import (
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.inventory import InventoryService
+from xw_office.services.plc.customs_document import ensure_customs_a5_print_file
 from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.printer_status.service import PrinterStatusService
 from xw_office.services.products.catalog import Product, ProductCatalogService, normalize_legacy_title
@@ -3210,13 +3211,27 @@ class RechnungenView(QWidget):
         existing_label_path = self._resolve_plc_archive_path_for_summary(summary)
         if existing_label_path:
             existing_customs_path = self._resolve_plc_customs_archive_path_for_summary(summary)
+            existing_customs_print_path = ""
+            if existing_customs_path:
+                try:
+                    existing_customs_print_path = os.fspath(
+                        ensure_customs_a5_print_file(existing_customs_path)
+                    )
+                except Exception as exc:  # noqa: BLE001 - the PLC original remains available.
+                    logger.warning(
+                        "Archived customs A5 preparation failed path=%s: %s",
+                        existing_customs_path,
+                        exc,
+                    )
             box = QMessageBox(self)
             box.setWindowTitle("PLC-Dokumente vorhanden")
             box.setIcon(QMessageBox.Icon.Question)
             box.setText("Für diese Rechnung existieren bereits lokale PLC-Dokumente.")
             archive_lines = [f"Label: {existing_label_path}"]
             if existing_customs_path:
-                archive_lines.append(f"Zollformular: {existing_customs_path}")
+                archive_lines.append(f"Zollformular (PLC-Original): {existing_customs_path}")
+            if existing_customs_print_path:
+                archive_lines.append(f"Zollformular (A5-Druck): {existing_customs_print_path}")
             box.setInformativeText(
                 "Die archivierten PDFs können ohne neue PLC-Sendung erneut gedruckt werden.\n\n"
                 + "\n".join(archive_lines)
@@ -3225,8 +3240,14 @@ class RechnungenView(QWidget):
             reprint_btn = box.addButton(reprint_label, QMessageBox.ButtonRole.AcceptRole)
             open_btn = box.addButton("Label-PDF öffnen", QMessageBox.ButtonRole.ActionRole)
             customs_open_btn = None
+            customs_print_open_btn = None
             if existing_customs_path:
-                customs_open_btn = box.addButton("Zoll-PDF öffnen", QMessageBox.ButtonRole.ActionRole)
+                customs_open_btn = box.addButton("Zoll-Original öffnen", QMessageBox.ButtonRole.ActionRole)
+            if existing_customs_print_path:
+                customs_print_open_btn = box.addButton(
+                    "Zoll-A5 öffnen",
+                    QMessageBox.ButtonRole.ActionRole,
+                )
             new_btn = box.addButton("Neues Label erstellen", QMessageBox.ButtonRole.ActionRole)
             box.addButton("Abbrechen", QMessageBox.ButtonRole.RejectRole)
             box.setDefaultButton(reprint_btn)
@@ -3244,7 +3265,7 @@ class RechnungenView(QWidget):
                     if existing_customs_path:
                         customs_job_id = queue_archived_plc_customs(
                             self._container,
-                            existing_customs_path,
+                            existing_customs_print_path or existing_customs_path,
                             reference,
                         )
                 except Exception as exc:  # noqa: BLE001 - archives remain available for manual recovery.
@@ -3269,6 +3290,13 @@ class RechnungenView(QWidget):
                 return
             if customs_open_btn is not None and clicked is customs_open_btn and existing_customs_path:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(existing_customs_path))
+                return
+            if (
+                customs_print_open_btn is not None
+                and clicked is customs_print_open_btn
+                and existing_customs_print_path
+            ):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(existing_customs_print_path))
                 return
             if clicked is not new_btn:
                 return

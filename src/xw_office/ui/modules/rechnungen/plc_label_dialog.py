@@ -51,6 +51,7 @@ from xw_office.services.plc.models import (
     requires_customs_declaration,
 )
 from xw_office.services.plc.pricing import quote_plc_price
+from xw_office.services.plc.customs_document import ensure_customs_a5_print_file
 from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.plc.service import PlcDuplicateShipmentError, PlcShipmentService
 from xw_office.services.plc.webservice import PlcWebserviceResult, webservice_settings_from_secrets
@@ -123,27 +124,28 @@ def queue_archived_plc_customs(
     pdf_path: str | os.PathLike[str],
     reference: str,
 ) -> str:
-    """Queue an already archived customs PDF on the dedicated A5 printer."""
+    """Queue the persistent AF/A5 derivative of an archived PLC customs PDF."""
     profile = container.config.printing.resolve_profile("plc_customs")
-    printer = str(getattr(profile, "printer_name", "") or "Zollformular").strip()
+    printer = str(getattr(profile, "printer_name", "") or "Zollformular XW 100").strip()
     if not printer:
-        raise RuntimeError("Drucker 'Zollformular' ist nicht konfiguriert")
+        raise RuntimeError("Drucker 'Zollformular XW 100' ist nicht konfiguriert")
     if not os.path.isfile(pdf_path):
         raise RuntimeError(f"Archiviertes PLC-Zollformular fehlt: {pdf_path}")
+    print_path = ensure_customs_a5_print_file(pdf_path)
     queue: PrintQueueService = container.resolve(PrintQueueService)
     return queue.enqueue(
         PdfPrintJob(
-            pdf_path=os.fspath(pdf_path),
+            pdf_path=os.fspath(print_path),
             printer_name=printer,
             copies=1,
             job_kind="invoice",
             description=f"Zollformular {reference}",
             page_size=str(getattr(profile, "page_size", "") or "A5"),
             orientation=str(getattr(profile, "orientation", "") or "portrait"),
-            placement_mode=str(getattr(profile, "placement_mode", "") or "printable_origin"),  # type: ignore[arg-type]
+            placement_mode=str(getattr(profile, "placement_mode", "") or "paper_origin"),  # type: ignore[arg-type]
             scale_mode=str(getattr(profile, "scale_mode", "") or "fit"),  # type: ignore[arg-type]
-            scale_percent=float(getattr(profile, "scale_percent", 90.0) or 90.0),
-            alignment=str(getattr(profile, "alignment", "") or "center"),  # type: ignore[arg-type]
+            scale_percent=float(getattr(profile, "scale_percent", 100.0) or 100.0),
+            alignment=str(getattr(profile, "alignment", "") or "top_left"),  # type: ignore[arg-type]
             dpi=int(profile.dpi) if profile is not None and profile.dpi else None,
             x_offset_mm=float(getattr(profile, "x_offset_mm", 0.0) or 0.0),
             y_offset_mm=float(getattr(profile, "y_offset_mm", 0.0) or 0.0),
@@ -899,6 +901,7 @@ class PlcLabelPrintDialog(QDialog):
             return
         archive_path = None
         customs_path = None
+        customs_print_path = None
         job_id = ""
         customs_job_id = ""
         try:
@@ -915,16 +918,19 @@ class PlcLabelPrintDialog(QDialog):
             archive_path = self._label_archive.save(shipment, result.webservice_result.pdf_bytes)
             if shipment.country_group == "NON_EU":
                 customs_path = self._label_archive.save_customs_document(shipment, customs_pdf)
+                customs_print_path = self._label_archive.ensure_customs_print_document(shipment)
 
             job_id = self._queue_webservice_label(archive_path, shipment.reference)
             service: PlcShipmentService = self._container.resolve(PlcShipmentService)
             service.mark_print_queued(shipment, job_id)
-            if customs_path is not None:
-                customs_job_id = self._queue_customs_document(customs_path, shipment.reference)
+            if customs_print_path is not None:
+                customs_job_id = self._queue_customs_document(customs_print_path, shipment.reference)
         except Exception as exc:  # noqa: BLE001 - shipment was created; preserve the recovery message.
             self._status.setText("PLC-Sendung erstellt, Druckauftrag fehlgeschlagen")
             archived = "\n".join(
-                f"- {path}" for path in (archive_path, customs_path) if path is not None
+                f"- {path}"
+                for path in (archive_path, customs_path, customs_print_path)
+                if path is not None
             )
             archive_note = (
                 f"\n\nLokal archiviert:\n{archived}"
@@ -948,12 +954,14 @@ class PlcLabelPrintDialog(QDialog):
         else:
             self._status.setText(f"PLC-Label archiviert; Druckauftrag {job_id[:8]}…")
         logger.info(
-            "PLC label created reference=%s tracking=%s archive=%s print_job=%s customs_archive=%s customs_job=%s",
+            "PLC label created reference=%s tracking=%s archive=%s print_job=%s "
+            "customs_archive=%s customs_print_archive=%s customs_job=%s",
             shipment.reference,
             tracking,
             archive_path,
             job_id,
             customs_path,
+            customs_print_path,
             customs_job_id,
         )
         self._show_success_overlay(
@@ -1041,12 +1049,20 @@ class PlcLabelPrintDialog(QDialog):
     ) -> None:
         box = QMessageBox(self)
         customs_path = self._label_archive.find_customs_document(shipment)
+        customs_print_path = self._label_archive.find_customs_print_document(shipment)
+        if customs_path is not None and customs_print_path is None:
+            try:
+                customs_print_path = self._label_archive.ensure_customs_print_document(shipment)
+            except Exception as exc:  # noqa: BLE001 - the PLC original remains available.
+                logger.warning("Archived customs A5 preparation failed path=%s: %s", customs_path, exc)
         box.setWindowTitle("PLC-Sendung bereits erstellt")
         box.setIcon(QMessageBox.Icon.Question)
         box.setText("Für diese Sendung existieren bereits lokale PLC-Dokumente.")
         archive_lines = [f"Label: {archive_path}"]
         if customs_path is not None:
-            archive_lines.append(f"Zollformular: {customs_path}")
+            archive_lines.append(f"Zollformular (PLC-Original): {customs_path}")
+        if customs_print_path is not None:
+            archive_lines.append(f"Zollformular (A5-Druck): {customs_print_path}")
         box.setInformativeText(
             "Die archivierten PDFs können ohne neue PLC-Sendung erneut gedruckt werden.\n\n"
             + "\n".join(archive_lines)
@@ -1055,8 +1071,11 @@ class PlcLabelPrintDialog(QDialog):
         reprint_btn = box.addButton(reprint_label, QMessageBox.ButtonRole.AcceptRole)
         open_btn = box.addButton("Label-PDF öffnen", QMessageBox.ButtonRole.ActionRole)
         customs_open_btn = None
+        customs_print_open_btn = None
         if customs_path is not None:
-            customs_open_btn = box.addButton("Zoll-PDF öffnen", QMessageBox.ButtonRole.ActionRole)
+            customs_open_btn = box.addButton("Zoll-Original öffnen", QMessageBox.ButtonRole.ActionRole)
+        if customs_print_path is not None:
+            customs_print_open_btn = box.addButton("Zoll-A5 öffnen", QMessageBox.ButtonRole.ActionRole)
         additional_btn = box.addButton("Neues Label erstellen", QMessageBox.ButtonRole.ActionRole)
         box.addButton("Abbrechen", QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(reprint_btn)
@@ -1067,7 +1086,10 @@ class PlcLabelPrintDialog(QDialog):
                 label_job_id = self._queue_webservice_label(archive_path, shipment.reference)
                 customs_job_id = ""
                 if customs_path is not None:
-                    customs_job_id = self._queue_customs_document(customs_path, shipment.reference)
+                    customs_job_id = self._queue_customs_document(
+                        customs_print_path or customs_path,
+                        shipment.reference,
+                    )
             except Exception as exc:  # noqa: BLE001 - keep the archived recovery path visible.
                 QMessageBox.warning(self, "PLC-Nachdruck", f"Nachdruck konnte nicht eingereiht werden:\n\n{exc}")
                 return
@@ -1083,7 +1105,15 @@ class PlcLabelPrintDialog(QDialog):
             return
         if customs_open_btn is not None and clicked is customs_open_btn and customs_path is not None:
             QDesktopServices.openUrl(QUrl.fromLocalFile(os.fspath(customs_path)))
-            self._status.setText("Archiviertes Zollformular geöffnet")
+            self._status.setText("Archiviertes PLC-Zolloriginal geöffnet")
+            return
+        if (
+            customs_print_open_btn is not None
+            and clicked is customs_print_open_btn
+            and customs_print_path is not None
+        ):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.fspath(customs_print_path)))
+            self._status.setText("Archivierte A5-Druckfassung geöffnet")
             return
         if clicked is additional_btn:
             next_shipment = self._next_additional_shipment(shipment)

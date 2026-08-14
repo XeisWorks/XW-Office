@@ -57,6 +57,7 @@ printing:
     - "Brother QL-800"
     - "Paketmarke A5"
     - "Zollformular"
+    - "Zollformular XW 100"
   # Named print profiles: map a logical role to a specific printer + DPI.
   # Use profile "id" when calling print_pdf() via product print rules.
   print_profiles:
@@ -76,13 +77,13 @@ printing:
       alignment: "center"
     - id: "plc_customs"
       label: "PLC-Zollformular"
-      printer_name: "Zollformular"
+      printer_name: "Zollformular XW 100"
       page_size: "A5"
       orientation: "portrait"
-      placement_mode: "printable_origin"
+      placement_mode: "paper_origin"
       scale_mode: "fit"
-      scale_percent: 90
-      alignment: "center"
+      scale_percent: 100
+      alignment: "top_left"
     - id: "noten_simplex"
       label: "Noten A4 Simplex"
       printer_name: "Noten A4 Simplex"

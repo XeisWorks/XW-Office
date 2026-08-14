@@ -118,7 +118,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--printer", default="Zollformular")
+    parser.add_argument("--printer", default="Zollformular XW 100")
     parser.add_argument("--print", action="store_true", dest="print_trials")
     parser.add_argument(
         "--codes",

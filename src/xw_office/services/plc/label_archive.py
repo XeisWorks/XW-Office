@@ -7,6 +7,10 @@ from pathlib import Path
 import re
 import tempfile
 
+from xw_office.services.plc.customs_document import (
+    customs_a5_print_path,
+    ensure_customs_a5_print_file,
+)
 from xw_office.services.plc.models import PlcShipmentDraft
 
 
@@ -67,6 +71,21 @@ class PlcLabelArchive:
         os.replace(temp_path, target)
         return target
 
+    def customs_print_path_for(self, shipment: PlcShipmentDraft) -> Path:
+        """Return the persistent A5 derivative path without creating it."""
+        return customs_a5_print_path(self.customs_path_for(shipment))
+
+    def ensure_customs_print_document(self, shipment: PlcShipmentDraft) -> Path:
+        """Create or refresh the calibrated A5 derivative from the PLC original."""
+        original = self.find_customs_document(shipment)
+        if original is None:
+            raise FileNotFoundError(f"Archiviertes PLC-Zollformular fehlt: {self.customs_path_for(shipment)}")
+        return ensure_customs_a5_print_file(original)
+
+    def find_customs_print_document(self, shipment: PlcShipmentDraft) -> Path | None:
+        candidate = self.customs_print_path_for(shipment)
+        return candidate if candidate.is_file() else None
+
     def find_customs_document(self, shipment: PlcShipmentDraft) -> Path | None:
         candidate = self.customs_path_for(shipment)
         return candidate if candidate.is_file() else None
@@ -106,7 +125,7 @@ class PlcLabelArchive:
         if not candidates:
             return None
         candidates = list(dict.fromkeys(candidates))
-        candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        candidates.sort(key=_archive_recency_key, reverse=True)
         return candidates[0]
 
     def find(self, shipment: PlcShipmentDraft) -> Path | None:
@@ -178,3 +197,9 @@ def _safe_filename_part(value: object, *, fallback: str) -> str:
 
 def _strip_numeric_suffix(value: str) -> str:
     return re.sub(r"-\d{1,2}$", "", str(value or "").strip())
+
+
+def _archive_recency_key(path: Path) -> tuple[int, int]:
+    """Break equal Windows mtimes in favor of the later shipment suffix."""
+    suffixes = [int(value) for value in re.findall(r"-(\d{1,2})(?=\s|$)", path.stem)]
+    return (int(path.stat().st_mtime_ns), max(suffixes, default=0))
