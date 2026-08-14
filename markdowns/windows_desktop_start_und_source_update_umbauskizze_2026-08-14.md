@@ -1,7 +1,7 @@
 # XW-Office: Windows-Desktop-Start und leichtes Source-Update
 
-Stand: 2026-08-14
-Status: Umbau-Skizze, noch keine Implementierung
+Stand: 2026-08-14 (Update-Konzept am selben Tag um automatischen Update-Check erweitert)
+Status: umgesetzt und auf dem Entwicklungs-PC verifiziert
 
 ## 1. Ziel und Entscheidung
 
@@ -38,8 +38,16 @@ run_xw_office_debug.cmd
   -> .venv\Scripts\python.exe
   -> sichtbare Konsole plus dieselben Dateilogs
 
-Update:
-separater, bewusst gestarteter Update-Weg
+Update (automatischer, lautloser Check vor dem normalen Start):
+GUI-Bootstrap, vor dem eigentlichen App-Start
+  -> Branch=main? Upstream=origin/main? Arbeitsbaum sauber? (sonst: lautlos ueberspringen)
+  -> git fetch origin main (kurzes Timeout, bei Offline/Fehler: lautlos ueberspringen)
+  -> Update vorhanden? -> Ja/Nein-Dialog ("Jetzt aktualisieren?")
+       Ja  -> scripts\update_xw_office.ps1 (ff-only, eigenes Update-Log) -> App startet aktualisiert
+       Nein/Fehler -> App startet unveraendert, nie blockierend
+
+Update (manuell/administrativ, weiterhin direkt aufrufbar):
+scripts\update_xw_office.ps1
   -> Branch-/Working-Tree-Pruefung
   -> git fetch + git pull --ff-only origin main
   -> Abhaengigkeiten/Migrationen nur wenn erforderlich
@@ -166,11 +174,16 @@ eng begrenzt:
    muss.
 4. das fruehe Bootstrap-/Crash-Log oeffnen.
 5. AppUserModelID setzen.
-6. `xw_office.__main__.main()` bzw. den regulaeren App-Einstieg starten.
-7. Fehler vor Erzeugung der `QApplication` in Datei schreiben und sichtbar melden.
+6. lautlosen, fail-open Update-Check ausfuehren und bei Bedarf per Dialog anbieten (Abschnitt
+   8.3) — laeuft komplett vor Schritt 7, damit ein frisch gezogener Source-Stand noch unimportiert
+   ist.
+7. `xw_office.__main__.main()` bzw. den regulaeren App-Einstieg starten.
+8. Fehler vor Erzeugung der `QApplication` in Datei schreiben und sichtbar melden.
 
 Der Bootstrap darf keine zweite fachliche Startlogik entwickeln. Die eigentliche
-Anwendungserzeugung bleibt in `xw_office.app.create_application()`.
+Anwendungserzeugung bleibt in `xw_office.app.create_application()`. Der Update-Check ist davon
+ausgenommen: er ist reine Prozess-/Git-Orchestrierung ohne fachliche App-Logik und gehoert
+strukturell zum Start, nicht zur App selbst.
 
 ### 4.3 Fehler vor dem Qt-Start
 
@@ -294,8 +307,14 @@ ein versioniertes Setup-Skript pro PC:
 
 - einen Startmenueeintrag `XeisWorks Office`,
 - optional einen Desktop-Eintrag,
-- einen Startmenueeintrag `XeisWorks Office - Debug`,
-- optional `XeisWorks Office aktualisieren`.
+- einen Startmenueeintrag `XeisWorks Office - Debug`.
+
+Ein eigener Startmenueeintrag `XeisWorks Office aktualisieren` wird bewusst **nicht** mehr
+angelegt: der normale Start prueft automatisch und lautlos auf Updates (siehe Abschnitt 8.3) und
+bietet sie per Dialog an, ein separater manueller Aufruf ist fuer den Alltag nicht mehr noetig.
+Das Setup-Skript entfernt eine bereits vorhandene alte `XeisWorks Office aktualisieren.lnk` beim
+naechsten Lauf automatisch. `scripts\update_xw_office.ps1` bleibt als Datei erhalten und ist
+weiterhin direkt aus einer Konsole aufrufbar (Admin-/Entwicklungsfall, siehe Abschnitt 8.2).
 
 Die normale Verknuepfung enthaelt:
 
@@ -348,17 +367,19 @@ Betriebs-PC
 Eine reine `.py`-Aenderung braucht keinen Build und normalerweise kein erneutes `pip install`,
 weil das Projekt editable installiert ist bzw. aus `src` gestartet wird.
 
-### 8.2 Empfohlener Update-Weg
+### 8.2 Update-Mechanik (`scripts\update_xw_office.ps1`)
 
-Vorerst wird ein eigener, bewusst gestarteter Update-Einstieg empfohlen, statt eines versteckten
-Updates in der laufenden GUI. Er kann als PowerShell-Skript implementiert und ueber eine
-Startmenue-Verknuepfung aufgerufen werden. Ein sichtbares Fenster ist bei dieser Wartungsaktion
-akzeptabel und hilfreich; der Alltagsstart bleibt fensterlos.
+Die eigentliche Update-Logik lebt in einem PowerShell-Skript, unabhaengig davon, ob es automatisch
+(Abschnitt 8.3) oder manuell/administrativ aufgerufen wird. Ein sichtbares Fenster ist bei
+manuellem Aufruf akzeptabel und hilfreich; beim automatischen Aufruf aus dem GUI-Bootstrap laeuft
+es ohne Konsolenfenster.
 
 Der Updater prueft in dieser Reihenfolge:
 
 1. Repo-Root eindeutig aufloesen.
-2. Sicherstellen, dass XW-Office nicht laeuft.
+2. Sicherstellen, dass XW-Office nicht laeuft (der aufrufende Bootstrap-Prozess kann sich dabei
+   ueber `-ExcludeProcessId` von der eigenen Pruefung ausnehmen, da er selbst noch nicht die
+   fertig gestartete App ist).
 3. `git status --porcelain` muss leer sein.
 4. Aktueller Branch muss `main` sein.
 5. Upstream muss `origin/main` sein.
@@ -366,32 +387,59 @@ Der Updater prueft in dieser Reihenfolge:
 7. Nur `git pull --ff-only origin main` erlauben.
 8. Alten und neuen Commit protokollieren.
 9. Bei geaendertem `pyproject.toml` Abhaengigkeiten im lokalen `.venv` aktualisieren.
-10. Erforderliche Alembic-Migrationen kontrolliert ausfuehren oder deutlich als separaten
-    Adminschritt melden.
+10. Erforderliche Alembic-Migrationen nur melden, nicht automatisch ausfuehren (separater
+    Adminschritt).
 11. Smoke-Preflight ausfuehren.
 12. Erfolg bzw. Fehler in `logs/xw_office_update.log` schreiben.
-13. Optional nach Erfolg die GUI starten.
+13. Optional (`-StartAfterUpdate`) nach Erfolg die GUI starten; wird vom automatischen Check in
+    8.3 nicht gesetzt, da der Bootstrap den Start selbst uebernimmt.
 
 Bei lokalen Aenderungen, falschem Branch oder nicht moeglichem Fast-forward wird nichts
-automatisch gemergt, gestasht oder verworfen.
-
-### 8.3 Optionale spaetere Komfortstufe
-
-Nach Stabilisierung kann der fensterlose Launcher vor dem Appstart lediglich feststellen, ob ein
-Update vorhanden ist, und einen Dialog anbieten:
+automatisch gemergt, gestasht oder verworfen. Fuer den manuellen/administrativen Fall bleibt das
+Skript direkt aus einer Konsole aufrufbar:
 
 ```text
-Neue Version verfuegbar.
-[Jetzt aktualisieren] [Diese Version starten] [Abbrechen]
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\update_xw_office.ps1
 ```
 
-Das eigentliche Update laeuft weiterhin vor dem Start der Haupt-App und schreibt ein eigenes Log.
-Auf dem VS-Code-Entwicklungs-PC kann diese Pruefung deaktiviert werden, damit offene lokale
-Aenderungen nicht stoeren.
+Eine eigene Startmenue-Verknuepfung dafuer gibt es bewusst nicht (mehr) — siehe 8.3.
 
-Ein vollautomatischer Pull bei jedem Start wird vorerst nicht empfohlen. Er koppelt die
-Verfuegbarkeit der App an GitHub, kann einen dringenden Arbeitsstart verzoegern und ist bei
-lokalen Aenderungen oder einer fehlerhaften neuen Version unguenstig.
+### 8.3 Automatischer Update-Check vor dem normalen Start (umgesetzt)
+
+Der fensterlose GUI-Bootstrap (`scripts\xw_office_gui.pyw`) prueft vor jedem normalen Start
+lautlos, ob ein Update vorliegt, und bietet es per Dialog an:
+
+```text
+Eine neue Version von XeisWorks Office ist verfuegbar.
+Jetzt aktualisieren (dauert meist nur wenige Sekunden)?
+"Nein" startet die aktuelle Version unveraendert.
+[Ja] [Nein]
+```
+
+Ablauf und Sicherheitsnetz:
+
+- Branch muss `main` sein, Upstream muss `origin/main` sein, Arbeitsbaum muss sauber sein —
+  jede Abweichung fuehrt zu einem lautlosen Ueberspringen, niemals zu einer Fehlermeldung beim
+  Start. Das schuetzt insbesondere den VS-Code-Entwicklungs-PC: bei offenem Arbeitsbaum (der
+  Normalfall waehrend aktiver Entwicklung) erscheint der Dialog gar nicht erst.
+- `git fetch origin main` laeuft mit kurzem Timeout (Sekunden, nicht Minuten). Offline-Betrieb
+  oder ein nicht erreichbares GitHub fuehren zu einem lautlosen Ueberspringen, nie zu einer
+  Verzoegerung des Arbeitsstarts.
+- Nur wenn Branch/Upstream/Arbeitsbaum sauber sind UND `origin/main` tatsaechlich neue Commits
+  hat, erscheint der Ja/Nein-Dialog.
+- "Ja" ruft `scripts\update_xw_office.ps1` auf (siehe 8.2, inkl. allem dort Beschriebenen:
+  ff-only, Update-Log, Migrations-Warnung statt Automatik). Schlaegt das Update dennoch fehl,
+  startet XeisWorks Office trotzdem mit der bisherigen, funktionierenden Version weiter — der
+  Start wird nie dauerhaft blockiert.
+- "Nein" startet sofort mit der aktuellen Version, ohne jede Aenderung.
+- Explizit deaktivierbar per Umgebungsvariable `XW_OFFICE_SKIP_UPDATE_CHECK=1`, falls auf einem
+  PC auch bei zufällig sauberem Arbeitsbaum nie automatisch geprueft werden soll.
+
+Ein vollautomatischer, stiller Pull ohne Rueckfrage bei jedem Start bleibt bewusst
+**nicht** umgesetzt: er wuerde die Verfuegbarkeit der App an GitHub koppeln, koennte einen
+dringenden Arbeitsstart verzoegern und wuerde bei einer fehlerhaften neuen Version ohne Vorwarnung
+durchschlagen. Die Kombination aus lautlosem Fail-open-Check plus expliziter Rueckfrage nur im
+sicheren Fall vermeidet genau das, bei minimaler zusaetzlicher Reibung im Alltag.
 
 ### 8.4 Abhaengigkeiten und Migrationen
 
@@ -458,14 +506,15 @@ src/xw_office/core/logging_setup.py
 src/xw_office/core/app_paths.py                  (neu)
   zentrale Aufloesung von Repo-, Log-, State- und Ressourcenpfaden
 
-scripts/xw_office_gui.pyw                       (neu, moegliche Form)
-  schlanker fensterloser Bootstrap
+scripts/xw_office_gui.pyw                       (neu)
+  schlanker fensterloser Bootstrap, inkl. automatischem Update-Check (Abschnitt 8.3)
 
 scripts/setup_windows_shortcuts.ps1             (neu)
-  Startmenue-/Desktop-Verknuepfungen pro PC
+  Startmenue-/Desktop-Verknuepfungen pro PC (kein eigener Update-Eintrag mehr, siehe 6.3)
 
 scripts/update_xw_office.ps1                    (neu)
-  kontrolliertes Source-Update vor Appstart
+  kontrolliertes Source-Update; wird automatisch vom GUI-Bootstrap sowie manuell/administrativ
+  aus einer Konsole aufgerufen
 
 run_xw_office_debug.cmd                         (neu/Umbenennung)
   sichtbarer Diagnose-Start
@@ -518,6 +567,15 @@ geben.
 - Abhaengigkeitsfehler werden im Update-Log sichtbar.
 - App wird nicht aktualisiert, waehrend sie laeuft.
 - Datenbankmigrationen werden nicht unkoordiniert parallel von mehreren PCs ausgefuehrt.
+- Automatischer Update-Check (verifiziert, siehe unten): erscheint nur bei sauberem Arbeitsbaum,
+  Branch `main`, Upstream `origin/main` und tatsaechlich vorhandenem Update; ueberspringt sich in
+  jedem anderen Fall lautlos, inklusive Offline-/Timeout-Fall.
+- Automatischer Update-Check verzoegert den normalen Start im Nicht-Update-Fall nur um die kurzen
+  Git-Check-Timeouts (keine spuerbare Wartezeit im Alltag), im Offline-Fall maximal um das
+  Fetch-Timeout.
+- Der GUI-Bootstrap-Prozess erkennt sich beim automatischen Aufruf des Updaters nicht
+  faelschlich selbst als "App laeuft bereits" (eigene PID wird ausgeschlossen).
+- `XW_OFFICE_SKIP_UPDATE_CHECK=1` deaktiviert den automatischen Check zuverlaessig.
 
 ### 11.5 Regression
 
@@ -569,7 +627,9 @@ Der angemessene Mittelweg fuer den aktuellen Entwicklungsrhythmus ist:
 - Verknuepfungen pro PC reproduzierbar generieren,
 - sichtbaren Debug-Start behalten,
 - File-/Crash-Logging fuer den fensterlosen Betrieb haerten,
-- Updates separat, bewusst und Fast-forward-only vor dem Appstart ausfuehren.
+- Updates Fast-forward-only, mit automatischem lautlosem Check plus Rueckfrage vor dem
+  Appstart (Abschnitt 8.3) statt eines separaten manuellen Startmenue-Eintrags.
 
 Damit bleiben kleine woechentliche Updates genauso leicht wie heute, waehrend sich der normale
-Betrieb deutlich mehr wie eine eigenstaendige Windows-Anwendung verhaelt.
+Betrieb deutlich mehr wie eine eigenstaendige Windows-Anwendung verhaelt — und das Aktuellhalten
+passiert von selbst, ohne die Zuverlaessigkeit des taeglichen Starts zu gefaehrden.

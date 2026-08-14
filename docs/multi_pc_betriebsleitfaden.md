@@ -27,9 +27,10 @@ Ziel:
    - `alembic upgrade head`
 8. Windows-Startmenue-Verknuepfungen erzeugen (einmalig, danach idempotent erneut ausfuehrbar):
    - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_windows_shortcuts.ps1`
-   - Legt im Startmenue den Ordner "XeisWorks Office" mit drei Eintraegen an: normaler Start,
-     Debug-Start, Update. Optional zusaetzlich eine Desktop-Verknuepfung mit
-     `-IncludeDesktopShortcut`.
+   - Legt im Startmenue den Ordner "XeisWorks Office" mit zwei Eintraegen an: normaler Start und
+     Debug-Start. Optional zusaetzlich eine Desktop-Verknuepfung mit `-IncludeDesktopShortcut`.
+     Der normale Start prueft beim Start automatisch und lautlos auf Updates (siehe Abschnitt 5),
+     eine eigene Update-Verknuepfung gibt es deshalb nicht.
 9. Normalen Start testen: Startmenue -> "XeisWorks Office" (kein Konsolenfenster, PySide6-Fenster
    erscheint maximiert).
 10. Debug-Start testen: Startmenue -> "XeisWorks Office - Debug" (sichtbare Konsole, gleiches
@@ -63,9 +64,11 @@ Hinweis:
   `origin/main`.
 - Temporaere Arbeitsbranches wie `agent/*` muessen nach Abschluss in `main` integriert werden
   und duerfen nicht als dauerhafter Betriebsstand eines PCs verbleiben.
-- Code-Updates laufen ueber einen bewusst gestarteten Update-Schritt (siehe Abschnitt 5), nicht
-  automatisch beim Appstart. Der Alltagsstart bleibt dadurch schnell und unabhaengig von GitHub.
-- Nach einem Update App neu starten.
+- Code-Updates laufen ueber einen automatischen, lautlosen Check vor dem normalen Start (siehe
+  Abschnitt 5): nur bei sauberem Arbeitsbaum, Branch `main`/Upstream `origin/main` und
+  tatsaechlich vorhandenem Update erscheint eine Ja/Nein-Rueckfrage; sonst startet die App
+  unveraendert weiter. Der Alltagsstart wird dadurch nie laenger als um ein kurzes
+  Netzwerk-Timeout verzoegert und haengt nie zwingend von GitHub ab.
 
 Normaler Betrieb pro PC:
 - Alltagsstart ueber die Startmenue-/Taskleisten-Verknuepfung "XeisWorks Office" (fensterlos,
@@ -81,13 +84,18 @@ Empfehlung Rollenmodell:
 
 ## 5) Update-Routine
 
-- Vor Schichtbeginn auf jedem PC (optional, bei Bedarf):
-  - Startmenue -> "XeisWorks Office aktualisieren" ausfuehren (oder
-    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\update_xw_office.ps1`).
+- Normalfall: beim Start ueber "XeisWorks Office" prueft die App selbst lautlos, ob ein Update
+  vorliegt, und fragt per Dialog nach ("Jetzt aktualisieren?" / "Nein"). Kein separater Schritt
+  noetig.
+- Vor Schichtbeginn zusaetzlich sinnvoll:
   - DB-Status in Einstellungen kurz pruefen.
   - Druckerampel pruefen (Druck-PC).
+- Manuell/administrativ jederzeit direkt aufrufbar (z. B. um ohne App-Start zu aktualisieren):
+  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\update_xw_office.ps1`.
+- Auf einem PC, der nie automatisch geprueft werden soll (z. B. bewusst pinned Version), vor dem
+  Start `XW_OFFICE_SKIP_UPDATE_CHECK=1` setzen.
 
-Der Update-Schritt (`scripts\update_xw_office.ps1`):
+Der Update-Schritt (`scripts\update_xw_office.ps1`), automatisch wie manuell gleich:
 1. Bricht ab, wenn XW-Office noch laeuft, lokale Aenderungen offen sind, der Branch nicht `main`
    ist oder der Upstream nicht `origin/main` ist. In keinem dieser Faelle wird automatisch
    gemergt, gestasht oder verworfen.

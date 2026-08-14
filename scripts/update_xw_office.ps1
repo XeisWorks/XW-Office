@@ -29,13 +29,20 @@
     Ueberspringt die Pruefung auf einen laufenden XW-Office-Prozess. Nur fuer den Fall,
     dass die Prozesserkennung auf einem PC nicht zuverlaessig funktioniert.
 
+.PARAMETER ExcludeProcessId
+    Schliesst eine einzelne Prozess-ID von der Laeuft-bereits-Pruefung aus. Wird vom
+    fensterlosen GUI-Bootstrap (scripts\xw_office_gui.pyw) gesetzt, wenn dieser den
+    automatischen Update-Check vor dem eigentlichen App-Start ausfuehrt: der Bootstrap-Prozess
+    selbst zaehlt an dieser Stelle noch nicht als laufende App.
+
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\update_xw_office.ps1
 #>
 [CmdletBinding()]
 param(
     [switch]$StartAfterUpdate,
-    [switch]$SkipRunningCheck
+    [switch]$SkipRunningCheck,
+    [int]$ExcludeProcessId = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -74,7 +81,11 @@ Write-UpdateLog "Update gestartet. Repo: $RepoRoot"
 if (-not $SkipRunningCheck) {
     try {
         $running = Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
-            Where-Object { $_.CommandLine -and ($_.CommandLine -match [regex]::Escape($RepoRoot) -or $_.CommandLine -match 'xw_office') }
+            Where-Object {
+                $_.ProcessId -ne $ExcludeProcessId -and
+                $_.CommandLine -and
+                ($_.CommandLine -match [regex]::Escape($RepoRoot) -or $_.CommandLine -match 'xw_office')
+            }
         if ($running) {
             $pids = ($running | Select-Object -ExpandProperty ProcessId) -join ', '
             Stop-UpdateWithError "XW-Office scheint noch zu laufen (PID $pids). Bitte App schliessen und Update erneut starten. Mit -SkipRunningCheck kann diese Pruefung uebersprungen werden."

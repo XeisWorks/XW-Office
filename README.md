@@ -78,7 +78,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_windows_shortc
 # "XeisWorks Office" per Rechtsklick im Startmenue an die Taskleiste anheften.
 ```
 
-Source-Updates laufen bewusst getrennt vom Appstart, Fast-forward-only:
+Der normale Start prueft automatisch und lautlos, ob ein Fast-forward-only-Update vorliegt, und
+fragt per Dialog nach — nie blockierend, bei Offline/dirty Tree/falschem Branch wird lautlos
+uebersprungen. Manuell/administrativ bleibt der Update-Schritt direkt aufrufbar:
 
 ```bash
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\update_xw_office.ps1
@@ -97,7 +99,7 @@ Logs liegen unabhaengig vom gewaehlten Start immer unter `logs\` im Repo
 - **Database:** PostgreSQL on Railway
 - **Printing:** QPrinter fuer Rechnungen/Labels; nativer PDF-XChange-Vektordruck fuer Noten/Produkte mit Windows-Spooler-Bestaetigung (kein automatischer Acrobat-/Raster-Fallback)
 - **Config:** YAML defaults + .env secrets + DB settings
-- **Update:** deliberate, separate fast-forward-only update step (`scripts\update_xw_office.ps1`), not automatic at startup
+- **Update:** fast-forward-only, checked silently before the normal desktop start with a confirm dialog (`scripts\update_xw_office.ps1`, invoked automatically or manually)
 
 ## Database (PostgreSQL / Alembic)
 

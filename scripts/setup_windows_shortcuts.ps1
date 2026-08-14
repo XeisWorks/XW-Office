@@ -3,10 +3,15 @@
     Erzeugt oder aktualisiert die Windows-Start-Verknuepfungen fuer XW-Office auf diesem PC.
 
 .DESCRIPTION
-    Legt im Startmenue einen Ordner "XeisWorks Office" mit drei Verknuepfungen an:
-      - XeisWorks Office               (fensterloser Alltagsstart ueber pythonw.exe)
-      - XeisWorks Office - Debug       (sichtbare Diagnosekonsole)
-      - XeisWorks Office aktualisieren (kontrolliertes Source-Update)
+    Legt im Startmenue einen Ordner "XeisWorks Office" mit zwei Verknuepfungen an:
+      - XeisWorks Office         (fensterloser Alltagsstart ueber pythonw.exe)
+      - XeisWorks Office - Debug (sichtbare Diagnosekonsole)
+    Der normale Start prueft beim Start automatisch und ohne zu blockieren, ob ein
+    Source-Update vorliegt, und bietet es bei Bedarf per Dialog an (siehe
+    scripts\xw_office_gui.pyw). Eine eigene Verknuepfung "XeisWorks Office aktualisieren"
+    ist deshalb nicht mehr noetig; eine bereits vorhandene alte Verknuepfung dieses Namens
+    wird beim Ausfuehren entfernt. scripts\update_xw_office.ps1 bleibt fuer manuelle bzw.
+    administrative Ausfuehrung direkt aufrufbar.
     Das Skript ist idempotent: wiederholtes Ausfuehren aktualisiert nur die
     Verknuepfungen, es werden weder Benutzerdaten noch das lokale .venv angefasst.
 
@@ -51,7 +56,6 @@ try {
     $VenvPythonw = Join-Path $RepoRoot '.venv\Scripts\pythonw.exe'
     $GuiBootstrap = Join-Path $RepoRoot 'scripts\xw_office_gui.pyw'
     $DebugCmd = Join-Path $RepoRoot 'run_xw_office_debug.cmd'
-    $UpdateScript = Join-Path $RepoRoot 'scripts\update_xw_office.ps1'
     $IconPath = Join-Path $RepoRoot 'icons\xw_office.ico'
 
     if (-not (Test-Path $VenvPythonw)) {
@@ -92,15 +96,10 @@ try {
         -IconLocation $IconArg `
         -Description 'XeisWorks Office mit sichtbarer Diagnosekonsole starten'
 
-    if (Test-Path $UpdateScript) {
-        New-XwShortcut -Path (Join-Path $AppFolder 'XeisWorks Office aktualisieren.lnk') `
-            -TargetPath 'powershell.exe' `
-            -Arguments "-NoProfile -ExecutionPolicy Bypass -File `"$UpdateScript`"" `
-            -WorkingDirectory $RepoRoot `
-            -IconLocation $IconArg `
-            -Description 'XeisWorks Office Source-Update ausfuehren (git fetch/pull --ff-only)'
-    } else {
-        Write-Warning "Update-Skript nicht gefunden unter '$UpdateScript', Verknuepfung wird uebersprungen."
+    $OldUpdateShortcut = Join-Path $AppFolder 'XeisWorks Office aktualisieren.lnk'
+    if (Test-Path $OldUpdateShortcut) {
+        Remove-Item -Path $OldUpdateShortcut -Force
+        Write-Host "Alte Verknuepfung entfernt (durch automatischen Update-Check ersetzt): $OldUpdateShortcut"
     }
 
     if ($IncludeDesktopShortcut) {
