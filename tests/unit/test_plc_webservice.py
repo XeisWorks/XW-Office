@@ -77,6 +77,40 @@ def test_address_parser_normalizes_wix_country_label_to_iso2() -> None:
     assert address.email == "max@example.test"
 
 
+def test_address_parser_keeps_multi_word_city_out_of_austrian_postal_code() -> None:
+    address = parse_shipment_address_lines(
+        ["Vollton", "Renate Pilshofer", "Kollroßdorf 29", "4362 Bad Kreuzen", "AUSTRIA"]
+    )
+
+    assert address.zip == "4362"
+    assert address.city == "Bad Kreuzen"
+    assert address.country_iso2 == "AT"
+    assert address.street == "Kollroßdorf"
+    assert address.house_no == "29"
+
+
+@pytest.mark.parametrize(
+    ("postal_city", "country", "expected_zip", "expected_city"),
+    [
+        ("CH-8000 Zürich", "SWITZERLAND", "8000", "Zürich"),
+        ("SW1A 1AA London", "UNITED KINGDOM", "SW1A 1AA", "London"),
+        ("1234 AB Amsterdam", "NETHERLANDS", "1234 AB", "Amsterdam"),
+    ],
+)
+def test_address_parser_supports_postal_codes_containing_prefixes_or_spaces(
+    postal_city: str,
+    country: str,
+    expected_zip: str,
+    expected_city: str,
+) -> None:
+    address = parse_shipment_address_lines(
+        ["Max Mustermann", "Teststrasse 1", postal_city, country]
+    )
+
+    assert address.zip == expected_zip
+    assert address.city == expected_city
+
+
 def test_test_settings_accept_the_existing_test_plc_environment_aliases() -> None:
     class Secrets:
         values = {

@@ -195,6 +195,26 @@ def clean_reference(value: object, *, max_length: int = 50) -> str:
     return text[:max_length]
 
 
+def _split_postal_city(value: str, country: str) -> tuple[str, str]:
+    """Split one address line without consuming words from a multi-word city."""
+    text = str(value or "").strip()
+    code = str(country or "").strip().upper()
+    country_patterns = {
+        "AT": r"^(?:A[- ]?)?(\d{4})\s+(.+)$",
+        "CH": r"^(?:CH[- ]?)?(\d{4})\s+(.+)$",
+        "LI": r"^(?:FL[- ]?)?(\d{4})\s+(.+)$",
+        "GB": r"^([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\s+(.+)$",
+        "CA": r"^([A-Z]\d[A-Z]\s*\d[A-Z]\d)\s+(.+)$",
+        "IE": r"^([A-Z\d]{3}\s+[A-Z\d]{4})\s+(.+)$",
+        "NL": r"^(\d{4}\s*[A-Z]{2})\s+(.+)$",
+    }
+    pattern = country_patterns.get(code, r"^(\S+)\s+(.+)$")
+    match = re.match(pattern, text, flags=re.IGNORECASE)
+    if not match:
+        return "", text
+    return match.group(1).strip().upper(), match.group(2).strip()
+
+
 def parse_shipment_address_lines(
     lines: list[str],
     *,
@@ -215,12 +235,7 @@ def parse_shipment_address_lines(
     street_line = cleaned[-3] if len(cleaned) >= 3 else ""
     names = cleaned[:-3] if len(cleaned) >= 3 else cleaned[:1]
 
-    zip_code = ""
-    city = postal_city.strip()
-    match = re.match(r"^([A-Za-z0-9][A-Za-z0-9 -]{1,14})\s+(.+)$", postal_city.strip())
-    if match:
-        zip_code = match.group(1).strip()
-        city = match.group(2).strip()
+    zip_code, city = _split_postal_city(postal_city, country)
 
     street = street_line.strip()
     house_no = ""
