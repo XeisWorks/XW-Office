@@ -31,6 +31,7 @@ class Trial:
     scale_percent: float
     x_offset_mm: float
     y_offset_mm: float
+    content_rect_mm: tuple[float, float, float, float] = (0.0, 0.0, 144.0, 206.0)
 
 
 TRIALS = (
@@ -38,6 +39,15 @@ TRIALS = (
     Trial("AB", "N-GEOMETRIE 106% OFFSET -4,5", False, 106.0, -4.5, -4.5),
     Trial("AC", "N-GEOMETRIE 106% OFFSET 0", False, 106.0, 0.0, 0.0),
     Trial("AD", "ECHTE PROPORTION VOLLSTAENDIG", True, 106.0, -4.5, -4.5),
+    Trial(
+        "AF",
+        "N-GEOMETRIE IN DRUCKFLAECHE WINDOWS 100%",
+        False,
+        100.0,
+        0.0,
+        0.0,
+        (4.23, 4.23, 143.77, 203.84),
+    ),
 )
 
 
@@ -64,8 +74,10 @@ def _create_trial(source_path: Path, output_path: Path, trial: Trial) -> None:
                 overlay=True,
             )
         else:
-            # Recreate TEST N on an exact Windows A5 canvas (148 x 210 mm).
-            target = fitz.Rect(0, 0, 144.0 * MM_TO_PT, 206.0 * MM_TO_PT)
+            # Recreate TEST N on an exact Windows A5 canvas (148 x 210 mm),
+            # optionally constrained to the printer's physical imageable area.
+            x0, y0, x1, y1 = trial.content_rect_mm
+            target = fitz.Rect(x0 * MM_TO_PT, y0 * MM_TO_PT, x1 * MM_TO_PT, y1 * MM_TO_PT)
             page.show_pdf_page(
                 target,
                 source,
@@ -76,7 +88,7 @@ def _create_trial(source_path: Path, output_path: Path, trial: Trial) -> None:
                 overlay=True,
             )
 
-        label_rect = fitz.Rect(8 * MM_TO_PT, 1.5 * MM_TO_PT, A5_WIDTH_PT - 8 * MM_TO_PT, 10 * MM_TO_PT)
+        label_rect = fitz.Rect(8 * MM_TO_PT, 5 * MM_TO_PT, A5_WIDTH_PT - 8 * MM_TO_PT, 14 * MM_TO_PT)
         page.insert_textbox(
             label_rect,
             f"TEST {trial.code} - {trial.description}",
