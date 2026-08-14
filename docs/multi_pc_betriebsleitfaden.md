@@ -25,8 +25,21 @@ Ziel:
 6. `.env` aus `.env.example` erstellen und lokale Werte setzen.
 7. Migrationen ausfuehren:
    - `alembic upgrade head`
-8. App starten:
-   - `python -m xw_office`
+8. Windows-Startmenue-Verknuepfungen erzeugen (einmalig, danach idempotent erneut ausfuehrbar):
+   - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_windows_shortcuts.ps1`
+   - Legt im Startmenue den Ordner "XeisWorks Office" mit drei Eintraegen an: normaler Start,
+     Debug-Start, Update. Optional zusaetzlich eine Desktop-Verknuepfung mit
+     `-IncludeDesktopShortcut`.
+9. Normalen Start testen: Startmenue -> "XeisWorks Office" (kein Konsolenfenster, PySide6-Fenster
+   erscheint maximiert).
+10. Debug-Start testen: Startmenue -> "XeisWorks Office - Debug" (sichtbare Konsole, gleiches
+    Dateilog).
+11. "XeisWorks Office" im Startmenue per Rechtsklick -> "An Taskleiste anheften" anheften.
+
+Alternativer Direktstart ohne Verknuepfung (z. B. fuer Codex/Claude Code):
+- Normaler Start: `.venv\\Scripts\\pythonw.exe scripts\\xw_office_gui.pyw`
+- Diagnose-Start mit sichtbarer Konsole: `run_xw_office_debug.cmd`
+- Reines Modul (aequivalent zum Debug-Start, ohne Fehlerdialog-Wrapper): `python -m xw_office`
 
 ## 3) Pflichtvariablen (.env oder Secret-Store)
 
@@ -50,10 +63,17 @@ Hinweis:
   `origin/main`.
 - Temporaere Arbeitsbranches wie `agent/*` muessen nach Abschluss in `main` integriert werden
   und duerfen nicht als dauerhafter Betriebsstand eines PCs verbleiben.
-- Code-Updates laufen ueber GitHub + Auto-Update beim Appstart. Das Auto-Update verweigert
-  Updates auf anderen Branches, damit `main` nicht versehentlich in einen Arbeitsbranch
-  gemischt wird.
-- Nach groesseren Updates App neu starten.
+- Code-Updates laufen ueber einen bewusst gestarteten Update-Schritt (siehe Abschnitt 5), nicht
+  automatisch beim Appstart. Der Alltagsstart bleibt dadurch schnell und unabhaengig von GitHub.
+- Nach einem Update App neu starten.
+
+Normaler Betrieb pro PC:
+- Alltagsstart ueber die Startmenue-/Taskleisten-Verknuepfung "XeisWorks Office" (fensterlos,
+  `pythonw.exe`).
+- Diagnose/Live-Debugging durch Entwickler, Codex oder Claude Code ueber
+  "XeisWorks Office - Debug" (sichtbare Konsole, gleiches Dateilog).
+- Alle Betriebsregeln (Rechnungslogs, Log-Pfade) sind unabhaengig vom gewaehlten Start identisch,
+  da beide Wege in dieselbe `logs\xw_office.log` schreiben.
 
 Empfehlung Rollenmodell:
 - 1 Druck-PC: stabile Druckerzuordnung, Noten-/Rechnungsdruck.
@@ -61,12 +81,23 @@ Empfehlung Rollenmodell:
 
 ## 5) Update-Routine
 
-- Vor Schichtbeginn auf jedem PC:
-  - App starten (Auto-Update prueft Pull/Install)
-  - DB-Status in Einstellungen kurz pruefen
-  - Druckerampel pruefen (Druck-PC)
+- Vor Schichtbeginn auf jedem PC (optional, bei Bedarf):
+  - Startmenue -> "XeisWorks Office aktualisieren" ausfuehren (oder
+    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\update_xw_office.ps1`).
+  - DB-Status in Einstellungen kurz pruefen.
+  - Druckerampel pruefen (Druck-PC).
 
-Bei manueller Aktualisierung:
+Der Update-Schritt (`scripts\update_xw_office.ps1`):
+1. Bricht ab, wenn XW-Office noch laeuft, lokale Aenderungen offen sind, der Branch nicht `main`
+   ist oder der Upstream nicht `origin/main` ist. In keinem dieser Faelle wird automatisch
+   gemergt, gestasht oder verworfen.
+2. `git fetch origin main`, danach ausschliesslich `git pull --ff-only origin main`.
+3. Installiert Abhaengigkeiten neu, wenn sich `pyproject.toml` geaendert hat.
+4. Meldet geaenderte Datenbankmigrationen nur, fuehrt sie aber nicht automatisch aus (siehe unten).
+5. Fuehrt einen kurzen Smoke-Preflight (Modul-Import) aus.
+6. Protokolliert Alt-/Neu-Commit und Ergebnis in `logs\xw_office_update.log`.
+
+Manuelle Aktualisierung (Fallback, z. B. wenn PowerShell-Skripte gesperrt sind):
 1. App schliessen.
 2. Sicherstellen, dass keine lokalen Aenderungen offen sind: `git status --short`
 3. Auf den gemeinsamen Branch wechseln: `git switch main`
@@ -79,13 +110,34 @@ Einrichtung bzw. Reparatur des Upstreams pro PC:
 - `git branch --set-upstream-to=origin/main main`
 - Kontrolle: `git status --short --branch` muss `main...origin/main` anzeigen.
 
+Datenbankmigrationen (`alembic upgrade head`):
+- Nicht unkoordiniert auf mehreren PCs gleichzeitig ausfuehren.
+- Bevorzugt einmalig und bewusst von einem festgelegten Admin-/Entwicklungs-PC ausfuehren.
+- Der Update-Schritt oben meldet neue Migrationsdateien nur, fuehrt sie aber nicht selbst aus.
+
 ## 6) Backup und Wiederherstellung
 
 - Primaer-Backup: Railway PostgreSQL Snapshots/Backups.
 - Sekundaer: regelmaessiger SQL-Dump.
 - Wiederherstellungstest mindestens monatlich.
 
-## 7) Stoerungsbehebung
+## 7) Logs und Diagnose (Codex/Claude Code)
+
+Alle Logs liegen unter `<repo>\logs\`, unabhaengig davon, ob normal (fensterlos) oder per
+Debug-Start gestartet wurde:
+
+- `xw_office.log` — laufendes Anwendungslog (Rotating, Standard 8 MB x 8 Backups; ueber
+  `XW_OFFICE_LOG_MAX_BYTES`/`XW_OFFICE_LOG_BACKUP_COUNT` anpassbar).
+- `xw_office_bootstrap.log` — nur bei Fehlern vor dem eigentlichen App-Start (z. B. defektes
+  `.venv`, Importfehler), geschrieben vom GUI-Bootstrap.
+- `xw_office_crash.log` — harte Python-Abstuerze (`faulthandler`).
+- `xw_office_update.log` — Ergebnis jedes Laufs von `scripts\update_xw_office.ps1`.
+
+Log-Level fuer eine Session erhoehen: `XW_OFFICE_LOG_LEVEL=DEBUG` vor dem Start setzen (z. B. in
+der Konsole vor `run_xw_office_debug.cmd`). Secrets/Tokens werden vor dem Schreiben ins Log
+redigiert.
+
+## 8) Stoerungsbehebung
 
 - Symptom: kein Sync / keine Daten.
   - `DATABASE_URL` pruefen.
@@ -95,7 +147,7 @@ Einrichtung bzw. Reparatur des Upstreams pro PC:
 - Symptom: Druck nicht verfuegbar.
   - Druckerampel / konfigurierte Druckernamen pruefen.
 
-## 8) Wartungscheckliste (monatlich)
+## 9) Wartungscheckliste (monatlich)
 
 - `pytest tests/`
 - `ruff check src/`

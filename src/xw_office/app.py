@@ -5,16 +5,21 @@ import logging
 import os
 import platform
 import sys
-from pathlib import Path
 
 from sqlalchemy import text
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from xw_office.bootstrap import register_default_services
+from xw_office.core.app_paths import app_icon_path, ensure_app_user_model_id
 from xw_office.core.config import AppConfig, load_config
 from xw_office.core.container import Container
 from xw_office.core.database import create_engine_from_config, ensure_core_tables
-from xw_office.core.logging_setup import setup_logging
+from xw_office.core.logging_setup import (
+    install_qt_message_handler,
+    log_startup_info,
+    setup_logging,
+)
 from xw_office.core.signals import AppSignals
 from xw_office.core.updater import check_and_update
 from xw_office.core.printer_detect import discover_printers
@@ -22,6 +27,8 @@ from xw_office.repositories import PcRegistryRepository
 from xw_office.ui.theme import apply_app_theme
 
 logger = logging.getLogger(__name__)
+
+APP_VERSION = "0.1.0"
 
 
 def _retain_main_window(app: QApplication, window: object) -> None:
@@ -94,7 +101,12 @@ def _register_workstation(container: Container) -> None:
 
 def create_application() -> QApplication:
     """Build and return the fully wired QApplication."""
-    setup_logging(log_dir=Path("logs"))
+    ensure_app_user_model_id()
+
+    setup_logging()
+    install_qt_message_handler()
+    start_mode = os.getenv("XW_OFFICE_START_MODE") or ("gui" if sys.stdout is None else "console")
+    log_startup_info(start_mode, APP_VERSION)
     logger.info("Starting XeisWorks Office...")
 
     update_result = check_and_update(enabled=False)
@@ -104,7 +116,11 @@ def create_application() -> QApplication:
     config = load_config()
     app = QApplication(sys.argv)
     app.setApplicationName(config.app.name)
-    app.setApplicationVersion("0.1.0")
+    app.setApplicationVersion(APP_VERSION)
+
+    icon_path = app_icon_path()
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     apply_app_theme(app, config.app.theme)
 

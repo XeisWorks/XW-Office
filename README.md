@@ -58,9 +58,34 @@ pip install -e ".[dev]"
 copy .env.example .env
 # Edit .env with your credentials
 
-# Run
+# Run (visible console, for development/diagnosis)
 python -m xw_office
 ```
+
+### Windows-Desktop-Start (Alltagsbetrieb)
+
+Fuer den taeglichen Betrieb gibt es einen fensterlosen Start ohne Konsole, mit eigenem Icon und
+Startmenue-/Taskleisten-Verknuepfung. Details, Architekturentscheidung und Update-Konzept stehen
+in
+[`markdowns/windows_desktop_start_und_source_update_umbauskizze_2026-08-14.md`](markdowns/windows_desktop_start_und_source_update_umbauskizze_2026-08-14.md).
+
+```bash
+# Einmalig: Startmenue-Verknuepfungen erzeugen (idempotent, pro PC)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_windows_shortcuts.ps1
+
+# Danach: Startmenue -> "XeisWorks Office" (normal) oder
+#         Startmenue -> "XeisWorks Office - Debug" (sichtbare Konsole)
+# "XeisWorks Office" per Rechtsklick im Startmenue an die Taskleiste anheften.
+```
+
+Source-Updates laufen bewusst getrennt vom Appstart, Fast-forward-only:
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\update_xw_office.ps1
+```
+
+Logs liegen unabhaengig vom gewaehlten Start immer unter `logs\` im Repo
+(`xw_office.log`, `xw_office_crash.log`, `xw_office_bootstrap.log`, `xw_office_update.log`).
 
 ## Roadmap / Copilot
 
@@ -72,7 +97,7 @@ python -m xw_office
 - **Database:** PostgreSQL on Railway
 - **Printing:** QPrinter fuer Rechnungen/Labels; nativer PDF-XChange-Vektordruck fuer Noten/Produkte mit Windows-Spooler-Bestaetigung (kein automatischer Acrobat-/Raster-Fallback)
 - **Config:** YAML defaults + .env secrets + DB settings
-- **Auto-Update:** git pull + pip install at startup
+- **Update:** deliberate, separate fast-forward-only update step (`scripts\update_xw_office.ps1`), not automatic at startup
 
 ## Database (PostgreSQL / Alembic)
 

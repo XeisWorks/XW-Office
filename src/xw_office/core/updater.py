@@ -5,7 +5,8 @@ import logging
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+
+from xw_office.core.app_paths import find_repo_root
 
 logger = logging.getLogger(__name__)
 
@@ -15,15 +16,6 @@ class UpdateResult:
     updated: bool = False
     needs_restart: bool = False
     error: str | None = None
-
-
-def find_repo_root() -> Path:
-    """Walk up from this file to find the git root."""
-    current = Path(__file__).resolve()
-    for parent in current.parents:
-        if (parent / ".git").exists():
-            return parent
-    return current.parents[3]
 
 
 def check_and_update(*, enabled: bool = True) -> UpdateResult:

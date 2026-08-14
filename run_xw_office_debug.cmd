@@ -1,17 +1,18 @@
 @echo off
 setlocal
 
-rem Uebergangs-Hinweis: Der normale Alltagsstart laeuft inzwischen fensterlos
-rem ueber die Startmenue-Verknuepfung "XeisWorks Office"
-rem (siehe scripts\setup_windows_shortcuts.ps1). Dieses Skript bleibt als
-rem sichtbarer Konsolenstart erhalten und funktioniert unveraendert; fuer
-rem gezielte Diagnose bitte run_xw_office_debug.cmd verwenden.
+rem Diagnose-Start mit sichtbarer Konsole. Fuer den taeglichen Betrieb bitte
+rem die generierte Verknuepfung "XeisWorks Office" aus dem Startmenue nutzen
+rem (siehe scripts\setup_windows_shortcuts.ps1). Dieser Start ist fuer
+rem Entwickler, Codex und Claude Code gedacht, wenn Live-Ausgabe im Terminal
+rem gebraucht wird.
 
 set "ROOT=%~dp0"
 set "VENV_PY=%ROOT%.venv\Scripts\python.exe"
 set "ENTRYPOINT=-m xw_office"
 set "PY_EXE="
 set "PY_ARGS="
+set "XW_OFFICE_START_MODE=debug"
 
 if exist "%VENV_PY%" (
     set "PY_EXE=%VENV_PY%"
@@ -46,7 +47,8 @@ set "EXIT_CODE=%ERRORLEVEL%"
 if not "%EXIT_CODE%"=="0" (
     echo.
     echo [XW-Office] Anwendung unerwartet beendet ^(Exit-Code %EXIT_CODE%^).
-    echo Details stehen in der aktuellen Datei im Ordner logs.
+    echo Dateilog: %ROOT%logs\xw_office.log
+    echo Crash-Log: %ROOT%logs\xw_office_crash.log
     echo Falls direkt beim Start ein Importfehler gemeldet wurde:
     echo   python -m venv .venv
     echo   .venv\Scripts\python -m pip install -e ".[dev]"
