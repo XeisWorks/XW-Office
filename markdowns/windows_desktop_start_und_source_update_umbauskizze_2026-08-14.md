@@ -1,6 +1,6 @@
 # XW-Office: Windows-Desktop-Start und leichtes Source-Update
 
-Stand: 2026-08-14  
+Stand: 2026-08-14
 Status: Umbau-Skizze, noch keine Implementierung
 
 ## 1. Ziel und Entscheidung
