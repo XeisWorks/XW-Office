@@ -912,6 +912,30 @@ def test_plc_dialog_defaults_to_direct_webservice_without_changing_list_action(q
     assert dialog._price_label.text() == "Preis: 7,21 €"  # noqa: SLF001
 
 
+def test_plc_dialog_defers_wix_loading_until_after_first_event_loop_turn(
+    qtbot: object,
+    monkeypatch: object,
+) -> None:
+    started: list[bool] = []
+    monkeypatch.setattr(PlcLabelPrintDialog, "_load_context", lambda _self: started.append(True))
+    summary = InvoiceSummary.model_validate(
+        {
+            "id": "plc-lazy",
+            "invoiceNumber": "RE-PLC-LAZY",
+            "status": 200,
+            "contact_name": "PLC Customer",
+            "order_reference": "20857",
+        }
+    )
+
+    dialog = PlcLabelPrintDialog(_build_container(), summary)
+    qtbot.addWidget(dialog)
+
+    assert started == []
+    assert "Wix-Cache" in dialog._status.text()  # noqa: SLF001
+    qtbot.waitUntil(lambda: started == [True], timeout=1000)
+
+
 def test_manual_plc_dialog_uses_structured_address_and_office_email(qtbot: object) -> None:
     dialog = PlcLabelPrintDialog(_build_container(), None)
     qtbot.addWidget(dialog)

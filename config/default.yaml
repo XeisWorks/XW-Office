@@ -72,7 +72,9 @@ printing:
       printer_name: "Paketmarke A5"
       page_size: "A5"
       orientation: "portrait"
-      placement_mode: "printable_origin"
+      # PLC already returns a real A5 page. Paper origin preserves its native
+      # 100x200 geometry; printable origin would add the Brother margin twice.
+      placement_mode: "paper_origin"
       scale_mode: "none"
       alignment: "center"
     - id: "plc_customs"

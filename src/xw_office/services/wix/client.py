@@ -1400,6 +1400,8 @@ class WixOrdersClient:
         self,
         reference: str,
         order: dict[str, Any],
+        *,
+        allow_network: bool = True,
     ) -> dict[str, Any]:
         raw_items = order.get("lineItems") if isinstance(order.get("lineItems"), list) else []
         if not raw_items:
@@ -1420,7 +1422,7 @@ class WixOrdersClient:
                 or catalog.get("productId")
                 or ""
             ).strip()
-            label = self._category_label_for_product(product_id)
+            label = self._category_label_for_product(product_id, allow_network=allow_network)
             if label:
                 item_copy = dict(raw_item)
                 item_copy["xwMainCategoryLabel"] = label
@@ -1435,7 +1437,7 @@ class WixOrdersClient:
         self._cache_order(reference, order_copy)
         return order_copy
 
-    def _category_label_for_product(self, product_id: str) -> str:
+    def _category_label_for_product(self, product_id: str, *, allow_network: bool = True) -> str:
         pid = str(product_id or "").strip()
         if not pid:
             return ""
@@ -1452,6 +1454,8 @@ class WixOrdersClient:
             if cached is not None:
                 self._product_category_memory[pid] = cached
                 return cached
+        if not allow_network:
+            return ""
         label = self._fetch_category_label_for_product(pid)
         self._product_category_memory[pid] = label
         if cache is not None and site_id:
@@ -1530,7 +1534,11 @@ class WixOrdersClient:
             return []
         if not isinstance(cached.get("lineItems"), list):
             return None
-        cached = self._order_with_enriched_line_item_categories(ref, cached)
+        cached = self._order_with_enriched_line_item_categories(
+            ref,
+            cached,
+            allow_network=False,
+        )
         raw_items = cached.get("lineItems")
         return [
             _parse_order_line_item(
@@ -1541,6 +1549,45 @@ class WixOrdersClient:
             for item in raw_items
             if isinstance(item, dict)
         ]
+
+    def get_cached_plc_order_context(self, reference: str) -> dict[str, object] | None:
+        """Return the complete PLC popup context from one cache snapshot only.
+
+        ``None`` means that the snapshot is absent or incomplete and a regular
+        Wix lookup is needed. An empty/missing order marker is a valid cached
+        result and deliberately does not trigger another request.
+        """
+        ref = str(reference or "").strip()
+        if not ref:
+            return None
+        cached = self._cached_order(ref)
+        if cached is None:
+            return None
+        if not cached:
+            return {"meta": {}, "shipping": {}, "items": []}
+        if not isinstance(cached.get("lineItems"), list):
+            return None
+        if self._shipping_address_is_name_only(cached):
+            return None
+        cached = self._order_with_enriched_line_item_categories(
+            ref,
+            cached,
+            allow_network=False,
+        )
+        raw_items = cached.get("lineItems") or []
+        return {
+            "meta": self._summary_from_order(cached),
+            "shipping": self._plc_shipping_context_from_order(cached),
+            "items": [
+                _parse_order_line_item(
+                    item,
+                    weight_unit=cached.get("weightUnit") or "KG",
+                    currency=cached.get("currency") or "EUR",
+                )
+                for item in raw_items
+                if isinstance(item, dict)
+            ],
+        }
 
     def get_cached_reference_digital_only(self, reference: str) -> bool | None:
         """Return cached digital-only classification without calling Wix.
@@ -1931,9 +1978,22 @@ class WixOrdersClient:
         order = self._resolve_order(reference)
         if not order:
             return {}
+        return self._plc_shipping_context_from_order(order)
+
+    def _plc_shipping_context_from_order(self, order: dict[str, Any]) -> dict[str, str]:
+        """Normalize PLC contact fields from an already available order."""
         parts = self._shipping_address_parts_from_order(order)
         shipping = order.get("shippingInfo") if isinstance(order.get("shippingInfo"), dict) else {}
-        destination = shipping.get("shippingDestination") if isinstance(shipping.get("shippingDestination"), dict) else {}
+        logistics = shipping.get("logistics") if isinstance(shipping.get("logistics"), dict) else {}
+        direct_destination = shipping.get("shippingDestination")
+        logistics_destination = logistics.get("shippingDestination")
+        destination = (
+            direct_destination
+            if isinstance(direct_destination, dict)
+            else logistics_destination
+            if isinstance(logistics_destination, dict)
+            else {}
+        )
         contact = destination.get("contactDetails") if isinstance(destination.get("contactDetails"), dict) else {}
         shipment_details = shipping.get("shipmentDetails") if isinstance(shipping.get("shipmentDetails"), dict) else {}
         buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
@@ -1942,6 +2002,7 @@ class WixOrdersClient:
             contact,
             shipment_details,
             buyer,
+            logistics,
             shipping,
             keys=("email", "emailAddress"),
         )
@@ -1949,6 +2010,7 @@ class WixOrdersClient:
             contact,
             shipment_details,
             buyer,
+            logistics,
             shipping,
             keys=("phone", "phoneNumber", "phoneNumber1", "mobile", "mobilePhone"),
         )

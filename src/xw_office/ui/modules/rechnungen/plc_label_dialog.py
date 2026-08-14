@@ -108,7 +108,7 @@ def queue_archived_plc_label(
             description=f"PLC-Label {reference}",
             page_size=str(getattr(profile, "page_size", "") or "A5"),
             orientation=str(getattr(profile, "orientation", "") or "portrait"),
-            placement_mode=str(getattr(profile, "placement_mode", "") or "printable_origin"),  # type: ignore[arg-type]
+            placement_mode=str(getattr(profile, "placement_mode", "") or "paper_origin"),  # type: ignore[arg-type]
             scale_mode=str(getattr(profile, "scale_mode", "") or "none"),  # type: ignore[arg-type]
             alignment=str(getattr(profile, "alignment", "") or "center"),  # type: ignore[arg-type]
             dpi=int(profile.dpi) if profile is not None and profile.dpi else None,
@@ -162,6 +162,7 @@ class _PlcDialogContext:
     items: list[WixOrderItem]
     email: str = ""
     phone: str = ""
+    source: str = "wix"
 
 
 @dataclass(frozen=True)
@@ -221,7 +222,10 @@ class PlcLabelPrintDialog(QDialog):
             self._update_customs_visibility()
             self._status.setText("Adresse und Paketgewicht eingeben")
         else:
-            self._load_context()
+            self._status.setText("Fenster bereit – Wix-Cache wird im Hintergrund gelesen …")
+            # Let the dialog paint before cache I/O or a possible Wix request
+            # starts. This keeps opening the popup independent of network speed.
+            QTimer.singleShot(0, self._load_context)
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -401,9 +405,23 @@ class PlcLabelPrintDialog(QDialog):
             if ref:
                 wix: WixOrdersClient = self._container.resolve(WixOrdersClient)
                 if wix.has_credentials():
-                    meta = wix.resolve_order_summary(ref)
-                    context_method = getattr(wix, "resolve_plc_shipping_context", None)
-                    plc_context = context_method(ref) if callable(context_method) else {}
+                    cached_method = getattr(wix, "get_cached_plc_order_context", None)
+                    cached = cached_method(ref) if callable(cached_method) else None
+                    source = "cache" if isinstance(cached, dict) else "wix"
+                    if isinstance(cached, dict):
+                        meta = cached.get("meta") if isinstance(cached.get("meta"), dict) else {}
+                        plc_context = (
+                            cached.get("shipping")
+                            if isinstance(cached.get("shipping"), dict)
+                            else {}
+                        )
+                        cached_items = cached.get("items")
+                        items = list(cached_items) if isinstance(cached_items, list) else []
+                    else:
+                        meta = wix.resolve_order_summary(ref)
+                        context_method = getattr(wix, "resolve_plc_shipping_context", None)
+                        plc_context = context_method(ref) if callable(context_method) else {}
+                        items = wix.fetch_order_line_items(ref)
                     order_number = str(meta.get("wix_order_number") or order_number or "").strip()
                     if isinstance(plc_context, dict):
                         order_number = str(plc_context.get("order_number") or order_number).strip()
@@ -412,15 +430,18 @@ class PlcLabelPrintDialog(QDialog):
                     shipping = str(meta.get("wix_shipping_address") or "").strip()
                     if shipping:
                         address_lines = [ln.strip() for ln in shipping.splitlines() if ln.strip()]
-                    if not address_lines:
+                    if not address_lines and source != "cache":
                         address_lines = wix.resolve_order_address_lines(ref)
-                    items = wix.fetch_order_line_items(ref)
                     weight = sum(
                         max(1, int(item.qty or 1))
                         * float(item.unit_weight_kg or 0)
                         for item in items
                         if not item.is_digital
                     )
+                else:
+                    source = "none"
+            else:
+                source = "none"
             return _PlcDialogContext(
                 order_number=order_number,
                 address_lines=address_lines,
@@ -428,6 +449,7 @@ class PlcLabelPrintDialog(QDialog):
                 items=items,
                 email=email,
                 phone=phone,
+                source=source,
             )
 
         self._load_worker = BackgroundWorker(job)
@@ -454,10 +476,11 @@ class PlcLabelPrintDialog(QDialog):
         self._sync_product_options()
         self._update_customs_visibility()
         physical_count = sum(max(1, int(item.qty or 1)) for item in result.items if not item.is_digital)
+        source_label = "Wix-Cache" if result.source == "cache" else "Wix"
         self._status.setText(
-            f"Bereit – {physical_count} physische Notenhefte aus Wix; Paketgewicht/Verpackung prüfen"
+            f"Bereit ({source_label}) – {physical_count} physische Notenhefte; Paketgewicht/Verpackung prüfen"
             if physical_count
-            else "Bereit – keine physischen Wix-Positionen gefunden"
+            else f"Bereit ({source_label}) – keine physischen Wix-Positionen gefunden"
         )
 
     def _on_context_error(self, exc: Exception) -> None:

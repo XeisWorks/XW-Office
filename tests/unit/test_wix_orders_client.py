@@ -926,3 +926,65 @@ def test_cached_order_line_items_are_enriched_with_cached_category_label(tmp_pat
     assert items[0].category_label == "Böhmische Besetzung"
     assert cached_order is not None
     assert cached_order.order["lineItems"][0]["xwMainCategoryLabel"] == "Böhmische Besetzung"
+
+
+def test_cached_plc_context_never_fetches_product_details(tmp_path) -> None:
+    class _SecretService:
+        def get_secret(self, name: str) -> str:
+            return {"WIX_API_KEY": "key", "WIX_SITE_ID": "site", "WIX_ACCOUNT_ID": ""}.get(name, "")
+
+    class _ProductDetails:
+        def get_product(self, _product_id: str) -> object:
+            raise AssertionError("cache-only PLC context must not fetch product details")
+
+    cache = WixOrderCache(tmp_path / "cache.sqlite")
+    cache.put_order(
+        site_id="site",
+        account_id="",
+        reference="20911",
+        order={
+            "id": "order-plc",
+            "number": "20911",
+            "currency": "EUR",
+            "buyerInfo": {"email": "buyer@example.test"},
+            "shippingInfo": {
+                "logistics": {
+                    "shippingDestination": {
+                        "address": {
+                            "addressLine": "Teststrasse 1",
+                            "postalCode": "8000",
+                            "city": "Zuerich",
+                            "country": "CH",
+                        },
+                        "contactDetails": {
+                            "firstName": "Anna",
+                            "lastName": "Muster",
+                            "phone": "+41440000000",
+                        },
+                    }
+                }
+            },
+            "lineItems": [
+                {
+                    "id": "line-1",
+                    "quantity": 2,
+                    "productName": {"original": "Polka"},
+                    "physicalProperties": {"sku": "XW-780", "weight": 0.25},
+                    "catalogReference": {"catalogItemId": "uncached-product"},
+                    "price": {"amount": "12.50"},
+                }
+            ],
+        },
+    )
+    client = WixOrdersClient(
+        secret_service=_SecretService(),  # type: ignore[arg-type]
+        order_cache=cache,
+        product_details_client=_ProductDetails(),  # type: ignore[arg-type]
+    )
+
+    context = client.get_cached_plc_order_context("20911")
+
+    assert context is not None
+    assert context["meta"]["wix_order_number"] == "20911"  # type: ignore[index]
+    assert context["shipping"]["phone"] == "+41440000000"  # type: ignore[index]
+    assert len(context["items"]) == 1  # type: ignore[arg-type]
