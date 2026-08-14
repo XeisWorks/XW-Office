@@ -81,4 +81,3 @@ def _content_bbox(page: fitz.Page) -> fitz.Rect:
         if kind.startswith(("fill-", "stroke-")):
             result |= fitz.Rect(coordinates)
     return result
-

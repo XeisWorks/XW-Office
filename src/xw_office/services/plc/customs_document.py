@@ -166,4 +166,3 @@ def _is_print_ready_file(path: Path) -> bool:
             document.close()
     except Exception:  # noqa: BLE001 - invalid legacy files must be regenerated.
         return False
-
