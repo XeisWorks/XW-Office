@@ -1,8 +1,10 @@
 """Smoke tests for ProductsView brand bulk flow."""
 from __future__ import annotations
 
+from threading import Event
+
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QPushButton
+from PySide6.QtWidgets import QInputDialog, QPushButton
 
 from xw_office.core.config import AppConfig
 from xw_office.core.container import Container
@@ -250,6 +252,82 @@ def test_products_sync_print_action_opens_product_print_config(qtbot: object, mo
     qtbot.mouseClick(view._sync_table.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())  # noqa: SLF001
 
     assert calls == ["XW-902"]
+
+
+def test_products_sync_ready_print_action_is_backgrounded_and_confirms_click(
+    qtbot: object,
+    monkeypatch: object,
+) -> None:
+    monkeypatch.setattr(ProductsView, "_load_sync_sources", lambda self, *args, **kwargs: None)
+    view = ProductsView(Container(AppConfig()))
+    qtbot.addWidget(view)
+    view.show()
+    release = Event()
+    started = Event()
+
+    row = ProductRow(
+        sku="XW-READY",
+        name="Druckbereit",
+        category="Kat",
+        on_hand=1,
+        price_eur="12.00",
+        wix_id="w-ready",
+        sevdesk_id="s-ready",
+        print_file_path="ready.pdf",
+        print_profile_id="noten_simplex",
+        print_plan=[],
+    )
+    view._all_rows = [row]  # noqa: SLF001
+    sync_row_type = __import__("xw_office.ui.modules.products.view", fromlist=["_SyncRow"])._SyncRow
+    view._sync_rows = [  # noqa: SLF001
+        sync_row_type(
+            sku=row.sku,
+            name=row.name,
+            wix_id=row.wix_id,
+            sevdesk_id=row.sevdesk_id,
+            local_present=True,
+            wix_present=True,
+            sevdesk_present=True,
+            local_stock=1,
+            wix_stock=1,
+            sevdesk_stock=1,
+            local_brand="",
+            wix_brand="",
+            local_price="12.00",
+            wix_price="12.00",
+            sevdesk_price="12.00",
+            status="sauber verknuepft",
+            can_create_sevdesk=False,
+        )
+    ]
+    view._populate_sync_table(view._sync_rows)  # noqa: SLF001
+
+    def fake_prepare(*_args: object, **_kwargs: object):
+        def job() -> None:
+            started.set()
+            release.wait(timeout=2)
+
+        return job
+
+    monkeypatch.setattr(
+        "xw_office.ui.modules.products.view.prepare_piece_pdf_print",
+        fake_prepare,
+    )
+    monkeypatch.setattr(QInputDialog, "getInt", lambda *_args, **_kwargs: (2, True))
+
+    model = view._sync_table.model()  # noqa: SLF001
+    assert model is not None
+    index = model.index(0, 10)
+    rect = view._sync_table.visualRect(index)  # noqa: SLF001
+    qtbot.mouseClick(view._sync_table.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())  # noqa: SLF001
+
+    row_data = view._sync_table.source_rows_data()[0]  # noqa: SLF001
+    assert row_data["__action_kind__Druck"] == "print_confirmed"
+    assert row.sku in view._print_confirmed_skus  # noqa: SLF001
+    assert len(view._direct_product_print_handles) == 1  # noqa: SLF001
+    assert started.wait(timeout=1)
+    release.set()
+    qtbot.waitUntil(lambda: not view._direct_product_print_handles, timeout=2000)  # noqa: SLF001
 
 
 def test_products_view_exposes_separate_print_and_production_actions(

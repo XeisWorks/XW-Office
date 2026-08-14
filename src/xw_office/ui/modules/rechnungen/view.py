@@ -701,6 +701,8 @@ class _PieceListModel(QAbstractListModel):
     STOCK_ROLE = int(Qt.ItemDataRole.UserRole) + 5
     STOCK_COLOR_ROLE = int(Qt.ItemDataRole.UserRole) + 6
     PRINT_ENABLED_ROLE = int(Qt.ItemDataRole.UserRole) + 7
+    SELECTED_ROLE = int(Qt.ItemDataRole.UserRole) + 8
+    PRINT_CONFIRMED_ROLE = int(Qt.ItemDataRole.UserRole) + 9
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -737,6 +739,10 @@ class _PieceListModel(QAbstractListModel):
             return str(row.get("stock_color") or "#64748b")
         if role == self.PRINT_ENABLED_ROLE:
             return bool(row.get("print_enabled"))
+        if role == self.SELECTED_ROLE:
+            return bool(row.get("selected", row.get("flagged")))
+        if role == self.PRINT_CONFIRMED_ROLE:
+            return bool(row.get("print_confirmed"))
         return None
 
     def rows(self) -> list[tuple[PieceBlock, int, bool]]:
@@ -744,7 +750,13 @@ class _PieceListModel(QAbstractListModel):
         for row in self._rows:
             block = row.get("block")
             if isinstance(block, PieceBlock):
-                result.append((block, int(row.get("quantity") or 1), bool(row.get("flagged"))))
+                result.append(
+                    (
+                        block,
+                        int(row.get("quantity") or 1),
+                        bool(row.get("selected", row.get("flagged"))),
+                    )
+                )
         return result
 
     def set_print_enabled(self, enabled: bool) -> None:
@@ -767,6 +779,45 @@ class _PieceListModel(QAbstractListModel):
             if row.get("block") is block:
                 return max(1, int(row.get("quantity") or 1))
         return 1
+
+    def toggle_selected(self, source_row: int) -> None:
+        if not (0 <= source_row < len(self._rows)):
+            return
+        row = self._rows[source_row]
+        if not bool(row.get("flagged")):
+            return
+        row["selected"] = not bool(row.get("selected", True))
+        idx = self.index(source_row, 0)
+        self.dataChanged.emit(idx, idx, [self.SELECTED_ROLE])
+
+    def show_print_confirmation(self, block: PieceBlock, duration_ms: int = 4000) -> None:
+        for source_row, row in enumerate(self._rows):
+            if row.get("block") is not block:
+                continue
+            token = int(row.get("print_confirmation_token") or 0) + 1
+            row["print_confirmation_token"] = token
+            row["print_confirmed"] = True
+            idx = self.index(source_row, 0)
+            self.dataChanged.emit(idx, idx, [self.PRINT_CONFIRMED_ROLE])
+
+            def clear_confirmation(target_row: int = source_row, expected_token: int = token) -> None:
+                if not (0 <= target_row < len(self._rows)):
+                    return
+                target = self._rows[target_row]
+                if target.get("block") is not block:
+                    return
+                if int(target.get("print_confirmation_token") or 0) != expected_token:
+                    return
+                target["print_confirmed"] = False
+                target_idx = self.index(target_row, 0)
+                self.dataChanged.emit(target_idx, target_idx, [self.PRINT_CONFIRMED_ROLE])
+
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(clear_confirmation)
+            timer.timeout.connect(timer.deleteLater)
+            timer.start(max(1, int(duration_ms)))
+            return
 
 
 class _PieceDelegate(QStyledItemDelegate):
@@ -791,6 +842,8 @@ class _PieceDelegate(QStyledItemDelegate):
         painter.drawRoundedRect(rect, 6, 6)
 
         flagged = bool(index.data(_PieceListModel.FLAGGED_ROLE))
+        selected_for_print = bool(index.data(_PieceListModel.SELECTED_ROLE))
+        print_confirmed = bool(index.data(_PieceListModel.PRINT_CONFIRMED_ROLE))
         enabled = bool(index.data(_PieceListModel.PRINT_ENABLED_ROLE))
         quantity = int(index.data(_PieceListModel.QUANTITY_ROLE) or 1)
         details = index.data(_PieceListModel.DETAILS_ROLE)
@@ -803,7 +856,20 @@ class _PieceDelegate(QStyledItemDelegate):
             painter.restore()
             return
 
-        qty_rect = QRect(rect.left() + 8, rect.top() + 8, 32, 22)
+        check_width = 24 if flagged else 0
+        if flagged:
+            check_rect = self._checkbox_rect(option.rect)
+            painter.setPen(QColor("#60a5fa"))
+            painter.setBrush(QColor("#2563eb") if selected_for_print else QColor("#0f172a"))
+            painter.drawRoundedRect(check_rect, 3, 3)
+            if selected_for_print:
+                painter.setPen(QColor("#ffffff"))
+                check_font = painter.font()
+                check_font.setBold(True)
+                painter.setFont(check_font)
+                painter.drawText(check_rect, Qt.AlignmentFlag.AlignCenter, "✓")
+
+        qty_rect = QRect(rect.left() + 8 + check_width, rect.top() + 8, 32, 22)
         font = painter.font()
         font.setBold(True)
         painter.setFont(font)
@@ -850,18 +916,31 @@ class _PieceDelegate(QStyledItemDelegate):
             key = "print" if has_print_config else "manage"
             button_rect = self._button_rects(option.rect, has_print_config=has_print_config)[key]
             active = enabled if key == "print" else True
-            painter.setBrush(QColor("#334155") if active else QColor("#1f2937"))
-            painter.setPen(QColor("#64748b") if active else QColor("#334155"))
+            confirmed = key == "print" and print_confirmed
+            painter.setBrush(
+                QColor("#15803d") if confirmed else (QColor("#334155") if active else QColor("#1f2937"))
+            )
+            painter.setPen(
+                QColor("#22c55e") if confirmed else (QColor("#64748b") if active else QColor("#334155"))
+            )
             painter.drawRoundedRect(button_rect, 4, 4)
-            icon = self._print_icon if key == "print" else self._manage_icon
-            pixmap = icon.pixmap(18, 18)
-            if not pixmap.isNull():
-                painter.setOpacity(1.0 if active else 0.45)
-                painter.drawPixmap(
-                    button_rect.center().x() - pixmap.width() // 2,
-                    button_rect.center().y() - pixmap.height() // 2,
-                    pixmap,
-                )
+            if confirmed:
+                painter.setPen(QColor("#ffffff"))
+                confirmed_font = painter.font()
+                confirmed_font.setBold(True)
+                confirmed_font.setPointSize(max(11, confirmed_font.pointSize()))
+                painter.setFont(confirmed_font)
+                painter.drawText(button_rect, Qt.AlignmentFlag.AlignCenter, "✓")
+            else:
+                icon = self._print_icon if key == "print" else self._manage_icon
+                pixmap = icon.pixmap(18, 18)
+                if not pixmap.isNull():
+                    painter.setOpacity(1.0 if active else 0.45)
+                    painter.drawPixmap(
+                        button_rect.center().x() - pixmap.width() // 2,
+                        button_rect.center().y() - pixmap.height() // 2,
+                        pixmap,
+                    )
         painter.restore()
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
@@ -874,6 +953,10 @@ class _PieceDelegate(QStyledItemDelegate):
         block = index.data(_PieceListModel.BLOCK_ROLE)
         if not isinstance(block, PieceBlock):
             return False
+        if bool(index.data(_PieceListModel.FLAGGED_ROLE)) and self._checkbox_rect(option.rect).contains(pos):
+            if isinstance(model, _PieceListModel):
+                model.toggle_selected(index.row())
+            return True
         rects = self._button_rects(option.rect, has_print_config=block.has_direct_print_config)
         enabled = bool(index.data(_PieceListModel.PRINT_ENABLED_ROLE))
         if "print" in rects and rects["print"].contains(pos) and enabled:
@@ -892,6 +975,10 @@ class _PieceDelegate(QStyledItemDelegate):
         height = 28
         action = "print" if has_print_config else "manage"
         return {action: QRect(right - 31, top, 32, height)}
+
+    @staticmethod
+    def _checkbox_rect(row_rect: QRect) -> QRect:
+        return QRect(row_rect.left() + 10, row_rect.top() + 10, 18, 18)
 
 
 class RechnungenView(QWidget):
@@ -922,6 +1009,7 @@ class RechnungenView(QWidget):
         self._delete_draft_worker: BackgroundWorker | None = None
         self._open_overview_worker: BackgroundWorker | None = None
         self._product_print_worker: BackgroundWorker | None = None
+        self._product_print_handles: list[JobHandle] = []
         self._did_initial_load = False
         self._print_allowed = False
         self._open_draft_after_create = False
@@ -992,6 +1080,7 @@ class RechnungenView(QWidget):
         self._open_overview_products: list[PrintProductAggregate] = []
         self._session_print_products: list[PrintProductAggregate] = []
         self._print_products_last_run = False
+        self._open_product_checks: dict[tuple[str, str, str], bool] = {}
         self._last_print_all_products_key: tuple[tuple[str, str, str, int], ...] | None = None
         self._plc_label_archive = PlcLabelArchive()
         self._selected_plc_label_path = ""
@@ -1184,8 +1273,10 @@ class RechnungenView(QWidget):
         open_products_header = QHBoxLayout()
         open_products_header.setContentsMargins(0, 0, 0, 0)
         open_products_header.addStretch(1)
-        self._btn_print_all_products = QPushButton("PRINT ALL PRODUCTS")
-        self._btn_print_all_products.setToolTip("Alle angezeigten Print-Produkte in der angezeigten Menge drucken")
+        self._btn_print_all_products = QPushButton("PRINT SELECTED PRODUCTS")
+        self._btn_print_all_products.setToolTip(
+            "Nur die aktivierten Print-Produkte in der angezeigten Menge drucken"
+        )
         self._btn_print_all_products.setFixedHeight(26)
         self._btn_print_all_products.clicked.connect(self._on_print_all_open_products_clicked)
         open_products_header.addWidget(self._btn_print_all_products, alignment=Qt.AlignmentFlag.AlignRight)
@@ -1586,9 +1677,7 @@ class RechnungenView(QWidget):
 
     def _on_printer_status(self, printing_allowed: bool) -> None:
         self._print_allowed = printing_allowed
-        self._set_piece_print_controls_enabled(
-            printing_allowed and not (self._product_print_worker is not None and self._product_print_worker.isRunning())
-        )
+        self._set_piece_print_controls_enabled(printing_allowed)
         self._update_print_all_products_button()
         self._update_plc_controls()
 
@@ -2457,12 +2546,31 @@ class RechnungenView(QWidget):
         products = self._session_print_products if self._print_products_last_run else self._open_overview_products
         return [item for item in products if str(item.sku or "").strip()]
 
+    @staticmethod
+    def _open_product_check_key(item: PrintProductAggregate) -> tuple[str, str, str]:
+        return (
+            str(item.sku or "").strip().casefold(),
+            str(item.title or "").strip().casefold(),
+            str(item.description or "").strip().casefold(),
+        )
+
+    def _selected_displayed_print_products(self) -> list[PrintProductAggregate]:
+        return [
+            item
+            for item in self._displayed_print_products()
+            if self._open_product_checks.get(self._open_product_check_key(item), True)
+        ]
+
+    def _on_open_product_check_changed(self, item: PrintProductAggregate, checked: bool) -> None:
+        self._open_product_checks[self._open_product_check_key(item)] = bool(checked)
+        self._update_print_all_products_button()
+
     def _update_print_all_products_button(self) -> None:
         if not hasattr(self, "_btn_print_all_products"):
             return
         running = self._product_print_worker is not None and self._product_print_worker.isRunning()
         self._btn_print_all_products.setEnabled(
-            bool(self._print_allowed and self._displayed_print_products() and not running)
+            bool(self._print_allowed and self._selected_displayed_print_products() and not running)
         )
 
     @staticmethod
@@ -2480,19 +2588,19 @@ class RechnungenView(QWidget):
     def _on_print_all_open_products_clicked(self) -> None:
         if not self._print_allowed or (self._product_print_worker is not None and self._product_print_worker.isRunning()):
             return
-        products = self._displayed_print_products()
+        products = self._selected_displayed_print_products()
         if not products:
             QMessageBox.information(
                 self,
-                "PRINT ALL PRODUCTS",
-                "Keine Print-Produkte in der aktuellen Liste gefunden.",
+                "PRINT SELECTED PRODUCTS",
+                "Keine aktivierten Print-Produkte in der aktuellen Liste gefunden.",
             )
             return
         products_key = self._print_all_products_key(products)
         if products_key == self._last_print_all_products_key:
             answer = QMessageBox.question(
                 self,
-                "PRINT ALL PRODUCTS",
+                "PRINT SELECTED PRODUCTS",
                 "Produkte bereits gedruckt.\n\nErneut drucken?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
@@ -2516,7 +2624,7 @@ class RechnungenView(QWidget):
             ):
                 signals: AppSignals = self._container.resolve(AppSignals)
                 signals.status_message.emit(
-                    f"PRINT ALL PRODUCTS abgebrochen: {block.sku} wurde nicht konfiguriert.",
+                    f"PRINT SELECTED PRODUCTS abgebrochen: {block.sku} wurde nicht konfiguriert.",
                     8000,
                 )
                 return
@@ -2524,7 +2632,7 @@ class RechnungenView(QWidget):
             if job is None:
                 signals: AppSignals = self._container.resolve(AppSignals)
                 signals.status_message.emit(
-                    f"PRINT ALL PRODUCTS abgebrochen: {block.sku} ist nicht druckbereit.",
+                    f"PRINT SELECTED PRODUCTS abgebrochen: {block.sku} ist nicht druckbereit.",
                     8000,
                 )
                 return
@@ -2534,11 +2642,10 @@ class RechnungenView(QWidget):
             return
 
         self._btn_print_all_products.setEnabled(False)
-        self._set_piece_print_controls_enabled(False)
         total_copies = sum(qty for _block, qty, _job in prepared_jobs)
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.status_message.emit(
-            f"PRINT ALL PRODUCTS gestartet: {len(prepared_jobs)} Produkt(e), {total_copies}x.",
+            f"PRINT SELECTED PRODUCTS gestartet: {len(prepared_jobs)} Produkt(e), {total_copies}x.",
             5000,
         )
 
@@ -2556,7 +2663,7 @@ class RechnungenView(QWidget):
                     new_stock = engine.record_print_and_update_sevdesk(block, qty)
                     self._container.resolve(InventoryService).set_product_stock(block.sku, new_stock)
                 except Exception as exc:
-                    logger.warning("Stock update after PRINT ALL PRODUCTS failed for %s: %s", block.sku, exc)
+                    logger.warning("Stock update after PRINT SELECTED PRODUCTS failed for %s: %s", block.sku, exc)
                     warnings.append(f"{block.sku}: {exc}")
             return {
                 "sku": f"{len(printed)} Produkt(e)",
@@ -2586,6 +2693,18 @@ class RechnungenView(QWidget):
         layout = QHBoxLayout(row)
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(8)
+
+        checkbox = QCheckBox()
+        checkbox.setChecked(self._open_product_checks.get(self._open_product_check_key(item), True))
+        checkbox.setToolTip("Produkt in PRINT SELECTED PRODUCTS einbeziehen")
+        checkbox.setStyleSheet("QCheckBox { background: transparent; border: none; }")
+        checkbox.stateChanged.connect(
+            lambda state, aggregate=item: self._on_open_product_check_changed(
+                aggregate,
+                state == Qt.CheckState.Checked.value,
+            )
+        )
+        layout.addWidget(checkbox)
 
         qty_label = QLabel(f"{max(1, int(item.quantity or 1))}x")
         qty_label.setStyleSheet("color: #ffffff; font-weight: 700;")
@@ -2621,7 +2740,12 @@ class RechnungenView(QWidget):
         if self._open_print_product_ready(item):
             action.setIcon(QIcon(str(Path(__file__).resolve().parents[5] / "icons" / "print.png")))
             action.setToolTip("Druckplan ohne Rueckfrage ausfuehren")
-            action.clicked.connect(lambda _checked=False, aggregate=item: self._on_open_product_print_clicked(aggregate))
+            action.clicked.connect(
+                lambda _checked=False, aggregate=item, button=action: self._on_open_product_print_clicked(
+                    aggregate,
+                    button,
+                )
+            )
         else:
             action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
             action.setToolTip("Druckplan/PDF fuer dieses Produkt einrichten")
@@ -2708,11 +2832,43 @@ class RechnungenView(QWidget):
             )
         self._refresh_open_invoice_overview()
 
-    def _on_open_product_print_clicked(self, item: PrintProductAggregate) -> None:
+    def _on_open_product_print_clicked(
+        self,
+        item: PrintProductAggregate,
+        button: QToolButton | None = None,
+    ) -> None:
         self._on_product_print_clicked(
             self._piece_block_from_open_product(item),
             max(1, int(item.quantity or 1)),
+            on_accepted=(lambda: self._show_toolbutton_print_confirmation(button)) if button is not None else None,
         )
+
+    def _show_toolbutton_print_confirmation(self, button: QToolButton) -> None:
+        try:
+            button.setEnabled(False)
+            button.setIcon(QIcon())
+            button.setText("✓")
+            button.setStyleSheet(
+                "QToolButton { background-color: #15803d; color: white; border: 1px solid #22c55e; "
+                "border-radius: 4px; font-weight: 800; font-size: 16px; }"
+            )
+        except RuntimeError:
+            return
+
+        def restore() -> None:
+            try:
+                button.setText("")
+                button.setIcon(QIcon(str(Path(__file__).resolve().parents[5] / "icons" / "print.png")))
+                button.setStyleSheet(
+                    "QToolButton { background-color: #334155; border: 1px solid #64748b; border-radius: 4px; }"
+                    "QToolButton:hover { background-color: #475569; border-color: #94a3b8; }"
+                    "QToolButton:disabled { background-color: #1f2937; border-color: #334155; }"
+                )
+                button.setEnabled(self._print_allowed)
+            except RuntimeError:
+                return
+
+        QTimer.singleShot(4000, restore)
 
     @staticmethod
     def _format_open_print_products(overview: OpenInvoiceOverview) -> str:
@@ -3334,8 +3490,8 @@ class RechnungenView(QWidget):
 
         selected_jobs: list[tuple[PieceBlock, int, Callable[[], None]]] = []
         skipped: list[str] = []
-        for block, qty, flagged in self._piece_model.rows():
-            if not flagged:
+        for block, qty, selected_for_print in self._piece_model.rows():
+            if not selected_for_print:
                 continue
             qty = max(1, int(qty or self._default_piece_print_qty(block)))
             if not block.has_direct_print_config:
@@ -3359,7 +3515,6 @@ class RechnungenView(QWidget):
         if row is not None and 0 <= row < len(self._summaries):
             invoice_ref = self._summaries[row].invoice_number or self._summaries[row].id
 
-        self._set_piece_print_controls_enabled(False)
         self._btn_print_music.setEnabled(False)
         signals: AppSignals = self._container.resolve(AppSignals)
         total_copies = sum(qty for _block, qty, _job in selected_jobs)
@@ -5028,8 +5183,14 @@ class RechnungenView(QWidget):
             row_layout.addWidget(stock_lbl)
             self._stuecke_layout.addWidget(row_widget)
 
-    def _on_product_print_clicked(self, block: PieceBlock, quantity: int | None = None) -> None:
-        if not self._print_allowed or (self._product_print_worker is not None and self._product_print_worker.isRunning()):
+    def _on_product_print_clicked(
+        self,
+        block: PieceBlock,
+        quantity: int | None = None,
+        *,
+        on_accepted: Callable[[], None] | None = None,
+    ) -> None:
+        if not self._print_allowed:
             return
         from xw_office.ui.modules.rechnungen.print_dialog import prepare_piece_pdf_print
 
@@ -5043,10 +5204,11 @@ class RechnungenView(QWidget):
         if row is not None and 0 <= row < len(self._summaries):
             invoice_ref = self._summaries[row].invoice_number or self._summaries[row].id
 
-        self._set_piece_print_controls_enabled(False)
-        self._btn_print_music.setEnabled(False)
+        self._piece_model.show_print_confirmation(block)
+        if on_accepted is not None:
+            on_accepted()
         signals: AppSignals = self._container.resolve(AppSignals)
-        signals.status_message.emit(f"Produktdruck fuer {block.sku} gestartet ({qty}x).", 5000)
+        signals.status_message.emit(f"Produktdruck fuer {block.sku} eingereiht ({qty}x).", 5000)
 
         def worker_job() -> dict[str, object]:
             job()
@@ -5075,11 +5237,23 @@ class RechnungenView(QWidget):
                 "local_warning": local_warning,
             }
 
-        self._product_print_worker = BackgroundWorker(worker_job)
-        self._product_print_worker.signals.result.connect(self._on_product_print_result)
-        self._product_print_worker.signals.error.connect(self._on_product_print_error)
-        self._product_print_worker.signals.finished.connect(self._on_product_print_finished)
-        self._product_print_worker.start()
+        handle: JobHandle
+
+        def finished() -> None:
+            self._on_individual_product_print_finished(handle)
+
+        handle = self._background_jobs.submit_callable(
+            queue="printing",
+            priority=20,
+            key=f"product-print:{block.sku}:{time.monotonic_ns()}",
+            fn=lambda _token: worker_job(),
+            on_result=self._on_product_print_result,
+            on_error=self._on_product_print_error,
+            on_finished=finished,
+            owner=self,
+            replace="allow_parallel",
+        )
+        self._product_print_handles.append(handle)
 
     def _on_product_print_result(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}
@@ -5110,6 +5284,11 @@ class RechnungenView(QWidget):
         self._set_piece_print_controls_enabled(self._print_allowed)
         self._update_print_all_products_button()
         self._update_plc_controls()
+
+    def _on_individual_product_print_finished(self, handle: JobHandle) -> None:
+        if handle in self._product_print_handles:
+            self._product_print_handles.remove(handle)
+        self._update_print_all_products_button()
 
     @staticmethod
     def _default_piece_print_qty(block: PieceBlock) -> int:

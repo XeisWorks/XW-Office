@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, QTimer, Qt
 from PySide6.QtGui import QColor, QIcon, QImage, QMouseEvent, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from xw_office.core.worker import BackgroundWorker
+from xw_office.services.background_jobs.service import BackgroundJobManager, JobHandle
 from xw_office.services.inventory import InventoryService, ProductRow
 from xw_office.services.draft_invoice.service import (
     DraftInvoiceService,
@@ -49,7 +51,6 @@ from xw_office.ui.modules.rechnungen.product_preflight_dialog import ProductPref
 from xw_office.ui.modules.rechnungen.print_dialog import (
     _configure_missing_piece_print,
     prepare_piece_pdf_print,
-    run_piece_pdf_print,
 )
 from xw_office.ui.widgets.data_table import DataTable
 from xw_office.ui.widgets.search_bar import SearchBar
@@ -272,6 +273,7 @@ class _SyncActionDelegate(QStyledItemDelegate):
         self._icons = {
             "create_sevdesk": QIcon(str(_ICONS_DIR / "createInSevdesk.png")),
             "print_config": QIcon(str(_ICONS_DIR / "printondemand.png")),
+            "print": QIcon(str(_ICONS_DIR / "print.png")),
         }
 
     @staticmethod
@@ -308,13 +310,22 @@ class _SyncActionDelegate(QStyledItemDelegate):
         button_rect.setWidth(button_width)
         button_rect.setHeight(button_height)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(QColor("#cbd5e1"))
-        painter.setBrush(QColor("#ffffff"))
+        action_kind = str(row_data.get(f"__action_kind__{field}") or "create_sevdesk") if isinstance(row_data, dict) else ""
+        confirmed = action_kind == "print_confirmed"
+        painter.setPen(QColor("#22c55e") if confirmed else QColor("#cbd5e1"))
+        painter.setBrush(QColor("#15803d") if confirmed else QColor("#ffffff"))
         painter.drawRoundedRect(button_rect, 6, 6)
         icon_rect = button_rect.adjusted(5, 3, -5, -3)
-        action_kind = str(row_data.get(f"__action_kind__{field}") or "create_sevdesk") if isinstance(row_data, dict) else ""
-        icon = self._icons.get(action_kind) or self._icons["create_sevdesk"]
-        icon.paint(painter, icon_rect, Qt.AlignmentFlag.AlignCenter)
+        if confirmed:
+            painter.setPen(QColor("#ffffff"))
+            font = painter.font()
+            font.setBold(True)
+            font.setPointSize(max(11, font.pointSize()))
+            painter.setFont(font)
+            painter.drawText(button_rect, Qt.AlignmentFlag.AlignCenter, "✓")
+        else:
+            icon = self._icons.get(action_kind) or self._icons["create_sevdesk"]
+            icon.paint(painter, icon_rect, Qt.AlignmentFlag.AlignCenter)
         painter.restore()
 
     def sizeHint(self, option, index):  # type: ignore[override]
@@ -362,6 +373,9 @@ class ProductsView(QWidget):
         self._brand_worker: BackgroundWorker | None = None
         self._product_create_worker: BackgroundWorker | None = None
         self._product_print_worker: BackgroundWorker | None = None
+        self._direct_product_print_handles: list[JobHandle] = []
+        self._local_background_jobs: BackgroundJobManager | None = None
+        self._print_confirmed_skus: set[str] = set()
         self._sync_filter_text: str = ""
         self._sync_filter_status: str = ""
         self._sync_status_delegate = _SyncPresenceDelegate(self)
@@ -957,6 +971,20 @@ class ProductsView(QWidget):
         for row in rows:
             stock_value = row.local_stock if row.local_present else (row.wix_stock if row.wix_stock is not None else row.sevdesk_stock)
             conflict_specs = self._conflict_icon_specs(row)
+            local_product = self._local_product_by_sku(row.sku) if row.local_present else None
+            print_ready = bool(
+                local_product is not None
+                and self._piece_from_product_row(local_product).has_direct_print_config
+            )
+            print_confirmed = row.sku.strip().upper() in self._print_confirmed_skus
+            if not row.local_present:
+                print_tooltip = ""
+            elif print_confirmed:
+                print_tooltip = "Druckauftrag wurde eingereiht"
+            elif print_ready:
+                print_tooltip = "Produkt im Hintergrund drucken (Shift+Klick: Druckplan bearbeiten)"
+            else:
+                print_tooltip = "PDF-Pfad und Druckplan direkt fuer dieses Produkt pflegen"
             payload.append(
                 {
                     "SKU": row.sku,
@@ -975,11 +1003,7 @@ class ProductsView(QWidget):
                     "__tooltip__Status": self._sync_presence_tooltip(row),
                     "__tooltip__Konflikt": self._sync_conflict_tooltip(conflict_specs),
                     "__tooltip__Aktion": "In sevDesk anlegen" if row.can_create_sevdesk else "",
-                    "__tooltip__Druck": (
-                        "PDF-Pfad und Druckplan direkt fuer dieses Produkt pflegen"
-                        if row.local_present
-                        else ""
-                    ),
+                    "__tooltip__Druck": print_tooltip,
                     "__icons__Status": [
                         ("local", row.local_present),
                         ("wix", row.wix_present),
@@ -988,8 +1012,10 @@ class ProductsView(QWidget):
                     "__icons__Konflikt": [key for key, _tooltip in conflict_specs],
                     "__action_enabled__Aktion": row.can_create_sevdesk,
                     "__action_kind__Aktion": "create_sevdesk",
-                    "__action_enabled__Druck": row.local_present,
-                    "__action_kind__Druck": "print_config",
+                    "__action_enabled__Druck": row.local_present and not print_confirmed,
+                    "__action_kind__Druck": (
+                        "print_confirmed" if print_confirmed else ("print" if print_ready else "print_config")
+                    ),
                 }
             )
         self._sync_table.set_data(payload)
@@ -1081,9 +1107,119 @@ class ProductsView(QWidget):
         copies, ok = QInputDialog.getInt(self, "Produktdruck", "Anzahl:", 1, 1, 999, 1)
         if not ok:
             return
+        self._enqueue_direct_product_print(row, copies)
+
+    def _print_product_from_table(self, sku: str) -> None:
+        row = self._local_product_by_sku(sku)
+        if row is None:
+            return
+        copies, ok = QInputDialog.getInt(self, "Produktdruck", "Anzahl:", 1, 1, 999, 1)
+        if not ok:
+            return
+        self._enqueue_direct_product_print(row, copies)
+
+    def _enqueue_direct_product_print(self, row: ProductRow, copies: int) -> None:
         piece = self._piece_from_product_row(row)
-        if run_piece_pdf_print(self, self._container, piece=piece, copies=copies):
-            self._sync_status_lbl.setText(f"Produktdruck gestartet: {row.sku} ({copies}x)")
+        print_job = prepare_piece_pdf_print(
+            self,
+            self._container,
+            piece=piece,
+            copies=max(1, int(copies)),
+            wait=True,
+        )
+        if print_job is None:
+            return
+
+        quantity = max(1, int(copies))
+        self._show_product_print_confirmation(row.sku)
+        self._sync_status_lbl.setText(f"Produktdruck eingereiht: {row.sku} ({quantity}x)")
+
+        def worker_job() -> dict[str, object]:
+            print_job()
+            return {"sku": row.sku, "quantity": quantity}
+
+        handle: JobHandle
+
+        def finished() -> None:
+            self._on_direct_product_print_finished(handle)
+
+        handle = self._product_background_jobs().submit_callable(
+            queue="printing",
+            priority=20,
+            key=f"products-menu-print:{row.sku}:{time.monotonic_ns()}",
+            fn=lambda _token: worker_job(),
+            on_result=self._on_direct_product_print_result,
+            on_error=self._on_direct_product_print_error,
+            on_finished=finished,
+            owner=self,
+            replace="allow_parallel",
+        )
+        self._direct_product_print_handles.append(handle)
+
+    def _product_background_jobs(self) -> BackgroundJobManager:
+        try:
+            return self._container.resolve(BackgroundJobManager)
+        except KeyError:
+            if self._local_background_jobs is None:
+                self._local_background_jobs = BackgroundJobManager()
+            return self._local_background_jobs
+
+    def _show_product_print_confirmation(self, sku: str, duration_ms: int = 4000) -> None:
+        normalized = str(sku or "").strip().upper()
+        if not normalized:
+            return
+        self._print_confirmed_skus.add(normalized)
+        self._update_sync_print_action(normalized)
+
+        def clear_confirmation() -> None:
+            self._print_confirmed_skus.discard(normalized)
+            self._update_sync_print_action(normalized)
+
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(clear_confirmation)
+        timer.timeout.connect(timer.deleteLater)
+        timer.start(max(1, int(duration_ms)))
+
+    def _update_sync_print_action(self, normalized_sku: str) -> None:
+        for source_row, data in enumerate(self._sync_table.source_rows_data()):
+            if str(data.get("SKU") or "").strip().upper() != normalized_sku:
+                continue
+            product = self._local_product_by_sku(normalized_sku)
+            ready = bool(product is not None and self._piece_from_product_row(product).has_direct_print_config)
+            confirmed = normalized_sku in self._print_confirmed_skus
+            self._sync_table.update_source_row_data(
+                source_row,
+                {
+                    "__tooltip__Druck": (
+                        "Druckauftrag wurde eingereiht"
+                        if confirmed
+                        else (
+                            "Produkt im Hintergrund drucken (Shift+Klick: Druckplan bearbeiten)"
+                            if ready
+                            else "PDF-Pfad und Druckplan direkt fuer dieses Produkt pflegen"
+                        )
+                    ),
+                    "__action_enabled__Druck": not confirmed,
+                    "__action_kind__Druck": (
+                        "print_confirmed" if confirmed else ("print" if ready else "print_config")
+                    ),
+                },
+            )
+
+    def _on_direct_product_print_result(self, payload: object) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        sku = str(data.get("sku") or "Produkt")
+        quantity = int(data.get("quantity") or 0)
+        self._sync_status_lbl.setText(f"Druckauftrag bestaetigt: {sku} ({quantity}x)")
+
+    def _on_direct_product_print_error(self, exc: BaseException) -> None:
+        self._sync_status_lbl.setText(f"Produktdruck fehlgeschlagen: {exc}")
+        QMessageBox.critical(self, "Produktdruck fehlgeschlagen", str(exc))
+
+    def _on_direct_product_print_finished(self, handle: JobHandle) -> None:
+        if handle in self._direct_product_print_handles:
+            self._direct_product_print_handles.remove(handle)
 
     def _produce_selected_product(self) -> None:
         if self._product_print_worker is not None and self._product_print_worker.isRunning():
@@ -1854,7 +1990,12 @@ class ProductsView(QWidget):
                             sku = str(row_data.get("SKU") or "").strip()
                             if sku:
                                 action_kind = str(row_data.get(f"__action_kind__{field}") or "").strip()
-                                if action_kind == "print_config":
+                                if action_kind == "print":
+                                    if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                                        self._manage_product_print_config(sku)
+                                    else:
+                                        self._print_product_from_table(sku)
+                                elif action_kind == "print_config":
                                     self._manage_product_print_config(sku)
                                 else:
                                     self._create_selected_wix_product_in_sevdesk(sku)
