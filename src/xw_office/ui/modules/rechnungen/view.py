@@ -876,7 +876,8 @@ class _PieceDelegate(QStyledItemDelegate):
         painter.setPen(QColor("#ffffff"))
         painter.drawText(qty_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"{quantity}x")
 
-        action_width = 40 if flagged else 0
+        qty_button_width = 60 if flagged else 0
+        action_width = (40 if flagged else 0) + qty_button_width
         sku_width = 76
         text_left = qty_rect.right() + 4
         text_width = max(80, rect.right() - text_left - sku_width - action_width - 14)
@@ -914,7 +915,18 @@ class _PieceDelegate(QStyledItemDelegate):
 
         if flagged:
             key = "print" if has_print_config else "manage"
-            button_rect = self._button_rects(option.rect, has_print_config=has_print_config)[key]
+            rects = self._button_rects(option.rect, has_print_config=has_print_config)
+            minus_rect = rects["qty_minus"]
+            plus_rect = rects["qty_plus"]
+            painter.setPen(QColor("#64748b") if enabled else QColor("#334155"))
+            painter.setBrush(QColor("#334155") if enabled else QColor("#1f2937"))
+            painter.drawRoundedRect(minus_rect, 4, 4)
+            painter.drawRoundedRect(plus_rect, 4, 4)
+            painter.setPen(QColor("#ffffff") if enabled else QColor("#64748b"))
+            painter.drawText(minus_rect, Qt.AlignmentFlag.AlignCenter, "-")
+            painter.drawText(plus_rect, Qt.AlignmentFlag.AlignCenter, "+")
+
+            button_rect = rects[key]
             active = enabled if key == "print" else True
             confirmed = key == "print" and print_confirmed
             painter.setBrush(
@@ -959,6 +971,14 @@ class _PieceDelegate(QStyledItemDelegate):
             return True
         rects = self._button_rects(option.rect, has_print_config=block.has_direct_print_config)
         enabled = bool(index.data(_PieceListModel.PRINT_ENABLED_ROLE))
+        if enabled and "qty_minus" in rects and rects["qty_minus"].contains(pos):
+            if isinstance(model, _PieceListModel):
+                model.adjust_quantity(index.row(), -1)
+            return True
+        if enabled and "qty_plus" in rects and rects["qty_plus"].contains(pos):
+            if isinstance(model, _PieceListModel):
+                model.adjust_quantity(index.row(), 1)
+            return True
         if "print" in rects and rects["print"].contains(pos) and enabled:
             qty = int(index.data(_PieceListModel.QUANTITY_ROLE) or 1)
             self.print_clicked.emit(block, qty)
@@ -974,7 +994,10 @@ class _PieceDelegate(QStyledItemDelegate):
         right = row_rect.right() - 10
         height = 28
         action = "print" if has_print_config else "manage"
-        return {action: QRect(right - 31, top, 32, height)}
+        action_rect = QRect(right - 31, top, 32, height)
+        plus_rect = QRect(action_rect.left() - 28, top, 24, height)
+        minus_rect = QRect(plus_rect.left() - 28, top, 24, height)
+        return {action: action_rect, "qty_minus": minus_rect, "qty_plus": plus_rect}
 
     @staticmethod
     def _checkbox_rect(row_rect: QRect) -> QRect:
@@ -1081,6 +1104,7 @@ class RechnungenView(QWidget):
         self._session_print_products: list[PrintProductAggregate] = []
         self._print_products_last_run = False
         self._open_product_checks: dict[tuple[str, str, str], bool] = {}
+        self._open_product_quantities: dict[tuple[str, str, str], int] = {}
         self._last_print_all_products_key: tuple[tuple[str, str, str, int], ...] | None = None
         self._plc_label_archive = PlcLabelArchive()
         self._selected_plc_label_path = ""
@@ -2530,9 +2554,10 @@ class RechnungenView(QWidget):
         self._open_products_status.hide()
         plain_lines: list[str] = []
         for item in overview.print_products:
-            row = self._build_open_print_product_row(item)
+            display_item = self._open_product_with_quantity(item)
+            row = self._build_open_print_product_row(display_item)
             self._open_products_rows_layout.addWidget(row)
-            plain_lines.append(self._plain_open_print_product_line(item))
+            plain_lines.append(self._plain_open_print_product_line(display_item))
         if overview.unknown:
             note = QLabel("Weitere Print-Produkte werden noch ermittelt.")
             note.setStyleSheet("color: #94a3b8; font-size: 11px;")
@@ -2544,7 +2569,7 @@ class RechnungenView(QWidget):
 
     def _displayed_print_products(self) -> list[PrintProductAggregate]:
         products = self._session_print_products if self._print_products_last_run else self._open_overview_products
-        return [item for item in products if str(item.sku or "").strip()]
+        return [self._open_product_with_quantity(item) for item in products if str(item.sku or "").strip()]
 
     @staticmethod
     def _open_product_check_key(item: PrintProductAggregate) -> tuple[str, str, str]:
@@ -2563,6 +2588,29 @@ class RechnungenView(QWidget):
 
     def _on_open_product_check_changed(self, item: PrintProductAggregate, checked: bool) -> None:
         self._open_product_checks[self._open_product_check_key(item)] = bool(checked)
+        self._update_print_all_products_button()
+
+    def _open_product_quantity(self, item: PrintProductAggregate) -> int:
+        default = max(1, int(item.quantity or 1))
+        return max(1, int(self._open_product_quantities.get(self._open_product_check_key(item), default)))
+
+    def _open_product_with_quantity(self, item: PrintProductAggregate) -> PrintProductAggregate:
+        quantity = self._open_product_quantity(item)
+        if quantity == int(item.quantity or 0):
+            return item
+        return PrintProductAggregate(
+            sku=item.sku,
+            title=item.title,
+            description=item.description,
+            quantity=quantity,
+            category_label=item.category_label,
+        )
+
+    def _on_open_product_quantity_changed(self, item: PrintProductAggregate, quantity: int) -> None:
+        self._open_product_quantities[self._open_product_check_key(item)] = max(1, min(999, int(quantity or 1)))
+        self._open_products_text.setPlainText(
+            "\n".join(self._plain_open_print_product_line(product) for product in self._displayed_print_products())
+        )
         self._update_print_all_products_button()
 
     def _update_print_all_products_button(self) -> None:
@@ -2706,10 +2754,16 @@ class RechnungenView(QWidget):
         )
         layout.addWidget(checkbox)
 
-        qty_label = QLabel(f"{max(1, int(item.quantity or 1))}x")
-        qty_label.setStyleSheet("color: #ffffff; font-weight: 700;")
-        qty_label.setMinimumWidth(32)
-        layout.addWidget(qty_label)
+        qty_input = QSpinBox()
+        qty_input.setRange(1, 999)
+        qty_input.setValue(self._open_product_quantity(item))
+        qty_input.setFixedWidth(64)
+        qty_input.setEnabled(self._print_allowed)
+        qty_input.setToolTip("Anzahl fuer diesen Produktdruck")
+        qty_input.valueChanged.connect(
+            lambda value, aggregate=item: self._on_open_product_quantity_changed(aggregate, value)
+        )
+        layout.addWidget(qty_input)
 
         text_col = QVBoxLayout()
         text_col.setContentsMargins(0, 0, 0, 0)
@@ -2839,7 +2893,7 @@ class RechnungenView(QWidget):
     ) -> None:
         self._on_product_print_clicked(
             self._piece_block_from_open_product(item),
-            max(1, int(item.quantity or 1)),
+            self._open_product_quantity(item),
             on_accepted=(lambda: self._show_toolbutton_print_confirmation(button)) if button is not None else None,
         )
 
@@ -5292,7 +5346,7 @@ class RechnungenView(QWidget):
 
     @staticmethod
     def _default_piece_print_qty(block: PieceBlock) -> int:
-        return max(1, int(block.print_qty or block.qty_needed or 1))
+        return max(1, int(block.qty_needed or 1))
 
     def _set_piece_print_controls_enabled(self, enabled: bool) -> None:
         self._piece_model.set_print_enabled(enabled)

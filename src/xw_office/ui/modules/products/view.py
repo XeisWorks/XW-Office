@@ -1104,7 +1104,8 @@ class ProductsView(QWidget):
                 "Fuer diese SKU gibt es noch keinen lokalen Produktdatensatz mit Druckkonfiguration.",
             )
             return
-        copies, ok = QInputDialog.getInt(self, "Produktdruck", "Anzahl:", 1, 1, 999, 1)
+        default_copies = self._default_product_row_print_qty(row)
+        copies, ok = QInputDialog.getInt(self, "Produktdruck", "Anzahl:", default_copies, 1, 999, 1)
         if not ok:
             return
         self._enqueue_direct_product_print(row, copies)
@@ -1113,7 +1114,8 @@ class ProductsView(QWidget):
         row = self._local_product_by_sku(sku)
         if row is None:
             return
-        copies, ok = QInputDialog.getInt(self, "Produktdruck", "Anzahl:", 1, 1, 999, 1)
+        default_copies = self._default_product_row_print_qty(row)
+        copies, ok = QInputDialog.getInt(self, "Produktdruck", "Anzahl:", default_copies, 1, 999, 1)
         if not ok:
             return
         self._enqueue_direct_product_print(row, copies)
@@ -1243,7 +1245,8 @@ class ProductsView(QWidget):
                 "Drucken + Bestand benoetigt eine sevDesk-Verknuepfung.",
             )
             return
-        copies, ok = QInputDialog.getInt(self, "Produktion", "Anzahl:", 1, 1, 999, 1)
+        default_copies = self._default_product_row_print_qty(row)
+        copies, ok = QInputDialog.getInt(self, "Produktion", "Anzahl:", default_copies, 1, 999, 1)
         if not ok:
             return
         piece = self._piece_from_product_row(row)
@@ -1393,6 +1396,10 @@ class ProductsView(QWidget):
             print_plan=[entry for entry in (row.print_plan or []) if isinstance(entry, dict)],
             product=product,
         )
+
+    @staticmethod
+    def _default_product_row_print_qty(row: ProductRow) -> int:
+        return max(1, int(ProductsView._piece_from_product_row(row).print_qty or 1))
 
     def _apply_wix_to_local(self) -> None:
         if not self._wix_rows:

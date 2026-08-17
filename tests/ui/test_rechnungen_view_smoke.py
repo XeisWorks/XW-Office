@@ -5,7 +5,7 @@ import subprocess
 from threading import Event
 import types
 
-from PySide6.QtWidgets import QCheckBox, QMessageBox, QToolButton
+from PySide6.QtWidgets import QCheckBox, QMessageBox, QSpinBox, QToolButton
 
 from xw_office.bootstrap import register_default_services
 from xw_office.core.config import AppConfig
@@ -771,6 +771,53 @@ def test_print_all_products_button_prints_displayed_quantities(qtbot: object, mo
     assert view._last_print_all_products_key is not None  # noqa: SLF001
 
 
+def test_print_all_products_uses_adjusted_open_quantities(qtbot: object, monkeypatch: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    product = PrintProductAggregate(sku="XW-FIRST", title="Erstes Produkt", description="A", quantity=2)
+    printed: list[str] = []
+
+    view._open_print_product_ready = lambda _item: True  # type: ignore[method-assign]  # noqa: SLF001
+    monkeypatch.setattr(
+        view,
+        "_piece_block_from_open_product",
+        lambda item: PieceBlock(sku=str(item.sku), name=str(item.title), qty_needed=int(item.quantity)),
+    )
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.print_dialog.prepare_piece_pdf_print",
+        lambda _parent, _container, *, piece, copies, wait=False: (
+            lambda: printed.append(f"{piece.sku}:{copies}:{wait}")
+        ),
+    )
+
+    view._apply_open_invoice_overview(  # noqa: SLF001
+        OpenInvoiceOverview(
+            key="print-all-adjusted",
+            total=1,
+            with_ref=1,
+            physical=1,
+            digital=0,
+            unknown=0,
+            with_note=0,
+            plc=0,
+            complete=True,
+            print_products=[product],
+        )
+    )
+    view._on_printer_status(True)  # noqa: SLF001
+
+    spinboxes = view._gb_open_products.findChildren(QSpinBox)  # noqa: SLF001
+    assert len(spinboxes) == 1
+    assert spinboxes[0].value() == 2
+    spinboxes[0].setValue(5)
+
+    view._on_print_all_open_products_clicked()  # noqa: SLF001
+    qtbot.waitUntil(lambda: view._product_print_worker is None, timeout=2000)  # noqa: SLF001
+
+    assert printed == ["XW-FIRST:5:True"]
+
+
 def test_print_selected_products_skips_unchecked_rows(qtbot: object, monkeypatch: object) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
@@ -884,6 +931,32 @@ def test_invoice_product_rows_are_selected_for_batch_print_by_default(qtbot: obj
     assert view._piece_model.rows() == [(block, 2, True)]  # noqa: SLF001
     view._piece_model.toggle_selected(0)  # noqa: SLF001
     assert view._piece_model.rows() == [(block, 2, False)]  # noqa: SLF001
+
+
+def test_invoice_product_row_quantity_can_be_adjusted(qtbot: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    block = PieceBlock(sku="XW-INVOICE", name="Rechnungsprodukt", qty_needed=2)
+    view._piece_model.set_pieces(  # noqa: SLF001
+        [
+            {
+                "block": block,
+                "flagged": True,
+                "quantity": 2,
+                "header": "Rechnungsprodukt",
+                "details": [],
+                "stock": "",
+                "stock_color": "#64748b",
+                "print_enabled": True,
+            }
+        ]
+    )
+
+    view._piece_model.adjust_quantity(0, 1)  # noqa: SLF001
+    assert view._piece_model.rows() == [(block, 3, True)]  # noqa: SLF001
+    view._piece_model.adjust_quantity(0, -10)  # noqa: SLF001
+    assert view._piece_model.rows() == [(block, 1, True)]  # noqa: SLF001
 
 
 def test_print_all_products_warns_before_reprint(qtbot: object, monkeypatch: object) -> None:
