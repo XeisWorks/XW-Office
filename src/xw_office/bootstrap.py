@@ -63,6 +63,7 @@ from xw_office.services.secrets.service import SecretService
 from xw_office.services.sevdesk.contact_client import ContactClient
 from xw_office.services.sevdesk.invoice_client import InvoiceClient
 from xw_office.services.sevdesk.part_client import PartClient
+from xw_office.services.sevdesk.tax_set_client import TaxSetClient
 from xw_office.services.sevdesk.refund_client import SevDeskRefundClient
 from xw_office.services.statistics.service import StatisticsService
 from xw_office.services.products.catalog import ProductCatalogService
@@ -118,6 +119,10 @@ def register_default_services(container: Container) -> None:
     container.register(
         PartClient,
         lambda c: PartClient(c.resolve(SevdeskConnection)),
+    )
+    container.register(
+        TaxSetClient,
+        lambda c: TaxSetClient(c.resolve(SevdeskConnection)),
     )
     container.register(
         SevDeskRefundClient,

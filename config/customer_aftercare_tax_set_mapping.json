@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "description": "Country -> sevDesk TaxSet text mapping for Lieferkorrektur invoices. Copied verbatim from wix-sevdesk-api/src/services/sevdesk.TaxSet.js (TAX_SET_MAPPING) for functional parity with the production Wix->sevDesk pipeline. AT is intentionally absent from both customer_type maps (falls through to sevDesk's domestic default). Do not reinterpret this table without matching tax-advisor sign-off on both sides.",
+  "source": "wix-sevdesk-api/src/services/sevdesk.TaxSet.js",
+  "rules": [
+    {"country_code": "CH", "customer_type": "b2b", "tax_set_text": "Steuerfreie Ausfuhrlieferung (§ 7 UStG 1994)"},
+    {"country_code": "GB", "customer_type": "b2b", "tax_set_text": "Steuerfreie Ausfuhrlieferung (§ 7 UStG 1994)"},
+    {"country_code": "NO", "customer_type": "b2b", "tax_set_text": "Steuerfreie Ausfuhrlieferung (§ 7 UStG 1994)"},
+    {"country_code": "BE", "customer_type": "b2c", "tax_set_text": "Belgische TVA 6%"},
+    {"country_code": "FI", "customer_type": "b2c", "tax_set_text": "Finnische ALV 14%"},
+    {"country_code": "DK", "customer_type": "b2c", "tax_set_text": "Dänische MOMS 25%"},
+    {"country_code": "SI", "customer_type": "b2c", "tax_set_text": "Slowenische DDV 9,5 %"},
+    {"country_code": "CZ", "customer_type": "b2c", "tax_set_text": "Tschechische DPH 0% (seit 2024)"},
+    {"country_code": "SE", "customer_type": "b2c", "tax_set_text": "Schwedische MOMS 6%"},
+    {"country_code": "LT", "customer_type": "b2c", "tax_set_text": "Litauische PVM 9%"},
+    {"country_code": "LU", "customer_type": "b2c", "tax_set_text": "Luxemburgische TVA 3%"},
+    {"country_code": "FR", "customer_type": "b2c", "tax_set_text": "Französische TVA 5,5%"},
+    {"country_code": "NL", "customer_type": "b2c", "tax_set_text": "Niederländische BTW 9%"},
+    {"country_code": "CH", "customer_type": "b2c", "tax_set_text": "Steuerfreie Ausfuhrlieferung (§ 7 UStG 1994)"},
+    {"country_code": "GB", "customer_type": "b2c", "tax_set_text": "Steuerfreie Ausfuhrlieferung (§ 7 UStG 1994)"},
+    {"country_code": "IT", "customer_type": "b2c", "tax_set_text": "Italienische IVA 4%"},
+    {"country_code": "DE", "customer_type": "b2c", "tax_set_text": "Deutsche MwSt. 7%"}
+  ]
+}
