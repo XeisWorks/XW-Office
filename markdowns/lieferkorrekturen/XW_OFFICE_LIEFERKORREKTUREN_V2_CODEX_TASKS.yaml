@@ -1,0 +1,119 @@
+project: XW-Office Lieferkorrekturen V2
+objective: Einheitlicher KI-gestützter Lieferkorrektur-Workflow mit manueller Bestätigung, 20-Tage-B2B-Trigger, Kulanz-Policy
+  und sevDesk/Lieferschein-Integration.
+defaults:
+  mailbox: shop@xeisworks.at
+  b2b_max_wait_days: 20
+  courtesy_default_enabled: true
+  courtesy_product_discount_percent: 30
+  courtesy_shipping_discount_percent: 100
+  ai_is_advisory_only: true
+case_types:
+  B2B_WRONG_DELIVERY:
+    wait_for_next_order: true
+    invoice_wrong_item: optional_at_trigger
+    replacement_required: true
+  B2B_MISSING_ITEMS:
+    wait_for_next_order: true
+    invoice_wrong_item: false
+    replacement_required: true
+  B2C_WRONG_DELIVERY:
+    trigger_immediately: true
+    invoice_wrong_item: false
+    replacement_required: true
+  B2B_CUSTOMER_ORDER_ERROR:
+    trigger_immediately: true
+    invoice_required: true
+    replacement_required: true
+tasks:
+- id: CA2-001
+  priority: P0
+  title: Relationales Case-Modell
+  requirements:
+  - Case kann wrong_items und missing_items gleichzeitig speichern.
+  - Status PENDING_REVIEW, WAITING, TRIGGERED, RESOLVED, IGNORED, CANCELLED.
+  - source_message_id eindeutig.
+  - due_at persistent.
+  - courtesy default true.
+- id: CA2-002
+  priority: P0
+  title: KI-Klassifikation aus shop@-Mails
+  requirements:
+  - Graph wiederverwenden.
+  - Vier Falltypen plus UNKNOWN klassifizieren.
+  - Kunde, Bestellung, wrong_items, missing_items, error_party und confidence extrahieren.
+  - Nur PENDING_REVIEW erzeugen.
+  - Keine Rechnung/kein Label automatisch.
+- id: CA2-003
+  priority: P0
+  title: Review-Popup
+  requirements:
+  - AI-Vorschlag anzeigen.
+  - Typ manuell änderbar.
+  - Kulanz-Checkbox standardmäßig aktiv.
+  - Tooltip 30% Produkt / 100% Versand vs normale Wix-Konditionen.
+  - Übernehmen, Bearbeiten, Ignorieren.
+- id: CA2-004
+  priority: P0
+  title: Wix-Matching und 20-Tage-Trigger
+  requirements:
+  - Primär buyerInfo.contactId.
+  - E-Mail als Fallback.
+  - Name niemals allein.
+  - B2B_WAITING bei neuer Bestellung triggern.
+  - Ausgangsbestellung ausschließen.
+  - due_at = created_at + 20 Tage.
+  - Tag 20 automatisch triggern.
+  - Atomar und idempotent.
+- id: CA2-005
+  priority: P1
+  title: Tagesgeschäft und Manager
+  requirements:
+  - Button Lieferkorrekturen.
+  - Badge KORREKTUR ZU PRÜFEN.
+  - Roter Badge LIEFERKORREKTUR FÄLLIG.
+  - Filter Zu prüfen/Fällig/Wartet/Erledigt/Alle.
+  - BackgroundWorker/BackgroundJobManager.
+- id: CA2-006
+  priority: P0
+  title: PricingPolicy
+  requirements:
+  - courtesy=true => 30% Produktrabatt.
+  - courtesy=true => 100% Versandrabatt.
+  - courtesy=false => bestehende Wix-B2B-Rabatte.
+  - courtesy=false => normale Versandkosten.
+  - Keine Preislogik in UI.
+- id: CA2-007
+  priority: P0
+  title: TaxSet/USt-Parität
+  requirements:
+  - wix-sevdesk-api fachlich spiegeln.
+  - 0%-B2B bewahren.
+  - OSS/Export/innergemeinschaftlich korrekt.
+  - Rabatt und Steuer getrennt.
+- id: CA2-008
+  priority: P0
+  title: Idempotente Zusatzrechnung
+  requirements:
+  - Erst bei TRIGGERED/Benutzeraktion.
+  - B2B_WRONG optional.
+  - B2B_CUSTOMER_ORDER_ERROR grundsätzlich vorgesehen.
+  - Preview.
+  - Marker LIEFERKORREKTUR:<case_uuid> | WIX:<source_order_number>.
+  - Retry ohne Dublette.
+- id: CA2-009
+  priority: P1
+  title: Lieferschein/Nachsendung
+  requirements:
+  - Bestehenden Code wiederverwenden.
+  - Kostenlose Nachlieferung klar markieren.
+  - B2B Missing nach 20 Tagen separat senden.
+  - B2C Wrong sofort.
+- id: CA2-010
+  priority: P0
+  title: Regression und Tests
+  requirements:
+  - pytest für Domain, AI, Trigger, Pricing, Tax, Invoice und UI.
+  - Bestehende Offene-Sendungen-Tests grün.
+  - Wix-/sevDesk-Regression grün.
+  - Keine Netzwerkcalls im UI-Thread.

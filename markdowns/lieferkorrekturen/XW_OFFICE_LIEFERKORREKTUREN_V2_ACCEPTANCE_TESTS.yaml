@@ -1,0 +1,91 @@
+suite: XW-Office Lieferkorrekturen V2 Acceptance
+scenarios:
+- id: FLOW-01
+  given: B2B-Händler erhält A statt B.
+  when: AI erkennt und Benutzer bestätigt B2B_WRONG_DELIVERY.
+  then:
+  - wrong_items enthält A
+  - missing_items enthält B
+  - courtesy=true
+  - status=WAITING
+  - due_at=created_at+20d
+- id: FLOW-02
+  given: WAITING Case.
+  when: gleicher Wix contactId bestellt erneut.
+  then:
+  - status=TRIGGERED
+  - trigger_reason=NEW_ORDER
+  - Fällig-Badge sichtbar
+- id: FLOW-03
+  given: B2B_MISSING wartet.
+  when: 20 Tage ohne neue Bestellung.
+  then:
+  - status=TRIGGERED
+  - trigger_reason=MAX_WAIT_EXPIRED
+  - separate Nachsendung gefordert
+- id: FLOW-04
+  given: B2C wrong delivery.
+  when: bestätigt.
+  then:
+  - sofort TRIGGERED
+  - keine Zusatzrechnung
+  - Nachsendung verfügbar
+- id: FLOW-05
+  given: Händler hat selbst falsch bestellt.
+  when: B2B_CUSTOMER_ORDER_ERROR bestätigt.
+  then:
+  - sofort TRIGGERED
+  - invoice_required=true
+  - courtesy=true
+- id: PRICE-01
+  given: courtesy=true.
+  when: Rechnung erstellt.
+  then:
+  - Produkt 30% Rabatt
+  - Versand 100% Rabatt
+  - Steuer korrekt
+- id: PRICE-02
+  given: courtesy=false.
+  when: Rechnung erstellt.
+  then:
+  - normale Wix-B2B-Rabatte
+  - normale Versandkosten
+- id: AI-01
+  given: shop@-Mail ist Lieferkorrektur.
+  when: AI klassifiziert.
+  then:
+  - nur PENDING_REVIEW
+  - kein sevDesk-Dokument
+  - kein Label
+- id: AI-02
+  given: AI typisiert falsch.
+  when: Benutzer korrigiert.
+  then:
+  - manueller Typ gilt
+  - AI-Vorschlag bleibt auditierbar
+- id: MATCH-01
+  given: gleicher Kundenname, aber keine contactId/E-Mail-Übereinstimmung.
+  when: neue Bestellung erscheint.
+  then:
+  - kein automatischer Trigger
+- id: IDEMP-01
+  given: gleiche Graph-Mail mehrfach.
+  when: Inbox erneut pollt.
+  then:
+  - nur ein Case
+- id: IDEMP-02
+  given: sevDesk erfolgreich, Client Timeout.
+  when: Retry.
+  then:
+  - bestehende Rechnung per Marker gefunden
+  - keine Dublette
+- id: TAX-01
+  given: 0%-B2B.
+  when: Kulanzrechnung.
+  then:
+  - Steuersatz bleibt 0%
+- id: COMBO-01
+  given: Case enthält wrong + missing gleichzeitig.
+  when: fällig.
+  then:
+  - Nachsendung und optionale Rechnung getrennt steuerbar
