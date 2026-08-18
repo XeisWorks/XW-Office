@@ -18,6 +18,7 @@ from xw_office.services.clearing.service import PaymentClearingService
 from xw_office.services.crm.service import CrmService
 from xw_office.services.customer_aftercare.inbox_service import CustomerAftercareInboxService
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
+from xw_office.services.customer_aftercare.trigger_service import CustomerAftercareTriggerService
 from xw_office.services.daily_business.service import DailyBusinessService
 from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.expenses.service import ExpenseAuditService
@@ -207,10 +208,18 @@ def register_default_services(container: Container) -> None:
         ),
     )
     container.register(
+        CustomerAftercareTriggerService,
+        lambda c: CustomerAftercareTriggerService(
+            c.resolve(CustomerAftercareRepository) if (c.config.database_url or "").strip() else None,
+            c.resolve(WixOrdersClient),
+        ),
+    )
+    container.register(
         CustomerAftercareService,
         lambda c: CustomerAftercareService(
             c.resolve(CustomerAftercareRepository) if (c.config.database_url or "").strip() else None,
             c.resolve(CustomerAftercareInboxService),
+            c.resolve(CustomerAftercareTriggerService),
             c.config,
         ),
     )

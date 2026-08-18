@@ -12,6 +12,10 @@ from xw_office.services.customer_aftercare.inbox_service import (
     CustomerAftercareInboxService,
     InboxPollResult,
 )
+from xw_office.services.customer_aftercare.trigger_service import (
+    CustomerAftercareTriggerService,
+    TriggerRunResult,
+)
 
 #: Manager-dialog filters (spec §7): Zu prüfen / Fällig / Wartet / Erledigt / Alle.
 MANAGER_FILTERS = ("zu_pruefen", "faellig", "wartet", "erledigt", "alle")
@@ -58,10 +62,12 @@ class CustomerAftercareService:
         self,
         repo: CustomerAftercareRepository | None,
         inbox: CustomerAftercareInboxService,
+        trigger: CustomerAftercareTriggerService,
         config: AppConfig,
     ) -> None:
         self._repo = repo
         self._inbox = inbox
+        self._trigger = trigger
         self._config = config
 
     # -- badges ---------------------------------------------------------------
@@ -92,6 +98,14 @@ class CustomerAftercareService:
         return self._inbox.poll_inbox(
             lookback_days=14, max_items=60, allow_interactive_auth=allow_interactive_auth
         )
+
+    # -- trigger polling (Phase 10 wires the actual QTimer cadence) -----------
+
+    def check_due_cases(self) -> TriggerRunResult:
+        return self._trigger.check_due_cases()
+
+    def check_new_orders_for_waiting_cases(self) -> TriggerRunResult:
+        return self._trigger.check_new_orders_for_waiting_cases()
 
     # -- review popup (spec §4) ------------------------------------------------
 

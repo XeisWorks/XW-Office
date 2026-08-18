@@ -12,6 +12,7 @@ from xw_office.models.base import Base
 from xw_office.repositories.customer_aftercare import CustomerAftercareRepository
 from xw_office.services.customer_aftercare.inbox_service import CustomerAftercareInboxService
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
+from xw_office.services.customer_aftercare.trigger_service import CustomerAftercareTriggerService
 
 
 class _Secrets:
@@ -30,7 +31,8 @@ def session_factory() -> sessionmaker[Session]:
 def service(session_factory: sessionmaker[Session]) -> CustomerAftercareService:
     repo = CustomerAftercareRepository(session_factory)
     inbox = CustomerAftercareInboxService(repo, _Secrets())
-    return CustomerAftercareService(repo, inbox, AppConfig())
+    trigger = CustomerAftercareTriggerService(repo, None)
+    return CustomerAftercareService(repo, inbox, trigger, AppConfig())
 
 
 def _new_case(service: CustomerAftercareService, message_id: str):
