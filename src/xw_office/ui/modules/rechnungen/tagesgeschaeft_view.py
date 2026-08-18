@@ -44,9 +44,14 @@ from xw_office.services.inventory.service import (
     StartPreflight,
 )
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.sendungen.service import OffeneSendungenService
+from xw_office.ui.modules.rechnungen.customer_aftercare_review_dialog import (
+    CustomerAftercareReviewDialog,
+    ReviewDialogOutcome,
+)
 from xw_office.services.transfers.service import OffeneUeberweisungenService
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 from xw_office.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
@@ -326,6 +331,13 @@ class TagesgeschaeftView(QWidget):
         self._mollie_count = 0
         self._lieferkorrektur_review_count = 0
         self._lieferkorrektur_due_count = 0
+        self._lieferkorrektur_due_check_ts = 0.0
+        self._lieferkorrektur_wix_check_ts = 0.0
+        self._lieferkorrektur_inbox_poll_ts = 0.0
+        self._lieferkorrektur_review_popup_open = False
+        self._lieferkorrektur_deferred_case_ids: set[object] = set()
+        self._lieferkorrektur_popup_fetch_worker: BackgroundWorker | None = None
+        self._lieferkorrektur_popup_apply_worker: BackgroundWorker | None = None
         self._sendungen_live_refresh_ts = 0.0
         self._pending_start_preflight: StartPreflight | None = None
         self._start_product_preflight_started_at = 0.0
@@ -382,6 +394,8 @@ class TagesgeschaeftView(QWidget):
             self._start_exec_worker,
             self._reprint_worker,
             self._reprint_exec_worker,
+            self._lieferkorrektur_popup_fetch_worker,
+            self._lieferkorrektur_popup_apply_worker,
         )
         deadline = time.monotonic() + 5.0
         for worker in workers:
@@ -652,8 +666,22 @@ class TagesgeschaeftView(QWidget):
                 counts["transfer"] = max(0, int(counts.get("transfers", 0)))
                 counts["transfer_login_required"] = 0
             aftercare_service: CustomerAftercareService = self._container.resolve(CustomerAftercareService)
+            aftercare_config = self._container.config.customer_aftercare.polling
+            aftercare_now = time.monotonic()
+            if aftercare_now - self._lieferkorrektur_due_check_ts >= aftercare_config.due_check_seconds:
+                aftercare_service.check_due_cases()
+                self._lieferkorrektur_due_check_ts = aftercare_now
+            if aftercare_now - self._lieferkorrektur_wix_check_ts >= aftercare_config.wix_order_check_seconds:
+                aftercare_service.check_new_orders_for_waiting_cases()
+                self._lieferkorrektur_wix_check_ts = aftercare_now
+            new_review_cases = 0
+            if aftercare_now - self._lieferkorrektur_inbox_poll_ts >= aftercare_config.inbox_seconds:
+                poll_result = aftercare_service.poll_inbox(allow_interactive_auth=False)
+                new_review_cases = poll_result.new_cases
+                self._lieferkorrektur_inbox_poll_ts = aftercare_now
             counts["lieferkorrektur_review"] = max(0, int(aftercare_service.count_pending_review()))
             counts["lieferkorrektur_due"] = max(0, int(aftercare_service.count_due()))
+            counts["lieferkorrektur_new_review_cases"] = new_review_cases
             return counts
 
         self._badge_worker = BackgroundWorker(job)
@@ -701,6 +729,9 @@ class TagesgeschaeftView(QWidget):
         self._update_alert_button(
             self._btn_lieferkorrektur_due_alert, "LIEFERKORREKTUR FAELLIG", lieferkorrektur_due_count
         )
+        if int(counts.get("lieferkorrektur_new_review_cases", 0)) > 0:
+            self._lieferkorrektur_deferred_case_ids.clear()
+            self._maybe_show_next_lieferkorrektur_review_popup()
 
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.badge_updated.emit(ModuleKey.RECHNUNGEN.value, open_count)
@@ -775,6 +806,90 @@ class TagesgeschaeftView(QWidget):
         self._update_alert_button(
             self._btn_lieferkorrektur_due_alert, "LIEFERKORREKTUR FAELLIG", self._lieferkorrektur_due_count
         )
+
+    def _maybe_show_next_lieferkorrektur_review_popup(self) -> None:
+        """Hybrid review-popup (spec §4, user-confirmed behavior).
+
+        Auto-opens the next PENDING_REVIEW case's review popup only while
+        XW-Office is the active foreground window, one popup at a time,
+        never stacked. If the app isn't active, newly detected cases simply
+        stay behind the "ZU PRUEFEN" badge for manual opening.
+        """
+        if self._lieferkorrektur_review_popup_open:
+            return
+        if QApplication.activeWindow() is None:
+            return
+        if (
+            self._lieferkorrektur_popup_fetch_worker is not None
+            and self._lieferkorrektur_popup_fetch_worker.isRunning()
+        ):
+            return
+        aftercare_service: CustomerAftercareService = self._container.resolve(CustomerAftercareService)
+        skip_ids = set(self._lieferkorrektur_deferred_case_ids)
+
+        def job() -> tuple[CustomerAftercareCase, list[CustomerAftercareItem]] | None:
+            candidates = [
+                case
+                for case in aftercare_service.list_cases_for_filter("zu_pruefen")
+                if case.id not in skip_ids
+            ]
+            if not candidates:
+                return None
+            case = candidates[-1]
+            return case, aftercare_service.get_items(case.id)
+
+        def on_result(result: object) -> None:
+            if result is None:
+                return
+            case, items = result
+            self._show_lieferkorrektur_review_popup(case, items)
+
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(on_result)
+        worker.signals.finished.connect(lambda: setattr(self, "_lieferkorrektur_popup_fetch_worker", None))
+        self._lieferkorrektur_popup_fetch_worker = worker
+        worker.start()
+
+    def _show_lieferkorrektur_review_popup(
+        self, case: CustomerAftercareCase, items: list[CustomerAftercareItem]
+    ) -> None:
+        self._lieferkorrektur_review_popup_open = True
+        dialog = CustomerAftercareReviewDialog(case, items, config=self._container.config, parent=self)
+        dialog.exec()
+        self._apply_lieferkorrektur_review_outcome(case, dialog.outcome())
+
+    def _apply_lieferkorrektur_review_outcome(
+        self, case: CustomerAftercareCase, outcome: ReviewDialogOutcome | None
+    ) -> None:
+        aftercare_service: CustomerAftercareService = self._container.resolve(CustomerAftercareService)
+        if outcome is not None and outcome.action == "defer":
+            self._lieferkorrektur_deferred_case_ids.add(case.id)
+
+        def job() -> None:
+            if outcome is None or outcome.action == "defer":
+                return
+            if outcome.action == "confirm":
+                aftercare_service.confirm_case(
+                    case.id, case_type=outcome.case_type, courtesy=outcome.courtesy, note=outcome.note
+                )
+            elif outcome.action == "ignore":
+                aftercare_service.ignore_case(case.id)
+
+        def on_done(_result: object) -> None:
+            self._lieferkorrektur_review_popup_open = False
+            self._refresh_badges()
+            self._maybe_show_next_lieferkorrektur_review_popup()
+
+        def on_error(exc: Exception) -> None:
+            self._on_badges_error(exc)
+            on_done(None)
+
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(on_done)
+        worker.signals.error.connect(on_error)
+        worker.signals.finished.connect(lambda: setattr(self, "_lieferkorrektur_popup_apply_worker", None))
+        self._lieferkorrektur_popup_apply_worker = worker
+        worker.start()
 
     def _on_start_clicked(
         self,
