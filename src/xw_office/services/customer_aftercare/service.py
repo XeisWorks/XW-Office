@@ -149,3 +149,11 @@ class CustomerAftercareService:
 
     def ignore_case(self, case_id: uuid.UUID) -> CustomerAftercareCase | None:
         return self._repo.mark_ignored(case_id) if self._repo is not None else None
+
+    # -- manual manager-dialog actions -----------------------------------------
+
+    def mark_resolved(self, case_id: uuid.UUID) -> CustomerAftercareCase | None:
+        return self._repo.mark_resolved(case_id) if self._repo is not None else None
+
+    def mark_cancelled(self, case_id: uuid.UUID) -> CustomerAftercareCase | None:
+        return self._repo.mark_cancelled(case_id) if self._repo is not None else None

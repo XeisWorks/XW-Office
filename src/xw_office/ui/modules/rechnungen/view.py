@@ -78,12 +78,16 @@ from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.printer_status.service import PrinterStatusService
 from xw_office.services.products.catalog import Product, ProductCatalogService, normalize_legacy_title
 from xw_office.services.products.print_decision import PieceBlock, PrintDecisionEngine
+from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sendungen.service import OffeneSendungenService
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 from xw_office.ui.modules.rechnungen.offene_ueberweisungen_dialog import OffeneUeberweisungenDialog
 from xw_office.services.sevdesk.refund_client import SevDeskRefundClient
 from xw_office.services.wix.client import WixOrdersClient
+from xw_office.ui.modules.rechnungen.customer_aftercare_manager_dialog import (
+    CustomerAftercareManagerDialog,
+)
 from xw_office.ui.modules.rechnungen.digital_licenses_dialog import DigitalLicensesDialog
 from xw_office.ui.modules.rechnungen.offene_sendungen_dialog import OffeneSendungenDialog
 from xw_office.ui.modules.rechnungen.special_order_dialog import SpecialOrderDialog
@@ -1641,6 +1645,12 @@ class RechnungenView(QWidget):
         dlg = OffeneUeberweisungenDialog(self._container, self)
         dlg.exec()
         return dlg.open_count()
+
+    def open_lieferkorrekturen_dialog(self, *, initial_filter: str = "alle") -> tuple[int, int]:
+        dlg = CustomerAftercareManagerDialog(self._container, self, initial_filter=initial_filter)
+        dlg.exec()
+        service: CustomerAftercareService = self._container.resolve(CustomerAftercareService)
+        return service.count_pending_review(), service.count_due()
 
     def open_queue_dialog(self, queue_name: str, title: str, fallback_count: int = 0) -> None:
         from xw_office.ui.modules.rechnungen.tagesgeschaeft_view import QueuePopupDialog

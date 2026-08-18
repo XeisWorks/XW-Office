@@ -44,6 +44,7 @@ from xw_office.services.inventory.service import (
     StartPreflight,
 )
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.sendungen.service import OffeneSendungenService
 from xw_office.services.transfers.service import OffeneUeberweisungenService
@@ -323,6 +324,8 @@ class TagesgeschaeftView(QWidget):
         self._digital_licenses_count = 0
         self._transfer_count = 0
         self._mollie_count = 0
+        self._lieferkorrektur_review_count = 0
+        self._lieferkorrektur_due_count = 0
         self._sendungen_live_refresh_ts = 0.0
         self._pending_start_preflight: StartPreflight | None = None
         self._start_product_preflight_started_at = 0.0
@@ -506,6 +509,18 @@ class TagesgeschaeftView(QWidget):
         self._btn_mollie_alert.hide()
         bar_lay.addWidget(self._btn_mollie_alert)
 
+        self._btn_lieferkorrektur_review_alert = self._build_alert_button("KORREKTUR ZU PRUEFEN")
+        self._btn_lieferkorrektur_review_alert.clicked.connect(
+            self._on_lieferkorrektur_review_alert_clicked
+        )
+        self._btn_lieferkorrektur_review_alert.hide()
+        bar_lay.addWidget(self._btn_lieferkorrektur_review_alert)
+
+        self._btn_lieferkorrektur_due_alert = self._build_alert_button("LIEFERKORREKTUR FAELLIG")
+        self._btn_lieferkorrektur_due_alert.clicked.connect(self._on_lieferkorrektur_due_alert_clicked)
+        self._btn_lieferkorrektur_due_alert.hide()
+        bar_lay.addWidget(self._btn_lieferkorrektur_due_alert)
+
         bar_lay.addSpacing(18)
         bar_lay.addWidget(self._btn_start)
         bar_lay.addWidget(self._btn_stop)
@@ -636,6 +651,9 @@ class TagesgeschaeftView(QWidget):
             except Exception:  # noqa: BLE001
                 counts["transfer"] = max(0, int(counts.get("transfers", 0)))
                 counts["transfer_login_required"] = 0
+            aftercare_service: CustomerAftercareService = self._container.resolve(CustomerAftercareService)
+            counts["lieferkorrektur_review"] = max(0, int(aftercare_service.count_pending_review()))
+            counts["lieferkorrektur_due"] = max(0, int(aftercare_service.count_due()))
             return counts
 
         self._badge_worker = BackgroundWorker(job)
@@ -672,6 +690,18 @@ class TagesgeschaeftView(QWidget):
         else:
             self._update_alert_button(self._btn_transfer_alert, "UEBERWEISUNG OFFEN", 0)
         self._update_alert_button(self._btn_mollie_alert, "MOLLIE AUTH", mollie_count)
+
+        lieferkorrektur_review_count = max(0, int(counts.get("lieferkorrektur_review", 0)))
+        lieferkorrektur_due_count = max(0, int(counts.get("lieferkorrektur_due", 0)))
+        self._lieferkorrektur_review_count = lieferkorrektur_review_count
+        self._lieferkorrektur_due_count = lieferkorrektur_due_count
+        self._update_alert_button(
+            self._btn_lieferkorrektur_review_alert, "KORREKTUR ZU PRUEFEN", lieferkorrektur_review_count
+        )
+        self._update_alert_button(
+            self._btn_lieferkorrektur_due_alert, "LIEFERKORREKTUR FAELLIG", lieferkorrektur_due_count
+        )
+
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.badge_updated.emit(ModuleKey.RECHNUNGEN.value, open_count)
         signals.badge_updated.emit(ModuleKey.GUTSCHEINE.value, gutscheine_count)
@@ -722,6 +752,29 @@ class TagesgeschaeftView(QWidget):
             fallback_count=self._mollie_count,
         )
         self._refresh_badges()
+
+    def _on_lieferkorrektur_review_alert_clicked(self) -> None:
+        self._open_lieferkorrekturen_dialog(initial_filter="zu_pruefen")
+
+    def _on_lieferkorrektur_due_alert_clicked(self) -> None:
+        self._open_lieferkorrekturen_dialog(initial_filter="faellig")
+
+    def _open_lieferkorrekturen_dialog(self, *, initial_filter: str) -> None:
+        if self._rechnungen_view is None:
+            return
+        review_count, due_count = self._rechnungen_view.open_lieferkorrekturen_dialog(
+            initial_filter=initial_filter
+        )
+        self._lieferkorrektur_review_count = max(0, int(review_count))
+        self._lieferkorrektur_due_count = max(0, int(due_count))
+        self._update_alert_button(
+            self._btn_lieferkorrektur_review_alert,
+            "KORREKTUR ZU PRUEFEN",
+            self._lieferkorrektur_review_count,
+        )
+        self._update_alert_button(
+            self._btn_lieferkorrektur_due_alert, "LIEFERKORREKTUR FAELLIG", self._lieferkorrektur_due_count
+        )
 
     def _on_start_clicked(
         self,
