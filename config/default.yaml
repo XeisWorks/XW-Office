@@ -126,3 +126,20 @@ sku_rules:
   # Legacy convention: reference starting with "1" = B2B, "2" = B2C.
   b2b_reference_prefixes: ["1"]
   b2c_reference_prefixes: ["2"]
+
+customer_aftercare:
+  enabled: true
+  ai:
+    enabled: true
+    min_confidence_for_prefill: 0.75
+  b2b:
+    wait_for_next_order: true
+    max_wait_days: 20
+  courtesy:
+    default_enabled: true
+    product_discount_percent: 30
+    shipping_discount_percent: 100
+  polling:
+    inbox_seconds: 300
+    due_check_seconds: 60
+    wix_order_check_seconds: 60

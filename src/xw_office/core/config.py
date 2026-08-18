@@ -199,6 +199,47 @@ class SkuRulesSection:
 
 
 @dataclass(frozen=True)
+class CustomerAftercareAiSection:
+    enabled: bool = True
+    min_confidence_for_prefill: float = 0.75
+
+
+@dataclass(frozen=True)
+class CustomerAftercareB2bSection:
+    wait_for_next_order: bool = True
+    max_wait_days: int = 20
+
+
+@dataclass(frozen=True)
+class CustomerAftercareCourtesySection:
+    default_enabled: bool = True
+    product_discount_percent: int = 30
+    shipping_discount_percent: int = 100
+
+
+@dataclass(frozen=True)
+class CustomerAftercarePollingSection:
+    inbox_seconds: int = 300
+    due_check_seconds: int = 60
+    wix_order_check_seconds: int = 60
+
+
+@dataclass(frozen=True)
+class CustomerAftercareSection:
+    """Tuning knobs for the Lieferkorrekturen ("customer aftercare") workflow."""
+
+    enabled: bool = True
+    ai: CustomerAftercareAiSection = field(default_factory=CustomerAftercareAiSection)
+    b2b: CustomerAftercareB2bSection = field(default_factory=CustomerAftercareB2bSection)
+    courtesy: CustomerAftercareCourtesySection = field(
+        default_factory=CustomerAftercareCourtesySection
+    )
+    polling: CustomerAftercarePollingSection = field(
+        default_factory=CustomerAftercarePollingSection
+    )
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """Immutable application configuration assembled from YAML + env."""
     app: AppSection = field(default_factory=AppSection)
@@ -210,6 +251,7 @@ class AppConfig:
     crm: CrmSection = field(default_factory=CrmSection)
     clearing: ClearingSection = field(default_factory=ClearingSection)
     sku_rules: SkuRulesSection = field(default_factory=SkuRulesSection)
+    customer_aftercare: CustomerAftercareSection = field(default_factory=CustomerAftercareSection)
     database_url: str = ""
     fernet_master_key: str = ""
 

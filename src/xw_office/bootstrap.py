@@ -16,6 +16,8 @@ from xw_office.services.clearing.gateways import (
 )
 from xw_office.services.clearing.service import PaymentClearingService
 from xw_office.services.crm.service import CrmService
+from xw_office.services.customer_aftercare.inbox_service import CustomerAftercareInboxService
+from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.daily_business.service import DailyBusinessService
 from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.expenses.service import ExpenseAuditService
@@ -78,6 +80,7 @@ from xw_office.services.xw_copilot.live_dispatch import XWCopilotLiveDispatcher
 from xw_office.services.xw_copilot.service import XWCopilotService
 from xw_office.repositories import (
     ApiSecretRepository,
+    CustomerAftercareRepository,
     ExpenseCheckRepository,
     PcRegistryRepository,
     PlcShipmentRepository,
@@ -194,6 +197,21 @@ def register_default_services(container: Container) -> None:
             c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
             c.resolve(SecretService),
             c.resolve(WixOrdersClient),
+        ),
+    )
+    container.register(
+        CustomerAftercareInboxService,
+        lambda c: CustomerAftercareInboxService(
+            c.resolve(CustomerAftercareRepository) if (c.config.database_url or "").strip() else None,
+            c.resolve(SecretService),
+        ),
+    )
+    container.register(
+        CustomerAftercareService,
+        lambda c: CustomerAftercareService(
+            c.resolve(CustomerAftercareRepository) if (c.config.database_url or "").strip() else None,
+            c.resolve(CustomerAftercareInboxService),
+            c.config,
         ),
     )
     container.register(
@@ -439,4 +457,8 @@ def register_default_services(container: Container) -> None:
         container.register(
             ExpenseCheckRepository,
             lambda c: ExpenseCheckRepository(c.resolve(SessionMaker)),
+        )
+        container.register(
+            CustomerAftercareRepository,
+            lambda c: CustomerAftercareRepository(c.resolve(SessionMaker)),
         )

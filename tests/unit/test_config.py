@@ -21,6 +21,29 @@ def test_load_config_with_missing_file() -> None:
     assert config.app.name == "XeisWorks Office"
 
 
+def test_customer_aftercare_defaults() -> None:
+    config = AppConfig()
+    assert config.customer_aftercare.enabled is True
+    assert config.customer_aftercare.ai.enabled is True
+    assert config.customer_aftercare.ai.min_confidence_for_prefill == 0.75
+    assert config.customer_aftercare.b2b.wait_for_next_order is True
+    assert config.customer_aftercare.b2b.max_wait_days == 20
+    assert config.customer_aftercare.courtesy.default_enabled is True
+    assert config.customer_aftercare.courtesy.product_discount_percent == 30
+    assert config.customer_aftercare.courtesy.shipping_discount_percent == 100
+    assert config.customer_aftercare.polling.inbox_seconds == 300
+    assert config.customer_aftercare.polling.due_check_seconds == 60
+    assert config.customer_aftercare.polling.wix_order_check_seconds == 60
+
+
+def test_customer_aftercare_loaded_from_yaml() -> None:
+    config = load_config("config/default.yaml")
+    assert config.customer_aftercare.enabled is True
+    assert config.customer_aftercare.courtesy.product_discount_percent == 30
+    assert config.customer_aftercare.courtesy.shipping_discount_percent == 100
+    assert config.customer_aftercare.b2b.max_wait_days == 20
+
+
 def test_product_print_profiles_use_pdf_xchange_native_backend() -> None:
     config = load_config("config/default.yaml")
     profiles = {profile.id: profile for profile in config.printing.all_profiles()}
