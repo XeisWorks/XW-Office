@@ -1,6 +1,7 @@
 """Wix Store REST client — products and order status."""
 from __future__ import annotations
 
+import datetime
 import logging
 import re
 import time
@@ -1853,6 +1854,60 @@ class WixOrdersClient:
             return []
         orders = payload.get("orders") if isinstance(payload, dict) else None
         return [item for item in orders if isinstance(item, dict)] if isinstance(orders, list) else []
+
+    def find_recent_orders_by_contact_or_email(
+        self,
+        *,
+        contact_id: str = "",
+        email: str = "",
+        since: datetime.datetime | None = None,
+        exclude_order_id: str = "",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Find a customer's orders created after *since* (Lieferkorrektur 20-day trigger, spec §5).
+
+        Tries ``buyerInfo.contactId`` first, falling back to ``buyerInfo.email``
+        — matching the spec's stated matching priority (contactId, then
+        normalized email, name is never used as an auto-trigger signal here).
+        Purely additive: a thin wrapper around the existing ``_search_orders``
+        that does not change any existing call site or behavior.
+        """
+        if not self.has_credentials():
+            return []
+        orders: list[dict[str, Any]] = []
+        cid = str(contact_id or "").strip()
+        if cid:
+            orders = self._search_orders("buyerInfo.contactId", cid, limit=limit)
+        if not orders:
+            mail = str(email or "").strip()
+            if mail:
+                orders = self._search_orders("buyerInfo.email", mail, limit=limit)
+
+        exclude_id = str(exclude_order_id or "").strip()
+        results: list[dict[str, Any]] = []
+        for order in orders:
+            order_id = str(order.get("id") or "").strip()
+            if exclude_id and order_id == exclude_id:
+                continue
+            if since is not None:
+                created = self._parse_wix_datetime(order.get("createdDate"))
+                if created is None or created <= since:
+                    continue
+            results.append(order)
+        return results
+
+    @staticmethod
+    def _parse_wix_datetime(value: object) -> datetime.datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+        return parsed
 
     def resolve_latest_shipping_address(
         self,
