@@ -1125,6 +1125,7 @@ class InvoiceClient:
             ("addressCountry", "StaticCountry"),
             ("paymentMethod", "PaymentMethod"),
             ("taxRule", "TaxRule"),
+            ("taxSet", "TaxSet"),
         ):
             ref = self._normalize_ref(invoice.get(key), object_name)
             if ref:

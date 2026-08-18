@@ -157,3 +157,6 @@ class CustomerAftercareService:
 
     def mark_cancelled(self, case_id: uuid.UUID) -> CustomerAftercareCase | None:
         return self._repo.mark_cancelled(case_id) if self._repo is not None else None
+
+    def mark_invoice_skipped(self, case_id: uuid.UUID) -> CustomerAftercareCase | None:
+        return self._repo.mark_invoice_skipped(case_id) if self._repo is not None else None

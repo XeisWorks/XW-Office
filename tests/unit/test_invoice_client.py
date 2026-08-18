@@ -146,6 +146,40 @@ def test_invoice_client_fetch_invoice_positions_uses_invoice_filter_params() -> 
     assert positions[0]["id"] == "POS-1"
 
 
+def test_update_invoice_draft_includes_tax_set_and_discount_passthrough() -> None:
+    """taxSet is a Lieferkorrektur-only addition — must not affect existing callers that omit it."""
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/Invoice/Factory/saveInvoice")
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"objects": {"invoice": {"id": "1"}}})
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.Client(transport=transport, base_url="https://example.test/api/v1")
+    inv = InvoiceClient(SevdeskConnection(client=client, config=AppConfig()))
+
+    inv.update_invoice_draft(
+        {"id": "1", "taxType": "custom", "taxSet": {"id": "77", "objectName": "TaxSet"}},
+        [{"name": "Artikel", "quantity": 1, "price": 10.0, "taxRate": 19, "discount": 30, "isPercentage": True}],
+    )
+
+    body = captured["body"]
+    assert body["invoice"]["taxSet"] == {"id": "77", "objectName": "TaxSet"}
+    assert body["invoice"]["taxType"] == "custom"
+    assert body["invoicePosSave"][0]["discount"] == 30.0
+    assert body["invoicePosSave"][0]["isPercentage"] is True
+
+
+def test_normalize_invoice_for_save_omits_tax_set_when_absent() -> None:
+    """Existing (non-Lieferkorrektur) callers that never set taxSet keep the old payload shape."""
+    inv = InvoiceClient(SevdeskConnection(client=httpx.Client(base_url="https://example.test/api/v1"), config=AppConfig()))
+
+    payload = inv._normalize_invoice_for_save({"id": "1", "taxType": "default"})  # noqa: SLF001
+
+    assert "taxSet" not in payload
+
+
 def test_invoice_client_extracts_q1_2026_objects_pdf_payload() -> None:
     pdf = b"%PDF-1.7\nq1-2026"
     payload = {"objects": {"pdf": base64.b64encode(pdf).decode("ascii")}}

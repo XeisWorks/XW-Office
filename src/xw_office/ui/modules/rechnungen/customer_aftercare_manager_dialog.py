@@ -26,6 +26,9 @@ from PySide6.QtWidgets import (
 from xw_office.core.worker import BackgroundWorker
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
 from xw_office.services.customer_aftercare.service import MANAGER_FILTERS, CustomerAftercareService
+from xw_office.ui.modules.rechnungen.customer_aftercare_invoice_dialog import (
+    CustomerAftercareInvoiceDialog,
+)
 from xw_office.ui.modules.rechnungen.customer_aftercare_review_dialog import (
     CASE_TYPE_LABELS,
     CustomerAftercareReviewDialog,
@@ -162,6 +165,9 @@ class CustomerAftercareManagerDialog(QDialog):
         self._btn_review = QPushButton("Prüfen / Bestätigen…")
         self._btn_review.clicked.connect(self._open_review_dialog)
         row_actions.addWidget(self._btn_review)
+        self._btn_invoice = QPushButton("Zusatzrechnung…")
+        self._btn_invoice.clicked.connect(self._open_invoice_dialog)
+        row_actions.addWidget(self._btn_invoice)
         self._btn_resolve = QPushButton("Als erledigt markieren")
         self._btn_resolve.clicked.connect(self._mark_resolved)
         row_actions.addWidget(self._btn_resolve)
@@ -283,6 +289,15 @@ class CustomerAftercareManagerDialog(QDialog):
         if outcome is None:
             return
         self._apply_outcome(case.id, outcome)
+
+    def _open_invoice_dialog(self) -> None:
+        case = self._selected_case
+        if case is None:
+            return
+        dialog = CustomerAftercareInvoiceDialog(self._container, case, self._selected_items, parent=self)
+        dialog.exec()
+        if dialog.action_taken in {"invoiced", "skipped"}:
+            self._load_cases()
 
     def _apply_outcome(self, case_id: uuid.UUID, outcome: ReviewDialogOutcome) -> None:
         if outcome.action == "defer":
