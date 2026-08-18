@@ -30,6 +30,10 @@ _DEFAULT_MODEL = "gpt-4.1-mini"
 _EXCLUDED_WIX_SENDER = "no-reply@mystore.wix.com"
 _EXCLUDED_ORDER_SENDER = "office@xeisworks.at"
 _EXCLUDED_ORDER_SUBJECT_PREFIX = "neue bestellung"
+#: Sentinel ``SendungCase.sender`` for cases injected via create_manual_case
+#: (e.g. from a Lieferkorrektur) — preserved across refresh_from_graph
+#: instead of being overwritten by the next Graph fetch.
+_MANUAL_CASE_SENDER = "lieferkorrektur"
 _FOOTER_LINES = [
     "XeisWorks",
     "Musikverlag Mag. Bernhard Holl",
@@ -110,8 +114,55 @@ class OffeneSendungenService:
             allow_interactive_auth=allow_interactive_auth,
         )
         candidates = [msg for msg in messages if self._is_sendung_candidate(msg)]
-        self._save_cases([self._to_case(msg) for msg in candidates])
+        manual_cases = [case for case in self._load_cached_cases() if case.sender == _MANUAL_CASE_SENDER]
+        self._save_cases(manual_cases + [self._to_case(msg) for msg in candidates])
         return self.load_open_cases()
+
+    def create_manual_case(
+        self,
+        *,
+        case_id: str,
+        subject: str,
+        note: str,
+        address_lines: list[str] | None = None,
+        products: list[SendungProductLine] | None = None,
+    ) -> SendungCase:
+        """Inject a manually-created case (e.g. from a Lieferkorrektur) into Offene Sendungen.
+
+        Reuses the existing cached-case/manual-fields/label/PDF pipeline as-is
+        — additive only, never touches Graph-sourced case handling. Idempotent:
+        calling again with the same *case_id* returns the existing case
+        unchanged rather than duplicating it. Survives refresh_from_graph
+        (see the manual-case preservation there).
+        """
+        cid = str(case_id or "").strip()
+        if not cid:
+            raise ValueError("case_id fehlt")
+        existing = self._find_case(cid)
+        if existing is not None:
+            return existing
+
+        case = SendungCase(
+            id=cid,
+            received_at=self._utc_now_iso(),
+            sender=_MANUAL_CASE_SENDER,
+            subject=str(subject or "").strip(),
+            snippet=str(note or "").strip(),
+            body=str(note or "").strip(),
+            thread_id="",
+            order_number="",
+        )
+        cases = self._load_cached_cases()
+        cases.append(case)
+        self._save_cases(cases)
+        if address_lines or products:
+            self.save_manual_fields(
+                cid,
+                address_lines=list(address_lines or []),
+                products=list(products or []),
+                manual_text=str(note or "").strip(),
+            )
+        return case
 
     def refresh_count_from_graph_silent(self, *, lookback_days: int = 20, max_items: int = 120) -> int:
         """Refresh Graph-backed cases only when cached MS auth is already available."""

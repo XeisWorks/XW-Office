@@ -7,6 +7,9 @@ import pytest
 
 from xw_office.services.sendungen.service import OffeneSendungenService, SendungProductLine
 
+from xw_office.services.customer_aftercare import fulfillment as aftercare_fulfillment
+from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
+
 
 class _Repo:
     def __init__(self) -> None:
@@ -218,6 +221,75 @@ def test_extract_case_details_fallback_reads_address_and_products() -> None:
     assert details.address_lines == ["Max Muster", "Hauptstrasse 1", "1010 Wien", "AT"]
     assert details.products[0].quantity == "2"
     assert details.products[0].name == "Musikbuch Alpen"
+
+
+def test_create_manual_case_is_idempotent_and_stores_manual_fields() -> None:
+    repo = _Repo()
+    service = OffeneSendungenService(repo, _Secrets())  # type: ignore[arg-type]
+
+    first = service.create_manual_case(
+        case_id="lieferkorrektur-abc",
+        subject="Lieferkorrektur 21842",
+        note="Kostenlose Nachlieferung zu Bestellung 21842 — Lieferkorrektur, nicht verrechnen.",
+        address_lines=["Max Muster", "Hauptstrasse 1", "1010 Wien"],
+        products=[SendungProductLine(quantity="1", name="Notenheft B", sku="XW-2")],
+    )
+    again = service.create_manual_case(
+        case_id="lieferkorrektur-abc", subject="anderer titel", note="anderer text"
+    )
+
+    assert first.id == again.id == "lieferkorrektur-abc"
+    assert again.subject == "Lieferkorrektur 21842"  # first call wins, no overwrite
+    manual = service.load_manual_fields("lieferkorrektur-abc")
+    assert manual["address_lines"] == ["Max Muster", "Hauptstrasse 1", "1010 Wien"]
+    assert manual["products"][0]["name"] == "Notenheft B"
+    assert service.open_count() == 1
+
+
+def test_refresh_from_graph_preserves_manual_cases(monkeypatch) -> None:
+    class _GraphClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def has_silent_token(self) -> bool:
+            return True
+
+        def list_inbox_messages(self, **_kwargs: object) -> list[dict[str, Any]]:
+            return [_message("m1", "Versand bitte prüfen", "Bestellung 20868")]
+
+    monkeypatch.setattr("xw_office.services.sendungen.service.GraphMailClient", _GraphClient)
+    repo = _Repo()
+    service = OffeneSendungenService(repo, _Secrets())  # type: ignore[arg-type]
+    service.create_manual_case(case_id="lieferkorrektur-xyz", subject="Lieferkorrektur", note="note")
+
+    service.refresh_from_graph()
+
+    cases = service.load_open_cases()
+    assert {case.id for case in cases} == {"m1", "lieferkorrektur-xyz"}
+
+    # Refreshing again must not duplicate the manual case.
+    service.refresh_from_graph()
+    assert [case.id for case in service.load_open_cases()].count("lieferkorrektur-xyz") == 1
+
+
+def test_customer_aftercare_fulfillment_helpers_build_expected_note_and_lines() -> None:
+    case = CustomerAftercareCase(
+        case_type="B2B_MISSING_ITEMS", source_wix_order_number="21842"
+    )
+    items = [
+        CustomerAftercareItem(role="MISSING_TO_SEND", name="Notenheft B", sku="XW-2", quantity=1),
+        CustomerAftercareItem(role="WRONG_DELIVERED", name="Notenheft A", sku="XW-1", quantity=2),
+    ]
+
+    note = aftercare_fulfillment.replacement_shipment_note(case)
+    lines = aftercare_fulfillment.missing_items_as_product_lines(items)
+
+    assert "Kostenlose Nachlieferung zu Bestellung 21842" in note
+    assert "nicht verrechnen" in note
+    assert len(lines) == 1
+    assert lines[0].name == "Notenheft B"
+    assert lines[0].free_delivery is True
+    assert lines[0].no_return_required is True
 
 
 def test_manual_fields_are_used_for_label_lines() -> None:

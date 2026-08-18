@@ -5,6 +5,7 @@ import uuid
 from xw_office.core.config import AppConfig
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
+from xw_office.services.sendungen.service import OffeneSendungenService
 from xw_office.ui.modules.rechnungen.customer_aftercare_manager_dialog import (
     CustomerAftercareManagerDialog,
 )
@@ -24,7 +25,10 @@ class _FakeService:
             note="",
         )
         self.case.id = self.case_id  # type: ignore[assignment]
-        self.items = [CustomerAftercareItem(role="WRONG_DELIVERED", name="Notenheft A", sku="XW-1", quantity=1)]
+        self.items = [
+            CustomerAftercareItem(role="WRONG_DELIVERED", name="Notenheft A", sku="XW-1", quantity=1),
+            CustomerAftercareItem(role="MISSING_TO_SEND", name="Notenheft B", sku="XW-2", quantity=1),
+        ]
         self.confirm_calls: list[dict[str, object]] = []
         self.ignore_calls: list[uuid.UUID] = []
         self.resolve_calls: list[uuid.UUID] = []
@@ -57,15 +61,36 @@ class _FakeService:
         self.cancel_calls.append(case_id)
 
 
+class _FakeOffeneSendungenService:
+    def __init__(self) -> None:
+        self.create_manual_case_calls: list[dict[str, object]] = []
+
+    def create_manual_case(
+        self,
+        *,
+        case_id: str,
+        subject: str,
+        note: str,
+        address_lines: list[str] | None = None,
+        products: list[object] | None = None,
+    ) -> None:
+        self.create_manual_case_calls.append(
+            {"case_id": case_id, "subject": subject, "note": note, "products": products}
+        )
+
+
 class _FakeContainer:
     config = AppConfig()
 
-    def __init__(self, service: _FakeService) -> None:
+    def __init__(self, service: _FakeService, sendungen: _FakeOffeneSendungenService | None = None) -> None:
         self._service = service
+        self._sendungen = sendungen or _FakeOffeneSendungenService()
 
     def resolve(self, typ: object) -> object:
         if typ is CustomerAftercareService:
             return self._service
+        if typ is OffeneSendungenService:
+            return self._sendungen
         raise KeyError(str(typ))
 
 
@@ -142,3 +167,34 @@ def test_mark_resolved_calls_service(qtbot: object) -> None:
 
     dialog._btn_resolve.click()  # noqa: SLF001
     qtbot.waitUntil(lambda: len(service.resolve_calls) == 1, timeout=3000)
+
+
+def test_prepare_nachsendung_creates_manual_case_from_missing_items(qtbot: object, monkeypatch) -> None:
+    service = _FakeService()
+    sendungen = _FakeOffeneSendungenService()
+    dialog = CustomerAftercareManagerDialog(_FakeContainer(service, sendungen))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    _wait_loaded(qtbot, dialog)
+    dialog._list.setCurrentRow(0)  # noqa: SLF001
+    qtbot.waitUntil(lambda: len(dialog._selected_items) > 0, timeout=3000)  # noqa: SLF001
+
+    class _FakeSendungenDialog:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def exec(self) -> int:
+            return 0
+
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.customer_aftercare_manager_dialog.OffeneSendungenDialog",
+        _FakeSendungenDialog,
+    )
+
+    dialog._btn_nachsendung.click()  # noqa: SLF001
+    qtbot.waitUntil(lambda: len(sendungen.create_manual_case_calls) == 1, timeout=3000)
+
+    call = sendungen.create_manual_case_calls[0]
+    assert call["case_id"] == f"lieferkorrektur-{service.case_id}"
+    product_names = [product.name for product in call["products"]]
+    assert product_names == ["Notenheft B"]
+    assert "nicht verrechnen" in call["note"]
