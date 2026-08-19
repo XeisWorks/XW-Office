@@ -37,7 +37,7 @@ from xw_office.services.products.catalog import Product, ProductCatalogService
 from xw_office.services.products.print_decision import PieceBlock
 from xw_office.services.printing.print_jobs import PdfPrintJob, PrintJobKind
 from xw_office.services.printing.print_queue import PrintQueueService
-from xw_office.services.printing.planned_pdf_printer import print_pdf_by_plan
+from xw_office.services.printing.planned_pdf_printer import page_indices_from_range_text, print_pdf_by_plan
 from xw_office.services.printing.pdf_renderer import page_indices_from_qprinter
 
 if TYPE_CHECKING:
@@ -46,6 +46,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _PRODUCT_PRINT_PROFILE_IDS = {"noten_simplex", "noten_duplex", "brochure_mono", "brochure_duo"}
+
+
+def _format_page_ranges(pages: list[int]) -> str:
+    """Compress a sorted list of 1-based page numbers into "1-3, 5, 7-9" form."""
+    if not pages:
+        return ""
+    ranges: list[str] = []
+    start = prev = pages[0]
+    for page in pages[1:]:
+        if page == prev + 1:
+            prev = page
+            continue
+        ranges.append(str(start) if start == prev else f"{start}-{prev}")
+        start = prev = page
+    ranges.append(str(start) if start == prev else f"{start}-{prev}")
+    return ", ".join(ranges)
 
 
 class _PrintPlanModel(QAbstractTableModel):
@@ -221,8 +237,14 @@ class ProductPrintConfigDialog(QDialog):
         self._plan_summary = QLabel("")
         self._plan_summary.setWordWrap(True)
         root.addWidget(self._plan_summary)
+        self._title_override_note = QLabel("")
+        self._title_override_note.setWordWrap(True)
+        self._title_override_note.setStyleSheet("color: #f59e0b;")
+        self._title_override_note.hide()
+        root.addWidget(self._title_override_note)
         self._refresh_pdf_status()
         self._refresh_plan_summary()
+        self._refresh_title_override_note()
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
@@ -350,7 +372,65 @@ class ProductPrintConfigDialog(QDialog):
             printer = self._profile_printer(profile_id)
             lines.append(f"{range_text} -> {printer}")
         suffix = f" | PDF: {self._page_count} Seite(n)" if self._page_count is not None else ""
-        self._plan_summary.setText("Druckplan: " + ("; ".join(lines) if lines else "kein Plan") + suffix)
+        summary = "Druckplan: " + ("; ".join(lines) if lines else "kein Plan") + suffix
+        coverage_note = self._plan_coverage_note()
+        if coverage_note:
+            summary += "\n" + coverage_note
+        self._plan_summary.setText(summary)
+
+    def _plan_coverage_note(self) -> str:
+        """Report gaps/overlaps across plan rows so a copy-paste typo in a
+        page range shows up here instead of on paper."""
+        if self._page_count is None:
+            return ""
+        rows = self._plan_model.plan()
+        if not rows:
+            return ""
+        total_pages = self._page_count
+        covered = [0] * total_pages
+        for row in rows:
+            range_text = str(row.get("range") or "").strip() or "Alle Seiten"
+            try:
+                indices = page_indices_from_range_text(range_text, page_count=total_pages)
+            except RuntimeError as exc:
+                return f"⚠ {exc}"
+            target_indices = range(total_pages) if indices is None else indices
+            for index in target_indices:
+                covered[index] += 1
+        missing = [index + 1 for index, count in enumerate(covered) if count == 0]
+        overlapping = [index + 1 for index, count in enumerate(covered) if count > 1]
+        if not missing and not overlapping:
+            return f"✓ Deckt alle {total_pages} Seite(n) genau einmal ab."
+        parts: list[str] = []
+        if missing:
+            parts.append(f"Luecke bei Seite(n) {_format_page_ranges(missing)}")
+        if overlapping:
+            parts.append(f"Ueberlappung bei Seite(n) {_format_page_ranges(overlapping)}")
+        return "⚠ " + "; ".join(parts)
+
+    def _refresh_title_override_note(self) -> None:
+        if not hasattr(self, "_title_override_note"):
+            return
+        try:
+            catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
+            override_titles = catalog.title_overrides_for_sku(self._piece.sku)
+        except Exception as exc:  # noqa: BLE001 - purely informational note.
+            logger.debug("Title override lookup failed for %s: %s", self._piece.sku, exc)
+            return
+        current_title = str(self._piece.name or "").strip()
+        other_titles = [title for title in override_titles if title != current_title]
+        if not other_titles:
+            self._title_override_note.hide()
+            return
+        shown = other_titles[:5]
+        joined = ", ".join(f'"{title}"' for title in shown)
+        if len(other_titles) > len(shown):
+            joined += f" (+{len(other_titles) - len(shown)} weitere)"
+        self._title_override_note.setText(
+            "⚠ Fuer diese SKU gibt es zusaetzlich titelspezifische Druckplaene, die weiterhin diesen "
+            f"Standard ueberschreiben und hier NICHT bearbeitet werden: {joined}."
+        )
+        self._title_override_note.show()
 
     def _profile_printer(self, profile_id: str) -> str:
         for candidate_id, _label, printer, _backend in self._profiles:

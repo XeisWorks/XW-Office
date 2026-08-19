@@ -62,6 +62,34 @@ def test_piece_block_uses_new_repo_print_config_for_title_specific_entry(tmp_pat
     assert block.has_direct_print_config is True
 
 
+def test_title_overrides_for_sku_lists_saved_title_specific_plans() -> None:
+    repo = _RepoStub(
+        {
+            "inventory.products": json.dumps(
+                [
+                    {
+                        "sku": "XW-6612",
+                        "name": "Standardtitel",
+                        "print_file_path": "C:/pdfs/default.pdf",
+                        "print_profile_id": "noten_simplex",
+                        "print_plan": [],
+                        "title_print_configs": {
+                            "Song A": {"path": "C:/pdfs/a.pdf", "profile_id": "noten_duplex", "print_plan": []},
+                            "Song B": {"path": "C:/pdfs/b.pdf", "profile_id": "brochure_mono", "print_plan": []},
+                        },
+                    }
+                ],
+                ensure_ascii=False,
+            )
+        }
+    )
+
+    catalog = ProductCatalogService(repo)
+
+    assert catalog.title_overrides_for_sku("xw-6612") == ["Song A", "Song B"]
+    assert catalog.title_overrides_for_sku("XW-UNKNOWN") == []
+
+
 def test_piece_block_uses_legacy_normalized_title_matching(tmp_path) -> None:
     pdf_path = tmp_path / "die-ungewoehnliche.pdf"
     pdf_path.write_bytes(b"%PDF-1.4 test")

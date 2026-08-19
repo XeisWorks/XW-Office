@@ -2801,9 +2801,17 @@ class RechnungenView(QWidget):
             "QToolButton:hover { background-color: #475569; border-color: #94a3b8; }"
             "QToolButton:disabled { background-color: #1f2937; border-color: #334155; }"
         )
+        # Right-click always reaches the print settings, even once a plan exists.
+        action.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        action.customContextMenuRequested.connect(
+            lambda _pos, aggregate=item: self._on_open_product_manage_clicked(aggregate)
+        )
         if self._open_print_product_ready(item):
             action.setIcon(QIcon(str(Path(__file__).resolve().parents[5] / "icons" / "print.png")))
-            action.setToolTip("Druckplan ohne Rueckfrage ausfuehren")
+            action.setToolTip(
+                "Linksklick: Druckplan ohne Rueckfrage ausfuehren\n"
+                "Rechtsklick: Druckeinstellungen oeffnen"
+            )
             action.clicked.connect(
                 lambda _checked=False, aggregate=item, button=action: self._on_open_product_print_clicked(
                     aggregate,
@@ -5257,6 +5265,7 @@ class RechnungenView(QWidget):
         if not self._print_allowed:
             return
         from xw_office.ui.modules.rechnungen.print_dialog import prepare_piece_pdf_print
+        from xw_office.services.printing.planned_pdf_printer import PrintPlanPartialFailure
 
         qty = max(1, int(quantity or self._default_piece_print_qty(block)))
         job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty, wait=True)
@@ -5275,19 +5284,31 @@ class RechnungenView(QWidget):
         signals.status_message.emit(f"Produktdruck fuer {block.sku} eingereiht ({qty}x).", 5000)
 
         def worker_job() -> dict[str, object]:
-            job()
+            completed = qty
+            print_warning = ""
+            try:
+                job()
+            except PrintPlanPartialFailure as exc:
+                # A failure partway through a multi-copy plan must not
+                # discard the sets that already printed successfully — book
+                # what was confirmed and report the shortfall separately.
+                completed = exc.completed_copies
+                print_warning = str(exc)
+                if completed <= 0:
+                    raise
             if block.product is None or not str(block.product.sevdesk_part_id or "").strip():
                 return {
                     "sku": block.sku,
-                    "quantity": qty,
+                    "quantity": completed,
                     "stock_warning": "kein sevDesk-Part fuer Bestandsbuchung hinterlegt",
+                    "print_warning": print_warning,
                 }
             try:
                 engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
-                new_stock = engine.record_print_and_update_sevdesk(block, qty, invoice_ref=invoice_ref)
+                new_stock = engine.record_print_and_update_sevdesk(block, completed, invoice_ref=invoice_ref)
             except Exception as exc:
                 logger.warning("Stock update after product print failed: %s", exc)
-                return {"sku": block.sku, "quantity": qty, "stock_warning": str(exc)}
+                return {"sku": block.sku, "quantity": completed, "stock_warning": str(exc), "print_warning": print_warning}
             local_warning = ""
             try:
                 self._container.resolve(InventoryService).set_product_stock(block.sku, new_stock)
@@ -5296,9 +5317,10 @@ class RechnungenView(QWidget):
                 logger.warning("Local stock mirror update failed for %s: %s", block.sku, exc)
             return {
                 "sku": block.sku,
-                "quantity": qty,
+                "quantity": completed,
                 "stock_warning": "",
                 "local_warning": local_warning,
+                "print_warning": print_warning,
             }
 
         handle: JobHandle
@@ -5325,8 +5347,19 @@ class RechnungenView(QWidget):
         qty = str(data.get("quantity") or "").strip() or "?"
         warning = str(data.get("stock_warning") or "").strip()
         local_warning = str(data.get("local_warning") or "").strip()
+        print_warning = str(data.get("print_warning") or "").strip()
         signals: AppSignals = self._container.resolve(AppSignals)
-        if warning:
+        if print_warning and warning:
+            signals.status_message.emit(
+                f"{sku}: nur {qty}x gedruckt, Bestand nicht gebucht ({warning}). Rest abgebrochen: {print_warning}",
+                12000,
+            )
+        elif print_warning:
+            signals.status_message.emit(
+                f"{sku}: nur {qty}x gedruckt und gebucht, Rest abgebrochen: {print_warning}",
+                12000,
+            )
+        elif warning:
             signals.status_message.emit(f"{sku}: Druckauftrag {qty}x bestaetigt; Bestand nicht gebucht.", 8000)
         elif local_warning:
             signals.status_message.emit(

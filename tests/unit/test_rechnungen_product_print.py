@@ -17,10 +17,17 @@ from xw_office.ui.modules.rechnungen.view import _PieceDelegate
 
 
 def test_selected_product_delegate_has_exactly_one_print_or_settings_action() -> None:
+    """The row always carries a qty stepper; the single action button next
+    to it must still be exclusively "print" xor "manage", never both."""
     row = QRect(0, 0, 420, 82)
 
-    assert set(_PieceDelegate._button_rects(row, has_print_config=True)) == {"print"}
-    assert set(_PieceDelegate._button_rects(row, has_print_config=False)) == {"manage"}
+    with_config = set(_PieceDelegate._button_rects(row, has_print_config=True))
+    without_config = set(_PieceDelegate._button_rects(row, has_print_config=False))
+
+    assert with_config == {"print", "qty_minus", "qty_plus"}
+    assert without_config == {"manage", "qty_minus", "qty_plus"}
+    assert with_config.isdisjoint({"manage"})
+    assert without_config.isdisjoint({"print"})
 
 
 def test_prepare_piece_pdf_print_uses_requested_copy_count(monkeypatch, tmp_path) -> None:
@@ -214,6 +221,135 @@ def test_product_print_config_dialog_builds_plan_rows_with_start_end(qtbot: obje
     profile_ids = [profile_id for profile_id, _label, _printer, _backend in dialog._profiles]  # noqa: SLF001
     assert "invoice" not in profile_ids
     assert "noten_native_pilot" not in profile_ids
+
+
+def test_print_plan_summary_flags_gap_and_overlap(qtbot: object, tmp_path) -> None:
+    """XW-6612-style plans: a page count typo must surface in the dialog,
+    not only at print time."""
+    pdf_path = tmp_path / "piece.pdf"
+    doc = fitz.open()
+    for _ in range(5):
+        doc.new_page(width=595, height=842)
+    doc.save(pdf_path)
+    doc.close()
+    config = AppConfig(
+        printing=PrintingSection(
+            print_profiles=[
+                {"id": "noten_simplex", "label": "Noten Duplex", "printer_name": "Printer A"},
+                {"id": "brochure_mono", "label": "Broschuere", "printer_name": "Printer B"},
+            ]
+        )
+    )
+    container = Container(config)
+    piece = PieceBlock(
+        sku="XW-6612",
+        name="Luecke",
+        qty_needed=1,
+        print_plan=[
+            {"range": "1-2", "profile_id": "noten_simplex"},
+            # Row 2 skips page 3 (gap) and re-covers page 4 (overlap with a
+            # hypothetical row that would have ended at 4) - here it simply
+            # leaves a gap at page 3 relative to a full 1-5 plan.
+            {"range": "4-5", "profile_id": "brochure_mono"},
+        ],
+        product=Product(id="p1", sku="XW-6612", name="Luecke", print_file_path=str(pdf_path)),
+    )
+
+    dialog = ProductPrintConfigDialog(None, container, piece)
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+
+    assert "Luecke bei Seite(n) 3" in dialog._plan_summary.text()  # noqa: SLF001
+
+
+def test_print_plan_summary_confirms_full_coverage(qtbot: object, tmp_path) -> None:
+    pdf_path = tmp_path / "piece.pdf"
+    doc = fitz.open()
+    for _ in range(5):
+        doc.new_page(width=595, height=842)
+    doc.save(pdf_path)
+    doc.close()
+    config = AppConfig(
+        printing=PrintingSection(
+            print_profiles=[
+                {"id": "noten_simplex", "label": "Noten Duplex", "printer_name": "Printer A"},
+                {"id": "brochure_mono", "label": "Broschuere", "printer_name": "Printer B"},
+            ]
+        )
+    )
+    container = Container(config)
+    piece = PieceBlock(
+        sku="XW-6612",
+        name="Vollstaendig",
+        qty_needed=1,
+        print_plan=[
+            {"range": "1-2", "profile_id": "noten_simplex"},
+            {"range": "3-END", "profile_id": "brochure_mono"},
+        ],
+        product=Product(id="p1", sku="XW-6612", name="Vollstaendig", print_file_path=str(pdf_path)),
+    )
+
+    dialog = ProductPrintConfigDialog(None, container, piece)
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+
+    assert "Deckt alle 5 Seite(n) genau einmal ab" in dialog._plan_summary.text()  # noqa: SLF001
+
+
+def test_print_dialog_shows_note_for_other_title_overrides(qtbot: object, tmp_path) -> None:
+    pdf_path = tmp_path / "piece.pdf"
+    doc = fitz.open()
+    doc.new_page(width=595, height=842)
+    doc.save(pdf_path)
+    doc.close()
+
+    class CatalogStub:
+        def title_overrides_for_sku(self, sku: str) -> list[str]:
+            assert sku == "XW-6612"
+            return ["Andere Fassung", "Aktueller Titel"]
+
+    container = Container(AppConfig())
+    container.register(ProductCatalogService, lambda _c: CatalogStub())  # type: ignore[return-value]
+    piece = PieceBlock(
+        sku="XW-6612",
+        name="Aktueller Titel",
+        qty_needed=1,
+        print_plan=[{"range": "Alle Seiten", "profile_id": "noten_duplex"}],
+        product=Product(id="p1", sku="XW-6612", name="Aktueller Titel", print_file_path=str(pdf_path)),
+    )
+
+    dialog = ProductPrintConfigDialog(None, container, piece)
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+
+    note = dialog._title_override_note.text()  # noqa: SLF001
+    assert not dialog._title_override_note.isHidden()  # noqa: SLF001
+    assert "Andere Fassung" in note
+    assert "Aktueller Titel" not in note
+
+
+def test_print_dialog_hides_note_when_no_other_title_overrides_exist(qtbot: object, tmp_path) -> None:
+    pdf_path = tmp_path / "piece.pdf"
+    doc = fitz.open()
+    doc.new_page(width=595, height=842)
+    doc.save(pdf_path)
+    doc.close()
+
+    class CatalogStub:
+        def title_overrides_for_sku(self, sku: str) -> list[str]:
+            return []
+
+    container = Container(AppConfig())
+    container.register(ProductCatalogService, lambda _c: CatalogStub())  # type: ignore[return-value]
+    piece = PieceBlock(
+        sku="XW-6612",
+        name="Einziger Titel",
+        qty_needed=1,
+        print_plan=[{"range": "Alle Seiten", "profile_id": "noten_duplex"}],
+        product=Product(id="p1", sku="XW-6612", name="Einziger Titel", print_file_path=str(pdf_path)),
+    )
+
+    dialog = ProductPrintConfigDialog(None, container, piece)
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+
+    assert dialog._title_override_note.isHidden()  # noqa: SLF001
 
 
 def test_print_plan_printer_selection_commits_immediately(qtbot: object, tmp_path) -> None:

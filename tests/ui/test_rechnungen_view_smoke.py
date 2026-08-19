@@ -5,6 +5,7 @@ import subprocess
 from threading import Event
 import types
 
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QCheckBox, QMessageBox, QSpinBox, QToolButton
 
 from xw_office.bootstrap import register_default_services
@@ -649,6 +650,33 @@ def test_rechnungen_open_overview_resolves_wix_classification_and_buyer_notes(qt
     assert any(button.toolTip() == "Druckplan/PDF fuer dieses Produkt einrichten" for button in view._gb_open_products.findChildren(QToolButton))  # noqa: SLF001
 
 
+def test_ready_print_product_reaches_settings_via_right_click(qtbot: object, monkeypatch: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    view._open_print_product_ready = lambda _item: True  # type: ignore[method-assign]  # noqa: SLF001
+    opened: list[str] = []
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        view,
+        "_on_open_product_manage_clicked",
+        lambda item: opened.append(str(item.sku)),
+    )
+
+    row = view._build_open_print_product_row(  # noqa: SLF001
+        PrintProductAggregate(sku="XW-6612", title="Geplantes Produkt", description="Besetzung A", quantity=1)
+    )
+    qtbot.addWidget(row)  # type: ignore[attr-defined]
+    buttons = row.findChildren(QToolButton)
+    assert len(buttons) == 1
+    button = buttons[0]
+
+    assert button.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
+    assert "Rechtsklick" in button.toolTip()
+    button.customContextMenuRequested.emit(QPoint(0, 0))
+
+    assert opened == ["XW-6612"]
+
+
 def test_print_products_remain_for_session_after_completed_run(qtbot: object) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
@@ -906,6 +934,48 @@ def test_individual_product_print_clicks_are_queued_without_blocking_each_other(
     release.set()
     qtbot.waitUntil(lambda: not view._product_print_handles, timeout=2000)  # noqa: SLF001
     assert started == ["XW-FIRST", "XW-SECOND"]
+
+
+def test_product_print_partial_failure_books_completed_copies(qtbot: object, monkeypatch: object) -> None:
+    """Regression test for the XW-6612 reorder's failure path.
+
+    When a multi-copy print job fails partway (e.g. printer goes offline),
+    the copies confirmed before the failure must still be reported/bookable
+    instead of the whole run silently losing that count.
+    """
+    from xw_office.services.printing.planned_pdf_printer import PrintPlanPartialFailure
+
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    view._on_printer_status(True)  # noqa: SLF001
+
+    def fake_prepare(_parent: object, _container: object, *, piece: PieceBlock, copies: int, wait: bool = False):
+        def job() -> None:
+            raise PrintPlanPartialFailure("Drucker offline", completed_copies=2, job_ids=["a", "b"])
+
+        return job
+
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.print_dialog.prepare_piece_pdf_print", fake_prepare)
+
+    results: list[object] = []
+    monkeypatch.setattr(view, "_on_product_print_result", lambda payload: results.append(payload))  # type: ignore[method-assign]
+
+    view._on_product_print_clicked(  # noqa: SLF001
+        PieceBlock(sku="XW-6612", name="Testprodukt", qty_needed=5),
+        5,
+    )
+
+    qtbot.waitUntil(lambda: not view._product_print_handles, timeout=2000)  # noqa: SLF001
+
+    assert results == [
+        {
+            "sku": "XW-6612",
+            "quantity": 2,
+            "stock_warning": "kein sevDesk-Part fuer Bestandsbuchung hinterlegt",
+            "print_warning": "Drucker offline",
+        }
+    ]
 
 
 def test_invoice_product_rows_are_selected_for_batch_print_by_default(qtbot: object) -> None:

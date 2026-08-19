@@ -24,6 +24,20 @@ _PROFILE_ALIASES = {
 }
 
 
+class PrintPlanPartialFailure(RuntimeError):
+    """Raised when a multi-copy plan fails partway through a set.
+
+    ``completed_copies`` counts full sets (every plan row printed once) that
+    the print queue confirmed before the failing row, so callers can credit
+    stock for what was actually produced instead of losing the count.
+    """
+
+    def __init__(self, message: str, *, completed_copies: int, job_ids: list[str]) -> None:
+        super().__init__(message)
+        self.completed_copies = completed_copies
+        self.job_ids = job_ids
+
+
 @dataclass(frozen=True)
 class PlanTarget:
     range_text: str
@@ -153,7 +167,13 @@ def print_pdf_by_plan(
     job_kind: str = "product",
     wait: bool = False,
 ) -> list[str]:
-    """Queue PDF print jobs for configured printer targets without a dialog."""
+    """Queue PDF print jobs for configured printer targets without a dialog.
+
+    Jobs are dispatched copy-by-copy across all plan rows (one full set, then
+    the next), not row-by-row with all copies at once. A multi-row plan (e.g.
+    cover + body + insert) therefore comes off the printers as complete,
+    ready-to-collate sets instead of one block per row.
+    """
     targets = resolve_plan_targets(printing, print_plan=print_plan, profile_id=profile_id)
     if not targets:
         raise RuntimeError("Kein Druckplan oder Profil fuer Produktdruck konfiguriert")
@@ -165,38 +185,45 @@ def print_pdf_by_plan(
         "product" if job_kind not in {"music", "product", "invoice", "label"} else job_kind,
     )
     job_ids: list[str] = []
-    for target in targets:
-        pages = None
-        if page_count is not None:
-            pages = page_indices_from_range_text(target.range_text, page_count=page_count)
-        job = PdfPrintJob(
-            pdf_path=pdf_path,
-            printer_name=target.printer_name,
-            pages=pages,
-            copies=effective_copies,
-            dpi=target.dpi,
-            job_kind=effective_kind,
-            description=f"{job_kind}: {pdf_path}",
-            placement_mode=target.placement_mode,
-            page_size=target.page_size,  # type: ignore[arg-type]
-            orientation=target.orientation,  # type: ignore[arg-type]
-            scale_mode=target.scale_mode,  # type: ignore[arg-type]
-            alignment=target.alignment,  # type: ignore[arg-type]
-            x_offset_mm=target.x_offset_mm,
-            y_offset_mm=target.y_offset_mm,
-            render_color_mode=target.render_color_mode,
-            black_enhancement=target.black_enhancement,
-            black_threshold=target.black_threshold,
-            backend=target.backend,
-            native_pdf_exe=target.native_pdf_exe,
-        )
-        if wait:
-            result = queue.enqueue_and_wait(job)
-            if not result.success:
-                raise RuntimeError(result.message or f"Druck fehlgeschlagen: {target.printer_name}")
-        else:
-            queue.enqueue(job)
-        job_ids.append(job.id)
+    completed_copies = 0
+    for _copy_index in range(effective_copies):
+        for target in targets:
+            pages = None
+            if page_count is not None:
+                pages = page_indices_from_range_text(target.range_text, page_count=page_count)
+            job = PdfPrintJob(
+                pdf_path=pdf_path,
+                printer_name=target.printer_name,
+                pages=pages,
+                copies=1,
+                dpi=target.dpi,
+                job_kind=effective_kind,
+                description=f"{job_kind}: {pdf_path}",
+                placement_mode=target.placement_mode,
+                page_size=target.page_size,  # type: ignore[arg-type]
+                orientation=target.orientation,  # type: ignore[arg-type]
+                scale_mode=target.scale_mode,  # type: ignore[arg-type]
+                alignment=target.alignment,  # type: ignore[arg-type]
+                x_offset_mm=target.x_offset_mm,
+                y_offset_mm=target.y_offset_mm,
+                render_color_mode=target.render_color_mode,
+                black_enhancement=target.black_enhancement,
+                black_threshold=target.black_threshold,
+                backend=target.backend,
+                native_pdf_exe=target.native_pdf_exe,
+            )
+            if wait:
+                result = queue.enqueue_and_wait(job)
+                if not result.success:
+                    raise PrintPlanPartialFailure(
+                        result.message or f"Druck fehlgeschlagen: {target.printer_name}",
+                        completed_copies=completed_copies,
+                        job_ids=job_ids,
+                    )
+            else:
+                queue.enqueue(job)
+            job_ids.append(job.id)
+        completed_copies += 1
     return job_ids
 
 

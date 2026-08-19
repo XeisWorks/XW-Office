@@ -264,6 +264,25 @@ class ProductCatalogService:
         default = config.get("default")
         return dict(default) if isinstance(default, dict) else {}
 
+    def title_overrides_for_sku(self, raw_sku: str) -> list[str]:
+        """Return saved title-specific print-config overrides for one SKU.
+
+        The print-settings dialog edits only the SKU-level default (plus the
+        override matching the piece's own title, if any). Other stored
+        title overrides keep taking precedence for orders under those exact
+        titles, so callers use this to warn the user they were not touched.
+        """
+        sku = raw_sku.strip().upper()
+        if not sku:
+            return []
+        config = self._direct_print_config.get(sku) or {}
+        if not isinstance(config, dict):
+            return []
+        titles = config.get("titles")
+        if not isinstance(titles, dict):
+            return []
+        return sorted(title for title in titles if isinstance(title, str) and title.strip())
+
     def resolve_product_title(self, raw_sku: str, title: str) -> str:
         """Return a canonical title for generic unreleased Wix products."""
 

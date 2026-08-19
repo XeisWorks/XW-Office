@@ -5,8 +5,9 @@ from unittest.mock import patch
 import pytest
 
 from xw_office.core.config import PrintingSection
-from xw_office.services.printing.print_jobs import PdfPrintJob
+from xw_office.services.printing.print_jobs import PdfPrintJob, PrintJobResult
 from xw_office.services.printing.planned_pdf_printer import (
+    PrintPlanPartialFailure,
     page_indices_from_range_text,
     print_pdf_by_plan,
     resolve_plan_targets,
@@ -91,23 +92,59 @@ def test_print_pdf_by_plan_queues_target_with_parsed_pages_and_copies() -> None:
         print_queue=queue,  # type: ignore[arg-type]
     )
 
-    assert len(queue.jobs) == 1
-    assert queue.jobs[0].pages == [1, 2, 3]
-    assert queue.jobs[0].dpi == 600
-    assert queue.jobs[0].copies == 3
-    assert queue.jobs[0].printer_name == "Brochure"
-    assert queue.jobs[0].placement_mode == "calibrated"
-    assert queue.jobs[0].page_size == "A5"
-    assert queue.jobs[0].orientation == "portrait"
-    assert queue.jobs[0].scale_mode == "fit"
-    assert queue.jobs[0].alignment == "center"
-    assert queue.jobs[0].x_offset_mm == -2.0
-    assert queue.jobs[0].y_offset_mm == 0.5
-    assert queue.jobs[0].render_color_mode == "gray"
-    assert queue.jobs[0].black_enhancement == "threshold"
-    assert queue.jobs[0].black_threshold == 200
-    assert queue.jobs[0].backend == "pdf_xchange"
-    assert queue.jobs[0].native_pdf_exe == "C:/Program Files/PDFXEdit.exe"
+    # One job per copy (never one job with copies=N) so a single-row plan
+    # still dispatches N independent, individually confirmable jobs.
+    assert len(queue.jobs) == 3
+    assert all(job.copies == 1 for job in queue.jobs)
+    assert all(job.pages == [1, 2, 3] for job in queue.jobs)
+    assert all(job.dpi == 600 for job in queue.jobs)
+    assert all(job.printer_name == "Brochure" for job in queue.jobs)
+    assert all(job.placement_mode == "calibrated" for job in queue.jobs)
+    assert all(job.page_size == "A5" for job in queue.jobs)
+    assert all(job.orientation == "portrait" for job in queue.jobs)
+    assert all(job.scale_mode == "fit" for job in queue.jobs)
+    assert all(job.alignment == "center" for job in queue.jobs)
+    assert all(job.x_offset_mm == -2.0 for job in queue.jobs)
+    assert all(job.y_offset_mm == 0.5 for job in queue.jobs)
+    assert all(job.render_color_mode == "gray" for job in queue.jobs)
+    assert all(job.black_enhancement == "threshold" for job in queue.jobs)
+    assert all(job.black_threshold == 200 for job in queue.jobs)
+    assert all(job.backend == "pdf_xchange" for job in queue.jobs)
+    assert all(job.native_pdf_exe == "C:/Program Files/PDFXEdit.exe" for job in queue.jobs)
+
+
+def test_print_pdf_by_plan_interleaves_copies_across_plan_rows() -> None:
+    """Regression test for XW-6612: copies must come off as complete sets.
+
+    Before this fix, a 3-row plan printed all N copies of row 1, then all N
+    copies of row 2, then all N copies of row 3 — forcing the user to
+    re-collate the piece by hand. Copies must instead cycle through every
+    row before repeating, in plan order.
+    """
+    printing = _printing_config()
+    queue = _QueueStub()
+
+    print_pdf_by_plan(
+        "C:/tmp/test.pdf",
+        printing,
+        print_plan=[
+            {"range": "1-2", "profile_id": "noten_simplex"},
+            {"range": "3-END", "profile_id": "noten_duplex"},
+        ],
+        page_count=5,
+        copies=3,
+        print_queue=queue,  # type: ignore[arg-type]
+    )
+
+    assert [(job.printer_name, job.pages) for job in queue.jobs] == [
+        ("Simplex", [0, 1]),
+        ("Duplex", [2, 3, 4]),
+        ("Simplex", [0, 1]),
+        ("Duplex", [2, 3, 4]),
+        ("Simplex", [0, 1]),
+        ("Duplex", [2, 3, 4]),
+    ]
+    assert all(job.copies == 1 for job in queue.jobs)
 
 
 def test_print_pdf_by_plan_keeps_different_printers_for_multiple_rows() -> None:
@@ -166,6 +203,58 @@ def test_minimal_profile_keeps_dpi_optional() -> None:
     assert target.black_threshold == 180
     assert target.backend == "qt_raster"
     assert target.native_pdf_exe == ""
+
+
+class _WaitQueueStub:
+    """Fake queue whose ``fail_at``-th job (1-based) reports failure."""
+
+    def __init__(self, fail_at: int) -> None:
+        self.jobs: list[PdfPrintJob] = []
+        self._fail_at = fail_at
+
+    def enqueue(self, job: PdfPrintJob) -> str:
+        self.jobs.append(job)
+        return job.id
+
+    def enqueue_and_wait(self, job: PdfPrintJob, *, timeout_seconds: float = 300.0) -> PrintJobResult:
+        self.jobs.append(job)
+        success = len(self.jobs) != self._fail_at
+        return PrintJobResult(
+            job_id=job.id,
+            success=success,
+            description="",
+            printer_name=job.printer_name,
+            message="" if success else "Drucker offline",
+        )
+
+
+def test_print_pdf_by_plan_reports_completed_copies_on_partial_failure() -> None:
+    """A failure mid-batch must report whole sets already confirmed.
+
+    With two plan rows and the 4th dispatched job failing (copy index 1,
+    row index 1 — i.e. the second row of the second set), exactly one full
+    set (copy 0, both rows) was already confirmed before the failure.
+    """
+    printing = _printing_config()
+    queue = _WaitQueueStub(fail_at=4)
+
+    with pytest.raises(PrintPlanPartialFailure) as exc_info:
+        print_pdf_by_plan(
+            "C:/tmp/test.pdf",
+            printing,
+            print_plan=[
+                {"range": "1-2", "profile_id": "noten_simplex"},
+                {"range": "3-END", "profile_id": "noten_duplex"},
+            ],
+            page_count=5,
+            copies=3,
+            print_queue=queue,  # type: ignore[arg-type]
+            wait=True,
+        )
+
+    assert exc_info.value.completed_copies == 1
+    assert "Drucker offline" in str(exc_info.value)
+    assert len(queue.jobs) == 4
 
 
 def test_unknown_backend_is_rejected_during_plan_resolution() -> None:
