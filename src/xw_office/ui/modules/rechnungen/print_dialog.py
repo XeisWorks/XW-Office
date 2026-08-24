@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_PRODUCT_PRINT_PROFILE_IDS = {"noten_simplex", "noten_duplex", "brochure_mono", "brochure_duo"}
+_PRODUCT_PRINT_PROFILE_IDS = {"noten_simplex", "noten_duplex", "noten_a5", "brochure_mono", "brochure_duo"}
 
 
 def _format_page_ranges(pages: list[int]) -> str:

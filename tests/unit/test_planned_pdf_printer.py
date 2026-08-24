@@ -29,6 +29,12 @@ def _printing_config() -> PrintingSection:
                 "dpi": 600,
             },
             {
+                "id": "noten_a5",
+                "label": "Noten A5",
+                "printer_name": "A5",
+                "dpi": 600,
+            },
+            {
                 "id": "brochure_mono",
                 "label": "Canon Broschuere Mono",
                 "printer_name": "Brochure",
@@ -68,6 +74,14 @@ def test_resolve_plan_targets_maps_legacy_profile_aliases() -> None:
     assert len(targets) == 1
     assert targets[0].printer_name == "Duplex"
     assert targets[0].range_text == "1-3"
+
+    targets = resolve_plan_targets(
+        printing,
+        print_plan=[{"range": "Alle Seiten", "profile_id": "noten_a5"}],
+    )
+
+    assert len(targets) == 1
+    assert targets[0].printer_name == "A5"
 
 
 class _QueueStub:
