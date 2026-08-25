@@ -151,7 +151,7 @@ class PrintDecisionEngine:
     ) -> list[PieceBlock]:
         """Build PieceBlock list from Wix order items, enriched with stock data."""
         blocks: list[PieceBlock] = []
-        for item in wix_items:
+        for item in self._expand_multi_title_items(wix_items):
             block = self._build_block(item)
             blocks.append(block)
         logger.debug(
@@ -161,6 +161,25 @@ class PrintDecisionEngine:
             sum(1 for b in blocks if b.needs_print),
         )
         return blocks
+
+    @staticmethod
+    def _expand_multi_title_items(wix_items: list[WixOrderItem]) -> list[WixOrderItem]:
+        """Split XW-010 into one print item per requested title when safe.
+
+        The customer enters titles line-by-line in a single Wix custom field.
+        Only expand when the number of non-empty lines equals the ordered
+        quantity; otherwise retain the source item so no title is silently
+        assigned to the wrong PDF.
+        """
+
+        expanded: list[WixOrderItem] = []
+        for item in wix_items:
+            titles = [str(title).strip() for title in item.custom_piece_titles if str(title).strip()]
+            if item.sku.strip().upper() == "XW-010" and len(titles) == item.qty:
+                expanded.extend(item.model_copy(update={"name": title, "qty": 1}) for title in titles)
+            else:
+                expanded.append(item)
+        return expanded
 
     def create_plan(
         self,
@@ -216,8 +235,8 @@ class PrintDecisionEngine:
     def _build_block(self, item: WixOrderItem) -> PieceBlock:
         product = self._catalog.resolve_sku(item.sku)
         stock_status: StockStatus | None = None
-        direct_cfg = self._catalog.resolve_print_config(item.sku, title=item.name)
         resolved_name = self._catalog.resolve_product_title(item.sku, item.name)
+        direct_cfg = self._catalog.resolve_print_config(item.sku, title=resolved_name)
 
         if product is None:
             fallback_part = self._part_client.find_part_by_sku(item.sku)

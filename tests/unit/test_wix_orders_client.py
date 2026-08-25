@@ -884,7 +884,28 @@ def test_parse_order_line_item_uses_unreleased_custom_piece_title() -> None:
     )
 
     assert item.name == "Junelklaenge Marsch"
+    assert item.custom_piece_titles == ["Junelklaenge Marsch"]
     assert item.is_unreleased is True
+
+
+def test_parse_order_line_item_keeps_each_multiline_unreleased_title() -> None:
+    item = _parse_order_line_item(
+        {
+            "quantity": 2,
+            "productName": {"original": "Diverse Noten unveroeffentlicht"},
+            "physicalProperties": {"sku": "XW-010"},
+            "catalogReference": {
+                "options": {
+                    "customTextFields": {
+                        "Name des Stueckes / der Stuecke": "Gabriellas Song\nIn deinen Augen"
+                    }
+                }
+            },
+        }
+    )
+
+    assert item.name == "Gabriellas Song\nIn deinen Augen"
+    assert item.custom_piece_titles == ["Gabriellas Song", "In deinen Augen"]
 
 
 def test_cached_order_line_items_are_enriched_with_cached_category_label(tmp_path) -> None:

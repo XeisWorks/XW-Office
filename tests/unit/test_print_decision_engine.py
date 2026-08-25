@@ -163,6 +163,49 @@ def test_xw_010_fuzzy_title_resolves_matching_unreleased_pdf(tmp_path) -> None:
     assert blocks[0].print_profile_id == "noten_a4_duplex"
 
 
+def test_xw_010_expands_multiline_titles_and_uses_canonical_title_configs(tmp_path) -> None:
+    gabriellas_pdf = tmp_path / "Gabriellas Song BH.pdf"
+    augen_pdf = tmp_path / "In deinen Augen BH.pdf"
+    gabriellas_pdf.write_bytes(b"%PDF-1.4 gabriellas")
+    augen_pdf.write_bytes(b"%PDF-1.4 augen")
+    repo = _RepoStub(
+        {
+            "inventory.products": json.dumps(
+                [
+                    {
+                        "sku": "XW-010",
+                        "name": "Diverse Noten unveroeffentlicht",
+                        "print_file_path": "",
+                        "print_profile_id": "noten_a4_duplex",
+                        "print_plan": [{"range": "Alle Seiten", "profile_id": "noten_a4_duplex"}],
+                        "title_print_configs": {
+                            "Gabriellas Song": {"path": str(gabriellas_pdf), "profile_id": "noten_simplex"},
+                            "In deinen Augen": {"path": str(augen_pdf), "profile_id": "noten_duplex"},
+                        },
+                    }
+                ]
+            )
+        }
+    )
+
+    blocks = PrintDecisionEngine(ProductCatalogService(repo), _PartClientStub()).get_piece_blocks(
+        [
+            WixOrderItem(
+                sku="XW-010",
+                name="Gabriellas Song\nIn deinen Augen",
+                qty=2,
+                is_unreleased=True,
+                custom_piece_titles=["da Blechhauf'n - Gabriella's Song", "In deinen Augen"],
+            )
+        ]
+    )
+
+    assert [(block.name, block.qty_needed, block.print_file_path, block.print_profile_id) for block in blocks] == [
+        ("Gabriellas Song", 1, gabriellas_pdf, "noten_simplex"),
+        ("In deinen Augen", 1, augen_pdf, "noten_duplex"),
+    ]
+
+
 def test_xw_010_unknown_title_does_not_fall_back_to_unrelated_default_pdf(tmp_path) -> None:
     default_pdf = tmp_path / "Gabriellas Song BH.pdf"
     default_pdf.write_bytes(b"%PDF-1.4 default")

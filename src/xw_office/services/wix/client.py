@@ -9,7 +9,7 @@ import unicodedata
 from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from xw_office.services.shipping.countries import country_label_for_address, country_name_en
 from xw_office.services.wix.order_cache import WixOrderCache
@@ -687,6 +687,8 @@ class WixOrderItem(BaseModel):
     unit_weight_kg: float = 0.0
     is_digital: bool = False
     is_unreleased: bool = False
+    custom_piece_titles: list[str] = Field(default_factory=list)
+    """Individual titles entered for a multi-title unreleased product."""
 
 
 def _wix_text(value: object) -> str:
@@ -832,6 +834,19 @@ def _unreleased_piece_text(raw: dict[str, Any]) -> str:
     return ""
 
 
+def _unreleased_piece_titles(raw: dict[str, Any]) -> list[str]:
+    """Return the non-empty title lines from Wix's unreleased-piece field.
+
+    Wix stores several requested pieces in one multiline custom field while the
+    line-item quantity carries the authoritative number of pieces.  Keep the
+    individual lines here; the print decision engine can then create one print
+    job per title instead of trying to match a concatenated string to a PDF.
+    """
+
+    text = _unreleased_piece_text(raw)
+    return [line.strip() for line in re.split(r"[\r\n]+", text) if line.strip()]
+
+
 def _line_item_is_digital(raw: dict[str, Any]) -> bool:
     product_type = str(raw.get("productType") or "").strip().lower()
     item_type = raw.get("itemType") if isinstance(raw.get("itemType"), dict) else {}
@@ -957,10 +972,14 @@ def _parse_order_line_item(
     ).strip()
 
     is_unreleased = any(sku.upper().startswith(p) for p in _UNRELEASED_PREFIXES)
+    custom_piece_titles: list[str] = []
     if is_unreleased:
-        piece_text = _unreleased_piece_text(raw)
-        if piece_text:
-            name = piece_text
+        custom_piece_titles = _unreleased_piece_titles(raw)
+        if custom_piece_titles:
+            # Preserve the complete raw field in ``name`` for diagnostics.  A
+            # separate title is selected by PrintDecisionEngine only when its
+            # cardinality agrees with the ordered quantity.
+            name = "\n".join(custom_piece_titles)
 
     return WixOrderItem(
         line_item_id=line_item_id,
@@ -975,6 +994,7 @@ def _parse_order_line_item(
         unit_weight_kg=unit_weight_kg,
         is_digital=_line_item_is_digital(raw),
         is_unreleased=is_unreleased,
+        custom_piece_titles=custom_piece_titles,
     )
 
 

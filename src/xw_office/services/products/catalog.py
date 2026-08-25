@@ -247,17 +247,19 @@ class ProductCatalogService:
             return {}
         titles = config.get("titles") if isinstance(config.get("titles"), dict) else {}
         title_key = str(title or "").strip()
-        if title_key and title_key in titles and isinstance(titles[title_key], dict):
-            return dict(titles[title_key])
-        normalized_title_key = normalize_legacy_title(title_key)
-        if normalized_title_key:
-            for candidate_title, candidate_config in titles.items():
-                if not isinstance(candidate_config, dict):
-                    continue
-                if normalize_legacy_title(str(candidate_title or "")) == normalized_title_key:
-                    return dict(candidate_config)
+        canonical_title = self.resolve_product_title(sku, title_key)
+        for requested_title in (title_key, canonical_title):
+            if requested_title and requested_title in titles and isinstance(titles[requested_title], dict):
+                return dict(titles[requested_title])
+            normalized_title_key = normalize_legacy_title(requested_title)
+            if normalized_title_key:
+                for candidate_title, candidate_config in titles.items():
+                    if not isinstance(candidate_config, dict):
+                        continue
+                    if normalize_legacy_title(str(candidate_title or "")) == normalized_title_key:
+                        return dict(candidate_config)
         if sku in _UNRELEASED_DYNAMIC_SKUS and title_key:
-            dynamic = self._resolve_unreleased_pdf_config(title_key, config)
+            dynamic = self._resolve_unreleased_pdf_config(canonical_title, config)
             # A generic SKU default belongs to a different piece and must never
             # be printed merely because this title could not be resolved.
             return dynamic
@@ -293,8 +295,10 @@ class ProductCatalogService:
         config = self._direct_print_config.get(sku)
         if not isinstance(config, dict):
             return raw_title
-        match = self._resolve_unreleased_pdf_match(raw_title, config)
-        return match[0] if match is not None else raw_title
+        alias_match = self._best_title_match(raw_title, self._load_legacy_unreleased_names())
+        canonical_title = alias_match[0] if alias_match is not None else raw_title
+        match = self._resolve_unreleased_pdf_match(canonical_title, config)
+        return match[0] if match is not None else canonical_title
 
     def _resolve_unreleased_pdf_config(
         self,
