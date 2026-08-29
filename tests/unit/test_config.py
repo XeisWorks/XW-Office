@@ -51,6 +51,7 @@ def test_product_print_profiles_use_pdf_xchange_native_backend() -> None:
     expected_printers = {
         "noten_simplex": "Noten A4 Simplex",
         "noten_duplex": "Noten A4 Duplex",
+        "noten_a5": "Noten A5",
         "brochure_mono": "Canon Broschüre Mono",
         "brochure_duo": "Canon Broschüre Duo",
     }
@@ -61,6 +62,7 @@ def test_product_print_profiles_use_pdf_xchange_native_backend() -> None:
         assert profile.printer_name == printer_name
         assert profile.backend == "pdf_xchange"
         assert profile.native_pdf_exe.endswith("PXCEditor.exe")
+    assert profiles["noten_a5"].rotate_degrees == 90
 
 
 def test_plc_customs_profile_uses_dedicated_unscaled_af_printer() -> None:

@@ -34,6 +34,7 @@ def test_print_queue_worker_executes_jobs_sequentially(monkeypatch) -> None:
     assert pdf_kwargs["placement_mode"] == "paper_origin"
     assert pdf_kwargs["x_offset_mm"] == 0.0
     assert pdf_kwargs["y_offset_mm"] == 0.0
+    assert pdf_kwargs.get("rotate_degrees", 0) == 0
     assert pdf_kwargs["render_color_mode"] == "auto"
     assert pdf_kwargs["black_enhancement"] == "auto_music"
     assert pdf_kwargs["black_threshold"] == 180

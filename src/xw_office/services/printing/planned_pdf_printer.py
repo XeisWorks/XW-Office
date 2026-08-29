@@ -50,6 +50,7 @@ class PlanTarget:
     alignment: str
     x_offset_mm: float
     y_offset_mm: float
+    rotate_degrees: int
     render_color_mode: RenderColorMode
     black_enhancement: BlackEnhancement
     black_threshold: int
@@ -121,6 +122,7 @@ def resolve_plan_targets(
                     alignment=_alignment(resolved.alignment),
                     x_offset_mm=float(resolved.x_offset_mm),
                     y_offset_mm=float(resolved.y_offset_mm),
+                    rotate_degrees=_rotate_degrees(resolved.rotate_degrees),
                     render_color_mode=_render_color_mode(resolved.render_color_mode),
                     black_enhancement=_black_enhancement(resolved.black_enhancement),
                     black_threshold=int(resolved.black_threshold),
@@ -146,6 +148,7 @@ def resolve_plan_targets(
             alignment=_alignment(resolved.alignment),
             x_offset_mm=float(resolved.x_offset_mm),
             y_offset_mm=float(resolved.y_offset_mm),
+            rotate_degrees=_rotate_degrees(resolved.rotate_degrees),
             render_color_mode=_render_color_mode(resolved.render_color_mode),
             black_enhancement=_black_enhancement(resolved.black_enhancement),
             black_threshold=int(resolved.black_threshold),
@@ -206,6 +209,7 @@ def print_pdf_by_plan(
                 alignment=target.alignment,  # type: ignore[arg-type]
                 x_offset_mm=target.x_offset_mm,
                 y_offset_mm=target.y_offset_mm,
+                rotate_degrees=target.rotate_degrees,
                 render_color_mode=target.render_color_mode,
                 black_enhancement=target.black_enhancement,
                 black_threshold=target.black_threshold,
@@ -283,6 +287,13 @@ def _alignment(value: str) -> str:
     if normalized in {"top_left", "center"}:
         return normalized
     return "top_left"
+
+
+def _rotate_degrees(value: int) -> int:
+    normalized = int(value or 0) % 360
+    if normalized in {0, 90, 180, 270}:
+        return normalized
+    raise RuntimeError(f"Ungueltige PDF-Drehung im Profil: {value}")
 
 
 def _render_color_mode(value: str) -> RenderColorMode:

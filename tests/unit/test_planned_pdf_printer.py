@@ -33,6 +33,7 @@ def _printing_config() -> PrintingSection:
                 "label": "Noten A5",
                 "printer_name": "A5",
                 "dpi": 600,
+                "rotate_degrees": 90,
             },
             {
                 "id": "brochure_mono",
@@ -82,6 +83,7 @@ def test_resolve_plan_targets_maps_legacy_profile_aliases() -> None:
 
     assert len(targets) == 1
     assert targets[0].printer_name == "A5"
+    assert targets[0].rotate_degrees == 90
 
 
 class _QueueStub:
@@ -212,6 +214,7 @@ def test_minimal_profile_keeps_dpi_optional() -> None:
     assert target.alignment == "top_left"
     assert target.x_offset_mm == 0.0
     assert target.y_offset_mm == 0.0
+    assert target.rotate_degrees == 0
     assert target.render_color_mode == "auto"
     assert target.black_enhancement == "auto"
     assert target.black_threshold == 180

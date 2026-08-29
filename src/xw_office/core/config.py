@@ -93,6 +93,7 @@ class PrintProfile:
     alignment: str = "top_left"
     x_offset_mm: float = 0.0
     y_offset_mm: float = 0.0
+    rotate_degrees: int = 0
     render_color_mode: str = "auto"
     black_enhancement: str = "auto"
     black_threshold: int = 180
@@ -132,6 +133,7 @@ class PrintingSection:
             alignment=str(entry.get("alignment") or "top_left"),
             x_offset_mm=float(entry.get("x_offset_mm") or 0.0),
             y_offset_mm=float(entry.get("y_offset_mm") or 0.0),
+            rotate_degrees=int(entry.get("rotate_degrees") or 0),
             render_color_mode=str(entry.get("render_color_mode") or "auto"),
             black_enhancement=str(entry.get("black_enhancement") or "auto"),
             black_threshold=int(entry.get("black_threshold") or 180),

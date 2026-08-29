@@ -102,6 +102,7 @@ printing:
       printer_name: "Noten A5"
       backend: "pdf_xchange"
       native_pdf_exe: "C:/Program Files/PDF-XChange/PDF Editor/PXCEditor.exe"
+      rotate_degrees: 90
     - id: "brochure_mono"
       label: "Canon Broschüre Mono"
       printer_name: "Canon Broschüre Mono"

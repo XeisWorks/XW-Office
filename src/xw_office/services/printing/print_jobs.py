@@ -74,6 +74,7 @@ class PdfPrintJob:
     alignment: AlignmentMode = "top_left"
     x_offset_mm: float = 0.0
     y_offset_mm: float = 0.0
+    rotate_degrees: int = 0
     render_color_mode: RenderColorMode = "auto"
     black_enhancement: BlackEnhancement = "auto"
     black_threshold: int = 180

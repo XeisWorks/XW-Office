@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 
+import fitz
 import pytest
 
 from xw_office.services.printing.pdf_backends import (
@@ -52,7 +53,7 @@ def test_pdf_xchange_builds_silent_native_command_with_pages_and_copies(
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(
         "xw_office.services.printing.pdf_backends._extract_pdf_pages",
-        lambda _pdf_path, _pages: str(pages_pdf),
+        lambda _pdf_path, _pages, **_kwargs: str(pages_pdf),
     )
     monkeypatch.setattr("xw_office.services.printing.pdf_backends._WindowsSpoolerWatcher", _FakeSpoolerWatcher)
     job = PdfPrintJob(
@@ -118,6 +119,30 @@ def test_pdf_xchange_command_keeps_each_plan_printer_explicit() -> None:
 
     assert first[1:] == ["/printto:default=yes;showui=no", "Simplex", "score.pdf"]
     assert second[1:] == ["/printto:default=yes;showui=no", "Duplex", "score.pdf"]
+
+
+def test_prepare_native_print_pdf_can_rotate_full_document(tmp_path: Path) -> None:
+    from xw_office.services.printing.pdf_backends import _prepare_native_print_pdf
+
+    pdf = tmp_path / "landscape.pdf"
+    source = fitz.open()
+    source.new_page(width=595, height=420)
+    source.new_page(width=595, height=420)
+    source.save(pdf)
+    source.close()
+
+    prepared = _prepare_native_print_pdf(str(pdf), None, rotate_degrees=90)
+
+    try:
+        assert prepared.path != str(pdf)
+        rotated = fitz.open(prepared.path)
+        try:
+            assert rotated.page_count == 2
+            assert [page.rotation for page in rotated] == [90, 90]
+        finally:
+            rotated.close()
+    finally:
+        Path(prepared.path).unlink(missing_ok=True)
 
 
 def test_pdf_xchange_without_spooler_confirmation_fails_closed(

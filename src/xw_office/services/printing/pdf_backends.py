@@ -63,7 +63,11 @@ class NativePdfCliBackend(PdfPrintBackend):
         if not pdf_path.is_file():
             raise RuntimeError(f"Produkt-PDF wurde nicht gefunden: {pdf_path}")
 
-        prepared_pdf = _prepare_native_print_pdf(str(pdf_path), job.pages)
+        prepared_pdf = _prepare_native_print_pdf(
+            str(pdf_path),
+            job.pages,
+            rotate_degrees=job.rotate_degrees,
+        )
 
         try:
             if not self._executable_path or not executable.is_file():
@@ -179,18 +183,31 @@ class _PreparedNativePdf:
         timer.start()
 
 
-def _prepare_native_print_pdf(pdf_path: str, pages: list[int] | None) -> _PreparedNativePdf:
-    if pages is None:
+def _prepare_native_print_pdf(
+    pdf_path: str,
+    pages: list[int] | None,
+    *,
+    rotate_degrees: int = 0,
+) -> _PreparedNativePdf:
+    normalized_rotation = int(rotate_degrees or 0) % 360
+    if normalized_rotation not in {0, 90, 180, 270}:
+        raise RuntimeError(f"Ungueltige PDF-Drehung im Profil: {rotate_degrees}")
+    if pages is None and normalized_rotation == 0:
         return _PreparedNativePdf(path=str(pdf_path), cleanup=False)
-    temp_path = _extract_pdf_pages(pdf_path, pages)
+    temp_path = _extract_pdf_pages(pdf_path, pages, rotate_degrees=normalized_rotation)
     if not temp_path or temp_path == str(pdf_path):
         return _PreparedNativePdf(path=str(pdf_path), cleanup=False)
     return _PreparedNativePdf(path=temp_path, cleanup=True)
 
 
-def _extract_pdf_pages(pdf_path: str, pages: list[int]) -> str:
-    page_indices = sorted({int(page) for page in pages if int(page) >= 0})
-    if not page_indices:
+def _extract_pdf_pages(
+    pdf_path: str,
+    pages: list[int] | None,
+    *,
+    rotate_degrees: int = 0,
+) -> str:
+    page_indices = None if pages is None else sorted({int(page) for page in pages if int(page) >= 0})
+    if page_indices == []:
         return str(pdf_path)
     try:
         import fitz  # type: ignore[import-untyped]
@@ -200,9 +217,13 @@ def _extract_pdf_pages(pdf_path: str, pages: list[int]) -> str:
     target = fitz.open()
     try:
         max_page = source.page_count - 1
-        for page_index in page_indices:
+        selected_indices = range(source.page_count) if page_indices is None else page_indices
+        for page_index in selected_indices:
             if page_index <= max_page:
                 target.insert_pdf(source, from_page=page_index, to_page=page_index)
+                if rotate_degrees:
+                    page = target[target.page_count - 1]
+                    page.set_rotation((int(page.rotation or 0) + rotate_degrees) % 360)
         if target.page_count == 0:
             raise RuntimeError("Seitenauswahl enthaelt keine gueltigen PDF-Seiten")
         handle = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="xw_print_pages_")
