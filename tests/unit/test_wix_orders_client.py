@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from time import sleep
 from typing import Any
 import httpx
 import pytest
@@ -7,6 +10,64 @@ import pytest
 from xw_office.services.wix.client import WixOrdersClient
 from xw_office.services.wix.client import _parse_order_line_item
 from xw_office.services.wix.order_cache import WixOrderCache
+
+
+class _Secrets:
+    def get_secret(self, key: str) -> str:
+        return {"WIX_API_KEY": "key", "WIX_SITE_ID": "site", "WIX_ACCOUNT_ID": ""}.get(key, "")
+
+
+def test_concurrent_cold_resolves_share_one_upstream_lookup() -> None:
+    client = WixOrdersClient(secret_service=_Secrets())  # type: ignore[arg-type]
+    calls = 0
+
+    def search(field: str, value: str) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        assert field == "number"
+        assert value == "20999"
+        sleep(0.08)
+        return {"id": "order-1", "number": value, "lineItems": []}
+
+    client._search_order_by_field = search  # type: ignore[method-assign]
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        results = list(pool.map(client.resolve_order, ["20999", "20999", "20999"]))
+
+    assert calls == 1
+    assert [result["id"] for result in results] == ["order-1", "order-1", "order-1"]
+
+
+def test_raw_order_is_cached_before_optional_category_enrichment_finishes(tmp_path) -> None:
+    cache = WixOrderCache(tmp_path / "cache.sqlite")
+    enrichment_started = Event()
+    release_enrichment = Event()
+
+    class _SlowProductDetails:
+        def get_product(self, _product_id: str):
+            enrichment_started.set()
+            assert release_enrichment.wait(timeout=1)
+            return None
+
+    client = WixOrdersClient(
+        secret_service=_Secrets(),  # type: ignore[arg-type]
+        order_cache=cache,
+        product_details_client=_SlowProductDetails(),  # type: ignore[arg-type]
+    )
+    client._search_order_by_field = lambda _field, value: {  # type: ignore[method-assign]
+        "id": "order-2",
+        "number": value,
+        "lineItems": [{"catalogReference": {"catalogItemId": "product-1"}}],
+    }
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(client.resolve_order, "21000")
+        assert enrichment_started.wait(timeout=1)
+        cached = cache.get_order(site_id="site", account_id="", reference="21000")
+        assert cached is not None
+        assert cached.order["id"] == "order-2"
+        release_enrichment.set()
+        assert future.result(timeout=1)["id"] == "order-2"
 
 
 def test_latest_shipping_address_uses_newest_matching_cached_order(tmp_path, monkeypatch) -> None:

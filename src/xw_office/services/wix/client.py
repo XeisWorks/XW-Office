@@ -6,6 +6,8 @@ import logging
 import re
 import time
 import unicodedata
+from dataclasses import dataclass
+from threading import Event, RLock
 from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
@@ -50,6 +52,12 @@ class CancellationToken(Protocol):
     def cancelled(self) -> bool: ...
 
     def raise_if_cancelled(self) -> None: ...
+
+
+@dataclass
+class _InFlightOrder:
+    done: Event
+    result: dict[str, Any] | None = None
 
 
 class WixProduct(BaseModel):
@@ -1011,6 +1019,7 @@ class WixOrdersClient:
         orders_base: str = _ORDERS_BASE,
         order_cache: WixOrderCache | None = None,
         product_details_client: "WixProductDetailsClient | None" = None,
+        http_client: httpx.Client | None = None,
     ) -> None:
         self._secrets = secret_service
         self._orders_base = orders_base.rstrip("/")
@@ -1018,6 +1027,26 @@ class WixOrdersClient:
         self._product_details_client = product_details_client
         self._product_category_memory: dict[str, str] = {}
         self._category_names_memory: dict[str, str] | None = None
+        self._http_client = http_client
+        self._owns_http_client = http_client is None
+        self._http_client_lock = RLock()
+        self._inflight_orders: dict[tuple[str, bool], _InFlightOrder] = {}
+        self._inflight_orders_lock = RLock()
+
+    def _orders_http_client(self) -> httpx.Client:
+        """Return the lazily-created client shared by hot order lookups."""
+        with self._http_client_lock:
+            if self._http_client is None:
+                self._http_client = httpx.Client(timeout=_TIMEOUT)
+            return self._http_client
+
+    def close(self) -> None:
+        """Release the owned HTTP pool during orderly application shutdown."""
+        with self._http_client_lock:
+            client = self._http_client
+            self._http_client = None
+        if client is not None and self._owns_http_client:
+            client.close()
 
     def _api_key(self) -> str:
         return self._secrets.get_secret("WIX_API_KEY") if self._secrets else ""
@@ -1314,18 +1343,17 @@ class WixOrdersClient:
         }
 
     def _get_order_by_id(self, order_id: str) -> dict[str, Any]:
-        with httpx.Client(timeout=_TIMEOUT) as client:
-            try:
-                resp = client.get(
-                    f"{self._orders_base}/orders/{order_id}",
-                    headers=self._headers(),
-                )
-                resp.raise_for_status()
-                payload = resp.json()
-                return payload.get("order") or payload or {}
-            except httpx.HTTPError as exc:
-                logger.warning("WixOrdersClient GET order/%s failed: %s", order_id, exc)
-                return {}
+        try:
+            resp = self._orders_http_client().get(
+                f"{self._orders_base}/orders/{order_id}",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            return payload.get("order") or payload or {}
+        except httpx.HTTPError as exc:
+            logger.warning("WixOrdersClient GET order/%s failed: %s", order_id, exc)
+            return {}
 
     def _search_order_by_field(self, field: str, value: str) -> dict[str, Any]:
         body = {
@@ -1334,20 +1362,19 @@ class WixOrdersClient:
                 "cursorPaging": {"limit": 25},
             }
         }
-        with httpx.Client(timeout=_TIMEOUT) as client:
-            try:
-                resp = client.post(
-                    f"{self._orders_base}/orders/search",
-                    headers=self._headers(),
-                    json=body,
-                )
-                resp.raise_for_status()
-                payload = resp.json()
-                orders = payload.get("orders") or []
-                return self._pick_exact_order_match(str(value), orders)
-            except httpx.HTTPError as exc:
-                logger.warning("WixOrdersClient search %s=%s failed: %s", field, value, exc)
-                return {}
+        try:
+            resp = self._orders_http_client().post(
+                f"{self._orders_base}/orders/search",
+                headers=self._headers(),
+                json=body,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            orders = payload.get("orders") or []
+            return self._pick_exact_order_match(str(value), orders)
+        except httpx.HTTPError as exc:
+            logger.warning("WixOrdersClient search %s=%s failed: %s", field, value, exc)
+            return {}
 
     @staticmethod
     def _normalize_order_number(value: str) -> str:
@@ -1658,32 +1685,69 @@ class WixOrdersClient:
             cached = self._cached_order(ref)
             if cached is not None:
                 return cached
-        if cancel_token is not None:
-            cancel_token.raise_if_cancelled()
+        return self._resolve_order_single_flight(ref, use_cache=use_cache, cancel_token=cancel_token)
+
+    def _resolve_order_single_flight(
+        self,
+        ref: str,
+        *,
+        use_cache: bool,
+        cancel_token: CancellationToken | None,
+    ) -> dict[str, Any]:
+        """Share one cold resolve per reference without sharing cancellation.
+
+        A cancelled UI consumer may stop waiting, but must not cancel the
+        upstream request another selected row or background task is using.
+        """
+        key = (ref, use_cache)
+        with self._inflight_orders_lock:
+            flight = self._inflight_orders.get(key)
+            if flight is None:
+                flight = _InFlightOrder(done=Event())
+                self._inflight_orders[key] = flight
+                leader = True
+            else:
+                leader = False
+        if not leader:
+            while not flight.done.wait(0.05):
+                if cancel_token is not None:
+                    cancel_token.raise_if_cancelled()
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
+            return dict(flight.result or {})
+
+        try:
+            # Do not pass a consumer's cancellation token into shared work.
+            result = self._resolve_order_upstream(ref, use_cache=use_cache)
+            flight.result = dict(result)
+            return result
+        finally:
+            flight.done.set()
+            with self._inflight_orders_lock:
+                self._inflight_orders.pop(key, None)
+
+    def _resolve_order_upstream(self, ref: str, *, use_cache: bool) -> dict[str, Any]:
         if self._looks_like_uuid(ref):
             order_by_id = self._get_order_by_id(ref)
             if order_by_id:
+                # Persist the usable raw snapshot before optional category I/O.
+                self._cache_order(ref, order_by_id)
                 order_by_id = self._order_with_enriched_line_item_categories(ref, order_by_id)
                 self._cache_order(ref, order_by_id)
                 return order_by_id
-        if cancel_token is not None:
-            cancel_token.raise_if_cancelled()
         order = self._search_order_by_field("number", ref)
-        if cancel_token is not None:
-            cancel_token.raise_if_cancelled()
         if not order:
             order = self._search_order_by_field("orderNumber", ref)
-        if cancel_token is not None:
-            cancel_token.raise_if_cancelled()
         if not order and not ref.startswith("00"):
             digits = "".join(c for c in ref if c.isdigit())
             if digits and digits != ref:
                 order = self._search_order_by_field("number", digits)
-                if cancel_token is not None:
-                    cancel_token.raise_if_cancelled()
                 if not order:
                     order = self._search_order_by_field("orderNumber", digits)
         if order:
+            # A second consumer can now use the raw order while enrichment
+            # performs optional product/category lookups.
+            self._cache_order(ref, order)
             order = self._order_with_enriched_line_item_categories(ref, order)
             self._cache_order(ref, order)
         elif use_cache:
