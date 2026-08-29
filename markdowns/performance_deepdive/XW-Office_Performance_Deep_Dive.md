@@ -20,6 +20,8 @@ Die Skizze wurde gegen den aktuellen Code verifiziert und in den folgenden Punkt
 
 Abgesichert sind die Änderungen mit Request-Count-Tests für Stock-Snapshots und Wix-Single-Flight sowie Cache-only-Tests für die Open-Overview. Vollständige P50/P95-Telemetrie und progressive Batches sind noch offen.
 
+Nachtrag 2026-08-29: Die App führt nun prozesslokale Counter für Stock-Snapshot- und Wix-Single-Flight/Cache-Hits sowie benannte Zeitspannen. Sie sind über `MainWindow.performance_metrics_snapshot()` für Diagnose und Tests abrufbar. `WixProductDetailsClient` verwendet jetzt ebenfalls einen langlebigen Pool. Der PLC-Archivindex wird beim Anzeigen von `RECHNUNGEN` im Hintergrund aufgebaut; die View führt Archiv-Lookups anschließend ohne Glob aus und wartet im Ausnahmefall sicher auf den Index, statt eine potenziell doppelte PLC-Sendung zu riskieren. Progressive Overview-Batches bleiben der einzige noch nicht umgesetzte Punkt.
+
 ## Executive Summary
 
 Ja – es gibt **deutliche, grundsätzliche Performance-Hebel**.

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+from threading import RLock
 
 from xw_office.services.plc.customs_document import (
     customs_a5_print_path,
@@ -28,7 +29,9 @@ class PlcLabelArchive:
         )
         self._root = root.expanduser().resolve()
         self._index_by_pair: dict[tuple[str, str], Path] = {}
-        self._index_snapshot: tuple[int, int] = (-1, -1)
+        self._customs_index_by_pair: dict[tuple[str, str], Path] = {}
+        self._index_ready = False
+        self._index_lock = RLock()
 
     @staticmethod
     def _default_root() -> Path:
@@ -90,37 +93,31 @@ class PlcLabelArchive:
         candidate = self.customs_path_for(shipment)
         return candidate if candidate.is_file() else None
 
-    def find_customs_for_invoice(self, *, order_reference: str, invoice_number: str) -> Path | None:
+    def find_customs_for_invoice(
+        self,
+        *,
+        order_reference: str,
+        invoice_number: str,
+        refresh: bool = True,
+    ) -> Path | None:
         """Return the newest archived customs PDF for one order/invoice pair."""
         order = _safe_filename_part(order_reference, fallback="")
         invoice = _safe_filename_part(invoice_number, fallback="")
         if not order or not invoice:
             return None
 
-        customs_root = self._root / "customs"
-        if not customs_root.is_dir():
-            return None
-
         candidates: list[Path] = []
-        exact = customs_root / f"{order} - {invoice} - Zollformular.pdf"
+        exact = self._root / "customs" / f"{order} - {invoice} - Zollformular.pdf"
         if exact.is_file():
             candidates.append(exact)
-
-        expected_pair = (_strip_numeric_suffix(order), _strip_numeric_suffix(invoice))
-        suffix = " - Zollformular"
-        for file_path in customs_root.glob("*.pdf"):
-            if not file_path.is_file() or not file_path.stem.endswith(suffix):
-                continue
-            pair_stem = file_path.stem[: -len(suffix)]
-            if " - " not in pair_stem:
-                continue
-            raw_order, raw_invoice = pair_stem.split(" - ", 1)
-            candidate_pair = (
-                _strip_numeric_suffix(_safe_filename_part(raw_order, fallback="")),
-                _strip_numeric_suffix(_safe_filename_part(raw_invoice, fallback="")),
+        if refresh:
+            self.refresh_index()
+        with self._index_lock:
+            indexed = self._customs_index_by_pair.get(
+                (_strip_numeric_suffix(order), _strip_numeric_suffix(invoice))
             )
-            if candidate_pair == expected_pair:
-                candidates.append(file_path)
+        if indexed is not None and indexed.is_file():
+            candidates.append(indexed)
 
         if not candidates:
             return None
@@ -132,7 +129,13 @@ class PlcLabelArchive:
         candidate = self.path_for(shipment)
         return candidate if candidate.is_file() else None
 
-    def find_for_invoice(self, *, order_reference: str, invoice_number: str) -> Path | None:
+    def find_for_invoice(
+        self,
+        *,
+        order_reference: str,
+        invoice_number: str,
+        refresh: bool = True,
+    ) -> Path | None:
         """Return newest archived label for one order/invoice pair."""
         order = _safe_filename_part(order_reference, fallback="")
         invoice = _safe_filename_part(invoice_number, fallback="")
@@ -144,8 +147,10 @@ class PlcLabelArchive:
         if exact.is_file():
             candidates.append(exact)
 
-        self._refresh_index_if_needed()
-        indexed = self._index_by_pair.get((order, invoice))
+        if refresh:
+            self.refresh_index()
+        with self._index_lock:
+            indexed = self._index_by_pair.get((_strip_numeric_suffix(order), _strip_numeric_suffix(invoice)))
         if indexed is not None and indexed.is_file():
             candidates.append(indexed)
 
@@ -154,38 +159,36 @@ class PlcLabelArchive:
         candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
         return candidates[0]
 
-    def _refresh_index_if_needed(self) -> None:
+    @property
+    def index_ready(self) -> bool:
+        with self._index_lock:
+            return self._index_ready
+
+    def refresh_index(self) -> tuple[int, int]:
+        """Scan label/customs archive once; intended for a background worker."""
+        labels: dict[tuple[str, str], Path] = {}
+        customs: dict[tuple[str, str], Path] = {}
         if not self._root.exists() or not self._root.is_dir():
-            self._index_by_pair = {}
-            self._index_snapshot = (-1, -1)
-            return
-        root_stat = self._root.stat()
-        snapshot = (int(root_stat.st_mtime_ns), int(root_stat.st_size))
-        if snapshot == self._index_snapshot:
-            return
-
-        index: dict[tuple[str, str], Path] = {}
+            with self._index_lock:
+                self._index_by_pair = labels
+                self._customs_index_by_pair = customs
+                self._index_ready = True
+            return 0, 0
         for file_path in self._root.glob("*.pdf"):
-            if not file_path.is_file():
-                continue
-            stem = file_path.stem
-            if " - " not in stem:
-                continue
-            raw_order, raw_invoice = stem.split(" - ", 1)
-            order = _safe_filename_part(raw_order, fallback="")
-            invoice = _safe_filename_part(raw_invoice, fallback="")
-            if not order or not invoice:
-                continue
-            key = (_strip_numeric_suffix(order), _strip_numeric_suffix(invoice))
-            current = index.get(key)
-            if current is None:
-                index[key] = file_path
-                continue
-            if file_path.stat().st_mtime > current.stat().st_mtime:
-                index[key] = file_path
-
-        self._index_by_pair = index
-        self._index_snapshot = snapshot
+            pair = _label_pair(file_path)
+            if pair is not None:
+                _remember_newer(labels, pair, file_path)
+        customs_root = self._root / "customs"
+        if customs_root.is_dir():
+            for file_path in customs_root.glob("*.pdf"):
+                pair = _customs_pair(file_path)
+                if pair is not None:
+                    _remember_newer(customs, pair, file_path)
+        with self._index_lock:
+            self._index_by_pair = labels
+            self._customs_index_by_pair = customs
+            self._index_ready = True
+        return len(labels), len(customs)
 
 
 def _safe_filename_part(value: object, *, fallback: str) -> str:
@@ -203,3 +206,31 @@ def _archive_recency_key(path: Path) -> tuple[int, int]:
     """Break equal Windows mtimes in favor of the later shipment suffix."""
     suffixes = [int(value) for value in re.findall(r"-(\d{1,2})(?=\s|$)", path.stem)]
     return (int(path.stat().st_mtime_ns), max(suffixes, default=0))
+
+
+def _remember_newer(index: dict[tuple[str, str], Path], key: tuple[str, str], path: Path) -> None:
+    current = index.get(key)
+    if current is None or _archive_recency_key(path) > _archive_recency_key(current):
+        index[key] = path
+
+
+def _label_pair(path: Path) -> tuple[str, str] | None:
+    if not path.is_file() or " - " not in path.stem:
+        return None
+    raw_order, raw_invoice = path.stem.split(" - ", 1)
+    order = _strip_numeric_suffix(_safe_filename_part(raw_order, fallback=""))
+    invoice = _strip_numeric_suffix(_safe_filename_part(raw_invoice, fallback=""))
+    return (order, invoice) if order and invoice else None
+
+
+def _customs_pair(path: Path) -> tuple[str, str] | None:
+    suffix = " - Zollformular"
+    if not path.is_file() or not path.stem.endswith(suffix):
+        return None
+    stem = path.stem[: -len(suffix)]
+    if " - " not in stem:
+        return None
+    raw_order, raw_invoice = stem.split(" - ", 1)
+    order = _strip_numeric_suffix(_safe_filename_part(raw_order, fallback=""))
+    invoice = _strip_numeric_suffix(_safe_filename_part(raw_invoice, fallback=""))
+    return (order, invoice) if order and invoice else None

@@ -59,6 +59,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from xw_office.core.performance_metrics import performance_metrics
 from xw_office.core.signals import AppSignals
 from xw_office.core.types import ModuleKey
 from xw_office.core.worker import BackgroundWorker
@@ -1136,6 +1137,9 @@ class RechnungenView(QWidget):
         self._open_product_quantities: dict[tuple[str, str, str], int] = {}
         self._last_print_all_products_key: tuple[tuple[str, str, str, int], ...] | None = None
         self._plc_label_archive = PlcLabelArchive()
+        self._plc_archive_index_handle: JobHandle | None = None
+        self._plc_archive_index_ready = False
+        self._pending_plc_archive_popup: InvoiceSummary | None = None
         self._selected_plc_label_path = ""
         self._plc_archive_lookup_cache: dict[tuple[str, str], str] = {}
         self._printer_status_initialized = False
@@ -1554,6 +1558,7 @@ class RechnungenView(QWidget):
         if not self._printer_status_initialized:
             self._printer_status_initialized = True
             QTimer.singleShot(0, self._initialize_printer_status)
+        self._prime_plc_archive_index()
         if not self._did_initial_load:
             self._did_initial_load = True
             if self._has_sevdesk_token():
@@ -3448,7 +3453,16 @@ class RechnungenView(QWidget):
         return ""
 
     def _open_plc_post_popup(self, summary: InvoiceSummary) -> None:
+        popup_started_at = time.perf_counter()
+        if not self._plc_archive_index_ready:
+            self._pending_plc_archive_popup = summary
+            self._prime_plc_archive_index()
+            signals: AppSignals = self._container.resolve(AppSignals)
+            signals.status_message.emit("PLC-Archiv wird vorbereitet…", 2500)
+            performance_metrics.record_elapsed("plc_click_to_index_wait_ms", popup_started_at)
+            return
         existing_label_path = self._resolve_plc_archive_path_for_summary(summary)
+        performance_metrics.record_elapsed("plc_click_to_dialog_setup_ms", popup_started_at)
         if existing_label_path:
             existing_customs_path = self._resolve_plc_customs_archive_path_for_summary(summary)
             # The calibrated A5 derivative is generated only when the user
@@ -3921,7 +3935,11 @@ class RechnungenView(QWidget):
         cached = self._plc_archive_lookup_cache.get(cache_key)
         if cached is not None:
             return cached
-        path = self._plc_label_archive.find_for_invoice(order_reference=order_ref, invoice_number=invoice_no)
+        path = self._plc_label_archive.find_for_invoice(
+            order_reference=order_ref,
+            invoice_number=invoice_no,
+            refresh=False,
+        )
         resolved = os.fspath(path) if path is not None else ""
         self._plc_archive_lookup_cache[cache_key] = resolved
         return resolved
@@ -3934,8 +3952,47 @@ class RechnungenView(QWidget):
         path = self._plc_label_archive.find_customs_for_invoice(
             order_reference=order_ref,
             invoice_number=invoice_no,
+            refresh=False,
         )
         return os.fspath(path) if path is not None else ""
+
+    def _prime_plc_archive_index(self) -> None:
+        if self._plc_archive_index_ready:
+            return
+        if self._plc_archive_index_handle is not None and self._plc_archive_index_handle.running:
+            return
+
+        def job(token: CancelToken) -> tuple[int, int]:
+            token.raise_if_cancelled()
+            result = self._plc_label_archive.refresh_index()
+            token.raise_if_cancelled()
+            return result
+
+        self._plc_archive_index_handle = self._background_jobs.submit_callable(
+            queue="cpu",
+            priority=5,
+            key="plc-archive-index",
+            fn=job,
+            on_result=self._on_plc_archive_index_ready,
+            on_error=self._on_plc_archive_index_error,
+            on_finished=lambda: setattr(self, "_plc_archive_index_handle", None),
+            owner=self,
+            replace="coalesce_pending",
+        )
+
+    def _on_plc_archive_index_ready(self, payload: object) -> None:
+        counts = payload if isinstance(payload, tuple) else (0, 0)
+        self._plc_archive_index_ready = True
+        self._plc_archive_lookup_cache.clear()
+        logger.debug("PLC archive index ready labels=%s customs=%s", counts[0], counts[1])
+        self._update_plc_controls()
+        pending = self._pending_plc_archive_popup
+        self._pending_plc_archive_popup = None
+        if pending is not None and not self._shutting_down:
+            QTimer.singleShot(0, lambda summary=pending: self._open_plc_post_popup(summary))
+
+    def _on_plc_archive_index_error(self, exc: Exception) -> None:
+        logger.warning("PLC archive index build failed: %s", exc)
 
     def _on_open_plc_label_clicked(self) -> None:
         path = str(self._selected_plc_label_path or "").strip()
@@ -4199,6 +4256,7 @@ class RechnungenView(QWidget):
         self._overlay.hide()
 
     def _refresh_detail_for_selection(self) -> None:
+        selection_started_at = time.perf_counter()
         summary = self._selected_summary()
         self._detail_context_seq += 1
         seq = self._detail_context_seq
@@ -4206,6 +4264,7 @@ class RechnungenView(QWidget):
             self._reset_detail()
             return
         self._populate_detail_for_summary(summary)
+        performance_metrics.record_elapsed("invoice_select_to_immediate_paint_ms", selection_started_at)
         QTimer.singleShot(0, lambda s=summary, token=seq: self._hydrate_detail_for_selection(s, token))
 
     def _populate_detail_for_summary(self, summary: InvoiceSummary) -> None:

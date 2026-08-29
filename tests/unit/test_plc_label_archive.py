@@ -105,6 +105,23 @@ def test_customs_archive_lookup_finds_newest_suffixed_shipment(tmp_path) -> None
     assert found == second_path
 
 
+def test_background_index_serves_suffixed_label_and_customs_lookups_without_rescan(tmp_path) -> None:
+    archive = PlcLabelArchive(tmp_path)
+    second = _shipment(reference="20868-2", invoice_number="RE-261952-2")
+    label = archive.save(second, b"%PDF-1.7\nPLC label")
+    customs = archive.save_customs_document(second, b"%PDF-1.7\nCN23")
+
+    assert archive.index_ready is False
+    assert archive.refresh_index() == (1, 1)
+    assert archive.index_ready is True
+    assert archive.find_for_invoice(
+        order_reference="20868", invoice_number="RE-261952", refresh=False
+    ) == label
+    assert archive.find_customs_for_invoice(
+        order_reference="20868", invoice_number="RE-261952", refresh=False
+    ) == customs
+
+
 def test_additional_plc_label_uses_suffix_for_order_and_invoice(tmp_path) -> None:
     dialog = PlcLabelPrintDialog.__new__(PlcLabelPrintDialog)
     dialog._label_archive = PlcLabelArchive(tmp_path)  # noqa: SLF001
