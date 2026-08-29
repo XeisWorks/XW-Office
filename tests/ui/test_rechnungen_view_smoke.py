@@ -18,6 +18,7 @@ from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.draft_invoice.service import DraftInvoiceService
 from xw_office.services.inventory.service import StartMode, StartPreflight
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.services.products.catalog import Product
 from xw_office.services.products.print_decision import PieceBlock, PrintDecisionEngine
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sendungen.service import OffeneSendungenService
@@ -53,6 +54,41 @@ def _wait_embedded_rechnungen(qtbot: object, view: TagesgeschaeftView) -> Rechnu
     qtbot.waitUntil(lambda: view._rechnungen_view is not None, timeout=3000)  # type: ignore[attr-defined]  # noqa: SLF001
     assert view._rechnungen_view is not None  # noqa: SLF001
     return view._rechnungen_view  # noqa: SLF001
+
+
+def test_cached_invoice_piece_is_hydrated_before_product_panel_render(
+    qtbot: object,
+    monkeypatch: object,
+    tmp_path: object,
+) -> None:
+    container = _build_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    pdf_path = tmp_path / "cached-piece.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+    cached_piece = PieceBlock(
+        sku="XW-010",
+        name="Vielen Dank für die Blumen",
+        qty_needed=1,
+    )
+
+    def hydrate(_catalog: object, piece: PieceBlock) -> PieceBlock:
+        piece.product = Product(
+            id="canonical",
+            sku=piece.sku,
+            name=piece.name,
+            print_file_path=str(pdf_path),
+        )
+        piece.print_plan = [{"range": "Alle Seiten", "profile_id": "noten_a5"}]
+        return piece
+
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.view.resolve_piece_print_config", hydrate)
+
+    view._on_stuecke_loaded([cached_piece])  # noqa: SLF001
+
+    assert view._current_piece_blocks == [cached_piece]  # noqa: SLF001
+    assert cached_piece.print_file_path == pdf_path
+    assert cached_piece.has_direct_print_config is True
 
 
 def test_draft_preview_is_non_blocking(qtbot: object) -> None:

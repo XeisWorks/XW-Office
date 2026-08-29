@@ -31,10 +31,9 @@ from PySide6.QtWidgets import (
 from xw_office.core.printer_detect import discover_printers, evaluate_printer_status
 from xw_office.core.signals import AppSignals
 from xw_office.core.types import PrinterStatus
-from xw_office.services.background_jobs import BackgroundJobManager
 from xw_office.services.inventory import InventoryService
-from xw_office.services.products.catalog import Product, ProductCatalogService
-from xw_office.services.products.print_decision import PieceBlock
+from xw_office.services.products.catalog import ProductCatalogService
+from xw_office.services.products.print_decision import PieceBlock, resolve_piece_print_config
 from xw_office.services.printing.print_jobs import PdfPrintJob, PrintJobKind
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.printing.planned_pdf_printer import page_indices_from_range_text, print_pdf_by_plan
@@ -573,17 +572,14 @@ def run_music_pdf_print(parent: QWidget, container: Container) -> None:
 
 
 def _configure_missing_piece_print(parent: QWidget, container: Container, piece: PieceBlock) -> bool:
+    try:
+        resolve_piece_print_config(container.resolve(ProductCatalogService), piece)
+    except KeyError:
+        pass
     dialog = ProductPrintConfigDialog(parent, container, piece)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return False
     path, profile_id, plan = dialog.values()
-
-    if piece.product is None:
-        piece.product = Product(id=f"settings::{piece.sku}", sku=piece.sku, name=piece.name, print_file_path=path)
-    else:
-        piece.product.print_file_path = path
-    piece.print_profile_id = profile_id
-    piece.print_plan = plan
 
     inv: InventoryService = container.resolve(InventoryService)
     try:
@@ -591,7 +587,7 @@ def _configure_missing_piece_print(parent: QWidget, container: Container, piece:
     except KeyError:
         signals = None
 
-    def persist(_token: object) -> str:
+    try:
         inv.save_product_print_config(
             sku=piece.sku,
             name=piece.name,
@@ -599,36 +595,18 @@ def _configure_missing_piece_print(parent: QWidget, container: Container, piece:
             print_profile_id=profile_id,
             print_plan=plan,
         )
-        container.resolve(ProductCatalogService).reload_from_settings()
-        return piece.sku
-
-    def saved(_payload: object) -> None:
-        if signals is not None:
-            signals.inventory_changed.emit()
-            signals.status_message.emit(f"Druckkonfiguration gespeichert: {piece.sku}", 5000)
-
-    def failed(exc: Exception) -> None:
+        catalog = container.resolve(ProductCatalogService)
+        catalog.reload_from_settings()
+        resolve_piece_print_config(catalog, piece)
+    except Exception as exc:  # noqa: BLE001 - persistence failure must keep printing closed.
         logger.error("Product print config save failed for %s: %s", piece.sku, exc)
         if signals is not None:
             signals.task_error.emit("Druckkonfiguration", str(exc))
             signals.status_message.emit(f"Druckkonfiguration konnte nicht gespeichert werden: {piece.sku}", 12000)
-
-    try:
-        background_jobs = container.resolve(BackgroundJobManager)
-    except KeyError:
-        persist(object())
-        saved(piece.sku)
-    else:
-        background_jobs.submit_callable(
-            queue="database",
-            priority=20,
-            key=f"save-product-print-config:{piece.sku}",
-            fn=persist,
-            on_result=saved,
-            on_error=failed,
-            owner=parent,
-            replace="allow_parallel",
-        )
+        return False
+    if signals is not None:
+        signals.inventory_changed.emit()
+        signals.status_message.emit(f"Druckkonfiguration gespeichert: {piece.sku}", 5000)
     return True
 
 
@@ -643,6 +621,11 @@ def prepare_piece_pdf_print(
     """Validate one product print and return the blocking print job."""
     if not _check_printer_runtime(parent, container):
         return None
+
+    try:
+        resolve_piece_print_config(container.resolve(ProductCatalogService), piece)
+    except KeyError:
+        pass
 
     if not piece.has_direct_print_config and not _configure_missing_piece_print(parent, container, piece):
         return None

@@ -38,12 +38,16 @@ from xw_office.services.draft_invoice.service import (
     ProductPreflightPlan,
 )
 from xw_office.services.products.brand_service import BrandBulkUpdateReport, ProductBrandService
-from xw_office.services.products.catalog import Product
+from xw_office.services.products.catalog import Product, ProductCatalogService
 from xw_office.services.products.field_bulk_service import (
     FieldBulkUpdateReport,
     ProductFieldBulkService,
 )
-from xw_office.services.products.print_decision import PieceBlock, PrintDecisionEngine
+from xw_office.services.products.print_decision import (
+    PieceBlock,
+    PrintDecisionEngine,
+    resolve_piece_print_config,
+)
 from xw_office.services.sevdesk.part_client import PartClient, SevdeskPart
 from xw_office.services.wix.client import WixProduct, WixProductsClient
 from xw_office.ui.modules.products.bulk_field_dialog import BulkFieldEditorDialog
@@ -1375,8 +1379,7 @@ class ProductsView(QWidget):
         self._apply_sync_filters()
         self._sync_status_lbl.setText(f"Druckkonfiguration fuer {row.sku} gespeichert.")
 
-    @staticmethod
-    def _piece_from_product_row(row: ProductRow) -> PieceBlock:
+    def _piece_from_product_row(self, row: ProductRow) -> PieceBlock:
         product = Product(
             id=f"settings::{row.sku}",
             sku=row.sku,
@@ -1388,7 +1391,7 @@ class ProductsView(QWidget):
             wix_product_id=row.wix_id,
             print_file_path=row.print_file_path,
         )
-        return PieceBlock(
+        piece = PieceBlock(
             sku=row.sku,
             name=row.name,
             qty_needed=1,
@@ -1396,10 +1399,14 @@ class ProductsView(QWidget):
             print_plan=[entry for entry in (row.print_plan or []) if isinstance(entry, dict)],
             product=product,
         )
+        try:
+            catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
+            return resolve_piece_print_config(catalog, piece)
+        except KeyError:
+            return piece
 
-    @staticmethod
-    def _default_product_row_print_qty(row: ProductRow) -> int:
-        return max(1, int(ProductsView._piece_from_product_row(row).print_qty or 1))
+    def _default_product_row_print_qty(self, row: ProductRow) -> int:
+        return max(1, int(self._piece_from_product_row(row).print_qty or 1))
 
     def _apply_wix_to_local(self) -> None:
         if not self._wix_rows:

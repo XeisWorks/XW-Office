@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QInputDialog, QPushButton
 from xw_office.core.config import AppConfig
 from xw_office.core.container import Container
 from xw_office.services.inventory.service import ProductRow
+from xw_office.services.products.catalog import Product, ProductCatalogService
 from xw_office.services.products.brand_service import (
     BrandBulkUpdateReport,
     BrandUpdateItem,
@@ -328,6 +329,53 @@ def test_products_sync_ready_print_action_is_backgrounded_and_confirms_click(
     assert started.wait(timeout=1)
     release.set()
     qtbot.waitUntil(lambda: not view._direct_product_print_handles, timeout=2000)  # noqa: SLF001
+
+
+def test_products_view_refreshes_stale_row_through_canonical_print_resolver(
+    qtbot: object,
+    monkeypatch: object,
+    tmp_path: object,
+) -> None:
+    monkeypatch.setattr(ProductsView, "_load_sync_sources", lambda self, *args, **kwargs: None)
+    pdf_path = tmp_path / "canonical.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+
+    class CatalogStub:
+        def resolve_product_title(self, _sku: str, title: str) -> str:
+            return title
+
+        def resolve_print_config(self, _sku: str, *, title: str = "") -> dict[str, object]:
+            return {
+                "path": str(pdf_path),
+                "profile_id": "",
+                "print_plan": [{"range": "Alle Seiten", "profile_id": "noten_a5"}],
+            }
+
+        def resolve_sku(self, sku: str) -> Product:
+            return Product(id="canonical", sku=sku, name="Canonical")
+
+    container = Container(AppConfig())
+    container.register(ProductCatalogService, lambda _c: CatalogStub())  # type: ignore[return-value]
+    view = ProductsView(container)
+    qtbot.addWidget(view)
+    stale_row = ProductRow(
+        sku="XW-010",
+        name="Vielen Dank für die Blumen",
+        category="",
+        on_hand=0,
+        price_eur="",
+        wix_id="",
+        sevdesk_id="",
+        print_file_path="",
+        print_profile_id="",
+        print_plan=[],
+    )
+
+    piece = view._piece_from_product_row(stale_row)  # noqa: SLF001
+
+    assert piece.print_file_path == pdf_path
+    assert piece.print_plan == [{"range": "Alle Seiten", "profile_id": "noten_a5"}]
+    assert piece.has_direct_print_config is True
 
 
 def test_products_view_exposes_separate_print_and_production_actions(

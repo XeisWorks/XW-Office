@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 
 from xw_office.services.products.catalog import ProductCatalogService
-from xw_office.services.products.print_decision import PrintDecisionEngine
+from xw_office.services.products.print_decision import (
+    PieceBlock,
+    PrintDecisionEngine,
+    resolve_piece_print_config,
+)
 from xw_office.services.wix.client import WixOrderItem
 
 
@@ -21,6 +25,47 @@ class _PartClientStub:
 
     def get_part_stock(self, _part_id: str) -> int:
         return 0
+
+
+def test_cached_piece_is_refreshed_from_same_title_specific_print_config(tmp_path) -> None:
+    pdf_path = tmp_path / "Vielen Dank fuer die Blumen.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+    repo = _RepoStub(
+        {
+            "inventory.products": json.dumps(
+                [
+                    {
+                        "sku": "XW-010",
+                        "name": "Diverse Noten",
+                        "print_file_path": "",
+                        "print_profile_id": "",
+                        "print_plan": [],
+                        "title_print_configs": {
+                            "Vielen Dank für die Blumen": {
+                                "path": str(pdf_path),
+                                "profile_id": "",
+                                "print_plan": [{"range": "Alle Seiten", "profile_id": "noten_a5"}],
+                            }
+                        },
+                    }
+                ],
+                ensure_ascii=False,
+            )
+        }
+    )
+    cached_piece = PieceBlock(
+        sku="xw-010",
+        name="Vielen Dank fur die Blumen",
+        qty_needed=1,
+    )
+
+    resolved = resolve_piece_print_config(ProductCatalogService(repo), cached_piece)
+
+    assert resolved is cached_piece
+    assert resolved.name == "Vielen Dank für die Blumen"
+    assert resolved.print_file_path == pdf_path
+    assert resolved.print_plan == [{"range": "Alle Seiten", "profile_id": "noten_a5"}]
+    assert resolved.has_direct_print_config is True
 
 
 def test_piece_block_uses_new_repo_print_config_for_title_specific_entry(tmp_path) -> None:

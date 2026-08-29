@@ -250,14 +250,18 @@ class ProductCatalogService:
         canonical_title = self.resolve_product_title(sku, title_key)
         for requested_title in (title_key, canonical_title):
             if requested_title and requested_title in titles and isinstance(titles[requested_title], dict):
-                return dict(titles[requested_title])
+                resolved = dict(titles[requested_title])
+                resolved["resolved_title"] = requested_title
+                return resolved
             normalized_title_key = normalize_legacy_title(requested_title)
             if normalized_title_key:
                 for candidate_title, candidate_config in titles.items():
                     if not isinstance(candidate_config, dict):
                         continue
                     if normalize_legacy_title(str(candidate_title or "")) == normalized_title_key:
-                        return dict(candidate_config)
+                        resolved = dict(candidate_config)
+                        resolved["resolved_title"] = str(candidate_title or "").strip()
+                        return resolved
         if sku in _UNRELEASED_DYNAMIC_SKUS and title_key:
             dynamic = self._resolve_unreleased_pdf_config(canonical_title, config)
             # A generic SKU default belongs to a different piece and must never

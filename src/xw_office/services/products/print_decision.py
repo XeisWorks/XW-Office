@@ -94,6 +94,46 @@ class PieceBlock:
         )
 
 
+def resolve_piece_print_config(
+    catalog: ProductCatalogService,
+    piece: PieceBlock,
+) -> PieceBlock:
+    """Refresh a piece from the canonical product print configuration."""
+    sku = str(piece.sku or "").strip().upper()
+    if not sku:
+        return piece
+    requested_name = str(piece.name or "").strip() or sku
+    config = catalog.resolve_print_config(sku, title=requested_name)
+    resolved_name = catalog.resolve_product_title(sku, requested_name) or requested_name
+    configured_path = str(config.get("path") or "").strip()
+    configured_name = str(config.get("resolved_title") or resolved_name).strip() or resolved_name
+    product = catalog.resolve_sku(sku) or piece.product
+    if product is None and configured_path:
+        product = Product(
+            id=f"settings::{sku}",
+            sku=sku,
+            name=configured_name,
+            print_file_path=configured_path,
+        )
+    elif product is not None:
+        # Do not mutate the catalog object: generic SKUs can resolve to a
+        # different title-specific PDF on the next invoice.
+        product = replace(
+            product,
+            name=configured_name or product.name,
+            print_file_path=configured_path,
+        )
+    piece.sku = sku
+    piece.name = configured_name
+    piece.product = product
+    piece.print_profile_id = str(config.get("profile_id") or "").strip()
+    piece.print_plan = [
+        entry for entry in (config.get("print_plan") or [])
+        if isinstance(entry, dict)
+    ]
+    return piece
+
+
 @dataclass
 class InvoicePrintPlan:
     """Complete print plan for one invoice's Wix order."""
@@ -235,8 +275,11 @@ class PrintDecisionEngine:
     def _build_block(self, item: WixOrderItem) -> PieceBlock:
         product = self._catalog.resolve_sku(item.sku)
         stock_status: StockStatus | None = None
-        resolved_name = self._catalog.resolve_product_title(item.sku, item.name)
-        direct_cfg = self._catalog.resolve_print_config(item.sku, title=resolved_name)
+        direct_cfg = self._catalog.resolve_print_config(item.sku, title=item.name)
+        resolved_name = (
+            str(direct_cfg.get("resolved_title") or "").strip()
+            or self._catalog.resolve_product_title(item.sku, item.name)
+        )
 
         if product is None:
             fallback_part = self._part_client.find_part_by_sku(item.sku)

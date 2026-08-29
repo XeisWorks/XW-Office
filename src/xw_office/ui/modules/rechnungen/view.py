@@ -76,8 +76,12 @@ from xw_office.services.inventory import InventoryService
 from xw_office.services.plc.customs_document import ensure_customs_a5_print_file
 from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.printer_status.service import PrinterStatusService
-from xw_office.services.products.catalog import Product, ProductCatalogService, normalize_legacy_title
-from xw_office.services.products.print_decision import PieceBlock, PrintDecisionEngine
+from xw_office.services.products.catalog import ProductCatalogService, normalize_legacy_title
+from xw_office.services.products.print_decision import (
+    PieceBlock,
+    PrintDecisionEngine,
+    resolve_piece_print_config,
+)
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sendungen.service import OffeneSendungenService
@@ -2862,33 +2866,20 @@ class RechnungenView(QWidget):
         sku = str(item.sku or "").strip().upper()
         title = str(item.title or "").strip() or sku
         description = str(item.description or "").strip()
-        product: Product | None = None
-        config: dict[str, object] = {}
-        try:
-            catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
-            product = catalog.resolve_sku(sku)
-            config = catalog.resolve_print_config(sku, title=title)
-        except Exception as exc:  # noqa: BLE001 - dialog can still create config.
-            logger.debug("Open print product catalog lookup failed sku=%s: %s", sku, exc)
-        path = str(config.get("path") or "").strip()
-        if product is None and path:
-            product = Product(id=f"settings::{sku}", sku=sku, name=title, print_file_path=path)
-        elif product is not None and path and not product.print_file_path.strip():
-            product.print_file_path = path
-        return PieceBlock(
+        block = PieceBlock(
             sku=sku,
             name=title,
             qty_needed=max(1, int(item.quantity or 1)),
             note=description,
             is_unreleased=True,
-            print_profile_id=str(config.get("profile_id") or "").strip(),
-            print_plan=[
-                entry for entry in (config.get("print_plan") or [])
-                if isinstance(entry, dict)
-            ],
-            product=product,
             stock_status=None,
         )
+        try:
+            catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
+            return resolve_piece_print_config(catalog, block)
+        except Exception as exc:  # noqa: BLE001 - dialog can still create config.
+            logger.debug("Open print product catalog lookup failed sku=%s: %s", sku, exc)
+        return block
 
     def _on_open_product_manage_clicked(self, item: PrintProductAggregate) -> None:
         from xw_office.ui.modules.rechnungen.print_dialog import _configure_missing_piece_print
@@ -5137,9 +5128,15 @@ class RechnungenView(QWidget):
             return
         deduped: list[PieceBlock] = []
         seen: set[tuple[str, str, int, str]] = set()
+        try:
+            catalog: ProductCatalogService | None = self._container.resolve(ProductCatalogService)
+        except KeyError:
+            catalog = None
         for piece in payload_items:
             if not isinstance(piece, PieceBlock):
                 continue
+            if catalog is not None:
+                resolve_piece_print_config(catalog, piece)
             key = (
                 str(piece.sku or "").strip().upper(),
                 str(piece.name or "").strip(),

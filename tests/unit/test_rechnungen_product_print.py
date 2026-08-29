@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QComboBox, QStyleOptionViewItem
 
 from xw_office.core.config import AppConfig, PrintingSection
 from xw_office.core.container import Container
+from xw_office.services.background_jobs import BackgroundJobManager
 from xw_office.services.inventory import InventoryService
 from xw_office.services.products.catalog import Product
 from xw_office.services.products.catalog import ProductCatalogService
@@ -114,8 +115,27 @@ def test_prepare_piece_pdf_print_prompts_for_missing_print_config(monkeypatch, t
             return object()
 
     class CatalogStub:
+        def resolve_product_title(self, _sku: str, title: str) -> str:
+            return title
+
+        def resolve_print_config(self, _sku: str, *, title: str = "") -> dict[str, object]:
+            if not saved.get("print_file_path"):
+                return {}
+            return {
+                "path": saved["print_file_path"],
+                "profile_id": saved["print_profile_id"],
+                "print_plan": saved["print_plan"],
+            }
+
+        def resolve_sku(self, _sku: str) -> Product | None:
+            return piece.product
+
         def reload_from_settings(self) -> None:
             saved["reloaded"] = True
+
+    class BackgroundJobsMustNotBeUsed:
+        def submit_callable(self, **_kwargs: object) -> None:
+            raise AssertionError("Print config persistence must finish before the dialog reports success")
 
     class DialogStub:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
@@ -133,6 +153,7 @@ def test_prepare_piece_pdf_print_prompts_for_missing_print_config(monkeypatch, t
     monkeypatch.setattr("xw_office.ui.modules.rechnungen.print_dialog.ProductPrintConfigDialog", DialogStub)
     container.register(InventoryService, lambda _container: InventoryStub())  # type: ignore[return-value]
     container.register(ProductCatalogService, lambda _container: CatalogStub())  # type: ignore[return-value]
+    container.register(BackgroundJobManager, lambda _container: BackgroundJobsMustNotBeUsed())  # type: ignore[return-value]
 
     def fake_print_pdf_by_plan(
         pdf_path_arg: str,
