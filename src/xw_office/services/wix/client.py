@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from xw_office.core.performance_metrics import performance_metrics
 from xw_office.services.shipping.countries import country_label_for_address, country_name_en
 from xw_office.services.wix.order_cache import WixOrderCache
 
@@ -1421,6 +1422,7 @@ class WixOrdersClient:
             cached.found,
             int(cached.age_seconds * 1000),
         )
+        performance_metrics.increment("wix.order_cache.hit")
         # Negative markers are intentional cache hits.  They avoid repeatedly
         # asking Wix for historical sevDesk references that are known to have
         # no matching Wix order.
@@ -1706,8 +1708,10 @@ class WixOrdersClient:
                 flight = _InFlightOrder(done=Event())
                 self._inflight_orders[key] = flight
                 leader = True
+                performance_metrics.increment("wix.singleflight.started")
             else:
                 leader = False
+                performance_metrics.increment("wix.singleflight.joined")
         if not leader:
             while not flight.done.wait(0.05):
                 if cancel_token is not None:

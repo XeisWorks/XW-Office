@@ -21,6 +21,9 @@ from xw_office.services.background_jobs import BackgroundJobManager
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.plc.service import PlcShipmentService
 from xw_office.services.printer_status.service import PrinterStatusService, PrinterStatusSnapshot
+from xw_office.services.wix.client import WixOrdersClient
+from xw_office.services.wix.product_details_client import WixProductDetailsClient
+from xw_office.core.performance_metrics import performance_metrics
 from xw_office.ui.performance import EventLoopWatchdog
 from xw_office.ui.sidebar import Sidebar
 from xw_office.ui.status_bar import OfficeStatusBar
@@ -55,6 +58,10 @@ class MainWindow(QMainWindow):
     def performance_snapshot(self) -> list[object]:
         """Return recent event-loop gaps for diagnostics/tests."""
         return self._eventloop_watchdog.snapshot()
+
+    def performance_metrics_snapshot(self) -> dict[str, object]:
+        """Return request/cache counters and named timings for support analysis."""
+        return performance_metrics.snapshot()
 
     def _setup_window(self) -> None:
         cfg = self._container.config.app.window
@@ -415,6 +422,11 @@ class MainWindow(QMainWindow):
         if print_queue is not None and not print_queue.shutdown(30000):
             self._postpone_shutdown(event)
             return
+        for service_type in (WixOrdersClient, WixProductDetailsClient):
+            service = self._container.get_if_resolved(service_type)
+            close = getattr(service, "close", None)
+            if callable(close):
+                close()
         self._eventloop_watchdog.stop()
         super().closeEvent(event)
 

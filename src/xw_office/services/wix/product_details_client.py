@@ -22,6 +22,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from threading import RLock
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -260,9 +261,28 @@ class WixProductDetailsClient:
         self,
         *,
         secret_service: "SecretService | None" = None,
+        http_client: httpx.Client | None = None,
     ) -> None:
         self._secrets = secret_service
         self._detected_version: CatalogVersion | None = None
+        self._http_client = http_client
+        self._owns_http_client = http_client is None
+        self._http_client_lock = RLock()
+
+    def _client(self) -> httpx.Client:
+        """Return the reusable connection pool for product/category requests."""
+        with self._http_client_lock:
+            if self._http_client is None:
+                self._http_client = httpx.Client(timeout=_TIMEOUT)
+            return self._http_client
+
+    def close(self) -> None:
+        """Close the owned pool during application shutdown."""
+        with self._http_client_lock:
+            client = self._http_client
+            self._http_client = None
+        if client is not None and self._owns_http_client:
+            client.close()
 
     # ------------------------------------------------------------------
     # Credentials
@@ -310,8 +330,7 @@ class WixProductDetailsClient:
         probe_url = f"{self._V3_BASE}/catalog/products/query"
         probe_body: dict[str, Any] = {"query": {"paging": {"limit": 1}}}
         try:
-            with httpx.Client(timeout=_TIMEOUT) as client:
-                resp = client.post(probe_url, headers=headers, json=probe_body)
+            resp = self._client().post(probe_url, headers=headers, json=probe_body)
             if resp.status_code == 428:
                 # Wix returns 428 with "CATALOG_V1" when the site uses the old catalog
                 self._detected_version = CatalogVersion.V1
@@ -320,8 +339,7 @@ class WixProductDetailsClient:
             else:
                 # Other v3-style paths
                 alt_url = f"{self._V3_BASE}/products/query"
-                with httpx.Client(timeout=_TIMEOUT) as client:
-                    resp2 = client.post(alt_url, headers=headers, json=probe_body)
+                resp2 = self._client().post(alt_url, headers=headers, json=probe_body)
                 self._detected_version = CatalogVersion.V3 if resp2.status_code < 400 else CatalogVersion.V1
         except Exception as exc:  # noqa: BLE001
             logger.warning("WixProductDetailsClient: version probe failed: %s", exc)
@@ -344,17 +362,17 @@ class WixProductDetailsClient:
         urls = self._get_endpoint_candidates(pid, version)
         headers = self._headers()
 
-        with httpx.Client(timeout=_TIMEOUT) as client:
-            for url in urls:
-                try:
-                    resp = client.get(url, headers=headers)
-                    if resp.status_code < 400:
-                        raw = resp.json() if resp.content else {}
-                        product_raw = raw.get("product") or raw
-                        if isinstance(product_raw, dict) and product_raw.get("id"):
-                            return _parse_detail(product_raw)
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("WixProductDetailsClient.get_product %s failed at %s: %s", pid, url, exc)
+        client = self._client()
+        for url in urls:
+            try:
+                resp = client.get(url, headers=headers)
+                if resp.status_code < 400:
+                    raw = resp.json() if resp.content else {}
+                    product_raw = raw.get("product") or raw
+                    if isinstance(product_raw, dict) and product_raw.get("id"):
+                        return _parse_detail(product_raw)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("WixProductDetailsClient.get_product %s failed at %s: %s", pid, url, exc)
 
         logger.warning("WixProductDetailsClient: could not fetch product %s", pid)
         return None
@@ -382,29 +400,29 @@ class WixProductDetailsClient:
             ),
         ]
         names: dict[str, str] = {}
-        with httpx.Client(timeout=_TIMEOUT) as client:
-            for url, body in endpoints:
-                try:
-                    resp = client.post(url, headers=headers, json=body)
-                    if resp.status_code >= 400:
-                        continue
-                    data = resp.json() if resp.content else {}
-                except Exception as exc:  # noqa: BLE001 - category fallback must stay best-effort.
-                    logger.debug("WixProductDetailsClient category query failed at %s: %s", url, exc)
+        client = self._client()
+        for url, body in endpoints:
+            try:
+                resp = client.post(url, headers=headers, json=body)
+                if resp.status_code >= 400:
                     continue
-                for raw in self._extract_category_rows(data):
-                    cid = str(raw.get("id") or raw.get("categoryId") or "").strip()
-                    name = str(
-                        raw.get("name")
-                        or raw.get("displayName")
-                        or raw.get("label")
-                        or raw.get("title")
-                        or ""
-                    ).strip()
-                    if cid and name:
-                        names[cid] = name
-                if names:
-                    return names
+                data = resp.json() if resp.content else {}
+            except Exception as exc:  # noqa: BLE001 - category fallback must stay best-effort.
+                logger.debug("WixProductDetailsClient category query failed at %s: %s", url, exc)
+                continue
+            for raw in self._extract_category_rows(data):
+                cid = str(raw.get("id") or raw.get("categoryId") or "").strip()
+                name = str(
+                    raw.get("name")
+                    or raw.get("displayName")
+                    or raw.get("label")
+                    or raw.get("title")
+                    or ""
+                ).strip()
+                if cid and name:
+                    names[cid] = name
+            if names:
+                return names
         return names
 
     @staticmethod
@@ -784,8 +802,7 @@ class WixProductDetailsClient:
         last_error: Exception | None = None
         for attempt in range(1, _RETRY_ATTEMPTS + 1):
             try:
-                with httpx.Client(timeout=_TIMEOUT) as client:
-                    resp = client.request(method, url, headers=headers, json=json_body)
+                resp = self._client().request(method, url, headers=headers, json=json_body)
                 if resp.status_code >= 400:
                     if resp.status_code in (408, 429, 500, 502, 503, 504) and attempt < _RETRY_ATTEMPTS:
                         time.sleep(_RETRY_BACKOFF_SEC * attempt)

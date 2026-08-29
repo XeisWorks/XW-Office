@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from xw_office.core.performance_metrics import performance_metrics
 from xw_office.services.http_client import SevdeskConnection
 
 logger = logging.getLogger(__name__)
@@ -133,7 +134,9 @@ class PartClient:
         """
         with self._cache_lock:
             if self._parts_cache:
+                performance_metrics.increment("sevdesk.stock_snapshot.hit")
                 return list(self._parts_cache)
+        performance_metrics.increment("sevdesk.stock_snapshot.bulk_refresh")
         rows = self._fetch_parts(max_pages=max_pages)
         self._replace_parts_cache(rows)
         return rows
