@@ -35,7 +35,7 @@ def _printing_config() -> PrintingSection:
                 "dpi": 600,
                 "rotate_degrees": 90,
                 "normalize_page_size": "A5",
-                "max_upscale_percent": 105,
+                "max_upscale_percent": 110,
             },
             {
                 "id": "brochure_mono",
@@ -87,7 +87,7 @@ def test_resolve_plan_targets_maps_legacy_profile_aliases() -> None:
     assert targets[0].printer_name == "A5"
     assert targets[0].rotate_degrees == 90
     assert targets[0].normalize_page_size == "A5"
-    assert targets[0].max_upscale_percent == 105
+    assert targets[0].max_upscale_percent == 110
 
 
 class _QueueStub:
