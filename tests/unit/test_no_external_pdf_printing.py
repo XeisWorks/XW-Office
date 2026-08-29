@@ -145,6 +145,46 @@ def test_prepare_native_print_pdf_can_rotate_full_document(tmp_path: Path) -> No
         Path(prepared.path).unlink(missing_ok=True)
 
 
+def test_prepare_native_print_pdf_normalizes_small_pages_to_a5_without_distortion(
+    tmp_path: Path,
+) -> None:
+    from xw_office.services.printing.pdf_backends import _prepare_native_print_pdf
+
+    mm_to_pt = 72.0 / 25.4
+    pdf = tmp_path / "mixed-a5.pdf"
+    source = fitz.open()
+    exact = source.new_page(width=210 * mm_to_pt, height=148 * mm_to_pt)
+    exact.insert_text((20, 30), "Exact A5")
+    small = source.new_page(width=203 * mm_to_pt, height=141 * mm_to_pt)
+    small.insert_text((20, 30), "Small A5")
+    source.save(pdf)
+    source.close()
+
+    prepared = _prepare_native_print_pdf(
+        str(pdf),
+        None,
+        rotate_degrees=90,
+        normalize_page_size="A5",
+        max_upscale_percent=105,
+    )
+
+    try:
+        normalized = fitz.open(prepared.path)
+        try:
+            assert normalized.page_count == 2
+            assert [page.rotation for page in normalized] == [90, 90]
+            assert normalized[0].rect.width == pytest.approx(148 * mm_to_pt, abs=0.02)
+            assert normalized[0].rect.height == pytest.approx(210 * mm_to_pt, abs=0.02)
+            assert normalized[1].rect.width == pytest.approx(148 * mm_to_pt, abs=0.02)
+            assert normalized[1].rect.height == pytest.approx(210 * mm_to_pt, abs=0.02)
+            assert "Exact A5" in normalized[0].get_text()
+            assert "Small A5" in normalized[1].get_text()
+        finally:
+            normalized.close()
+    finally:
+        Path(prepared.path).unlink(missing_ok=True)
+
+
 def test_pdf_xchange_without_spooler_confirmation_fails_closed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

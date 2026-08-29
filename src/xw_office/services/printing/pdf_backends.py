@@ -67,6 +67,8 @@ class NativePdfCliBackend(PdfPrintBackend):
             str(pdf_path),
             job.pages,
             rotate_degrees=job.rotate_degrees,
+            normalize_page_size=job.normalize_page_size,
+            max_upscale_percent=job.max_upscale_percent,
         )
 
         try:
@@ -188,13 +190,22 @@ def _prepare_native_print_pdf(
     pages: list[int] | None,
     *,
     rotate_degrees: int = 0,
+    normalize_page_size: str = "",
+    max_upscale_percent: float = 100.0,
 ) -> _PreparedNativePdf:
     normalized_rotation = int(rotate_degrees or 0) % 360
     if normalized_rotation not in {0, 90, 180, 270}:
         raise RuntimeError(f"Ungueltige PDF-Drehung im Profil: {rotate_degrees}")
-    if pages is None and normalized_rotation == 0:
+    normalized_page_size = str(normalize_page_size or "").strip().upper()
+    if pages is None and normalized_rotation == 0 and not normalized_page_size:
         return _PreparedNativePdf(path=str(pdf_path), cleanup=False)
-    temp_path = _extract_pdf_pages(pdf_path, pages, rotate_degrees=normalized_rotation)
+    temp_path = _extract_pdf_pages(
+        pdf_path,
+        pages,
+        rotate_degrees=normalized_rotation,
+        normalize_page_size=normalized_page_size,
+        max_upscale_percent=max_upscale_percent,
+    )
     if not temp_path or temp_path == str(pdf_path):
         return _PreparedNativePdf(path=str(pdf_path), cleanup=False)
     return _PreparedNativePdf(path=temp_path, cleanup=True)
@@ -205,6 +216,8 @@ def _extract_pdf_pages(
     pages: list[int] | None,
     *,
     rotate_degrees: int = 0,
+    normalize_page_size: str = "",
+    max_upscale_percent: float = 100.0,
 ) -> str:
     page_indices = None if pages is None else sorted({int(page) for page in pages if int(page) >= 0})
     if page_indices == []:
@@ -220,7 +233,29 @@ def _extract_pdf_pages(
         selected_indices = range(source.page_count) if page_indices is None else page_indices
         for page_index in selected_indices:
             if page_index <= max_page:
-                target.insert_pdf(source, from_page=page_index, to_page=page_index)
+                source_page = source[page_index]
+                target_size = _normalized_page_dimensions(
+                    normalize_page_size,
+                    source_page.rect.width,
+                    source_page.rect.height,
+                )
+                if target_size is None or _same_page_size(source_page.rect, target_size):
+                    target.insert_pdf(source, from_page=page_index, to_page=page_index)
+                else:
+                    width, height = target_size
+                    target_page = target.new_page(width=width, height=height)
+                    scale = min(width / source_page.rect.width, height / source_page.rect.height)
+                    scale = min(scale, max(float(max_upscale_percent), 100.0) / 100.0)
+                    fitted_width = source_page.rect.width * scale
+                    fitted_height = source_page.rect.height * scale
+                    left = (width - fitted_width) / 2.0
+                    top = (height - fitted_height) / 2.0
+                    target_page.show_pdf_page(
+                        fitz.Rect(left, top, left + fitted_width, top + fitted_height),
+                        source,
+                        page_index,
+                        keep_proportion=True,
+                    )
                 if rotate_degrees:
                     page = target[target.page_count - 1]
                     page.set_rotation((int(page.rotation or 0) + rotate_degrees) % 360)
@@ -234,6 +269,30 @@ def _extract_pdf_pages(
     finally:
         target.close()
         source.close()
+
+
+def _normalized_page_dimensions(
+    page_size: str,
+    source_width: float,
+    source_height: float,
+) -> tuple[float, float] | None:
+    normalized = str(page_size or "").strip().upper()
+    if not normalized:
+        return None
+    if normalized != "A5":
+        raise RuntimeError(f"Nicht unterstuetztes natives PDF-Seitenformat: {page_size}")
+    a5_short = 148.0 * 72.0 / 25.4
+    a5_long = 210.0 * 72.0 / 25.4
+    if source_width >= source_height:
+        return a5_long, a5_short
+    return a5_short, a5_long
+
+
+def _same_page_size(rect: Any, target_size: tuple[float, float]) -> bool:
+    tolerance = 0.5 * 72.0 / 25.4
+    return abs(float(rect.width) - target_size[0]) <= tolerance and abs(
+        float(rect.height) - target_size[1]
+    ) <= tolerance
 
 
 class _WindowsSpoolerWatcher:

@@ -23,6 +23,8 @@ def test_pdf_print_job_default_placement_is_paper_origin() -> None:
     assert job.x_offset_mm == 0.0
     assert job.y_offset_mm == 0.0
     assert job.rotate_degrees == 0
+    assert job.normalize_page_size == ""
+    assert job.max_upscale_percent == 100.0
 
 
 def test_music_and_product_jobs_default_to_gray_with_black_enhancement() -> None:

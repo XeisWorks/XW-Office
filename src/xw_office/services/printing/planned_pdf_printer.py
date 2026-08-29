@@ -51,6 +51,8 @@ class PlanTarget:
     x_offset_mm: float
     y_offset_mm: float
     rotate_degrees: int
+    normalize_page_size: str
+    max_upscale_percent: float
     render_color_mode: RenderColorMode
     black_enhancement: BlackEnhancement
     black_threshold: int
@@ -123,6 +125,8 @@ def resolve_plan_targets(
                     x_offset_mm=float(resolved.x_offset_mm),
                     y_offset_mm=float(resolved.y_offset_mm),
                     rotate_degrees=_rotate_degrees(resolved.rotate_degrees),
+                    normalize_page_size=str(resolved.normalize_page_size or "").strip().upper(),
+                    max_upscale_percent=max(float(resolved.max_upscale_percent), 100.0),
                     render_color_mode=_render_color_mode(resolved.render_color_mode),
                     black_enhancement=_black_enhancement(resolved.black_enhancement),
                     black_threshold=int(resolved.black_threshold),
@@ -149,6 +153,8 @@ def resolve_plan_targets(
             x_offset_mm=float(resolved.x_offset_mm),
             y_offset_mm=float(resolved.y_offset_mm),
             rotate_degrees=_rotate_degrees(resolved.rotate_degrees),
+            normalize_page_size=str(resolved.normalize_page_size or "").strip().upper(),
+            max_upscale_percent=max(float(resolved.max_upscale_percent), 100.0),
             render_color_mode=_render_color_mode(resolved.render_color_mode),
             black_enhancement=_black_enhancement(resolved.black_enhancement),
             black_threshold=int(resolved.black_threshold),
@@ -210,6 +216,8 @@ def print_pdf_by_plan(
                 x_offset_mm=target.x_offset_mm,
                 y_offset_mm=target.y_offset_mm,
                 rotate_degrees=target.rotate_degrees,
+                normalize_page_size=target.normalize_page_size,
+                max_upscale_percent=target.max_upscale_percent,
                 render_color_mode=target.render_color_mode,
                 black_enhancement=target.black_enhancement,
                 black_threshold=target.black_threshold,
