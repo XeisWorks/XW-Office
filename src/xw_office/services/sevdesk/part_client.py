@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
+from threading import RLock
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
@@ -98,11 +99,15 @@ class PartClient:
     def __init__(self, connection: SevdeskConnection) -> None:
         self._conn = connection
         self._parts_cache: list[SevdeskPart] = []
+        self._parts_by_id: dict[str, SevdeskPart] = {}
+        self._parts_by_sku: dict[str, SevdeskPart] = {}
         self._parts_cache_updated_at: datetime | None = None
+        self._cache_lock = RLock()
 
     @property
     def parts_cache_updated_at(self) -> datetime | None:
-        return self._parts_cache_updated_at
+        with self._cache_lock:
+            return self._parts_cache_updated_at
 
     def list_parts(self, *, max_pages: int = 20, refresh_cache: bool = False) -> list[SevdeskPart]:
         """Return sevDesk parts.
@@ -111,13 +116,57 @@ class PartClient:
         - default returns cache when available.
         - when cache is empty and refresh is False, data is fetched but cache remains untouched.
         """
-        if not refresh_cache and self._parts_cache:
-            return list(self._parts_cache)
+        with self._cache_lock:
+            if not refresh_cache and self._parts_cache:
+                return list(self._parts_cache)
         rows = self._fetch_parts(max_pages=max_pages)
         if refresh_cache:
-            self._parts_cache = list(rows)
-            self._parts_cache_updated_at = datetime.now(timezone.utc)
+            self._replace_parts_cache(rows)
         return rows
+
+    def ensure_parts_cache(self, *, max_pages: int = 20) -> list[SevdeskPart]:
+        """Populate the shared part snapshot once, returning the current snapshot.
+
+        Callers that need many stock values should use this bulk endpoint before
+        reading individual products.  It deliberately does not refresh a warm
+        snapshot: row selection must not turn into a live stock poll.
+        """
+        with self._cache_lock:
+            if self._parts_cache:
+                return list(self._parts_cache)
+        rows = self._fetch_parts(max_pages=max_pages)
+        self._replace_parts_cache(rows)
+        return rows
+
+    def get_cached_part_by_id(self, part_id: str) -> SevdeskPart | None:
+        """Return a part from the in-memory bulk snapshot without I/O."""
+        key = str(part_id or "").strip()
+        if not key:
+            return None
+        with self._cache_lock:
+            return self._parts_by_id.get(key)
+
+    def get_cached_part_by_sku(self, sku: str) -> SevdeskPart | None:
+        """Return a part from the in-memory bulk snapshot without I/O."""
+        key = str(sku or "").strip().upper()
+        if not key:
+            return None
+        with self._cache_lock:
+            return self._parts_by_sku.get(key)
+
+    def get_cached_part_stock(self, part_id: str) -> int | None:
+        """Return a stock value from the snapshot, or ``None`` when unknown."""
+        part = self.get_cached_part_by_id(part_id)
+        return part.stock_qty if part is not None else None
+
+    def _replace_parts_cache(self, rows: list[SevdeskPart]) -> None:
+        by_id = {part.id.strip(): part for part in rows if part.id.strip()}
+        by_sku = {part.sku.strip().upper(): part for part in rows if part.sku.strip()}
+        with self._cache_lock:
+            self._parts_cache = list(rows)
+            self._parts_by_id = by_id
+            self._parts_by_sku = by_sku
+            self._parts_cache_updated_at = datetime.now(timezone.utc)
 
     def _fetch_parts(self, *, max_pages: int = 20) -> list[SevdeskPart]:
         rows: list[SevdeskPart] = []
@@ -256,6 +305,17 @@ class PartClient:
         """
         try:
             self._conn.put(f"/Part/{part_id}", json={"stock": float(new_stock)})
+            key = str(part_id or "").strip()
+            with self._cache_lock:
+                cached = self._parts_by_id.get(key)
+                if cached is not None:
+                    updated = cached.model_copy(update={"stock_qty": max(0, int(new_stock))})
+                    self._parts_by_id[key] = updated
+                    if updated.sku.strip():
+                        self._parts_by_sku[updated.sku.strip().upper()] = updated
+                    self._parts_cache = [
+                        updated if part.id.strip() == key else part for part in self._parts_cache
+                    ]
             logger.info("sevDesk Part %s stock set to %d", part_id, new_stock)
         except Exception as exc:  # noqa: BLE001
             logger.error("set_part_stock failed for Part %s: %s", part_id, exc)

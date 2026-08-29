@@ -18,6 +18,7 @@ class _ConnStub:
     def __init__(self, pages: list[dict[str, Any]]) -> None:
         self._pages = pages
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.put_calls: list[tuple[str, dict[str, Any]]] = []
 
     def get(self, path: str, **kwargs: Any) -> _ResponseStub:
         params = kwargs.get("params") or {}
@@ -26,6 +27,11 @@ class _ConnStub:
         index = offset // 100
         payload = self._pages[index] if index < len(self._pages) else {"objects": []}
         return _ResponseStub(payload)
+
+    def put(self, path: str, **kwargs: Any) -> _ResponseStub:
+        payload = kwargs.get("json") or {}
+        self.put_calls.append((path, dict(payload)))
+        return _ResponseStub({})
 
 
 def test_list_parts_parses_rows() -> None:
@@ -114,3 +120,27 @@ def test_list_parts_without_refresh_does_not_update_cache_timestamp() -> None:
 
     assert len(rows) == 1
     assert client.parts_cache_updated_at is None
+
+
+def test_bulk_snapshot_supports_cache_only_stock_reads_and_stock_writes() -> None:
+    conn = _ConnStub(
+        [
+            {
+                "objects": [
+                    {"id": "10", "partNumber": "XW-4-001", "name": "Etuede A", "stock": "7"}
+                ]
+            }
+        ]
+    )
+    client = PartClient(conn)  # type: ignore[arg-type]
+
+    client.ensure_parts_cache()
+
+    assert client.get_cached_part_by_sku("xw-4-001").id == "10"  # type: ignore[union-attr]
+    assert client.get_cached_part_stock("10") == 7
+    assert len(conn.calls) == 1
+
+    client.set_part_stock("10", 12)
+
+    assert client.get_cached_part_stock("10") == 12
+    assert conn.put_calls == [("/Part/10", {"stock": 12.0})]

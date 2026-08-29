@@ -282,7 +282,7 @@ class PrintDecisionEngine:
         )
 
         if product is None:
-            fallback_part = self._part_client.find_part_by_sku(item.sku)
+            fallback_part = self._cached_part_by_sku(item.sku)
             if fallback_part is not None:
                 product = self._catalog.upsert_from_sevdesk(fallback_part)
             elif str(direct_cfg.get("path") or "").strip():
@@ -300,15 +300,16 @@ class PrintDecisionEngine:
             product = replace(product, name=resolved_name or product.name, print_file_path=direct_pdf)
 
         if product is not None and not product.is_digital and product.sevdesk_part_id:
-            on_hand = self._fetch_stock_safe(product.sevdesk_part_id)
-            stock_status = StockStatus(
-                sku=product.sku,
-                product_name=product.name,
-                is_digital=False,
-                on_hand=on_hand,
-                min_stock_target=product.print_rule.min_stock_target,
-                reprint_batch_qty=product.print_rule.reprint_batch_qty,
-            )
+            on_hand = self._cached_stock(product.sevdesk_part_id)
+            if on_hand is not None:
+                stock_status = StockStatus(
+                    sku=product.sku,
+                    product_name=product.name,
+                    is_digital=False,
+                    on_hand=on_hand,
+                    min_stock_target=product.print_rule.min_stock_target,
+                    reprint_batch_qty=product.print_rule.reprint_batch_qty,
+                )
         elif product is not None and product.is_digital:
             stock_status = StockStatus(
                 sku=product.sku,
@@ -338,9 +339,9 @@ class PrintDecisionEngine:
         )
 
     def _fetch_stock_by_sku_safe(self, sku: str) -> StockStatus | None:
-        """Fallback: find sevDesk Part by SKU and return a transient StockStatus."""
+        """Read a SKU from the bulk snapshot without adding a network request."""
         try:
-            part = self._part_client.find_part_by_sku(sku)
+            part = self._cached_part_by_sku(sku)
             if part is None:
                 return None
             if not part.stock_enabled:
@@ -364,6 +365,21 @@ class PrintDecisionEngine:
         except Exception as exc:  # noqa: BLE001
             logger.warning("_fetch_stock_by_sku_safe(%r) failed: %s", sku, exc)
             return None
+
+    def _cached_part_by_sku(self, sku: str):
+        cached_lookup = getattr(self._part_client, "get_cached_part_by_sku", None)
+        if callable(cached_lookup):
+            return cached_lookup(sku)
+        # Test doubles and legacy adapters retain the historical behaviour.
+        return self._part_client.find_part_by_sku(sku)
+
+    def _cached_stock(self, sevdesk_part_id: str) -> int | None:
+        cached_lookup = getattr(self._part_client, "get_cached_part_stock", None)
+        if callable(cached_lookup):
+            return cached_lookup(sevdesk_part_id)
+        # Compatibility fallback for legacy callers.  Production PartClient
+        # always exposes the cache-only method above.
+        return self._fetch_stock_safe(sevdesk_part_id)
 
     def _fetch_stock_safe(self, sevdesk_part_id: str) -> int:
         try:

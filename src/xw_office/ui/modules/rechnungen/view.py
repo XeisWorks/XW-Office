@@ -73,7 +73,6 @@ from xw_office.services.draft_invoice.service import (
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.inventory import InventoryService
-from xw_office.services.plc.customs_document import ensure_customs_a5_print_file
 from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.printer_status.service import PrinterStatusService
 from xw_office.services.products.catalog import ProductCatalogService, normalize_legacy_title
@@ -86,6 +85,7 @@ from xw_office.services.customer_aftercare.service import CustomerAftercareServi
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sendungen.service import OffeneSendungenService
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.services.sevdesk.part_client import PartClient
 from xw_office.ui.modules.rechnungen.offene_ueberweisungen_dialog import OffeneUeberweisungenDialog
 from xw_office.services.sevdesk.refund_client import SevDeskRefundClient
 from xw_office.services.wix.client import WixOrdersClient
@@ -1050,6 +1050,7 @@ class RechnungenView(QWidget):
         self._wix_meta_worker: BackgroundWorker | None = None
         self._wix_context_worker: BackgroundWorker | None = None
         self._invoice_detail_worker: BackgroundWorker | None = None
+        self._invoice_detail_handle: JobHandle | None = None
         self._customer_mail_worker: BackgroundWorker | None = None
         self._wix_warm_worker: BackgroundWorker | None = None
         self._wix_context_handle: JobHandle | None = None
@@ -1082,6 +1083,7 @@ class RechnungenView(QWidget):
         self._load_started_at = 0.0
         self._wix_warm_started_at = 0.0
         self._invoice_detail_started_at = 0.0
+        self._invoice_detail_seq = 0
         self._selected_wix_started_at = 0.0
         self._search_active = False
         self._search_seq = 0
@@ -1118,7 +1120,6 @@ class RechnungenView(QWidget):
         self._piece_delegate.manage_clicked.connect(self._on_product_manage_clicked)
         self._append_mode = False
         self._queued_wix_context_ref = ""
-        self._queued_invoice_detail_id = ""
         self._detail_context_seq = 0
         self._table_layout_initialized = False
         self._open_overview_key = ""
@@ -3450,18 +3451,10 @@ class RechnungenView(QWidget):
         existing_label_path = self._resolve_plc_archive_path_for_summary(summary)
         if existing_label_path:
             existing_customs_path = self._resolve_plc_customs_archive_path_for_summary(summary)
+            # The calibrated A5 derivative is generated only when the user
+            # actually queues a customs reprint.  Parsing/regenerating PDFs
+            # here delays the dialog shell on the Qt main thread.
             existing_customs_print_path = ""
-            if existing_customs_path:
-                try:
-                    existing_customs_print_path = os.fspath(
-                        ensure_customs_a5_print_file(existing_customs_path)
-                    )
-                except Exception as exc:  # noqa: BLE001 - the PLC original remains available.
-                    logger.warning(
-                        "Archived customs A5 preparation failed path=%s: %s",
-                        existing_customs_path,
-                        exc,
-                    )
             box = QMessageBox(self)
             box.setWindowTitle("PLC-Dokumente vorhanden")
             box.setIcon(QMessageBox.Icon.Question)
@@ -4367,26 +4360,36 @@ class RechnungenView(QWidget):
         invoice_id = str(summary.id or "").strip()
         if not invoice_id:
             return
-        if self._invoice_detail_worker is not None and self._invoice_detail_worker.isRunning():
-            self._queued_invoice_detail_id = invoice_id
-            return
-
+        self._invoice_detail_seq += 1
+        seq = self._invoice_detail_seq
         self._invoice_detail_started_at = time.perf_counter()
         logger.debug("Rechnungen phase=selected-detail-load start invoice_id=%s", invoice_id)
 
-        def job() -> dict[str, object]:
+        def job(token: CancelToken) -> dict[str, object]:
+            token.raise_if_cancelled()
             service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             context = service.get_invoice_detail_context(summary)
-            return {"__invoice_id": invoice_id, "summary": summary, "context": context}
+            token.raise_if_cancelled()
+            return {"seq": seq, "__invoice_id": invoice_id, "summary": summary, "context": context}
 
-        self._invoice_detail_worker = BackgroundWorker(job)
-        self._invoice_detail_worker.signals.result.connect(self._on_invoice_detail_context_loaded)
-        self._invoice_detail_worker.signals.error.connect(self._on_invoice_detail_context_error)
-        self._invoice_detail_worker.signals.finished.connect(self._on_invoice_detail_context_finished)
-        self._invoice_detail_worker.start()
+        handle = self._background_jobs.submit_callable(
+            queue="ui-critical-network",
+            priority=0,
+            key="selected-invoice-detail",
+            fn=job,
+            on_result=self._on_invoice_detail_context_loaded,
+            on_error=self._on_invoice_detail_context_error,
+            on_finished=lambda: self._on_invoice_detail_context_finished(seq),
+            owner=self,
+            replace="cancel_previous",
+        )
+        self._invoice_detail_handle = handle
+        self._invoice_detail_worker = handle.worker
 
     def _on_invoice_detail_context_loaded(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}
+        if int(data.get("seq") or 0) != self._invoice_detail_seq:
+            return
         invoice_id = str(data.get("__invoice_id") or "").strip()
         selected = self._selected_summary()
         if selected is None or invoice_id != str(selected.id or "").strip():
@@ -4400,26 +4403,18 @@ class RechnungenView(QWidget):
     def _on_invoice_detail_context_error(self, exc: Exception) -> None:
         logger.warning("Invoice detail background load failed: %s", exc)
 
-    def _on_invoice_detail_context_finished(self) -> None:
+    def _on_invoice_detail_context_finished(self, seq: int) -> None:
+        if seq != self._invoice_detail_seq:
+            return
         if self._invoice_detail_started_at:
             elapsed_ms = int((time.perf_counter() - self._invoice_detail_started_at) * 1000)
             logger.debug("Rechnungen phase=selected-detail-load finished elapsed_ms=%s", elapsed_ms)
             self._invoice_detail_started_at = 0.0
         self._invoice_detail_worker = None
-        queued_id = self._queued_invoice_detail_id.strip()
-        self._queued_invoice_detail_id = ""
-        if not queued_id:
-            self._start_next_wix_warm_batch()
-            if self._pending_open_overview_rows:
-                self._start_open_invoice_overview(list(self._pending_open_overview_rows))
-            return
-        selected = self._selected_summary()
-        if selected is None or queued_id != str(selected.id or "").strip():
-            self._start_next_wix_warm_batch()
-            if self._pending_open_overview_rows:
-                self._start_open_invoice_overview(list(self._pending_open_overview_rows))
-            return
-        self._load_invoice_detail_context(selected)
+        self._invoice_detail_handle = None
+        self._start_next_wix_warm_batch()
+        if self._pending_open_overview_rows:
+            self._start_open_invoice_overview(list(self._pending_open_overview_rows))
 
     def _apply_invoice_detail_context(
         self,
@@ -4578,6 +4573,9 @@ class RechnungenView(QWidget):
             meta = self._resolve_wix_order_summary(wix_client, ref, token)
             token.raise_if_cancelled()
             wix_items = self._fetch_wix_order_line_items(wix_client, ref, token)
+            token.raise_if_cancelled()
+            part_client = self._container.resolve(PartClient)
+            part_client.ensure_parts_cache()
             token.raise_if_cancelled()
             engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
             pieces = engine.get_piece_blocks(wix_items, invoice_ref=ref)

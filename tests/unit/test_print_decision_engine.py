@@ -27,6 +27,17 @@ class _PartClientStub:
         return 0
 
 
+class _SnapshotPartClientStub:
+    def get_cached_part_stock(self, part_id: str) -> int | None:
+        return 9 if part_id == "part-1" else None
+
+    def get_cached_part_by_sku(self, _sku: str):
+        return None
+
+    def get_part_stock(self, _part_id: str) -> int:
+        raise AssertionError("piece rendering must not make an individual stock request")
+
+
 def test_cached_piece_is_refreshed_from_same_title_specific_print_config(tmp_path) -> None:
     pdf_path = tmp_path / "Vielen Dank fuer die Blumen.pdf"
     pdf_path.write_bytes(b"%PDF-1.4 test")
@@ -105,6 +116,30 @@ def test_piece_block_uses_new_repo_print_config_for_title_specific_entry(tmp_pat
     assert block.print_profile_id == "noten_a4_duplex"
     assert block.print_plan == [{"range": "1-2", "profile_id": "canon_brochure_mono"}]
     assert block.has_direct_print_config is True
+
+
+def test_piece_blocks_use_stock_snapshot_without_individual_stock_requests() -> None:
+    repo = _RepoStub(
+        {
+            "inventory.products": json.dumps(
+                [
+                    {
+                        "sku": "XW-4-001",
+                        "name": "Etuede A",
+                        "sevdesk_id": "part-1",
+                        "is_digital": False,
+                    }
+                ]
+            )
+        }
+    )
+
+    blocks = PrintDecisionEngine(
+        ProductCatalogService(repo), _SnapshotPartClientStub()  # type: ignore[arg-type]
+    ).get_piece_blocks([WixOrderItem(sku="XW-4-001", name="Etuede A", qty=2)])
+
+    assert blocks[0].stock_status is not None
+    assert blocks[0].stock_status.on_hand == 9
 
 
 def test_title_overrides_for_sku_lists_saved_title_specific_plans() -> None:
