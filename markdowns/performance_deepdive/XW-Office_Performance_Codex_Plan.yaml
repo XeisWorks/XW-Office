@@ -1,0 +1,245 @@
+schema_version: 1
+project: XW-Office
+repository: XeisWorks/XW-Office
+analyzed_head: 5267e25af9347547b85de603f9a9ada967579e18
+objective: RECHNUNGEN significantly faster without changing business behavior
+principles:
+- Do not solve latency by unbounded concurrency.
+- No blocking network, filesystem scan, or PDF parsing on Qt main thread.
+- Prefer cache-first/stale-while-revalidate for UI presentation.
+- Deduplicate in-flight work by logical key.
+- Measure request count and latency before and after every phase.
+- Preserve current persistent Wix order cache as the raw snapshot source of truth.
+performance_budgets:
+  invoice_selection_immediate_ui_ms: 50
+  warm_invoice_context_ms: 150
+  latest_selection_request_start_ms: 50
+  plc_dialog_shell_visible_ms: 100
+  warm_open_products_local_ms: 150-300
+  wix_http_calls_on_cache_hit: 0
+  stock_http_calls_on_warm_invoice_switch: 0
+  concurrent_wix_resolves_per_reference: 1
+  qt_main_thread_plc_glob_or_pdf_parse: 0
+findings:
+- id: F01
+  priority: P0
+  confidence: very_high
+  impact: very_high
+  title: N+1 sevDesk stock requests during invoice selection
+  files:
+  - src/xw_office/ui/modules/rechnungen/view.py
+  - src/xw_office/services/products/print_decision.py
+  - src/xw_office/services/sevdesk/part_client.py
+  cause: selected Wix context calls PrintDecisionEngine.get_piece_blocks(); physical pieces call get_part_stock
+    individually; unknown SKUs can trigger find_part_by_sku
+  fix: Introduce short-lived StockSnapshotService with stale-while-revalidate and bulk refresh; PrintDecisionEngine
+    uses snapshot only in UI path; update/invalidate snapshot on stock writes
+- id: F02
+  priority: P0
+  confidence: very_high
+  impact: very_high
+  title: Open invoice print-product overview resolves invoices sequentially
+  files:
+  - src/xw_office/ui/modules/rechnungen/open_invoice_overview.py
+  - src/xw_office/ui/modules/rechnungen/view.py
+  - src/xw_office/services/invoice_processing/service.py
+  - src/xw_office/services/wix/client.py
+  cause: up to 50 open invoices are resolved one-by-one; missing cache entries may perform remote Wix work
+  fix: cache-only first pass, collect unknown refs, resolve only unknowns with bounded parallelism and progressive
+    partial results
+- id: F03
+  priority: P0
+  confidence: very_high
+  impact: high_to_very_high
+  title: Wix cold path rebuilds HTTP clients and caches order after optional enrichment
+  files:
+  - src/xw_office/services/wix/client.py
+  - src/xw_office/services/wix/product_details_client.py
+  - src/xw_office/services/wix/order_cache.py
+  cause: new httpx.Client in multiple request methods; order search can try several variants; product category enrichment
+    may perform more network calls before final order cache write
+  fix: shared pooled HTTP client; persist raw order immediately; lazy/background metadata enrichment
+- id: F04
+  priority: P0
+  confidence: very_high
+  impact: high
+  title: No single-flight dedupe for concurrent Wix order resolves
+  files:
+  - src/xw_office/services/wix/client.py
+  - src/xw_office/services/background_jobs/service.py
+  - src/xw_office/ui/modules/rechnungen/view.py
+  cause: selected context, warmup, hints, open overview and PLC can miss the same cache before the first request
+    finishes
+  fix: per-reference in-flight registry/future; one upstream resolve, multiple consumers
+- id: F05
+  priority: P1
+  confidence: very_high
+  impact: high
+  title: Invoice detail head-of-line blocking
+  files:
+  - src/xw_office/ui/modules/rechnungen/view.py
+  - src/xw_office/services/background_jobs/service.py
+  cause: one serial invoice detail worker; next selection waits for old blocking request
+  fix: latest-wins orchestration with generation guard and bounded concurrency=2; stale results discarded
+- id: F06
+  priority: P1
+  confidence: very_high
+  impact: high_when_plc_is_slow
+  title: PLC click path can perform synchronous filesystem/PDF work
+  files:
+  - src/xw_office/ui/modules/rechnungen/view.py
+  - src/xw_office/services/plc/label_archive.py
+  - src/xw_office/services/plc/customs_document.py
+  cause: archive lookup/glob/stat and ensure_customs_a5_print_file can run before popup is visible
+  fix: background archive index; O(1) snapshot lookup; no ensure/PyMuPDF before dialog; generate derivative at archive
+    time or asynchronously
+- id: F07
+  priority: P2
+  confidence: high
+  impact: small_to_medium
+  title: Repeated settings reads/parsing in hint loops
+  files:
+  - src/xw_office/services/invoice_processing/service.py
+  cause: SKU/country rules repeatedly read and JSON-parsed
+  fix: compiled settings snapshots invalidated on settings change
+phases:
+- id: PHASE-0
+  name: Performance instrumentation and regression guardrails
+  priority: P0
+  tasks:
+  - id: P0-01
+    action: Add named timing spans and request counters for invoice selection, Wix context, piece blocks, PLC click,
+      open overview, cache hit/miss and queue wait
+    files:
+    - src/xw_office/ui/performance.py
+    - src/xw_office/ui/modules/rechnungen/view.py
+    - src/xw_office/services/wix/client.py
+    - src/xw_office/services/sevdesk/part_client.py
+  - id: P0-02
+    action: Add fake-latency tests and counters so optimizations can assert upstream request counts
+    acceptance:
+    - Can distinguish UI paint latency from network completion latency
+    - Can count stock requests per invoice switch
+    - Can count Wix upstream resolves per reference
+- id: PHASE-1
+  name: Fast invoice switching
+  priority: P0
+  tasks:
+  - id: P1-01
+    action: Create StockSnapshotService or equivalent cache in PartClient
+    implementation:
+    - Map part_id->stock and sku->part
+    - TTL 30-60s
+    - stale-while-revalidate
+    - bulk refresh using list_parts(refresh_cache=True) or equivalent paginated fetch
+    - update/invalidate on set_part_stock
+    acceptance:
+    - 10-piece cached invoice causes 0 stock HTTP requests
+    - cold snapshot causes one bounded bulk refresh, not 10 individual calls
+  - id: P1-02
+    action: Make PrintDecisionEngine use stock snapshot in UI read path
+    files:
+    - src/xw_office/services/products/print_decision.py
+  - id: P1-03
+    action: Replace serial _invoice_detail_worker behavior with latest-wins managed jobs
+    implementation:
+    - generation/sequence guard
+    - bounded concurrency 2
+    - new selection starts immediately
+    - old result never overwrites current selection
+  - id: P1-04
+    action: Ensure row selection PLC controls use only an in-memory archive-index snapshot
+- id: PHASE-2
+  name: Wix transport and order-resolution architecture
+  priority: P0
+  tasks:
+  - id: P2-01
+    action: Inject/reuse a long-lived httpx.Client for WixOrdersClient and WixProductDetailsClient
+    acceptance:
+    - No new client construction per order request
+    - clean shutdown closes client
+    - MockTransport/injected client is testable
+  - id: P2-02
+    action: Persist raw order immediately after successful lookup
+    implementation:
+    - raw cache write before product-category enrichment
+    - critical summary/shipping/items can be parsed immediately
+    - category enrichment becomes lazy/background
+  - id: P2-03
+    action: Add per-order-reference single-flight
+    acceptance:
+    - three concurrent resolve_order calls for same ref cause one upstream resolve
+    - one consumer cancellation does not cancel shared work for all consumers
+  - id: P2-04
+    action: Keep product/category metadata off the UI-critical order path and reuse persistent metadata cache
+- id: PHASE-3
+  name: Rebuild PRINT PRODUKTE OFFEN pipeline
+  priority: P0
+  tasks:
+  - id: P3-01
+    action: Cache-only first pass over all visible open invoices
+    outputs:
+    - known product aggregates
+    - known digital/physical flags
+    - unknown_refs
+  - id: P3-02
+    action: Resolve only unknown_refs with bounded parallelism 3-4 and single-flight
+  - id: P3-03
+    action: Emit progressive aggregate updates instead of waiting for all invoices
+  - id: P3-04
+    action: Optionally introduce OrderAnalysisSnapshot derived from one raw Wix snapshot
+    fields:
+    - ref
+    - digital_only
+    - buyer_note
+    - shipping
+    - line_items
+    - hint_flags
+    - analyzed_at
+  - id: P3-05
+    acceptance:
+    - 50 open invoices with 45 cached -> exactly 5 remote resolves
+    - 50 fully cached -> 0 remote resolves
+    - first cached products visible immediately
+- id: PHASE-4
+  name: PLC fast path
+  priority: P1
+  tasks:
+  - id: P4-01
+    action: Build combined label/customs archive index in background and maintain incrementally
+  - id: P4-02
+    action: Remove ensure_customs_a5_print_file from pre-dialog click path
+  - id: P4-03
+    action: Generate missing A5 derivative at archive time or asynchronously on reprint
+  - id: P4-04
+    acceptance:
+    - no glob on Qt main thread during PLC click
+    - no fitz/PyMuPDF open before dialog visible
+    - existing print/reprint behavior unchanged
+- id: PHASE-5
+  name: Derived-cache cleanup and maintainability
+  priority: P2
+  tasks:
+  - id: P5-01
+    action: Cache compiled SKU/country hint settings until settings mutation
+  - id: P5-02
+    action: Document cache ownership and invalidation rules
+  - id: P5-03
+    action: Optionally split 244KB Rechnungen view after performance changes are proven
+    note: Do not claim file splitting itself is a performance fix.
+recommended_commit_sequence:
+- perf-0 instrumentation
+- perf-1 stock-snapshot
+- perf-1 latest-invoice-detail
+- perf-2 wix-shared-client
+- perf-2 wix-raw-first-singleflight
+- perf-3 open-overview-pipeline
+- perf-4 plc-fast-path
+- perf-5 cleanup
+do_not_do:
+- Do not add arbitrary caches without explicit ownership/invalidation.
+- Do not simply increase all thread pool limits.
+- Do not launch all 50 open invoices concurrently.
+- Do not live-refresh stock per row selection.
+- Do not make product category enrichment a prerequisite for basic order/PLC context.
+- Do not refactor the giant view first and assume it fixes latency.
