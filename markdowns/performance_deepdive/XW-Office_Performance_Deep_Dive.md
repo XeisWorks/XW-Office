@@ -8,6 +8,18 @@
 
 ---
 
+## Umsetzungsstand 2026-08-29
+
+Die Skizze wurde gegen den aktuellen Code verifiziert und in den folgenden Punkten korrigiert:
+
+- Der ausgewählte Wix-Kontext nutzte bereits `BackgroundJobManager`, Sequenzschutz und begrenzte Parallelität. Der separate sevDesk-Detail-Worker war dagegen seriell; er nutzt jetzt ebenfalls einen `latest-wins`-Job mit Queue-Limit.
+- Die offene Rechnungsübersicht besitzt bereits eine lokale Sofortansicht. Der nachfolgende Resolver lief aber trotzdem über alle Referenzen. Bekannte persistente Wix-Snapshots bleiben jetzt cache-only; nur unbekannte Referenzen gehen noch in die Remote-Auflösung.
+- Der Hot Path von `WixOrdersClient` verwendet jetzt einen langlebigen HTTP-Client, speichert den Raw-Snapshot vor der optionalen Kategorieanreicherung und dedupliziert parallele Cold-Resolves pro Referenz. `WixProductDetailsClient` ist noch nicht auf denselben Pool umgestellt und bleibt eine getrennte Folgemaßnahme.
+- Die Stückliste liest Bestände nun aus einem in-memory Part-Snapshot. Bei leerem Snapshot wird innerhalb des Background-Jobs genau ein paginierter Part-Bulk-Lauf gestartet statt Einzelrequests pro Position. Ein Stock-Write aktualisiert den Snapshot gezielt.
+- Der PLC-Dialog erzeugt keine A5-Zoll-PDF mehr vor der Dialoganzeige. Der verbleibende Archivindex-/Glob-Umbau ist bewusst offen: Ein synchrones Entfernen ohne fertig aufgebauten Hintergrundindex könnte historische Nachdrucke übersehen und dadurch eine neue PLC-Sendung auslösen.
+
+Abgesichert sind die Änderungen mit Request-Count-Tests für Stock-Snapshots und Wix-Single-Flight sowie Cache-only-Tests für die Open-Overview. Vollständige P50/P95-Telemetrie und progressive Batches sind noch offen.
+
 ## Executive Summary
 
 Ja – es gibt **deutliche, grundsätzliche Performance-Hebel**.

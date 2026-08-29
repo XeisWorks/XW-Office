@@ -3,6 +3,18 @@ project: XW-Office
 repository: XeisWorks/XW-Office
 analyzed_head: 5267e25af9347547b85de603f9a9ada967579e18
 objective: RECHNUNGEN significantly faster without changing business behavior
+implementation_status:
+  verified_on: 2026-08-29
+  completed:
+  - Stock reads for piece rendering use the PartClient bulk snapshot; an empty snapshot is populated once in the background job and stock writes update it.
+  - Invoice detail loading is latest-wins through the bounded ui-critical-network queue.
+  - WixOrdersClient reuses its hot-path HTTP client, persists raw orders before optional enrichment, and single-flights concurrent cold resolves.
+  - Open overview keeps persistent known Wix snapshots cache-only; only unknown references use remote classification.
+  - PLC dialog opening no longer generates/parses the customs A5 derivative before showing the dialog.
+  deferred:
+  - Full timing/counter telemetry and progressive overview batch delivery need product-PC measurements and UI callback design.
+  - WixProductDetailsClient is not yet pooled with WixOrdersClient.
+  - A background PLC archive index is required before removing the remaining historical archive glob safely.
 principles:
 - Do not solve latency by unbounded concurrency.
 - No blocking network, filesystem scan, or PDF parsing on Qt main thread.

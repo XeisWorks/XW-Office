@@ -210,22 +210,47 @@ def _resolve_one_summary(
             "has_plc": has_plc,
             "items": items,
         }
-    buyer_note, has_plc = _resolve_hint_context(
-        invoice_service,
-        ref,
-        buyer_note=buyer_note,
-        has_plc=has_plc,
-    )
+    digital_known_in_ui_cache = ref in known_digital
+    resolved_remotely = False
     is_digital: bool | None = known_digital.get(ref)
     if is_digital is None:
         is_digital = _cached_reference_digital_only(wix_client, ref)
+    if is_digital is not None:
+        # A warm row must stay cache-only.  The regular InvoiceProcessingService
+        # offers this accessor; the fallback keeps lightweight legacy stubs
+        # compatible with this pure resolver.
+        buyer_note, has_plc = _cached_hint_context(
+            invoice_service,
+            ref,
+            buyer_note=buyer_note,
+            has_plc=has_plc,
+        )
     if is_digital is None and has_wix_credentials:
+        buyer_note, has_plc = _resolve_hint_context(
+            invoice_service,
+            ref,
+            buyer_note=buyer_note,
+            has_plc=has_plc,
+        )
         try:
             is_digital = bool(wix_client.is_reference_digital_only(ref))
+            resolved_remotely = True
         except Exception as exc:  # noqa: BLE001 - overview must stay partial.
             logger.debug("Open overview digital lookup failed ref=%s: %s", ref, exc)
     if is_digital is False:
-        items = _order_line_items(wix_client, ref, has_wix_credentials=has_wix_credentials)
+        cached_items = _cached_order_line_items(wix_client, ref)
+        if cached_items is not None:
+            items = cached_items
+        elif (
+            resolved_remotely
+            or digital_known_in_ui_cache
+            or not callable(getattr(wix_client, "get_cached_order_line_items", None))
+        ):
+            # Compatibility path for test doubles/older adapters.  The
+            # production client normally provides the cache-only accessor. A
+            # UI-only digital cache, however, does not prove that raw line
+            # items are locally available yet.
+            items = _order_line_items(wix_client, ref, has_wix_credentials=has_wix_credentials)
     return {
         "ref": ref,
         "has_ref": True,
@@ -248,6 +273,30 @@ def _resolve_hint_context(
         hints = invoice_service.resolve_invoice_list_hints(reference)
     except Exception as exc:  # noqa: BLE001 - overview must not break the list.
         logger.debug("Open overview hint lookup failed ref=%s: %s", reference, exc)
+        return buyer_note, has_plc
+    hint_note = str(getattr(hints, "buyer_note", "") or "").strip()
+    return buyer_note or hint_note, has_plc or note_has_plc_label_hint(hint_note)
+
+
+def _cached_hint_context(
+    invoice_service: InvoiceProcessingService,
+    reference: str,
+    *,
+    buyer_note: str,
+    has_plc: bool,
+) -> tuple[str, bool]:
+    resolver = getattr(invoice_service, "get_cached_invoice_list_hints", None)
+    if not callable(resolver):
+        return _resolve_hint_context(
+            invoice_service,
+            reference,
+            buyer_note=buyer_note,
+            has_plc=has_plc,
+        )
+    try:
+        hints = resolver(reference)
+    except Exception as exc:  # noqa: BLE001 - overview must stay partial.
+        logger.debug("Open overview cached hint lookup failed ref=%s: %s", reference, exc)
         return buyer_note, has_plc
     hint_note = str(getattr(hints, "buyer_note", "") or "").strip()
     return buyer_note or hint_note, has_plc or note_has_plc_label_hint(hint_note)

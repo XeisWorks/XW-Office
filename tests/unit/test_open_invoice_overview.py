@@ -250,3 +250,54 @@ def test_open_invoice_overview_resolves_wix_notes_and_skips_cached_digital_looku
         ("Physisches Produkt", "Produktbeschreibung", 3)
     ]
     assert wix_client.calls == ["20911"]
+
+
+def test_resolver_keeps_fully_cached_overview_off_the_remote_path() -> None:
+    summaries = [
+        InvoiceSummary.model_validate(
+            {
+                "id": f"id-{index}",
+                "invoiceNumber": f"RE-{index}",
+                "status": 100,
+                "order_reference": str(21000 + index),
+            }
+        )
+        for index in range(5)
+    ]
+
+    class _InvoiceService:
+        def get_cached_invoice_list_hints(self, _reference: str) -> object:
+            return types.SimpleNamespace(buyer_note="")
+
+        def resolve_invoice_list_hints(self, _reference: str) -> object:
+            raise AssertionError("warm overview must not resolve hints")
+
+    class _WixClient:
+        def has_credentials(self) -> bool:
+            return True
+
+        def get_cached_reference_digital_only(self, reference: str) -> bool | None:
+            return reference != "21000"
+
+        def get_cached_order_line_items(self, reference: str) -> list[object] | None:
+            if reference != "21000":
+                return []
+            return [types.SimpleNamespace(sku="XW-PRINT", name="Print Produkt", qty=1, note="")]
+
+        def is_reference_digital_only(self, _reference: str) -> bool:
+            raise AssertionError("warm overview must not call Wix")
+
+        def fetch_order_line_items(self, _reference: str) -> list[object]:
+            raise AssertionError("warm overview must not call Wix")
+
+    overview = resolve_open_invoice_overview(
+        summaries,
+        seq=1,
+        invoice_service=_InvoiceService(),  # type: ignore[arg-type]
+        wix_client=_WixClient(),  # type: ignore[arg-type]
+    )
+
+    assert overview.complete is True
+    assert overview.physical == 1
+    assert overview.digital == 4
+    assert [(row.sku, row.quantity) for row in overview.print_products] == [("XW-PRINT", 1)]
