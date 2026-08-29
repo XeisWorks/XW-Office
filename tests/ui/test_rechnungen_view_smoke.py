@@ -1039,6 +1039,64 @@ def test_invoice_product_rows_are_selected_for_batch_print_by_default(qtbot: obj
     assert view._piece_model.rows() == [(block, 2, False)]  # noqa: SLF001
 
 
+def test_selected_invoice_ready_product_right_click_opens_print_settings(
+    qtbot: object,
+    tmp_path: object,
+) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    view.show()
+    pdf_path = tmp_path / "ready.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+    block = PieceBlock(
+        sku="XW-RIGHT",
+        name="Rechnungsprodukt",
+        qty_needed=1,
+        print_profile_id="noten_a5",
+        product=Product(
+            id="right-click",
+            sku="XW-RIGHT",
+            name="Rechnungsprodukt",
+            print_file_path=str(pdf_path),
+        ),
+    )
+    view._piece_model.set_pieces(  # noqa: SLF001
+        [
+            {
+                "block": block,
+                "flagged": True,
+                "quantity": 1,
+                "header": "Rechnungsprodukt",
+                "details": [],
+                "stock": "",
+                "stock_color": "#64748b",
+                "print_enabled": True,
+            }
+        ]
+    )
+    view._gb_stuecke.show()  # noqa: SLF001
+    view._piece_list.show()  # noqa: SLF001
+    opened: list[str] = []
+    printed: list[str] = []
+    view._piece_delegate.manage_clicked.disconnect()  # noqa: SLF001
+    view._piece_delegate.print_clicked.disconnect()  # noqa: SLF001
+    view._piece_delegate.manage_clicked.connect(lambda piece: opened.append(piece.sku))  # noqa: SLF001
+    view._piece_delegate.print_clicked.connect(lambda piece, _qty: printed.append(piece.sku))  # noqa: SLF001
+    index = view._piece_model.index(0, 0)  # noqa: SLF001
+    row_rect = view._piece_list.visualRect(index)  # noqa: SLF001
+    action_rect = view._piece_delegate._button_rects(row_rect, has_print_config=True)["print"]  # noqa: SLF001
+
+    qtbot.mouseClick(
+        view._piece_list.viewport(),  # noqa: SLF001
+        Qt.MouseButton.RightButton,
+        pos=action_rect.center(),
+    )
+
+    assert opened == ["XW-RIGHT"]
+    assert printed == []
+
+
 def test_invoice_product_row_quantity_can_be_adjusted(qtbot: object) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)

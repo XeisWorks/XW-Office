@@ -970,30 +970,50 @@ class _PieceDelegate(QStyledItemDelegate):
         if event.type() != QEvent.Type.MouseButtonRelease or not index.isValid():
             return super().editorEvent(event, model, option, index)
         pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        mouse_button = event.button() if hasattr(event, "button") else Qt.MouseButton.NoButton
         block = index.data(_PieceListModel.BLOCK_ROLE)
         if not isinstance(block, PieceBlock):
             return False
-        if bool(index.data(_PieceListModel.FLAGGED_ROLE)) and self._checkbox_rect(option.rect).contains(pos):
+        if (
+            mouse_button == Qt.MouseButton.LeftButton
+            and bool(index.data(_PieceListModel.FLAGGED_ROLE))
+            and self._checkbox_rect(option.rect).contains(pos)
+        ):
             if isinstance(model, _PieceListModel):
                 model.toggle_selected(index.row())
             return True
         rects = self._button_rects(option.rect, has_print_config=block.has_direct_print_config)
         enabled = bool(index.data(_PieceListModel.PRINT_ENABLED_ROLE))
-        if enabled and "qty_minus" in rects and rects["qty_minus"].contains(pos):
+        if (
+            mouse_button == Qt.MouseButton.LeftButton
+            and enabled
+            and "qty_minus" in rects
+            and rects["qty_minus"].contains(pos)
+        ):
             if isinstance(model, _PieceListModel):
                 model.adjust_quantity(index.row(), -1)
             return True
-        if enabled and "qty_plus" in rects and rects["qty_plus"].contains(pos):
+        if (
+            mouse_button == Qt.MouseButton.LeftButton
+            and enabled
+            and "qty_plus" in rects
+            and rects["qty_plus"].contains(pos)
+        ):
             if isinstance(model, _PieceListModel):
                 model.adjust_quantity(index.row(), 1)
             return True
-        if "print" in rects and rects["print"].contains(pos) and enabled:
-            qty = int(index.data(_PieceListModel.QUANTITY_ROLE) or 1)
-            self.print_clicked.emit(block, qty)
-            return True
-        if "manage" in rects and rects["manage"].contains(pos):
-            self.manage_clicked.emit(block)
-            return True
+        action_rect = rects.get("print") or rects.get("manage")
+        if action_rect is not None and action_rect.contains(pos):
+            if mouse_button == Qt.MouseButton.RightButton:
+                self.manage_clicked.emit(block)
+                return True
+            if "print" in rects and enabled and mouse_button == Qt.MouseButton.LeftButton:
+                qty = int(index.data(_PieceListModel.QUANTITY_ROLE) or 1)
+                self.print_clicked.emit(block, qty)
+                return True
+            if "manage" in rects and mouse_button == Qt.MouseButton.LeftButton:
+                self.manage_clicked.emit(block)
+                return True
         return super().editorEvent(event, model, option, index)
 
     @staticmethod

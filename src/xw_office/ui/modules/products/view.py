@@ -986,7 +986,7 @@ class ProductsView(QWidget):
             elif print_confirmed:
                 print_tooltip = "Druckauftrag wurde eingereiht"
             elif print_ready:
-                print_tooltip = "Produkt im Hintergrund drucken (Shift+Klick: Druckplan bearbeiten)"
+                print_tooltip = "Linksklick: Produkt drucken; Rechtsklick: Druckeinstellungen oeffnen"
             else:
                 print_tooltip = "PDF-Pfad und Druckplan direkt fuer dieses Produkt pflegen"
             payload.append(
@@ -1201,7 +1201,7 @@ class ProductsView(QWidget):
                         "Druckauftrag wurde eingereiht"
                         if confirmed
                         else (
-                            "Produkt im Hintergrund drucken (Shift+Klick: Druckplan bearbeiten)"
+                            "Linksklick: Produkt drucken; Rechtsklick: Druckeinstellungen oeffnen"
                             if ready
                             else "PDF-Pfad und Druckplan direkt fuer dieses Produkt pflegen"
                         )
@@ -1986,12 +1986,15 @@ class ProductsView(QWidget):
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         if watched is self._sync_table.viewport() and event.type() == QEvent.Type.MouseButtonRelease:
-            if isinstance(event, QMouseEvent) and event.button() == Qt.MouseButton.LeftButton:
+            if isinstance(event, QMouseEvent) and event.button() in {
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.RightButton,
+            }:
                 index = self._sync_table.indexAt(event.position().toPoint())
                 if index.isValid() and index.column() in {9, 10}:
                     row_data = index.data(Qt.ItemDataRole.UserRole)
                     field = str(index.model().headerData(index.column(), Qt.Orientation.Horizontal) or "")
-                    if isinstance(row_data, dict) and bool(row_data.get(f"__action_enabled__{field}")):
+                    if isinstance(row_data, dict):
                         rect = self._sync_table.visualRect(index)
                         local_x = event.position().x() - rect.x()
                         local_y = event.position().y() - rect.y()
@@ -2003,6 +2006,17 @@ class ProductsView(QWidget):
                         ):
                             sku = str(row_data.get("SKU") or "").strip()
                             if sku:
+                                if (
+                                    field == "Druck"
+                                    and event.button() == Qt.MouseButton.RightButton
+                                    and bool(row_data.get("Druck"))
+                                ):
+                                    self._manage_product_print_config(sku)
+                                    return True
+                                if event.button() == Qt.MouseButton.RightButton:
+                                    return super().eventFilter(watched, event)
+                                if not bool(row_data.get(f"__action_enabled__{field}")):
+                                    return True
                                 action_kind = str(row_data.get(f"__action_kind__{field}") or "").strip()
                                 if action_kind == "print":
                                     if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:

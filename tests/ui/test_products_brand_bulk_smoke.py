@@ -331,6 +331,69 @@ def test_products_sync_ready_print_action_is_backgrounded_and_confirms_click(
     qtbot.waitUntil(lambda: not view._direct_product_print_handles, timeout=2000)  # noqa: SLF001
 
 
+def test_products_ready_print_action_right_click_opens_settings(
+    qtbot: object,
+    monkeypatch: object,
+) -> None:
+    monkeypatch.setattr(ProductsView, "_load_sync_sources", lambda self, *args, **kwargs: None)
+    view = ProductsView(Container(AppConfig()))
+    qtbot.addWidget(view)
+    view.show()
+    row = ProductRow(
+        sku="XW-RIGHT",
+        name="Druckbereit",
+        category="Kat",
+        on_hand=1,
+        price_eur="12.00",
+        wix_id="w-right",
+        sevdesk_id="s-right",
+        print_file_path="ready.pdf",
+        print_profile_id="noten_a5",
+        print_plan=[],
+    )
+    view._all_rows = [row]  # noqa: SLF001
+    sync_row_type = __import__("xw_office.ui.modules.products.view", fromlist=["_SyncRow"])._SyncRow
+    view._sync_rows = [  # noqa: SLF001
+        sync_row_type(
+            sku=row.sku,
+            name=row.name,
+            wix_id=row.wix_id,
+            sevdesk_id=row.sevdesk_id,
+            local_present=True,
+            wix_present=True,
+            sevdesk_present=True,
+            local_stock=1,
+            wix_stock=1,
+            sevdesk_stock=1,
+            local_brand="",
+            wix_brand="",
+            local_price="12.00",
+            wix_price="12.00",
+            sevdesk_price="12.00",
+            status="sauber verknuepft",
+            can_create_sevdesk=False,
+        )
+    ]
+    view._populate_sync_table(view._sync_rows)  # noqa: SLF001
+    opened: list[str] = []
+    printed: list[str] = []
+    monkeypatch.setattr(view, "_manage_product_print_config", lambda sku: opened.append(sku))
+    monkeypatch.setattr(view, "_print_product_from_table", lambda sku: printed.append(sku))
+    model = view._sync_table.model()  # noqa: SLF001
+    assert model is not None
+    index = model.index(0, 10)
+    rect = view._sync_table.visualRect(index)  # noqa: SLF001
+
+    qtbot.mouseClick(
+        view._sync_table.viewport(),  # noqa: SLF001
+        Qt.MouseButton.RightButton,
+        pos=rect.center(),
+    )
+
+    assert opened == ["XW-RIGHT"]
+    assert printed == []
+
+
 def test_products_view_refreshes_stale_row_through_canonical_print_resolver(
     qtbot: object,
     monkeypatch: object,
