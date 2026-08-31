@@ -116,11 +116,16 @@ def create_application() -> QApplication:
     config = load_config()
     app = QApplication(sys.argv)
     app.setApplicationName(config.app.name)
+    app.setApplicationDisplayName(config.app.name)
     app.setApplicationVersion(APP_VERSION)
 
     icon_path = app_icon_path()
-    if icon_path.exists():
-        app.setWindowIcon(QIcon(str(icon_path)))
+    app_icon = QIcon(str(icon_path)) if icon_path.exists() else QIcon()
+    if not app_icon.isNull():
+        # QApplication supplies the default for new windows.  Set it on the
+        # native top-level window as well: this makes the taskbar icon reliable
+        # for the pythonw.exe desktop launcher on Windows.
+        app.setWindowIcon(app_icon)
 
     apply_app_theme(app, config.app.theme)
 
@@ -145,6 +150,8 @@ def create_application() -> QApplication:
 
     from xw_office.ui.main_window import MainWindow
     window = MainWindow(container)
+    if not app_icon.isNull():
+        window.setWindowIcon(app_icon)
     _retain_main_window(app, window)
     window.showMaximized()
 
