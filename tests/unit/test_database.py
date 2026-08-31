@@ -24,6 +24,8 @@ def test_ensure_core_tables_creates_missing_tables() -> None:
         created_tables = ensure_core_tables(engine)
         expected = {
             "api_secret",
+            "customer_aftercare_case",
+            "customer_aftercare_item",
             "expense_ignore_rule",
             "expense_shift_entry",
             "pc_registry",

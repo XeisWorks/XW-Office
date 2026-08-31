@@ -147,7 +147,11 @@ _OPEN_AUTO_LOAD_LIMIT = 50
 # after 75 seconds only caused needless conversion work when users revisited a
 # row in the same list.
 _WIX_CONTEXT_CACHE_TTL_SECONDS = 6 * 60 * 60
-_WIX_WARM_BATCH_SIZE = 3
+# Warmup must never compete noticeably with a user's row selection. One
+# reference per idle slice keeps cache fill useful without multi-second bursts
+# of JSON/product mapping work that starve the Qt event loop.
+_WIX_WARM_BATCH_SIZE = 1
+_WIX_WARM_IDLE_DELAY_MS = 1000
 _WIX_WARM_QUEUE_LIMIT = 8
 _SIDE_JOB_QUEUE = "rechnungen-side"
 _PRIORITY_OPEN_OVERVIEW = 10
@@ -1099,6 +1103,9 @@ class RechnungenView(QWidget):
         self._wix_context_seq = 0
         self._wix_warm_queue: list[str] = []
         self._wix_warm_inflight_refs: set[str] = set()
+        self._wix_warm_timer = QTimer(self)
+        self._wix_warm_timer.setSingleShot(True)
+        self._wix_warm_timer.timeout.connect(self._launch_next_wix_warm_batch)
         self._shutting_down = False
         self._open_overview_seq = 0
         self._pending_open_overview_rows: list[InvoiceSummary] = []
@@ -1627,6 +1634,7 @@ class RechnungenView(QWidget):
         self._wix_context_seq += 1
         self._detail_context_seq += 1
         self._mollie_timer.stop()
+        self._wix_warm_timer.stop()
         self._wix_warm_queue.clear()
         self._wix_warm_inflight_refs.clear()
         if self._wix_warm_handle is not None:
@@ -3154,6 +3162,16 @@ class RechnungenView(QWidget):
             return
         if not self._can_run_wix_warm_job():
             return
+        if self._wix_warm_timer.isActive():
+            return
+        if not self._wix_warm_queue:
+            return
+        self._wix_warm_timer.start(_WIX_WARM_IDLE_DELAY_MS)
+
+    def _launch_next_wix_warm_batch(self) -> None:
+        """Run one speculative Wix context only after a short idle window."""
+        if self._shutting_down or not self._can_run_wix_warm_job():
+            return
         refs = self._wix_warm_queue[:_WIX_WARM_BATCH_SIZE]
         if not refs:
             return
@@ -4377,6 +4395,9 @@ class RechnungenView(QWidget):
 
     def _refresh_detail_for_selection(self) -> None:
         selection_started_at = time.perf_counter()
+        # Restart the idle window for every user selection. Speculative cache
+        # fills are useful only after the user has stopped navigating rows.
+        self._wix_warm_timer.stop()
         summary = self._selected_summary()
         self._detail_context_seq += 1
         seq = self._detail_context_seq
@@ -4384,7 +4405,14 @@ class RechnungenView(QWidget):
             self._reset_detail()
             return
         self._populate_detail_for_summary(summary)
-        performance_metrics.record_elapsed("invoice_select_to_immediate_paint_ms", selection_started_at)
+        elapsed_ms = performance_metrics.record_elapsed(
+            "invoice_select_to_immediate_paint_ms", selection_started_at
+        )
+        logger.info(
+            "Rechnungen metric invoice_select_to_immediate_paint_ms=%s invoice_id=%s",
+            elapsed_ms,
+            summary.id,
+        )
         QTimer.singleShot(0, lambda s=summary, token=seq: self._hydrate_detail_for_selection(s, token))
 
     def _populate_detail_for_summary(self, summary: InvoiceSummary) -> None:
@@ -4429,6 +4457,7 @@ class RechnungenView(QWidget):
         else:
             self._reset_wix_meta("Keine Wix-Order-Referenz")
             self._reset_stuecke()
+        self._start_next_wix_warm_batch()
 
     def _reset_detail(self) -> None:
         self._gb_open.show()
@@ -4586,8 +4615,10 @@ class RechnungenView(QWidget):
         if seq != self._invoice_detail_seq:
             return
         if self._invoice_detail_started_at:
-            elapsed_ms = int((time.perf_counter() - self._invoice_detail_started_at) * 1000)
-            logger.debug("Rechnungen phase=selected-detail-load finished elapsed_ms=%s", elapsed_ms)
+            elapsed_ms = performance_metrics.record_elapsed(
+                "invoice_selected_detail_load_ms", self._invoice_detail_started_at
+            )
+            logger.info("Rechnungen metric invoice_selected_detail_load_ms=%s", elapsed_ms)
             self._invoice_detail_started_at = 0.0
         self._invoice_detail_worker = None
         self._invoice_detail_handle = None
@@ -4719,6 +4750,10 @@ class RechnungenView(QWidget):
         if ref in self._wix_warm_queue:
             self._wix_warm_queue.remove(ref)
             logger.debug("Wix context warmup reprioritized ref=%s", ref)
+
+        # A queued warmup is entirely speculative. A direct selection always
+        # wins, including the short idle window before the warmup starts.
+        self._wix_warm_timer.stop()
 
         if self._wix_context_worker is not None and self._wix_context_worker.isRunning():
             self._background_jobs.cancel_key("selected-wix-context")
@@ -4852,8 +4887,10 @@ class RechnungenView(QWidget):
 
     def _on_wix_context_finished(self) -> None:
         if self._selected_wix_started_at:
-            elapsed_ms = int((time.perf_counter() - self._selected_wix_started_at) * 1000)
-            logger.debug("Rechnungen phase=selected-wix-context finished elapsed_ms=%s", elapsed_ms)
+            elapsed_ms = performance_metrics.record_elapsed(
+                "invoice_selected_wix_context_load_ms", self._selected_wix_started_at
+            )
+            logger.info("Rechnungen metric invoice_selected_wix_context_load_ms=%s", elapsed_ms)
             self._selected_wix_started_at = 0.0
         self._wix_context_worker = None
         queued_ref = self._queued_wix_context_ref.strip()

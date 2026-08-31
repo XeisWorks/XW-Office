@@ -13,6 +13,8 @@ from xw_office.core.config import AppConfig
 from xw_office.models import (
     ApiSecret,
     Base,
+    CustomerAftercareCase,
+    CustomerAftercareItem,
     ExpenseIgnoreRule,
     ExpenseShiftEntry,
     PcRegistry,
@@ -22,6 +24,8 @@ from xw_office.models import (
 
 _CORE_TABLES = (
     ApiSecret.__table__,
+    CustomerAftercareCase.__table__,
+    CustomerAftercareItem.__table__,
     ExpenseIgnoreRule.__table__,
     ExpenseShiftEntry.__table__,
     PcRegistry.__table__,
