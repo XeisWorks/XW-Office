@@ -381,26 +381,45 @@ class TagesgeschaeftView(QWidget):
         )
 
     def prepare_shutdown(self) -> bool:
+        self.request_shutdown()
+        return self.shutdown_complete()
+
+    def request_shutdown(self) -> None:
+        """Ask all page workers to stop without blocking the GUI thread."""
         self._badge_timer.stop()
-        if self._rechnungen_view is not None and self._rechnungen_view.prepare_shutdown() is False:
+        self._start_abort_requested = True
+        if self._rechnungen_view is not None:
+            self._rechnungen_view.request_shutdown()
+        for worker in self._shutdown_workers():
+            if worker.isRunning():
+                worker.cancel()
+
+    def shutdown_complete(self) -> bool:
+        if self._rechnungen_view is not None and not self._rechnungen_view.shutdown_complete():
             return False
-        return self._wait_for_workers()
+        return not any(worker.isRunning() for worker in self._shutdown_workers())
+
+    def _shutdown_workers(self) -> tuple[BackgroundWorker, ...]:
+        return tuple(
+            worker
+            for worker in (
+                self._badge_worker,
+                self._start_worker,
+                self._start_product_worker,
+                self._start_exec_worker,
+                self._reprint_worker,
+                self._reprint_exec_worker,
+                self._lieferkorrektur_popup_fetch_worker,
+                self._lieferkorrektur_popup_apply_worker,
+            )
+            if worker is not None
+        )
 
     def _wait_for_workers(self) -> bool:
-        workers = (
-            self._badge_worker,
-            self._start_worker,
-            self._start_product_worker,
-            self._start_exec_worker,
-            self._reprint_worker,
-            self._reprint_exec_worker,
-            self._lieferkorrektur_popup_fetch_worker,
-            self._lieferkorrektur_popup_apply_worker,
-        )
+        self.request_shutdown()
         deadline = time.monotonic() + 5.0
-        for worker in workers:
-            if worker is not None and worker.isRunning():
-                worker.cancel()
+        for worker in self._shutdown_workers():
+            if worker.isRunning():
                 remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
                 if not worker.wait(remaining_ms):
                     return False
@@ -1413,13 +1432,6 @@ class TagesgeschaeftView(QWidget):
 
     def _on_beenden_clicked(self) -> None:
         """Gracefully shut down the application."""
-        if self.has_active_flow():
-            QMessageBox.warning(
-                self,
-                "App beenden",
-                "Es laeuft noch ein Workflow. Bitte zuerst STOP bzw. den laufenden Flow abschliessen.",
-            )
-            return
         logger.info("User requested application shutdown via BEENDEN button.")
         window = self.window()
         if isinstance(window, QWidget):

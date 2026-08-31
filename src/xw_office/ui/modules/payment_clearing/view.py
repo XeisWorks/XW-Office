@@ -438,3 +438,11 @@ class PaymentClearingView(QWidget):
 
     def has_active_flow(self) -> bool:
         return self._worker is not None and self._worker.isRunning()
+
+    def request_shutdown(self) -> None:
+        """Cancel an active operation; the main window waits asynchronously."""
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.cancel()
+
+    def shutdown_complete(self) -> bool:
+        return self._worker is None or not self._worker.isRunning()

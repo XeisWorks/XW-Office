@@ -1616,6 +1616,11 @@ class RechnungenView(QWidget):
         super().closeEvent(event)
 
     def prepare_shutdown(self) -> bool:
+        self.request_shutdown()
+        return self.shutdown_complete()
+
+    def request_shutdown(self) -> None:
+        """Cancel page work without waiting in the GUI thread."""
         self._shutting_down = True
         self._post_load_prefetch_seq += 1
         self._hint_seq += 1
@@ -1630,8 +1635,39 @@ class RechnungenView(QWidget):
             self._wix_context_handle.cancel()
         self._background_jobs.cancel_owner(self)
         self._background_jobs.cancel_key("wix-warmup")
-        self._stop_mollie_worker()
-        return True
+        for worker in self._shutdown_workers():
+            if worker.isRunning():
+                worker.cancel()
+
+    def shutdown_complete(self) -> bool:
+        return not any(worker.isRunning() for worker in self._shutdown_workers())
+
+    def _shutdown_workers(self) -> tuple[BackgroundWorker, ...]:
+        return tuple(
+            worker
+            for worker in (
+                self._worker,
+                self._search_worker,
+                self._refund_worker,
+                self._draft_worker,
+                self._draft_product_worker,
+                self._draft_preview_worker,
+                self._mollie_badge_worker,
+                self._stuecke_worker,
+                self._wix_meta_worker,
+                self._wix_context_worker,
+                self._invoice_detail_worker,
+                self._customer_mail_worker,
+                self._wix_warm_worker,
+                self._hint_worker,
+                self._fulfillment_step_worker,
+                self._invoice_mail_worker,
+                self._delete_draft_worker,
+                self._open_overview_worker,
+                self._product_print_worker,
+            )
+            if worker is not None
+        )
 
     def set_badge_refresh_managed_externally(self, enabled: bool) -> None:
         """Switch badge refresh to parent-managed mode to avoid duplicate polling."""

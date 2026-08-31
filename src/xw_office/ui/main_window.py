@@ -34,6 +34,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_SHUTDOWN_POLL_INTERVAL_MS = 75
+
 
 class MainWindow(QMainWindow):
     """XeisWorks Office main window: sidebar + content area."""
@@ -46,6 +48,11 @@ class MainWindow(QMainWindow):
         self._loading_pages: set[str] = set()
         self._startup_preload_worker: BackgroundWorker | None = None
         self._printer_status_worker: BackgroundWorker | None = None
+        self._shutdown_in_progress = False
+        self._shutdown_finished = False
+        self._shutdown_timer = QTimer(self)
+        self._shutdown_timer.setSingleShot(True)
+        self._shutdown_timer.timeout.connect(self._continue_background_shutdown)
         self._eventloop_watchdog = EventLoopWatchdog(self)
         self._setup_window()
         self._build_ui()
@@ -115,6 +122,8 @@ class MainWindow(QMainWindow):
         self._status_bar.showMessage(f"Druckauftrag wird uebergeben: {printer}", 0)
 
     def _on_print_job_finished(self, result: object) -> None:
+        if self._shutdown_in_progress:
+            return
         printer = str(getattr(result, "printer_name", "") or "Drucker")
         job_id = str(getattr(result, "job_id", "") or "")
         self._status_bar.showMessage(f"Druckauftrag vom Windows-Spooler bestaetigt: {printer}", 8000)
@@ -136,6 +145,8 @@ class MainWindow(QMainWindow):
             )
 
     def _on_print_job_failed(self, result: object) -> None:
+        if self._shutdown_in_progress:
+            return
         printer = str(getattr(result, "printer_name", "") or "Drucker")
         message = str(getattr(result, "message", "") or "Unbekannter Druckfehler")
         self._status_bar.showMessage(f"Druck fehlgeschlagen: {printer}", 12000)
@@ -391,50 +402,64 @@ class MainWindow(QMainWindow):
         return SettingsView(self._container)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self._shutdown_finished:
+            super().closeEvent(event)
+            return
+
+        self._begin_background_shutdown()
+        # A Python QThread cannot be stopped safely in the middle of arbitrary
+        # work.  Keep the event loop alive while the cancellation request drains
+        # the workers, but make the app disappear immediately for the user.
+        event.ignore()
+
+    def _begin_background_shutdown(self) -> None:
+        if self._shutdown_in_progress:
+            return
+        self._shutdown_in_progress = True
+        logger.info("Application shutdown requested; cancelling background work")
+        self._eventloop_watchdog.stop()
+
         for widget in self._pages.values():
-            has_active_flow = getattr(widget, "has_active_flow", None)
-            if callable(has_active_flow) and has_active_flow():
-                QMessageBox.warning(
-                    self,
-                    "App beenden",
-                    "Es laeuft noch ein Workflow. Bitte zuerst STOP bzw. den laufenden Flow abschliessen.",
-                )
-                event.ignore()
-                return
-        for widget in self._pages.values():
-            prepare_shutdown = getattr(widget, "prepare_shutdown", None)
-            if callable(prepare_shutdown) and prepare_shutdown() is False:
-                self._postpone_shutdown(event)
-                return
+            request_shutdown = getattr(widget, "request_shutdown", None)
+            if callable(request_shutdown):
+                request_shutdown()
 
         for worker in (self._startup_preload_worker, self._printer_status_worker):
             if worker is not None and worker.isRunning():
                 worker.cancel()
-                if not worker.wait(30000):
-                    self._postpone_shutdown(event)
-                    return
+
+        # Do not leave a visible window behind while a blocking network call or
+        # the Windows print spooler is winding down.  The timer below keeps the
+        # process alive and finishes the shutdown without another user action.
+        self.hide()
+        self._shutdown_timer.start(0)
+
+    def _continue_background_shutdown(self) -> None:
+        if not self._shutdown_in_progress:
+            return
 
         background_jobs = self._container.get_if_resolved(BackgroundJobManager)
-        if background_jobs is not None and not background_jobs.shutdown(30000):
-            self._postpone_shutdown(event)
-            return
+        background_jobs_stopped = background_jobs is None or background_jobs.shutdown(0)
         print_queue = self._container.get_if_resolved(PrintQueueService)
-        if print_queue is not None and not print_queue.shutdown(30000):
-            self._postpone_shutdown(event)
+        print_queue_stopped = print_queue is None or print_queue.shutdown(0)
+        window_workers_stopped = all(
+            worker is None or not worker.isRunning()
+            for worker in (self._startup_preload_worker, self._printer_status_worker)
+        )
+        pages_stopped = all(
+            not callable(getattr(widget, "shutdown_complete", None))
+            or bool(widget.shutdown_complete())
+            for widget in self._pages.values()
+        )
+        if not all((background_jobs_stopped, print_queue_stopped, window_workers_stopped, pages_stopped)):
+            self._shutdown_timer.start(_SHUTDOWN_POLL_INTERVAL_MS)
             return
+
         for service_type in (WixOrdersClient, WixProductDetailsClient):
             service = self._container.get_if_resolved(service_type)
             close = getattr(service, "close", None)
             if callable(close):
                 close()
-        self._eventloop_watchdog.stop()
-        super().closeEvent(event)
-
-    def _postpone_shutdown(self, event: QCloseEvent) -> None:
-        logger.warning("Application shutdown postponed because a background task is still running")
-        QMessageBox.warning(
-            self,
-            "App beenden",
-            "Eine Hintergrundaufgabe wird noch sicher beendet. Bitte in einigen Sekunden erneut versuchen.",
-        )
-        event.ignore()
+        self._shutdown_finished = True
+        logger.info("All background work stopped; closing application window")
+        self.close()
