@@ -122,6 +122,28 @@ def overview_from_visible_summaries(
     )
 
 
+def unknown_open_invoice_summaries(
+    summaries: list[InvoiceSummary],
+    *,
+    digital_cache: dict[str, bool],
+    wix_client: WixOrdersClient | None,
+) -> list[InvoiceSummary]:
+    """Return only references that have no usable local digital classification."""
+    unknown: list[InvoiceSummary] = []
+    seen_refs: set[str] = set()
+    for summary in summaries:
+        ref = str(summary.order_reference or "").strip()
+        if not ref or ref in seen_refs:
+            continue
+        seen_refs.add(ref)
+        cached = digital_cache.get(ref) if ref in digital_cache else None
+        if cached is None and wix_client is not None:
+            cached = _cached_reference_digital_only(wix_client, ref)
+        if cached is None:
+            unknown.append(summary)
+    return unknown
+
+
 def resolve_open_invoice_overview(
     summaries: list[InvoiceSummary],
     *,

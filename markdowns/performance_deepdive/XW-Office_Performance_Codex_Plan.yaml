@@ -12,8 +12,8 @@ implementation_status:
   - Open overview keeps persistent known Wix snapshots cache-only; only unknown references use remote classification.
   - PLC dialog opening no longer generates/parses the customs A5 derivative before showing the dialog.
   - Product-details requests use a reusable HTTP pool, runtime counters/timings are available from MainWindow, and the PLC archive index is built in the background.
+  - PRINT PRODUKTE OFFEN resolves only unknown references in four-item batches, updates aggregates after every batch, then runs one cache-only final reconciliation.
   deferred:
-  - Progressive overview batch delivery needs a dedicated UI aggregation callback; cache-first/unknown-only delivery is already active.
   - Product-PC measurements are still required to establish real P50/P95 values.
 principles:
 - Do not solve latency by unbounded concurrency.

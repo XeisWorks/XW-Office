@@ -99,9 +99,11 @@ from xw_office.ui.modules.rechnungen.special_order_dialog import SpecialOrderDia
 from xw_office.ui.modules.rechnungen.open_invoice_overview import (
     OpenInvoiceOverview,
     PrintProductAggregate,
+    open_invoice_overview_key,
     overview_from_visible_summaries,
     overview_payload_from_object,
     resolve_open_invoice_overview,
+    unknown_open_invoice_summaries,
 )
 from xw_office.ui.modules.rechnungen.plc_label_dialog import (
     PlcLabelPrintDialog,
@@ -1100,6 +1102,9 @@ class RechnungenView(QWidget):
         self._shutting_down = False
         self._open_overview_seq = 0
         self._pending_open_overview_rows: list[InvoiceSummary] = []
+        self._open_overview_all_rows: list[InvoiceSummary] = []
+        self._open_overview_base: OpenInvoiceOverview | None = None
+        self._open_overview_batch_results: list[OpenInvoiceOverview] = []
         self._hint_seq = 0
         self._hint_draft_queue: list[str] = []
         self._hint_rest_queue: list[str] = []
@@ -2342,7 +2347,7 @@ class RechnungenView(QWidget):
             open_rows,
             digital_cache=self._wix_digital_cache,
             wix_client=wix_client,
-            include_print_products=False,
+            include_print_products=True,
         )
 
         if overview.total == 0:
@@ -2388,16 +2393,38 @@ class RechnungenView(QWidget):
         has_refs = any(str(summary.order_reference or "").strip() for summary in open_rows)
         if has_refs:
             self._open_overview_products_text = "Print-Produkte werden ermittelt..."
-            self._open_overview_products = []
-            if not self._print_products_last_run:
-                self._set_open_products_message("Print-Produkte werden ermittelt...")
             self._start_open_invoice_overview(open_rows)
 
     def _start_open_invoice_overview(
         self,
         open_rows: list[InvoiceSummary],
     ) -> None:
-        self._pending_open_overview_rows = list(open_rows)
+        try:
+            wix_client: WixOrdersClient | None = self._container.resolve(WixOrdersClient)
+        except Exception:  # noqa: BLE001 - the local overview remains available.
+            wix_client = None
+        key = open_invoice_overview_key(open_rows)
+        if key != self._open_overview_key:
+            return
+        unknown_rows = unknown_open_invoice_summaries(
+            open_rows,
+            digital_cache=self._wix_digital_cache,
+            wix_client=wix_client,
+        )
+        if not unknown_rows:
+            return
+        self._open_overview_seq += 1
+        self._open_overview_all_rows = list(open_rows)
+        self._open_overview_base = overview_from_visible_summaries(
+            open_rows,
+            digital_cache=self._wix_digital_cache,
+            wix_client=wix_client,
+            include_print_products=True,
+        )
+        self._open_overview_batch_results = []
+        self._pending_open_overview_rows = [
+            *unknown_rows,
+        ]
         self._submit_side_job(
             coalesce_key="open-overview",
             priority=_PRIORITY_OPEN_OVERVIEW,
@@ -2415,28 +2442,24 @@ class RechnungenView(QWidget):
         return True
 
     def _create_open_overview_worker(self) -> BackgroundWorker | None:
-        open_rows = list(self._pending_open_overview_rows)
-        if not open_rows:
+        if not self._pending_open_overview_rows:
             return None
-        refs = [s.order_reference.strip() for s in open_rows if s.order_reference.strip()]
-        if not refs:
-            self._pending_open_overview_rows = []
-            return None
-        self._open_overview_seq += 1
         seq = self._open_overview_seq
-        snapshot = list(open_rows)
+        snapshot = list(self._pending_open_overview_rows[:4])
+        del self._pending_open_overview_rows[:4]
+        all_rows = list(self._open_overview_all_rows)
+        is_final_batch = not self._pending_open_overview_rows
         digital_cache = dict(self._wix_digital_cache)
-        self._pending_open_overview_rows = []
         logger.debug(
-            "Rechnungen phase=open-overview start rows=%s refs=%s",
+            "Rechnungen phase=open-overview batch rows=%s remaining=%s",
             len(snapshot),
-            len(refs),
+            len(self._pending_open_overview_rows),
         )
 
-        def job() -> OpenInvoiceOverview:
+        def job() -> dict[str, OpenInvoiceOverview]:
             service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             wix_client: WixOrdersClient = self._container.resolve(WixOrdersClient)
-            return resolve_open_invoice_overview(
+            batch = resolve_open_invoice_overview(
                 snapshot,
                 seq=seq,
                 invoice_service=service,
@@ -2444,6 +2467,17 @@ class RechnungenView(QWidget):
                 digital_cache=digital_cache,
                 sku_filter=service.is_flagged_sku,
             )
+            payload = {"batch": batch}
+            if is_final_batch:
+                payload["final"] = resolve_open_invoice_overview(
+                    all_rows,
+                    seq=seq,
+                    invoice_service=service,
+                    wix_client=wix_client,
+                    digital_cache=digital_cache,
+                    sku_filter=service.is_flagged_sku,
+                )
+            return payload
 
         self._open_overview_worker = BackgroundWorker(job)
         self._open_overview_worker.signals.result.connect(self._on_open_overview_result)
@@ -2452,10 +2486,16 @@ class RechnungenView(QWidget):
         return self._open_overview_worker
 
     def _on_open_overview_result(self, payload: object) -> None:
-        overview = overview_payload_from_object(payload)
-        if overview is None:
+        data = payload if isinstance(payload, dict) else {}
+        batch = overview_payload_from_object(data.get("batch"))
+        if batch is None:
             return
-        if overview.seq != self._open_overview_seq:
+        if batch.seq != self._open_overview_seq:
+            return
+        self._open_overview_batch_results.append(batch)
+        final = overview_payload_from_object(data.get("final"))
+        overview = final or self._merge_open_overview_batches()
+        if overview is None:
             return
         logger.debug(
             "Rechnungen phase=open-overview result total=%s physical=%s digital=%s unknown=%s",
@@ -2465,6 +2505,50 @@ class RechnungenView(QWidget):
             overview.unknown,
         )
         self._apply_open_invoice_overview(overview)
+
+    def _merge_open_overview_batches(self) -> OpenInvoiceOverview | None:
+        base = self._open_overview_base
+        if base is None:
+            return None
+        physical = base.physical + sum(result.physical for result in self._open_overview_batch_results)
+        digital = base.digital + sum(result.digital for result in self._open_overview_batch_results)
+        unknown = len(self._pending_open_overview_rows) + sum(
+            result.unknown for result in self._open_overview_batch_results
+        )
+        products: dict[tuple[str, str, str, str], int] = {}
+        for row in [*base.print_products, *(item for result in self._open_overview_batch_results for item in result.print_products)]:
+            key = (row.sku, row.title, row.description, row.category_label)
+            products[key] = products.get(key, 0) + row.quantity
+        print_products = sorted(
+            (
+                PrintProductAggregate(
+                    sku=sku,
+                    title=title,
+                    description=description,
+                    category_label=category_label,
+                    quantity=quantity,
+                )
+                for (sku, title, description, category_label), quantity in products.items()
+            ),
+            key=lambda row: (row.title.casefold(), row.description.casefold(), row.category_label.casefold(), row.sku),
+        )
+        updates = dict(base.cache_updates)
+        for result in self._open_overview_batch_results:
+            updates.update(result.cache_updates)
+        return OpenInvoiceOverview(
+            key=base.key,
+            total=base.total,
+            with_ref=base.with_ref,
+            physical=physical,
+            digital=digital,
+            unknown=unknown,
+            with_note=base.with_note,
+            plc=base.plc,
+            complete=unknown == 0,
+            cache_updates=updates,
+            print_products=print_products,
+            seq=self._open_overview_seq,
+        )
 
     def _on_open_overview_error(self, exc: Exception) -> None:
         logger.warning("Open-overview digital classification failed: %s", exc)

@@ -6,6 +6,7 @@ from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 from xw_office.ui.modules.rechnungen.open_invoice_overview import (
     overview_from_visible_summaries,
     resolve_open_invoice_overview,
+    unknown_open_invoice_summaries,
 )
 
 
@@ -301,3 +302,29 @@ def test_resolver_keeps_fully_cached_overview_off_the_remote_path() -> None:
     assert overview.physical == 1
     assert overview.digital == 4
     assert [(row.sku, row.quantity) for row in overview.print_products] == [("XW-PRINT", 1)]
+
+
+def test_unknown_summary_selection_deduplicates_refs_and_skips_persistent_cache() -> None:
+    summaries = [
+        InvoiceSummary.model_validate(
+            {"id": "known", "invoiceNumber": "RE-1", "status": 100, "order_reference": "21000"}
+        ),
+        InvoiceSummary.model_validate(
+            {"id": "unknown-a", "invoiceNumber": "RE-2", "status": 100, "order_reference": "21001"}
+        ),
+        InvoiceSummary.model_validate(
+            {"id": "unknown-b", "invoiceNumber": "RE-3", "status": 100, "order_reference": "21001"}
+        ),
+    ]
+
+    class _WixClient:
+        def get_cached_reference_digital_only(self, reference: str) -> bool | None:
+            return False if reference == "21000" else None
+
+    unknown = unknown_open_invoice_summaries(
+        summaries,
+        digital_cache={},
+        wix_client=_WixClient(),  # type: ignore[arg-type]
+    )
+
+    assert [summary.id for summary in unknown] == ["unknown-a"]
