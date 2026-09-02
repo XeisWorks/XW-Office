@@ -616,6 +616,37 @@ def test_rechnungen_selection_sets_summary_before_cache_hydration(qtbot: object,
     qtbot.waitUntil(lambda: hydrate_calls == ["quick-select-1"], timeout=1000)
 
 
+def test_rechnungen_selection_never_fetches_live_sevdesk_details(qtbot: object, monkeypatch) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = InvoiceSummary.model_validate(
+        {
+            "id": "cache-only-select-1",
+            "invoiceNumber": "RE-CACHE",
+            "status": 200,
+            "contact_name": "Cache Kunde",
+            "order_reference": "",
+        }
+    )
+    live_calls: list[str] = []
+
+    monkeypatch.setattr(invoice_service, "get_cached_invoice_detail_context", lambda _summary: None)
+
+    def fail_on_live_fetch(next_summary: InvoiceSummary) -> dict[str, object]:
+        live_calls.append(str(next_summary.id))
+        raise AssertionError("row selection must not fetch live sevDesk details")
+
+    monkeypatch.setattr(invoice_service, "get_invoice_detail_context", fail_on_live_fetch)
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    view._table.select_source_row(0)  # noqa: SLF001
+    qtbot.wait(100)
+
+    assert view._dl_number.text() == "RE-CACHE"  # noqa: SLF001
+    assert live_calls == []
+
+
 def test_rechnungen_defers_and_deduplicates_detail_hydration_during_start(
     qtbot: object,
     monkeypatch,

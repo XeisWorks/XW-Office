@@ -1056,8 +1056,6 @@ class RechnungenView(QWidget):
         self._stuecke_worker: BackgroundWorker | None = None
         self._wix_meta_worker: BackgroundWorker | None = None
         self._wix_context_worker: BackgroundWorker | None = None
-        self._invoice_detail_worker: BackgroundWorker | None = None
-        self._invoice_detail_handle: JobHandle | None = None
         self._customer_mail_worker: BackgroundWorker | None = None
         self._wix_warm_worker: BackgroundWorker | None = None
         self._wix_context_handle: JobHandle | None = None
@@ -1089,8 +1087,6 @@ class RechnungenView(QWidget):
         self._pending_auto_open_load = False
         self._load_started_at = 0.0
         self._wix_warm_started_at = 0.0
-        self._invoice_detail_started_at = 0.0
-        self._invoice_detail_seq = 0
         self._selected_wix_started_at = 0.0
         self._search_active = False
         self._search_seq = 0
@@ -1667,7 +1663,6 @@ class RechnungenView(QWidget):
                 self._stuecke_worker,
                 self._wix_meta_worker,
                 self._wix_context_worker,
-                self._invoice_detail_worker,
                 self._customer_mail_worker,
                 self._wix_warm_worker,
                 self._hint_worker,
@@ -1703,7 +1698,6 @@ class RechnungenView(QWidget):
                 (selected, self._detail_context_seq) if selected is not None else None
             )
             self._wix_warm_timer.stop()
-            self._background_jobs.cancel_key("selected-invoice-detail")
             self._background_jobs.cancel_key("selected-wix-context")
             self._background_jobs.cancel_key("wix-warmup")
             return
@@ -2509,8 +2503,6 @@ class RechnungenView(QWidget):
             return False
         if self._wix_context_worker is not None and self._wix_context_worker.isRunning():
             return False
-        if self._invoice_detail_worker is not None and self._invoice_detail_worker.isRunning():
-            return False
         return True
 
     def _create_open_overview_worker(self) -> BackgroundWorker | None:
@@ -3228,8 +3220,6 @@ class RechnungenView(QWidget):
         if self._wix_warm_worker is not None and self._wix_warm_worker.isRunning():
             return False
         if self._wix_context_worker is not None and self._wix_context_worker.isRunning():
-            return False
-        if self._invoice_detail_worker is not None and self._invoice_detail_worker.isRunning():
             return False
         return True
 
@@ -4487,7 +4477,7 @@ class RechnungenView(QWidget):
             or str(selected.id or "").strip() != str(summary.id or "").strip()
         ):
             return
-        self._prefill_detail_from_invoice_async(summary)
+        self._prefill_detail_from_invoice_cache(summary)
         if summary.order_reference:
             has_cached_wix_context = self._apply_cached_wix_context(summary.order_reference)
             self._load_wix_context(
@@ -4576,7 +4566,8 @@ class RechnungenView(QWidget):
             self._shipping_status.setText("Keine Versandadresse in sevDesk")
             self._set_shipping_editor_lines(override_lines)
 
-    def _prefill_detail_from_invoice_async(self, summary: InvoiceSummary) -> None:
+    def _prefill_detail_from_invoice_cache(self, summary: InvoiceSummary) -> None:
+        """Apply cached sevDesk details without turning row selection into I/O."""
         override_lines = list(self._shipping_address_overrides.get(summary.id, []))
         current_lines = self._current_shipping_lines()
         if not current_lines:
@@ -4601,70 +4592,6 @@ class RechnungenView(QWidget):
             context = None
         if context is not None:
             self._apply_invoice_detail_context(summary.id, summary, context)
-            return
-        self._load_invoice_detail_context(summary)
-
-    def _load_invoice_detail_context(self, summary: InvoiceSummary) -> None:
-        invoice_id = str(summary.id or "").strip()
-        if not invoice_id:
-            return
-        self._invoice_detail_seq += 1
-        seq = self._invoice_detail_seq
-        self._invoice_detail_started_at = time.perf_counter()
-        logger.debug("Rechnungen phase=selected-detail-load start invoice_id=%s", invoice_id)
-
-        def job(token: CancelToken) -> dict[str, object]:
-            token.raise_if_cancelled()
-            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-            context = service.get_invoice_detail_context(summary)
-            token.raise_if_cancelled()
-            return {"seq": seq, "__invoice_id": invoice_id, "summary": summary, "context": context}
-
-        handle = self._background_jobs.submit_callable(
-            queue="ui-critical-network",
-            priority=0,
-            key="selected-invoice-detail",
-            fn=job,
-            on_result=self._on_invoice_detail_context_loaded,
-            on_error=self._on_invoice_detail_context_error,
-            on_finished=lambda: self._on_invoice_detail_context_finished(seq),
-            owner=self,
-            replace="cancel_previous",
-        )
-        self._invoice_detail_handle = handle
-        self._invoice_detail_worker = handle.worker
-
-    def _on_invoice_detail_context_loaded(self, payload: object) -> None:
-        data = payload if isinstance(payload, dict) else {}
-        if int(data.get("seq") or 0) != self._invoice_detail_seq:
-            return
-        invoice_id = str(data.get("__invoice_id") or "").strip()
-        selected = self._selected_summary()
-        if selected is None or invoice_id != str(selected.id or "").strip():
-            return
-        summary = data.get("summary")
-        if not isinstance(summary, InvoiceSummary):
-            summary = selected
-        context = data.get("context") if isinstance(data.get("context"), dict) else {}
-        self._apply_invoice_detail_context(invoice_id, summary, context)
-
-    def _on_invoice_detail_context_error(self, exc: Exception) -> None:
-        logger.warning("Invoice detail background load failed: %s", exc)
-
-    def _on_invoice_detail_context_finished(self, seq: int) -> None:
-        if seq != self._invoice_detail_seq:
-            return
-        if self._invoice_detail_started_at:
-            elapsed_ms = performance_metrics.record_elapsed(
-                "invoice_selected_detail_load_ms", self._invoice_detail_started_at
-            )
-            logger.info("Rechnungen metric invoice_selected_detail_load_ms=%s", elapsed_ms)
-            self._invoice_detail_started_at = 0.0
-        self._invoice_detail_worker = None
-        self._invoice_detail_handle = None
-        self._start_next_wix_warm_batch()
-        if self._pending_open_overview_rows:
-            self._start_open_invoice_overview(list(self._pending_open_overview_rows))
 
     def _apply_invoice_detail_context(
         self,
