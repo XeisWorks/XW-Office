@@ -616,6 +616,42 @@ def test_rechnungen_selection_sets_summary_before_cache_hydration(qtbot: object,
     qtbot.waitUntil(lambda: hydrate_calls == ["quick-select-1"], timeout=1000)
 
 
+def test_rechnungen_defers_and_deduplicates_detail_hydration_during_start(
+    qtbot: object,
+    monkeypatch,
+) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = InvoiceSummary.model_validate(
+        {
+            "id": "start-select-1",
+            "invoiceNumber": "RE-START",
+            "status": 200,
+            "contact_name": "START Kunde",
+            "order_reference": "20902",
+        }
+    )
+    hydrate_calls: list[str] = []
+
+    def fake_hydrate(next_summary: InvoiceSummary, _seq: int) -> None:
+        hydrate_calls.append(str(next_summary.id))
+
+    monkeypatch.setattr(view, "_hydrate_detail_for_selection", fake_hydrate)
+    view.set_start_workflow_running(True)
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    view._table.select_source_row(0)  # noqa: SLF001
+    view._refresh_detail_for_selection()  # noqa: SLF001
+
+    assert view._dl_number.text() == "RE-START"  # noqa: SLF001
+    assert "nach START" in view._shipping_status.text()  # noqa: SLF001
+    assert hydrate_calls == []
+
+    view.set_start_workflow_running(False)
+    qtbot.waitUntil(lambda: hydrate_calls == ["start-select-1"], timeout=1000)
+
+
 def test_rechnungen_open_overview_resolves_wix_classification_and_buyer_notes(qtbot: object) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
 

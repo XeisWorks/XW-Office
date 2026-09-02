@@ -1106,6 +1106,9 @@ class RechnungenView(QWidget):
         self._wix_warm_timer = QTimer(self)
         self._wix_warm_timer.setSingleShot(True)
         self._wix_warm_timer.timeout.connect(self._launch_next_wix_warm_batch)
+        self._start_workflow_running = False
+        self._deferred_selection_detail: tuple[InvoiceSummary, int] | None = None
+        self._last_detail_selection_key: tuple[int, str] | None = None
         self._shutting_down = False
         self._open_overview_seq = 0
         self._pending_open_overview_rows: list[InvoiceSummary] = []
@@ -1687,6 +1690,31 @@ class RechnungenView(QWidget):
     def set_top_actions_managed_externally(self, enabled: bool) -> None:
         """Hide the embedded toolbar when the parent view owns those actions."""
         self._toolbar.setVisible(not bool(enabled))
+
+    def set_start_workflow_running(self, running: bool) -> None:
+        """Keep row navigation light while the START workflow owns heavy I/O."""
+        next_state = bool(running)
+        if self._start_workflow_running == next_state:
+            return
+        self._start_workflow_running = next_state
+        if next_state:
+            selected = self._selected_summary()
+            self._deferred_selection_detail = (
+                (selected, self._detail_context_seq) if selected is not None else None
+            )
+            self._wix_warm_timer.stop()
+            self._background_jobs.cancel_key("selected-invoice-detail")
+            self._background_jobs.cancel_key("selected-wix-context")
+            self._background_jobs.cancel_key("wix-warmup")
+            return
+
+        pending = self._deferred_selection_detail
+        self._deferred_selection_detail = None
+        if pending is None or self._shutting_down:
+            self._start_next_wix_warm_batch()
+            return
+        summary, seq = pending
+        QTimer.singleShot(0, lambda s=summary, token=seq: self._hydrate_detail_for_selection(s, token))
 
     def reload_first_page(self) -> None:
         self._reload_first_page()
@@ -3195,7 +3223,7 @@ class RechnungenView(QWidget):
         self._wix_warm_worker = handle.worker
 
     def _can_run_wix_warm_job(self) -> bool:
-        if self._shutting_down:
+        if self._shutting_down or self._start_workflow_running:
             return False
         if self._wix_warm_worker is not None and self._wix_warm_worker.isRunning():
             return False
@@ -4399,6 +4427,10 @@ class RechnungenView(QWidget):
         # fills are useful only after the user has stopped navigating rows.
         self._wix_warm_timer.stop()
         summary = self._selected_summary()
+        selection_key = (id(summary), str(summary.id or "")) if summary is not None else (0, "")
+        if selection_key == self._last_detail_selection_key:
+            return
+        self._last_detail_selection_key = selection_key
         self._detail_context_seq += 1
         seq = self._detail_context_seq
         if summary is None:
@@ -4413,6 +4445,14 @@ class RechnungenView(QWidget):
             elapsed_ms,
             summary.id,
         )
+        if self._start_workflow_running:
+            self._deferred_selection_detail = (summary, seq)
+            self._reset_stuecke()
+            self._shipping_status.setText("Details werden nach START geladen...")
+            self._stuecke_hint.setText("Details werden nach START geladen...")
+            self._stuecke_hint.show()
+            self._gb_stuecke.show()
+            return
         QTimer.singleShot(0, lambda s=summary, token=seq: self._hydrate_detail_for_selection(s, token))
 
     def _populate_detail_for_summary(self, summary: InvoiceSummary) -> None:

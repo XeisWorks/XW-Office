@@ -1330,6 +1330,8 @@ class TagesgeschaeftView(QWidget):
         self._btn_start.setEnabled(not running)
         self._btn_start.setText("START..." if running else self._start_button_idle_text)
         self._btn_stop.setEnabled(bool(running and allow_stop))
+        if self._rechnungen_view is not None:
+            self._rechnungen_view.set_start_workflow_running(running)
 
     def _on_start_stop_clicked(self) -> None:
         running = any(
