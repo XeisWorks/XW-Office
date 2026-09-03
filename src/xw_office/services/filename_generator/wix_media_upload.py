@@ -59,6 +59,23 @@ class WixMediaUploadService:
     def is_configured(self) -> bool:
         return bool(self._api_key() and self._site_id())
 
+    def list_folder_files(self, target_path: str) -> tuple[WixMediaFolder, list[dict[str, Any]]]:
+        """Read-only listing of an existing Wix Media folder's files, for the CMS import."""
+        folder_parts = self._normalize_folder_path(target_path)
+        if not self.is_configured:
+            raise FilenameGeneratorError(
+                "Wix ist nicht konfiguriert. Bitte WIX_API_KEY und WIX_SITE_ID in den Einstellungen prüfen."
+            )
+        with httpx.Client(
+            base_url=_API_BASE,
+            headers=self._headers(),
+            timeout=httpx.Timeout(60.0, connect=20.0),
+            transport=self._transport,
+        ) as api_client:
+            folder = self._resolve_or_create_folder(api_client, folder_parts)
+            files = self._list_files(api_client, folder.folder_id)
+        return folder, files
+
     def upload_files(
         self,
         files: Sequence[Path | str],

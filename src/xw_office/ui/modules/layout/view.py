@@ -39,6 +39,7 @@ from xw_office.services.filename_generator.service import (
     ROLE_LABELS,
     FilenameGeneratorService,
 )
+from xw_office.services.filename_generator.mh_tracks_cms_import import MhTracksCmsImportService
 from xw_office.services.filename_generator.wix_media_upload import WixMediaUploadService
 from xw_office.services.layout.service import LayoutToolsService, SplitLandscapeResult
 from xw_office.services.qr_codes.service import QrCodeService
@@ -891,7 +892,8 @@ class LayoutView(QWidget):
         columns.addWidget(stage_one)
         service: FilenameGeneratorService = self._container.resolve(FilenameGeneratorService)
         wix_upload_service: WixMediaUploadService = self._container.resolve(WixMediaUploadService)
-        self._filename_rename_panel = FilenameRenamePanel(service, wix_upload_service, page)
+        cms_import_service: MhTracksCmsImportService = self._container.resolve(MhTracksCmsImportService)
+        self._filename_rename_panel = FilenameRenamePanel(service, wix_upload_service, cms_import_service, page)
         columns.addWidget(self._filename_rename_panel)
         columns.setStretchFactor(0, 1)
         columns.setStretchFactor(1, 2)

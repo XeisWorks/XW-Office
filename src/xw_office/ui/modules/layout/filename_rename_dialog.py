@@ -5,8 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl, QUrlQuery
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -28,6 +27,11 @@ from PySide6.QtWidgets import (
 )
 
 from xw_office.core.worker import BackgroundWorker
+from xw_office.services.filename_generator.mh_tracks_cms_import import (
+    MhTracksCmsApplyResult,
+    MhTracksCmsImportService,
+)
+from xw_office.services.filename_generator.mh_tracks_import_core import MhTracksImportPlan
 from xw_office.services.filename_generator.models import (
     FilenameGeneratorError,
     FilenameRenameOperation,
@@ -79,13 +83,18 @@ class FilenameRenamePanel(QWidget):
         self,
         service: FilenameGeneratorService,
         wix_upload_service: WixMediaUploadService | None = None,
+        cms_import_service: MhTracksCmsImportService | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._service = service
         self._wix_upload_service = wix_upload_service
+        self._cms_import_service = cms_import_service
         self._upload_worker: BackgroundWorker | None = None
+        self._cms_worker: BackgroundWorker | None = None
         self._last_upload: WixMediaUploadResult | None = None
+        self._pending_cms_plan: MhTracksImportPlan | None = None
+        self._pending_cms_plan_folder: str = ""
         self._wix_path_is_suggestion = False
         self._updating_table = False
 
@@ -211,10 +220,6 @@ class FilenameRenamePanel(QWidget):
         self._upload_button.setEnabled(bool(wix_upload_service and wix_upload_service.is_configured))
         self._upload_button.clicked.connect(self._start_upload)
         upload_actions.addWidget(self._upload_button)
-        self._open_upload_page_button = QPushButton("Wix-Importseite öffnen")
-        self._open_upload_page_button.setEnabled(False)
-        self._open_upload_page_button.clicked.connect(self._open_upload_page)
-        upload_actions.addWidget(self._open_upload_page_button)
         upload_actions.addStretch()
         upload_layout.addLayout(upload_actions)
 
@@ -230,6 +235,30 @@ class FilenameRenamePanel(QWidget):
         self._upload_status.setWordWrap(True)
         upload_layout.addWidget(self._upload_status)
         root.addWidget(upload_group)
+
+        cms_group = QGroupBox("MH-Tracks CMS aktualisieren")
+        cms_layout = QVBoxLayout(cms_group)
+        cms_intro = QLabel(
+            "Ersetzt die öffentliche Wix-Importseite. Prüft zuerst nicht-destruktiv, was sich ändern würde; "
+            "erst der zweite Klick auf denselben Button speichert."
+        )
+        cms_intro.setWordWrap(True)
+        cms_layout.addWidget(cms_intro)
+
+        self._cms_button = QPushButton("MH-Tracks CMS prüfen")
+        self._cms_button.setEnabled(bool(cms_import_service and cms_import_service.is_configured))
+        self._cms_button.clicked.connect(self._start_cms_import)
+        cms_layout.addWidget(self._cms_button)
+
+        self._cms_status = QLabel(
+            "Bereit."
+            if cms_import_service and cms_import_service.is_configured
+            else "WIX_API_KEY oder WIX_SITE_ID fehlt; CMS-Import ist deaktiviert."
+        )
+        self._cms_status.setWordWrap(True)
+        self._cms_status.setTextFormat(Qt.TextFormat.RichText)
+        cms_layout.addWidget(self._cms_status)
+        root.addWidget(cms_group)
 
         self._apply_preset(0)
 
@@ -528,7 +557,6 @@ class FilenameRenamePanel(QWidget):
         worker.signals.error.connect(self._on_upload_error)
         worker.signals.finished.connect(self._on_upload_finished)
         self._upload_button.setEnabled(False)
-        self._open_upload_page_button.setEnabled(False)
         self._upload_progress.setValue(0)
         self._upload_status.setText("Upload wird vorbereitet …")
         worker.start()
@@ -546,12 +574,11 @@ class FilenameRenamePanel(QWidget):
             f"{len(result.files)} Datei(en) hochgeladen. Wix-Ordner: {result.folder.path} "
             f"(ID: {result.folder.folder_id}). "
             + (
-                "Bitte nun den MH-Tracks-Import prüfen."
+                "Bitte nun 'MH-Tracks CMS prüfen' anklicken."
                 if result.processing_complete
-                else "Wix verarbeitet die Audiodateien noch; die Importseite gegebenenfalls nach kurzer Wartezeit erneut prüfen."
+                else "Wix verarbeitet die Audiodateien noch; die CMS-Prüfung gegebenenfalls nach kurzer Wartezeit wiederholen."
             )
         )
-        self._open_upload_page_button.setEnabled(True)
 
     def _on_upload_error(self, exc: BaseException) -> None:
         self._upload_status.setText(f"Upload fehlgeschlagen: {exc}")
@@ -562,15 +589,105 @@ class FilenameRenamePanel(QWidget):
         configured = bool(self._wix_upload_service and self._wix_upload_service.is_configured)
         self._upload_button.setEnabled(configured)
 
-    def _open_upload_page(self) -> None:
-        result = self._last_upload
-        if result is None:
+    def _start_cms_import(self) -> None:
+        service = self._cms_import_service
+        if service is None or not service.is_configured:
+            QMessageBox.warning(
+                self,
+                "Wix nicht konfiguriert",
+                "Bitte WIX_API_KEY und WIX_SITE_ID in den Einstellungen prüfen.",
+            )
             return
-        url = QUrl("https://www.xeisworks.at/upload")
-        query = QUrlQuery()
-        query.addQueryItem("folderId", result.folder.folder_id)
-        query.addQueryItem("folderName", result.folder.display_name)
-        query.addQueryItem("folderPath", result.folder.path)
-        url.setQuery(query)
-        if not QDesktopServices.openUrl(url):
-            QMessageBox.warning(self, "Browser", "Die Wix-Importseite konnte nicht geöffnet werden.")
+        folder_path = self._wix_path_edit.text().strip()
+        if not folder_path:
+            QMessageBox.warning(self, "Kein Ordner", "Bitte zuerst einen Wix-Zielpfad angeben.")
+            return
+
+        if self._pending_cms_plan is not None and self._pending_cms_plan_folder == folder_path:
+            self._confirm_and_apply_cms_import(folder_path, self._pending_cms_plan.token)
+            return
+
+        worker: BackgroundWorker = BackgroundWorker(lambda: service.preview(folder_path))
+        self._cms_worker = worker
+        worker.signals.result.connect(lambda plan: self._on_cms_preview_result(folder_path, plan))
+        worker.signals.error.connect(self._on_cms_error)
+        worker.signals.finished.connect(self._on_cms_finished)
+        self._cms_button.setEnabled(False)
+        self._cms_status.setText("Vorschau wird geladen …")
+        worker.start()
+
+    def _on_cms_preview_result(self, folder_path: str, plan: object) -> None:
+        if not isinstance(plan, MhTracksImportPlan):
+            return
+        self._pending_cms_plan = plan
+        self._pending_cms_plan_folder = folder_path
+        summary = plan.summary
+        lines = [
+            f"Erkannte Dateien: {summary.get('recognizedFiles', 0)}",
+            f"Zu ändernde Dateien: {summary.get('changedFiles', 0)}",
+            f"Neue Track-Entwürfe: {summary.get('inserts', 0)}",
+            f"Zu aktualisierende Tracks: {summary.get('updates', 0)}",
+            f"Unverändert: {summary.get('unchangedFiles', 0)}",
+            f"Ignorierte Dateien: {summary.get('ignoredFiles', 0)}",
+            f"Fehler: {summary.get('errors', 0)}",
+        ]
+        if plan.errors:
+            lines.append("<b>Fehler:</b> " + " | ".join(plan.errors))
+        if plan.warnings:
+            lines.append("<b>Warnungen:</b> " + " | ".join(plan.warnings[:10]))
+        if plan.can_apply:
+            lines.append("Noch wurde nichts gespeichert. Button erneut klicken, um zu speichern.")
+            self._cms_button.setText("CMS-Vorschau bestätigen")
+        else:
+            lines.append("Es gibt nichts zu speichern oder Fehler müssen zuerst behoben werden.")
+            self._cms_button.setText("MH-Tracks CMS erneut prüfen")
+            self._pending_cms_plan = None
+        self._cms_status.setText("<br>".join(lines))
+
+    def _confirm_and_apply_cms_import(self, folder_path: str, token: str) -> None:
+        service = self._cms_import_service
+        if service is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "MH-Tracks CMS wirklich aktualisieren?",
+            "Die geprüften Änderungen werden jetzt in MH-Tracks/MH-Editions geschrieben.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        worker: BackgroundWorker = BackgroundWorker(lambda: service.apply(folder_path, token))
+        self._cms_worker = worker
+        worker.signals.result.connect(self._on_cms_apply_result)
+        worker.signals.error.connect(self._on_cms_error)
+        worker.signals.finished.connect(self._on_cms_finished)
+        self._cms_button.setEnabled(False)
+        self._cms_status.setText("CMS wird aktualisiert …")
+        worker.start()
+
+    def _on_cms_apply_result(self, result: object) -> None:
+        if not isinstance(result, MhTracksCmsApplyResult):
+            return
+        self._pending_cms_plan = None
+        self._pending_cms_plan_folder = ""
+        self._cms_button.setText("MH-Tracks CMS prüfen")
+        lines = [
+            f"Neu angelegte Track-Entwürfe: {result.inserted}",
+            f"Aktualisierte Tracks: {result.updated}",
+        ]
+        if result.failures:
+            lines.append(
+                "<b>Fehlgeschlagen:</b> "
+                + " | ".join(f"{failure.track_key}: {failure.message}" for failure in result.failures)
+            )
+        else:
+            lines.append("Alle Änderungen wurden gespeichert.")
+        self._cms_status.setText("<br>".join(lines))
+
+    def _on_cms_error(self, exc: BaseException) -> None:
+        self._cms_status.setText(f"CMS-Import fehlgeschlagen: {exc}")
+        QMessageBox.critical(self, "MH-Tracks CMS-Import fehlgeschlagen", str(exc))
+
+    def _on_cms_finished(self) -> None:
+        self._cms_worker = None
+        configured = bool(self._cms_import_service and self._cms_import_service.is_configured)
+        self._cms_button.setEnabled(configured)

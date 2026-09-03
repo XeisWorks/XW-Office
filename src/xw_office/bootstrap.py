@@ -55,6 +55,7 @@ from xw_office.services.sendungen.service import OffeneSendungenService
 from xw_office.services.special_orders import SpecialOrderService
 from xw_office.services.transfers.service import OffeneUeberweisungenService
 from xw_office.services.layout.service import LayoutToolsService
+from xw_office.services.filename_generator.mh_tracks_cms_import import MhTracksCmsImportService
 from xw_office.services.filename_generator.service import FilenameGeneratorService
 from xw_office.services.filename_generator.wix_media_upload import WixMediaUploadService
 from xw_office.services.qr_codes.service import QrCodeService
@@ -78,6 +79,7 @@ from xw_office.services.products.field_bulk_service import ProductFieldBulkServi
 from xw_office.services.products.print_decision import PrintDecisionEngine
 from xw_office.services.wix.client import WixProductsClient
 from xw_office.services.wix.client import WixOrdersClient
+from xw_office.services.wix.data_client import WixDataClient
 from xw_office.services.wix.order_cache import WixOrderCache
 from xw_office.services.wix.product_details_client import WixProductDetailsClient
 from xw_office.services.clickup.client import ClickUpClient
@@ -396,6 +398,14 @@ def register_default_services(container: Container) -> None:
     container.register(
         WixMediaUploadService,
         lambda c: WixMediaUploadService(c.resolve(SecretService)),
+    )
+    container.register(
+        WixDataClient,
+        lambda c: WixDataClient(c.resolve(SecretService)),
+    )
+    container.register(
+        MhTracksCmsImportService,
+        lambda c: MhTracksCmsImportService(c.resolve(WixMediaUploadService), c.resolve(WixDataClient)),
     )
     container.register(
         QrCodeService,
