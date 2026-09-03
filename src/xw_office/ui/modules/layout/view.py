@@ -8,6 +8,9 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QUrl, Qt
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -16,6 +19,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -25,6 +29,15 @@ from PySide6.QtWidgets import (
 )
 
 from xw_office.core.worker import BackgroundWorker
+from xw_office.services.filename_generator.models import (
+    FilenameGeneratorError,
+    FilenameGeneratorRequest,
+)
+from xw_office.services.filename_generator.service import (
+    INSTRUMENT_SUGGESTIONS,
+    ROLE_LABELS,
+    FilenameGeneratorService,
+)
 from xw_office.services.layout.service import LayoutToolsService, SplitLandscapeResult
 from xw_office.services.qr_codes.service import QrCodeService
 from xw_office.ui.modules.layout.qr_batch_dialog import QrCodeBatchDialog
@@ -62,6 +75,7 @@ class LayoutView(QWidget):
         tabs.addTab(self._build_landscape_split_tab(), "Querformat teilen")
         tabs.addTab(self._build_qr_tab(), "QR-Code")
         tabs.addTab(self._build_qr_series_tab(), "QR-Code-Serien")
+        tabs.addTab(self._build_filename_generator_tab(), "Dateinamen-Generator")
         tabs.addTab(self._build_blank_tab(), "Leerseiten")
         tabs.addTab(self._build_cover_tab(), "Deckblatt")
         tabs.addTab(self._build_isbn_tab(), "ISBN")
@@ -780,6 +794,129 @@ class LayoutView(QWidget):
             return
         self._watermark_status.setText(f"Gespeichert: {data}")
         QMessageBox.information(self, "Fertig", f"Lizenzierte PDF gespeichert:\n{data}")
+
+    # ------------------------------------------------------------------
+    # Tab: Dateinamen-Generator (MH-AudioPlayer MH-Tracks-Konvention)
+    # ------------------------------------------------------------------
+
+    def _build_filename_generator_tab(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(10)
+
+        info = QLabel(
+            "Erzeugt Dateinamen nach der MH-Tracks-Konvention des MH-AudioPlayer "
+            "(edition__track__instrument__rolle.mp3), z. B. sk-t__01__btb__practice.mp3. "
+            "Es wird nichts umbenannt - die Liste ist zum manuellen Ueberschreiben per "
+            "Kopieren/Einfuegen gedacht."
+        )
+        info.setWordWrap(True)
+        lay.addWidget(info)
+
+        form_group = QGroupBox("Angaben")
+        form = QFormLayout(form_group)
+
+        self._fname_edition_edit = QLineEdit()
+        self._fname_edition_edit.setPlaceholderText("z. B. sk-t")
+        form.addRow("Edition-Slug:", self._fname_edition_edit)
+
+        self._fname_instrument_combo = QComboBox()
+        self._fname_instrument_combo.setEditable(True)
+        self._fname_instrument_combo.addItems(INSTRUMENT_SUGGESTIONS)
+        form.addRow("Instrument-Slug:", self._fname_instrument_combo)
+
+        track_row = QHBoxLayout()
+        self._fname_track_start = QSpinBox()
+        self._fname_track_start.setRange(1, 999)
+        self._fname_track_start.setValue(1)
+        track_row.addWidget(QLabel("Start:"))
+        track_row.addWidget(self._fname_track_start)
+
+        self._fname_track_end = QSpinBox()
+        self._fname_track_end.setRange(1, 999)
+        self._fname_track_end.setValue(8)
+        track_row.addWidget(QLabel("Ende:"))
+        track_row.addWidget(self._fname_track_end)
+
+        self._fname_track_width = QSpinBox()
+        self._fname_track_width.setRange(1, 4)
+        self._fname_track_width.setValue(2)
+        track_row.addWidget(QLabel("Mindestbreite:"))
+        track_row.addWidget(self._fname_track_width)
+        form.addRow("Tracks:", track_row)
+
+        roles_row = QHBoxLayout()
+        self._fname_role_practice = QCheckBox(f"{ROLE_LABELS['practice']} (practice)")
+        self._fname_role_practice.setChecked(True)
+        roles_row.addWidget(self._fname_role_practice)
+        self._fname_role_performance = QCheckBox(f"{ROLE_LABELS['performance']} (performance)")
+        roles_row.addWidget(self._fname_role_performance)
+        self._fname_role_teacher = QCheckBox(f"{ROLE_LABELS['teacher']} (teacher)")
+        roles_row.addWidget(self._fname_role_teacher)
+        form.addRow("Rollen:", roles_row)
+
+        self._fname_extra_roles_edit = QLineEdit()
+        self._fname_extra_roles_edit.setPlaceholderText("weitere Rollen, kommagetrennt, z. B. voice, mix")
+        form.addRow("Weitere Rollen:", self._fname_extra_roles_edit)
+
+        lay.addWidget(form_group)
+
+        generate_btn = QPushButton("Dateinamen erzeugen")
+        generate_btn.clicked.connect(self._run_filename_generator)
+        lay.addWidget(generate_btn)
+
+        self._fname_output = QPlainTextEdit()
+        self._fname_output.setReadOnly(True)
+        self._fname_output.setPlaceholderText("(noch keine Dateinamen erzeugt)")
+        lay.addWidget(self._fname_output, stretch=1)
+
+        copy_btn = QPushButton("In Zwischenablage kopieren")
+        copy_btn.clicked.connect(self._copy_filename_generator_output)
+        lay.addWidget(copy_btn)
+
+        self._fname_status = QLabel("Bereit")
+        self._fname_status.setWordWrap(True)
+        lay.addWidget(self._fname_status)
+
+        return page
+
+    def _run_filename_generator(self) -> None:
+        roles: list[str] = []
+        if self._fname_role_practice.isChecked():
+            roles.append("practice")
+        if self._fname_role_performance.isChecked():
+            roles.append("performance")
+        if self._fname_role_teacher.isChecked():
+            roles.append("teacher")
+        extra_roles = [part.strip() for part in self._fname_extra_roles_edit.text().split(",") if part.strip()]
+        roles.extend(extra_roles)
+
+        svc: FilenameGeneratorService = self._container.resolve(FilenameGeneratorService)
+        request = FilenameGeneratorRequest(
+            edition_slug=self._fname_edition_edit.text(),
+            instrument_slug=self._fname_instrument_combo.currentText(),
+            track_start=self._fname_track_start.value(),
+            track_end=self._fname_track_end.value(),
+            roles=tuple(roles),
+            track_width=self._fname_track_width.value(),
+        )
+        try:
+            names = svc.build_filenames(request)
+        except FilenameGeneratorError as exc:
+            self._fname_output.setPlainText("")
+            self._fname_status.setText(f"Fehler: {exc}")
+            return
+
+        self._fname_output.setPlainText("\n".join(names))
+        self._fname_status.setText(f"{len(names)} Dateinamen erzeugt.")
+
+    def _copy_filename_generator_output(self) -> None:
+        text = self._fname_output.toPlainText()
+        if not text:
+            return
+        QApplication.clipboard().setText(text)
+        self._fname_status.setText("In die Zwischenablage kopiert.")
 
     # ------------------------------------------------------------------
     # Shared error handler
