@@ -8,7 +8,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDialog,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -56,7 +55,7 @@ _INSTRUMENT_MAPPING = (
 )
 
 
-class FilenameRenameDialog(QDialog):
+class FilenameRenamePanel(QWidget):
     """Scan, review, edit, and explicitly apply a safe rename plan."""
 
     COL_SELECT = 0
@@ -75,8 +74,7 @@ class FilenameRenameDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._service = service
-        self.setWindowTitle("Audiodateien für MH-Tracks umbenennen")
-        self.resize(1220, 720)
+        self._updating_table = False
 
         root = QVBoxLayout(self)
         intro = QLabel(
@@ -166,6 +164,7 @@ class FilenameRenameDialog(QDialog):
         header.setSectionResizeMode(self.COL_TARGET, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.Stretch)
         self._table.itemChanged.connect(self._update_rename_button)
+        self._table.itemChanged.connect(self._apply_manual_cell_change)
         root.addWidget(self._table, stretch=1)
 
         action_row = QHBoxLayout()
@@ -180,9 +179,6 @@ class FilenameRenameDialog(QDialog):
         self._rename_button.setEnabled(False)
         self._rename_button.clicked.connect(self._rename_selected)
         action_row.addWidget(self._rename_button)
-        close_button = QPushButton("Schließen")
-        close_button.clicked.connect(self.accept)
-        action_row.addWidget(close_button)
         root.addLayout(action_row)
 
         self._apply_preset(0)
@@ -243,12 +239,13 @@ class FilenameRenameDialog(QDialog):
             )
             select_item.setData(Qt.ItemDataRole.UserRole, str(plan_item.source_path))
             select_item.setData(Qt.ItemDataRole.UserRole + 1, plan_item.status)
+            select_item.setData(Qt.ItemDataRole.UserRole + 2, plan_item.title)
             self._table.setItem(row, self.COL_SELECT, select_item)
             self._set_read_only_item(row, self.COL_SOURCE, plan_item.source_path.name)
-            self._set_read_only_item(row, self.COL_TRACK, plan_item.track_number)
-            self._set_read_only_item(row, self.COL_EDITION, plan_item.edition_slug)
-            self._set_read_only_item(row, self.COL_INSTRUMENT, plan_item.instrument_slug)
-            self._set_read_only_item(row, self.COL_ROLE, plan_item.role)
+            self._table.setItem(row, self.COL_TRACK, QTableWidgetItem(plan_item.track_number))
+            self._table.setItem(row, self.COL_EDITION, QTableWidgetItem(plan_item.edition_slug))
+            self._table.setItem(row, self.COL_INSTRUMENT, QTableWidgetItem(plan_item.instrument_slug))
+            self._table.setItem(row, self.COL_ROLE, QTableWidgetItem(plan_item.role))
             self._table.setItem(row, self.COL_TARGET, QTableWidgetItem(plan_item.target_name))
             status_text = {
                 "ready": "Eindeutig",
@@ -302,6 +299,57 @@ class FilenameRenameDialog(QDialog):
                 has_selected_target = True
                 break
         self._rename_button.setEnabled(has_selected_target)
+
+    def _apply_manual_cell_change(self, item: QTableWidgetItem) -> None:
+        """Keep the editable metadata columns and target-name cell in sync."""
+        if self._updating_table or item.column() not in {
+            self.COL_TRACK,
+            self.COL_EDITION,
+            self.COL_INSTRUMENT,
+            self.COL_ROLE,
+            self.COL_TARGET,
+        }:
+            return
+        row = item.row()
+        select_item = self._table.item(row, self.COL_SELECT)
+        status_item = self._table.item(row, self.COL_STATUS)
+        if select_item is None or status_item is None:
+            return
+
+        self._updating_table = True
+        try:
+            if item.column() == self.COL_TARGET:
+                status_item.setText("Manuell: Zielname wird vor dem Umbenennen geprüft.")
+            else:
+                target_name = self._target_from_row(row, select_item)
+                target_item = self._table.item(row, self.COL_TARGET)
+                if target_item is not None:
+                    target_item.setText(target_name)
+                status_item.setText("Manuell: Zielname aus bearbeiteten Angaben erzeugt.")
+            select_item.setCheckState(Qt.CheckState.Checked)
+        finally:
+            self._updating_table = False
+
+    def _target_from_row(self, row: int, select_item: QTableWidgetItem) -> str:
+        track_item = self._table.item(row, self.COL_TRACK)
+        edition_item = self._table.item(row, self.COL_EDITION)
+        instrument_item = self._table.item(row, self.COL_INSTRUMENT)
+        role_item = self._table.item(row, self.COL_ROLE)
+        raw_track = track_item.text().strip() if track_item else ""
+        edition = edition_item.text().strip().lower() if edition_item else ""
+        instrument = instrument_item.text().strip().lower() if instrument_item else ""
+        role = role_item.text().strip().lower() if role_item else ""
+        try:
+            track = str(int(raw_track)).zfill(self._track_width.value())
+        except ValueError:
+            return ""
+        if not track or not edition or not instrument or not role:
+            return ""
+        target = f"{edition}__{track}__{instrument}__{role}"
+        title = str(select_item.data(Qt.ItemDataRole.UserRole + 2) or "").strip()
+        if self._keep_title_check.isChecked() and title:
+            target += f" -- {title}"
+        return f"{target}.mp3"
 
     def _selected_operations(self) -> list[FilenameRenameOperation]:
         operations: list[FilenameRenameOperation] = []
