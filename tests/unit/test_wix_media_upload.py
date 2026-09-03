@@ -38,6 +38,7 @@ def test_upload_creates_exact_folder_path_without_leaking_api_key(tmp_path) -> N
                 {"file": {"id": "file-1", "displayName": source.name}},
             )
         if request.method == "GET" and request.url.path.endswith("/folders"):
+            assert request.url.params["paging.limit"] == "100"
             return _json_response(request, {"folders": []})
         if request.method == "POST" and request.url.path.endswith("/folders"):
             body = json.loads(request.content)
@@ -47,6 +48,7 @@ def test_upload_creates_exact_folder_path_without_leaking_api_key(tmp_path) -> N
                 {"folder": {"id": f"folder-{len(created)}", "displayName": body["displayName"]}},
             )
         if request.method == "GET" and request.url.path.endswith("/files"):
+            assert request.url.params["paging.limit"] == "100"
             list_file_calls += 1
             if list_file_calls == 1:
                 return _json_response(request, {"files": []})
@@ -122,3 +124,10 @@ def test_upload_requires_wix_credentials(tmp_path) -> None:
 
     with pytest.raises(FilenameGeneratorError, match="WIX_API_KEY"):
         service.upload_files([source], "/MH-Tracks/test")
+
+
+def test_upload_prefers_data_api_key_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("WIX_API_KEY_DATA", "media-key")
+    service = WixMediaUploadService(_Secrets(api_key="general-key"))  # type: ignore[arg-type]
+
+    assert service._api_key() == "media-key"

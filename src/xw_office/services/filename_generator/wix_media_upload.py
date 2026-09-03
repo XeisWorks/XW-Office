@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import mimetypes
+import os
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 
 _API_BASE = "https://www.wixapis.com/site-media/v1"
 _READY_STATES = {"OK", "READY"}
+_MAX_LIST_PAGE_SIZE = 100
 
 
 @dataclass(frozen=True)
@@ -125,7 +127,11 @@ class WixMediaUploadService:
             )
 
     def _api_key(self) -> str:
-        return str(self._secrets.get_secret("WIX_API_KEY") or "").strip()
+        # A separate data/media key may deliberately have narrower Wix scopes than
+        # the general integration key. It stays environment-only, so it is not
+        # exposed in the general settings UI.
+        data_key = os.getenv("WIX_API_KEY_DATA", "").strip()
+        return data_key or str(self._secrets.get_secret("WIX_API_KEY") or "").strip()
 
     def _site_id(self) -> str:
         return str(self._secrets.get_secret("WIX_SITE_ID") or "").strip()
@@ -198,7 +204,7 @@ class WixMediaUploadService:
     def _list_folders(self, client: httpx.Client, parent_id: str) -> list[dict[str, Any]]:
         response = client.get(
             "/folders",
-            params={"parentFolderId": parent_id, "paging.limit": 200},
+            params={"parentFolderId": parent_id, "paging.limit": _MAX_LIST_PAGE_SIZE},
         )
         payload = self._response_json(response, "Wix-Ordner lesen")
         return [item for item in payload.get("folders", []) if isinstance(item, dict)]
@@ -206,7 +212,7 @@ class WixMediaUploadService:
     def _list_files(self, client: httpx.Client, folder_id: str) -> list[dict[str, Any]]:
         response = client.get(
             "/files",
-            params={"parentFolderId": folder_id, "paging.limit": 200},
+            params={"parentFolderId": folder_id, "paging.limit": _MAX_LIST_PAGE_SIZE},
         )
         payload = self._response_json(response, "Wix-Dateien lesen")
         return [item for item in payload.get("files", []) if isinstance(item, dict)]
@@ -237,13 +243,12 @@ class WixMediaUploadService:
         with httpx.Client(
             timeout=httpx.Timeout(300.0, connect=30.0),
             transport=self._transport,
-        ) as upload_client:
-            with source.open("rb") as file_handle:
-                upload_response = upload_client.put(
-                    upload_url,
-                    headers={"Content-Type": mime_type},
-                    content=file_handle,
-                )
+        ) as upload_client, source.open("rb") as file_handle:
+            upload_response = upload_client.put(
+                upload_url,
+                headers={"Content-Type": mime_type},
+                content=file_handle,
+            )
         upload_payload = self._response_json(upload_response, f"{source.name} hochladen")
         file_data = upload_payload.get("file", upload_payload)
         if not isinstance(file_data, dict):
