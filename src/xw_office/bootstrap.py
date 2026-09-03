@@ -55,6 +55,7 @@ from xw_office.services.sendungen.service import OffeneSendungenService
 from xw_office.services.special_orders import SpecialOrderService
 from xw_office.services.transfers.service import OffeneUeberweisungenService
 from xw_office.services.layout.service import LayoutToolsService
+from xw_office.services.layout.sample_pages_service import SamplePageExportService
 from xw_office.services.filename_generator.mh_tracks_cms_import import MhTracksCmsImportService
 from xw_office.services.filename_generator.service import FilenameGeneratorService
 from xw_office.services.filename_generator.wix_media_upload import WixMediaUploadService
@@ -394,6 +395,7 @@ def register_default_services(container: Container) -> None:
         ),
     )
     container.register(LayoutToolsService, lambda c: LayoutToolsService())
+    container.register(SamplePageExportService, lambda c: SamplePageExportService())
     container.register(FilenameGeneratorService, lambda c: FilenameGeneratorService())
     container.register(
         WixMediaUploadService,

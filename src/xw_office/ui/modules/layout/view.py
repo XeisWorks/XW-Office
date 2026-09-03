@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from xw_office.core.worker import BackgroundWorker
+from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.filename_generator.models import (
     FilenameGeneratorError,
     FilenameGeneratorRequest,
@@ -43,10 +44,12 @@ from xw_office.services.filename_generator.service import (
 from xw_office.services.filename_generator.mh_tracks_cms_import import MhTracksCmsImportService
 from xw_office.services.filename_generator.wix_media_upload import WixMediaUploadService
 from xw_office.services.layout.service import LayoutToolsService, SplitLandscapeResult
+from xw_office.services.layout.sample_pages_service import SamplePageExportService
 from xw_office.services.qr_codes.service import QrCodeService
 from xw_office.ui.modules.layout.filename_rename_dialog import FilenameRenamePanel
 from xw_office.ui.modules.layout.qr_batch_dialog import QrCodeBatchDialog
 from xw_office.ui.modules.layout.qr_settings_dialog import QrSettingsDialog
+from xw_office.ui.modules.layout.sample_pages_panel import SamplePagesPanel
 
 if TYPE_CHECKING:
     from xw_office.core.container import Container
@@ -81,6 +84,7 @@ class LayoutView(QWidget):
         tabs.addTab(self._build_qr_tab(), "QR-Code")
         tabs.addTab(self._build_qr_series_tab(), "QR-Code-Serien")
         tabs.addTab(self._build_filename_generator_tab(), "Dateinamen-Generator")
+        tabs.addTab(self._build_sample_pages_tab(), "Beispielseiten")
         tabs.addTab(self._build_blank_tab(), "Leerseiten")
         tabs.addTab(self._build_cover_tab(), "Deckblatt")
         tabs.addTab(self._build_isbn_tab(), "ISBN")
@@ -908,6 +912,20 @@ class LayoutView(QWidget):
         scroll_area.setWidgetResizable(True)
         scroll_area.setWidget(widget)
         return scroll_area
+
+    # ------------------------------------------------------------------
+    # Tab: Beispielseiten (PDF-Seiten als Web-JPG exportieren)
+    # ------------------------------------------------------------------
+
+    def _build_sample_pages_tab(self) -> QWidget:
+        service: SamplePageExportService = self._container.resolve(SamplePageExportService)
+        settings_repo: SettingKvRepository | None
+        try:
+            settings_repo = self._container.resolve(SettingKvRepository)
+        except KeyError:
+            settings_repo = None
+        self._sample_pages_panel = SamplePagesPanel(service, settings_repo)
+        return self._wrap_in_scroll_area(self._sample_pages_panel)
 
     def _run_filename_generator(self) -> None:
         roles: list[str] = []
