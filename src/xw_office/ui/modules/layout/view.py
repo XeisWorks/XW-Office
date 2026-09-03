@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QUrl, Qt
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -40,6 +40,7 @@ from xw_office.services.filename_generator.service import (
 )
 from xw_office.services.layout.service import LayoutToolsService, SplitLandscapeResult
 from xw_office.services.qr_codes.service import QrCodeService
+from xw_office.ui.modules.layout.filename_rename_dialog import FilenameRenameDialog
 from xw_office.ui.modules.layout.qr_batch_dialog import QrCodeBatchDialog
 from xw_office.ui.modules.layout.qr_settings_dialog import QrSettingsDialog
 
@@ -808,11 +809,15 @@ class LayoutView(QWidget):
         info = QLabel(
             "Erzeugt Dateinamen nach der MH-Tracks-Konvention des MH-AudioPlayer "
             "(edition__track__instrument__rolle.mp3), z. B. sk-t__01__btb__practice.mp3. "
-            "Es wird nichts umbenannt - die Liste ist zum manuellen Ueberschreiben per "
-            "Kopieren/Einfuegen gedacht."
+            "Die Liste kann weiterhin manuell kopiert werden; der kontrollierte Batch-Umbenenner "
+            "scannt vorhandene MP3-Dateien mit Vorschau und Konfliktprüfung."
         )
         info.setWordWrap(True)
         lay.addWidget(info)
+
+        rename_btn = QPushButton("Vorhandene MP3-Dateien automatisch umbenennen…")
+        rename_btn.clicked.connect(self._open_filename_rename_dialog)
+        lay.addWidget(rename_btn)
 
         form_group = QGroupBox("Angaben")
         form = QFormLayout(form_group)
@@ -917,6 +922,10 @@ class LayoutView(QWidget):
             return
         QApplication.clipboard().setText(text)
         self._fname_status.setText("In die Zwischenablage kopiert.")
+
+    def _open_filename_rename_dialog(self) -> None:
+        service: FilenameGeneratorService = self._container.resolve(FilenameGeneratorService)
+        FilenameRenameDialog(service, self).exec()
 
     # ------------------------------------------------------------------
     # Shared error handler
