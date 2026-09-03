@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 TRACK_COLLECTION_ID = "MH-Tracks"
 EDITION_COLLECTION_ID = "MH-Editions"
+_PLAYER_URL_BASE = "https://www.xeisworks.at/mh-player/p"
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,17 @@ class MhTracksCmsApplyResult:
     inserted: int
     updated: int
     failures: tuple[MhTracksCmsApplyFailure, ...] = field(default_factory=tuple)
+    first_track_url: str = ""
+
+
+def _track_player_url(track: dict[str, Any]) -> str:
+    edition = str(track.get("editionSlug") or "").strip()
+    track_number = str(track.get("trackNumber") or "").strip()
+    groups = track.get("instrumentGroups") or []
+    instrument = str(groups[0]).strip() if groups else ""
+    if not edition or not instrument or not track_number.isdigit():
+        return ""
+    return f"{_PLAYER_URL_BASE}?e={edition}&i={instrument}&t={int(track_number)}"
 
 
 class MhTracksCmsImportService:
@@ -87,6 +99,7 @@ class MhTracksCmsImportService:
         inserted = 0
         updated = 0
         failures: list[MhTracksCmsApplyFailure] = []
+        first_track_url = ""
         for track in plan.writes:
             track_id = str(track.get("_id") or "").strip()
             data = {key: value for key, value in track.items() if key != "_id"}
@@ -97,6 +110,8 @@ class MhTracksCmsImportService:
                 else:
                     self._data.insert_item(TRACK_COLLECTION_ID, data)
                     inserted += 1
+                if not first_track_url:
+                    first_track_url = _track_player_url(track)
             except FilenameGeneratorError as exc:
                 failures.append(MhTracksCmsApplyFailure(str(track.get("trackKey") or ""), str(exc)))
 
@@ -105,4 +120,5 @@ class MhTracksCmsImportService:
             inserted=inserted,
             updated=updated,
             failures=tuple(failures),
+            first_track_url=first_track_url,
         )

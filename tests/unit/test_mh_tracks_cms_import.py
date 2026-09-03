@@ -64,6 +64,7 @@ def test_preview_then_apply_updates_existing_track() -> None:
     assert result.applied
     assert result.updated == 1
     assert data.updated[0][0] == "track-1"
+    assert result.first_track_url == "https://www.xeisworks.at/mh-player/p?e=sk-t&i=btb&t=3"
 
 
 def test_apply_rejects_stale_token() -> None:

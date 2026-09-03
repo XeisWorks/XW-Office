@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -95,6 +96,7 @@ class FilenameRenamePanel(QWidget):
         self._last_upload: WixMediaUploadResult | None = None
         self._pending_cms_plan: MhTracksImportPlan | None = None
         self._pending_cms_plan_folder: str = ""
+        self._last_cms_track_url: str = ""
         self._wix_path_is_suggestion = False
         self._updating_table = False
 
@@ -259,6 +261,11 @@ class FilenameRenamePanel(QWidget):
         self._cms_status.setWordWrap(True)
         self._cms_status.setTextFormat(Qt.TextFormat.RichText)
         cms_layout.addWidget(self._cms_status)
+
+        self._cms_open_first_track_button = QPushButton("Ersten aktualisierten Track öffnen")
+        self._cms_open_first_track_button.setEnabled(False)
+        self._cms_open_first_track_button.clicked.connect(self._open_first_cms_track)
+        cms_layout.addWidget(self._cms_open_first_track_button)
         root.addWidget(cms_group)
 
         self._apply_preset(0)
@@ -614,6 +621,7 @@ class FilenameRenamePanel(QWidget):
         worker.signals.error.connect(self._on_cms_error)
         worker.signals.finished.connect(self._on_cms_finished)
         self._cms_button.setEnabled(False)
+        self._cms_open_first_track_button.setEnabled(False)
         self._cms_status.setText("Vorschau wird geladen …")
         worker.start()
 
@@ -683,6 +691,14 @@ class FilenameRenamePanel(QWidget):
         else:
             lines.append("Alle Änderungen wurden gespeichert.")
         self._cms_status.setText("<br>".join(lines))
+        self._last_cms_track_url = result.first_track_url if result.applied else ""
+        self._cms_open_first_track_button.setEnabled(bool(self._last_cms_track_url))
+
+    def _open_first_cms_track(self) -> None:
+        if not self._last_cms_track_url:
+            return
+        if not QDesktopServices.openUrl(QUrl(self._last_cms_track_url)):
+            QMessageBox.warning(self, "Browser", "Der Track-Link konnte nicht geöffnet werden.")
 
     def _on_cms_error(self, exc: BaseException) -> None:
         self._cms_status.setText(f"CMS-Import fehlgeschlagen: {exc}")
@@ -692,3 +708,4 @@ class FilenameRenamePanel(QWidget):
         self._cms_worker = None
         configured = bool(self._cms_import_service and self._cms_import_service.is_configured)
         self._cms_button.setEnabled(configured)
+
