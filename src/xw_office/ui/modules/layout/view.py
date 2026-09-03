@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QSplitter,
@@ -889,16 +890,24 @@ class LayoutView(QWidget):
         self._fname_status.setWordWrap(True)
         lay.addWidget(self._fname_status)
 
-        columns.addWidget(stage_one)
+        columns.addWidget(self._wrap_in_scroll_area(stage_one))
         service: FilenameGeneratorService = self._container.resolve(FilenameGeneratorService)
         wix_upload_service: WixMediaUploadService = self._container.resolve(WixMediaUploadService)
         cms_import_service: MhTracksCmsImportService = self._container.resolve(MhTracksCmsImportService)
         self._filename_rename_panel = FilenameRenamePanel(service, wix_upload_service, cms_import_service, page)
-        columns.addWidget(self._filename_rename_panel)
+        columns.addWidget(self._wrap_in_scroll_area(self._filename_rename_panel))
         columns.setStretchFactor(0, 1)
         columns.setStretchFactor(1, 2)
         columns.setSizes([420, 820])
         return page
+
+    @staticmethod
+    def _wrap_in_scroll_area(widget: QWidget) -> QScrollArea:
+        """Let a splitter pane scroll instead of squeezing its content (e.g. the rename table) to zero height."""
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(widget)
+        return scroll_area
 
     def _run_filename_generator(self) -> None:
         roles: list[str] = []

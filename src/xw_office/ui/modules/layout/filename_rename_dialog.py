@@ -187,6 +187,7 @@ class FilenameRenamePanel(QWidget):
         header.setSectionResizeMode(self.COL_STATUS, QHeaderView.ResizeMode.Stretch)
         self._table.itemChanged.connect(self._update_rename_button)
         self._table.itemChanged.connect(self._apply_manual_cell_change)
+        self._table.setMinimumHeight(220)
         root.addWidget(self._table, stretch=1)
 
         action_row = QHBoxLayout()
