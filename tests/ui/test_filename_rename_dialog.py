@@ -48,3 +48,14 @@ def test_layout_keeps_generator_and_rename_panel_in_one_register(qtbot) -> None:
     qtbot.addWidget(view)
 
     assert view.findChild(FilenameRenamePanel) is not None
+
+
+def test_panel_suggests_precise_wix_batch_path(qtbot, tmp_path) -> None:
+    (tmp_path / "sk-t__03__btb__teacher.mp3").write_bytes(b"audio")
+    panel = FilenameRenamePanel(FilenameGeneratorService())
+    qtbot.addWidget(panel)
+    panel._folder_edit.setText(str(tmp_path))  # noqa: SLF001
+
+    panel._scan()  # noqa: SLF001
+
+    assert panel._wix_path_edit.text().startswith("/MH-Tracks/sk-t/btb/uploads/")  # noqa: SLF001

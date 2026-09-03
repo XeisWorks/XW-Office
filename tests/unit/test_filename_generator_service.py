@@ -223,3 +223,12 @@ def test_mapping_parser_rejects_ambiguous_source() -> None:
 
     with pytest.raises(FilenameGeneratorError, match="mehrfach"):
         svc.parse_mapping("2=teacher, 2=duet", field_name="Varianten")
+
+
+def test_canonical_mp3_files_excludes_legacy_and_other_files(tmp_path) -> None:
+    canonical = tmp_path / "sk-t__01__btb__practice.mp3"
+    canonical.write_bytes(b"audio")
+    (tmp_path / "01.1 Lied.mp3").write_bytes(b"legacy")
+    (tmp_path / "sk-t__02__btb__teacher.wav").write_bytes(b"wave")
+
+    assert FilenameGeneratorService.canonical_mp3_files(tmp_path) == [canonical]

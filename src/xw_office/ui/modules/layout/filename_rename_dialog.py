@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl, QUrlQuery
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QProgressBar,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -24,12 +27,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from xw_office.core.worker import BackgroundWorker
 from xw_office.services.filename_generator.models import (
     FilenameGeneratorError,
     FilenameRenameOperation,
     FilenameRenameRules,
 )
 from xw_office.services.filename_generator.service import FilenameGeneratorService
+from xw_office.services.filename_generator.wix_media_upload import (
+    WixMediaUploadResult,
+    WixMediaUploadService,
+)
 
 
 @dataclass(frozen=True)
@@ -70,10 +78,15 @@ class FilenameRenamePanel(QWidget):
     def __init__(
         self,
         service: FilenameGeneratorService,
+        wix_upload_service: WixMediaUploadService | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._service = service
+        self._wix_upload_service = wix_upload_service
+        self._upload_worker: BackgroundWorker | None = None
+        self._last_upload: WixMediaUploadResult | None = None
+        self._wix_path_is_suggestion = False
         self._updating_table = False
 
         root = QVBoxLayout(self)
@@ -181,6 +194,43 @@ class FilenameRenamePanel(QWidget):
         action_row.addWidget(self._rename_button)
         root.addLayout(action_row)
 
+        upload_group = QGroupBox("Direkt zu Wix hochladen")
+        upload_layout = QVBoxLayout(upload_group)
+        upload_path_row = QHBoxLayout()
+        self._wix_path_edit = QLineEdit()
+        self._wix_path_edit.setPlaceholderText(
+            "/MH-Tracks/sk-t/btb/uploads/20260903-143000"
+        )
+        self._wix_path_edit.textEdited.connect(self._mark_wix_path_as_manual)
+        upload_path_row.addWidget(QLabel("Wix-Zielpfad:"))
+        upload_path_row.addWidget(self._wix_path_edit, stretch=1)
+        upload_layout.addLayout(upload_path_row)
+
+        upload_actions = QHBoxLayout()
+        self._upload_button = QPushButton("Alle gültigen MP3s hochladen")
+        self._upload_button.setEnabled(bool(wix_upload_service and wix_upload_service.is_configured))
+        self._upload_button.clicked.connect(self._start_upload)
+        upload_actions.addWidget(self._upload_button)
+        self._open_upload_page_button = QPushButton("Wix-Importseite öffnen")
+        self._open_upload_page_button.setEnabled(False)
+        self._open_upload_page_button.clicked.connect(self._open_upload_page)
+        upload_actions.addWidget(self._open_upload_page_button)
+        upload_actions.addStretch()
+        upload_layout.addLayout(upload_actions)
+
+        self._upload_progress = QProgressBar()
+        self._upload_progress.setRange(0, 100)
+        self._upload_progress.setValue(0)
+        upload_layout.addWidget(self._upload_progress)
+        self._upload_status = QLabel(
+            "Bereit. Hochgeladen werden alle bereits gültig benannten MP3-Dateien im Quellordner."
+            if wix_upload_service and wix_upload_service.is_configured
+            else "WIX_API_KEY oder WIX_SITE_ID fehlt; direkter Upload ist deaktiviert."
+        )
+        self._upload_status.setWordWrap(True)
+        upload_layout.addWidget(self._upload_status)
+        root.addWidget(upload_group)
+
         self._apply_preset(0)
 
     def _apply_preset(self, index: int) -> None:
@@ -263,6 +313,7 @@ class FilenameRenamePanel(QWidget):
             f"{len(plan)} MP3-Dateien: {safe_count} eindeutig, {review_count} zu prüfen, "
             f"{canonical_count} bereits korrekt."
         )
+        self._suggest_wix_path()
         self._update_rename_button()
 
     def _set_read_only_item(self, row: int, column: int, text: str) -> None:
@@ -404,3 +455,122 @@ class FilenameRenamePanel(QWidget):
         self._undo_button.setEnabled(False)
         self._scan()
         self._status_label.setText(f"{len(result.operations)} Datei(en) zurückbenannt.")
+
+    def _suggest_wix_path(self) -> None:
+        if self._wix_path_edit.text().strip() and not self._wix_path_is_suggestion:
+            return
+        try:
+            files = self._service.canonical_mp3_files(self._folder_edit.text())
+        except FilenameGeneratorError:
+            return
+        if not files:
+            return
+        identities = {
+            (path.name.split("__", 3)[0], path.name.split("__", 3)[2]) for path in files
+        }
+        if len(identities) == 1:
+            edition, instrument = next(iter(identities))
+        else:
+            edition, instrument = "mixed", "mixed"
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self._wix_path_edit.setText(
+            f"/MH-Tracks/{edition}/{instrument}/uploads/{stamp}"
+        )
+        self._wix_path_is_suggestion = True
+
+    def _mark_wix_path_as_manual(self, _text: str) -> None:
+        self._wix_path_is_suggestion = False
+
+    def _start_upload(self) -> None:
+        service = self._wix_upload_service
+        if service is None or not service.is_configured:
+            QMessageBox.warning(
+                self,
+                "Wix nicht konfiguriert",
+                "Bitte WIX_API_KEY und WIX_SITE_ID in den Einstellungen prüfen.",
+            )
+            return
+        try:
+            files = self._service.canonical_mp3_files(self._folder_edit.text())
+        except FilenameGeneratorError as exc:
+            QMessageBox.warning(self, "Upload nicht möglich", str(exc))
+            return
+        if not files:
+            QMessageBox.information(
+                self,
+                "Keine Dateien",
+                "Im Quellordner wurden keine gültig benannten MH-Tracks-MP3s gefunden.",
+            )
+            return
+        target_path = self._wix_path_edit.text().strip()
+        answer = QMessageBox.question(
+            self,
+            "MP3-Dateien zu Wix hochladen?",
+            f"{len(files)} Datei(en) werden in folgenden Wix-Ordner hochgeladen:\n{target_path}\n\n"
+            "Bei Namenskonflikten wird nichts überschrieben.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        worker: BackgroundWorker
+
+        def job() -> WixMediaUploadResult:
+            return service.upload_files(
+                files,
+                target_path,
+                progress=lambda percent, message: worker.signals.progress.emit(percent, message),
+            )
+
+        worker = BackgroundWorker(job)
+        self._upload_worker = worker
+        worker.signals.progress.connect(self._on_upload_progress)
+        worker.signals.result.connect(self._on_upload_result)
+        worker.signals.error.connect(self._on_upload_error)
+        worker.signals.finished.connect(self._on_upload_finished)
+        self._upload_button.setEnabled(False)
+        self._open_upload_page_button.setEnabled(False)
+        self._upload_progress.setValue(0)
+        self._upload_status.setText("Upload wird vorbereitet …")
+        worker.start()
+
+    def _on_upload_progress(self, percent: int, message: str) -> None:
+        self._upload_progress.setValue(percent)
+        self._upload_status.setText(message)
+
+    def _on_upload_result(self, result: object) -> None:
+        if not isinstance(result, WixMediaUploadResult):
+            return
+        self._last_upload = result
+        self._upload_progress.setValue(100)
+        self._upload_status.setText(
+            f"{len(result.files)} Datei(en) hochgeladen. Wix-Ordner: {result.folder.path} "
+            f"(ID: {result.folder.folder_id}). "
+            + (
+                "Bitte nun den MH-Tracks-Import prüfen."
+                if result.processing_complete
+                else "Wix verarbeitet die Audiodateien noch; die Importseite gegebenenfalls nach kurzer Wartezeit erneut prüfen."
+            )
+        )
+        self._open_upload_page_button.setEnabled(True)
+
+    def _on_upload_error(self, exc: BaseException) -> None:
+        self._upload_status.setText(f"Upload fehlgeschlagen: {exc}")
+        QMessageBox.critical(self, "Wix-Upload fehlgeschlagen", str(exc))
+
+    def _on_upload_finished(self) -> None:
+        self._upload_worker = None
+        configured = bool(self._wix_upload_service and self._wix_upload_service.is_configured)
+        self._upload_button.setEnabled(configured)
+
+    def _open_upload_page(self) -> None:
+        result = self._last_upload
+        if result is None:
+            return
+        url = QUrl("https://www.xeisworks.at/upload")
+        query = QUrlQuery()
+        query.addQueryItem("folderId", result.folder.folder_id)
+        query.addQueryItem("folderName", result.folder.display_name)
+        query.addQueryItem("folderPath", result.folder.path)
+        url.setQuery(query)
+        if not QDesktopServices.openUrl(url):
+            QMessageBox.warning(self, "Browser", "Die Wix-Importseite konnte nicht geöffnet werden.")

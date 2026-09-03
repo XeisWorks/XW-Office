@@ -56,6 +56,7 @@ from xw_office.services.special_orders import SpecialOrderService
 from xw_office.services.transfers.service import OffeneUeberweisungenService
 from xw_office.services.layout.service import LayoutToolsService
 from xw_office.services.filename_generator.service import FilenameGeneratorService
+from xw_office.services.filename_generator.wix_media_upload import WixMediaUploadService
 from xw_office.services.qr_codes.service import QrCodeService
 from xw_office.services.mailing.service import MailDeliveryService
 from xw_office.services.printing.print_queue import PrintQueueService
@@ -392,6 +393,10 @@ def register_default_services(container: Container) -> None:
     )
     container.register(LayoutToolsService, lambda c: LayoutToolsService())
     container.register(FilenameGeneratorService, lambda c: FilenameGeneratorService())
+    container.register(
+        WixMediaUploadService,
+        lambda c: WixMediaUploadService(c.resolve(SecretService)),
+    )
     container.register(
         QrCodeService,
         lambda c: QrCodeService(

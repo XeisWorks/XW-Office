@@ -39,6 +39,7 @@ from xw_office.services.filename_generator.service import (
     ROLE_LABELS,
     FilenameGeneratorService,
 )
+from xw_office.services.filename_generator.wix_media_upload import WixMediaUploadService
 from xw_office.services.layout.service import LayoutToolsService, SplitLandscapeResult
 from xw_office.services.qr_codes.service import QrCodeService
 from xw_office.ui.modules.layout.filename_rename_dialog import FilenameRenamePanel
@@ -889,7 +890,8 @@ class LayoutView(QWidget):
 
         columns.addWidget(stage_one)
         service: FilenameGeneratorService = self._container.resolve(FilenameGeneratorService)
-        self._filename_rename_panel = FilenameRenamePanel(service, page)
+        wix_upload_service: WixMediaUploadService = self._container.resolve(WixMediaUploadService)
+        self._filename_rename_panel = FilenameRenamePanel(service, wix_upload_service, page)
         columns.addWidget(self._filename_rename_panel)
         columns.setStretchFactor(0, 1)
         columns.setStretchFactor(1, 2)

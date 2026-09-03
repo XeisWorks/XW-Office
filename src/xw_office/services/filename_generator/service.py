@@ -141,6 +141,18 @@ class FilenameGeneratorService:
     def can_undo_last_rename(self) -> bool:
         return self._last_rename_batch is not None
 
+    @staticmethod
+    def canonical_mp3_files(directory: Path | str) -> list[Path]:
+        """Return canonical MH-Tracks MP3 files in one local directory."""
+        folder = Path(directory).expanduser().resolve()
+        if not folder.is_dir():
+            raise FilenameGeneratorError("Der ausgewählte Quellordner existiert nicht.")
+        return [
+            path
+            for path in sorted(folder.iterdir(), key=lambda item: item.name.casefold())
+            if path.is_file() and CANONICAL_NAME_RE.fullmatch(path.name)
+        ]
+
     def _validate_rename_rules(self, rules: FilenameRenameRules) -> None:
         if rules.track_width < 1:
             raise FilenameGeneratorError("Die Mindestbreite der Tracknummer muss mindestens 1 sein.")
