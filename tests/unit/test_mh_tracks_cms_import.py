@@ -76,3 +76,32 @@ def test_apply_rejects_stale_token() -> None:
 
     with pytest.raises(FilenameGeneratorError, match="ge\u00e4ndert"):
         service.apply("/MH-Tracks/sk-t/btb/uploads/x", "stale-token")
+
+
+def test_first_track_url_reflects_the_instrument_actually_edited_not_alphabetical_order() -> None:
+    # Same track already has an unchanged "btb" stem; this batch only uploads "ftb".
+    # The opened link must point to "ftb" (what was actually edited), not "btb".
+    tracks = [
+        {
+            "_id": "track-1",
+            "trackKey": "sk-t::03",
+            "editionSlug": "sk-t",
+            "trackNumber": "03",
+            "stems": [{"id": "btb-practice", "group": "btb", "role": "practice", "audioUrl": "wix:audio://unchanged"}],
+        }
+    ]
+    media = _FakeMediaService(
+        [
+            {"displayName": "sk-t__03__btb__practice.mp3", "url": "wix:audio://unchanged"},
+            {"displayName": "sk-t__03__ftb__practice.mp3", "url": "wix:audio://new-ftb"},
+        ]
+    )
+    data = _FakeDataClient(tracks, [{"editionSlug": "sk-t"}])
+    service = MhTracksCmsImportService(media, data)  # type: ignore[arg-type]
+
+    plan = service.preview("/MH-Tracks/sk-t/ftb/uploads/x")
+    result = service.apply("/MH-Tracks/sk-t/ftb/uploads/x", plan.token)
+
+    assert result.applied
+    assert result.first_track_url == "https://www.xeisworks.at/mh-player/p?e=sk-t&i=ftb&t=3"
+

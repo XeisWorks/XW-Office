@@ -39,11 +39,10 @@ class MhTracksCmsApplyResult:
     first_track_url: str = ""
 
 
-def _track_player_url(track: dict[str, Any]) -> str:
-    edition = str(track.get("editionSlug") or "").strip()
-    track_number = str(track.get("trackNumber") or "").strip()
-    groups = track.get("instrumentGroups") or []
-    instrument = str(groups[0]).strip() if groups else ""
+def _track_player_url(action: dict[str, Any]) -> str:
+    edition = str(action.get("editionSlug") or "").strip()
+    track_number = str(action.get("trackNumber") or "").strip()
+    instrument = str(action.get("group") or "").strip()
     if not edition or not instrument or not track_number.isdigit():
         return ""
     return f"{_PLAYER_URL_BASE}?e={edition}&i={instrument}&t={int(track_number)}"
@@ -99,7 +98,6 @@ class MhTracksCmsImportService:
         inserted = 0
         updated = 0
         failures: list[MhTracksCmsApplyFailure] = []
-        first_track_url = ""
         for track in plan.writes:
             track_id = str(track.get("_id") or "").strip()
             data = {key: value for key, value in track.items() if key != "_id"}
@@ -110,10 +108,22 @@ class MhTracksCmsImportService:
                 else:
                     self._data.insert_item(TRACK_COLLECTION_ID, data)
                     inserted += 1
-                if not first_track_url:
-                    first_track_url = _track_player_url(track)
             except FilenameGeneratorError as exc:
                 failures.append(MhTracksCmsApplyFailure(str(track.get("trackKey") or ""), str(exc)))
+
+        # Link to the first file that was actually changed in this batch (in upload/processing
+        # order), not just "some" written track — a track can hold stems for several instruments,
+        # and we want the instrument the user actually just edited/uploaded.
+        failed_track_keys = {failure.track_key for failure in failures}
+        first_track_url = ""
+        for action in plan.actions:
+            if action.get("type") == "unchanged":
+                continue
+            if action.get("trackKey") in failed_track_keys:
+                continue
+            first_track_url = _track_player_url(action)
+            if first_track_url:
+                break
 
         return MhTracksCmsApplyResult(
             applied=not failures,

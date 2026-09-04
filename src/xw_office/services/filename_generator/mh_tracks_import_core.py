@@ -390,6 +390,10 @@ def build_mh_tracks_import_plan(
                         "trackKey": parsed.track_key,
                         "stemId": _text(existing_stem.get("id")) or parsed.stem_id,
                         "fileName": parsed.file_name,
+                        "group": parsed.group,
+                        "role": parsed.role,
+                        "editionSlug": parsed.edition_slug,
+                        "trackNumber": parsed.track_number,
                     }
                 )
             else:
@@ -400,6 +404,10 @@ def build_mh_tracks_import_plan(
                         "trackKey": parsed.track_key,
                         "stemId": _text(existing_stem.get("id")) or parsed.stem_id,
                         "fileName": parsed.file_name,
+                        "group": parsed.group,
+                        "role": parsed.role,
+                        "editionSlug": parsed.edition_slug,
+                        "trackNumber": parsed.track_number,
                     }
                 )
                 warnings.append(f"{parsed.track_key}/{parsed.stem_id}: vorhandene Audiodatei wird ersetzt.")
@@ -411,6 +419,10 @@ def build_mh_tracks_import_plan(
                     "trackKey": parsed.track_key,
                     "stemId": parsed.stem_id,
                     "fileName": parsed.file_name,
+                    "group": parsed.group,
+                    "role": parsed.role,
+                    "editionSlug": parsed.edition_slug,
+                    "trackNumber": parsed.track_number,
                 }
             )
 

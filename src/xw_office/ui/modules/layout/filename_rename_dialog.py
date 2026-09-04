@@ -44,6 +44,13 @@ from xw_office.services.filename_generator.wix_media_upload import (
     WixMediaUploadService,
 )
 
+_CMS_ACTION_LABELS = {
+    "add-stem": "Neue Spur",
+    "replace-audio": "Audio ersetzen",
+    "create-track-and-stem": "Neuer Track-Entwurf",
+    "unchanged": "Unverändert",
+}
+
 
 @dataclass(frozen=True)
 class _RenamePreset:
@@ -640,18 +647,38 @@ class FilenameRenamePanel(QWidget):
             f"Ignorierte Dateien: {summary.get('ignoredFiles', 0)}",
             f"Fehler: {summary.get('errors', 0)}",
         ]
+        action_lines = [
+            f"{_CMS_ACTION_LABELS.get(action.get('type'), action.get('type'))}: "
+            f"{action.get('trackKey')} / {action.get('group')}-{action.get('role')} "
+            f"← {action.get('fileName')}"
+            for action in plan.actions
+        ]
+        if action_lines:
+            lines.append("<b>Geplante Zuordnungen (bitte prüfen):</b>")
+            lines.append(self._format_html_list(action_lines))
+        if plan.ignored_files:
+            lines.append("<b>Ignorierte Dateien (Namensschema nicht erkannt):</b>")
+            lines.append(self._format_html_list(plan.ignored_files))
         if plan.errors:
             lines.append("<b>Fehler:</b> " + " | ".join(plan.errors))
         if plan.warnings:
             lines.append("<b>Warnungen:</b> " + " | ".join(plan.warnings[:10]))
         if plan.can_apply:
-            lines.append("Noch wurde nichts gespeichert. Button erneut klicken, um zu speichern.")
+            lines.append("Noch wurde nichts gespeichert. Prüfen und Button erneut klicken, um zu speichern.")
             self._cms_button.setText("CMS-Vorschau bestätigen")
         else:
             lines.append("Es gibt nichts zu speichern oder Fehler müssen zuerst behoben werden.")
             self._cms_button.setText("MH-Tracks CMS erneut prüfen")
             self._pending_cms_plan = None
         self._cms_status.setText("<br>".join(lines))
+
+    @staticmethod
+    def _format_html_list(values: list[str], limit: int = 30) -> str:
+        shown = values[:limit]
+        items = "".join(f"<li>{item}</li>" for item in shown)
+        remainder = len(values) - len(shown)
+        tail = f"<li>… und {remainder} weitere</li>" if remainder > 0 else ""
+        return f"<ul style='margin:4px 0 4px 18px'>{items}{tail}</ul>"
 
     def _confirm_and_apply_cms_import(self, folder_path: str, token: str) -> None:
         service = self._cms_import_service
