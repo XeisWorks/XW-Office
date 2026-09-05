@@ -312,11 +312,11 @@ def build_polling_lines(config: object, shipment: PlcShipmentDraft) -> list[str]
     articles = [
         {
             "sku": article.sku,
-            "content": article.name,
+            "content": clean_reference(article.name, max_length=100),
             "origin": article.origin_iso2,
             "hs_code": article.hs_tariff_number,
             "customs_type": "GOODS",
-            "description": article.name,
+            "description": clean_reference(article.name, max_length=100),
             "quantity": article.quantity,
             "unit": article.unit_id,
             "net_weight_kg": article.net_weight_kg,
@@ -342,7 +342,7 @@ def build_polling_lines(config: object, shipment: PlcShipmentDraft) -> list[str]
             "shipment_id": shipment.reference,
             "ref1": shipment.reference,
             "ref2": shipment.invoice_number,
-            "customs_description": shipment.customs_description,
+            "customs_description": clean_reference(shipment.customs_description, max_length=100),
             "returnsend": "0",
         },
         articles=articles,

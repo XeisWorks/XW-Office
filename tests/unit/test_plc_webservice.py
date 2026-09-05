@@ -216,6 +216,26 @@ def test_non_eu_shipment_requires_complete_customs_values() -> None:
     assert row["BusinessDocumentEntryList"] == {"string": ["CustomsDeclaration"]}
 
 
+def test_webservice_sanitizes_plc_forbidden_customs_text_characters() -> None:
+    shipment = _shipment(
+        country="CH",
+        articles=(
+            PlcCustomsArticle(
+                sku="XW-4582",
+                name="Printed | sheet\nmusic book",
+                quantity=1,
+                net_weight_kg=0.3,
+                customs_value_eur=19.9,
+            ),
+        ),
+    )
+
+    row = build_import_shipment_row(_settings(), shipment)
+    article = row["ColloList"]["ColloRow"][0]["ColloArticleList"]["ColloArticleRow"][0]  # type: ignore[index]
+
+    assert article["ArticleName"] == "Printed sheet music book"
+
+
 def test_post_eu_exception_territories_require_customs() -> None:
     assert requires_customs_declaration("ES", postal_code="35001", city="Las Palmas")
     assert requires_customs_declaration("DE", postal_code="27498", city="Helgoland")

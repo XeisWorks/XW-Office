@@ -8,7 +8,7 @@ import os
 import time
 from typing import TYPE_CHECKING, Callable, Mapping, Protocol
 
-from xw_office.services.plc.models import PlcShipmentDraft
+from xw_office.services.plc.models import PlcShipmentDraft, clean_reference
 from xw_office.services.plc.polling import ShipmentAddress, normalize_shipment_address
 from xw_office.services.shipping.countries import country_iso2
 
@@ -268,7 +268,7 @@ def build_import_shipment_row(settings: PlcWebserviceSettings, shipment: PlcShip
         # ``shipmentDocuments`` when it is explicitly requested here.
         row["BusinessDocumentEntryList"] = {"string": ["CustomsDeclaration"]}
     if shipment.customs_description.strip():
-        row["CustomsDescription"] = shipment.customs_description.strip()
+        row["CustomsDescription"] = clean_reference(shipment.customs_description, max_length=100)
     return row
 
 
@@ -298,7 +298,7 @@ def _article_row(article: object) -> dict[str, object]:
         raise TypeError("PLC customs article has invalid type")
     return {
         "ArticleNumber": article.sku,
-        "ArticleName": article.name,
+        "ArticleName": clean_reference(article.name, max_length=100),
         "CountryOfOriginID": article.origin_iso2.upper(),
         "HSTariffNumber": article.hs_tariff_number,
         "CustomsOptionID": article.customs_option_id,
