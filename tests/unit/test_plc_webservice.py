@@ -222,7 +222,7 @@ def test_webservice_sanitizes_plc_forbidden_customs_text_characters() -> None:
         articles=(
             PlcCustomsArticle(
                 sku="XW-4582",
-                name="Printed | sheet\nmusic book",
+                name="Printed | sheet\nmusic – book",
                 quantity=1,
                 net_weight_kg=0.3,
                 customs_value_eur=19.9,
@@ -233,7 +233,7 @@ def test_webservice_sanitizes_plc_forbidden_customs_text_characters() -> None:
     row = build_import_shipment_row(_settings(), shipment)
     article = row["ColloList"]["ColloRow"][0]["ColloArticleList"]["ColloArticleRow"][0]  # type: ignore[index]
 
-    assert article["ArticleName"] == "Printed sheet music book"
+    assert article["ArticleName"] == "Printed sheet music - book"
 
 
 def test_post_eu_exception_territories_require_customs() -> None:

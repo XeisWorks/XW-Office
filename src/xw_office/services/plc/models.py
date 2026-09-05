@@ -195,6 +195,7 @@ class PlcShipmentDraft:
 def clean_reference(value: object, *, max_length: int = 50) -> str:
     """Make a PLC-safe, human-readable reference without changing its meaning."""
     text = str(value or "").strip()
+    text = text.translate(str.maketrans({"–": "-", "—": "-", "−": "-"}))
     text = re.sub(r"[\r\n|]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text[:max_length]

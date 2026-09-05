@@ -269,7 +269,7 @@ def test_customs_table_uses_only_physical_wix_items_and_builds_cn23_values(qtbot
 
     articles = dialog._build_customs_articles()  # noqa: SLF001
     assert len(articles) == 1
-    assert articles[0].name == "Printed sheet music book – Alpenmarsch"
+    assert articles[0].name == "Printed sheet music book - Alpenmarsch"
     assert articles[0].quantity == 2
     assert articles[0].net_weight_kg == 0.25
     assert articles[0].customs_value_eur == 19.9

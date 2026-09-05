@@ -653,7 +653,7 @@ class PlcLabelPrintDialog(QDialog):
             title = str(item.name or "").strip()
             description = _CUSTOMS_ARTICLE_NAME
             if title and title.casefold() != _CUSTOMS_ARTICLE_NAME.casefold():
-                description = f"{_CUSTOMS_ARTICLE_NAME} – {title}"[:100]
+                description = f"{_CUSTOMS_ARTICLE_NAME} - {title}"[:100]
             self._append_customs_row(
                 name=description,
                 sku=str(item.sku or ""),
