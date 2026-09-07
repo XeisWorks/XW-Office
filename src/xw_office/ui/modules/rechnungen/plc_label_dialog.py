@@ -161,7 +161,6 @@ class _PlcDialogContext:
     weight_kg: float
     items: list[WixOrderItem]
     email: str = ""
-    phone: str = ""
     source: str = "wix"
 
 
@@ -196,6 +195,7 @@ class PlcLabelPrintDialog(QDialog):
         self._product_catalog = self._load_products()
         self._product_user_set = False
         self._address_edited = bool(address_override_lines)
+        self._order_numbers_edited = False
         self._weight_user_set = False
         self._success_overlay: QFrame | None = None
 
@@ -203,6 +203,9 @@ class PlcLabelPrintDialog(QDialog):
         self.setMinimumWidth(960)
         self.resize(1180, 680)
         self._build_ui()
+        self._primary_order_number.blockSignals(True)
+        self._primary_order_number.setText(self._summary.wix_order_number())
+        self._primary_order_number.blockSignals(False)
         if self._manual_entry:
             # Header "PLC-Label" button: no invoice/customer context, so the
             # office mailbox is the correct default recipient.
@@ -267,6 +270,16 @@ class PlcLabelPrintDialog(QDialog):
         self._weight_edit.textChanged.connect(self._on_weight_edit)
         form.addRow("Gewicht (kg):", self._weight_edit)
 
+        self._primary_order_number = QLineEdit()
+        self._primary_order_number.setPlaceholderText("z. B. 21104")
+        self._primary_order_number.textChanged.connect(self._on_order_number_edit)
+        form.addRow("Wix-Order-Nr.:", self._primary_order_number)
+
+        self._secondary_order_number = QLineEdit()
+        self._secondary_order_number.setPlaceholderText("optional, z. B. 21105")
+        self._secondary_order_number.textChanged.connect(self._on_order_number_edit)
+        form.addRow("2. Wix-Order-Nr.:", self._secondary_order_number)
+
         self._customs_edit = QPlainTextEdit()
         self._customs_edit.setPlaceholderText(_CUSTOMS_DESCRIPTION)
         self._customs_edit.setFixedHeight(72)
@@ -319,10 +332,6 @@ class PlcLabelPrintDialog(QDialog):
         self._recipient_email = QLineEdit()
         self._recipient_email.setPlaceholderText("office@xeisworks.at")
         form.addRow("Empfänger E-Mail:", self._recipient_email)
-
-        self._recipient_phone = QLineEdit()
-        self._recipient_phone.setPlaceholderText("Aus Wix, falls vorhanden")
-        form.addRow("Empfänger Telefon:", self._recipient_phone)
 
         self._status = QLabel("Lade Analyse...")
         self._status.setStyleSheet("color: #64748b;")
@@ -400,7 +409,6 @@ class PlcLabelPrintDialog(QDialog):
             items: list[WixOrderItem] = []
             weight = 0.0
             email = ""
-            phone = ""
             ref = self._summary.order_reference.strip()
             if ref:
                 wix: WixOrdersClient = self._container.resolve(WixOrdersClient)
@@ -426,7 +434,6 @@ class PlcLabelPrintDialog(QDialog):
                     if isinstance(plc_context, dict):
                         order_number = str(plc_context.get("order_number") or order_number).strip()
                         email = str(plc_context.get("email") or "").strip()
-                        phone = str(plc_context.get("phone") or "").strip()
                     shipping = str(meta.get("wix_shipping_address") or "").strip()
                     if shipping:
                         address_lines = [ln.strip() for ln in shipping.splitlines() if ln.strip()]
@@ -448,7 +455,6 @@ class PlcLabelPrintDialog(QDialog):
                 weight_kg=weight,
                 items=items,
                 email=email,
-                phone=phone,
                 source=source,
             )
 
@@ -470,8 +476,10 @@ class PlcLabelPrintDialog(QDialog):
             self._weight_edit.setText(f"{result.weight_kg:.2f}".replace(".", ","))
         if result.email and not self._recipient_email.text().strip():
             self._recipient_email.setText(result.email)
-        if result.phone and not self._recipient_phone.text().strip():
-            self._recipient_phone.setText(result.phone)
+        if result.order_number and not self._order_numbers_edited:
+            self._primary_order_number.blockSignals(True)
+            self._primary_order_number.setText(result.order_number)
+            self._primary_order_number.blockSignals(False)
         self._populate_customs_table(result.items)
         self._sync_product_options()
         self._update_customs_visibility()
@@ -506,6 +514,9 @@ class PlcLabelPrintDialog(QDialog):
         self._update_price()
         self._update_customs_summary()
 
+    def _on_order_number_edit(self, _value: str) -> None:
+        self._order_numbers_edited = True
+
     def _on_country_completed(self, value: str) -> None:
         self._country_combo.setEditText(country_name_en(value))
 
@@ -513,8 +524,16 @@ class PlcLabelPrintDialog(QDialog):
         return "LIVE" if self._mode_live.isChecked() else "TEST"
 
     def _build_reference(self) -> str:
-        if self._context.order_number:
-            return clean_reference(self._context.order_number)
+        order_numbers = [
+            value
+            for value in (
+                self._primary_order_number.text().strip(),
+                self._secondary_order_number.text().strip(),
+            )
+            if value
+        ]
+        if order_numbers:
+            return clean_reference(" + ".join(order_numbers))
         contact_name = self._name_edit.text().strip() if self._manual_entry else self._summary.contact_name
         slug = re.sub(r"[^A-Za-z0-9]+", "", contact_name or "")[:12]
         day = time.strftime("%Y%m%d")
@@ -544,7 +563,6 @@ class PlcLabelPrintDialog(QDialog):
             lines,
             fallback_name=self._summary.contact_name,
             email=self._recipient_email.text().strip(),
-            phone=self._recipient_phone.text().strip(),
         )
 
     def _country_group(self, iso2: str, *, postal_code: str = "", city: str = "") -> str:
