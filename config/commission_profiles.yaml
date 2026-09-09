@@ -12,14 +12,16 @@ profiles:
 
   - key: supergroup
     label: Supergroup
-    category_names: []
+    category_names:
+      - Supergroup
     include_credit_notes: true
     include_cancellation_invoices: true
     date_policy: invoice_date
 
   - key: mnozil
     label: Mnozil
-    category_names: []
+    category_names:
+      - Mnozil
     include_credit_notes: true
     include_cancellation_invoices: true
     date_policy: invoice_date

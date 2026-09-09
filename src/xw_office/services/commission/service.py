@@ -14,8 +14,8 @@ from xw_office.services.sevdesk.part_client import PartClient
 
 logger = logging.getLogger(__name__)
 
-_PAGE_SIZE = 100
-_MAX_PAGES = 200
+_PAGE_SIZE = 5_000
+_MAX_PAGES = 100
 _CANCEL_INVOICE_TYPES = {"SR"}
 
 
@@ -131,10 +131,16 @@ class CommissionDataProvider(Protocol):
     def list_invoice_positions(self, invoice_id: str) -> list[dict[str, Any]]:
         ...
 
+    def list_invoice_positions_bulk(self, invoice_ids: list[str]) -> list[dict[str, Any]]:
+        ...
+
     def list_credit_notes_for_year(self, year: int) -> list[dict[str, Any]]:
         ...
 
     def list_credit_note_positions(self, credit_note_id: str) -> list[dict[str, Any]]:
+        ...
+
+    def list_credit_note_positions_bulk(self, credit_note_ids: list[str]) -> list[dict[str, Any]]:
         ...
 
 
@@ -157,6 +163,7 @@ class SevdeskCommissionProvider:
         self._credit_cache: dict[int, list[dict[str, Any]]] = {}
         self._invoice_pos_cache: dict[str, list[dict[str, Any]]] = {}
         self._credit_pos_cache: dict[str, list[dict[str, Any]]] = {}
+        self._bulk_position_resources_loaded: set[str] = set()
         self._parts_cache: list[dict[str, Any]] | None = None
         self._categories_cache: list[dict[str, str]] | None = None
 
@@ -165,6 +172,7 @@ class SevdeskCommissionProvider:
         self._credit_cache.clear()
         self._invoice_pos_cache.clear()
         self._credit_pos_cache.clear()
+        self._bulk_position_resources_loaded.clear()
         self._parts_cache = None
         self._categories_cache = None
 
@@ -206,6 +214,14 @@ class SevdeskCommissionProvider:
             ]
         return [dict(item) for item in self._invoice_pos_cache[doc_id]]
 
+    def list_invoice_positions_bulk(self, invoice_ids: list[str]) -> list[dict[str, Any]]:
+        return self._load_positions_bulk(
+            "/InvoicePos",
+            parent_key="invoice",
+            document_ids=invoice_ids,
+            cache=self._invoice_pos_cache,
+        )
+
     def list_credit_notes_for_year(self, year: int) -> list[dict[str, Any]]:
         if year not in self._credit_cache:
             start_ts, end_ts = _year_bounds_timestamps(year)
@@ -234,6 +250,42 @@ class SevdeskCommissionProvider:
             ]
         return [dict(item) for item in self._credit_pos_cache[doc_id]]
 
+    def list_credit_note_positions_bulk(self, credit_note_ids: list[str]) -> list[dict[str, Any]]:
+        return self._load_positions_bulk(
+            "/CreditNotePos",
+            parent_key="creditNote",
+            document_ids=credit_note_ids,
+            cache=self._credit_pos_cache,
+        )
+
+    def _load_positions_bulk(
+        self,
+        path: str,
+        *,
+        parent_key: str,
+        document_ids: list[str],
+        cache: dict[str, list[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
+        ids = list(dict.fromkeys(str(item).strip() for item in document_ids if str(item).strip()))
+        if not ids:
+            return []
+
+        # sevDesk currently treats repeated or comma-separated parent filters as
+        # one single ID.  Loading in chunks would therefore silently omit almost
+        # every invoice.  One paginated resource snapshot is both correct and far
+        # faster than one HTTP request per document; select the requested parents
+        # locally and keep the snapshot grouped for subsequent runs.
+        if path not in self._bulk_position_resources_loaded:
+            rows = self._load_resource(path, params={"embed": "part"})
+            for row in rows:
+                parent_id = _reference_id(row.get(parent_key)).strip()
+                if parent_id:
+                    cache.setdefault(parent_id, []).append(row)
+            self._bulk_position_resources_loaded.add(path)
+        for item in ids:
+            cache.setdefault(item, [])
+        return [dict(row) for item in ids for row in cache.get(item, [])]
+
     def _load_resource(
         self,
         path: str,
@@ -256,6 +308,11 @@ class SevdeskCommissionProvider:
             if len(objects) < self._page_size:
                 break
             offset += self._page_size
+        if page_count >= self._max_pages and len(objects) >= self._page_size:
+            raise RuntimeError(
+                f"sevDesk-Datenabruf fuer {path} nach {self._max_pages} Seiten unvollstaendig. "
+                "Die Abrechnung wurde sicherheitshalber abgebrochen."
+            )
         return result
 
 
@@ -305,10 +362,12 @@ class CommissionService:
             end_month = start_month + 2
             end = _month_end(year, end_month)
         elif key == "last_half_year":
-            first_of_current = date(today.year, today.month, 1)
-            end = first_of_current - timedelta(days=1)
-            half_year_start = _shift_months(date(end.year, end.month, 1), -5)
-            start = date(half_year_start.year, half_year_start.month, 1)
+            if today.month <= 6:
+                start = date(today.year - 1, 7, 1)
+                end = date(today.year - 1, 12, 31)
+            else:
+                start = date(today.year, 1, 1)
+                end = date(today.year, 6, 30)
         elif key == "last_year":
             year = today.year - 1
             start = date(year, 1, 1)
@@ -354,15 +413,24 @@ class CommissionService:
 
         categories = self._provider.list_part_categories()
         category_name_to_id = {
-            str(item.get("name") or "").strip(): str(item.get("id") or "").strip()
+            str(item.get("name") or "").strip().casefold(): str(item.get("id") or "").strip()
             for item in categories
             if str(item.get("name") or "").strip() and str(item.get("id") or "").strip()
         }
         profile_category_ids = {
-            category_name_to_id[name]
+            category_name_to_id[name.casefold()]
             for name in profile.category_names
-            if name in category_name_to_id
+            if name.casefold() in category_name_to_id
         }
+        missing_category_names = [
+            name for name in profile.category_names if name.casefold() not in category_name_to_id
+        ]
+        if missing_category_names:
+            missing = ", ".join(missing_category_names)
+            raise RuntimeError(
+                f"Konfigurierte sevDesk-Kategorie nicht gefunden: {missing}. "
+                "Die Abrechnung wurde sicherheitshalber nicht ausgefuehrt."
+            )
 
         parts = self._provider.list_parts()
         parts_by_id = {
@@ -386,6 +454,7 @@ class CommissionService:
         for year in years:
             invoices = self._provider.list_invoices_for_year(year)
             source_stats["invoices_loaded"] += len(invoices)
+            eligible_invoices: list[tuple[str, dict[str, Any], str]] = []
             for invoice in invoices:
                 doc_date = _pick_date(invoice, ("invoiceDate", "date", "create", "updated"))
                 if doc_date is None:
@@ -402,15 +471,20 @@ class CommissionService:
                 invoice_id = str(invoice.get("id") or "").strip()
                 if not invoice_id:
                     continue
-                positions = self._provider.list_invoice_positions(invoice_id)
-                source_stats["invoice_positions_loaded"] += len(positions)
-                for pos in positions:
+                eligible_invoices.append((invoice_id, invoice, invoice_type))
+
+            invoice_positions = self._provider.list_invoice_positions_bulk(
+                [item[0] for item in eligible_invoices]
+            )
+            source_stats["invoice_positions_loaded"] += len(invoice_positions)
+            positions_by_invoice = _group_positions_by_parent(invoice_positions, "invoice")
+            for invoice_id, invoice, invoice_type in eligible_invoices:
+                for pos in positions_by_invoice.get(invoice_id, []):
                     built = self._build_contribution(
                         source_kind="invoice",
                         document=invoice,
                         position=pos,
                         parts_by_id=parts_by_id,
-                        profile=profile,
                         profile_category_ids=profile_category_ids,
                         invoice_type=invoice_type,
                     )
@@ -427,6 +501,7 @@ class CommissionService:
 
             credit_notes = self._provider.list_credit_notes_for_year(year)
             source_stats["credit_notes_loaded"] += len(credit_notes)
+            eligible_credits: list[tuple[str, dict[str, Any]]] = []
             for credit in credit_notes:
                 doc_date = _pick_date(credit, ("creditNoteDate", "date", "create", "updated"))
                 if doc_date is None:
@@ -438,15 +513,20 @@ class CommissionService:
                 credit_id = str(credit.get("id") or "").strip()
                 if not credit_id:
                     continue
-                positions = self._provider.list_credit_note_positions(credit_id)
-                source_stats["credit_positions_loaded"] += len(positions)
-                for pos in positions:
+                eligible_credits.append((credit_id, credit))
+
+            credit_positions = self._provider.list_credit_note_positions_bulk(
+                [item[0] for item in eligible_credits]
+            )
+            source_stats["credit_positions_loaded"] += len(credit_positions)
+            positions_by_credit = _group_positions_by_parent(credit_positions, "creditNote")
+            for credit_id, credit in eligible_credits:
+                for pos in positions_by_credit.get(credit_id, []):
                     built = self._build_contribution(
                         source_kind="credit_note",
                         document=credit,
                         position=pos,
                         parts_by_id=parts_by_id,
-                        profile=profile,
                         profile_category_ids=profile_category_ids,
                         invoice_type="CR",
                     )
@@ -521,7 +601,6 @@ class CommissionService:
         document: dict[str, Any],
         position: dict[str, Any],
         parts_by_id: dict[str, dict[str, Any]],
-        profile: CommissionProfile,
         profile_category_ids: set[str],
         invoice_type: str,
     ) -> DocumentContribution | None:
@@ -543,25 +622,15 @@ class CommissionService:
         ).strip()
         part_meta = parts_by_id.get(part_id, {}) if part_id else {}
 
-        category_id = str(
-            part_meta.get("category_id")
-            or _nested_id(part_obj.get("category"))
-            or _nested_id(position.get("category"))
-            or ""
-        ).strip()
-        category_name = str(
-            part_meta.get("category_name")
-            or _nested_name(part_obj.get("category"))
-            or _nested_name(position.get("category"))
-            or ""
-        ).strip()
+        # A category profile must only contain real sevDesk products whose current
+        # catalog record carries the configured category.  Free-text positions and
+        # ambiguous name fallbacks are deliberately not eligible.
+        if not part_meta:
+            return None
 
-        matches_profile = False
-        if profile_category_ids and category_id:
-            matches_profile = category_id in profile_category_ids
-        if not matches_profile and category_name:
-            matches_profile = category_name in profile.category_names
-        if not matches_profile:
+        category_id = str(part_meta.get("category_id") or "").strip()
+        category_name = str(part_meta.get("category_name") or "").strip()
+        if not category_id or category_id not in profile_category_ids:
             return None
 
         sku = str(
@@ -756,21 +825,15 @@ def _reference_id(value: object) -> str:
     return str(value)
 
 
-def _nested_id(value: object) -> str:
-    if isinstance(value, dict):
-        raw = value.get("id")
-        if raw is not None:
-            return str(raw)
-    return ""
-
-
-def _nested_name(value: object) -> str:
-    if isinstance(value, dict):
-        for key in ("name", "displayName"):
-            raw = value.get(key)
-            if raw is not None and str(raw).strip():
-                return str(raw)
-    return ""
+def _group_positions_by_parent(
+    positions: list[dict[str, Any]], parent_key: str
+) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for position in positions:
+        parent_id = _reference_id(position.get(parent_key)).strip()
+        if parent_id:
+            grouped.setdefault(parent_id, []).append(position)
+    return grouped
 
 
 def _document_number(document: dict[str, Any]) -> str:
