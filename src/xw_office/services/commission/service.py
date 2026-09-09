@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 import logging
 from pathlib import Path
 from typing import Any, Protocol
@@ -155,7 +156,7 @@ def format_commission_summary(result: CommissionRunResult) -> str:
 
     rate = result.profile.commission_rate_percent
     if rate > 0:
-        invoice_amount = result.summary.total_net_amount * rate / 100.0
+        invoice_amount = calculate_commission_amount(result.summary.total_net_amount, rate)
         lines.extend(
             [
                 "",
@@ -164,6 +165,12 @@ def format_commission_summary(result: CommissionRunResult) -> str:
             ]
         )
     return "\n".join(lines)
+
+
+def calculate_commission_amount(net_amount: float, rate_percent: float) -> float:
+    """Calculate a currency amount using commercial cent rounding."""
+    amount = Decimal(str(net_amount)) * Decimal(str(rate_percent)) / Decimal("100")
+    return float(amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 class CommissionDataProvider(Protocol):

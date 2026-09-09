@@ -12,6 +12,7 @@ from xw_office.services.commission.service import (
     CommissionSummary,
     ProductBreakdownRow,
     SevdeskCommissionProvider,
+    calculate_commission_amount,
     format_commission_summary,
 )
 
@@ -388,7 +389,6 @@ def test_clipboard_summary_matches_legacy_layout_with_german_numbers() -> None:
         anomalies=[],
         source_stats={},
     )
-
     assert format_commission_summary(result) == (
         "Kategorie: Mnozil Brass\n"
         "Zeitraum: 01.01.2026 - 30.06.2026\n"
@@ -405,6 +405,10 @@ def test_clipboard_summary_matches_legacy_layout_with_german_numbers() -> None:
         "\n"
         "Rechnungsbetrag (25%): € 670,76"
     )
+
+
+def test_commission_amount_uses_commercial_cent_rounding() -> None:
+    assert calculate_commission_amount(222.22, 25.0) == 55.56
 
 
 def test_provider_bulk_positions_loads_one_snapshot_and_filters_locally() -> None:
