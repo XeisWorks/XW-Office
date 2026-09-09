@@ -292,7 +292,7 @@ class CalculationView(QWidget):
         export_xlsx_btn.setToolTip("Abrechnung als Excel-Datei exportieren")
         export_xlsx_btn.clicked.connect(self._export_commission_xlsx)
         toggles.addWidget(export_xlsx_btn)
-        copy_btn = QPushButton("Kopieren")
+        copy_btn = QPushButton("Copy to 📋")
         copy_btn.setToolTip("Abrechnungstext in die Zwischenablage kopieren")
         copy_btn.clicked.connect(self._copy_commission_summary)
         toggles.addWidget(copy_btn)
