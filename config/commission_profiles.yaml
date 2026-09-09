@@ -11,9 +11,10 @@ profiles:
     date_policy: invoice_date
 
   - key: supergroup
-    label: Supergroup
+    label: Blasmusik Supergroup
     category_names:
-      - Supergroup
+      - Vienna Arts Management
+    commission_rate_percent: 25
     include_credit_notes: true
     include_cancellation_invoices: true
     date_policy: invoice_date
@@ -22,6 +23,51 @@ profiles:
     label: Mnozil Brass
     category_names:
       - Mnozil
+    commission_rate_percent: 25
+    include_credit_notes: true
+    include_cancellation_invoices: true
+    date_policy: invoice_date
+
+  - key: pravecek
+    label: Jindrich Pravecek
+    category_names:
+      - Pravecek
+    commission_rate_percent: 25
+    include_credit_notes: true
+    include_cancellation_invoices: true
+    date_policy: invoice_date
+
+  - key: flip
+    label: Flip
+    category_names:
+      - Flip
+    commission_rate_percent: 25
+    include_credit_notes: true
+    include_cancellation_invoices: true
+    date_policy: invoice_date
+
+  - key: albert
+    label: Albert
+    category_names:
+      - Albert
+    commission_rate_percent: 25
+    include_credit_notes: true
+    include_cancellation_invoices: true
+    date_policy: invoice_date
+
+  - key: leonhard
+    label: Leonhard
+    category_names:
+      - Leonhard
+    commission_rate_percent: 25
+    include_credit_notes: true
+    include_cancellation_invoices: true
+    date_policy: invoice_date
+
+  - key: krickl
+    label: Krickl
+    category_names:
+      - Krickl
     commission_rate_percent: 25
     include_credit_notes: true
     include_cancellation_invoices: true

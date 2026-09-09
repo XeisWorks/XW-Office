@@ -499,6 +499,8 @@ class CommissionService:
             "positions_included": 0,
             "positions_skipped_no_profile_match": 0,
             "positions_skipped_missing_date": 0,
+            "documents_skipped_draft": 0,
+            "invoices_with_discount": 0,
         }
 
         anomalies: list[str] = []
@@ -510,6 +512,9 @@ class CommissionService:
             source_stats["invoices_loaded"] += len(invoices)
             eligible_invoices: list[tuple[str, dict[str, Any], str]] = []
             for invoice in invoices:
+                if _is_draft_document(invoice):
+                    source_stats["documents_skipped_draft"] += 1
+                    continue
                 doc_date = _pick_date(invoice, ("invoiceDate", "date", "create", "updated"))
                 if doc_date is None:
                     source_stats["positions_skipped_missing_date"] += 1
@@ -533,6 +538,11 @@ class CommissionService:
             source_stats["invoice_positions_loaded"] += len(invoice_positions)
             positions_by_invoice = _group_positions_by_parent(invoice_positions, "invoice")
             for invoice_id, invoice, invoice_type in eligible_invoices:
+                net_factor = _invoice_discount_factor(
+                    invoice, positions_by_invoice.get(invoice_id, [])
+                )
+                if net_factor < 1.0:
+                    source_stats["invoices_with_discount"] += 1
                 for pos in positions_by_invoice.get(invoice_id, []):
                     built = self._build_contribution(
                         source_kind="invoice",
@@ -541,6 +551,7 @@ class CommissionService:
                         parts_by_id=parts_by_id,
                         profile_category_ids=profile_category_ids,
                         invoice_type=invoice_type,
+                        net_factor=net_factor,
                     )
                     if built is None:
                         source_stats["positions_skipped_no_profile_match"] += 1
@@ -557,6 +568,9 @@ class CommissionService:
             source_stats["credit_notes_loaded"] += len(credit_notes)
             eligible_credits: list[tuple[str, dict[str, Any]]] = []
             for credit in credit_notes:
+                if _is_draft_document(credit):
+                    source_stats["documents_skipped_draft"] += 1
+                    continue
                 doc_date = _pick_date(credit, ("creditNoteDate", "date", "create", "updated"))
                 if doc_date is None:
                     source_stats["positions_skipped_missing_date"] += 1
@@ -583,6 +597,7 @@ class CommissionService:
                         parts_by_id=parts_by_id,
                         profile_category_ids=profile_category_ids,
                         invoice_type="CR",
+                        net_factor=1.0,
                     )
                     if built is None:
                         source_stats["positions_skipped_no_profile_match"] += 1
@@ -657,6 +672,7 @@ class CommissionService:
         parts_by_id: dict[str, dict[str, Any]],
         profile_category_ids: set[str],
         invoice_type: str,
+        net_factor: float,
     ) -> DocumentContribution | None:
         raw_quantity = _to_float(
             position.get("quantity") or position.get("qty") or position.get("count")
@@ -670,6 +686,8 @@ class CommissionService:
         raw_gross = _to_float(
             position.get("sumGross") or position.get("priceGross") or position.get("price")
         )
+        adjusted_net = raw_net * net_factor
+        adjusted_gross = raw_gross * net_factor
 
         part_obj = position.get("part") if isinstance(position.get("part"), dict) else {}
         part_id = str(
@@ -723,19 +741,23 @@ class CommissionService:
         if source_kind == "invoice":
             is_cancel = invoice_type in _CANCEL_INVOICE_TYPES
             signed_quantity = -abs(raw_quantity) if is_cancel else abs(raw_quantity)
-            signed_net = raw_net
-            signed_gross = raw_gross
-            rule = "invoice:standard"
+            signed_net = adjusted_net
+            signed_gross = adjusted_gross
+            rule = (
+                f"invoice:discount:{net_factor:.6f}"
+                if net_factor < 1.0
+                else "invoice:standard"
+            )
             if is_cancel:
                 rule = "invoice:sr-cancel"
-                if raw_net > 0:
-                    signed_net = -abs(raw_net)
+                if adjusted_net > 0:
+                    signed_net = -abs(adjusted_net)
                     warning = (
                         f"{sku}: SR-Beleg {doc_number} mit positivem Roh-Netto erkannt, "
                         "Vorzeichen korrigiert"
                     )
-                if raw_gross > 0:
-                    signed_gross = -abs(raw_gross)
+                if adjusted_gross > 0:
+                    signed_gross = -abs(adjusted_gross)
         else:
             signed_quantity = -abs(raw_quantity)
             signed_net = raw_net if raw_net <= 0 else -abs(raw_net)
@@ -909,6 +931,23 @@ def _group_positions_by_parent(
         if parent_id:
             grouped.setdefault(parent_id, []).append(position)
     return grouped
+
+
+def _is_draft_document(document: dict[str, Any]) -> bool:
+    return int(_to_float(document.get("status"))) == 100
+
+
+def _invoice_discount_factor(
+    invoice: dict[str, Any], positions: list[dict[str, Any]]
+) -> float:
+    """Return the proportional net factor for a sevDesk header discount."""
+    net_before_discount = sum(_to_float(position.get("sumNet")) for position in positions)
+    discount_net = abs(
+        _to_float(invoice.get("sumDiscountNet") or invoice.get("sumDiscounts") or 0.0)
+    )
+    if net_before_discount <= 0.0 or discount_net <= 0.0:
+        return 1.0
+    return max(0.0, 1.0 - min(discount_net / net_before_discount, 1.0))
 
 
 def _document_number(document: dict[str, Any]) -> str:

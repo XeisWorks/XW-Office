@@ -201,6 +201,58 @@ def test_refresh_data_clears_provider_cache() -> None:
     assert provider.cache_cleared == 1
 
 
+def test_invoice_header_discount_is_distributed_over_positions() -> None:
+    provider = _ProviderStub()
+    provider._parts.append(
+        {
+            "id": "part_other",
+            "sku": "OTHER-1",
+            "name": "Anderes Produkt",
+            "category_id": "cat_other",
+            "category_name": "Andere Kategorie",
+        }
+    )
+    provider._invoice_positions["inv_re_1"].append(
+        {
+            "part": {"id": "part_other"},
+            "quantity": 1,
+            "sumNet": 22.64,
+            "sumGross": 24.90,
+        }
+    )
+    provider._invoices[0]["sumDiscountNet"] = 22.64
+    service = CommissionService(provider)
+    period = service.resolve_period(
+        "custom",
+        reference_date=date(2026, 7, 8),
+        custom_start=date(2026, 6, 1),
+        custom_end=date(2026, 6, 30),
+    )
+
+    result = service.run_profile("musikheroes", period)
+
+    assert round(result.summary.total_net_amount, 2) == -82.22
+    assert result.source_stats["invoices_with_discount"] == 1
+
+
+def test_draft_documents_are_excluded() -> None:
+    provider = _ProviderStub()
+    provider._invoices[0]["status"] = 100
+    service = CommissionService(provider)
+    period = service.resolve_period(
+        "custom",
+        reference_date=date(2026, 7, 8),
+        custom_start=date(2026, 6, 1),
+        custom_end=date(2026, 6, 30),
+    )
+
+    result = service.run_profile("musikheroes", period)
+
+    assert result.summary.total_net_quantity == -6.0
+    assert round(result.summary.total_net_amount, 2) == -93.54
+    assert result.source_stats["documents_skipped_draft"] == 1
+
+
 def test_category_profile_excludes_free_text_and_other_category_products() -> None:
     provider = _ProviderStub()
     provider._parts.append(
@@ -280,6 +332,26 @@ def test_mnozil_profile_resolves_the_sevdesk_category() -> None:
     assert profile.label == "Mnozil Brass"
     assert profile.category_names == ("Mnozil",)
     assert profile.commission_rate_percent == 25.0
+
+
+def test_all_legacy_category_profiles_are_configured() -> None:
+    service = CommissionService(_ProviderStub())
+    profiles = {profile.key: profile for profile in service.list_profiles()}
+
+    assert {
+        "supergroup",
+        "mnozil",
+        "pravecek",
+        "flip",
+        "albert",
+        "leonhard",
+        "krickl",
+        "musikheroes",
+    }.issubset(profiles)
+    assert profiles["supergroup"].category_names == ("Vienna Arts Management",)
+    for key in ("supergroup", "mnozil", "pravecek", "flip", "albert", "leonhard", "krickl"):
+        assert profiles[key].commission_rate_percent == 25.0
+    assert profiles["musikheroes"].commission_rate_percent == 0.0
 
 
 def test_clipboard_summary_matches_legacy_layout_with_german_numbers() -> None:
