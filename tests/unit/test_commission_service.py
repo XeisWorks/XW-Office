@@ -1,9 +1,19 @@
 """Unit tests for MusikHeroes commission calculation service."""
+
 from __future__ import annotations
 
 from datetime import date
 
-from xw_office.services.commission.service import CommissionService, SevdeskCommissionProvider
+from xw_office.services.commission.service import (
+    CommissionPeriod,
+    CommissionProfile,
+    CommissionRunResult,
+    CommissionService,
+    CommissionSummary,
+    ProductBreakdownRow,
+    SevdeskCommissionProvider,
+    format_commission_summary,
+)
 
 
 class _ProviderStub:
@@ -120,7 +130,9 @@ class _ProviderStub:
     def list_credit_note_positions(self, credit_note_id: str) -> list[dict[str, object]]:
         return [dict(item) for item in self._credit_positions.get(credit_note_id, [])]
 
-    def list_credit_note_positions_bulk(self, credit_note_ids: list[str]) -> list[dict[str, object]]:
+    def list_credit_note_positions_bulk(
+        self, credit_note_ids: list[str]
+    ) -> list[dict[str, object]]:
         return [
             {**dict(item), "creditNote": {"id": credit_note_id}}
             for credit_note_id in credit_note_ids
@@ -264,7 +276,63 @@ def test_last_half_year_is_previous_completed_calendar_half_year() -> None:
 def test_mnozil_profile_resolves_the_sevdesk_category() -> None:
     service = CommissionService(_ProviderStub())
 
-    assert service.get_profile("mnozil").category_names == ("Mnozil",)
+    profile = service.get_profile("mnozil")
+    assert profile.label == "Mnozil Brass"
+    assert profile.category_names == ("Mnozil",)
+    assert profile.commission_rate_percent == 25.0
+
+
+def test_clipboard_summary_matches_legacy_layout_with_german_numbers() -> None:
+    result = CommissionRunResult(
+        profile=CommissionProfile(
+            key="mnozil",
+            label="Mnozil Brass",
+            category_names=("Mnozil",),
+            commission_rate_percent=25.0,
+        ),
+        period=CommissionPeriod(
+            start=date(2026, 1, 1),
+            end=date(2026, 6, 30),
+            basis="invoice_date",
+            reference_date=date(2026, 9, 9),
+        ),
+        summary=CommissionSummary(total_net_quantity=154, total_net_amount=2683.04),
+        product_rows=[
+            ProductBreakdownRow(
+                sku="XW-4516",
+                name="Mnoschil",
+                net_quantity=45,
+                net_amount=625.70,
+            ),
+            ProductBreakdownRow(
+                sku="XW-4556",
+                name="Florentiner Marsch",
+                net_quantity=9,
+                net_amount=202.45,
+            ),
+        ],
+        category_rows=[],
+        document_rows=[],
+        anomalies=[],
+        source_stats={},
+    )
+
+    assert format_commission_summary(result) == (
+        "Kategorie: Mnozil Brass\n"
+        "Zeitraum: 01.01.2026 - 30.06.2026\n"
+        "Basisdatum: Rechnungsdatum\n"
+        "SKU-Filter: Filter: sevDesk-Kategorie Mnozil\n"
+        "Gesamtmenge: 154\n"
+        "Netto gesamt: 2.683,04 EUR\n"
+        "\n"
+        "Produkte:\n"
+        "SKU\tName\tMenge\tNetto\n"
+        "\n"
+        "XW-4516\tMnoschil\t45 Stk.\t625,70 EUR netto\n"
+        "XW-4556\tFlorentiner Marsch\t9 Stk.\t202,45 EUR netto\n"
+        "\n"
+        "Rechnungsbetrag (25%): € 670,76"
+    )
 
 
 def test_provider_bulk_positions_loads_one_snapshot_and_filters_locally() -> None:

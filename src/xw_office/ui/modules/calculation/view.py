@@ -1,8 +1,8 @@
 """Provisionen / Kalkulation module."""
+
 from __future__ import annotations
 
 import csv
-from io import StringIO
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -35,7 +35,11 @@ from PySide6.QtWidgets import (
 from openpyxl import Workbook
 
 from xw_office.core.worker import BackgroundWorker
-from xw_office.services.commission.service import CommissionRunResult, CommissionService
+from xw_office.services.commission.service import (
+    CommissionRunResult,
+    CommissionService,
+    format_commission_summary,
+)
 from xw_office.services.calculation.service import (
     ArticleEntry,
     CalculationService,
@@ -48,7 +52,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_ARTICLE_HEADERS = ["Titel", "Brutto EUR", "MwSt %", "Provision %", "Netto EUR", "MwSt EUR", "Provision EUR", "Notiz"]
+_ARTICLE_HEADERS = [
+    "Titel",
+    "Brutto EUR",
+    "MwSt %",
+    "Provision %",
+    "Netto EUR",
+    "MwSt EUR",
+    "Provision EUR",
+    "Notiz",
+]
 _PRODUCT_HEADERS = [
     "SKU",
     "Name",
@@ -271,13 +284,16 @@ class CalculationView(QWidget):
         cache_btn = QPushButton("Cache verwenden")
         cache_btn.clicked.connect(lambda: self._run_musikheroes(use_cache=True))
         toggles.addWidget(cache_btn)
-        export_csv_btn = QPushButton("CSV exportieren")
+        export_csv_btn = QPushButton("CSV")
+        export_csv_btn.setToolTip("Abrechnung als CSV exportieren")
         export_csv_btn.clicked.connect(self._export_commission_csv)
         toggles.addWidget(export_csv_btn)
-        export_xlsx_btn = QPushButton("XLSX exportieren")
+        export_xlsx_btn = QPushButton("XLSX")
+        export_xlsx_btn.setToolTip("Abrechnung als Excel-Datei exportieren")
         export_xlsx_btn.clicked.connect(self._export_commission_xlsx)
         toggles.addWidget(export_xlsx_btn)
-        copy_btn = QPushButton("Abrechnung kopieren")
+        copy_btn = QPushButton("Kopieren")
+        copy_btn.setToolTip("Abrechnungstext in die Zwischenablage kopieren")
         copy_btn.clicked.connect(self._copy_commission_summary)
         toggles.addWidget(copy_btn)
         lay.addLayout(toggles)
@@ -305,19 +321,29 @@ class CalculationView(QWidget):
         lay.addLayout(kpi)
 
         self._product_table = DataTable(_PRODUCT_HEADERS)
-        self._product_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self._product_table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
-        self._product_table.horizontalHeader().setSectionResizeMode(9, QHeaderView.ResizeMode.Stretch)
+        self._product_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self._product_table.horizontalHeader().setSectionResizeMode(
+            8, QHeaderView.ResizeMode.Stretch
+        )
+        self._product_table.horizontalHeader().setSectionResizeMode(
+            9, QHeaderView.ResizeMode.Stretch
+        )
         self._product_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         lay.addWidget(self._product_table, stretch=3)
 
         self._category_table = DataTable(_CATEGORY_HEADERS)
-        self._category_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._category_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
         self._category_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         lay.addWidget(self._category_table, stretch=1)
 
         self._doc_table = DataTable(_DOC_HEADERS)
-        self._doc_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        self._doc_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Interactive
+        )
         self._doc_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self._doc_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         lay.addWidget(self._doc_table, stretch=2)
@@ -325,7 +351,9 @@ class CalculationView(QWidget):
         self._anomaly_label = QLabel("Problemfaelle:")
         lay.addWidget(self._anomaly_label)
         self._anomaly_table = DataTable(["Hinweis"])
-        self._anomaly_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._anomaly_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
         self._anomaly_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         lay.addWidget(self._anomaly_table, stretch=1)
 
@@ -451,8 +479,16 @@ class CalculationView(QWidget):
             return path
 
         self._export_worker = BackgroundWorker(job)
-        self._export_worker.signals.result.connect(lambda payload: QMessageBox.information(self, "Provisionen", f"CSV exportiert: {payload}"))
-        self._export_worker.signals.error.connect(lambda exc: QMessageBox.critical(self, "Provisionen", f"CSV-Export fehlgeschlagen: {exc}"))
+        self._export_worker.signals.result.connect(
+            lambda payload: QMessageBox.information(
+                self, "Provisionen", f"CSV exportiert: {payload}"
+            )
+        )
+        self._export_worker.signals.error.connect(
+            lambda exc: QMessageBox.critical(
+                self, "Provisionen", f"CSV-Export fehlgeschlagen: {exc}"
+            )
+        )
         self._export_worker.signals.finished.connect(lambda: setattr(self, "_export_worker", None))
         self._export_worker.start()
 
@@ -465,7 +501,9 @@ class CalculationView(QWidget):
             return
 
         default_name = f"provision_{result.profile.key}_{result.period.start.isoformat()}_{result.period.end.isoformat()}.xlsx"
-        path, _ = QFileDialog.getSaveFileName(self, "XLSX exportieren", default_name, "Excel (*.xlsx)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "XLSX exportieren", default_name, "Excel (*.xlsx)"
+        )
         if not path:
             return
 
@@ -504,7 +542,9 @@ class CalculationView(QWidget):
                 )
 
             ws_categories = wb.create_sheet("Kategorien")
-            ws_categories.append(["Kategorie", "Menge", "Netto EUR", "Brutto EUR", "Anteil Netto %"])
+            ws_categories.append(
+                ["Kategorie", "Menge", "Netto EUR", "Brutto EUR", "Anteil Netto %"]
+            )
             for row in result.category_rows:
                 ws_categories.append(
                     [
@@ -540,8 +580,16 @@ class CalculationView(QWidget):
             return path
 
         self._export_worker = BackgroundWorker(job)
-        self._export_worker.signals.result.connect(lambda payload: QMessageBox.information(self, "Provisionen", f"XLSX exportiert: {payload}"))
-        self._export_worker.signals.error.connect(lambda exc: QMessageBox.critical(self, "Provisionen", f"XLSX-Export fehlgeschlagen: {exc}"))
+        self._export_worker.signals.result.connect(
+            lambda payload: QMessageBox.information(
+                self, "Provisionen", f"XLSX exportiert: {payload}"
+            )
+        )
+        self._export_worker.signals.error.connect(
+            lambda exc: QMessageBox.critical(
+                self, "Provisionen", f"XLSX-Export fehlgeschlagen: {exc}"
+            )
+        )
         self._export_worker.signals.finished.connect(lambda: setattr(self, "_export_worker", None))
         self._export_worker.start()
 
@@ -551,25 +599,8 @@ class CalculationView(QWidget):
             QMessageBox.information(self, "Provisionen", "Bitte zuerst eine Abrechnung laden.")
             return
 
-        buffer = StringIO()
-        writer = csv.writer(buffer, delimiter=";", lineterminator="\n")
-        writer.writerow([f"Profil: {result.profile.label}"])
-        writer.writerow([f"Zeitraum: {result.period.start.isoformat()} bis {result.period.end.isoformat()}"])
-        writer.writerow([])
-        writer.writerow(["SKU", "Name", "Netto-Menge", "Netto EUR", "Brutto EUR"])
-        for row in result.product_rows:
-            writer.writerow(
-                [
-                    row.sku,
-                    row.name,
-                    f"{row.net_quantity:.2f}",
-                    f"{row.net_amount:.2f}",
-                    f"{row.gross_amount:.2f}",
-                ]
-            )
-
         clipboard = QApplication.clipboard()
-        clipboard.setText(buffer.getvalue())
+        clipboard.setText(format_commission_summary(result))
         QMessageBox.information(self, "Provisionen", "Abrechnung in die Zwischenablage kopiert.")
 
     def _populate_product_table(self, result: CommissionRunResult) -> None:
@@ -668,7 +699,9 @@ class CalculationView(QWidget):
         self._art_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         lay.addWidget(self._art_table)
 
-        info = QLabel("Artikelliste in DB: Einstellungen > Schluessel-Verwaltung > calculation.articles (JSON-Array).")
+        info = QLabel(
+            "Artikelliste in DB: Einstellungen > Schluessel-Verwaltung > calculation.articles (JSON-Array)."
+        )
         info.setObjectName("infoLabel")
         info.setWordWrap(True)
         lay.addWidget(info)
@@ -690,7 +723,9 @@ class CalculationView(QWidget):
             return
         self._articles = rows  # type: ignore[assignment]
         if not self._articles:
-            self._art_status.setText("Keine Artikel — bitte calculation.articles in Einstellungen befuellen.")
+            self._art_status.setText(
+                "Keine Artikel — bitte calculation.articles in Einstellungen befuellen."
+            )
         else:
             self._art_status.setText(f"{len(self._articles)} Artikel geladen")
         self._populate_articles(self._articles)
@@ -698,7 +733,9 @@ class CalculationView(QWidget):
     def _populate_articles(self, items: list[ArticleEntry]) -> None:
         payload: list[dict[str, object]] = []
         for art in items:
-            res = calculate_royalty(art.gross_price, vat_pct=art.vat_pct, royalty_pct=art.royalty_pct)
+            res = calculate_royalty(
+                art.gross_price, vat_pct=art.vat_pct, royalty_pct=art.royalty_pct
+            )
             payload.append(
                 {
                     "Titel": art.title,

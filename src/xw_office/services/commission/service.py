@@ -1,4 +1,5 @@
 """Commission calculations with sevDesk-backed document aggregation."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ class CommissionProfile:
     key: str
     label: str
     category_names: tuple[str, ...]
+    commission_rate_percent: float = 0.0
     include_credit_notes: bool = True
     include_cancellation_invoices: bool = True
     date_policy: str = "invoice_date"
@@ -116,32 +118,74 @@ class CommissionRunResult:
     source_stats: dict[str, int]
 
 
+def format_commission_summary(result: CommissionRunResult) -> str:
+    """Render a compact, human-readable commission statement for the clipboard."""
+    categories = result.profile.category_names
+    if len(categories) == 1:
+        sku_filter = f"Filter: sevDesk-Kategorie {categories[0]}"
+    else:
+        sku_filter = f"Filter: sevDesk-Kategorien {', '.join(categories)}"
+    basis_label = {
+        "invoice_date": "Rechnungsdatum",
+        "payment_date": "Zahlungsdatum",
+    }.get(result.period.basis, result.period.basis)
+
+    lines = [
+        f"Kategorie: {result.profile.label}",
+        (
+            f"Zeitraum: {result.period.start.strftime('%d.%m.%Y')} - "
+            f"{result.period.end.strftime('%d.%m.%Y')}"
+        ),
+        f"Basisdatum: {basis_label}",
+        f"SKU-Filter: {sku_filter}",
+        f"Gesamtmenge: {_format_de_number(result.summary.total_net_quantity, trim=True)}",
+        f"Netto gesamt: {_format_de_number(result.summary.total_net_amount)} EUR",
+        "",
+        "Produkte:",
+        "SKU\tName\tMenge\tNetto",
+        "",
+    ]
+    lines.extend(
+        (
+            f"{row.sku}\t{row.name}\t{_format_de_number(row.net_quantity, trim=True)} Stk.\t"
+            f"{_format_de_number(row.net_amount)} EUR netto"
+        )
+        for row in result.product_rows
+    )
+
+    rate = result.profile.commission_rate_percent
+    if rate > 0:
+        invoice_amount = result.summary.total_net_amount * rate / 100.0
+        lines.extend(
+            [
+                "",
+                f"Rechnungsbetrag ({_format_de_number(rate, trim=True)}%): "
+                f"€ {_format_de_number(invoice_amount)}",
+            ]
+        )
+    return "\n".join(lines)
+
+
 class CommissionDataProvider(Protocol):
     """Abstract data source used by commission calculations."""
 
-    def list_part_categories(self) -> list[dict[str, str]]:
-        ...
+    def list_part_categories(self) -> list[dict[str, str]]: ...
 
-    def list_parts(self) -> list[dict[str, Any]]:
-        ...
+    def list_parts(self) -> list[dict[str, Any]]: ...
 
-    def list_invoices_for_year(self, year: int) -> list[dict[str, Any]]:
-        ...
+    def list_invoices_for_year(self, year: int) -> list[dict[str, Any]]: ...
 
-    def list_invoice_positions(self, invoice_id: str) -> list[dict[str, Any]]:
-        ...
+    def list_invoice_positions(self, invoice_id: str) -> list[dict[str, Any]]: ...
 
-    def list_invoice_positions_bulk(self, invoice_ids: list[str]) -> list[dict[str, Any]]:
-        ...
+    def list_invoice_positions_bulk(self, invoice_ids: list[str]) -> list[dict[str, Any]]: ...
 
-    def list_credit_notes_for_year(self, year: int) -> list[dict[str, Any]]:
-        ...
+    def list_credit_notes_for_year(self, year: int) -> list[dict[str, Any]]: ...
 
-    def list_credit_note_positions(self, credit_note_id: str) -> list[dict[str, Any]]:
-        ...
+    def list_credit_note_positions(self, credit_note_id: str) -> list[dict[str, Any]]: ...
 
-    def list_credit_note_positions_bulk(self, credit_note_ids: list[str]) -> list[dict[str, Any]]:
-        ...
+    def list_credit_note_positions_bulk(
+        self, credit_note_ids: list[str]
+    ) -> list[dict[str, Any]]: ...
 
 
 class SevdeskCommissionProvider:
@@ -183,7 +227,9 @@ class SevdeskCommissionProvider:
 
     def list_parts(self) -> list[dict[str, Any]]:
         if self._parts_cache is None:
-            self._parts_cache = [row.model_dump() for row in self._part_client.list_parts(refresh_cache=True)]
+            self._parts_cache = [
+                row.model_dump() for row in self._part_client.list_parts(refresh_cache=True)
+            ]
         return [dict(item) for item in self._parts_cache]
 
     def list_invoices_for_year(self, year: int) -> list[dict[str, Any]]:
@@ -210,7 +256,9 @@ class SevdeskCommissionProvider:
             ).json()
             objects = payload.get("objects") if isinstance(payload, dict) else []
             self._invoice_pos_cache[doc_id] = [
-                dict(item) for item in objects if isinstance(objects, list) and isinstance(item, dict)
+                dict(item)
+                for item in objects
+                if isinstance(objects, list) and isinstance(item, dict)
             ]
         return [dict(item) for item in self._invoice_pos_cache[doc_id]]
 
@@ -246,7 +294,9 @@ class SevdeskCommissionProvider:
             ).json()
             objects = payload.get("objects") if isinstance(payload, dict) else []
             self._credit_pos_cache[doc_id] = [
-                dict(item) for item in objects if isinstance(objects, list) and isinstance(item, dict)
+                dict(item)
+                for item in objects
+                if isinstance(objects, list) and isinstance(item, dict)
             ]
         return [dict(item) for item in self._credit_pos_cache[doc_id]]
 
@@ -409,7 +459,9 @@ class CommissionService:
             if include_cancellation_invoices is None
             else include_cancellation_invoices
         )
-        use_credit_notes = profile.include_credit_notes if include_credit_notes is None else include_credit_notes
+        use_credit_notes = (
+            profile.include_credit_notes if include_credit_notes is None else include_credit_notes
+        )
 
         categories = self._provider.list_part_categories()
         category_name_to_id = {
@@ -434,7 +486,9 @@ class CommissionService:
 
         parts = self._provider.list_parts()
         parts_by_id = {
-            str(part.get("id") or "").strip(): part for part in parts if str(part.get("id") or "").strip()
+            str(part.get("id") or "").strip(): part
+            for part in parts
+            if str(part.get("id") or "").strip()
         }
 
         source_stats: dict[str, int] = {
@@ -604,14 +658,18 @@ class CommissionService:
         profile_category_ids: set[str],
         invoice_type: str,
     ) -> DocumentContribution | None:
-        raw_quantity = _to_float(position.get("quantity") or position.get("qty") or position.get("count"))
+        raw_quantity = _to_float(
+            position.get("quantity") or position.get("qty") or position.get("count")
+        )
         raw_net = _to_float(
             position.get("sumNet")
             or position.get("priceNet")
             or position.get("sumNetAccounting")
             or position.get("price")
         )
-        raw_gross = _to_float(position.get("sumGross") or position.get("priceGross") or position.get("price"))
+        raw_gross = _to_float(
+            position.get("sumGross") or position.get("priceGross") or position.get("price")
+        )
 
         part_obj = position.get("part") if isinstance(position.get("part"), dict) else {}
         part_id = str(
@@ -633,24 +691,32 @@ class CommissionService:
         if not category_id or category_id not in profile_category_ids:
             return None
 
-        sku = str(
-            part_meta.get("sku")
-            or part_obj.get("partNumber")
-            or position.get("partNumber")
-            or position.get("name")
-            or ""
-        ).strip() or "(ohne-sku)"
-        name = str(
-            part_meta.get("name")
-            or part_obj.get("name")
-            or position.get("name")
-            or position.get("text")
-            or ""
-        ).strip() or "(ohne Bezeichnung)"
+        sku = (
+            str(
+                part_meta.get("sku")
+                or part_obj.get("partNumber")
+                or position.get("partNumber")
+                or position.get("name")
+                or ""
+            ).strip()
+            or "(ohne-sku)"
+        )
+        name = (
+            str(
+                part_meta.get("name")
+                or part_obj.get("name")
+                or position.get("name")
+                or position.get("text")
+                or ""
+            ).strip()
+            or "(ohne Bezeichnung)"
+        )
 
         doc_number = _document_number(document)
         doc_id = str(document.get("id") or "").strip()
-        doc_date = _pick_date(document, ("creditNoteDate", "invoiceDate", "date", "create", "updated"))
+        doc_date = _pick_date(
+            document, ("creditNoteDate", "invoiceDate", "date", "create", "updated")
+        )
         doc_date_iso = doc_date.isoformat() if doc_date is not None else ""
 
         warning = ""
@@ -737,7 +803,9 @@ class CommissionService:
         return result
 
     @staticmethod
-    def _aggregate_categories(contributions: list[DocumentContribution]) -> list[CategoryBreakdownRow]:
+    def _aggregate_categories(
+        contributions: list[DocumentContribution],
+    ) -> list[CategoryBreakdownRow]:
         rows: dict[str, CategoryBreakdownRow] = {}
         total_net = sum(item.signed_net for item in contributions)
 
@@ -773,6 +841,13 @@ def _to_float(value: object) -> float:
         return float(str(value).replace(",", "."))
     except (TypeError, ValueError):
         return 0.0
+
+
+def _format_de_number(value: float, *, trim: bool = False) -> str:
+    formatted = f"{value:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+    if trim:
+        formatted = formatted.rstrip("0").rstrip(",")
+    return formatted
 
 
 def _pick_date(payload: dict[str, Any], keys: tuple[str, ...]) -> date | None:
@@ -874,17 +949,21 @@ def _profile_from_dict(raw: dict[str, Any]) -> CommissionProfile | None:
     category_names_raw = raw.get("category_names")
     category_names: tuple[str, ...]
     if isinstance(category_names_raw, list):
-        category_names = tuple(str(item).strip() for item in category_names_raw if str(item).strip())
+        category_names = tuple(
+            str(item).strip() for item in category_names_raw if str(item).strip()
+        )
     else:
         category_names = ()
     include_credit_notes = bool(raw.get("include_credit_notes", True))
     include_cancellation_invoices = bool(raw.get("include_cancellation_invoices", True))
     date_policy = str(raw.get("date_policy") or "invoice_date").strip() or "invoice_date"
+    commission_rate_percent = _to_float(raw.get("commission_rate_percent"))
 
     return CommissionProfile(
         key=key,
         label=label,
         category_names=category_names,
+        commission_rate_percent=commission_rate_percent,
         include_credit_notes=include_credit_notes,
         include_cancellation_invoices=include_cancellation_invoices,
         date_policy=date_policy,

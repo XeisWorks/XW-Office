@@ -19,9 +19,10 @@ profiles:
     date_policy: invoice_date
 
   - key: mnozil
-    label: Mnozil
+    label: Mnozil Brass
     category_names:
       - Mnozil
+    commission_rate_percent: 25
     include_credit_notes: true
     include_cancellation_invoices: true
     date_policy: invoice_date
