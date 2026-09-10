@@ -6,7 +6,8 @@ from dataclasses import replace
 from datetime import date
 from typing import TYPE_CHECKING, cast
 
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -28,6 +29,7 @@ from xw_office.services.clearing import (
     BookingBatchResult,
     ClearingAnalysis,
     ClearingCandidate,
+    MatchStatus,
     PaymentClearingService,
     ResetBatchResult,
 )
@@ -163,10 +165,28 @@ class PaymentClearingView(QWidget):
         self._search = SearchBar("Provider, Referenz, Bestellung, Rechnung oder Kunde")
         self._search.search_changed.connect(lambda _text: self._refresh_table())
         filter_row.addWidget(self._search)
+        self._status_filter = QComboBox()
+        self._status_filter.addItem("Offene Probleme", "open")
+        self._status_filter.addItem("Alle Vorgaenge", "all")
+        self._status_filter.addItem("Buchbar", "bookable")
+        self._status_filter.addItem("Erledigt", "done")
+        self._status_filter.setToolTip("Offene Problemfaelle werden standardmaessig hervorgehoben.")
+        self._status_filter.currentIndexChanged.connect(lambda _index: self._refresh_table())
+        filter_row.addWidget(self._status_filter)
         self._manual_btn = QPushButton("ASSIGN: Rechnung")
         self._manual_btn.setToolTip("Dem markierten offenen Fall manuell eine sevDesk-Rechnung zuordnen.")
         self._manual_btn.clicked.connect(self._assign_invoice)
         filter_row.addWidget(self._manual_btn)
+        self._open_invoice_btn = QPushButton("OPEN: sevDesk")
+        self._open_invoice_btn.setToolTip("Die bereits gefundene Rechnung zur Korrektur in sevDesk oeffnen.")
+        self._open_invoice_btn.clicked.connect(self._open_invoice_in_sevdesk)
+        filter_row.addWidget(self._open_invoice_btn)
+        self._recheck_btn = QPushButton("RECHECK: Rechnung")
+        self._recheck_btn.setToolTip(
+            "Die markierte Zahlung nach einer Rechnungskorrektur erneut gegen sevDesk pruefen."
+        )
+        self._recheck_btn.clicked.connect(self._recheck_invoice)
+        filter_row.addWidget(self._recheck_btn)
         layout.addLayout(filter_row)
 
         self._table = DataTable(self._TABLE_COLUMNS)
@@ -215,6 +235,8 @@ class PaymentClearingView(QWidget):
         self._book_btn.setEnabled(not running and bool(self._candidates))
         self._reset_month_btn.setEnabled(not running)
         self._manual_btn.setEnabled(not running and bool(self._candidates))
+        self._open_invoice_btn.setEnabled(not running and bool(self._candidates))
+        self._recheck_btn.setEnabled(not running and bool(self._candidates))
         self._select_all_btn.setEnabled(not running and bool(self._candidates))
         self._clear_selection_btn.setEnabled(not running and bool(self._candidates))
 
@@ -271,12 +293,29 @@ class PaymentClearingView(QWidget):
         )
 
     def _filtered(self) -> list[ClearingCandidate]:
+        mode = str(self._status_filter.currentData() or "open")
+        if mode == "open":
+            candidates = [
+                row
+                for row in self._candidates
+                if row.status in {MatchStatus.MANUAL, MatchStatus.ERROR, MatchStatus.REFUND_REVIEW}
+            ]
+        elif mode == "bookable":
+            candidates = [row for row in self._candidates if row.is_bookable]
+        elif mode == "done":
+            candidates = [
+                row
+                for row in self._candidates
+                if row.status in {MatchStatus.ALREADY_BOOKED, MatchStatus.BOOKED}
+            ]
+        else:
+            candidates = list(self._candidates)
         needle = self._search.text().casefold().strip()
         if not needle:
-            return self._candidates
+            return candidates
         return [
             row
-            for row in self._candidates
+            for row in candidates
             if needle
             in " ".join(
                 (
@@ -316,6 +355,18 @@ class PaymentClearingView(QWidget):
                     "__align__Betrag": "right",
                 }
             )
+            if row.status in {MatchStatus.MANUAL, MatchStatus.ERROR, MatchStatus.REFUND_REVIEW}:
+                color = "#fee2e2" if row.status == MatchStatus.ERROR else "#fff7d6"
+                for column in ("Wix", "sevDesk", "Betrag", "Status", "Hinweis"):
+                    table_rows[-1][f"__bg__{column}"] = color
+                table_rows[-1]["__fg__Status"] = (
+                    "#b91c1c" if row.status == MatchStatus.ERROR else "#b45309"
+                )
+                table_rows[-1]["__tooltip__Hinweis"] = (
+                    f"{row.reason}\n\nRechnung in sevDesk korrigieren und danach RECHECK: Rechnung ausfuehren."
+                    if row.invoice_id is not None
+                    else row.reason
+                )
         self._table.set_data(table_rows)
 
     def _on_table_clicked(self, index: object) -> None:
@@ -383,8 +434,77 @@ class PaymentClearingView(QWidget):
         self._candidates = [
             updated if row.candidate_id == candidate_id else row for row in self._candidates
         ]
+        bookable_index = self._status_filter.findData("bookable")
+        if bookable_index >= 0:
+            self._status_filter.setCurrentIndex(bookable_index)
         self._refresh_table()
         self._summary.setText(f"Rechnung {updated.invoice_number} wurde zugeordnet.")
+
+    def _open_invoice_in_sevdesk(self) -> None:
+        candidate = self._selected_candidate()
+        if candidate is None:
+            QMessageBox.information(self, "Zahlungsclearing", "Bitte zuerst eine Zeile markieren.")
+            return
+        if candidate.invoice_id is None:
+            QMessageBox.information(
+                self,
+                "Zahlungsclearing",
+                "Zu diesem Fall wurde noch keine sevDesk-Rechnung gefunden. Bitte ASSIGN: Rechnung verwenden.",
+            )
+            return
+        base = str(
+            self._container.config.sevdesk.base_url or "https://my.sevdesk.de/api/v1"
+        ).strip().rstrip("/")
+        if base.endswith("/api/v1"):
+            base = base[:-7]
+        QDesktopServices.openUrl(QUrl(f"{base}/#/invoices/{candidate.invoice_id}"))
+
+    def _recheck_invoice(self) -> None:
+        candidate = self._selected_candidate()
+        if candidate is None:
+            QMessageBox.information(self, "Zahlungsclearing", "Bitte zuerst eine Zeile markieren.")
+            return
+        if not candidate.invoice_number.strip():
+            QMessageBox.information(
+                self,
+                "Zahlungsclearing",
+                "Es ist noch keine Rechnung zugeordnet. Bitte zuerst ASSIGN: Rechnung verwenden.",
+            )
+            return
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self._set_running(True)
+        self._summary.setText(f"Rechnung {candidate.invoice_number} wird erneut geprueft...")
+
+        def job() -> ClearingCandidate:
+            return self._service.assign_invoice(candidate, candidate.invoice_number)
+
+        self._worker = BackgroundWorker(job)
+        self._worker.signals.result.connect(self._on_invoice_rechecked)
+        self._worker.signals.error.connect(
+            lambda exc: QMessageBox.warning(
+                self,
+                "Zahlungsclearing",
+                f"Rechnung ist noch nicht buchbar:\n\n{exc}",
+            )
+        )
+        self._worker.signals.finished.connect(lambda: self._set_running(False))
+        self._worker.start()
+
+    def _on_invoice_rechecked(self, payload: object) -> None:
+        if not isinstance(payload, ClearingCandidate):
+            return
+        updated = payload
+        self._candidates = [
+            updated if row.candidate_id == updated.candidate_id else row for row in self._candidates
+        ]
+        bookable_index = self._status_filter.findData("bookable")
+        if bookable_index >= 0:
+            self._status_filter.setCurrentIndex(bookable_index)
+        self._refresh_table()
+        self._summary.setText(
+            f"Rechnung {updated.invoice_number} passt jetzt zur Zahlung und ist zur Buchung markiert."
+        )
 
     def _pick_month(self) -> date | None:
         dialog = QDialog(self)

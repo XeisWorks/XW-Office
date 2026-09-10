@@ -1,6 +1,7 @@
 """Payment-clearing UI behavior tests."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -49,6 +50,43 @@ def test_select_all_only_selects_bookable_rows(qtbot: object, app_config: object
 
     selected = {row.candidate_id for row in view._candidates if row.selected}  # noqa: SLF001
     assert selected == {"ready", "payout"}
+
+
+def test_default_filter_shows_only_open_problems(qtbot: object, app_config: object) -> None:
+    container = Container(app_config)  # type: ignore[arg-type]
+    container.register(PaymentClearingService, lambda _c: PaymentClearingService())
+    view = PaymentClearingView(container)
+    qtbot.addWidget(view)
+    view._candidates = [  # noqa: SLF001
+        _candidate("ready", MatchStatus.READY),
+        _candidate("manual", MatchStatus.MANUAL),
+        _candidate("error", MatchStatus.ERROR),
+        _candidate("done", MatchStatus.ALREADY_BOOKED),
+    ]
+
+    visible = view._filtered()  # noqa: SLF001
+
+    assert [row.candidate_id for row in visible] == ["manual", "error"]
+
+
+def test_problem_row_is_highlighted_and_explains_recheck(qtbot: object, app_config: object) -> None:
+    container = Container(app_config)  # type: ignore[arg-type]
+    container.register(PaymentClearingService, lambda _c: PaymentClearingService())
+    view = PaymentClearingView(container)
+    qtbot.addWidget(view)
+    candidate = replace(
+        _candidate("manual", MatchStatus.MANUAL),
+        invoice_id=128476289,
+        invoice_number="RE-262003",
+        reason="Betrag weicht ab: Zahlung 180.00, Rechnung 144.00",
+    )
+    view._candidates = [candidate]  # noqa: SLF001
+
+    view._refresh_table()  # noqa: SLF001
+    row = view._table.source_rows_data()[0]  # noqa: SLF001
+
+    assert row["__bg__Betrag"] == "#fff7d6"
+    assert "RECHECK: Rechnung" in row["__tooltip__Hinweis"]
 
 
 def test_month_preset_updates_date_range(qtbot: object, app_config: object) -> None:
