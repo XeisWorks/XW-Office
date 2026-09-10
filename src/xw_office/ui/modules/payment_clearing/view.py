@@ -142,8 +142,15 @@ class PaymentClearingView(QWidget):
         self._clear_selection_btn.setToolTip("Alle Markierungen in der aktuellen Analyse entfernen.")
         self._clear_selection_btn.clicked.connect(lambda: self._set_all_bookable(False))
         controls.addWidget(self._clear_selection_btn)
-        self._reset_month_btn = QPushButton("RESET TO 100: Monat")
-        self._reset_month_btn.setToolTip("Bereits gebuchte Clearing-Transaktionen eines Monats auf sevDesk-Status 100 setzen.")
+        self._reset_month_btn = QPushButton("RESET: Month")
+        self._reset_month_btn.setToolTip(
+            "Korrekturwerkzeug: Clearing-Banktransaktionen eines Monats von Status 200 auf 100 zuruecksetzen. "
+            "Das ist nicht der Rechnungsstatus."
+        )
+        self._reset_month_btn.setStyleSheet(
+            "QPushButton { color: #dc2626; border: 2px solid #dc2626; font-weight: 700; }"
+            "QPushButton:disabled { color: #7f1d1d; border-color: #7f1d1d; }"
+        )
         self._reset_month_btn.clicked.connect(self._reset_month_transactions)
         controls.addWidget(self._reset_month_btn)
         self._book_btn = QPushButton("BOOK: Auswahl")
@@ -409,10 +416,11 @@ class PaymentClearingView(QWidget):
         month_end = date(month_start.year, month_start.month, month_last_day)
         answer = QMessageBox.question(
             self,
-            "Clearing-Monat auf 100 zuruecksetzen",
+            "RESET: Month",
             (
-                "Alle eindeutig als Zahlungsclearing markierten sevDesk-Transaktionen "
-                f"mit Status 200 im {month_start:%m.%Y} auf 100 zuruecksetzen?"
+                "Alle eindeutig als Zahlungsclearing markierten sevDesk-Banktransaktionen "
+                f"mit Transaktionsstatus 200 im {month_start:%m.%Y} auf 100 zuruecksetzen?\n\n"
+                "Hinweis: Das betrifft CheckAccountTransaction, nicht den Rechnungsstatus."
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
