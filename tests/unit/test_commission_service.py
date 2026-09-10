@@ -15,6 +15,8 @@ from xw_office.services.commission.service import (
     calculate_commission_amount,
     format_commission_summary,
 )
+from xw_office.services.products.catalog import ProductCatalogService
+from xw_office.services.wix.client import WixOrderItem
 
 
 class _ProviderStub:
@@ -340,6 +342,7 @@ def test_all_legacy_category_profiles_are_configured() -> None:
     profiles = {profile.key: profile for profile in service.list_profiles()}
 
     assert {
+        "unveroeffentlichte_noten",
         "supergroup",
         "mnozil",
         "pravecek",
@@ -353,6 +356,135 @@ def test_all_legacy_category_profiles_are_configured() -> None:
     for key in ("supergroup", "mnozil", "pravecek", "flip", "albert", "leonhard", "krickl"):
         assert profiles[key].commission_rate_percent == 25.0
     assert profiles["musikheroes"].commission_rate_percent == 0.0
+
+
+def test_unreleased_notes_resolve_xw_010_aliases_to_owner_genres() -> None:
+    provider = _ProviderStub()
+    provider._parts.append(
+        {
+            "id": "part_unreleased",
+            "sku": "XW-010",
+            "name": "Diverse Noten unveröffentlicht",
+            "category_id": "cat_unreleased",
+            "category_name": "Unveröffentlichte Noten",
+        }
+    )
+    provider._invoices = [
+        {
+            "id": "inv_unreleased",
+            "invoiceNumber": "RE-UN-1",
+            "invoiceDate": "2026-06-08",
+            "invoiceType": "RE",
+            "reference": "Wix | 12345",
+        }
+    ]
+    provider._invoice_positions = {
+        "inv_unreleased": [
+            {
+                "part": {"id": "part_unreleased"},
+                "quantity": 2,
+                "sumNet": 40,
+                "sumGross": 44,
+            }
+        ]
+    }
+    provider._credit_notes = []
+    catalog = ProductCatalogService()
+    catalog.save_unreleased_resolution("Bestellalias A", canonical_name="Werk A", owner="Krickl")
+    catalog.save_unreleased_resolution("Bestellalias B", canonical_name="Werk B", owner="Albert")
+
+    class _WixStub:
+        def fetch_order_line_items(self, reference: str) -> list[WixOrderItem]:
+            assert reference == "12345"
+            return [
+                WixOrderItem(
+                    sku="XW-010",
+                    name="Bestellalias A/Bestellalias B",
+                    qty=2,
+                    is_unreleased=True,
+                    custom_piece_titles=["Bestellalias A/Bestellalias B"],
+                )
+            ]
+
+    service = CommissionService(
+        provider,
+        product_catalog=catalog,
+        wix_orders=_WixStub(),  # type: ignore[arg-type]
+    )
+    period = service.resolve_period(
+        "custom",
+        reference_date=date(2026, 7, 8),
+        custom_start=date(2026, 6, 1),
+        custom_end=date(2026, 6, 30),
+    )
+
+    result = service.run_profile("unveroeffentlichte_noten", period)
+
+    assert result.unresolved_titles == []
+    assert [(row.name, row.net_quantity, row.net_amount) for row in result.product_rows] == [
+        ("Werk A", 1.0, 20.0),
+        ("Werk B", 1.0, 20.0),
+    ]
+    assert {row.category_name for row in result.category_rows} == {"Albert", "Krickl"}
+
+
+def test_unreleased_notes_fail_closed_and_request_user_input_for_unknown_alias() -> None:
+    provider = _ProviderStub()
+    provider._parts.append(
+        {
+            "id": "part_unreleased",
+            "sku": "XW-010",
+            "name": "Diverse Noten unveröffentlicht",
+            "category_id": "cat_unreleased",
+            "category_name": "Unveröffentlichte Noten",
+        }
+    )
+    provider._invoices = [
+        {
+            "id": "inv_unreleased",
+            "invoiceNumber": "RE-UN-2",
+            "invoiceDate": "2026-06-08",
+            "invoiceType": "RE",
+            "reference": "12345",
+        }
+    ]
+    provider._invoice_positions = {
+        "inv_unreleased": [
+            {"part": {"id": "part_unreleased"}, "quantity": 1, "sumNet": 25, "sumGross": 27.5}
+        ]
+    }
+    provider._credit_notes = []
+
+    class _WixStub:
+        def fetch_order_line_items(self, _reference: str) -> list[WixOrderItem]:
+            return [
+                WixOrderItem(
+                    sku="XW-010",
+                    name="Völlig unbekanntes Auftragswerk QZX",
+                    qty=1,
+                    is_unreleased=True,
+                    custom_piece_titles=["Völlig unbekanntes Auftragswerk QZX"],
+                )
+            ]
+
+    service = CommissionService(
+        provider,
+        product_catalog=ProductCatalogService(),
+        wix_orders=_WixStub(),  # type: ignore[arg-type]
+    )
+    period = service.resolve_period(
+        "custom",
+        reference_date=date(2026, 7, 8),
+        custom_start=date(2026, 6, 1),
+        custom_end=date(2026, 6, 30),
+    )
+
+    result = service.run_profile("unveroeffentlichte_noten", period)
+
+    assert result.product_rows == []
+    assert len(result.unresolved_titles or []) == 1
+    assert result.summary.total_net_amount == 0.0
+    assert result.summary.anomaly_count == 1
 
 
 def test_clipboard_summary_matches_legacy_layout_with_german_numbers() -> None:

@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -44,6 +44,11 @@ from xw_office.services.calculation.service import (
     ArticleEntry,
     CalculationService,
     calculate_royalty,
+)
+from xw_office.services.products.catalog import ProductCatalogService
+from xw_office.ui.dialogs.unreleased_title_dialog import (
+    UnreleasedTitleDialog,
+    UnreleasedTitleSplitDialog,
 )
 from xw_office.ui.widgets.data_table import DataTable
 
@@ -91,6 +96,8 @@ class CalculationView(QWidget):
         self._export_worker: BackgroundWorker | None = None
         self._last_commission_result: CommissionRunResult | None = None
         self._active_profile_key: str = ""
+        self._rerun_commission_after_clarification = False
+        self._dismissed_unreleased_issues: set[tuple[str, str, str]] = set()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -367,6 +374,8 @@ class CalculationView(QWidget):
     def _run_musikheroes(self, *, use_cache: bool) -> None:
         if self._commission_worker is not None and self._commission_worker.isRunning():
             return
+        if not use_cache:
+            self._dismissed_unreleased_issues.clear()
         commission = self._commission_service
         if not self._active_profile_key:
             QMessageBox.warning(self, "Provisionen", "Kein Abrechnungsprofil ausgewaehlt.")
@@ -406,10 +415,14 @@ class CalculationView(QWidget):
         self._commission_worker = BackgroundWorker(job)
         self._commission_worker.signals.result.connect(self._on_musikheroes_loaded)
         self._commission_worker.signals.error.connect(self._on_error)
+        self._commission_worker.signals.finished.connect(self._on_commission_finished)
         self._commission_worker.start()
 
     def _on_musikheroes_loaded(self, payload: object) -> None:
         if not isinstance(payload, CommissionRunResult):
+            return
+        if payload.unresolved_titles and self._clarify_unreleased_titles(payload):
+            self._rerun_commission_after_clarification = True
             return
         self._last_commission_result = payload
 
@@ -429,6 +442,64 @@ class CalculationView(QWidget):
         self._populate_category_table(payload)
         self._populate_doc_table(payload)
         self._populate_anomaly_table(payload)
+
+    def _clarify_unreleased_titles(self, result: CommissionRunResult) -> bool:
+        try:
+            catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
+        except KeyError:
+            return False
+        changed = False
+        seen: set[tuple[str, str, str]] = set()
+        for issue in result.unresolved_titles or []:
+            key = (issue.raw_title, issue.order_reference, issue.document_number)
+            if key in seen or key in self._dismissed_unreleased_issues:
+                continue
+            seen.add(key)
+            context = (
+                f"Beleg: {issue.document_number} · Wix: {issue.order_reference or 'keine Referenz'} "
+                f"· SKU: {issue.sku}\nGrund: {issue.reason}"
+            )
+            if issue.needs_title_split:
+                split_dialog = UnreleasedTitleSplitDialog(
+                    quantity=issue.quantity,
+                    initial_text=issue.raw_title,
+                    context=context,
+                    parent=self,
+                )
+                titles = split_dialog.titles()
+                if titles is None:
+                    self._dismissed_unreleased_issues.add(key)
+                    continue
+                catalog.save_unreleased_document_title(
+                    issue.order_reference or issue.document_number,
+                    "\n".join(titles),
+                )
+                changed = True
+                continue
+            dialog = UnreleasedTitleDialog(
+                catalog,
+                raw_title=issue.raw_title,
+                context=context,
+                parent=self,
+            )
+            decision = dialog.decision()
+            if decision is None:
+                self._dismissed_unreleased_issues.add(key)
+                continue
+            catalog.save_unreleased_resolution(
+                decision.raw_title,
+                canonical_name=decision.canonical_name,
+                owner=decision.owner,
+            )
+            changed = True
+        return changed
+
+    def _on_commission_finished(self) -> None:
+        self._commission_worker = None
+        if not self._rerun_commission_after_clarification:
+            return
+        self._rerun_commission_after_clarification = False
+        QTimer.singleShot(0, lambda: self._run_musikheroes(use_cache=True))
 
     def _export_commission_csv(self) -> None:
         result = self._last_commission_result

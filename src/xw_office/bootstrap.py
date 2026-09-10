@@ -431,7 +431,9 @@ def register_default_services(container: Container) -> None:
             SevdeskCommissionProvider(
                 c.resolve(SevdeskConnection),
                 c.resolve(PartClient),
-            )
+            ),
+            product_catalog=c.resolve(ProductCatalogService),
+            wix_orders=c.resolve(WixOrdersClient),
         ),
     )
     container.register(

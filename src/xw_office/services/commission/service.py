@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 from pathlib import Path
-from typing import Any, Protocol
+import re
+from typing import TYPE_CHECKING, Any, Protocol
 
 import yaml
 
 from xw_office.services.http_client import SevdeskConnection
+from xw_office.services.products.catalog import normalize_legacy_title
 from xw_office.services.sevdesk.part_client import PartClient
+from xw_office.services.sevdesk.invoice_client import extract_wix_order_number
+
+if TYPE_CHECKING:
+    from xw_office.services.products.catalog import ProductCatalogService
+    from xw_office.services.wix.client import WixOrdersClient
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +39,8 @@ class CommissionProfile:
     include_credit_notes: bool = True
     include_cancellation_invoices: bool = True
     date_policy: str = "invoice_date"
+    sku_patterns: tuple[str, ...] = ()
+    resolve_unreleased_titles: bool = False
 
 
 @dataclass(frozen=True)
@@ -105,6 +114,19 @@ class CommissionSummary:
     anomaly_count: int = 0
 
 
+@dataclass(frozen=True)
+class UnreleasedResolutionIssue:
+    """A title/owner decision that must be confirmed in the UI."""
+
+    raw_title: str
+    document_number: str
+    order_reference: str
+    sku: str
+    reason: str
+    quantity: int = 1
+    needs_title_split: bool = False
+
+
 @dataclass
 class CommissionRunResult:
     """Full result bundle consumed by UI and exports."""
@@ -117,12 +139,17 @@ class CommissionRunResult:
     document_rows: list[DocumentContribution]
     anomalies: list[str]
     source_stats: dict[str, int]
+    unresolved_titles: list[UnreleasedResolutionIssue] | None = None
 
 
 def format_commission_summary(result: CommissionRunResult) -> str:
     """Render a compact, human-readable commission statement for the clipboard."""
     categories = result.profile.category_names
-    if len(categories) == 1:
+    if result.profile.resolve_unreleased_titles:
+        sku_filter = (
+            f"Filter: SKU {', '.join(result.profile.sku_patterns)}; Zuordnung über Titel-Aliase"
+        )
+    elif len(categories) == 1:
         sku_filter = f"Filter: sevDesk-Kategorie {categories[0]}"
     else:
         sku_filter = f"Filter: sevDesk-Kategorien {', '.join(categories)}"
@@ -381,8 +408,12 @@ class CommissionService:
         provider: CommissionDataProvider | None = None,
         *,
         profile_config_path: Path | None = None,
+        product_catalog: ProductCatalogService | None = None,
+        wix_orders: WixOrdersClient | None = None,
     ) -> None:
         self._provider = provider
+        self._product_catalog = product_catalog
+        self._wix_orders = wix_orders
         self._profiles = self._load_profiles(profile_config_path)
 
     def list_profiles(self) -> list[CommissionProfile]:
@@ -508,9 +539,11 @@ class CommissionService:
             "positions_skipped_missing_date": 0,
             "documents_skipped_draft": 0,
             "invoices_with_discount": 0,
+            "titles_unresolved": 0,
         }
 
         anomalies: list[str] = []
+        unresolved_titles: list[UnreleasedResolutionIssue] = []
         contributions: list[DocumentContribution] = []
         years = range(period.start.year, period.end.year + 1)
 
@@ -550,7 +583,23 @@ class CommissionService:
                 )
                 if net_factor < 1.0:
                     source_stats["invoices_with_discount"] += 1
-                for pos in positions_by_invoice.get(invoice_id, []):
+                document_positions = positions_by_invoice.get(invoice_id, [])
+                if profile.resolve_unreleased_titles:
+                    built_rows, issues = self._build_unreleased_contributions(
+                        source_kind="invoice",
+                        document=invoice,
+                        positions=document_positions,
+                        parts_by_id=parts_by_id,
+                        invoice_type=invoice_type,
+                        net_factor=net_factor,
+                        profile=profile,
+                    )
+                    contributions.extend(built_rows)
+                    unresolved_titles.extend(issues)
+                    source_stats["positions_included"] += len(built_rows)
+                    source_stats["titles_unresolved"] += len(issues)
+                    continue
+                for pos in document_positions:
                     built = self._build_contribution(
                         source_kind="invoice",
                         document=invoice,
@@ -596,7 +645,23 @@ class CommissionService:
             source_stats["credit_positions_loaded"] += len(credit_positions)
             positions_by_credit = _group_positions_by_parent(credit_positions, "creditNote")
             for credit_id, credit in eligible_credits:
-                for pos in positions_by_credit.get(credit_id, []):
+                document_positions = positions_by_credit.get(credit_id, [])
+                if profile.resolve_unreleased_titles:
+                    built_rows, issues = self._build_unreleased_contributions(
+                        source_kind="credit_note",
+                        document=credit,
+                        positions=document_positions,
+                        parts_by_id=parts_by_id,
+                        invoice_type="CR",
+                        net_factor=1.0,
+                        profile=profile,
+                    )
+                    contributions.extend(built_rows)
+                    unresolved_titles.extend(issues)
+                    source_stats["positions_included"] += len(built_rows)
+                    source_stats["titles_unresolved"] += len(issues)
+                    continue
+                for pos in document_positions:
                     built = self._build_contribution(
                         source_kind="credit_note",
                         document=credit,
@@ -614,7 +679,26 @@ class CommissionService:
                     if built.warning:
                         anomalies.append(built.warning)
 
-        product_rows = self._aggregate_products(contributions)
+        unresolved_titles = list(
+            {
+                (
+                    item.raw_title,
+                    item.document_number,
+                    item.order_reference,
+                    item.sku,
+                    item.reason,
+                ): item
+                for item in unresolved_titles
+            }.values()
+        )
+        anomalies.extend(
+            f"{item.sku} · {item.document_number}: {item.reason}"
+            + (f" ({item.raw_title})" if item.raw_title else "")
+            for item in unresolved_titles
+        )
+        product_rows = self._aggregate_products(
+            contributions, group_by_name=profile.resolve_unreleased_titles
+        )
         category_rows = self._aggregate_categories(contributions)
         summary = CommissionSummary(
             total_net_quantity=sum(item.signed_quantity for item in contributions),
@@ -638,7 +722,156 @@ class CommissionService:
             document_rows=contributions,
             anomalies=anomalies,
             source_stats=source_stats,
+            unresolved_titles=unresolved_titles,
         )
+
+    def _build_unreleased_contributions(
+        self,
+        *,
+        source_kind: str,
+        document: dict[str, Any],
+        positions: list[dict[str, Any]],
+        parts_by_id: dict[str, dict[str, Any]],
+        invoice_type: str,
+        net_factor: float,
+        profile: CommissionProfile,
+    ) -> tuple[list[DocumentContribution], list[UnreleasedResolutionIssue]]:
+        """Resolve special-SKU position totals through Wix titles and the alias catalog."""
+        base_rows: list[DocumentContribution] = []
+        for position in positions:
+            built = self._build_contribution(
+                source_kind=source_kind,
+                document=document,
+                position=position,
+                parts_by_id=parts_by_id,
+                profile_category_ids=set(),
+                profile_sku_patterns=profile.sku_patterns,
+                invoice_type=invoice_type,
+                net_factor=net_factor,
+            )
+            if built is not None:
+                base_rows.append(built)
+        if not base_rows:
+            return [], []
+        base_rows = _combine_document_rows_by_sku(base_rows)
+
+        reference = _document_wix_reference(document)
+        wix_titles: dict[str, list[str]] = {}
+        if reference and self._wix_orders is not None:
+            for item in self._wix_orders.fetch_order_line_items(reference):
+                sku = str(getattr(item, "sku", "") or "").strip().upper()
+                if not _matches_any_pattern(sku, profile.sku_patterns):
+                    continue
+                raw_titles = [
+                    str(title).strip()
+                    for title in (getattr(item, "custom_piece_titles", None) or [])
+                    if str(title).strip()
+                ]
+                if not raw_titles:
+                    fallback = str(getattr(item, "name", "") or "").strip()
+                    if fallback:
+                        raw_titles = [fallback]
+                quantity = max(1, int(getattr(item, "qty", 1) or 1))
+                titles = (
+                    self._product_catalog.split_unreleased_titles(raw_titles, quantity)
+                    if self._product_catalog is not None
+                    else raw_titles
+                )
+                wix_titles.setdefault(sku, []).extend(titles)
+
+        results: list[DocumentContribution] = []
+        issues: list[UnreleasedResolutionIssue] = []
+        for base in base_rows:
+            titles = wix_titles.get(base.sku.upper(), [])
+            override_key = reference or base.document_number
+            manual_title = (
+                self._product_catalog.unreleased_document_title(override_key)
+                if self._product_catalog is not None
+                else ""
+            )
+            if manual_title:
+                titles = [line.strip() for line in manual_title.splitlines() if line.strip()]
+            if not titles:
+                candidate = base.name
+                if normalize_unreleased_position_name(candidate):
+                    titles = [candidate]
+            if not titles:
+                issues.append(
+                    UnreleasedResolutionIssue(
+                        raw_title="",
+                        document_number=base.document_number,
+                        order_reference=reference,
+                        sku=base.sku,
+                        reason="Kein Stücktitel in der zugehörigen Wix-Bestellung gefunden",
+                        quantity=max(1, int(round(abs(base.signed_quantity)))),
+                        needs_title_split=True,
+                    )
+                )
+                continue
+
+            expected_quantity = max(1, int(round(abs(base.signed_quantity))))
+            if len(titles) != expected_quantity:
+                issues.append(
+                    UnreleasedResolutionIssue(
+                        raw_title="\n".join(titles),
+                        document_number=base.document_number,
+                        order_reference=reference,
+                        sku=base.sku,
+                        reason=(
+                            f"{expected_quantity} Stücktitel erwartet, aber {len(titles)} erkannt"
+                        ),
+                        quantity=expected_quantity,
+                        needs_title_split=True,
+                    )
+                )
+                continue
+
+            quantity_weight = abs(base.signed_quantity)
+            per_title_weight = quantity_weight / len(titles) if quantity_weight else 0.0
+            for title in titles:
+                resolution = (
+                    self._product_catalog.resolve_unreleased_title(title)
+                    if self._product_catalog is not None
+                    else None
+                )
+                if resolution is None or not resolution.is_resolved:
+                    reason = "Alias nicht eindeutig"
+                    if (
+                        resolution is not None
+                        and resolution.canonical_name
+                        and not resolution.owner
+                    ):
+                        reason = "Für das Produkt ist keine eindeutige Gattung hinterlegt"
+                    issues.append(
+                        UnreleasedResolutionIssue(
+                            raw_title=title,
+                            document_number=base.document_number,
+                            order_reference=reference,
+                            sku=base.sku,
+                            reason=reason,
+                            quantity=1,
+                        )
+                    )
+                    continue
+                ratio = 1.0 / expected_quantity
+                signed_quantity = (
+                    -per_title_weight if base.signed_quantity < 0 else per_title_weight
+                )
+                results.append(
+                    replace(
+                        base,
+                        name=resolution.canonical_name,
+                        category_name=resolution.owner,
+                        raw_quantity=abs(base.raw_quantity) * ratio,
+                        raw_net=base.raw_net * ratio,
+                        raw_gross=base.raw_gross * ratio,
+                        signed_quantity=signed_quantity,
+                        signed_net=base.signed_net * ratio,
+                        signed_gross=base.signed_gross * ratio,
+                        rule=f"{base.rule}:unreleased-{resolution.method}",
+                    )
+                )
+        return results, issues
 
     def _load_profiles(self, profile_config_path: Path | None) -> dict[str, CommissionProfile]:
         profiles: dict[str, CommissionProfile] = {}
@@ -678,6 +911,7 @@ class CommissionService:
         position: dict[str, Any],
         parts_by_id: dict[str, dict[str, Any]],
         profile_category_ids: set[str],
+        profile_sku_patterns: tuple[str, ...] = (),
         invoice_type: str,
         net_factor: float,
     ) -> DocumentContribution | None:
@@ -713,7 +947,10 @@ class CommissionService:
 
         category_id = str(part_meta.get("category_id") or "").strip()
         category_name = str(part_meta.get("category_name") or "").strip()
-        if not category_id or category_id not in profile_category_ids:
+        part_sku = str(part_meta.get("sku") or part_obj.get("partNumber") or "").strip()
+        category_match = bool(category_id and category_id in profile_category_ids)
+        sku_match = _matches_any_pattern(part_sku, profile_sku_patterns)
+        if not category_match and not sku_match:
             return None
 
         sku = (
@@ -750,11 +987,7 @@ class CommissionService:
             signed_quantity = -abs(raw_quantity) if is_cancel else abs(raw_quantity)
             signed_net = adjusted_net
             signed_gross = adjusted_gross
-            rule = (
-                f"invoice:discount:{net_factor:.6f}"
-                if net_factor < 1.0
-                else "invoice:standard"
-            )
+            rule = f"invoice:discount:{net_factor:.6f}" if net_factor < 1.0 else "invoice:standard"
             if is_cancel:
                 rule = "invoice:sr-cancel"
                 if adjusted_net > 0:
@@ -796,16 +1029,22 @@ class CommissionService:
         )
 
     @staticmethod
-    def _aggregate_products(contributions: list[DocumentContribution]) -> list[ProductBreakdownRow]:
-        rows: dict[str, ProductBreakdownRow] = {}
-        category_sets: dict[str, set[str]] = {}
+    def _aggregate_products(
+        contributions: list[DocumentContribution], *, group_by_name: bool = False
+    ) -> list[ProductBreakdownRow]:
+        rows: dict[tuple[str, str], ProductBreakdownRow] = {}
+        category_sets: dict[tuple[str, str], set[str]] = {}
+        sku_sets: dict[tuple[str, str], set[str]] = {}
 
         for item in contributions:
-            row = rows.get(item.sku)
+            key = ("", item.name) if group_by_name else (item.sku, item.name)
+            row = rows.get(key)
             if row is None:
                 row = ProductBreakdownRow(sku=item.sku, name=item.name)
-                rows[item.sku] = row
-                category_sets[item.sku] = set()
+                rows[key] = row
+                category_sets[key] = set()
+                sku_sets[key] = set()
+            sku_sets[key].add(item.sku)
 
             if item.source_kind == "invoice" and item.document_type in _CANCEL_INVOICE_TYPES:
                 row.canceled_quantity += abs(item.signed_quantity)
@@ -819,13 +1058,14 @@ class CommissionService:
             row.gross_amount += item.signed_gross
 
             if item.category_name:
-                category_sets[item.sku].add(item.category_name)
+                category_sets[key].add(item.category_name)
             if item.warning and not row.warning:
                 row.warning = item.warning
 
-        for sku, row in rows.items():
-            names = sorted(category_sets.get(sku, set()))
+        for key, row in rows.items():
+            names = sorted(category_sets.get(key, set()))
             row.category_names = tuple(names)
+            row.sku = " / ".join(sorted(sku_sets.get(key, {row.sku})))
 
         result = list(rows.values())
         result.sort(key=lambda row: (row.net_amount, row.net_quantity), reverse=True)
@@ -940,13 +1180,35 @@ def _group_positions_by_parent(
     return grouped
 
 
+def _combine_document_rows_by_sku(
+    rows: list[DocumentContribution],
+) -> list[DocumentContribution]:
+    """Combine repeated generic SKU positions before distributing their Wix titles."""
+    grouped: dict[str, DocumentContribution] = {}
+    for row in rows:
+        key = row.sku.upper()
+        current = grouped.get(key)
+        if current is None:
+            grouped[key] = row
+            continue
+        grouped[key] = replace(
+            current,
+            raw_quantity=current.raw_quantity + row.raw_quantity,
+            raw_net=current.raw_net + row.raw_net,
+            raw_gross=current.raw_gross + row.raw_gross,
+            signed_quantity=current.signed_quantity + row.signed_quantity,
+            signed_net=current.signed_net + row.signed_net,
+            signed_gross=current.signed_gross + row.signed_gross,
+            warning=current.warning or row.warning,
+        )
+    return list(grouped.values())
+
+
 def _is_draft_document(document: dict[str, Any]) -> bool:
     return int(_to_float(document.get("status"))) == 100
 
 
-def _invoice_discount_factor(
-    invoice: dict[str, Any], positions: list[dict[str, Any]]
-) -> float:
+def _invoice_discount_factor(invoice: dict[str, Any], positions: list[dict[str, Any]]) -> float:
     """Return the proportional net factor for a sevDesk header discount."""
     net_before_discount = sum(_to_float(position.get("sumNet")) for position in positions)
     discount_net = abs(
@@ -963,6 +1225,37 @@ def _document_number(document: dict[str, Any]) -> str:
         if value:
             return value
     return ""
+
+
+def _document_wix_reference(document: dict[str, Any]) -> str:
+    for key in ("reference", "orderReference", "customerInternalNote"):
+        raw = str(document.get(key) or "").strip()
+        reference = extract_wix_order_number(raw)
+        if reference:
+            return reference
+        if raw.isdigit():
+            return raw
+    return ""
+
+
+def _matches_any_pattern(value: str, patterns: tuple[str, ...]) -> bool:
+    normalized = str(value or "").strip().upper()
+    return any(re.fullmatch(pattern, normalized, flags=re.IGNORECASE) for pattern in patterns)
+
+
+def normalize_unreleased_position_name(value: str) -> str:
+    """Return a usable title or empty text for generic sevDesk labels."""
+    title = " ".join(str(value or "").split()).strip()
+    normalized = normalize_legacy_title(title)
+    generic_tokens = (
+        "diverse noten unveroffentlicht",
+        "div noten unveroffentlicht",
+        "unveroffentlichte noten",
+        "xw 010",
+    )
+    if not title or any(token in normalized for token in generic_tokens):
+        return ""
+    return title
 
 
 def _default_profile_config_path() -> Path:
@@ -1004,12 +1297,21 @@ def _profile_from_dict(raw: dict[str, Any]) -> CommissionProfile | None:
     include_cancellation_invoices = bool(raw.get("include_cancellation_invoices", True))
     date_policy = str(raw.get("date_policy") or "invoice_date").strip() or "invoice_date"
     commission_rate_percent = _to_float(raw.get("commission_rate_percent"))
+    sku_patterns_raw = raw.get("sku_patterns")
+    sku_patterns = (
+        tuple(str(item).strip() for item in sku_patterns_raw if str(item).strip())
+        if isinstance(sku_patterns_raw, list)
+        else ()
+    )
+    resolve_unreleased_titles = bool(raw.get("resolve_unreleased_titles", False))
 
     return CommissionProfile(
         key=key,
         label=label,
         category_names=category_names,
         commission_rate_percent=commission_rate_percent,
+        sku_patterns=sku_patterns,
+        resolve_unreleased_titles=resolve_unreleased_titles,
         include_credit_notes=include_credit_notes,
         include_cancellation_invoices=include_cancellation_invoices,
         date_policy=date_policy,

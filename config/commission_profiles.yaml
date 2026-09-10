@@ -1,4 +1,15 @@
 profiles:
+  - key: unveroeffentlichte_noten
+    label: Unveröffentlichte Noten
+    category_names: []
+    sku_patterns:
+      - 'XW-010'
+      - 'XW-600(?:\.[0-9]+)?'
+    resolve_unreleased_titles: true
+    include_credit_notes: true
+    include_cancellation_invoices: true
+    date_policy: invoice_date
+
   - key: musikheroes
     label: MusikHeroes
     category_names:

@@ -38,6 +38,17 @@ class _SnapshotPartClientStub:
         raise AssertionError("piece rendering must not make an individual stock request")
 
 
+def test_bundled_legacy_unreleased_alias_resolves_canonical_title_and_owner() -> None:
+    catalog = ProductCatalogService()
+
+    resolution = catalog.resolve_unreleased_title("Aber dich")
+
+    assert resolution.is_resolved
+    assert resolution.canonical_name == "Aber dich - Vorstellung"
+    assert resolution.owner == "XeisWorks"
+    assert resolution.method == "alias"
+
+
 def test_cached_piece_is_refreshed_from_same_title_specific_print_config(tmp_path) -> None:
     pdf_path = tmp_path / "Vielen Dank fuer die Blumen.pdf"
     pdf_path.write_bytes(b"%PDF-1.4 test")
@@ -96,7 +107,9 @@ def test_piece_block_uses_new_repo_print_config_for_title_specific_entry(tmp_pat
                             "Song A": {
                                 "path": str(pdf_path),
                                 "profile_id": "noten_a4_duplex",
-                                "print_plan": [{"range": "1-2", "profile_id": "canon_brochure_mono"}],
+                                "print_plan": [
+                                    {"range": "1-2", "profile_id": "canon_brochure_mono"}
+                                ],
                             }
                         },
                     }
@@ -107,7 +120,9 @@ def test_piece_block_uses_new_repo_print_config_for_title_specific_entry(tmp_pat
     )
 
     engine = PrintDecisionEngine(ProductCatalogService(repo), _PartClientStub())
-    blocks = engine.get_piece_blocks([WixOrderItem(sku="XW-010", name="Song A", qty=1, is_unreleased=True)])
+    blocks = engine.get_piece_blocks(
+        [WixOrderItem(sku="XW-010", name="Song A", qty=1, is_unreleased=True)]
+    )
 
     assert len(blocks) == 1
     block = blocks[0]
@@ -135,7 +150,8 @@ def test_piece_blocks_use_stock_snapshot_without_individual_stock_requests() -> 
     )
 
     blocks = PrintDecisionEngine(
-        ProductCatalogService(repo), _SnapshotPartClientStub()  # type: ignore[arg-type]
+        ProductCatalogService(repo),
+        _SnapshotPartClientStub(),  # type: ignore[arg-type]
     ).get_piece_blocks([WixOrderItem(sku="XW-4-001", name="Etuede A", qty=2)])
 
     assert blocks[0].stock_status is not None
@@ -154,8 +170,16 @@ def test_title_overrides_for_sku_lists_saved_title_specific_plans() -> None:
                         "print_profile_id": "noten_simplex",
                         "print_plan": [],
                         "title_print_configs": {
-                            "Song A": {"path": "C:/pdfs/a.pdf", "profile_id": "noten_duplex", "print_plan": []},
-                            "Song B": {"path": "C:/pdfs/b.pdf", "profile_id": "brochure_mono", "print_plan": []},
+                            "Song A": {
+                                "path": "C:/pdfs/a.pdf",
+                                "profile_id": "noten_duplex",
+                                "print_plan": [],
+                            },
+                            "Song B": {
+                                "path": "C:/pdfs/b.pdf",
+                                "profile_id": "brochure_mono",
+                                "print_plan": [],
+                            },
                         },
                     }
                 ],
@@ -187,7 +211,9 @@ def test_piece_block_uses_legacy_normalized_title_matching(tmp_path) -> None:
                             "Die Ungewöhnliche": {
                                 "path": str(pdf_path),
                                 "profile_id": "noten_a4_duplex",
-                                "print_plan": [{"range": "Alle Seiten", "profile_id": "noten_a4_duplex"}],
+                                "print_plan": [
+                                    {"range": "Alle Seiten", "profile_id": "noten_a4_duplex"}
+                                ],
                             }
                         },
                     }
@@ -259,8 +285,14 @@ def test_xw_010_expands_multiline_titles_and_uses_canonical_title_configs(tmp_pa
                         "print_profile_id": "noten_a4_duplex",
                         "print_plan": [{"range": "Alle Seiten", "profile_id": "noten_a4_duplex"}],
                         "title_print_configs": {
-                            "Gabriellas Song": {"path": str(gabriellas_pdf), "profile_id": "noten_simplex"},
-                            "In deinen Augen": {"path": str(augen_pdf), "profile_id": "noten_duplex"},
+                            "Gabriellas Song": {
+                                "path": str(gabriellas_pdf),
+                                "profile_id": "noten_simplex",
+                            },
+                            "In deinen Augen": {
+                                "path": str(augen_pdf),
+                                "profile_id": "noten_duplex",
+                            },
                         },
                     }
                 ]
@@ -280,9 +312,40 @@ def test_xw_010_expands_multiline_titles_and_uses_canonical_title_configs(tmp_pa
         ]
     )
 
-    assert [(block.name, block.qty_needed, block.print_file_path, block.print_profile_id) for block in blocks] == [
+    assert [
+        (block.name, block.qty_needed, block.print_file_path, block.print_profile_id)
+        for block in blocks
+    ] == [
         ("Gabriellas Song", 1, gabriellas_pdf, "noten_simplex"),
         ("In deinen Augen", 1, augen_pdf, "noten_duplex"),
+    ]
+
+
+def test_xw_010_expands_slash_separated_titles_like_legacy(tmp_path) -> None:
+    repo = _RepoStub(
+        {
+            "inventory.products": json.dumps(
+                [{"sku": "XW-010", "name": "Diverse Noten", "title_print_configs": {}}]
+            )
+        }
+    )
+    engine = PrintDecisionEngine(ProductCatalogService(repo), _PartClientStub())
+
+    blocks = engine.get_piece_blocks(
+        [
+            WixOrderItem(
+                sku="XW-010",
+                name="Werk A/Werk B",
+                qty=2,
+                is_unreleased=True,
+                custom_piece_titles=["Werk A/Werk B"],
+            )
+        ]
+    )
+
+    assert [(block.name, block.qty_needed) for block in blocks] == [
+        ("Werk A", 1),
+        ("Werk B", 1),
     ]
 
 

@@ -202,8 +202,7 @@ class PrintDecisionEngine:
         )
         return blocks
 
-    @staticmethod
-    def _expand_multi_title_items(wix_items: list[WixOrderItem]) -> list[WixOrderItem]:
+    def _expand_multi_title_items(self, wix_items: list[WixOrderItem]) -> list[WixOrderItem]:
         """Split XW-010 into one print item per requested title when safe.
 
         The customer enters titles line-by-line in a single Wix custom field.
@@ -214,7 +213,9 @@ class PrintDecisionEngine:
 
         expanded: list[WixOrderItem] = []
         for item in wix_items:
-            titles = [str(title).strip() for title in item.custom_piece_titles if str(title).strip()]
+            titles = self._catalog.split_unreleased_titles(
+                [str(title) for title in item.custom_piece_titles], item.qty
+            )
             if item.sku.strip().upper() == "XW-010" and len(titles) == item.qty:
                 expanded.extend(item.model_copy(update={"name": title, "qty": 1}) for title in titles)
             else:

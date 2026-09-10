@@ -1,6 +1,7 @@
 """Rechnungen module — invoice list from sevDesk."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 import html
 import json
@@ -113,6 +114,10 @@ from xw_office.ui.modules.rechnungen.plc_label_dialog import (
 from xw_office.ui.modules.rechnungen.plc_statistics_dialog import PlcStatisticsDialog
 from xw_office.services.plc.statistics import PlcStatisticsService
 from xw_office.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
+from xw_office.ui.dialogs.unreleased_title_dialog import (
+    UnreleasedTitleDialog,
+    UnreleasedTitleSplitDialog,
+)
 from xw_office.ui.modules.rechnungen.refund_dialog import RefundDialog
 from xw_office.ui.widgets.data_table import DataTable
 from xw_office.ui.widgets.progress_overlay import ProgressOverlay
@@ -5305,6 +5310,57 @@ class RechnungenView(QWidget):
     def _load_stuecke(self, order_reference: str) -> None:
         self._load_wix_context(order_reference)
 
+    def _clarify_unreleased_piece(
+        self,
+        piece: PieceBlock,
+        catalog: ProductCatalogService,
+        order_reference: str,
+    ) -> None:
+        if not piece.is_unreleased or not str(piece.name or "").strip():
+            return
+        resolution = catalog.resolve_unreleased_title(piece.name)
+        if resolution.is_resolved:
+            piece.name = resolution.canonical_name
+            return
+        dialog = UnreleasedTitleDialog(
+            catalog,
+            raw_title=piece.name,
+            context=f"Wix-Bestellung: {order_reference or 'unbekannt'} · SKU: {piece.sku}",
+            parent=self,
+        )
+        decision = dialog.decision()
+        if decision is None:
+            return
+        catalog.save_unreleased_resolution(
+            decision.raw_title,
+            canonical_name=decision.canonical_name,
+            owner=decision.owner,
+        )
+        piece.name = decision.canonical_name
+
+    def _split_unreleased_piece(
+        self,
+        piece: PieceBlock,
+        catalog: ProductCatalogService,
+        order_reference: str,
+    ) -> list[PieceBlock]:
+        if not piece.is_unreleased or int(piece.qty_needed or 0) <= 1:
+            return [piece]
+        quantity = max(1, int(piece.qty_needed))
+        titles = catalog.split_unreleased_titles([piece.name], quantity)
+        if len(titles) != quantity:
+            dialog = UnreleasedTitleSplitDialog(
+                quantity=quantity,
+                initial_text="\n".join(titles),
+                context=f"Wix-Bestellung: {order_reference or 'unbekannt'} · SKU: {piece.sku}",
+                parent=self,
+            )
+            clarified = dialog.titles()
+            if clarified is None:
+                return [piece]
+            titles = clarified
+        return [replace(piece, name=title, qty_needed=1) for title in titles]
+
     def _on_stuecke_loaded(self, items: object) -> None:
         requested_ref = ""
         payload_items: object = items
@@ -5333,10 +5389,19 @@ class RechnungenView(QWidget):
             catalog: ProductCatalogService | None = self._container.resolve(ProductCatalogService)
         except KeyError:
             catalog = None
+        expanded_pieces: list[PieceBlock] = []
         for piece in payload_items:
             if not isinstance(piece, PieceBlock):
                 continue
             if catalog is not None:
+                expanded_pieces.extend(
+                    self._split_unreleased_piece(piece, catalog, requested_ref or current_ref)
+                )
+            else:
+                expanded_pieces.append(piece)
+        for piece in expanded_pieces:
+            if catalog is not None:
+                self._clarify_unreleased_piece(piece, catalog, requested_ref or current_ref)
                 resolve_piece_print_config(catalog, piece)
             key = (
                 str(piece.sku or "").strip().upper(),
