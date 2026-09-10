@@ -3484,7 +3484,7 @@ class RechnungenView(QWidget):
                 {
                     "FULFILLMENT": "",
                     "__fulfillment__": dict(flags),
-                    "__tooltip__FULFILLMENT": "Label | Rechnung | Produkt | Mail | Wix | Zahlung",
+                    "__tooltip__FULFILLMENT": self._fulfillment_tooltip(flags),
                     "__align__FULFILLMENT": "center",
                 },
             )
@@ -3492,6 +3492,14 @@ class RechnungenView(QWidget):
             if selected is not None and str(selected.id or "").strip() == target_id:
                 self._update_action_state()
             return
+
+    @staticmethod
+    def _fulfillment_tooltip(flags: dict[str, object]) -> str:
+        tooltip = "Label | Rechnung | Produkt | Mail | Wix | Zahlung"
+        payment_warning = str(flags.get("payment_warning") or "").strip()
+        if payment_warning and not bool(flags.get("payment_booked")):
+            tooltip += f"\n\nZahlung: {payment_warning}"
+        return tooltip
 
     def _on_print_clicked(self) -> None:
         if not self._print_allowed:
@@ -4520,12 +4528,17 @@ class RechnungenView(QWidget):
         flags = payload if isinstance(payload, dict) else {}
         last_error = str(flags.get("last_error") or "").strip()
         last_warning = str(flags.get("last_warning") or "").strip()
+        payment_warning = str(flags.get("payment_warning") or "").strip()
         if last_error:
             self._action_state.setText(f"Letzter Fulfillment-Fehler: {last_error}")
             self._action_state.setStyleSheet("color: #ef5350; font-weight: 600;")
             return
         if last_warning:
             self._action_state.setText(f"Wix-/Fulfillment-Hinweis: {last_warning}")
+            self._action_state.setStyleSheet("color: #f59e0b; font-weight: 600;")
+            return
+        if payment_warning and not bool(flags.get("payment_booked")):
+            self._action_state.setText(f"Zahlungs-Hinweis: {payment_warning}")
             self._action_state.setStyleSheet("color: #f59e0b; font-weight: 600;")
             return
         self._action_state.setText("Aktionen für die ausgewählte Rechnung verfügbar.")

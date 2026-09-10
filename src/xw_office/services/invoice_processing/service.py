@@ -116,6 +116,7 @@ class FulfillmentFlags:
     wix_fulfilled: bool = False
     payment_applicable: bool = False
     payment_booked: bool = False
+    payment_warning: str = ""
     last_run_iso: str = ""
     last_error: str = ""
     last_warning: str = ""
@@ -129,6 +130,7 @@ class FulfillmentFlags:
             "wix_fulfilled": self.wix_fulfilled,
             "payment_applicable": self.payment_applicable,
             "payment_booked": self.payment_booked,
+            "payment_warning": self.payment_warning,
             "last_run_iso": self.last_run_iso,
             "last_error": self.last_error,
             "last_warning": self.last_warning,
@@ -146,6 +148,7 @@ class FulfillmentFlags:
             wix_fulfilled=bool(payload.get("wix_fulfilled")),
             payment_applicable=bool(payload.get("payment_applicable")),
             payment_booked=bool(payload.get("payment_booked")),
+            payment_warning=str(payload.get("payment_warning") or ""),
             last_run_iso=str(payload.get("last_run_iso") or ""),
             last_error=str(payload.get("last_error") or ""),
             last_warning=str(payload.get("last_warning") or ""),
@@ -1125,6 +1128,7 @@ class InvoiceProcessingService:
             wix_fulfilled=flags.wix_fulfilled,
             payment_applicable=flags.payment_applicable,
             payment_booked=flags.payment_booked,
+            payment_warning=flags.payment_warning,
             last_run_iso=datetime.now(timezone.utc).isoformat(timespec="seconds"),
             last_error=flags.last_error,
             last_warning=flags.last_warning,
@@ -1140,11 +1144,19 @@ class InvoiceProcessingService:
             "wix_fulfilled": stamped.wix_fulfilled,
             "payment_applicable": stamped.payment_applicable,
             "payment_booked": stamped.payment_booked,
+            "payment_warning": stamped.payment_warning,
             "last_run_iso": stamped.last_run_iso,
             "last_error": "",
             "last_warning": "",
         }
         data.update(overrides)
+        if overrides.get("payment_applicable") is False:
+            data["payment_warning"] = ""
+        elif "payment_booked" in overrides:
+            if bool(overrides.get("payment_booked")):
+                data["payment_warning"] = ""
+            elif str(overrides.get("last_warning") or "").strip():
+                data["payment_warning"] = str(overrides.get("last_warning") or "").strip()
         return FulfillmentFlags(**data)
 
     def _with_error(self, flags: FulfillmentFlags, exc: Exception) -> FulfillmentFlags:
@@ -1157,6 +1169,7 @@ class InvoiceProcessingService:
             wix_fulfilled=stamped.wix_fulfilled,
             payment_applicable=stamped.payment_applicable,
             payment_booked=stamped.payment_booked,
+            payment_warning=stamped.payment_warning,
             last_run_iso=stamped.last_run_iso,
             last_error=str(exc),
             last_warning=stamped.last_warning,
@@ -1172,6 +1185,7 @@ class InvoiceProcessingService:
             wix_fulfilled=stamped.wix_fulfilled,
             payment_applicable=stamped.payment_applicable,
             payment_booked=stamped.payment_booked,
+            payment_warning=stamped.payment_warning,
             last_run_iso=stamped.last_run_iso,
             last_error="",
             last_warning=str(message or "").strip(),
@@ -1397,7 +1411,13 @@ class InvoiceProcessingService:
                     last_warning=f"Rechnung {invoice_id}: Wix Payment-Details konnten nicht geladen werden",
                 )
 
-            payment_status = str(payment_details.get("paymentStatus") or "").strip().upper()
+            # The transaction endpoint can return an empty payments array even
+            # though the order endpoint still exposes a meaningful aggregate
+            # status.  Keep that status visible instead of degrading the case
+            # to the misleading "no provider transaction ID" warning.
+            payment_status = str(
+                payment_details.get("paymentStatus") or order.get("paymentStatus") or ""
+            ).strip().upper()
             if payment_status and payment_status not in PAYMENT_BOOKABLE_STATUSES:
                 return self._next_flags(
                     stamped,
@@ -1691,6 +1711,7 @@ class InvoiceProcessingService:
             wix_fulfilled=flags.wix_fulfilled,
             payment_applicable=flags.payment_applicable,
             payment_booked=flags.payment_booked,
+            payment_warning=flags.payment_warning,
             last_run_iso=next_flags.last_run_iso,
             last_error=next_flags.last_error,
             last_warning=next_flags.last_warning,
@@ -2063,7 +2084,10 @@ class InvoiceProcessingService:
                 )
             row["FULFILLMENT"] = ""
             row["__fulfillment__"] = flags.as_row_payload()
-            row["__tooltip__FULFILLMENT"] = "Label | Rechnung | Produkt | Mail | Wix | Zahlung"
+            tooltip = "Label | Rechnung | Produkt | Mail | Wix | Zahlung"
+            if flags.payment_warning.strip() and not flags.payment_booked:
+                tooltip += f"\n\nZahlung: {flags.payment_warning.strip()}"
+            row["__tooltip__FULFILLMENT"] = tooltip
             row["__align__FULFILLMENT"] = "center"
         return row_list
 

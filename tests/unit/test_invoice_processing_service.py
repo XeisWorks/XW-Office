@@ -1101,6 +1101,78 @@ def test_payment_step_surfaces_not_booked_status_as_warning() -> None:
     assert "status=not_booked" in flags.last_warning
 
 
+def test_payment_step_uses_order_status_when_transaction_list_is_empty() -> None:
+    summary = InvoiceSummary(id="27", invoiceNumber="RE-TEST-27", order_reference="20527", sum_gross="29.90")
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads["27"] = {
+        "id": "27",
+        "invoiceNumber": "RE-TEST-27",
+        "status": 200,
+        "sumOutstanding": "29.90",
+        "sumGross": "29.90",
+        "customerInternalNote": "20527",
+    }
+    wix = _WixOrdersStub()
+    wix.orders["20527"] = {
+        "id": "wix-order-27",
+        "paymentStatus": "NOT_PAID",
+        "buyerInfo": {"firstName": "Max", "lastName": "Mustermann"},
+    }
+    wix.payment_details["wix-order-27"] = {
+        "paymentStatus": "",
+        "providerTransactionId": "",
+    }
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        _RepoStub({}),
+        wix,  # type: ignore[arg-type]
+        _MailServiceStub(),  # type: ignore[arg-type]
+    )
+
+    flags = svc.retry_fulfillment_step("27", "payment_booked")
+
+    assert flags.payment_booked is False
+    assert "Payment-Status nicht buchbar (NOT_PAID)" in flags.last_warning
+    assert client.created_transactions == []
+
+
+def test_start_preserves_payment_warning_after_later_successful_steps() -> None:
+    summary = InvoiceSummary(id="28", invoiceNumber="RE-TEST-28", order_reference="20528", sum_gross="29.90")
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads["28"] = {
+        "id": "28",
+        "invoiceNumber": "RE-TEST-28",
+        "status": 200,
+        "sumOutstanding": "29.90",
+        "sumGross": "29.90",
+        "customerInternalNote": "20528",
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+    wix = _WixOrdersStub()
+    wix.orders["20528"] = {
+        "id": "wix-order-28",
+        "paymentStatus": "NOT_PAID",
+        "buyerInfo": {"firstName": "Max", "lastName": "Mustermann"},
+    }
+    wix.payment_details["wix-order-28"] = {"paymentStatus": "", "providerTransactionId": ""}
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        _RepoStub({}),
+        wix,  # type: ignore[arg-type]
+        _MailServiceStub(),  # type: ignore[arg-type]
+    )
+
+    result = svc.run_start_fullflow(full_mode=False)
+    flags = svc.read_fulfillment_flags("28")
+
+    assert result["successful"] == 1
+    assert flags.mail_sent is True
+    assert flags.payment_booked is False
+    assert "Payment-Status nicht buchbar (NOT_PAID)" in flags.payment_warning
+
+
 def test_inventory_requirements_use_only_requested_invoice_ids() -> None:
     rows = [
         InvoiceSummary(id="11", invoiceNumber="RE-TEST-11", order_reference="ORDER-11"),

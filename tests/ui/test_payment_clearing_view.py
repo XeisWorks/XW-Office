@@ -1,7 +1,7 @@
 """Payment-clearing UI behavior tests."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -49,6 +49,23 @@ def test_select_all_only_selects_bookable_rows(qtbot: object, app_config: object
 
     selected = {row.candidate_id for row in view._candidates if row.selected}  # noqa: SLF001
     assert selected == {"ready", "payout"}
+
+
+def test_month_preset_updates_date_range(qtbot: object, app_config: object) -> None:
+    container = Container(app_config)  # type: ignore[arg-type]
+    container.register(PaymentClearingService, lambda _c: PaymentClearingService())
+    view = PaymentClearingView(container)
+    qtbot.addWidget(view)
+
+    view._month_preset.setCurrentIndex(1)  # noqa: SLF001
+    expected_start = PaymentClearingView._recent_month_starts(date.today())[1]  # noqa: SLF001
+    selected_start = view._start.date().toPython()  # noqa: SLF001
+    selected_end = view._end.date().toPython()  # noqa: SLF001
+
+    assert view._month_preset.count() == PaymentClearingView.MONTH_PRESET_COUNT  # noqa: SLF001
+    assert selected_start == expected_start
+    assert selected_end.year == expected_start.year
+    assert selected_end.month == expected_start.month
 
 
 def test_main_window_can_open_payment_clearing(qtbot: object, app_config: object) -> None:

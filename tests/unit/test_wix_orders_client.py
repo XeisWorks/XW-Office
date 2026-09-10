@@ -619,6 +619,48 @@ def test_fetch_order_payment_details_uses_top_level_provider_fields(monkeypatch)
     ]
 
 
+def test_fetch_order_payment_details_reads_current_wix_payment_provider(monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "orderTransactions": {
+                    "payments": [
+                        {
+                            "status": "APPROVED",
+                            "createdDate": "2026-09-09T08:15:00Z",
+                            "amount": {"amount": "29.90", "currency": "EUR"},
+                            "regularPaymentDetails": {
+                                "providerTransactionId": "08ede05f-1f9f-4c2a-a27a-2328b5fe5928",
+                                "paymentProvider": "Stripe",
+                                "paymentMethodId": "creditCard",
+                            },
+                        }
+                    ]
+                }
+            },
+        )
+
+    class _SecretService:
+        def get_secret(self, name: str) -> str:
+            return {"WIX_API_KEY": "key", "WIX_SITE_ID": "site", "WIX_ACCOUNT_ID": ""}.get(name, "")
+
+    class _Client(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(handler)
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    client = WixOrdersClient(secret_service=_SecretService())  # type: ignore[arg-type]
+
+    details = client.fetch_order_payment_details("ord-123")
+
+    assert details["provider"] == "Stripe"
+    assert details["paymentStatus"] == "APPROVED"
+    assert details["providerTransactionId"] == "08ede05f-1f9f-4c2a-a27a-2328b5fe5928"
+    assert details["amount"] == "29.90"
+
+
 def test_get_cached_order_summary_does_not_call_wix(tmp_path, monkeypatch) -> None:
     calls = 0
 

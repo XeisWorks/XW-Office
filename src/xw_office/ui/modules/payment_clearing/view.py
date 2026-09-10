@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 
 from PySide6.QtCore import QDate
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDateEdit,
@@ -37,6 +38,23 @@ if TYPE_CHECKING:
     from xw_office.core.container import Container
 
 
+_GERMAN_MONTH_NAMES = (
+    "",
+    "Januar",
+    "Februar",
+    "Maerz",
+    "April",
+    "Mai",
+    "Juni",
+    "Juli",
+    "August",
+    "September",
+    "Oktober",
+    "November",
+    "Dezember",
+)
+
+
 class PaymentClearingView(QWidget):
     """Analyze many payments, review exceptions, and confirm one booking batch."""
 
@@ -51,6 +69,7 @@ class PaymentClearingView(QWidget):
     COL_AMOUNT = 8
     COL_STATUS = 9
     COL_REASON = 10
+    MONTH_PRESET_COUNT = 5
 
     _TABLE_COLUMNS = [
         "",
@@ -83,6 +102,19 @@ class PaymentClearingView(QWidget):
         layout.addWidget(QLabel(self._service.describe()))
 
         controls = QHBoxLayout()
+        today = date.today()
+        first_this_month = today.replace(day=1)
+        previous_end = first_this_month.fromordinal(first_this_month.toordinal() - 1)
+        previous_start = previous_end.replace(day=1)
+
+        controls.addWidget(QLabel("Monat:"))
+        self._month_preset = QComboBox()
+        self._month_preset.setToolTip("Einen der letzten fuenf abgeschlossenen Monate direkt auswaehlen.")
+        for month_start in self._recent_month_starts(today):
+            self._month_preset.addItem(self._month_label(month_start), month_start.isoformat())
+        self._month_preset.currentIndexChanged.connect(self._apply_month_preset)
+        controls.addWidget(self._month_preset)
+
         controls.addWidget(QLabel("Von:"))
         self._start = QDateEdit()
         self._start.setCalendarPopup(True)
@@ -91,26 +123,31 @@ class PaymentClearingView(QWidget):
         self._end = QDateEdit()
         self._end.setCalendarPopup(True)
         controls.addWidget(self._end)
-        today = date.today()
-        first_this_month = today.replace(day=1)
-        previous_end = first_this_month.fromordinal(first_this_month.toordinal() - 1)
-        previous_start = previous_end.replace(day=1)
         self._start.setDate(QDate(previous_start.year, previous_start.month, previous_start.day))
         self._end.setDate(QDate(previous_end.year, previous_end.month, previous_end.day))
 
-        self._analyze_btn = QPushButton("Zahlungen analysieren")
+        self._analyze_btn = QPushButton("START: Analyse")
+        self._analyze_btn.setToolTip("Zahlungen im gewaehlten Zeitraum mit Wix und sevDesk abgleichen.")
         self._analyze_btn.clicked.connect(self._analyze)
         controls.addWidget(self._analyze_btn)
-        self._select_all_btn = QPushButton("Alle buchbaren auswaehlen")
+        self._stop_btn = QPushButton("STOP")
+        self._stop_btn.setToolTip("Laufende Analyse, Buchung oder Reset abbrechen.")
+        self._stop_btn.clicked.connect(self._stop_worker)
+        controls.addWidget(self._stop_btn)
+        self._select_all_btn = QPushButton("SELECT: Buchbare")
+        self._select_all_btn.setToolTip("Alle automatisch buchbaren Zeilen markieren.")
         self._select_all_btn.clicked.connect(lambda: self._set_all_bookable(True))
         controls.addWidget(self._select_all_btn)
-        deselect = QPushButton("Auswahl aufheben")
-        deselect.clicked.connect(lambda: self._set_all_bookable(False))
-        controls.addWidget(deselect)
-        self._reset_month_btn = QPushButton("Clearing-Monat auf 100 zuruecksetzen")
+        self._clear_selection_btn = QPushButton("CLEAR: Auswahl")
+        self._clear_selection_btn.setToolTip("Alle Markierungen in der aktuellen Analyse entfernen.")
+        self._clear_selection_btn.clicked.connect(lambda: self._set_all_bookable(False))
+        controls.addWidget(self._clear_selection_btn)
+        self._reset_month_btn = QPushButton("RESET TO 100: Monat")
+        self._reset_month_btn.setToolTip("Bereits gebuchte Clearing-Transaktionen eines Monats auf sevDesk-Status 100 setzen.")
         self._reset_month_btn.clicked.connect(self._reset_month_transactions)
         controls.addWidget(self._reset_month_btn)
-        self._book_btn = QPushButton("Auswahl gesammelt buchen")
+        self._book_btn = QPushButton("BOOK: Auswahl")
+        self._book_btn.setToolTip("Markierte buchbare Zeilen gesammelt in sevDesk buchen/importieren.")
         self._book_btn.clicked.connect(self._book)
         controls.addWidget(self._book_btn)
         layout.addLayout(controls)
@@ -119,7 +156,8 @@ class PaymentClearingView(QWidget):
         self._search = SearchBar("Provider, Referenz, Bestellung, Rechnung oder Kunde")
         self._search.search_changed.connect(lambda _text: self._refresh_table())
         filter_row.addWidget(self._search)
-        self._manual_btn = QPushButton("Offenen Fall Rechnung zuordnen")
+        self._manual_btn = QPushButton("ASSIGN: Rechnung")
+        self._manual_btn.setToolTip("Dem markierten offenen Fall manuell eine sevDesk-Rechnung zuordnen.")
         self._manual_btn.clicked.connect(self._assign_invoice)
         filter_row.addWidget(self._manual_btn)
         layout.addLayout(filter_row)
@@ -139,12 +177,45 @@ class PaymentClearingView(QWidget):
         layout.addWidget(self._summary)
         self._set_running(False)
 
+    @classmethod
+    def _recent_month_starts(cls, today: date) -> list[date]:
+        first_this_month = today.replace(day=1)
+        return [cls._shift_month(first_this_month, -offset) for offset in range(1, cls.MONTH_PRESET_COUNT + 1)]
+
+    @staticmethod
+    def _shift_month(month_start: date, offset: int) -> date:
+        month_index = month_start.year * 12 + month_start.month - 1 + offset
+        year, zero_based_month = divmod(month_index, 12)
+        return date(year, zero_based_month + 1, 1)
+
+    @staticmethod
+    def _month_label(month_start: date) -> str:
+        return f"{_GERMAN_MONTH_NAMES[month_start.month]} {month_start.year}"
+
+    def _apply_month_preset(self) -> None:
+        month_value = self._month_preset.currentData()
+        if not isinstance(month_value, str):
+            return
+        month_start = date.fromisoformat(month_value)
+        month_last_day = calendar.monthrange(month_start.year, month_start.month)[1]
+        month_end = date(month_start.year, month_start.month, month_last_day)
+        self._start.setDate(QDate(month_start.year, month_start.month, month_start.day))
+        self._end.setDate(QDate(month_end.year, month_end.month, month_end.day))
+
     def _set_running(self, running: bool) -> None:
         self._analyze_btn.setEnabled(not running)
+        self._stop_btn.setEnabled(running)
         self._book_btn.setEnabled(not running and bool(self._candidates))
         self._reset_month_btn.setEnabled(not running)
         self._manual_btn.setEnabled(not running and bool(self._candidates))
         self._select_all_btn.setEnabled(not running and bool(self._candidates))
+        self._clear_selection_btn.setEnabled(not running and bool(self._candidates))
+
+    def _stop_worker(self) -> None:
+        if self._worker is None or not self._worker.isRunning():
+            return
+        self._worker.cancel()
+        self._summary.setText("STOP angefordert. Laufende Aktion wird beendet...")
 
     def _emit_worker_progress(self, value: int, text: str) -> None:
         worker = self._worker

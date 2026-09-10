@@ -2224,12 +2224,12 @@ class WixOrdersClient:
             return {}
         order_transactions = payload.get("orderTransactions")
         if isinstance(order_transactions, list):
-            source = next((item for item in order_transactions if isinstance(item, dict)), {})
+            sources = [item for item in order_transactions if isinstance(item, dict)]
         elif isinstance(order_transactions, dict):
-            source = order_transactions
+            sources = [order_transactions]
         else:
-            source = payload
-        if not isinstance(source, dict):
+            sources = [payload]
+        if not sources:
             return {}
 
         provider_ids: list[str] = []
@@ -2239,24 +2239,43 @@ class WixOrdersClient:
         payment_created = ""
         payment_updated = ""
         amount = ""
-        for key in ("paymentProviderTransactionId", "paymentGatewayTransactionId", "externalTransactionId"):
-            candidate = str(source.get(key) or payload.get(key) or "").strip()
-            if candidate:
-                provider_ids.append(candidate)
-                if not primary_provider_id:
-                    primary_provider_id = candidate
-        if not provider_hint:
-            provider_hint = str(source.get("provider") or payload.get("provider") or "").strip()
-        if not payment_status:
-            payment_status = str(source.get("paymentStatus") or payload.get("paymentStatus") or "").strip()
-        if not payment_created:
-            payment_created = str(source.get("paymentCreatedDate") or payload.get("paymentCreatedDate") or "").strip()
-        if not payment_updated:
-            payment_updated = str(source.get("paymentUpdatedDate") or payload.get("paymentUpdatedDate") or "").strip()
-        if not amount:
-            amount = str(source.get("amount") or payload.get("amount") or "").strip()
-        payments = source.get("payments")
-        for payment in payments if isinstance(payments, list) else []:
+        payments_to_read: list[dict[str, Any]] = []
+        for source in sources:
+            for key in ("paymentProviderTransactionId", "paymentGatewayTransactionId", "externalTransactionId"):
+                candidate = str(source.get(key) or payload.get(key) or "").strip()
+                if candidate:
+                    provider_ids.append(candidate)
+                    if not primary_provider_id:
+                        primary_provider_id = candidate
+            if not provider_hint:
+                provider_hint = str(
+                    source.get("paymentProvider")
+                    or source.get("provider")
+                    or payload.get("paymentProvider")
+                    or payload.get("provider")
+                    or ""
+                ).strip()
+            if not payment_status:
+                payment_status = str(source.get("paymentStatus") or payload.get("paymentStatus") or "").strip()
+            if not payment_created:
+                payment_created = str(source.get("paymentCreatedDate") or payload.get("paymentCreatedDate") or "").strip()
+            if not payment_updated:
+                payment_updated = str(source.get("paymentUpdatedDate") or payload.get("paymentUpdatedDate") or "").strip()
+            if not amount:
+                amount = str(source.get("amount") or payload.get("amount") or "").strip()
+            payments = source.get("payments")
+            if isinstance(payments, list):
+                payments_to_read.extend(payment for payment in payments if isinstance(payment, dict))
+
+        # Wix currently returns the actual provider as
+        # regularPaymentDetails.paymentProvider (for example "Stripe").  Older
+        # payloads used provider, so accept both.  Prefer an approved payment
+        # when an order contains multiple attempts.
+        payments_to_read.sort(
+            key=lambda payment: str(payment.get("status") or "").strip().upper()
+            not in {"APPROVED", "PAID"}
+        )
+        for payment in payments_to_read:
             if not isinstance(payment, dict):
                 continue
             regular = payment.get("regularPaymentDetails") if isinstance(payment.get("regularPaymentDetails"), dict) else {}
@@ -2267,9 +2286,17 @@ class WixOrdersClient:
                     if not primary_provider_id:
                         primary_provider_id = candidate
             if not provider_hint:
-                provider_hint = str(payment.get("provider") or regular.get("provider") or source.get("provider") or "").strip()
+                provider_hint = str(
+                    regular.get("paymentProvider")
+                    or payment.get("paymentProvider")
+                    or payment.get("provider")
+                    or regular.get("provider")
+                    or regular.get("paymentMethodId")
+                    or regular.get("paymentMethod")
+                    or ""
+                ).strip()
             if not payment_status:
-                payment_status = str(payment.get("status") or source.get("paymentStatus") or "").strip()
+                payment_status = str(payment.get("status") or regular.get("status") or "").strip()
             if not payment_created:
                 payment_created = str(payment.get("createdDate") or payment.get("createdAt") or "").strip()
             if not payment_updated:
@@ -2285,7 +2312,7 @@ class WixOrdersClient:
         if not primary_provider_id and unique_provider_ids:
             primary_provider_id = unique_provider_ids[0]
         return {
-            "paymentStatus": payment_status or str(source.get("paymentStatus") or "").strip(),
+            "paymentStatus": payment_status,
             "provider": provider_hint,
             "providerTransactionId": primary_provider_id,
             "providerTransactionIds": unique_provider_ids,
