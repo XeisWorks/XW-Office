@@ -185,7 +185,10 @@ class ClearingAnalysis:
 
     @property
     def open_count(self) -> int:
-        return sum(row.status in {MatchStatus.MANUAL, MatchStatus.ERROR} for row in self.candidates)
+        return sum(
+            row.status in {MatchStatus.MANUAL, MatchStatus.ERROR, MatchStatus.REFUND_REVIEW}
+            for row in self.candidates
+        )
 
 
 @dataclass(frozen=True)

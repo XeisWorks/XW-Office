@@ -11,7 +11,7 @@ from xw_office.core.signals import AppSignals
 from xw_office.core.types import ModuleKey
 from xw_office.bootstrap import register_default_services
 from xw_office.ui.main_window import MainWindow
-from xw_office.services.clearing.models import ClearingCandidate, MatchStatus, TransactionKind
+from xw_office.services.clearing.models import ClearingAnalysis, ClearingCandidate, MatchStatus, TransactionKind
 from xw_office.services.clearing.service import PaymentClearingService
 from xw_office.ui.modules.payment_clearing.view import PaymentClearingView
 
@@ -67,6 +67,30 @@ def test_default_filter_shows_only_open_problems(qtbot: object, app_config: obje
     visible = view._filtered()  # noqa: SLF001
 
     assert [row.candidate_id for row in visible] == ["manual", "error"]
+
+
+def test_analysis_summary_shows_visible_count_and_filter(qtbot: object, app_config: object) -> None:
+    container = Container(app_config)  # type: ignore[arg-type]
+    container.register(PaymentClearingService, lambda _c: PaymentClearingService())
+    view = PaymentClearingView(container)
+    qtbot.addWidget(view)
+    analysis = ClearingAnalysis(
+        started_at=datetime(2026, 8, 31, tzinfo=ZoneInfo("Europe/Vienna")),
+        start_date=datetime(2026, 8, 1, tzinfo=ZoneInfo("Europe/Vienna")),
+        end_date=datetime(2026, 9, 1, tzinfo=ZoneInfo("Europe/Vienna")),
+        candidates=(
+            _candidate("ready", MatchStatus.READY),
+            _candidate("refund", MatchStatus.REFUND_REVIEW),
+            _candidate("done", MatchStatus.ALREADY_BOOKED),
+        ),
+    )
+
+    view._on_analysis(analysis)  # noqa: SLF001
+
+    assert len(view._table.source_rows_data()) == 1  # noqa: SLF001
+    assert view._summary.text() == (  # noqa: SLF001
+        "1 sichtbar von 3 Vorgangen | 1 automatisch buchbar | 1 offen | Filter: Offene Probleme"
+    )
 
 
 def test_problem_row_is_highlighted_and_explains_recheck(qtbot: object, app_config: object) -> None:

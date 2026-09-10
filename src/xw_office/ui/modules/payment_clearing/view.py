@@ -55,6 +55,7 @@ _GERMAN_MONTH_NAMES = (
     "November",
     "Dezember",
 )
+_OPEN_PROBLEM_STATUSES = {MatchStatus.MANUAL, MatchStatus.ERROR, MatchStatus.REFUND_REVIEW}
 
 
 class PaymentClearingView(QWidget):
@@ -94,6 +95,7 @@ class PaymentClearingView(QWidget):
         self._worker: BackgroundWorker | None = None
         self._candidates: list[ClearingCandidate] = []
         self._visible_ids: list[str] = []
+        self._warning_count = 0
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -163,7 +165,7 @@ class PaymentClearingView(QWidget):
 
         filter_row = QHBoxLayout()
         self._search = SearchBar("Provider, Referenz, Bestellung, Rechnung oder Kunde")
-        self._search.search_changed.connect(lambda _text: self._refresh_table())
+        self._search.search_changed.connect(lambda _text: self._refresh_table(update_summary=True))
         filter_row.addWidget(self._search)
         self._status_filter = QComboBox()
         self._status_filter.addItem("Offene Probleme", "open")
@@ -171,7 +173,7 @@ class PaymentClearingView(QWidget):
         self._status_filter.addItem("Buchbar", "bookable")
         self._status_filter.addItem("Erledigt", "done")
         self._status_filter.setToolTip("Offene Problemfaelle werden standardmaessig hervorgehoben.")
-        self._status_filter.currentIndexChanged.connect(lambda _index: self._refresh_table())
+        self._status_filter.currentIndexChanged.connect(lambda _index: self._refresh_table(update_summary=True))
         filter_row.addWidget(self._status_filter)
         self._manual_btn = QPushButton("ASSIGN: Rechnung")
         self._manual_btn.setToolTip("Dem markierten offenen Fall manuell eine sevDesk-Rechnung zuordnen.")
@@ -284,22 +286,26 @@ class PaymentClearingView(QWidget):
         if not isinstance(result, ClearingAnalysis):
             return
         self._candidates = list(result.candidates)
-        self._refresh_table()
-        warning = f" | Warnungen: {len(result.warnings)}" if result.warnings else ""
+        self._warning_count = len(result.warnings)
         self._summary.setToolTip("\n".join(result.warnings))
+        self._refresh_table(update_summary=True)
+
+    def _update_analysis_summary(self) -> None:
+        if not self._candidates:
+            return
+        ready_count = sum(row.status == MatchStatus.READY for row in self._candidates)
+        open_count = sum(row.status in _OPEN_PROBLEM_STATUSES for row in self._candidates)
+        warning = f" | Warnungen: {self._warning_count}" if self._warning_count else ""
         self._summary.setText(
-            f"{len(self._candidates)} Vorgange | {result.ready_count} automatisch buchbar | "
-            f"{result.open_count} offen{warning}"
+            f"{len(self._visible_ids)} sichtbar von {len(self._candidates)} Vorgangen | "
+            f"{ready_count} automatisch buchbar | {open_count} offen | "
+            f"Filter: {self._status_filter.currentText()}{warning}"
         )
 
     def _filtered(self) -> list[ClearingCandidate]:
         mode = str(self._status_filter.currentData() or "open")
         if mode == "open":
-            candidates = [
-                row
-                for row in self._candidates
-                if row.status in {MatchStatus.MANUAL, MatchStatus.ERROR, MatchStatus.REFUND_REVIEW}
-            ]
+            candidates = [row for row in self._candidates if row.status in _OPEN_PROBLEM_STATUSES]
         elif mode == "bookable":
             candidates = [row for row in self._candidates if row.is_bookable]
         elif mode == "done":
@@ -331,7 +337,7 @@ class PaymentClearingView(QWidget):
             ).casefold()
         ]
 
-    def _refresh_table(self) -> None:
+    def _refresh_table(self, *, update_summary: bool = False) -> None:
         rows = self._filtered()
         self._visible_ids = [row.candidate_id for row in rows]
         table_rows: list[dict[str, object]] = []
@@ -368,6 +374,8 @@ class PaymentClearingView(QWidget):
                     else row.reason
                 )
         self._table.set_data(table_rows)
+        if update_summary:
+            self._update_analysis_summary()
 
     def _on_table_clicked(self, index: object) -> None:
         if not hasattr(index, "column") or int(index.column()) != self.COL_SELECT:
