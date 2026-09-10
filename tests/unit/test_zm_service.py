@@ -106,6 +106,25 @@ def test_zm_service_uses_invoice_date_and_groups_by_uid_and_kind() -> None:
         "ungueltige/fehlende UID: Ohne UID (RE-3) -> leer",
         "ungueltige/fehlende UID: AT falsch klassifiziert (RE-5) -> ATU12345678",
     ]
+    assert [(item.document_key, item.document_number) for item in result.invalid_uid_details] == [
+        ("Invoice:3", "RE-3"),
+        ("Invoice:5", "RE-5"),
+    ]
+
+
+def test_zm_service_uses_operator_uid_corrections_for_this_calculation() -> None:
+    result = ZmService(_Provider()).calculate_month(  # type: ignore[arg-type]
+        2026,
+        5,
+        uid_overrides={"Invoice:3": "DE136695976", "Invoice:5": "DE136695976"},
+    )
+
+    assert result.invalid == []
+    assert result.invalid_uid_details == []
+    assert [(row.uid, row.kind, row.amount_eur_int) for row in result.rows] == [
+        ("DE136695976", "delivery", 160),
+        ("IT00743110157", "service", 201),
+    ]
 
 
 def test_zm_service_subtracts_credit_notes_by_credit_note_date() -> None:

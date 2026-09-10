@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -39,10 +40,12 @@ from xw_office.services.finanzonline import (
     OssXmlExport,
     UvaService,
     UvaSubmitResult,
+    ZmCalculationResult,
     render_data_quality_text,
     render_reference_comparison_text,
     render_reconciliation_text,
 )
+from xw_office.services.finanzonline.zm_service import is_valid_uid, normalize_uid
 from xw_office.ui.widgets.data_table import DataTable
 from xw_office.ui.widgets.search_bar import SearchBar
 
@@ -128,6 +131,7 @@ class TaxesView(QWidget):
         self._container = container
         self._uva_preview_worker: BackgroundWorker | None = None
         self._uva_submit_worker: BackgroundWorker | None = None
+        self._zm_prepare_worker: BackgroundWorker | None = None
         self._oss_worker: BackgroundWorker | None = None
         self._clearing_worker: BackgroundWorker | None = None
         self._expenses_worker: BackgroundWorker | None = None
@@ -138,6 +142,7 @@ class TaxesView(QWidget):
         self._uva_progress_label: QLabel | None = None
         self._uva_preview_button: QPushButton | None = None
         self._uva_submit_button: QPushButton | None = None
+        self._zm_submit_button: QPushButton | None = None
         self._uva_amount_label: QLabel | None = None
         self._uva_output: QPlainTextEdit | None = None
         self._zm_output: QPlainTextEdit | None = None
@@ -237,10 +242,12 @@ class TaxesView(QWidget):
 
         preview = QPushButton("UVA berechnen")
         refresh = QPushButton("Neu aus sevDesk laden")
-        submit = QPushButton("UVA + ZM an FinanzOnline senden")
+        submit_uva = QPushButton("UVA an FinanzOnline senden")
+        submit_zm = QPushButton("Zusammenfassende Meldung senden")
         self._uva_preview_button = preview
         self._uva_refresh_button = refresh
-        self._uva_submit_button = submit
+        self._uva_submit_button = submit_uva
+        self._zm_submit_button = submit_zm
 
         def on_progress(value: int, text: str) -> None:
             self._set_uva_progress(value, text)
@@ -290,21 +297,29 @@ class TaxesView(QWidget):
         def on_refresh() -> None:
             start_preview(refresh_data=True)
 
-        def on_submit() -> None:
+        def on_submit_uva() -> None:
             if self._uva_submit_worker is not None and self._uva_submit_worker.isRunning():
                 return
             if self._uva_preview_worker is not None and self._uva_preview_worker.isRunning():
                 return
+            if QMessageBox.question(
+                self,
+                "UVA an FinanzOnline senden",
+                f"UVA/U30 fuer {year.value():04d}-{month.value():02d} jetzt verbindlich senden?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            ) != QMessageBox.StandardButton.Yes:
+                return
 
             self._set_uva_busy(True)
-            self._set_uva_progress(5, "UVA/U13 wird vorbereitet...")
+            self._set_uva_progress(5, "UVA wird vorbereitet...")
             selected_year = year.value()
             selected_month = month.value()
 
             def job() -> UvaSubmitResult:
                 self._emit_uva_submit_progress(20, "UVA-Payload wird erstellt...")
                 self._emit_uva_submit_progress(45, "UVA wird an FinanzOnline gesendet...")
-                result = uva.submit_month(selected_year, selected_month)
+                result = uva.submit_uva_month(selected_year, selected_month)
                 self._emit_uva_submit_progress(100, "Sendevorgang abgeschlossen")
                 return result
 
@@ -312,7 +327,7 @@ class TaxesView(QWidget):
 
             def on_uva_result(res: object) -> None:
                 if not isinstance(res, UvaSubmitResult):
-                    QMessageBox.warning(self, "UVA + ZM", "Keine gueltige Antwort erhalten.")
+                    QMessageBox.warning(self, "UVA", "Keine gueltige Antwort erhalten.")
                     return
                 self._show_uva_submit_result(res)
 
@@ -321,7 +336,7 @@ class TaxesView(QWidget):
             self._uva_submit_worker.signals.error.connect(
                 lambda exc: QMessageBox.warning(
                     self,
-                    "UVA + ZM",
+                    "UVA",
                     f"Fehler: {exc}",
                 )
             )
@@ -334,16 +349,161 @@ class TaxesView(QWidget):
             self._uva_submit_worker.signals.finished.connect(on_submit_finished)
             self._uva_submit_worker.start()
 
+        def on_submit_zm() -> None:
+            if self._zm_prepare_worker is not None and self._zm_prepare_worker.isRunning():
+                return
+            if self._uva_submit_worker is not None and self._uva_submit_worker.isRunning():
+                return
+            if self._uva_preview_worker is not None and self._uva_preview_worker.isRunning():
+                return
+
+            self._set_uva_busy(True)
+            self._set_uva_progress(5, "Zusammenfassende Meldung wird vorbereitet...")
+            selected_year = year.value()
+            selected_month = month.value()
+
+            def prepare_job() -> ZmCalculationResult:
+                self._emit_uva_submit_progress(25, "ZM-Daten und UIDs werden geprueft...")
+                return uva.prepare_zm_month(selected_year, selected_month)
+
+            self._zm_prepare_worker = BackgroundWorker(prepare_job)
+
+            def on_zm_prepared(prepared: object) -> None:
+                if not isinstance(prepared, ZmCalculationResult):
+                    QMessageBox.warning(self, "Zusammenfassende Meldung", "Keine gueltige ZM-Antwort erhalten.")
+                    return
+                corrections = self._ask_zm_uid_corrections(prepared)
+                if corrections is None:
+                    self._set_uva_progress(0, "ZS-Abgabe abgebrochen: UID-Eingabe fehlt.")
+                    return
+                if QMessageBox.question(
+                    self,
+                    "Zusammenfassende Meldung senden",
+                    (
+                        f"Zusammenfassende Meldung/U13 fuer {selected_year:04d}-{selected_month:02d} "
+                        f"mit {len(prepared.rows)} UID-Zeilen jetzt verbindlich senden?"
+                    ),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                ) != QMessageBox.StandardButton.Yes:
+                    self._set_uva_progress(0, "ZS-Abgabe abgebrochen.")
+                    return
+                self._start_zm_submission(
+                    uva,
+                    selected_year,
+                    selected_month,
+                    prepared,
+                    corrections,
+                )
+
+            self._zm_prepare_worker.signals.progress.connect(on_progress)
+            self._zm_prepare_worker.signals.result.connect(on_zm_prepared)
+            self._zm_prepare_worker.signals.error.connect(
+                lambda exc: QMessageBox.warning(self, "Zusammenfassende Meldung", f"Fehler: {exc}")
+            )
+
+            def on_zm_prepare_finished() -> None:
+                self._zm_prepare_worker = None
+                sending = self._uva_submit_worker is not None
+                self._set_uva_busy(sending)
+                if not sending:
+                    self._container.resolve(AppSignals).status_message.emit("ZS-Pruefung beendet", 3000)
+
+            self._zm_prepare_worker.signals.finished.connect(on_zm_prepare_finished)
+            self._zm_prepare_worker.start()
+
         preview.clicked.connect(on_preview)
         refresh.clicked.connect(on_refresh)
-        submit.clicked.connect(on_submit)
+        submit_uva.clicked.connect(on_submit_uva)
+        submit_zm.clicked.connect(on_submit_zm)
         buttons = QHBoxLayout()
         buttons.addWidget(preview)
         buttons.addWidget(refresh)
-        buttons.addWidget(submit)
+        buttons.addWidget(submit_uva)
+        buttons.addWidget(submit_zm)
         buttons.addStretch()
         layout.addLayout(buttons)
         return page
+
+    def _ask_zm_uid_corrections(self, result: ZmCalculationResult) -> dict[str, str] | None:
+        """Request valid UIDs before a U13 upload; corrections stay in this filing only."""
+        if not result.invalid:
+            return {}
+        if not result.invalid_uid_details:
+            QMessageBox.warning(
+                self,
+                "Zusammenfassende Meldung",
+                "Ungültige UID-Daten konnten nicht eindeutig einer Rechnung zugeordnet werden. "
+                "Bitte ZM neu aus sevDesk laden.",
+            )
+            return None
+
+        corrections: dict[str, str] = {}
+        for detail in result.invalid_uid_details:
+            context = detail.customer or "Unbekannter Kunde"
+            if detail.document_number:
+                context += f"\nRechnung/Gutschrift: {detail.document_number}"
+            original = detail.uid_raw or "leer"
+            while True:
+                value, accepted = QInputDialog.getText(
+                    self,
+                    "UID fuer Zusammenfassende Meldung",
+                    f"Ungültige oder fehlende UID ({original}) fuer:\n{context}\n\n"
+                    "Bitte korrekte EU-UID eingeben:",
+                    text=detail.uid_raw,
+                )
+                if not accepted:
+                    return None
+                normalized = normalize_uid(value)
+                if is_valid_uid(normalized):
+                    corrections[detail.document_key] = normalized
+                    break
+                QMessageBox.warning(
+                    self,
+                    "UID ungültig",
+                    "Die eingegebene UID ist weiterhin ungültig. Bitte prüfen oder Abbrechen.",
+                )
+        return corrections
+
+    def _start_zm_submission(
+        self,
+        uva: UvaService,
+        year: int,
+        month: int,
+        prepared: ZmCalculationResult,
+        corrections: dict[str, str],
+    ) -> None:
+        self._set_uva_busy(True)
+        self._set_uva_progress(45, "Zusammenfassende Meldung wird an FinanzOnline gesendet...")
+
+        def job() -> UvaSubmitResult:
+            result = uva.submit_zm_month(
+                year,
+                month,
+                uid_overrides=corrections or None,
+                prepared=prepared if not corrections else None,
+            )
+            self._emit_uva_submit_progress(100, "ZS-Sendevorgang abgeschlossen")
+            return result
+
+        self._uva_submit_worker = BackgroundWorker(job)
+        self._uva_submit_worker.signals.progress.connect(self._set_uva_progress)
+        self._uva_submit_worker.signals.result.connect(
+            lambda result: self._show_zm_submit_result(result)
+            if isinstance(result, UvaSubmitResult)
+            else QMessageBox.warning(self, "Zusammenfassende Meldung", "Keine gueltige Antwort erhalten.")
+        )
+        self._uva_submit_worker.signals.error.connect(
+            lambda exc: QMessageBox.warning(self, "Zusammenfassende Meldung", f"Fehler: {exc}")
+        )
+
+        def on_finished() -> None:
+            self._uva_submit_worker = None
+            self._set_uva_busy(False)
+            self._container.resolve(AppSignals).status_message.emit("ZS-Abgabe beendet", 3000)
+
+        self._uva_submit_worker.signals.finished.connect(on_finished)
+        self._uva_submit_worker.start()
 
     def _set_uva_payload(self, payload: dict[str, object]) -> None:
         zahlbetrag = str(payload.get("zahlbetrag") or "").strip()
@@ -466,7 +626,7 @@ class TaxesView(QWidget):
             detail_parts.append("Gesendetes U13/ZM-XML:\n" + res.zm_xml_payload)
 
         box = QMessageBox(self)
-        box.setWindowTitle("UVA + ZM Abgabe")
+        box.setWindowTitle("UVA Abgabe")
         box.setIcon(QMessageBox.Icon.Information if res.ok and (res.zm_ok is not False) else QMessageBox.Icon.Warning)
         box.setText("Sendevorgang abgeschlossen." if res.ok else "Sendevorgang mit Fehler.")
         box.setInformativeText("\n".join(lines))
@@ -474,8 +634,37 @@ class TaxesView(QWidget):
             box.setDetailedText("\n\n".join(detail_parts))
         box.exec()
 
+    def _show_zm_submit_result(self, res: UvaSubmitResult) -> None:
+        state = "erfolgreich" if res.ok else "fehlgeschlagen"
+        lines = [
+            f"U13/Zusammenfassende Meldung: {state}",
+            f"Antwort: {res.message or '-'}",
+            f"Referenz: {res.reference_id or '-'}",
+            f"ZM-Zeilen: {res.zm_rows}",
+            f"Modus: {'Testuebermittlung' if res.test_mode else 'Produktivuebermittlung'}",
+            f"XML validiert: {'ja' if res.xml_validated else 'nein'}",
+        ]
+        box = QMessageBox(self)
+        box.setWindowTitle("Zusammenfassende Meldung Abgabe")
+        box.setIcon(QMessageBox.Icon.Information if res.ok else QMessageBox.Icon.Warning)
+        box.setText("Sendevorgang abgeschlossen." if res.ok else "Sendevorgang mit Fehler.")
+        box.setInformativeText("\n".join(lines))
+        details: list[str] = []
+        if res.zm_payload:
+            details.append("Gesendeter U13/ZM-Payload:\n" + repr(res.zm_payload))
+        if res.xml_payload:
+            details.append("Gesendetes U13/ZM-XML:\n" + res.xml_payload)
+        if details:
+            box.setDetailedText("\n\n".join(details))
+        box.exec()
+
     def _set_uva_busy(self, busy: bool) -> None:
-        for button in (self._uva_preview_button, self._uva_refresh_button, self._uva_submit_button):
+        for button in (
+            self._uva_preview_button,
+            self._uva_refresh_button,
+            self._uva_submit_button,
+            self._zm_submit_button,
+        ):
             if button is not None:
                 button.setEnabled(not busy)
         if self._uva_progress_bar is not None:
@@ -506,6 +695,7 @@ class TaxesView(QWidget):
         running = (
             (self._uva_preview_worker is not None and self._uva_preview_worker.isRunning())
             or (self._uva_submit_worker is not None and self._uva_submit_worker.isRunning())
+            or (self._zm_prepare_worker is not None and self._zm_prepare_worker.isRunning())
         )
         if not running:
             self._uva_progress_timer.stop()
@@ -524,7 +714,7 @@ class TaxesView(QWidget):
             worker.signals.progress.emit(value, text)
 
     def _emit_uva_submit_progress(self, value: int, text: str) -> None:
-        worker = self._uva_submit_worker
+        worker = self._uva_submit_worker or self._zm_prepare_worker
         if worker is not None:
             worker.signals.progress.emit(value, text)
 

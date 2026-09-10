@@ -504,6 +504,26 @@ def test_uva_service_blocks_submission_when_data_quality_blocks() -> None:
     assert mock.calls == []
 
 
+def test_uva_and_zm_can_be_submitted_separately_when_zm_uid_is_invalid() -> None:
+    mock = MockUvaSoapBackend()
+    client = FinanzOnlineClient(AppConfig(), uva_backend=mock)
+    service = UvaService(
+        AppConfig(),
+        client,
+        preview_service=_PreviewServiceWithCounter(),  # type: ignore[arg-type]
+        payload_service=_PayloadServiceWithPreviewCounter(),  # type: ignore[arg-type]
+        zm_service=_BlockingZmService(),  # type: ignore[arg-type]
+    )
+
+    uva_result = service.submit_uva_month(2026, 3)
+    zm_result = service.submit_zm_month(2026, 3)
+
+    assert uva_result.ok is True
+    assert zm_result.ok is False
+    assert zm_result.zm_ok is False
+    assert [call["meldung"] for call in mock.calls] == ["U30"]
+
+
 class _JunePreviewResultStub(_PreviewResultStub):
     year = 2026
     month = 6

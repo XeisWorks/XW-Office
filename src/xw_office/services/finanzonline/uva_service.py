@@ -5,7 +5,7 @@ import logging
 import time
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Mapping
 
 from xw_office.core.config import AppConfig
 from xw_office.services.finanzonline.client import FinanzOnlineClient
@@ -14,7 +14,7 @@ from xw_office.services.finanzonline.uva_payload_service import UvaPayloadServic
 from xw_office.services.finanzonline.uva_preview import UvaPreviewService
 from xw_office.services.finanzonline.uva_references import compare_uva_reference
 from xw_office.services.finanzonline.uva_soap import UvaSubmitResult
-from xw_office.services.finanzonline.zm_service import ZmService
+from xw_office.services.finanzonline.zm_service import ZmCalculationResult, ZmService
 
 logger = logging.getLogger(__name__)
 _TAX_SNAPSHOT_SCHEMA_VERSION = "uva_zm_snapshot_v4"
@@ -75,15 +75,15 @@ class UvaService:
         if not refresh and self._snapshot_store is not None:
             snapshot = self._snapshot_store.get_snapshot(year, month)
             if snapshot is not None and snapshot.payload.get("snapshot_schema_version") == _TAX_SNAPSHOT_SCHEMA_VERSION:
-                payload = deepcopy(snapshot.payload)
-                payload["cache"] = {
+                cached_payload = deepcopy(snapshot.payload)
+                cached_payload["cache"] = {
                     "hit": True,
                     "source": "persistent",
                     "snapshot_hash": snapshot.payload_hash,
                     "age_seconds": round(snapshot.age_seconds, 3),
                 }
-                self._calculation_cache[cache_key] = deepcopy(payload)
-                return payload
+                self._calculation_cache[cache_key] = deepcopy(cached_payload)
+                return cached_payload
         if self._preview_service is None or self._payload_service is None:
             return {
                 "jahr": year,
@@ -205,7 +205,7 @@ class UvaService:
         }
 
     def submit_month(self, year: int, month: int) -> UvaSubmitResult:
-        """Calculate and submit one monthly U30 payload, then U13/ZM when configured."""
+        """Compatibility workflow for callers that still explicitly request both filings."""
         monthly_payload = self.calculate_month(year, month)
         data_quality = monthly_payload.get("data_quality")
         if isinstance(data_quality, dict) and int(data_quality.get("blocking_count") or 0) > 0:
@@ -216,33 +216,86 @@ class UvaService:
                 message=f"UVA nicht gesendet: Datenqualitaet blockiert. {details}".strip(),
                 uva_payload=monthly_payload,
             )
+        result = self.submit_uva_month(year, month)
+        if not result.ok or self._zm_service is None:
+            return result
+
+        zm_result = self.submit_zm_month(year, month)
+        result.zm_ok = zm_result.ok
+        result.zm_reference_id = zm_result.reference_id
+        result.zm_message = zm_result.message
+        result.zm_rows = zm_result.zm_rows
+        result.zm_xml_validated = zm_result.xml_validated
+        result.zm_xml_payload = zm_result.xml_payload
+        result.zm_payload = zm_result.zm_payload
+        return result
+
+    def submit_uva_month(self, year: int, month: int) -> UvaSubmitResult:
+        """Submit U30 only; ZM data errors must not block the separate UVA filing."""
+        monthly_payload = self.calculate_month(year, month)
+        data_quality = monthly_payload.get("data_quality")
+        if isinstance(data_quality, dict) and int(data_quality.get("uva_blocking_count") or 0) > 0:
+            blocking = data_quality.get("uva_blocking")
+            details = "; ".join(str(item) for item in blocking) if isinstance(blocking, list) else ""
+            return UvaSubmitResult(
+                ok=False,
+                message=f"UVA nicht gesendet: Datenqualitaet blockiert. {details}".strip(),
+                uva_payload=monthly_payload,
+            )
         uva_payload = self.build_submission_payload(year, month)
         result = self.submit_uva(uva_payload)
         result.uva_payload = uva_payload
-        if not result.ok or self._zm_service is None:
-            return result
+        return result
+
+    def prepare_zm_month(self, year: int, month: int) -> ZmCalculationResult:
+        """Return ZM source rows so the UI can resolve invalid customer UIDs first."""
+        if self._zm_service is None:
+            raise RuntimeError("ZM/U13 ist nicht konfiguriert.")
 
         cached = self._calculation_cache.get((year, month))
         cached_zm = cached.get("zm") if isinstance(cached, dict) else None
         if isinstance(cached_zm, dict):
-            zm_rows = list(cached_zm.get("rows") or [])
-            zm_invalid = list(cached_zm.get("invalid") or [])
-            zm_warnings = list(cached_zm.get("warnings") or [])
-        else:
-            zm = self._zm_service.calculate_month(year, month)
-            zm_rows = [row.model_dump() for row in zm.rows]
-            zm_invalid = list(zm.invalid)
-            zm_warnings = list(zm.warnings)
+            try:
+                return ZmCalculationResult.model_validate(cached_zm)
+            except ValueError:
+                logger.warning("Cached ZM result for %s-%s could not be parsed", year, month)
+        return self._zm_service.calculate_month(year, month)
 
-        result.zm_rows = len(zm_rows)
+    def submit_zm_month(
+        self,
+        year: int,
+        month: int,
+        *,
+        uid_overrides: Mapping[str, str] | None = None,
+        prepared: ZmCalculationResult | None = None,
+    ) -> UvaSubmitResult:
+        """Submit U13 only, applying operator-confirmed UID corrections in-memory."""
+        if self._zm_service is None:
+            return UvaSubmitResult(ok=False, zm_ok=False, message="ZM/U13 ist nicht konfiguriert.")
+        if uid_overrides:
+            zm = self._zm_service.calculate_month(year, month, uid_overrides=uid_overrides)
+        elif prepared is not None:
+            zm = prepared
+        else:
+            zm = self.prepare_zm_month(year, month)
+
+        zm_rows = [row.model_dump() for row in zm.rows]
+        zm_invalid = list(zm.invalid)
+        zm_warnings = list(zm.warnings)
         if zm_invalid:
-            result.zm_ok = False
-            result.zm_message = "ZM nicht gesendet: " + "; ".join(str(item) for item in zm_invalid)
-            return result
+            return UvaSubmitResult(
+                ok=False,
+                zm_ok=False,
+                message="ZM nicht gesendet: " + "; ".join(str(item) for item in zm_invalid),
+                zm_rows=len(zm_rows),
+            )
         if not zm_rows:
-            result.zm_ok = True
-            result.zm_message = "Keine ZM-relevanten Rechnungen fuer diesen Monat."
-            return result
+            return UvaSubmitResult(
+                ok=True,
+                zm_ok=True,
+                message="Keine ZM-relevanten Rechnungen fuer diesen Monat.",
+                zm_rows=0,
+            )
 
         zm_payload = {
             "meldung": "U13",
@@ -255,14 +308,11 @@ class UvaService:
             "rows": zm_rows,
             "warnings": zm_warnings,
         }
-        result.zm_payload = zm_payload
         zm_result = self._client.submit_zm(zm_payload)
-        result.zm_ok = zm_result.ok
-        result.zm_reference_id = zm_result.reference_id
-        result.zm_message = zm_result.message
-        result.zm_xml_validated = zm_result.xml_validated
-        result.zm_xml_payload = zm_result.xml_payload
-        return result
+        zm_result.zm_ok = zm_result.ok
+        zm_result.zm_rows = len(zm_rows)
+        zm_result.zm_payload = zm_payload
+        return zm_result
 
     def submit_uva(self, payload: dict[str, Any]) -> UvaSubmitResult:
         """Delegate to FinanzOnline SOAP/FileUpload client."""
@@ -333,24 +383,32 @@ def build_data_quality(payload: dict[str, Any]) -> dict[str, Any]:
     zm = payload.get("zm")
     zm_invalid = zm.get("invalid") if isinstance(zm, dict) else []
     invalid_items = [str(item) for item in zm_invalid if str(item).strip()] if isinstance(zm_invalid, list) else []
-    blocking = list(invalid_items)
+    zm_blocking = list(invalid_items)
+    uva_blocking: list[str] = []
     if isinstance(reference_comparison, dict) and reference_comparison.get("within_tolerance") is False:
         amount = reference_comparison.get("zahlbetrag")
         if isinstance(amount, dict):
-            blocking.append(
+            uva_blocking.append(
                 "Golden-Master-Abweichung ausserhalb Toleranz: "
                 f"Live {amount.get('actual')} / Soll {amount.get('expected')} / Delta {amount.get('delta')}"
             )
         else:
-            blocking.append("Golden-Master-Abweichung ausserhalb Toleranz")
+            uva_blocking.append("Golden-Master-Abweichung ausserhalb Toleranz")
+    blocking = [*uva_blocking, *zm_blocking]
     status = "abgabebereit"
-    if blocking:
+    if uva_blocking:
         status = "blockiert"
+    elif zm_blocking:
+        status = "ZM-UID pruefen"
     elif warning_items:
         status = "pruefen"
     return {
         "status": status,
         "blocking_count": len(blocking),
+        "uva_blocking_count": len(uva_blocking),
+        "uva_blocking": uva_blocking,
+        "zm_blocking_count": len(zm_blocking),
+        "zm_blocking": zm_blocking,
         "warning_count": len(warning_items),
         "blocking": blocking,
         "warnings": warning_items,
@@ -370,12 +428,13 @@ def render_data_quality_text(data_quality: dict[str, Any]) -> str:
         "Datenqualitaet",
         f"Status: {data_quality.get('status') or 'unbekannt'}",
         f"Regelversion: {data_quality.get('rule_version') or '-'}",
-        f"Blockierend: {data_quality.get('blocking_count') or 0}",
+        f"UVA blockierend: {data_quality.get('uva_blocking_count') or 0}",
+        f"ZM-UID-Pruefung: {data_quality.get('zm_blocking_count') or 0}",
         f"Hinweise: {data_quality.get('warning_count') or 0}",
     ]
     blocking = data_quality.get("blocking")
     if isinstance(blocking, list) and blocking:
-        lines.extend(["", "Blockierende Punkte:"])
+        lines.extend(["", "Zu klaerende Punkte:"])
         lines.extend(f"- {item}" for item in blocking if str(item).strip())
     return "\n".join(lines)
 

@@ -7,10 +7,10 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Mapping, Protocol
 
 from pydantic import BaseModel, Field
-from stdnum.eu import vat
+from stdnum.eu import vat  # type: ignore[import-untyped]
 
 from xw_office.services.http_client import SevdeskConnection
 
@@ -28,11 +28,21 @@ class ZmRow(BaseModel):
     customer: str = ""
 
 
+class ZmInvalidUid(BaseModel):
+    """A ZM document whose customer UID needs an explicit operator decision."""
+
+    document_key: str
+    document_number: str = ""
+    customer: str = ""
+    uid_raw: str = ""
+
+
 class ZmCalculationResult(BaseModel):
     year: int
     month: int
     rows: list[ZmRow] = Field(default_factory=list)
     invalid: list[str] = Field(default_factory=list)
+    invalid_uid_details: list[ZmInvalidUid] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     considered: int = 0
     selected: int = 0
@@ -194,7 +204,13 @@ class ZmService:
     def __init__(self, provider: ZmInvoiceProvider) -> None:
         self._provider = provider
 
-    def calculate_month(self, year: int, month: int) -> ZmCalculationResult:
+    def calculate_month(
+        self,
+        year: int,
+        month: int,
+        *,
+        uid_overrides: Mapping[str, str] | None = None,
+    ) -> ZmCalculationResult:
         invoices = self._provider.load_invoices(year, month)
         load_credit_notes = getattr(self._provider, "load_credit_notes", None)
         credit_notes = load_credit_notes(year, month) if callable(load_credit_notes) else []
@@ -248,13 +264,23 @@ class ZmService:
                 or document.get("id")
                 or ""
             ).strip()
-            uid_raw = str(contact.get("vatNumber") or "").strip()
+            document_id = _ref_id(document.get("id"))
+            document_key = f"{resource}:{document_id or document_number}"
+            uid_raw = str((uid_overrides or {}).get(document_key) or contact.get("vatNumber") or "").strip()
             uid = normalize_uid(uid_raw)
             if not uid or not is_valid_uid(uid):
                 label = f"{customer or 'Unbekannter Kunde'}"
                 if document_number:
                     label += f" ({document_number})"
                 result.invalid.append(f"ungueltige/fehlende UID: {label} -> {uid_raw or 'leer'}")
+                result.invalid_uid_details.append(
+                    ZmInvalidUid(
+                        document_key=document_key,
+                        document_number=document_number,
+                        customer=customer,
+                        uid_raw=uid_raw,
+                    )
+                )
                 return
 
             for kind, net_amount in facts:
