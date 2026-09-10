@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 VIENNA = ZoneInfo("Europe/Vienna")
 _QUEUE_MOLLIE_KEY = "daily_business.queue.mollie"
 _ORDER_NUMBER = re.compile(r"(?<!\d)(\d{5})(?!\d)")
+_CLEARING_PURPOSE_KIND = re.compile(r"\|\s*(?:PAYMENT|PAYOUT|REFUND)\s*$", re.IGNORECASE)
 
 
 def default_clearing_history_dir() -> Path:
@@ -68,6 +69,30 @@ def _order_number(value: object) -> str:
         return text
     matches = _ORDER_NUMBER.findall(text)
     return matches[-1] if matches else ""
+
+
+def _invoice_number(value: object) -> str:
+    """Normalize a sevDesk invoice number for an exact identity comparison."""
+    return str(value or "").strip().upper()
+
+
+def _is_direct_b2b_match(row: ClearingCandidate, invoice: InvoiceRecord) -> bool:
+    """Return whether a SEPA row refers directly to a sevDesk invoice number.
+
+    B2B bank transfers carry a number such as ``RE-261234`` in their purpose,
+    rather than a Wix order number. They must therefore be verified against
+    ``invoice_number`` and not against the Wix reference field.
+    """
+    return (
+        row.kind == TransactionKind.SEPA
+        and bool(_invoice_number(row.order_number))
+        and _invoice_number(row.order_number) == _invoice_number(invoice.invoice_number)
+    )
+
+
+def _is_clearing_transaction(row: SevdeskTransaction) -> bool:
+    """Limit recovery resets to transactions created by this clearing workflow."""
+    return bool(purpose_provider_ref(row.purpose) and _CLEARING_PURPOSE_KIND.search(row.purpose))
 
 
 def _candidate_id(tx: ProviderTransaction) -> str:
@@ -504,6 +529,8 @@ class PaymentClearingService:
             raise ValueError(
                 f"Betrag passt nicht: Zahlung {candidate.amount:.2f}, Rechnung {invoice.amount:.2f}."
             )
+        if _is_direct_b2b_match(candidate, invoice):
+            return replace(candidate.with_manual_invoice(invoice), order_number=invoice.invoice_number)
         invoice_order_no = _order_number(invoice.reference)
         candidate_order_no = _order_number(candidate.order_number)
         if not invoice_order_no:
@@ -528,6 +555,12 @@ class PaymentClearingService:
                 f"({current_invoice.invoice_id} statt {row.invoice_id})"
             )
         if current_invoice.is_paid:
+            return current_invoice
+        if _is_direct_b2b_match(row, current_invoice):
+            if current_invoice.amount != row.amount:
+                raise RuntimeError(
+                    f"Betrag hat sich geaendert: Zahlung {row.amount:.2f}, Rechnung {current_invoice.amount:.2f}"
+                )
             return current_invoice
         expected_order_no = _order_number(row.order_number)
         current_order_no = _order_number(current_invoice.reference)
@@ -558,6 +591,21 @@ class PaymentClearingService:
         selected = [row for row in candidates if row.selected and row.is_bookable]
         results: list[BookingItemResult] = []
         total = len(selected)
+        # Refresh existing imports once per account instead of querying sevDesk
+        # again for every selected Stripe/Mollie row. The date buffer matches
+        # ``find_transaction_by_duplicate_key`` and preserves idempotency.
+        existing_by_duplicate: dict[tuple[str, str, str, str, Decimal], SevdeskTransaction] = {}
+        rows_by_account: dict[int, list[ClearingCandidate]] = {}
+        for row in selected:
+            if row.account_id is not None and row.kind != TransactionKind.SEPA:
+                rows_by_account.setdefault(row.account_id, []).append(row)
+        for account_id, account_rows in rows_by_account.items():
+            start = min(row.payment_date for row in account_rows) - timedelta(days=2)
+            end = max(row.payment_date for row in account_rows) + timedelta(days=3)
+            for existing_transaction in self._sevdesk.transactions(account_id, start, end):
+                key = transaction_duplicate_key(existing_transaction)
+                if key.provider_ref:
+                    existing_by_duplicate[key.as_tuple()] = existing_transaction
         for index, row in enumerate(selected, start=1):
             if progress:
                 progress(int((index - 1) / max(total, 1) * 100), f"{row.provider_ref} buchen")
@@ -565,11 +613,7 @@ class PaymentClearingService:
             try:
                 transaction_id = row.transaction_id
                 if row.account_id is not None and row.kind != TransactionKind.SEPA:
-                    existing = self._sevdesk.find_transaction_by_duplicate_key(
-                        row.account_id,
-                        _duplicate_key_for_candidate(row),
-                        row.payment_date,
-                    )
+                    existing = existing_by_duplicate.get(_duplicate_key_for_candidate(row).as_tuple())
                     if existing is not None:
                         transaction_id = existing.transaction_id
                         if existing.status == 400:
@@ -680,7 +724,7 @@ class PaymentClearingService:
         for account_id in accounts.values():
             rows.extend(self._sevdesk.transactions(account_id, start, end))
 
-        candidates = [row for row in rows if row.status == 200]
+        candidates = [row for row in rows if row.status == 200 and _is_clearing_transaction(row)]
         total = len(candidates)
         results: list[ResetItemResult] = []
         for index, row in enumerate(candidates, start=1):

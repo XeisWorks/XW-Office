@@ -107,7 +107,7 @@ class PaymentClearingView(QWidget):
         deselect = QPushButton("Auswahl aufheben")
         deselect.clicked.connect(lambda: self._set_all_bookable(False))
         controls.addWidget(deselect)
-        self._reset_month_btn = QPushButton("Monat auf 100 zuruecksetzen")
+        self._reset_month_btn = QPushButton("Clearing-Monat auf 100 zuruecksetzen")
         self._reset_month_btn.clicked.connect(self._reset_month_transactions)
         controls.addWidget(self._reset_month_btn)
         self._book_btn = QPushButton("Auswahl gesammelt buchen")
@@ -338,8 +338,11 @@ class PaymentClearingView(QWidget):
         month_end = date(month_start.year, month_start.month, month_last_day)
         answer = QMessageBox.question(
             self,
-            "Monat auf 100 zuruecksetzen",
-            f"Alle sevDesk-Transaktionen mit Status 200 im {month_start:%m.%Y} auf 100 zuruecksetzen?",
+            "Clearing-Monat auf 100 zuruecksetzen",
+            (
+                "Alle eindeutig als Zahlungsclearing markierten sevDesk-Transaktionen "
+                f"mit Status 200 im {month_start:%m.%Y} auf 100 zuruecksetzen?"
+            ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -433,7 +436,9 @@ class PaymentClearingView(QWidget):
             )
             QMessageBox.warning(self, "Zahlungsclearing", self._summary.text() + ("\n\n" + message if message else ""))
             return
-        self._summary.setText(f"Monats-Reset abgeschlossen: {result.success_count} Transaktionen auf 100 gesetzt.")
+        self._summary.setText(
+            f"Clearing-Reset abgeschlossen: {result.success_count} Transaktionen auf 100 gesetzt."
+        )
         QMessageBox.information(self, "Zahlungsclearing", self._summary.text())
 
     def has_active_flow(self) -> bool:

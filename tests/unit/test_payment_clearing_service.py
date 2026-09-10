@@ -17,6 +17,7 @@ from xw_office.services.clearing.gateways import (
     purpose_provider_ref,
 )
 from xw_office.services.clearing.models import (
+    ClearingCandidate,
     ClearingDuplicateKey,
     ClearingSkipReason,
     InvoiceRecord,
@@ -58,6 +59,8 @@ class _Sevdesk:
         self.created: list[dict] = []
         self.booked: list[dict] = []
         self.reset_calls: list[tuple[int, int]] = []
+        self.duplicate_lookup_calls = 0
+        self.transaction_queries: list[tuple[int, datetime, datetime]] = []
         self.existing: SevdeskTransaction | None = None
         self.transactions_by_account: dict[int, list[SevdeskTransaction]] = {}
         self.book_result: object = None
@@ -69,6 +72,7 @@ class _Sevdesk:
         return [self.invoice]
 
     def transactions(self, account_id: int, start: datetime, end: datetime) -> list:
+        self.transaction_queries.append((account_id, start, end))
         return list(self.transactions_by_account.get(account_id, []))
 
     def get_check_account_transaction_by_id(self, transaction_id: int) -> dict[str, object]:
@@ -99,6 +103,7 @@ class _Sevdesk:
     def find_transaction_by_duplicate_key(
         self, account_id: int, duplicate_key: ClearingDuplicateKey, value_date: datetime
     ) -> SevdeskTransaction | None:
+        self.duplicate_lookup_calls += 1
         if self.existing is None:
             return None
         expected = ClearingDuplicateKey(
@@ -413,6 +418,7 @@ def test_booking_reuses_existing_transaction_instead_of_importing_duplicate(tmp_
         "order:12345 | stripe:ch_1 | PAYMENT",
         100,
     )
+    sevdesk.transactions_by_account = {11: [sevdesk.existing]}
     service = _service(sevdesk, [_payment()], tmp_path)
     row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
 
@@ -421,6 +427,37 @@ def test_booking_reuses_existing_transaction_instead_of_importing_duplicate(tmp_
     assert result.success_count == 1
     assert sevdesk.created == []
     assert sevdesk.booked[0]["transaction_id"] == 55
+    assert sevdesk.duplicate_lookup_calls == 0
+
+
+def test_booking_refreshes_duplicate_index_once_per_account(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    service = _service(sevdesk, [], tmp_path)
+    candidates = [
+        ClearingCandidate(
+            candidate_id=f"payout-{index}",
+            provider="stripe",
+            kind=TransactionKind.PAYOUT,
+            provider_ref=f"po_{index}",
+            order_number="",
+            invoice_id=None,
+            invoice_number="",
+            customer="Stripe",
+            amount=money("-10.00"),
+            payment_date=datetime(2026, 5, day, tzinfo=VIENNA),
+            status=MatchStatus.IMPORT_ONLY,
+            reason="Auszahlung",
+            selected=True,
+            account_id=11,
+        )
+        for index, day in ((1, 2), (2, 28))
+    ]
+
+    result = service.book_selected(candidates)
+
+    assert result.success_count == 2
+    assert len(sevdesk.transaction_queries) == 1
+    assert sevdesk.duplicate_lookup_calls == 0
 
 
 def test_booking_does_not_reuse_same_ref_with_wrong_amount(tmp_path: Path) -> None:
@@ -443,15 +480,29 @@ def test_booking_does_not_reuse_same_ref_with_wrong_amount(tmp_path: Path) -> No
     assert sevdesk.booked[0]["transaction_id"] == 99
 
 
-def test_reset_transactions_in_range_only_resets_linked_entries(tmp_path: Path) -> None:
+def test_reset_transactions_in_range_only_resets_clearing_entries(tmp_path: Path) -> None:
     sevdesk = _Sevdesk()
     sevdesk.transactions_by_account = {
         11: [
-            SevdeskTransaction(1, 11, money("29.90"), datetime(2026, 6, 10, tzinfo=VIENNA), "a", 200),
+            SevdeskTransaction(
+                1,
+                11,
+                money("29.90"),
+                datetime(2026, 6, 10, tzinfo=VIENNA),
+                "order:12345 | stripe:ch_1 | PAYMENT",
+                200,
+            ),
             SevdeskTransaction(2, 11, money("29.90"), datetime(2026, 6, 11, tzinfo=VIENNA), "b", 100),
         ],
         12: [
-            SevdeskTransaction(3, 12, money("29.90"), datetime(2026, 6, 12, tzinfo=VIENNA), "c", 200),
+            SevdeskTransaction(
+                3,
+                12,
+                money("29.90"),
+                datetime(2026, 6, 12, tzinfo=VIENNA),
+                "manuell gebuchte Transaktion",
+                200,
+            ),
         ],
     }
     service = _service(sevdesk, [], tmp_path)
@@ -459,12 +510,12 @@ def test_reset_transactions_in_range_only_resets_linked_entries(tmp_path: Path) 
     result = service.reset_transactions_in_range(date(2026, 6, 1), date(2026, 6, 30))
 
     assert isinstance(result, ResetBatchResult)
-    assert result.success_count == 2
+    assert result.success_count == 1
     assert result.failure_count == 0
-    assert sevdesk.reset_calls == [(1, 100), (3, 100)]
+    assert sevdesk.reset_calls == [(1, 100)]
     assert sevdesk.transactions_by_account[11][0].status == 100
     assert sevdesk.transactions_by_account[11][1].status == 100
-    assert sevdesk.transactions_by_account[12][0].status == 100
+    assert sevdesk.transactions_by_account[12][0].status == 200
 
 
 def test_refund_with_invoice_is_visible_but_not_preselected(tmp_path: Path) -> None:
@@ -534,6 +585,69 @@ def test_sepa_b2b_reference_matches_direct_invoice_number(tmp_path: Path) -> Non
     assert row.status == MatchStatus.READY
     assert row.selected is True
     assert row.skip_reason is None
+
+
+def test_sepa_b2b_reference_books_against_direct_invoice_number(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    sevdesk.invoice = InvoiceRecord(7, "RE-261234", "kein-wix-bezug", money("50.00"), 200, "Musikkapelle")
+    sevdesk.transactions_by_account = {
+        11: [
+            SevdeskTransaction(
+                101,
+                11,
+                money("50.00"),
+                datetime(2026, 5, 12, tzinfo=VIENNA),
+                "Rechnung RE-261234 Musikkapelle",
+                100,
+            )
+        ]
+    }
+    service = _service(sevdesk, [], tmp_path)
+    row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
+
+    result = service.book_selected([row])
+
+    assert result.success_count == 1
+    assert result.items[0].transaction_id == 101
+    assert sevdesk.created == []
+    assert sevdesk.booked == [
+        {
+            "invoice_id": 7,
+            "amount": money("50.00"),
+            "payment_date": datetime(2026, 5, 12, tzinfo=VIENNA),
+            "account_id": 11,
+            "transaction_id": 101,
+        }
+    ]
+
+
+def test_manual_assignment_accepts_matching_b2b_invoice_number(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    sevdesk.invoice = InvoiceRecord(7, "RE-261234", "kein-wix-bezug", money("50.00"), 200, "Musikkapelle")
+    service = _service(sevdesk, [], tmp_path)
+    row = ClearingCandidate(
+        candidate_id="sepa-101",
+        provider="sepa",
+        kind=TransactionKind.SEPA,
+        provider_ref="101",
+        order_number="RE-261234",
+        invoice_id=None,
+        invoice_number="",
+        customer="",
+        amount=money("50.00"),
+        payment_date=datetime(2026, 5, 12, tzinfo=VIENNA),
+        status=MatchStatus.MANUAL,
+        reason="Manuelle Zuordnung",
+        selected=False,
+        account_id=11,
+        transaction_id=101,
+    )
+
+    assigned = service.assign_invoice(row, "RE-261234")
+
+    assert assigned.invoice_id == 7
+    assert assigned.order_number == "RE-261234"
+    assert assigned.status == MatchStatus.READY
 
 
 def test_sepa_transfer_without_any_reference_stays_invisible(tmp_path: Path) -> None:
