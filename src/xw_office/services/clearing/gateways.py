@@ -207,6 +207,50 @@ class MollieClearingGateway:
             return Decimal("0.00")
         return money(raw.get("value"))
 
+    @staticmethod
+    def _link_resource_id(raw: dict[str, Any], key: str) -> str:
+        links = raw.get("_links") if isinstance(raw.get("_links"), dict) else {}
+        link = links.get(key) if isinstance(links, dict) else None
+        href = str(link.get("href") or "").strip() if isinstance(link, dict) else ""
+        return href.rstrip("/").rsplit("/", 1)[-1] if href else ""
+
+    def _refund_order_details(
+        self,
+        client: httpx.Client,
+        raw: dict[str, Any],
+    ) -> tuple[str, str]:
+        order_id = str(raw.get("orderId") or self._link_resource_id(raw, "order") or "").strip()
+        payment_id = str(raw.get("paymentId") or self._link_resource_id(raw, "payment") or "").strip()
+        order_number = str(raw.get("orderNumber") or "").strip()
+        if order_number:
+            return order_number, order_id or payment_id
+        if not order_id and payment_id:
+            try:
+                payment_response = client.get(f"/payments/{payment_id}")
+                if payment_response.status_code == 200:
+                    payment = payment_response.json()
+                    if isinstance(payment, dict):
+                        order_number = str(payment.get("orderNumber") or "").strip()
+                        order_id = str(
+                            payment.get("orderId") or self._link_resource_id(payment, "order") or ""
+                        ).strip()
+                        if order_number:
+                            return order_number, order_id or payment_id
+            except httpx.HTTPError:
+                return "", payment_id
+        if order_id:
+            try:
+                order_response = client.get(f"/orders/{order_id}")
+                if order_response.status_code == 200:
+                    order = order_response.json()
+                    if isinstance(order, dict):
+                        order_number = str(order.get("orderNumber") or "").strip()
+                        if order_number:
+                            return order_number, order_id
+            except httpx.HTTPError:
+                return "", order_id
+        return "", order_id or payment_id
+
     def fetch(self, start: datetime, end: datetime) -> list[ProviderTransaction]:
         self.last_warning = ""
         if not self.available():
@@ -262,11 +306,13 @@ class MollieClearingGateway:
                     continue
                 ref = str(raw.get("id") or "")
                 if ref:
+                    order_number, provider_order_id = self._refund_order_details(client, raw)
                     out.append(
                         ProviderTransaction(
                             provider="mollie",
                             provider_ref=ref,
-                            provider_order_id=str(raw.get("orderId") or raw.get("paymentId") or ""),
+                            provider_order_id=provider_order_id,
+                            order_number=order_number,
                             kind=TransactionKind.REFUND,
                             amount=-self._amount(raw.get("amount")),
                             created_at=created,

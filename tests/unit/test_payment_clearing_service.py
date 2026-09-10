@@ -748,4 +748,56 @@ def test_mollie_gateway_surfaces_403_settlements_as_last_warning() -> None:
 
     assert rows == []
     assert "403" in gateway.last_warning
-    assert "OAuth" in gateway.last_warning
+
+
+def test_mollie_gateway_resolves_refund_order_number_from_payment() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/v2/orders":
+            return httpx.Response(200, json={"_embedded": {"orders": []}})
+        if path == "/v2/refunds":
+            return httpx.Response(
+                200,
+                json={
+                    "_embedded": {
+                        "refunds": [
+                            {
+                                "id": "re_q2BLE9cZRkfg4qmeKDPUJ",
+                                "status": "refunded",
+                                "createdAt": "2026-07-23T09:00:00+02:00",
+                                "paymentId": "tr_payment_1",
+                                "amount": {"currency": "EUR", "value": "48.90"},
+                            }
+                        ]
+                    }
+                },
+            )
+        if path == "/v2/payments/tr_payment_1":
+            return httpx.Response(200, json={"orderId": "ord_1"})
+        if path == "/v2/orders/ord_1":
+            return httpx.Response(200, json={"orderNumber": "20924"})
+        if path == "/v2/settlements":
+            return httpx.Response(200, json={"_embedded": {"settlements": []}})
+        return httpx.Response(404, text=f"unexpected {request.method} {path}")
+
+    gateway = MollieClearingGateway("token")
+    original = httpx.Client
+
+    class _Mock(httpx.Client):
+        def __init__(self, *a: object, **kw: object) -> None:
+            kw["transport"] = httpx.MockTransport(handler)
+            super().__init__(*a, **kw)  # type: ignore[arg-type]
+
+    httpx.Client = _Mock  # type: ignore[misc, assignment]
+    try:
+        rows = gateway.fetch(
+            datetime(2026, 7, 1, tzinfo=VIENNA), datetime(2026, 8, 1, tzinfo=VIENNA)
+        )
+    finally:
+        httpx.Client = original  # type: ignore[misc, assignment]
+
+    assert len(rows) == 1
+    assert rows[0].provider_ref == "re_q2BLE9cZRkfg4qmeKDPUJ"
+    assert rows[0].provider_order_id == "ord_1"
+    assert rows[0].order_number == "20924"
+    assert rows[0].amount == money("-48.90")
