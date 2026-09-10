@@ -839,7 +839,7 @@ def test_june_2026_golden_master_is_reference_data_only() -> None:
     references = json.loads(reference_path.read_text(encoding="utf-8"))
     reference = references["2026-06"]
 
-    assert sorted(references) == ["2026-04", "2026-05", "2026-06"]
+    assert sorted(references) == ["2026-04", "2026-05", "2026-06", "2026-09"]
     assert references["2026-04"]["zahlbetrag"] == "267.60"
     assert references["2026-05"]["kennzahlen"]["C065"] == "23.70"
     assert reference["kennzahlen"]["A022"] == "3349.56"
@@ -847,7 +847,34 @@ def test_june_2026_golden_master_is_reference_data_only() -> None:
     assert reference["kennzahlen"]["A006"] == "9216.97"
     assert reference["kennzahlen"]["C060"] == "416.46"
     assert reference["zahlbetrag"] == "1910.22"
+    assert references["2026-09"]["kennzahlen"]["A029"] == "2526.59"
+    assert references["2026-09"]["zahlbetrag"] == "538.68"
     assert all(item["immutable_reference"] is True for item in references.values())
+
+
+def test_september_2026_golden_master_blocks_raw_sevdesk_preview_delta() -> None:
+    comparison = compare_uva_reference(
+        year=2026,
+        month=9,
+        kennzahlen={
+            "A000": "13032.94",
+            "A011": "583.00",
+            "A017": "4014.47",
+            "A022": "1315.18",
+            "A029": "6658.72",
+            "A006": "1461.57",
+            "C060": "171.81",
+            "C066": "1.04",
+        },
+        zahlbetrag="955.50",
+    )
+
+    assert comparison["available"] is True
+    assert comparison["within_tolerance"] is False
+    assert comparison["zahlbetrag"]["expected"] == "538.68"
+    deltas = {item["field"]: item for item in comparison["deltas"]}
+    assert deltas["A029"]["expected"] == "2526.59"
+    assert deltas["A029"]["delta"] == "4132.13"
 
 
 def test_uva_references_are_loaded_as_immutable_mapping() -> None:

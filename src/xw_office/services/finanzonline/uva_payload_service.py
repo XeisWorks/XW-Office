@@ -85,7 +85,7 @@ class UvaPayloadService:
         kz = payload.kennzahlen
         lines = [
             "",
-            "UVA-Kennzahlen",
+            "UVA-Kennzahlen (FinanzOnline-Abgabegrundlage)",
             f"Regelversion: {payload.rule_version}",
             f"A000: EUR {_euro(kz.A000)}",
             f"A011: EUR {_euro(kz.A011)}",
@@ -132,6 +132,9 @@ class UvaPayloadService:
             return
         if "REVERSE CHARGE" in label:
             values["A021"] += net
+            return
+        if label.startswith("MIT 0%"):
+            warnings.append(f"0%-Umsatz ohne UVA-Kennzahl nicht automatisch uebernommen: {group.label}")
             return
         if _is_foreign_label(label):
             warnings.append(f"Nicht in AT-UVA übernommen: {group.label}")

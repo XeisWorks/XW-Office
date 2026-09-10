@@ -599,12 +599,12 @@ class UvaPreviewService:
 
     def render_preview_text(self, preview: UvaPreviewResult) -> str:
         sales_lines = self._render_section(
-            title="Mehrwertsteuer",
+            title="sevDesk Steueranalyse - Mehrwertsteuer (Kontrollansicht)",
             tax_label="Mehrwertsteuer",
             section=preview.sales,
         )
         input_lines = self._render_section(
-            title="Vorsteuer",
+            title="sevDesk Steueranalyse - Vorsteuer (Kontrollansicht)",
             tax_label="Vorsteuer",
             section=preview.input_tax,
         )
@@ -661,7 +661,7 @@ class UvaPreviewService:
         for group in section.groups:
             lines.extend(["", group.label])
             is_sales_ig_delivery = (
-                title == "Mehrwertsteuer"
+                (title == "Mehrwertsteuer" or title.startswith("sevDesk Steueranalyse - Mehrwertsteuer"))
                 and "STEUERFREIE INNERGEMEINSCHAFTL. LIEFERUNG" in group.label
             )
             if is_sales_ig_delivery:

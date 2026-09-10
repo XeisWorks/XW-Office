@@ -73,5 +73,34 @@
       "D009": "0.00"
     },
     "zahlbetrag": "1910.22"
+  },
+  "2026-09": {
+    "source": "Vom Anwender bestaetigte Legacy-UVA-Werte mit sevDesk-Analyse als Kontrollquelle (2026-09-10)",
+    "immutable_reference": true,
+    "kennzahlen": {
+      "A000": "6926.19",
+      "A021": "0.00",
+      "A011": "247.70",
+      "A017": "1375.15",
+      "A022": "1315.18",
+      "A029": "2526.59",
+      "A006": "1461.57",
+      "A057": "1.04",
+      "B070": "0.00",
+      "B072": "0.00",
+      "C060": "167.02",
+      "C065": "0.00",
+      "C066": "1.04",
+      "D009": "0.00",
+      "D090": "0.00"
+    },
+    "reference_only": {
+      "documents": "111 Rechnungen, 0 Gutschriften, 11 Belege",
+      "theoretisch": "538.68",
+      "praktisch": "538.68",
+      "vortrag_alt": "0.00",
+      "vortrag_neu": "0.00"
+    },
+    "zahlbetrag": "538.68"
   }
 }

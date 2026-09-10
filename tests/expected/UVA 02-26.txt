@@ -1,4 +1,4 @@
-Mehrwertsteuer
+sevDesk Steueranalyse - Mehrwertsteuer (Kontrollansicht)
 EUR 492,29
 Brutto: EUR 9 652,98
 Netto: EUR 9 160,69
@@ -43,7 +43,7 @@ Netto: EUR 5,00
 
 ------------
 
-Vorsteuer
+sevDesk Steueranalyse - Vorsteuer (Kontrollansicht)
 EUR 826,19
 Brutto: EUR 17 675,84
 Netto: EUR 16 849,65
