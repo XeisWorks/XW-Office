@@ -52,7 +52,7 @@ def test_select_all_only_selects_bookable_rows(qtbot: object, app_config: object
     assert selected == {"ready", "payout"}
 
 
-def test_default_filter_shows_only_open_problems(qtbot: object, app_config: object) -> None:
+def test_default_filter_shows_all_candidates(qtbot: object, app_config: object) -> None:
     container = Container(app_config)  # type: ignore[arg-type]
     container.register(PaymentClearingService, lambda _c: PaymentClearingService())
     view = PaymentClearingView(container)
@@ -66,7 +66,7 @@ def test_default_filter_shows_only_open_problems(qtbot: object, app_config: obje
 
     visible = view._filtered()  # noqa: SLF001
 
-    assert [row.candidate_id for row in visible] == ["manual", "error"]
+    assert [row.candidate_id for row in visible] == ["ready", "manual", "error", "done"]
 
 
 def test_analysis_summary_shows_visible_count_and_filter(qtbot: object, app_config: object) -> None:
@@ -87,9 +87,9 @@ def test_analysis_summary_shows_visible_count_and_filter(qtbot: object, app_conf
 
     view._on_analysis(analysis)  # noqa: SLF001
 
-    assert len(view._table.source_rows_data()) == 1  # noqa: SLF001
+    assert len(view._table.source_rows_data()) == 3  # noqa: SLF001
     assert view._summary.text() == (  # noqa: SLF001
-        "1 sichtbar von 3 Vorgangen | 1 automatisch buchbar | 1 offen | Filter: Offene Probleme"
+        "3 sichtbar von 3 Vorgangen | 1 automatisch buchbar | 1 offen | Filter: Alle Vorgaenge"
     )
 
 
