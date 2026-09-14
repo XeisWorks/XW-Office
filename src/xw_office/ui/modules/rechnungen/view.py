@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -162,6 +163,10 @@ _SIDE_JOB_QUEUE = "rechnungen-side"
 _PRIORITY_OPEN_OVERVIEW = 10
 _PRIORITY_HINT_PREFETCH = 20
 _PRIORITY_WIX_WARMUP = 30
+# Rows are resolved concurrently within a batch (see _create_open_overview_worker),
+# so a larger batch cuts the number of sequential job round-trips without adding
+# more concurrent Wix requests per round-trip than before.
+_OPEN_OVERVIEW_BATCH_SIZE = 4
 
 
 class _HintsIconDelegate(QStyledItemDelegate):
@@ -1354,6 +1359,11 @@ class RechnungenView(QWidget):
         self._btn_print_all_products.clicked.connect(self._on_print_all_open_products_clicked)
         open_products_header.addWidget(self._btn_print_all_products, alignment=Qt.AlignmentFlag.AlignRight)
         open_products_layout.addLayout(open_products_header)
+        self._open_products_spinner = QProgressBar()
+        self._open_products_spinner.setRange(0, 0)
+        self._open_products_spinner.setFixedHeight(4)
+        self._open_products_spinner.setTextVisible(False)
+        open_products_layout.addWidget(self._open_products_spinner)
         self._open_products_status = QLabel("Print-Produkte werden ermittelt...")
         self._open_products_status.setWordWrap(True)
         self._open_products_status.setStyleSheet("color: #cbd5e1;")
@@ -2414,10 +2424,16 @@ class RechnungenView(QWidget):
             wix_client: WixOrdersClient | None = self._container.resolve(WixOrdersClient)
         except Exception:  # noqa: BLE001 - overview still works with UI cache only.
             wix_client = None
+        try:
+            invoice_service: InvoiceProcessingService | None = self._container.resolve(InvoiceProcessingService)
+        except Exception:  # noqa: BLE001 - overview still works without SKU flags.
+            invoice_service = None
+        sku_filter = invoice_service.is_flagged_sku if invoice_service is not None else None
         overview = overview_from_visible_summaries(
             open_rows,
             digital_cache=self._wix_digital_cache,
             wix_client=wix_client,
+            sku_filter=sku_filter,
             include_print_products=True,
         )
 
@@ -2484,12 +2500,18 @@ class RechnungenView(QWidget):
         )
         if not unknown_rows:
             return
+        try:
+            invoice_service: InvoiceProcessingService | None = self._container.resolve(InvoiceProcessingService)
+        except Exception:  # noqa: BLE001 - overview still works without SKU flags.
+            invoice_service = None
+        sku_filter = invoice_service.is_flagged_sku if invoice_service is not None else None
         self._open_overview_seq += 1
         self._open_overview_all_rows = list(open_rows)
         self._open_overview_base = overview_from_visible_summaries(
             open_rows,
             digital_cache=self._wix_digital_cache,
             wix_client=wix_client,
+            sku_filter=sku_filter,
             include_print_products=True,
         )
         self._open_overview_batch_results = []
@@ -2514,8 +2536,8 @@ class RechnungenView(QWidget):
         if not self._pending_open_overview_rows:
             return None
         seq = self._open_overview_seq
-        snapshot = list(self._pending_open_overview_rows[:4])
-        del self._pending_open_overview_rows[:4]
+        snapshot = list(self._pending_open_overview_rows[:_OPEN_OVERVIEW_BATCH_SIZE])
+        del self._pending_open_overview_rows[:_OPEN_OVERVIEW_BATCH_SIZE]
         all_rows = list(self._open_overview_all_rows)
         is_final_batch = not self._pending_open_overview_rows
         digital_cache = dict(self._wix_digital_cache)
@@ -2728,15 +2750,16 @@ class RechnungenView(QWidget):
             if widget is not None:
                 widget.deleteLater()
 
-    def _set_open_products_message(self, message: str) -> None:
+    def _set_open_products_message(self, message: str, *, loading: bool = False) -> None:
         self._clear_open_print_product_rows()
         self._open_products_status.setText(message)
         self._open_products_status.show()
+        self._open_products_spinner.setVisible(loading)
         self._open_products_text.setPlainText(message)
 
     def _render_open_print_products(self, overview: OpenInvoiceOverview) -> None:
         if overview.unknown and not overview.print_products:
-            self._set_open_products_message("Print-Produkte werden ermittelt...")
+            self._set_open_products_message("Print-Produkte werden ermittelt...", loading=True)
             self._update_print_all_products_button()
             return
         if not overview.print_products:
@@ -2745,6 +2768,7 @@ class RechnungenView(QWidget):
             return
         self._clear_open_print_product_rows()
         self._open_products_status.hide()
+        self._open_products_spinner.hide()
         plain_lines: list[str] = []
         for item in overview.print_products:
             display_item = self._open_product_with_quantity(item)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -163,16 +164,34 @@ def resolve_open_invoice_overview(
     with_note = 0
     plc = 0
     products = _ProductAccumulator(sku_filter=sku_filter)
-    rows = [
-        _resolve_one_summary(
-            summary,
-            invoice_service=invoice_service,
-            wix_client=wix_client,
-            known_digital=known_digital,
-            has_wix_credentials=has_wix_credentials,
-        )
-        for summary in summaries
-    ]
+    # Each row is an independent, network-bound Wix lookup (digital-only check
+    # plus line items). Resolving them concurrently instead of one-by-one is
+    # what actually shortens the wait for the real print-product list.
+    if len(summaries) > 1:
+        with ThreadPoolExecutor(max_workers=min(4, len(summaries))) as executor:
+            rows = list(
+                executor.map(
+                    lambda summary: _resolve_one_summary(
+                        summary,
+                        invoice_service=invoice_service,
+                        wix_client=wix_client,
+                        known_digital=known_digital,
+                        has_wix_credentials=has_wix_credentials,
+                    ),
+                    summaries,
+                )
+            )
+    else:
+        rows = [
+            _resolve_one_summary(
+                summary,
+                invoice_service=invoice_service,
+                wix_client=wix_client,
+                known_digital=known_digital,
+                has_wix_credentials=has_wix_credentials,
+            )
+            for summary in summaries
+        ]
 
     cache_updates: dict[str, bool] = {}
     for row in rows:
