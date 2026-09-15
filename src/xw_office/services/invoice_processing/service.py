@@ -8,6 +8,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable
 
 from xw_office.repositories.settings_kv import SettingKvRepository
@@ -209,6 +210,7 @@ class _StartPostTask:
     summary: InvoiceSummary
     flags: FulfillmentFlags
     digital_only: bool
+    manual_licensed: bool = False
 
 
 class InvoiceProcessingService:
@@ -454,6 +456,7 @@ class InvoiceProcessingService:
         failures = 0
         successful = 0
         aborted = False
+        pending_manual_license_ids: list[str] = []
         for summary in summaries:
             if should_abort is not None and should_abort():
                 aborted = True
@@ -487,8 +490,19 @@ class InvoiceProcessingService:
             try:
                 if progress_callback is not None:
                     progress_callback(f"START: {label} wird vorbereitet...")
-                run_phase("product_mapping", lambda: self._repair_draft_products(summary))
+                manual_licensed = self._is_manual_licensed_delivery(summary)
                 digital_only = self._is_digital_only(summary) if summary.order_reference.strip() else False
+                if manual_licensed:
+                    summary = run_phase(
+                        "manual_license_finalize",
+                        lambda: self.finalize_invoice_without_delivery(summary),
+                    )
+                    pending_manual_license_ids.append(str(summary.id))
+                    flags = run_phase("payment", lambda: self._run_payment_step(summary, flags))
+                    successful += 1
+                    updates[summary.id] = flags
+                    continue
+                run_phase("product_mapping", lambda: self._repair_draft_products(summary))
                 if progress_callback is not None and not digital_only and full_mode:
                     progress_callback(f"START: {label} wird gedruckt...")
                 flags = run_phase(
@@ -536,6 +550,7 @@ class InvoiceProcessingService:
             "full_mode": full_mode,
             "print_products": bool(print_products),
             "aborted": aborted,
+            "pending_digital_license_case_ids": pending_manual_license_ids,
         }
 
     def _run_start_fullflow_print_first(
@@ -554,6 +569,7 @@ class InvoiceProcessingService:
         processed_ids: set[str] = set()
         failed_ids: set[str] = set()
         successful_ids: set[str] = set()
+        pending_manual_license_ids: list[str] = []
         aborted = False
 
         def persist(summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
@@ -593,9 +609,17 @@ class InvoiceProcessingService:
             flags = self.read_fulfillment_flags(summary.id)
 
             try:
+                manual_licensed = self._is_manual_licensed_delivery(summary)
                 digital_only = self._is_digital_only(summary) if summary.order_reference.strip() else False
-                if digital_only:
-                    post_tasks.append(_StartPostTask(summary=summary, flags=flags, digital_only=True))
+                if manual_licensed or digital_only:
+                    post_tasks.append(
+                        _StartPostTask(
+                            summary=summary,
+                            flags=flags,
+                            digital_only=digital_only,
+                            manual_licensed=manual_licensed,
+                        )
+                    )
                     continue
 
                 if progress_callback is not None:
@@ -666,6 +690,17 @@ class InvoiceProcessingService:
                         run_phase(summary, "payment", lambda: self._run_payment_step(summary, flags)),
                     )
                     self.write_fulfillment_flags(summary.id, flags)
+                elif task.manual_licensed:
+                    if progress_callback is not None:
+                        progress_callback(f"START: {label} wird als digitale Lieferung vorbereitet...")
+                    summary = self.finalize_invoice_without_delivery(summary)
+                    flags = persist(
+                        summary,
+                        run_phase(summary, "payment", lambda: self._run_payment_step(summary, flags)),
+                    )
+                    pending_manual_license_ids.append(str(summary.id))
+                    self.write_fulfillment_flags(summary.id, flags)
+                    return str(summary.id), flags, True
                 flags = run_phase(summary, "wix_fulfillment", lambda: self._run_product_step(summary, flags))
                 self.write_fulfillment_flags(summary.id, flags)
                 if progress_callback is not None:
@@ -716,6 +751,7 @@ class InvoiceProcessingService:
             "full_mode": True,
             "print_products": bool(print_products),
             "aborted": aborted,
+            "pending_digital_license_case_ids": pending_manual_license_ids,
         }
 
     def _start_processing_priority(self, summary: InvoiceSummary) -> tuple[int, str]:
@@ -741,6 +777,20 @@ class InvoiceProcessingService:
 
         requirements: dict[str, int] = {}
         for reference in references:
+            # Custom paid digital-license orders are fulfilled manually in the
+            # Digital License wizard.  They must never reserve or decrement
+            # physical stock during START's print pre-flight.
+            try:
+                if self._is_manual_licensed_delivery(
+                    next(
+                        summary
+                        for summary in summaries
+                        if str(summary.order_reference or "").strip() == reference
+                    )
+                ):
+                    continue
+            except StopIteration:
+                pass
             try:
                 items = self._wix_orders.fetch_order_line_items(reference)
             except Exception as exc:
@@ -758,6 +808,10 @@ class InvoiceProcessingService:
                 if qty:
                     requirements[sku] = requirements.get(sku, 0) + qty
         return requirements
+
+    def is_manual_licensed_delivery(self, summary: InvoiceSummary) -> bool:
+        """Public classification used by START pre-flight UI components."""
+        return self._is_manual_licensed_delivery(summary)
 
     def _prefetch_wix_order_context(self, summaries: list[InvoiceSummary]) -> None:
         if self._wix_orders is None or not self._wix_orders.has_credentials():
@@ -845,6 +899,53 @@ class InvoiceProcessingService:
             resolved = False
         self._wix_digital_cache[ref] = resolved
         return resolved
+
+    def _is_manual_licensed_delivery(self, summary: InvoiceSummary) -> bool:
+        """Return whether this is a custom, paid digital-license order.
+
+        Keep the rule in the Wix client so START and the Digital License
+        wizard cannot drift apart.  Older test doubles only expose the legacy
+        method, therefore the fallback is intentionally compatible.
+        """
+        ref = str(summary.order_reference or "").strip()
+        if not ref or self._wix_orders is None or not self._wix_orders.has_credentials():
+            return False
+        resolver = getattr(self._wix_orders, "is_reference_manual_licensed_delivery", None)
+        if not callable(resolver):
+            resolver = getattr(self._wix_orders, "is_reference_manual_digital_license", None)
+        if not callable(resolver):
+            return False
+        try:
+            return bool(resolver(ref))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Wix manual digital-license resolve failed ref=%s: %s", ref, exc)
+            return False
+
+    def finalize_invoice_without_delivery(self, summary: InvoiceSummary) -> InvoiceSummary:
+        """Finalize a sevDesk invoice without printing or sending an email."""
+        current = self._resolve_current_start_summary(summary)
+        if int(current.status_code or 0) == 100:
+            self._invoices.send_invoice_document(current.id, send_type="VPR", send_draft=False)
+            self._invoice_detail_cache.pop(str(current.id or "").strip(), None)
+            current = self._resolve_current_start_summary(current)
+        return current
+
+    def export_final_invoice_pdf(self, invoice_id: str, target_dir: Path | str) -> Path:
+        """Persist the validated final invoice PDF for Outlook attachments."""
+        summary = self._load_summary_by_id(invoice_id)
+        pdf_bytes = self._get_invoice_pdf_bytes(
+            summary.id,
+            expected_invoice_number=summary.invoice_number,
+        )
+        if not pdf_bytes:
+            raise RuntimeError("PDF nicht verfügbar")
+        directory = Path(target_dir).expanduser().resolve(strict=False)
+        directory.mkdir(parents=True, exist_ok=True)
+        invoice_number = str(summary.invoice_number or summary.id or "invoice").strip()
+        safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", invoice_number).strip("._") or "invoice"
+        target = directory / f"{safe}.pdf"
+        target.write_bytes(pdf_bytes)
+        return target
 
     def retry_fulfillment_step(
         self,

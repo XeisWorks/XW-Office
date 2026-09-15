@@ -3,6 +3,7 @@
 from xw_office.models.api_secret import ApiSecret
 from xw_office.models.base import Base
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
+from xw_office.models.digital_license_fulfillment import DigitalLicenseFulfillment
 from xw_office.models.expense_check import ExpenseIgnoreRule, ExpenseShiftEntry
 from xw_office.models.pc_registry import PcRegistry
 from xw_office.models.plc_shipment import PlcShipment
@@ -13,6 +14,7 @@ __all__ = [
     "Base",
     "CustomerAftercareCase",
     "CustomerAftercareItem",
+    "DigitalLicenseFulfillment",
     "ExpenseIgnoreRule",
     "ExpenseShiftEntry",
     "PcRegistry",

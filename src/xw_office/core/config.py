@@ -205,6 +205,16 @@ class SkuRulesSection:
 
 
 @dataclass(frozen=True)
+class DigitalLicensesSection:
+    """Configuration for manually controlled licensed sheet-music delivery."""
+
+    output_dir: str = (
+        r"C:\Users\XeisWorks\OneDrive - XeisWorks\02 XeisWorks\24 Digitale Lizensierung"
+    )
+    alarm_label: str = "DIGITALE LIEFERUNG OFFEN"
+
+
+@dataclass(frozen=True)
 class CustomerAftercareAiSection:
     enabled: bool = True
     min_confidence_for_prefill: float = 0.75
@@ -257,6 +267,7 @@ class AppConfig:
     crm: CrmSection = field(default_factory=CrmSection)
     clearing: ClearingSection = field(default_factory=ClearingSection)
     sku_rules: SkuRulesSection = field(default_factory=SkuRulesSection)
+    digital_licenses: DigitalLicensesSection = field(default_factory=DigitalLicensesSection)
     customer_aftercare: CustomerAftercareSection = field(default_factory=CustomerAftercareSection)
     database_url: str = ""
     fernet_master_key: str = ""

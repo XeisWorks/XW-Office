@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import subprocess
@@ -12,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from xw_office.services.layout.service import LayoutToolsService
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.core.shared_paths import resolve_shared_path
 
 if TYPE_CHECKING:
     from xw_office.repositories.settings_kv import SettingKvRepository
@@ -20,6 +22,7 @@ if TYPE_CHECKING:
     from xw_office.services.products.catalog import ProductCatalogService
     from xw_office.services.secrets.service import SecretService
     from xw_office.services.wix.client import WixOrdersClient
+    from xw_office.repositories.digital_license_fulfillment import DigitalLicenseFulfillmentRepository
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,8 @@ class DigitalLicenseLine:
     quantity: int
     print_file_path: str = ""
     missing_print_file: bool = False
+    output_path: str = ""
+    source_sha256: str = ""
 
 
 @dataclass(slots=True)
@@ -46,6 +51,10 @@ class DigitalLicenseCase:
     customer_name: str
     customer_email: str
     lines: list[DigitalLicenseLine]
+    state: str = "PENDING_DECISION"
+    invoice_attachment_path: str = ""
+    outlook_entry_id: str = ""
+    outlook_store_id: str = ""
 
 
 class DigitalLicenseService:
@@ -61,6 +70,7 @@ class DigitalLicenseService:
         secret_service: "SecretService",
         settings_repo: "SettingKvRepository | None" = None,
         inventory: "InventoryService | None" = None,
+        fulfillment_repo: "DigitalLicenseFulfillmentRepository | None" = None,
         output_dir: str = _DEFAULT_OUTPUT_DIR,
     ) -> None:
         self._invoices = invoices
@@ -70,7 +80,8 @@ class DigitalLicenseService:
         self._secrets = secret_service
         self._settings_repo = settings_repo
         self._inventory = inventory
-        self._output_dir = output_dir
+        self._fulfillment_repo = fulfillment_repo
+        self._output_dir = resolve_shared_path(output_dir) or output_dir
 
     def open_count(self, *, limit: int = 30, use_cache: bool = True) -> int:
         """Return a lightweight badge count for open external digital orders.
@@ -82,6 +93,15 @@ class DigitalLicenseService:
 
     def list_open_cases(self, *, limit: int = 100, use_cache: bool = False) -> list[DigitalLicenseCase]:
         completed = self._load_completed()
+        repo_completed: set[str] = set()
+        if self._fulfillment_repo is not None:
+            try:
+                repo_completed = {
+                    str(row.invoice_id or "").strip()
+                    for row in self._fulfillment_repo.list_by_states(("COMPLETED",), limit=1000)
+                }
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Digital license repository read failed: %s", exc)
         summaries: list[InvoiceSummary] = []
         seen_invoice_ids: set[str] = set()
         for status in _INVOICE_STATUSES:
@@ -95,21 +115,73 @@ class DigitalLicenseService:
         cases: list[DigitalLicenseCase] = []
         for summary in summaries:
             invoice_id = str(summary.id or "").strip()
-            if not invoice_id or invoice_id in completed:
+            if not invoice_id or invoice_id in completed or invoice_id in repo_completed:
                 continue
             ref = str(summary.order_reference or "").strip()
             if not ref:
                 continue
             try:
-                if not self._wix_orders.is_reference_manual_digital_license(ref, use_cache=use_cache):
+                resolver = getattr(self._wix_orders, "is_reference_manual_licensed_delivery", None)
+                if not callable(resolver):
+                    resolver = self._wix_orders.is_reference_manual_digital_license
+                if not resolver(ref, use_cache=use_cache):
                     continue
                 case = self._build_case(summary)
+                if self._fulfillment_repo is not None:
+                    row = self._fulfillment_repo.upsert_candidate(
+                        invoice_id=case.invoice_id,
+                        invoice_number=case.invoice_number,
+                        order_reference=case.order_reference,
+                    )
+                    case.state = str(row.state or case.state)
+                    case.invoice_attachment_path = str(row.invoice_attachment_path or "")
+                    case.outlook_entry_id = str(row.outlook_entry_id or "")
+                    case.outlook_store_id = str(row.outlook_store_id or "")
+                    try:
+                        stored_files = json.loads(str(row.licensed_files_json or "[]"))
+                    except json.JSONDecodeError:
+                        stored_files = []
+                    if isinstance(stored_files, list):
+                        by_key = {
+                            f"{str(item.get('sku') or '').strip()}:{str(item.get('title') or '').strip()}".casefold(): item
+                            for item in stored_files
+                            if isinstance(item, dict)
+                        }
+                        for line in case.lines:
+                            stored = by_key.get(f"{line.sku}:{line.name}".casefold())
+                            if stored:
+                                line.output_path = str(stored.get("path") or "")
+                                line.source_sha256 = str(stored.get("source_sha256") or "")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Digital license case skipped invoice=%s ref=%s: %s", invoice_id, ref, exc)
                 continue
             if case.lines:
                 cases.append(case)
         return cases
+
+    def reconcile_candidates(self, *, invoice_ids: list[str] | None = None) -> list[DigitalLicenseCase]:
+        """Discover and persist manual-license candidates.
+
+        ``invoice_ids`` is currently a narrowing hint for callers such as
+        START; the existing invoice client remains the source of truth.
+        """
+        cases = self.list_open_cases(limit=100 if invoice_ids else 1000, use_cache=False)
+        if invoice_ids:
+            wanted = {str(item).strip() for item in invoice_ids if str(item).strip()}
+            cases = [case for case in cases if case.invoice_id in wanted]
+        return cases
+
+    def defer(self, case: DigitalLicenseCase) -> None:
+        """Leave a case open without creating an Outlook draft."""
+        if self._fulfillment_repo is not None:
+            from datetime import datetime, timezone
+
+            self._fulfillment_repo.transition(
+                case.invoice_id,
+                "DEFERRED",
+                deferred_at=datetime.now(timezone.utc),
+                error="",
+            )
 
     def apply_print_path(self, sku: str, path: str) -> None:
         clean_sku = str(sku or "").strip().upper()
@@ -127,33 +199,155 @@ class DigitalLicenseService:
             logger.warning("Persisting print path failed for %s: %s", clean_sku, exc)
 
     def prepare_license_mail(self, case: DigitalLicenseCase) -> list[Path]:
+        output_files = self.prepare_license_files(case)
+        invoice_path = self._prepare_invoice_attachment(case)
+        self._open_outlook_draft(case, [invoice_path, *output_files])
+        return output_files
+
+    def prepare_license_files(self, case: DigitalLicenseCase) -> list[Path]:
         name = self._license_name(case.customer_name)
         if not name:
             raise RuntimeError("Kundenname fehlt")
         output_files: list[Path] = []
+        seen: set[str] = set()
+        prepared_lines: list[DigitalLicenseLine] = []
         for line in case.lines:
+            line_key = f"{line.sku}:{line.name}".casefold()
+            if line_key in seen:
+                continue
+            seen.add(line_key)
             source = str(line.print_file_path or "").strip()
             if not source:
                 raise RuntimeError(f"Druckpfad fehlt fuer {line.sku or line.name}")
-            output_files.append(
-                self._layout.watermark_side_a4_pdf(
-                    source,
-                    output_dir=self._output_dir,
-                    user_name=name,
-                )
+            output_files.append(self._reuse_or_watermark(source, name, line, case))
+            prepared_lines.append(line)
+        if self._fulfillment_repo is not None:
+            self._fulfillment_repo.set_files(
+                case.invoice_id,
+                [
+                    {
+                        "sku": line.sku,
+                        "title": line.name,
+                        "path": str(path),
+                        "source": line.print_file_path,
+                        "source_sha256": self._sha256(Path(line.print_file_path)),
+                    }
+                    for line, path in zip(prepared_lines, output_files, strict=True)
+                ],
             )
-        self._open_outlook_draft(case, output_files)
         return output_files
+
+    def create_outlook_draft(
+        self,
+        case: DigitalLicenseCase,
+        licensed_files: list[Path] | None = None,
+    ) -> dict[str, str]:
+        """Create and save one editable Outlook draft after PDF review."""
+        files = list(licensed_files or [])
+        if not files:
+            files = self.prepare_license_files(case)
+        invoice_path = self._prepare_invoice_attachment(case)
+        result = self._open_outlook_draft(case, [invoice_path, *files])
+        if self._fulfillment_repo is not None:
+            from datetime import datetime, timezone
+
+            self._fulfillment_repo.transition(
+                case.invoice_id,
+                "DRAFT_READY",
+                outlook_entry_id=result.get("entry_id", ""),
+                outlook_store_id=result.get("store_id", ""),
+                draft_created_at=datetime.now(timezone.utc),
+                invoice_attachment_path=str(invoice_path),
+                error="",
+            )
+        return result
+
+    def reopen_outlook_draft(self, case: DigitalLicenseCase) -> None:
+        """Reopen a previously saved draft without creating a duplicate."""
+        entry_id = str(case.outlook_entry_id or "").strip()
+        if not entry_id:
+            raise RuntimeError("Keine Outlook-Entwurf-ID gespeichert")
+        payload = json.dumps(
+            {
+                "operation": "reopen",
+                "entry_id": entry_id,
+                "store_id": str(case.outlook_store_id or "").strip(),
+            },
+            ensure_ascii=False,
+        )
+        env = dict(os.environ)
+        src_path = str(Path(__file__).resolve().parents[3])
+        existing_pythonpath = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = f"{src_path}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else src_path
+        completed = subprocess.run(
+            [sys.executable, "-m", "xw_office.services.mailing.outlook_compose"],
+            input=payload,
+            text=True,
+            capture_output=True,
+            timeout=25,
+            env=env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError((completed.stderr or completed.stdout or "Outlook draft reopen failed").strip())
+
+    def _prepare_invoice_attachment(self, case: DigitalLicenseCase) -> Path:
+        directory = Path(self._output_dir) / ".xw-office-invoices" / str(case.invoice_id)
+        path = self._invoices.export_final_invoice_pdf(case.invoice_id, directory)
+        case.invoice_attachment_path = str(path)
+        return path
+
+    def _reuse_or_watermark(
+        self,
+        source: str,
+        license_name: str,
+        line: DigitalLicenseLine,
+        case: DigitalLicenseCase,
+    ) -> Path:
+        source_path = Path(source).resolve(strict=False)
+        fingerprint = self._sha256(source_path)
+        existing = Path(str(line.output_path or "").strip())
+        if (
+            existing.is_file()
+            and fingerprint
+            and line.source_sha256
+            and line.source_sha256 == fingerprint
+        ):
+            return existing
+        return self._layout.watermark_side_a4_pdf(
+            source_path,
+            output_dir=self._output_dir,
+            user_name=license_name,
+        )
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        if not path.is_file():
+            return ""
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def mark_done(self, case: DigitalLicenseCase) -> None:
         ref = str(case.order_reference or "").strip()
         if ref:
-            items = self._wix_orders.get_fulfillable_items(ref)
-            normalized = self._normalize_fulfillment_items(items)
+            status = str(getattr(self._wix_orders, "fulfillment_status", lambda _ref: "")(ref) or "").upper()
+            if status == "FULFILLED":
+                normalized = []
+            else:
+                items = self._wix_orders.get_fulfillable_items(ref)
+                normalized = self._normalize_fulfillment_items(items)
             if normalized:
                 created = self._wix_orders.create_fulfillment(ref, normalized, notify_customer=False)
                 if not created:
                     raise RuntimeError(f"Wix-Fulfillment konnte nicht bestaetigt werden fuer {ref}")
+        if self._fulfillment_repo is not None:
+            from datetime import datetime, timezone
+
+            self._fulfillment_repo.mark_completed(case.invoice_id, wix_fulfilled_at=datetime.now(timezone.utc))
         completed = self._load_completed()
         completed[str(case.invoice_id)] = {
             "invoice_number": case.invoice_number,
@@ -204,7 +398,7 @@ class DigitalLicenseService:
     @staticmethod
     def _license_name(value: str) -> str:
         parts = [part for part in str(value or "").replace("\n", " ").split() if part]
-        return " ".join(parts[:2]) if len(parts) >= 2 else " ".join(parts)
+        return " ".join(parts)
 
     @staticmethod
     def _normalize_fulfillment_items(raw_items: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -224,7 +418,7 @@ class DigitalLicenseService:
             normalized.append({"id": item_id, "quantity": quantity})
         return normalized
 
-    def _open_outlook_draft(self, case: DigitalLicenseCase, attachments: list[Path]) -> None:
+    def _open_outlook_draft(self, case: DigitalLicenseCase, attachments: list[Path]) -> dict[str, str]:
         sender = str(self._secrets.get_secret("OUTLOOK_SENDER_EMAIL") or "").strip()
         if not sender:
             raise RuntimeError("OUTLOOK_SENDER_EMAIL fehlt")
@@ -256,6 +450,14 @@ class DigitalLicenseService:
         )
         if completed.returncode != 0:
             raise RuntimeError((completed.stderr or completed.stdout or "Outlook draft failed").strip())
+        try:
+            decoded = json.loads(completed.stdout or "{}")
+        except json.JSONDecodeError:
+            decoded = {}
+        return {
+            "entry_id": str(decoded.get("entry_id") or "").strip(),
+            "store_id": str(decoded.get("store_id") or "").strip(),
+        }
 
     @staticmethod
     def _mail_subject(case: DigitalLicenseCase) -> str:

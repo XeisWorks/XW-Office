@@ -317,6 +317,7 @@ class TagesgeschaeftView(QWidget):
         self._start_worker: BackgroundWorker | None = None
         self._start_product_worker: BackgroundWorker | None = None
         self._start_exec_worker: BackgroundWorker | None = None
+        self._digital_license_offer_worker: BackgroundWorker | None = None
         self._reprint_worker: BackgroundWorker | None = None
         self._reprint_exec_worker: BackgroundWorker | None = None
         self._start_requested_mode: StartMode = StartMode.INVOICES_AND_PRINT
@@ -375,6 +376,7 @@ class TagesgeschaeftView(QWidget):
                 self._start_worker,
                 self._start_product_worker,
                 self._start_exec_worker,
+                self._digital_license_offer_worker,
                 self._reprint_worker,
                 self._reprint_exec_worker,
             )
@@ -407,6 +409,7 @@ class TagesgeschaeftView(QWidget):
                 self._start_worker,
                 self._start_product_worker,
                 self._start_exec_worker,
+                self._digital_license_offer_worker,
                 self._reprint_worker,
                 self._reprint_exec_worker,
                 self._lieferkorrektur_popup_fetch_worker,
@@ -527,7 +530,7 @@ class TagesgeschaeftView(QWidget):
         self._btn_sendungen_alert.hide()
         bar_lay.addWidget(self._btn_sendungen_alert)
 
-        self._btn_digital_licenses_alert = self._build_alert_button("EXTERNE BESTELLUNG")
+        self._btn_digital_licenses_alert = self._build_alert_button("DIGITALE LIEFERUNG OFFEN")
         self._btn_digital_licenses_alert.clicked.connect(self._on_digital_licenses_alert_clicked)
         self._btn_digital_licenses_alert.hide()
         bar_lay.addWidget(self._btn_digital_licenses_alert)
@@ -726,7 +729,7 @@ class TagesgeschaeftView(QWidget):
         self._update_alert_button(self._btn_sendungen_alert, "OFFENE SENDUNGEN", sendungen_count)
         self._update_alert_button(
             self._btn_digital_licenses_alert,
-            "EXTERNE BESTELLUNG",
+            "DIGITALE LIEFERUNG OFFEN",
             digital_licenses_count,
         )
         if transfer_count > 0:
@@ -782,7 +785,7 @@ class TagesgeschaeftView(QWidget):
         self._digital_licenses_count = max(0, int(count))
         self._update_alert_button(
             self._btn_digital_licenses_alert,
-            "EXTERNE BESTELLUNG",
+            "DIGITALE LIEFERUNG OFFEN",
             self._digital_licenses_count,
         )
 
@@ -1059,6 +1062,11 @@ class TagesgeschaeftView(QWidget):
                 reference = str(summary.order_reference or "").strip()
                 if not reference:
                     continue
+                # Manual paid digital-license orders have no physical product
+                # mapping/print path.  They are handed to the guided wizard
+                # after START and must not create pre-flight interruptions.
+                if invoice_service.is_manual_licensed_delivery(summary):
+                    continue
                 refs.append(reference)
                 targets_by_reference.setdefault(reference, []).append(
                     ProductIssueTarget(
@@ -1258,6 +1266,11 @@ class TagesgeschaeftView(QWidget):
         full_mode = bool(batch.get("full_mode"))
         print_products = bool(batch.get("print_products"))
         aborted = bool(batch.get("aborted"))
+        pending_license_ids = [
+            str(item).strip()
+            for item in (batch.get("pending_digital_license_case_ids") or [])
+            if str(item).strip()
+        ]
         mode_label = StartMode.INVOICES_AND_PRINT.value if full_mode else StartMode.INVOICES_ONLY.value
 
         signals: AppSignals = self._container.resolve(AppSignals)
@@ -1279,6 +1292,8 @@ class TagesgeschaeftView(QWidget):
             f"Erfolgreich: {successful}",
             f"Fehler: {failures}",
         ]
+        if pending_license_ids:
+            lines.append(f"Digitale Lieferungen offen: {len(pending_license_ids)}")
         if aborted:
             lines.append("Laufstatus: manuell gestoppt")
         if isinstance(inventory_report, StartExecutionReport):
@@ -1314,6 +1329,49 @@ class TagesgeschaeftView(QWidget):
             if processed > 0:
                 self._rechnungen_view.mark_print_products_last_run()
             self._rechnungen_view._reload_first_page()  # noqa: SLF001
+        self._refresh_badges()
+        if pending_license_ids and not aborted:
+            self._offer_digital_license_delivery(pending_license_ids)
+
+    def _offer_digital_license_delivery(self, invoice_ids: list[str]) -> None:
+        """Offer the manual-license wizard after START without blocking Qt."""
+        if self._digital_license_offer_worker is not None and self._digital_license_offer_worker.isRunning():
+            return
+
+        def job() -> list[object]:
+            service: DigitalLicenseService = self._container.resolve(DigitalLicenseService)
+            return list(service.reconcile_candidates(invoice_ids=invoice_ids))
+
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(self._on_digital_license_candidates_ready)
+        worker.signals.error.connect(lambda exc: logger.warning("Digital-license reconcile failed: %s", exc))
+        worker.signals.finished.connect(lambda: setattr(self, "_digital_license_offer_worker", None))
+        self._digital_license_offer_worker = worker
+        worker.start()
+
+    def _on_digital_license_candidates_ready(self, payload: object) -> None:
+        cases = list(payload) if isinstance(payload, list) else []
+        if not cases or self._rechnungen_view is None:
+            return
+        count = len(cases)
+        answer = QMessageBox.question(
+            self,
+            "Digitale Lieferung",
+            f"{count} digitale Bestellung{'en' if count != 1 else ''} wurde vorbereitet. "
+            "Digitale Lieferung jetzt ausfuehren?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        service: DigitalLicenseService = self._container.resolve(DigitalLicenseService)
+        if answer != QMessageBox.StandardButton.Yes:
+            for case in cases:
+                try:
+                    service.defer(case)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Deferring digital-license case failed: %s", exc)
+            self._refresh_badges()
+            return
+        self._rechnungen_view.open_digital_licenses_dialog()
         self._refresh_badges()
 
     def _on_start_preflight_error(self, exc: Exception) -> None:

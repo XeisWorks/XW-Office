@@ -91,6 +91,7 @@ from xw_office.services.xw_copilot.service import XWCopilotService
 from xw_office.repositories import (
     ApiSecretRepository,
     CustomerAftercareRepository,
+    DigitalLicenseFulfillmentRepository,
     ExpenseCheckRepository,
     PcRegistryRepository,
     PlcShipmentRepository,
@@ -444,6 +445,10 @@ def register_default_services(container: Container) -> None:
         ),
     )
     container.register(
+        DigitalLicenseFulfillmentRepository,
+        lambda c: DigitalLicenseFulfillmentRepository(c.resolve(SessionMaker)),
+    )
+    container.register(
         DigitalLicenseService,
         lambda c: DigitalLicenseService(
             invoices=c.resolve(InvoiceProcessingService),
@@ -453,6 +458,12 @@ def register_default_services(container: Container) -> None:
             secret_service=c.resolve(SecretService),
             settings_repo=c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
             inventory=c.resolve(InventoryService),
+            fulfillment_repo=(
+                c.resolve(DigitalLicenseFulfillmentRepository)
+                if (c.config.database_url or "").strip()
+                else None
+            ),
+            output_dir=c.config.digital_licenses.output_dir,
         ),
     )
     container.register(

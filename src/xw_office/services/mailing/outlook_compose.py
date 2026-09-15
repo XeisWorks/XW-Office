@@ -28,7 +28,7 @@ def compose_outlook_mail(
     sender_smtp: str,
     body: str = "",
     attachments: list[str] | None = None,
-) -> None:
+) -> dict[str, str]:
     """Open an editable Outlook mail draft from *sender_smtp*."""
     sender = str(sender_smtp or "").strip()
     recipient = str(to_email or "").strip()
@@ -58,6 +58,30 @@ def compose_outlook_mail(
         _apply_sender(mail, account)
         _apply_body(mail, body)
         _apply_attachments(mail, attachments or [])
+        save = getattr(mail, "Save", None)
+        if callable(save):
+            save()
+        return {
+            "entry_id": str(getattr(mail, "EntryID", "") or "").strip(),
+            "store_id": str(getattr(getattr(mail, "Parent", None), "StoreID", "") or "").strip(),
+        }
+    finally:
+        pythoncom.CoUninitialize()
+
+
+def reopen_outlook_mail(*, entry_id: str, store_id: str = "") -> None:
+    """Open a previously saved draft by its stable Outlook identifiers."""
+    wanted_entry = str(entry_id or "").strip()
+    if not wanted_entry:
+        raise OutlookComposeError("Outlook-Entwurf-ID fehlt")
+    import pythoncom  # type: ignore[import-untyped]
+    import win32com.client as win32  # type: ignore[import-untyped]
+
+    pythoncom.CoInitialize()
+    try:
+        outlook = win32.Dispatch("Outlook.Application")
+        item = outlook.Session.GetItemFromID(wanted_entry, str(store_id or "").strip() or None)
+        item.Display(False)
     finally:
         pythoncom.CoUninitialize()
 
@@ -141,7 +165,14 @@ def _apply_attachments(mail: Any, attachments: list[str]) -> None:
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
-        compose_outlook_mail(
+        if str(payload.get("operation") or "compose").strip().lower() == "reopen":
+            reopen_outlook_mail(
+                entry_id=str(payload.get("entry_id") or ""),
+                store_id=str(payload.get("store_id") or ""),
+            )
+            print(json.dumps({"ok": True}))
+            return 0
+        result = compose_outlook_mail(
             to_email=str(payload.get("to") or ""),
             subject=str(payload.get("subject") or ""),
             sender_smtp=str(payload.get("sender") or ""),
@@ -152,11 +183,11 @@ def main() -> int:
                 if str(item or "").strip()
             ],
         )
+        print(json.dumps({"ok": True, **result}))
+        return 0
     except Exception as exc:  # noqa: BLE001
         print(json.dumps({"ok": False, "error": str(exc), "type": type(exc).__name__}))
         return 1
-    print(json.dumps({"ok": True}))
-    return 0
 
 
 if __name__ == "__main__":

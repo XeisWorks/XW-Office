@@ -136,6 +136,10 @@ sku_rules:
   b2b_reference_prefixes: ["1"]
   b2c_reference_prefixes: ["2"]
 
+digital_licenses:
+  output_dir: "C:\\Users\\XeisWorks\\OneDrive - XeisWorks\\02 XeisWorks\\24 Digitale Lizensierung"
+  alarm_label: "DIGITALE LIEFERUNG OFFEN"
+
 customer_aftercare:
   enabled: true
   ai:

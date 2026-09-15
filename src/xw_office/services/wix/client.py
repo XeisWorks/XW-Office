@@ -1780,6 +1780,23 @@ class WixOrdersClient:
         return custom == "PAYLINK_ITEM"
 
     def is_reference_manual_digital_license(self, reference: str, *, use_cache: bool = True) -> bool:
+        """Backward-compatible broad classifier used by older callers."""
+        order = self._resolve_order(reference, use_cache=use_cache)
+        if not order:
+            return False
+        raw_items = order.get("lineItems") if isinstance(order.get("lineItems"), list) else []
+        valid_items = [item for item in raw_items if isinstance(item, dict)]
+        if not valid_items or not all(self.line_item_is_digital(item) for item in valid_items):
+            return False
+        return any(self.line_item_is_paylink_custom(item) for item in valid_items)
+
+    def is_reference_manual_licensed_delivery(self, reference: str, *, use_cache: bool = True) -> bool:
+        """Return whether a custom payment-link order needs manual licensing.
+
+        The handling line is the explicit contract emitted by the Wix
+        ``Digitale Noten`` flow.  Requiring it avoids classifying unrelated
+        custom digital payment links as sheet-music licenses.
+        """
         order = self._resolve_order(reference, use_cache=use_cache)
         if not order:
             return False
@@ -1789,7 +1806,19 @@ class WixOrdersClient:
             return False
         if not all(self.line_item_is_digital(item) for item in valid_items):
             return False
-        return any(self.line_item_is_paylink_custom(item) for item in valid_items)
+        has_custom = any(self.line_item_is_paylink_custom(item) for item in valid_items)
+        has_handling = any(
+            "digital delivery handling" in " ".join(
+                str(value or "")
+                for value in (
+                    item.get("name"),
+                    item.get("productName"),
+                    item.get("description"),
+                )
+            ).casefold()
+            for item in valid_items
+        )
+        return has_custom and has_handling
 
     def fulfillment_status(self, reference: str) -> str:
         order = self._resolve_order(reference, use_cache=False)
