@@ -104,6 +104,16 @@ class _WixOrdersDigitalOnlyStub:
         return "FULFILLED"
 
 
+class _WixOrdersManualLicenseStub(_WixOrdersDigitalOnlyStub):
+    def is_reference_manual_licensed_delivery(
+        self,
+        reference: str,
+        *,
+        use_cache: bool = True,
+    ) -> bool:
+        return True
+
+
 class _WixOrdersPhysicalStub:
     def __init__(self) -> None:
         self.fulfillment_calls: list[tuple[str, list[dict]]] = []
@@ -441,6 +451,42 @@ def test_fullflow_skips_print_for_digital_only_wix_orders() -> None:
     assert stored["INV-DIGI-001"]["mail_sent"] is True
     assert not mock_inv_print.called
     assert not mock_label_print.called
+
+
+def test_fullflow_routes_manual_license_before_generic_digital_only() -> None:
+    config = AppConfig()
+    invoice_client = _InvoiceClientE2E()
+    repo = _SettingsRepoE2E()
+    mailer = _MailServiceStub()
+    wix_orders = _WixOrdersManualLicenseStub()
+    service = InvoiceProcessingService(config, invoice_client, repo, wix_orders, mailer)
+    summary = InvoiceSummary(
+        id="INV-LICENSE-001",
+        invoice_number="R-LICENSE-001",
+        contact_name="John Doe",
+        order_reference="21222",
+    )
+    invoice_client.list_invoice_summaries = lambda **_: [summary]
+
+    with patch.object(
+        service,
+        "finalize_invoice_without_delivery",
+        side_effect=lambda current: current,
+    ) as finalize, patch.object(
+        service,
+        "_run_payment_step",
+        side_effect=lambda _summary, flags: flags,
+    ):
+        result = service.run_start_fullflow(full_mode=True)
+
+    assert result["failures"] == 0
+    assert result["successful"] == 1
+    assert result["pending_digital_license_case_ids"] == ["INV-LICENSE-001"]
+    finalize.assert_called_once()
+    finalized_summary = finalize.call_args.args[0]
+    assert finalized_summary.id == "INV-LICENSE-001"
+    assert finalized_summary.order_reference == "21222"
+    assert invoice_client.mail_calls == []
 
 
 def test_start_fullflow_honors_abort_between_invoices() -> None:

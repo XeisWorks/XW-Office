@@ -668,6 +668,20 @@ class InvoiceProcessingService:
             label = summary.invoice_number or summary.order_reference or summary.id
             flags = task.flags
             try:
+                # A manual licensed delivery is also technically digital-only.
+                # Handle the more specific branch first so it cannot fall
+                # through to automatic Wix fulfillment and sevDesk mail.
+                if task.manual_licensed:
+                    if progress_callback is not None:
+                        progress_callback(f"START: {label} wird als digitale Lieferung vorbereitet...")
+                    summary = self.finalize_invoice_without_delivery(summary)
+                    flags = persist(
+                        summary,
+                        run_phase(summary, "payment", lambda: self._run_payment_step(summary, flags)),
+                    )
+                    pending_manual_license_ids.append(str(summary.id))
+                    self.write_fulfillment_flags(summary.id, flags)
+                    return str(summary.id), flags, True
                 if task.digital_only:
                     if progress_callback is not None:
                         progress_callback(f"START: {label} wird vorbereitet...")
@@ -690,17 +704,6 @@ class InvoiceProcessingService:
                         run_phase(summary, "payment", lambda: self._run_payment_step(summary, flags)),
                     )
                     self.write_fulfillment_flags(summary.id, flags)
-                elif task.manual_licensed:
-                    if progress_callback is not None:
-                        progress_callback(f"START: {label} wird als digitale Lieferung vorbereitet...")
-                    summary = self.finalize_invoice_without_delivery(summary)
-                    flags = persist(
-                        summary,
-                        run_phase(summary, "payment", lambda: self._run_payment_step(summary, flags)),
-                    )
-                    pending_manual_license_ids.append(str(summary.id))
-                    self.write_fulfillment_flags(summary.id, flags)
-                    return str(summary.id), flags, True
                 flags = run_phase(summary, "wix_fulfillment", lambda: self._run_product_step(summary, flags))
                 self.write_fulfillment_flags(summary.id, flags)
                 if progress_callback is not None:
