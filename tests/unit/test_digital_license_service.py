@@ -23,6 +23,27 @@ class _Invoices:
         ]
 
 
+class _FinalizedInvoices:
+    def load_invoice_summaries(
+        self,
+        *,
+        status: int | None,
+        limit: int,
+        offset: int,
+    ) -> list[InvoiceSummary]:
+        if status != 200:
+            return []
+        return [
+            InvoiceSummary(
+                id="inv-finalized",
+                invoiceNumber="RE-262256",
+                status=200,
+                contact_name="Anna Example",
+                order_reference="12345",
+            )
+        ]
+
+
 class _Wix:
     def is_reference_manual_digital_license(self, reference: str, *, use_cache: bool = True) -> bool:
         assert use_cache is False
@@ -132,3 +153,16 @@ def test_list_open_cases_ignores_regular_wix_digital_products(tmp_path: Path) ->
     cases = _service(_Settings(), pdf, wix=_WixRegularDigital()).list_open_cases()
 
     assert cases == []
+
+
+def test_list_open_cases_recovers_finalized_invoice(tmp_path: Path) -> None:
+    pdf = tmp_path / "piece.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    service = _service(_Settings(), pdf)
+    service._invoices = _FinalizedInvoices()  # type: ignore[assignment]  # noqa: SLF001
+
+    cases = service.list_open_cases()
+
+    assert len(cases) == 1
+    assert cases[0].invoice_id == "inv-finalized"
+    assert cases[0].invoice_number == "RE-262256"

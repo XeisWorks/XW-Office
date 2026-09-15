@@ -29,7 +29,10 @@ logger = logging.getLogger(__name__)
 _COMPLETED_KEY = "digital_licenses.completed"
 _DEFAULT_OUTPUT_DIR = r"C:\Users\bernh\OneDrive - XeisWorks\02 XeisWorks\24 Digitale Lizensierung"
 _HANDLING_TOKENS = ("digital delivery handling",)
-_INVOICE_STATUSES = (100, 1000)
+# 100 = draft, 200 = finalized/sent, 1000 = paid.  Finalized invoices must
+# remain discoverable because a license case can be deferred or recovered
+# after the ordinary invoice flow has already advanced the sevDesk status.
+_INVOICE_STATUSES = (100, 200, 1000)
 
 
 @dataclass(slots=True)
