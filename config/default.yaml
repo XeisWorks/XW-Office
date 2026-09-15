@@ -140,6 +140,12 @@ digital_licenses:
   output_dir: "C:\\Users\\XeisWorks\\OneDrive - XeisWorks\\02 XeisWorks\\24 Digitale Lizensierung"
   alarm_label: "DIGITALE LIEFERUNG OFFEN"
 
+transfers:
+  # Offene Überweisungen ALARM button — disabled because XW-Flow's
+  # "ÜBERWEISUNG:"-Task now covers this (QR-Code, Rechnungsanhang,
+  # OpenAI-Zusammenfassung). Set back to true to restore this ALARM.
+  alarm_enabled: false
+
 customer_aftercare:
   enabled: true
   ai:

@@ -673,20 +673,28 @@ class TagesgeschaeftView(QWidget):
                 counts["sendungen"] = max(0, int(sendungen_service.open_count()))
             digital_licenses: DigitalLicenseService = self._container.resolve(DigitalLicenseService)
             counts["digital_licenses"] = max(0, int(digital_licenses.open_count(limit=30, use_cache=True)))
-            transfer_service: OffeneUeberweisungenService = self._container.resolve(OffeneUeberweisungenService)
-            try:
-                counts["transfer"] = max(
-                    0,
-                    int(transfer_service.refresh_count_from_graph_silent(lookback_days=60, max_items=150)),
-                )
-                counts["transfer_login_required"] = (
-                    1
-                    if counts["transfer"] == 0 and transfer_service.needs_interactive_graph_login()
-                    else 0
-                )
-            except Exception:  # noqa: BLE001
-                counts["transfer"] = max(0, int(counts.get("transfers", 0)))
+            if not self._container.config.transfers.alarm_enabled:
+                # Deactivated in favor of XW-Flow's "ÜBERWEISUNG:"-Task
+                # (config/default.yaml: transfers.alarm_enabled) — no Graph
+                # call, no badge, no ALARM button. Service/dialog code is
+                # untouched, so flipping the flag brings it back instantly.
+                counts["transfer"] = 0
                 counts["transfer_login_required"] = 0
+            else:
+                transfer_service: OffeneUeberweisungenService = self._container.resolve(OffeneUeberweisungenService)
+                try:
+                    counts["transfer"] = max(
+                        0,
+                        int(transfer_service.refresh_count_from_graph_silent(lookback_days=60, max_items=150)),
+                    )
+                    counts["transfer_login_required"] = (
+                        1
+                        if counts["transfer"] == 0 and transfer_service.needs_interactive_graph_login()
+                        else 0
+                    )
+                except Exception:  # noqa: BLE001
+                    counts["transfer"] = max(0, int(counts.get("transfers", 0)))
+                    counts["transfer_login_required"] = 0
             aftercare_service: CustomerAftercareService = self._container.resolve(CustomerAftercareService)
             aftercare_config = self._container.config.customer_aftercare.polling
             aftercare_now = time.monotonic()

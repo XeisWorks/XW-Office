@@ -215,6 +215,16 @@ class DigitalLicensesSection:
 
 
 @dataclass(frozen=True)
+class TransfersSection:
+    """Offene Überweisungen (transfer@ mailbox alarm). Superseded by the
+    XW-Flow "ÜBERWEISUNG:"-Task (which now carries the same QR/PDF/OpenAI
+    helpers), so the ALARM button here is disabled by default via
+    config/default.yaml — set alarm_enabled back to true to bring it back."""
+
+    alarm_enabled: bool = True
+
+
+@dataclass(frozen=True)
 class CustomerAftercareAiSection:
     enabled: bool = True
     min_confidence_for_prefill: float = 0.75
@@ -268,6 +278,7 @@ class AppConfig:
     clearing: ClearingSection = field(default_factory=ClearingSection)
     sku_rules: SkuRulesSection = field(default_factory=SkuRulesSection)
     digital_licenses: DigitalLicensesSection = field(default_factory=DigitalLicensesSection)
+    transfers: TransfersSection = field(default_factory=TransfersSection)
     customer_aftercare: CustomerAftercareSection = field(default_factory=CustomerAftercareSection)
     database_url: str = ""
     fernet_master_key: str = ""
