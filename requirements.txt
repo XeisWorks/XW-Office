@@ -1,1 +1,5 @@
--r requirements-web.txt
+# Lean production dependencies for the Railway Content Studio service.
+fastapi>=0.115,<1
+pydantic>=2,<3
+PyYAML>=6,<7
+uvicorn>=0.34,<1
