@@ -1,4 +1,4 @@
-"""Compact week/month/year overview for successfully printed PLC labels."""
+"""Compact PLC overview with historical Post and local print data."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
@@ -31,6 +31,9 @@ class _StatisticsPage(QWidget):
         self._count = QLabel("Sendungen: —")
         self._count.setStyleSheet("font-size: 18px; font-weight: bold;")
         summary_row.addWidget(self._count)
+        self._weight = QLabel("Gewicht: —")
+        self._weight.setStyleSheet("font-size: 18px; font-weight: bold;")
+        summary_row.addWidget(self._weight)
         summary_row.addStretch()
         self._price = QLabel("Preis: —")
         self._price.setStyleSheet("font-size: 18px; font-weight: bold; color: #0f766e;")
@@ -41,8 +44,8 @@ class _StatisticsPage(QWidget):
         self._range.setStyleSheet("color: #64748b;")
         layout.addWidget(self._range)
 
-        self._table = QTableWidget(0, 3)
-        self._table.setHorizontalHeaderLabels(["Land", "Sendungen", "Preis"])
+        self._table = QTableWidget(0, 4)
+        self._table.setHorizontalHeaderLabels(["Land", "Sendungen", "Gewicht", "Preis"])
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self._table.verticalHeader().setVisible(False)
@@ -50,15 +53,18 @@ class _StatisticsPage(QWidget):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         layout.addWidget(self._table, stretch=1)
 
-        self._empty = QLabel("Noch keine erfolgreich gedruckten LIVE-PLC-Labels in diesem Zeitraum.")
+        self._empty = QLabel("Keine PLC-Sendungen in diesem Zeitraum.")
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty.setStyleSheet("color: #64748b; padding: 18px;")
         layout.addWidget(self._empty)
 
     def apply(self, stats: PlcPeriodStatistics) -> None:
         self._count.setText(f"Sendungen: {stats.shipment_count}")
+        weight = f"{stats.weight_kg:.2f}".replace(".", ",")
+        self._weight.setText(f"Gewicht: {weight} kg")
         price = f"{stats.price_eur:.2f}".replace(".", ",")
         self._price.setText(f"Preis: {price} €")
         unknown = stats.shipment_count - stats.priced_count
@@ -76,7 +82,8 @@ class _StatisticsPage(QWidget):
                 if country.priced_count
                 else "—"
             )
-            values = (country_label, str(country.shipment_count), country_price)
+            country_weight = f"{country.weight_kg:.2f} kg".replace(".", ",")
+            values = (country_label, str(country.shipment_count), country_weight, country_price)
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if column > 0:
@@ -103,7 +110,7 @@ class PlcStatisticsDialog(QDialog):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         top = QHBoxLayout()
-        title = QLabel("Erfolgreich gedruckte PLC-Labels")
+        title = QLabel("PLC-Sendungen")
         title.setStyleSheet("font-size: 16px; font-weight: bold;")
         top.addWidget(title)
         top.addStretch()
@@ -112,12 +119,12 @@ class PlcStatisticsDialog(QDialog):
         top.addWidget(self._refresh)
         layout.addLayout(top)
 
-        self._status = QLabel("Lade Railway-Statistik …")
+        self._status = QLabel("Lade PLC-Statistik …")
         self._status.setStyleSheet("color: #64748b;")
         layout.addWidget(self._status)
 
         self._tabs = QTabWidget()
-        for key, label in (("week", "Woche"), ("month", "Monat"), ("year", "Jahr")):
+        for key, label in (("week", "Woche"), ("month", "Monat"), ("year", "Jahr"), ("all", "Gesamt")):
             page = _StatisticsPage()
             self._pages[key] = page
             self._tabs.addTab(page, label)
@@ -131,7 +138,7 @@ class PlcStatisticsDialog(QDialog):
         if self._worker is not None and self._worker.isRunning():
             return
         self._refresh.setEnabled(False)
-        self._status.setText("Lade Railway-Statistik …")
+        self._status.setText("Lade PLC-Statistik …")
         self._worker = BackgroundWorker(self._service.load)
         self._worker.signals.result.connect(self._on_loaded)
         self._worker.signals.error.connect(self._on_error)
@@ -145,7 +152,7 @@ class PlcStatisticsDialog(QDialog):
         for stats in result:
             if isinstance(stats, PlcPeriodStatistics) and stats.key in self._pages:
                 self._pages[stats.key].apply(stats)
-        self._status.setText("LIVE-Sendungen · zentral aus Railway PostgreSQL")
+        self._status.setText("Post-Export bis 15.09.2026 · lokale LIVE-Sendungen danach aus Railway PostgreSQL")
 
     def _on_error(self, exc: Exception) -> None:
         self._status.setText(f"Statistik nicht verfügbar: {exc}")

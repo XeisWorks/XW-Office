@@ -28,6 +28,7 @@ class PlcPrintedShipment:
     weight_kg: Decimal | None
     price_eur: Decimal | None
     printed_at: datetime.datetime
+    shipment_count: int = 1
 
 
 class PlcShipmentRepository:
