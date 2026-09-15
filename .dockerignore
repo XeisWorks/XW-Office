@@ -1,0 +1,2 @@
+# Raw operational exports may contain personal shipment data and are never build inputs.
+docs/invoices/Sendungen_*.csv

@@ -19,3 +19,4 @@ node_modules/
 .railway/
 test-results/
 data/
+docs/invoices/Sendungen_*.csv
