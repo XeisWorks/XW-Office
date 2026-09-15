@@ -1,4 +1,5 @@
 import json
+import types
 from pathlib import Path
 
 from xw_office.services.digital_licenses import DigitalLicenseService
@@ -166,3 +167,65 @@ def test_list_open_cases_recovers_finalized_invoice(tmp_path: Path) -> None:
     assert len(cases) == 1
     assert cases[0].invoice_id == "inv-finalized"
     assert cases[0].invoice_number == "RE-262256"
+
+
+def test_mail_html_uses_small_unlinked_dark_gray_signature(tmp_path: Path) -> None:
+    pdf = tmp_path / "piece.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    case = _service(_Settings(), pdf).list_open_cases()[0]
+
+    body = DigitalLicenseService._mail_html_body(case)
+
+    assert "font-size:8.5pt" in body
+    assert "color:#555555" in body
+    assert "office@xeisworks.at" in body
+    assert "www.xeisworks.at" in body
+    assert "mailto:" not in body
+    assert "<a " not in body
+
+
+def test_persisted_queue_uses_count_and_exact_invoice_lookup(tmp_path: Path) -> None:
+    pdf = tmp_path / "piece.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+
+    class _ExactInvoices:
+        def load_invoice_summary_by_id(self, invoice_id: str) -> InvoiceSummary:
+            assert invoice_id == "inv-1"
+            return InvoiceSummary(
+                id="inv-1",
+                invoiceNumber="RE-1",
+                status=200,
+                contact_name="Anna Example",
+                order_reference="12345",
+            )
+
+        def load_invoice_summaries(self, **kwargs: object) -> list[InvoiceSummary]:
+            raise AssertionError("Status lists must not be scanned for a persisted queue")
+
+    row = types.SimpleNamespace(
+        invoice_id="inv-1",
+        invoice_number="RE-1",
+        order_reference="12345",
+        state="DEFERRED",
+        invoice_attachment_path="",
+        outlook_entry_id="",
+        outlook_store_id="",
+        licensed_files_json="[]",
+    )
+
+    class _Repo:
+        def count_open(self) -> int:
+            return 1
+
+        def list_open(self, *, limit: int) -> list[object]:
+            assert limit == 100
+            return [row]
+
+    service = _service(_Settings(), pdf)
+    service._invoices = _ExactInvoices()  # type: ignore[assignment]
+    service._fulfillment_repo = _Repo()  # type: ignore[assignment]
+
+    assert service.open_count() == 1
+    cases = service.list_open_cases()
+    assert len(cases) == 1
+    assert cases[0].state == "DEFERRED"

@@ -1,8 +1,9 @@
 """Services for paid digital sheet-music license fulfillment."""
 from __future__ import annotations
 
-import json
 import hashlib
+import html
+import json
 import logging
 import os
 import subprocess
@@ -92,9 +93,23 @@ class DigitalLicenseService:
         The full dialog can run uncached lookups.  Header badges are refreshed
         often and must not trigger a long live Wix scan on every refresh.
         """
+        if self._fulfillment_repo is not None:
+            try:
+                return self._fulfillment_repo.count_open()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Digital license count failed; falling back to discovery: %s", exc)
         return len(self.list_open_cases(limit=limit, use_cache=use_cache))
 
     def list_open_cases(self, *, limit: int = 100, use_cache: bool = False) -> list[DigitalLicenseCase]:
+        if self._fulfillment_repo is not None:
+            try:
+                rows = self._fulfillment_repo.list_open(limit=limit)
+                return self._load_persisted_cases(rows)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Digital license queue read failed; falling back to discovery: %s", exc)
+        return self._discover_open_cases(limit=limit, use_cache=use_cache)
+
+    def _discover_open_cases(self, *, limit: int, use_cache: bool) -> list[DigitalLicenseCase]:
         completed = self._load_completed()
         repo_completed: set[str] = set()
         if self._fulfillment_repo is not None:
@@ -104,7 +119,7 @@ class DigitalLicenseService:
                     for row in self._fulfillment_repo.list_by_states(("COMPLETED",), limit=1000)
                 }
             except Exception as exc:  # noqa: BLE001
-                logger.warning("Digital license repository read failed: %s", exc)
+                logger.warning("Digital license completed-state read failed: %s", exc)
         summaries: list[InvoiceSummary] = []
         seen_invoice_ids: set[str] = set()
         for status in _INVOICE_STATUSES:
@@ -136,25 +151,7 @@ class DigitalLicenseService:
                         invoice_number=case.invoice_number,
                         order_reference=case.order_reference,
                     )
-                    case.state = str(row.state or case.state)
-                    case.invoice_attachment_path = str(row.invoice_attachment_path or "")
-                    case.outlook_entry_id = str(row.outlook_entry_id or "")
-                    case.outlook_store_id = str(row.outlook_store_id or "")
-                    try:
-                        stored_files = json.loads(str(row.licensed_files_json or "[]"))
-                    except json.JSONDecodeError:
-                        stored_files = []
-                    if isinstance(stored_files, list):
-                        by_key = {
-                            f"{str(item.get('sku') or '').strip()}:{str(item.get('title') or '').strip()}".casefold(): item
-                            for item in stored_files
-                            if isinstance(item, dict)
-                        }
-                        for line in case.lines:
-                            stored = by_key.get(f"{line.sku}:{line.name}".casefold())
-                            if stored:
-                                line.output_path = str(stored.get("path") or "")
-                                line.source_sha256 = str(stored.get("source_sha256") or "")
+                    self._hydrate_case(case, row)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Digital license case skipped invoice=%s ref=%s: %s", invoice_id, ref, exc)
                 continue
@@ -162,16 +159,83 @@ class DigitalLicenseService:
                 cases.append(case)
         return cases
 
+    def _load_persisted_cases(self, rows: list[object]) -> list[DigitalLicenseCase]:
+        completed = self._load_completed()
+        cases: list[DigitalLicenseCase] = []
+        for row in rows:
+            invoice_id = str(getattr(row, "invoice_id", "") or "").strip()
+            if not invoice_id or invoice_id in completed:
+                continue
+            try:
+                summary = self._invoices.load_invoice_summary_by_id(invoice_id)
+                stored_reference = str(getattr(row, "order_reference", "") or "").strip()
+                if stored_reference and not str(summary.order_reference or "").strip():
+                    summary = summary.model_copy(update={"order_reference": stored_reference})
+                case = self._build_case(summary)
+                self._hydrate_case(case, row)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Open digital license could not be loaded invoice=%s: %s", invoice_id, exc)
+                continue
+            if case.lines:
+                cases.append(case)
+        return cases
+
+    @staticmethod
+    def _hydrate_case(case: DigitalLicenseCase, row: object) -> None:
+        case.state = str(getattr(row, "state", "") or case.state)
+        case.invoice_attachment_path = str(getattr(row, "invoice_attachment_path", "") or "")
+        case.outlook_entry_id = str(getattr(row, "outlook_entry_id", "") or "")
+        case.outlook_store_id = str(getattr(row, "outlook_store_id", "") or "")
+        try:
+            stored_files = json.loads(str(getattr(row, "licensed_files_json", "") or "[]"))
+        except json.JSONDecodeError:
+            stored_files = []
+        if not isinstance(stored_files, list):
+            return
+        by_key = {
+            f"{str(item.get('sku') or '').strip()}:{str(item.get('title') or '').strip()}".casefold(): item
+            for item in stored_files
+            if isinstance(item, dict)
+        }
+        for line in case.lines:
+            stored = by_key.get(f"{line.sku}:{line.name}".casefold())
+            if stored:
+                line.output_path = str(stored.get("path") or "")
+                line.source_sha256 = str(stored.get("source_sha256") or "")
+
     def reconcile_candidates(self, *, invoice_ids: list[str] | None = None) -> list[DigitalLicenseCase]:
         """Discover and persist manual-license candidates.
 
-        ``invoice_ids`` is currently a narrowing hint for callers such as
-        START; the existing invoice client remains the source of truth.
+        When START supplies invoice IDs, only those exact invoices are loaded.
         """
-        cases = self.list_open_cases(limit=100 if invoice_ids else 1000, use_cache=False)
-        if invoice_ids:
-            wanted = {str(item).strip() for item in invoice_ids if str(item).strip()}
-            cases = [case for case in cases if case.invoice_id in wanted]
+        wanted = list(dict.fromkeys(str(item).strip() for item in (invoice_ids or []) if str(item).strip()))
+        if not wanted:
+            return self._discover_open_cases(limit=1000, use_cache=False)
+        cases: list[DigitalLicenseCase] = []
+        for invoice_id in wanted:
+            try:
+                summary = self._invoices.load_invoice_summary_by_id(invoice_id)
+                ref = str(summary.order_reference or "").strip()
+                if not ref:
+                    continue
+                resolver = getattr(self._wix_orders, "is_reference_manual_licensed_delivery", None)
+                if not callable(resolver):
+                    resolver = self._wix_orders.is_reference_manual_digital_license
+                if not resolver(ref, use_cache=False):
+                    continue
+                case = self._build_case(summary)
+                if self._fulfillment_repo is not None:
+                    row = self._fulfillment_repo.upsert_candidate(
+                        invoice_id=case.invoice_id,
+                        invoice_number=case.invoice_number,
+                        order_reference=case.order_reference,
+                    )
+                    self._hydrate_case(case, row)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Digital license candidate skipped invoice=%s: %s", invoice_id, exc)
+                continue
+            if case.lines:
+                cases.append(case)
         return cases
 
     def defer(self, case: DigitalLicenseCase) -> None:
@@ -433,6 +497,7 @@ class DigitalLicenseService:
                 "subject": self._mail_subject(case),
                 "sender": sender,
                 "body": self._mail_body(case),
+                "html_body": self._mail_html_body(case),
                 "attachments": [str(path) for path in attachments],
             },
             ensure_ascii=False,
@@ -479,6 +544,28 @@ class DigitalLicenseService:
             f"Included:\n{product_lines}\n\n"
             "Best regards,\n"
             "XeisWorks"
+        )
+
+    @staticmethod
+    def _mail_html_body(case: DigitalLicenseCase) -> str:
+        first_name = html.escape(str(case.customer_name or "").strip().split(" ")[0] or "there")
+        product_lines = "".join(f"<li>{html.escape(line.name)}</li>" for line in case.lines)
+        return (
+            '<html><body style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1f1f1f;">'
+            f"<p>Dear {first_name},</p>"
+            "<p>Thank you for your order. Please find your personally licensed sheet music PDF file(s) "
+            "and invoice attached.</p>"
+            "<p>This license is issued for your personal use only. Please do not share, resell, upload, "
+            "or redistribute the attached file(s).</p>"
+            f"<p>Included:</p><ul>{product_lines}</ul>"
+            "<p>Best regards,</p>"
+            '<div style="font-family:Calibri,Arial,sans-serif;font-size:8.5pt;color:#555555;line-height:1.25;">'
+            "<strong>XeisWorks</strong><br>"
+            "Musikverlag Mag. Bernhard Holl<br>"
+            "office@xeisworks.at<br>"
+            "www.xeisworks.at<br>"
+            "+43 3611 93012"
+            "</div></body></html>"
         )
 
     def _load_completed(self) -> dict[str, dict[str, object]]:

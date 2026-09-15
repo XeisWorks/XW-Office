@@ -1182,6 +1182,10 @@ class InvoiceProcessingService:
         self._apply_unreleased_sku_flags([summary])
         return summary
 
+    def load_invoice_summary_by_id(self, invoice_id: str) -> InvoiceSummary:
+        """Load one exact invoice for workflows backed by persisted invoice IDs."""
+        return self._load_summary_by_id(invoice_id)
+
     def _resolve_current_start_summary(self, summary: InvoiceSummary) -> InvoiceSummary:
         """Refresh a START draft and recover by Wix reference if sevDesk moved the id."""
         invoice_id = str(summary.id or "").strip()

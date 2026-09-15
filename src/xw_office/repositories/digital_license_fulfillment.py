@@ -7,7 +7,7 @@ import json
 from collections.abc import Generator, Iterable
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
@@ -52,6 +52,14 @@ class DigitalLicenseFulfillmentRepository:
 
     def list_open(self, *, limit: int = 100) -> list[DigitalLicenseFulfillment]:
         return self.list_by_states(OPEN_STATES, limit=limit)
+
+    def count_open(self) -> int:
+        """Return the badge count without loading fulfillment rows."""
+        with self._scope() as session:
+            query = select(func.count()).select_from(DigitalLicenseFulfillment).where(
+                DigitalLicenseFulfillment.state.in_(OPEN_STATES)
+            )
+            return int(session.scalar(query) or 0)
 
     def list_by_states(
         self,

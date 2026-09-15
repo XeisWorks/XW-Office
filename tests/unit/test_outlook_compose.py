@@ -30,3 +30,15 @@ def test_create_mail_item_falls_back_to_default_create_item() -> None:
     outlook = types.SimpleNamespace(CreateItem=lambda kind: fallback if kind == 0 else object())
 
     assert outlook_compose._create_mail_item(outlook, account) is fallback  # noqa: SLF001
+
+
+def test_apply_html_body_replaces_outlook_signature() -> None:
+    mail = types.SimpleNamespace(
+        Body="Old plain signature",
+        HTMLBody='<a href="mailto:office@xeisworks.at">old signature</a>',
+    )
+
+    outlook_compose._apply_body(mail, "Plain fallback", html_body="<p>Complete custom mail</p>")
+
+    assert mail.HTMLBody == "<p>Complete custom mail</p>"
+    assert "mailto:" not in mail.HTMLBody

@@ -27,6 +27,7 @@ def compose_outlook_mail(
     subject: str,
     sender_smtp: str,
     body: str = "",
+    html_body: str = "",
     attachments: list[str] | None = None,
 ) -> dict[str, str]:
     """Open an editable Outlook mail draft from *sender_smtp*."""
@@ -56,7 +57,7 @@ def compose_outlook_mail(
         # inspector/signature. Re-apply after Display so the visible From
         # selector is forced to the configured account.
         _apply_sender(mail, account)
-        _apply_body(mail, body)
+        _apply_body(mail, body, html_body=html_body)
         _apply_attachments(mail, attachments or [])
         save = getattr(mail, "Save", None)
         if callable(save):
@@ -143,7 +144,12 @@ def _apply_sender(mail: Any, account: Any) -> None:
             pass
 
 
-def _apply_body(mail: Any, body: str) -> None:
+def _apply_body(mail: Any, body: str, *, html_body: str = "") -> None:
+    clean_html = str(html_body or "").strip()
+    if clean_html:
+        # Replace the default signature inserted by Outlook during Display().
+        mail.HTMLBody = clean_html
+        return
     clean_body = str(body or "").strip()
     if not clean_body:
         return
@@ -177,6 +183,7 @@ def main() -> int:
             subject=str(payload.get("subject") or ""),
             sender_smtp=str(payload.get("sender") or ""),
             body=str(payload.get("body") or ""),
+            html_body=str(payload.get("html_body") or ""),
             attachments=[
                 str(item)
                 for item in (payload.get("attachments") or [])

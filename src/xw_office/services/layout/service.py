@@ -119,7 +119,7 @@ def _insert_side_watermark(
     document: object,
     user_name: str,
     *,
-    font_size: float = 12.0,
+    font_size: float = 11.0,
     side_margin_mm: float = 6.0,
     opacity: float = 0.5,
     text_template: str = _DEFAULT_WATERMARK_TEXT,
@@ -282,7 +282,7 @@ class LayoutToolsService:
         *,
         output_dir: str | Path,
         user_name: str,
-        font_size: float = 12.0,
+        font_size: float = 11.0,
         side_margin_mm: float = 6.0,
         opacity: float = 0.5,
     ) -> Path:
