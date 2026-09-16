@@ -1113,6 +1113,7 @@ class RechnungenView(QWidget):
         self._wix_warm_timer.setSingleShot(True)
         self._wix_warm_timer.timeout.connect(self._launch_next_wix_warm_batch)
         self._start_workflow_running = False
+        self._start_product_print_running = False
         self._deferred_selection_detail: tuple[InvoiceSummary, int] | None = None
         self._last_detail_selection_key: tuple[int, str] | None = None
         self._shutting_down = False
@@ -1155,7 +1156,11 @@ class RechnungenView(QWidget):
         self._session_print_products: list[PrintProductAggregate] = []
         self._print_products_last_run = False
         self._open_product_checks: dict[tuple[str, str, str], bool] = {}
-        self._open_product_quantities: dict[tuple[str, str, str], int] = {}
+        # Store manual corrections relative to the discovered quantity.  An
+        # absolute override would swallow products found by later overview
+        # batches (for example: 5 -> user removes 2 -> another 2 arrive must
+        # result in 5, not remain frozen at 3).
+        self._open_product_quantity_adjustments: dict[tuple[str, str, str], int] = {}
         self._last_print_all_products_key: tuple[tuple[str, str, str, int], ...] | None = None
         self._plc_label_archive = PlcLabelArchive()
         self._plc_archive_index_handle: JobHandle | None = None
@@ -1359,6 +1364,14 @@ class RechnungenView(QWidget):
         self._btn_print_all_products.clicked.connect(self._on_print_all_open_products_clicked)
         open_products_header.addWidget(self._btn_print_all_products, alignment=Qt.AlignmentFlag.AlignRight)
         open_products_layout.addLayout(open_products_header)
+        self._open_products_feedback = QLabel()
+        self._open_products_feedback.setWordWrap(True)
+        self._open_products_feedback.setStyleSheet(
+            "color: #bfdbfe; background-color: #172554; border: 1px solid #1d4ed8; "
+            "border-radius: 4px; padding: 5px 7px;"
+        )
+        self._open_products_feedback.hide()
+        open_products_layout.addWidget(self._open_products_feedback)
         self._open_products_spinner = QProgressBar()
         self._open_products_spinner.setRange(0, 0)
         self._open_products_spinner.setFixedHeight(4)
@@ -1701,13 +1714,22 @@ class RechnungenView(QWidget):
         """Hide the embedded toolbar when the parent view owns those actions."""
         self._toolbar.setVisible(not bool(enabled))
 
-    def set_start_workflow_running(self, running: bool) -> None:
+    def set_start_workflow_running(self, running: bool, *, product_print: bool = False) -> None:
         """Keep row navigation light while the START workflow owns heavy I/O."""
         next_state = bool(running)
+        self._start_product_print_running = bool(next_state and product_print)
         if self._start_workflow_running == next_state:
             return
         self._start_workflow_running = next_state
         if next_state:
+            note = (
+                "START + Noten läuft: Mengen und Druckplan bleiben bearbeitbar. "
+                "Änderungen am Druckplan gelten ab dem nächsten noch nicht gestarteten Druckauftrag."
+                if self._start_product_print_running
+                else
+                "START läuft: Mengen und Druckplan bleiben bearbeitbar; neu erkannte Stücke werden weiter addiert."
+            )
+            self._set_open_products_feedback(note)
             selected = self._selected_summary()
             self._deferred_selection_detail = (
                 (selected, self._detail_context_seq) if selected is not None else None
@@ -2772,7 +2794,10 @@ class RechnungenView(QWidget):
         plain_lines: list[str] = []
         for item in overview.print_products:
             display_item = self._open_product_with_quantity(item)
-            row = self._build_open_print_product_row(display_item)
+            # Keep the discovered quantity as the row's baseline.  The spinbox
+            # displays the adjusted amount, but later discoveries are added to
+            # that baseline instead of being hidden by an absolute override.
+            row = self._build_open_print_product_row(item)
             self._open_products_rows_layout.addWidget(row)
             plain_lines.append(self._plain_open_print_product_line(display_item))
         if overview.unknown:
@@ -2800,7 +2825,10 @@ class RechnungenView(QWidget):
         return [
             item
             for item in self._displayed_print_products()
-            if self._open_product_checks.get(self._open_product_check_key(item), True)
+            if (
+                self._open_product_checks.get(self._open_product_check_key(item), True)
+                and int(item.quantity or 0) > 0
+            )
         ]
 
     def _on_open_product_check_changed(self, item: PrintProductAggregate, checked: bool) -> None:
@@ -2808,8 +2836,11 @@ class RechnungenView(QWidget):
         self._update_print_all_products_button()
 
     def _open_product_quantity(self, item: PrintProductAggregate) -> int:
-        default = max(1, int(item.quantity or 1))
-        return max(1, int(self._open_product_quantities.get(self._open_product_check_key(item), default)))
+        discovered = max(0, int(item.quantity or 0))
+        adjustment = int(
+            self._open_product_quantity_adjustments.get(self._open_product_check_key(item), 0)
+        )
+        return max(0, min(999, discovered + adjustment))
 
     def _open_product_with_quantity(self, item: PrintProductAggregate) -> PrintProductAggregate:
         quantity = self._open_product_quantity(item)
@@ -2824,11 +2855,32 @@ class RechnungenView(QWidget):
         )
 
     def _on_open_product_quantity_changed(self, item: PrintProductAggregate, quantity: int) -> None:
-        self._open_product_quantities[self._open_product_check_key(item)] = max(1, min(999, int(quantity or 1)))
+        key = self._open_product_check_key(item)
+        discovered = max(0, int(item.quantity or 0))
+        requested = max(0, min(999, int(quantity or 0)))
+        adjustment = requested - discovered
+        if adjustment:
+            self._open_product_quantity_adjustments[key] = adjustment
+        else:
+            self._open_product_quantity_adjustments.pop(key, None)
         self._open_products_text.setPlainText(
             "\n".join(self._plain_open_print_product_line(product) for product in self._displayed_print_products())
         )
+        change = f"{adjustment:+d}" if adjustment else "±0"
+        self._set_open_products_feedback(
+            f"Menge für {item.sku} angepasst: {requested} (Korrektur {change}). "
+            "Neu erkannte Stücke werden automatisch dazugezählt."
+        )
+        self._container.resolve(AppSignals).status_message.emit(
+            f"{item.sku}: Druckmenge auf {requested} angepasst ({change}).",
+            5000,
+        )
         self._update_print_all_products_button()
+
+    def _set_open_products_feedback(self, message: str) -> None:
+        text = str(message or "").strip()
+        self._open_products_feedback.setText(text)
+        self._open_products_feedback.setVisible(bool(text))
 
     def _update_print_all_products_button(self) -> None:
         if not hasattr(self, "_btn_print_all_products"):
@@ -2845,7 +2897,7 @@ class RechnungenView(QWidget):
                 str(item.sku or "").strip().casefold(),
                 str(item.title or "").strip().casefold(),
                 str(item.description or "").strip().casefold(),
-                max(1, int(item.quantity or 1)),
+                max(0, int(item.quantity or 0)),
             )
             for item in products
         )
@@ -2881,7 +2933,7 @@ class RechnungenView(QWidget):
         prepared_jobs: list[tuple[PieceBlock, int, Callable[[], None]]] = []
         for item in products:
             block = self._piece_block_from_open_product(item)
-            qty = max(1, int(item.quantity or 1))
+            qty = max(0, int(item.quantity or 0))
             if not self._open_print_product_ready(item) and not _configure_missing_piece_print(
                 self,
                 self._container,
@@ -2972,11 +3024,13 @@ class RechnungenView(QWidget):
         layout.addWidget(checkbox)
 
         qty_input = QSpinBox()
-        qty_input.setRange(1, 999)
+        qty_input.setRange(0, 999)
         qty_input.setValue(self._open_product_quantity(item))
         qty_input.setFixedWidth(64)
         qty_input.setEnabled(self._print_allowed)
-        qty_input.setToolTip("Anzahl fuer diesen Produktdruck")
+        qty_input.setToolTip(
+            "Offene Druckmenge. Manuelle Korrekturen bleiben relativ; später erkannte Stücke werden addiert."
+        )
         qty_input.valueChanged.connect(
             lambda value, aggregate=item: self._on_open_product_quantity_changed(aggregate, value)
         )
@@ -3045,7 +3099,7 @@ class RechnungenView(QWidget):
 
     def _plain_open_print_product_line(self, item: PrintProductAggregate) -> str:
         return (
-            f"{max(1, int(item.quantity or 1))}x "
+            f"{max(0, int(item.quantity or 0))}x "
             f"{str(item.title or item.sku or 'Unbenanntes Produkt').strip()} "
             f"{str(item.sku or '-').strip()} "
             f"{self._open_product_description(item)}"
@@ -3072,7 +3126,7 @@ class RechnungenView(QWidget):
         block = PieceBlock(
             sku=sku,
             name=title,
-            qty_needed=max(1, int(item.quantity or 1)),
+            qty_needed=max(0, int(item.quantity or 0)),
             note=description,
             is_unreleased=True,
             stock_status=None,
@@ -3090,12 +3144,24 @@ class RechnungenView(QWidget):
         block = self._piece_block_from_open_product(item)
         signals: AppSignals = self._container.resolve(AppSignals)
         if _configure_missing_piece_print(self, self._container, block):
-            signals.status_message.emit(f"Druckkonfiguration fuer {block.sku} gespeichert.", 5000)
+            if self._start_product_print_running:
+                feedback = (
+                    f"Druckplan für {block.sku} gespeichert. Er gilt ab dem nächsten noch nicht "
+                    "gestarteten Druckauftrag; ein bereits laufender Druck bleibt unverändert."
+                )
+            elif self._start_workflow_running:
+                feedback = (
+                    f"Druckplan für {block.sku} gespeichert. Er gilt für die nächste manuelle "
+                    "Druckaktion; START läuft unabhängig weiter."
+                )
+            else:
+                feedback = f"Druckplan für {block.sku} gespeichert und ab der nächsten Druckaktion aktiv."
+            self._set_open_products_feedback(feedback)
+            signals.status_message.emit(feedback, 8000)
         else:
-            signals.status_message.emit(
-                f"Druckkonfiguration fuer {block.sku} nicht geaendert.",
-                5000,
-            )
+            feedback = f"Druckplan für {block.sku} nicht geändert."
+            self._set_open_products_feedback(feedback)
+            signals.status_message.emit(feedback, 5000)
         self._refresh_open_invoice_overview()
 
     def _on_open_product_print_clicked(
@@ -3103,9 +3169,15 @@ class RechnungenView(QWidget):
         item: PrintProductAggregate,
         button: QToolButton | None = None,
     ) -> None:
+        quantity = self._open_product_quantity(item)
+        if quantity <= 0:
+            self._set_open_products_feedback(
+                f"{item.sku}: Menge ist 0 – es wurde kein Druckauftrag gestartet."
+            )
+            return
         self._on_product_print_clicked(
             self._piece_block_from_open_product(item),
-            self._open_product_quantity(item),
+            quantity,
             on_accepted=(lambda: self._show_toolbutton_print_confirmation(button)) if button is not None else None,
         )
 

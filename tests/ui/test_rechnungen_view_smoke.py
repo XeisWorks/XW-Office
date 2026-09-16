@@ -949,6 +949,134 @@ def test_print_all_products_uses_adjusted_open_quantities(qtbot: object, monkeyp
     assert printed == ["XW-FIRST:5:True"]
 
 
+def test_open_product_quantity_correction_keeps_later_discoveries(qtbot: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    initial = PrintProductAggregate(
+        sku="XW-GROWING",
+        title="Wachsendes Produkt",
+        description="A",
+        quantity=5,
+    )
+
+    view._apply_open_invoice_overview(  # noqa: SLF001
+        OpenInvoiceOverview(
+            key="growing-1",
+            total=1,
+            with_ref=1,
+            physical=1,
+            digital=0,
+            unknown=1,
+            with_note=0,
+            plc=0,
+            complete=False,
+            print_products=[initial],
+        )
+    )
+    view._on_printer_status(True)  # noqa: SLF001
+    spinbox = view._gb_open_products.findChildren(QSpinBox)[0]  # noqa: SLF001
+
+    spinbox.setValue(3)
+
+    assert "Korrektur -2" in view._open_products_feedback.text()  # noqa: SLF001
+    assert "automatisch dazugezählt" in view._open_products_feedback.text()  # noqa: SLF001
+
+    view._apply_open_invoice_overview(  # noqa: SLF001
+        OpenInvoiceOverview(
+            key="growing-2",
+            total=2,
+            with_ref=2,
+            physical=2,
+            digital=0,
+            unknown=0,
+            with_note=0,
+            plc=0,
+            complete=True,
+            print_products=[
+                PrintProductAggregate(
+                    sku="XW-GROWING",
+                    title="Wachsendes Produkt",
+                    description="A",
+                    quantity=7,
+                )
+            ],
+        )
+    )
+
+    # The previous row is pending Qt's deleteLater(); the last child belongs
+    # to the freshly rendered cumulative overview.
+    updated_spinbox = view._gb_open_products.findChildren(QSpinBox)[-1]  # noqa: SLF001
+    assert updated_spinbox.minimum() == 0
+    assert updated_spinbox.value() == 5
+    assert view._selected_displayed_print_products()[0].quantity == 5  # noqa: SLF001
+
+
+def test_open_product_quantity_zero_removes_product_from_print_selection(qtbot: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    view._apply_open_invoice_overview(  # noqa: SLF001
+        OpenInvoiceOverview(
+            key="zero-quantity",
+            total=1,
+            with_ref=1,
+            physical=1,
+            digital=0,
+            unknown=0,
+            with_note=0,
+            plc=0,
+            complete=True,
+            print_products=[
+                PrintProductAggregate(
+                    sku="XW-ZERO",
+                    title="Erledigtes Produkt",
+                    description="A",
+                    quantity=2,
+                )
+            ],
+        )
+    )
+    view._on_printer_status(True)  # noqa: SLF001
+
+    spinbox = view._gb_open_products.findChildren(QSpinBox)[0]  # noqa: SLF001
+    spinbox.setValue(0)
+
+    assert view._displayed_print_products()[0].quantity == 0  # noqa: SLF001
+    assert view._selected_displayed_print_products() == []  # noqa: SLF001
+    assert not view._btn_print_all_products.isEnabled()  # noqa: SLF001
+    assert "Menge für XW-ZERO angepasst: 0" in view._open_products_feedback.text()  # noqa: SLF001
+
+
+def test_print_plan_feedback_marks_active_start_boundary(qtbot: object, monkeypatch: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    product = PrintProductAggregate(
+        sku="XW-PLAN",
+        title="Planprodukt",
+        description="A",
+        quantity=1,
+    )
+    monkeypatch.setattr(
+        view,
+        "_piece_block_from_open_product",
+        lambda item: PieceBlock(sku=item.sku, name=item.title, qty_needed=item.quantity),
+    )
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.print_dialog._configure_missing_piece_print",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(view, "_refresh_open_invoice_overview", lambda: None)
+
+    view.set_start_workflow_running(True, product_print=True)
+    view._on_open_product_manage_clicked(product)  # noqa: SLF001
+
+    feedback = view._open_products_feedback.text()  # noqa: SLF001
+    assert "nächsten noch nicht gestarteten Druckauftrag" in feedback
+    assert "bereits laufender Druck bleibt unverändert" in feedback
+
+
 def test_print_selected_products_skips_unchecked_rows(qtbot: object, monkeypatch: object) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
