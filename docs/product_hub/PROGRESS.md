@@ -13,7 +13,7 @@ Update this file at the end of every PR.
 | PR02 | Import staging foundation | **Done** | See below. |
 | PR03 | Wix read importer | **Done (code), reads only via fixtures — never called against the live Wix API in this session** | See below. |
 | PR04 | sevdesk read importer | **Done** | See below. |
-| PR05 | Excel import and matching | **Done (import; cross-source matching is PR06)** | See below. |
+| PR05 | Excel import and matching | **Done** | See below. |
 | PR06–PR16 | — | Not started | |
 
 ## PR01 detail
@@ -260,3 +260,42 @@ stub package is installed and this is the first module in the codebase to import
 `src/`. Same single pre-existing flaky UVA failure, nothing new.
 
 **No migration needed:** PR05 only uses the PR02 staging schema; no new tables/columns.
+
+### PR05 continued: cross-source matching engine
+
+**Code delivered:**
+- `src/xw_office/services/product_hub/matching.py` — `MatchingEngine.run(batch_id=...)` resolves
+  every (or one batch's) `staging_product` row against the canonical schema in the build plan's
+  strict priority order, never auto-merging below "exact" certainty:
+  1. existing `channel_mapping.external_id` (wix/sevdesk rows already linked)
+  2. exact normalized SKU (`ProductHubRepository.resolve_sku`)
+  3. SKU alias (same call — `ResolvedSku` gained a `matched_via: "sku" | "alias"` field so the
+     matching engine can tell `exact_sku` and `sku_alias` apart in `match_method`)
+  4. unique identifier (ISBN/EAN/ASIN/...) — resolves via all of *that row's own* staged
+     identifiers; if they resolve to more than one distinct canonical product, that is treated
+     as a **conflict** (contradictory identifiers on the same row), not a match — a single
+     identifier matching one existing product is a normal tier-4 match, not a conflict, even if
+     the row's SKU alone did not already match
+  5. fuzzy name suggestion (rapidfuzz `WRatio`, threshold 80) — written only as
+     `import_match_candidate` rows plus `match_status="suggested_match"`, **never**
+     `proposed_product_id`/`exact_match` — a human must confirm it
+  - Also detects **duplicates** (two different staged rows in the same run both resolving to the
+    same canonical product) and **title drift** (SKU/alias match found, but the staged name and
+    the canonical product's name diverge — rapidfuzz score below 90).
+  - Returns a `MatchingReport` — the "Import-Review-Bericht" the build plan asks for: counts per
+    match tier plus `conflicts`/`duplicates`/`title_drift` string lists for human review.
+- `ProductHubRepository` (PR01) gained three lookups needed to support this:
+  `get_channel_mapping`, `find_identifier`, `get_variant` — all additive, read-only.
+
+**Verified:** `pytest tests/` — 1102 passed (+11 new in `test_product_hub_matching_engine.py`,
+covering all 5 priority tiers individually, the conflict-vs-normal-match distinction explicitly
+(two dedicated tests proving contradictory identifiers are flagged while a single reused
+identifier is not), fuzzy-threshold boundary behavior, duplicate detection, title drift, and
+batch-scoped vs. all-staging runs); `ruff check src/` clean; `mypy` clean on every file this
+touched (same 2 pre-existing, unrelated `core/config.py` errors surface transitively). Same
+single pre-existing flaky UVA failure, nothing new.
+
+**PR05 is now complete** per the build plan's own definition (import + matching engine +
+review-report). PR06 (import commit service + curated grouping) is the natural next step: it
+will read `match_status`/`proposed_product_id` plus `import_match_candidate` rows this engine
+produced, let a human approve/reject, and only then write to the canonical schema.

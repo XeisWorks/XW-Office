@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
 from xw_office.models.product_hub import (
+    ChannelMapping,
     Product,
     ProductAsset,
     ProductIdentifier,
@@ -66,6 +67,10 @@ class ResolvedSku:
 
     product: Product
     variant: ProductVariant
+    #: "sku" when the variant's own SKU matched directly, "alias" when only a
+    #: product_sku_alias row matched — the matching engine (PR05) uses this to tell
+    #: match_method "exact_sku" apart from "sku_alias".
+    matched_via: str = "sku"
 
 
 class ProductHubRepository:
@@ -204,10 +209,12 @@ class ProductHubRepository:
         if not needle:
             return None
         with self._scope() as session:
+            matched_via = "sku"
             variant = session.scalar(
                 select(ProductVariant).where(func.upper(ProductVariant.sku) == needle)
             )
             if variant is None:
+                matched_via = "alias"
                 alias = session.scalar(
                     select(ProductSkuAlias).where(func.upper(ProductSkuAlias.alias_sku) == needle)
                 )
@@ -227,7 +234,7 @@ class ProductHubRepository:
             product = session.get(Product, variant.product_id)
             if product is None:
                 return None
-            return ResolvedSku(product=product, variant=variant)
+            return ResolvedSku(product=product, variant=variant, matched_via=matched_via)
 
     # -- variants -----------------------------------------------------------
 
@@ -239,6 +246,10 @@ class ProductHubRepository:
                 .order_by(ProductVariant.is_default.desc(), ProductVariant.sku)
             )
             return list(session.scalars(stmt).all())
+
+    def get_variant(self, variant_id: uuid.UUID) -> ProductVariant | None:
+        with self._scope() as session:
+            return session.get(ProductVariant, variant_id)
 
     def get_default_variant(self, product_id: uuid.UUID) -> ProductVariant | None:
         with self._scope() as session:
@@ -329,6 +340,29 @@ class ProductHubRepository:
                 .order_by(ProductAsset.role, ProductAsset.sort_order)
             )
             return list(session.scalars(stmt).all())
+
+    # -- channel mappings / cross-source lookups (used by the PR05 matching engine) --
+
+    def get_channel_mapping(
+        self, *, channel: str, entity_type: str, external_id: str
+    ) -> ChannelMapping | None:
+        with self._scope() as session:
+            return session.scalar(
+                select(ChannelMapping).where(
+                    ChannelMapping.channel == channel,
+                    ChannelMapping.entity_type == entity_type,
+                    ChannelMapping.external_id == external_id,
+                )
+            )
+
+    def find_identifier(self, *, scheme: str, normalized_value: str) -> ProductIdentifier | None:
+        with self._scope() as session:
+            return session.scalar(
+                select(ProductIdentifier).where(
+                    ProductIdentifier.scheme == scheme,
+                    ProductIdentifier.normalized_value == normalized_value,
+                )
+            )
 
     # -- internal -------------------------------------------------------------
 
