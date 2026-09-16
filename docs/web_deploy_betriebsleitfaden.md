@@ -12,7 +12,7 @@ Ziel:
 - Service: **XW-Content-Web** (Railway-Projekt "XW-Studio").
 - Build: `Dockerfile.web`, Abhaengigkeiten aus `requirements-web.txt` (bewusst schlank -
   **kein** `config/default.yaml`, **keine** Desktop-/Druck-Abhaengigkeiten aus
-  `pyproject.toml`; siehe Abschnitt 5).
+  `pyproject.toml`; siehe Abschnitt 6).
 - Auslöser im Normalfall: jeder Push nach `origin/main` (siehe `railway.toml` /
   Railway-GitHub-Verbindung). Kein separater "Deploy"-Klick noetig, wenn der Webhook
   zuverlaessig feuert.
@@ -23,8 +23,8 @@ Ziel:
   lang **kein** neues Deployment ausgeloest (alle Deploys dieser Session liefen ueber
   den manuellen `railway up`-Weg). Ob das am selben Vorfall lag oder eine eigene,
   separate Webhook-Anbindungsfrage ist, ist nicht abschliessend geklaert. Deshalb:
-  nach jedem Push aktiv pruefen (Abschnitt 4) und im Zweifel `railway up` als
-  manuellen Ersatzweg nutzen (Abschnitt 6) - nicht blind darauf vertrauen, dass der
+  nach jedem Push aktiv pruefen (Abschnitt 5) und im Zweifel `railway up` als
+  manuellen Ersatzweg nutzen (Abschnitt 7) - nicht blind darauf vertrauen, dass der
   Push allein reicht.
 
 ## 2) Empfohlener Weg: `scripts\deploy_web.ps1`
@@ -41,10 +41,10 @@ Fuehrt aus (Details siehe Kommentarkopf im Skript):
 3. Qualitaets-Gate exakt wie `.github/workflows/ci.yml`: `ruff check src/`,
    `mypy src/` (weich, wie CI), `pytest tests/`.
 4. optional `-VerifyLeanWebImage`: `requirements-web.txt` isoliert in einer
-   Wegwerf-venv smoke-testen (siehe Abschnitt 5) - faengt einen fehlenden
+   Wegwerf-venv smoke-testen (siehe Abschnitt 6) - faengt einen fehlenden
    Abhaengigkeitseintrag ab, bevor er erst im Railway-Build auffaellt.
 5. `git push origin main`.
-6. Railway-CLI-Verfuegbarkeit pruefen (optional `-InstallMissingTools`, siehe Abschnitt 7).
+6. Railway-CLI-Verfuegbarkeit pruefen (optional `-InstallMissingTools`, siehe Abschnitt 8).
 7. neues Deployment erkennen und bis zu `-WatchTimeoutMinutes` (Default 10) auf einen
    Endzustand pollen.
 8. nur mit explizitem `-Fallback` und nur wenn kein neues Deployment erkannt wurde:
@@ -116,7 +116,55 @@ Container-Prozess startet gar nicht erst - bei einem Docker-Build zuerst
 `railway.toml`s `[deploy].startCommand` pruefen, bevor man Plattforminstabilitaet
 vermutet oder Zeit in wiederholte blinde Retries steckt.
 
-## 4) Deploy-Status manuell pruefen
+## 4) GitHub-Webhook reparieren (offen - braucht Dashboard-Zugriff)
+
+**Befund (2026-09-16):** die automatische Railway-Deploy-Anbindung an GitHub-Pushes ist
+seit Monaten tot, nicht erst seit dem `startCommand`-Vorfall:
+
+- Ueber `gh api repos/XeisWorks/XW-Studio/deployments` existiert genau **ein**
+  GitHub-Deployment-Eintrag von `railway-app[bot]`, erstellt **2026-04-07**. Seither -
+  auch fuer alle PR07-Commits - kein einziger neuer Eintrag, kein Check-Run von
+  Railway auf aktuellen Commits (nur der normale `github-actions`-CI-Check).
+- `gh api repos/XeisWorks/XW-Studio/hooks` liefert `[]` - erwartungsgemaess, Railway
+  nutzt eine GitHub-App-Installation, keinen klassischen Repo-Webhook; diese Liste ist
+  hier also kein Diagnosewert.
+- Es gibt **zwei** Railway-Projekte namens "XW-Studio" (`railway list`):
+  - `b9ca5990-...`, erstellt **2026-04-02** - das echte Projekt mit den Services
+    Postgres/XW-Content-Web/XW-Studio, mit dem dieser Leitfaden arbeitet.
+  - `fd0ee406-...`, erstellt **2026-09-15 07:28** - ein zweites, praktisch leeres
+    Projekt mit nur einem Service "XW-Studio", per Railpack (nicht `Dockerfile.web`)
+    deployt, eigene Domain `xw-studio-production.up.railway.app`. Zeitlich unmittelbar
+    vor den `fix(deploy)`-Commits desselben Morgens (09:32/09:38) - passt zum Muster
+    eines versehentlichen `railway init`/`railway up` ohne bestehenden Projekt-Link
+    waehrend fruehrerer Fehlersuche. Vermutlich nicht die Ursache des seit April toten
+    Webhooks, aber verwirrend und es lohnt sich, es aufzuraeumen.
+
+**Nicht per CLI loesbar:** weder `railway` noch `gh` (ohne GitHub-App-Token) erlauben,
+die GitHub-App-Installation/Repo-Zuordnung programmatisch zu lesen oder neu zu
+verbinden - das geht nur ueber die Weboberflaechen. Schritte:
+
+1. **Railway-Dashboard** → Projekt "XW-Studio" (`b9ca5990-...`, **nicht** das vom
+   15.09.) → Service "XW-Content-Web" → Settings → Source.
+   - Falls dort kein GitHub-Repo verbunden ist oder ein falsches/veraltetes: "Connect
+     Repo" bzw. "Disconnect" + neu verbinden, Repo `XeisWorks/XW-Office` (bzw. noch
+     als `XW-Studio` gelistet, je nach GitHub-Rename-Stand), Branch `main` waehlen.
+2. Falls Schritt 1 keine Option zum Verbinden zeigt bzw. die App fehlt: **GitHub** →
+   oben rechts Profilbild → Settings → Applications → Installed GitHub Apps → Railway
+   → Configure → sicherstellen, dass `XeisWorks/XW-Office` in der Repository-Liste der
+   Installation enthalten ist (bei "Only select repositories" muss es explizit
+   hinzugefuegt werden - nach einem Repo-Rename passiert das nicht automatisch).
+3. Test: einen trivialen Commit nach `main` pushen, dann
+   `railway deployment list --service XW-Content-Web` pruefen, ob ein neues
+   Deployment mit aktuellem Zeitstempel erscheint.
+4. Optional Aufraeumen: das leere Duplikat-Projekt `fd0ee406-...` im Railway-Dashboard
+   pruefen (Inhalt gegenchecken) und bei Bestaetigung loeschen, um kuenftige
+   Verwechslungen zu vermeiden. **Nicht ungefragt von einer Automatisierung loeschen
+   lassen** - Projektloeschung ist nicht rueckgaengig zu machen.
+
+Bis das erledigt ist: `scripts\deploy_web.ps1 -Fallback` bzw. `railway up` (Abschnitt 7)
+bleibt der zuverlaessige Weg.
+
+## 5) Deploy-Status manuell pruefen
 
 ```powershell
 railway status
@@ -131,7 +179,7 @@ railway logs --http --status ">=400" --lines 50
   sind ein starkes Signal fuer ein `railway.toml`/`startCommand`-Problem, nicht fuer
   einen Python-Fehler.
 
-## 5) Schlankes Web-Image: was es enthaelt und warum
+## 6) Schlankes Web-Image: was es enthaelt und warum
 
 `Dockerfile.web` kopiert **nur** `src/` und `config/content_brands.yaml` - explizit
 **nicht** `config/default.yaml`. `requirements-web.txt` enthaelt nur, was
@@ -150,7 +198,7 @@ Bei jeder neuen Abhaengigkeit, die ein `web/`-Modul (transitiv) braucht: **zuers
 dass `xw_office.web.app` mit nur dieser Datei installierbar importiert - nicht erst im
 Railway-Build herausfinden.
 
-## 6) Manueller Ersatz-Deploy ohne Skript
+## 7) Manueller Ersatz-Deploy ohne Skript
 
 ```powershell
 railway up --service XW-Content-Web --ci -m "Kurzbeschreibung"
@@ -166,7 +214,7 @@ railway up --service XW-Content-Web --ci -m "Kurzbeschreibung"
   Immer mit `railway deployment list --service XW-Content-Web` nachpruefen, statt sich
   auf den Exit-Code des CLI-Aufrufs zu verlassen.
 
-## 7) Railway-CLI installieren
+## 8) Railway-CLI installieren
 
 ```powershell
 npm install -g @railway/cli
@@ -177,7 +225,7 @@ railway link   # einmalig: Projekt/Service verknuepfen
 Alternative ohne npm: offizielles Installationsskript, siehe
 https://docs.railway.com/guides/cli.
 
-## 8) Migrationen - bewusst NICHT Teil dieses Deploy-Wegs
+## 9) Migrationen - bewusst NICHT Teil dieses Deploy-Wegs
 
 `scripts\deploy_web.ps1` fuehrt **keine** Alembic-Migration aus. Grund: Migrationen
 sind eine Aenderung an der produktiven Datenbank, nicht nur am Code, und sollen bewusst
@@ -193,7 +241,7 @@ alembic current
 Siehe auch `docs/multi_pc_betriebsleitfaden.md` und, fuer den Product-Hub-Kontext,
 `docs/product_hub/PROGRESS.md`.
 
-## 9) Rollback
+## 10) Rollback
 
 ```powershell
 railway deployment list --service XW-Content-Web
