@@ -11,13 +11,14 @@ from __future__ import annotations
 from contextlib import contextmanager
 import datetime
 import uuid
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
 from xw_office.models.product_hub_sync import (
+    ExternalPayloadArchive,
     OutboxEvent,
     SyncConflict,
     SyncCursor,
@@ -207,6 +208,10 @@ class SyncRepository:
             session.flush()
             return conflict
 
+    def get_sync_conflict(self, conflict_id: uuid.UUID) -> SyncConflict | None:
+        with self._scope() as session:
+            return session.get(SyncConflict, conflict_id)
+
     def list_open_sync_conflicts(self, *, channel: str | None = None) -> list[SyncConflict]:
         with self._scope() as session:
             stmt = select(SyncConflict).where(SyncConflict.resolved_at.is_(None))
@@ -226,6 +231,46 @@ class SyncRepository:
             conflict.resolved_at = datetime.datetime.now(datetime.timezone.utc)
             session.flush()
             return conflict
+
+    # -- external payload archive (drift-detection baseline, PR11) --------------------
+
+    def archive_external_payload(
+        self,
+        *,
+        channel: str,
+        entity_type: str,
+        external_id: str,
+        payload: Mapping[str, object],
+        payload_hash: str,
+    ) -> ExternalPayloadArchive:
+        with self._scope() as session:
+            row = ExternalPayloadArchive(
+                id=uuid.uuid4(),
+                channel=channel,
+                entity_type=entity_type,
+                external_id=external_id,
+                payload=payload,
+                payload_hash=payload_hash,
+                fetched_at=datetime.datetime.now(datetime.timezone.utc),
+            )
+            session.add(row)
+            session.flush()
+            return row
+
+    def get_latest_external_payload(
+        self, *, channel: str, entity_type: str, external_id: str
+    ) -> ExternalPayloadArchive | None:
+        with self._scope() as session:
+            stmt = (
+                select(ExternalPayloadArchive)
+                .where(
+                    ExternalPayloadArchive.channel == channel,
+                    ExternalPayloadArchive.entity_type == entity_type,
+                    ExternalPayloadArchive.external_id == external_id,
+                )
+                .order_by(ExternalPayloadArchive.fetched_at.desc())
+            )
+            return session.scalars(stmt).first()
 
     def get_sync_cursor(self, *, channel: str, stream: str) -> SyncCursor | None:
         with self._scope() as session:

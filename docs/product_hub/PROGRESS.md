@@ -19,7 +19,8 @@ Update this file at the end of every PR.
 | PR08 | Read-only WebUI/PWA | **Done and confirmed live on Railway** (`/app/` → 200, SPA routes fall back to `index.html`, `/api/v1/products` still 401 as before) | See below. |
 | PR09 | Edit API + WebUI editing + Verbesserungen/Auflagen | **Done (code + migration applied), edit API kept off in production pending a deliberate flip** | See below. |
 | PR10 | Transactional outbox + sync foundation | **Done (schema + worker + wiring), migration applied — no consumer/handler yet** | See below. |
-| PR11–PR16 | — | Not started | |
+| PR11 | Wix push + reconcile + conflict management | **Done (code, no new migration), push kept off in production pending a deliberate flip** | See below. |
+| PR12–PR16 | — | Not started | |
 
 ## PR01 detail
 
@@ -712,3 +713,108 @@ job.
 `product_hub_edit_enabled` is still off in production, **no outbox events are
 actually being written yet** even after this deploy — the write path only exists
 behind PR09's still-disabled edit API. Code push/deploy: see the commit that follows.
+
+## PR11 detail
+
+**No new migration** — everything PR11 needed already exists from PR10's schema
+(`outbox_event`, `sync_conflict`, `external_payload_archive`).
+
+**Reused rather than rebuilt:** `src/xw_office/services/wix/product_details_client.py`
+already had a v3-revision-aware `WixProductDetailsClient` (from PR03) with
+per-field `update_product_*` methods that fetch the current revision before every
+PATCH — exactly the "Bei V3 Revision immer aktuelle Revision verwenden" requirement.
+The only gap: those methods swallow the HTTP status into a bare bool
+(`_patch_v3` → `(bool, str)`), so a 409 revision conflict was indistinguishable
+from any other failure. Added one new method,
+`patch_product_field_with_conflict_detection`, that surfaces
+`(success, error, http_status_code)` — additive, doesn't touch the existing
+`update_product_*` methods or their tests.
+
+**Code delivered:**
+- `src/xw_office/services/product_hub/wix_push.py` (new) — `WixPushService`:
+  - **Owned fields** (Hub master, per "Hub ist Master für definierte Felder"): `name`,
+    `description`, `price` (RETAIL_EUR gross, default variant), `visible` (→
+    `Product.active`). Extending this tuple later is additive.
+  - **Push always re-derives current Hub state** rather than trusting an outbox
+    event's payload — the event is only a "product X may need re-syncing" signal
+    (see `wix_push_handler`), which sidesteps staleness/ordering between when an
+    event was written and when it's processed.
+  - **Drift detection**: compares Wix's *live* value for each field against the most
+    recent `external_payload_archive` snapshot (the last-known-good state after our
+    last successful push — a legitimate reuse of that PR10 table's stated "debug/audit
+    snapshot" purpose as a drift baseline, no new column needed). If Wix's live value
+    differs from that snapshot AND doesn't already equal what the Hub wants to write,
+    a `sync_conflict` is created and that field is **not** overwritten. Never silent.
+  - **Idempotent**: a field already matching between Hub and Wix is skipped with zero
+    HTTP calls; the baseline snapshot is refreshed after every successful push, so a
+    second push of unchanged state is a pure no-op (`status="no_changes"`).
+  - **Disabled push**: gated by `push_enabled` (a callable, re-checked every call,
+    mirroring PR09's `product_hub_edit_enabled` pattern) — when off, `push_product` is
+    a pure no-op with zero Wix HTTP calls, returning `status="skipped_disabled"`.
+  - `resolve_conflict(conflict_id, resolution=...)` implements all three build-plan
+    actions: `keep_hub_and_push` (force-writes the Hub's value, blocked with a 409 if
+    push is currently disabled), `accept_external` (writes Wix's value back into the
+    Hub — `Product.name`/`description`/`active` directly, `price` via a new
+    effective-dated `ProductPrice` row through the existing `set_price` repository
+    method — never mutated in place), `ignore_once` (resolves the record without
+    touching either side; the divergence will simply be re-detected next push).
+  - `wix_push_handler(push_service, product_repo)` — the outbox handler, registered
+    for both `product.updated` and `price.changed` (the latter carries a *variant*
+    id per PR09/PR10's wiring, resolved to its product via `get_variant`). Raises on
+    `status="error"` so `OutboxWorker`'s existing backoff/retry applies; every other
+    outcome (pushed, no changes, conflict recorded, disabled, not yet mapped) is a
+    legitimate terminal state, not a failure to retry.
+- `src/xw_office/repositories/product_hub_sync.py` — `archive_external_payload`/
+  `get_latest_external_payload` (the drift baseline), `get_sync_conflict`.
+- `src/xw_office/web/app.py` — new `sync_push_enabled` flag (env
+  `XW_PRODUCT_HUB_SYNC_PUSH_ENABLED`, **defaults off**, same reasoning as PR09's edit
+  flag: first outbound-write channel this service has). `WixProductDetailsClient` is
+  constructed with a small `_EnvSecretSource` shim (`get_secret(name) ->
+  os.getenv(name)`) rather than the desktop's DB-backed `SecretService` — this lean
+  web service has no encrypted secret store, and (see next paragraph) the client
+  itself deliberately does *not* fall back to bare env vars on its own.
+- `src/xw_office/web/routers/sync.py` + `web/schemas/sync.py` (new) — `GET
+  /api/v1/sync/conflicts` (optional `channel` filter), `POST
+  /api/v1/sync/conflicts/{id}/resolve`, `POST /api/v1/sync/worker/run-once` (manually
+  triggers `OutboxWorker.process_once()` — there is no separate Railway worker/cron
+  deployed yet, so this is the practical way to actually exercise the pipeline; see
+  `XW_PRODUCT_HUB_IMPLEMENTATION.yaml`'s `worker.deployment:
+  separate_Railway_worker_or_periodic_worker` for the eventually-intended shape),
+  `GET /api/v1/sync/worker/dead-events`. All four share PR09's
+  `product_hub_edit_enabled` gate rather than getting a third flag, since resolving a
+  conflict or running the worker are both write-adjacent actions.
+
+**A mistake made and reverted during this PR:** first attempt added a bare
+`os.getenv(...)` fallback *inside* `WixProductDetailsClient._api_key()` etc. (matching
+`FinanzOnlineClient`'s own SecretService-then-env pattern). This broke two existing
+tests (`test_has_credentials_false_when_no_key`,
+`test_detect_version_returns_unknown_without_credentials`) because this dev
+machine's shell has real `WIX_API_KEY`/`WIX_SITE_ID` set as ambient env vars — the
+*shared* client's "no credentials configured" behavior became environment-dependent
+for every caller, not just the web app, which is the same class of bug as the
+already-documented UVA test flake. Reverted; the `_EnvSecretSource` shim above keeps
+the env-var fallback local to this one call site instead.
+
+**Verified locally:** 24 new tests (16 `WixPushService`-level against a fake Wix
+client covering disabled/not-mapped/no-changes/first-push/idempotency/drift-conflict/
+409-conflict/generic-error/all three resolutions/the outbox handler's aggregate-type
+dispatch/an end-to-end retry-through-`OutboxWorker` check — i.e. every case the build
+plan's own test list names: "409/revision conflict, retry, idempotency, disabled
+push" — plus 8 HTTP-level for the new sync router) all pass; full backend suite at
+1219/1220 (same one pre-existing flaky UVA test, confirmed still isolated to that one
+test after this PR's changes). No live Wix account was called — everything above
+runs against a fake/stub client; there's been no manual/browser or real-Wix
+verification of an actual push yet, since `sync_push_enabled` stays off in
+production.
+
+**Not done / explicit scope cuts:** Media push ("Hub-Metadaten respektieren: COVER
+zuerst, Samples danach") is not built — that needs the S3-compatible object storage
+integration from `XW_PRODUCT_HUB_IMPLEMENTATION.yaml` (`object_storage.type:
+S3_compatible`), which doesn't exist yet in this codebase; pushing images is a
+separate, larger piece of work. No `sync_job`/`sync_item` rows are written per push —
+those tables (already schema-ready from PR10) are better suited to a future bulk/
+scheduled reconciliation run than to per-event single-product pushes, so they stay
+unused until that's built. `create_product`/import/grouping flows still don't emit
+outbox events (unchanged from PR10's scope note), so freshly imported products won't
+auto-push to Wix even once `sync_push_enabled` is on — only products edited through
+PR09's edit API will trigger a push.

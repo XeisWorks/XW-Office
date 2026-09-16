@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import secrets
+import uuid
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse
@@ -21,11 +22,30 @@ from xw_office import __version__
 from xw_office.content import BrandProfile, BrandProfileCatalog
 from xw_office.core.database import session_scope
 from xw_office.repositories.product_hub import ProductHubRepository
+from xw_office.repositories.product_hub_sync import SyncRepository
 from xw_office.services.product_hub.editing import EditingService
+from xw_office.services.product_hub.outbox_worker import OutboxWorker
+from xw_office.services.product_hub.wix_push import WixPushService, wix_push_handler
+from xw_office.services.wix.product_details_client import WixProductDetailsClient
 from xw_office.web.routers.products import build_products_router
+from xw_office.web.routers.sync import build_sync_router
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _bearer = HTTPBearer(auto_error=False)
+
+
+class _EnvSecretSource:
+    """Minimal ``SecretService``-shaped adapter reading straight from the process
+    environment — this lean web service has no DB-backed encrypted secret store
+    (that's desktop-only, see ``services/secrets/service.py``), and deliberately does
+    *not* fall back to bare ``os.getenv`` inside ``WixProductDetailsClient`` itself
+    (that was tried and reverted: it made the *shared* client's "no credentials"
+    behavior depend on ambient env vars, breaking tests and risking picking up the
+    wrong tenant's Wix credentials for any other caller constructed without this
+    adapter). Passing this in explicitly keeps that opt-in and web-service-local."""
+
+    def get_secret(self, name: str) -> str:
+        return os.getenv(name, "").strip()
 
 
 def _env_flag(name: str, *, default: bool) -> bool:
@@ -57,6 +77,13 @@ class ContentWebSettings:
     #: write-capable HTTP surface this service exposes. Flip on deliberately once the
     #: WebUI editing flow has been exercised against a real deploy.
     product_hub_edit_enabled: bool = False
+    #: PR11: gates WixPushService actually calling Wix (patch_product_field_with_
+    #: conflict_detection). Defaults off, same reasoning as product_hub_edit_enabled —
+    #: this is the first outbound-write channel this service has. When off,
+    #: push_product() is a pure no-op (no HTTP calls), which is what the outbox
+    #: worker needs so disabled-push events still resolve to a clean terminal state
+    #: instead of retrying forever.
+    sync_push_enabled: bool = False
     #: Built PR08 React/PWA bundle (`npm run build` output of web/product-hub/).
     #: Served same-origin at /app/ when present; absent in plain-API deployments
     #: and in most local dev setups, where the mount below is simply skipped.
@@ -73,6 +100,7 @@ class ContentWebSettings:
                 "XW_PRODUCT_HUB_CATALOG_READ_ENABLED", default=True
             ),
             product_hub_edit_enabled=_env_flag("XW_PRODUCT_HUB_EDIT_ENABLED", default=False),
+            sync_push_enabled=_env_flag("XW_PRODUCT_HUB_SYNC_PUSH_ENABLED", default=False),
             product_hub_web_dist=Path(
                 os.getenv("XW_PRODUCT_HUB_WEB_DIST", "").strip()
                 or (_REPOSITORY_ROOT / "web" / "product-hub" / "dist")
@@ -198,6 +226,48 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
     app.include_router(
         build_products_router(get_product_repo, get_editing_service, require_product_hub_edit_enabled),
         dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
+    )
+
+    # -- Product Hub (PR11): Wix push + outbox worker --------------------------------
+
+    _wix_client = WixProductDetailsClient(secret_service=_EnvSecretSource())  # type: ignore[arg-type]
+    _wix_push_service = (
+        WixPushService(
+            _session_factory,
+            wix_client=_wix_client,
+            push_enabled=lambda: resolved.sync_push_enabled,
+        )
+        if _session_factory is not None
+        else None
+    )
+    _outbox_worker = OutboxWorker(_session_factory) if _session_factory is not None else None
+    if _outbox_worker is not None and _wix_push_service is not None:
+        assert _session_factory is not None  # both constructed only when this holds
+        _handler_repo = ProductHubRepository(_session_factory)
+        _handler = wix_push_handler(_wix_push_service, _handler_repo)
+        _outbox_worker.register_handler("product.updated", _handler)
+        _outbox_worker.register_handler("price.changed", _handler)
+
+    def get_sync_repo() -> Generator[SyncRepository, None, None]:
+        assert _session_factory is not None  # guarded by require_product_hub_enabled below
+        with session_scope(_session_factory) as session:
+            yield SyncRepository(session)
+
+    def get_outbox_worker() -> OutboxWorker:
+        assert _outbox_worker is not None  # guarded by require_product_hub_enabled below
+        return _outbox_worker
+
+    def resolve_sync_conflict(conflict_id: uuid.UUID, resolution: str) -> None:
+        assert _wix_push_service is not None  # guarded by require_product_hub_enabled below
+        _wix_push_service.resolve_conflict(conflict_id, resolution=resolution)
+
+    app.include_router(
+        build_sync_router(get_sync_repo, get_outbox_worker, resolve_sync_conflict),
+        dependencies=[
+            Depends(require_bootstrap_token),
+            Depends(require_product_hub_enabled),
+            Depends(require_product_hub_edit_enabled),
+        ],
     )
 
     if resolved.product_hub_web_dist.is_dir():

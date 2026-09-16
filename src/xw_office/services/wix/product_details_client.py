@@ -574,6 +574,36 @@ class WixProductDetailsClient:
         """Set the product brand name."""
         return self._update_single(product_id, "brand", brand_name)
 
+    def patch_product_field_with_conflict_detection(
+        self, product_id: str, *, field: str, value: Any
+    ) -> tuple[bool, str, int | None]:
+        """Revision-aware v3 PATCH that surfaces the HTTP status code — needed to tell
+        a 409 revision conflict apart from any other failure, which ``update_product_*``
+        above cannot do (``_patch_v3`` swallows the status into a bare bool). Used by
+        the Product Hub push adapter (PR11). Unlike the legacy update methods, this
+        never falls back to v1 on a 428 — the Hub's push flow is v3-revision-based by
+        design (``get_product_revision`` always refetches the current revision first).
+
+        Returns ``(success, error_message, http_status_code)``.
+        """
+        pid = str(product_id or "").strip()
+        if not pid:
+            raise ValueError("product_id fehlt")
+        if not self.has_credentials():
+            raise RuntimeError("Wix Credentials fehlen")
+
+        revision = self.get_product_revision(pid)
+        payload = self._build_v3_payload(field, value, revision)
+        url = f"{self._V3_BASE}/products/{pid}"
+        headers = self._headers()
+        try:
+            self._do_request("PATCH", url, headers=headers, json_body=payload)
+            return True, "", None
+        except httpx.HTTPStatusError as exc:
+            return False, str(exc), exc.response.status_code
+        except Exception as exc:  # noqa: BLE001
+            return False, str(exc), None
+
     # ------------------------------------------------------------------
     # Write: bulk property update
     # ------------------------------------------------------------------
