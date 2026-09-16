@@ -27,6 +27,16 @@ from xw_office.models.product_hub import (
     ProductVariant,
     Tag,
 )
+from xw_office.models.product_hub_import import (
+    ImportBatch,
+    ImportMatchCandidate,
+    StagingAsset,
+    StagingCategory,
+    StagingIdentifier,
+    StagingInventory,
+    StagingProduct,
+    StagingVariant,
+)
 from xw_office.models.settings_kv import SettingKV
 
 __all__ = [
@@ -41,6 +51,8 @@ __all__ = [
     "DigitalLicenseFulfillment",
     "ExpenseIgnoreRule",
     "ExpenseShiftEntry",
+    "ImportBatch",
+    "ImportMatchCandidate",
     "PcRegistry",
     "PlcShipment",
     "PriceList",
@@ -57,5 +69,11 @@ __all__ = [
     "ProductTag",
     "ProductVariant",
     "SettingKV",
+    "StagingAsset",
+    "StagingCategory",
+    "StagingIdentifier",
+    "StagingInventory",
+    "StagingProduct",
+    "StagingVariant",
     "Tag",
 ]

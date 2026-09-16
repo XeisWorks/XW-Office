@@ -10,7 +10,7 @@ Update this file at the end of every PR.
 |---|---|---|---|
 | PR00 | Align architecture docs and guardrails | **Done** | `docs/product_pipeline_masterplan.md` / `docs/product_pipeline_phases.yaml` updated; historical "sevDesk = SOT für Bestand" statement struck through and replaced. Approved specs copied to `docs/product_hub/`. |
 | PR01 | Canonical ORM schema and repositories | **Done, migration applied to Railway** | See below. |
-| PR02 | Import staging foundation | Not started | |
+| PR02 | Import staging foundation | **Done** | See below. |
 | PR03–PR16 | — | Not started | |
 
 ## PR01 detail
@@ -83,3 +83,42 @@ a backup/snapshot first.
   `SettingKV["inventory.products"]`/`inventory.stock_levels"]` exclusively, not the `product`
   table). PR01 does not change any of that; it only adds new, currently-unused structure
   alongside it, per the build plan's explicit "no Big-Bang" instruction.
+
+## PR02 detail
+
+**Code delivered:**
+- `src/xw_office/models/product_hub_import.py` — `import_batch`, `staging_product`,
+  `staging_variant`, `staging_identifier`, `staging_asset`, `staging_inventory`,
+  `staging_category`, `import_match_candidate`. No staging table has any relationship to the
+  canonical schema beyond plain UUID columns (`proposed_product_id`, etc.) — deliberately not
+  FKs, since a staged row may propose a product that does not exist yet.
+- `src/xw_office/repositories/product_hub_import.py` — `ProductHubImportRepository`:
+  `create_batch`/`finish_batch`, `ingest_staging_product` (idempotent upsert keyed on
+  `(import_batch_id, source, source_key)`, preserves any existing match decision on re-ingest),
+  `set_match`, `list_staging_products` (filters), plus `add_identifier`/`add_asset`/
+  `add_inventory`/`add_category`/`add_variant` and `add_match_candidate`/`list_match_candidates`.
+  `hash_payload()` is a stable (key-sorted) sha256 helper, reusable by the PR03–PR05 importers.
+- `src/xw_office/migrations/versions/010_product_hub_import_staging.py` — additive from head
+  `009_product_hub_core`, applied to Railway (`alembic current` → `010_product_hub_import_staging
+  (head)`).
+- `tests/unit/test_product_hub_import_repository.py` — 10 tests: idempotent re-ingest (same
+  payload and changed payload, both without duplicating rows), payload-hash stability
+  (key-order-independent), match-decision preservation across re-ingest, batch
+  completion/failure, filtered listing, all staging sub-row types round-tripping, and an explicit
+  rollback test (forces a unique-constraint violation mid-transaction on a raw `Session`, confirms
+  `session.rollback()` leaves zero rows).
+
+**Verified:** `pytest tests/` all green except the two known pre-existing, order-dependent
+flaky failures below (never both together; count varies by run); `ruff check src/` clean;
+`mypy` clean on every PR02 file (the 2 `core/config.py` errors that show up when mypy follows
+imports are pre-existing — confirmed identical on `main` via `git stash -u`, unrelated to this
+change, lines 121/401, `list[dict]`/`no-any-return` in code this PR did not touch).
+
+**Newly observed (not a regression, but worth recording):** adding
+`tests/unit/test_product_hub_import_repository.py` shifts pytest's collection order enough
+that `tests/ui/test_async_action.py::test_async_action_sets_and_restores_busy_state`
+intermittently fails in the full-suite run (passes alone; passed again on a repeat full-suite
+run with the exact same code) — this is pre-existing order/state flakiness in the Qt test
+suite, not something PR02's pure-SQLAlchemy code can cause. Worth a dedicated cleanup PR
+outside the product-hub track (e.g. explicit `PYTHONHASHSEED`/qapp-fixture isolation) if it
+keeps being disruptive.
