@@ -21,7 +21,10 @@ Update this file at the end of every PR.
 | PR10 | Transactional outbox + sync foundation | **Done (schema + worker + wiring), migration applied — no consumer/handler yet** | See below. |
 | PR11 | Wix push + reconcile + conflict management | **Done (code, no new migration), push kept off in production pending a deliberate flip** | See below. |
 | PR12 | Händlerfreigabe + CSV/XLSX Export | **Done and confirmed live on Railway** (`/share/{token}` is public, no bootstrap token needed) | See below. |
-| PR13–PR16 | — | Not started | |
+| PR13 | Inventory V2 Shadow Mode | **Done and deployed** — ledger + alerts + shadow reconcile, legacy inventory paths untouched (by design) | See below. |
+| PR14 | Lagerwarnungen + XW-Flow Integration | **Done and deployed** — alert crossing + `/api/v1/inventory/summary`, XW-Flow task as an outbox-event intent (no real HTTP client — see below) | See below. |
+| PR15 | Inventory Cutover: Product Hub wird Master | **Deliberately not attempted** — see "Why PR15/PR16 stop here" below | — |
+| PR16 | Legacy JSON entfernen | **Blocked on PR15** | — |
 
 ## ⚠️ Infrastructure incident (2026-09-16, discovered during PR12): DATABASE_URL was never
 set on the XW-Content-Web Railway service
@@ -957,3 +960,127 @@ DSL (arbitrary field/operator combinations) is a future extension if a second us
 case ever needs one. `password_hash` stays an unused schema column, matching the data
 model's own "optional expiry/password später" framing. Rate limiting is per-process
 in-memory, not distributed — fine for the current single-instance deployment.
+
+## PR13/PR14 detail
+
+**Migration `014_product_hub_inventory`, applied to Railway Postgres:**
+`inventory_location`, `inventory_stock`, `inventory_movement` (append-only ledger),
+`inventory_alert` — exactly per the data model spec, including the Postgres partial
+unique index (`WHERE status = 'open'`) enforcing "at most one open alert per
+variant/location/type" at the DB level (SQLite tests enforce the same rule in the
+repository instead — partial indexes aren't portable, same reasoning as the "one
+default variant" note in `models/product_hub.py`).
+
+**This is explicitly shadow mode**, matching the build plan's own framing of PR13
+("Hub-Lagerledger aufbauen, **noch ohne finalen Master-Cutover**"). Three things are
+deliberately *not* done, and are the reason PR15 doesn't follow immediately — see the
+next section:
+
+1. **No legacy call site was rewired.** `SettingKV["inventory.products"]` /
+   `inventory.stock_levels`, `InventoryService`, and `PrintDecisionEngine` are
+   completely untouched. Researched (not modified) as part of scoping this PR:
+   `InventoryService` (`services/inventory/service.py`) owns `load_stock_levels`,
+   `build_start_preflight`/`build_reprint_preflight`,
+   `execute_start_workflow`/`execute_reprint_workflow`, `set_product_stock`, etc. —
+   all still the only thing any real print/fulfillment/correction/return/recount path
+   in this app calls. `PrintDecisionEngine` (`services/products/print_decision.py`)
+   computes reprint decisions from `ProductCatalogService` + legacy `PrintRule`
+   (`min_stock_target`/`reprint_batch_qty` on the *legacy* `product` table, migration
+   002/003 — a different, older thing than Product Hub's own `print_rule` table from
+   PR01/PR09). The build plan's "Bridge" note ("bestehende InventoryService-Aufrufer
+   dürfen zunächst weiterlaufen") is satisfied by construction: nothing was changed,
+   so nothing needed a bridge.
+2. **No automatic sevdesk stock polling.** `PartClient.get_part_stock(part_id) -> int`
+   already exists (`services/sevdesk/part_client.py`) and already does what's needed
+   — but it's constructed via `SevdeskConnection`, which requires a full desktop
+   `AppConfig` (a large, many-sub-dataclass object), not something the lean web
+   service has ever constructed. `reconcile_variant_stock(variant_id,
+   sevdesk_on_hand=...)` takes the external figure as a parameter instead of fetching
+   it live — the comparison/conflict-creation logic is real, tested, and reuses
+   PR10's `sync_conflict` table exactly as designed, just not wired to an automatic
+   poll yet. Also worth noting for whoever wires this: sevdesk `channel_mapping` rows
+   are keyed at the **product** level today (`entity_type="product"`), not per
+   variant — there is no existing repository call that resolves
+   `variant_id → sevdesk part_id` directly.
+3. **No real XW-Flow HTTP call.** There is no XW-Flow API client anywhere in this
+   codebase, and its contract isn't documented here — building one would mean
+   fabricating field names/auth/endpoints. Instead, a newly-opened alert writes an
+   `inventory_alert.opened` outbox event (via the exact PR10 mechanism) with every
+   field the build plan specifies: `title` (`"Nachdruck: <SKU> – <Produktname>"`),
+   `description`, `notes` (stock/threshold/open improvements), `planning_mode`
+   (`"PIPELINE"`), `external_entity_type`/`external_entity_id`, `external_deep_link`,
+   and `client_request_id` (`UUID5` of a fixed namespace + the alert's own UUID, per
+   spec). No handler is registered — same "wait for a real integration" pattern PR10
+   established for Wix before PR11 existed.
+
+**Code delivered:**
+- `src/xw_office/models/product_hub_inventory.py`, `repositories/
+  product_hub_inventory.py` (new) — `InventoryRepository.record_movement` is the
+  *only* writer of `inventory_stock.on_hand`: idempotent on `idempotency_key` (a
+  repeat returns the existing movement rather than double-applying — this directly
+  exercises PR15's precondition #7, "Inventory-Movement-Idempotency getestet", years
+  ahead of attempting the cutover itself), and raises `NegativeStockError` rather
+  than letting `on_hand` go negative (the data model's own constraint).
+- `src/xw_office/services/product_hub/inventory.py` (new) — `InventoryV2Service`:
+  `record_movement` (ledger write + alert crossing: `before > threshold AND after <=
+  threshold` opens `low_stock`/`out_of_stock` exactly per the build plan's crossing
+  rule; `after > threshold` resolves any open alert), `reconcile_variant_stock`
+  (shadow drift, see above), `compute_summary` (the `/inventory/summary` tile).
+- `src/xw_office/web/routers/inventory.py` + `web/schemas/inventory.py` (new) —
+  `GET /api/v1/inventory/summary`, `GET .../alerts`, `GET
+  .../variants/{id}/stock|movements` (read, gated by the read flag only);
+  `POST .../movements`, `PUT .../variants/{id}/thresholds`, `POST .../reconcile`,
+  `POST .../alerts/{id}/resolve` (write, additionally gated by
+  `product_hub_edit_enabled` — same reused-flag reasoning as PR11/PR12).
+
+**Verified locally:** 26 new tests (9 repository — idempotency, negative-stock
+rejection, alert dedupe/resolve; 10 service — alert crossing open/no-reopen/resolve,
+outbox payload field-by-field, reconcile drift/no-drift/no-duplicate-conflict,
+summary counts; 7 HTTP — auth gates, movement/stock/alert/reconcile round-trips, 409
+on negative stock) all pass; full backend suite at 1271/1272 (same one pre-existing
+flaky UVA test). Lean-image check ran clean before deploying (no new third-party
+dependency — everything here is stdlib + already-required SQLAlchemy/FastAPI).
+
+**Deployed:** migration applied via `alembic upgrade head` (confirmed via `alembic
+current` → `014_product_hub_inventory`), code pushed and deployed via `railway up`
+(webhook still not auto-firing — same open item as every prior PR this session).
+
+## Why PR15/PR16 stop here
+
+Asked to continue "bis Schritt PR16, falls sinnvoll" (through PR16, if sensible) —
+PR13 and PR14 were sensible to build now: additive, `external_writes: false`/
+`xw_flow_tasks_only`, fully reversible, no cutover. **PR15 is a different kind of
+thing.** Its own precondition list (build plan, verbatim) is not a code checklist —
+it's an operational sign-off gate:
+
+1. alle bekannten Bestandsänderungspfade laufen durch Inventory V2 *(not true yet —
+   see scope cut #1 above; would require rewiring every legacy call site first)*
+2. Shadow Mode über **repräsentativen Zeitraum** ohne ungeklärte Drift *(requires
+   actually running shadow mode against real traffic for a real stretch of time —
+   cannot be satisfied by writing code in one sitting, by definition)*
+3. sevdesk-/Hub-Bestände reconciled *(reconcile logic exists but has never been run
+   against a real sevdesk figure — see scope cut #2)*
+4. Backups vorhanden *(not something a coding session can verify)*
+5. Rollback-Schalter getestet *(the flag exists in the build plan's design — `product_
+   hub.inventory_master_enabled` — but nothing has tested flipping it back off yet,
+   because nothing has flipped it on)*
+6. keine kritischen Sync-Fehler offen
+7. Inventory-Movement-Idempotency getestet *(this one **is** done — see above)*
+8. Druckpfad verwendet Hub-Bestand *(not true — `PrintDecisionEngine` is untouched)*
+9. Wix-/sevdesk-Projektionen getestet *(not built — that's what PR15 itself would add)*
+
+Attempting PR15 now would mean flipping `product_hub.inventory_master_enabled=true`
+— making the Hub the **canonical source of truth for a real business's physical
+inventory** — while most of these conditions are provably false. That's exactly the
+"Big-Bang refactor" this whole build plan has been explicit about avoiding at every
+prior step. PR16 (remove the legacy JSON blobs) depends on PR15 being live and
+stable, so it's blocked transitively.
+
+**What would need to happen first, for whoever picks this up:** rewire the legacy
+call sites listed in scope cut #1 onto `InventoryV2Service.record_movement` (one at a
+time, each independently verifiable); wire real sevdesk stock polling (needs the
+`AppConfig`-in-lean-web-service question resolved properly, not rushed); run shadow
+reconcile for a real period and actually look at the drift it finds; get backups
+confirmed and a rollback rehearsal done by a human who owns that call. None of that
+is a "continue autonomously" task — it's an operational readiness process this
+session correctly stopped short of.

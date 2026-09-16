@@ -37,6 +37,12 @@ from xw_office.models.product_hub_import import (
     StagingProduct,
     StagingVariant,
 )
+from xw_office.models.product_hub_inventory import (
+    InventoryAlert,
+    InventoryLocation,
+    InventoryMovement,
+    InventoryStock,
+)
 from xw_office.models.product_hub_sharing import ExportLog, SharedCatalogView
 from xw_office.models.product_hub_sync import (
     ExternalPayloadArchive,
@@ -64,6 +70,10 @@ __all__ = [
     "ExternalPayloadArchive",
     "ImportBatch",
     "ImportMatchCandidate",
+    "InventoryAlert",
+    "InventoryLocation",
+    "InventoryMovement",
+    "InventoryStock",
     "OutboxEvent",
     "PcRegistry",
     "PlcShipment",

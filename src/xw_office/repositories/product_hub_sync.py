@@ -32,7 +32,7 @@ def append_outbox_event(
     aggregate_type: str,
     aggregate_id: uuid.UUID,
     event_type: str,
-    payload: dict[str, object],
+    payload: Mapping[str, object],
 ) -> OutboxEvent:
     """Write one outbox row on the caller's session — commits with their transaction."""
     event = OutboxEvent(
@@ -211,6 +211,20 @@ class SyncRepository:
     def get_sync_conflict(self, conflict_id: uuid.UUID) -> SyncConflict | None:
         with self._scope() as session:
             return session.get(SyncConflict, conflict_id)
+
+    def get_open_conflict(
+        self, *, channel: str, entity_type: str, internal_entity_id: uuid.UUID, field_name: str
+    ) -> SyncConflict | None:
+        with self._scope() as session:
+            return session.scalar(
+                select(SyncConflict).where(
+                    SyncConflict.channel == channel,
+                    SyncConflict.entity_type == entity_type,
+                    SyncConflict.internal_entity_id == internal_entity_id,
+                    SyncConflict.field_name == field_name,
+                    SyncConflict.resolved_at.is_(None),
+                )
+            )
 
     def list_open_sync_conflicts(self, *, channel: str | None = None) -> list[SyncConflict]:
         with self._scope() as session:

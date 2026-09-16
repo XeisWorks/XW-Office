@@ -22,13 +22,16 @@ from xw_office import __version__
 from xw_office.content import BrandProfile, BrandProfileCatalog
 from xw_office.core.database import session_scope
 from xw_office.repositories.product_hub import ProductHubRepository
+from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.repositories.product_hub_sharing import SharingRepository
 from xw_office.repositories.product_hub_sync import SyncRepository
 from xw_office.services.product_hub.editing import EditingService
+from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.product_hub.outbox_worker import OutboxWorker
 from xw_office.services.product_hub.sharing import SharingService
 from xw_office.services.product_hub.wix_push import WixPushService, wix_push_handler
 from xw_office.services.wix.product_details_client import WixProductDetailsClient
+from xw_office.web.routers.inventory import build_inventory_router
 from xw_office.web.routers.products import build_products_router
 from xw_office.web.routers.share_public import build_share_public_router
 from xw_office.web.routers.sharing_admin import build_sharing_admin_router
@@ -293,6 +296,24 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
     app.include_router(
         build_share_public_router(get_sharing_service),
         dependencies=[Depends(require_product_hub_enabled)],
+    )
+
+    # -- Product Hub (PR13/PR14): Inventory V2 shadow mode ----------------------------
+
+    def get_inventory_repo() -> Generator[InventoryRepository, None, None]:
+        assert _session_factory is not None  # guarded by require_product_hub_enabled below
+        with session_scope(_session_factory) as session:
+            yield InventoryRepository(session)
+
+    def get_inventory_service() -> InventoryV2Service:
+        assert _session_factory is not None  # guarded by require_product_hub_enabled below
+        return InventoryV2Service(_session_factory, public_base_url=resolved.public_url)
+
+    app.include_router(
+        build_inventory_router(
+            get_inventory_repo, get_inventory_service, require_product_hub_edit_enabled
+        ),
+        dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
     )
 
     if resolved.product_hub_web_dist.is_dir():
