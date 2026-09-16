@@ -40,6 +40,7 @@ export interface ProductVariant {
   is_default: boolean;
   active: boolean;
   stock_enabled: boolean;
+  row_version: number;
   updated_at: string;
 }
 
@@ -60,6 +61,7 @@ export interface ProductAsset {
   public_share_allowed: boolean;
   health_status: "unknown" | "ok" | "missing" | "unreadable" | "checksum_mismatch" | "stale";
   last_checked_at: string | null;
+  row_version: number;
 }
 
 export interface ProductImprovement {
@@ -71,6 +73,7 @@ export interface ProductImprovement {
   source: string;
   severity: "info" | "minor" | "major" | "critical";
   status: "open" | "planned" | "resolved" | "wont_fix";
+  row_version: number;
   created_at: string;
   resolved_at: string | null;
 }
@@ -124,4 +127,55 @@ export interface ProductListFilters {
   active?: boolean;
   limit?: number;
   offset?: number;
+}
+
+// -- PR09: edit API ------------------------------------------------------------
+
+export interface Tag {
+  id: string;
+  code: string;
+  label: string;
+}
+
+export interface Edition {
+  id: string;
+  product_id: string;
+  label: string;
+  edition_number: number | null;
+  status: string;
+  published_at: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+/** Every edit request carries the row_version the client last saw; the server
+ * rejects a stale one with 409 and returns the current server state instead of
+ * silently overwriting a concurrent change. */
+export interface ProductUpdateRequest {
+  expected_row_version: number;
+  name?: string;
+  short_description?: string;
+  description?: string;
+  category?: string;
+  status?: string;
+  active?: boolean;
+}
+
+export interface ImprovementCreateRequest {
+  description: string;
+  title?: string;
+  severity?: "info" | "minor" | "major" | "critical";
+}
+
+export interface ImprovementUpdateRequest {
+  expected_row_version: number;
+  status?: "open" | "planned" | "resolved" | "wont_fix";
+}
+
+/** Thrown by the API client when the server responds 409 (stale row_version) - the
+ * conflict body is the current server state, per the build plan's "Konflikt -> HTTP
+ * 409 mit aktuellem Serverstand". */
+export interface ConflictError<T> {
+  kind: "conflict";
+  current: T;
 }

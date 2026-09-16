@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 import datetime
+from decimal import Decimal
 import re
 import uuid
 from collections.abc import Generator
@@ -28,6 +29,7 @@ from xw_office.models.product_hub import (
     Product,
     ProductAsset,
     ProductCategory,
+    ProductEdition,
     ProductIdentifier,
     ProductImprovement,
     ProductPrice,
@@ -309,6 +311,32 @@ class ProductHubRepository:
             session.flush()
             return variant
 
+    def update_variant(
+        self,
+        variant_id: uuid.UUID,
+        *,
+        expected_row_version: int,
+        **fields: object,
+    ) -> ProductVariant:
+        """Optimistic-locked partial update; raises :class:`OptimisticLockError` if stale."""
+        with self._scope() as session:
+            variant = session.get(ProductVariant, variant_id)
+            if variant is None:
+                raise KeyError(f"Variant {variant_id} not found")
+            if variant.row_version != expected_row_version:
+                raise OptimisticLockError(
+                    f"Variant {variant_id} row_version is {variant.row_version}, "
+                    f"expected {expected_row_version}"
+                )
+            for field_name, value in fields.items():
+                if not hasattr(variant, field_name):
+                    raise ValueError(f"Unknown variant field: {field_name}")
+                setattr(variant, field_name, value)
+            variant.row_version += 1
+            variant.updated_at = datetime.datetime.now(datetime.timezone.utc)
+            session.flush()
+            return variant
+
     # -- identifiers --------------------------------------------------------
 
     def list_identifiers(
@@ -354,6 +382,14 @@ class ProductHubRepository:
             session.flush()
             return identifier
 
+    def remove_identifier(self, identifier_id: uuid.UUID) -> None:
+        with self._scope() as session:
+            identifier = session.get(ProductIdentifier, identifier_id)
+            if identifier is None:
+                raise KeyError(f"Identifier {identifier_id} not found")
+            session.delete(identifier)
+            session.flush()
+
     # -- assets -------------------------------------------------------------
 
     def list_assets(self, product_id: uuid.UUID) -> list[ProductAsset]:
@@ -365,7 +401,38 @@ class ProductHubRepository:
             )
             return list(session.scalars(stmt).all())
 
-    # -- prices / print rules / improvements (read-only, used by PR07's readiness calc) --
+    def get_asset(self, asset_id: uuid.UUID) -> ProductAsset | None:
+        with self._scope() as session:
+            return session.get(ProductAsset, asset_id)
+
+    def update_asset(
+        self,
+        asset_id: uuid.UUID,
+        *,
+        expected_row_version: int,
+        **fields: object,
+    ) -> ProductAsset:
+        """Optimistic-locked metadata update (role/sort_order) — never ``uri``/health
+        fields, those stay system-managed (import/health-check owned)."""
+        with self._scope() as session:
+            asset = session.get(ProductAsset, asset_id)
+            if asset is None:
+                raise KeyError(f"Asset {asset_id} not found")
+            if asset.row_version != expected_row_version:
+                raise OptimisticLockError(
+                    f"Asset {asset_id} row_version is {asset.row_version}, "
+                    f"expected {expected_row_version}"
+                )
+            for field_name, value in fields.items():
+                if not hasattr(asset, field_name):
+                    raise ValueError(f"Unknown asset field: {field_name}")
+                setattr(asset, field_name, value)
+            asset.row_version += 1
+            asset.updated_at = datetime.datetime.now(datetime.timezone.utc)
+            session.flush()
+            return asset
+
+    # -- prices / print rules / improvements ---------------------------------------
 
     def list_prices(self, variant_id: uuid.UUID) -> list[ProductPrice]:
         with self._scope() as session:
@@ -378,9 +445,91 @@ class ProductHubRepository:
         with self._scope() as session:
             return session.scalar(select(PriceList).where(PriceList.code == code))
 
+    def set_price(
+        self,
+        variant_id: uuid.UUID,
+        *,
+        price_list_id: uuid.UUID,
+        currency: str = "EUR",
+        net_amount: Decimal | None = None,
+        gross_amount: Decimal | None = None,
+        tax_rate: Decimal | None = None,
+        valid_from: datetime.datetime | None = None,
+        source: str = "manual",
+    ) -> ProductPrice:
+        """Write a new effective-dated price row, closing out the previously open one.
+
+        Prices are never mutated in place (see migration 011's docstring) — "editing" a
+        price means the old value stays in history with a real ``valid_until``, and the
+        new value starts a fresh row. No optimistic lock needed: each call is additive.
+        """
+        effective_from = valid_from or datetime.datetime.now(datetime.timezone.utc)
+        with self._scope() as session:
+            previous = session.scalar(
+                select(ProductPrice)
+                .where(
+                    ProductPrice.variant_id == variant_id,
+                    ProductPrice.price_list_id == price_list_id,
+                    ProductPrice.valid_until.is_(None),
+                )
+                .order_by(ProductPrice.valid_from.desc())
+            )
+            if previous is not None:
+                previous.valid_until = effective_from
+            price = ProductPrice(
+                id=uuid.uuid4(),
+                variant_id=variant_id,
+                price_list_id=price_list_id,
+                currency=currency,
+                net_amount=net_amount,
+                gross_amount=gross_amount,
+                tax_rate=tax_rate,
+                valid_from=effective_from,
+                valid_until=None,
+                source=source,
+            )
+            session.add(price)
+            session.flush()
+            return price
+
     def get_print_rule(self, variant_id: uuid.UUID) -> PrintRule | None:
         with self._scope() as session:
             return session.scalar(select(PrintRule).where(PrintRule.variant_id == variant_id))
+
+    def upsert_print_rule(
+        self,
+        variant_id: uuid.UUID,
+        *,
+        expected_row_version: int | None = None,
+        **fields: object,
+    ) -> PrintRule:
+        """Create the variant's print rule if it doesn't exist yet, else optimistic-locked
+        update. ``expected_row_version`` is required (and checked) only for the update
+        path — a first-time create has nothing to conflict with."""
+        with self._scope() as session:
+            rule = session.scalar(select(PrintRule).where(PrintRule.variant_id == variant_id))
+            if rule is None:
+                rule = PrintRule(id=uuid.uuid4(), variant_id=variant_id)
+                for field_name, value in fields.items():
+                    if not hasattr(rule, field_name):
+                        raise ValueError(f"Unknown print rule field: {field_name}")
+                    setattr(rule, field_name, value)
+                session.add(rule)
+                session.flush()
+                return rule
+            if expected_row_version is None or rule.row_version != expected_row_version:
+                raise OptimisticLockError(
+                    f"Print rule for variant {variant_id} row_version is {rule.row_version}, "
+                    f"expected {expected_row_version}"
+                )
+            for field_name, value in fields.items():
+                if not hasattr(rule, field_name):
+                    raise ValueError(f"Unknown print rule field: {field_name}")
+                setattr(rule, field_name, value)
+            rule.row_version += 1
+            rule.updated_at = datetime.datetime.now(datetime.timezone.utc)
+            session.flush()
+            return rule
 
     def list_improvements(self, product_id: uuid.UUID) -> list[ProductImprovement]:
         with self._scope() as session:
@@ -390,6 +539,117 @@ class ProductHubRepository:
                 .order_by(ProductImprovement.created_at.desc())
             )
             return list(session.scalars(stmt).all())
+
+    def get_improvement(self, improvement_id: uuid.UUID) -> ProductImprovement | None:
+        with self._scope() as session:
+            return session.get(ProductImprovement, improvement_id)
+
+    def create_improvement(
+        self,
+        *,
+        product_id: uuid.UUID,
+        description: str,
+        variant_id: uuid.UUID | None = None,
+        title: str = "",
+        source: str = "internal",
+        source_reference: str = "",
+        severity: str = "minor",
+    ) -> ProductImprovement:
+        with self._scope() as session:
+            improvement = ProductImprovement(
+                id=uuid.uuid4(),
+                product_id=product_id,
+                variant_id=variant_id,
+                title=title or None,
+                description=description,
+                source=source,
+                source_reference=source_reference or None,
+                severity=severity,
+                status="open",
+            )
+            session.add(improvement)
+            session.flush()
+            return improvement
+
+    def update_improvement(
+        self,
+        improvement_id: uuid.UUID,
+        *,
+        expected_row_version: int,
+        **fields: object,
+    ) -> ProductImprovement:
+        """Optimistic-locked update, e.g. ``status``/``severity``; setting ``status`` to
+        ``"resolved"`` does not auto-stamp ``resolved_at`` — callers (the editing
+        service) own that so it stays paired with ``resolved_in_edition_id``."""
+        with self._scope() as session:
+            improvement = session.get(ProductImprovement, improvement_id)
+            if improvement is None:
+                raise KeyError(f"Improvement {improvement_id} not found")
+            if improvement.row_version != expected_row_version:
+                raise OptimisticLockError(
+                    f"Improvement {improvement_id} row_version is {improvement.row_version}, "
+                    f"expected {expected_row_version}"
+                )
+            for field_name, value in fields.items():
+                if not hasattr(improvement, field_name):
+                    raise ValueError(f"Unknown improvement field: {field_name}")
+                setattr(improvement, field_name, value)
+            improvement.row_version += 1
+            session.flush()
+            return improvement
+
+    # -- editions -------------------------------------------------------------------
+
+    def create_edition(
+        self,
+        *,
+        product_id: uuid.UUID,
+        label: str,
+        edition_number: int | None = None,
+        notes: str = "",
+    ) -> ProductEdition:
+        with self._scope() as session:
+            edition = ProductEdition(
+                id=uuid.uuid4(),
+                product_id=product_id,
+                label=label,
+                edition_number=edition_number,
+                status="draft",
+                notes=notes or None,
+            )
+            session.add(edition)
+            session.flush()
+            return edition
+
+    def list_editions(self, product_id: uuid.UUID) -> list[ProductEdition]:
+        with self._scope() as session:
+            stmt = (
+                select(ProductEdition)
+                .where(ProductEdition.product_id == product_id)
+                .order_by(ProductEdition.created_at.desc())
+            )
+            return list(session.scalars(stmt).all())
+
+    def assign_improvements_to_edition(
+        self, edition_id: uuid.UUID, improvement_ids: list[uuid.UUID]
+    ) -> list[ProductImprovement]:
+        """Mark each improvement resolved-in this edition. Silently skips ids that
+        don't exist or already belong to a different edition's resolved set — the
+        caller (editing service) reports exactly which ids actually changed via the
+        returned list, so partial/duplicate input never raises."""
+        with self._scope() as session:
+            updated: list[ProductImprovement] = []
+            for improvement_id in improvement_ids:
+                improvement = session.get(ProductImprovement, improvement_id)
+                if improvement is None:
+                    continue
+                improvement.status = "resolved"
+                improvement.resolved_in_edition_id = edition_id
+                improvement.resolved_at = datetime.datetime.now(datetime.timezone.utc)
+                improvement.row_version += 1
+                updated.append(improvement)
+            session.flush()
+            return updated
 
     # -- channel mappings / cross-source lookups (used by the PR05 matching engine) --
 
@@ -498,6 +758,13 @@ class ProductHubRepository:
             session.flush()
             return link
 
+    def remove_product_category(self, *, product_id: uuid.UUID, category_id: uuid.UUID) -> None:
+        with self._scope() as session:
+            link = session.get(ProductCategory, (product_id, category_id))
+            if link is not None:
+                session.delete(link)
+                session.flush()
+
     def get_or_create_tag(self, *, code: str, label: str) -> Tag:
         with self._scope() as session:
             existing = session.scalar(select(Tag).where(Tag.code == code))
@@ -511,6 +778,10 @@ class ProductHubRepository:
     def find_tag_by_code(self, code: str) -> Tag | None:
         with self._scope() as session:
             return session.scalar(select(Tag).where(Tag.code == code))
+
+    def get_tag(self, tag_id: uuid.UUID) -> Tag | None:
+        with self._scope() as session:
+            return session.get(Tag, tag_id)
 
     def list_product_tags(self, product_id: uuid.UUID) -> list[ProductTag]:
         with self._scope() as session:
@@ -526,6 +797,13 @@ class ProductHubRepository:
             session.add(link)
             session.flush()
             return link
+
+    def remove_product_tag(self, *, product_id: uuid.UUID, tag_id: uuid.UUID) -> None:
+        with self._scope() as session:
+            link = session.get(ProductTag, (product_id, tag_id))
+            if link is not None:
+                session.delete(link)
+                session.flush()
 
     # -- variants (grouping support) -------------------------------------------------
 

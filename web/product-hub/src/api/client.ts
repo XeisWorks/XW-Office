@@ -1,6 +1,9 @@
 import type {
   AuditLogEntry,
   ChannelMapping,
+  Edition,
+  ImprovementCreateRequest,
+  ImprovementUpdateRequest,
   Page,
   ProductAsset,
   ProductDetail,
@@ -8,8 +11,10 @@ import type {
   ProductListFilters,
   ProductListItem,
   ProductReadiness,
+  ProductUpdateRequest,
   ProductVariant,
   ReadinessSummary,
+  Tag,
 } from "./types";
 
 const TOKEN_KEY = "xw_product_hub_token";
@@ -50,10 +55,29 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string): Promise<T> {
+/** Thrown on 409 — `current` is the server's current state (see build plan's
+ * "Konflikt -> HTTP 409 mit aktuellem Serverstand"), so callers can show it or
+ * refetch instead of guessing what changed. */
+export class ConflictApiError<T = unknown> extends ApiError {
+  constructor(public current: T) {
+    super(409, "Der Datensatz wurde zwischenzeitlich geändert.");
+    this.name = "ConflictApiError";
+  }
+}
+
+interface RequestOptions {
+  method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
+  body?: unknown;
+}
+
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const token = getToken();
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  if (options.body !== undefined) headers["Content-Type"] = "application/json";
   const response = await fetch(path, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    method: options.method ?? "GET",
+    headers,
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
   });
   if (response.status === 401) {
     clearToken();
@@ -61,6 +85,13 @@ async function request<T>(path: string): Promise<T> {
   }
   if (response.status === 503) {
     throw new ApiError(503, "Product Hub API ist nicht konfiguriert oder deaktiviert.");
+  }
+  if (response.status === 409) {
+    const body = await response.json().catch(() => null);
+    throw new ConflictApiError(body);
+  }
+  if (response.status === 204) {
+    return undefined as T;
   }
   if (!response.ok) {
     const text = await response.text().catch(() => "");
@@ -93,4 +124,32 @@ export const api = {
   getAudit: (id: string) => request<AuditLogEntry[]>(`/api/v1/products/${id}/audit`),
   getReadiness: (id: string) => request<ProductReadiness>(`/api/v1/products/${id}/readiness`),
   getReadinessSummary: () => request<ReadinessSummary>(`/api/v1/catalog/readiness-summary`),
+
+  // -- PR09: edit API -----------------------------------------------------------
+  updateProduct: (id: string, body: ProductUpdateRequest) =>
+    request<ProductDetail>(`/api/v1/products/${id}`, { method: "PATCH", body }),
+  getTags: (productId: string) => request<Tag[]>(`/api/v1/products/${productId}/tags`),
+  addTag: (productId: string, tagCode: string) =>
+    request<Tag>(`/api/v1/products/${productId}/tags`, {
+      method: "POST",
+      body: { tag_code: tagCode },
+    }),
+  removeTag: (productId: string, tagId: string) =>
+    request<void>(`/api/v1/products/${productId}/tags/${tagId}`, { method: "DELETE" }),
+  createImprovement: (productId: string, body: ImprovementCreateRequest) =>
+    request<ProductImprovement>(`/api/v1/products/${productId}/improvements`, {
+      method: "POST",
+      body,
+    }),
+  updateImprovement: (productId: string, improvementId: string, body: ImprovementUpdateRequest) =>
+    request<ProductImprovement>(`/api/v1/products/${productId}/improvements/${improvementId}`, {
+      method: "PATCH",
+      body,
+    }),
+  getEditions: (productId: string) => request<Edition[]>(`/api/v1/products/${productId}/editions`),
+  createEdition: (productId: string, label: string, resolveImprovementIds: string[] = []) =>
+    request<Edition>(`/api/v1/products/${productId}/editions`, {
+      method: "POST",
+      body: { label, resolve_improvement_ids: resolveImprovementIds },
+    }),
 };

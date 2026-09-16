@@ -10,6 +10,7 @@ define its own, separately field-whitelisted models rather than reusing these.
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
 import uuid
 from typing import Generic, TypeVar
 
@@ -62,6 +63,7 @@ class ProductVariantOut(BaseModel):
     is_default: bool
     active: bool
     stock_enabled: bool
+    row_version: int
     updated_at: datetime.datetime
 
 
@@ -82,6 +84,7 @@ class ProductAssetOut(BaseModel):
     public_share_allowed: bool
     health_status: str
     last_checked_at: datetime.datetime | None = None
+    row_version: int
 
 
 class ProductImprovementOut(BaseModel):
@@ -95,6 +98,7 @@ class ProductImprovementOut(BaseModel):
     source: str
     severity: str
     status: str
+    row_version: int
     created_at: datetime.datetime
     resolved_at: datetime.datetime | None = None
 
@@ -152,3 +156,147 @@ class ReadinessSummaryOut(BaseModel):
     sevdesk_ready: int
     missing_cover: int
     open_improvements: int
+
+
+# -- PR09: edit API -----------------------------------------------------------------
+#
+# Response schemas below add ``row_version`` (required by every PATCH's If-Match-style
+# body) and expose entities PR07 never surfaced (tags, identifiers, prices, print
+# rules, editions). Request bodies are intentionally separate models, not
+# ``ProductDetail.model_copy(update=...)`` — every field is optional so a PATCH only
+# sends what changed, and ``expected_row_version`` is required so the client can never
+# forget it.
+
+
+class TagOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    code: str
+    label: str
+
+
+class TagAddRequest(BaseModel):
+    tag_code: str
+
+
+class IdentifierOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    scheme: str
+    value: str
+    variant_id: uuid.UUID | None = None
+    market: str | None = None
+    is_primary: bool
+
+
+class IdentifierAddRequest(BaseModel):
+    scheme: str
+    value: str
+    variant_id: uuid.UUID | None = None
+    market: str = ""
+    is_primary: bool = False
+
+
+class PriceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    price_list_id: uuid.UUID
+    currency: str
+    net_amount: Decimal | None = None
+    gross_amount: Decimal | None = None
+    tax_rate: Decimal | None = None
+    valid_from: datetime.datetime
+    valid_until: datetime.datetime | None = None
+
+
+class PriceSetRequest(BaseModel):
+    price_list_code: str
+    currency: str = "EUR"
+    net_amount: Decimal | None = None
+    gross_amount: Decimal | None = None
+    tax_rate: Decimal | None = None
+
+
+class PrintRuleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    variant_id: uuid.UUID
+    min_stock_target: int
+    reprint_batch_qty: int
+    print_profile_id: str | None = None
+    primary_print_asset_id: uuid.UUID | None = None
+    row_version: int
+
+
+class PrintRuleUpsertRequest(BaseModel):
+    expected_row_version: int | None = None
+    min_stock_target: int | None = None
+    reprint_batch_qty: int | None = None
+    print_profile_id: str | None = None
+    primary_print_asset_id: uuid.UUID | None = None
+
+
+class EditionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    product_id: uuid.UUID
+    label: str
+    edition_number: int | None = None
+    status: str
+    published_at: datetime.date | None = None
+    notes: str | None = None
+    created_at: datetime.datetime
+
+
+class EditionCreateRequest(BaseModel):
+    label: str
+    edition_number: int | None = None
+    notes: str = ""
+    resolve_improvement_ids: list[uuid.UUID] = []
+
+
+class ProductUpdateRequest(BaseModel):
+    expected_row_version: int
+    name: str | None = None
+    short_description: str | None = None
+    description: str | None = None
+    category: str | None = None
+    status: str | None = None
+    active: bool | None = None
+    product_type: str | None = None
+    brand_name: str | None = None
+    release_date: datetime.date | None = None
+
+
+class VariantUpdateRequest(BaseModel):
+    expected_row_version: int
+    name: str | None = None
+    active: bool | None = None
+    stock_enabled: bool | None = None
+    weight_grams: Decimal | None = None
+
+
+class AssetUpdateRequest(BaseModel):
+    expected_row_version: int
+    role: str | None = None
+    sort_order: int | None = None
+
+
+class ImprovementCreateRequest(BaseModel):
+    description: str
+    variant_id: uuid.UUID | None = None
+    title: str = ""
+    severity: str = "minor"
+
+
+class ImprovementUpdateRequest(BaseModel):
+    expected_row_version: int
+    title: str | None = None
+    description: str | None = None
+    severity: str | None = None
+    status: str | None = None

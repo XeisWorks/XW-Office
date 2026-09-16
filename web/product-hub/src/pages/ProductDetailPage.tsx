@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../api/client";
+import { api, ConflictApiError } from "../api/client";
 import AsyncState from "../components/AsyncState";
 import StatusBadge from "../components/StatusBadge";
 import { healthTone, readinessTone, syncTone } from "../components/tone";
 import { useApi } from "../hooks/useApi";
+import type { ProductDetail } from "../api/types";
 
 interface ProductDetailPageProps {
   onUnauthorized: () => void;
@@ -20,6 +21,8 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "audit", label: "Audit-Log" },
 ];
 
+const SEVERITIES = ["info", "minor", "major", "critical"] as const;
+
 function formatDate(value: string | null): string {
   return value ? new Date(value).toLocaleString("de-DE") : "—";
 }
@@ -27,14 +30,134 @@ function formatDate(value: string | null): string {
 export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageProps) {
   const { id = "" } = useParams<{ id: string }>();
   const [tab, setTab] = useState<TabKey>("variants");
+  const [refreshKey, setRefreshKey] = useState(0);
+  const refresh = () => setRefreshKey((key) => key + 1);
 
-  const product = useApi(() => api.getProduct(id), [id], onUnauthorized);
-  const readiness = useApi(() => api.getReadiness(id), [id], onUnauthorized);
-  const variants = useApi(() => api.getVariants(id), [id], onUnauthorized);
-  const assets = useApi(() => api.getAssets(id), [id], onUnauthorized);
-  const channels = useApi(() => api.getChannels(id), [id], onUnauthorized);
-  const improvements = useApi(() => api.getImprovements(id), [id], onUnauthorized);
-  const audit = useApi(() => api.getAudit(id), [id], onUnauthorized);
+  const product = useApi(() => api.getProduct(id), [id, refreshKey], onUnauthorized);
+  const readiness = useApi(() => api.getReadiness(id), [id, refreshKey], onUnauthorized);
+  const variants = useApi(() => api.getVariants(id), [id, refreshKey], onUnauthorized);
+  const assets = useApi(() => api.getAssets(id), [id, refreshKey], onUnauthorized);
+  const channels = useApi(() => api.getChannels(id), [id, refreshKey], onUnauthorized);
+  const tags = useApi(() => api.getTags(id), [id, refreshKey], onUnauthorized);
+  const improvements = useApi(() => api.getImprovements(id), [id, refreshKey], onUnauthorized);
+  const audit = useApi(() => api.getAudit(id), [id, refreshKey], onUnauthorized);
+
+  // -- product Stammdaten edit form -----------------------------------------------
+  const [editingProduct, setEditingProduct] = useState(false);
+  const [productForm, setProductForm] = useState<{
+    name: string;
+    status: string;
+    category: string;
+    short_description: string;
+    description: string;
+  } | null>(null);
+  const [productSaving, setProductSaving] = useState(false);
+  const [productError, setProductError] = useState<string | null>(null);
+
+  function startEditingProduct(current: ProductDetail) {
+    setProductForm({
+      name: current.name,
+      status: current.status,
+      category: current.category ?? "",
+      short_description: current.short_description ?? "",
+      description: current.description ?? "",
+    });
+    setProductError(null);
+    setEditingProduct(true);
+  }
+
+  async function handleProductSubmit(event: FormEvent, current: ProductDetail) {
+    event.preventDefault();
+    if (!productForm) return;
+    setProductSaving(true);
+    setProductError(null);
+    try {
+      await api.updateProduct(id, {
+        expected_row_version: current.row_version,
+        name: productForm.name,
+        status: productForm.status,
+        category: productForm.category,
+        short_description: productForm.short_description,
+        description: productForm.description,
+      });
+      setEditingProduct(false);
+      refresh();
+    } catch (err) {
+      if (err instanceof ConflictApiError) {
+        setProductError(
+          "Wurde zwischenzeitlich geändert - bitte aktuellen Stand laden und erneut versuchen.",
+        );
+        refresh();
+      } else {
+        setProductError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setProductSaving(false);
+    }
+  }
+
+  // -- tags ----------------------------------------------------------------------
+  const [tagCode, setTagCode] = useState("");
+  const [tagError, setTagError] = useState<string | null>(null);
+
+  async function handleAddTag(event: FormEvent) {
+    event.preventDefault();
+    const code = tagCode.trim().toUpperCase();
+    if (!code) return;
+    setTagError(null);
+    try {
+      await api.addTag(id, code);
+      setTagCode("");
+      refresh();
+    } catch (err) {
+      setTagError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleRemoveTag(tagId: string) {
+    try {
+      await api.removeTag(id, tagId);
+      refresh();
+    } catch (err) {
+      setTagError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // -- improvements: add + resolve -------------------------------------------------
+  const [newImprovement, setNewImprovement] = useState("");
+  const [newSeverity, setNewSeverity] = useState<(typeof SEVERITIES)[number]>("minor");
+  const [improvementError, setImprovementError] = useState<string | null>(null);
+
+  async function handleAddImprovement(event: FormEvent) {
+    event.preventDefault();
+    const description = newImprovement.trim();
+    if (!description) return;
+    setImprovementError(null);
+    try {
+      await api.createImprovement(id, { description, severity: newSeverity });
+      setNewImprovement("");
+      refresh();
+    } catch (err) {
+      setImprovementError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleResolveImprovement(improvementId: string, rowVersion: number) {
+    setImprovementError(null);
+    try {
+      await api.updateImprovement(id, improvementId, {
+        expected_row_version: rowVersion,
+        status: "resolved",
+      });
+      refresh();
+    } catch (err) {
+      if (err instanceof ConflictApiError) {
+        refresh();
+      } else {
+        setImprovementError(err instanceof Error ? err.message : String(err));
+      }
+    }
+  }
 
   return (
     <section>
@@ -47,13 +170,83 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
       {product.data && (
         <>
           <header className="detail-header">
-            <h1>{product.data.name}</h1>
-            <p className="detail-sub">
-              {product.data.sku} · {product.data.product_type}
-              {product.data.category ? ` · ${product.data.category}` : ""}
-              {product.data.brand_name ? ` · ${product.data.brand_name}` : ""}
-            </p>
-            {product.data.short_description && <p>{product.data.short_description}</p>}
+            {!editingProduct ? (
+              <>
+                <div className="detail-header-row">
+                  <h1>{product.data.name}</h1>
+                  <button type="button" onClick={() => startEditingProduct(product.data!)}>
+                    Bearbeiten
+                  </button>
+                </div>
+                <p className="detail-sub">
+                  {product.data.sku} · {product.data.product_type}
+                  {product.data.category ? ` · ${product.data.category}` : ""}
+                  {product.data.brand_name ? ` · ${product.data.brand_name}` : ""}
+                </p>
+                {product.data.short_description && <p>{product.data.short_description}</p>}
+              </>
+            ) : (
+              productForm && (
+                <form
+                  className="edit-form"
+                  onSubmit={(event) => handleProductSubmit(event, product.data!)}
+                >
+                  <label>
+                    Name
+                    <input
+                      value={productForm.name}
+                      onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Status
+                    <input
+                      value={productForm.status}
+                      onChange={(e) => setProductForm({ ...productForm, status: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Kategorie
+                    <input
+                      value={productForm.category}
+                      onChange={(e) => setProductForm({ ...productForm, category: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    Kurzbeschreibung
+                    <input
+                      value={productForm.short_description}
+                      onChange={(e) =>
+                        setProductForm({ ...productForm, short_description: e.target.value })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Beschreibung
+                    <textarea
+                      value={productForm.description}
+                      onChange={(e) =>
+                        setProductForm({ ...productForm, description: e.target.value })
+                      }
+                    />
+                  </label>
+                  {productError && <p className="hint hint-error">{productError}</p>}
+                  <div className="edit-form-actions">
+                    <button type="submit" disabled={productSaving}>
+                      Speichern
+                    </button>
+                    <button
+                      type="button"
+                      className="link-button"
+                      onClick={() => setEditingProduct(false)}
+                      disabled={productSaving}
+                    >
+                      Abbrechen
+                    </button>
+                  </div>
+                </form>
+              )
+            )}
           </header>
 
           {readiness.data && (
@@ -64,6 +257,26 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
               <StatusBadge label="sevdesk" tone={readinessTone(readiness.data.sevdesk_ready)} />
             </div>
           )}
+
+          <div className="tag-row">
+            {(tags.data ?? []).map((tag) => (
+              <span key={tag.id} className="tag-chip">
+                {tag.label}
+                <button type="button" onClick={() => handleRemoveTag(tag.id)} aria-label={`${tag.label} entfernen`}>
+                  ×
+                </button>
+              </span>
+            ))}
+            <form className="tag-add-form" onSubmit={handleAddTag}>
+              <input
+                placeholder="Tag-Code, z. B. AMAZON"
+                value={tagCode}
+                onChange={(e) => setTagCode(e.target.value)}
+              />
+              <button type="submit">+ Tag</button>
+            </form>
+          </div>
+          {tagError && <p className="hint hint-error">{tagError}</p>}
 
           <nav className="tab-bar">
             {TABS.map((entry) => (
@@ -192,6 +405,26 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
 
           {tab === "improvements" && (
             <>
+              <form className="improvement-add-form" onSubmit={handleAddImprovement}>
+                <input
+                  placeholder="+ Verbesserung hinzufügen"
+                  value={newImprovement}
+                  onChange={(e) => setNewImprovement(e.target.value)}
+                />
+                <select
+                  value={newSeverity}
+                  onChange={(e) => setNewSeverity(e.target.value as (typeof SEVERITIES)[number])}
+                >
+                  {SEVERITIES.map((severity) => (
+                    <option key={severity} value={severity}>
+                      {severity}
+                    </option>
+                  ))}
+                </select>
+                <button type="submit">Hinzufügen</button>
+              </form>
+              {improvementError && <p className="hint hint-error">{improvementError}</p>}
+
               <AsyncState
                 loading={improvements.loading}
                 error={improvements.error}
@@ -210,6 +443,15 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
                       <strong>{item.title ?? item.description}</strong>
                       <span className="hint"> · {item.status} · {item.source}</span>
                       {item.title && <p>{item.description}</p>}
+                      {item.status === "open" && (
+                        <button
+                          type="button"
+                          className="link-button"
+                          onClick={() => handleResolveImprovement(item.id, item.row_version)}
+                        >
+                          Als gelöst markieren
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ul>

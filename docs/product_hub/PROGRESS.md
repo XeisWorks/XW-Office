@@ -17,7 +17,8 @@ Update this file at the end of every PR.
 | PR06 | Import commit service + curated grouping | **Done** | See below. |
 | PR07 | Product Hub Read API | **Done and confirmed live on Railway** (`/api/v1/products` → 401 on the production domain) | See below. |
 | PR08 | Read-only WebUI/PWA | **Done and confirmed live on Railway** (`/app/` → 200, SPA routes fall back to `index.html`, `/api/v1/products` still 401 as before) | See below. |
-| PR09–PR16 | — | Not started | |
+| PR09 | Edit API + WebUI editing + Verbesserungen/Auflagen | **Done (code + migration applied), edit API kept off in production pending a deliberate flip** | See below. |
+| PR10–PR16 | — | Not started | |
 
 ## PR01 detail
 
@@ -565,3 +566,85 @@ The `scripts\deploy_web.ps1` quality gate hard-fails on the flaky UVA test above
 allowlist), so this deploy bypassed the script and ran push/`railway up` directly after manually
 confirming ruff/mypy/pytest results — worth adding tolerance for known pre-existing flakes to the
 script, or fixing the flake itself, before the next PR's deploy.
+
+## PR09 detail
+
+**Migration `011_product_hub_row_versions`, applied to Railway Postgres:** adds a
+`row_version` column to `product_variant`, `product_asset`, `print_rule` and
+`product_improvement` (`product.row_version` already existed from PR01). Everything
+else PR09 needed — `product_edition`, `product_improvement.resolved_in_edition_id`,
+`price_list`/`product_price`, `tag`/`product_tag` — was already in the PR01 schema,
+just unused until now. **Naming pitfall hit and documented in the migration's own
+docstring:** the first attempt used a 38-character revision id
+(`011_product_hub_editable_row_versions`); `alembic_version.version_num` is
+`VARCHAR(32)`, so the final version-stamp `UPDATE` failed with
+`StringDataRightTruncation` *after* the DDL had already run inside the same
+transaction — Postgres rolled the whole thing back cleanly (confirmed via
+`alembic current` still showing 010 afterwards), so nothing was left half-applied,
+but the shorter `011_product_hub_row_versions` (28 chars) had to be used instead.
+
+**Code delivered:**
+- `src/xw_office/models/product_hub.py` — `row_version` field on the four entities above.
+- `src/xw_office/repositories/product_hub.py` — `update_variant`, `update_asset`,
+  `remove_identifier`, `set_price` (writes a new effective-dated row and closes the
+  previous one — prices are never mutated in place, so no lock needed there),
+  `upsert_print_rule` (create-if-missing, else optimistic-locked update),
+  `create_improvement`/`update_improvement`, `create_edition`/`list_editions`/
+  `assign_improvements_to_edition`, `remove_product_category`/`remove_product_tag`,
+  plus small `get_asset`/`get_improvement`/`get_tag` getters the router's 409 handler
+  needs to fetch "current server state." All follow `update_product`'s existing
+  optimistic-lock pattern (`OptimisticLockError` on stale `row_version`).
+- `src/xw_office/services/product_hub/editing.py` (new) — `EditingService`, one
+  DB-transaction-per-call wrapper (mirrors `grouping.py`'s pattern) that combines each
+  repository write with a `record_audit` call, and enforces a per-entity field
+  allowlist (`UnknownFieldError`) so a stray/renamed request field fails with 400
+  instead of silently touching an unrelated column.
+- `src/xw_office/web/schemas/products.py` — request bodies (`ProductUpdateRequest`,
+  `VariantUpdateRequest`, `AssetUpdateRequest`, `TagAddRequest`, `IdentifierAddRequest`,
+  `PriceSetRequest`, `PrintRuleUpsertRequest`, `ImprovementCreateRequest`,
+  `ImprovementUpdateRequest`, `EditionCreateRequest`) and new read-out schemas
+  (`TagOut`, `IdentifierOut`, `PriceOut`, `PrintRuleOut`, `EditionOut`); existing
+  variant/asset/improvement schemas gained `row_version`.
+- `src/xw_office/web/routers/products.py` — every PATCH/POST/PUT/DELETE route lives on
+  a nested `write_router`, mounted into the main router with its own
+  `require_edit_enabled` dependency (see below) — a 409 handler (`_conflict`) refetches
+  and returns the current server state per the build plan's "Konflikt -> HTTP 409 mit
+  aktuellem Serverstand," rather than just a bare error.
+- `src/xw_office/web/app.py` — new `ContentWebSettings.product_hub_edit_enabled`
+  (env `XW_PRODUCT_HUB_EDIT_ENABLED`), **defaults to `False`** — a separate kill switch
+  from the read API's, since this is the first write-capable HTTP surface this service
+  has ever exposed. Deliberately left off in production after this deploy; flip it on
+  once the WebUI editing flow has been exercised for real.
+- `web/product-hub/src/pages/ProductDetailPage.tsx` — inline product Stammdaten edit
+  form (name/status/category/short+long description), a tag row (add by code / remove
+  chip), and an improvements "+ Verbesserung hinzufügen" form with a "Als gelöst
+  markieren" action per open item — matching the build plan's explicit UX note that the
+  improvement UI should look simple while staying separate audited records underneath.
+  409 conflicts trigger a refetch instead of a silent overwrite.
+- `web/product-hub/src/api/{types,client}.ts` — `ConflictApiError` (carries the 409
+  body's current-state payload), the new edit methods, `Tag`/`Edition` types.
+
+**Deliberately not built in this round** (backend API is ready, WebUI isn't): inline
+editing for asset metadata (role/sort_order), variant prices, and print rules —
+`ProductDetailPage`'s Assets/Print tab is still read-only. Same for identifiers (add
+via API works, no UI yet) and the edition-creation flow (`create_edition` +
+`resolve_improvement_ids` works end-to-end via API, no "neue Auflage" button yet). Adding
+these is mechanical (same pattern as tags/improvements) whenever picked back up.
+
+**Verified locally:** 45 new tests (32 repository-level incl. optimistic-lock/stale-
+version cases, 13 HTTP-level incl. the 503-when-disabled gate, 409-with-current-state,
+and an audit-log-entry-written check) all pass; full backend suite at 1181/1182 (same
+one pre-existing flaky UVA test, confirmed unrelated). `npm run build`/`lint` clean for
+the frontend changes. Not yet done: no browser click-through of the new edit forms —
+also blocked on `product_hub_edit_enabled` being off in production right now.
+
+**Deployed:** migration applied directly via `alembic upgrade head` against the
+production Railway Postgres (confirmed via `alembic current` → `011_product_hub_row_
+versions`). Code not yet pushed/deployed as of writing this section — see the commit
+that follows. GitHub webhook: still not connected (`railway status` shows
+`source.repo: null` for XW-Content-Web) despite the project rename to "XW-Office" and
+the user's dashboard reconnect attempt — the Railway CLI's local project link
+(`~/.railway/config.json`, keyed by absolute repo path) also had to be redone after the
+`XW-Studio` → `XW-Office` folder rename (`railway link -p b9ca5990-...`), unrelated to
+the GitHub side but worth knowing if `railway` commands suddenly say "No linked project
+found" again after a future folder move.

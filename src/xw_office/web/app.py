@@ -21,6 +21,7 @@ from xw_office import __version__
 from xw_office.content import BrandProfile, BrandProfileCatalog
 from xw_office.core.database import session_scope
 from xw_office.repositories.product_hub import ProductHubRepository
+from xw_office.services.product_hub.editing import EditingService
 from xw_office.web.routers.products import build_products_router
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -51,6 +52,11 @@ class ContentWebSettings:
     #: copy of this flag (core/config.py) defaults to off for the same reason in
     #: reverse: nothing read it before this PR existed.
     product_hub_catalog_read_enabled: bool = True
+    #: Separate kill switch for the PR09 edit API (PATCH/POST/PUT/DELETE routes) —
+    #: defaults to *off*, unlike the read flag above, since this is the first
+    #: write-capable HTTP surface this service exposes. Flip on deliberately once the
+    #: WebUI editing flow has been exercised against a real deploy.
+    product_hub_edit_enabled: bool = False
     #: Built PR08 React/PWA bundle (`npm run build` output of web/product-hub/).
     #: Served same-origin at /app/ when present; absent in plain-API deployments
     #: and in most local dev setups, where the mount below is simply skipped.
@@ -66,6 +72,7 @@ class ContentWebSettings:
             product_hub_catalog_read_enabled=_env_flag(
                 "XW_PRODUCT_HUB_CATALOG_READ_ENABLED", default=True
             ),
+            product_hub_edit_enabled=_env_flag("XW_PRODUCT_HUB_EDIT_ENABLED", default=False),
             product_hub_web_dist=Path(
                 os.getenv("XW_PRODUCT_HUB_WEB_DIST", "").strip()
                 or (_REPOSITORY_ROOT / "web" / "product-hub" / "dist")
@@ -177,8 +184,19 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
         with session_scope(_session_factory) as session:
             yield ProductHubRepository(session)
 
+    def get_editing_service() -> EditingService:
+        assert _session_factory is not None  # guarded by require_product_hub_enabled above
+        return EditingService(_session_factory)
+
+    def require_product_hub_edit_enabled() -> None:
+        if not resolved.product_hub_edit_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Product Hub edit API is not enabled",
+            )
+
     app.include_router(
-        build_products_router(get_product_repo),
+        build_products_router(get_product_repo, get_editing_service, require_product_hub_edit_enabled),
         dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
     )
 

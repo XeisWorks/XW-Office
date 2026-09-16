@@ -304,3 +304,169 @@ def test_list_products_search_matches_name_case_insensitively(
 
     results = repo.list_products(ProductFilter(search="blechhaufen"))
     assert [p.id for p in results] == [product.id]
+
+
+# -- PR09: editable entities (row_version, optimistic locking) --------------------
+
+
+def test_update_variant_succeeds_and_bumps_row_version(repo: ProductHubRepository) -> None:
+    product, variant = repo.create_product(sku="XW-1000", name="Book")
+    assert variant.row_version == 1
+
+    updated = repo.update_variant(variant.id, expected_row_version=1, name="New Variant Name")
+
+    assert updated.name == "New Variant Name"
+    assert updated.row_version == 2
+
+
+def test_update_variant_stale_row_version_raises(repo: ProductHubRepository) -> None:
+    _product, variant = repo.create_product(sku="XW-1001", name="Book")
+    with pytest.raises(OptimisticLockError):
+        repo.update_variant(variant.id, expected_row_version=999, name="X")
+
+
+def test_update_asset_succeeds_and_bumps_row_version(repo: ProductHubRepository) -> None:
+    product, _variant = repo.create_product(sku="XW-1002", name="Book")
+    asset = repo.add_asset(
+        product_id=product.id, role="COVER", storage_kind="EXTERNAL_URL", uri="https://x/c.jpg"
+    )
+    assert asset.row_version == 1
+
+    updated = repo.update_asset(asset.id, expected_row_version=1, sort_order=5)
+
+    assert updated.sort_order == 5
+    assert updated.row_version == 2
+
+
+def test_update_asset_stale_row_version_raises(repo: ProductHubRepository) -> None:
+    product, _variant = repo.create_product(sku="XW-1003", name="Book")
+    asset = repo.add_asset(
+        product_id=product.id, role="COVER", storage_kind="EXTERNAL_URL", uri="https://x/c.jpg"
+    )
+    with pytest.raises(OptimisticLockError):
+        repo.update_asset(asset.id, expected_row_version=999, sort_order=5)
+
+
+def test_remove_identifier(repo: ProductHubRepository) -> None:
+    product, _variant = repo.create_product(sku="XW-1004", name="Book")
+    identifier = repo.add_identifier(
+        scheme="ISBN13", value="978-1", normalized_value="9781", product_id=product.id
+    )
+    assert [i.id for i in repo.list_identifiers(product_id=product.id)] == [identifier.id]
+
+    repo.remove_identifier(identifier.id)
+
+    assert repo.list_identifiers(product_id=product.id) == []
+
+
+def test_remove_identifier_unknown_raises(repo: ProductHubRepository) -> None:
+    with pytest.raises(KeyError):
+        repo.remove_identifier(uuid.uuid4())
+
+
+def test_set_price_creates_new_row_and_closes_previous(
+    repo: ProductHubRepository, session_factory: sessionmaker[Session]
+) -> None:
+    # migration 009 seeds RETAIL_EUR/B2B_EUR in real deployments; the SQLite test schema
+    # only carries table structure (Base.metadata.create_all), so seed one here.
+    with session_factory() as session:
+        session.add(PriceList(id=uuid.uuid4(), code="RETAIL_EUR", name="Retail EUR"))
+        session.commit()
+
+    product, variant = repo.create_product(sku="XW-1005", name="Book")
+    price_list = repo.get_price_list_by_code("RETAIL_EUR")
+    assert price_list is not None
+
+    first = repo.set_price(
+        variant.id, price_list_id=price_list.id, gross_amount=Decimal("19.99")
+    )
+    assert first.valid_until is None
+
+    second = repo.set_price(
+        variant.id, price_list_id=price_list.id, gross_amount=Decimal("24.99")
+    )
+
+    # SQLite (unlike Postgres) drops tzinfo on round-trip, so re-fetch both sides
+    # from the DB before comparing instead of mixing a naive with an aware datetime.
+    by_id = {p.id: p for p in repo.list_prices(variant.id)}
+    assert by_id[first.id].valid_until == by_id[second.id].valid_from
+    assert by_id[second.id].valid_until is None
+    assert by_id[second.id].gross_amount == Decimal("24.99")
+
+
+def test_upsert_print_rule_creates_then_updates(repo: ProductHubRepository) -> None:
+    _product, variant = repo.create_product(sku="XW-1006", name="Book")
+
+    created = repo.upsert_print_rule(variant.id, min_stock_target=10)
+    assert created.min_stock_target == 10
+    assert created.row_version == 1
+
+    updated = repo.upsert_print_rule(
+        variant.id, expected_row_version=1, min_stock_target=20
+    )
+    assert updated.min_stock_target == 20
+    assert updated.row_version == 2
+
+
+def test_upsert_print_rule_stale_row_version_raises(repo: ProductHubRepository) -> None:
+    _product, variant = repo.create_product(sku="XW-1007", name="Book")
+    repo.upsert_print_rule(variant.id, min_stock_target=10)
+
+    with pytest.raises(OptimisticLockError):
+        repo.upsert_print_rule(variant.id, expected_row_version=999, min_stock_target=20)
+
+
+def test_create_and_update_improvement(repo: ProductHubRepository) -> None:
+    product, _variant = repo.create_product(sku="XW-1008", name="Book")
+
+    improvement = repo.create_improvement(product_id=product.id, description="Typo on page 3")
+    assert improvement.status == "open"
+    assert improvement.row_version == 1
+
+    resolved = repo.update_improvement(
+        improvement.id, expected_row_version=1, status="resolved"
+    )
+    assert resolved.status == "resolved"
+    assert resolved.row_version == 2
+
+
+def test_update_improvement_stale_row_version_raises(repo: ProductHubRepository) -> None:
+    product, _variant = repo.create_product(sku="XW-1009", name="Book")
+    improvement = repo.create_improvement(product_id=product.id, description="Typo")
+
+    with pytest.raises(OptimisticLockError):
+        repo.update_improvement(improvement.id, expected_row_version=999, status="resolved")
+
+
+def test_create_edition_and_assign_improvements(repo: ProductHubRepository) -> None:
+    product, _variant = repo.create_product(sku="XW-1010", name="Book")
+    improvement = repo.create_improvement(product_id=product.id, description="Typo")
+
+    edition = repo.create_edition(product_id=product.id, label="2nd Edition")
+    assert [e.id for e in repo.list_editions(product.id)] == [edition.id]
+
+    resolved = repo.assign_improvements_to_edition(edition.id, [improvement.id])
+
+    assert len(resolved) == 1
+    assert resolved[0].status == "resolved"
+    assert resolved[0].resolved_in_edition_id == edition.id
+
+
+def test_assign_improvements_to_edition_skips_unknown_ids(repo: ProductHubRepository) -> None:
+    product, _variant = repo.create_product(sku="XW-1011", name="Book")
+    edition = repo.create_edition(product_id=product.id, label="2nd Edition")
+
+    resolved = repo.assign_improvements_to_edition(edition.id, [uuid.uuid4()])
+
+    assert resolved == []
+
+
+def test_add_and_remove_product_tag(repo: ProductHubRepository) -> None:
+    product, _variant = repo.create_product(sku="XW-1012", name="Book")
+    tag = repo.get_or_create_tag(code="AMAZON", label="Amazon")
+
+    repo.add_product_tag(product_id=product.id, tag_id=tag.id)
+    assert [link.tag_id for link in repo.list_product_tags(product.id)] == [tag.id]
+
+    repo.remove_product_tag(product_id=product.id, tag_id=tag.id)
+    assert repo.list_product_tags(product.id) == []

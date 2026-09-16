@@ -176,6 +176,7 @@ class ProductVariant(Base):
     weight_grams: Mapped[Decimal | None] = mapped_column(Numeric(12, 3), nullable=True)
     option_values: Mapped[dict[str, object]] = mapped_column(JSONVariant, default=dict, nullable=False)
     attributes: Mapped[dict[str, object]] = mapped_column(JSONVariant, default=dict, nullable=False)
+    row_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -358,6 +359,7 @@ class ProductAsset(Base):
     last_checked_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    row_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -382,6 +384,7 @@ class PrintRule(Base):
     primary_print_asset_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("product_asset.id", ondelete="SET NULL"), nullable=True
     )
+    row_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
@@ -438,6 +441,7 @@ class ProductImprovement(Base):
     source_reference: Mapped[str | None] = mapped_column(Text, nullable=True)
     severity: Mapped[str] = mapped_column(String(20), default="minor", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="open", nullable=False)
+    row_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
