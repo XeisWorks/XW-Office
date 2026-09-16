@@ -9,7 +9,7 @@ Update this file at the end of every PR.
 | PR | Title | Status | Notes |
 |---|---|---|---|
 | PR00 | Align architecture docs and guardrails | **Done** | `docs/product_pipeline_masterplan.md` / `docs/product_pipeline_phases.yaml` updated; historical "sevDesk = SOT für Bestand" statement struck through and replaced. Approved specs copied to `docs/product_hub/`. |
-| PR01 | Canonical ORM schema and repositories | **Done (code), migration NOT yet applied to Railway** | See below. |
+| PR01 | Canonical ORM schema and repositories | **Done, migration applied to Railway** | See below. |
 | PR02 | Import staging foundation | Not started | |
 | PR03–PR16 | — | Not started | |
 
@@ -57,20 +57,16 @@ fails when run as part of the full suite (passes alone) — reproduced identical
 any product-hub change, confirmed via `git stash -u`. Order-dependent test pollution in the
 FinanzOnline UVA tests, not caused by this work.
 
-**Not done in this session — needs a deliberate manual step:**
-The Alembic migration (`009_product_hub_core`) was written and carefully reviewed but **has not
-been applied to the real Railway PostgreSQL database**. `alembic upgrade head` requires
-`DATABASE_URL` (present in `.env`, pointing at production) and this is a schema change to a live
-business database — that is exactly the kind of hard-to-reverse, shared-system action that should
-not be run unattended. Before running it:
-
-1. Take a Railway Postgres backup/snapshot.
-2. Review `009_product_hub_core.py` once more (especially the backfill loop).
-3. Run `alembic upgrade head` from a machine with the real `DATABASE_URL`, ideally at low traffic.
-4. Spot-check: every pre-existing `product` row now has exactly one `product_variant` with
-   `is_default = true`, a `slug`, and (where applicable) mirrored `channel_mapping`/
-   `product_asset`/`print_rule` rows.
-5. Update this file's PR01 status to "Done (migration applied)".
+**Migration applied to Railway (2026-09-16):**
+`alembic current` was 008 (no drift) and the live `product` table had **0 rows** — the real
+operational catalog still lives entirely in `SettingKV["inventory.products"]`, `product` has never
+been written to by `ProductCatalogService`/`InventoryService`, so the backfill loop was a no-op by
+construction (verified before running: `SELECT COUNT(*) FROM product` = 0). `alembic upgrade head`
+was run against the real `DATABASE_URL`; `alembic current` now reports `009_product_hub_core
+(head)`, all 16 new tables exist, `price_list` has `RETAIL_EUR`/`B2B_EUR` seeded, and `product` has
+the new `slug`/`row_version`/`active`/... columns. Given the 0-row backfill, no separate data
+spot-check was needed this time — a future migration that touches non-empty tables should still get
+a backup/snapshot first.
 
 **Design decisions worth knowing for later PRs:**
 - "One default variant per product" is enforced two ways: a PostgreSQL-only partial unique index
