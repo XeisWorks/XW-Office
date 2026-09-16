@@ -818,3 +818,20 @@ unused until that's built. `create_product`/import/grouping flows still don't em
 outbox events (unchanged from PR10's scope note), so freshly imported products won't
 auto-push to Wix even once `sync_push_enabled` is on — only products edited through
 PR09's edit API will trigger a push.
+
+**Deploy incident: first attempt (`95af4eaa…`) FAILED at container start**, not
+build — `ModuleNotFoundError: No module named 'httpx'`. Root cause: `wix_push.py`
+imports `xw_office.services.wix.product_details_client`, and importing *anything*
+under `xw_office.services.wix.*` runs that package's `__init__.py`, which
+unconditionally imports the legacy `client.py` too (for its own re-exports) — and
+`client.py` imports `httpx`, which was never in `requirements-web.txt` (only in the
+full desktop `pyproject.toml`, which is why local dev/tests never caught this — the
+repo's own `.venv` has both). Traced the rest of that chain
+(`core.performance_metrics`, `services.shipping.countries`,
+`services.wix.order_cache`) and confirmed everything else is stdlib-only, so `httpx`
+was the complete fix. Added it to `requirements-web.txt`, then verified with the same
+check `scripts\deploy_web.ps1 -VerifyLeanWebImage` runs (throwaway venv, only
+`requirements-web.txt` installed, import `xw_office.web.app`) *before* redeploying —
+should have done this the first time; the CI/local quality gate uses the full desktop
+`.venv` so it can't catch a lean-image-only missing dependency, which is exactly what
+that flag exists for.

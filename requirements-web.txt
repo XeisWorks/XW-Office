@@ -11,3 +11,9 @@ uvicorn>=0.34,<1
 sqlalchemy>=2,<3
 psycopg2-binary>=2.9,<3
 python-dotenv>=1,<2
+# Product Hub Wix push (PR11): xw_office.services.wix.product_details_client needs
+# httpx. Importing anything under xw_office.services.wix.* also runs that package's
+# __init__.py, which imports the legacy client.py too - its own transitive imports
+# (core.performance_metrics, services.shipping.countries, wix.order_cache) are all
+# stdlib-only, so httpx is the one and only addition this pulls in.
+httpx>=0.27,<1
