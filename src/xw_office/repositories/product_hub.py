@@ -494,6 +494,81 @@ class ProductHubRepository:
             session.flush()
             return variant
 
+    # -- product-scoped reparenting (curated grouping, PR06) -------------------------
+
+    def reparent_identifier(self, identifier_id: uuid.UUID, *, product_id: uuid.UUID) -> ProductIdentifier:
+        """Move a *product-scoped* identifier to a different product.
+
+        Only ever called for identifiers already carrying ``product_id`` (never
+        ``variant_id``) — a variant-scoped identifier already follows its variant
+        automatically once :meth:`move_variant` re-parents that variant.
+        """
+        with self._scope() as session:
+            identifier = session.get(ProductIdentifier, identifier_id)
+            if identifier is None:
+                raise KeyError(f"Identifier {identifier_id} not found")
+            identifier.product_id = product_id
+            session.flush()
+            return identifier
+
+    def reparent_asset(self, asset_id: uuid.UUID, *, product_id: uuid.UUID) -> ProductAsset:
+        with self._scope() as session:
+            asset = session.get(ProductAsset, asset_id)
+            if asset is None:
+                raise KeyError(f"Asset {asset_id} not found")
+            asset.product_id = product_id
+            session.flush()
+            return asset
+
+    def remove_product_categories(self, product_id: uuid.UUID) -> None:
+        with self._scope() as session:
+            for link in session.scalars(
+                select(ProductCategory).where(ProductCategory.product_id == product_id)
+            ).all():
+                session.delete(link)
+            session.flush()
+
+    def remove_product_tags(self, product_id: uuid.UUID) -> None:
+        with self._scope() as session:
+            for link in session.scalars(
+                select(ProductTag).where(ProductTag.product_id == product_id)
+            ).all():
+                session.delete(link)
+            session.flush()
+
+    def list_channel_mappings(
+        self, *, entity_type: str, internal_entity_id: uuid.UUID
+    ) -> list[ChannelMapping]:
+        with self._scope() as session:
+            stmt = select(ChannelMapping).where(
+                ChannelMapping.entity_type == entity_type,
+                ChannelMapping.internal_entity_id == internal_entity_id,
+            )
+            return list(session.scalars(stmt).all())
+
+    def reparent_channel_mapping(
+        self, mapping_id: uuid.UUID, *, internal_entity_id: uuid.UUID
+    ) -> ChannelMapping:
+        with self._scope() as session:
+            mapping = session.get(ChannelMapping, mapping_id)
+            if mapping is None:
+                raise KeyError(f"Channel mapping {mapping_id} not found")
+            mapping.internal_entity_id = internal_entity_id
+            session.flush()
+            return mapping
+
+    def archive_product(self, product_id: uuid.UUID) -> Product:
+        """Soft-delete: set ``active=False``/``archived_at`` (never hard-delete)."""
+        with self._scope() as session:
+            product = session.get(Product, product_id)
+            if product is None:
+                raise KeyError(f"Product {product_id} not found")
+            product.active = False
+            product.archived_at = datetime.datetime.now(datetime.timezone.utc)
+            product.row_version += 1
+            session.flush()
+            return product
+
     # -- audit log --------------------------------------------------------------
 
     def record_audit(

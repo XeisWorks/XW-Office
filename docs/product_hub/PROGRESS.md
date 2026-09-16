@@ -14,7 +14,7 @@ Update this file at the end of every PR.
 | PR03 | Wix read importer | **Done (code), reads only via fixtures — never called against the live Wix API in this session** | See below. |
 | PR04 | sevdesk read importer | **Done** | See below. |
 | PR05 | Excel import and matching | **Done** | See below. |
-| PR06 | Import commit service + curated grouping | **In progress (commit service done, grouping next)** | See below. |
+| PR06 | Import commit service + curated grouping | **Done** | See below. |
 | PR07–PR16 | — | Not started | |
 
 ## PR01 detail
@@ -359,5 +359,49 @@ clean on every file this touched. Same single pre-existing flaky UVA failure, no
 
 **No migration needed:** PR06 only writes through PR01/PR02's existing schema.
 
-Grouping (`group_products_into_parent`/`move_variant_to_product`) is the second half of PR06,
-in progress next.
+## PR06 detail (part 2: curated grouping) — PR06 now fully done
+
+**Code delivered:**
+- `src/xw_office/services/product_hub/grouping.py` — `GroupingService`, one transaction per
+  call, same shared-session pattern as the commit service:
+  - `move_variant_to_product(variant_id, target_product_id, actor=...)` — the low-level
+    primitive: re-parents one variant, writes an audit entry. Variant-scoped identifiers/assets
+    (`variant_id` set) follow automatically since their FK is the variant, not the product —
+    nothing else needs to move for those.
+  - `preview_grouping(parent_product_id, child_product_ids)` — read-only: counts of
+    variants/identifiers/assets that would move, plus any `channel_mapping_conflicts`
+    (`.is_safe` is `False` when any exist). No writes, ever.
+  - `group_products_into_parent(parent_product_id, child_product_ids, actor=...)` — the curated
+    grouping command itself. Two-phase: a **pure-read pre-check** (channel-mapping conflicts +
+    all child ids exist) that raises `GroupingConflictError`/`KeyError` with **zero writes** if
+    anything is wrong, then an apply phase that only runs once the pre-check is clean. For each
+    child product: moves every variant, moves product-scoped identifiers/assets
+    (`ProductHubRepository.reparent_identifier`/`reparent_asset`, new), copies
+    `product_category`/`product_tag` links onto the parent then removes the child's own
+    (`remove_product_categories`/`remove_product_tags`, new), moves `channel_mapping` rows
+    (`reparent_channel_mapping`, new), then archives the child (`archive_product`, new —
+    `active=False`/`archived_at`, never a hard delete). Ends with exactly one `is_default=True`
+    variant on the parent (the parent's own pre-existing default wins over any moved-in child
+    default) and one `audit_log` entry per archived child plus one summary entry on the parent.
+  - Product-level identifier moves need **no conflict pre-check at all**: since
+    `(scheme, normalized_value)` is already globally unique in `product_identifier`, a child's
+    own identifier row cannot, by construction, collide with anything the parent already has —
+    the only real grouping-time conflict is two *separate* channel listings (e.g. both parent
+    and child already have their own Wix product), which the pre-check catches explicitly.
+- `ProductHubRepository` gains the six additive methods named above plus
+  `list_channel_mappings`.
+
+**Verified:** `pytest tests/` — 1130 passed (+9 new in `test_product_hub_grouping_service.py`:
+a full MusikHeroes-shaped scenario (one parent + two children, each carrying an identifier, an
+asset, a category, and a tag) proving every SKU stays independently `resolve_sku`-resolvable
+under the parent afterward and nothing is lost; the default-variant invariant explicitly;
+the channel-mapping-conflict abort with a follow-up assertion that the child was **not**
+touched at all; `preview_grouping` for both the conflict and the clean case; parent-cannot-
+be-its-own-child, empty-children, and an unknown child id aborting before any real child is
+touched); `ruff check src/` clean; `mypy` clean on every file this touched. Same single
+pre-existing flaky UVA failure, nothing new.
+
+**PR06 is now fully complete** per its own build-plan scope (atomic commit service, audit log,
+preview/diff, safe 1:1 import, explicit curated grouping). PR07 (Product Hub Read API) is the
+natural next step — it is the first PR that gives XW-Office Desktop and the future WebUI
+anything to actually call.
