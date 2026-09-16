@@ -382,6 +382,104 @@ class WixProductDetailsClient:
         detail = self.get_product(product_id)
         return detail.revision if detail is not None else ""
 
+    def get_product_raw(self, product_id: str) -> dict[str, Any] | None:
+        """Fetch the full, unparsed product payload.
+
+        ``get_product``/``WixProductDetail`` intentionally drop fields (media, full
+        variant list) that field-update callers never needed. The Product Hub importer
+        (PR03) needs the raw payload for media provenance (Wix's first media item is the
+        cover, see docs/product_hub/), so this is a read-only, additive sibling method —
+        it does not change ``get_product``'s behavior or its callers.
+        """
+        pid = str(product_id or "").strip()
+        if not pid or not self.has_credentials():
+            return None
+
+        version = self.detect_catalog_version()
+        urls = self._get_endpoint_candidates(pid, version)
+        headers = self._headers()
+
+        client = self._client()
+        for url in urls:
+            try:
+                resp = client.get(url, headers=headers)
+                if resp.status_code < 400:
+                    raw = resp.json() if resp.content else {}
+                    product_raw = raw.get("product") or raw
+                    if isinstance(product_raw, dict) and product_raw.get("id"):
+                        return product_raw
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "WixProductDetailsClient.get_product_raw %s failed at %s: %s", pid, url, exc
+                )
+
+        logger.warning("WixProductDetailsClient: could not fetch raw product %s", pid)
+        return None
+
+    def query_variants(self, product_id: str) -> list[dict[str, Any]]:
+        """Return raw Catalog V3 variants for one product (Read-Only Variants API).
+
+        Wix Catalog V3 does not include variants in the product query/get response —
+        they must be fetched separately, up to 1000 per query (per Wix docs). Returns
+        ``[]`` for a no-options product or a non-V3 site; callers should then fall back
+        to the product's own single implicit variant (see ``get_product_raw``/``sku``).
+        """
+        pid = str(product_id or "").strip()
+        if not pid or not self.has_credentials():
+            return []
+        headers = self._headers()
+        endpoints = [
+            f"{self._V3_BASE}/products/{pid}/variants/query",
+            f"{self._V3_BASE}/catalog/products/{pid}/variants/query",
+        ]
+        body: dict[str, Any] = {"query": {"paging": {"limit": 1000}}}
+        client = self._client()
+        for url in endpoints:
+            try:
+                resp = client.post(url, headers=headers, json=body)
+                if resp.status_code >= 400:
+                    continue
+                data = resp.json() if resp.content else {}
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "WixProductDetailsClient.query_variants %s failed at %s: %s", pid, url, exc
+                )
+                continue
+            variants = data.get("variants") if isinstance(data, dict) else None
+            if isinstance(variants, list):
+                return [variant for variant in variants if isinstance(variant, dict)]
+        return []
+
+    def query_inventory(self, product_id: str) -> list[dict[str, Any]]:
+        """Return raw Inventory V3 items (variant/location-based) for one product."""
+        pid = str(product_id or "").strip()
+        if not pid or not self.has_credentials():
+            return []
+        headers = self._headers()
+        endpoints = [
+            f"{self._V3_BASE}/inventoryItems/query",
+            f"{self._V3_BASE}/catalog/inventoryItems/query",
+        ]
+        body: dict[str, Any] = {
+            "query": {"filter": {"productId": pid}, "paging": {"limit": 1000}}
+        }
+        client = self._client()
+        for url in endpoints:
+            try:
+                resp = client.post(url, headers=headers, json=body)
+                if resp.status_code >= 400:
+                    continue
+                data = resp.json() if resp.content else {}
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "WixProductDetailsClient.query_inventory %s failed at %s: %s", pid, url, exc
+                )
+                continue
+            items = data.get("inventoryItems") if isinstance(data, dict) else None
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+        return []
+
     def query_category_names(self) -> dict[str, str]:
         """Return Wix category/collection display names by ID.
 

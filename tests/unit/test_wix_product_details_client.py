@@ -297,6 +297,98 @@ def test_get_product_revision_returns_empty_on_failure() -> None:
 
 
 # ---------------------------------------------------------------------------
+# get_product_raw / query_variants / query_inventory (PR03 additions)
+# ---------------------------------------------------------------------------
+
+
+def test_get_product_raw_returns_full_payload_including_media() -> None:
+    raw = _make_product("P-2", revision="rev-2", name="Mit Medien")
+    raw["media"] = {"items": [{"id": "m1", "image": {"url": "https://x/cover.jpg"}}]}
+    original = httpx.Client
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "query" in str(request.url):
+            return httpx.Response(200, json={"products": []})
+        return httpx.Response(200, json={"product": raw})
+
+    httpx.Client = _with_transport(httpx.MockTransport(handler))  # type: ignore[assignment]
+    try:
+        result = _client().get_product_raw("P-2")
+    finally:
+        httpx.Client = original  # type: ignore[assignment]
+
+    assert result is not None
+    assert result["id"] == "P-2"
+    assert result["media"]["items"][0]["id"] == "m1"
+
+
+def test_get_product_raw_returns_none_without_credentials() -> None:
+    assert _client_no_creds().get_product_raw("any-id") is None
+
+
+def test_query_variants_returns_variant_list() -> None:
+    variants = [
+        {"id": "v1", "sku": "XW-1-A", "choices": {"Instrument": "Trompete"}},
+        {"id": "v2", "sku": "XW-1-B", "choices": {"Instrument": "Posaune"}},
+    ]
+    original = httpx.Client
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "variants/query" in str(request.url):
+            return httpx.Response(200, json={"variants": variants})
+        return httpx.Response(200, json={"products": []})
+
+    httpx.Client = _with_transport(httpx.MockTransport(handler))  # type: ignore[assignment]
+    try:
+        result = _client().query_variants("P-1")
+    finally:
+        httpx.Client = original  # type: ignore[assignment]
+
+    assert [v["sku"] for v in result] == ["XW-1-A", "XW-1-B"]
+
+
+def test_query_variants_returns_empty_without_credentials() -> None:
+    assert _client_no_creds().query_variants("any-id") == []
+
+
+def test_query_variants_returns_empty_on_no_options_product() -> None:
+    original = httpx.Client
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "variants/query" in str(request.url):
+            return httpx.Response(200, json={"variants": []})
+        return httpx.Response(200, json={"products": []})
+
+    httpx.Client = _with_transport(httpx.MockTransport(handler))  # type: ignore[assignment]
+    try:
+        result = _client().query_variants("P-1")
+    finally:
+        httpx.Client = original  # type: ignore[assignment]
+
+    assert result == []
+
+
+def test_query_inventory_returns_items() -> None:
+    items = [
+        {"id": "inv1", "variantId": "v1", "quantity": 7, "inStock": True, "locationId": "loc-1"},
+    ]
+    original = httpx.Client
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "inventoryItems/query" in str(request.url):
+            return httpx.Response(200, json={"inventoryItems": items})
+        return httpx.Response(200, json={"products": []})
+
+    httpx.Client = _with_transport(httpx.MockTransport(handler))  # type: ignore[assignment]
+    try:
+        result = _client().query_inventory("P-1")
+    finally:
+        httpx.Client = original  # type: ignore[assignment]
+
+    assert result[0]["quantity"] == 7
+
+
+# ---------------------------------------------------------------------------
 # Single-field updates — v3
 # ---------------------------------------------------------------------------
 

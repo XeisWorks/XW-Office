@@ -11,7 +11,8 @@ Update this file at the end of every PR.
 | PR00 | Align architecture docs and guardrails | **Done** | `docs/product_pipeline_masterplan.md` / `docs/product_pipeline_phases.yaml` updated; historical "sevDesk = SOT für Bestand" statement struck through and replaced. Approved specs copied to `docs/product_hub/`. |
 | PR01 | Canonical ORM schema and repositories | **Done, migration applied to Railway** | See below. |
 | PR02 | Import staging foundation | **Done** | See below. |
-| PR03–PR16 | — | Not started | |
+| PR03 | Wix read importer | **Done (code), reads only via fixtures — never called against the live Wix API in this session** | See below. |
+| PR04–PR16 | — | Not started | |
 
 ## PR01 detail
 
@@ -122,3 +123,40 @@ run with the exact same code) — this is pre-existing order/state flakiness in 
 suite, not something PR02's pure-SQLAlchemy code can cause. Worth a dedicated cleanup PR
 outside the product-hub track (e.g. explicit `PYTHONHASHSEED`/qapp-fixture isolation) if it
 keeps being disruptive.
+
+## PR03 detail
+
+**Code delivered:**
+- `src/xw_office/services/wix/product_details_client.py` — three new, additive, read-only
+  methods on the existing `WixProductDetailsClient`: `get_product_raw` (full unparsed product
+  JSON — `get_product`/`WixProductDetail` intentionally drop media and the full variant list),
+  `query_variants` (Catalog V3 Read-Only Variants, up to 1000/query), `query_inventory`
+  (Inventory V3, variant/location-based). None of the existing methods/behavior changed.
+- `src/xw_office/services/product_hub/wix_import.py` — `WixProductImporter`: pages all Wix
+  products via the existing `WixProductsClient.list_products()`, then for each product fetches
+  raw detail + variants + inventory and writes everything into staging
+  (`ProductHubImportRepository`). Media rule: first item = `COVER`, the rest = `SAMPLE_SCORE`
+  (confirmed architecture decision). One failing product is recorded in the batch's
+  `error_summary` and does not abort the rest of the batch. Depends only on two small
+  `Protocol`s (`WixProductsSource`, `WixDetailsSource`), so it can be tested without any network
+  access or real Wix credentials.
+- **No Wix write call anywhere in this PR** — `WixProductImporter` never calls an update/PATCH
+  endpoint, only the pre-existing read client and the two new read-only methods above.
+
+**Verified:** `pytest tests/` — 1065 passed (+24 new: 6 client-level fixture tests in
+`test_wix_product_details_client.py`, 8 importer tests in `test_wix_import_service.py` covering
+every build-plan fixture scenario — no variants, multiple variants, no media, cover+samples,
+revision present, variant-based inventory, one-product-failure isolation, idempotent re-run —
+plus the 10 pre-existing PR02 tests picking up the new `list_assets`/`list_inventory` repository
+methods used by the importer tests); `ruff check src/` clean; `mypy` clean on every PR03 file
+(only the same 2 pre-existing, unrelated `core/config.py` errors surface transitively). Same
+single pre-existing flaky UVA failure as before, nothing new.
+
+**Not done — deliberately, not a gap:** this PR was never run against the real Wix API. Per
+the build plan ("Fixtures für: ...") PR03 is meant to be validated with fixtures, not live
+calls, and reading a production e-commerce catalog from an agent session is exactly the kind
+of external, business-visible action that should be a deliberate choice, not a side effect of
+writing code. The next natural verification step is a **real, credentialed dry run**
+(`WixProductImporter(...).run()` against the actual `WixProductsClient`/`WixProductDetailsClient`,
+pointed at production Wix, still read-only) — worth doing once PR04/PR05 exist too, so the
+resulting staging data can be reviewed end-to-end rather than piecemeal.

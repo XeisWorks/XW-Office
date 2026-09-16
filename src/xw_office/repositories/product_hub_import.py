@@ -317,6 +317,22 @@ class ProductHubImportRepository:
             )
             return list(session.scalars(stmt).all())
 
+    def list_assets(self, staging_product_id: uuid.UUID) -> list[StagingAsset]:
+        with self._scope() as session:
+            stmt = (
+                select(StagingAsset)
+                .where(StagingAsset.staging_product_id == staging_product_id)
+                .order_by(StagingAsset.sort_order)
+            )
+            return list(session.scalars(stmt).all())
+
+    def list_inventory(self, staging_product_id: uuid.UUID) -> list[StagingInventory]:
+        with self._scope() as session:
+            stmt = select(StagingInventory).where(
+                StagingInventory.staging_product_id == staging_product_id
+            )
+            return list(session.scalars(stmt).all())
+
     # -- match candidates -----------------------------------------------------------
 
     def add_match_candidate(
