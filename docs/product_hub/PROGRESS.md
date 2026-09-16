@@ -12,7 +12,8 @@ Update this file at the end of every PR.
 | PR01 | Canonical ORM schema and repositories | **Done, migration applied to Railway** | See below. |
 | PR02 | Import staging foundation | **Done** | See below. |
 | PR03 | Wix read importer | **Done (code), reads only via fixtures — never called against the live Wix API in this session** | See below. |
-| PR04–PR16 | — | Not started | |
+| PR04 | sevdesk read importer | **Done** | See below. |
+| PR05–PR16 | — | Not started | |
 
 ## PR01 detail
 
@@ -100,8 +101,9 @@ a backup/snapshot first.
   `add_inventory`/`add_category`/`add_variant` and `add_match_candidate`/`list_match_candidates`.
   `hash_payload()` is a stable (key-sorted) sha256 helper, reusable by the PR03–PR05 importers.
 - `src/xw_office/migrations/versions/010_product_hub_import_staging.py` — additive from head
-  `009_product_hub_core`, applied to Railway (`alembic current` → `010_product_hub_import_staging
-  (head)`).
+  `009_product_hub_core`. Claude's own `alembic upgrade head` attempt was blocked by the Claude
+  Code auto-mode classifier ("Production Deploy"); the user ran it manually in PowerShell instead
+  (confirmed: `alembic current` → `010_product_hub_import_staging (head)`).
 - `tests/unit/test_product_hub_import_repository.py` — 10 tests: idempotent re-ingest (same
   payload and changed payload, both without duplicating rows), payload-hash stability
   (key-order-independent), match-decision preservation across re-ingest, batch
@@ -160,3 +162,37 @@ writing code. The next natural verification step is a **real, credentialed dry r
 (`WixProductImporter(...).run()` against the actual `WixProductsClient`/`WixProductDetailsClient`,
 pointed at production Wix, still read-only) — worth doing once PR04/PR05 exist too, so the
 resulting staging data can be reviewed end-to-end rather than piecemeal.
+
+## PR04 detail
+
+**Code delivered:**
+- `src/xw_office/services/sevdesk/part_client.py` — one new, additive, read-only method on the
+  existing `PartClient`: `fetch_parts_raw` (raw, unparsed `/Part` payloads, same pagination as
+  the private `_fetch_parts`, kept fully independent of it/`list_parts`/`ensure_parts_cache` so
+  none of their existing, widely-used behavior can change).
+- `src/xw_office/services/product_hub/sevdesk_import.py` — `SevdeskPartImporter`: fetches every
+  raw Part, reuses the already-tested `_parse_part` (a pure function) for field extraction, and
+  stages one `staging_product` + one `staging_inventory` row (location `sevdesk`) + an optional
+  `staging_category` row per Part. `internalComment` is kept only in `normalized_fields` and is
+  never mapped onto a public description field (explicit build-plan rule). A Part without a SKU
+  is staged with a blank SKU — no placeholder like the legacy `ProductCatalogService`'s
+  `SEVDESK-<id>` is invented; that stays a matching-time decision (PR05/06). One failing Part
+  does not abort the batch (same isolation pattern as PR03, proven with a payload engineered to
+  fail JSON-hashing rather than a contrived "malformed" field that `_parse_part` already handles
+  defensively).
+- **No sevdesk write call anywhere in this PR.**
+
+**Verified:** `pytest tests/` — 1076 passed (+11 new: 2 `fetch_parts_raw` tests in
+`test_part_client.py`, 9 importer tests in `test_sevdesk_import_service.py` covering physical vs.
+digital `stockEnabled`, category mapping, no-category, blank-SKU handling, alternate stock field
+names, internal-comment isolation, single-part-failure isolation, and independent-batch re-runs);
+`ruff check src/` clean; `mypy` clean on `fetch_parts_raw`/the importer (the pre-existing errors
+that surface transitively — 2 in `core/config.py`, 2 in `services/http_client.py`, 3 in
+`part_client.py`'s existing `_parse_part`/`SevdeskPart` — are all confirmed identical on the
+pre-PR04 branch via `git stash -u`, none in code this PR touches). Same single pre-existing
+flaky UVA failure, nothing new.
+
+**Migration 010 status:** applied to Railway by the user via PowerShell (`alembic upgrade head`)
+after Claude's own attempt was blocked by the Claude Code auto-mode classifier as a "Production
+Deploy" action — confirmed via `alembic current` → `010_product_hub_import_staging (head)`.
+Future migrations (011+) will need the same manual step unless that classifier rule changes.

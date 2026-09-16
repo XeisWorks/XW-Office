@@ -194,6 +194,35 @@ class PartClient:
         logger.info("PartClient: fetched %s parts", len(rows))
         return rows
 
+    def fetch_parts_raw(self, *, max_pages: int = 20) -> list[dict[str, Any]]:
+        """Return raw, unparsed sevDesk Part payloads (Product Hub staging, PR04).
+
+        Mirrors ``_fetch_parts``'s pagination exactly but keeps the full original
+        payload instead of only the fields ``SevdeskPart`` parses, so a staging row can
+        retain ``raw_payload``/``payload_hash`` provenance. Deliberately independent of
+        ``_fetch_parts``/``list_parts``/``ensure_parts_cache`` so this addition cannot
+        change their existing, widely-used behavior.
+        """
+        rows: list[dict[str, Any]] = []
+        offset = 0
+        for _ in range(max_pages):
+            params = {"limit": _PAGE_SIZE, "offset": offset, "embed": "category,unity"}
+            try:
+                response = self._conn.get("/Part", params=params)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("PartClient.fetch_parts_raw failed at offset %s: %s", offset, exc)
+                break
+            payload = response.json()
+            objects = payload.get("objects") if isinstance(payload, dict) else None
+            if not isinstance(objects, list):
+                break
+            rows.extend(raw for raw in objects if isinstance(raw, dict))
+            if len(objects) < _PAGE_SIZE:
+                break
+            offset += _PAGE_SIZE
+        logger.info("PartClient: fetched %s raw parts", len(rows))
+        return rows
+
     def find_part_by_sku(self, sku: str) -> SevdeskPart | None:
         """Look up a single Part by its partNumber/SKU via GET /Part?partNumber=…."""
         try:

@@ -75,6 +75,28 @@ def test_list_parts_paginates() -> None:
     assert conn.calls[1][1]["offset"] == 100
 
 
+def test_fetch_parts_raw_returns_unparsed_dicts() -> None:
+    conn = _ConnStub(
+        [{"objects": [{"id": "10", "partNumber": "XW-4-001", "someExtraField": "kept"}]}]
+    )
+    client = PartClient(conn)  # type: ignore[arg-type]
+
+    rows = client.fetch_parts_raw()
+
+    assert rows == [{"id": "10", "partNumber": "XW-4-001", "someExtraField": "kept"}]
+
+
+def test_fetch_parts_raw_paginates_like_list_parts() -> None:
+    first_page = {"objects": [{"id": str(i), "partNumber": f"SKU-{i}"} for i in range(100)]}
+    second_page = {"objects": [{"id": "101", "partNumber": "SKU-101"}]}
+    conn = _ConnStub([first_page, second_page])
+    client = PartClient(conn)  # type: ignore[arg-type]
+
+    rows = client.fetch_parts_raw()
+
+    assert len(rows) == 101
+
+
 def test_list_parts_uses_cache_without_extra_http_calls() -> None:
     conn = _ConnStub(
         [
