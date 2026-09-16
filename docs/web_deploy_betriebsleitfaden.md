@@ -16,12 +16,16 @@ Ziel:
 - Auslöser im Normalfall: jeder Push nach `origin/main` (siehe `railway.toml` /
   Railway-GitHub-Verbindung). Kein separater "Deploy"-Klick noetig, wenn der Webhook
   zuverlaessig feuert.
-- **Bekannte Einschraenkung (Stand 2026-09-16):** Der GitHub-Webhook hat mehrfach nicht
-  zuverlaessig ausgeloest (zwei FAILED-Deployments am 15.09. abends ohne Build-/
-  Deploy-Log-Inhalt; ein Push am 16.09. hat 10+ Minuten lang **gar kein** neues
-  Deployment ausgeloest). Deshalb: nach jedem Push aktiv pruefen (Abschnitt 3) und im
-  Zweifel `railway up` als manuellen Ersatzweg nutzen (Abschnitt 6) - nicht blind
-  darauf vertrauen, dass der Push allein reicht.
+- **Geloester Vorfall (2026-09-15/16, siehe Abschnitt 3):** ein `startCommand`-Fehler
+  in `railway.toml` hat fuenf Deploys in Folge lautlos am Containerstart scheitern
+  lassen, unabhaengig vom Code-Inhalt. Seit Commit `c40ac50` behoben und bestaetigt.
+- **Weiterhin offen:** der GitHub-Webhook hat nach dem PR07-Push am 16.09. 10+ Minuten
+  lang **kein** neues Deployment ausgeloest (alle Deploys dieser Session liefen ueber
+  den manuellen `railway up`-Weg). Ob das am selben Vorfall lag oder eine eigene,
+  separate Webhook-Anbindungsfrage ist, ist nicht abschliessend geklaert. Deshalb:
+  nach jedem Push aktiv pruefen (Abschnitt 4) und im Zweifel `railway up` als
+  manuellen Ersatzweg nutzen (Abschnitt 6) - nicht blind darauf vertrauen, dass der
+  Push allein reicht.
 
 ## 2) Empfohlener Weg: `scripts\deploy_web.ps1`
 
@@ -55,10 +59,39 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\deploy_web.ps1 -Fall
 
 Log: `logs\deploy_web.log` (gleiches Muster wie `logs\xw_office_update.log`).
 
-## 3) Bekannter Vorfall: Deploys scheitern lautlos an der Startphase (seit 2026-09-15)
+## 3) Geloester Vorfall: Deploys scheitern lautlos an der Startphase (2026-09-15/16)
 
-Beobachtung (2x am 15.09. abends vor jeder Code-Aenderung dieses Leitfadens, 2x erneut
-am 16.09. bei PR07-Deploy-Versuchen - vier von vier Versuchen):
+**Ursache gefunden und behoben (2026-09-16, Commit `c40ac50`):** `railway.toml` hatte ein
+explizites `[deploy].startCommand`:
+
+```toml
+startCommand = "PYTHONPATH=src python -m uvicorn xw_office.web.app:app --host 0.0.0.0 --port $PORT"
+```
+
+Das wurde am 15.09. um 09:32/09:38 Uhr als vermeintlicher Fix fuer ein anderes Problem
+ergaenzt (`8c76047`, `2d2f0b7`) - **noch nie erfolgreich deployt**, bevor die
+Fehlschlaege abends begannen. `PYTHONPATH=src ...` ist eine Shell-Syntax
+(Variablenzuweisung vor dem Befehl); Railways `startCommand` laeuft bei
+Dockerfile-Builds nicht garantiert durch eine Shell wie `Dockerfile.web`s eigenes
+`CMD ["sh", "-c", "..."]`. Ohne Shell wird `PYTHONPATH=src` als Programmname
+interpretiert -> der Container startet gar nicht erst, **bevor** Python ueberhaupt
+laeuft - exakt deckungsgleich mit der Beobachtung "Build erfolgreich, Deploy-Logs
+komplett leer".
+
+`Dockerfile.web` macht dasselbe bereits korrekt (`ENV PYTHONPATH=/app/src` fest im
+Image, `CMD` mit echtem `sh -c` und `${PORT:-8000}`-Fallback) - das
+`startCommand`-Override war ueberfluessig und hat genau das kaputt gemacht, was es
+reparieren sollte. Fix: die Zeile aus `railway.toml` entfernt, Railway faellt jetzt auf
+das Dockerfile-`CMD` zurueck. Naechster Deploy-Versuch (`dd87c443`) war sofort
+erfolgreich.
+
+**Lehre fuer kuenftige Aenderungen an `railway.toml`/Start-Kommandos:** eine Aenderung
+an `startCommand`/`Procfile` ist selbst ein Deploy-relevanter Code-Pfad und muss wie
+jede andere Aenderung durch einen tatsaechlichen, beobachteten Deploy bestaetigt werden -
+nicht nur "sollte funktionieren, sieht plausibel aus".
+
+Beobachtung waehrend der ungeloesten Phase (2x am 15.09. abends, 3x am 16.09. vor dem
+Fix - fuenf von fuenf Versuchen mit identischem Muster):
 
 - `railway logs --build <id>` zeigt einen vollstaendig erfolgreichen Build (inkl. Image
   Push), auch mit den seit PR07 neuen Abhaengigkeiten `sqlalchemy`/`psycopg2-binary`/
@@ -74,16 +107,14 @@ am 16.09. bei PR07-Deploy-Versuchen - vier von vier Versuchen):
   --host 0.0.0.0 --port <PORT>`), identischen Abhaengigkeiten (nur
   `requirements-web.txt`, frische venv) und ohne `DATABASE_URL` startet fehlerfrei und
   beantwortet `/health` mit 200.
-- Die Build-Logs erwaehnen "scheduling build on Metal builder" - vermutlich ein
-  (neuerer) Railway-Builder/Runtime-Pfad, der fuer diesen Service aktuell gestoert ist.
+- Die Build-Logs erwaehnen "scheduling build on Metal builder" - das war eine
+  Ablenkung, keine Ursache; der eigentliche Fehler lag in `railway.toml` (siehe oben).
 
-**Einschaetzung:** kein Code-Problem dieses Repos, sondern eine Railway-seitige
-Instabilitaet fuer den Service "XW-Content-Web". Vor weiterem Debugging hier zuerst:
-
-1. Im Railway-Dashboard (nicht nur CLI) direkt nachsehen - die Web-UI zeigt teils mehr
-   Diagnosedetails als `railway logs`.
-2. Falls das Problem anhaelt: Railway-Support kontaktieren bzw. Status-Page pruefen.
-3. Erneuter Versuch zu einem spaeteren Zeitpunkt, statt wiederholt blind zu retryen.
+**Tatsaechliche Ursache:** ein `startCommand`-Override in `railway.toml`, nicht die
+Railway-Plattform. "Leere Deploy-Logs trotz erfolgreichem Build" bedeutet: der
+Container-Prozess startet gar nicht erst - bei einem Docker-Build zuerst
+`railway.toml`s `[deploy].startCommand` pruefen, bevor man Plattforminstabilitaet
+vermutet oder Zeit in wiederholte blinde Retries steckt.
 
 ## 4) Deploy-Status manuell pruefen
 
@@ -95,10 +126,10 @@ railway logs --deployment <deployment-id>
 railway logs --http --status ">=400" --lines 50
 ```
 
-- `railway logs --build`/`--deployment` waren bei allen vier bisher beobachteten
-  fehlgeschlagenen Deployments inhaltsleer (siehe Abschnitt 3). Bei einem
-  FAILED-Status ohne erkennbaren Grund in den Logs: nicht in leeren Logs graben,
-  sondern Abschnitt 3 pruefen und ggf. erneut deployen (Abschnitt 6).
+- `railway logs --build`/`--deployment` waren bei allen fuenf Deployments des geloesten
+  Vorfalls inhaltsleer (siehe Abschnitt 3) - leere Deploy-Logs trotz erfolgreichem Build
+  sind ein starkes Signal fuer ein `railway.toml`/`startCommand`-Problem, nicht fuer
+  einen Python-Fehler.
 
 ## 5) Schlankes Web-Image: was es enthaelt und warum
 

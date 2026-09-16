@@ -15,7 +15,7 @@ Update this file at the end of every PR.
 | PR04 | sevdesk read importer | **Done** | See below. |
 | PR05 | Excel import and matching | **Done** | See below. |
 | PR06 | Import commit service + curated grouping | **Done** | See below. |
-| PR07 | Product Hub Read API | **Code done, merged to main, pushed — Railway deploy currently blocked by a platform-side issue, not a code issue (see below and docs/web_deploy_betriebsleitfaden.md §3)** | See below. |
+| PR07 | Product Hub Read API | **Done and confirmed live on Railway** (`/api/v1/products` → 401 on the production domain) | See below. |
 | PR08–PR16 | — | Not started | |
 
 ## PR01 detail
@@ -475,24 +475,31 @@ an isolated venv (see above) — not just this repo's full desktop environment.
 
 **No migration needed:** PR07 only reads through PR01's existing schema.
 
-**Deploy status (2026-09-16):** merged to `main` and pushed to `origin/main`
-(`b93310e..126016c`, fast-forward). The GitHub→Railway auto-deploy webhook did not trigger a
-new build within 10+ minutes, so the manual fallback (`railway up --service XW-Content-Web`)
-was used instead — four consecutive attempts (2 pre-existing from 2026-09-15 evening, before
-any of this work; 2 from this session) all failed at the deploy/start stage with **zero**
-log output, despite every build succeeding cleanly (including the new `sqlalchemy`/
-`psycopg2-binary`/`python-dotenv` dependencies installing without issue). Ruled out as a code
-problem by reproducing the exact container command (`python -m uvicorn xw_office.web.app:app
---host 0.0.0.0 --port <PORT>`) locally with only `requirements-web.txt` installed and no
-`DATABASE_URL` set (matches the real service's configuration — confirmed via
-`railway variables --json`, names only, per this repo's secret-handling convention): starts
-cleanly, `/health` returns 200. The currently-live production deployment (2026-09-10) remains
-healthy throughout (`https://studio.xeisworks.at/health` → 200); `/api/v1/products` → 404
-there confirms PR07's new code is simply not live yet, not that anything is broken. Full
-write-up, including why this looks like a Railway platform/builder issue rather than an
-application bug, is in `docs/web_deploy_betriebsleitfaden.md` §3 — check that first before
-spending more time on it, and prefer the Railway dashboard UI over `railway logs` for further
-diagnosis since the CLI's historical log retrieval has been unhelpful for these failures.
+**Deploy status (2026-09-16): live and confirmed.** Merged to `main` and pushed to
+`origin/main` (`b93310e..126016c`, fast-forward). Five consecutive deploy attempts (2
+pre-existing from 2026-09-15 evening, before any of this work; 3 from this session) failed at
+the container-start stage with **zero** log output, despite every build succeeding cleanly
+(including the new `sqlalchemy`/`psycopg2-binary`/`python-dotenv` dependencies). Root cause
+found: `railway.toml` had a `[deploy].startCommand` override
+(`PYTHONPATH=src python -m uvicorn ...`) added 2026-09-15 09:32/09:38 as an attempted fix for
+an unrelated issue, never validated against a real deploy before the failures started — that
+command string is shell syntax (`VAR=value cmd`), and Railway's `startCommand` for a
+Dockerfile-builder service is not guaranteed to run through a shell the way
+`Dockerfile.web`'s own `CMD ["sh", "-c", "..."]` does, so the container never got as far as
+starting Python. `Dockerfile.web` already sets `PYTHONPATH` correctly via `ENV`, making the
+override redundant as well as broken. Fix: removed the `startCommand` line
+(`c40ac50`) so Railway falls back to the Dockerfile's own `CMD`. Confirmed on the next deploy
+attempt (`dd87c443`): `SUCCESS`, and `https://studio.xeisworks.at/api/v1/products` → `401`
+(was `404` before this fix — the endpoint now genuinely exists in production). Full write-up
+in `docs/web_deploy_betriebsleitfaden.md` §3, including the lesson that a `startCommand`/
+`Procfile` change needs the same "confirmed by an actual observed deploy" bar as any other
+code change — not just "looks plausible."
+
+**Still open, separate from the above:** the GitHub→Railway auto-deploy webhook did not
+trigger a new build within 10+ minutes after the initial PR07 push — every deploy in this
+session went through the manual `railway up` fallback instead. Not yet root-caused; may or
+may not be related to the `startCommand` incident. Worth confirming on the next ordinary push
+to `main` whether the webhook fires on its own now.
 
 **Deploy tooling added alongside this investigation:** `scripts/deploy_web.ps1` (PC-independent,
 runs the exact CI quality gate, verifies branch/upstream/clean tree, pushes, watches Railway for
