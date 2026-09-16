@@ -6,6 +6,7 @@ from xw_office.repositories.digital_license_fulfillment import DigitalLicenseFul
 from xw_office.repositories.expense_check import ExpenseCheckRepository
 from xw_office.repositories.pc_registry import PcRegistryRepository
 from xw_office.repositories.plc_shipment import PlcShipmentRepository
+from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.settings_kv import SettingKvRepository
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "ExpenseCheckRepository",
     "PcRegistryRepository",
     "PlcShipmentRepository",
+    "ProductHubRepository",
     "SettingKvRepository",
 ]

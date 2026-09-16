@@ -162,3 +162,14 @@ customer_aftercare:
     inbox_seconds: 300
     due_check_seconds: 60
     wix_order_check_seconds: 60
+
+product_hub:
+  # XW Product Hub migration flags (docs/product_hub/). Off until the matching PR
+  # explicitly enables it for its scope; inventory_master_enabled stays false until
+  # PR15's cutover preconditions are verified.
+  catalog_read_enabled: false
+  catalog_write_enabled: false
+  sync_push_enabled: false
+  inventory_shadow_enabled: false
+  inventory_master_enabled: false
+  shared_catalog_enabled: false

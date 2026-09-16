@@ -266,6 +266,23 @@ class CustomerAftercareSection:
 
 
 @dataclass(frozen=True)
+class ProductHubSection:
+    """XW Product Hub migration feature flags (docs/product_hub/, build-plan §4).
+
+    Kept off by default until each corresponding PR explicitly turns a flag on for its
+    scope; ``inventory_master_enabled`` in particular must stay false until the PR15
+    cutover preconditions are verified (see docs/product_hub/XW_PRODUCT_HUB_CODEX_5_6_LUNA_BUILD_PLAN.md).
+    """
+
+    catalog_read_enabled: bool = False
+    catalog_write_enabled: bool = False
+    sync_push_enabled: bool = False
+    inventory_shadow_enabled: bool = False
+    inventory_master_enabled: bool = False
+    shared_catalog_enabled: bool = False
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """Immutable application configuration assembled from YAML + env."""
     app: AppSection = field(default_factory=AppSection)
@@ -280,6 +297,7 @@ class AppConfig:
     digital_licenses: DigitalLicensesSection = field(default_factory=DigitalLicensesSection)
     transfers: TransfersSection = field(default_factory=TransfersSection)
     customer_aftercare: CustomerAftercareSection = field(default_factory=CustomerAftercareSection)
+    product_hub: ProductHubSection = field(default_factory=ProductHubSection)
     database_url: str = ""
     fernet_master_key: str = ""
 

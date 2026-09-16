@@ -7,11 +7,35 @@ from xw_office.models.digital_license_fulfillment import DigitalLicenseFulfillme
 from xw_office.models.expense_check import ExpenseIgnoreRule, ExpenseShiftEntry
 from xw_office.models.pc_registry import PcRegistry
 from xw_office.models.plc_shipment import PlcShipment
+from xw_office.models.product_hub import (
+    AuditLog,
+    Category,
+    ChannelCategoryMapping,
+    ChannelMapping,
+    PriceList,
+    PrintRule,
+    Product,
+    ProductAsset,
+    ProductCategory,
+    ProductEdition,
+    ProductFamily,
+    ProductIdentifier,
+    ProductImprovement,
+    ProductPrice,
+    ProductSkuAlias,
+    ProductTag,
+    ProductVariant,
+    Tag,
+)
 from xw_office.models.settings_kv import SettingKV
 
 __all__ = [
     "ApiSecret",
+    "AuditLog",
     "Base",
+    "Category",
+    "ChannelCategoryMapping",
+    "ChannelMapping",
     "CustomerAftercareCase",
     "CustomerAftercareItem",
     "DigitalLicenseFulfillment",
@@ -19,5 +43,19 @@ __all__ = [
     "ExpenseShiftEntry",
     "PcRegistry",
     "PlcShipment",
+    "PriceList",
+    "PrintRule",
+    "Product",
+    "ProductAsset",
+    "ProductCategory",
+    "ProductEdition",
+    "ProductFamily",
+    "ProductIdentifier",
+    "ProductImprovement",
+    "ProductPrice",
+    "ProductSkuAlias",
+    "ProductTag",
+    "ProductVariant",
     "SettingKV",
+    "Tag",
 ]
