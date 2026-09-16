@@ -13,8 +13,9 @@ import datetime
 import re
 import uuid
 from collections.abc import Generator
+from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
@@ -22,10 +23,14 @@ from xw_office.models.product_hub import (
     AuditLog,
     Category,
     ChannelMapping,
+    PriceList,
+    PrintRule,
     Product,
     ProductAsset,
     ProductCategory,
     ProductIdentifier,
+    ProductImprovement,
+    ProductPrice,
     ProductSkuAlias,
     ProductTag,
     ProductVariant,
@@ -64,6 +69,8 @@ class ProductFilter:
     active: bool | None = None
     family_id: uuid.UUID | None = None
     search: str | None = None
+    limit: int | None = None
+    offset: int = 0
 
 
 @dataclass(frozen=True)
@@ -76,6 +83,20 @@ class ResolvedSku:
     #: product_sku_alias row matched — the matching engine (PR05) uses this to tell
     #: match_method "exact_sku" apart from "sku_alias".
     matched_via: str = "sku"
+
+
+def _apply_product_filters(stmt: "Select[Any]", filters: ProductFilter) -> "Select[Any]":
+    """Shared WHERE-clause builder for :meth:`list_products`/:meth:`count_products`."""
+    if filters.status is not None:
+        stmt = stmt.where(Product.status == filters.status)
+    if filters.active is not None:
+        stmt = stmt.where(Product.active == filters.active)
+    if filters.family_id is not None:
+        stmt = stmt.where(Product.family_id == filters.family_id)
+    if filters.search:
+        needle = f"%{filters.search.strip()}%"
+        stmt = stmt.where(Product.name.ilike(needle))
+    return stmt
 
 
 class ProductHubRepository:
@@ -105,18 +126,16 @@ class ProductHubRepository:
     def list_products(self, filters: ProductFilter | None = None) -> list[Product]:
         filters = filters or ProductFilter()
         with self._scope() as session:
-            stmt = select(Product)
-            if filters.status is not None:
-                stmt = stmt.where(Product.status == filters.status)
-            if filters.active is not None:
-                stmt = stmt.where(Product.active == filters.active)
-            if filters.family_id is not None:
-                stmt = stmt.where(Product.family_id == filters.family_id)
-            if filters.search:
-                needle = f"%{filters.search.strip()}%"
-                stmt = stmt.where(Product.name.ilike(needle))
-            stmt = stmt.order_by(Product.name)
+            stmt = _apply_product_filters(select(Product), filters).order_by(Product.name)
+            if filters.limit is not None:
+                stmt = stmt.limit(filters.limit).offset(filters.offset)
             return list(session.scalars(stmt).all())
+
+    def count_products(self, filters: ProductFilter | None = None) -> int:
+        filters = filters or ProductFilter()
+        with self._scope() as session:
+            stmt = _apply_product_filters(select(func.count(Product.id)), filters)
+            return int(session.scalar(stmt) or 0)
 
     def create_product(
         self,
@@ -346,6 +365,32 @@ class ProductHubRepository:
             )
             return list(session.scalars(stmt).all())
 
+    # -- prices / print rules / improvements (read-only, used by PR07's readiness calc) --
+
+    def list_prices(self, variant_id: uuid.UUID) -> list[ProductPrice]:
+        with self._scope() as session:
+            stmt = select(ProductPrice).where(ProductPrice.variant_id == variant_id).order_by(
+                ProductPrice.valid_from.desc()
+            )
+            return list(session.scalars(stmt).all())
+
+    def get_price_list_by_code(self, code: str) -> PriceList | None:
+        with self._scope() as session:
+            return session.scalar(select(PriceList).where(PriceList.code == code))
+
+    def get_print_rule(self, variant_id: uuid.UUID) -> PrintRule | None:
+        with self._scope() as session:
+            return session.scalar(select(PrintRule).where(PrintRule.variant_id == variant_id))
+
+    def list_improvements(self, product_id: uuid.UUID) -> list[ProductImprovement]:
+        with self._scope() as session:
+            stmt = (
+                select(ProductImprovement)
+                .where(ProductImprovement.product_id == product_id)
+                .order_by(ProductImprovement.created_at.desc())
+            )
+            return list(session.scalars(stmt).all())
+
     # -- channel mappings / cross-source lookups (used by the PR05 matching engine) --
 
     def get_channel_mapping(
@@ -462,6 +507,10 @@ class ProductHubRepository:
             session.add(tag)
             session.flush()
             return tag
+
+    def find_tag_by_code(self, code: str) -> Tag | None:
+        with self._scope() as session:
+            return session.scalar(select(Tag).where(Tag.code == code))
 
     def list_product_tags(self, product_id: uuid.UUID) -> list[ProductTag]:
         with self._scope() as session:

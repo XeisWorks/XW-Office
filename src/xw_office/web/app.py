@@ -1,6 +1,7 @@
 """Minimal, secure-by-default FastAPI foundation for the Content Studio."""
 from __future__ import annotations
 
+from collections.abc import Generator
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -9,12 +10,24 @@ import secrets
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office import __version__
 from xw_office.content import BrandProfile, BrandProfileCatalog
+from xw_office.core.database import session_scope
+from xw_office.repositories.product_hub import ProductHubRepository
+from xw_office.web.routers.products import build_products_router
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _bearer = HTTPBearer(auto_error=False)
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "ja", "on"}
 
 
 @dataclass(frozen=True)
@@ -25,6 +38,15 @@ class ContentWebSettings:
     public_url: str = "http://127.0.0.1:8000"
     environment: str = "development"
     brand_config_path: Path = _REPOSITORY_ROOT / "config" / "content_brands.yaml"
+    #: Railway's internal Postgres URL. Empty means "no DB" — Product Hub endpoints
+    #: then fail closed with 503, same pattern as the bootstrap token below.
+    database_url: str = ""
+    #: Kill switch independent of code changes; see docs/product_hub/ build-plan §4.
+    #: Defaults to on *given* a configured database_url, since PR07 is the first
+    #: consumer of `product_hub.catalog_read_enabled` — the desktop AppConfig's own
+    #: copy of this flag (core/config.py) defaults to off for the same reason in
+    #: reverse: nothing read it before this PR existed.
+    product_hub_catalog_read_enabled: bool = True
 
     @classmethod
     def from_environment(cls) -> "ContentWebSettings":
@@ -32,6 +54,10 @@ class ContentWebSettings:
             bootstrap_token=os.getenv("XW_CONTENT_BOOTSTRAP_TOKEN", "").strip(),
             public_url=os.getenv("XW_CONTENT_PUBLIC_URL", "http://127.0.0.1:8000").strip(),
             environment=os.getenv("XW_CONTENT_ENVIRONMENT", "development").strip(),
+            database_url=os.getenv("DATABASE_URL", "").strip(),
+            product_hub_catalog_read_enabled=_env_flag(
+                "XW_PRODUCT_HUB_CATALOG_READ_ENABLED", default=True
+            ),
         )
 
 
@@ -104,6 +130,32 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
                 detail="Invalid or missing bearer token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+
+    # -- Product Hub (PR07): DB session factory, gated by database_url + the kill switch --
+
+    _engine = create_engine(resolved.database_url, pool_pre_ping=True, future=True) if resolved.database_url else None
+    _session_factory: sessionmaker[Session] | None = (
+        sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False, future=True)
+        if _engine is not None
+        else None
+    )
+
+    def require_product_hub_enabled() -> None:
+        if _session_factory is None or not resolved.product_hub_catalog_read_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Product Hub API is not configured/enabled",
+            )
+
+    def get_product_repo() -> Generator[ProductHubRepository, None, None]:
+        assert _session_factory is not None  # guarded by require_product_hub_enabled above
+        with session_scope(_session_factory) as session:
+            yield ProductHubRepository(session)
+
+    app.include_router(
+        build_products_router(get_product_repo),
+        dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
+    )
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def landing() -> str:

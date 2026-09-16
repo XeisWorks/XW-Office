@@ -4,3 +4,10 @@ fastapi>=0.115,<1
 pydantic>=2,<3
 PyYAML>=6,<7
 uvicorn>=0.34,<1
+# Product Hub Read API (PR07): xw_office.repositories.product_hub /
+# xw_office.core.database pull these in transitively (SQLAlchemy for the ORM/session,
+# psycopg2 as the Postgres driver, python-dotenv because core.config imports it even
+# though load_config() itself is never called from this lean web app).
+sqlalchemy>=2,<3
+psycopg2-binary>=2.9,<3
+python-dotenv>=1,<2

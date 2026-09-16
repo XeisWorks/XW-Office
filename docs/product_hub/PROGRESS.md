@@ -15,7 +15,8 @@ Update this file at the end of every PR.
 | PR04 | sevdesk read importer | **Done** | See below. |
 | PR05 | Excel import and matching | **Done** | See below. |
 | PR06 | Import commit service + curated grouping | **Done** | See below. |
-| PR07–PR16 | — | Not started | |
+| PR07 | Product Hub Read API | **Done** | See below. |
+| PR08–PR16 | — | Not started | |
 
 ## PR01 detail
 
@@ -405,3 +406,71 @@ pre-existing flaky UVA failure, nothing new.
 preview/diff, safe 1:1 import, explicit curated grouping). PR07 (Product Hub Read API) is the
 natural next step — it is the first PR that gives XW-Office Desktop and the future WebUI
 anything to actually call.
+
+## PR07 detail
+
+**This is the first PR that changes the deployed Railway web service** (`xw-content-web`, built
+from `Dockerfile.web`/`requirements-web.txt`) rather than only the desktop package — everything
+before PR07 only added code the desktop app and its SQLite-backed tests could reach.
+
+**Code delivered:**
+- `src/xw_office/web/schemas/products.py` — Pydantic response models
+  (`ProductListItem`/`ProductDetail`/`ProductVariantOut`/`ProductAssetOut`/
+  `ProductImprovementOut`/`ChannelMappingOut`/`AuditLogOut`/`ProductReadinessOut`/
+  `ReadinessSummaryOut`, generic `Page[T]`). Never serializes an ORM object directly
+  (`from_attributes=True` + explicit fields only); `row_version` is included on product
+  responses per the build plan's "editable internal responses" rule. `ProductAssetOut.uri` is
+  included — that is fine for *this* bearer-token-protected internal API (Desktop needs the
+  network path to find/print files) and is explicitly documented as **not** reusable as-is for
+  PR12's future public/dealer-share schema, which must define its own, separately
+  field-whitelisted models instead.
+- `src/xw_office/web/routers/products.py` — `build_products_router(get_repo)`, a factory
+  function (mirrors `create_app(settings)`'s own injection style) so the router stays testable
+  and reusable without importing `web/app.py`'s closures. Implements every endpoint the build
+  plan lists: `GET /api/v1/products` (search/status/active/family_id filters, real DB-level
+  limit/offset pagination), `GET /api/v1/products/{id}`, `GET /api/v1/products/by-sku/{sku}`,
+  `.../variants`, `.../assets`, `.../improvements`, `.../channels`, `.../audit`, plus
+  `.../{id}/readiness` and `GET /api/v1/catalog/readiness-summary`.
+- `src/xw_office/services/product_hub/readiness.py` — `evaluate_product_readiness`/
+  `build_readiness_summary`, pure read-only functions (a readiness *check* must never have a
+  side effect — caught and fixed a bug during development where the B2B-tag check would have
+  silently created a `Tag` row on first use). Wix-ready/B2B-ready/Print-ready/sevdesk-ready per
+  the deep-research doc's own criteria; two criteria are explicitly documented as approximated
+  (Wix/sevdesk "category mapped" uses internal-category/channel-mapping presence as a proxy,
+  since `channel_category_mapping` has no read/write support yet) rather than silently faked.
+  Retail/B2B price and print-profile checks query the real `product_price`/`print_rule` tables —
+  today that means most products correctly show as *not* ready, since PR06 deliberately never
+  auto-creates prices and no print rule has been curated yet. That is the intended, honest
+  behavior, not a bug to "fix" by lowering the bar.
+- `src/xw_office/web/app.py` — extends `ContentWebSettings` with `database_url` (from
+  `DATABASE_URL`, Railway's own internal Postgres URL — no YAML/`config/default.yaml` needed,
+  since that file is deliberately **not** copied into `Dockerfile.web`'s image) and
+  `product_hub_catalog_read_enabled` (from `XW_PRODUCT_HUB_CATALOG_READ_ENABLED`, defaults to
+  `true`, a kill switch independent of a code deploy). Builds a SQLAlchemy engine/session
+  factory only when `database_url` is set; `require_product_hub_enabled` fails closed with 503
+  when the DB isn't configured or the flag is off, matching the existing
+  `require_bootstrap_token`'s fail-closed-on-503 pattern exactly. The products router is
+  included with **both** the existing bootstrap-token dependency and this new one.
+- `requirements-web.txt` gains `sqlalchemy`, `psycopg2-binary`, `python-dotenv` — the last one
+  because `xw_office.core.database`/`xw_office.repositories.product_hub` transitively import
+  `xw_office.core.config`, which imports `python-dotenv` at module level even though this web
+  app never calls `load_config()` itself. Verified this is sufficient and correct by installing
+  *only* `requirements-web.txt` into a throwaway venv and round-tripping real HTTP requests
+  through `TestClient` against a SQLite-backed app instance — confirms the lean production image
+  will actually work, not just "imports fine with the full desktop dependency set installed."
+- `ProductHubRepository` gained: DB-level pagination (`ProductFilter.limit`/`.offset`,
+  `count_products`), `list_prices`/`get_price_list_by_code`, `get_print_rule`,
+  `list_improvements`, `find_tag_by_code` (the read-only counterpart to `get_or_create_tag`,
+  needed once the readiness side-effect bug above was found and fixed) — all additive.
+
+**Verified:** `pytest tests/` — 1154 passed (+17 new in `test_product_hub_web_api.py`: auth
+(401)/DB-not-configured (503)/flag-disabled (503) fail-closed behavior, every endpoint against a
+seeded product, 404s for unknown id/SKU, pagination, and search filtering; +7 new in
+`test_product_hub_readiness.py` including the explicit "never writes a tag" regression test);
+`ruff check src/` clean; `mypy` clean on every file this touched; existing
+`test_content_web.py`/`test_content_brands.py` still pass unmodified (no regression to the
+already-deployed Content Studio endpoints). Same single pre-existing flaky UVA failure, nothing
+new. Additionally smoke-tested against the real, lean `requirements-web.txt` dependency set in
+an isolated venv (see above) — not just this repo's full desktop environment.
+
+**No migration needed:** PR07 only reads through PR01's existing schema.
