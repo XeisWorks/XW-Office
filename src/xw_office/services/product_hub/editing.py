@@ -1,15 +1,18 @@
-"""Product Hub edit API service layer (PR09).
+"""Product Hub edit API service layer (PR09/PR10).
 
 Every mutation here runs inside one DB transaction (via ``session_scope``) and writes
-exactly one :class:`~xw_office.models.product_hub.AuditLog` row alongside the business
-change — matching the pattern already established by ``grouping.py`` (PR06). Optimistic
-locking (``expected_row_version`` -> :class:`OptimisticLockError` -> HTTP 409 at the
-router layer) is enforced by the repository methods this service calls, not here.
+exactly one :class:`~xw_office.models.product_hub.AuditLog` row *and* one
+:class:`~xw_office.models.product_hub_sync.OutboxEvent` row alongside the business
+change — matching the pattern already established by ``grouping.py`` (PR06) for
+audit, and the build plan's PR10 "Outbox-Regel" (business change + outbox event in
+the *same* transaction) for the outbox. Optimistic locking (``expected_row_version``
+-> :class:`OptimisticLockError` -> HTTP 409 at the router layer) is enforced by the
+repository methods this service calls, not here.
 
 Scope (per docs/product_hub build plan PR09): product/variant fields, tags,
 identifiers, asset metadata, prices (append-only, never mutated in place), print
-rules, and the improvement/edition workflow. This service does not touch external
-channels — that starts with PR10's outbox.
+rules, and the improvement/edition workflow. Outbox events are written here but
+nothing consumes them yet — no handler is registered until PR11's Wix push adapter.
 """
 from __future__ import annotations
 
@@ -32,6 +35,7 @@ from xw_office.models.product_hub import (
     Tag,
 )
 from xw_office.repositories.product_hub import ProductHubRepository
+from xw_office.repositories.product_hub_sync import append_outbox_event
 
 #: Fields the edit API allows on each entity — an explicit allowlist so a stray/renamed
 #: kwarg from a request body fails fast with a clear 400 instead of silently touching an
@@ -94,6 +98,13 @@ class EditingService:
                 changed_fields=sorted(changes),
                 after_data={k: str(v) for k, v in changes.items()},
             )
+            append_outbox_event(
+                session,
+                aggregate_type="product",
+                aggregate_id=product_id,
+                event_type="product.updated",
+                payload={k: str(v) for k, v in changes.items()},
+            )
             return updated
 
     def update_variant(
@@ -113,6 +124,13 @@ class EditingService:
                 action="update",
                 changed_fields=sorted(changes),
                 after_data={k: str(v) for k, v in changes.items()},
+            )
+            append_outbox_event(
+                session,
+                aggregate_type="product",
+                aggregate_id=updated.product_id,
+                event_type="product.updated",
+                payload={"variant_id": str(variant_id), **{k: str(v) for k, v in changes.items()}},
             )
             return updated
 
@@ -134,6 +152,13 @@ class EditingService:
                 changed_fields=["tags"],
                 after_data={"tag_code": tag_code},
             )
+            append_outbox_event(
+                session,
+                aggregate_type="product",
+                aggregate_id=product_id,
+                event_type="product.updated",
+                payload={"tags_added": [tag_code]},
+            )
             return tag
 
     def remove_tag(self, product_id: uuid.UUID, *, tag_id: uuid.UUID, actor: str = "") -> None:
@@ -148,6 +173,13 @@ class EditingService:
                 action="remove_tag",
                 changed_fields=["tags"],
                 before_data={"tag_id": str(tag_id)},
+            )
+            append_outbox_event(
+                session,
+                aggregate_type="product",
+                aggregate_id=product_id,
+                event_type="product.updated",
+                payload={"tags_removed": [str(tag_id)]},
             )
 
     def add_identifier(
@@ -182,6 +214,13 @@ class EditingService:
                 changed_fields=["identifiers"],
                 after_data={"scheme": scheme, "value": value},
             )
+            append_outbox_event(
+                session,
+                aggregate_type="product",
+                aggregate_id=product_id,
+                event_type="product.updated",
+                payload={"identifier_added": {"scheme": scheme, "value": value}},
+            )
             return identifier
 
     def remove_identifier(
@@ -198,6 +237,13 @@ class EditingService:
                 action="remove_identifier",
                 changed_fields=["identifiers"],
                 before_data={"identifier_id": str(identifier_id)},
+            )
+            append_outbox_event(
+                session,
+                aggregate_type="product",
+                aggregate_id=product_id,
+                event_type="product.updated",
+                payload={"identifier_removed": str(identifier_id)},
             )
 
     # -- assets / print rules ------------------------------------------------------
@@ -217,6 +263,13 @@ class EditingService:
                 action="update",
                 changed_fields=sorted(changes),
                 after_data={k: str(v) for k, v in changes.items()},
+            )
+            append_outbox_event(
+                session,
+                aggregate_type="product_asset",
+                aggregate_id=asset_id,
+                event_type="asset.changed",
+                payload={k: str(v) for k, v in changes.items()},
             )
             return updated
 
@@ -242,6 +295,13 @@ class EditingService:
                 action="upsert",
                 changed_fields=sorted(changes),
                 after_data={k: str(v) for k, v in changes.items()},
+            )
+            append_outbox_event(
+                session,
+                aggregate_type="print_rule",
+                aggregate_id=updated.id,
+                event_type="print_rule.updated",
+                payload={k: str(v) for k, v in changes.items()},
             )
             return updated
 
@@ -283,6 +343,17 @@ class EditingService:
                     "gross_amount": str(gross_amount) if gross_amount is not None else None,
                 },
             )
+            append_outbox_event(
+                session,
+                aggregate_type="product_variant",
+                aggregate_id=variant_id,
+                event_type="price.changed",
+                payload={
+                    "price_list_code": price_list_code,
+                    "net_amount": str(net_amount) if net_amount is not None else None,
+                    "gross_amount": str(gross_amount) if gross_amount is not None else None,
+                },
+            )
             return price
 
     # -- improvements / editions --------------------------------------------------
@@ -316,6 +387,13 @@ class EditingService:
                 changed_fields=["improvements"],
                 after_data={"description": description, "severity": severity},
             )
+            append_outbox_event(
+                session,
+                aggregate_type="product",
+                aggregate_id=product_id,
+                event_type="improvement.created",
+                payload={"description": description, "severity": severity},
+            )
             return improvement
 
     def update_improvement(
@@ -342,6 +420,13 @@ class EditingService:
                 action="update",
                 changed_fields=sorted(changes),
                 after_data={k: str(v) for k, v in changes.items()},
+            )
+            append_outbox_event(
+                session,
+                aggregate_type="product_improvement",
+                aggregate_id=improvement_id,
+                event_type="improvement.updated",
+                payload={k: str(v) for k, v in changes.items()},
             )
             return updated
 
@@ -374,5 +459,12 @@ class EditingService:
                 action="create_edition",
                 changed_fields=["editions"],
                 after_data={"label": label, "resolved_improvement_count": str(len(resolved_ids))},
+            )
+            append_outbox_event(
+                session,
+                aggregate_type="product_edition",
+                aggregate_id=edition.id,
+                event_type="edition.created",
+                payload={"product_id": str(product_id), "label": label},
             )
             return edition

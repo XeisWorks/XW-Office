@@ -18,7 +18,8 @@ Update this file at the end of every PR.
 | PR07 | Product Hub Read API | **Done and confirmed live on Railway** (`/api/v1/products` → 401 on the production domain) | See below. |
 | PR08 | Read-only WebUI/PWA | **Done and confirmed live on Railway** (`/app/` → 200, SPA routes fall back to `index.html`, `/api/v1/products` still 401 as before) | See below. |
 | PR09 | Edit API + WebUI editing + Verbesserungen/Auflagen | **Done (code + migration applied), edit API kept off in production pending a deliberate flip** | See below. |
-| PR10–PR16 | — | Not started | |
+| PR10 | Transactional outbox + sync foundation | **Done (schema + worker + wiring), migration applied — no consumer/handler yet** | See below. |
+| PR11–PR16 | — | Not started | |
 
 ## PR01 detail
 
@@ -648,3 +649,66 @@ the user's dashboard reconnect attempt — the Railway CLI's local project link
 `XW-Studio` → `XW-Office` folder rename (`railway link -p b9ca5990-...`), unrelated to
 the GitHub side but worth knowing if `railway` commands suddenly say "No linked project
 found" again after a future folder move.
+
+## PR10 detail
+
+**Migration `012_product_hub_sync_outbox`, applied to Railway Postgres:** the six
+schema-only tables from the data model spec — `outbox_event`, `sync_job`, `sync_item`,
+`sync_conflict`, `sync_cursor`, `external_payload_archive` — exactly as specified in
+`XW_PRODUCT_HUB_DATA_MODEL.yaml`. Naming stayed under alembic's 32-char
+`version_num` limit this time (`012_product_hub_sync_outbox`, 27 chars) — see
+migration 011's docstring for what happens if you don't.
+
+**Code delivered:**
+- `src/xw_office/models/product_hub_sync.py` (new) — the six ORM models, registered
+  in `models/__init__.py` alongside the existing product_hub/product_hub_import
+  modules so `Base.metadata` (and therefore both Alembic and the SQLite test suite)
+  sees them.
+- `src/xw_office/repositories/product_hub_sync.py` (new) — `append_outbox_event`, a
+  **plain function** (not a scope-owning repository method) that writes on the
+  *caller's* session, since the whole point is that it must commit inside the
+  caller's own transaction, never open its own. Also `SyncRepository` for the
+  worker side (`claim_outbox_events`/`mark_outbox_event_processed`/
+  `mark_outbox_event_failed`/`release_outbox_event`/`list_dead_events`) and basic
+  `sync_job`/`sync_conflict`/`sync_cursor` CRUD ready for PR11 to build on.
+- `src/xw_office/services/product_hub/outbox_worker.py` (new) — `OutboxWorker`:
+  claims available events, dispatches to a handler registered by `event_type`,
+  applies bounded exponential backoff on failure (default: 60s base, doubling, capped
+  at 1h, dead-lettered — i.e. excluded from further retries and surfaced via
+  `list_dead_events()` — after 8 attempts; all three are constructor overrides, not
+  hardcoded). Events whose `event_type` has **no registered handler** are released
+  without penalty rather than burning a retry attempt, since that's the expected
+  state for every event type right now — nothing registers a handler until PR11's
+  Wix push adapter exists. Deployment shape is deliberately left open per
+  `XW_PRODUCT_HUB_IMPLEMENTATION.yaml` (`worker.deployment:
+  separate_Railway_worker_or_periodic_worker`) — `process_once()` is transport-
+  agnostic; wiring an actual Railway cron/worker service is not part of this PR.
+- `src/xw_office/services/product_hub/editing.py` — every one of PR09's 11 mutating
+  methods now also calls `append_outbox_event` in the same transaction as its
+  `record_audit` call, per the build plan's "Outbox-Regel" (business change + outbox
+  event in the *same* DB transaction). Event types used: `product.updated` (product/
+  variant/tag/identifier edits — all product-aggregate-scoped), `asset.changed`,
+  `price.changed`, `print_rule.updated`, `improvement.created`/`improvement.updated`,
+  `edition.created` — the first four names come straight from the build plan's
+  "Eventtypen Beispiele"; the rest follow the same convention.
+
+**Deliberately not wired in this round:** `ProductHubRepository.create_product` and
+the PR06 `grouping.py`/PR06 `import_commit.py` write paths do **not** yet write
+outbox events (no `product.created` events from imports/grouping today). PR10 is
+scoped to PR09's edit surface — extending coverage to the import/grouping flows is a
+small, mechanical follow-up (same `append_outbox_event` call, same transaction) but
+touches already-shipped, already-verified code paths without a concrete near-term
+consumer, so it's deferred rather than done speculatively.
+
+**Verified locally:** 14 new tests (9 sync-repository: claim/backoff/dead-letter/
+no-handler-release + sync_job/sync_conflict/sync_cursor CRUD; 5 outbox-worker:
+handler dispatch, backoff growth/cap, dead-lettering) all pass; full backend suite
+at 1195/1196 (same one pre-existing flaky UVA test). No manual/browser verification
+possible since there is still no real handler to observe end-to-end — that's PR11's
+job.
+
+**Deployed:** migration applied directly via `alembic upgrade head`
+(confirmed via `alembic current` → `012_product_hub_sync_outbox`). Since
+`product_hub_edit_enabled` is still off in production, **no outbox events are
+actually being written yet** even after this deploy — the write path only exists
+behind PR09's still-disabled edit API. Code push/deploy: see the commit that follows.

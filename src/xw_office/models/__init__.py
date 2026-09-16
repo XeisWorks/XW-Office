@@ -37,6 +37,14 @@ from xw_office.models.product_hub_import import (
     StagingProduct,
     StagingVariant,
 )
+from xw_office.models.product_hub_sync import (
+    ExternalPayloadArchive,
+    OutboxEvent,
+    SyncConflict,
+    SyncCursor,
+    SyncItem,
+    SyncJob,
+)
 from xw_office.models.settings_kv import SettingKV
 
 __all__ = [
@@ -51,8 +59,10 @@ __all__ = [
     "DigitalLicenseFulfillment",
     "ExpenseIgnoreRule",
     "ExpenseShiftEntry",
+    "ExternalPayloadArchive",
     "ImportBatch",
     "ImportMatchCandidate",
+    "OutboxEvent",
     "PcRegistry",
     "PlcShipment",
     "PriceList",
@@ -75,5 +85,9 @@ __all__ = [
     "StagingInventory",
     "StagingProduct",
     "StagingVariant",
+    "SyncConflict",
+    "SyncCursor",
+    "SyncItem",
+    "SyncJob",
     "Tag",
 ]
