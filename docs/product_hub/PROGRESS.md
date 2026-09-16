@@ -13,7 +13,8 @@ Update this file at the end of every PR.
 | PR02 | Import staging foundation | **Done** | See below. |
 | PR03 | Wix read importer | **Done (code), reads only via fixtures — never called against the live Wix API in this session** | See below. |
 | PR04 | sevdesk read importer | **Done** | See below. |
-| PR05–PR16 | — | Not started | |
+| PR05 | Excel import and matching | **Done (import; cross-source matching is PR06)** | See below. |
+| PR06–PR16 | — | Not started | |
 
 ## PR01 detail
 
@@ -196,3 +197,66 @@ flaky UVA failure, nothing new.
 after Claude's own attempt was blocked by the Claude Code auto-mode classifier as a "Production
 Deploy" action — confirmed via `alembic current` → `010_product_hub_import_staging (head)`.
 Future migrations (011+) will need the same manual step unless that classifier rule changes.
+
+## PR05 detail
+
+**Product decision folded in (2026-09-16, from the user directly):** Amazon is **never** its
+own category or product family. It becomes a suggested `Amazon` tag plus `product_identifier`
+rows (`ASIN`/`FNSKU`/`ISBN13`) — consistent with the already-approved data model, where "Amazon"
+was already listed as a *tag* example, not a category.
+
+**Real file used:** the user placed the actual, current business workbook at
+`docs/Produktpalette.xlsx` (committed — this repo already keeps other real business PDFs
+directly under `docs/`, e.g. invoices and product covers, so this matches existing convention).
+
+**Code delivered:**
+- `src/xw_office/services/product_hub/excel_import.py` — `ExcelWorkbookImporter` plus three pure
+  parsing functions (`parse_produktpalette_rows`, `parse_amazon_rows`, `read_besetzungen`) kept
+  separate from the `openpyxl.load_workbook` call so the tricky part (multi-block sheet layout)
+  is unit-testable without any file I/O.
+  - `Produktpalette` is not one flat table — it is five "EDITION" blocks
+    (TANZLMUSI/BLECH4ER/BLECH7ER/MUSIKHEROES/BÖHMISCH), each with its own title row and its own
+    `Art.Nr./Titel/Beschreibung/SKG*/brutto/netto/netto` header row. Category comes from the
+    nearest preceding title row containing "EDITION"; anything outside an active header block
+    (subtitles, the "da Blechhauf'n" brand sub-label, the closing SKG legend) is skipped, not
+    guessed at.
+  - The sheet's two ambiguous "netto" columns (divisors `/1.05` vs `/1.1`, undocumented which is
+    correct) are **both staged, never picked between** — a mismatch beyond a small tolerance
+    becomes a `price_warning` for manual review, per the explicit build-plan rule.
+  - `Amazon` rows are merged onto the matching Produktpalette-staged row by SKU via the new
+    `ProductHubImportRepository.merge_normalized_fields` (shallow-merges into
+    `normalized_fields` instead of clobbering it the way `ingest_staging_product`'s upsert would);
+    ASIN/FNSKU/ISBN13 become `staging_identifier` rows, "Amazon" becomes a
+    `normalized_fields["suggested_tags"]` entry. An Amazon row with no matching Produktpalette
+    SKU still gets a minimal staging product so its identifiers are not lost, but — critically —
+    gets **no category**, only the tag.
+  - `Besetzungen` becomes a flat controlled-vocabulary list recorded on the batch's
+    `source_metadata` (`ImportBatch.set_batch_metadata`, new), not staged as products.
+  - `Händler` is recorded as present (`source_metadata`) but **deliberately not parsed** — it is
+    a non-tabular, multiple-mini-tables-per-row layout, and the build plan explicitly scopes it
+    as "nur kontrolliert" (controlled reference only, not auto-imported).
+  - `XeisWorks`/`MusikHeroes` are not touched at all in this PR — the approved data model marks
+    them `legacy_catalog_view`/`legacy_series_and_variant_relationship_reference`, evidence for
+    PR06's curated grouping later, not PR05 import material.
+- `ProductHubImportRepository` gains `set_batch_metadata` and `merge_normalized_fields` (both
+  additive, needed so a second sheet can enrich a staging row a first sheet already created).
+
+**Verified against the real workbook, not just fixtures:** a dedicated smoke test
+(`test_run_against_real_workbook_is_read_only_and_stages_products`, skipped gracefully if the
+file is ever absent) runs the importer against `docs/Produktpalette.xlsx` itself and asserts the
+file's bytes are byte-for-byte unchanged afterward. A manual run confirmed: **111 products
+staged** (matches the deep-research audit's independently-counted "111 eindeutige Produkt-SKUs"
+exactly), all 5 categories detected correctly, 22 identifiers staged from the Amazon sheet with
+**zero** Amazon-only orphan products (every Amazon SKU already existed in Produktpalette), and
+**22 netto-ambiguity price warnings** correctly raised instead of silently guessing a price.
+
+**Verified:** `pytest tests/` — 1091 passed (+15 new in `test_excel_import_service.py`: 9 pure
+parsing-logic tests — category detection, multi-block handling, footnote/non-SKU skipping,
+rows-outside-any-block, ambiguous/non-ambiguous/single-value netto, Amazon field extraction,
+Besetzungen — plus 5 end-to-end tests against a small generated fixture workbook and the 1 real
+smoke test above); `ruff check src/` clean; `mypy` clean on every PR05 file. Added a
+`[[tool.mypy.overrides]]` for `openpyxl.*` (`ignore_missing_imports`) since no `types-openpyxl`
+stub package is installed and this is the first module in the codebase to import openpyxl in
+`src/`. Same single pre-existing flaky UVA failure, nothing new.
+
+**No migration needed:** PR05 only uses the PR02 staging schema; no new tables/columns.

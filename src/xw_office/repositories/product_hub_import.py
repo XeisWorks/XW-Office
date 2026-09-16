@@ -92,6 +92,18 @@ class ProductHubImportRepository:
         with self._scope() as session:
             return session.get(ImportBatch, batch_id)
 
+    def set_batch_metadata(
+        self, batch_id: uuid.UUID, source_metadata: dict[str, object]
+    ) -> ImportBatch:
+        """Replace ``source_metadata`` on a batch (caller merges, this just writes)."""
+        with self._scope() as session:
+            batch = session.get(ImportBatch, batch_id)
+            if batch is None:
+                raise KeyError(f"Import batch {batch_id} not found")
+            batch.source_metadata = source_metadata
+            session.flush()
+            return batch
+
     # -- staging products ---------------------------------------------------------
 
     def ingest_staging_product(
@@ -192,6 +204,26 @@ class ProductHubImportRepository:
             staging_product.match_method = match_method
             staging_product.match_score = match_score
             staging_product.decision_note = decision_note or None
+            session.flush()
+            return staging_product
+
+    def merge_normalized_fields(
+        self, staging_product_id: uuid.UUID, updates: dict[str, object]
+    ) -> StagingProduct:
+        """Shallow-merge *updates* into an existing staging_product's ``normalized_fields``.
+
+        Used when a later source row (e.g. the Amazon sheet) adds identifiers/tags for
+        a product an earlier row (e.g. the Produktpalette sheet) already staged in the
+        same batch, without clobbering what that first ingest already recorded — unlike
+        ``ingest_staging_product``, which replaces ``normalized_fields`` wholesale.
+        """
+        with self._scope() as session:
+            staging_product = session.get(StagingProduct, staging_product_id)
+            if staging_product is None:
+                raise KeyError(f"Staging product {staging_product_id} not found")
+            merged = dict(staging_product.normalized_fields)
+            merged.update(updates)
+            staging_product.normalized_fields = merged
             session.flush()
             return staging_product
 
