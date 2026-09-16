@@ -1,0 +1,259 @@
+version: 1
+name: xw-product-hub-codex-5-6-luna-task-queue
+as_of: '2026-09-16'
+primary_repo: XeisWorks/XW-Office
+secondary_repo: XeisWorks/XW-Flow
+baseline:
+  xw_office: 09e3b64c8377c938868f2b939c36bb38d2852cb5
+  xw_flow: 86fd0f83fd2a15a23b7e97f430780b0d91ed2504
+execution_policy:
+  one_pr_per_codex_run: true
+  sequential_preferred: true
+  do_not_start_next_pr_if_dod_failed: true
+  recheck_current_main_before_every_pr: true
+  never_rewrite_applied_migrations: true
+  no_fuzzy_auto_merge: true
+  print_pdf_browser_delivery: false
+  final_inventory_master: product_hub
+  current_dealer_price_list: B2B_EUR
+  future_dealer_specific_price_lists_supported: true
+quality_gate:
+  commands:
+    - python -m pytest
+    - python -m ruff check src tests
+    - python -m mypy src/xw_office
+  require_targeted_tests: true
+  document_preexisting_failures: true
+prs:
+  - id: PR00
+    title: Align architecture docs and guardrails
+    dependencies: []
+    risk: low
+    external_writes: false
+    deliverables:
+      - update docs/product_pipeline_masterplan.md
+      - update docs/product_pipeline_phases.yaml
+      - add approved product hub specs under docs/product_hub
+    done_when:
+      - no central documentation says sevdesk is final inventory master
+      - confirmed architecture decisions are consistent
+
+  - id: PR01
+    title: Canonical ORM schema and repositories
+    dependencies: [PR00]
+    risk: high
+    external_writes: false
+    migration: additive_from_current_head
+    deliverables:
+      - product parent expansion
+      - product_variant
+      - product_identifier
+      - product_family
+      - category and product_category
+      - tag and product_tag
+      - price_list and product_price
+      - product_asset
+      - print_rule
+      - product_edition
+      - product_improvement
+      - channel_mapping
+      - channel_category_mapping
+      - audit_log
+      - repository layer
+      - legacy compatibility backfill
+    guardrails:
+      - keep existing product table
+      - keep product.sku compatibility temporarily
+      - no inventory master cutover
+      - no wix or sevdesk writes
+
+  - id: PR02
+    title: Import staging foundation
+    dependencies: [PR01]
+    risk: medium
+    external_writes: false
+    deliverables:
+      - import_batch
+      - staging entities
+      - import_match_candidate
+      - idempotent batch ingestion
+
+  - id: PR03
+    title: Wix read importer
+    dependencies: [PR02]
+    risk: medium
+    external_writes: false
+    deliverables:
+      - paged product import
+      - separate variant import
+      - inventory import
+      - category import
+      - media provenance
+      - first media mapped as COVER
+      - remaining media mapped as SAMPLE_SCORE
+
+  - id: PR04
+    title: sevdesk read importer
+    dependencies: [PR02]
+    risk: medium
+    external_writes: false
+    deliverables:
+      - parts import
+      - category import
+      - stock shadow data
+      - price and tax staging
+
+  - id: PR05
+    title: Excel import and matching
+    dependencies: [PR02]
+    risk: medium
+    external_writes: false
+    deliverables:
+      - Produktpalette import
+      - Amazon identifier import
+      - dealer reference import
+      - exact sku matching
+      - alias matching
+      - identifier matching
+      - fuzzy suggestion only
+      - conflict report
+
+  - id: PR06
+    title: Import commit and curated grouping
+    dependencies: [PR03, PR04, PR05]
+    risk: high
+    external_writes: false
+    deliverables:
+      - atomic commit service
+      - audit log
+      - preview and diff
+      - safe one-to-one initial import
+      - explicit curated variant grouping
+
+  - id: PR07
+    title: Read API
+    dependencies: [PR06]
+    risk: medium
+    external_writes: false
+    deliverables:
+      - product list/detail endpoints
+      - variant/assets/improvements/channels/audit endpoints
+      - pagination and filters
+      - readiness summary
+
+  - id: PR08
+    title: Read-only WebUI PWA
+    dependencies: [PR07]
+    risk: medium
+    external_writes: false
+    deliverables:
+      - responsive React TypeScript Vite PWA
+      - dashboard
+      - product list
+      - product detail
+      - readonly sync and asset health
+
+  - id: PR09
+    title: Editing improvements and editions
+    dependencies: [PR08]
+    risk: high
+    external_writes: false
+    deliverables:
+      - edit API
+      - optimistic locking
+      - product editing UI
+      - improvement records
+      - edition workflow
+
+  - id: PR10
+    title: Transactional outbox and sync foundation
+    dependencies: [PR09]
+    risk: high
+    external_writes: false
+    deliverables:
+      - outbox_event
+      - sync_job
+      - sync_item
+      - sync_conflict
+      - sync_cursor
+      - payload archive
+      - retry worker
+
+  - id: PR11
+    title: Wix push reconcile and conflict management
+    dependencies: [PR10]
+    risk: high
+    external_writes: feature_flagged
+    deliverables:
+      - wix push adapter
+      - revision aware updates
+      - drift detection
+      - conflict UI or API
+      - retry and idempotency
+
+  - id: PR12
+    title: Dealer shared views and exports
+    dependencies: [PR09]
+    risk: medium
+    external_writes: false
+    deliverables:
+      - shared_catalog_view
+      - token hashing
+      - revocation
+      - field whitelist
+      - html view
+      - csv export
+      - xlsx export
+
+  - id: PR13
+    title: Inventory V2 shadow mode
+    dependencies: [PR10]
+    risk: critical
+    external_writes: false
+    deliverables:
+      - inventory_location
+      - inventory_stock
+      - append-only ledger
+      - inventory_alert
+      - sevdesk shadow reconcile
+      - bridge for existing InventoryService consumers
+
+  - id: PR14
+    title: XW-Flow inventory alerts and tile API
+    dependencies: [PR13]
+    risk: high
+    external_writes: xw_flow_tasks_only
+    deliverables:
+      - threshold crossing detection
+      - deduplicated alerts
+      - idempotent XW-Flow task adapter
+      - /api/v1/inventory/summary
+      - new-edition task integration
+
+  - id: PR15
+    title: Inventory master cutover
+    dependencies: [PR11, PR13, PR14]
+    risk: critical
+    external_writes: true
+    preconditions:
+      - all inventory mutation paths use Inventory V2
+      - shadow drift reconciled
+      - rollback flag tested
+      - backups verified
+      - wix and sevdesk projection tests green
+    deliverables:
+      - enable product hub inventory master
+      - project stock to sevdesk and wix
+      - external drift becomes conflict
+
+  - id: PR16
+    title: Remove legacy inventory JSON runtime paths
+    dependencies: [PR15]
+    risk: high
+    external_writes: false
+    deliverables:
+      - remove inventory.products runtime dependency
+      - remove inventory.stock_levels runtime dependency
+      - archive final legacy snapshot
+      - remove duplicated sku and stock logic where safe
+      - retain deprecated product.sku only if consumers remain

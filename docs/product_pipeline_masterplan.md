@@ -1,7 +1,14 @@
 # XW-Office Product Pipeline Masterplan — Final Spec
 
-> Letzte Aktualisierung: 2026-04-03  
+> Letzte Aktualisierung: 2026-09-16 (Product-Hub-Entscheidungen ergänzt)
 > Alle Design-Entscheidungen durch User-Interview bestätigt.
+
+> **Product-Hub-Update (2026-09-16):** Dieser Masterplan beschreibt die ursprüngliche
+> Product-Pipeline-Vision (April 2026). Er wird seit 2026-09-16 durch den **XW Product Hub**
+> weiterentwickelt und in Detail-Spezifikationen unter [`docs/product_hub/`](product_hub/)
+> präzisiert. Verbindlich sind ab sofort die dort bestätigten Architekturentscheidungen —
+> insbesondere Punkt 2 unten ist historisch und wird durch den Product Hub als finalen
+> Bestands-Master ersetzt (siehe [`docs/product_hub/XW_PRODUCT_HUB_DEEP_RESEARCH.md`](product_hub/XW_PRODUCT_HUB_DEEP_RESEARCH.md) §17-19).
 
 ---
 
@@ -10,8 +17,8 @@
 | # | Thema | Entscheidung |
 |---|---|---|
 | 1 | Schreibstelle | Pipeline = einzige Schreibstelle für alle Menüs |
-| 2 | Bestandsquelle | sevDesk = Single Source of Truth (SOT) für Bestand |
-| 3 | Stock Write-back | Nach Druck: `PUT /Part/{id}` mit neuem Bestand |
+| 2 | Bestandsquelle | ~~sevDesk = Single Source of Truth (SOT) für Bestand~~ **Historische Entscheidung, ersetzt.** Übergangsphase: sevDesk bleibt Bestands-Shadow/Vergleichsquelle, während der Product Hub aufgebaut wird. **Endzustand (verbindlich seit 2026-09-16): der XW Product Hub (PostgreSQL) ist der finale Bestands-Master; sevDesk und Wix werden nach dem Inventory-Cutover reine Projektionen.** Siehe `docs/product_hub/`. |
+| 3 | Stock Write-back | Übergangsphase: Nach Druck `PUT /Part/{id}` mit neuem Bestand (sevDesk). Nach dem Product-Hub-Inventory-Cutover: Bestand wird im Hub-Ledger gebucht und von dort an sevDesk/Wix projiziert. |
 | 4 | Reservierung | Erst beim klick auf START/Drucken — kein Pre-Lock |
 | 5 | Digitale Produkte | `stockEnabled: false` in sevDesk → UI zeigt ∞, von Drucklogik ausgeschlossen |
 | 6 | POD-Zielbestand | Konfigurierbar pro Produkt (`min_stock_target`, `reprint_batch_qty`) |
@@ -159,6 +166,25 @@ Beispiel-Queries:
 - Phase E: Rechnungen-Integration (Stuecke + Druckvorschlag)
 - Phase F: Produkte-UI auf Pipeline umstellen
 - Phase G: Voller Channel-Sync + Monitoring
+
+### Fortsetzung als Product Hub (ab 2026-09-16)
+
+Die Phasen A–G oben bleiben als Ursprungsvision gültig, werden aber ab 2026-09-16 durch den
+**XW Product Hub** konkretisiert und um den verbindlichen Bestands-Cutover erweitert. Die
+maßgebliche, kleinteilige PR-Reihenfolge (PR00–PR16) inklusive Cutover-Vorbedingungen steht in
+[`docs/product_hub/XW_PRODUCT_HUB_CODEX_5_6_LUNA_BUILD_PLAN.md`](product_hub/XW_PRODUCT_HUB_CODEX_5_6_LUNA_BUILD_PLAN.md).
+Kurzfassung der zusätzlichen, sichtbar zu machenden Cutover-Phasen:
+
+- **P0–P1**: Read-only Audit + kanonisches relationales Schema (kein Bestands-Cutover).
+- **P2–P6**: Import/Matching, Read/Edit-API, WebUI, Wix-Sync, Händlerfreigabe — Bestand bleibt
+  Shadow, sevDesk weiterhin operative Referenz.
+- **P7**: Inventory-Konvergenz — Hub-Ledger läuft parallel mit, Drift wird gemessen, noch kein Cutover.
+- **P8 (Cutover)**: Erst wenn alle Vorbedingungen erfüllt sind (siehe Build-Plan PR15), wird der
+  Product Hub verbindlich Bestands-Master; sevDesk und Wix werden danach reine Projektionen.
+- **P9**: Legacy-JSON (`inventory.products`, `inventory.stock_levels`) wird entfernt.
+
+Diese Phasen ersetzen nicht Phase A–G, sondern erweitern sie um den Bestands-Cutover, der im
+April-2026-Stand dieses Dokuments noch nicht vorgesehen war.
 
 ## Akzeptanzkriterien
 - Jede produktbezogene UI-Funktion nutzt dieselbe Pipeline-API

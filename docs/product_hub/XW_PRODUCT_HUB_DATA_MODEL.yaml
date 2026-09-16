@@ -1,0 +1,674 @@
+version: 1.1
+name: xw-product-hub-data-model
+as_of: '2026-09-16'
+notes:
+  - UUID primary keys unless explicitly stated.
+  - All timestamps are timezone-aware.
+  - Use PostgreSQL numeric for money; never float.
+  - Use JSONB only for flexible attributes/payloads, not for core queryable relationships.
+  - Tables should use created_at/updated_at where meaningful.
+  - Soft-delete/archive business entities rather than hard delete when external mappings/history exist.
+
+confirmed_architecture_decisions:
+  inventory_final_master: product_hub
+  dealer_pricing:
+    current: one_shared_B2B_EUR_price_list
+    future_specific_price_lists_supported: true
+    no_extra_schema_migration_required_for_additional_price_lists: true
+  production_print_pdf:
+    initial_storage_kind: NETWORK_PATH
+    webui_access: metadata_and_healthcheck_only
+    browser_download: false
+    public_share: false
+  variant_migration:
+    initial: each_known_sku_as_own_product_with_default_variant
+    second_step: explicit_curated_grouping
+    automatic_fuzzy_grouping: false
+
+enums:
+  product_status: [draft, review, live, archived]
+  product_type: [physical, digital, hybrid]
+  identifier_scheme: [ISBN13, ISBN10, EAN, UPC, ASIN, FNSKU, BARCODE, LEGACY_SKU, VLB_ID, CUSTOM]
+  asset_role: [COVER, SAMPLE_SCORE, PRINT_PDF, PREVIEW_PDF, AUDIO, DOWNLOAD, OTHER]
+  asset_storage_kind: [OBJECT_STORAGE, NETWORK_PATH, WIX_MEDIA, EXTERNAL_URL]
+  asset_health: [unknown, ok, missing, unreadable, checksum_mismatch, stale]
+  improvement_status: [open, planned, resolved, wont_fix]
+  improvement_severity: [info, minor, major, critical]
+  channel_code: [wix, sevdesk, amazon, vlb]
+  sync_status: [never, pending, synced, conflict, error, disabled]
+  sync_direction: [pull, push, reconcile]
+  alert_type: [low_stock, out_of_stock, sync_drift]
+  alert_status: [open, acknowledged, resolved]
+  inventory_reason: [import_baseline, sale, print_run, return, damage, manual_adjustment, recount]
+  share_status: [active, revoked, expired]
+
+constraints_global:
+  - SKU comparison uses trim plus uppercase normalization for matching, while preserving display/original value if needed.
+  - ISBN13 should be normalized to digits only for uniqueness and formatted only for display.
+  - Monetary values use Decimal/Numeric and explicit currency.
+  - External IDs are never used as internal primary keys.
+  - Channel payload snapshots are immutable for forensic debugging where retained.
+
+entities:
+  product:
+    purpose: Canonical parent product/master record.
+    columns:
+      id: {type: uuid, pk: true}
+      name: {type: varchar(300), nullable: false}
+      slug: {type: varchar(320), nullable: false, unique: true}
+      short_description: {type: text, nullable: true}
+      description: {type: text, nullable: true}
+      brand_name: {type: varchar(160), nullable: true}
+      family_id: {type: uuid, fk: product_family.id, nullable: true}
+      product_type: {type: enum.product_type, nullable: false, default: physical}
+      status: {type: enum.product_status, nullable: false, default: draft}
+      active: {type: boolean, nullable: false, default: true}
+      release_date: {type: date, nullable: true}
+      attributes: {type: jsonb, nullable: false, default: {}}
+      row_version: {type: integer, nullable: false, default: 1}
+      archived_at: {type: timestamptz, nullable: true}
+      created_at: {type: timestamptz, nullable: false}
+      updated_at: {type: timestamptz, nullable: false}
+    indexes:
+      - [status, active]
+      - [family_id]
+      - [brand_name]
+    rules:
+      - row_version increments on mutable update for optimistic locking.
+      - product may have one or many variants.
+
+  product_family:
+    purpose: Template/group of common product attributes and readiness rules.
+    columns:
+      id: {type: uuid, pk: true}
+      code: {type: varchar(80), unique: true, nullable: false}
+      name: {type: varchar(160), nullable: false}
+      attribute_schema: {type: jsonb, nullable: false, default: {}}
+      readiness_rules: {type: jsonb, nullable: false, default: {}}
+      created_at: {type: timestamptz, nullable: false}
+      updated_at: {type: timestamptz, nullable: false}
+
+  product_variant:
+    purpose: Sellable/inventory-relevant SKU entity.
+    columns:
+      id: {type: uuid, pk: true}
+      product_id: {type: uuid, fk: product.id, nullable: false, on_delete: restrict}
+      sku: {type: varchar(80), nullable: false, unique: true}
+      name: {type: varchar(300), nullable: true}
+      is_default: {type: boolean, nullable: false, default: false}
+      active: {type: boolean, nullable: false, default: true}
+      stock_enabled: {type: boolean, nullable: false, default: true}
+      weight_grams: {type: numeric(12,3), nullable: true}
+      option_values: {type: jsonb, nullable: false, default: {}}
+      attributes: {type: jsonb, nullable: false, default: {}}
+      created_at: {type: timestamptz, nullable: false}
+      updated_at: {type: timestamptz, nullable: false}
+    constraints:
+      - one_default_variant_per_product_partial_unique
+    indexes:
+      - [product_id]
+      - [active]
+
+  sku_alias:
+    purpose: Legacy/alternate SKU resolution without duplicating products.
+    columns:
+      id: {type: bigint, pk: true, identity: true}
+      variant_id: {type: uuid, fk: product_variant.id, nullable: false, on_delete: cascade}
+      alias_sku: {type: varchar(80), nullable: false, unique: true}
+      source: {type: varchar(40), nullable: false, default: manual}
+      created_at: {type: timestamptz, nullable: false}
+
+  product_identifier:
+    purpose: ISBN/ASIN/FNSKU/EAN/etc. attached to product or variant.
+    columns:
+      id: {type: uuid, pk: true}
+      product_id: {type: uuid, fk: product.id, nullable: true, on_delete: cascade}
+      variant_id: {type: uuid, fk: product_variant.id, nullable: true, on_delete: cascade}
+      scheme: {type: enum.identifier_scheme, nullable: false}
+      value: {type: varchar(180), nullable: false}
+      normalized_value: {type: varchar(180), nullable: false}
+      market: {type: varchar(16), nullable: true}
+      is_primary: {type: boolean, nullable: false, default: false}
+      source: {type: varchar(40), nullable: true}
+      created_at: {type: timestamptz, nullable: false}
+    constraints:
+      - exactly_one_of_product_id_variant_id
+      - unique: [scheme, normalized_value]
+    indexes:
+      - [product_id]
+      - [variant_id]
+
+  category:
+    purpose: Internal hierarchical taxonomy independent from channels.
+    columns:
+      id: {type: uuid, pk: true}
+      parent_id: {type: uuid, fk: category.id, nullable: true}
+      code: {type: varchar(100), unique: true, nullable: false}
+      name: {type: varchar(180), nullable: false}
+      active: {type: boolean, nullable: false, default: true}
+      sort_order: {type: integer, nullable: false, default: 0}
+
+  product_category:
+    purpose: Many-to-many internal category assignment.
+    columns:
+      product_id: {type: uuid, fk: product.id, pk_part: true, on_delete: cascade}
+      category_id: {type: uuid, fk: category.id, pk_part: true, on_delete: restrict}
+      is_primary: {type: boolean, nullable: false, default: false}
+
+  tag:
+    purpose: Flexible cross-cutting labels such as B2B/POD/VLB.
+    columns:
+      id: {type: uuid, pk: true}
+      code: {type: varchar(80), unique: true, nullable: false}
+      label: {type: varchar(120), nullable: false}
+      description: {type: text, nullable: true}
+
+  product_tag:
+    columns:
+      product_id: {type: uuid, fk: product.id, pk_part: true, on_delete: cascade}
+      tag_id: {type: uuid, fk: tag.id, pk_part: true, on_delete: cascade}
+
+  price_list:
+    purpose: Named commercial context instead of ambiguous spreadsheet columns.
+    columns:
+      id: {type: uuid, pk: true}
+      code: {type: varchar(80), unique: true, nullable: false}
+      name: {type: varchar(160), nullable: false}
+      currency: {type: char(3), nullable: false, default: EUR}
+      customer_scope: {type: varchar(40), nullable: false, default: retail}
+      active: {type: boolean, nullable: false, default: true}
+      rules: {type: jsonb, nullable: false, default: {}}
+    rules:
+      - seed RETAIL_EUR and B2B_EUR initially.
+      - all dealers use B2B_EUR initially.
+      - later dealer-specific lists are additional rows, not schema changes.
+
+  product_price:
+    purpose: Effective-dated variant price.
+    columns:
+      id: {type: uuid, pk: true}
+      variant_id: {type: uuid, fk: product_variant.id, nullable: false, on_delete: cascade}
+      price_list_id: {type: uuid, fk: price_list.id, nullable: false, on_delete: restrict}
+      currency: {type: char(3), nullable: false}
+      net_amount: {type: numeric(14,4), nullable: true}
+      gross_amount: {type: numeric(14,4), nullable: true}
+      tax_rate: {type: numeric(7,4), nullable: true}
+      valid_from: {type: timestamptz, nullable: false}
+      valid_until: {type: timestamptz, nullable: true}
+      source: {type: varchar(40), nullable: true}
+      created_at: {type: timestamptz, nullable: false}
+      updated_at: {type: timestamptz, nullable: false}
+    indexes:
+      - [variant_id, price_list_id, valid_from]
+    rules:
+      - application must prevent overlapping active periods for the same variant/price list.
+
+  product_asset:
+    purpose: Media and production assets with explicit role/provenance.
+    columns:
+      id: {type: uuid, pk: true}
+      product_id: {type: uuid, fk: product.id, nullable: false, on_delete: cascade}
+      variant_id: {type: uuid, fk: product_variant.id, nullable: true, on_delete: cascade}
+      role: {type: enum.asset_role, nullable: false}
+      sort_order: {type: integer, nullable: false, default: 0}
+      storage_kind: {type: enum.asset_storage_kind, nullable: false}
+      uri: {type: text, nullable: false}
+      original_filename: {type: text, nullable: true}
+      mime_type: {type: varchar(160), nullable: true}
+      size_bytes: {type: bigint, nullable: true}
+      checksum_sha256: {type: char(64), nullable: true}
+      source_channel: {type: enum.channel_code, nullable: true}
+      source_external_id: {type: varchar(200), nullable: true}
+      source_url: {type: text, nullable: true}
+      public_share_allowed: {type: boolean, nullable: false, default: false}
+      health_status: {type: enum.asset_health, nullable: false, default: unknown}
+      last_checked_at: {type: timestamptz, nullable: true}
+      created_at: {type: timestamptz, nullable: false}
+      updated_at: {type: timestamptz, nullable: false}
+    indexes:
+      - [product_id, role, sort_order]
+      - [variant_id]
+      - [health_status]
+    rules:
+      - initial PRINT_PDF assets use NETWORK_PATH.
+      - PRINT_PDF public_share_allowed is always false.
+      - WebUI exposes PRINT_PDF metadata/health only; no download/stream endpoint in initial scope.
+
+  print_rule:
+    purpose: Canonical print/reprint policy, replacing JSON-only config where practical.
+    columns:
+      id: {type: uuid, pk: true}
+      variant_id: {type: uuid, fk: product_variant.id, unique: true, nullable: false}
+      min_stock_target: {type: integer, nullable: false, default: 5}
+      reprint_batch_qty: {type: integer, nullable: false, default: 3}
+      print_profile_id: {type: varchar(120), nullable: true}
+      print_plan: {type: jsonb, nullable: false, default: []}
+      primary_print_asset_id: {type: uuid, fk: product_asset.id, nullable: true}
+      updated_at: {type: timestamptz, nullable: false}
+
+  product_edition:
+    purpose: Track new print editions/revisions of publications.
+    columns:
+      id: {type: uuid, pk: true}
+      product_id: {type: uuid, fk: product.id, nullable: false, on_delete: restrict}
+      label: {type: varchar(120), nullable: false}
+      edition_number: {type: integer, nullable: true}
+      status: {type: varchar(40), nullable: false, default: draft}
+      published_at: {type: date, nullable: true}
+      print_asset_id: {type: uuid, fk: product_asset.id, nullable: true}
+      notes: {type: text, nullable: true}
+      created_at: {type: timestamptz, nullable: false}
+      updated_at: {type: timestamptz, nullable: false}
+
+  product_improvement:
+    purpose: Persistent user/customer correction and improvement backlog.
+    columns:
+      id: {type: uuid, pk: true}
+      product_id: {type: uuid, fk: product.id, nullable: false, on_delete: restrict}
+      variant_id: {type: uuid, fk: product_variant.id, nullable: true, on_delete: restrict}
+      title: {type: varchar(300), nullable: true}
+      description: {type: text, nullable: false}
+      source: {type: varchar(60), nullable: false, default: internal}
+      source_reference: {type: text, nullable: true}
+      severity: {type: enum.improvement_severity, nullable: false, default: minor}
+      status: {type: enum.improvement_status, nullable: false, default: open}
+      created_by: {type: uuid, nullable: true}
+      created_at: {type: timestamptz, nullable: false}
+      resolved_at: {type: timestamptz, nullable: true}
+      resolved_in_edition_id: {type: uuid, fk: product_edition.id, nullable: true}
+    indexes:
+      - [product_id, status]
+      - [severity, status]
+
+  inventory_location:
+    columns:
+      id: {type: uuid, pk: true}
+      code: {type: varchar(80), unique: true, nullable: false}
+      name: {type: varchar(160), nullable: false}
+      active: {type: boolean, nullable: false, default: true}
+
+  inventory_stock:
+    purpose: Materialized current stock; changed only through InventoryService ledger transactions.
+    columns:
+      variant_id: {type: uuid, fk: product_variant.id, pk_part: true, on_delete: restrict}
+      location_id: {type: uuid, fk: inventory_location.id, pk_part: true, on_delete: restrict}
+      on_hand: {type: integer, nullable: false, default: 0}
+      reserved: {type: integer, nullable: false, default: 0}
+      reorder_point: {type: integer, nullable: false, default: 0}
+      target_stock: {type: integer, nullable: false, default: 0}
+      default_reprint_qty: {type: integer, nullable: false, default: 0}
+      version: {type: integer, nullable: false, default: 1}
+      updated_at: {type: timestamptz, nullable: false}
+    derived:
+      available: on_hand - reserved
+    constraints:
+      - on_hand >= 0 unless explicit future negative-stock policy is enabled
+      - reserved >= 0
+
+  inventory_movement:
+    purpose: Immutable stock ledger.
+    columns:
+      id: {type: uuid, pk: true}
+      variant_id: {type: uuid, fk: product_variant.id, nullable: false, on_delete: restrict}
+      location_id: {type: uuid, fk: inventory_location.id, nullable: false, on_delete: restrict}
+      delta: {type: integer, nullable: false}
+      reason: {type: enum.inventory_reason, nullable: false}
+      source: {type: varchar(80), nullable: false}
+      external_reference: {type: varchar(240), nullable: true}
+      idempotency_key: {type: varchar(240), nullable: false, unique: true}
+      note: {type: text, nullable: true}
+      on_hand_after: {type: integer, nullable: false}
+      actor: {type: varchar(160), nullable: true}
+      occurred_at: {type: timestamptz, nullable: false}
+      created_at: {type: timestamptz, nullable: false}
+    rules:
+      - no update/delete through ordinary application paths.
+      - correction is a new compensating movement.
+
+  inventory_alert:
+    purpose: Stateful threshold alert used to deduplicate XW-Flow tasks.
+    columns:
+      id: {type: uuid, pk: true}
+      variant_id: {type: uuid, fk: product_variant.id, nullable: false, on_delete: restrict}
+      location_id: {type: uuid, fk: inventory_location.id, nullable: false, on_delete: restrict}
+      type: {type: enum.alert_type, nullable: false}
+      status: {type: enum.alert_status, nullable: false, default: open}
+      threshold: {type: integer, nullable: true}
+      observed_stock: {type: integer, nullable: true}
+      first_triggered_at: {type: timestamptz, nullable: false}
+      last_triggered_at: {type: timestamptz, nullable: false}
+      acknowledged_at: {type: timestamptz, nullable: true}
+      resolved_at: {type: timestamptz, nullable: true}
+      xw_flow_task_id: {type: uuid, nullable: true}
+      xw_flow_client_request_id: {type: uuid, nullable: true}
+    constraints:
+      - partial_unique_open_alert_per_variant_location_type
+
+  channel_mapping:
+    purpose: Stable relation between internal entities and external channel objects.
+    columns:
+      id: {type: uuid, pk: true}
+      channel: {type: enum.channel_code, nullable: false}
+      entity_type: {type: varchar(40), nullable: false}
+      internal_entity_id: {type: uuid, nullable: false}
+      external_id: {type: varchar(240), nullable: false}
+      external_parent_id: {type: varchar(240), nullable: true}
+      external_revision: {type: varchar(240), nullable: true}
+      sync_status: {type: enum.sync_status, nullable: false, default: never}
+      last_pulled_at: {type: timestamptz, nullable: true}
+      last_pushed_at: {type: timestamptz, nullable: true}
+      last_external_updated_at: {type: timestamptz, nullable: true}
+      last_success_at: {type: timestamptz, nullable: true}
+      source_payload_hash: {type: char(64), nullable: true}
+      last_error: {type: text, nullable: true}
+      created_at: {type: timestamptz, nullable: false}
+      updated_at: {type: timestamptz, nullable: false}
+    constraints:
+      - unique: [channel, entity_type, external_id]
+      - unique: [channel, entity_type, internal_entity_id]
+
+  channel_category_mapping:
+    purpose: Map internal taxonomy to Wix/sevdesk categories without conflating tags.
+    columns:
+      id: {type: uuid, pk: true}
+      category_id: {type: uuid, fk: category.id, nullable: false}
+      channel: {type: enum.channel_code, nullable: false}
+      external_category_id: {type: varchar(240), nullable: false}
+      external_category_name: {type: varchar(240), nullable: true}
+      is_primary: {type: boolean, nullable: false, default: false}
+    constraints:
+      - unique: [category_id, channel, external_category_id]
+
+  sync_job:
+    columns:
+      id: {type: uuid, pk: true}
+      channel: {type: enum.channel_code, nullable: false}
+      direction: {type: enum.sync_direction, nullable: false}
+      job_type: {type: varchar(80), nullable: false}
+      status: {type: varchar(40), nullable: false}
+      correlation_id: {type: uuid, nullable: false}
+      started_at: {type: timestamptz, nullable: false}
+      finished_at: {type: timestamptz, nullable: true}
+      requested_by: {type: varchar(160), nullable: true}
+      error_summary: {type: text, nullable: true}
+
+  sync_item:
+    columns:
+      id: {type: uuid, pk: true}
+      sync_job_id: {type: uuid, fk: sync_job.id, nullable: false, on_delete: cascade}
+      internal_entity_id: {type: uuid, nullable: true}
+      external_id: {type: varchar(240), nullable: true}
+      action: {type: varchar(60), nullable: false}
+      status: {type: varchar(40), nullable: false}
+      attempts: {type: integer, nullable: false, default: 0}
+      last_error: {type: text, nullable: true}
+      processed_at: {type: timestamptz, nullable: true}
+
+  sync_conflict:
+    columns:
+      id: {type: uuid, pk: true}
+      channel: {type: enum.channel_code, nullable: false}
+      entity_type: {type: varchar(40), nullable: false}
+      internal_entity_id: {type: uuid, nullable: false}
+      field_name: {type: varchar(160), nullable: false}
+      hub_value: {type: jsonb, nullable: true}
+      external_value: {type: jsonb, nullable: true}
+      detected_at: {type: timestamptz, nullable: false}
+      external_updated_at: {type: timestamptz, nullable: true}
+      resolved_at: {type: timestamptz, nullable: true}
+      resolution: {type: varchar(60), nullable: true}
+      resolved_by: {type: varchar(160), nullable: true}
+    indexes:
+      - [channel, resolved_at]
+      - [internal_entity_id]
+
+  sync_cursor:
+    columns:
+      id: {type: uuid, pk: true}
+      channel: {type: enum.channel_code, nullable: false}
+      stream: {type: varchar(100), nullable: false}
+      cursor_value: {type: text, nullable: true}
+      last_seen_updated_at: {type: timestamptz, nullable: true}
+      updated_at: {type: timestamptz, nullable: false}
+    constraints:
+      - unique: [channel, stream]
+
+  external_payload_archive:
+    purpose: Debug/audit snapshot with retention policy, not business master.
+    columns:
+      id: {type: uuid, pk: true}
+      channel: {type: enum.channel_code, nullable: false}
+      entity_type: {type: varchar(40), nullable: false}
+      external_id: {type: varchar(240), nullable: true}
+      payload: {type: jsonb, nullable: false}
+      payload_hash: {type: char(64), nullable: false}
+      fetched_at: {type: timestamptz, nullable: false}
+    indexes:
+      - [channel, entity_type, external_id, fetched_at]
+
+  outbox_event:
+    purpose: Transactional bridge from canonical DB write to async external sync.
+    columns:
+      id: {type: uuid, pk: true}
+      aggregate_type: {type: varchar(80), nullable: false}
+      aggregate_id: {type: uuid, nullable: false}
+      event_type: {type: varchar(120), nullable: false}
+      payload: {type: jsonb, nullable: false}
+      created_at: {type: timestamptz, nullable: false}
+      available_at: {type: timestamptz, nullable: false}
+      claimed_at: {type: timestamptz, nullable: true}
+      processed_at: {type: timestamptz, nullable: true}
+      attempts: {type: integer, nullable: false, default: 0}
+      last_error: {type: text, nullable: true}
+    indexes:
+      - [processed_at, available_at]
+
+  shared_catalog_view:
+    purpose: Revocable, filtered, field-whitelisted dealer/public catalog view.
+    columns:
+      id: {type: uuid, pk: true}
+      title: {type: varchar(220), nullable: false}
+      status: {type: enum.share_status, nullable: false, default: active}
+      token_hash: {type: char(64), nullable: false, unique: true}
+      password_hash: {type: text, nullable: true}
+      filter_definition: {type: jsonb, nullable: false}
+      field_whitelist: {type: jsonb, nullable: false}
+      sort_definition: {type: jsonb, nullable: false, default: []}
+      price_list_id: {type: uuid, fk: price_list.id, nullable: true}
+      allow_csv: {type: boolean, nullable: false, default: true}
+      allow_xlsx: {type: boolean, nullable: false, default: true}
+      allow_images: {type: boolean, nullable: false, default: true}
+      expires_at: {type: timestamptz, nullable: true}
+      revoked_at: {type: timestamptz, nullable: true}
+      created_by: {type: uuid, nullable: true}
+      created_at: {type: timestamptz, nullable: false}
+      last_access_at: {type: timestamptz, nullable: true}
+    rules:
+      - token plaintext is returned once at creation and never stored.
+      - query builder uses an allowlist of filterable fields.
+      - internal fields cannot be whitelisted by ordinary editor role.
+      - initial B2B shares resolve to B2B_EUR.
+      - future dealer-specific pricing is implemented by assigning another price_list_id; no schema change required.
+      - PRINT_PDF path/asset is never exposed by a public shared view.
+
+  export_log:
+    columns:
+      id: {type: uuid, pk: true}
+      shared_view_id: {type: uuid, fk: shared_catalog_view.id, nullable: true}
+      format: {type: varchar(20), nullable: false}
+      row_count: {type: integer, nullable: false}
+      query_hash: {type: char(64), nullable: false}
+      generated_at: {type: timestamptz, nullable: false}
+      requested_by: {type: varchar(160), nullable: true}
+
+  audit_log:
+    purpose: Field-level application audit separate from sync payload archive.
+    columns:
+      id: {type: uuid, pk: true}
+      actor_type: {type: varchar(40), nullable: false}
+      actor_id: {type: varchar(160), nullable: true}
+      source: {type: varchar(80), nullable: false}
+      entity_type: {type: varchar(80), nullable: false}
+      entity_id: {type: uuid, nullable: false}
+      action: {type: varchar(40), nullable: false}
+      changed_fields: {type: jsonb, nullable: false, default: []}
+      before_data: {type: jsonb, nullable: true}
+      after_data: {type: jsonb, nullable: true}
+      correlation_id: {type: uuid, nullable: true}
+      created_at: {type: timestamptz, nullable: false}
+    indexes:
+      - [entity_type, entity_id, created_at]
+
+staging:
+  principle: No direct source import writes canonical business tables before review.
+  tables:
+    import_batch:
+      columns: [id, source, status, started_at, finished_at, source_metadata, error_summary]
+    staging_product:
+      columns:
+        - id
+        - import_batch_id
+        - source
+        - source_external_id
+        - sku
+        - name
+        - raw_payload
+        - proposed_product_id
+        - match_method
+        - match_score
+        - decision
+        - decision_note
+    staging_identifier:
+      columns: [id, staging_product_id, scheme, value, normalized_value, conflict]
+    staging_asset:
+      columns: [id, staging_product_id, role, source_external_id, source_url, sort_order]
+    staging_inventory:
+      columns: [id, staging_product_id, location_external_id, quantity, stock_enabled]
+    grouping_candidate:
+      purpose: Review-only candidate for second-step curated product/variant grouping.
+      columns:
+        - id
+        - source_product_id
+        - proposed_parent_product_id
+        - evidence
+        - confidence_hint
+        - decision
+        - reviewed_by
+        - reviewed_at
+      rules:
+        - never commits automatically.
+        - fuzzy/name similarity may suggest but never decide.
+
+migration_map_from_existing:
+  xw_office_inventory_products_json:
+    import_shape: each_known_sku_creates_own_product_plus_default_variant_before_curated_grouping
+    sku: product_variant.sku
+    name: product.name
+    category: category_or_staging_category
+    brand_name: product.brand_name
+    brand_id: channel_mapping_or_attributes_legacy_brand_id
+    wix_id: channel_mapping.channel=wix
+    sevdesk_id: channel_mapping.channel=sevdesk
+    print_file_path: product_asset.role=PRINT_PDF_storage_kind=NETWORK_PATH
+    print_profile_id: print_rule.print_profile_id
+    print_plan: print_rule.print_plan
+    title_print_configs: legacy_bridge_then_normalize_later
+    on_hand: inventory_baseline_only_not_product_master
+  migration_002_product:
+    use_as_seed_where_populated: true
+    note: avoid creating a second competing product table; extend/evolve existing migration lineage.
+  migration_002_inventory_movement:
+    reuse_or_migrate: true
+    note: preserve existing history if any.
+  migration_003_brand_fields:
+    reuse: true
+
+excel_mapping:
+  Produktpalette:
+    art_nr: product_variant.sku
+    titel: product.name
+    beschreibung: product.description
+    skg: product.attributes.skg_pending_semantic_confirmation
+    brutto: product_price.gross_amount_pending_price_list_mapping
+    netto_columns: product_price.net_amount_pending_semantic_confirmation
+  Amazon:
+    art_nr: product_variant.sku
+    isbn: product_identifier.ISBN13_or_ISBN10_after_validation
+    asin: product_identifier.ASIN
+    fnsku: product_identifier.FNSKU
+    titel: match_validation_only
+  Besetzungen:
+    values: controlled_vocabulary_seed_for_variant_or_product_attribute
+  Händler:
+    values: b2b_price_and_share_view_migration_reference
+  XeisWorks:
+    values: legacy_view_reference_not_master
+  MusikHeroes:
+    values: legacy_series_and_variant_relationship_reference
+
+read_models:
+  product_list_view:
+    fields:
+      - product_id
+      - cover_thumbnail
+      - primary_sku
+      - name
+      - family
+      - category
+      - tags
+      - isbn
+      - retail_price
+      - b2b_price
+      - available_stock
+      - wix_sync_status
+      - sevdesk_sync_status
+      - readiness_wix
+      - readiness_b2b
+      - readiness_print
+      - updated_at
+  product_detail_view:
+    aggregates:
+      - variants
+      - identifiers
+      - prices
+      - categories
+      - tags
+      - assets
+      - inventory
+      - improvements
+      - channel_mappings
+      - latest_sync_events
+      - readiness
+  inventory_summary_view:
+    fields:
+      - physical_products
+      - low_stock
+      - out_of_stock
+      - open_reprint_alerts
+      - sync_errors
+      - updated_at
+
+retention:
+  audit_log: long_term
+  inventory_movement: permanent
+  external_payload_archive: configurable_180_to_365_days_initially
+  sync_job_success: configurable_90_days
+  sync_errors_conflicts: keep_until_resolved_plus_retention
+  export_files_object_storage: short_lived_24h_or_generate_streaming
+
+implementation_invariants:
+  inventory_cutover:
+    mandatory_final_authority: product_hub
+    before_cutover: sevdesk_shadow_source_with_reconciliation
+    after_cutover:
+      sevdesk: projection_only
+      wix: projection_only
+      external_stock_edit: sync_drift_conflict
+      legacy_inventory_stock_levels_writes: forbidden
+  grouping:
+    first_pass: lossless_one_sku_one_product_one_default_variant
+    second_pass: curated_reparenting
+    preserve_all_identifiers_prices_mappings_assets: true
+  print_pdf:
+    production_asset_download_api_initially_exists: false
+    healthcheck_required: true

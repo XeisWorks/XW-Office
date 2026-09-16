@@ -2,6 +2,14 @@ version: 1
 name: xw-office-product-pipeline
 owner: XeisWorks
 status: draft
+superseded_by_note: >-
+  As of 2026-09-16 this phase plan is being extended by the XW Product Hub. See
+  docs/product_hub/ for the confirmed architecture decisions and the authoritative
+  PR00-PR16 build order (docs/product_hub/XW_PRODUCT_HUB_CODEX_5_6_LUNA_BUILD_PLAN.md).
+  The historical statement that sevDesk is the final inventory source of truth is
+  replaced: sevDesk is a shadow/comparison source during migration, the Product Hub
+  (PostgreSQL) is the final, mandatory inventory master after the confirmed cutover
+  (see product_hub_cutover_phases below).
 
 principles:
   - single_engine
@@ -9,6 +17,32 @@ principles:
   - idempotent_commands
   - auditability
   - postgres_as_operational_source
+  - product_hub_is_final_inventory_master  # confirmed 2026-09-16, see docs/product_hub/
+
+product_hub_cutover_phases:
+  note: >-
+    Visibility layer for the mandatory inventory cutover added by the Product Hub
+    build plan. Does not replace phases A-G below; sevDesk/Wix stay shadow/operational
+    references until the cutover preconditions in PR15 are all met.
+  phases:
+    - id: P0
+      title: Read-only audit and staging
+      inventory_role: sevdesk_shadow_reference
+    - id: P1
+      title: Canonical relational schema
+      inventory_role: sevdesk_shadow_reference
+    - id: P7
+      title: Inventory convergence (Hub ledger built, drift measured)
+      inventory_role: sevdesk_shadow_reference
+    - id: P8
+      title: Inventory master cutover (mandatory, gated by explicit preconditions)
+      inventory_role: product_hub_final_master
+      after_cutover:
+        sevdesk: projection_only
+        wix: projection_only
+    - id: P9
+      title: Legacy inventory JSON removal
+      inventory_role: product_hub_final_master
 
 global_contracts:
   commands:
