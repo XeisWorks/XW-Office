@@ -9,7 +9,9 @@ Ziel:
 
 ## 1) Ueberblick: was deployt wird und wie
 
-- Service: **XW-Content-Web** (Railway-Projekt "XW-Studio").
+- Service: **XW-Content-Web** (Railway-Projekt **"XW-Office"**, ID `b9ca5990-0aaf-4757-9efd-14119c1bdabf`;
+  bis 2026-09-16 noch "XW-Studio" genannt, umbenannt im Zuge des GitHub-Repo-Renames
+  `XW-Studio` → `XW-Office`).
 - Build: `Dockerfile.web`, Abhaengigkeiten aus `requirements-web.txt` (bewusst schlank -
   **kein** `config/default.yaml`, **keine** Desktop-/Druck-Abhaengigkeiten aus
   `pyproject.toml`; siehe Abschnitt 6).
@@ -116,38 +118,42 @@ Container-Prozess startet gar nicht erst - bei einem Docker-Build zuerst
 `railway.toml`s `[deploy].startCommand` pruefen, bevor man Plattforminstabilitaet
 vermutet oder Zeit in wiederholte blinde Retries steckt.
 
-## 4) GitHub-Webhook reparieren (offen - braucht Dashboard-Zugriff)
+## 4) GitHub-Webhook reparieren (in Arbeit, siehe Statuslog unten)
 
 **Befund (2026-09-16):** die automatische Railway-Deploy-Anbindung an GitHub-Pushes ist
 seit Monaten tot, nicht erst seit dem `startCommand`-Vorfall:
 
-- Ueber `gh api repos/XeisWorks/XW-Studio/deployments` existiert genau **ein**
-  GitHub-Deployment-Eintrag von `railway-app[bot]`, erstellt **2026-04-07**. Seither -
-  auch fuer alle PR07-Commits - kein einziger neuer Eintrag, kein Check-Run von
+- Ueber `gh api repos/XeisWorks/XW-Office/deployments` (bis zum Rename:
+  `repos/XeisWorks/XW-Studio/deployments`, GitHub leitet die alte URL weiter) existiert
+  genau **ein** GitHub-Deployment-Eintrag von `railway-app[bot]`, erstellt **2026-04-07**.
+  Seither - auch fuer alle PR07-Commits - kein einziger neuer Eintrag, kein Check-Run von
   Railway auf aktuellen Commits (nur der normale `github-actions`-CI-Check).
-- `gh api repos/XeisWorks/XW-Studio/hooks` liefert `[]` - erwartungsgemaess, Railway
+- `gh api repos/XeisWorks/XW-Office/hooks` liefert `[]` - erwartungsgemaess, Railway
   nutzt eine GitHub-App-Installation, keinen klassischen Repo-Webhook; diese Liste ist
   hier also kein Diagnosewert.
-- Es gibt **zwei** Railway-Projekte namens "XW-Studio" (`railway list`):
-  - `b9ca5990-...`, erstellt **2026-04-02** - das echte Projekt mit den Services
-    Postgres/XW-Content-Web/XW-Studio, mit dem dieser Leitfaden arbeitet.
-  - `fd0ee406-...`, erstellt **2026-09-15 07:28** - ein zweites, praktisch leeres
-    Projekt mit nur einem Service "XW-Studio", per Railpack (nicht `Dockerfile.web`)
-    deployt, eigene Domain `xw-studio-production.up.railway.app`. Zeitlich unmittelbar
-    vor den `fix(deploy)`-Commits desselben Morgens (09:32/09:38) - passt zum Muster
-    eines versehentlichen `railway init`/`railway up` ohne bestehenden Projekt-Link
-    waehrend fruehrerer Fehlersuche. Vermutlich nicht die Ursache des seit April toten
-    Webhooks, aber verwirrend und es lohnt sich, es aufzuraeumen.
+- Es gab **zwei** Railway-Projekte, die beide "XW-Studio" hiessen (`railway list`):
+  - `b9ca5990-0aaf-4757-9efd-14119c1bdabf`, erstellt **2026-04-02** - das echte Projekt
+    mit den Services Postgres/XW-Content-Web/XW-Studio, mit dem dieser Leitfaden
+    arbeitet. **Am 2026-09-16 auf "XW-Office" umbenannt** (passend zum GitHub-Repo-
+    Rename), damit dieses und das Duplikat unten nicht mehr verwechselt werden.
+  - `fd0ee406-9c1b-46eb-a4bd-56b53f6b9ce1`, erstellt **2026-09-15 07:28** - ein zweites,
+    praktisch leeres Projekt mit nur einem Service "XW-Studio", per Railpack (nicht
+    `Dockerfile.web`) deployt, eigene Domain `xw-studio-production.up.railway.app`.
+    Zeitlich unmittelbar vor den `fix(deploy)`-Commits desselben Morgens (09:32/09:38) -
+    passte zum Muster eines versehentlichen `railway init`/`railway up` ohne bestehenden
+    Projekt-Link waehrend fruehrerer Fehlersuche. War vermutlich nicht die Ursache des
+    seit April toten Webhooks, aber verwirrend. **Wird vom Nutzer geloescht
+    (2026-09-16).**
 
 **Nicht per CLI loesbar:** weder `railway` noch `gh` (ohne GitHub-App-Token) erlauben,
 die GitHub-App-Installation/Repo-Zuordnung programmatisch zu lesen oder neu zu
 verbinden - das geht nur ueber die Weboberflaechen. Schritte:
 
-1. **Railway-Dashboard** → Projekt "XW-Studio" (`b9ca5990-...`, **nicht** das vom
-   15.09.) → Service "XW-Content-Web" → Settings → Source.
+1. **Railway-Dashboard** → Projekt **"XW-Office"** (`b9ca5990-...`, das umbenannte,
+   **nicht** das Duplikat) → Service "XW-Content-Web" → Settings → Source.
    - Falls dort kein GitHub-Repo verbunden ist oder ein falsches/veraltetes: "Connect
-     Repo" bzw. "Disconnect" + neu verbinden, Repo `XeisWorks/XW-Office` (bzw. noch
-     als `XW-Studio` gelistet, je nach GitHub-Rename-Stand), Branch `main` waehlen.
+     Repo" bzw. "Disconnect" + neu verbinden, Repo `XeisWorks/XW-Office` waehlen,
+     Branch `main`.
 2. Falls Schritt 1 keine Option zum Verbinden zeigt bzw. die App fehlt: **GitHub** →
    oben rechts Profilbild → Settings → Applications → Installed GitHub Apps → Railway
    → Configure → sicherstellen, dass `XeisWorks/XW-Office` in der Repository-Liste der
@@ -156,10 +162,14 @@ verbinden - das geht nur ueber die Weboberflaechen. Schritte:
 3. Test: einen trivialen Commit nach `main` pushen, dann
    `railway deployment list --service XW-Content-Web` pruefen, ob ein neues
    Deployment mit aktuellem Zeitstempel erscheint.
-4. Optional Aufraeumen: das leere Duplikat-Projekt `fd0ee406-...` im Railway-Dashboard
-   pruefen (Inhalt gegenchecken) und bei Bestaetigung loeschen, um kuenftige
-   Verwechslungen zu vermeiden. **Nicht ungefragt von einer Automatisierung loeschen
-   lassen** - Projektloeschung ist nicht rueckgaengig zu machen.
+
+**Wichtig beim Dashboard-Reconnect:** falls die "Connect Repo"-Aktion dort die Option
+anbietet, ein *neues* Railway-Projekt anzulegen statt den bestehenden Service
+"XW-Content-Web" im Projekt "XW-Office" (`b9ca5990-...`) neu zu verbinden - **nicht**
+bestaetigen. Das ist vermutlich genau der Mechanismus, der am 2026-09-15 das Duplikat
+`fd0ee406-...` erzeugt hat. Immer ueber Settings → Source **innerhalb** des bestehenden
+Service arbeiten, nie ueber einen "New Project from GitHub"-Button auf der
+Projektuebersicht.
 
 Bis das erledigt ist: `scripts\deploy_web.ps1 -Fallback` bzw. `railway up` (Abschnitt 7)
 bleibt der zuverlaessige Weg.
