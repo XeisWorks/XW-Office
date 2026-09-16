@@ -23,6 +23,46 @@ Update this file at the end of every PR.
 | PR12 | Händlerfreigabe + CSV/XLSX Export | **Done and confirmed live on Railway** (`/share/{token}` is public, no bootstrap token needed) | See below. |
 | PR13–PR16 | — | Not started | |
 
+## ⚠️ Infrastructure incident (2026-09-16, discovered during PR12): DATABASE_URL was never
+set on the XW-Content-Web Railway service
+
+**Every "confirmed live" note for PR07–PR11 above was a false positive.** Every
+production check run in this session (and apparently since PR07) only ever tested the
+*no-bootstrap-token* path and asserted `401` — proof the route exists, never proof the
+DB-backed gate (`require_product_hub_enabled`) actually passes. `XW-Content-Web`'s
+Railway variables were `XW_CONTENT_BOOTSTRAP_TOKEN` / `XW_CONTENT_ENVIRONMENT` /
+`XW_CONTENT_PUBLIC_URL` only — **no `DATABASE_URL` at all** — so
+`ContentWebSettings.database_url` was always `""`, `_session_factory` was always
+`None`, and every single Product Hub endpoint (read API, edit API, sync API, sharing
+API) had been returning `503 {"detail":"Product Hub API is not
+configured/enabled"}` for every real request, this entire time. All migrations
+(009–013) landed fine regardless, because those were applied directly via `alembic
+upgrade head` against a `DATABASE_URL` from *this development machine's own shell*,
+not from Railway's environment for the service — two completely separate places
+that happened to point at the same Postgres, which is exactly why this went
+unnoticed: the data was always correct, only the *web service's own access to it*
+was never wired up.
+
+**Found via:** PR12's new public `/share/{token}` route has no bootstrap-token
+dependency at all, so an unauthenticated curl hit the DB gate directly instead of
+stopping at a 401 first — returned 503, which is what surfaced this.
+
+**Fixed:** `railway variables --service XW-Content-Web --set
+'DATABASE_URL=${{Postgres.DATABASE_URL}}'` (referencing the same Postgres service this
+whole build has been migrating against) — Railway auto-redeployed on the variable
+change (deployment `7144c5ef…`, SUCCESS). **Verified with a real unauthenticated
+request** (`/share/nonexistent-token` → `404 {"detail":"Unknown share"}`, not 503) —
+this is the first point in the whole PR07–PR12 arc where a request has been
+confirmed to actually reach the database in production.
+
+**Implication:** PR07–PR11's "confirmed live" claims in the sections below should be
+read as "code deployed and reachable at the HTTP layer," not "verified working
+end-to-end with real data" — that verification effectively happens for the first
+time now, after this fix. Recommend an explicit pass with the real bootstrap token
+(not available in this session) to click through `/api/v1/products`,
+`/app/`'s actual data rendering, etc. before trusting any of it beyond what curl-
+without-auth can prove.
+
 ## PR01 detail
 
 **Code delivered:**

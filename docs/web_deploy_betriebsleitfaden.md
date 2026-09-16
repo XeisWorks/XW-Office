@@ -261,3 +261,34 @@ railway redeploy --service XW-Content-Web   # letztes Deployment erneut ausrolle
 Fuer einen Rollback auf einen bestimmten, aelteren Stand: den gewuenschten Commit in
 `main` per `git revert` rueckgaengig machen und erneut ueber diesen Leitfaden deployen -
 kein `git reset --hard`/Force-Push auf `main`.
+
+## 11) Geloester Vorfall: `DATABASE_URL` fehlte auf `XW-Content-Web` (2026-09-16)
+
+**Befund:** `railway variables --service XW-Content-Web --kv` zeigte nur
+`XW_CONTENT_BOOTSTRAP_TOKEN`/`XW_CONTENT_ENVIRONMENT`/`XW_CONTENT_PUBLIC_URL` - **keine**
+`DATABASE_URL`. Jede Product-Hub-Route (PR07-PR12) gab bei echten Requests seit PR07
+`503 {"detail":"Product Hub API is not configured/enabled"}` zurueck. Unbemerkt, weil
+jeder bisherige Live-Check in dieser Session nur den *Kein-Token*-Pfad testete (erwartet:
+401) - das beweist nur, dass die Route existiert, nicht dass das DB-Gate durchlaesst.
+Migrationen liefen trotzdem alle sauber durch, weil `alembic upgrade head` gegen die
+`DATABASE_URL` *dieser Entwicklungsmaschine* lief, nicht gegen die des Railway-Service -
+zwei getrennte Quellen, die zufaellig auf dieselbe Postgres-Instanz zeigen. Gefunden erst
+durch PR12s neue oeffentliche `/share/{token}`-Route (kein Bootstrap-Token noetig), die
+direkt am DB-Gate scheiterte statt vorher an der Auth.
+
+**Fix:**
+
+```powershell
+railway variables --service XW-Content-Web --set 'DATABASE_URL=${{Postgres.DATABASE_URL}}'
+```
+
+Das referenziert dieselbe Postgres, gegen die dieser Leitfaden (Abschnitt 9) die ganze
+Zeit migriert - loest automatisch ein Redeploy aus. Verifiziert mit einem echten,
+unauthentifizierten Request: `/share/nonexistent-token` → `404 {"detail":"Unknown
+share"}` statt 503, d.h. das DB-Gate laesst jetzt durch.
+
+**Lehre fuer kuenftige Live-Checks:** ein `401` auf einen Product-Hub-Endpoint ohne Token
+beweist nur "Route existiert + Bootstrap-Auth greift zuerst" - nichts darueber, ob
+`DATABASE_URL` gesetzt ist. Ein echter End-to-End-Beweis braucht entweder einen
+authentifizierten Request mit dem echten Bootstrap-Token, oder eine Route ohne
+Token-Pruefung (wie `/share/{token}`) und eine erwartete Nicht-503-Antwort.
