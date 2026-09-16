@@ -1,0 +1,767 @@
+version: 1.1
+name: xw-product-hub
+owner: XeisWorks
+status: approved_for_implementation
+as_of: '2026-09-16'
+
+mission: >-
+  Build one canonical product hub on the existing XW-Office PostgreSQL/FastAPI stack.
+  The hub owns product master data, variants, identifiers, pricing, assets, improvements,
+  channel mappings, sync history and ultimately inventory. XW-Office Desktop, the responsive
+  WebUI, Wix, sevdesk and XW-Flow become clients/channels of this source of truth.
+
+non_goals_initially:
+  - replace XW-Office desktop printing with browser printing
+  - expose production PDFs publicly
+  - introduce microservices
+  - introduce Redis or RabbitMQ before proven need
+  - automatically merge fuzzy-matched products
+  - make Baserow, Airtable, Notion, Wix or sevdesk a second master database
+
+architecture:
+  style: modular_monolith_plus_worker
+  database:
+    engine: PostgreSQL
+    host_strategy: existing_Railway_DATABASE_URL
+    orm: SQLAlchemy_2
+    migrations: Alembic
+  api:
+    framework: FastAPI
+    base_package: src/xw_office/web
+    version_prefix: /api/v1
+  frontend:
+    recommended: React_TypeScript_Vite_PWA
+    responsive: true
+    targets: [windows_browser, android_browser_pwa, ios_browser_pwa]
+  worker:
+    pattern: postgres_outbox
+    deployment: separate_Railway_worker_or_periodic_worker
+  object_storage:
+    type: S3_compatible
+    use_for:
+      - cover_images
+      - score_samples
+      - private_web_previews
+      - generated_exports
+    not_required_initially_for:
+      - production_print_pdfs
+  desktop:
+    role: api_client_plus_local_print_agent
+
+source_of_truth:
+  product_master: product_hub
+  variants: product_hub
+  identifiers: product_hub
+  prices: product_hub
+  tags: product_hub
+  assets_metadata: product_hub
+  improvements: product_hub
+  print_rules: product_hub
+  inventory_transition: sevdesk_shadowed_into_hub
+  inventory_final: product_hub
+  inventory_final_decision: confirmed_non_optional
+  wix: synchronized_channel
+  sevdesk: accounting_article_channel
+  xw_flow: read_and_task_client
+
+field_ownership:
+  product_name: hub
+  description: hub
+  sku: hub
+  variant_options: hub
+  identifiers: hub
+  retail_price: hub
+  b2b_price: hub
+  internal_category: hub
+  internal_tags: hub
+  wix_category_mapping: hub
+  sevdesk_category_mapping: hub
+  product_media: hub
+  print_asset_path: hub
+  improvement_items: hub
+  inventory_policy: hub
+  inventory_quantity:
+    transition: sevdesk
+    final: hub
+    after_cutover_external_changes: drift_conflict_not_authoritative_pull
+
+sync_conflict_policy:
+  critical_fields:
+    - sku
+    - retail_price
+    - inventory_quantity
+    - product_name
+    - identifiers
+  default_behavior: create_conflict_do_not_silently_overwrite
+  conflict_actions:
+    - keep_hub_and_push
+    - accept_external_into_hub
+    - ignore_once
+  store:
+    - hub_value
+    - external_value
+    - detected_at
+    - external_updated_at
+    - resolution
+    - resolved_by
+    - resolved_at
+
+imports:
+  wix_initial:
+    mode: staging_then_commit
+    steps:
+      - detect_catalog_version
+      - page_all_products
+      - fetch_full_product_details_for_media
+      - query_variants
+      - query_inventory_items
+      - query_categories
+      - persist_raw_external_snapshots
+      - generate_exact_match_candidates
+      - generate_fuzzy_suggestions_without_auto_merge
+      - show_conflict_report
+      - require_commit_action
+    matching_priority:
+      - existing_external_id
+      - exact_sku
+      - exact_sku_alias
+      - exact_identifier
+      - manual_review_of_name_similarity
+    media_mapping:
+      first_product_media: COVER
+      subsequent_product_media: SAMPLE_SCORE
+      preserve:
+        - wix_media_id
+        - wix_url
+        - sort_order
+        - source_updated_at
+    variants:
+      rule: every_imported_sku_becomes_a_variant
+      no_options_product: create_default_variant
+      initial_parenting: one_product_per_known_sku_unless_relationship_is_already_proven
+      automatic_fuzzy_grouping: false
+  sevdesk_initial:
+    mode: staging_then_commit
+    fields:
+      - part_id
+      - part_number
+      - name
+      - text
+      - category_id
+      - category_name
+      - stock
+      - stock_enabled
+      - unity
+      - price_net
+      - price_gross
+      - tax_rate
+      - internal_comment
+  excel_initial:
+    file: Produktpalette.xlsx
+    mode: staging_only_until_matches_approved
+    sources:
+      Produktpalette:
+        purpose: commercial_product_and_price_reference
+      Amazon:
+        purpose: identifier_mapping
+      Händler:
+        purpose: b2b_view_and_price_reference
+      Besetzungen:
+        purpose: controlled_vocabulary_seed
+      XeisWorks:
+        purpose: legacy_catalog_view
+      MusikHeroes:
+        purpose: legacy_series_variant_view
+
+product_modeling:
+  safe_migration_rule: >-
+    Import each known SKU first as its own canonical product with one default variant unless an
+    existing canonical relationship is already proven beyond ambiguity. Then run a separate,
+    explicit curated grouping workflow. Never fuzzy-auto-merge.
+  curated_grouping:
+    enabled_after_safe_import: true
+    priority_scope: musikheroes_and_known_variant_families
+    preview_before_commit: true
+    audited: true
+    preserve:
+      - sku
+      - identifiers
+      - prices
+      - channel_mappings
+      - assets
+      - audit_history
+  identifiers:
+    schemes: [ISBN13, ISBN10, EAN, UPC, ASIN, FNSKU, BARCODE, LEGACY_SKU, VLB_ID, CUSTOM]
+  status: [draft, review, live, archived]
+  product_types: [physical, digital, hybrid]
+
+prices:
+  strategy: price_lists
+  price_lists_seed:
+    - code: RETAIL_EUR
+      label: Retail EUR
+    - code: B2B_EUR
+      label: Händler/B2B EUR
+  current_b2b_policy:
+    dealer_specific_prices_active: false
+    all_dealers_use: B2B_EUR
+    future_dealer_specific_lists_supported: true
+    future_assignment: shared_catalog_view.price_list_id
+  required_fields:
+    - currency
+    - net_amount
+    - gross_amount
+    - tax_rate_or_tax_class
+    - valid_from
+  rules:
+    - never_store_semantically_ambiguous_netto_1_netto_2_columns
+    - price_changes_are_audited
+    - channel_specific_price_can_derive_from_named_price_list
+
+categories_and_tags:
+  internal_categories:
+    hierarchical: true
+    examples: [MusikHeroes, Blech7er, Blech4er, Tanzlmusi, Unterrichtsliteratur]
+  tags:
+    many_to_many: true
+    examples: [B2B, POD, Neuauflage, Amazon, VLB, Händler-Export, AudioPlayer]
+  sevdesk:
+    store_external_category_id: true
+    store_external_category_name: true
+    use_mapping_table: true
+    sync_internal_tags_as_sevdesk_categories: false
+
+assets:
+  roles: [COVER, SAMPLE_SCORE, PRINT_PDF, PREVIEW_PDF, AUDIO, DOWNLOAD, OTHER]
+  storage_kinds: [OBJECT_STORAGE, NETWORK_PATH, WIX_MEDIA, EXTERNAL_URL]
+  integrity:
+    calculate_checksum: true
+    store_size: true
+    store_mime_type: true
+    healthcheck_network_paths: true
+  print_pdf_policy:
+    initial_storage_kind: NETWORK_PATH
+    webui_metadata_and_health_only: true
+    browser_download_endpoint: false
+    browser_streaming_endpoint: false
+  public_share_rules:
+    allow_by_default: [COVER, SAMPLE_SCORE]
+    deny_by_default: [PRINT_PDF, AUDIO, DOWNLOAD, OTHER]
+
+improvements:
+  implementation: relational_items_not_single_overwritten_blob
+  ui: simple_add_text_input_plus_list
+  fields:
+    - title
+    - description
+    - source
+    - source_reference
+    - severity
+    - status
+    - created_by
+    - created_at
+    - resolved_at
+    - resolved_in_edition_id
+  statuses: [open, planned, resolved, wont_fix]
+  severity: [info, minor, major, critical]
+  on_new_edition_task:
+    include_all_open_items: true
+
+inventory:
+  model: append_only_movement_ledger_plus_materialized_stock
+  locations:
+    initial:
+      - code: MAIN
+        label: XeisWorks Hauptlager
+  quantities:
+    - on_hand
+    - reserved
+    - available
+  available_formula: on_hand_minus_reserved
+  policies_per_variant_location:
+    - reorder_point
+    - target_stock
+    - default_reprint_qty
+  movement_reasons:
+    - import_baseline
+    - sale
+    - print_run
+    - return
+    - damage
+    - manual_adjustment
+    - recount
+  required_movement_fields:
+    - idempotency_key
+    - source
+    - external_reference
+    - occurred_at
+    - actor
+  no_direct_stock_overwrite_without_movement: true
+  final_master_cutover:
+    required: true
+    authority_after_cutover: product_hub
+    external_systems: [sevdesk, wix]
+    external_role_after_cutover: projection_only
+    external_stock_drift: create_sync_conflict
+    prerequisites:
+      - all_productive_stock_writes_use_ledger
+      - unresolved_inventory_drift_count_is_zero
+      - reconciliation_passes
+      - rollback_runbook_tested
+
+inventory_alerts:
+  types: [low_stock, out_of_stock, sync_drift]
+  lifecycle: [open, acknowledged, resolved]
+  trigger_rule: threshold_crossing_only
+  dedup_key: variant_id_plus_location_plus_alert_type_plus_open_state
+  xw_flow_task:
+    create: true
+    endpoint: POST /api/v1/tasks
+    planning_mode: pipeline
+    external_entity_type: inventory_alert
+    external_entity_id: alert_uuid
+    external_deep_link: product_hub_product_url
+    client_request_id: deterministic_uuid5_from_alert_uuid
+    notes_include:
+      - current_stock
+      - threshold
+      - target_stock
+      - suggested_reprint_qty
+      - open_improvement_count
+
+xw_flow:
+  inventory_tile:
+    source_endpoint: GET /api/v1/inventory/summary
+    fields:
+      - physical_products
+      - low_stock
+      - out_of_stock
+      - open_reprint_alerts
+      - sync_errors
+      - updated_at
+    click_target: product_hub_inventory_view
+  alert_list:
+    source_endpoint: GET /api/v1/inventory/alerts?status=open
+  new_edition:
+    product_hub_endpoint: POST /api/v1/products/{product_id}/plan-new-edition
+    creates_xw_flow_task: true
+    task_context:
+      - product_name
+      - sku_list
+      - current_edition
+      - open_improvements
+      - print_asset_health
+      - identifiers
+
+sharing:
+  entity: shared_catalog_view
+  token_storage: hashed_only
+  default_mode: live_read_only
+  filters_server_side: true
+  field_whitelist_server_side: true
+  features:
+    - optional_expiration
+    - optional_password
+    - revoke
+    - csv_export
+    - xlsx_export
+    - image_display
+  export_same_query_as_web_view: true
+  export_metadata:
+    - generated_at
+    - view_title
+  b2b_default_filter:
+    tags_contains: B2B
+    product_status: live
+    active: true
+  never_expose:
+    - network_print_paths
+    - production_pdf_download_url
+    - internal_improvements
+    - purchase_cost
+    - sync_payloads
+    - api_ids
+    - internal_comments
+
+readiness:
+  wix:
+    required:
+      - sku
+      - name
+      - retail_price
+      - cover
+      - description
+      - wix_category_mapping
+  b2b:
+    required:
+      - tag_B2B
+      - sku
+      - name
+      - b2b_price
+      - cover
+      - description
+    conditional:
+      ISBN13: physical_publication_family
+  print:
+    required:
+      - print_pdf_path
+      - asset_health_ok
+      - print_profile_or_plan
+  sevdesk:
+    required:
+      - sku
+      - name
+      - sevdesk_category_mapping
+      - tax_rate
+      - unity
+
+api:
+  products:
+    - 'GET /api/v1/products'
+    - 'POST /api/v1/products'
+    - 'GET /api/v1/products/{product_id}'
+    - 'PATCH /api/v1/products/{product_id}'
+    - 'POST /api/v1/products/{product_id}/archive'
+  variants:
+    - 'POST /api/v1/products/{product_id}/variants'
+    - 'PATCH /api/v1/variants/{variant_id}'
+  improvements:
+    - 'GET /api/v1/products/{product_id}/improvements'
+    - 'POST /api/v1/products/{product_id}/improvements'
+    - 'PATCH /api/v1/improvements/{improvement_id}'
+    - 'POST /api/v1/products/{product_id}/plan-new-edition'
+  assets:
+    - 'POST /api/v1/products/{product_id}/assets'
+    - 'PATCH /api/v1/assets/{asset_id}'
+    - 'POST /api/v1/assets/{asset_id}/healthcheck'
+  inventory:
+    - 'GET /api/v1/inventory/summary'
+    - 'GET /api/v1/inventory/alerts'
+    - 'POST /api/v1/inventory/movements'
+    - 'POST /api/v1/inventory/recount'
+    - 'PATCH /api/v1/variants/{variant_id}/inventory-policy'
+  sync:
+    - 'POST /api/v1/sync/wix/import/preview'
+    - 'POST /api/v1/sync/wix/import/commit'
+    - 'POST /api/v1/sync/wix/push'
+    - 'POST /api/v1/sync/sevdesk/pull'
+    - 'POST /api/v1/sync/sevdesk/push'
+    - 'GET /api/v1/sync/conflicts'
+    - 'POST /api/v1/sync/conflicts/{conflict_id}/resolve'
+  sharing:
+    - 'POST /api/v1/shared-views'
+    - 'POST /api/v1/shared-views/{id}/revoke'
+    - 'GET /share/{token}'
+    - 'GET /share/{token}/export.csv'
+    - 'GET /share/{token}/export.xlsx'
+
+web_ui:
+  pages:
+    dashboard:
+      widgets:
+        - total_products
+        - wix_ready
+        - b2b_ready
+        - low_stock
+        - out_of_stock
+        - sync_conflicts
+        - missing_cover
+        - open_improvements
+        - broken_print_paths
+    product_list:
+      capabilities:
+        - global_search
+        - filter_chips
+        - saved_views
+        - configurable_columns
+        - bulk_edit
+        - csv_export
+        - xlsx_export
+        - create_shared_view
+    product_detail:
+      tabs:
+        - master_data
+        - variants
+        - prices
+        - identifiers
+        - categories_tags
+        - assets
+        - inventory
+        - improvements
+        - channels
+        - audit_history
+    sync_center:
+      capabilities:
+        - last_pull_push
+        - per_channel_presence
+        - conflict_diff
+        - retry
+        - payload_inspection_admin_only
+    inventory:
+      capabilities:
+        - low_stock_filter
+        - out_of_stock_filter
+        - recount
+        - movement_history
+        - alert_acknowledge
+
+security:
+  internal_auth:
+    replace_bootstrap_token: true
+    roles: [admin, editor, viewer]
+    service_tokens: [xw_office_desktop, xw_flow, worker]
+  public_share:
+    random_high_entropy_token: true
+    store_token_hash_only: true
+    field_whitelist_mandatory: true
+    rate_limit: true
+    revocable: true
+  audit:
+    record:
+      - actor
+      - source
+      - entity
+      - entity_id
+      - changed_fields
+      - before
+      - after
+      - timestamp
+      - correlation_id
+
+phases:
+  - id: P0
+    title: Baseline and staging audit
+    writes_to_external_systems: false
+    deliverables:
+      - staging schema
+      - export current inventory.products JSON
+      - Wix full read import
+      - sevdesk full Part read import
+      - Excel parse/import
+      - duplicate report
+      - SKU match report
+      - identifier conflict report
+      - price drift report
+      - inventory drift report
+    acceptance:
+      - no Wix/sevdesk writes occur
+      - every source row has provenance
+      - uncertain matches require manual decision
+
+  - id: P1
+    title: Canonical relational schema
+    deliverables:
+      - Alembic migrations
+      - SQLAlchemy models
+      - repository layer
+      - audit log
+      - unit tests
+    acceptance:
+      - canonical products query by UUID and SKU
+      - identifiers unique by scheme/value
+      - tags and categories relational
+      - prices have explicit price-list semantics
+
+  - id: P2
+    title: Import commit and legacy bridge
+    deliverables:
+      - approved staging commit
+      - legacy inventory.products read bridge
+      - compatibility ProductCatalogService backed by repositories
+    acceptance:
+      - existing desktop flows keep working
+      - no duplicate SKU introduced
+      - legacy JSON no longer receives independent business logic changes
+
+  - id: P2B
+    title: Curated product and variant grouping
+    deliverables:
+      - grouping candidate report from MusikHeroes/Excel/Wix relationships
+      - preview UI or review command showing parent/variant result before commit
+      - explicit merge/reparent service with audit log
+      - preservation checks for SKU, identifiers, prices, mappings and assets
+    acceptance:
+      - no fuzzy grouping commits automatically
+      - every grouping is explicit and audited
+      - all known SKUs remain resolvable after grouping
+      - no identifier, price, channel mapping or asset is lost
+
+  - id: P3
+    title: Read-only WebUI
+    deliverables:
+      - PWA shell
+      - product list
+      - product detail
+      - search/filter
+      - asset preview
+      - sync timestamps
+    acceptance:
+      - usable on Android, iOS and Windows browser
+      - no local network path required for ordinary browsing
+      - PRINT_PDF shows metadata/health only and has no browser download
+
+  - id: P4
+    title: Central editing and audit
+    deliverables:
+      - edit forms
+      - optimistic locking
+      - audit history
+      - bulk edit
+      - improvements
+      - readiness rules
+    acceptance:
+      - every mutation audited
+      - concurrent stale edit returns conflict instead of silent overwrite
+
+  - id: P5
+    title: Wix master sync
+    deliverables:
+      - outbox
+      - Wix worker
+      - revisions
+      - media mapping
+      - conflict UI
+      - reconciliation job
+    acceptance:
+      - hub-master fields push reliably
+      - failed jobs retry
+      - external drift becomes visible conflict
+
+  - id: P6
+    title: B2B sharing and exports
+    deliverables:
+      - saved shared views
+      - tokenized public route
+      - CSV export
+      - XLSX export
+      - revoke and expiry
+    acceptance:
+      - public user sees only whitelisted fields
+      - B2B filter applied server-side
+      - CSV/XLSX row set equals web view
+      - all initial dealer shares use B2B_EUR
+      - schema can assign another price_list_id later without migration
+
+  - id: P7
+    title: Inventory convergence
+    deliverables:
+      - inventory_stock
+      - inventory_movement ledger
+      - migration baseline
+      - sevdesk shadow comparison
+      - inventory policy per variant
+    acceptance:
+      - all XW-Office stock changes create movements
+      - hub and sevdesk drift report reaches zero before cutover
+
+  - id: P8
+    title: Inventory master cutover and XW-Flow
+    deliverables:
+      - mandatory cutover: hub stock becomes authoritative
+      - disable independent legacy/local stock writes
+      - push projections to sevdesk/Wix
+      - detect direct external stock changes as drift conflicts
+      - inventory alerts
+      - XW-Flow inventory tile
+      - idempotent low-stock tasks
+      - new-edition tasks with improvements
+    acceptance:
+      - one threshold crossing creates one open alert/task
+      - retry does not duplicate tasks
+      - inventory tile is read-only from hub API
+      - sevdesk and Wix are no longer stock masters
+      - direct external stock edits cannot silently replace hub stock
+
+  - id: P9
+    title: Legacy cleanup
+    deliverables:
+      - remove inventory.products as product source
+      - remove inventory.stock_levels as independent stock source
+      - remove duplicate SKU parsing from UI
+      - migration documentation
+    acceptance:
+      - all product UIs use Product Hub contracts
+      - one inventory truth
+      - no production feature writes legacy JSON product state
+
+implementation_order_first_prs:
+  - PR01_schema_and_repository_contracts
+  - PR02_import_staging_models
+  - PR03_wix_full_importer_media_variants_inventory
+  - PR04_sevdesk_importer_category_stock
+  - PR05_excel_importer_and_match_report
+  - PR06_canonical_commit_service
+  - PR07_product_api_read_endpoints
+  - PR07B_curated_variant_grouping
+  - PR08_webui_read_only
+  - PR09_edit_audit_improvements
+  - PR10_outbox_sync_engine
+  - PR11_wix_push_reconcile_conflicts
+  - PR12_shared_views_exports
+  - PR13_inventory_ledger_shadow_mode
+  - PR14_xw_flow_inventory_and_alerts
+  - PR15_inventory_cutover
+  - PR16_legacy_json_removal
+
+testing:
+  unit:
+    - sku_normalization
+    - identifier_uniqueness
+    - price_semantics
+    - media_role_mapping
+    - readiness_calculation
+    - threshold_crossing
+    - idempotent_task_key
+    - conflict_detection
+  integration:
+    - wix_import_fixture_v1
+    - wix_import_fixture_v3
+    - sevdesk_part_import_fixture
+    - outbox_retry
+    - xw_flow_task_retry
+    - shared_view_field_whitelist
+    - xlsx_csv_query_parity
+  migration:
+    - no_lost_inventory_products_rows
+    - all_known_skus_resolvable
+    - all_amazon_isbn_rows_mapped_or_reported
+    - all_existing_print_paths_preserved
+    - stock_baseline_reconciled
+  e2e:
+    - edit_product_then_push_wix
+    - public_b2b_share_no_internal_fields
+    - stock_threshold_creates_one_task
+    - new_edition_task_contains_open_improvements
+
+observability:
+  correlation_id_every_sync_job: true
+  metrics:
+    - sync_jobs_success_total
+    - sync_jobs_failed_total
+    - sync_conflicts_open
+    - inventory_drift_count
+    - low_stock_open
+    - wix_api_latency
+    - sevdesk_api_latency
+  logs:
+    structured: true
+    never_log:
+      - api_tokens
+      - share_tokens
+      - passwords
+
+confirmed_decisions:
+  confirmed_at: '2026-09-16'
+  final_inventory_master:
+    value: product_hub
+    required_cutover: true
+  dealer_specific_price_lists:
+    current: one_shared_B2B_EUR_price_list
+    future: schema_support_now_ui_later
+  production_pdf_download_in_webui:
+    value: false
+    policy: path_metadata_and_healthcheck_only
+  variant_grouping:
+    initial: one_product_plus_default_variant_per_known_sku
+    later: explicit_curated_grouping
+    automatic_fuzzy_merge: false
