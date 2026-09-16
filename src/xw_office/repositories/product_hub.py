@@ -19,12 +19,17 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
 from xw_office.models.product_hub import (
+    AuditLog,
+    Category,
     ChannelMapping,
     Product,
     ProductAsset,
+    ProductCategory,
     ProductIdentifier,
     ProductSkuAlias,
+    ProductTag,
     ProductVariant,
+    Tag,
 )
 
 _SLUG_INVALID_CHARS = re.compile(r"[^a-z0-9]+")
@@ -363,6 +368,174 @@ class ProductHubRepository:
                     ProductIdentifier.normalized_value == normalized_value,
                 )
             )
+
+    def create_channel_mapping(
+        self,
+        *,
+        channel: str,
+        entity_type: str,
+        internal_entity_id: uuid.UUID,
+        external_id: str,
+        sync_status: str = "synced",
+    ) -> ChannelMapping:
+        with self._scope() as session:
+            mapping = ChannelMapping(
+                id=uuid.uuid4(),
+                channel=channel,
+                entity_type=entity_type,
+                internal_entity_id=internal_entity_id,
+                external_id=external_id,
+                sync_status=sync_status,
+            )
+            session.add(mapping)
+            session.flush()
+            return mapping
+
+    def add_asset(
+        self,
+        *,
+        product_id: uuid.UUID,
+        role: str,
+        storage_kind: str,
+        uri: str,
+        variant_id: uuid.UUID | None = None,
+        sort_order: int = 0,
+        source_channel: str | None = None,
+        source_external_id: str | None = None,
+        source_url: str | None = None,
+        public_share_allowed: bool = False,
+    ) -> ProductAsset:
+        with self._scope() as session:
+            asset = ProductAsset(
+                id=uuid.uuid4(),
+                product_id=product_id,
+                variant_id=variant_id,
+                role=role,
+                sort_order=sort_order,
+                storage_kind=storage_kind,
+                uri=uri,
+                source_channel=source_channel,
+                source_external_id=source_external_id,
+                source_url=source_url,
+                public_share_allowed=public_share_allowed,
+                health_status="unknown",
+            )
+            session.add(asset)
+            session.flush()
+            return asset
+
+    # -- categories / tags ---------------------------------------------------------
+
+    def get_or_create_category(self, *, code: str, name: str) -> Category:
+        with self._scope() as session:
+            existing = session.scalar(select(Category).where(Category.code == code))
+            if existing is not None:
+                return existing
+            category = Category(id=uuid.uuid4(), code=code, name=name)
+            session.add(category)
+            session.flush()
+            return category
+
+    def list_product_categories(self, product_id: uuid.UUID) -> list[ProductCategory]:
+        with self._scope() as session:
+            stmt = select(ProductCategory).where(ProductCategory.product_id == product_id)
+            return list(session.scalars(stmt).all())
+
+    def add_product_category(
+        self, *, product_id: uuid.UUID, category_id: uuid.UUID, is_primary: bool = False
+    ) -> ProductCategory:
+        with self._scope() as session:
+            existing = session.get(ProductCategory, (product_id, category_id))
+            if existing is not None:
+                return existing
+            link = ProductCategory(product_id=product_id, category_id=category_id, is_primary=is_primary)
+            session.add(link)
+            session.flush()
+            return link
+
+    def get_or_create_tag(self, *, code: str, label: str) -> Tag:
+        with self._scope() as session:
+            existing = session.scalar(select(Tag).where(Tag.code == code))
+            if existing is not None:
+                return existing
+            tag = Tag(id=uuid.uuid4(), code=code, label=label)
+            session.add(tag)
+            session.flush()
+            return tag
+
+    def list_product_tags(self, product_id: uuid.UUID) -> list[ProductTag]:
+        with self._scope() as session:
+            stmt = select(ProductTag).where(ProductTag.product_id == product_id)
+            return list(session.scalars(stmt).all())
+
+    def add_product_tag(self, *, product_id: uuid.UUID, tag_id: uuid.UUID) -> ProductTag:
+        with self._scope() as session:
+            existing = session.get(ProductTag, (product_id, tag_id))
+            if existing is not None:
+                return existing
+            link = ProductTag(product_id=product_id, tag_id=tag_id)
+            session.add(link)
+            session.flush()
+            return link
+
+    # -- variants (grouping support) -------------------------------------------------
+
+    def move_variant(self, variant_id: uuid.UUID, *, target_product_id: uuid.UUID) -> ProductVariant:
+        """Re-parent a variant to a different product (used by curated grouping, PR06).
+
+        Identifiers/assets attached via ``variant_id`` follow automatically (their FK
+        is the variant, not the product); only product-scoped rows need separate moves.
+        """
+        with self._scope() as session:
+            variant = session.get(ProductVariant, variant_id)
+            if variant is None:
+                raise KeyError(f"Variant {variant_id} not found")
+            variant.product_id = target_product_id
+            session.flush()
+            return variant
+
+    # -- audit log --------------------------------------------------------------
+
+    def record_audit(
+        self,
+        *,
+        actor_type: str,
+        entity_type: str,
+        entity_id: uuid.UUID,
+        action: str,
+        source: str = "product_hub",
+        actor_id: str = "",
+        changed_fields: list[str] | None = None,
+        before_data: dict[str, object] | None = None,
+        after_data: dict[str, object] | None = None,
+        correlation_id: uuid.UUID | None = None,
+    ) -> AuditLog:
+        with self._scope() as session:
+            entry = AuditLog(
+                id=uuid.uuid4(),
+                actor_type=actor_type,
+                actor_id=actor_id or None,
+                source=source,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                action=action,
+                changed_fields=list(changed_fields or []),
+                before_data=before_data,
+                after_data=after_data,
+                correlation_id=correlation_id,
+            )
+            session.add(entry)
+            session.flush()
+            return entry
+
+    def list_audit_log(self, entity_type: str, entity_id: uuid.UUID) -> list[AuditLog]:
+        with self._scope() as session:
+            stmt = (
+                select(AuditLog)
+                .where(AuditLog.entity_type == entity_type, AuditLog.entity_id == entity_id)
+                .order_by(AuditLog.created_at)
+            )
+            return list(session.scalars(stmt).all())
 
     # -- internal -------------------------------------------------------------
 

@@ -207,6 +207,19 @@ class ProductHubImportRepository:
             session.flush()
             return staging_product
 
+    def mark_committed(self, staging_product_id: uuid.UUID, *, product_id: uuid.UUID) -> StagingProduct:
+        """Idempotency anchor for the PR06 commit service: records which canonical
+        product a staging row became, so re-running a commit is a safe no-op."""
+        with self._scope() as session:
+            staging_product = session.get(StagingProduct, staging_product_id)
+            if staging_product is None:
+                raise KeyError(f"Staging product {staging_product_id} not found")
+            staging_product.match_status = "committed"
+            staging_product.committed_at = datetime.datetime.now(datetime.timezone.utc)
+            staging_product.committed_product_id = product_id
+            session.flush()
+            return staging_product
+
     def merge_normalized_fields(
         self, staging_product_id: uuid.UUID, updates: dict[str, object]
     ) -> StagingProduct:

@@ -14,7 +14,8 @@ Update this file at the end of every PR.
 | PR03 | Wix read importer | **Done (code), reads only via fixtures — never called against the live Wix API in this session** | See below. |
 | PR04 | sevdesk read importer | **Done** | See below. |
 | PR05 | Excel import and matching | **Done** | See below. |
-| PR06–PR16 | — | Not started | |
+| PR06 | Import commit service + curated grouping | **In progress (commit service done, grouping next)** | See below. |
+| PR07–PR16 | — | Not started | |
 
 ## PR01 detail
 
@@ -299,3 +300,64 @@ single pre-existing flaky UVA failure, nothing new.
 review-report). PR06 (import commit service + curated grouping) is the natural next step: it
 will read `match_status`/`proposed_product_id` plus `import_match_candidate` rows this engine
 produced, let a human approve/reject, and only then write to the canonical schema.
+
+## PR06 detail (part 1: import commit service)
+
+**Code delivered:**
+- `src/xw_office/services/product_hub/import_commit.py` — `ImportCommitService`, one DB
+  transaction per staging row (`session_scope` per call, `ProductHubRepository` and
+  `ProductHubImportRepository` share that one `Session` so canonical writes and the staging
+  row's status update are atomic together):
+  - `approve_match`/`reject_match` — human review step; `approve_match` only allowed from
+    `exact_match`/`suggested_match` (never silently promotes a `conflict`).
+  - `preview_commit` — read-only dry run: `create` / `link_existing` / `already_committed` /
+    `blocked` (with a reason), plus staged identifier/asset counts and suggested tags.
+  - `create_from_staging` — the "safe 1:1 import" path: only from `unmatched`/`rejected`,
+    requires a SKU, creates one product + one default variant, then enriches it.
+  - `commit_approved_match` — the "link to existing" path: only from `approved`, enriches the
+    already-existing target product, never touches its core fields (name/sku/...), only adds
+    what is missing.
+  - `commit_import_batch` — orchestrates a whole batch: auto-creates every `unmatched` row
+    (no ambiguity to resolve), links every `approved` row, and explicitly does **not** touch
+    `suggested_match`/`conflict`/`rejected` rows — those need a human decision first and are
+    counted as `skipped_needs_review`. Per-row try/except: one row's `CommitError` is recorded
+    in `errors` and does not abort the rest of the batch.
+  - Idempotency anchor: `StagingProduct.committed_product_id`/`committed_at`
+    (`ProductHubImportRepository.mark_committed`, new) — re-running `create_from_staging`,
+    `commit_approved_match`, or a whole `commit_import_batch` on already-committed rows is a
+    safe no-op that returns the existing product instead of writing anything new.
+  - Enrichment (`_merge_staging_extras`, shared by both commit paths): staged identifiers
+    (conflict-checked against the canonical `product_identifier` table — a genuine conflict
+    raises `CommitError` and commits nothing for that row), staged assets (deduped by
+    `role`+`source_external_id`, stored as `storage_kind='EXTERNAL_URL'` — no download/mirroring
+    in this PR, that stays a later asset-pipeline concern), Excel `staging_category` rows become
+    real internal `category`/`product_category` rows (Wix/sevdesk staged categories are
+    deliberately left in staging — mapping *external* categories needs its own curated step, a
+    channel_category_mapping, not silent reuse as internal taxonomy), and
+    `normalized_fields["suggested_tags"]` (the PR05 Amazon-tag mechanism) becomes real
+    `tag`/`product_tag` rows — this is where "Amazon is a tag, not a category" actually lands in
+    the canonical schema.
+  - `wix`/`sevdesk` sourced rows get a `channel_mapping` row created automatically if one
+    doesn't already exist for that `(channel, external_id)`.
+  - Every commit/approve/reject writes an `audit_log` entry
+    (`ProductHubRepository.record_audit`/`list_audit_log`, new).
+  - **No `product_price` rows are created.** Given the Excel importer's explicit
+    netto-ambiguity warnings (PR05), auto-writing a price would mean guessing at real business
+    pricing — that stays a deliberate, reviewed step (PR09 edit API), not part of this PR.
+- `ProductHubRepository` (PR01) gained: `create_channel_mapping`, `add_asset`,
+  `get_or_create_category`/`list_product_categories`/`add_product_category`,
+  `get_or_create_tag`/`list_product_tags`/`add_product_tag`, `move_variant` (used by the
+  grouping half below), `record_audit`/`list_audit_log` — all additive.
+- `ProductHubImportRepository` (PR02) gained `mark_committed`.
+
+**Verified:** `pytest tests/` — 1121 passed (+19 new in
+`test_product_hub_import_commit_service.py`: create/link/idempotency/status-guard tests for
+both commit paths, the identifier-conflict-aborts-cleanly case, channel-mapping and
+Excel-category enrichment, batch orchestration (create+link+skip+idempotent-rerun+
+error-isolation), and all four `preview_commit` outcomes); `ruff check src/` clean; `mypy`
+clean on every file this touched. Same single pre-existing flaky UVA failure, nothing new.
+
+**No migration needed:** PR06 only writes through PR01/PR02's existing schema.
+
+Grouping (`group_products_into_parent`/`move_variant_to_product`) is the second half of PR06,
+in progress next.
