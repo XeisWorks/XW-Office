@@ -10,8 +10,12 @@ import secrets
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
+from starlette.types import Scope
 
 from xw_office import __version__
 from xw_office.content import BrandProfile, BrandProfileCatalog
@@ -47,6 +51,10 @@ class ContentWebSettings:
     #: copy of this flag (core/config.py) defaults to off for the same reason in
     #: reverse: nothing read it before this PR existed.
     product_hub_catalog_read_enabled: bool = True
+    #: Built PR08 React/PWA bundle (`npm run build` output of web/product-hub/).
+    #: Served same-origin at /app/ when present; absent in plain-API deployments
+    #: and in most local dev setups, where the mount below is simply skipped.
+    product_hub_web_dist: Path = _REPOSITORY_ROOT / "web" / "product-hub" / "dist"
 
     @classmethod
     def from_environment(cls) -> "ContentWebSettings":
@@ -58,7 +66,24 @@ class ContentWebSettings:
             product_hub_catalog_read_enabled=_env_flag(
                 "XW_PRODUCT_HUB_CATALOG_READ_ENABLED", default=True
             ),
+            product_hub_web_dist=Path(
+                os.getenv("XW_PRODUCT_HUB_WEB_DIST", "").strip()
+                or (_REPOSITORY_ROOT / "web" / "product-hub" / "dist")
+            ),
         )
+
+
+class _SPAStaticFiles(StaticFiles):
+    """Serves the built PR08 bundle, falling back to index.html for client-side
+    routes (e.g. /app/products/<id>) so React Router - not a 404 - handles them."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == status.HTTP_404_NOT_FOUND:
+                return await super().get_response("index.html", scope)
+            raise
 
 
 def _landing_page(settings: ContentWebSettings) -> str:
@@ -156,6 +181,13 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
         build_products_router(get_product_repo),
         dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
     )
+
+    if resolved.product_hub_web_dist.is_dir():
+        app.mount(
+            "/app",
+            _SPAStaticFiles(directory=resolved.product_hub_web_dist, html=True),
+            name="product-hub-web",
+        )
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def landing() -> str:

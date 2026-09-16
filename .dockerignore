@@ -1,2 +1,8 @@
 # Raw operational exports may contain personal shipment data and are never build inputs.
 docs/invoices/Sendungen_*.csv
+
+# PR08 frontend: the web-build Docker stage runs its own `npm ci`, so the host's
+# local node_modules/dist (if any) must never leak into the build context - they
+# can be stale, contain platform-specific native binaries, or just be huge.
+web/product-hub/node_modules/
+web/product-hub/dist/

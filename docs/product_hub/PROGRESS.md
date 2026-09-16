@@ -16,7 +16,8 @@ Update this file at the end of every PR.
 | PR05 | Excel import and matching | **Done** | See below. |
 | PR06 | Import commit service + curated grouping | **Done** | See below. |
 | PR07 | Product Hub Read API | **Done and confirmed live on Railway** (`/api/v1/products` → 401 on the production domain) | See below. |
-| PR08–PR16 | — | Not started | |
+| PR08 | Read-only WebUI/PWA | **Done (code, builds clean, not yet deployed)** | See below. |
+| PR09–PR16 | — | Not started | |
 
 ## PR01 detail
 
@@ -506,3 +507,48 @@ runs the exact CI quality gate, verifies branch/upstream/clean tree, pushes, wat
 the resulting deployment, and — only with explicit `-Fallback` — triggers `railway up` as a
 manual replacement path) and `docs/web_deploy_betriebsleitfaden.md` (the operating runbook,
 matching the tone/structure of `docs/multi_pc_betriebsleitfaden.md`).
+
+## PR08 detail
+
+**Code delivered:** `web/product-hub/` — a React 18 + TypeScript + Vite PWA, built as a static
+bundle and served **same-origin** by the existing `xw_office.web.app` FastAPI service (no
+separate deployment, no CORS). Read-only, mirrors the PR07 API exactly:
+
+- `src/api/types.ts` / `src/api/client.ts` — hand-kept mirror of `web/schemas/products.py`
+  (no shared codegen for this small, slow-moving surface); token-based auth reusing the same
+  bootstrap-bearer-token as the rest of the Content API, entered once via `TokenGate` and stored
+  in `localStorage`.
+- `src/pages/DashboardPage.tsx` — readiness tiles. Deliberately limited to what
+  `/api/v1/catalog/readiness-summary` can compute today (total/wix/b2b/print/sevdesk-ready,
+  missing-cover, open-improvements); the build plan's low_stock/out_of_stock/sync_conflicts
+  widgets need the inventory ledger and sync-conflict tables from later PRs and are not faked.
+- `src/pages/ProductListPage.tsx` — search/status filter + paginated table over
+  `ProductListItem` fields only (no per-row N+1 readiness/channel calls).
+- `src/pages/ProductDetailPage.tsx` — tabbed read-only sections (variants, assets/print-health,
+  sync/channels, improvements, audit-log). Asset `uri` values are always rendered as plain text,
+  never as a link — see the `ProductAsset` comment in `types.ts` for why (network paths /
+  internal storage keys, not public URLs).
+- `vite-plugin-pwa` with `base: "/app/"`, installable manifest, `navigateFallbackDenylist:
+  [/^\/api\//]` so the service worker never intercepts API calls.
+
+**Backend wiring (`src/xw_office/web/app.py`):** a new `_SPAStaticFiles` (falls back to
+`index.html` for unknown paths so React Router handles client-side routes like
+`/app/products/<id>` instead of getting a 404) mounted at `/app` when
+`ContentWebSettings.product_hub_web_dist` is a real directory — absent in plain-API deployments
+and most local dev setups, where the mount is simply skipped. `Dockerfile.web` is now two
+stages: `node:20-slim` runs `npm ci && npm run build` for `web/product-hub/`, and only the
+resulting `dist/` is copied into the final `python:3.12-slim` image (no Node/npm ships in the
+deployed image).
+
+**Verified locally:** `npm run build` (tsc --noEmit + vite build) and `npm run lint`
+(`eslint . --max-warnings=0`) both clean; started the FastAPI app locally and curled `/app/`,
+`/app/manifest.webmanifest`, and `/app/products/123` (SPA fallback returns `index.html` as
+expected) alongside the existing `/health` and `/api/v1/products` routes. Full backend suite
+(`pytest`) still at 1153/1155 passing, same two pre-existing flaky tests as before this PR
+(`test_uva_soap_mock.py::test_unconfigured_client_raises`, `test_async_action.py::…` — both pass
+in isolation, unrelated to this change). Docker itself was not available in this environment, so
+the multi-stage `Dockerfile.web` build has **not** been verified end-to-end yet — that happens
+on the next Railway deploy and should be watched closely.
+
+**Not done:** no browser/manual click-through of the built UI against live data yet (only
+curl-level route verification). Recommended before/soon after the next deploy.
