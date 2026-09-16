@@ -15,7 +15,7 @@ Update this file at the end of every PR.
 | PR04 | sevdesk read importer | **Done** | See below. |
 | PR05 | Excel import and matching | **Done** | See below. |
 | PR06 | Import commit service + curated grouping | **Done** | See below. |
-| PR07 | Product Hub Read API | **Done** | See below. |
+| PR07 | Product Hub Read API | **Code done, merged to main, pushed — Railway deploy currently blocked by a platform-side issue, not a code issue (see below and docs/web_deploy_betriebsleitfaden.md §3)** | See below. |
 | PR08–PR16 | — | Not started | |
 
 ## PR01 detail
@@ -474,3 +474,28 @@ new. Additionally smoke-tested against the real, lean `requirements-web.txt` dep
 an isolated venv (see above) — not just this repo's full desktop environment.
 
 **No migration needed:** PR07 only reads through PR01's existing schema.
+
+**Deploy status (2026-09-16):** merged to `main` and pushed to `origin/main`
+(`b93310e..126016c`, fast-forward). The GitHub→Railway auto-deploy webhook did not trigger a
+new build within 10+ minutes, so the manual fallback (`railway up --service XW-Content-Web`)
+was used instead — four consecutive attempts (2 pre-existing from 2026-09-15 evening, before
+any of this work; 2 from this session) all failed at the deploy/start stage with **zero**
+log output, despite every build succeeding cleanly (including the new `sqlalchemy`/
+`psycopg2-binary`/`python-dotenv` dependencies installing without issue). Ruled out as a code
+problem by reproducing the exact container command (`python -m uvicorn xw_office.web.app:app
+--host 0.0.0.0 --port <PORT>`) locally with only `requirements-web.txt` installed and no
+`DATABASE_URL` set (matches the real service's configuration — confirmed via
+`railway variables --json`, names only, per this repo's secret-handling convention): starts
+cleanly, `/health` returns 200. The currently-live production deployment (2026-09-10) remains
+healthy throughout (`https://studio.xeisworks.at/health` → 200); `/api/v1/products` → 404
+there confirms PR07's new code is simply not live yet, not that anything is broken. Full
+write-up, including why this looks like a Railway platform/builder issue rather than an
+application bug, is in `docs/web_deploy_betriebsleitfaden.md` §3 — check that first before
+spending more time on it, and prefer the Railway dashboard UI over `railway logs` for further
+diagnosis since the CLI's historical log retrieval has been unhelpful for these failures.
+
+**Deploy tooling added alongside this investigation:** `scripts/deploy_web.ps1` (PC-independent,
+runs the exact CI quality gate, verifies branch/upstream/clean tree, pushes, watches Railway for
+the resulting deployment, and — only with explicit `-Fallback` — triggers `railway up` as a
+manual replacement path) and `docs/web_deploy_betriebsleitfaden.md` (the operating runbook,
+matching the tone/structure of `docs/multi_pc_betriebsleitfaden.md`).
