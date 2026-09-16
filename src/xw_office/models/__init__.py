@@ -37,6 +37,7 @@ from xw_office.models.product_hub_import import (
     StagingProduct,
     StagingVariant,
 )
+from xw_office.models.product_hub_sharing import ExportLog, SharedCatalogView
 from xw_office.models.product_hub_sync import (
     ExternalPayloadArchive,
     OutboxEvent,
@@ -59,6 +60,7 @@ __all__ = [
     "DigitalLicenseFulfillment",
     "ExpenseIgnoreRule",
     "ExpenseShiftEntry",
+    "ExportLog",
     "ExternalPayloadArchive",
     "ImportBatch",
     "ImportMatchCandidate",
@@ -79,6 +81,7 @@ __all__ = [
     "ProductTag",
     "ProductVariant",
     "SettingKV",
+    "SharedCatalogView",
     "StagingAsset",
     "StagingCategory",
     "StagingIdentifier",

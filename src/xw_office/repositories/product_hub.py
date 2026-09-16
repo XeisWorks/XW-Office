@@ -445,6 +445,10 @@ class ProductHubRepository:
         with self._scope() as session:
             return session.scalar(select(PriceList).where(PriceList.code == code))
 
+    def get_price_list(self, price_list_id: uuid.UUID) -> PriceList | None:
+        with self._scope() as session:
+            return session.get(PriceList, price_list_id)
+
     def set_price(
         self,
         variant_id: uuid.UUID,

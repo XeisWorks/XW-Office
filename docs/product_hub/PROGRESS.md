@@ -20,7 +20,8 @@ Update this file at the end of every PR.
 | PR09 | Edit API + WebUI editing + Verbesserungen/Auflagen | **Done (code + migration applied), edit API kept off in production pending a deliberate flip** | See below. |
 | PR10 | Transactional outbox + sync foundation | **Done (schema + worker + wiring), migration applied — no consumer/handler yet** | See below. |
 | PR11 | Wix push + reconcile + conflict management | **Done (code, no new migration), push kept off in production pending a deliberate flip** | See below. |
-| PR12–PR16 | — | Not started | |
+| PR12 | Händlerfreigabe + CSV/XLSX Export | **Done and confirmed live on Railway** (`/share/{token}` is public, no bootstrap token needed) | See below. |
+| PR13–PR16 | — | Not started | |
 
 ## PR01 detail
 
@@ -835,3 +836,84 @@ check `scripts\deploy_web.ps1 -VerifyLeanWebImage` runs (throwaway venv, only
 should have done this the first time; the CI/local quality gate uses the full desktop
 `.venv` so it can't catch a lean-image-only missing dependency, which is exactly what
 that flag exists for.
+
+## PR12 detail
+
+**Migration `013_product_hub_sharing`, applied to Railway Postgres:**
+`shared_catalog_view` + `export_log`, exactly per the data model spec. Only
+`token_hash` (SHA-256 hex) is ever persisted — the plaintext token is generated at
+creation, returned exactly once in the API response, and never stored anywhere.
+
+**Code delivered:**
+- `src/xw_office/models/product_hub_sharing.py` (new) — `SharedCatalogView`,
+  `ExportLog`, and `ALLOWED_SHARE_FIELDS` — the hard ceiling on what a share can ever
+  expose (`cover_url`, `sku`, `isbn`, `name`, `description`, `price_uvp`, `price_b2b`,
+  `available`), checked at creation time regardless of what a request body asks for,
+  per the build plan's "interne Felder können nicht von normaler Editor-Rolle
+  freigegeben werden."
+- `src/xw_office/repositories/product_hub_sharing.py` (new) — `SharingRepository`:
+  create/get/list/revoke a share, `touch_last_access`, `record_export`. Never touches
+  a plaintext token.
+- `src/xw_office/services/product_hub/sharing.py` (new) — `SharingService`:
+  - `create_share`: generates the token (`secrets.token_urlsafe(32)`), stores only its
+    hash, validates `field_whitelist` against `ALLOWED_SHARE_FIELDS`.
+  - `resolve_token`: hash-lookup + revoked/expired checks + a minimal in-memory
+    sliding-window rate limiter (60 req/min per token hash — no Redis, matching this
+    project's "no microservices/Redis without proven need" constraint; would need
+    revisiting only if this service ever scales past one instance).
+  - `query_catalog(share)`: the **one** server-side query HTML, CSV and XLSX all call
+    — per the build plan's explicit requirement that all three "use the same
+    server-side query" so they can never silently disagree. Implements the
+    Standardfilter (`tag=B2B`, `status=live`, `active=true`) and Standardfelder (cover/
+    SKU/ISBN/name/description/UVP from `RETAIL_EUR`/B2B price from `B2B_EUR` or the
+    share's own `price_list_id`/availability). `available` is derived from the default
+    variant's `active` flag — there's no real per-unit stock quantity in Product Hub
+    yet (that's PR13+'s Inventory V2), so this is an honest simplification, not a
+    placeholder pretending to be real stock data.
+  - `resolve_conflict`-style safety: a `COVER` asset with `storage_kind="NETWORK_PATH"`
+    is skipped even if present — the "Niemals öffentlich: NETWORK_PATH, PRINT_PDF"
+    rule enforced in code, not just by convention.
+- `src/xw_office/web/routers/sharing_admin.py` + `web/schemas/sharing.py` (new) —
+  authenticated admin API: `POST/GET /api/v1/shares`, `POST
+  /api/v1/shares/{id}/revoke`. Gated by `product_hub_edit_enabled` (reused, not a new
+  flag — creating a public data-exposure surface is at least as sensitive as editing
+  products). The create response is the only one that ever carries `token`.
+- `src/xw_office/web/routers/share_public.py` (new) — `GET /share/{token}` (inline
+  server-rendered HTML, matching the existing `_landing_page` precedent in `app.py` —
+  no new templating dependency), `GET /share/{token}/export.csv` (stdlib `csv`),
+  `GET /share/{token}/export.xlsx` (`openpyxl`). **Deliberately not behind the
+  bootstrap-token dependency** — that's the entire point of a share link — but still
+  fails closed (503) via `require_product_hub_enabled` if the Product Hub isn't
+  configured at all, and every request re-validates the token (404 unknown, 410
+  revoked/expired, 429 rate-limited, 403 if that format is disabled for this share).
+- `requirements-web.txt` — added `openpyxl>=3.1,<4` for XLSX export (verified against
+  the lean-image check before deploying this time, see below).
+
+**Two bugs found and fixed while writing tests** (both are the same recurring class of
+issue seen earlier in PR09/PR10 — SQLite round-trips silently drop what Postgres
+keeps): (1) `resolve_token` returned the *pre-touch* `SharedCatalogView` object
+because `touch_last_access` opens its own session (the repo is factory-backed, not a
+single bound session) — fixed by re-fetching after the touch; (2) comparing
+`share.expires_at` (naive after an SQLite round-trip) against
+`datetime.now(timezone.utc)` (aware) raised `TypeError` — fixed by treating a naive
+value as UTC before comparing, which is correct for both SQLite (tests) and Postgres
+(production) rather than papering over it only in test code.
+
+**Verified locally:** 26 new tests (14 service-level — token generation/hashing,
+resolve success/unknown/revoked/expired/rate-limited, whitelist enforcement, default
+filter, NETWORK_PATH-cover exclusion, custom price list, export logging; 12 HTTP-level
+— admin CRUD + gating, public view/csv/xlsx, 404/410/403/503) all pass; full backend
+suite at 1245/1246 (same one pre-existing flaky UVA test). **This time, the lean-image
+check ran before deploying** (throwaway venv, only `requirements-web.txt`, import
+`xw_office.web.app`) — confirmed clean, so this PR's deploy did not repeat PR11's
+incident.
+
+**Not done / explicit scope cuts:** No "create/manage shares" UI in the React app —
+the admin API is fully functional and tested, but there's no button for it yet in
+`ProductDetailPage`/a new page; a follow-up, not a blocker, since the feature is fully
+usable via the API today. `filter_definition`/`sort_definition` only understand the
+build plan's fixed Standardfilter shape (`{tag, status, active}`) — a richer filter
+DSL (arbitrary field/operator combinations) is a future extension if a second use
+case ever needs one. `password_hash` stays an unused schema column, matching the data
+model's own "optional expiry/password später" framing. Rate limiting is per-process
+in-memory, not distributed — fine for the current single-instance deployment.

@@ -22,12 +22,16 @@ from xw_office import __version__
 from xw_office.content import BrandProfile, BrandProfileCatalog
 from xw_office.core.database import session_scope
 from xw_office.repositories.product_hub import ProductHubRepository
+from xw_office.repositories.product_hub_sharing import SharingRepository
 from xw_office.repositories.product_hub_sync import SyncRepository
 from xw_office.services.product_hub.editing import EditingService
 from xw_office.services.product_hub.outbox_worker import OutboxWorker
+from xw_office.services.product_hub.sharing import SharingService
 from xw_office.services.product_hub.wix_push import WixPushService, wix_push_handler
 from xw_office.services.wix.product_details_client import WixProductDetailsClient
 from xw_office.web.routers.products import build_products_router
+from xw_office.web.routers.share_public import build_share_public_router
+from xw_office.web.routers.sharing_admin import build_sharing_admin_router
 from xw_office.web.routers.sync import build_sync_router
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -268,6 +272,27 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
             Depends(require_product_hub_enabled),
             Depends(require_product_hub_edit_enabled),
         ],
+    )
+
+    # -- Product Hub (PR12): dealer sharing -------------------------------------------
+
+    def get_sharing_service() -> SharingService:
+        assert _session_factory is not None  # guarded by require_product_hub_enabled below
+        return SharingService(
+            ProductHubRepository(_session_factory), SharingRepository(_session_factory)
+        )
+
+    app.include_router(
+        build_sharing_admin_router(get_sharing_service, public_base_url=resolved.public_url),
+        dependencies=[
+            Depends(require_bootstrap_token),
+            Depends(require_product_hub_enabled),
+            Depends(require_product_hub_edit_enabled),
+        ],
+    )
+    app.include_router(
+        build_share_public_router(get_sharing_service),
+        dependencies=[Depends(require_product_hub_enabled)],
     )
 
     if resolved.product_hub_web_dist.is_dir():
