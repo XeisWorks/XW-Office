@@ -211,12 +211,20 @@ class ImportCommitService:
             if not staging.sku:
                 raise CommitError("Cannot create a canonical product without a SKU")
 
-            stock_enabled = staging.normalized_fields.get("stock_enabled")
+            fields = staging.normalized_fields
+            stock_enabled = fields.get("stock_enabled")
             product, _variant = product_repo.create_product(
                 sku=staging.sku,
                 name=staging.name or staging.sku,
                 stock_enabled=stock_enabled if isinstance(stock_enabled, bool) else True,
+                status=str(fields.get("status")) if fields.get("status") else "draft",
+                product_type=str(fields.get("product_type")) if fields.get("product_type") else "physical",
+                brand_name=str(fields.get("brand") or ""),
+                category=str(fields.get("category") or ""),
+                description=str(fields.get("description") or ""),
             )
+            if fields.get("active") is False:
+                product_repo.update_product(product.id, expected_row_version=product.row_version, active=False)
 
             self._merge_staging_extras(product_repo, import_repo, staging, product)
             import_repo.mark_committed(staging.id, product_id=product.id)
@@ -376,11 +384,11 @@ class ImportCommitService:
                 source_url=staged_asset.source_url,
             )
 
-        # Excel EDITION blocks are the business's own taxonomy - safe to become internal
-        # categories directly. Wix/sevdesk staged categories stay in staging for a later,
-        # deliberate channel-category-mapping curation step (mixing them in here would
-        # conflate external channel taxonomy with the internal one).
-        if staging.source == "excel":
+        # Excel/master-seed categories are the business's own taxonomy - safe to become
+        # internal categories directly. Wix/sevdesk staged categories stay in staging
+        # for a later, deliberate channel-category-mapping curation step (mixing them
+        # in here would conflate external channel taxonomy with the internal one).
+        if staging.source in ("excel", "master_seed"):
             existing_category_ids = {link.category_id for link in product_repo.list_product_categories(product.id)}
             for staged_category in import_repo.list_categories(staging.id):
                 if not staged_category.external_category_name:
@@ -397,7 +405,7 @@ class ImportCommitService:
             if tag.id not in existing_tag_ids:
                 product_repo.add_product_tag(product_id=product.id, tag_id=tag.id)
 
-        if staging.source == "excel":
+        if staging.source in ("excel", "master_seed"):
             brutto_raw = staging.normalized_fields.get("brutto")
             price_list = product_repo.get_price_list_by_code("RETAIL_EUR")
             variant = product_repo.get_default_variant(product.id)
@@ -415,8 +423,75 @@ class ImportCommitService:
                         gross_amount=Decimal(str(brutto_raw)),
                         net_amount=Decimal(str(netto_raw)) if netto_raw else None,
                         tax_rate=Decimal(str(tax_rate_raw)) if tax_rate_raw else None,
-                        source="excel_import",
+                        source=f"{staging.source}_import",
                     )
+
+        if staging.source == "master_seed":
+            self._merge_master_seed_extras(product_repo, staging, product)
+
+    def _merge_master_seed_extras(
+        self, product_repo: ProductHubRepository, staging: StagingProduct, product: Product
+    ) -> None:
+        """Master-seed-only enrichment: Wix linkage (only when the seed already knows
+        the Wix handle — never guessed), an editorial-review flag for AUTO_DRAFT
+        content, and the extra music/grouping metadata the canonical schema has no
+        dedicated columns for yet (parked in ``product.attributes``, conservative —
+        never overwrites a key that's already set)."""
+        fields = staging.normalized_fields
+
+        wix_handle_id = fields.get("wix_handle_id")
+        if isinstance(wix_handle_id, str) and wix_handle_id:
+            existing_mapping = product_repo.get_channel_mapping(
+                channel="wix", entity_type="product", external_id=wix_handle_id
+            )
+            if existing_mapping is None:
+                product_repo.create_channel_mapping(
+                    channel="wix",
+                    entity_type="product",
+                    internal_entity_id=product.id,
+                    external_id=wix_handle_id,
+                    sync_status="never",
+                )
+
+        if fields.get("content_status") == "AUTO_DRAFT":
+            already_flagged = any(
+                imp.source == "master_seed_import" and imp.status == "open"
+                for imp in product_repo.list_improvements(product.id)
+            )
+            if not already_flagged:
+                product_repo.create_improvement(
+                    product_id=product.id,
+                    description=(
+                        "Automatisch generierte Beschreibung/Bulletpoints aus dem "
+                        "Master-Seed-Import — vor Push zu Wix/Amazon redaktionell prüfen."
+                    ),
+                    source="master_seed_import",
+                    severity="minor",
+                )
+
+        attribute_keys = (
+            "title_short",
+            "code_short",
+            "bullet_points",
+            "music_attributes",
+            "erp_category",
+            "parent_sku",
+            "product_group_id",
+            "group_key",
+            "grouping_confidence",
+            "conflict_flags",
+            "conflict_notes",
+        )
+        updates = {
+            key: fields[key]
+            for key in attribute_keys
+            if fields.get(key) not in (None, "", [], {}) and key not in product.attributes
+        }
+        if updates:
+            merged_attributes = {**product.attributes, **updates}
+            product_repo.update_product(
+                product.id, expected_row_version=product.row_version, attributes=merged_attributes
+            )
 
 
 def _suggested_tags(staging: StagingProduct) -> list[str]:
