@@ -1,4 +1,5 @@
 """Minimal, secure-by-default FastAPI foundation for the Content Studio."""
+
 from __future__ import annotations
 
 from collections.abc import Generator
@@ -25,7 +26,9 @@ from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.repositories.product_hub_sharing import SharingRepository
 from xw_office.repositories.product_hub_sync import SyncRepository
+from xw_office.models.product_hub_sync import OutboxEvent
 from xw_office.services.product_hub.content_generation import ContentGenerationService
+from xw_office.services.product_hub.conflicts import ConflictWizardService
 from xw_office.services.product_hub.editing import EditingService
 from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.product_hub.outbox_worker import OutboxWorker
@@ -33,6 +36,7 @@ from xw_office.services.product_hub.sharing import SharingService
 from xw_office.services.product_hub.wix_push import WixPushService, wix_push_handler
 from xw_office.services.wix.product_details_client import WixProductDetailsClient
 from xw_office.web.routers.inventory import build_inventory_router
+from xw_office.web.routers.conflicts import build_conflicts_router
 from xw_office.web.routers.products import build_products_router
 from xw_office.web.routers.share_public import build_share_public_router
 from xw_office.web.routers.sharing_admin import build_sharing_admin_router
@@ -92,6 +96,11 @@ class ContentWebSettings:
     #: worker needs so disabled-push events still resolve to a clean terminal state
     #: instead of retrying forever.
     sync_push_enabled: bool = False
+    #: Conflict Wizard read UI is independently deployable. Scans and mutations have
+    #: separate switches so the queue can be inspected safely before enabling work.
+    conflict_wizard_enabled: bool = False
+    conflict_scan_enabled: bool = False
+    conflict_channel_apply_enabled: bool = False
     #: Built PR08 React/PWA bundle (`npm run build` output of web/product-hub/).
     #: Served same-origin at /app/ when present; absent in plain-API deployments
     #: and in most local dev setups, where the mount below is simply skipped.
@@ -109,6 +118,13 @@ class ContentWebSettings:
             ),
             product_hub_edit_enabled=_env_flag("XW_PRODUCT_HUB_EDIT_ENABLED", default=False),
             sync_push_enabled=_env_flag("XW_PRODUCT_HUB_SYNC_PUSH_ENABLED", default=False),
+            conflict_wizard_enabled=_env_flag(
+                "XW_PRODUCT_HUB_CONFLICT_WIZARD_ENABLED", default=False
+            ),
+            conflict_scan_enabled=_env_flag("XW_PRODUCT_HUB_CONFLICT_SCAN_ENABLED", default=False),
+            conflict_channel_apply_enabled=_env_flag(
+                "XW_PRODUCT_HUB_CONFLICT_CHANNEL_APPLY_ENABLED", default=False
+            ),
             product_hub_web_dist=Path(
                 os.getenv("XW_PRODUCT_HUB_WEB_DIST", "").strip()
                 or (_REPOSITORY_ROOT / "web" / "product-hub" / "dist")
@@ -190,8 +206,10 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
                 detail="Content API protection is not configured",
             )
         supplied = credentials.credentials if credentials is not None else ""
-        if credentials is None or credentials.scheme.lower() != "bearer" or not secrets.compare_digest(
-            supplied, expected
+        if (
+            credentials is None
+            or credentials.scheme.lower() != "bearer"
+            or not secrets.compare_digest(supplied, expected)
         ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -201,7 +219,11 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
 
     # -- Product Hub (PR07): DB session factory, gated by database_url + the kill switch --
 
-    _engine = create_engine(resolved.database_url, pool_pre_ping=True, future=True) if resolved.database_url else None
+    _engine = (
+        create_engine(resolved.database_url, pool_pre_ping=True, future=True)
+        if resolved.database_url
+        else None
+    )
     _session_factory: sessionmaker[Session] | None = (
         sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False, future=True)
         if _engine is not None
@@ -267,6 +289,68 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
         _handler = wix_push_handler(_wix_push_service, _handler_repo)
         _outbox_worker.register_handler("product.updated", _handler)
         _outbox_worker.register_handler("price.changed", _handler)
+
+    # -- Conflict Wizard (CW00-CW07): durable workflow over low-level drift --------
+
+    _conflict_service = (
+        ConflictWizardService(_session_factory) if _session_factory is not None else None
+    )
+
+    if (
+        _outbox_worker is not None
+        and _wix_push_service is not None
+        and _conflict_service is not None
+    ):
+
+        def _handle_wizard_wix(event: OutboxEvent) -> None:
+            sync_conflict_id = uuid.UUID(str(event.payload["sync_conflict_id"]))
+            try:
+                _wix_push_service.resolve_conflict(
+                    sync_conflict_id,
+                    resolution="keep_hub_and_push",
+                    resolved_by="conflict-wizard",
+                )
+            except Exception as exc:
+                _conflict_service.fail_wix_action(event, str(exc))
+                raise
+            _conflict_service.finish_wix_action(event)
+
+        _outbox_worker.register_handler("conflict.wix_apply", _handle_wizard_wix)
+
+    def require_conflict_wizard_enabled() -> None:
+        if not resolved.conflict_wizard_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Conflict Wizard is not enabled",
+            )
+
+    def require_conflict_scan_enabled() -> None:
+        if not resolved.conflict_scan_enabled:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Conflict scan is not enabled",
+            )
+
+    def get_conflict_service() -> ConflictWizardService:
+        assert _conflict_service is not None
+        return _conflict_service
+
+    def conflict_channel_apply_enabled() -> bool:
+        return resolved.conflict_channel_apply_enabled and resolved.sync_push_enabled
+
+    app.include_router(
+        build_conflicts_router(
+            get_conflict_service,
+            require_conflict_scan_enabled,
+            require_product_hub_edit_enabled,
+            conflict_channel_apply_enabled,
+        ),
+        dependencies=[
+            Depends(require_bootstrap_token),
+            Depends(require_product_hub_enabled),
+            Depends(require_conflict_wizard_enabled),
+        ],
+    )
 
     def get_sync_repo() -> Generator[SyncRepository, None, None]:
         assert _session_factory is not None  # guarded by require_product_hub_enabled below

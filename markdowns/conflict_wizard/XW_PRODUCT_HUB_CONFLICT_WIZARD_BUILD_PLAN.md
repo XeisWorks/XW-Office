@@ -5,6 +5,27 @@
 **Stand:** 2026-09-17  
 **Ziel:** Einen dauerhaften Wizard bauen, mit dem hunderte Widersprüche zwischen Product Hub, sevdesk, Wix und Amazon schrittweise, auditierbar und mit selektiver Synchronisation geklärt werden können.
 
+## Umsetzungsstand 2026-09-17
+
+Die erste produktive Version (CW00–CW07) ist umgesetzt. Sie übernimmt vorhandene
+`sync_conflict`-Signale in persistente Wizard-Fälle, dedupliziert aktive Fälle,
+normalisiert Vergleichswerte, speichert Entscheidungen, erzeugt eine Impact-Vorschau,
+wendet sichere Product-Hub-Felder mit Optimistic Locking und Audit an und stellt
+selektive Wix-Korrekturen ausschließlich in die bestehende Outbox.
+
+Zwei Präzisierungen gegenüber der ursprünglichen Skizze:
+
+- `dedupe_key` ist nicht global eindeutig. Sonst könnte ein später erneut auftretender,
+  bereits abgeschlossener Konflikt keinen neuen Fall erzeugen. Eindeutig ist nun
+  `(dedupe_key, occurrence)`; für aktive Fälle wird per `dedupe_key` gesucht.
+- CW08/CW09 bleiben sichtbar gesperrt, bis für sevdesk bzw. Amazon echte, testbare
+  Write- und Readback-Adapter existieren. Die Oberfläche behauptet dort keinen
+  Scheinsupport.
+
+Die vier Feature Flags bleiben getrennt: Wizard lesen, Scan ausführen, automatische
+Regeln und externe Channel-Writes. Ein externes Apply erfordert weiterhin eine zuvor
+persistierte Vorschau und erfolgreiche Readback-Verifikation.
+
 ---
 
 # 1. Grundidee

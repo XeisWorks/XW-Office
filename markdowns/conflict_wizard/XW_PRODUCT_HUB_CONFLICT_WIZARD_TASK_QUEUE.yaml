@@ -1,4 +1,4 @@
-version: "1.0"
+version: "1.1"
 name: xw-product-hub-conflict-wizard-task-queue
 as_of: "2026-09-17"
 
@@ -13,6 +13,7 @@ phases:
 
   - id: CW00
     title: Audit existing conflict/sync architecture
+    status: done
     goal: >
       Map existing sync_conflict, Wix reconcile, outbox, channel mappings,
       inventory drift, audit log and current Product Hub APIs.
@@ -33,6 +34,7 @@ phases:
 
   - id: CW01
     title: Persistent conflict domain model
+    status: done
     depends_on: [CW00]
     goal: Add persistent wizard case model.
     tasks:
@@ -60,6 +62,7 @@ phases:
 
   - id: CW02
     title: Normalizer + conflict detector
+    status: done_for_existing_sync_conflict_signals
     depends_on: [CW01]
     goal: Detect real differences without noisy false positives.
     tasks:
@@ -86,6 +89,7 @@ phases:
 
   - id: CW03
     title: Conflict dashboard + read-only wizard
+    status: done
     depends_on: [CW02]
     goal: Usable queue UI with persistent navigation.
     tasks:
@@ -109,6 +113,7 @@ phases:
 
   - id: CW04
     title: Decision persistence
+    status: done
     depends_on: [CW03]
     goal: User can decide, defer and mark intentional differences.
     tasks:
@@ -131,6 +136,7 @@ phases:
 
   - id: CW05
     title: Impact preview / dry-run planner
+    status: done
     depends_on: [CW04]
     goal: Show exact intended mutations before applying.
     tasks:
@@ -152,6 +158,7 @@ phases:
 
   - id: CW06
     title: Apply approved changes to Product Hub
+    status: done_for_safe_product_fields
     depends_on: [CW05]
     goal: First real mutations, internal only.
     tasks:
@@ -172,6 +179,7 @@ phases:
 
   - id: CW07
     title: Wix selective apply
+    status: done_feature_flagged
     depends_on: [CW06]
     goal: Reuse existing Wix push/reconcile through outbox.
     tasks:
@@ -194,6 +202,7 @@ phases:
 
   - id: CW08
     title: sevdesk selective apply
+    status: blocked_missing_verified_write_readback_adapter
     depends_on: [CW07]
     goal: Add/reuse sevdesk product update path through outbox.
     tasks:
@@ -212,6 +221,7 @@ phases:
 
   - id: CW09
     title: Amazon selective apply
+    status: blocked_missing_connector
     depends_on: [CW08]
     goal: Integrate Amazon only where real write capability exists.
     tasks:

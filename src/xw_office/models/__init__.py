@@ -43,6 +43,14 @@ from xw_office.models.product_hub_inventory import (
     InventoryMovement,
     InventoryStock,
 )
+from xw_office.models.product_hub_conflicts import (
+    ConflictAction,
+    ConflictCase,
+    ConflictField,
+    ConflictObservation,
+    ConflictScan,
+    ResolutionRule,
+)
 from xw_office.models.product_hub_sharing import ExportLog, SharedCatalogView
 from xw_office.models.product_hub_sync import (
     ExternalPayloadArchive,
@@ -59,6 +67,11 @@ __all__ = [
     "AuditLog",
     "Base",
     "Category",
+    "ConflictAction",
+    "ConflictCase",
+    "ConflictField",
+    "ConflictObservation",
+    "ConflictScan",
     "ChannelCategoryMapping",
     "ChannelMapping",
     "CustomerAftercareCase",
@@ -90,6 +103,7 @@ __all__ = [
     "ProductSkuAlias",
     "ProductTag",
     "ProductVariant",
+    "ResolutionRule",
     "SettingKV",
     "SharedCatalogView",
     "StagingAsset",

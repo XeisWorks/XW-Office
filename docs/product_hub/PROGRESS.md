@@ -4,6 +4,25 @@ Tracks which PR packages from `XW_PRODUCT_HUB_CODEX_5_6_LUNA_BUILD_PLAN.md` are 
 next work session (human, Codex, or Claude) does not have to re-derive state from scratch.
 Update this file at the end of every PR.
 
+## Conflict Resolution Wizard CW00–CW07 (2026-09-17)
+
+Die erste produktive Wizard-Stufe ist umgesetzt: additive Migration 016, persistente
+Cases/Felder/Observations/Aktionen/Scans, Normalisierung und Klassifikation vorhandener
+`sync_conflict`-Signale, idempotenter Scan, Queue/Detail-WebUI, fortsetzbare
+Entscheidungen, Snooze/Intentional Difference, verpflichtende Impact-Vorschau,
+Optimistic Locking und auditierte Product-Hub-Änderungen. Wix-Korrekturen laufen
+ausschließlich als `conflict.wix_apply` über die bestehende Outbox und werden erst nach
+dem vorhandenen Wix-Readback als verifiziert abgeschlossen.
+
+Sicherheitsgrenzen: Wizard, Scan und externe Channel-Anwendung haben getrennte,
+standardmäßig deaktivierte Feature Flags. sevdesk/Amazon erscheinen als explizit nicht
+unterstützt, bis echte Write-/Readback-Adapter vorhanden sind. Details und Reuse-Map:
+`docs/product_hub/conflict_wizard/CW00_CURRENT_STATE.md`.
+
+Zusätzlicher PR00–PR14-Befund: Die lokale `.venv` konnte durch einen alten
+Editable-Install weiterhin `XW-Studio` statt dieses Checkouts importieren. `pytest`
+setzt deshalb nun über `pyproject.toml` zuverlässig `src` voran.
+
 ## Product List V2: parent products with expandable variants (2026-09-17)
 
 Follow-up to the Master Seed V2 replace below, from `docs/CLAUDE_CODE_PROMPT_Product_List_Parent_Variants_V2.md`.

@@ -46,6 +46,11 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
   const tags = useApi(() => api.getTags(id), [id, refreshKey], onUnauthorized);
   const improvements = useApi(() => api.getImprovements(id), [id, refreshKey], onUnauthorized);
   const audit = useApi(() => api.getAudit(id), [id, refreshKey], onUnauthorized);
+  const conflicts = useApi(
+    () => api.listConflicts({ product_id: id }),
+    [id, refreshKey],
+    onUnauthorized,
+  );
 
   // -- product Stammdaten edit form -----------------------------------------------
   const [editingProduct, setEditingProduct] = useState(false);
@@ -229,6 +234,11 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
                 <div className="detail-header-row">
                   <h1>{product.data.name}</h1>
                   <div className="detail-header-actions">
+                    {conflicts.data && conflicts.data.total > 0 && (
+                      <Link to={`/conflicts/${conflicts.data.items[0].id}`}>
+                        Konflikte ({conflicts.data.total})
+                      </Link>
+                    )}
                     <button type="button" onClick={handleGenerateContent} disabled={generating}>
                       {generating ? "Generiere…" : "Beschreibung generieren (KI)"}
                     </button>

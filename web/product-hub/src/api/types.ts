@@ -256,6 +256,74 @@ export interface BulletPointsUpdateRequest {
   bullet_points: string[];
 }
 
+// -- Persistent Conflict Wizard ------------------------------------------------
+
+export interface ConflictCase {
+  id: string;
+  product_id: string;
+  variant_id: string | null;
+  conflict_type: string;
+  severity: "INFO" | "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  status: string;
+  priority_score: number;
+  title: string;
+  summary: string | null;
+  detected_at: string;
+  last_seen_at: string;
+  snoozed_until: string | null;
+  resolution_type: string | null;
+  resolution_note: string | null;
+  row_version: number;
+}
+
+export interface ConflictObservation {
+  id: string;
+  source: "hub" | "wix" | "sevdesk" | "amazon";
+  raw_value: unknown;
+  normalized_value: unknown;
+  source_revision: string | null;
+  observed_at: string;
+}
+
+export interface ConflictField {
+  id: string;
+  field_path: string;
+  selected_value: unknown;
+  selected_source: string | null;
+  resolution_type: string | null;
+  status: string;
+  observations: ConflictObservation[];
+}
+
+export interface ConflictAction {
+  id: string;
+  channel: string;
+  action_type: string;
+  field_path: string | null;
+  before_value: unknown;
+  after_value: unknown;
+  selected: boolean;
+  status: string;
+  outbox_event_id: string | null;
+  error: string | null;
+  verified_at: string | null;
+}
+
+export interface ConflictCaseDetail extends ConflictCase {
+  product_sku: string;
+  product_name: string;
+  fields: ConflictField[];
+  actions: ConflictAction[];
+}
+
+export interface ConflictSummary {
+  open: number;
+  critical: number;
+  waiting: number;
+  partially_resolved: number;
+  resolved: number;
+}
+
 /** Thrown by the API client when the server responds 409 (stale row_version) - the
  * conflict body is the current server state, per the build plan's "Konflikt -> HTTP
  * 409 mit aktuellem Serverstand". */

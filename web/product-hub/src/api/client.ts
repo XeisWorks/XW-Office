@@ -1,6 +1,10 @@
 import type {
   AuditLogEntry,
   BulletPointsUpdateRequest,
+  ConflictAction,
+  ConflictCase,
+  ConflictCaseDetail,
+  ConflictSummary,
   ChannelMapping,
   Edition,
   GeneratedContent,
@@ -164,5 +168,53 @@ export const api = {
     request<ProductDetail>(`/api/v1/products/${productId}/bullet-points`, {
       method: "PUT",
       body,
+    }),
+
+  // -- Conflict Wizard ----------------------------------------------------------
+  getConflictSummary: () => request<ConflictSummary>("/api/v1/conflicts/summary"),
+  listConflicts: (filters: Record<string, string> = {}) => {
+    const params = new URLSearchParams(filters);
+    return request<Page<ConflictCase>>(`/api/v1/conflicts?${params.toString()}`);
+  },
+  getConflict: (id: string) => request<ConflictCaseDetail>(`/api/v1/conflicts/${id}`),
+  scanConflicts: (productId?: string) =>
+    request<{ differences_found: number; cases_created: number; cases_updated: number }>(
+      `/api/v1/conflicts/scan${productId ? `?product_id=${encodeURIComponent(productId)}` : ""}`,
+      { method: "POST" },
+    ),
+  startConflict: (id: string, expectedRowVersion: number) =>
+    request<ConflictCase>(`/api/v1/conflicts/${id}/start`, {
+      method: "POST",
+      body: { expected_row_version: expectedRowVersion },
+    }),
+  decideConflict: (
+    id: string,
+    body: {
+      expected_row_version: number;
+      resolution_type: string;
+      selected_source?: string;
+      custom_value?: unknown;
+      note?: string;
+    },
+  ) => request<ConflictCase>(`/api/v1/conflicts/${id}/decision`, { method: "POST", body }),
+  previewConflict: (id: string, channels?: string[]) =>
+    request<ConflictAction[]>(`/api/v1/conflicts/${id}/preview`, {
+      method: "POST",
+      body: { channels },
+    }),
+  applyConflict: (id: string, expectedRowVersion: number) =>
+    request<ConflictCase>(`/api/v1/conflicts/${id}/apply`, {
+      method: "POST",
+      body: { expected_row_version: expectedRowVersion },
+    }),
+  snoozeConflict: (id: string, expectedRowVersion: number, until: string) =>
+    request<ConflictCase>(`/api/v1/conflicts/${id}/snooze`, {
+      method: "POST",
+      body: { expected_row_version: expectedRowVersion, until },
+    }),
+  ignoreConflict: (id: string, expectedRowVersion: number) =>
+    request<ConflictCase>(`/api/v1/conflicts/${id}/ignore`, {
+      method: "POST",
+      body: { expected_row_version: expectedRowVersion },
     }),
 };

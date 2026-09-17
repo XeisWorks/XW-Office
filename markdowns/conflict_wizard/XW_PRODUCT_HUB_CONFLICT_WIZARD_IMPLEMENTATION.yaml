@@ -1,4 +1,4 @@
-version: "1.0"
+version: "1.1"
 name: xw-product-hub-conflict-resolution-wizard
 as_of: "2026-09-17"
 
@@ -112,6 +112,7 @@ entities:
       id: uuid
       product_id: uuid
       variant_id: uuid_nullable
+      origin_sync_conflict_id: uuid_nullable_fk
       conflict_type: enum.conflict_type
       severity: enum.conflict_severity
       status: enum.conflict_status
@@ -128,10 +129,18 @@ entities:
       resolution_note: text_nullable
       source_scan_id: uuid_nullable
       reopened_from_case_id: uuid_nullable
-      dedupe_key: varchar_500_unique
+      dedupe_key: varchar_500
+      occurrence: integer
+      hub_row_version: integer
       row_version: integer
       created_at: timestamptz
       updated_at: timestamptz
+    unique:
+      - [dedupe_key, occurrence]
+    rationale: >
+      A globally unique dedupe_key contradicts reopening: a later recurrence needs a
+      new case. Active cases are found by dedupe_key; historical occurrences use a
+      monotonically increasing occurrence number.
 
   conflict_field:
     columns:
@@ -343,6 +352,16 @@ sync:
   note: >
     Actual order may be overridden per conflict type; product identity conflicts must
     be resolved in Hub before any channel push.
+  capability_matrix:
+    wix:
+      write: existing_wix_push_service_via_outbox
+      readback: required
+    sevdesk:
+      write: unsupported_until_verified_product_write_adapter_exists
+      ui_behavior: show_blocked_not_fake_success
+    amazon:
+      write: unsupported_until_connector_credentials_and_readback_exist
+      ui_behavior: show_blocked_not_fake_success
 
 stale_detection:
   use:
@@ -437,33 +456,43 @@ rollout:
   - id: CW00
     name: current_state_audit
     writes: false
+    status: implemented
   - id: CW01
     name: conflict_data_model
     writes: database_only
+    status: implemented
   - id: CW02
     name: normalizer_detector
     writes: conflict_cases_only
+    status: implemented_for_existing_sync_conflict_signals
   - id: CW03
     name: wizard_read_ui
     writes: false
+    status: implemented
   - id: CW04
     name: decision_persistence
     writes: conflict_metadata_only
+    status: implemented
   - id: CW05
     name: impact_preview
     writes: false
+    status: implemented
   - id: CW06
     name: apply_to_product_hub
     writes: hub_only
+    status: implemented_for_safe_product_fields
   - id: CW07
     name: wix_apply
     writes: wix_via_outbox
+    status: implemented_feature_flagged
   - id: CW08
     name: sevdesk_apply
     writes: sevdesk_via_outbox
+    status: blocked_by_missing_verified_write_readback_adapter
   - id: CW09
     name: amazon_apply
     writes: amazon_via_outbox_if_supported
+    status: blocked_by_missing_connector
   - id: CW10
     name: rules_engine
     writes: safe_rule_based

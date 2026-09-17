@@ -1,0 +1,180 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session, sessionmaker
+
+from xw_office.models.base import Base
+from xw_office.models.product_hub import Product
+from xw_office.models.product_hub_conflicts import ConflictAction
+from xw_office.models.product_hub_sync import OutboxEvent
+from xw_office.repositories.product_hub import ProductHubRepository
+from xw_office.repositories.product_hub_sync import SyncRepository
+from xw_office.services.product_hub.conflicts.normalizer import equivalent, normalize_value
+from xw_office.services.product_hub.conflicts.service import (
+    ConflictWizardService,
+    StaleConflictError,
+)
+from xw_office.web import ContentWebSettings, create_app
+
+
+@pytest.fixture
+def factory(tmp_path: Path) -> sessionmaker[Session]:
+    engine = create_engine(f"sqlite:///{tmp_path / 'conflicts.db'}", future=True)
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+
+
+def _seed(
+    factory: sessionmaker[Session], *, hub: object = "Hub title", external: object = "Wix title"
+) -> tuple[Product, ConflictWizardService]:
+    product, _ = ProductHubRepository(factory).create_product(sku="XW-CW-1", name=str(hub))
+    SyncRepository(factory).create_sync_conflict(
+        channel="wix",
+        entity_type="product",
+        internal_entity_id=product.id,
+        field_name="name",
+        hub_value=hub,
+        external_value=external,
+    )
+    return product, ConflictWizardService(factory)
+
+
+def test_normalizer_suppresses_non_semantic_differences() -> None:
+    assert equivalent("title", "  [PRINT] Tuba in Bb  ", "TUBA in B")
+    assert normalize_value("price_gross", "9,9") == "9.90"
+
+
+def test_repeated_scan_updates_one_case(factory: sessionmaker[Session]) -> None:
+    _, service = _seed(factory)
+    first = service.scan_low_level_conflicts()
+    second = service.scan_low_level_conflicts()
+    rows, total = service.repository.list_cases()
+    assert first["cases_created"] == 1
+    assert second["cases_created"] == 0
+    assert second["cases_updated"] == 1
+    assert total == 1
+    assert len(rows) == 1
+
+
+def test_known_sku_alias_does_not_create_conflict(factory: sessionmaker[Session]) -> None:
+    products = ProductHubRepository(factory)
+    product, variant = products.create_product(sku="XW-4043", name="Alias product")
+    products.add_sku_alias(
+        product.id, alias_sku="XW-443", variant_id=variant.id, source="test"
+    )
+    SyncRepository(factory).create_sync_conflict(
+        channel="wix",
+        entity_type="product",
+        internal_entity_id=product.id,
+        field_name="sku",
+        hub_value="XW-4043",
+        external_value="XW-443",
+    )
+    result = ConflictWizardService(factory).scan_low_level_conflicts()
+    assert result["differences_found"] == 0
+
+
+def test_decision_preview_and_hub_apply_are_audited(factory: sessionmaker[Session]) -> None:
+    product, service = _seed(factory)
+    service.scan_low_level_conflicts()
+    case = service.repository.list_cases()[0][0]
+    decided = service.decide(
+        case.id, expected_row_version=case.row_version, resolution_type="USE_WIX"
+    )
+    actions = service.preview(case.id)
+    assert [(row.channel, row.action_type) for row in actions] == [("hub", "UPDATE_FIELD")]
+    applied = service.apply(
+        case.id, expected_row_version=decided.row_version, channel_apply_enabled=False
+    )
+    assert applied.status == "RESOLVED"
+    with factory() as session:
+        refreshed = session.get(Product, product.id)
+        assert refreshed is not None and refreshed.name == "Wix title"
+        assert session.query(Product).count() == 1
+        assert session.execute(text("select count(*) from audit_log")).scalar_one() == 1
+
+
+def test_intentional_difference_is_not_reopened(factory: sessionmaker[Session]) -> None:
+    _, service = _seed(factory)
+    service.scan_low_level_conflicts()
+    case = service.repository.list_cases()[0][0]
+    resolved = service.decide(
+        case.id, expected_row_version=case.row_version, resolution_type="INTENTIONAL_DIFFERENCE"
+    )
+    assert resolved.status == "RESOLVED"
+    result = service.scan_low_level_conflicts()
+    assert result["cases_created"] == 0
+
+
+def test_stale_product_blocks_apply(factory: sessionmaker[Session]) -> None:
+    product, service = _seed(factory)
+    service.scan_low_level_conflicts()
+    case = service.repository.list_cases()[0][0]
+    decided = service.decide(
+        case.id, expected_row_version=case.row_version, resolution_type="USE_WIX"
+    )
+    service.preview(case.id)
+    with factory.begin() as session:
+        row = session.get(Product, product.id)
+        assert row is not None
+        row.row_version += 1
+    with pytest.raises(StaleConflictError):
+        service.apply(
+            case.id, expected_row_version=decided.row_version, channel_apply_enabled=False
+        )
+
+
+def test_wix_apply_is_queued_and_only_readback_completion_resolves(
+    factory: sessionmaker[Session],
+) -> None:
+    _, service = _seed(factory)
+    service.scan_low_level_conflicts()
+    case = service.repository.list_cases()[0][0]
+    decided = service.decide(
+        case.id, expected_row_version=case.row_version, resolution_type="USE_HUB"
+    )
+    actions = service.preview(case.id)
+    assert len(actions) == 1 and actions[0].channel == "wix"
+    queued = service.apply(
+        case.id,
+        expected_row_version=decided.row_version,
+        channel_apply_enabled=True,
+    )
+    assert queued.status == "PARTIALLY_RESOLVED"
+    with factory() as session:
+        event = session.query(OutboxEvent).filter_by(event_type="conflict.wix_apply").one()
+        action = session.get(ConflictAction, actions[0].id)
+        assert action is not None and action.status == "QUEUED"
+    service.finish_wix_action(event)
+    assert service.repository.get_case(case.id).status == "RESOLVED"  # type: ignore[union-attr]
+
+
+def test_conflict_api_is_independently_feature_flagged(factory: sessionmaker[Session]) -> None:
+    _seed(factory)
+    database_url = str(factory.kw["bind"].url)
+    client = TestClient(
+        create_app(
+            ContentWebSettings(
+                bootstrap_token="secret",
+                database_url=database_url,
+                product_hub_catalog_read_enabled=True,
+                product_hub_edit_enabled=True,
+                conflict_wizard_enabled=True,
+                conflict_scan_enabled=True,
+            )
+        )
+    )
+    headers = {"Authorization": "Bearer secret"}
+    scan = client.post("/api/v1/conflicts/scan", headers=headers)
+    assert scan.status_code == 200
+    response = client.get("/api/v1/conflicts/summary", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["open"] == 1
+    queue = client.get("/api/v1/conflicts", headers=headers).json()
+    detail = client.get(f"/api/v1/conflicts/{queue['items'][0]['id']}", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["fields"][0]["observations"][1]["source"] == "wix"

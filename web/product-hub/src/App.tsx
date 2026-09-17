@@ -5,6 +5,8 @@ import TokenGate from "./components/TokenGate";
 import DashboardPage from "./pages/DashboardPage";
 import ProductListPage from "./pages/ProductListPage";
 import ProductDetailPage from "./pages/ProductDetailPage";
+import ConflictListPage from "./pages/ConflictListPage";
+import ConflictWizardPage from "./pages/ConflictWizardPage";
 
 export default function App() {
   const [hasToken, setHasToken] = useState<boolean>(() => Boolean(getToken()));
@@ -31,6 +33,7 @@ export default function App() {
             Dashboard
           </NavLink>
           <NavLink to="/products">Produkte</NavLink>
+          <NavLink to="/conflicts">Konflikte</NavLink>
         </nav>
         <button className="link-button" onClick={handleLogout} type="button">
           Abmelden
@@ -44,11 +47,14 @@ export default function App() {
             path="/products/:id"
             element={<ProductDetailPage onUnauthorized={handleUnauthorized} />}
           />
+          <Route path="/conflicts" element={<ConflictListPage onUnauthorized={handleUnauthorized} />} />
+          <Route path="/conflicts/wizard" element={<ConflictWizardPage onUnauthorized={handleUnauthorized} />} />
+          <Route path="/conflicts/:id" element={<ConflictWizardPage onUnauthorized={handleUnauthorized} />} />
           <Route path="*" element={<p className="hint">Seite nicht gefunden.</p>} />
         </Routes>
       </main>
       <footer className="app-footer">
-        Read-only Ansicht - Preis-/Druckdaten spiegeln nur, was im Hub bereits gepflegt ist.
+        Product Hub · Änderungen sind versioniert, auditiert und vor Channel-Syncs prüfbar.
       </footer>
     </div>
   );

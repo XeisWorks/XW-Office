@@ -20,7 +20,22 @@ from xw_office.services.finanzonline.uva_soap import (
 from xw_office.services.finanzonline.zm_service import ZmCalculationResult, ZmRow
 
 
-def test_unconfigured_client_raises() -> None:
+def test_unconfigured_client_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The developer .env may legitimately contain live credentials.  This test is
+    # about the unconfigured branch, so isolate it from ambient machine secrets.
+    for name in (
+        "FON_TEILNEHMER_ID",
+        "FON_BENUTZER_ID",
+        "FON_PIN",
+        "FON_HERSTELLER_ID",
+        "FINANZONLINE_UID",
+        "FINANZONLINE_FASTNR",
+        "FINANZONLINE_STEUERNUMMER",
+        "FON_STEUERNUMMER",
+        "FON_FASTNR",
+        "FON_SOAP_WSDL",
+    ):
+        monkeypatch.delenv(name, raising=False)
     client = FinanzOnlineClient(AppConfig())
     with pytest.raises(UvaSoapUnavailableError):
         client.submit_uva({"jahr": 2026, "monat": 1})
