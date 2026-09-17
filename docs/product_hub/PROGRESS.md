@@ -130,15 +130,21 @@ hide again. First attempt had already safely deleted+re-staged+committed before
 failing (transactional per group — nothing corrupted); the second, fixed run replaced
 the catalog cleanly from scratch.
 
-A second, unrelated, pre-existing bug was found (not fixed, out of scope) while first
-attempting the delete: `inventory_movement` (PR13/14's variant-keyed shadow ledger)
-was never actually created in production — migration 014's own `if "inventory_movement"
-not in existing_tables` guard silently skipped it because migration 002 already had a
-same-named but incompatible (product-keyed) legacy table. `delete_legacy_master_seed_catalog`
-deliberately does not touch `inventory_movement` at all (see its own docstring); the
-Inventory V2 shadow-mode ledger has therefore never actually recorded a real
-movement in production. Flagged for a future fix (rename PR13/14's table), not
-attempted here.
+A second, unrelated, pre-existing bug was found while first attempting the delete:
+`inventory_movement` (PR13/14's variant-keyed shadow ledger) was never actually
+created in production — migration 014's own `if "inventory_movement" not in
+existing_tables` guard silently skipped it because migration 002 already had a
+same-named but incompatible (product-keyed) legacy table. The Inventory V2
+shadow-mode ledger had therefore never actually recorded a real movement in
+production. **Fixed as a same-day follow-up**: migration 015
+(`015_inventory_movement_rename.py`) creates PR13/14's ledger under its own,
+collision-free name, `product_hub_inventory_movement`
+(`models/product_hub_inventory.py`'s `InventoryMovement.__tablename__` updated to
+match); the legacy `inventory_movement` table is untouched, still owned by the
+unrelated desktop inventory path. Applied to production (`alembic upgrade head`,
+014 -> 015) and verified: `product_hub_inventory_movement` exists with the correct
+variant-keyed schema, legacy `inventory_movement` still has its original 0 rows.
+`delete_legacy_master_seed_catalog` now deletes from the correctly-named table too.
 
 **Verified locally (SQLite) before touching production**, then **run against
 production for real** with identical results both times:

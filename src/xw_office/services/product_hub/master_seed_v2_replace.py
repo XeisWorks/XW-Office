@@ -33,22 +33,16 @@ then found those orphaned identifiers and proposed merging into their now-delete
 products. Explicit deletes make this correct regardless of which DB backend enforces
 what.
 
-Never touches anything outside the Product Hub schema. Deliberately does **not**
-delete from ``inventory_movement`` (unlike ``inventory_stock``/``inventory_alert``):
-migration ``002_product_pipeline`` already created a *legacy*, unrelated
-``product_id``-keyed ``inventory_movement`` table (the desktop app's original stock
-ledger) years before PR13/14's variant-keyed shadow-mode ledger of the same name was
-designed; migration ``014_product_hub_inventory``'s own ``if "inventory_movement" not
-in existing_tables`` guard then silently skipped creating PR13/14's real table in
-production, since a table with that name already existed. The two schemas are
-incompatible (no ``variant_id`` column on the legacy one) — deleting through the
-PR13/14 ORM model against the real, legacy table fails outright. This was caught
-during this module's own dry run against production; see
-``docs/product_hub/PROGRESS.md`` for the finding. Fixing the underlying name
-collision (e.g. renaming PR13/14's table in a new migration) is a separate, follow-up
-concern — out of scope here since PR13/14 is unrelated to the Master Seed replace and
-the legacy table is confirmed empty (0 rows) in production, so simply not touching it
-is safe.
+Never touches anything outside the Product Hub schema. Note on ``InventoryMovement``:
+it now lives in ``product_hub_inventory_movement`` (migration 015), not the more
+obvious ``inventory_movement`` — that name was already taken by a legacy,
+``product_id``-keyed stock ledger from migration 002 (the desktop app's original
+inventory path). An earlier version of this function tried to delete through the
+PR13/14 ORM model against what turned out to be that legacy table in production
+(``variant_id`` doesn't exist there) and failed outright — caught during this
+module's own rollout; see migration 015's docstring and
+``docs/product_hub/PROGRESS.md`` for the full story. This function never touches the
+legacy ``inventory_movement`` table at all (out of scope — unrelated desktop feature).
 """
 from __future__ import annotations
 
@@ -75,7 +69,7 @@ from xw_office.models.product_hub import (
     ProductTag,
     ProductVariant,
 )
-from xw_office.models.product_hub_inventory import InventoryAlert, InventoryStock
+from xw_office.models.product_hub_inventory import InventoryAlert, InventoryMovement, InventoryStock
 from xw_office.repositories.product_hub import ProductHubRepository
 
 #: The only ``audit_log.action`` values the automated import + curated-grouping
@@ -170,8 +164,10 @@ def delete_legacy_master_seed_catalog(
         variant_ids = list(session.scalars(select(ProductVariant.id)))
         product_ids = list(session.scalars(select(Product.id)))
 
-        # inventory_movement deliberately NOT included here — see module docstring.
+        # The *legacy* inventory_movement table is deliberately NOT touched here —
+        # see module docstring.
         report.inventory_rows_deleted += _exec(delete(InventoryAlert).where(InventoryAlert.variant_id.in_(variant_ids)))
+        report.inventory_rows_deleted += _exec(delete(InventoryMovement).where(InventoryMovement.variant_id.in_(variant_ids)))
         report.inventory_rows_deleted += _exec(delete(InventoryStock).where(InventoryStock.variant_id.in_(variant_ids)))
 
         report.improvements_deleted = _exec(

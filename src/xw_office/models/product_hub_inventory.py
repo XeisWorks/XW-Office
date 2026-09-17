@@ -80,11 +80,21 @@ class InventoryStock(Base):
 
 class InventoryMovement(Base):
     """Immutable stock ledger entry. No update/delete through application paths —
-    a correction is always a new, compensating movement."""
+    a correction is always a new, compensating movement.
 
-    __tablename__ = "inventory_movement"
+    Uses ``product_hub_inventory_movement``, not the more obvious
+    ``inventory_movement`` — that name was already taken by a legacy, product-keyed
+    stock ledger from migration 002 (the desktop app's original inventory path,
+    unrelated to this one). See migration 015's own docstring for the full story."""
+
+    __tablename__ = "product_hub_inventory_movement"
     __table_args__ = (
-        Index("ix_inventory_movement_variant_location", "variant_id", "location_id", "occurred_at"),
+        Index(
+            "ix_product_hub_inventory_movement_variant_location",
+            "variant_id",
+            "location_id",
+            "occurred_at",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
