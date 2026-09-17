@@ -28,6 +28,8 @@ type ColumnKey =
   | "ensembles"
   | "scorings"
   | "instruments"
+  | "isbns"
+  | "asins"
   | "price_gross"
   | "price_net"
   | "stock_total"
@@ -78,6 +80,8 @@ const COLUMNS: { key: ColumnKey; label: string; defaultVisible: boolean }[] = [
   { key: "ensembles", label: "Besetzung", defaultVisible: false },
   { key: "scorings", label: "Scoring", defaultVisible: false },
   { key: "instruments", label: "Instrument", defaultVisible: false },
+  { key: "isbns", label: "ISBN", defaultVisible: false },
+  { key: "asins", label: "ASIN", defaultVisible: false },
   { key: "price_gross", label: "Preis brutto", defaultVisible: true },
   { key: "price_net", label: "Preis netto", defaultVisible: false },
   { key: "stock_total", label: "Bestand", defaultVisible: false },
@@ -107,6 +111,8 @@ const CELL_RENDERERS: Record<ColumnKey, (item: ParentProductListItem) => ReactNo
   ensembles: (item) => (item.ensembles.length > 0 ? item.ensembles.join(", ") : "—"),
   scorings: (item) => (item.scorings.length > 0 ? item.scorings.join(", ") : "—"),
   instruments: (item) => (item.instruments.length > 0 ? item.instruments.join(", ") : "—"),
+  isbns: (item) => (item.isbns.length > 0 ? item.isbns.join(", ") : "—"),
+  asins: (item) => (item.asins.length > 0 ? item.asins.join(", ") : "—"),
   price_gross: (item) => formatPriceRange(item.price_gross_min, item.price_gross_max),
   price_net: (item) => formatPriceRange(item.price_net_min, item.price_net_max),
   stock_total: (item) => (item.stock_total !== null ? item.stock_total : "—"),
@@ -140,6 +146,8 @@ function sortValue(item: ParentProductListItem, key: SortKey): string | number {
     case "ensembles":
     case "scorings":
     case "instruments":
+    case "isbns":
+    case "asins":
     case "tags":
       return (item[key] as string[]).join(", ").toLocaleLowerCase("de-DE");
     case "wix_state":

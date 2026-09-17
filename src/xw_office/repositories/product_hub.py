@@ -447,6 +447,17 @@ class ProductHubRepository:
                 stmt = stmt.where(ProductIdentifier.variant_id == variant_id)
             return list(session.scalars(stmt).all())
 
+    def list_identifiers_for_products(self, product_ids: list[uuid.UUID]) -> list[ProductIdentifier]:
+        """Batched, product-scoped sibling of :meth:`list_identifiers` for the
+        parent-list read model — master-seed identifiers are always staged
+        product-scoped (see ``import_commit.py``), never variant-scoped, so this
+        covers every identifier that import path can create."""
+        if not product_ids:
+            return []
+        with self._scope() as session:
+            stmt = select(ProductIdentifier).where(ProductIdentifier.product_id.in_(product_ids))
+            return list(session.scalars(stmt).all())
+
     def add_identifier(
         self,
         *,

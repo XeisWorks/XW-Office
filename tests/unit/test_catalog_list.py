@@ -227,6 +227,29 @@ def test_review_required_rolls_up_from_any_grouped_variant(
     assert summary.review_required is True
 
 
+def test_isbn_prefers_isbn13_and_asins_are_aggregated_per_parent(
+    product_repo: ProductHubRepository, grouping: GroupingService
+) -> None:
+    """Unlike attributes (format/ensemble/...), grouping *reparents* product-scoped
+    identifiers onto the parent (see grouping.py's reparent_identifier) - so after
+    grouping, a child's own ASIN shows up as the *parent's* ASIN, not attributed to
+    any one specific variant (the DB no longer records which row it came from)."""
+    parent, _pv = product_repo.create_product(sku="XW-1", name="A")
+    product_repo.add_identifier(product_id=parent.id, scheme="ISBN13", value="9780000000001", normalized_value="9780000000001")
+    product_repo.add_identifier(product_id=parent.id, scheme="ISBN10", value="0000000001", normalized_value="0000000001")
+    product_repo.add_identifier(product_id=parent.id, scheme="ASIN", value="B000TEST01", normalized_value="B000TEST01")
+    child, _cv = product_repo.create_product(sku="XW-1-D", name="A")
+    product_repo.add_identifier(product_id=child.id, scheme="ASIN", value="B000TEST02", normalized_value="B000TEST02")
+    grouping.group_products_into_parent(parent_product_id=parent.id, child_product_ids=[child.id])
+    refreshed_parent = product_repo.get_product(parent.id)
+    assert refreshed_parent is not None
+
+    [summary] = build_parent_product_summaries(product_repo, [refreshed_parent])
+
+    assert summary.isbns == ["9780000000001"]
+    assert set(summary.asins) == {"B000TEST01", "B000TEST02"}
+
+
 def test_display_sku_is_the_products_own_sku_after_grouping(
     product_repo: ProductHubRepository, grouping: GroupingService
 ) -> None:

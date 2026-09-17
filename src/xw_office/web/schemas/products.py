@@ -105,6 +105,8 @@ class ParentProductListItem(BaseModel):
     ensembles: list[str] = []
     scorings: list[str] = []
     instruments: list[str] = []
+    isbns: list[str] = []
+    asins: list[str] = []
     price_net_min: Decimal | None = None
     price_net_max: Decimal | None = None
     price_gross_min: Decimal | None = None

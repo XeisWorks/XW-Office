@@ -83,6 +83,8 @@ export interface ParentProductListItem {
   ensembles: string[];
   scorings: string[];
   instruments: string[];
+  isbns: string[];
+  asins: string[];
   price_net_min: string | null;
   price_net_max: string | null;
   price_gross_min: string | null;

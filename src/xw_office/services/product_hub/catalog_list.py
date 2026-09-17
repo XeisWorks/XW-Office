@@ -11,11 +11,21 @@ for the list UI.
 
 Per-row metadata (format/ensemble/scoring/title_short/...) that a *grouped-away*
 variant's original row carried lived in that row's own ``product.attributes`` before
-grouping archived it. Grouping preserves ``Product.sku`` on the archived row and never
-touches ``ProductVariant.sku`` when moving a variant — the two always still match — so
-this module recovers that metadata with a single batched SKU lookup
-(``list_products_by_skus``) instead of a migration/backfill step. See
-``repositories/product_hub.py``'s own docstring on that method for the full reasoning.
+grouping archived it — ``attributes`` is never touched by grouping. Grouping preserves
+``Product.sku`` on the archived row and never touches ``ProductVariant.sku`` when moving
+a variant — the two always still match — so this module recovers that metadata with a
+single batched SKU lookup (``list_products_by_skus``) instead of a migration/backfill
+step. See ``repositories/product_hub.py``'s own docstring on that method for the full
+reasoning.
+
+``product_identifier`` (ISBN/ASIN/...) is different: unlike ``attributes``, grouping
+*does* reparent product-scoped identifiers onto the parent (see
+``grouping.py``'s own ``reparent_identifier`` call) — so after a group has been
+applied, every identifier for the whole group already lives under the parent's own
+``product_id``. ISBN/ASIN are therefore aggregated per *parent* only
+(``list_identifiers_for_products(product_ids)``, batched by the listed parents
+directly), never attributed to one specific variant — the DB no longer records which
+original row an already-reparented identifier came from.
 """
 from __future__ import annotations
 
@@ -25,7 +35,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 
-from xw_office.models.product_hub import ChannelMapping, Product, ProductPrice, ProductVariant
+from xw_office.models.product_hub import ChannelMapping, Product, ProductIdentifier, ProductPrice, ProductVariant
 from xw_office.repositories.product_hub import ProductHubRepository
 
 _NATURAL_SORT_SEGMENT = re.compile(r"(\d+)")
@@ -124,6 +134,8 @@ class ParentProductSummary:
     ensembles: list[str]
     scorings: list[str]
     instruments: list[str]
+    isbns: list[str]
+    asins: list[str]
     price_net_min: Decimal | None
     price_net_max: Decimal | None
     price_gross_min: Decimal | None
@@ -153,7 +165,18 @@ def build_parent_product_summaries(
     variant_ids = [v.id for v in variants]
 
     source_skus = {p.sku for p in products} | {v.sku for v in variants}
-    source_rows_by_sku = {p.sku: p for p in repo.list_products_by_skus(list(source_skus))}
+    source_rows = repo.list_products_by_skus(list(source_skus))
+    source_rows_by_sku = {p.sku: p for p in source_rows}
+
+    # Unlike product.attributes (never touched by grouping), product_identifier rows
+    # attached via product_id *are* reparented onto the parent when a child is grouped
+    # in (see grouping.py's own reparent_identifier call) - so by the time a group has
+    # been applied, every identifier for the whole group already lives on the parent's
+    # own product_id. Batched by the listed parent ids directly, not by source SKU.
+    identifiers_by_product: dict[uuid.UUID, list[ProductIdentifier]] = {}
+    for identifier in repo.list_identifiers_for_products(product_ids):
+        if identifier.product_id is not None:
+            identifiers_by_product.setdefault(identifier.product_id, []).append(identifier)
 
     prices_by_variant: dict[uuid.UUID, list[ProductPrice]] = {}
     for price in repo.list_prices_for_variants(variant_ids):
@@ -257,6 +280,10 @@ def build_parent_product_summaries(
 
         product_attrs = product.attributes or {}
         stock_values = [stock_by_variant[v.id] for v in product_variants if v.id in stock_by_variant]
+        product_identifiers = identifiers_by_product.get(product.id, [])
+        isbn13s = sorted({i.value for i in product_identifiers if i.scheme == "ISBN13"})
+        isbn10s = sorted({i.value for i in product_identifiers if i.scheme == "ISBN10"})
+        asins = sorted({i.value for i in product_identifiers if i.scheme == "ASIN"})
 
         summaries.append(
             ParentProductSummary(
@@ -274,6 +301,8 @@ def build_parent_product_summaries(
                 ensembles=ensembles,
                 scorings=scorings,
                 instruments=instruments,
+                isbns=isbn13s or isbn10s,
+                asins=asins,
                 price_net_min=min(net_values) if net_values else None,
                 price_net_max=max(net_values) if net_values else None,
                 price_gross_min=min(gross_values) if gross_values else None,
