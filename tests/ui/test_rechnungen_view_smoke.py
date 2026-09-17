@@ -979,9 +979,6 @@ def test_open_product_quantity_correction_keeps_later_discoveries(qtbot: object)
 
     spinbox.setValue(3)
 
-    assert "Korrektur -2" in view._open_products_feedback.text()  # noqa: SLF001
-    assert "automatisch dazugezählt" in view._open_products_feedback.text()  # noqa: SLF001
-
     view._apply_open_invoice_overview(  # noqa: SLF001
         OpenInvoiceOverview(
             key="growing-2",
@@ -1045,38 +1042,6 @@ def test_open_product_quantity_zero_removes_product_from_print_selection(qtbot: 
     assert view._displayed_print_products()[0].quantity == 0  # noqa: SLF001
     assert view._selected_displayed_print_products() == []  # noqa: SLF001
     assert not view._btn_print_all_products.isEnabled()  # noqa: SLF001
-    assert "Menge für XW-ZERO angepasst: 0" in view._open_products_feedback.text()  # noqa: SLF001
-
-
-def test_print_plan_feedback_marks_active_start_boundary(qtbot: object, monkeypatch: object) -> None:
-    container, _invoice_service = _build_rechnungen_test_container()
-    view = RechnungenView(container)
-    qtbot.addWidget(view)
-    product = PrintProductAggregate(
-        sku="XW-PLAN",
-        title="Planprodukt",
-        description="A",
-        quantity=1,
-    )
-    monkeypatch.setattr(
-        view,
-        "_piece_block_from_open_product",
-        lambda item: PieceBlock(sku=item.sku, name=item.title, qty_needed=item.quantity),
-    )
-    monkeypatch.setattr(
-        "xw_office.ui.modules.rechnungen.print_dialog._configure_missing_piece_print",
-        lambda *_args, **_kwargs: True,
-    )
-    monkeypatch.setattr(view, "_refresh_open_invoice_overview", lambda: None)
-
-    view.set_start_workflow_running(True, product_print=True)
-    view._on_open_product_manage_clicked(product)  # noqa: SLF001
-
-    feedback = view._open_products_feedback.text()  # noqa: SLF001
-    assert "nächsten noch nicht gestarteten Druckauftrag" in feedback
-    assert "bereits laufender Druck bleibt unverändert" in feedback
-
-
 def test_print_selected_products_skips_unchecked_rows(qtbot: object, monkeypatch: object) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)

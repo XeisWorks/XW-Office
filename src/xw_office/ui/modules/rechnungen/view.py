@@ -1364,14 +1364,6 @@ class RechnungenView(QWidget):
         self._btn_print_all_products.clicked.connect(self._on_print_all_open_products_clicked)
         open_products_header.addWidget(self._btn_print_all_products, alignment=Qt.AlignmentFlag.AlignRight)
         open_products_layout.addLayout(open_products_header)
-        self._open_products_feedback = QLabel()
-        self._open_products_feedback.setWordWrap(True)
-        self._open_products_feedback.setStyleSheet(
-            "color: #bfdbfe; background-color: #172554; border: 1px solid #1d4ed8; "
-            "border-radius: 4px; padding: 5px 7px;"
-        )
-        self._open_products_feedback.hide()
-        open_products_layout.addWidget(self._open_products_feedback)
         self._open_products_spinner = QProgressBar()
         self._open_products_spinner.setRange(0, 0)
         self._open_products_spinner.setFixedHeight(4)
@@ -1730,6 +1722,7 @@ class RechnungenView(QWidget):
                 "START läuft: Mengen und Druckplan bleiben bearbeitbar; neu erkannte Stücke werden weiter addiert."
             )
             self._set_open_products_feedback(note)
+            self._container.resolve(AppSignals).status_message.emit(note, 5000)
             selected = self._selected_summary()
             self._deferred_selection_detail = (
                 (selected, self._detail_context_seq) if selected is not None else None
@@ -2867,20 +2860,16 @@ class RechnungenView(QWidget):
             "\n".join(self._plain_open_print_product_line(product) for product in self._displayed_print_products())
         )
         change = f"{adjustment:+d}" if adjustment else "±0"
-        self._set_open_products_feedback(
-            f"Menge für {item.sku} angepasst: {requested} (Korrektur {change}). "
-            "Neu erkannte Stücke werden automatisch dazugezählt."
-        )
         self._container.resolve(AppSignals).status_message.emit(
-            f"{item.sku}: Druckmenge auf {requested} angepasst ({change}).",
+            f"{item.sku}: Druckmenge auf {requested} angepasst ({change}); "
+            "neu erkannte Stücke werden addiert.",
             5000,
         )
         self._update_print_all_products_button()
 
     def _set_open_products_feedback(self, message: str) -> None:
-        text = str(message or "").strip()
-        self._open_products_feedback.setText(text)
-        self._open_products_feedback.setVisible(bool(text))
+        """Compatibility hook; inline feedback is intentionally not rendered."""
+        return
 
     def _update_print_all_products_button(self) -> None:
         if not hasattr(self, "_btn_print_all_products"):
@@ -3171,8 +3160,9 @@ class RechnungenView(QWidget):
     ) -> None:
         quantity = self._open_product_quantity(item)
         if quantity <= 0:
-            self._set_open_products_feedback(
-                f"{item.sku}: Menge ist 0 – es wurde kein Druckauftrag gestartet."
+            self._container.resolve(AppSignals).status_message.emit(
+                f"{item.sku}: Menge ist 0 – kein Druckauftrag gestartet.",
+                5000,
             )
             return
         self._on_product_print_clicked(
