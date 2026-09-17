@@ -684,7 +684,7 @@ class OffeneSendungenDialog(QDialog):
         products = self._products_from_table()
         manual_text = self._manual_text.toPlainText()
 
-        def job() -> bool:
+        def job() -> int:
             self._service.save_manual_fields(
                 case_id,
                 address_lines=lines,
@@ -815,14 +815,24 @@ class OffeneSendungenDialog(QDialog):
                 manual_text=manual_text,
             )
             self._service.mark_done(case_id, done=True)
-            return True
+            return self._service.open_count()
 
         self._start_action(
             self._btn_done,
             "Erledige...",
             job,
-            lambda _payload: self._load_cases(refresh=False),
+            self._on_mark_done_finished,
         )
+
+    def _on_mark_done_finished(self, payload: object) -> None:
+        try:
+            remaining = int(payload)
+        except (TypeError, ValueError):
+            remaining = self._service.open_count()
+        if remaining <= 0:
+            QTimer.singleShot(0, self.accept)
+            return
+        self._load_cases(refresh=False)
 
     def _start_action(
         self,

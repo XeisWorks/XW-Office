@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QDialog
 
 from xw_office.core.config import AppConfig, PrintingSection
 from xw_office.services.printing.print_queue import PrintQueueService
@@ -169,3 +170,4 @@ def test_dialog_mark_done_saves_manual_fields_and_removes_case(qtbot: object) ->
     qtbot.waitUntil(lambda: bool(service.mark_done_calls), timeout=2000)
     assert service.mark_done_calls == [("m1", True)]
     assert service.saved_manual[-1]["manual_text"] == "Bitte schnell senden"
+    qtbot.waitUntil(lambda: dialog.result() == QDialog.DialogCode.Accepted, timeout=2000)
