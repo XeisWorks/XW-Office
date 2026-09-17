@@ -1,6 +1,7 @@
 """Tests for the Import Commit Service (PR06)."""
 from __future__ import annotations
 
+from decimal import Decimal
 import uuid
 
 import pytest
@@ -8,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.models.base import Base
-from xw_office.models.product_hub import ProductIdentifier
+from xw_office.models.product_hub import PriceList, ProductIdentifier
 from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_import import ProductHubImportRepository
 from xw_office.services.product_hub.import_commit import CommitError, ImportCommitService
@@ -433,3 +434,91 @@ def test_preview_commit_shows_already_committed(
 
     assert preview.action == "already_committed"
     assert preview.target_product_id is not None
+
+
+# -- price merge on commit (2026-09-17: deterministic 10% VAT unblocked this) ----------
+
+
+def test_create_from_staging_sets_retail_price_from_excel_brutto_netto(
+    session_factory: sessionmaker[Session],
+    import_repo: ProductHubImportRepository,
+    product_repo: ProductHubRepository,
+    commit_service: ImportCommitService,
+) -> None:
+    with session_factory() as session:
+        session.add(PriceList(id=uuid.uuid4(), code="RETAIL_EUR", name="Retail EUR"))
+        session.commit()
+
+    batch = import_repo.create_batch(source="excel")
+    staged = import_repo.ingest_staging_product(
+        import_batch_id=batch.id,
+        source="excel",
+        source_key="XW-500",
+        sku="XW-500",
+        name="Preisprodukt",
+        raw_payload={},
+        normalized_fields={"brutto": "42.90", "netto": "39.00", "tax_rate": "0.10"},
+    )
+
+    product = commit_service.create_from_staging(staged.id)
+
+    variant = product_repo.get_default_variant(product.id)
+    assert variant is not None
+    prices = product_repo.list_prices(variant.id)
+    assert len(prices) == 1
+    assert prices[0].gross_amount == Decimal("42.90")
+    assert prices[0].net_amount == Decimal("39.00")
+    assert prices[0].tax_rate == Decimal("0.10")
+
+
+def test_create_from_staging_without_price_list_skips_price_gracefully(
+    import_repo: ProductHubImportRepository,
+    product_repo: ProductHubRepository,
+    commit_service: ImportCommitService,
+) -> None:
+    # No RETAIL_EUR price list seeded — must not raise, just skip pricing.
+    batch = import_repo.create_batch(source="excel")
+    staged = import_repo.ingest_staging_product(
+        import_batch_id=batch.id,
+        source="excel",
+        source_key="XW-501",
+        sku="XW-501",
+        name="Kein Preislistenprodukt",
+        raw_payload={},
+        normalized_fields={"brutto": "10.00", "netto": "9.09", "tax_rate": "0.10"},
+    )
+
+    product = commit_service.create_from_staging(staged.id)
+
+    variant = product_repo.get_default_variant(product.id)
+    assert variant is not None
+    assert product_repo.list_prices(variant.id) == []
+
+
+def test_create_from_staging_price_merge_is_idempotent(
+    session_factory: sessionmaker[Session],
+    import_repo: ProductHubImportRepository,
+    product_repo: ProductHubRepository,
+    commit_service: ImportCommitService,
+) -> None:
+    with session_factory() as session:
+        session.add(PriceList(id=uuid.uuid4(), code="RETAIL_EUR", name="Retail EUR"))
+        session.commit()
+
+    batch = import_repo.create_batch(source="excel")
+    staged = import_repo.ingest_staging_product(
+        import_batch_id=batch.id,
+        source="excel",
+        source_key="XW-502",
+        sku="XW-502",
+        name="Idempotenzprodukt",
+        raw_payload={},
+        normalized_fields={"brutto": "20.00", "netto": "18.18", "tax_rate": "0.10"},
+    )
+
+    product = commit_service.create_from_staging(staged.id)
+    commit_service.create_from_staging(staged.id)  # idempotent re-call
+
+    variant = product_repo.get_default_variant(product.id)
+    assert variant is not None
+    assert len(product_repo.list_prices(variant.id)) == 1

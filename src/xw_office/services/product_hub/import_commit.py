@@ -13,12 +13,15 @@ Safety rules (docs/product_hub/XW_PRODUCT_HUB_CODEX_5_6_LUNA_BUILD_PLAN.md PR06)
   never silently resolved;
 - every commit writes an ``audit_log`` entry.
 
-This does not create ``product_price`` rows: Excel's ambiguous "netto" columns
-(see ``excel_import.py``) mean price data needs a deliberate, reviewed decision, not an
-automatic one — that stays a follow-up (PR09 edit API), not part of this PR's scope.
+Excel-sourced rows also get a ``product_price`` row (``RETAIL_EUR``, gross from the
+sheet's ``brutto`` column, net computed at the fixed 10% VAT rate — see
+``excel_import.py``): now that netto is deterministic rather than ambiguous, there is
+no longer a reason to defer this to a separate manual step. Idempotent like everything
+else here — only written if the variant has no current ``RETAIL_EUR`` price yet.
 """
 from __future__ import annotations
 
+from decimal import Decimal
 import uuid
 from dataclasses import dataclass, field
 
@@ -393,6 +396,27 @@ class ImportCommitService:
             tag = product_repo.get_or_create_tag(code=slugify(tag_label), label=tag_label)
             if tag.id not in existing_tag_ids:
                 product_repo.add_product_tag(product_id=product.id, tag_id=tag.id)
+
+        if staging.source == "excel":
+            brutto_raw = staging.normalized_fields.get("brutto")
+            price_list = product_repo.get_price_list_by_code("RETAIL_EUR")
+            variant = product_repo.get_default_variant(product.id)
+            if brutto_raw and price_list is not None and variant is not None:
+                has_current_price = any(
+                    price.price_list_id == price_list.id and price.valid_until is None
+                    for price in product_repo.list_prices(variant.id)
+                )
+                if not has_current_price:
+                    netto_raw = staging.normalized_fields.get("netto")
+                    tax_rate_raw = staging.normalized_fields.get("tax_rate")
+                    product_repo.set_price(
+                        variant.id,
+                        price_list_id=price_list.id,
+                        gross_amount=Decimal(str(brutto_raw)),
+                        net_amount=Decimal(str(netto_raw)) if netto_raw else None,
+                        tax_rate=Decimal(str(tax_rate_raw)) if tax_rate_raw else None,
+                        source="excel_import",
+                    )
 
 
 def _suggested_tags(staging: StagingProduct) -> list[str]:

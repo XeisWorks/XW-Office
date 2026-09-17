@@ -23,10 +23,11 @@ Scope (per docs/product_hub/ excel_mapping / PR05):
   approved data model (``excel_mapping.XeisWorks``/``.MusikHeroes``); not imported here,
   used later only as grouping evidence (PR06 curated grouping).
 
-Two "netto" columns exist in ``Produktpalette`` with different, undocumented divisors
-(``/1.05`` vs ``/1.1``); per the build plan this importer never guesses which one is
-correct — both are staged and a mismatch is surfaced as a price warning for manual
-review, not silently resolved.
+The sheet carries two "netto" columns with different, undocumented divisors
+(``/1.05`` vs ``/1.1``). Per explicit business decision (2026-09-17): **10% Umsatzsteuer
+gilt immer** — this importer no longer reads either netto column at all; ``netto`` is
+computed deterministically as ``brutto / 1.10``. The 5%-derived column is not staged,
+not stored, not used anywhere.
 """
 from __future__ import annotations
 
@@ -43,8 +44,12 @@ from xw_office.repositories.product_hub_import import ProductHubImportRepository
 logger = logging.getLogger(__name__)
 
 _EDITION_MARKER = "edition"
-_NETTO_AMBIGUITY_TOLERANCE = Decimal("0.02")
 _HEADER_CELL_NOISE = re.compile(r"[.\-\s]")
+
+#: Fixed per explicit business decision (2026-09-17): every Produktpalette price uses
+#: 10% Umsatzsteuer. netto = brutto / VAT_DIVISOR, always — no per-row ambiguity.
+VAT_DIVISOR = Decimal("1.10")
+VAT_RATE = Decimal("0.10")
 
 
 @dataclass(frozen=True)
@@ -57,8 +62,7 @@ class ProduktpaletteRow:
     skg: str
     category: str
     brutto: Decimal | None
-    netto_values: tuple[Decimal | None, ...]
-    netto_ambiguous: bool
+    netto: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -82,7 +86,6 @@ class ExcelImportReport:
     identifiers_staged: int = 0
     besetzungen_seed_count: int = 0
     haendler_sheet_present: bool = False
-    price_warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
 
@@ -132,11 +135,10 @@ def parse_produktpalette_rows(rows: list[tuple[Any, ...]]) -> list[Produktpalett
         description = _clean_str(row[2]) if len(row) > 2 else ""
         skg = _clean_str(row[3]) if len(row) > 3 else ""
         brutto = _to_decimal(row[4]) if len(row) > 4 else None
-        netto_values = tuple(_to_decimal(row[i]) for i in range(5, len(row)))
-        present_netto = [value for value in netto_values if value is not None]
-        ambiguous = (
-            len(present_netto) >= 2
-            and max(present_netto) - min(present_netto) > _NETTO_AMBIGUITY_TOLERANCE
+        # Columns beyond index 4 (the sheet's two "netto" columns) are never read —
+        # netto is always derived from brutto at the fixed 10% VAT rate, see VAT_DIVISOR.
+        netto = (
+            (brutto / VAT_DIVISOR).quantize(Decimal("0.01")) if brutto is not None else None
         )
 
         results.append(
@@ -147,8 +149,7 @@ def parse_produktpalette_rows(rows: list[tuple[Any, ...]]) -> list[Produktpalett
                 skg=skg,
                 category=current_category,
                 brutto=brutto,
-                netto_values=netto_values,
-                netto_ambiguous=ambiguous,
+                netto=netto,
             )
         )
     return results
@@ -212,11 +213,6 @@ class ExcelWorkbookImporter:
                     continue
                 staged_by_sku[entry.sku.upper()] = staged_id
                 report.products_staged += 1
-                if entry.netto_ambiguous:
-                    report.price_warnings.append(
-                        f"{entry.sku}: netto-Werte weichen voneinander ab "
-                        f"{entry.netto_values} — manuell prüfen, nicht automatisch übernommen"
-                    )
 
         if "Amazon" in workbook.sheetnames:
             raw_rows = list(workbook["Amazon"].iter_rows(values_only=True))
@@ -269,14 +265,14 @@ class ExcelWorkbookImporter:
                 "description": entry.description,
                 "skg": entry.skg,
                 "brutto": str(entry.brutto) if entry.brutto is not None else None,
-                "netto_values": [str(v) if v is not None else None for v in entry.netto_values],
+                "netto": str(entry.netto) if entry.netto is not None else None,
             },
             normalized_fields={
                 "sheet_origin": "Produktpalette",
                 "category": entry.category,
                 "brutto": str(entry.brutto) if entry.brutto is not None else None,
-                "netto_values": [str(v) if v is not None else None for v in entry.netto_values],
-                "netto_ambiguous": entry.netto_ambiguous,
+                "netto": str(entry.netto) if entry.netto is not None else None,
+                "tax_rate": str(VAT_RATE),
             },
         )
         if entry.category:

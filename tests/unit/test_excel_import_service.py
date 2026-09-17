@@ -1,6 +1,7 @@
 """Tests for the Produktpalette.xlsx -> Product Hub staging importer (PR05)."""
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from xw_office.models.base import Base
 from xw_office.repositories.product_hub_import import ProductHubImportRepository
 from xw_office.services.product_hub.excel_import import (
+    VAT_DIVISOR,
     ExcelWorkbookImporter,
     parse_amazon_rows,
     parse_produktpalette_rows,
@@ -80,38 +82,30 @@ def test_parse_produktpalette_rows_outside_any_block_are_ignored() -> None:
     assert parse_produktpalette_rows(rows) == []
 
 
-def test_parse_produktpalette_flags_ambiguous_netto_outside_tolerance() -> None:
+def test_parse_produktpalette_netto_is_always_brutto_over_ten_percent_vat() -> None:
+    """Fixed business decision (2026-09-17): 10% VAT always, sheet's netto columns
+    (whatever they contain) are never read — netto is derived, not sourced."""
     rows = [
         ("TANZLMUSI EDITION",),
         (),
         ("Art.Nr.", "Titel", "Beschreibung", "SKG*", "brutto", "netto", "netto"),
+        # The two sheet netto columns deliberately disagree (5%- vs 10%-derived) —
+        # must not affect the computed value at all.
         ("XW-101", "Titel", "Beschr.", 4, 42.9, 40.857142857142854, 38.99999999999999),
     ]
     parsed = parse_produktpalette_rows(rows)
-    assert parsed[0].netto_ambiguous is True
-    assert len(parsed[0].netto_values) == 2
+    assert parsed[0].netto == (Decimal("42.9") / VAT_DIVISOR).quantize(Decimal("0.01"))
 
 
-def test_parse_produktpalette_no_ambiguity_when_netto_values_agree() -> None:
+def test_parse_produktpalette_netto_is_none_without_brutto() -> None:
     rows = [
         ("TANZLMUSI EDITION",),
         (),
-        ("Art.Nr.", "Titel", "Beschreibung", "SKG*", "brutto", "netto", "netto"),
-        ("XW-101", "Titel", "Beschr.", 4, 42.9, 39.0, 39.0001),
+        ("Art.Nr.", "Titel", "Beschreibung", "SKG*", "brutto"),
+        ("XW-101", "Titel", "Beschr.", 4, None),
     ]
     parsed = parse_produktpalette_rows(rows)
-    assert parsed[0].netto_ambiguous is False
-
-
-def test_parse_produktpalette_single_netto_value_is_never_ambiguous() -> None:
-    rows = [
-        ("TANZLMUSI EDITION",),
-        (),
-        ("Art.Nr.", "Titel", "Beschreibung", "SKG*", "brutto", "netto"),
-        ("XW-101", "Titel", "Beschr.", 4, 42.9, 39.0),
-    ]
-    parsed = parse_produktpalette_rows(rows)
-    assert parsed[0].netto_ambiguous is False
+    assert parsed[0].netto is None
 
 
 def test_parse_amazon_rows_extracts_asin_fnsku_isbn() -> None:
@@ -198,7 +192,7 @@ def fixture_workbook(tmp_path: Path) -> Path:
     return path
 
 
-def test_run_stages_products_with_categories_and_price_warning(
+def test_run_stages_products_with_categories_and_deterministic_netto(
     fixture_workbook: Path, import_repo: ProductHubImportRepository
 ) -> None:
     importer = ExcelWorkbookImporter(import_repo=import_repo)
@@ -206,11 +200,15 @@ def test_run_stages_products_with_categories_and_price_warning(
     report = importer.run(fixture_workbook)
 
     assert report.errors == []
-    assert len(report.price_warnings) == 1
-    assert "XW-101" in report.price_warnings[0]
 
     staged = {row.sku: row for row in import_repo.list_staging_products()}
     assert staged["XW-101"].normalized_fields["category"] == "TANZLMUSI EDITION"
+    assert staged["XW-101"].normalized_fields["brutto"] == "42.9"
+    # netto = 42.9 / 1.10, never the sheet's two (disagreeing) netto columns.
+    assert staged["XW-101"].normalized_fields["netto"] == str(
+        (Decimal("42.9") / VAT_DIVISOR).quantize(Decimal("0.01"))
+    )
+    assert staged["XW-101"].normalized_fields["tax_rate"] == "0.10"
     categories = import_repo.list_categories(staged["XW-101"].id)
     assert categories[0].external_category_name == "TANZLMUSI EDITION"
 
