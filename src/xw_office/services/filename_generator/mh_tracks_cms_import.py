@@ -1,4 +1,4 @@
-"""Non-destructive MH-Tracks CMS import, run directly from XW-Studio.
+"""Non-destructive MH-Tracks CMS import, run directly from XW-Office.
 
 Replaces the public, Permissions.Admin-gated Wix upload page for the CMS
 write step: preview (read-only) then apply (writes), using the same

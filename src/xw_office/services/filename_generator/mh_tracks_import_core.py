@@ -1,7 +1,7 @@
 """Pure planner for the MH-Tracks audio import.
 
 Python port of the Wix Velo module ``mhTracksImportCore.js`` so the same
-non-destructive import logic can run directly in XW-Studio instead of the
+non-destructive import logic can run directly in XW-Office instead of the
 public, permission-gated Wix upload page. Keep this in sync with the Velo
 original when the naming convention or write rules change.
 """

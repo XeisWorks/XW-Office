@@ -1,6 +1,6 @@
 """Wix Data (CMS collections) REST client.
 
-Lets XW-Studio read and write Wix CMS collections (e.g. MH-Tracks, MH-Editions)
+Lets XW-Office read and write Wix CMS collections (e.g. MH-Tracks, MH-Editions)
 directly with the API key, without depending on a Wix-site-admin browser session.
 """
 from __future__ import annotations

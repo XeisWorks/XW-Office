@@ -1434,40 +1434,24 @@ class RechnungenView(QWidget):
 
         self._gb_shipping = QGroupBox("VERSANDADRESSE")
         shipping_layout = QVBoxLayout(self._gb_shipping)
-        shipping_layout.setContentsMargins(12, 10, 12, 12)
-        shipping_layout.setSpacing(6)
+        shipping_layout.setContentsMargins(8, 6, 8, 8)
+        shipping_layout.setSpacing(3)
         shipping_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._shipping_status = QLabel("—")
         self._shipping_status.setWordWrap(True)
         self._shipping_status.setStyleSheet("color: #64748b;")
         self._shipping_status.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         shipping_layout.addWidget(self._shipping_status)
-        shipping_row_wrap = QWidget(self._gb_shipping)
-        shipping_row = QHBoxLayout(shipping_row_wrap)
-        shipping_row.setContentsMargins(0, 0, 0, 0)
-        shipping_row.setSpacing(8)
         self._shipping_editor = QPlainTextEdit()
         self._shipping_editor.setPlaceholderText("Lieferadresse Zeile für Zeile bearbeiten")
-        self._shipping_editor.setMinimumHeight(104)
-        self._shipping_editor.setMaximumHeight(150)
-        self._shipping_editor.setMaximumWidth(300)
+        self._shipping_editor.setMinimumHeight(64)
+        self._shipping_editor.setMaximumHeight(104)
+        self._shipping_editor.setMaximumWidth(360)
         self._shipping_editor.setMinimumWidth(240)
         self._shipping_editor.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._shipping_editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._shipping_editor.textChanged.connect(self._on_shipping_editor_changed)
-        shipping_row.addWidget(self._shipping_editor, stretch=0)
-        self._btn_print_label = QPushButton("")
-        label_icon = Path(__file__).resolve().parents[5] / "icons" / "labelprint.png"
-        if label_icon.exists():
-            self._btn_print_label.setIcon(QIcon(str(label_icon)))
-        self._btn_print_label.setToolTip("Label drucken")
-        self._btn_print_label.setFixedSize(36, 36)
-        self._btn_print_label.clicked.connect(self._on_print_label_clicked)
-        self._btn_print_label.setEnabled(False)
-        shipping_row.addWidget(self._btn_print_label, alignment=Qt.AlignmentFlag.AlignTop)
-        shipping_row.addStretch()
-        shipping_row_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        shipping_layout.addWidget(shipping_row_wrap, alignment=Qt.AlignmentFlag.AlignTop)
+        shipping_layout.addWidget(self._shipping_editor, alignment=Qt.AlignmentFlag.AlignLeft)
         self._gb_shipping.hide()
         detail_main.addWidget(self._gb_shipping)
 
@@ -1481,44 +1465,67 @@ class RechnungenView(QWidget):
 
         self._gb_actions = QGroupBox("AKTIONEN")
         actions_layout = QGridLayout(self._gb_actions)
-        actions_layout.setHorizontalSpacing(8)
-        actions_layout.setVerticalSpacing(6)
+        actions_layout.setContentsMargins(8, 6, 8, 8)
+        actions_layout.setHorizontalSpacing(6)
+        actions_layout.setVerticalSpacing(5)
         actions_layout.setColumnStretch(0, 1)
         actions_layout.setColumnStretch(1, 1)
+        actions_layout.setColumnStretch(2, 1)
         self._action_state = QLabel("Keine Rechnung ausgewählt")
         self._action_state.setWordWrap(True)
         self._action_state.setStyleSheet("color: #64748b;")
-        actions_layout.addWidget(self._action_state, 0, 0, 1, 2)
+        actions_layout.addWidget(self._action_state, 2, 0, 1, 3)
         self._plc_last = QLabel("Letzter PLC-Druck: —")
         self._plc_last.setStyleSheet("color: #64748b; font-size: 11px;")
-        actions_layout.addWidget(self._plc_last, 1, 0, 1, 2)
+        actions_layout.addWidget(self._plc_last, 3, 0, 1, 3)
         self._action_state.hide()
         self._plc_last.hide()
 
         action_button_style = (
             "QPushButton { background-color: #334155; color: #f8fafc; border: 1px solid #64748b; "
-            "border-radius: 5px; font-weight: 600; padding: 7px 10px; }"
+            "border-radius: 5px; font-weight: 600; padding: 5px 7px; }"
             "QPushButton:hover { background-color: #475569; border-color: #94a3b8; }"
             "QPushButton:pressed { background-color: #1e293b; }"
             "QPushButton:disabled { background-color: #1f2937; color: #64748b; border-color: #334155; }"
         )
-        self._btn_print = QPushButton("Rechnung drucken")
+        print_icon_path = Path(__file__).resolve().parents[5] / "icons" / "print.png"
+        print_icon = QIcon(str(print_icon_path)) if print_icon_path.exists() else QIcon()
+
+        self._btn_print = QPushButton("Rechnung")
+        self._btn_print.setIcon(print_icon)
+        self._btn_print.setIconSize(QSize(18, 18))
+        self._btn_print.setToolTip("Rechnung drucken")
         self._btn_print.setStyleSheet(action_button_style)
         self._btn_print.clicked.connect(self._on_print_clicked)
         self._btn_print.setEnabled(False)
         actions_layout.addWidget(self._btn_print, 0, 0)
 
-        self._btn_print_plc = QPushButton("PLC-Label drucken")
-        self._btn_print_plc.setStyleSheet(action_button_style)
-        self._btn_print_plc.clicked.connect(self._on_print_plc_selected)
-        self._btn_print_plc.setEnabled(False)
-        actions_layout.addWidget(self._btn_print_plc, 0, 1)
+        self._btn_print_label = QPushButton("Versandlabel")
+        self._btn_print_label.setIcon(print_icon)
+        self._btn_print_label.setIconSize(QSize(18, 18))
+        self._btn_print_label.setToolTip("Versandlabel mit der angezeigten Wix-Adresse drucken")
+        self._btn_print_label.setStyleSheet(action_button_style)
+        self._btn_print_label.clicked.connect(self._on_print_label_clicked)
+        self._btn_print_label.setEnabled(False)
+        actions_layout.addWidget(self._btn_print_label, 0, 1)
 
-        self._btn_print_music = QPushButton("Noten drucken")
+        self._btn_print_music = QPushButton("Noten")
+        self._btn_print_music.setIcon(print_icon)
+        self._btn_print_music.setIconSize(QSize(18, 18))
+        self._btn_print_music.setToolTip("Noten drucken")
         self._btn_print_music.setStyleSheet(action_button_style)
         self._btn_print_music.clicked.connect(self._on_print_music_clicked)
         self._btn_print_music.setEnabled(False)
-        actions_layout.addWidget(self._btn_print_music, 1, 0)
+        actions_layout.addWidget(self._btn_print_music, 0, 2)
+
+        self._btn_print_plc = QPushButton("PLC-Label")
+        self._btn_print_plc.setIcon(print_icon)
+        self._btn_print_plc.setIconSize(QSize(18, 18))
+        self._btn_print_plc.setToolTip("PLC-Label drucken")
+        self._btn_print_plc.setStyleSheet(action_button_style)
+        self._btn_print_plc.clicked.connect(self._on_print_plc_selected)
+        self._btn_print_plc.setEnabled(False)
+        actions_layout.addWidget(self._btn_print_plc, 1, 0)
 
         self._btn_send_invoice = QPushButton("Rechnung senden")
         self._btn_send_invoice.setStyleSheet(action_button_style)
@@ -1531,7 +1538,7 @@ class RechnungenView(QWidget):
         self._btn_open_plc_label.clicked.connect(self._on_open_plc_label_clicked)
         self._btn_open_plc_label.setEnabled(False)
         self._btn_open_plc_label.hide()
-        actions_layout.addWidget(self._btn_open_plc_label, 2, 1)
+        actions_layout.addWidget(self._btn_open_plc_label, 1, 2)
         self._gb_actions.hide()
         detail_main.addWidget(self._gb_actions)
 
@@ -5041,9 +5048,10 @@ class RechnungenView(QWidget):
         shipping_country = str(data.get("wix_shipping_country") or "").strip()
         if shipping_country:
             self._dl_country.setText(shipping_country)
-        shipping_lines = self._normalize_shipping_lines(
+        wix_shipping_lines = self._normalize_shipping_lines(
             str(data.get("wix_shipping_address") or "").splitlines()
         )
+        shipping_lines = wix_shipping_lines
         if not shipping_lines:
             city = data.get("wix_shipping_city") or ""
             country = data.get("wix_shipping_country") or ""
@@ -5056,19 +5064,30 @@ class RechnungenView(QWidget):
                 self._dl_country.setText(shipping_country)
             elif shipping_lines:
                 self._dl_country.setText(str(shipping_lines[-1] or "").strip())
-        self._shipping_source_lines = shipping_lines
-        self._shipping_status.setText("")
         selected = self._selected_summary()
         override_lines: list[str] = []
         if selected is not None:
             override_lines = list(self._shipping_address_overrides.get(selected.id, []))
         current_lines = self._current_shipping_lines()
         if override_lines:
+            self._shipping_source_lines = wix_shipping_lines or self._shipping_source_lines
             self._set_shipping_editor_lines(override_lines)
+            self._shipping_status.setText("Adresse manuell angepasst; Wix-Versandadresse geladen")
+        elif wix_shipping_lines:
+            # Wix is authoritative for an order's shipping destination.  The
+            # sevDesk address is only a fast prefill while the Wix context is
+            # loading and must not win merely because it has a similar score.
+            self._shipping_source_lines = wix_shipping_lines
+            self._set_shipping_editor_lines(wix_shipping_lines)
+            self._shipping_status.setText("Adresse aus Wix")
         elif self._should_replace_shipping_lines(current_lines, shipping_lines):
+            self._shipping_source_lines = shipping_lines
             self._set_shipping_editor_lines(shipping_lines)
-        elif current_lines and shipping_lines and current_lines != shipping_lines:
-            self._shipping_status.setText("Versandadresse aus Rechnung verwendet; Wix-Adresse abweichend/unsicher")
+            self._shipping_status.setText("Nur Ort/Land aus Wix verfügbar")
+        elif current_lines:
+            self._shipping_status.setText("Keine vollständige Wix-Versandadresse; Adresse aus Rechnung verwendet")
+        else:
+            self._shipping_status.setText("Keine Wix-Versandadresse verfügbar")
 
     def _on_wix_meta_error(self, exc: Exception) -> None:
         if not self._current_shipping_lines():
@@ -5141,9 +5160,9 @@ class RechnungenView(QWidget):
         return score
 
     def _adjust_shipping_editor_height(self) -> None:
-        lines = max(5, min(7, self._shipping_editor.blockCount()))
+        lines = max(2, min(5, self._shipping_editor.blockCount()))
         line_height = self._shipping_editor.fontMetrics().lineSpacing()
-        target = max(104, min(150, 18 + lines * line_height))
+        target = max(64, min(104, 16 + lines * line_height))
         self._shipping_editor.setFixedHeight(target)
 
     def _on_shipping_editor_changed(self) -> None:

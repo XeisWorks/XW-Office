@@ -572,10 +572,19 @@ def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
     assert view._btn_custom_label.text() == "CUSTOM-LABEL"  # noqa: SLF001
     assert view._btn_manual_plc_label.text() == "PLC-LABEL"  # noqa: SLF001
     assert view._btn_plc_statistics.text() == "PLC-ÜBERSICHT"  # noqa: SLF001
-    assert view._btn_print.text() == "Rechnung drucken"  # noqa: SLF001
-    assert view._btn_print_label.toolTip() == "Label drucken"  # noqa: SLF001
-    assert view._btn_print_plc.text() == "PLC-Label drucken"  # noqa: SLF001
-    assert view._btn_print_music.text() == "Noten drucken"  # noqa: SLF001
+    assert view._btn_print.text() == "Rechnung"  # noqa: SLF001
+    assert view._btn_print_label.text() == "Versandlabel"  # noqa: SLF001
+    assert view._btn_print_plc.text() == "PLC-Label"  # noqa: SLF001
+    assert view._btn_print_music.text() == "Noten"  # noqa: SLF001
+    assert not view._btn_print.icon().isNull()  # noqa: SLF001
+    assert not view._btn_print_label.icon().isNull()  # noqa: SLF001
+    assert not view._btn_print_plc.icon().isNull()  # noqa: SLF001
+    assert not view._btn_print_music.icon().isNull()  # noqa: SLF001
+    assert view._btn_print_label.parentWidget() is view._gb_actions  # noqa: SLF001
+    actions_layout = view._gb_actions.layout()  # noqa: SLF001
+    assert actions_layout.getItemPosition(actions_layout.indexOf(view._btn_print)) == (0, 0, 1, 1)  # noqa: SLF001
+    assert actions_layout.getItemPosition(actions_layout.indexOf(view._btn_print_label)) == (0, 1, 1, 1)  # noqa: SLF001
+    assert actions_layout.getItemPosition(actions_layout.indexOf(view._btn_print_music)) == (0, 2, 1, 1)  # noqa: SLF001
     assert view._btn_send_invoice.text() == "Rechnung senden"  # noqa: SLF001
     assert view._shipping_editor is not None  # noqa: SLF001
     assert view._gb_actions.isHidden()  # noqa: SLF001
@@ -1594,6 +1603,54 @@ def test_shipping_editor_keeps_complete_panel_address_over_name_only_wix() -> No
 
     assert RechnungenView._should_replace_shipping_lines(panel_lines, wix_lines) is False  # noqa: SLF001
     assert RechnungenView._should_replace_shipping_lines([], wix_lines) is True  # noqa: SLF001
+
+
+def test_rechnungen_wix_shipping_address_replaces_sevdesk_prefill(
+    qtbot: object,
+    monkeypatch,
+) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = InvoiceSummary.model_validate(
+        {
+            "id": "wix-shipping-source",
+            "invoiceNumber": "RE-WIX-SHIPPING",
+            "status": 200,
+            "contact_name": "sevDesk Kunde",
+            "order_reference": "20977",
+        }
+    )
+    monkeypatch.setattr(view, "_hydrate_detail_for_selection", lambda *_args: None)
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    view._table.select_source_row(0)  # noqa: SLF001
+    view._shipping_source_lines = [  # noqa: SLF001
+        "sevDesk Kunde",
+        "Rechnungsweg 1",
+        "5020 Salzburg",
+        "AUSTRIA",
+    ]
+    view._set_shipping_editor_lines(view._shipping_source_lines)  # noqa: SLF001
+
+    view._on_wix_meta_loaded(  # noqa: SLF001
+        {
+            "__requested_ref": "20977",
+            "wix_order_number": "20977",
+            "wix_customer_name": "Wix Kunde",
+            "wix_customer_email": "wix@example.test",
+            "wix_shipping_country": "Austria",
+            "wix_shipping_address": "Wix Kunde\nLiefergasse 7\n1010 Wien\nAUSTRIA",
+        }
+    )
+
+    assert view._current_shipping_lines() == [  # noqa: SLF001
+        "Wix Kunde",
+        "Liefergasse 7",
+        "1010 Wien",
+        "AUSTRIA",
+    ]
+    assert view._shipping_status.text() == "Adresse aus Wix"  # noqa: SLF001
 
 
 def test_rechnungen_piece_details_use_model_instead_of_row_widgets(qtbot: object) -> None:
