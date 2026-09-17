@@ -4,6 +4,31 @@ Tracks which PR packages from `XW_PRODUCT_HUB_CODEX_5_6_LUNA_BUILD_PLAN.md` are 
 next work session (human, Codex, or Claude) does not have to re-derive state from scratch.
 Update this file at the end of every PR.
 
+## Catalog correction (2026-09-17): wrong-sheet import replaced with master-seed
+
+The first real catalog load (111 products, 2026-09-16) used the `Produktpalette` sheet
+directly — the wrong source. Per the user: only the `XeisWorks`/`MusikHeroes` sheets are
+source of truth. The user prepared a reconciled 972-row master-seed CSV (cross-referencing
+XLSX/Wix/sevdesk/Amazon, see `docs/producthub_master-seed/…_README.md` for the full
+source-of-truth/modeling rules) and asked for the 111 wrong products to be deleted and
+replaced with it.
+
+Deleted all 111 products (correct FK order: product_improvement/product_edition/audit_log/
+channel_mapping first, then product_variant, then product — RESTRICT constraints block a
+naive `DELETE FROM product`). New `services/product_hub/master_seed_import.py` stages the
+CSV; `import_commit.py` gained master-seed-specific enrichment (Wix linkage only when the
+seed already knows the handle, AUTO_DRAFT content flagged as an open `product_improvement`
+for editorial review, `EXTERNAL_ONLY` sevdesk-only rows tagged "Nicht zum Verkauf" instead of
+treated as missing-Wix-mapping defects). Committed **972 products, 0 errors** — verified
+against the README's own expected counts (244 draft/501 live/227 review, 226 not-for-sale,
+660 auto-draft-content, all exact matches).
+
+**Not done yet**: the CSV's pre-computed curated-grouping hints (`parent_sku`/
+`product_group_id`/`group_key`) are staged in `product.attributes` but not yet applied — the
+972 products are currently all flat/ungrouped, per the "safe migration rule" (import flat
+first, curated grouping is a separate, explicit step). Applying that grouping is a natural
+next step whenever picked up.
+
 ## Status
 
 | PR | Title | Status | Notes |
