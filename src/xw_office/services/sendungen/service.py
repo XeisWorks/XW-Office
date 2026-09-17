@@ -7,6 +7,8 @@ import json
 import logging
 from pathlib import Path
 import re
+from threading import RLock
+import time
 from typing import Any
 
 import httpx
@@ -27,6 +29,7 @@ _EXTRACTIONS_KEY = "daily_business.offene_sendungen.extractions"
 _MANUAL_KEY = "daily_business.offene_sendungen.manual"
 _WIX_ADDRESS_KEY = "daily_business.offene_sendungen.wix_addresses"
 _DEFAULT_MODEL = "gpt-4.1-mini"
+_MEMORY_CACHE_SECONDS = 120.0
 _EXCLUDED_WIX_SENDER = "no-reply@mystore.wix.com"
 _EXCLUDED_ORDER_SENDER = "office@xeisworks.at"
 _EXCLUDED_ORDER_SUBJECT_PREFIX = "neue bestellung"
@@ -55,6 +58,7 @@ class SendungCase:
     thread_id: str
     order_number: str
     thread_text: str = ""
+    sender_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -92,14 +96,68 @@ class OffeneSendungenService:
         self._repo = settings_repo
         self._secrets = secrets
         self._wix_orders = wix_orders
+        self._cache_lock = RLock()
+        self._open_cases_cache: list[SendungCase] | None = None
+        self._open_cases_cache_at = 0.0
+        self._recipient_names_cache: dict[str, str] | None = None
 
     def open_count(self) -> int:
-        return len(self.load_open_cases())
+        cases = self.load_open_cases()
+        self.load_cached_recipient_names(cases)
+        return len(cases)
 
     def load_open_cases(self) -> list[SendungCase]:
+        with self._cache_lock:
+            if (
+                self._open_cases_cache is not None
+                and time.monotonic() - self._open_cases_cache_at < _MEMORY_CACHE_SECONDS
+            ):
+                return list(self._open_cases_cache)
         all_cases = self._load_cached_cases()
         done = self._load_done_ids()
-        return [case for case in all_cases if case.id not in done]
+        open_cases = [case for case in all_cases if case.id not in done]
+        with self._cache_lock:
+            self._open_cases_cache = list(open_cases)
+            self._open_cases_cache_at = time.monotonic()
+        return open_cases
+
+    def load_cached_recipient_names(
+        self,
+        cases: list[SendungCase] | None = None,
+    ) -> dict[str, str]:
+        """Return list labels without network calls or per-case database roundtrips."""
+        with self._cache_lock:
+            if self._recipient_names_cache is not None:
+                return dict(self._recipient_names_cache)
+        extractions = self._load_json_map(_EXTRACTIONS_KEY)
+        manual = self._load_json_map(_MANUAL_KEY)
+        names: dict[str, str] = {}
+        for case in cases if cases is not None else self.load_open_cases():
+            address_lines: object = None
+            manual_case = manual.get(case.id)
+            if isinstance(manual_case, dict):
+                address_lines = manual_case.get("address_lines")
+            if not isinstance(address_lines, list) or not address_lines:
+                extraction = extractions.get(case.id)
+                if isinstance(extraction, dict):
+                    address_lines = extraction.get("address_lines")
+            if isinstance(address_lines, list) and address_lines:
+                name = str(address_lines[0] or "").strip()
+                if name:
+                    names[case.id] = name
+                    continue
+            if case.sender_name:
+                names[case.id] = case.sender_name
+        with self._cache_lock:
+            self._recipient_names_cache = dict(names)
+        return names
+
+    def _invalidate_memory_cache(self, *, names: bool = True) -> None:
+        with self._cache_lock:
+            self._open_cases_cache = None
+            self._open_cases_cache_at = 0.0
+            if names:
+                self._recipient_names_cache = None
 
     def refresh_from_graph(
         self,
@@ -436,6 +494,7 @@ class OffeneSendungenService:
         from_obj = msg.get("from") if isinstance(msg.get("from"), dict) else {}
         email_obj = from_obj.get("emailAddress") if isinstance(from_obj.get("emailAddress"), dict) else {}
         sender = str(email_obj.get("address") or email_obj.get("name") or "").strip()
+        sender_name = str(email_obj.get("name") or "").strip()
 
         body_obj = msg.get("body") if isinstance(msg.get("body"), dict) else {}
         body = str(body_obj.get("content") or "").strip()
@@ -453,6 +512,7 @@ class OffeneSendungenService:
             thread_id=str(msg.get("conversationId") or "").strip(),
             order_number=order_number,
             thread_text=str(msg.get("threadText") or "").strip(),
+            sender_name=sender_name,
         )
 
     def _find_case(self, case_id: str) -> SendungCase | None:
@@ -482,6 +542,8 @@ class OffeneSendungenService:
             "die tatsaechlich verschickt werden muessen. Ignoriere digitale Downloads, "
             "Signaturen, alte ueberholte Adressen und reine Rueckfragen. "
             "Wenn im Verlauf eine Adresse korrigiert wurde, verwende die zuletzt gueltige. "
+            "Uebernimm Strasse, Hausnummer und alle Adresszusaetze (z. B. Top, Stiege, Tuer, "
+            "Apartment) vollstaendig und wortgetreu; Hausnummer oder Zusatz niemals weglassen. "
             "Antworte ausschliesslich als JSON.\n\n"
             "JSON-Schema:\n"
             "{\n"
@@ -502,9 +564,13 @@ class OffeneSendungenService:
             resp.raise_for_status()
             payload = resp.json()
         data = self._parse_json_object(self._response_text(payload))
+        address_lines = self._restore_street_details(
+            self._normalize_address_lines(data.get("address_lines")),
+            thread_text,
+        )
         extraction = SendungExtraction(
             summary=str(data.get("summary") or "").strip() or self._fallback_summary(case),
-            address_lines=self._normalize_address_lines(data.get("address_lines")),
+            address_lines=address_lines,
             products=self._normalize_products(data.get("products")),
             order_number=str(data.get("order_number") or case.order_number or "").strip(),
             confidence_notes=[str(item).strip() for item in data.get("confidence_notes") or [] if str(item).strip()]
@@ -668,6 +734,38 @@ class OffeneSendungenService:
         if not isinstance(value, list):
             return []
         return [str(line).strip() for line in value if str(line).strip()][:8]
+
+    @staticmethod
+    def _restore_street_details(address_lines: list[str], source_text: str) -> list[str]:
+        """Restore house number/unit suffixes that an AI response shortened."""
+        result = list(address_lines)
+        source = re.sub(r"[\t\r\n]+", " ", str(source_text or ""))
+        source = re.sub(r"\s+", " ", source).strip()
+        if not source:
+            return result
+        postal_pattern = r"(?=\s+\d{4,5}\s+[A-Za-zÀ-ÖØ-öø-ÿ])"
+        for index, line in enumerate(result):
+            street = str(line or "").strip().rstrip(" ,.;")
+            street_hint = re.search(
+                r"(?:straße|strasse|str\.?|gasse|weg|platz|allee|road|street|lane|avenue|drive)\b",
+                street,
+                flags=re.IGNORECASE,
+            )
+            if not street or (not street_hint and not re.search(r"\d", street)):
+                continue
+            match = re.search(
+                rf"\b{re.escape(street)}\b\s+(.+?){postal_pattern}",
+                source,
+                flags=re.IGNORECASE,
+            )
+            if not match:
+                continue
+            suffix = match.group(1).strip(" ,.;")
+            if not re.search(r"\d", suffix) or len(suffix) > 60:
+                continue
+            result[index] = f"{street} {suffix}"
+            break
+        return result
 
     def _normalize_products(self, value: object) -> list[SendungProductLine]:
         if not isinstance(value, list):
@@ -896,11 +994,13 @@ class OffeneSendungenService:
                     thread_id=str(item.get("thread_id") or "").strip(),
                     order_number=str(item.get("order_number") or "").strip(),
                     thread_text=str(item.get("thread_text") or "").strip(),
+                    sender_name=str(item.get("sender_name") or "").strip(),
                 )
             )
         return out
 
     def _save_cases(self, cases: list[SendungCase]) -> None:
+        self._invalidate_memory_cache()
         if self._repo is None:
             return
         payload = [
@@ -914,6 +1014,7 @@ class OffeneSendungenService:
                 "thread_id": c.thread_id,
                 "order_number": c.order_number,
                 "thread_text": c.thread_text,
+                "sender_name": c.sender_name,
             }
             for c in cases
         ]
@@ -932,6 +1033,7 @@ class OffeneSendungenService:
         return {str(item).strip() for item in data if str(item).strip()}
 
     def _save_done_ids(self, ids: set[str]) -> None:
+        self._invalidate_memory_cache(names=False)
         if self._repo is not None:
             self._repo.set_value_json(_DONE_CASES_KEY, json.dumps(sorted(ids), ensure_ascii=False))
 
@@ -960,6 +1062,9 @@ class OffeneSendungenService:
         return data if isinstance(data, dict) else {}
 
     def _save_json_map(self, key: str, value: dict[str, Any]) -> None:
+        if key in {_EXTRACTIONS_KEY, _MANUAL_KEY}:
+            with self._cache_lock:
+                self._recipient_names_cache = None
         if self._repo is not None:
             self._repo.set_value_json(key, json.dumps(value, ensure_ascii=False))
 

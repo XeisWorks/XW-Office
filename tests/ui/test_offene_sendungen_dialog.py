@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -116,14 +117,29 @@ def test_dialog_loads_cases_and_prefills_shipping_fields(qtbot: object) -> None:
     qtbot.addWidget(dialog)
     _wait_dialog_loaded(qtbot, dialog)
 
-    assert service.refresh_called == 1
+    qtbot.waitUntil(lambda: service.refresh_called == 1, timeout=3000)
     assert dialog._status.text() == "1 offene Sendungen"  # noqa: SLF001
-    assert "Ein Musikbuch" in dialog._summary.toPlainText()  # noqa: SLF001
+    assert "Ein Musikbuch" in dialog._summary.text()  # noqa: SLF001
     assert dialog._cell_text(0, 1) == "Musikbuch Alpen"  # noqa: SLF001
     free_index = dialog._products_model.index(0, 4)  # noqa: SLF001
     return_index = dialog._products_model.index(0, 6)  # noqa: SLF001
     assert free_index.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
     assert return_index.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
+
+
+def test_dialog_uses_compact_case_label_and_mail_spacing(qtbot: object) -> None:
+    service = _FakeSendungenService()
+    service._cases[0] = replace(  # type: ignore[index]
+        service._cases[0],
+        thread_text="Erste Zeile\n\n\n\nZweite Zeile",
+    )
+    dialog = OffeneSendungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    _wait_dialog_loaded(qtbot, dialog)
+
+    assert dialog._list.item(0).text() == "10.07. Max Muster"  # noqa: SLF001
+    assert dialog._thread.toPlainText() == "Erste Zeile\n\nZweite Zeile"  # noqa: SLF001
+    assert dialog._btn_done.text() == "✓"  # noqa: SLF001
 
 
 def test_dialog_product_options_are_individually_editable(qtbot: object) -> None:

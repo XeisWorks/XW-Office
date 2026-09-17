@@ -3,14 +3,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
+import re
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl
 from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
-    QDialogButtonBox,
     QAbstractItemView,
     QFrame,
     QHBoxLayout,
@@ -41,15 +42,7 @@ from xw_office.services.sendungen.service import (
 
 
 class _SendungProductsModel(QAbstractTableModel):
-    _headers = [
-        "Menge",
-        "Produkt",
-        "SKU",
-        "Notiz",
-        "Kostenlose Lieferung",
-        "Lieferpreis (€)",
-        "Keine Rücksendung erforderlich",
-    ]
+    _headers = ["Anz.", "Produkt", "SKU", "Notiz", "Gratis", "Preis (€)", "Keine Retoure"]
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -160,9 +153,16 @@ class OffeneSendungenDialog(QDialog):
         self._load_seq = 0
         self._detail_seq = 0
         self._delivery_pdf_by_case: dict[str, Path] = {}
+        self._recipient_names: dict[str, str] = {}
+        self._silent_refresh_scheduled = False
+        self._silent_refresh_timer = QTimer(self)
+        self._silent_refresh_timer.setSingleShot(True)
+        self._silent_refresh_timer.timeout.connect(
+            lambda: self._load_cases(refresh=True, preserve=True, silent=True)
+        )
         self._products_model = _SendungProductsModel(self)
         self._build_ui()
-        QTimer.singleShot(0, lambda: self._load_cases(refresh=True))
+        QTimer.singleShot(0, lambda: self._load_cases(refresh=False))
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         self._wait_for_workers()
@@ -188,22 +188,26 @@ class OffeneSendungenDialog(QDialog):
 
     def _build_ui(self) -> None:
         self.setWindowTitle("OFFENE SENDUNGEN")
-        self.setMinimumSize(980, 640)
-        self.resize(1420, 860)
+        self.setMinimumSize(1100, 700)
+        self.resize(1500, 920)
 
         root = QVBoxLayout(self)
-
         top = QHBoxLayout()
         self._status = QLabel("-")
         top.addWidget(self._status, stretch=1)
         self._btn_refresh = QPushButton("Aktualisieren")
-        self._btn_refresh.clicked.connect(lambda: self._load_cases(refresh=True))
+        self._btn_refresh.clicked.connect(
+            lambda: self._load_cases(refresh=True, preserve=True)
+        )
         top.addWidget(self._btn_refresh)
+        self._btn_extract = QPushButton("OpenAI neu extrahieren")
+        self._btn_extract.clicked.connect(lambda: self._extract_selected(force=True))
+        top.addWidget(self._btn_extract)
         root.addLayout(top)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
-
         left = QWidget()
+        left.setMinimumWidth(310)
         left_lay = QVBoxLayout(left)
         self._list = QListWidget()
         self._list.currentRowChanged.connect(self._on_case_selected)
@@ -221,144 +225,232 @@ class OffeneSendungenDialog(QDialog):
         right_content = QWidget()
         right_lay = QVBoxLayout(right_content)
         right_lay.setContentsMargins(10, 0, 10, 0)
-        right_lay.setSpacing(8)
+        right_lay.setSpacing(7)
         right.setWidget(right_content)
         right_outer_lay.addWidget(right, stretch=1)
 
-        self._meta = QLabel("Keine Sendung ausgewaehlt")
-        self._meta.setWordWrap(True)
-        right_lay.addWidget(self._meta)
-
-        self._summary = QPlainTextEdit()
-        self._summary.setReadOnly(True)
-        self._summary.setPlaceholderText("OpenAI-Zusammenfassung")
-        self._summary.setMinimumHeight(78)
-        self._summary.setMaximumHeight(105)
+        self._summary = QLabel("Keine Sendung ausgewählt")
+        self._summary.setWordWrap(True)
+        self._summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._summary.setStyleSheet(
+            "font-size: 16px; font-weight: 600; padding: 2px 0 5px 0;"
+        )
         right_lay.addWidget(self._summary)
+
+        self._meta = QLabel("")
+        self._meta.setWordWrap(True)
+        self._meta.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._meta.setStyleSheet("font-size: 10px; color: #94a3b8;")
+        right_lay.addWidget(self._meta)
 
         self._thread = QPlainTextEdit()
         self._thread.setReadOnly(True)
         self._thread.setPlaceholderText("Mailverlauf / Inhalt")
-        self._thread.setMinimumHeight(105)
-        self._thread.setMaximumHeight(160)
+        self._thread.setMinimumHeight(250)
+        self._thread.setMaximumHeight(420)
         right_lay.addWidget(self._thread)
 
         self._detail_status = QLabel("Quelle: -")
         self._detail_status.setWordWrap(True)
+        self._detail_status.setStyleSheet("font-size: 10px; color: #94a3b8;")
         right_lay.addWidget(self._detail_status)
 
-        right_lay.addWidget(QLabel("Lieferadresse fuer Label (bearbeitbar, eine Zeile pro Zeile):"))
-        self._address = QPlainTextEdit()
-        self._address.setMinimumHeight(78)
-        self._address.setMaximumHeight(105)
-        right_lay.addWidget(self._address)
-
-        row_products_header = QHBoxLayout()
-        row_products_header.addWidget(QLabel("Produkte fuer Lieferschein:"))
-        row_products_header.addStretch(1)
-        self._btn_add_product = QPushButton("Produktzeile +")
-        self._btn_add_product.clicked.connect(lambda: self._add_product_row(SendungProductLine()))
-        row_products_header.addWidget(self._btn_add_product)
-        self._btn_remove_product = QPushButton("Produktzeile -")
-        self._btn_remove_product.clicked.connect(self._remove_selected_product_row)
-        row_products_header.addWidget(self._btn_remove_product)
-        right_lay.addLayout(row_products_header)
+        detail_columns = QSplitter(Qt.Orientation.Horizontal)
+        products_panel = QWidget()
+        products_lay = QVBoxLayout(products_panel)
+        products_lay.setContentsMargins(0, 0, 8, 0)
+        products_lay.setSpacing(6)
+        products_lay.addWidget(QLabel("PRODUKTE"))
 
         self._products = QTableView()
         self._products.setModel(self._products_model)
-        self._products.setMinimumHeight(155)
-        self._products.setMaximumHeight(210)
+        self._products.setMinimumHeight(190)
         self._products.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        self._products.setColumnWidth(0, 70)
-        self._products.setColumnWidth(1, 280)
-        self._products.setColumnWidth(2, 110)
-        self._products.setColumnWidth(3, 220)
-        self._products.setColumnWidth(4, 150)
-        self._products.setColumnWidth(5, 105)
-        self._products.setColumnWidth(6, 205)
-        right_lay.addWidget(self._products)
+        for column, width in enumerate((45, 190, 75, 120, 55, 70, 95)):
+            self._products.setColumnWidth(column, width)
+        products_lay.addWidget(self._products)
 
-        right_lay.addWidget(QLabel("Manueller Text fuer Lieferschein:"))
+        product_row = QHBoxLayout()
+        self._btn_add_product = QPushButton("+ Produkt")
+        self._btn_add_product.clicked.connect(
+            lambda: self._add_product_row(SendungProductLine())
+        )
+        product_row.addWidget(self._btn_add_product)
+        self._btn_remove_product = QPushButton("− Produkt")
+        self._btn_remove_product.clicked.connect(self._remove_selected_product_row)
+        product_row.addWidget(self._btn_remove_product)
+        product_row.addStretch(1)
+        products_lay.addLayout(product_row)
+
+        products_lay.addWidget(QLabel("Zusatztext Lieferschein:"))
         self._manual_text = QPlainTextEdit()
         self._manual_text.setMinimumHeight(58)
         self._manual_text.setMaximumHeight(85)
-        right_lay.addWidget(self._manual_text)
+        products_lay.addWidget(self._manual_text)
 
-        row_actions = QHBoxLayout()
-        self._btn_extract = QPushButton("OpenAI neu extrahieren")
-        self._btn_extract.clicked.connect(lambda: self._extract_selected(force=True))
-        row_actions.addWidget(self._btn_extract)
-
-        self._btn_label = QPushButton("Label drucken")
-        self._btn_label.clicked.connect(self._print_label)
-        row_actions.addWidget(self._btn_label)
-
+        delivery_row = QHBoxLayout()
         self._btn_delivery_show = QPushButton("Lieferschein zeigen")
         self._btn_delivery_show.clicked.connect(self._show_delivery_note)
-        row_actions.addWidget(self._btn_delivery_show)
-
+        delivery_row.addWidget(self._btn_delivery_show)
         self._btn_delivery_print = QPushButton("Lieferschein drucken")
         self._btn_delivery_print.clicked.connect(self._print_delivery_note)
-        row_actions.addWidget(self._btn_delivery_print)
+        delivery_row.addWidget(self._btn_delivery_print)
+        delivery_row.addStretch(1)
+        products_lay.addLayout(delivery_row)
+        detail_columns.addWidget(products_panel)
 
-        row_actions.addStretch(1)
-        self._btn_done = QPushButton("Sendung erledigt")
+        address_panel = QWidget()
+        address_lay = QVBoxLayout(address_panel)
+        address_lay.setContentsMargins(8, 0, 0, 0)
+        address_lay.setSpacing(6)
+        address_lay.addWidget(QLabel("LIEFERANSCHRIFT"))
+        self._address = QPlainTextEdit()
+        self._address.setPlaceholderText("Eine Adresszeile pro Zeile")
+        self._address.setMinimumHeight(190)
+        address_lay.addWidget(self._address)
+        address_actions = QHBoxLayout()
+        self._btn_label = QPushButton("Label drucken")
+        self._btn_label.clicked.connect(self._print_label)
+        address_actions.addWidget(self._btn_label)
+        address_actions.addStretch(1)
+        address_lay.addLayout(address_actions)
+        detail_columns.addWidget(address_panel)
+        detail_columns.setStretchFactor(0, 3)
+        detail_columns.setStretchFactor(1, 2)
+        detail_columns.setSizes([650, 420])
+        right_lay.addWidget(detail_columns)
+
+        done_row = QHBoxLayout()
+        done_row.addStretch(1)
+        self._btn_done = QPushButton("✓")
+        self._btn_done.setToolTip("Sendung erledigt")
+        self._btn_done.setAccessibleName("Sendung erledigt")
+        self._btn_done.setFixedSize(58, 48)
+        self._btn_done.setStyleSheet(
+            "QPushButton { background-color: #16803c; color: white; border-radius: 8px;"
+            " font-size: 28px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #16a34a; }"
+            "QPushButton:disabled { background-color: #64748b; }"
+        )
         self._btn_done.clicked.connect(self._mark_done)
-        row_actions.addWidget(self._btn_done)
-        right_outer_lay.addLayout(row_actions)
+        done_row.addWidget(self._btn_done)
+        right_outer_lay.addLayout(done_row)
 
         splitter.addWidget(right_panel)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 4)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([340, 1160])
         root.addWidget(splitter)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(self.reject)
-        buttons.accepted.connect(self.accept)
-        root.addWidget(buttons)
 
     def open_count(self) -> int:
         return self._service.open_count()
 
-    def _load_cases(self, *, refresh: bool) -> None:
+    def _load_cases(
+        self,
+        *,
+        refresh: bool,
+        preserve: bool = False,
+        silent: bool = False,
+    ) -> None:
         if self._load_worker is not None and self._load_worker.isRunning():
             return
         self._load_seq += 1
         self._detail_seq += 1
         seq = self._load_seq
-        self._status.setText("Lade offene Sendungen...")
-        self._list.setEnabled(False)
-        self._list.clear()
-        self._clear_detail("Lade offene Sendungen...")
+        selected = self._current_case()
+        selected_id = selected.id if preserve and selected is not None else ""
+        self._status.setText(
+            "Aktualisiere offene Sendungen..." if preserve else "Lade offene Sendungen..."
+        )
+        if not preserve:
+            self._list.setEnabled(False)
+            self._list.clear()
+            self._clear_detail("Lade offene Sendungen...")
 
-        def job() -> list[SendungCase]:
+        def job() -> tuple[list[SendungCase], dict[str, str]]:
             if refresh:
-                self._service.refresh_from_graph(lookback_days=20, max_items=150)
-            return self._service.load_open_cases()
+                self._service.refresh_from_graph(
+                    lookback_days=20,
+                    max_items=150,
+                    allow_interactive_auth=not silent,
+                )
+            cases = self._service.load_open_cases()
+            names_loader = getattr(self._service, "load_cached_recipient_names", None)
+            names = names_loader(cases) if callable(names_loader) else {}
+            return cases, names if isinstance(names, dict) else {}
 
         self._load_worker = BackgroundWorker(job)
-        self._load_worker.signals.result.connect(lambda result, token=seq: self._on_cases_loaded(token, result))
+        self._load_worker.signals.result.connect(
+            lambda result, token=seq, keep=preserve, cid=selected_id: self._on_cases_loaded(
+                token, result, preserve=keep, selected_id=cid
+            )
+        )
         self._load_worker.signals.error.connect(self._on_cases_load_error)
         self._load_worker.signals.finished.connect(lambda: setattr(self, "_load_worker", None))
         self._load_worker.start()
 
-    def _on_cases_loaded(self, seq: int, result: object) -> None:
+    def _on_cases_loaded(
+        self,
+        seq: int,
+        result: object,
+        *,
+        preserve: bool = False,
+        selected_id: str = "",
+    ) -> None:
         if not isValid(self):
             return
         if seq != self._load_seq:
             return
-        self._cases = list(result) if isinstance(result, list) else []
+        if isinstance(result, tuple) and len(result) == 2:
+            cases, names = result
+        else:
+            cases, names = result, {}
+        self._cases = list(cases) if isinstance(cases, list) else []
+        self._recipient_names = dict(names) if isinstance(names, dict) else {}
+        self._list.blockSignals(True)
         self._list.clear()
-        for case in self._cases:
-            item = QListWidgetItem(f"{case.received_at[:16]} | {case.sender} | {case.subject}")
+        selected_row = 0
+        for row, case in enumerate(self._cases):
+            item = QListWidgetItem(self._case_list_text(case))
             item.setData(Qt.ItemDataRole.UserRole, case.id)
             self._list.addItem(item)
+            if selected_id and case.id == selected_id:
+                selected_row = row
         self._list.setEnabled(True)
         self._status.setText(f"{len(self._cases)} offene Sendungen")
         if self._cases:
-            self._list.setCurrentRow(0)
+            self._list.setCurrentRow(selected_row)
         else:
             self._clear_detail("Keine offenen Sendungen.")
+        self._list.blockSignals(False)
+        selection_preserved = bool(
+            preserve
+            and selected_id
+            and self._cases
+            and self._cases[selected_row].id == selected_id
+        )
+        if self._cases and not selection_preserved:
+            self._on_case_selected(selected_row)
+        if not preserve and not self._silent_refresh_scheduled:
+            self._silent_refresh_scheduled = True
+            self._silent_refresh_timer.start(600)
+
+    def _case_list_text(self, case: SendungCase, *, recipient_name: str = "") -> str:
+        raw_date = str(case.received_at or "").strip()
+        short_date = raw_date[:10]
+        try:
+            short_date = datetime.fromisoformat(raw_date.replace("Z", "+00:00")).strftime("%d.%m.")
+        except ValueError:
+            if len(raw_date) >= 10:
+                short_date = f"{raw_date[8:10]}.{raw_date[5:7]}."
+        display_name = (
+            str(recipient_name or "").strip()
+            or self._recipient_names.get(case.id, "").strip()
+            or str(case.sender_name or "").strip()
+            or str(case.sender or "").strip()
+            or "Unbekannt"
+        )
+        return f"{short_date} {display_name}"
 
     def _on_cases_load_error(self, exc: Exception) -> None:
         self._list.setEnabled(True)
@@ -387,7 +479,7 @@ class OffeneSendungenDialog(QDialog):
                 ]
             )
         )
-        self._thread.setPlainText(case.thread_text or case.body or case.snippet)
+        self._thread.setPlainText(self._compact_thread_text(case.thread_text or case.body or case.snippet))
         self._set_detail_loading("Lade OpenAI-Auswertung und gespeicherte Korrekturen...")
         self._extract_selected(force=False)
 
@@ -430,9 +522,9 @@ class OffeneSendungenDialog(QDialog):
         case = self._current_case()
         if case is None or case.id != case_id or not isinstance(extraction, SendungExtraction):
             return
-        self._summary.setPlainText(extraction.summary)
+        self._summary.setText(extraction.summary)
         if extraction.thread_text:
-            self._thread.setPlainText(extraction.thread_text)
+            self._thread.setPlainText(self._compact_thread_text(extraction.thread_text))
         address = extraction.address_lines
         products = extraction.products
         manual_text = ""
@@ -457,6 +549,14 @@ class OffeneSendungenDialog(QDialog):
                 ]
             manual_text = str(manual.get("manual_text") or "").strip()
         self._address.setPlainText("\n".join(address))
+        if address:
+            row = self._list.currentRow()
+            item = self._list.item(row)
+            case = self._current_case()
+            if item is not None and case is not None:
+                recipient_name = str(address[0] or "").strip()
+                self._recipient_names[case.id] = recipient_name
+                item.setText(self._case_list_text(case, recipient_name=recipient_name))
         self._set_products(products)
         self._manual_text.setPlainText(manual_text)
         notes = ", ".join(extraction.confidence_notes or [])
@@ -474,7 +574,7 @@ class OffeneSendungenDialog(QDialog):
         QMessageBox.warning(self, "OFFENE SENDUNGEN", f"Details konnten nicht geladen werden:\n\n{exc}")
 
     def _set_detail_loading(self, message: str) -> None:
-        self._summary.setPlainText("Laden...")
+        self._summary.setText("Laden...")
         self._detail_status.setText(message)
         self._address.setPlainText("")
         self._products_model.set_products([])
@@ -482,14 +582,20 @@ class OffeneSendungenDialog(QDialog):
         self._set_actions_enabled(False)
 
     def _clear_detail(self, message: str) -> None:
-        self._meta.setText(message)
-        self._summary.setPlainText("")
+        self._summary.setText(message)
+        self._meta.setText("")
         self._thread.setPlainText("")
         self._detail_status.setText("Quelle: -")
         self._address.setPlainText("")
         self._products_model.set_products([])
         self._manual_text.setPlainText("")
         self._set_actions_enabled(False)
+
+    @staticmethod
+    def _compact_thread_text(value: str) -> str:
+        text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+        text = re.sub(r"[ \t]+\n", "\n", text)
+        return re.sub(r"\n(?:[ \t]*\n){2,}", "\n\n", text).strip()
 
     def _set_actions_enabled(self, enabled: bool) -> None:
         for button in (
@@ -611,7 +717,7 @@ class OffeneSendungenDialog(QDialog):
             address_lines=self._address_lines(),
             products=self._products_from_table(),
             manual_text=self._manual_text.toPlainText(),
-            summary=self._summary.toPlainText(),
+            summary=self._summary.text(),
         )
         self._delivery_pdf_by_case[case.id] = path
         return path
@@ -689,7 +795,7 @@ class OffeneSendungenDialog(QDialog):
             self._address_lines(),
             products,
             self._manual_text.toPlainText(),
-            self._summary.toPlainText(),
+            self._summary.text(),
         )
 
     def _mark_done(self) -> None:

@@ -223,6 +223,26 @@ def test_extract_case_details_fallback_reads_address_and_products() -> None:
     assert details.products[0].name == "Musikbuch Alpen"
 
 
+def test_restore_street_details_keeps_house_number_and_unit() -> None:
+    repaired = OffeneSendungenService._restore_street_details(  # noqa: SLF001
+        ["Marienbergstraße", "6263 Fügen", "AUSTRIA"],
+        "Meine Adresse Marienbergstraße 8 Top 11 6263 Fügen .",
+    )
+
+    assert repaired == ["Marienbergstraße 8 Top 11", "6263 Fügen", "AUSTRIA"]
+
+    partial = OffeneSendungenService._restore_street_details(  # noqa: SLF001
+        ["Rafael Huber", "Marienbergstraße 8", "6263 Fügen", "AUSTRIA"],
+        "Rafael Huber, Meine Adresse Marienbergstraße 8 Top 11 6263 Fügen.",
+    )
+    assert partial == [
+        "Rafael Huber",
+        "Marienbergstraße 8 Top 11",
+        "6263 Fügen",
+        "AUSTRIA",
+    ]
+
+
 def test_create_manual_case_is_idempotent_and_stores_manual_fields() -> None:
     repo = _Repo()
     service = OffeneSendungenService(repo, _Secrets())  # type: ignore[arg-type]
