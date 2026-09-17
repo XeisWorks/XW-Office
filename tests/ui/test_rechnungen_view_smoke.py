@@ -29,6 +29,7 @@ from xw_office.ui.main_window import MainWindow
 from xw_office.ui.modules.rechnungen.open_invoice_overview import (
     OpenInvoiceOverview,
     PrintProductAggregate,
+    UnreleasedAssignment,
 )
 from xw_office.ui.modules.rechnungen.tagesgeschaeft_view import TagesgeschaeftView, _StartDialog
 from xw_office.ui.modules.rechnungen.plc_label_dialog import (
@@ -147,6 +148,7 @@ class _FakeHint:
 class _FakeInvoiceProcessingService:
     def __init__(self) -> None:
         self.load_calls: list[tuple[str, int, int]] = []
+        self.last_start_overview: dict[str, object] = {}
         self._draft = InvoiceSummary.model_validate(
             {
                 "id": "draft-1",
@@ -212,6 +214,12 @@ class _FakeInvoiceProcessingService:
 
     def is_flagged_sku(self, _sku: str) -> bool:
         return False
+
+    def read_last_start_overview(self) -> dict[str, object]:
+        return dict(self.last_start_overview)
+
+    def write_last_start_overview(self, payload: dict[str, object]) -> None:
+        self.last_start_overview = dict(payload)
 
 
 class _FakeWixOrdersClient:
@@ -844,7 +852,7 @@ def test_ready_print_product_reaches_settings_via_right_click(qtbot: object, mon
     assert opened == ["XW-6612"]
 
 
-def test_print_products_remain_for_session_after_completed_run(qtbot: object) -> None:
+def test_print_products_remain_frozen_after_completed_run(qtbot: object) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
     qtbot.addWidget(view)
@@ -910,7 +918,51 @@ def test_print_products_remain_for_session_after_completed_run(qtbot: object) ->
 
     text = view._open_products_text.toPlainText()  # noqa: SLF001
     assert "Erstes Produkt" in text
-    assert "Zweites Produkt" in text
+    assert "Zweites Produkt" not in text
+
+
+def test_last_run_print_and_unreleased_panels_restore_after_restart(qtbot: object) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    product = PrintProductAggregate(
+        sku="XW-010",
+        title="Unreleased-Produkt",
+        description="",
+        quantity=1,
+    )
+    assignment = UnreleasedAssignment(
+        title="Marsch für Anna",
+        shipping_name="Anna Versand",
+        order_reference="20910",
+    )
+    view._apply_open_invoice_overview(  # noqa: SLF001
+        OpenInvoiceOverview(
+            key="run-persist",
+            total=1,
+            with_ref=1,
+            physical=1,
+            digital=0,
+            unknown=0,
+            with_note=0,
+            plc=0,
+            complete=True,
+            print_products=[product],
+            unreleased_assignments=[assignment],
+        )
+    )
+
+    view.mark_print_products_last_run()
+
+    assert invoice_service.last_start_overview["saved_at"]
+    restarted = RechnungenView(container)
+    qtbot.addWidget(restarted)
+    restarted._restore_last_start_overview()  # noqa: SLF001
+
+    assert restarted._gb_open_products.title() == "PRINT PRODUKTE (last run)"  # noqa: SLF001
+    assert restarted._gb_unreleased.title() == "UNRELEASED (last run)"  # noqa: SLF001
+    assert "Unreleased-Produkt" in restarted._open_products_text.toPlainText()  # noqa: SLF001
+    assert "Marsch für Anna -> Anna Versand [20910]" in restarted._unreleased_text.toPlainText()  # noqa: SLF001
 
 
 def test_print_all_products_button_prints_displayed_quantities(qtbot: object, monkeypatch: object) -> None:

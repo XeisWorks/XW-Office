@@ -167,6 +167,38 @@ class _RepoStub:
         self._data[key] = value_json
 
 
+def test_last_start_overview_round_trips_through_settings_repository() -> None:
+    repo = _RepoStub({})
+    service = InvoiceProcessingService(AppConfig(), _InvoiceClientStub([]), repo)  # type: ignore[arg-type]
+    payload = {
+        "schema_version": 1,
+        "saved_at": "2026-09-17T12:00:00+02:00",
+        "print_products": [{"sku": "XW-010", "title": "Marsch", "quantity": 1}],
+        "unreleased_assignments": [
+            {"title": "Marsch", "shipping_name": "Anna Versand", "order_reference": "20910"}
+        ],
+    }
+
+    service.write_last_start_overview(payload)
+
+    assert service.read_last_start_overview() == payload
+
+
+def test_last_start_overview_uses_local_fallback_without_database(monkeypatch, tmp_path) -> None:
+    target = tmp_path / "last-start.json"
+    monkeypatch.setattr(
+        "xw_office.services.invoice_processing.service._LAST_START_OVERVIEW_PATH",
+        target,
+    )
+    service = InvoiceProcessingService(AppConfig(), _InvoiceClientStub([]), None)  # type: ignore[arg-type]
+    payload = {"schema_version": 1, "saved_at": "2026-09-17T12:00:00+02:00"}
+
+    service.write_last_start_overview(payload)
+
+    assert target.exists()
+    assert service.read_last_start_overview() == payload
+
+
 class _WixOrdersStub:
     def __init__(self) -> None:
         self.calls = 0

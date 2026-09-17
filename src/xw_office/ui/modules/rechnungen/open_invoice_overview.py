@@ -26,6 +26,15 @@ class PrintProductAggregate:
 
 
 @dataclass(frozen=True)
+class UnreleasedAssignment:
+    """One Wix unreleased-title field mapped to its shipping recipient."""
+
+    title: str
+    shipping_name: str
+    order_reference: str = ""
+
+
+@dataclass(frozen=True)
 class OpenInvoiceOverview:
     """Counts shown in the OFFENE RECHNUNGEN box."""
 
@@ -40,6 +49,7 @@ class OpenInvoiceOverview:
     complete: bool
     cache_updates: dict[str, bool] = field(default_factory=dict)
     print_products: list[PrintProductAggregate] = field(default_factory=list)
+    unreleased_assignments: list[UnreleasedAssignment] = field(default_factory=list)
     seq: int = 0
 
     @property
@@ -77,6 +87,7 @@ def overview_from_visible_summaries(
     known_refs: set[str] = set()
     cache_updates: dict[str, bool] = {}
     products = _ProductAccumulator(sku_filter=sku_filter) if include_print_products else None
+    unreleased = _UnreleasedAccumulator()
     for summary in summaries:
         ref = str(summary.order_reference or "").strip()
         buyer_note = str(summary.buyer_note or "").strip()
@@ -99,6 +110,11 @@ def overview_from_visible_summaries(
                         cached_items = _cached_order_line_items(wix_client, ref) if wix_client is not None else None
                         if cached_items is not None:
                             products.add_items(cached_items)
+                            unreleased.add_items(
+                                cached_items,
+                                shipping_name=_cached_order_shipping_name(wix_client, ref),
+                                order_reference=ref,
+                            )
             cached_note = _cached_order_buyer_note(wix_client, ref) if wix_client is not None else ""
             if cached_note:
                 has_note = True
@@ -120,6 +136,7 @@ def overview_from_visible_summaries(
         complete=unknown == 0,
         cache_updates=cache_updates,
         print_products=products.to_list() if products is not None else [],
+        unreleased_assignments=unreleased.to_list(),
     )
 
 
@@ -164,6 +181,7 @@ def resolve_open_invoice_overview(
     with_note = 0
     plc = 0
     products = _ProductAccumulator(sku_filter=sku_filter)
+    unreleased = _UnreleasedAccumulator()
     # Each row is an independent, network-bound Wix lookup (digital-only check
     # plus line items). Resolving them concurrently instead of one-by-one is
     # what actually shortens the wait for the real print-product list.
@@ -208,6 +226,11 @@ def resolve_open_invoice_overview(
             else:
                 physical += 1
                 products.add_items(row["items"])
+                unreleased.add_items(
+                    row["items"],
+                    shipping_name=str(row.get("shipping_name") or "").strip(),
+                    order_reference=str(row.get("ref") or "").strip(),
+                )
         if row["buyer_note"]:
             with_note += 1
         if row["has_plc"]:
@@ -225,6 +248,7 @@ def resolve_open_invoice_overview(
         complete=unknown == 0,
         cache_updates=cache_updates,
         print_products=products.to_list(),
+        unreleased_assignments=unreleased.to_list(),
         seq=seq,
     )
 
@@ -250,6 +274,7 @@ def _resolve_one_summary(
             "buyer_note": buyer_note,
             "has_plc": has_plc,
             "items": items,
+            "shipping_name": "",
         }
     digital_known_in_ui_cache = ref in known_digital
     resolved_remotely = False
@@ -292,6 +317,13 @@ def _resolve_one_summary(
             # UI-only digital cache, however, does not prove that raw line
             # items are locally available yet.
             items = _order_line_items(wix_client, ref, has_wix_credentials=has_wix_credentials)
+    shipping_name = ""
+    if any(bool(getattr(item, "is_unreleased", False)) for item in items):
+        shipping_name = _order_shipping_name(
+            wix_client,
+            ref,
+            has_wix_credentials=has_wix_credentials,
+        )
     return {
         "ref": ref,
         "has_ref": True,
@@ -300,6 +332,7 @@ def _resolve_one_summary(
         "buyer_note": buyer_note,
         "has_plc": has_plc,
         "items": items,
+        "shipping_name": shipping_name,
     }
 
 
@@ -406,6 +439,55 @@ class _ProductAccumulator:
         )
 
 
+class _UnreleasedAccumulator:
+    def __init__(self) -> None:
+        self._rows: dict[tuple[str, str, str], UnreleasedAssignment] = {}
+
+    def add_items(
+        self,
+        items: object,
+        *,
+        shipping_name: str,
+        order_reference: str,
+    ) -> None:
+        if not isinstance(items, list):
+            return
+        recipient = str(shipping_name or "").strip() or "Versandname nicht verfügbar"
+        reference = str(order_reference or "").strip()
+        for item in items:
+            if not bool(getattr(item, "is_unreleased", False)):
+                continue
+            custom_titles = getattr(item, "custom_piece_titles", None)
+            titles = (
+                [str(title or "").strip() for title in custom_titles]
+                if isinstance(custom_titles, list)
+                else []
+            )
+            titles = [title for title in titles if title]
+            if not titles:
+                raw_title = str(getattr(item, "name", "") or "").strip()
+                titles = [line.strip() for line in raw_title.splitlines() if line.strip()]
+            if not titles:
+                titles = ["Titel und sonstige Bemerkungen nicht verfügbar"]
+            for title in titles:
+                key = (title.casefold(), recipient.casefold(), reference.casefold())
+                self._rows[key] = UnreleasedAssignment(
+                    title=title,
+                    shipping_name=recipient,
+                    order_reference=reference,
+                )
+
+    def to_list(self) -> list[UnreleasedAssignment]:
+        return sorted(
+            self._rows.values(),
+            key=lambda row: (
+                row.shipping_name.casefold(),
+                row.title.casefold(),
+                row.order_reference.casefold(),
+            ),
+        )
+
+
 def _cached_reference_digital_only(wix_client: WixOrdersClient, reference: str) -> bool | None:
     resolver = getattr(wix_client, "get_cached_reference_digital_only", None)
     if not callable(resolver):
@@ -441,6 +523,42 @@ def _cached_order_line_items(wix_client: WixOrdersClient | None, reference: str)
     return items if isinstance(items, list) else None
 
 
+def _cached_order_shipping_name(wix_client: WixOrdersClient | None, reference: str) -> str:
+    resolver = getattr(wix_client, "get_cached_order_summary", None)
+    if not callable(resolver):
+        return ""
+    try:
+        summary = resolver(reference)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Cached shipping-name lookup failed ref=%s: %s", reference, exc)
+        return ""
+    if not isinstance(summary, dict):
+        return ""
+    return str(summary.get("wix_shipping_name") or "").strip()
+
+
+def _order_shipping_name(
+    wix_client: WixOrdersClient,
+    reference: str,
+    *,
+    has_wix_credentials: bool,
+) -> str:
+    cached = _cached_order_shipping_name(wix_client, reference)
+    if cached or not has_wix_credentials:
+        return cached
+    resolver = getattr(wix_client, "resolve_order_summary", None)
+    if not callable(resolver):
+        return ""
+    try:
+        summary = resolver(reference)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Shipping-name lookup failed ref=%s: %s", reference, exc)
+        return ""
+    if not isinstance(summary, dict):
+        return ""
+    return str(summary.get("wix_shipping_name") or "").strip()
+
+
 def _order_line_items(
     wix_client: WixOrdersClient,
     reference: str,
@@ -469,6 +587,22 @@ def overview_payload_from_object(payload: object) -> OpenInvoiceOverview | None:
     cache_updates: dict[str, bool] = {}
     if isinstance(cache_updates_raw, dict):
         cache_updates = {str(key): bool(value) for key, value in cache_updates_raw.items()}
+    unreleased_raw = payload.get("unreleased_assignments")
+    unreleased_assignments: list[UnreleasedAssignment] = []
+    if isinstance(unreleased_raw, list):
+        for row in unreleased_raw:
+            if not isinstance(row, dict):
+                continue
+            title = str(row.get("title") or "").strip()
+            shipping_name = str(row.get("shipping_name") or "").strip()
+            if title:
+                unreleased_assignments.append(
+                    UnreleasedAssignment(
+                        title=title,
+                        shipping_name=shipping_name,
+                        order_reference=str(row.get("order_reference") or "").strip(),
+                    )
+                )
     return OpenInvoiceOverview(
         key=str(payload.get("overview_key") or payload.get("key") or ""),
         total=_int_value(payload.get("total")),
@@ -481,6 +615,7 @@ def overview_payload_from_object(payload: object) -> OpenInvoiceOverview | None:
         complete=not bool(payload.get("unknown")),
         cache_updates=cache_updates,
         print_products=[],
+        unreleased_assignments=unreleased_assignments,
         seq=_int_value(payload.get("seq")),
     )
 

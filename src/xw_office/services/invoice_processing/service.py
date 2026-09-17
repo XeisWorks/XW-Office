@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from xw_office.repositories.settings_kv import SettingKvRepository
+from xw_office.core.app_paths import state_dir
 from xw_office.core.config import AppConfig
 from xw_office.services.draft_invoice.service import DraftInvoiceService
 from xw_office.services.mailing.service import MailAttachment, MailDeliveryService
@@ -42,6 +43,8 @@ _SKU_FLAGS_KEY = "rechnungen.sku_flags"
 _FULFILLMENT_STATUS_KEY = "rechnungen.fulfillment_status"
 _FULFILLMENT_MAIL_TEMPLATE_KEY = "rechnungen.fulfillment_mail_template_html"
 _FULFILLMENT_MAIL_SUBJECT_KEY = "rechnungen.fulfillment_mail_subject"
+_LAST_START_OVERVIEW_KEY = "rechnungen.last_start_overview_v1"
+_LAST_START_OVERVIEW_PATH = state_dir() / "rechnungen_last_start_overview.json"
 _BATCH_CACHE_TTL_SECONDS = 30.0
 
 _DEFAULT_SKU_FLAGS = {
@@ -390,6 +393,38 @@ class InvoiceProcessingService:
         self._merge_fulfillment_flags(
             {str(invoice_id): flags for invoice_id, flags in updates.items()}
         )
+
+    def read_last_start_overview(self) -> dict[str, object]:
+        """Return the persisted PRINT/UNRELEASED snapshot from the last START run."""
+        if self._settings_repo is not None:
+            raw = self._settings_repo.get_value_json(_LAST_START_OVERVIEW_KEY)
+        else:
+            try:
+                raw = _LAST_START_OVERVIEW_PATH.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                return {}
+            except OSError as exc:
+                logger.warning("Last START overview file could not be read: %s", exc)
+                return {}
+        if not raw:
+            return {}
+        try:
+            payload = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            logger.warning("Ignoring invalid last START overview payload")
+            return {}
+        return dict(payload) if isinstance(payload, dict) else {}
+
+    def write_last_start_overview(self, payload: dict[str, object]) -> None:
+        """Persist the immutable dashboard snapshot produced by a completed START run."""
+        encoded = json.dumps(dict(payload), ensure_ascii=False)
+        if self._settings_repo is not None:
+            self._settings_repo.set_value_json(_LAST_START_OVERVIEW_KEY, encoded)
+            return
+        _LAST_START_OVERVIEW_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary = _LAST_START_OVERVIEW_PATH.with_suffix(".tmp")
+        temporary.write_text(encoded, encoding="utf-8")
+        temporary.replace(_LAST_START_OVERVIEW_PATH)
 
     def _merge_fulfillment_flags(self, updates: dict[str, FulfillmentFlags]) -> None:
         if self._settings_repo is None:

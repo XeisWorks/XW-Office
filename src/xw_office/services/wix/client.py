@@ -1292,6 +1292,60 @@ class WixOrdersClient:
             "country": country,
         }
 
+    @classmethod
+    def _shipping_person_name_from_order(cls, order: dict[str, Any]) -> str:
+        """Return only the shipping contact's name, never the buyer fallback."""
+        if not isinstance(order, dict):
+            return ""
+        shipping = order.get("shippingInfo") if isinstance(order.get("shippingInfo"), dict) else {}
+        shipping_address = (
+            shipping.get("shippingAddress")
+            if isinstance(shipping.get("shippingAddress"), dict)
+            else {}
+        )
+        shipment_details = (
+            shipping.get("shipmentDetails")
+            if isinstance(shipping.get("shipmentDetails"), dict)
+            else {}
+        )
+        destination = (
+            shipping.get("shippingDestination")
+            if isinstance(shipping.get("shippingDestination"), dict)
+            else {}
+        )
+        destination_contact = (
+            destination.get("contactDetails")
+            if isinstance(destination.get("contactDetails"), dict)
+            else {}
+        )
+        logistics_destination = cls._nested_dict(
+            order,
+            "shippingInfo",
+            "logistics",
+            "shippingDestination",
+        )
+        logistics_contact = (
+            logistics_destination.get("contactDetails")
+            if isinstance(logistics_destination.get("contactDetails"), dict)
+            else {}
+        )
+        sources = (
+            shipment_details,
+            destination_contact,
+            logistics_contact,
+            shipping_address,
+            shipping,
+        )
+        first = cls._address_field(
+            *sources,
+            keys=("firstName", "givenName", "firstname", "givenname", "surename", "name"),
+        )
+        last = cls._address_field(
+            *sources,
+            keys=("lastName", "familyName", "familyname", "surname", "lastname"),
+        )
+        return " ".join(part for part in (first, last) if part).strip()
+
     @staticmethod
     def _has_usable_address_location(parts: dict[str, str]) -> bool:
         street = str(parts.get("street1") or parts.get("street2") or "").strip()
@@ -2100,6 +2154,7 @@ class WixOrdersClient:
             "wix_order_number": cls._norm_text(order.get("number")),
             "wix_customer_name": full_name,
             "wix_customer_email": email,
+            "wix_shipping_name": cls._shipping_person_name_from_order(order),
             "wix_shipping_street": shipping_parts.get("street1", ""),
             "wix_shipping_street2": shipping_parts.get("street2", ""),
             "wix_shipping_zip": shipping_parts.get("postal_code", ""),

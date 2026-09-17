@@ -421,6 +421,7 @@ def test_best_address_lines_merges_structured_street_address_number() -> None:
         "buyerInfo": {"firstName": "Florian", "lastName": "Brandner"},
         "shippingInfo": {
             "shippingDestination": {
+                "contactDetails": {"firstName": "Florian", "lastName": "Brandner"},
                 "streetAddress": {"name": "Auerdörfl", "number": "16", "apt": ""},
                 "postalCode": "20038",
                 "city": "Berchtesgaden",
@@ -448,10 +449,24 @@ def test_best_address_lines_merges_structured_street_address_number() -> None:
 
     summary = WixOrdersClient._summary_from_order(order)  # noqa: SLF001
 
+    assert summary["wix_shipping_name"] == "Florian Brandner"
     assert summary["wix_shipping_street"] == "Auerdörfl 16"
     assert summary["wix_billing_street"] == "Auerdörfl 16"
     assert summary["wix_billing_city"] == "Berchtesgaden"
     assert summary["wix_billing_country"] == "Germany"
+
+    buyer_only = {
+        "buyerInfo": {"firstName": "Buyer", "lastName": "Only"},
+        "shippingInfo": {
+            "shippingDestination": {
+                "streetAddress": {"name": "Auerdörfl", "number": "16"},
+                "postalCode": "20038",
+                "city": "Berchtesgaden",
+                "countryCode": "DE",
+            }
+        },
+    }
+    assert WixOrdersClient._summary_from_order(buyer_only)["wix_shipping_name"] == ""  # noqa: SLF001
 
 
 def test_physical_fulfillment_line_items_from_order_skips_digital_items() -> None:

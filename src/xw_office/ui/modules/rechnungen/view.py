@@ -101,6 +101,7 @@ from xw_office.ui.modules.rechnungen.special_order_dialog import SpecialOrderDia
 from xw_office.ui.modules.rechnungen.open_invoice_overview import (
     OpenInvoiceOverview,
     PrintProductAggregate,
+    UnreleasedAssignment,
     open_invoice_overview_key,
     overview_from_visible_summaries,
     overview_payload_from_object,
@@ -1162,7 +1163,11 @@ class RechnungenView(QWidget):
         self._open_overview_complete = False
         self._open_overview_products_text = ""
         self._open_overview_products: list[PrintProductAggregate] = []
+        self._open_overview_unreleased: list[UnreleasedAssignment] = []
         self._session_print_products: list[PrintProductAggregate] = []
+        self._session_unreleased: list[UnreleasedAssignment] = []
+        self._last_run_print_products: list[PrintProductAggregate] = []
+        self._last_run_unreleased: list[UnreleasedAssignment] = []
         self._print_products_last_run = False
         self._open_product_checks: dict[tuple[str, str, str], bool] = {}
         # Store manual corrections relative to the discovered quantity.  An
@@ -1187,6 +1192,7 @@ class RechnungenView(QWidget):
             bool,
         ] | None = None
         self._build_ui()
+        QTimer.singleShot(0, self._restore_last_start_overview)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -1391,6 +1397,29 @@ class RechnungenView(QWidget):
         self._open_products_text.setReadOnly(True)
         self._open_products_text.hide()
         detail_main.addWidget(self._gb_open_products)
+
+        self._gb_unreleased = QGroupBox("UNRELEASED")
+        unreleased_layout = QVBoxLayout(self._gb_unreleased)
+        unreleased_layout.setContentsMargins(10, 8, 10, 10)
+        unreleased_layout.setSpacing(5)
+        self._unreleased_spinner = QProgressBar()
+        self._unreleased_spinner.setRange(0, 0)
+        self._unreleased_spinner.setFixedHeight(4)
+        self._unreleased_spinner.setTextVisible(False)
+        unreleased_layout.addWidget(self._unreleased_spinner)
+        self._unreleased_status = QLabel("Unreleased-Zuordnungen werden ermittelt...")
+        self._unreleased_status.setWordWrap(True)
+        self._unreleased_status.setStyleSheet("color: #cbd5e1;")
+        unreleased_layout.addWidget(self._unreleased_status)
+        self._unreleased_rows = QWidget()
+        self._unreleased_rows_layout = QVBoxLayout(self._unreleased_rows)
+        self._unreleased_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._unreleased_rows_layout.setSpacing(5)
+        unreleased_layout.addWidget(self._unreleased_rows)
+        self._unreleased_text = QTextBrowser()
+        self._unreleased_text.setReadOnly(True)
+        self._unreleased_text.hide()
+        detail_main.addWidget(self._gb_unreleased)
 
         self._gb_info = QGroupBox("INFO")
         self._gb_info.setCheckable(True)
@@ -1756,6 +1785,28 @@ class RechnungenView(QWidget):
             return
         self._start_workflow_running = next_state
         if next_state:
+            # A new START run owns a fresh in-memory snapshot.  Keep showing
+            # the already resolved open rows while further Wix batches arrive.
+            self._print_products_last_run = False
+            self._session_print_products = list(self._open_overview_products)
+            self._session_unreleased = list(self._open_overview_unreleased)
+            self._gb_open_products.setTitle("PRINT-PRODUKTE OFFEN")
+            self._gb_unreleased.setTitle("UNRELEASED")
+            current_overview = OpenInvoiceOverview(
+                key=self._open_overview_key,
+                total=0,
+                with_ref=0,
+                physical=0,
+                digital=0,
+                unknown=0,
+                with_note=0,
+                plc=0,
+                complete=self._open_overview_complete,
+                print_products=list(self._session_print_products),
+                unreleased_assignments=list(self._session_unreleased),
+            )
+            self._render_open_print_products(current_overview)
+            self._render_unreleased_assignments(current_overview)
             note = (
                 "START + Noten läuft: Mengen und Druckplan bleiben bearbeitbar. "
                 "Änderungen am Druckplan gelten ab dem nächsten noch nicht gestarteten Druckauftrag."
@@ -2506,6 +2557,7 @@ class RechnungenView(QWidget):
             self._open_overview_complete = True
             self._open_overview_products_text = ""
             self._open_overview_products = []
+            self._open_overview_unreleased = []
             return
 
         if overview.key and overview.key == self._open_overview_key and self._open_overview_complete:
@@ -2517,7 +2569,7 @@ class RechnungenView(QWidget):
             self._open_digital.setText(str(self._open_overview_cached_digital))
             self._open_plc.setText(str(self._open_overview_cached_plc))
             self._open_note.setText(str(self._open_overview_cached_note))
-            if self._open_overview_products or self._print_products_last_run:
+            if self._open_overview_products or self._open_overview_unreleased or self._print_products_last_run:
                 cached_overview = OpenInvoiceOverview(
                     key=self._open_overview_key,
                     total=overview.total,
@@ -2529,8 +2581,10 @@ class RechnungenView(QWidget):
                     plc=self._open_overview_cached_plc,
                     complete=True,
                     print_products=list(self._open_overview_products),
+                    unreleased_assignments=list(self._open_overview_unreleased),
                 )
                 self._render_open_print_products(self._print_product_display_overview(cached_overview))
+                self._render_unreleased_assignments(cached_overview)
             return
 
         self._apply_open_invoice_overview(overview)
@@ -2683,6 +2737,17 @@ class RechnungenView(QWidget):
         updates = dict(base.cache_updates)
         for result in self._open_overview_batch_results:
             updates.update(result.cache_updates)
+        unreleased: dict[tuple[str, str, str], UnreleasedAssignment] = {}
+        for row in [
+            *base.unreleased_assignments,
+            *(item for result in self._open_overview_batch_results for item in result.unreleased_assignments),
+        ]:
+            key = (
+                row.title.casefold(),
+                row.shipping_name.casefold(),
+                row.order_reference.casefold(),
+            )
+            unreleased[key] = row
         return OpenInvoiceOverview(
             key=base.key,
             total=base.total,
@@ -2695,6 +2760,14 @@ class RechnungenView(QWidget):
             complete=unknown == 0,
             cache_updates=updates,
             print_products=print_products,
+            unreleased_assignments=sorted(
+                unreleased.values(),
+                key=lambda row: (
+                    row.shipping_name.casefold(),
+                    row.title.casefold(),
+                    row.order_reference.casefold(),
+                ),
+            ),
             seq=self._open_overview_seq,
         )
 
@@ -2735,13 +2808,19 @@ class RechnungenView(QWidget):
         self._open_overview_complete = overview.complete
         self._open_overview_products_text = self._format_open_print_products(overview)
         self._open_overview_products = list(overview.print_products)
+        self._open_overview_unreleased = list(overview.unreleased_assignments)
         self._merge_session_print_products(overview.print_products)
+        self._merge_session_unreleased(overview.unreleased_assignments)
         self._render_open_print_products(self._print_product_display_overview(overview))
+        self._render_unreleased_assignments(overview)
 
     def mark_print_products_last_run(self) -> None:
-        """Keep the accumulated product list visible after a completed START run."""
+        """Freeze and persist the PRINT/UNRELEASED dashboard after START."""
         self._print_products_last_run = True
         self._gb_open_products.setTitle("PRINT PRODUKTE (last run)")
+        self._gb_unreleased.setTitle("UNRELEASED (last run)")
+        self._last_run_print_products = list(self._session_print_products)
+        self._last_run_unreleased = list(self._session_unreleased)
         overview = OpenInvoiceOverview(
             key="session-last-run",
             total=0,
@@ -2752,9 +2831,12 @@ class RechnungenView(QWidget):
             with_note=0,
             plc=0,
             complete=True,
-            print_products=list(self._session_print_products),
+            print_products=list(self._last_run_print_products),
+            unreleased_assignments=list(self._last_run_unreleased),
         )
         self._render_open_print_products(overview)
+        self._render_unreleased_assignments(overview)
+        self._persist_last_start_overview()
 
     def _merge_session_print_products(self, products: list[PrintProductAggregate]) -> None:
         """Append new products and retain the largest quantity seen this session."""
@@ -2772,6 +2854,25 @@ class RechnungenView(QWidget):
             previous = self._session_print_products[index]
             if int(item.quantity or 0) > int(previous.quantity or 0):
                 self._session_print_products[index] = item
+
+    def _merge_session_unreleased(self, assignments: list[UnreleasedAssignment]) -> None:
+        positions = {
+            self._unreleased_session_key(item): index
+            for index, item in enumerate(self._session_unreleased)
+        }
+        for item in assignments:
+            key = self._unreleased_session_key(item)
+            if key not in positions:
+                positions[key] = len(self._session_unreleased)
+                self._session_unreleased.append(item)
+
+    @staticmethod
+    def _unreleased_session_key(item: UnreleasedAssignment) -> tuple[str, str, str]:
+        return (
+            str(item.title or "").strip().casefold(),
+            str(item.shipping_name or "").strip().casefold(),
+            str(item.order_reference or "").strip().casefold(),
+        )
 
     @staticmethod
     def _print_product_session_key(item: PrintProductAggregate) -> tuple[str, str, str, str]:
@@ -2796,9 +2897,205 @@ class RechnungenView(QWidget):
             plc=overview.plc,
             complete=overview.complete,
             cache_updates=overview.cache_updates,
-            print_products=list(self._session_print_products),
+            print_products=list(self._last_run_print_products),
+            unreleased_assignments=list(self._last_run_unreleased),
             seq=overview.seq,
         )
+
+    def _persist_last_start_overview(self) -> None:
+        try:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            writer = getattr(service, "write_last_start_overview", None)
+            if not callable(writer):
+                return
+            writer(
+                {
+                    "schema_version": 1,
+                    "saved_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                    "print_products": [
+                        {
+                            "sku": item.sku,
+                            "title": item.title,
+                            "description": item.description,
+                            "quantity": item.quantity,
+                            "category_label": item.category_label,
+                        }
+                        for item in self._last_run_print_products
+                    ],
+                    "unreleased_assignments": [
+                        {
+                            "title": item.title,
+                            "shipping_name": item.shipping_name,
+                            "order_reference": item.order_reference,
+                        }
+                        for item in self._last_run_unreleased
+                    ],
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - the completed START must remain usable.
+            logger.warning("Last START overview persistence failed: %s", exc)
+
+    def _restore_last_start_overview(self) -> None:
+        if self._start_workflow_running or self._print_products_last_run:
+            return
+        try:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            reader = getattr(service, "read_last_start_overview", None)
+            payload = reader() if callable(reader) else {}
+        except Exception as exc:  # noqa: BLE001 - dashboard can fall back to live data.
+            logger.warning("Last START overview restore failed: %s", exc)
+            return
+        if not isinstance(payload, dict) or not str(payload.get("saved_at") or "").strip():
+            return
+
+        products: list[PrintProductAggregate] = []
+        for row in payload.get("print_products") if isinstance(payload.get("print_products"), list) else []:
+            if not isinstance(row, dict):
+                continue
+            sku = str(row.get("sku") or "").strip()
+            title = str(row.get("title") or "").strip()
+            if not sku and not title:
+                continue
+            try:
+                quantity = max(0, int(row.get("quantity") or 0))
+            except (TypeError, ValueError):
+                quantity = 0
+            products.append(
+                PrintProductAggregate(
+                    sku=sku,
+                    title=title,
+                    description=str(row.get("description") or "").strip(),
+                    quantity=quantity,
+                    category_label=str(row.get("category_label") or "").strip(),
+                )
+            )
+
+        assignments: list[UnreleasedAssignment] = []
+        raw_assignments = payload.get("unreleased_assignments")
+        for row in raw_assignments if isinstance(raw_assignments, list) else []:
+            if not isinstance(row, dict):
+                continue
+            title = str(row.get("title") or "").strip()
+            if not title:
+                continue
+            assignments.append(
+                UnreleasedAssignment(
+                    title=title,
+                    shipping_name=str(row.get("shipping_name") or "").strip()
+                    or "Versandname nicht verfügbar",
+                    order_reference=str(row.get("order_reference") or "").strip(),
+                )
+            )
+
+        self._last_run_print_products = products
+        self._last_run_unreleased = assignments
+        self._print_products_last_run = True
+        self._gb_open_products.setTitle("PRINT PRODUKTE (last run)")
+        self._gb_unreleased.setTitle("UNRELEASED (last run)")
+        overview = OpenInvoiceOverview(
+            key="persisted-last-run",
+            total=0,
+            with_ref=0,
+            physical=0,
+            digital=0,
+            unknown=0,
+            with_note=0,
+            plc=0,
+            complete=True,
+            print_products=list(products),
+            unreleased_assignments=list(assignments),
+        )
+        self._render_open_print_products(overview)
+        self._render_unreleased_assignments(overview)
+
+    def _clear_unreleased_rows(self) -> None:
+        while self._unreleased_rows_layout.count():
+            item = self._unreleased_rows_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _set_unreleased_message(self, message: str, *, loading: bool = False) -> None:
+        self._clear_unreleased_rows()
+        self._unreleased_status.setText(message)
+        self._unreleased_status.show()
+        self._unreleased_spinner.setVisible(loading)
+        self._unreleased_text.setPlainText(message)
+
+    def _build_unreleased_row(self, item: UnreleasedAssignment) -> QWidget:
+        row = QWidget()
+        row.setStyleSheet(
+            "QWidget { background-color: #1f2933; border: 1px solid #334155; border-radius: 4px; }"
+            "QLabel { border: none; background: transparent; }"
+        )
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(7)
+
+        title = QLabel(item.title)
+        title.setWordWrap(True)
+        title.setStyleSheet("color: #ffffff; font-weight: 600;")
+        layout.addWidget(title, stretch=3)
+
+        arrow = QLabel("→")
+        arrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        arrow.setStyleSheet("color: #93c5fd; font-weight: 700; font-size: 15px;")
+        layout.addWidget(arrow)
+
+        recipient_column = QVBoxLayout()
+        recipient_column.setContentsMargins(0, 0, 0, 0)
+        recipient_column.setSpacing(0)
+        recipient = QLabel(item.shipping_name or "Versandname nicht verfügbar")
+        recipient.setWordWrap(True)
+        recipient.setStyleSheet("color: #ffffff; font-weight: 700;")
+        recipient_column.addWidget(recipient)
+        if item.order_reference:
+            reference = QLabel(f"Wix {item.order_reference}")
+            reference.setStyleSheet("color: #93c5fd; font-size: 10px;")
+            recipient_column.addWidget(reference)
+        layout.addLayout(recipient_column, stretch=2)
+        return row
+
+    def _render_unreleased_assignments(self, overview: OpenInvoiceOverview) -> None:
+        assignments = (
+            self._last_run_unreleased
+            if self._print_products_last_run
+            else list(overview.unreleased_assignments)
+        )
+        if overview.unknown and not assignments and not self._print_products_last_run:
+            self._set_unreleased_message("Unreleased-Zuordnungen werden ermittelt...", loading=True)
+            return
+        if not assignments:
+            message = (
+                "Keine Unreleased-Zuordnungen im letzten Lauf gefunden."
+                if self._print_products_last_run
+                else "Keine Unreleased-Zuordnungen in offenen Rechnungen gefunden."
+            )
+            self._set_unreleased_message(message)
+            return
+
+        self._clear_unreleased_rows()
+        self._unreleased_status.hide()
+        self._unreleased_spinner.hide()
+        header = QWidget()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(8, 0, 8, 0)
+        header_layout.setSpacing(7)
+        left = QLabel("TITEL UND SONSTIGE BEMERKUNGEN")
+        left.setStyleSheet("color: #94a3b8; font-size: 10px; font-weight: 700;")
+        right = QLabel("VERSANDNAME")
+        right.setStyleSheet("color: #94a3b8; font-size: 10px; font-weight: 700;")
+        header_layout.addWidget(left, stretch=3)
+        header_layout.addSpacing(20)
+        header_layout.addWidget(right, stretch=2)
+        self._unreleased_rows_layout.addWidget(header)
+        plain_lines: list[str] = []
+        for item in assignments:
+            self._unreleased_rows_layout.addWidget(self._build_unreleased_row(item))
+            reference = f" [{item.order_reference}]" if item.order_reference else ""
+            plain_lines.append(f"{item.title} -> {item.shipping_name}{reference}")
+        self._unreleased_rows_layout.addStretch(1)
+        self._unreleased_text.setPlainText("\n".join(plain_lines))
 
     def _clear_open_print_product_rows(self) -> None:
         while self._open_products_rows_layout.count():
@@ -2845,7 +3142,7 @@ class RechnungenView(QWidget):
         self._update_print_all_products_button()
 
     def _displayed_print_products(self) -> list[PrintProductAggregate]:
-        products = self._session_print_products if self._print_products_last_run else self._open_overview_products
+        products = self._last_run_print_products if self._print_products_last_run else self._open_overview_products
         return [self._open_product_with_quantity(item) for item in products if str(item.sku or "").strip()]
 
     @staticmethod
@@ -4578,6 +4875,7 @@ class RechnungenView(QWidget):
     def _populate_detail_for_summary(self, summary: InvoiceSummary) -> None:
         self._gb_open.hide()
         self._gb_open_products.hide()
+        self._gb_unreleased.hide()
         self._gb_info.show()
         self._gb_shipping.show()
         self._dl_number.setText(summary.invoice_number or "")
@@ -4622,6 +4920,7 @@ class RechnungenView(QWidget):
     def _reset_detail(self) -> None:
         self._gb_open.show()
         self._gb_open_products.show()
+        self._gb_unreleased.show()
         self._gb_info.hide()
         self._gb_shipping.hide()
         for lbl in (
