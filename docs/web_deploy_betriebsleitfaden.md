@@ -1,4 +1,4 @@
-# XW-Content-Web Deploy-Betriebsleitfaden
+# XW-Product-Hub Deploy-Betriebsleitfaden
 
 Ziel:
 - Ein einziger, wiederholbarer, PC-unabhaengiger Weg, um Aenderungen an
@@ -9,7 +9,7 @@ Ziel:
 
 ## 1) Ueberblick: was deployt wird und wie
 
-- Service: **XW-Content-Web** (Railway-Projekt **"XW-Office"**, ID `b9ca5990-0aaf-4757-9efd-14119c1bdabf`;
+- Service: **XW-Product-Hub** (Railway-Projekt **"XW-Office"**, ID `b9ca5990-0aaf-4757-9efd-14119c1bdabf`;
   bis 2026-09-16 noch "XW-Studio" genannt, umbenannt im Zuge des GitHub-Repo-Renames
   `XW-Studio` → `XW-Office`).
 - Build: `Dockerfile.web`, Abhaengigkeiten aus `requirements-web.txt` (bewusst schlank -
@@ -150,7 +150,7 @@ die GitHub-App-Installation/Repo-Zuordnung programmatisch zu lesen oder neu zu
 verbinden - das geht nur ueber die Weboberflaechen. Schritte:
 
 1. **Railway-Dashboard** → Projekt **"XW-Office"** (`b9ca5990-...`, das umbenannte,
-   **nicht** das Duplikat) → Service "XW-Content-Web" → Settings → Source.
+   **nicht** das Duplikat) → Service "XW-Product-Hub" → Settings → Source.
    - Falls dort kein GitHub-Repo verbunden ist oder ein falsches/veraltetes: "Connect
      Repo" bzw. "Disconnect" + neu verbinden, Repo `XeisWorks/XW-Office` waehlen,
      Branch `main`.
@@ -160,12 +160,12 @@ verbinden - das geht nur ueber die Weboberflaechen. Schritte:
    Installation enthalten ist (bei "Only select repositories" muss es explizit
    hinzugefuegt werden - nach einem Repo-Rename passiert das nicht automatisch).
 3. Test: einen trivialen Commit nach `main` pushen, dann
-   `railway deployment list --service XW-Content-Web` pruefen, ob ein neues
+   `railway deployment list --service XW-Product-Hub` pruefen, ob ein neues
    Deployment mit aktuellem Zeitstempel erscheint.
 
 **Wichtig beim Dashboard-Reconnect:** falls die "Connect Repo"-Aktion dort die Option
 anbietet, ein *neues* Railway-Projekt anzulegen statt den bestehenden Service
-"XW-Content-Web" im Projekt "XW-Office" (`b9ca5990-...`) neu zu verbinden - **nicht**
+"XW-Product-Hub" im Projekt "XW-Office" (`b9ca5990-...`) neu zu verbinden - **nicht**
 bestaetigen. Das ist vermutlich genau der Mechanismus, der am 2026-09-15 das Duplikat
 `fd0ee406-...` erzeugt hat. Immer ueber Settings → Source **innerhalb** des bestehenden
 Service arbeiten, nie ueber einen "New Project from GitHub"-Button auf der
@@ -178,7 +178,7 @@ bleibt der zuverlaessige Weg.
 
 ```powershell
 railway status
-railway deployment list --service XW-Content-Web
+railway deployment list --service XW-Product-Hub
 railway logs --build <deployment-id>
 railway logs --deployment <deployment-id>
 railway logs --http --status ">=400" --lines 50
@@ -211,7 +211,7 @@ Railway-Build herausfinden.
 ## 7) Manueller Ersatz-Deploy ohne Skript
 
 ```powershell
-railway up --service XW-Content-Web --ci -m "Kurzbeschreibung"
+railway up --service XW-Product-Hub --ci -m "Kurzbeschreibung"
 ```
 
 - `--ci` beendet den Stream nach den Build-Logs, statt dauerhaft angehaengt zu bleiben.
@@ -221,7 +221,7 @@ railway up --service XW-Content-Web --ci -m "Kurzbeschreibung"
 - Ein `reqwest error .../operation timed out` direkt nach dem Upload bedeutet nicht
   zwingend, dass der Deploy fehlgeschlagen ist - das war ein CLI-seitiger
   Verbindungsabbruch beim Log-Streaming, waehrend der Build serverseitig weiterlief.
-  Immer mit `railway deployment list --service XW-Content-Web` nachpruefen, statt sich
+  Immer mit `railway deployment list --service XW-Product-Hub` nachpruefen, statt sich
   auf den Exit-Code des CLI-Aufrufs zu verlassen.
 
 ## 8) Railway-CLI installieren
@@ -254,8 +254,8 @@ Siehe auch `docs/multi_pc_betriebsleitfaden.md` und, fuer den Product-Hub-Kontex
 ## 10) Rollback
 
 ```powershell
-railway deployment list --service XW-Content-Web
-railway redeploy --service XW-Content-Web   # letztes Deployment erneut ausrollen
+railway deployment list --service XW-Product-Hub
+railway redeploy --service XW-Product-Hub   # letztes Deployment erneut ausrollen
 ```
 
 Fuer einen Rollback auf einen bestimmten, aelteren Stand: den gewuenschten Commit in

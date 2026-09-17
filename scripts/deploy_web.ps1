@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Kontrollierter, PC-unabhaengiger Deploy-Weg fuer den XW-Content-Web Railway-Service.
+    Kontrollierter, PC-unabhaengiger Deploy-Weg fuer den XW-Product-Hub Railway-Service.
 
 .DESCRIPTION
     Railway ist bereits so verbunden, dass jeder Push nach origin/main automatisch einen
-    neuen Build/Deploy von Dockerfile.web fuer den Service "XW-Content-Web" ausloest
+    neuen Build/Deploy von Dockerfile.web fuer den Service "XW-Product-Hub" ausloest
     (siehe railway.toml). Dieses Skript macht diesen bestehenden Weg wiederholbar und
     ueberprueft nachvollziehbar, statt Schritte manuell nacheinander einzutippen:
 
@@ -75,7 +75,7 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $LogDir = Join-Path $RepoRoot 'logs'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $LogFile = Join-Path $LogDir 'deploy_web.log'
-$ServiceName = 'XW-Content-Web'
+$ServiceName = 'XW-Product-Hub'
 
 function Write-DeployLog {
     param([string]$Message)
