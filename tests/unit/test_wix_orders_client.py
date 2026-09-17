@@ -466,7 +466,8 @@ def test_best_address_lines_merges_structured_street_address_number() -> None:
             }
         },
     }
-    assert WixOrdersClient._summary_from_order(buyer_only)["wix_shipping_name"] == ""  # noqa: SLF001
+    buyer_summary = WixOrdersClient._summary_from_order(buyer_only)  # noqa: SLF001
+    assert buyer_summary["wix_shipping_name"] == "Buyer Only"
 
 
 def test_physical_fulfillment_line_items_from_order_skips_digital_items() -> None:
