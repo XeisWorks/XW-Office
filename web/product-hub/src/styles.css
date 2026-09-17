@@ -206,6 +206,32 @@ a {
   font-weight: 600;
 }
 
+.data-table th.sortable-th {
+  padding: 0;
+}
+
+.sortable-header {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.sortable-header:hover {
+  background: var(--color-border);
+}
+
+.sort-indicator {
+  color: var(--color-brand);
+  font-size: 0.7rem;
+}
+
 .data-table tbody tr:last-child td {
   border-bottom: none;
 }

@@ -1,50 +1,89 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import AsyncState from "../components/AsyncState";
 import StatusBadge from "../components/StatusBadge";
 import { useApi } from "../hooks/useApi";
-import type { ProductListFilters } from "../api/types";
+import type { ProductListFilters, ProductListItem } from "../api/types";
 
 interface ProductListPageProps {
   onUnauthorized: () => void;
 }
 
-const PAGE_SIZE = 50;
+// Backend caps at 2000 (see products.py) — comfortably above this catalog's size, so
+// every product fits on one page/one request; no offset-based pagination needed.
+const FETCH_LIMIT = 2000;
 const STATUS_OPTIONS = ["draft", "active", "discontinued", "archived"];
+
+type SortColumn = "sku" | "name" | "category" | "brand_name" | "product_type" | "status" | "active" | "updated_at";
+type SortDirection = "asc" | "desc";
+
+const COLUMNS: { key: SortColumn; label: string }[] = [
+  { key: "sku", label: "SKU" },
+  { key: "name", label: "Name" },
+  { key: "category", label: "Kategorie" },
+  { key: "brand_name", label: "Marke" },
+  { key: "product_type", label: "Typ" },
+  { key: "status", label: "Status" },
+  { key: "active", label: "Aktiv" },
+  { key: "updated_at", label: "Geändert am" },
+];
+
+function sortValue(product: ProductListItem, column: SortColumn): string | number {
+  switch (column) {
+    case "active":
+      return product.active ? 1 : 0;
+    case "updated_at":
+      return product.updated_at;
+    default: {
+      const value = product[column];
+      return (value ?? "").toString().toLocaleLowerCase("de-DE");
+    }
+  }
+}
 
 export default function ProductListPage({ onUnauthorized }: ProductListPageProps) {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
-  const [offset, setOffset] = useState(0);
+  const [sortColumn, setSortColumn] = useState<SortColumn>("sku");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
 
   const filters: ProductListFilters = {
     search: search || undefined,
     status: status || undefined,
-    limit: PAGE_SIZE,
-    offset,
+    limit: FETCH_LIMIT,
+    offset: 0,
   };
 
   const { data, error, loading } = useApi(
     () => api.listProducts(filters),
-    [search, status, offset],
+    [search, status],
     onUnauthorized,
   );
 
-  function handleSearchChange(value: string) {
-    setSearch(value);
-    setOffset(0);
-  }
-
-  function handleStatusChange(value: string) {
-    setStatus(value);
-    setOffset(0);
+  function handleSort(column: SortColumn) {
+    if (column === sortColumn) {
+      setSortDirection((direction) => (direction === "asc" ? "desc" : "asc"));
+    } else {
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
   }
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
-  const hasNext = offset + PAGE_SIZE < total;
-  const hasPrev = offset > 0;
+
+  const sortedItems = useMemo(() => {
+    const sorted = [...(data?.items ?? [])];
+    sorted.sort((a, b) => {
+      const left = sortValue(a, sortColumn);
+      const right = sortValue(b, sortColumn);
+      if (left < right) return sortDirection === "asc" ? -1 : 1;
+      if (left > right) return sortDirection === "asc" ? 1 : -1;
+      return 0;
+    });
+    return sorted;
+  }, [data, sortColumn, sortDirection]);
 
   return (
     <section>
@@ -54,9 +93,9 @@ export default function ProductListPage({ onUnauthorized }: ProductListPageProps
           type="search"
           placeholder="Suche nach SKU oder Name…"
           value={search}
-          onChange={(event) => handleSearchChange(event.target.value)}
+          onChange={(event) => setSearch(event.target.value)}
         />
-        <select value={status} onChange={(event) => handleStatusChange(event.target.value)}>
+        <select value={status} onChange={(event) => setStatus(event.target.value)}>
           <option value="">Alle Status</option>
           {STATUS_OPTIONS.map((option) => (
             <option key={option} value={option}>
@@ -70,21 +109,30 @@ export default function ProductListPage({ onUnauthorized }: ProductListPageProps
 
       {items.length > 0 && (
         <>
+          <p className="hint">{total} Produkte insgesamt</p>
           <table className="data-table">
             <thead>
               <tr>
-                <th>SKU</th>
-                <th>Name</th>
-                <th>Kategorie</th>
-                <th>Marke</th>
-                <th>Typ</th>
-                <th>Status</th>
-                <th>Aktiv</th>
-                <th>Geändert am</th>
+                {COLUMNS.map((column) => (
+                  <th key={column.key} className="sortable-th">
+                    <button
+                      type="button"
+                      className="sortable-header"
+                      onClick={() => handleSort(column.key)}
+                    >
+                      {column.label}
+                      {sortColumn === column.key && (
+                        <span className="sort-indicator">
+                          {sortDirection === "asc" ? " ▲" : " ▼"}
+                        </span>
+                      )}
+                    </button>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {items.map((product) => (
+              {sortedItems.map((product) => (
                 <tr key={product.id}>
                   <td>
                     <Link to={`/products/${product.id}`}>{product.sku}</Link>
@@ -105,17 +153,6 @@ export default function ProductListPage({ onUnauthorized }: ProductListPageProps
               ))}
             </tbody>
           </table>
-          <div className="pagination">
-            <button type="button" disabled={!hasPrev} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
-              Zurück
-            </button>
-            <span>
-              {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} von {total}
-            </span>
-            <button type="button" disabled={!hasNext} onClick={() => setOffset(offset + PAGE_SIZE)}>
-              Weiter
-            </button>
-          </div>
         </>
       )}
     </section>

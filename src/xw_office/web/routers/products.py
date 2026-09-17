@@ -90,7 +90,7 @@ def build_products_router(
         product_status: str | None = Query(default=None, alias="status"),
         active: bool | None = Query(default=None),
         family_id: uuid.UUID | None = Query(default=None),
-        limit: int = Query(default=50, ge=1, le=200),
+        limit: int = Query(default=50, ge=1, le=2000),
         offset: int = Query(default=0, ge=0),
         repo: ProductHubRepository = Depends(get_repo),
     ) -> Page[ProductListItem]:
