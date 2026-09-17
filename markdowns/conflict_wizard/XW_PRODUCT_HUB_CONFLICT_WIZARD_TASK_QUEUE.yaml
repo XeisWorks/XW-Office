@@ -1,0 +1,295 @@
+version: "1.0"
+name: xw-product-hub-conflict-wizard-task-queue
+as_of: "2026-09-17"
+
+rules:
+  one_phase_per_work_session: true
+  update_progress_after_each_phase: true
+  run_tests_after_each_phase: true
+  no_external_write_until_phase: CW07
+  inspect_current_repo_before_each_phase: true
+
+phases:
+
+  - id: CW00
+    title: Audit existing conflict/sync architecture
+    goal: >
+      Map existing sync_conflict, Wix reconcile, outbox, channel mappings,
+      inventory drift, audit log and current Product Hub APIs.
+    modify_runtime: false
+    tasks:
+      - read docs/product_hub/PROGRESS.md
+      - inspect current Alembic head
+      - inspect product_hub_sync models and repositories
+      - inspect Wix push/reconcile service
+      - inspect inventory sync conflicts
+      - inspect outbox worker and handlers
+      - document reuse vs new components
+    deliverables:
+      - docs/product_hub/conflict_wizard/CW00_CURRENT_STATE.md
+    done_when:
+      - no duplicate architecture is proposed
+      - exact relationship to existing sync_conflict is documented
+
+  - id: CW01
+    title: Persistent conflict domain model
+    depends_on: [CW00]
+    goal: Add persistent wizard case model.
+    tasks:
+      - create additive migration from current head
+      - add conflict_case
+      - add conflict_field
+      - add conflict_observation
+      - add conflict_action
+      - add conflict_scan
+      - add resolution_rule
+      - add repository layer
+      - add optimistic row_version
+      - add indexes and dedupe_key uniqueness
+    tests:
+      - create_case
+      - dedupe_key_unique
+      - status_transitions
+      - observations
+      - action_history
+      - optimistic_locking
+      - reopen_case
+    done_when:
+      - repository can persist/resume full wizard state
+      - no external writes exist
+
+  - id: CW02
+    title: Normalizer + conflict detector
+    depends_on: [CW01]
+    goal: Detect real differences without noisy false positives.
+    tasks:
+      - implement canonical comparison normalizer
+      - resolve SKU aliases before comparison
+      - normalize B/Bb and Es/Eb
+      - normalize money with Decimal
+      - suppress non-semantic PRINT markers
+      - implement channel relevance rules
+      - implement conflict classifiers
+      - implement severity and priority score
+      - create/update cases idempotently
+      - obsolete vanished conflicts
+    tests:
+      - whitespace_not_conflict
+      - alias_not_conflict
+      - vat_equivalence_not_conflict
+      - not_publishable_missing_wix_not_conflict
+      - duplicate_sku_critical
+      - repeated_scan_updates_case
+    done_when:
+      - repeated scan creates no duplicate cases
+      - no channel writes
+
+  - id: CW03
+    title: Conflict dashboard + read-only wizard
+    depends_on: [CW02]
+    goal: Usable queue UI with persistent navigation.
+    tasks:
+      - add conflicts summary API
+      - add conflict list API
+      - add conflict detail API
+      - add /app/conflicts dashboard
+      - add /app/conflicts/wizard
+      - add source comparison matrix
+      - add preset queues
+      - add filtering and sorting
+      - add progress counters
+    tests:
+      - dashboard_counts
+      - queue_filters
+      - case_detail_sources
+      - wizard_next_previous
+    done_when:
+      - user can browse hundreds of cases
+      - no decisions/writes yet
+
+  - id: CW04
+    title: Decision persistence
+    depends_on: [CW03]
+    goal: User can decide, defer and mark intentional differences.
+    tasks:
+      - implement start case
+      - implement selected source
+      - implement custom value
+      - implement intentional difference
+      - implement snooze
+      - implement ignore
+      - preserve decision history
+    tests:
+      - resume_after_restart
+      - snooze
+      - intentional_difference
+      - custom_value
+      - ignore
+    done_when:
+      - user can stop and continue weeks later
+      - no product/channel writes yet
+
+  - id: CW05
+    title: Impact preview / dry-run planner
+    depends_on: [CW04]
+    goal: Show exact intended mutations before applying.
+    tasks:
+      - implement action planner
+      - calculate Hub changes
+      - calculate per-channel changes
+      - expose channel checkboxes
+      - detect unsupported writes
+      - detect stale snapshots
+      - implement dry-run API
+    tests:
+      - hub_only_preview
+      - multi_channel_preview
+      - unsupported_channel
+      - stale_snapshot_blocks_preview
+    done_when:
+      - every intended change is visible before write
+      - no write is executed
+
+  - id: CW06
+    title: Apply approved changes to Product Hub
+    depends_on: [CW05]
+    goal: First real mutations, internal only.
+    tasks:
+      - apply selected canonical value to Hub
+      - use optimistic locking
+      - write audit log
+      - create conflict_action records
+      - refresh observations
+      - verify Hub state
+    tests:
+      - apply_hub_value
+      - stale_row_version_rejected
+      - audit_created
+      - failed_apply_keeps_case_open
+    done_when:
+      - internal changes are safe/audited
+      - external writes remain disabled
+
+  - id: CW07
+    title: Wix selective apply
+    depends_on: [CW06]
+    goal: Reuse existing Wix push/reconcile through outbox.
+    tasks:
+      - map wizard actions to Wix sync intent
+      - never call Wix client directly from UI
+      - queue outbox event
+      - record outbox_event_id on action
+      - read back Wix after success
+      - mark VERIFIED only after comparison
+      - handle partial failure
+    feature_flag:
+      product_hub.conflict_channel_apply_enabled: required
+    tests:
+      - wix_outbox_queued
+      - wix_fake_success_verified
+      - wix_failure_partial
+      - wix_readback_mismatch_not_resolved
+    done_when:
+      - selective Wix update is end-to-end safe
+
+  - id: CW08
+    title: sevdesk selective apply
+    depends_on: [CW07]
+    goal: Add/reuse sevdesk product update path through outbox.
+    tasks:
+      - inspect existing sevdesk write capabilities
+      - implement only missing narrowly-scoped writes
+      - respect sevdesk-only operational products
+      - read back after write
+      - verify exact intended fields
+    tests:
+      - sevdesk_only_not_wix_error
+      - sevdesk_outbox
+      - sevdesk_verify
+      - sevdesk_failure_partial
+    done_when:
+      - supported sevdesk fields can be safely reconciled
+
+  - id: CW09
+    title: Amazon selective apply
+    depends_on: [CW08]
+    goal: Integrate Amazon only where real write capability exists.
+    tasks:
+      - audit Amazon connector/API capability
+      - distinguish identifiers from listing content
+      - implement supported writes only
+      - leave unsupported actions explicitly blocked
+      - verify through readback/report
+    tests:
+      - unsupported_amazon_action_blocked
+      - amazon_identifier_conflict_never_auto
+      - amazon_apply_if_supported
+    done_when:
+      - no simulated/fake support is presented as real
+
+  - id: CW10
+    title: Resolution rules engine
+    depends_on: [CW06]
+    goal: Reduce repetitive manual work through explicit reusable rules.
+    tasks:
+      - CRUD resolution_rule
+      - rule preview
+      - match count before activation
+      - generate rule suggestion from repeated decisions
+      - require explicit user confirmation
+      - support safe auto-resolution
+      - audit rule versions
+    tests:
+      - rule_match
+      - rule_preview_count
+      - disabled_rule
+      - critical_not_auto_applied
+      - intentional_difference_rule
+    done_when:
+      - repetitive low-risk conflicts can disappear automatically
+
+  - id: CW11
+    title: Batch resolution
+    depends_on: [CW10]
+    goal: Resolve many identical safe cases at once.
+    tasks:
+      - list cases matched by one rule
+      - dry-run all affected SKUs
+      - reject CRITICAL cases
+      - confirmation screen
+      - enqueue actions transactionally
+    tests:
+      - batch_preview
+      - critical_excluded
+      - batch_partial_failure
+    done_when:
+      - dozens of identical safe cases can be handled efficiently
+
+  - id: CW12
+    title: Optional AI assist
+    depends_on: [CW04]
+    goal: Explain conflicts and suggest decisions without autonomous writes.
+    tasks:
+      - summarize source differences
+      - generate recommendation with cited source values
+      - suggest rule text
+      - label as AI suggestion
+      - never auto-submit decision
+    tests:
+      - suggestion_is_draft
+      - no_write_side_effect
+      - missing_data_not_invented
+    done_when:
+      - AI reduces cognitive load without reducing control
+
+global_acceptance:
+  - cases_are_persistent
+  - wizard_is_resumable
+  - false_positive_noise_is_reduced
+  - no_direct_ui_channel_writes
+  - critical_conflicts_are_human_only
+  - impact_preview_precedes_every_external_write
+  - verification_precedes_resolved
+  - partial_failure_remains_open
+  - intentional_differences_do_not_reappear
+  - all_mutations_are_audited

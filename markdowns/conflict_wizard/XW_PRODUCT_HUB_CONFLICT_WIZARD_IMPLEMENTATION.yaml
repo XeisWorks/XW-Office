@@ -1,0 +1,487 @@
+version: "1.0"
+name: xw-product-hub-conflict-resolution-wizard
+as_of: "2026-09-17"
+
+goal:
+  summary: >
+    Persistent wizard for step-by-step reconciliation of Product Hub, Wix,
+    sevdesk and Amazon data, designed to be used over weeks/months.
+  source_of_truth: product_hub
+  principle: human_decides_ambiguous_business_conflicts
+
+non_goals:
+  - blind_full_catalog_overwrite
+  - automatic_fuzzy_merges
+  - direct_channel_writes_from_ui
+  - automatic_critical_conflict_resolution
+  - treating_missing_channel_presence_as_error_when_not_required
+
+reuse_existing:
+  inspect_first:
+    - sync_conflict
+    - channel_mapping
+    - audit_log
+    - outbox_event
+    - outbox_worker
+    - wix_push_and_reconcile
+    - inventory_shadow_conflicts
+    - product_improvement
+  strategy:
+    low_level_sync_conflict: keep_or_extend
+    wizard_business_layer: conflict_case
+    channel_writes: existing_sync_services_via_outbox
+
+enums:
+  conflict_status:
+    - OPEN
+    - IN_PROGRESS
+    - WAITING
+    - PARTIALLY_RESOLVED
+    - RESOLVED
+    - IGNORED
+    - OBSOLETE
+
+  conflict_severity:
+    - INFO
+    - LOW
+    - MEDIUM
+    - HIGH
+    - CRITICAL
+
+  conflict_type:
+    - DUPLICATE_SKU
+    - SKU_ALIAS_REQUIRED
+    - POSSIBLE_DUPLICATE_PRODUCT
+    - WRONG_PRODUCT_MAPPING
+    - IDENTIFIER_COLLISION
+    - MISSING_CHANNEL_MAPPING
+    - TITLE_DRIFT
+    - DESCRIPTION_DRIFT
+    - BULLET_DRIFT
+    - BRAND_DRIFT
+    - CATEGORY_DRIFT
+    - TAG_DRIFT
+    - PRICE_DRIFT
+    - VAT_DRIFT
+    - FORMAT_DRIFT
+    - ACTIVE_STATUS_DRIFT
+    - PUBLISH_ELIGIBILITY_DRIFT
+    - STOCK_DRIFT
+    - STOCK_ENABLED_DRIFT
+    - ENSEMBLE_DRIFT
+    - SCORING_DRIFT
+    - INSTRUMENT_DRIFT
+    - TRANSPOSITION_DRIFT
+    - ASIN_CONFLICT
+    - FNSKU_CONFLICT
+    - SELLER_SKU_CONFLICT
+    - AMAZON_LISTING_MISSING
+    - AMAZON_LISTING_UNEXPECTED
+
+  resolution_type:
+    - USE_HUB
+    - USE_WIX
+    - USE_SEVDESK
+    - USE_AMAZON
+    - CUSTOM_VALUE
+    - INTENTIONAL_DIFFERENCE
+    - IGNORE
+    - AUTO_RULE
+    - OBSOLETE
+
+  action_status:
+    - PLANNED
+    - SKIPPED
+    - QUEUED
+    - RUNNING
+    - SUCCEEDED
+    - FAILED
+    - VERIFYING
+    - VERIFIED
+    - STALE
+
+  source_code:
+    - hub
+    - wix
+    - sevdesk
+    - amazon
+
+entities:
+  conflict_case:
+    columns:
+      id: uuid
+      product_id: uuid
+      variant_id: uuid_nullable
+      conflict_type: enum.conflict_type
+      severity: enum.conflict_severity
+      status: enum.conflict_status
+      priority_score: integer
+      title: varchar_300
+      summary: text_nullable
+      detected_at: timestamptz
+      last_seen_at: timestamptz
+      started_at: timestamptz_nullable
+      resolved_at: timestamptz_nullable
+      snoozed_until: timestamptz_nullable
+      assigned_to: varchar_160_nullable
+      resolution_type: enum.resolution_type_nullable
+      resolution_note: text_nullable
+      source_scan_id: uuid_nullable
+      reopened_from_case_id: uuid_nullable
+      dedupe_key: varchar_500_unique
+      row_version: integer
+      created_at: timestamptz
+      updated_at: timestamptz
+
+  conflict_field:
+    columns:
+      id: uuid
+      conflict_case_id: uuid_fk
+      field_path: varchar_240
+      selected_value: jsonb_nullable
+      selected_source: enum.source_code_nullable
+      resolution_type: enum.resolution_type_nullable
+      status: varchar_40
+      created_at: timestamptz
+      updated_at: timestamptz
+
+  conflict_observation:
+    columns:
+      id: uuid
+      conflict_field_id: uuid_fk
+      source: enum.source_code
+      raw_value: jsonb_nullable
+      normalized_value: jsonb_nullable
+      source_external_id: varchar_240_nullable
+      source_revision: varchar_240_nullable
+      source_hash: char_64_nullable
+      observed_at: timestamptz
+    unique:
+      - [conflict_field_id, source, source_hash]
+
+  conflict_action:
+    columns:
+      id: uuid
+      conflict_case_id: uuid_fk
+      channel: enum.source_code
+      action_type: varchar_80
+      field_path: varchar_240_nullable
+      before_value: jsonb_nullable
+      after_value: jsonb_nullable
+      selected: boolean
+      status: enum.action_status
+      outbox_event_id: uuid_nullable
+      error: text_nullable
+      attempted_at: timestamptz_nullable
+      verified_at: timestamptz_nullable
+      created_at: timestamptz
+      updated_at: timestamptz
+
+  conflict_scan:
+    columns:
+      id: uuid
+      scan_type: varchar_40
+      source_scope: jsonb
+      product_scope: jsonb
+      started_at: timestamptz
+      finished_at: timestamptz_nullable
+      products_scanned: integer
+      differences_found: integer
+      cases_created: integer
+      cases_updated: integer
+      auto_resolved: integer
+      error_summary: text_nullable
+
+  resolution_rule:
+    columns:
+      id: uuid
+      code: varchar_120_unique
+      name: varchar_240
+      enabled: boolean
+      priority: integer
+      scope: jsonb
+      conditions: jsonb
+      action: jsonb
+      risk_level: enum.conflict_severity
+      auto_apply: boolean
+      created_from_case_id: uuid_nullable
+      created_by: varchar_160_nullable
+      version: integer
+      created_at: timestamptz
+      updated_at: timestamptz
+
+normalization:
+  steps:
+    - trim_whitespace
+    - unicode_normalization
+    - sku_alias_resolution
+    - normalize_transposition_B_Bb
+    - normalize_transposition_Es_Eb
+    - remove_nonsemantic_print_markers
+    - normalize_case_for_comparison_only
+    - normalize_money_decimal
+    - derive_net_gross_at_10_percent_when_applicable
+  never:
+    - overwrite_canonical_value_during_normalization
+    - infer_identifier_from_untrusted_text
+    - fuzzy_merge_products
+
+classification:
+  critical:
+    - DUPLICATE_SKU
+    - WRONG_PRODUCT_MAPPING
+    - IDENTIFIER_COLLISION
+    - ASIN_CONFLICT
+    - FNSKU_CONFLICT
+  high:
+    - PRICE_DRIFT
+    - VAT_DRIFT
+    - STOCK_DRIFT
+    - ACTIVE_STATUS_DRIFT
+  medium:
+    - TITLE_DRIFT
+    - BRAND_DRIFT
+    - CATEGORY_DRIFT
+    - ENSEMBLE_DRIFT
+    - SCORING_DRIFT
+  low:
+    - TAG_DRIFT
+    - DESCRIPTION_DRIFT
+    - BULLET_DRIFT
+
+intentional_difference:
+  supported: true
+  scopes:
+    - field_product_channel
+    - field_product
+    - field_channel
+    - rule_based
+  behavior: suppress_future_matching_conflicts
+
+rules_engine:
+  user_confirmation_required_for_creation: true
+  auto_apply_allowed_for:
+    - INFO
+    - LOW
+  auto_apply_forbidden_for:
+    - CRITICAL
+  example_rules:
+    - code: brand_xw_1_2_3
+      when:
+        sku_prefix_any: ["XW-1", "XW-2", "XW-3"]
+        field: brand
+      set:
+        value: XeisWorks
+    - code: no_wix_conflict_when_not_publishable
+      when:
+        field: channel_mapping.wix
+        wix_publish_eligible: false
+      action:
+        suppress_conflict: true
+    - code: vat_10_equivalent
+      when:
+        field: price
+        gross_equals_net_times_1_10: true
+      action:
+        suppress_conflict: true
+
+workflow:
+  states:
+    detect:
+      next: classify
+    classify:
+      next:
+        auto_resolvable: auto_resolve
+        ambiguous: queue
+    queue:
+      next: in_progress
+    in_progress:
+      next:
+        defer: waiting
+        decide: preview
+        ignore: ignored
+    preview:
+      next:
+        confirm: apply
+        back: in_progress
+    apply:
+      next:
+        all_success: verify
+        partial_success: partially_resolved
+        stale: in_progress
+        error: in_progress
+    verify:
+      next:
+        matches: resolved
+        mismatch: partially_resolved
+    waiting:
+      next: queue
+    partially_resolved:
+      next: in_progress
+
+impact_preview:
+  required_before_external_write: true
+  per_channel_toggle: true
+  show:
+    - current_value
+    - desired_value
+    - operation
+    - target_channel
+    - risk
+    - validation_warnings
+
+sync:
+  architecture: outbox
+  direct_ui_channel_write: forbidden
+  readback_verification_required: true
+  partial_success_keeps_case_open: true
+  channel_order_default:
+    - hub
+    - sevdesk
+    - wix
+    - amazon
+  note: >
+    Actual order may be overridden per conflict type; product identity conflicts must
+    be resolved in Hub before any channel push.
+
+stale_detection:
+  use:
+    - product_row_version
+    - channel_external_revision
+    - channel_payload_hash
+    - observed_at
+  behavior_on_stale:
+    - abort_write
+    - refresh_case
+    - require_user_reconfirm
+
+queues:
+  presets:
+    - critical
+    - sku_mapping
+    - prices
+    - titles
+    - categories_brands
+    - wix
+    - sevdesk
+    - amazon
+    - inventory
+    - quick_wins
+    - snoozed
+  filters:
+    - status
+    - severity
+    - conflict_type
+    - brand
+    - category
+    - channel
+    - product_family
+    - assigned_to
+    - detected_date
+    - snoozed_until
+
+api:
+  endpoints:
+    - "GET /api/v1/conflicts"
+    - "GET /api/v1/conflicts/summary"
+    - "GET /api/v1/conflicts/{id}"
+    - "POST /api/v1/conflicts/scan"
+    - "POST /api/v1/conflicts/{id}/start"
+    - "POST /api/v1/conflicts/{id}/decision"
+    - "POST /api/v1/conflicts/{id}/preview"
+    - "POST /api/v1/conflicts/{id}/apply"
+    - "POST /api/v1/conflicts/{id}/snooze"
+    - "POST /api/v1/conflicts/{id}/ignore"
+    - "POST /api/v1/conflicts/{id}/refresh"
+    - "GET /api/v1/conflict-rules"
+    - "POST /api/v1/conflict-rules"
+    - "PATCH /api/v1/conflict-rules/{id}"
+
+ui:
+  routes:
+    - /app/conflicts
+    - /app/conflicts/wizard
+    - /app/conflicts/{id}
+    - /app/conflicts/rules
+  wizard_controls:
+    - previous
+    - save_and_later
+    - skip
+    - preview
+    - apply
+    - next_case
+  product_detail:
+    show_open_conflict_count: true
+    actions:
+      - open_in_wizard
+      - rescan_channels
+
+feature_flags:
+  product_hub.conflict_wizard_enabled: false
+  product_hub.conflict_scan_enabled: false
+  product_hub.conflict_auto_resolution_enabled: false
+  product_hub.conflict_channel_apply_enabled: false
+
+safety:
+  - external_write_requires_preview
+  - critical_never_auto_resolve
+  - no_fuzzy_auto_merge
+  - no_identifier_auto_resolution
+  - no_missing_wix_error_when_not_publishable
+  - resolution_requires_readback_verification
+  - every_write_audited
+  - use_existing_outbox
+  - wizard_resume_persistent
+
+rollout:
+  - id: CW00
+    name: current_state_audit
+    writes: false
+  - id: CW01
+    name: conflict_data_model
+    writes: database_only
+  - id: CW02
+    name: normalizer_detector
+    writes: conflict_cases_only
+  - id: CW03
+    name: wizard_read_ui
+    writes: false
+  - id: CW04
+    name: decision_persistence
+    writes: conflict_metadata_only
+  - id: CW05
+    name: impact_preview
+    writes: false
+  - id: CW06
+    name: apply_to_product_hub
+    writes: hub_only
+  - id: CW07
+    name: wix_apply
+    writes: wix_via_outbox
+  - id: CW08
+    name: sevdesk_apply
+    writes: sevdesk_via_outbox
+  - id: CW09
+    name: amazon_apply
+    writes: amazon_via_outbox_if_supported
+  - id: CW10
+    name: rules_engine
+    writes: safe_rule_based
+  - id: CW11
+    name: batch_resolution
+    writes: rule_based
+  - id: CW12
+    name: ai_assist
+    writes: none
+
+acceptance:
+  - persistent_cases_survive_restart
+  - duplicate_scans_do_not_duplicate_open_cases
+  - user_can_resume_over_weeks
+  - field_level_source_comparison
+  - intentional_difference_supported
+  - impact_preview_before_writes
+  - partial_channel_failure_does_not_close_case
+  - readback_verification_before_resolved
+  - rules_require_explicit_creation_confirmation
+  - channel_writes_can_be_globally_disabled
