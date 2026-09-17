@@ -1,0 +1,25 @@
+﻿sku,title_full,brand,category_primary,format,record_state,status,source_title_xlsx,source_title_wix,source_title_erp,sot_status,sync_wix,sync_sevdesk,conflict_flags,conflict_notes
+XW-017,Stimme individuell,,Noten,PRINT_AT_HOME,REVIEW,review,,,Zusatzstimme individuell,EXTERNAL,false,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-018,Div. Noten Bläser5tett,,Noten,PRINT_AT_HOME,REVIEW,review,,,Div. Noten Bläser5tett,EXTERNAL,false,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-026,Gutschein,,Noten,PHYSICAL,REVIEW,review,,,Gutschein,EXTERNAL,false,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-55*,Junior-4tett,MusikHeroes,Unterrichtsheft,DIGITAL,REVIEW,review,,,Junior-4tett,EXTERNAL,false,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-077,Digital-Upgrade,MusikHeroes,Unterrichtsheft,DIGITAL,REVIEW,review,,,Digital-Upgrade,EXTERNAL,false,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-099,Einzelstimme,,Noten,DIGITAL,REVIEW,review,,,Einzelstimme,EXTERNAL,false,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-100.1,Stimme Volksmusik,XeisWorks,Zusatzstimme,DIGITAL,REVIEW,review,,,Zusatzstimme Volksmusik,EXTERNAL,false,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-100.2,Stimme Blech4er,XeisWorks,Zusatzstimme,DIGITAL,REVIEW,review,,,Zusatzstimme Blech4er,EXTERNAL,false,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-206,SonntagsBlech #6,XeisWorks,Noten,PHYSICAL,ACTIVE,review,,#6 SonntagsBlech,#6 SonntagsBlech,EXTERNAL,true,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-206.3,SonntagsBlech #6 - Horn 1 in F,XeisWorks,Zusatzstimme,PHYSICAL,ACTIVE,review,,Zusatzstimmen Blech4er GEDRUCKT [#6 SonntagsBlech],ZST #6 Sonnt.Blech: Hrn.1,EXTERNAL,true,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-206.4,SonntagsBlech #6 - Horn 2 in F,XeisWorks,Zusatzstimme,PHYSICAL,ACTIVE,review,,Zusatzstimmen Blech4er GEDRUCKT [#6 SonntagsBlech],ZST #6 Sonnt.Blech: Hrn.2,EXTERNAL,true,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-206.5,SonntagsBlech #6 - Tuba in B,XeisWorks,Zusatzstimme,PHYSICAL,ACTIVE,review,,Zusatzstimmen Blech4er GEDRUCKT [#6 SonntagsBlech],ZST #6 Sonnt.Blech: Tb. in Bb,EXTERNAL,true,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-303,KirchenBlech #3,XeisWorks,Noten,DIGITAL,REVIEW,review,,,#3 KirchenBlech [Reg4er],EXTERNAL,false,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-305,TrauerBlech #5,XeisWorks,Noten,DIGITAL,REVIEW,review,,,#5 TrauerBlech [Reg4er],EXTERNAL,false,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-306,SonntagsBlech #6,XeisWorks,Noten,DIGITAL,REVIEW,review,,,#6 SonntagsBlech [Reg4er],EXTERNAL,false,true,,Review is tracked on canonical product variant XW-206.
+XW-500.03,Playalongs MusikHeroes - Playalongs,MusikHeroes,Playalong,PLAYALONG,REVIEW,review,,,Playalongs MusikHeroes,EXTERNAL,false,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-600.3,Diverse BH-Noten,,Noten,PHYSICAL,REVIEW,review,,,Diverse BH-Noten,EXTERNAL,false,true,,Review is tracked on canonical product variant XW-600.1.
+XW-600.5,Diverse BH-Noten,,Noten,PHYSICAL,REVIEW,review,,,Diverse BH-Noten,EXTERNAL,false,true,,Review is tracked on canonical product variant XW-600.1.
+XW-600.6,Diverse BH-Noten,,Noten,PRINT_AT_HOME,REVIEW,review,,,Diverse BH-Noten,EXTERNAL,false,true,,Review is tracked on canonical product variant XW-600.1.
+XW-702,Niel Gow's Lament For His Second Wife,,Noten,DIGITAL,REVIEW,review,,,Niel Gow's Lament For His Second Wife,EXTERNAL,false,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-704,"Nein, ich will nicht lieber...",,Noten,PHYSICAL,ACTIVE,review,,"Nein, ich will nicht lieber Piccoloflöte spielen!","Nein, ich will nicht lieber...",EXTERNAL,true,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-704.2,"Nein, ich will nicht lieber...",,Noten,PHYSICAL,REVIEW,review,,,"Nein, ich will nicht lieber...",EXTERNAL,false,true,,Review is tracked on canonical product variant XW-704.
+XW-810,Well Done,Blechhaufn,CD,PHYSICAL,ACTIVE,review,,Well Done,"CD ""Well Done""",EXTERNAL,true,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.
+XW-813,undefined,Blechhaufn,CD,PHYSICAL,REVIEW,review,,,undefined,EXTERNAL,false,true,SOT_GAP,Product-like channel item has no exact or safe title/category match in the XLSX SOT.

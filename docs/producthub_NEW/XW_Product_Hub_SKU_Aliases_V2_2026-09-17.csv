@@ -1,0 +1,88 @@
+﻿alias_sku,canonical_sku,reason,source_wix,source_sevdesk,source_title_wix,source_title_erp
+XW-400,XW-4000,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Div. Blechhaufn-Noten
+XW-400.1,XW-4000.1,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Zusatzstimme BH-Noten
+XW-401,XW-4001,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,#1 Kirchen-7er
+XW-401.2,XW-4001.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,#1 Kirchen-7er
+XW-401.4,XW-4001.4,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,ZST Kirchen7er: Hrn1 in F
+XW-401.5,XW-4001.5,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,ZST Kirchen7er: Hrn.2 in F
+XW-401.6,XW-4001.6,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,ZST Kirchen7er: Hrn.3 in F
+XW-402,XW-4002,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,#2 Advent-7er
+XW-402.2,XW-4002.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,#2 Advent-7er
+XW-403,XW-4003,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,In Gedanken bin i bei dir,In Gedanken bin i bei dir
+XW-403.2,XW-4003.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,In Gedanken bin i bei dir
+XW-404,XW-4004,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Übermorgen,Übermorgen
+XW-405,XW-4005,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Bin's a junger Witwer,Bin's a junger Witwer
+XW-405.2,XW-4005.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Bin's a junger Witwer
+XW-406,XW-4006,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Urlaubspolka,Urlaubspolka
+XW-406.2,XW-4006.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Urlaubspolka
+XW-407,XW-4007,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,false,30'er-Polka,
+XW-407.2,XW-4007.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,30er-Polka
+XW-408,XW-4008,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,false,Pfoarramadl,
+XW-408.2,XW-4008.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Pfoarramadl
+XW-409,XW-4009,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Am Kamin,Am Kamin
+XW-409.1,XW-4009.1,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Am Kamin
+XW-409.2,XW-4009.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Am Kamin
+XW-410,XW-4010,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Anna Polka,Anna-Polka
+XW-410.2,XW-4010.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Anna-Polka
+XW-411,XW-4011,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,April Polka,April Polka
+XW-411.2,XW-4011.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,April Polka
+XW-412,XW-4012,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Auf da Hulzg'stettn,Auf da Hulzgstett'n
+XW-412.1,XW-4012.1,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Auf da Hulzgs'tettn
+XW-413,XW-4013,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,false,Bagatelle,
+XW-413.2,XW-4013.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Bagatelle
+XW-414,XW-4014,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Banjo Boy,Banjo Boy
+XW-415,XW-4015,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,BH Polka,BH Polka
+XW-416,XW-4016,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Blondinen Walzer,Blondinen Walzer
+XW-416.2,XW-4016.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Blondinen Walzer
+XW-417,XW-4017,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Breznicka Polka,Breznicka Polka
+XW-418,XW-4018,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Das Glühwürmchen,Das Glühwürmchen
+XW-418.2,XW-4018.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Das Glühwürmchen
+XW-419,XW-4019,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Das Oppossum,Das Oppossum
+XW-420,XW-4020,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,false,Der Feuersalamander,
+XW-421,XW-4021,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Der Schließer,Der Schließer
+XW-422,XW-4022,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Der Schmetterling,Der Schmetterling
+XW-423,XW-4023,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,false,Die Akute,
+XW-424,XW-4024,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Erinnerungen an Brennberg
+XW-424.2,XW-4024.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Erinnerungen an Brennberg
+XW-424.3,XW-4024.3,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Erinnerungen an Brennberg
+XW-425,XW-4025,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Fliegermarsch,Fliegermarsch
+XW-426,XW-4026,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Arnhem,Arnhem
+XW-427,XW-4027,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Für Oma,Für Oma
+XW-427.2,XW-4027.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Für Oma
+XW-428,XW-4028,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Für schöne Stunden,Für schöne Stunden
+XW-428.2,XW-4028.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Für schöne Stunden
+XW-429,XW-4029,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Hinter der Garage
+XW-429.2,XW-4029.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Hinter der Garage
+XW-430,XW-4030,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,false,Hochzeitswalzer Nr. 2,
+XW-431,XW-4031,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Kolo,Kolo
+XW-431.2,XW-4031.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Kolo
+XW-432,XW-4032,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Leckmicha Marsch,Leckmicha Marsch
+XW-433,XW-4033,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Meine Mutti hat gesagt,Meine Mutti hat gesagt
+XW-434,XW-4034,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Milacek,Milacek
+XW-435,XW-4035,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Pepi do?,Pepi do?
+XW-436,XW-4036,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Pix,Pix
+XW-437,XW-4037,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Praise You,Praise You
+XW-438,XW-4038,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Retuschen Boarischer,Retuschen-Boarischer
+XW-438.2,XW-4038.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Retuschen-Boarischer
+XW-439,XW-4039,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Schöne Maderl,Schöne Maderl
+XW-440,XW-4040,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,S'is Feiaombd,S'is Feiaombd
+XW-441,XW-4041,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Urlaubspolka
+XW-442,XW-4042,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Vorgestern,Vorgestern
+XW-442.1,XW-4042.1,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Vorgestern
+XW-443,XW-4043,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Champions League - Fanfare,Champions League-Fanfare
+XW-443.2,XW-4043.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Champions League-Fanfare
+XW-444,XW-4044,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Aeronauten-Marsch
+XW-445,XW-4045,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Gabriella's Song
+XW-446.2,XW-4046.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,The Lion sleeps tonight
+XW-447.2,XW-4047.2,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Kannst du Knödel kochen
+XW-448,XW-4048,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,Entschwunden
+XW-449,XW-4049,LEGACY_XW4_3DIGIT_TO_4DIGIT,false,true,,6 kleine Stücke... / A.Wieder
+XW-450,XW-4050,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,"Trag mi, Wind",Trag mi Wind
+XW-451,XW-4051,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Marsch der Welt,Marsch der Welt [8tett]
+XW-452,XW-4052,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Well Done,Well Done
+XW-453,XW-4053,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Ana für's Herz,Ana für's Herz
+XW-454,XW-4054,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Komische Polka,Komische Polka
+XW-455,XW-4055,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Auf da Brandlhütt'n,Auf der Brandlhütt'n
+XW-456,XW-4056,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Musette,Musette
+XW-457,XW-4057,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Cabernet Polka,Cabernet Polka
+XW-458,XW-4058,LEGACY_XW4_3DIGIT_TO_4DIGIT,true,true,Allemanda,Allemanda
