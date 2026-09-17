@@ -30,6 +30,12 @@ def test_selected_product_delegate_has_exactly_one_print_or_settings_action() ->
     assert with_config.isdisjoint({"manage"})
     assert without_config.isdisjoint({"print"})
 
+    rects = _PieceDelegate._button_rects(row, has_print_config=True)
+    assert rects["qty_minus"].height() == 26
+    assert rects["qty_minus"].width() == 22
+    assert rects["qty_minus"].top() == 6
+    assert rects["print"].height() == 26
+
 
 def test_prepare_piece_pdf_print_uses_requested_copy_count(monkeypatch, tmp_path) -> None:
     pdf_path = tmp_path / "piece.pdf"

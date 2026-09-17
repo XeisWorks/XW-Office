@@ -894,7 +894,7 @@ class _PieceDelegate(QStyledItemDelegate):
                 painter.setFont(check_font)
                 painter.drawText(check_rect, Qt.AlignmentFlag.AlignCenter, "✓")
 
-        qty_rect = QRect(rect.left() + 8 + check_width, rect.top() + 8, 32, 22)
+        qty_rect = QRect(rect.left() + 8 + check_width, rect.top() + 5, 32, 20)
         font = painter.font()
         font.setBold(True)
         painter.setFont(font)
@@ -906,7 +906,7 @@ class _PieceDelegate(QStyledItemDelegate):
         sku_width = 76
         text_left = qty_rect.right() + 4
         text_width = max(80, rect.right() - text_left - sku_width - action_width - 14)
-        title_rect = QRect(text_left, rect.top() + 7, text_width, 22)
+        title_rect = QRect(text_left, rect.top() + 4, text_width, 20)
         painter.drawText(
             title_rect,
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
@@ -917,15 +917,18 @@ class _PieceDelegate(QStyledItemDelegate):
         font.setPointSize(max(8, font.pointSize() - 1))
         painter.setFont(font)
         description = " | ".join(line for line in detail_lines if line)
-        painter.setPen(QColor("#cbd5e1"))
-        painter.drawText(
-            QRect(text_left, title_rect.bottom() + 2, text_width, 18),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            description,
-        )
+        next_line_top = title_rect.bottom()
+        if description:
+            painter.setPen(QColor("#cbd5e1"))
+            painter.drawText(
+                QRect(text_left, next_line_top, text_width, 16),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                description,
+            )
+            next_line_top += 16
         painter.setPen(stock_color)
         painter.drawText(
-            QRect(text_left, title_rect.bottom() + 20, text_width, 18),
+            QRect(text_left, next_line_top, text_width, 16),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             stock,
         )
@@ -948,6 +951,10 @@ class _PieceDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(minus_rect, 4, 4)
             painter.drawRoundedRect(plus_rect, 4, 4)
             painter.setPen(QColor("#ffffff") if enabled else QColor("#64748b"))
+            step_font = painter.font()
+            step_font.setBold(True)
+            step_font.setPointSize(max(11, step_font.pointSize() + 2))
+            painter.setFont(step_font)
             painter.drawText(minus_rect, Qt.AlignmentFlag.AlignCenter, "-")
             painter.drawText(plus_rect, Qt.AlignmentFlag.AlignCenter, "+")
 
@@ -981,7 +988,9 @@ class _PieceDelegate(QStyledItemDelegate):
         painter.restore()
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
-        return QSize(option.rect.width(), 82)
+        details = index.data(_PieceListModel.DETAILS_ROLE)
+        has_details = bool(isinstance(details, list) and any(str(line).strip() for line in details))
+        return QSize(option.rect.width(), 68 if has_details else 54)
 
     def editorEvent(self, event, model, option, index) -> bool:  # type: ignore[override]
         if event.type() != QEvent.Type.MouseButtonRelease or not index.isValid():
@@ -1035,13 +1044,13 @@ class _PieceDelegate(QStyledItemDelegate):
 
     @staticmethod
     def _button_rects(row_rect: QRect, *, has_print_config: bool) -> dict[str, QRect]:
-        top = row_rect.top() + 26
-        right = row_rect.right() - 10
-        height = 28
+        top = row_rect.top() + 6
+        right = row_rect.right() - 8
+        height = 26
         action = "print" if has_print_config else "manage"
-        action_rect = QRect(right - 31, top, 32, height)
-        plus_rect = QRect(action_rect.left() - 28, top, 24, height)
-        minus_rect = QRect(plus_rect.left() - 28, top, 24, height)
+        action_rect = QRect(right - 33, top, 34, height)
+        plus_rect = QRect(action_rect.left() - 25, top, 22, height)
+        minus_rect = QRect(plus_rect.left() - 25, top, 22, height)
         return {action: action_rect, "qty_minus": minus_rect, "qty_plus": plus_rect}
 
     @staticmethod
@@ -1384,7 +1393,13 @@ class RechnungenView(QWidget):
         detail_main.addWidget(self._gb_open_products)
 
         self._gb_info = QGroupBox("INFO")
-        info_layout = QGridLayout(self._gb_info)
+        self._gb_info.setCheckable(True)
+        self._gb_info.setChecked(False)
+        info_outer_layout = QVBoxLayout(self._gb_info)
+        info_outer_layout.setContentsMargins(8, 4, 8, 6)
+        self._info_content = QWidget(self._gb_info)
+        info_layout = QGridLayout(self._info_content)
+        info_layout.setContentsMargins(0, 0, 0, 0)
         info_layout.setHorizontalSpacing(12)
         info_layout.setVerticalSpacing(8)
         info_layout.setColumnStretch(1, 1)
@@ -1429,6 +1444,9 @@ class RechnungenView(QWidget):
             label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
             info_layout.addWidget(label, row, col, alignment=Qt.AlignmentFlag.AlignTop)
             info_layout.addWidget(value_widget, row, col + 1, alignment=Qt.AlignmentFlag.AlignTop)
+        info_outer_layout.addWidget(self._info_content)
+        self._info_content.hide()
+        self._gb_info.toggled.connect(self._info_content.setVisible)
         self._gb_info.hide()
         detail_main.addWidget(self._gb_info)
 
@@ -1437,20 +1455,19 @@ class RechnungenView(QWidget):
         shipping_layout.setContentsMargins(8, 6, 8, 8)
         shipping_layout.setSpacing(3)
         shipping_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._shipping_status = QLabel("—")
+        self._shipping_status = QLabel("—", self._gb_shipping)
         self._shipping_status.setWordWrap(True)
         self._shipping_status.setStyleSheet("color: #64748b;")
         self._shipping_status.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        shipping_layout.addWidget(self._shipping_status)
+        self._shipping_status.hide()
         self._shipping_editor = QPlainTextEdit()
         self._shipping_editor.setPlaceholderText("Lieferadresse Zeile für Zeile bearbeiten")
-        self._shipping_editor.setMinimumHeight(64)
-        self._shipping_editor.setMaximumHeight(104)
         self._shipping_editor.setMaximumWidth(360)
         self._shipping_editor.setMinimumWidth(240)
         self._shipping_editor.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._shipping_editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._shipping_editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._shipping_editor.textChanged.connect(self._on_shipping_editor_changed)
+        self._adjust_shipping_editor_height()
         shipping_layout.addWidget(self._shipping_editor, alignment=Qt.AlignmentFlag.AlignLeft)
         self._gb_shipping.hide()
         detail_main.addWidget(self._gb_shipping)
@@ -1474,10 +1491,10 @@ class RechnungenView(QWidget):
         self._action_state = QLabel("Keine Rechnung ausgewählt")
         self._action_state.setWordWrap(True)
         self._action_state.setStyleSheet("color: #64748b;")
-        actions_layout.addWidget(self._action_state, 2, 0, 1, 3)
+        actions_layout.addWidget(self._action_state, 3, 0, 1, 3)
         self._plc_last = QLabel("Letzter PLC-Druck: —")
         self._plc_last.setStyleSheet("color: #64748b; font-size: 11px;")
-        actions_layout.addWidget(self._plc_last, 3, 0, 1, 3)
+        actions_layout.addWidget(self._plc_last, 4, 0, 1, 3)
         self._action_state.hide()
         self._plc_last.hide()
 
@@ -1491,7 +1508,7 @@ class RechnungenView(QWidget):
         print_icon_path = Path(__file__).resolve().parents[5] / "icons" / "print.png"
         print_icon = QIcon(str(print_icon_path)) if print_icon_path.exists() else QIcon()
 
-        self._btn_print = QPushButton("Rechnung")
+        self._btn_print = QPushButton("  Rechnung")
         self._btn_print.setIcon(print_icon)
         self._btn_print.setIconSize(QSize(18, 18))
         self._btn_print.setToolTip("Rechnung drucken")
@@ -1500,7 +1517,7 @@ class RechnungenView(QWidget):
         self._btn_print.setEnabled(False)
         actions_layout.addWidget(self._btn_print, 0, 0)
 
-        self._btn_print_label = QPushButton("Versandlabel")
+        self._btn_print_label = QPushButton("  Versandlabel")
         self._btn_print_label.setIcon(print_icon)
         self._btn_print_label.setIconSize(QSize(18, 18))
         self._btn_print_label.setToolTip("Versandlabel mit der angezeigten Wix-Adresse drucken")
@@ -1509,7 +1526,7 @@ class RechnungenView(QWidget):
         self._btn_print_label.setEnabled(False)
         actions_layout.addWidget(self._btn_print_label, 0, 1)
 
-        self._btn_print_music = QPushButton("Noten")
+        self._btn_print_music = QPushButton("  Noten")
         self._btn_print_music.setIcon(print_icon)
         self._btn_print_music.setIconSize(QSize(18, 18))
         self._btn_print_music.setToolTip("Noten drucken")
@@ -1518,7 +1535,7 @@ class RechnungenView(QWidget):
         self._btn_print_music.setEnabled(False)
         actions_layout.addWidget(self._btn_print_music, 0, 2)
 
-        self._btn_print_plc = QPushButton("PLC-Label")
+        self._btn_print_plc = QPushButton("  PLC-Label")
         self._btn_print_plc.setIcon(print_icon)
         self._btn_print_plc.setIconSize(QSize(18, 18))
         self._btn_print_plc.setToolTip("PLC-Label drucken")
@@ -1527,18 +1544,36 @@ class RechnungenView(QWidget):
         self._btn_print_plc.setEnabled(False)
         actions_layout.addWidget(self._btn_print_plc, 1, 0)
 
-        self._btn_send_invoice = QPushButton("Rechnung senden")
+        wix_icon_path = Path(__file__).resolve().parents[5] / "icons" / "wix.png"
+        self._btn_open_wix_order = QPushButton("  WIX ORDER")
+        if wix_icon_path.exists():
+            self._btn_open_wix_order.setIcon(QIcon(str(wix_icon_path)))
+            self._btn_open_wix_order.setIconSize(QSize(18, 18))
+        self._btn_open_wix_order.setToolTip("Wix-Order wie über die Aktion in der Rechnungsliste öffnen")
+        self._btn_open_wix_order.setStyleSheet(action_button_style)
+        self._btn_open_wix_order.clicked.connect(lambda: self._run_selected_row_action("wix"))
+        self._btn_open_wix_order.setEnabled(False)
+        actions_layout.addWidget(self._btn_open_wix_order, 1, 1)
+
+        self._btn_customer_mail = QPushButton("✉️ Kundenmail")
+        self._btn_customer_mail.setToolTip("Kundenmail wie über die Aktion in der Rechnungsliste öffnen")
+        self._btn_customer_mail.setStyleSheet(action_button_style)
+        self._btn_customer_mail.clicked.connect(lambda: self._run_selected_row_action("mail"))
+        self._btn_customer_mail.setEnabled(False)
+        actions_layout.addWidget(self._btn_customer_mail, 1, 2)
+
+        self._btn_send_invoice = QPushButton("✉️ Rechnung")
         self._btn_send_invoice.setStyleSheet(action_button_style)
         self._btn_send_invoice.clicked.connect(self._on_send_invoice_clicked)
         self._btn_send_invoice.setEnabled(False)
-        actions_layout.addWidget(self._btn_send_invoice, 1, 1)
+        actions_layout.addWidget(self._btn_send_invoice, 2, 0)
 
         self._btn_open_plc_label = QPushButton("PLC-PDF öffnen")
         self._btn_open_plc_label.setStyleSheet(action_button_style)
         self._btn_open_plc_label.clicked.connect(self._on_open_plc_label_clicked)
         self._btn_open_plc_label.setEnabled(False)
         self._btn_open_plc_label.hide()
-        actions_layout.addWidget(self._btn_open_plc_label, 1, 2)
+        actions_layout.addWidget(self._btn_open_plc_label, 2, 1)
         self._gb_actions.hide()
         detail_main.addWidget(self._gb_actions)
 
@@ -1555,7 +1590,7 @@ class RechnungenView(QWidget):
         self._piece_list.setSelectionMode(QListView.SelectionMode.SingleSelection)
         self._piece_list.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self._piece_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._piece_list.setMinimumHeight(120)
+        self._piece_list.setMinimumHeight(96)
         self._piece_list.hide()
         self._stuecke_layout.addWidget(self._piece_list)
         self._gb_stuecke.hide()
@@ -3554,6 +3589,8 @@ class RechnungenView(QWidget):
             self._btn_print_plc,
             self._btn_print_music,
             self._btn_print_label,
+            self._btn_open_wix_order,
+            self._btn_customer_mail,
             self._btn_open_plc_label,
             self._btn_send_invoice,
         ):
@@ -3672,25 +3709,7 @@ class RechnungenView(QWidget):
         PlcStatisticsDialog(self._container.resolve(PlcStatisticsService), self).exec()
 
     def _on_print_plc_selected(self) -> None:
-        if not self._print_allowed:
-            return
-        summary = self._require_selected_invoice()
-        if summary is None:
-            return
-        self._run_plc_print(summary)
-
-    def _run_plc_print(self, summary: InvoiceSummary) -> None:
-        if not self._print_allowed:
-            return
-        from xw_office.ui.modules.rechnungen.print_dialog import run_plc_label_pdf_print
-
-        run_plc_label_pdf_print(
-            self,
-            self._container,
-            invoice_number=summary.invoice_number,
-        )
-        self._last_plc_invoice = summary.invoice_number or summary.id
-        self._plc_last.setText(f"Letzter PLC-Druck: {self._last_plc_invoice}")
+        self._run_selected_row_action("post")
 
     def _cached_customer_email_for_summary(self, summary: InvoiceSummary) -> str:
         """Resolve the customer's email from already-fetched Wix data (no fresh API call)."""
@@ -4137,6 +4156,11 @@ class RechnungenView(QWidget):
         if action == "mail":
             self._open_customer_mail(summary)
             return
+
+    def _run_selected_row_action(self, action: str) -> None:
+        summary = self._require_selected_invoice()
+        if summary is not None:
+            self._run_row_action(summary, action)
 
     def _confirm_delete_draft(self, summary: InvoiceSummary) -> None:
         if self._delete_draft_worker is not None and self._delete_draft_worker.isRunning():
@@ -5098,9 +5122,11 @@ class RechnungenView(QWidget):
         selected = self._selected_summary()
         enabled = self._print_allowed and (selected is not None)
         self._btn_print.setEnabled(enabled)
-        self._btn_print_plc.setEnabled(enabled)
+        self._btn_print_plc.setEnabled(selected is not None)
         self._btn_print_music.setEnabled(enabled)
         self._btn_print_label.setEnabled(enabled and len(self._current_shipping_lines()) >= 2)
+        self._btn_open_wix_order.setEnabled(selected is not None)
+        self._btn_customer_mail.setEnabled(selected is not None)
         self._btn_send_invoice.setEnabled(selected is not None)
 
         self._selected_plc_label_path = ""
@@ -5160,9 +5186,10 @@ class RechnungenView(QWidget):
         return score
 
     def _adjust_shipping_editor_height(self) -> None:
-        lines = max(2, min(5, self._shipping_editor.blockCount()))
         line_height = self._shipping_editor.fontMetrics().lineSpacing()
-        target = max(64, min(104, 16 + lines * line_height))
+        # Frame and document margins need a few pixels beyond five line boxes;
+        # otherwise Qt shows a tiny scrollbar even when exactly five rows fit.
+        target = 28 + (5 * line_height)
         self._shipping_editor.setFixedHeight(target)
 
     def _on_shipping_editor_changed(self) -> None:

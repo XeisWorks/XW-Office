@@ -572,10 +572,10 @@ def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
     assert view._btn_custom_label.text() == "CUSTOM-LABEL"  # noqa: SLF001
     assert view._btn_manual_plc_label.text() == "PLC-LABEL"  # noqa: SLF001
     assert view._btn_plc_statistics.text() == "PLC-ÜBERSICHT"  # noqa: SLF001
-    assert view._btn_print.text() == "Rechnung"  # noqa: SLF001
-    assert view._btn_print_label.text() == "Versandlabel"  # noqa: SLF001
-    assert view._btn_print_plc.text() == "PLC-Label"  # noqa: SLF001
-    assert view._btn_print_music.text() == "Noten"  # noqa: SLF001
+    assert view._btn_print.text().strip() == "Rechnung"  # noqa: SLF001
+    assert view._btn_print_label.text().strip() == "Versandlabel"  # noqa: SLF001
+    assert view._btn_print_plc.text().strip() == "PLC-Label"  # noqa: SLF001
+    assert view._btn_print_music.text().strip() == "Noten"  # noqa: SLF001
     assert not view._btn_print.icon().isNull()  # noqa: SLF001
     assert not view._btn_print_label.icon().isNull()  # noqa: SLF001
     assert not view._btn_print_plc.icon().isNull()  # noqa: SLF001
@@ -585,14 +585,69 @@ def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
     assert actions_layout.getItemPosition(actions_layout.indexOf(view._btn_print)) == (0, 0, 1, 1)  # noqa: SLF001
     assert actions_layout.getItemPosition(actions_layout.indexOf(view._btn_print_label)) == (0, 1, 1, 1)  # noqa: SLF001
     assert actions_layout.getItemPosition(actions_layout.indexOf(view._btn_print_music)) == (0, 2, 1, 1)  # noqa: SLF001
-    assert view._btn_send_invoice.text() == "Rechnung senden"  # noqa: SLF001
+    assert view._btn_open_wix_order.text().strip() == "WIX ORDER"  # noqa: SLF001
+    assert view._btn_customer_mail.text() == "✉️ Kundenmail"  # noqa: SLF001
+    assert view._btn_send_invoice.text() == "✉️ Rechnung"  # noqa: SLF001
     assert view._shipping_editor is not None  # noqa: SLF001
+    assert view._shipping_status.isHidden()  # noqa: SLF001
+    assert view._shipping_editor.height() == 28 + (5 * view._shipping_editor.fontMetrics().lineSpacing())  # noqa: SLF001
+    view._set_shipping_editor_lines(["Zeile 1", "Zeile 2", "Zeile 3", "Zeile 4", "Zeile 5"])  # noqa: SLF001
+    assert view._shipping_editor.blockCount() == 5  # noqa: SLF001
+    assert view._shipping_editor.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff  # noqa: SLF001
+    assert not view._gb_info.isChecked()  # noqa: SLF001
+    assert view._info_content.isHidden()  # noqa: SLF001
     assert view._gb_actions.isHidden()  # noqa: SLF001
     assert not view._btn_print.isEnabled()  # noqa: SLF001
     assert not view._btn_print_label.isEnabled()  # noqa: SLF001
     assert not view._btn_print_plc.isEnabled()  # noqa: SLF001
     assert not view._btn_print_music.isEnabled()  # noqa: SLF001
+    assert not view._btn_open_wix_order.isEnabled()  # noqa: SLF001
+    assert not view._btn_customer_mail.isEnabled()  # noqa: SLF001
     assert not view._btn_send_invoice.isEnabled()  # noqa: SLF001
+
+
+def test_detail_info_is_collapsed_by_default_and_expands_on_click(qtbot: object) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = invoice_service._draft  # noqa: SLF001
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    view._table.select_source_row(0)  # noqa: SLF001
+
+    assert not view._gb_info.isHidden()  # noqa: SLF001
+    assert not view._gb_info.isChecked()  # noqa: SLF001
+    assert view._info_content.isHidden()  # noqa: SLF001
+
+    view._gb_info.setChecked(True)  # noqa: SLF001
+
+    assert not view._info_content.isHidden()  # noqa: SLF001
+
+
+def test_detail_buttons_use_same_row_actions_as_invoice_list(qtbot: object, monkeypatch) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = invoice_service._draft  # noqa: SLF001
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    view._table.select_source_row(0)  # noqa: SLF001
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        view,
+        "_run_row_action",
+        lambda selected, action: calls.append((selected.id, action)),
+    )
+
+    view._on_print_plc_selected()  # noqa: SLF001
+    view._btn_open_wix_order.click()  # noqa: SLF001
+    view._btn_customer_mail.click()  # noqa: SLF001
+
+    assert calls == [
+        (summary.id, "post"),
+        (summary.id, "wix"),
+        (summary.id, "mail"),
+    ]
 
 
 def test_rechnungen_selection_sets_summary_before_cache_hydration(qtbot: object, monkeypatch) -> None:
