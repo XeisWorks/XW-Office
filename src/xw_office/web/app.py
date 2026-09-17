@@ -25,6 +25,7 @@ from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.repositories.product_hub_sharing import SharingRepository
 from xw_office.repositories.product_hub_sync import SyncRepository
+from xw_office.services.product_hub.content_generation import ContentGenerationService
 from xw_office.services.product_hub.editing import EditingService
 from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.product_hub.outbox_worker import OutboxWorker
@@ -230,8 +231,20 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
                 detail="Product Hub edit API is not enabled",
             )
 
+    _content_generation_service = ContentGenerationService(
+        api_key=_EnvSecretSource().get_secret("OPENAI_API_KEY")
+    )
+
+    def get_content_generation_service() -> ContentGenerationService:
+        return _content_generation_service
+
     app.include_router(
-        build_products_router(get_product_repo, get_editing_service, require_product_hub_edit_enabled),
+        build_products_router(
+            get_product_repo,
+            get_editing_service,
+            require_product_hub_edit_enabled,
+            get_content_generation_service,
+        ),
         dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
     )
 

@@ -16,12 +16,19 @@ from pydantic import BaseModel
 
 from xw_office.models.product_hub import Product
 from xw_office.repositories.product_hub import OptimisticLockError, ProductFilter, ProductHubRepository
+from xw_office.services.product_hub.content_generation import (
+    ContentGenerationError,
+    ContentGenerationService,
+    ProductContentContext,
+)
 from xw_office.services.product_hub.editing import EditingService, UnknownFieldError
 from xw_office.services.product_hub.readiness import build_readiness_summary, evaluate_product_readiness
 from xw_office.web.schemas.products import (
     AssetUpdateRequest,
     AuditLogOut,
+    BulletPointsUpdateRequest,
     ChannelMappingOut,
+    ContentGenerateResponse,
     EditionCreateRequest,
     EditionOut,
     IdentifierAddRequest,
@@ -49,12 +56,14 @@ from xw_office.web.schemas.products import (
 RepoDependency = Callable[[], Generator[ProductHubRepository, None, None]]
 EditingDependency = Callable[[], EditingService]
 EditGateDependency = Callable[[], None]
+ContentGenerationDependency = Callable[[], ContentGenerationService]
 
 
 def build_products_router(
     get_repo: RepoDependency,
     get_editing: EditingDependency,
     require_edit_enabled: EditGateDependency,
+    get_content_generation: ContentGenerationDependency,
 ) -> APIRouter:
     """Build the products router, parameterized by a repo + editing-service dependency.
 
@@ -139,6 +148,51 @@ def build_products_router(
             raise _conflict(_get_product_or_404(repo, product_id), ProductDetail) from None
         except UnknownFieldError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return ProductDetail.model_validate(updated)
+
+    @write_router.post("/products/{product_id}/generate-content", response_model=ContentGenerateResponse)
+    def generate_product_content(
+        product_id: uuid.UUID,
+        repo: ProductHubRepository = Depends(get_repo),
+        content_generation: ContentGenerationService = Depends(get_content_generation),
+    ) -> ContentGenerateResponse:
+        product = _get_product_or_404(repo, product_id)
+        raw_music_attributes = product.attributes.get("music_attributes") if product.attributes else None
+        music_attributes = (
+            {str(k): str(v) for k, v in raw_music_attributes.items() if v}
+            if isinstance(raw_music_attributes, dict)
+            else {}
+        )
+        context = ProductContentContext(
+            name=product.name,
+            category=product.category,
+            brand_name=product.brand_name,
+            product_type=product.product_type,
+            existing_description=product.description,
+            music_attributes=music_attributes,
+        )
+        try:
+            generated = content_generation.generate(context)
+        except ContentGenerationError as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        return ContentGenerateResponse(description=generated.description, bullet_points=generated.bullet_points)
+
+    @write_router.put("/products/{product_id}/bullet-points", response_model=ProductDetail)
+    def put_product_bullet_points(
+        product_id: uuid.UUID,
+        body: BulletPointsUpdateRequest,
+        repo: ProductHubRepository = Depends(get_repo),
+        editing: EditingService = Depends(get_editing),
+    ) -> ProductDetail:
+        _get_product_or_404(repo, product_id)
+        try:
+            updated = editing.set_bullet_points(
+                product_id,
+                bullet_points=body.bullet_points,
+                expected_row_version=body.expected_row_version,
+            )
+        except OptimisticLockError:
+            raise _conflict(_get_product_or_404(repo, product_id), ProductDetail) from None
         return ProductDetail.model_validate(updated)
 
     @router.get("/products/{product_id}/variants", response_model=list[ProductVariantOut])

@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import uuid
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -267,3 +268,95 @@ def test_edit_creates_audit_log_entry(db_path: str, seeded_product: Product) -> 
         f"/api/v1/products/{seeded_product.id}/audit", headers=_auth_headers()
     ).json()
     assert any(entry["action"] == "update" for entry in audit)
+
+
+# -- Content generation (OpenAI-backed description/bullet-point drafting) -----------
+
+
+def _openai_transport(*, output_text: str, status_code: int = 200) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, json={"output_text": output_text})
+
+    return httpx.MockTransport(handler)
+
+
+def test_generate_content_returns_draft_without_saving(
+    db_path: str, seeded_product: Product, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    transport = _openai_transport(
+        output_text='{"description": "Ein tolles Stueck.", "bullet_points": ["Besetzung: Blasorchester"]}'
+    )
+    original = httpx.Client
+
+    class _MockClient(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    httpx.Client = _MockClient  # type: ignore[assignment]
+    try:
+        client = _client(db_path)
+        response = client.post(
+            f"/api/v1/products/{seeded_product.id}/generate-content", headers=_auth_headers()
+        )
+    finally:
+        httpx.Client = original  # type: ignore[assignment]
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["description"] == "Ein tolles Stueck."
+    assert body["bullet_points"] == ["Besetzung: Blasorchester"]
+
+    detail = client.get(
+        f"/api/v1/products/{seeded_product.id}", headers=_auth_headers()
+    ).json()
+    assert detail["description"] != "Ein tolles Stueck."
+    assert "bullet_points" not in detail.get("attributes", {})
+
+
+def test_generate_content_without_api_key_returns_503(
+    db_path: str, seeded_product: Product, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    client = _client(db_path)
+    response = client.post(
+        f"/api/v1/products/{seeded_product.id}/generate-content", headers=_auth_headers()
+    )
+    assert response.status_code == 503
+
+
+def test_generate_content_requires_edit_enabled(
+    db_path: str, seeded_product: Product, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    client = _client(db_path, edit_enabled=False)
+    response = client.post(
+        f"/api/v1/products/{seeded_product.id}/generate-content", headers=_auth_headers()
+    )
+    assert response.status_code == 503
+
+
+def test_put_bullet_points_saves_into_attributes(db_path: str, seeded_product: Product) -> None:
+    client = _client(db_path)
+    response = client.put(
+        f"/api/v1/products/{seeded_product.id}/bullet-points",
+        headers=_auth_headers(),
+        json={"expected_row_version": 1, "bullet_points": ["Punkt A", "Punkt B"]},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["attributes"]["bullet_points"] == ["Punkt A", "Punkt B"]
+    assert body["row_version"] == 2
+
+
+def test_put_bullet_points_stale_row_version_returns_409(
+    db_path: str, seeded_product: Product
+) -> None:
+    client = _client(db_path)
+    response = client.put(
+        f"/api/v1/products/{seeded_product.id}/bullet-points",
+        headers=_auth_headers(),
+        json={"expected_row_version": 999, "bullet_points": ["Punkt A"]},
+    )
+    assert response.status_code == 409

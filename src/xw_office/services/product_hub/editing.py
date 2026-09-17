@@ -468,3 +468,41 @@ class EditingService:
                 payload={"product_id": str(product_id), "label": label},
             )
             return edition
+
+    def set_bullet_points(
+        self,
+        product_id: uuid.UUID,
+        *,
+        bullet_points: list[str],
+        expected_row_version: int,
+        actor: str = "",
+    ) -> Product:
+        """Save bullet points (e.g. from the OpenAI content generator) into
+        ``product.attributes`` — not yet a first-class column, so this only ever
+        touches that one key, never the rest of ``attributes``."""
+        with session_scope(self._session_factory) as session:
+            repo = ProductHubRepository(session)
+            product = repo.get_product(product_id)
+            if product is None:
+                raise KeyError(f"Product {product_id} not found")
+            merged_attributes = {**product.attributes, "bullet_points": bullet_points}
+            updated = repo.update_product(
+                product_id, expected_row_version=expected_row_version, attributes=merged_attributes
+            )
+            repo.record_audit(
+                actor_type="user" if actor else "system",
+                actor_id=actor,
+                entity_type="product",
+                entity_id=product_id,
+                action="set_bullet_points",
+                changed_fields=["bullet_points"],
+                after_data={"bullet_points": bullet_points},
+            )
+            append_outbox_event(
+                session,
+                aggregate_type="product",
+                aggregate_id=product_id,
+                event_type="product.updated",
+                payload={"bullet_points": bullet_points},
+            )
+            return updated

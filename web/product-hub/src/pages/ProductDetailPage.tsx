@@ -5,7 +5,12 @@ import AsyncState from "../components/AsyncState";
 import StatusBadge from "../components/StatusBadge";
 import { healthTone, readinessTone, syncTone } from "../components/tone";
 import { useApi } from "../hooks/useApi";
-import type { ProductDetail } from "../api/types";
+import type { GeneratedContent, ProductDetail } from "../api/types";
+
+function existingBulletPoints(product: ProductDetail): string[] {
+  const raw = product.attributes?.bullet_points;
+  return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string") : [];
+}
 
 interface ProductDetailPageProps {
   onUnauthorized: () => void;
@@ -96,6 +101,55 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
     }
   }
 
+  // -- OpenAI description/bullet-point generator ----------------------------------
+  const [draft, setDraft] = useState<GeneratedContent | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [applyingDraft, setApplyingDraft] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+
+  async function handleGenerateContent() {
+    setGenerating(true);
+    setGenerateError(null);
+    try {
+      setDraft(await api.generateContent(id));
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function handleApplyDraft(current: ProductDetail) {
+    if (!draft) return;
+    setApplyingDraft(true);
+    setGenerateError(null);
+    try {
+      const updated = await api.updateProduct(id, {
+        expected_row_version: current.row_version,
+        description: draft.description,
+      });
+      if (draft.bullet_points.length > 0) {
+        await api.setBulletPoints(id, {
+          expected_row_version: updated.row_version,
+          bullet_points: draft.bullet_points,
+        });
+      }
+      setDraft(null);
+      refresh();
+    } catch (err) {
+      if (err instanceof ConflictApiError) {
+        setGenerateError(
+          "Wurde zwischenzeitlich geändert - bitte aktuellen Stand laden und erneut versuchen.",
+        );
+        refresh();
+      } else {
+        setGenerateError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setApplyingDraft(false);
+    }
+  }
+
   // -- tags ----------------------------------------------------------------------
   const [tagCode, setTagCode] = useState("");
   const [tagError, setTagError] = useState<string | null>(null);
@@ -174,9 +228,14 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
               <>
                 <div className="detail-header-row">
                   <h1>{product.data.name}</h1>
-                  <button type="button" onClick={() => startEditingProduct(product.data!)}>
-                    Bearbeiten
-                  </button>
+                  <div className="detail-header-actions">
+                    <button type="button" onClick={handleGenerateContent} disabled={generating}>
+                      {generating ? "Generiere…" : "Beschreibung generieren (KI)"}
+                    </button>
+                    <button type="button" onClick={() => startEditingProduct(product.data!)}>
+                      Bearbeiten
+                    </button>
+                  </div>
                 </div>
                 <p className="detail-sub">
                   {product.data.sku} · {product.data.product_type}
@@ -184,6 +243,45 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
                   {product.data.brand_name ? ` · ${product.data.brand_name}` : ""}
                 </p>
                 {product.data.short_description && <p>{product.data.short_description}</p>}
+                {existingBulletPoints(product.data).length > 0 && (
+                  <ul className="bullet-points-list">
+                    {existingBulletPoints(product.data).map((point, index) => (
+                      <li key={index}>{point}</li>
+                    ))}
+                  </ul>
+                )}
+                {generateError && !draft && <p className="hint hint-error">{generateError}</p>}
+                {draft && (
+                  <div className="content-draft-panel">
+                    <h3>KI-Entwurf (noch nicht gespeichert)</h3>
+                    <p>{draft.description}</p>
+                    {draft.bullet_points.length > 0 && (
+                      <ul className="bullet-points-list">
+                        {draft.bullet_points.map((point, index) => (
+                          <li key={index}>{point}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {generateError && <p className="hint hint-error">{generateError}</p>}
+                    <div className="edit-form-actions">
+                      <button
+                        type="button"
+                        onClick={() => handleApplyDraft(product.data!)}
+                        disabled={applyingDraft}
+                      >
+                        Übernehmen
+                      </button>
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() => setDraft(null)}
+                        disabled={applyingDraft}
+                      >
+                        Verwerfen
+                      </button>
+                    </div>
+                  </div>
+                )}
               </>
             ) : (
               productForm && (

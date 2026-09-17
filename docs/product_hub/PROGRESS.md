@@ -29,6 +29,31 @@ against the README's own expected counts (244 draft/501 live/227 review, 226 not
 first, curated grouping is a separate, explicit step). Applying that grouping is a natural
 next step whenever picked up.
 
+## OpenAI content generator + WebUI column visibility (2026-09-17)
+
+Two follow-up requests after the master-seed catalog correction:
+
+1. **OpenAI description/bullet-point generator.** `services/product_hub/content_generation.py`
+   (`ContentGenerationService`) mirrors the existing hand-rolled `httpx` → Responses API pattern
+   used elsewhere in this codebase (`ai_classifier.py`, `sendungen/service.py` — model
+   `gpt-4.1-mini`, no OpenAI SDK anywhere), reading `OPENAI_API_KEY` via the same
+   `_EnvSecretSource` adapter PR11's Wix work introduced. `POST
+   /api/v1/products/{id}/generate-content` returns a **draft only** — it never writes to the DB.
+   Saving is a separate, explicit step: the description goes through the existing product PATCH,
+   bullet points through the new `PUT /api/v1/products/{id}/bullet-points`
+   (`EditingService.set_bullet_points`, stored in `product.attributes.bullet_points`). Same
+   "never silently apply" rule as every other AUTO_DRAFT content in this system. WebUI: a
+   "Beschreibung generieren (KI)" button on the product detail page shows the draft with
+   Übernehmen/Verwerfen before anything is saved.
+2. **Column visibility picker.** Eye-icon button top-right of the product list applies a
+   `localStorage`-persisted (per-viewer only, never synced) set of visible columns. Table rows
+   became fully clickable (`onClick`/`onKeyDown` → navigate) instead of relying on a `Link` in
+   the SKU cell, so hiding the SKU column never breaks navigation to the detail page.
+
+**Not raised yet**: the near-duplicate SKU pair the user spotted (`XW-102.3-D` vs `XW-102.3 D`,
+identical title) from the master-seed import — no action taken; per the "no fuzzy auto-merge"
+rule this needs explicit human review, not a silent fix.
+
 ## Status
 
 | PR | Title | Status | Notes |

@@ -51,6 +51,10 @@ class ProductDetail(ProductListItem):
     release_date: datetime.date | None = None
     created_at: datetime.datetime
     archived_at: datetime.datetime | None = None
+    #: Free-form bag (bullet_points, music_attributes, content_status, title_short,
+    #: code_short, grouping hints, conflict_flags — see master_seed_import.py) — these
+    #: aren't first-class columns yet, exposed as-is rather than one bespoke field each.
+    attributes: dict[str, object] = {}
 
 
 class ProductVariantOut(BaseModel):
@@ -300,3 +304,16 @@ class ImprovementUpdateRequest(BaseModel):
     description: str | None = None
     severity: str | None = None
     status: str | None = None
+
+
+class ContentGenerateResponse(BaseModel):
+    """A draft — never auto-saved. Apply the description via the normal product
+    PATCH; apply bullet points via ``PUT .../bullet-points``."""
+
+    description: str
+    bullet_points: list[str]
+
+
+class BulletPointsUpdateRequest(BaseModel):
+    expected_row_version: int
+    bullet_points: list[str]

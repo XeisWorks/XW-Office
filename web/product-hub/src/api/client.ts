@@ -1,7 +1,9 @@
 import type {
   AuditLogEntry,
+  BulletPointsUpdateRequest,
   ChannelMapping,
   Edition,
+  GeneratedContent,
   ImprovementCreateRequest,
   ImprovementUpdateRequest,
   Page,
@@ -151,5 +153,16 @@ export const api = {
     request<Edition>(`/api/v1/products/${productId}/editions`, {
       method: "POST",
       body: { label, resolve_improvement_ids: resolveImprovementIds },
+    }),
+
+  // -- OpenAI description/bullet-point generator ---------------------------------
+  generateContent: (productId: string) =>
+    request<GeneratedContent>(`/api/v1/products/${productId}/generate-content`, {
+      method: "POST",
+    }),
+  setBulletPoints: (productId: string, body: BulletPointsUpdateRequest) =>
+    request<ProductDetail>(`/api/v1/products/${productId}/bullet-points`, {
+      method: "PUT",
+      body,
     }),
 };

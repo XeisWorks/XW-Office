@@ -30,6 +30,9 @@ export interface ProductDetail extends ProductListItem {
   release_date: string | null;
   created_at: string;
   archived_at: string | null;
+  /** Free-form bag (bullet_points, music_attributes, ...) - see products.py's own
+   * comment on this field for why it isn't several bespoke fields yet. */
+  attributes: Record<string, unknown>;
 }
 
 export interface ProductVariant {
@@ -170,6 +173,20 @@ export interface ImprovementCreateRequest {
 export interface ImprovementUpdateRequest {
   expected_row_version: number;
   status?: "open" | "planned" | "resolved" | "wont_fix";
+}
+
+// -- OpenAI description/bullet-point generator ----------------------------------
+
+/** A draft - never auto-saved. Apply description via the normal PATCH, bullets via
+ * setBulletPoints(). Mirrors ContentGenerateResponse in schemas/products.py. */
+export interface GeneratedContent {
+  description: string;
+  bullet_points: string[];
+}
+
+export interface BulletPointsUpdateRequest {
+  expected_row_version: number;
+  bullet_points: string[];
 }
 
 /** Thrown by the API client when the server responds 409 (stale row_version) - the
