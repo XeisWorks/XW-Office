@@ -7,11 +7,11 @@ import type {
   ImprovementCreateRequest,
   ImprovementUpdateRequest,
   Page,
+  ParentProductListItem,
   ProductAsset,
   ProductDetail,
   ProductImprovement,
   ProductListFilters,
-  ProductListItem,
   ProductReadiness,
   ProductUpdateRequest,
   ProductVariant,
@@ -114,7 +114,7 @@ function buildQuery(filters: ProductListFilters): string {
 
 export const api = {
   listProducts: (filters: ProductListFilters = {}) =>
-    request<Page<ProductListItem>>(`/api/v1/products?${buildQuery(filters)}`),
+    request<Page<ParentProductListItem>>(`/api/v1/products?${buildQuery(filters)}`),
   getProduct: (id: string) => request<ProductDetail>(`/api/v1/products/${id}`),
   getProductBySku: (sku: string) =>
     request<ProductDetail>(`/api/v1/products/by-sku/${encodeURIComponent(sku)}`),

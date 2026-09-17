@@ -38,6 +38,7 @@ from xw_office.models.product_hub import (
     ProductVariant,
     Tag,
 )
+from xw_office.models.product_hub_inventory import InventoryStock
 
 _SLUG_INVALID_CHARS = re.compile(r"[^a-z0-9]+")
 
@@ -73,6 +74,12 @@ class ProductFilter:
     search: str | None = None
     limit: int | None = None
     offset: int = 0
+    #: Curated grouping (grouping.py) archives (soft-deletes) a child product once its
+    #: variants move to the parent — it's never hard-deleted, so its history/attributes
+    #: survive, but it should never resurface as its own row in a normal product list.
+    #: False (the default) hides it; every existing caller wants that, so this is opt-in
+    #: rather than opt-out.
+    include_archived: bool = False
 
 
 @dataclass(frozen=True)
@@ -89,6 +96,8 @@ class ResolvedSku:
 
 def _apply_product_filters(stmt: "Select[Any]", filters: ProductFilter) -> "Select[Any]":
     """Shared WHERE-clause builder for :meth:`list_products`/:meth:`count_products`."""
+    if not filters.include_archived:
+        stmt = stmt.where(Product.archived_at.is_(None))
     if filters.status is not None:
         stmt = stmt.where(Product.status == filters.status)
     if filters.active is not None:
@@ -97,7 +106,13 @@ def _apply_product_filters(stmt: "Select[Any]", filters: ProductFilter) -> "Sele
         stmt = stmt.where(Product.family_id == filters.family_id)
     if filters.search:
         needle = f"%{filters.search.strip()}%"
-        stmt = stmt.where(Product.name.ilike(needle))
+        # Matches the parent's own name/SKU, or *any* of its variants' SKUs - so
+        # searching a format-variant SKU (e.g. "XW-102.5-D") still finds its parent
+        # row, not just an exact-SKU-only match.
+        variant_skus = select(ProductVariant.product_id).where(ProductVariant.sku.ilike(needle))
+        stmt = stmt.where(
+            Product.name.ilike(needle) | Product.sku.ilike(needle) | Product.id.in_(variant_skus)
+        )
     return stmt
 
 
@@ -262,6 +277,58 @@ class ProductHubRepository:
                 return None
             return ResolvedSku(product=product, variant=variant, matched_via=matched_via)
 
+    def add_sku_alias(
+        self,
+        product_id: uuid.UUID,
+        *,
+        alias_sku: str,
+        variant_id: uuid.UUID | None = None,
+        source: str = "manual",
+    ) -> ProductSkuAlias:
+        """Create a legacy/alternate SKU pointing at ``product_id`` (and, once known,
+        directly at its variant — ``resolve_sku`` prefers ``variant_id`` and re-derives
+        the product from the *variant's own* ``product_id`` at lookup time, so a later
+        :class:`~xw_office.services.product_hub.grouping.GroupingService` re-parent never
+        stales this alias out).
+
+        Idempotent: re-adding the same ``alias_sku`` for the same target is a no-op;
+        pointing an existing alias at a *different* target raises, since silently
+        repointing a legacy SKU is exactly the kind of guess this repository never makes.
+        """
+        clean_alias = normalize_sku(alias_sku)
+        if not clean_alias:
+            raise ValueError("alias_sku is required")
+        with self._scope() as session:
+            existing = session.scalar(
+                select(ProductSkuAlias).where(func.upper(ProductSkuAlias.alias_sku) == clean_alias)
+            )
+            if existing is not None:
+                if existing.product_id != product_id or (
+                    variant_id is not None and existing.variant_id not in (None, variant_id)
+                ):
+                    raise ValueError(
+                        f"Alias {alias_sku!r} already points to a different product/variant "
+                        f"({existing.product_id}/{existing.variant_id})"
+                    )
+                if variant_id is not None and existing.variant_id is None:
+                    existing.variant_id = variant_id
+                    session.flush()
+                return existing
+            alias = ProductSkuAlias(
+                product_id=product_id,
+                alias_sku=clean_alias,
+                source=source,
+                variant_id=variant_id,
+            )
+            session.add(alias)
+            session.flush()
+            return alias
+
+    def list_sku_aliases(self, product_id: uuid.UUID) -> list[ProductSkuAlias]:
+        with self._scope() as session:
+            stmt = select(ProductSkuAlias).where(ProductSkuAlias.product_id == product_id)
+            return list(session.scalars(stmt).all())
+
     # -- variants -----------------------------------------------------------
 
     def list_variants(self, product_id: uuid.UUID) -> list[ProductVariant]:
@@ -271,6 +338,34 @@ class ProductHubRepository:
                 .where(ProductVariant.product_id == product_id)
                 .order_by(ProductVariant.is_default.desc(), ProductVariant.sku)
             )
+            return list(session.scalars(stmt).all())
+
+    def list_variants_for_products(self, product_ids: list[uuid.UUID]) -> list[ProductVariant]:
+        """Batched sibling of :meth:`list_variants` — one query for a whole page of
+        parent products, not one query per product (see the parent-list read model)."""
+        if not product_ids:
+            return []
+        with self._scope() as session:
+            stmt = (
+                select(ProductVariant)
+                .where(ProductVariant.product_id.in_(product_ids))
+                .order_by(ProductVariant.is_default.desc(), ProductVariant.sku)
+            )
+            return list(session.scalars(stmt).all())
+
+    def list_products_by_skus(self, skus: list[str]) -> list[Product]:
+        """Batched SKU lookup, **including archived products** — unlike
+        :meth:`get_product_by_sku`/:meth:`resolve_sku`. Curated grouping never
+        changes a variant's own ``sku`` and never touches an archived (grouped-away)
+        child's ``Product.sku`` either, so this is how the parent-list read model
+        recovers the per-row metadata (format/ensemble/scoring/title_short/...) that
+        lived on each row's own ``product.attributes`` before it became a variant of
+        someone else's parent — no separate backfill/migration needed."""
+        if not skus:
+            return []
+        needles = {normalize_sku(sku) for sku in skus}
+        with self._scope() as session:
+            stmt = select(Product).where(func.upper(Product.sku).in_(needles))
             return list(session.scalars(stmt).all())
 
     def get_variant(self, variant_id: uuid.UUID) -> ProductVariant | None:
@@ -439,6 +534,14 @@ class ProductHubRepository:
             stmt = select(ProductPrice).where(ProductPrice.variant_id == variant_id).order_by(
                 ProductPrice.valid_from.desc()
             )
+            return list(session.scalars(stmt).all())
+
+    def list_prices_for_variants(self, variant_ids: list[uuid.UUID]) -> list[ProductPrice]:
+        """Batched sibling of :meth:`list_prices` for the parent-list read model."""
+        if not variant_ids:
+            return []
+        with self._scope() as session:
+            stmt = select(ProductPrice).where(ProductPrice.variant_id.in_(variant_ids))
             return list(session.scalars(stmt).all())
 
     def get_price_list_by_code(self, code: str) -> PriceList | None:
@@ -792,6 +895,21 @@ class ProductHubRepository:
             stmt = select(ProductTag).where(ProductTag.product_id == product_id)
             return list(session.scalars(stmt).all())
 
+    def list_tag_labels_for_products(
+        self, product_ids: list[uuid.UUID]
+    ) -> list[tuple[uuid.UUID, str]]:
+        """Batched ``(product_id, tag label)`` pairs for the parent-list read model —
+        one joined query per page instead of a tag lookup per product per tag."""
+        if not product_ids:
+            return []
+        with self._scope() as session:
+            stmt = (
+                select(ProductTag.product_id, Tag.label)
+                .join(Tag, Tag.id == ProductTag.tag_id)
+                .where(ProductTag.product_id.in_(product_ids))
+            )
+            return [(row[0], row[1]) for row in session.execute(stmt).all()]
+
     def add_product_tag(self, *, product_id: uuid.UUID, tag_id: uuid.UUID) -> ProductTag:
         with self._scope() as session:
             existing = session.get(ProductTag, (product_id, tag_id))
@@ -814,6 +932,16 @@ class ProductHubRepository:
     def move_variant(self, variant_id: uuid.UUID, *, target_product_id: uuid.UUID) -> ProductVariant:
         """Re-parent a variant to a different product (used by curated grouping, PR06).
 
+        Always clears ``is_default`` on the moved variant — its old default status was
+        scoped to the product it's leaving and means nothing in the new one. Caller
+        decides whether it should become the *new* product's default via the dedicated
+        ``set_default_variant`` (the only path that safely enforces "at most one
+        default variant per product" without a PostgreSQL-only partial unique index).
+        Confirmed the hard way: an earlier version left ``is_default`` untouched here,
+        which passed every SQLite-backed test (SQLite doesn't enforce that constraint)
+        but violated ``ix_product_variant_one_default_per_product`` the first time
+        curated grouping ran for real against Postgres.
+
         Identifiers/assets attached via ``variant_id`` follow automatically (their FK
         is the variant, not the product); only product-scoped rows need separate moves.
         """
@@ -822,6 +950,7 @@ class ProductHubRepository:
             if variant is None:
                 raise KeyError(f"Variant {variant_id} not found")
             variant.product_id = target_product_id
+            variant.is_default = False
             session.flush()
             return variant
 
@@ -874,6 +1003,38 @@ class ProductHubRepository:
             stmt = select(ChannelMapping).where(
                 ChannelMapping.entity_type == entity_type,
                 ChannelMapping.internal_entity_id == internal_entity_id,
+            )
+            return list(session.scalars(stmt).all())
+
+    def sum_stock_on_hand_for_variants(self, variant_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+        """``{variant_id: total on_hand across locations}`` for the parent-list read
+        model. Reads ``inventory_stock`` (PR13/14, shadow mode) directly rather than
+        going through ``InventoryRepository`` — a read-only aggregate, not a write, so
+        it doesn't need that service's idempotency/alert machinery. Variants with no
+        row at all (the common case today — shadow mode has never recorded a real
+        movement yet) are simply absent from the returned dict; callers render that as
+        "—", not 0, since "no data" and "confirmed zero stock" are different things."""
+        if not variant_ids:
+            return {}
+        with self._scope() as session:
+            stmt = (
+                select(InventoryStock.variant_id, func.sum(InventoryStock.on_hand))
+                .where(InventoryStock.variant_id.in_(variant_ids))
+                .group_by(InventoryStock.variant_id)
+            )
+            return {row[0]: int(row[1] or 0) for row in session.execute(stmt).all()}
+
+    def list_channel_mappings_for_entities(
+        self, entity_ids: list[uuid.UUID], *, entity_type: str
+    ) -> list[ChannelMapping]:
+        """Batched sibling of :meth:`list_channel_mappings` for the parent-list read
+        model — one query per page, not one per product."""
+        if not entity_ids:
+            return []
+        with self._scope() as session:
+            stmt = select(ChannelMapping).where(
+                ChannelMapping.entity_type == entity_type,
+                ChannelMapping.internal_entity_id.in_(entity_ids),
             )
             return list(session.scalars(stmt).all())
 

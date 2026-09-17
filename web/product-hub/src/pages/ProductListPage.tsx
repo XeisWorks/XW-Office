@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import AsyncState from "../components/AsyncState";
 import StatusBadge from "../components/StatusBadge";
+import { channelStateSymbol, channelStateTone } from "../components/tone";
 import { useApi } from "../hooks/useApi";
-import type { ProductListFilters, ProductListItem } from "../api/types";
+import { compareNatural } from "../utils/naturalSort";
+import type { ChannelState, ParentProductListItem, ProductListFilters, ProductVariantSummary } from "../api/types";
 
 interface ProductListPageProps {
   onUnauthorized: () => void;
@@ -15,74 +17,201 @@ interface ProductListPageProps {
 const FETCH_LIMIT = 2000;
 const STATUS_OPTIONS = ["draft", "active", "discontinued", "archived"];
 
-type SortColumn = "sku" | "name" | "category" | "brand_name" | "product_type" | "status" | "active" | "updated_at";
+type ColumnKey =
+  | "name"
+  | "title_short"
+  | "category"
+  | "brand_name"
+  | "product_type"
+  | "variant_count"
+  | "formats"
+  | "ensembles"
+  | "scorings"
+  | "instruments"
+  | "price_gross"
+  | "price_net"
+  | "stock_total"
+  | "tags"
+  | "wix_state"
+  | "sevdesk_state"
+  | "amazon_state"
+  | "content_status"
+  | "review_required"
+  | "status"
+  | "active"
+  | "updated_at";
+
+type SortKey = "sku" | ColumnKey;
 type SortDirection = "asc" | "desc";
 
-const COLUMNS: { key: SortColumn; label: string }[] = [
-  { key: "sku", label: "SKU" },
-  { key: "name", label: "Name" },
-  { key: "category", label: "Kategorie" },
-  { key: "brand_name", label: "Marke" },
-  { key: "product_type", label: "Typ" },
-  { key: "status", label: "Status" },
-  { key: "active", label: "Aktiv" },
-  { key: "updated_at", label: "Geändert am" },
+function formatPriceRange(min: string | null, max: string | null): string {
+  const minNum = min !== null ? Number(min) : null;
+  const maxNum = max !== null ? Number(max) : null;
+  const fmt = (n: number) => n.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (minNum !== null && maxNum !== null) {
+    return minNum === maxNum ? `${fmt(minNum)} €` : `${fmt(minNum)}–${fmt(maxNum)} €`;
+  }
+  if (minNum !== null) return `${fmt(minNum)} €`;
+  if (maxNum !== null) return `${fmt(maxNum)} €`;
+  return "—";
+}
+
+function formatSinglePrice(value: string | null): string {
+  if (value === null) return "—";
+  return `${Number(value).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
+}
+
+function ChannelBadge({ state, label }: { state: ChannelState; label: string }) {
+  return (
+    <StatusBadge label={`${label} ${channelStateSymbol(state)}`} tone={channelStateTone(state)} />
+  );
+}
+
+const COLUMNS: { key: ColumnKey; label: string; defaultVisible: boolean }[] = [
+  { key: "name", label: "Name", defaultVisible: true },
+  { key: "title_short", label: "Kurzname", defaultVisible: false },
+  { key: "category", label: "Kategorie", defaultVisible: true },
+  { key: "brand_name", label: "Marke", defaultVisible: true },
+  { key: "product_type", label: "Typ", defaultVisible: false },
+  { key: "variant_count", label: "Varianten", defaultVisible: true },
+  { key: "formats", label: "Formate", defaultVisible: false },
+  { key: "ensembles", label: "Besetzung", defaultVisible: false },
+  { key: "scorings", label: "Scoring", defaultVisible: false },
+  { key: "instruments", label: "Instrument", defaultVisible: false },
+  { key: "price_gross", label: "Preis brutto", defaultVisible: true },
+  { key: "price_net", label: "Preis netto", defaultVisible: false },
+  { key: "stock_total", label: "Bestand", defaultVisible: false },
+  { key: "tags", label: "Tags", defaultVisible: false },
+  { key: "wix_state", label: "Wix", defaultVisible: false },
+  { key: "sevdesk_state", label: "sevdesk", defaultVisible: false },
+  { key: "amazon_state", label: "Amazon", defaultVisible: false },
+  { key: "content_status", label: "Content-Status", defaultVisible: false },
+  { key: "review_required", label: "Review", defaultVisible: false },
+  { key: "status", label: "Status", defaultVisible: true },
+  { key: "active", label: "Aktiv", defaultVisible: true },
+  { key: "updated_at", label: "Geändert am", defaultVisible: false },
 ];
 
 const ALL_COLUMN_KEYS = COLUMNS.map((column) => column.key);
-const VISIBLE_COLUMNS_STORAGE_KEY = "xw_product_hub_visible_columns";
+const DEFAULT_VISIBLE_COLUMNS = COLUMNS.filter((c) => c.defaultVisible).map((c) => c.key);
+const VISIBLE_COLUMNS_STORAGE_KEY = "xw_product_hub_visible_columns_v2";
 
-const CELL_RENDERERS: Record<SortColumn, (product: ProductListItem) => ReactNode> = {
-  sku: (product) => product.sku,
-  name: (product) => product.name,
-  category: (product) => product.category ?? "—",
-  brand_name: (product) => product.brand_name ?? "—",
-  product_type: (product) => product.product_type,
-  status: (product) => product.status,
-  active: (product) => (
-    <StatusBadge label={product.active ? "aktiv" : "inaktiv"} tone={product.active ? "ok" : "neutral"} />
+const CELL_RENDERERS: Record<ColumnKey, (item: ParentProductListItem) => ReactNode> = {
+  name: (item) => item.name,
+  title_short: (item) => item.title_short ?? "—",
+  category: (item) => item.category ?? "—",
+  brand_name: (item) => item.brand_name ?? "—",
+  product_type: (item) => item.product_type,
+  variant_count: (item) => item.variant_count,
+  formats: (item) => (item.formats.length > 0 ? item.formats.join(", ") : "—"),
+  ensembles: (item) => (item.ensembles.length > 0 ? item.ensembles.join(", ") : "—"),
+  scorings: (item) => (item.scorings.length > 0 ? item.scorings.join(", ") : "—"),
+  instruments: (item) => (item.instruments.length > 0 ? item.instruments.join(", ") : "—"),
+  price_gross: (item) => formatPriceRange(item.price_gross_min, item.price_gross_max),
+  price_net: (item) => formatPriceRange(item.price_net_min, item.price_net_max),
+  stock_total: (item) => (item.stock_total !== null ? item.stock_total : "—"),
+  tags: (item) => (item.tags.length > 0 ? item.tags.join(", ") : "—"),
+  wix_state: (item) => <ChannelBadge state={item.wix_state} label="Wix" />,
+  sevdesk_state: (item) => <ChannelBadge state={item.sevdesk_state} label="sevdesk" />,
+  amazon_state: (item) => <ChannelBadge state={item.amazon_state} label="Amazon" />,
+  content_status: (item) => item.content_status ?? "—",
+  review_required: (item) =>
+    item.review_required ? <StatusBadge label="Review" tone="warn" /> : "—",
+  status: (item) => item.status,
+  active: (item) => (
+    <StatusBadge label={item.active ? "aktiv" : "inaktiv"} tone={item.active ? "ok" : "neutral"} />
   ),
-  updated_at: (product) => new Date(product.updated_at).toLocaleString("de-DE"),
+  updated_at: (item) => new Date(item.updated_at).toLocaleString("de-DE"),
 };
 
-function sortValue(product: ProductListItem, column: SortColumn): string | number {
-  switch (column) {
+function sortValue(item: ParentProductListItem, key: SortKey): string | number {
+  switch (key) {
     case "active":
-      return product.active ? 1 : 0;
+    case "review_required":
+      return item[key] ? 1 : 0;
+    case "variant_count":
+    case "stock_total":
+      return item[key] ?? -1;
+    case "price_gross":
+      return item.price_gross_min !== null ? Number(item.price_gross_min) : -1;
+    case "price_net":
+      return item.price_net_min !== null ? Number(item.price_net_min) : -1;
+    case "formats":
+    case "ensembles":
+    case "scorings":
+    case "instruments":
+    case "tags":
+      return (item[key] as string[]).join(", ").toLocaleLowerCase("de-DE");
+    case "wix_state":
+    case "sevdesk_state":
+    case "amazon_state":
     case "updated_at":
-      return product.updated_at;
-    default: {
-      const value = product[column];
-      return (value ?? "").toString().toLocaleLowerCase("de-DE");
-    }
+    case "name":
+    case "title_short":
+    case "category":
+    case "brand_name":
+    case "product_type":
+    case "content_status":
+    case "status":
+      return (item[key] ?? "").toString().toLocaleLowerCase("de-DE");
+    case "sku":
+      return item.display_sku;
+    default:
+      return "";
   }
 }
 
 // Per-viewer convenience only (never shared, never read back by us) - a blocked or
-// cleared storage just falls back to "show everything", which is always a safe default.
-function loadVisibleColumns(): SortColumn[] {
+// cleared storage just falls back to the documented defaults, which is always safe.
+function loadVisibleColumns(): ColumnKey[] {
   try {
     const raw = localStorage.getItem(VISIBLE_COLUMNS_STORAGE_KEY);
-    if (!raw) return ALL_COLUMN_KEYS;
+    if (!raw) return DEFAULT_VISIBLE_COLUMNS;
     const parsed: unknown = JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      const valid = parsed.filter((key): key is SortColumn => ALL_COLUMN_KEYS.includes(key as SortColumn));
+      const valid = parsed.filter((key): key is ColumnKey => ALL_COLUMN_KEYS.includes(key as ColumnKey));
       if (valid.length > 0) return valid;
     }
   } catch {
-    // ignore — fall back to showing everything
+    // ignore — fall back to the defaults
   }
-  return ALL_COLUMN_KEYS;
+  return DEFAULT_VISIBLE_COLUMNS;
+}
+
+function VariantRow({ variant }: { variant: ProductVariantSummary }) {
+  const dimension = [variant.format, variant.ensemble].filter(Boolean).join(" · ") || "—";
+  return (
+    <tr className="variant-row">
+      <td className="mono-cell">{dimension}</td>
+      <td className="mono-cell">{variant.sku}</td>
+      <td>{formatSinglePrice(variant.price_net)}</td>
+      <td>{formatSinglePrice(variant.price_gross)}</td>
+      <td>{variant.stock ?? "—"}</td>
+      <td>
+        <ChannelBadge state={variant.wix_state} label="Wix" />
+      </td>
+      <td>
+        <ChannelBadge state={variant.sevdesk_state} label="sevdesk" />
+      </td>
+      <td>
+        <ChannelBadge state={variant.amazon_state} label="Amazon" />
+      </td>
+      <td>
+        <StatusBadge label={variant.active ? "aktiv" : "inaktiv"} tone={variant.active ? "ok" : "neutral"} />
+      </td>
+    </tr>
+  );
 }
 
 export default function ProductListPage({ onUnauthorized }: ProductListPageProps) {
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
-  const [sortColumn, setSortColumn] = useState<SortColumn>("sku");
+  const [sortKey, setSortKey] = useState<SortKey>("sku");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
-  const [visibleColumns, setVisibleColumns] = useState<SortColumn[]>(loadVisibleColumns);
+  const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(loadVisibleColumns);
   const [columnPickerOpen, setColumnPickerOpen] = useState(false);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   const columnPickerRef = useRef<HTMLDivElement | null>(null);
 
   const filters: ProductListFilters = {
@@ -109,19 +238,18 @@ export default function ProductListPage({ onUnauthorized }: ProductListPageProps
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [columnPickerOpen]);
 
-  function handleSort(column: SortColumn) {
-    if (column === sortColumn) {
+  function handleSort(key: SortKey) {
+    if (key === sortKey) {
       setSortDirection((direction) => (direction === "asc" ? "desc" : "asc"));
     } else {
-      setSortColumn(column);
+      setSortKey(key);
       setSortDirection("asc");
     }
   }
 
-  function toggleColumn(key: SortColumn) {
+  function toggleColumn(key: ColumnKey) {
     setVisibleColumns((current) => {
       const isVisible = current.includes(key);
-      if (isVisible && current.length === 1) return current; // always keep at least one column
       const next = isVisible ? current.filter((k) => k !== key) : [...current, key];
       try {
         localStorage.setItem(VISIBLE_COLUMNS_STORAGE_KEY, JSON.stringify(next));
@@ -132,21 +260,35 @@ export default function ProductListPage({ onUnauthorized }: ProductListPageProps
     });
   }
 
+  function toggleExpanded(productId: string) {
+    setExpandedIds((current) => {
+      const next = new Set(current);
+      if (next.has(productId)) next.delete(productId);
+      else next.add(productId);
+      return next;
+    });
+  }
+
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
   const shownColumns = COLUMNS.filter((column) => visibleColumns.includes(column.key));
+  const columnCount = shownColumns.length + 2; // + expand toggle + pinned SKU
 
   const sortedItems = useMemo(() => {
     const sorted = [...(data?.items ?? [])];
     sorted.sort((a, b) => {
-      const left = sortValue(a, sortColumn);
-      const right = sortValue(b, sortColumn);
+      if (sortKey === "sku") {
+        const cmp = compareNatural(a.display_sku, b.display_sku);
+        return sortDirection === "asc" ? cmp : -cmp;
+      }
+      const left = sortValue(a, sortKey);
+      const right = sortValue(b, sortKey);
       if (left < right) return sortDirection === "asc" ? -1 : 1;
       if (left > right) return sortDirection === "asc" ? 1 : -1;
       return 0;
     });
     return sorted;
-  }, [data, sortColumn, sortDirection]);
+  }, [data, sortKey, sortDirection]);
 
   return (
     <section>
@@ -164,6 +306,10 @@ export default function ProductListPage({ onUnauthorized }: ProductListPageProps
           </button>
           {columnPickerOpen && (
             <div className="column-picker-menu">
+              <label>
+                <input type="checkbox" checked disabled />
+                SKU
+              </label>
               {COLUMNS.map((column) => (
                 <label key={column.key}>
                   <input
@@ -182,7 +328,7 @@ export default function ProductListPage({ onUnauthorized }: ProductListPageProps
       <div className="filter-bar">
         <input
           type="search"
-          placeholder="Suche nach SKU oder Name…"
+          placeholder="Suche nach SKU (auch Variante), Name…"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
@@ -204,6 +350,15 @@ export default function ProductListPage({ onUnauthorized }: ProductListPageProps
           <table className="data-table">
             <thead>
               <tr>
+                <th className="expand-th" aria-hidden="true" />
+                <th className="sortable-th">
+                  <button type="button" className="sortable-header" onClick={() => handleSort("sku")}>
+                    SKU
+                    {sortKey === "sku" && (
+                      <span className="sort-indicator">{sortDirection === "asc" ? " ▲" : " ▼"}</span>
+                    )}
+                  </button>
+                </th>
                 {shownColumns.map((column) => (
                   <th key={column.key} className="sortable-th">
                     <button
@@ -212,7 +367,7 @@ export default function ProductListPage({ onUnauthorized }: ProductListPageProps
                       onClick={() => handleSort(column.key)}
                     >
                       {column.label}
-                      {sortColumn === column.key && (
+                      {sortKey === column.key && (
                         <span className="sort-indicator">
                           {sortDirection === "asc" ? " ▲" : " ▼"}
                         </span>
@@ -223,21 +378,76 @@ export default function ProductListPage({ onUnauthorized }: ProductListPageProps
               </tr>
             </thead>
             <tbody>
-              {sortedItems.map((product) => (
-                <tr
-                  key={product.id}
-                  className="row-clickable"
-                  tabIndex={0}
-                  onClick={() => navigate(`/products/${product.id}`)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") navigate(`/products/${product.id}`);
-                  }}
-                >
-                  {shownColumns.map((column) => (
-                    <td key={column.key}>{CELL_RENDERERS[column.key](product)}</td>
-                  ))}
-                </tr>
-              ))}
+              {sortedItems.map((item) => {
+                const expandable = item.variant_count > 1;
+                const expanded = expandable && expandedIds.has(item.id);
+                return (
+                  <Fragment key={item.id}>
+                    <tr
+                      className="row-clickable"
+                      tabIndex={0}
+                      onClick={() => navigate(`/products/${item.id}`)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") navigate(`/products/${item.id}`);
+                      }}
+                    >
+                      <td className="expand-cell">
+                        {expandable && (
+                          <button
+                            type="button"
+                            className="expand-toggle"
+                            aria-label={expanded ? "Varianten einklappen" : "Varianten ausklappen"}
+                            aria-expanded={expanded}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggleExpanded(item.id);
+                            }}
+                            onKeyDown={(event) => event.stopPropagation()}
+                          >
+                            {expanded ? "▾" : "▸"}
+                          </button>
+                        )}
+                      </td>
+                      <td className="mono-cell">
+                        {item.display_sku}
+                        {expandable && <span className="hint"> · {item.variant_count} Varianten</span>}
+                      </td>
+                      {shownColumns.map((column) => (
+                        <td key={column.key}>{CELL_RENDERERS[column.key](item)}</td>
+                      ))}
+                    </tr>
+                    {expanded && (
+                      <tr className="variant-subtable-row">
+                        <td />
+                        <td colSpan={columnCount - 1}>
+                          <table className="variant-subtable">
+                            <thead>
+                              <tr>
+                                <th>Format / Besetzung</th>
+                                <th>SKU</th>
+                                <th>Netto</th>
+                                <th>Brutto</th>
+                                <th>Bestand</th>
+                                <th>Wix</th>
+                                <th>sevdesk</th>
+                                <th>Amazon</th>
+                                <th>Aktiv</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {[...item.variants]
+                                .sort((a, b) => compareNatural(a.sku, b.sku))
+                                .map((variant) => (
+                                  <VariantRow key={variant.id} variant={variant} />
+                                ))}
+                            </tbody>
+                          </table>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </>

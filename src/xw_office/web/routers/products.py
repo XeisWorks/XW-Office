@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from xw_office.models.product_hub import Product
 from xw_office.repositories.product_hub import OptimisticLockError, ProductFilter, ProductHubRepository
+from xw_office.services.product_hub.catalog_list import build_parent_product_summaries
 from xw_office.services.product_hub.content_generation import (
     ContentGenerationError,
     ContentGenerationService,
@@ -40,10 +41,10 @@ from xw_office.web.schemas.products import (
     PriceSetRequest,
     PrintRuleOut,
     PrintRuleUpsertRequest,
+    ParentProductListItem,
     ProductAssetOut,
     ProductDetail,
     ProductImprovementOut,
-    ProductListItem,
     ProductReadinessOut,
     ProductUpdateRequest,
     ProductVariantOut,
@@ -93,7 +94,7 @@ def build_products_router(
             detail=jsonable_encoder(out_schema.model_validate(current)),
         )
 
-    @router.get("/products", response_model=Page[ProductListItem])
+    @router.get("/products", response_model=Page[ParentProductListItem])
     def list_products(
         search: str | None = Query(default=None),
         product_status: str | None = Query(default=None, alias="status"),
@@ -102,7 +103,12 @@ def build_products_router(
         limit: int = Query(default=50, ge=1, le=2000),
         offset: int = Query(default=0, ge=0),
         repo: ProductHubRepository = Depends(get_repo),
-    ) -> Page[ProductListItem]:
+    ) -> Page[ParentProductListItem]:
+        """One row per fachliches Parent-Produkt (curated grouping already merges
+        format/ensemble/scoring variants into one Product with several
+        ProductVariant rows — see ``services/product_hub/catalog_list.py``); each row
+        carries its variants' aggregated price/stock/channel state plus the full
+        variant list for the WebUI's expandable sub-table."""
         base_filters = ProductFilter(
             status=product_status, active=active, family_id=family_id, search=search
         )
@@ -115,7 +121,8 @@ def build_products_router(
             limit=limit,
             offset=offset,
         )
-        items = [ProductListItem.model_validate(p) for p in repo.list_products(page_filters)]
+        summaries = build_parent_product_summaries(repo, repo.list_products(page_filters))
+        items = [ParentProductListItem.model_validate(s) for s in summaries]
         return Page(items=items, total=total, limit=limit, offset=offset)
 
     @router.get("/products/by-sku/{sku}", response_model=ProductDetail)

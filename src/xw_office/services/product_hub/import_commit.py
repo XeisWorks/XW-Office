@@ -481,6 +481,21 @@ class ImportCommitService:
             "grouping_confidence",
             "conflict_flags",
             "conflict_notes",
+            # -- V2 additions — purely informational/traceability, never auto-acted on --
+            "canonical_sku",
+            "legacy_sku_aliases",
+            "canonical_variant",
+            "variant_role",
+            "arrangement_variant",
+            "review_required",
+            "sot_status",
+            "derived_from_sku",
+            "sync_wix",
+            "sync_sevdesk",
+            "sync_amazon",
+            "wix_publish_eligible",
+            "channel_cleanup_required",
+            "channel_cleanup_notes",
         )
         updates = {
             key: fields[key]

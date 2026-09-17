@@ -1,4 +1,4 @@
-"""Master-seed CSV importer (2026-09-17): the reconciled XeisWorks/MusikHeroes catalog.
+"""Master-seed CSV importer: the reconciled XeisWorks/MusikHeroes catalog.
 
 Unlike ``excel_import.py`` (which parses the raw ``Produktpalette`` sheet directly and
 was the wrong source of truth for a full catalog load — it doesn't carry the
@@ -10,6 +10,15 @@ data, it does not re-derive them.
 
 Never writes to a canonical table — staging only, same "explicit commit step" rule as
 every other Product Hub importer.
+
+V2 (2026-09-17) adds canonical-SKU normalization (``XW-4xx`` -> ``XW-4xxx``), legacy SKU
+aliases, and curated grouping (``product_group_id``/``canonical_variant``/``variant_role``)
+on top of V1's flat-only shape. ``sku``/``canonical_sku`` are identical in every V2 row —
+this importer still stages ``sku`` as the row's own key/variant SKU and additionally
+carries every new V2 column through to ``normalized_fields`` (``raw_payload`` already
+carries the full row verbatim regardless). Applying the alias table and the curated
+grouping are separate, later, explicit steps — see ``sku_alias_import.py`` and
+``master_seed_v2_grouping.py`` — never done implicitly by staging alone.
 """
 from __future__ import annotations
 
@@ -189,6 +198,23 @@ class MasterSeedImporter:
             "grouping_confidence": _clean(row.get("grouping_confidence")),
             "conflict_flags": _clean(row.get("conflict_flags")),
             "conflict_notes": _clean(row.get("conflict_notes")),
+            # -- V2 additions (canonical SKU / aliases / grouping / channel hints) --
+            "canonical_sku": _clean(row.get("canonical_sku")) or sku,
+            "legacy_sku_aliases": [
+                a.strip() for a in _clean(row.get("legacy_sku_aliases")).split(",") if a.strip()
+            ],
+            "canonical_variant": _to_bool(row.get("canonical_variant")),
+            "variant_role": _clean(row.get("variant_role")),
+            "arrangement_variant": _clean(row.get("arrangement_variant")),
+            "review_required": _to_bool(row.get("review_required")),
+            "sot_status": _clean(row.get("sot_status")),
+            "derived_from_sku": _clean(row.get("derived_from_sku")),
+            "sync_wix": _to_bool(row.get("sync_wix")),
+            "sync_sevdesk": _to_bool(row.get("sync_sevdesk")),
+            "sync_amazon": _to_bool(row.get("sync_amazon")),
+            "wix_publish_eligible": _to_bool(row.get("wix_publish_eligible")),
+            "channel_cleanup_required": _to_bool(row.get("channel_cleanup_required")),
+            "channel_cleanup_notes": _clean(row.get("channel_cleanup_notes")),
         }
 
         staging = self._import_repo.ingest_staging_product(

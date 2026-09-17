@@ -57,6 +57,71 @@ class ProductDetail(ProductListItem):
     attributes: dict[str, object] = {}
 
 
+class ProductVariantSummaryOut(BaseModel):
+    """One variant row within a :class:`ParentProductListItem`'s expandable section —
+    mirrors ``catalog_list.VariantSummary``."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    sku: str
+    name: str | None = None
+    format: str | None = None
+    ensemble: str | None = None
+    scoring: str | None = None
+    instrument: str | None = None
+    is_default: bool
+    active: bool
+    price_net: Decimal | None = None
+    price_gross: Decimal | None = None
+    vat_percent: Decimal | None = None
+    currency: str | None = None
+    stock: int | None = None
+    wix_state: str
+    sevdesk_state: str
+    amazon_state: str
+
+
+class ParentProductListItem(BaseModel):
+    """The product list's main row shape ("Product List V2: expandable variants") —
+    one row per fachliches Product (curated grouping already consolidates format/
+    ensemble/scoring variants into a single Product with several ProductVariant rows;
+    this is the read model for that, not a second grouping step). Mirrors
+    ``catalog_list.ParentProductSummary``."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    display_sku: str
+    name: str
+    title_short: str | None = None
+    category: str | None = None
+    brand_name: str | None = None
+    product_type: str
+    status: str
+    active: bool
+    variant_count: int
+    formats: list[str] = []
+    ensembles: list[str] = []
+    scorings: list[str] = []
+    instruments: list[str] = []
+    price_net_min: Decimal | None = None
+    price_net_max: Decimal | None = None
+    price_gross_min: Decimal | None = None
+    price_gross_max: Decimal | None = None
+    currency: str | None = None
+    stock_total: int | None = None
+    tags: list[str] = []
+    wix_state: str
+    sevdesk_state: str
+    amazon_state: str
+    content_status: str | None = None
+    review_required: bool
+    row_version: int
+    updated_at: datetime.datetime
+    variants: list[ProductVariantSummaryOut] = []
+
+
 class ProductVariantOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

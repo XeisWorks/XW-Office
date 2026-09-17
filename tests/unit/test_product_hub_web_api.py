@@ -77,8 +77,18 @@ def test_list_products_returns_seeded_product(db_path: str, seeded_product: Prod
     assert response.status_code == 200
     payload = response.json()
     assert payload["total"] == 1
-    assert payload["items"][0]["sku"] == "XW-1"
+    assert payload["items"][0]["display_sku"] == "XW-1"
     assert "row_version" in payload["items"][0]
+
+
+def test_list_products_includes_variant_summary(db_path: str, seeded_product: Product) -> None:
+    client = _client(db_path)
+    response = client.get("/api/v1/products", headers=_auth_headers())
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["variant_count"] == 1
+    assert item["variants"][0]["sku"] == "XW-1"
+    assert item["variants"][0]["is_default"] is True
 
 
 def test_get_product_by_id(db_path: str, seeded_product: Product) -> None:
@@ -187,4 +197,4 @@ def test_list_products_search_filter(db_path: str) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["total"] == 1
-    assert payload["items"][0]["sku"] == "XW-M1"
+    assert payload["items"][0]["display_sku"] == "XW-M1"

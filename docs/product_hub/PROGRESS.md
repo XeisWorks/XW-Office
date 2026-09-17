@@ -4,6 +4,173 @@ Tracks which PR packages from `XW_PRODUCT_HUB_CODEX_5_6_LUNA_BUILD_PLAN.md` are 
 next work session (human, Codex, or Claude) does not have to re-derive state from scratch.
 Update this file at the end of every PR.
 
+## Product List V2: parent products with expandable variants (2026-09-17)
+
+Follow-up to the Master Seed V2 replace below, from `docs/CLAUDE_CODE_PROMPT_Product_List_Parent_Variants_V2.md`.
+The "duplicate physical/digital rows" problem this brief describes turned out to be
+two separate, smaller gaps rather than a missing grouping model — curated grouping
+(`grouping.py`) already consolidates format/ensemble/scoring variants into one
+`Product` with several `ProductVariant` rows; `list_products()` just never excluded
+*archived* (grouped-away) children, and the list API never aggregated per-variant data
+onto the parent row. No new grouping logic was written or needed.
+
+**Key finding used throughout**: `Product.sku` is always the canonical/default
+variant's SKU by construction (`create_product()` gives a product and its sole
+variant the same SKU; grouping never renames the parent or touches its own default
+variant) — this made `display_sku` free, no new column needed. Per-row metadata
+(`format`/`music_attributes`/`title_short`/...) that a grouped-away variant's original
+row carried survives on that row's own (archived, never hard-deleted) `Product.attributes`
+— recovered with one batched `Product.sku IN (...)` lookup
+(`repositories/product_hub.py`'s `list_products_by_skus`), no backfill/migration step
+needed.
+
+**Backend**:
+- `repositories/product_hub.py` — `ProductFilter.include_archived` (default `False`,
+  was previously not filtered at all); search now also matches any variant's SKU, not
+  just the parent's; new batched methods (`list_variants_for_products`,
+  `list_products_by_skus`, `list_prices_for_variants`,
+  `list_channel_mappings_for_entities`, `list_tag_labels_for_products`,
+  `sum_stock_on_hand_for_variants`) so the list endpoint is a handful of queries per
+  page, never one per product.
+- `services/product_hub/catalog_list.py` (new) — `build_parent_product_summaries`:
+  assembles `ParentProductSummary`/`VariantSummary` (variant_count, formats/
+  ensembles/scorings/instruments, price net/gross min-max, stock_total, tags, Wix/
+  sevdesk/Amazon channel state, content_status, review_required, full variant list).
+  `natural_sku_key` — numeric-segment-aware SKU sort (`XW-101.2` before `XW-101.10`).
+- `web/schemas/products.py` / `web/routers/products.py` — `GET /api/v1/products` now
+  returns `ParentProductListItem` (was the flat `ProductListItem`) — one row per
+  fachliches Product, `variants: [...]` embedded for the expand UI.
+- Known gap: `channel_mapping` is product-scoped only (confirmed during the Master
+  Seed V2 grouping run below — see the "Astronaut" conflict), so only a product's
+  *default* variant can honestly report a real Wix sync state; every other variant
+  falls back to its own `sync_wix` hint. ISBN/ASIN were **not** added as list columns
+  (would need another batched `product_identifier` query) — noted as a remaining gap,
+  not silently dropped.
+
+**Frontend** (`web/product-hub/`):
+- `pages/ProductListPage.tsx` — SKU is now a pinned, always-visible, always-first,
+  naturally-sorted column (`utils/naturalSort.ts`); expand/expand-collapse chevron for
+  `variant_count > 1` renders a per-variant sub-table (Format/Besetzung, SKU, Netto,
+  Brutto, Bestand, Wix, sevdesk, Amazon, Aktiv); expand click never navigates to the
+  detail page (`stopPropagation`); column picker extended from 8 to 23 toggleable
+  fields (§8 minus ISBN/ASIN, see backend gap above) with the same documented
+  defaults as the build request.
+- `vitest` added as a dev dependency (pinned to v2, since v3+ requires Vite 6/7 and
+  this project is still on Vite 5) — the project previously had no test runner at
+  all. `naturalSort.test.ts` covers the sort requirement directly; full component/DOM
+  tests (expand/collapse interaction, ARIA, keyboard) were **not** added — that needs
+  jsdom + testing-library, a separate infrastructure decision, and were instead
+  verified by code review, `tsc --noEmit`, and manual reasoning through the DoD list.
+
+**No Wix/sevdesk/Amazon writes** — this is a read-model change only.
+
+## Master Seed V2 (2026-09-17): canonical SKUs, aliases, curated grouping applied
+
+V1 (972 flat products, see "Catalog correction" below) is fully replaced by Master
+Seed V2 — not a text fix, a corrected catalog: canonical `XW-4xx -> XW-4xxx` SKU
+normalization, 87 legacy-SKU aliases, consistent brands/categories, unified titles
+across format variants, explicit `sync_wix`/`sync_sevdesk`/`sync_amazon` channel hints,
+and — for the first time — the seed's own curated grouping is actually *applied*
+instead of staying flat.
+
+**Files** (`docs/producthub_master-seed/`): `XW_Product_Hub_Master_Seed_2026-09-17.csv`
+(kanonischer Pfad, content now V2, 915 rows), `XW_Product_Hub_Master_Seed_README.md`
+(V2), `XW_Product_Hub_Review_Conflicts_2026-09-17.csv` (V2, 24 rows), plus two new V2
+files: `XW_Product_Hub_SKU_Aliases_V2_2026-09-17.csv` (87 rows) and
+`XW_Product_Hub_Channel_Cleanup_V2_2026-09-17.csv` (91 rows, documentation/worklist
+only — **no automated Wix/sevdesk/Amazon writes happened or were even attempted**).
+
+**New code**:
+- `services/product_hub/master_seed_v2_validate.py` — hard-invariant validator (unique
+  SKUs, no 3-digit `XW-4xx`, forbidden words `Zusatzstimme`/`ZST`/`ZS`/`Band` in the
+  three title fields, brand rules, `Zusatzstimme` category rule, format-variant title
+  equality). One documented, data-confirmed exception: `XW-017` (`record_state=REVIEW`)
+  violates the word rule in `code_short` only — reported, not blocking, since it's
+  already a self-flagged review case (also in `Review_Conflicts_2026-09-17.csv`).
+- `master_seed_import.py` — extended (not replaced) to carry the new V2 columns
+  (`canonical_sku`, `legacy_sku_aliases`, `canonical_variant`, `variant_role`,
+  `arrangement_variant`, `sot_status`, `derived_from_sku`, `sync_wix/sevdesk/amazon`,
+  `wix_publish_eligible`, `review_required`, `channel_cleanup_required/notes`) into
+  `normalized_fields`/`product.attributes` — purely informational, never triggers an
+  external action.
+- `repositories/product_hub.py` — new `add_sku_alias`/`list_sku_aliases` (idempotent;
+  repointing an existing alias to a different target raises rather than guessing).
+- `services/product_hub/sku_alias_import.py` — applies the alias CSV via
+  `add_sku_alias` after commit; an alias never creates its own product.
+- `services/product_hub/master_seed_v2_grouping.py` — reads `product_group_id`/
+  `canonical_variant`/`parent_sku`/`variant_role` only (cross-checks `parent_sku`
+  against the `canonical_variant`-derived parent; skips on disagreement); calls the
+  existing `GroupingService.preview_grouping` then `group_products_into_parent` per
+  group, never on a fuzzy basis. Unsafe (channel-mapping-conflicting) groups are
+  skipped and reported, never forced.
+- `services/product_hub/master_seed_v2_replace.py` — `check_catalog_replaceable`
+  (compares the catalog's entire `audit_log` trail against the known set of automated
+  import+grouping actions; any other action — a manual PATCH, a bullet-point edit —
+  blocks the replace) and `delete_legacy_master_seed_catalog` (FK-safe order,
+  everything deleted **explicitly**, not left to `ON DELETE CASCADE` — see the
+  module's own docstring for the SQLite-cascade bug this caught during local testing).
+- `scripts/product_hub/replace_master_seed_v2.py` — the repeatable, checked pipeline:
+  validate -> check-replaceable -> delete -> stage -> match (safety check) -> commit ->
+  group -> import aliases -> summary + acceptance checks. `--yes` required to write
+  anything; without it, dry-run only. Confirmed idempotent (ran twice back-to-back
+  locally, byte-for-byte identical result the second time).
+
+**Bug caught and fixed mid-rollout**: the first production attempt failed at the
+grouping step with `IntegrityError: ix_product_variant_one_default_per_product` — a
+PostgreSQL-only partial unique index (migration 009) that no SQLAlchemy model
+declares and no SQLite test therefore enforces. Root cause: `move_variant()` re-parented
+a variant without clearing its `is_default` flag, so moving a (always-default, since
+every `create_product()` gives a product exactly one, default variant) child variant
+into a parent that already had its own default variant produced two `is_default=true`
+rows under one `product_id`. Fixed in `repositories/product_hub.py`'s `move_variant`
+(always clears `is_default` on move; the caller's existing `set_default_variant` call
+promotes the right one) and mirrored in `grouping.py`. The grouping tests' own SQLite
+fixture now creates the same partial unique index manually so this class of bug can't
+hide again. First attempt had already safely deleted+re-staged+committed before
+failing (transactional per group — nothing corrupted); the second, fixed run replaced
+the catalog cleanly from scratch.
+
+A second, unrelated, pre-existing bug was found (not fixed, out of scope) while first
+attempting the delete: `inventory_movement` (PR13/14's variant-keyed shadow ledger)
+was never actually created in production — migration 014's own `if "inventory_movement"
+not in existing_tables` guard silently skipped it because migration 002 already had a
+same-named but incompatible (product-keyed) legacy table. `delete_legacy_master_seed_catalog`
+deliberately does not touch `inventory_movement` at all (see its own docstring); the
+Inventory V2 shadow-mode ledger has therefore never actually recorded a real
+movement in production. Flagged for a future fix (rename PR13/14's table), not
+attempted here.
+
+**Verified locally (SQLite) before touching production**, then **run against
+production for real** with identical results both times:
+- 915 rows staged, 915 committed (0 errors), 0 matching conflicts/duplicates/suggestions
+  (empty table, as expected)
+- grouping: 136 candidate groups, **131 applied** (160 variants moved, 160 child
+  products archived), **5 deferred as genuine channel-mapping conflicts** — 4 of the 5
+  are exactly the documented Channel-Cleanup cases (`XW-4039`/`XW-4034` legacy-SKU
+  normalization, `XW-4516` Mnoschil, `XW-6012` Bier-Polka/BH-Polka); the 5th
+  (`XW-6402`/`XW-6801`, "Astronaut" in two ensembles) is new: it shows that
+  `channel_mapping` is currently product-level only, so two independently-Wix-listed
+  ensemble variants of one grouped product can't be represented without a future
+  variant-level channel-mapping extension. None of these 5 were forced — they stay
+  flat, ungrouped, exactly as before, until their channel_cleanup is done externally.
+- 87 SKU aliases created, 0 errors
+- all 9 acceptance checks from the build request passed: `resolve_sku("XW-443") ==
+  resolve_sku("XW-4043")`; XW-443 resolves only via alias; `XW-102.5`/`XW-102.5-D`
+  share one product and title; `XW-551.01`/`XW-551.01-P` share one product and title;
+  `XW-511.16` draft/`XW-511.17` live; `XW-562.12` title contains "#2"; `XW-4024.2`/
+  `XW-4024.3` end up as two distinct variants of one grouped product; brand/category/
+  forbidden-word invariants enforced by the step-1 validator (which ran and passed on
+  the exact CSV before any write).
+- final state (both locally and in production, identical): 915 `product` rows total,
+  755 non-archived (131 groups merged 160 rows away), `product_variant` still 915
+  (grouping moves variants, never deletes them), 87 `product_sku_alias`, 262
+  `channel_mapping` (wix).
+
+**Not done automatically, by design**: no Wix/sevdesk/Amazon write of any kind — the
+Channel-Cleanup CSV stays a worklist. The 5 deferred grouping conflicts stay flat until
+resolved. Full PR15/PR16 (inventory cutover / legacy JSON removal) still explicitly out
+of scope, unchanged from before (see "Why PR15/PR16 stop here" below).
+
 ## Catalog correction (2026-09-17): wrong-sheet import replaced with master-seed
 
 The first real catalog load (111 products, 2026-09-16) used the `Produktpalette` sheet

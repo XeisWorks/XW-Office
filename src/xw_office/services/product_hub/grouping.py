@@ -142,13 +142,11 @@ class GroupingService:
             for child_id in child_product_ids:
                 for variant in product_repo.list_variants(child_id):
                     was_default = variant.is_default
+                    # move_variant() always clears is_default on the moved variant -
+                    # only promote it below if the parent doesn't already have one.
                     product_repo.move_variant(variant.id, target_product_id=parent_product_id)
                     result.variants_moved += 1
-                    if was_default and parent_default is not None:
-                        # At most one default variant per product (app-enforced, see
-                        # models/product_hub.py) - the parent's own default wins.
-                        product_repo.set_default_variant(parent_default.id)
-                    elif was_default and parent_default is None:
+                    if was_default and parent_default is None:
                         # Parent had no variant of its own yet - keep this one default
                         # and remember it, in case a later child also arrives default.
                         parent_default = product_repo.set_default_variant(variant.id)

@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.models.base import Base
@@ -16,6 +16,19 @@ from xw_office.services.product_hub.grouping import GroupingConflictError, Group
 def session_factory() -> sessionmaker[Session]:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
+    # Mirrors ix_product_variant_one_default_per_product (migration 009) - a
+    # PostgreSQL-only partial unique index the SQLAlchemy model never declares (see
+    # models/product_hub.py's own "PostgreSQL-only partial unique index" comments).
+    # Without this, SQLite silently allows two is_default=true variants under one
+    # product - exactly the gap that let move_variant()'s missing is_default reset
+    # through every existing test until it broke for real against production.
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX ix_test_one_default_variant_per_product "
+                "ON product_variant (product_id) WHERE is_default = 1"
+            )
+        )
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
 
 
@@ -40,6 +53,27 @@ def test_move_variant_to_product_reparents_and_audits(
     assert moved.product_id == target.id
     audit = product_repo.list_audit_log("product_variant", source_variant.id)
     assert any(entry.action == "move_variant_to_product" for entry in audit)
+
+
+def test_move_variant_to_product_clears_is_default_on_the_moved_variant(
+    product_repo: ProductHubRepository, grouping: GroupingService
+) -> None:
+    """Regression test for the bug that broke the first real Postgres grouping run:
+    every product's sole variant is is_default=True (create_product()'s own
+    invariant), so moving it into a product that already has its own default variant
+    must never leave two is_default=True rows under the same product_id -
+    ix_product_variant_one_default_per_product (Postgres-only, mirrored in this
+    file's session_factory fixture for SQLite) would reject exactly that."""
+    target, target_variant = product_repo.create_product(sku="XW-1", name="Ziel")
+    source, source_variant = product_repo.create_product(sku="XW-2", name="Quelle")
+    assert source_variant.is_default is True  # sanity check on the scenario itself
+
+    moved = grouping.move_variant_to_product(source_variant.id, target_product_id=target.id)
+
+    assert moved.is_default is False
+    refreshed_target_variant = product_repo.get_variant(target_variant.id)
+    assert refreshed_target_variant is not None
+    assert refreshed_target_variant.is_default is True
 
 
 def test_group_products_into_parent_moves_everything_and_archives_children(

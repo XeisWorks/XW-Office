@@ -1,94 +1,112 @@
-# XW Product Hub – Master Seed
+# XW Product Hub – Master Seed V2
 
 Stand: 2026-09-17
 
+Ersetzt vollständig den ursprünglichen 972-Zeilen-V1-Seed (importiert aus dem
+falschen `Produktpalette`-Blatt, siehe `docs/product_hub/PROGRESS.md`). V2 ist keine
+reine Textkorrektur, sondern bringt kanonische SKU-Bereinigung, SKU-Aliase, konsistente
+Marken/Kategorien, einheitliche Titel, explizite Channel-Sync-Hinweise und kuratierte
+Produktgruppierung (physisch/digital/Print@Home/Besetzungsvarianten).
+
+## Source of Truth
+Für widersprüchliche Produktidentität, Artikelnummern und Bezeichnungen gelten
+ausschließlich die Tabellenblätter `XeisWorks` und `MusikHeroes` aus
+`Produktpalette(2).xlsx` als höchste Priorität.
+
 ## Dateien
-- `XW_Product_Hub_Master_Seed_2026-09-17.csv`: 972 Master-Zeilen, eine Zeile pro SKU.
-- `XW_Product_Hub_Review_Conflicts_2026-09-17.csv`: 408 Zeilen mit Review-/Konfliktbedarf.
+- `XW_Product_Hub_Master_Seed_2026-09-17.csv`: 915 eindeutige kanonische SKU-Zeilen
+  (kanonischer Master-Pfad, Inhalt = V2)
+- `XW_Product_Hub_SKU_Aliases_V2_2026-09-17.csv`: 87 Legacy-SKU-Aliase
+- `XW_Product_Hub_Channel_Cleanup_V2_2026-09-17.csv`: 91 geplante Channel-Bereinigungen
+  (Dokumentation/Arbeitsliste — nicht automatisch extern ausgeführt)
+- `XW_Product_Hub_Review_Conflicts_2026-09-17.csv`: 24 verbleibende echte Review-Fälle
 
-## Source-of-Truth-Regel
-Höchste Priorität haben ausschließlich die Blätter `XeisWorks` und `MusikHeroes`
-aus `Produktpalette(1).xlsx`. Wix, ERP/sevdesk-Export und Amazon-Bericht ergänzen
-fehlende Informationen und dienen zur Konfliktprüfung.
+## V2-Regeln
 
-## Modellierungsentscheidungen
-- `ensemble`: nur
-  - Kleine Besetzung
-  - Böhmische Besetzung
-  - Musikkapelle
-  - Blasmusik Supergroup
-  - Sinfonisches Blasorchester
-- `scoring`: Satz-/Stimmigkeitsmodell, z. B.
-  `Register-4er`, `Junior-4tett`, `Section-4tett`, `4-stimmig`, `5-stimmig`,
-  `6-stimmig`, `7-stimmig`, `8-stimmig`.
-- `voice_count`: numerische Ergänzung zu `scoring`.
-- Deutschsprachige Stimmung: `B` / `Es`.
-- MusikHeroes-Codes: `CKH`, `OW`, `T&G`, `WU`, `BJ`, `UUU`, `ET`.
-- `format`: `PHYSICAL`, `PRINT_AT_HOME`, `DIGITAL`, `PLAYALONG`.
-- `vat_percent`: durchgehend 10.00.
-- Preise: explizite XLSX-Preisangaben haben Vorrang. Danach ERP/sevdesk netto,
-  danach Wix brutto. Brutto/Netto werden mit 10 % USt. gegengerechnet.
+### SKU
+- Alle dreistelligen `XW-4xx` werden kanonisch vierstellig: `XW-4xx -> XW-40xx`.
+- Suffixe bleiben erhalten, z. B. `XW-424.3 -> XW-4024.3`.
+- Alte Nummern werden NICHT vergessen, sondern als `sku_alias` geführt.
+- Beispiel: `XW-443 -> XW-4043`; Titel/Identität folgen dem XLSX-SOT (`Zadok The Priest`).
 
-## Titelkonvention
-- `title_full`: menschenlesbar; Besetzung/Scoring in eckigen Klammern.
-- `title_short`: kompakte Anzeige.
-- `code_short`: kompakter technischer Anzeigename; nicht als Primärschlüssel verwenden.
-- SKU bleibt der eindeutige technische Artikel-Identifier.
+### Marken
+- `XW-1...`, `XW-2...`, `XW-3...` -> `XeisWorks`
+- `XW-40...` -> `Blechhaufn`
+- `XW-45...` -> `Mnozil Brass`
 
-Beispiele:
-- `Christkindl-Hits #1 - 2. Stimme in B (hoch)`
-- `CKH#1 2B-h`
-- `CKH#1_2B-h`
-- `Himmelsthron [Kleine Besetzung]`
-- `Himmelsthron [Kl.Bes.]`
-- `HIMMELSTHRON_KB`
+### Zusatzstimmen
+- Bei `XW-1xx.*` und `XW-2xx.*` ist `category_primary=Zusatzstimme`.
+- `Zusatzstimme`, `ZST`, `ZS` stehen NIE in `title_full`, `title_short` oder `code_short`.
+- Beispiel: `XW-102.5` und `XW-102.5-D` heißen beide `Volksmusik #2 - Tuba in B`.
 
-## Amazon
-Der hochgeladene Kategorie-Angebotsbericht enthält keine FNSKU-Spalte und keine
-FNSKU-Werte. Deshalb bleibt `fnsku` leer und `fnsku_status=MISSING_IN_REPORT`.
+### Titel
+- `Volksmusik - Band N` wird immer `Volksmusik #N`.
+- Das Wort `Band` kommt in den drei Titelfeldern nicht vor.
+- B/Es werden deutschsprachig verwendet.
+- Physisch/Digital/Print@Home desselben fachlichen Produkts haben exakt dieselben drei Titel.
+- Format ist ausschließlich ein Variantenattribut.
 
-Für Amazon-Buchprodukte mit ISBN-13 wird zusätzlich ISBN-10 berechnet und als
-unverifizierter ASIN-Kandidat eingetragen:
-- `asin_source=DERIVED_FROM_ISBN13_BOOK`
-- `asin_verified=false`
+### Varianten und Gruppierung
+- `product_group_id` fasst fachlich identische Produkte zusammen.
+- `parent_sku` zeigt auf die bevorzugte kanonische Variante.
+- `canonical_variant` und `variant_role` machen Format-, Besetzungs-, Scoring- und Legacy-Varianten explizit.
+- Besetzung bleibt separat von `scoring`.
+- Zwei Arrangements von `Erinnerungen an Brennberg` bleiben als eigene Varianten erhalten.
 
-Nur ein im Bericht ausdrücklich als `ASIN` ausgewiesener Wert wird mit
-`asin_source=AMAZON_REPORT` und `asin_verified=true` markiert.
+### Channels
+- `EXTERNAL_ONLY` bedeutet bewusst: operativer/sevdesk-interner Artikel, nicht automatisch ein Wix-Verkaufsprodukt.
+- `sync_wix`, `sync_sevdesk`, `sync_amazon` und `wix_publish_eligible` sind explizite Channel-Hinweise.
+- Fehlende Wix-Präsenz bei Dienstleistung/Versand/Abrechnung ist kein Konflikt.
+- Externe Writes bleiben beim Import deaktiviert; Cleanup wird separat ausgeführt.
 
-## Content
-Vorhandene Amazon-/Wix-Beschreibungen werden übernommen und normalisiert.
-Fehlende Inhalte wurden neutral erzeugt:
-- `content_status=SOURCE`: vorhandener Quelltext
-- `content_status=AUTO_DRAFT`: automatisch erzeugter Entwurf
+## Statistiken
+- Zeilen: 915
+- Legacy-Aliase: 87
+- Review-Fälle: 24
+- Channel-Cleanup-Einträge: 91
 
-AUTO_DRAFT sollte vor Push zu Wix/Amazon redaktionell freigegeben werden.
+### Record state
+- ACTIVE: 600
+- RESERVED: 251
+- EXTERNAL_ONLY: 46
+- REVIEW: 18
 
-## Datenstatus
-- live: 501
-- review: 227
-- draft: 244
-- ACTIVE: 501
-- RESERVED: 244
-- EXTERNAL_ONLY: 226
-- XLSX_BLANK_EXTERNAL_ACTIVE: 1
+### Status
+- live: 640
+- draft: 251
+- review: 24
 
-## Formate
-- PHYSICAL: 753
-- DIGITAL: 118
-- PRINT_AT_HOME: 57
-- PLAYALONG: 44
+### SOT-Status
+- EXACT: 466
+- RESERVED: 251
+- DERIVED: 94
+- EXTERNAL: 73
+- DERIVED_TITLE_MATCH: 31
 
-## Content
-- AUTO_DRAFT: 660
-- SOURCE: 312
+## Kontrollierte Sonderentscheidungen
+- `XW-562.12`: Titel fachlich auf `Umpa Umpa Umtata #2 - Playalongs in C` korrigiert.
+- `XW-511.16`: bleibt reserviert; das sevdesk-Horn-Playalong gehört zu `XW-511.17`.
+- `XW-4024.2` / `XW-4024.3`: zwei Arrangements; `.3` = `[Blechhaufn-Version]`.
+- `XW-6012`: SOT = `BH-Polka [Kleine Besetzung]`; Wix-Bier-Polka-Doppelbelegung ist Channel-Cleanup.
+- `XW-4516`: SOT = `Mnoschil`; doppelte Wix-Abbildung wird als Cleanup behandelt.
 
-## Wichtigste Review-Flags
-- NOT_IN_XLSX_SOT: 226
-- TITLE_DRIFT: 138
-- PRICE_DRIFT_WIX: 31
-- FNSKU_NOT_IN_REPORT: 23
-- PRICE_DRIFT_ERP: 7
-- DUPLICATE_WIX_SKU: 2
-- DUPLICATE_ERP_SKU: 1
-- XLSX_BLANK_BUT_EXTERNAL_ACTIVE: 1
-- AMAZON_SELLER_SKU_DIFFERS: 1
+## Harte Validierungen vor Import
+- keine doppelten `sku`
+- kein dreistelliges `XW-4xx` mehr
+- keine Wörter `Zusatzstimme`, `ZST`, `ZS` oder `Band` in `title_full`, `title_short`, `code_short`
+- Markenregeln für XW-1/2/3/40/45 erfüllt
+- alle XW-1xx.* und XW-2xx.* in Kategorie `Zusatzstimme`
+- Formatvarianten mit vorhandener Basis-SKU haben identische Titel
+
+Durchgesetzt von `src/xw_office/services/product_hub/master_seed_v2_validate.py` und
+`tests/unit/test_master_seed_v2_validate.py`. Eine dokumentierte Ausnahme: `XW-017`
+(`record_state=REVIEW`) verletzt die Wortregel in `code_short`
+(`ZUSATZSTIMME_INDIVIDUELL_P`) — als bereits markierter Review-Fall blockiert das nicht
+den Import der anderen 914 Zeilen, wird aber weiterhin als bekanntes Problem gemeldet
+und ist in `XW_Product_Hub_Review_Conflicts_2026-09-17.csv` gelistet.
+
+## V1 -> V2 (2026-09-17)
+V1 (972 Zeilen, flach importiert) wurde vollständig aus der Produktionsdatenbank
+entfernt und durch V2 ersetzt — inklusive angewandter kuratierter Gruppierung (statt
+weiterhin flach) und importierter SKU-Aliase. Details, genaue Vorher/Nachher-Counts und
+der Replace-Workflow: `docs/product_hub/PROGRESS.md`.

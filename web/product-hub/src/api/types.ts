@@ -35,6 +35,71 @@ export interface ProductDetail extends ProductListItem {
   attributes: Record<string, unknown>;
 }
 
+/** One channel's aggregated status for a product/variant row - see catalog_list.py's
+ * `_channel_state`. "not_applicable" is a deliberate, non-error state (e.g. a
+ * sevdesk-only shipping line item was never meant to have a Wix listing). */
+export type ChannelState = "synced" | "error" | "pending" | "not_applicable";
+
+/** One variant row inside a ParentProductListItem's expandable section. Mirrors
+ * ProductVariantSummaryOut / catalog_list.VariantSummary. */
+export interface ProductVariantSummary {
+  id: string;
+  sku: string;
+  name: string | null;
+  format: string | null;
+  ensemble: string | null;
+  scoring: string | null;
+  instrument: string | null;
+  is_default: boolean;
+  active: boolean;
+  price_net: string | null;
+  price_gross: string | null;
+  vat_percent: string | null;
+  currency: string | null;
+  stock: number | null;
+  wix_state: ChannelState;
+  sevdesk_state: ChannelState;
+  amazon_state: ChannelState;
+}
+
+/** The product list's main row shape ("Product List V2: expandable variants") - one
+ * row per fachliches Parent-Produkt; curated grouping already consolidates format/
+ * ensemble/scoring variants into a single Product with several ProductVariant rows,
+ * this is the read model for that. Mirrors ParentProductListItem /
+ * catalog_list.ParentProductSummary. Replaces the old flat ProductListItem shape as
+ * the `/products` list endpoint's response. */
+export interface ParentProductListItem {
+  id: string;
+  display_sku: string;
+  name: string;
+  title_short: string | null;
+  category: string | null;
+  brand_name: string | null;
+  product_type: string;
+  status: string;
+  active: boolean;
+  variant_count: number;
+  formats: string[];
+  ensembles: string[];
+  scorings: string[];
+  instruments: string[];
+  price_net_min: string | null;
+  price_net_max: string | null;
+  price_gross_min: string | null;
+  price_gross_max: string | null;
+  currency: string | null;
+  stock_total: number | null;
+  tags: string[];
+  wix_state: ChannelState;
+  sevdesk_state: ChannelState;
+  amazon_state: ChannelState;
+  content_status: string | null;
+  review_required: boolean;
+  row_version: number;
+  updated_at: string;
+  variants: ProductVariantSummary[];
+}
+
 export interface ProductVariant {
   id: string;
   product_id: string;
