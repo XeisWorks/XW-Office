@@ -152,6 +152,7 @@ class ProductAssetOut(BaseModel):
     size_bytes: int | None = None
     source_channel: str | None = None
     source_external_id: str | None = None
+    source_url: str | None = None
     public_share_allowed: bool
     health_status: str
     last_checked_at: datetime.datetime | None = None

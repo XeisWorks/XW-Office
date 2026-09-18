@@ -12,6 +12,20 @@ function existingBulletPoints(product: ProductDetail): string[] {
   return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string") : [];
 }
 
+function isWixProductImage(asset: {
+  role: string;
+  storage_kind: string;
+  source_channel: string | null;
+  uri: string;
+}): boolean {
+  return (
+    (asset.role === "COVER" || asset.role === "GALLERY_IMAGE") &&
+    asset.storage_kind === "WIX_MEDIA" &&
+    asset.source_channel === "wix" &&
+    /^https:\/\//i.test(asset.uri)
+  );
+}
+
 interface ProductDetailPageProps {
   onUnauthorized: () => void;
 }
@@ -443,7 +457,23 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
                 empty={!assets.loading && !assets.error && (assets.data?.length ?? 0) === 0}
               />
               {assets.data && assets.data.length > 0 && (
-                <table className="data-table">
+                <>
+                  {assets.data.some(isWixProductImage) && (
+                    <div className="product-image-grid" aria-label="Wix Produktbilder">
+                      {assets.data.filter(isWixProductImage).map((asset) => (
+                        <figure key={asset.id} className="product-image-card">
+                          <img
+                            src={asset.source_url ?? asset.uri}
+                            alt={asset.role === "COVER" ? "Produkt-Hauptbild" : "Produkt-Zusatzbild"}
+                            loading="lazy"
+                            referrerPolicy="no-referrer"
+                          />
+                          <figcaption>{asset.role === "COVER" ? "Hauptbild" : "Zusatzbild"}</figcaption>
+                        </figure>
+                      ))}
+                    </div>
+                  )}
+                  <table className="data-table">
                   <thead>
                     <tr>
                       <th>Rolle</th>
@@ -468,7 +498,8 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                  </table>
+                </>
               )}
             </>
           )}

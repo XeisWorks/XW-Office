@@ -120,7 +120,7 @@ export interface ProductAsset {
   id: string;
   product_id: string;
   variant_id: string | null;
-  role: "COVER" | "SAMPLE_SCORE" | "PRINT_PDF" | "PREVIEW_PDF" | "AUDIO" | "DOWNLOAD" | "OTHER";
+  role: "COVER" | "GALLERY_IMAGE" | "SAMPLE_SCORE" | "PRINT_PDF" | "PREVIEW_PDF" | "AUDIO" | "DOWNLOAD" | "OTHER";
   sort_order: number;
   storage_kind: "OBJECT_STORAGE" | "NETWORK_PATH" | "WIX_MEDIA" | "EXTERNAL_URL";
   uri: string;
@@ -128,6 +128,7 @@ export interface ProductAsset {
   size_bytes: number | null;
   source_channel: string | null;
   source_external_id: string | null;
+  source_url: string | null;
   public_share_allowed: boolean;
   health_status: "unknown" | "ok" | "missing" | "unreadable" | "checksum_mismatch" | "stale";
   last_checked_at: string | null;
