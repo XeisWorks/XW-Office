@@ -34,6 +34,7 @@ from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.product_hub.outbox_worker import OutboxWorker
 from xw_office.services.product_hub.sharing import SharingService
 from xw_office.services.product_hub.wix_push import WixPushService, wix_push_handler
+from xw_office.services.product_hub.wix_snapshot import WixSnapshotService
 from xw_office.services.wix.product_details_client import WixProductDetailsClient
 from xw_office.web.routers.inventory import build_inventory_router
 from xw_office.web.routers.conflicts import build_conflicts_router
@@ -295,6 +296,11 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
     _conflict_service = (
         ConflictWizardService(_session_factory) if _session_factory is not None else None
     )
+    _wix_snapshot_service = (
+        WixSnapshotService(_session_factory, wix_client=_wix_client)
+        if _session_factory is not None
+        else None
+    )
 
     if (
         _outbox_worker is not None
@@ -335,12 +341,17 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
         assert _conflict_service is not None
         return _conflict_service
 
+    def get_wix_snapshot_service() -> WixSnapshotService:
+        assert _wix_snapshot_service is not None
+        return _wix_snapshot_service
+
     def conflict_channel_apply_enabled() -> bool:
         return resolved.conflict_channel_apply_enabled and resolved.sync_push_enabled
 
     app.include_router(
         build_conflicts_router(
             get_conflict_service,
+            get_wix_snapshot_service,
             require_conflict_scan_enabled,
             require_product_hub_edit_enabled,
             conflict_channel_apply_enabled,

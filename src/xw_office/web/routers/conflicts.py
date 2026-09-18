@@ -13,6 +13,7 @@ from xw_office.services.product_hub.conflicts.service import (
     StaleConflictError,
     UnsupportedConflictAction,
 )
+from xw_office.services.product_hub.wix_snapshot import WixSnapshotService
 from xw_office.web.schemas.conflicts import (
     ConflictActionOut,
     ConflictCaseDetailOut,
@@ -24,6 +25,7 @@ from xw_office.web.schemas.conflicts import (
     ConflictScanOut,
     ConflictSnoozeRequest,
     ConflictSummaryOut,
+    WixSnapshotScanOut,
     ConflictObservationOut,
     VersionedRequest,
 )
@@ -31,6 +33,7 @@ from xw_office.web.schemas.conflicts import (
 
 def build_conflicts_router(
     get_service: Callable[[], ConflictWizardService],
+    get_wix_snapshot_service: Callable[[], WixSnapshotService],
     require_scan_enabled: Callable[[], None],
     require_edit_enabled: Callable[[], None],
     channel_apply_enabled: Callable[[], bool],
@@ -106,6 +109,17 @@ def build_conflicts_router(
         product_id: uuid.UUID | None = None, service: ConflictWizardService = Depends(get_service)
     ) -> dict[str, object]:
         return service.scan_low_level_conflicts(product_id=product_id)
+
+    @router.post(
+        "/scan/wix", response_model=WixSnapshotScanOut, dependencies=[Depends(require_scan_enabled)]
+    )
+    def scan_wix(
+        service: ConflictWizardService = Depends(get_service),
+    ) -> dict[str, object]:
+        """Fetch only mapped Wix products, then materialise their conflict cases."""
+        source = get_wix_snapshot_service().run()
+        scan_result = service.scan_low_level_conflicts()
+        return {**scan_result, "source": source.as_dict()}
 
     @router.post(
         "/{case_id}/start",

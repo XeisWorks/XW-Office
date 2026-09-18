@@ -847,6 +847,69 @@ class ProductHubRepository:
             session.flush()
             return asset
 
+    def sync_wix_image_assets(
+        self, product_id: uuid.UUID, *, images: list[dict[str, object]]
+    ) -> tuple[int, int, int]:
+        """Idempotently mirror Wix image metadata for one mapped product.
+
+        Bytes are deliberately not downloaded: ``uri`` and ``source_url`` remain Wix
+        URLs. Removed Wix images are marked stale, not deleted, to retain provenance.
+        """
+        with self._scope() as session:
+            existing = {
+                str(asset.source_external_id): asset
+                for asset in session.scalars(
+                    select(ProductAsset).where(
+                        ProductAsset.product_id == product_id,
+                        ProductAsset.source_channel == "wix",
+                    )
+                ).all()
+                if asset.source_external_id
+            }
+            seen: set[str] = set()
+            created = updated = stale = 0
+            for image in images:
+                external_id = str(image["external_id"])
+                seen.add(external_id)
+                role = str(image["role"])
+                url = str(image["url"])
+                sort_order = int(str(image["sort_order"]))
+                asset = existing.get(external_id)
+                if asset is None:
+                    session.add(
+                        ProductAsset(
+                            id=uuid.uuid4(), product_id=product_id, role=role,
+                            sort_order=sort_order, storage_kind="WIX_MEDIA", uri=url,
+                            source_channel="wix", source_external_id=external_id,
+                            source_url=url, public_share_allowed=False, health_status="unknown",
+                        )
+                    )
+                    created += 1
+                    continue
+                changed = any(
+                    getattr(asset, field) != value
+                    for field, value in {
+                        "role": role, "sort_order": sort_order, "storage_kind": "WIX_MEDIA",
+                        "uri": url, "source_url": url, "health_status": "unknown",
+                    }.items()
+                )
+                if changed:
+                    asset.role = role
+                    asset.sort_order = sort_order
+                    asset.storage_kind = "WIX_MEDIA"
+                    asset.uri = url
+                    asset.source_url = url
+                    asset.health_status = "unknown"
+                    asset.row_version += 1
+                    updated += 1
+            for external_id, asset in existing.items():
+                if external_id not in seen and asset.health_status != "stale":
+                    asset.health_status = "stale"
+                    asset.row_version += 1
+                    stale += 1
+            session.flush()
+            return created, updated, stale
+
     # -- categories / tags ---------------------------------------------------------
 
     def get_or_create_category(self, *, code: str, name: str) -> Category:
@@ -1048,6 +1111,46 @@ class ProductHubRepository:
                 ChannelMapping.internal_entity_id.in_(entity_ids),
             )
             return list(session.scalars(stmt).all())
+
+    def list_channel_mappings_by_channel(
+        self, *, channel: str, entity_type: str = "product"
+    ) -> list[ChannelMapping]:
+        """Return stable mappings for a channel-owned source scan.
+
+        The Wix snapshot worker starts from mappings rather than creating canonical
+        products from every remote object. This keeps source ingestion read-only.
+        """
+        with self._scope() as session:
+            stmt = (
+                select(ChannelMapping)
+                .where(ChannelMapping.channel == channel, ChannelMapping.entity_type == entity_type)
+                .order_by(ChannelMapping.external_id)
+            )
+            return list(session.scalars(stmt).all())
+
+    def record_channel_pull(
+        self,
+        mapping_id: uuid.UUID,
+        *,
+        external_revision: str | None,
+        payload_hash: str,
+        external_updated_at: datetime.datetime | None = None,
+    ) -> ChannelMapping:
+        """Record a successful read without implying that anything was pushed."""
+        with self._scope() as session:
+            mapping = session.get(ChannelMapping, mapping_id)
+            if mapping is None:
+                raise KeyError(f"Channel mapping {mapping_id} not found")
+            now = datetime.datetime.now(datetime.timezone.utc)
+            mapping.external_revision = external_revision or None
+            mapping.source_payload_hash = payload_hash
+            mapping.last_pulled_at = now
+            mapping.last_external_updated_at = external_updated_at
+            mapping.last_success_at = now
+            mapping.sync_status = "synced"
+            mapping.last_error = None
+            session.flush()
+            return mapping
 
     def reparent_channel_mapping(
         self, mapping_id: uuid.UUID, *, internal_entity_id: uuid.UUID

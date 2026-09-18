@@ -5,8 +5,8 @@ writes everything into staging tables (``models/product_hub_import.py``) for lat
 review/matching. **Never writes to Wix** and never touches a canonical product-hub
 table directly — committing staged rows is a separate, explicit step (PR06).
 
-Media rule (confirmed architecture decision, see docs/product_hub/): the first Wix
-media item is the product's cover, every subsequent item is a sample score.
+Media rule: product images are preserved as product images (first = cover, subsequent
+= gallery). Non-image media can still be reviewed as sample-score candidates in staging.
 """
 from __future__ import annotations
 
@@ -138,8 +138,12 @@ class WixProductImporter:
 
     def _stage_media(self, staging_product_id: uuid.UUID, raw_product: dict[str, Any]) -> int:
         media_items = _extract_media_items(raw_product)
+        image_index = 0
         for index, item in enumerate(media_items):
-            role = "COVER" if index == 0 else "SAMPLE_SCORE"
+            is_image = _is_image_item(item)
+            role = "COVER" if is_image and image_index == 0 else (
+                "GALLERY_IMAGE" if is_image else "SAMPLE_SCORE"
+            )
             self._import_repo.add_asset(
                 staging_product_id,
                 role=role,
@@ -147,6 +151,8 @@ class WixProductImporter:
                 source_url=_media_url(item),
                 sort_order=index,
             )
+            if is_image:
+                image_index += 1
         return len(media_items)
 
     def _stage_variants(
@@ -224,6 +230,15 @@ def _media_url(item: dict[str, Any]) -> str:
         if url:
             return url
     return str(item.get("url") or "").strip()
+
+
+def _is_image_item(item: dict[str, Any]) -> bool:
+    if isinstance(item.get("image"), dict):
+        return True
+    return str(item.get("mediaType") or item.get("type") or "").strip().lower() in {
+        "image",
+        "photo",
+    }
 
 
 def _default_sku_and_name(

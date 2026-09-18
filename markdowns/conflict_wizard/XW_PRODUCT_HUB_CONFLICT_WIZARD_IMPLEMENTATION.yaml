@@ -235,6 +235,20 @@ normalization:
     - infer_identifier_from_untrusted_text
     - fuzzy_merge_products
 
+source_snapshots:
+  wix_mapped_products:
+    status: implemented
+    read_only: true
+    selection: existing_channel_mapping_only
+    archives: [raw_product, variants, inventory]
+    product_images:
+      first_image: COVER
+      subsequent_images: GALLERY_IMAGE
+      storage: wix_url_metadata_only
+      removed_remote_images: mark_stale_never_delete
+    conflict_fields: [name, description, visible]
+    external_writes: forbidden
+
 classification:
   critical:
     - DUPLICATE_SKU
@@ -405,6 +419,7 @@ api:
     - "GET /api/v1/conflicts/summary"
     - "GET /api/v1/conflicts/{id}"
     - "POST /api/v1/conflicts/scan"
+    - "POST /api/v1/conflicts/scan/wix"
     - "POST /api/v1/conflicts/{id}/start"
     - "POST /api/v1/conflicts/{id}/decision"
     - "POST /api/v1/conflicts/{id}/preview"
@@ -464,7 +479,7 @@ rollout:
   - id: CW02
     name: normalizer_detector
     writes: conflict_cases_only
-    status: implemented_for_existing_sync_conflict_signals
+    status: implemented_with_mapped_wix_source_snapshots
   - id: CW03
     name: wizard_read_ui
     writes: false

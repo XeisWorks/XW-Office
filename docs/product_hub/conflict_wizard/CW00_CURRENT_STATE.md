@@ -18,6 +18,13 @@ Stand: 2026-09-17
 
 ## Bewusste Grenzen
 
+- Der Wix-Quellscan liest ausschließlich bereits gemappte Produkte read-only ein,
+  archiviert geänderte Payloads und führt `name`, `description` und `visible` in die
+  technische Konfliktliste über. sevdesk/Amazon bleiben bei ihren jeweiligen Importern.
+- Wix-Produktbilder sind Canonical-Asset-Metadaten: erstes Bild `COVER`, weitere
+  `GALLERY_IMAGE`, jeweils als Wix-URL ohne Download. Entfernte Bilder werden als
+  `stale` markiert statt gelöscht.
+
 - Der erste Scanner materialisiert vorhandene, offene `sync_conflict`-Signale. Direkte
   Vollimporte von Wix/sevdesk/Amazon gehören weiterhin den jeweiligen Importern.
 - Sichere interne Writes sind zunächst auf direkte Product-Felder begrenzt. Preis,

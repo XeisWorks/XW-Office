@@ -23,6 +23,18 @@ Zusätzlicher PR00–PR14-Befund: Die lokale `.venv` konnte durch einen alten
 Editable-Install weiterhin `XW-Studio` statt dieses Checkouts importieren. `pytest`
 setzt deshalb nun über `pyproject.toml` zuverlässig `src` voran.
 
+## CW02B – Wix source snapshots and product images (2026-09-18)
+
+Der Wizard kann jetzt über `POST /api/v1/conflicts/scan/wix` (und den Button **Wix
+einlesen & vergleichen**) ausschließlich vorhandene Wix-Produktmappings read-only
+einlesen. Pro Mapping werden Rohprodukt, Varianten und Bestand versionssicher
+archiviert; unveränderte Payloads erzeugen keinen Duplikat-Snapshot. Produktbilder
+werden als Asset-Metadaten übernommen: erstes Bild `COVER`, weitere `GALLERY_IMAGE`,
+jeweils mit Wix-URL und ohne Download oder Wix-Write. Nicht mehr in Wix vorhandene Bilder
+werden als `stale` erhalten. Die sicheren Felder `name`, `description` und `visible`
+werden idempotent zu technischen Konflikten und dann Wizard-Cases materialisiert.
+Externe Writes bleiben weiter standardmäßig deaktiviert.
+
 ## Product List V2: parent products with expandable variants (2026-09-17)
 
 Follow-up to the Master Seed V2 replace below, from `docs/CLAUDE_CODE_PROMPT_Product_List_Parent_Variants_V2.md`.

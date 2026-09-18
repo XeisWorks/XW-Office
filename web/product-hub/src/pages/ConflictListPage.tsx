@@ -28,11 +28,28 @@ export default function ConflictListPage({ onUnauthorized }: { onUnauthorized: (
     }
   }
 
+  async function scanWix() {
+    setMessage("Wix-Produkte und Bilder werden read-only eingelesen â€¦");
+    try {
+      const result = await api.scanWixConflicts();
+      const imageCount = result.source.images_created + result.source.images_updated;
+      const errors = result.source.errors.length ? ` ${result.source.errors.length} Fehler.` : "";
+      setMessage(`${result.source.products_fetched} Wix-Produkte, ${imageCount} Bilder Ã¼bernommen; ${result.cases_created} neue FÃ¤lle.${errors}`);
+      setReload((value) => value + 1);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) onUnauthorized();
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   return (
     <section>
       <div className="list-toolbar">
         <div><h1>Konflikte</h1><p className="hint">Dauerhafte, auditierbare Bereinigungs-Queue</p></div>
-        <button className="primary-button" type="button" onClick={scan}>Jetzt vergleichen</button>
+        <div className="toolbar-actions">
+          <button className="primary-button" type="button" onClick={scanWix}>Wix einlesen & vergleichen</button>
+          <button type="button" onClick={scan}>Nur Queue aktualisieren</button>
+        </div>
       </div>
       {message && <p className="hint">{message}</p>}
       {summary.data && (

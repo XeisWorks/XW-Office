@@ -123,7 +123,7 @@ def test_import_product_without_media_stages_no_assets(
     assert report.assets_staged == 0
 
 
-def test_import_first_media_is_cover_rest_are_sample_score(
+def test_import_first_image_is_cover_and_remaining_images_are_gallery(
     import_repo: ProductHubImportRepository,
 ) -> None:
     raw = {
@@ -150,7 +150,7 @@ def test_import_first_media_is_cover_rest_are_sample_score(
     staged = import_repo.list_staging_products()[0]
     rows = import_repo.list_assets(staged.id)
 
-    assert [row.role for row in rows] == ["COVER", "SAMPLE_SCORE", "SAMPLE_SCORE"]
+    assert [row.role for row in rows] == ["COVER", "GALLERY_IMAGE", "GALLERY_IMAGE"]
     assert rows[0].source_url == "https://example.invalid/cover.jpg"
 
 

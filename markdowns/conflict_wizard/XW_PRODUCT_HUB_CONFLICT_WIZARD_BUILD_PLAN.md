@@ -1065,6 +1065,16 @@ Nur read-only.
 
 Keine Channel Writes.
 
+### CW02B – Wix-Quellsnapshot und Produktbilder
+
+Für bereits über `channel_mapping` zugeordnete Produkte wird Wix read-only eingelesen.
+Der Snapshot archiviert Rohprodukt, Varianten und Bestand nur bei geänderten Payloads.
+Wix-Bilder werden nicht heruntergeladen oder zurückgeschrieben: das erste Bild wird als
+`COVER`, weitere Bilder als `GALLERY_IMAGE` mit Wix-URL und Herkunft gespeichert.
+Verschwundene Remote-Bilder bleiben als `stale` erhalten. Die verifizierbaren Felder
+`name`, `description` und `visible` erzeugen/aktualisieren anschließend `sync_conflict`
+und damit Wizard-Cases. Unzugeordnete Wix-Produkte bleiben bewusst außerhalb dieses Scans.
+
 ## Phase CW03 – Wizard Read UI
 
 - Dashboard

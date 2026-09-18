@@ -90,7 +90,8 @@ prs:
       - category import
       - media provenance
       - first media mapped as COVER
-      - remaining media mapped as SAMPLE_SCORE
+      - subsequent product images mapped as GALLERY_IMAGE
+      - non-image media retained as SAMPLE_SCORE candidates
 
   - id: PR04
     title: sevdesk read importer

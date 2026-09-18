@@ -94,6 +94,24 @@ class ConflictScanOut(BaseModel):
     cases_obsoleted: int
 
 
+class WixSourceSnapshotOut(BaseModel):
+    mappings_seen: int
+    products_fetched: int
+    payloads_archived: int
+    payloads_unchanged: int
+    images_created: int
+    images_updated: int
+    images_marked_stale: int
+    conflicts_created: int
+    conflicts_updated: int
+    conflicts_resolved: int
+    errors: list[str] = Field(default_factory=list)
+
+
+class WixSnapshotScanOut(ConflictScanOut):
+    source: WixSourceSnapshotOut
+
+
 class VersionedRequest(BaseModel):
     expected_row_version: int = Field(ge=1)
 

@@ -129,7 +129,8 @@ imports:
       - manual_review_of_name_similarity
     media_mapping:
       first_product_media: COVER
-      subsequent_product_media: SAMPLE_SCORE
+      subsequent_product_images: GALLERY_IMAGE
+      non_image_media_candidates: SAMPLE_SCORE
       preserve:
         - wix_media_id
         - wix_url
@@ -232,7 +233,7 @@ categories_and_tags:
     sync_internal_tags_as_sevdesk_categories: false
 
 assets:
-  roles: [COVER, SAMPLE_SCORE, PRINT_PDF, PREVIEW_PDF, AUDIO, DOWNLOAD, OTHER]
+  roles: [COVER, GALLERY_IMAGE, SAMPLE_SCORE, PRINT_PDF, PREVIEW_PDF, AUDIO, DOWNLOAD, OTHER]
   storage_kinds: [OBJECT_STORAGE, NETWORK_PATH, WIX_MEDIA, EXTERNAL_URL]
   integrity:
     calculate_checksum: true
@@ -245,7 +246,7 @@ assets:
     browser_download_endpoint: false
     browser_streaming_endpoint: false
   public_share_rules:
-    allow_by_default: [COVER, SAMPLE_SCORE]
+    allow_by_default: [COVER, GALLERY_IMAGE, SAMPLE_SCORE]
     deny_by_default: [PRINT_PDF, AUDIO, DOWNLOAD, OTHER]
 
 improvements:

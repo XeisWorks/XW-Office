@@ -212,6 +212,54 @@ class SyncRepository:
         with self._scope() as session:
             return session.get(SyncConflict, conflict_id)
 
+    def upsert_scanned_conflict(
+        self,
+        *,
+        channel: str,
+        entity_type: str,
+        internal_entity_id: uuid.UUID,
+        field_name: str,
+        hub_value: object | None,
+        external_value: object | None,
+        external_updated_at: datetime.datetime | None = None,
+    ) -> tuple[SyncConflict | None, str]:
+        """Create/update a scanner conflict, or close it after a convergent read."""
+        with self._scope() as session:
+            row = session.scalar(
+                select(SyncConflict).where(
+                    SyncConflict.channel == channel,
+                    SyncConflict.entity_type == entity_type,
+                    SyncConflict.internal_entity_id == internal_entity_id,
+                    SyncConflict.field_name == field_name,
+                    SyncConflict.resolved_at.is_(None),
+                )
+            )
+            now = datetime.datetime.now(datetime.timezone.utc)
+            if hub_value == external_value:
+                if row is not None:
+                    row.resolution = "scanner_equal"
+                    row.resolved_by = "wix-snapshot"
+                    row.resolved_at = now
+                    session.flush()
+                    return row, "resolved"
+                return None, "equal"
+            if row is None:
+                row = SyncConflict(
+                    id=uuid.uuid4(), channel=channel, entity_type=entity_type,
+                    internal_entity_id=internal_entity_id, field_name=field_name,
+                    hub_value=hub_value, external_value=external_value, detected_at=now,
+                    external_updated_at=external_updated_at,
+                )
+                session.add(row)
+                session.flush()
+                return row, "created"
+            row.hub_value = hub_value
+            row.external_value = external_value
+            row.detected_at = now
+            row.external_updated_at = external_updated_at
+            session.flush()
+            return row, "updated"
+
     def get_open_conflict(
         self, *, channel: str, entity_type: str, internal_entity_id: uuid.UUID, field_name: str
     ) -> SyncConflict | None:
@@ -285,6 +333,37 @@ class SyncRepository:
                 .order_by(ExternalPayloadArchive.fetched_at.desc())
             )
             return session.scalars(stmt).first()
+
+    def archive_external_payload_if_changed(
+        self,
+        *,
+        channel: str,
+        entity_type: str,
+        external_id: str,
+        payload: Mapping[str, object],
+        payload_hash: str,
+    ) -> tuple[ExternalPayloadArchive, bool]:
+        """Append a source snapshot only if the canonical payload actually changed."""
+        with self._scope() as session:
+            latest = session.scalars(
+                select(ExternalPayloadArchive)
+                .where(
+                    ExternalPayloadArchive.channel == channel,
+                    ExternalPayloadArchive.entity_type == entity_type,
+                    ExternalPayloadArchive.external_id == external_id,
+                )
+                .order_by(ExternalPayloadArchive.fetched_at.desc())
+            ).first()
+            if latest is not None and latest.payload_hash == payload_hash:
+                return latest, False
+            row = ExternalPayloadArchive(
+                id=uuid.uuid4(), channel=channel, entity_type=entity_type,
+                external_id=external_id, payload=payload, payload_hash=payload_hash,
+                fetched_at=datetime.datetime.now(datetime.timezone.utc),
+            )
+            session.add(row)
+            session.flush()
+            return row, True
 
     def get_sync_cursor(self, *, channel: str, stream: str) -> SyncCursor | None:
         with self._scope() as session:

@@ -29,7 +29,7 @@ enums:
   product_status: [draft, review, live, archived]
   product_type: [physical, digital, hybrid]
   identifier_scheme: [ISBN13, ISBN10, EAN, UPC, ASIN, FNSKU, BARCODE, LEGACY_SKU, VLB_ID, CUSTOM]
-  asset_role: [COVER, SAMPLE_SCORE, PRINT_PDF, PREVIEW_PDF, AUDIO, DOWNLOAD, OTHER]
+  asset_role: [COVER, GALLERY_IMAGE, SAMPLE_SCORE, PRINT_PDF, PREVIEW_PDF, AUDIO, DOWNLOAD, OTHER]
   asset_storage_kind: [OBJECT_STORAGE, NETWORK_PATH, WIX_MEDIA, EXTERNAL_URL]
   asset_health: [unknown, ok, missing, unreadable, checksum_mismatch, stale]
   improvement_status: [open, planned, resolved, wont_fix]
