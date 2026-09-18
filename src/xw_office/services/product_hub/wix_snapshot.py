@@ -74,6 +74,10 @@ class WixSnapshotService:
 
     def run(self) -> WixSnapshotReport:
         report = WixSnapshotReport()
+        credential_check = getattr(self._wix, "has_credentials", None)
+        if callable(credential_check) and not credential_check():
+            report.errors.append("Wix credentials are not configured for the Product Hub service")
+            return report
         mappings = self._products.list_channel_mappings_by_channel(channel="wix")
         report.mappings_seen = len(mappings)
         for mapping in mappings:

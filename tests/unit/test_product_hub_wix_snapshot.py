@@ -18,6 +18,9 @@ class _FakeWix:
     def __init__(self, raw: dict[str, Any]) -> None:
         self.raw = raw
 
+    def has_credentials(self) -> bool:
+        return True
+
     def get_product_raw(self, product_id: str) -> dict[str, Any] | None:
         return self.raw if product_id == "wix-1" else None
 
@@ -103,3 +106,14 @@ def test_snapshot_marks_removed_wix_image_stale_and_closes_converged_field_confl
     assert report.conflicts_resolved == 1
     assert SyncRepository(factory).list_open_sync_conflicts(channel="wix") == []
     assert [row.health_status for row in products.list_assets(product.id)] == ["unknown", "stale"]
+
+
+def test_snapshot_reports_missing_wix_credentials_once(factory: sessionmaker[Session]) -> None:
+    class _NoCredentialsWix(_FakeWix):
+        def has_credentials(self) -> bool:
+            return False
+
+    report = WixSnapshotService(factory, wix_client=_NoCredentialsWix({})).run()
+
+    assert report.mappings_seen == 0
+    assert report.errors == ["Wix credentials are not configured for the Product Hub service"]

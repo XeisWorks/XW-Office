@@ -24,6 +24,8 @@ Stand: 2026-09-17
 - Wix-Produktbilder sind Canonical-Asset-Metadaten: erstes Bild `COVER`, weitere
   `GALLERY_IMAGE`, jeweils als Wix-URL ohne Download. Entfernte Bilder werden als
   `stale` markiert statt gelöscht.
+- Der Scan endet ohne Einzelobjekt-Fehler, wenn `WIX_API_KEY` oder `WIX_SITE_ID` im
+  Service fehlen; diese Secrets sind Voraussetzung für den produktiven Erstimport.
 
 - Der erste Scanner materialisiert vorhandene, offene `sync_conflict`-Signale. Direkte
   Vollimporte von Wix/sevdesk/Amazon gehören weiterhin den jeweiligen Importern.

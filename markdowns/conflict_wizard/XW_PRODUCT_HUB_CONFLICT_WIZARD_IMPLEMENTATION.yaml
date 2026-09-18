@@ -248,6 +248,7 @@ source_snapshots:
       removed_remote_images: mark_stale_never_delete
     conflict_fields: [name, description, visible]
     external_writes: forbidden
+    required_service_secrets: [WIX_API_KEY, WIX_SITE_ID]
 
 classification:
   critical:
