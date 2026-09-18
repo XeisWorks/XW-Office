@@ -94,8 +94,16 @@ class WixSnapshotService:
         raw = self._wix.get_product_raw(external_id)
         if raw is None:
             raise RuntimeError("product detail fetch returned nothing")
-        variants = self._wix.query_variants(external_id)
-        inventory = self._wix.query_inventory(external_id)
+        # A Catalog V1 shop returns product details/media through its V1 product
+        # endpoint, but has no compatible V3 variants/inventory query endpoints.
+        # Avoid four guaranteed 404 probes per product; V1 stock/inline variants
+        # remain part of the raw product payload and are therefore still archived.
+        if _is_catalog_v1(self._wix):
+            variants: list[dict[str, Any]] = []
+            inventory: list[dict[str, Any]] = []
+        else:
+            variants = self._wix.query_variants(external_id)
+            inventory = self._wix.query_inventory(external_id)
         payload: dict[str, object] = {
             "product": raw,
             "variants": variants,
@@ -187,3 +195,12 @@ def _updated_at(raw: dict[str, Any]) -> datetime.datetime | None:
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=datetime.timezone.utc)
     except ValueError:
         return None
+
+
+def _is_catalog_v1(source: WixSnapshotSource) -> bool:
+    """Detect V1 without coupling test doubles to Wix's concrete client type."""
+    detect_version = getattr(source, "detect_catalog_version", None)
+    if not callable(detect_version):
+        return False
+    version = detect_version()
+    return str(getattr(version, "value", version)).lower() == "v1"

@@ -117,3 +117,36 @@ def test_snapshot_reports_missing_wix_credentials_once(factory: sessionmaker[Ses
 
     assert report.mappings_seen == 0
     assert report.errors == ["Wix credentials are not configured for the Product Hub service"]
+
+
+def test_catalog_v1_snapshot_avoids_v3_variant_and_inventory_probes(
+    factory: sessionmaker[Session],
+) -> None:
+    class _V1Wix(_FakeWix):
+        def __init__(self) -> None:
+            super().__init__({"id": "wix-1", "name": "Product", "visible": True})
+            self.variant_calls = self.inventory_calls = 0
+
+        def detect_catalog_version(self) -> str:
+            return "v1"
+
+        def query_variants(self, product_id: str) -> list[dict[str, Any]]:
+            self.variant_calls += 1
+            return super().query_variants(product_id)
+
+        def query_inventory(self, product_id: str) -> list[dict[str, Any]]:
+            self.inventory_calls += 1
+            return super().query_inventory(product_id)
+
+    products = ProductHubRepository(factory)
+    product, _ = products.create_product(sku="XW-V1", name="Product")
+    products.create_channel_mapping(
+        channel="wix", entity_type="product", internal_entity_id=product.id, external_id="wix-1"
+    )
+    wix = _V1Wix()
+
+    report = WixSnapshotService(factory, wix_client=wix).run()
+
+    assert report.products_fetched == 1
+    assert wix.variant_calls == 0
+    assert wix.inventory_calls == 0
