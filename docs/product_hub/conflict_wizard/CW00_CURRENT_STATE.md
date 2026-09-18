@@ -26,6 +26,9 @@ Stand: 2026-09-17
   `stale` markiert statt gelöscht.
 - Der Scan endet ohne Einzelobjekt-Fehler, wenn `WIX_API_KEY` oder `WIX_SITE_ID` im
   Service fehlen; diese Secrets sind Voraussetzung für den produktiven Erstimport.
+- Historische Wix-Mappings dürfen die Exportform `product_<GUID>` enthalten. Der
+  Wix-Client normalisiert sie erst an der API-Grenze auf die von Wix erwartete GUID;
+  die ursprüngliche Mapping-ID bleibt als Provenienz erhalten.
 
 - Der erste Scanner materialisiert vorhandene, offene `sync_conflict`-Signale. Direkte
   Vollimporte von Wix/sevdesk/Amazon gehören weiterhin den jeweiligen Importern.

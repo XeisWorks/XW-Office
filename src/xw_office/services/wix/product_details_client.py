@@ -38,6 +38,17 @@ _RETRY_ATTEMPTS = 3
 _RETRY_BACKOFF_SEC = 0.4
 _BULK_CHUNK = 100  # max products per bulk request
 
+
+def _api_product_id(value: str) -> str:
+    """Return the GUID expected by Wix Stores API endpoints.
+
+    Wix exports and historic Product-Hub mappings commonly use ``product_<guid>``
+    while the V1/V3 REST endpoints accept only the GUID.  Keep the mapping's original
+    external ID for provenance; normalize only at the HTTP boundary.
+    """
+    product_id = str(value or "").strip()
+    return product_id.removeprefix("product_")
+
 # ---------------------------------------------------------------------------
 # Data models
 # ---------------------------------------------------------------------------
@@ -354,7 +365,7 @@ class WixProductDetailsClient:
 
     def get_product(self, product_id: str) -> WixProductDetail | None:
         """Fetch full product details for one product by ID."""
-        pid = str(product_id or "").strip()
+        pid = _api_product_id(product_id)
         if not pid or not self.has_credentials():
             return None
 
@@ -391,7 +402,7 @@ class WixProductDetailsClient:
         cover, see docs/product_hub/), so this is a read-only, additive sibling method —
         it does not change ``get_product``'s behavior or its callers.
         """
-        pid = str(product_id or "").strip()
+        pid = _api_product_id(product_id)
         if not pid or not self.has_credentials():
             return None
 
@@ -424,7 +435,7 @@ class WixProductDetailsClient:
         ``[]`` for a no-options product or a non-V3 site; callers should then fall back
         to the product's own single implicit variant (see ``get_product_raw``/``sku``).
         """
-        pid = str(product_id or "").strip()
+        pid = _api_product_id(product_id)
         if not pid or not self.has_credentials():
             return []
         headers = self._headers()
@@ -452,7 +463,7 @@ class WixProductDetailsClient:
 
     def query_inventory(self, product_id: str) -> list[dict[str, Any]]:
         """Return raw Inventory V3 items (variant/location-based) for one product."""
-        pid = str(product_id or "").strip()
+        pid = _api_product_id(product_id)
         if not pid or not self.has_credentials():
             return []
         headers = self._headers()
@@ -586,7 +597,7 @@ class WixProductDetailsClient:
 
         Returns ``(success, error_message, http_status_code)``.
         """
-        pid = str(product_id or "").strip()
+        pid = _api_product_id(product_id)
         if not pid:
             raise ValueError("product_id fehlt")
         if not self.has_credentials():
@@ -620,7 +631,7 @@ class WixProductDetailsClient:
         For v3 sites: uses ``POST /bulkUpdateProperty`` (up to 100 per call).
         For v1 sites: falls back to individual PATCH calls.
         """
-        ids = [str(pid or "").strip() for pid in product_ids if str(pid or "").strip()]
+        ids = [_api_product_id(pid) for pid in product_ids if _api_product_id(pid)]
         if not ids:
             return UpdateResult()
         if not self.has_credentials():
@@ -645,7 +656,7 @@ class WixProductDetailsClient:
 
         ``adjust_type``: ``"PERCENTAGE"`` or ``"AMOUNT"``.
         """
-        ids = [str(pid or "").strip() for pid in product_ids if str(pid or "").strip()]
+        ids = [_api_product_id(pid) for pid in product_ids if _api_product_id(pid)]
         if not ids:
             return UpdateResult()
         if not self.has_credentials():
@@ -707,7 +718,7 @@ class WixProductDetailsClient:
 
     def _update_single(self, product_id: str, field: str, value: Any) -> UpdateResult:
         """Route a single-product field update to the correct version handler."""
-        pid = str(product_id or "").strip()
+        pid = _api_product_id(product_id)
         if not pid:
             raise ValueError("product_id fehlt")
         if not self.has_credentials():

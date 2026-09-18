@@ -322,6 +322,28 @@ def test_get_product_raw_returns_full_payload_including_media() -> None:
     assert result["media"]["items"][0]["id"] == "m1"
 
 
+def test_get_product_raw_strips_wix_export_product_prefix_for_api_request() -> None:
+    raw = _make_product("01234567-89ab-cdef-0123-456789abcdef")
+    seen_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        if "query" in str(request.url):
+            return httpx.Response(428, json={"message": "CATALOG_V1"})
+        return httpx.Response(200, json={"product": raw})
+
+    original = httpx.Client
+    httpx.Client = _with_transport(httpx.MockTransport(handler))  # type: ignore[assignment]
+    try:
+        result = _client().get_product_raw("product_01234567-89ab-cdef-0123-456789abcdef")
+    finally:
+        httpx.Client = original  # type: ignore[assignment]
+
+    assert result is not None
+    assert any("/products/01234567-89ab-cdef-0123-456789abcdef" in url for url in seen_urls)
+    assert all("product_01234567" not in url for url in seen_urls)
+
+
 def test_get_product_raw_returns_none_without_credentials() -> None:
     assert _client_no_creds().get_product_raw("any-id") is None
 
