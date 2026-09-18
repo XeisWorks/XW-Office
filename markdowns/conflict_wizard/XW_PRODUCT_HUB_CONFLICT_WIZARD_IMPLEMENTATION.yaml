@@ -425,7 +425,7 @@ api:
     - "GET /api/v1/conflicts/summary"
     - "GET /api/v1/conflicts/{id}"
     - "POST /api/v1/conflicts/scan"
-    - "POST /api/v1/conflicts/scan/wix"
+    - "POST /api/v1/conflicts/scan/wix (inkrementell; ?force=true für Vollabgleich)"
     - "POST /api/v1/conflicts/{id}/start"
     - "POST /api/v1/conflicts/{id}/decision"
     - "POST /api/v1/conflicts/{id}/preview"

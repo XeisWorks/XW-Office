@@ -28,13 +28,14 @@ export default function ConflictListPage({ onUnauthorized }: { onUnauthorized: (
     }
   }
 
-  async function scanWix() {
-    setMessage("Wix-Produkte und Bilder werden read-only eingelesen â€¦");
+  async function scanWix(force = false) {
+    setMessage(force ? "Vollständiger Wix-Abgleich läuft read-only …" : "Wix-Änderungen werden read-only abgeglichen …");
     try {
-      const result = await api.scanWixConflicts();
+      const result = await api.scanWixConflicts(force);
       const imageCount = result.source.images_created + result.source.images_updated;
       const errors = result.source.errors.length ? ` ${result.source.errors.length} Fehler.` : "";
-      setMessage(`${result.source.products_fetched} Wix-Produkte, ${imageCount} Bilder Ã¼bernommen; ${result.cases_created} neue FÃ¤lle.${errors}`);
+      const mode = result.source.full_refresh ? "Vollabgleich" : "Inkrementeller Abgleich";
+      setMessage(`${mode}: ${result.source.catalog_products_indexed} im Wix-Index, ${result.source.products_fetched} Details geladen, ${result.source.products_cached} unverändert übersprungen, ${imageCount} Bilder übernommen; ${result.cases_created} neue Fälle.${errors}`);
       setReload((value) => value + 1);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) onUnauthorized();
@@ -47,7 +48,8 @@ export default function ConflictListPage({ onUnauthorized }: { onUnauthorized: (
       <div className="list-toolbar">
         <div><h1>Konflikte</h1><p className="hint">Dauerhafte, auditierbare Bereinigungs-Queue</p></div>
         <div className="toolbar-actions">
-          <button className="primary-button" type="button" onClick={scanWix}>Wix einlesen & vergleichen</button>
+          <button className="primary-button" type="button" onClick={() => scanWix()}>Wix aktualisieren & vergleichen</button>
+          <button type="button" onClick={() => scanWix(true)}>Vollständigen Wix-Abgleich erzwingen</button>
           <button type="button" onClick={scan}>Nur Queue aktualisieren</button>
         </div>
       </div>

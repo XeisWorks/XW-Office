@@ -34,6 +34,8 @@ def test_list_products_uses_fallback_query_endpoint() -> None:
                             "id": "p-1",
                             "name": "Produkt A",
                             "sku": "XW-1",
+                            "revision": "rev-1",
+                            "lastUpdatedDate": "2026-09-18T08:00:00Z",
                             "brand": {"id": "b-1", "name": "Marke"},
                             "visible": True,
                             "stock": {"quantity": 7},
@@ -62,6 +64,8 @@ def test_list_products_uses_fallback_query_endpoint() -> None:
     assert len(rows) == 1
     assert rows[0].id == "p-1"
     assert rows[0].sku == "XW-1"
+    assert rows[0].revision == "rev-1"
+    assert rows[0].updated_at == "2026-09-18T08:00:00Z"
 
 
 def test_list_products_paginates_with_has_next_and_offset_without_cursor() -> None:
@@ -128,6 +132,8 @@ def test_list_products_paginates_with_has_next_and_offset_without_cursor() -> No
         httpx.Client = original_client  # type: ignore[assignment]
 
     assert any(call["url"].endswith("/stores/v3/products/query") for call in calls)
-    assert any('"offset":100' in call["payload"] or '"offset": 100' in call["payload"] for call in calls)
+    assert any(
+        '"offset":100' in call["payload"] or '"offset": 100' in call["payload"] for call in calls
+    )
     assert len(rows) == 101
     assert rows[-1].sku == "XW-101"

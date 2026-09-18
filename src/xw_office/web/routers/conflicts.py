@@ -114,10 +114,13 @@ def build_conflicts_router(
         "/scan/wix", response_model=WixSnapshotScanOut, dependencies=[Depends(require_scan_enabled)]
     )
     def scan_wix(
+        force: bool = Query(
+            False, description="Fetch every mapped product detail, bypassing the catalog index"
+        ),
         service: ConflictWizardService = Depends(get_service),
     ) -> dict[str, object]:
-        """Fetch only mapped Wix products, then materialise their conflict cases."""
-        source = get_wix_snapshot_service().run()
+        """Incrementally refresh mapped Wix products, then materialise conflict cases."""
+        source = get_wix_snapshot_service().run(force=force)
         scan_result = service.scan_low_level_conflicts()
         return {**scan_result, "source": source.as_dict()}
 

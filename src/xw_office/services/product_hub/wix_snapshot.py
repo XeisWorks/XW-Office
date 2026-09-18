@@ -6,6 +6,7 @@ metadata, and feeds safe field differences into the conflict wizard's low-level
 ``sync_conflict`` ledger.  It never calls a Wix write endpoint and never downloads
 image bytes.
 """
+
 from __future__ import annotations
 
 import datetime
@@ -14,6 +15,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass, field
+from collections.abc import Mapping
 from typing import Any, Protocol
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -34,10 +36,20 @@ class WixSnapshotSource(Protocol):
     def query_inventory(self, product_id: str) -> list[dict[str, Any]]: ...
 
 
+class WixCatalogIndexSource(Protocol):
+    """Cheap paginated catalog index used to avoid per-product detail reads."""
+
+    def list_products(self, *, include_hidden: bool = True) -> list[object]: ...
+
+
 @dataclass
 class WixSnapshotReport:
     mappings_seen: int = 0
+    catalog_products_indexed: int = 0
     products_fetched: int = 0
+    products_cached: int = 0
+    products_missing_from_index: int = 0
+    full_refresh: bool = False
     payloads_archived: int = 0
     payloads_unchanged: int = 0
     images_created: int = 0
@@ -54,7 +66,11 @@ class WixSnapshotReport:
     def as_dict(self) -> dict[str, object]:
         return {
             "mappings_seen": self.mappings_seen,
+            "catalog_products_indexed": self.catalog_products_indexed,
             "products_fetched": self.products_fetched,
+            "products_cached": self.products_cached,
+            "products_missing_from_index": self.products_missing_from_index,
+            "full_refresh": self.full_refresh,
             "payloads_archived": self.payloads_archived,
             "payloads_unchanged": self.payloads_unchanged,
             "images_created": self.images_created,
@@ -73,22 +89,58 @@ class WixSnapshotReport:
 class WixSnapshotService:
     """Synchronise mapped Wix read models into the Hub's source/provenance records."""
 
-    def __init__(self, factory: sessionmaker[Session], *, wix_client: WixSnapshotSource) -> None:
+    def __init__(
+        self,
+        factory: sessionmaker[Session],
+        *,
+        wix_client: WixSnapshotSource,
+        wix_catalog_client: WixCatalogIndexSource | None = None,
+    ) -> None:
         self._products = ProductHubRepository(factory)
         self._sync = SyncRepository(factory)
         self._wix = wix_client
+        self._catalog = wix_catalog_client
 
-    def run(self) -> WixSnapshotReport:
-        report = WixSnapshotReport()
+    def run(self, *, force: bool = False) -> WixSnapshotReport:
+        report = WixSnapshotReport(full_refresh=force)
         credential_check = getattr(self._wix, "has_credentials", None)
         if callable(credential_check) and not credential_check():
             report.errors.append("Wix credentials are not configured for the Product Hub service")
             return report
         mappings = self._products.list_channel_mappings_by_channel(channel="wix")
         report.mappings_seen = len(mappings)
+        catalog_index = self._load_catalog_index(mappings, report, force=force)
         for mapping in mappings:
             try:
-                self._snapshot_one(mapping.id, mapping.internal_entity_id, mapping.external_id, report)
+                index_entry = (
+                    catalog_index.get(_canonical_wix_id(mapping.external_id))
+                    if catalog_index is not None
+                    else None
+                )
+                if catalog_index is not None and index_entry is None:
+                    report.products_missing_from_index += 1
+                    # A partial index response must never turn a healthy mapping into
+                    # a critical case. Confirm absence with the established detail
+                    # endpoint, which is also how legacy/malformed IDs are diagnosed.
+                    self._snapshot_one(
+                        mapping.id, mapping.internal_entity_id, mapping.external_id, report
+                    )
+                    continue
+                if (
+                    index_entry is not None
+                    and not force
+                    and _mapping_is_current(mapping, index_entry)
+                ):
+                    report.products_cached += 1
+                    self._record_mapping_healthy(
+                        product_id=mapping.internal_entity_id,
+                        external_id=mapping.external_id,
+                        report=report,
+                    )
+                    continue
+                self._snapshot_one(
+                    mapping.id, mapping.internal_entity_id, mapping.external_id, report
+                )
             except Exception as exc:  # noqa: BLE001 - one remote object must not abort a scan
                 logger.exception("Wix snapshot failed for %s", mapping.external_id)
                 report.errors.append(f"{mapping.external_id}: {exc}")
@@ -100,8 +152,35 @@ class WixSnapshotService:
                 )
         return report
 
+    def _load_catalog_index(
+        self, mappings: list[Any], report: WixSnapshotReport, *, force: bool
+    ) -> dict[str, object] | None:
+        """Return a current Wix index, or safely fall back to detail reads."""
+        if force or self._catalog is None:
+            return None
+        try:
+            rows = self._catalog.list_products(include_hidden=True)
+        except Exception as exc:  # noqa: BLE001 - source scan stays best-effort
+            logger.warning("Wix catalog index unavailable; falling back to detail reads: %s", exc)
+            report.errors.append("Wix catalog index unavailable; used full detail fallback")
+            return None
+        index = {
+            _canonical_wix_id(_index_value(row, "id")): row
+            for row in rows
+            if _index_value(row, "id")
+        }
+        report.catalog_products_indexed = len(index)
+        if mappings and not index:
+            report.errors.append("Wix catalog index was empty; used full detail fallback")
+            return None
+        return index
+
     def _snapshot_one(
-        self, mapping_id: uuid.UUID, product_id: uuid.UUID, external_id: str, report: WixSnapshotReport
+        self,
+        mapping_id: uuid.UUID,
+        product_id: uuid.UUID,
+        external_id: str,
+        report: WixSnapshotReport,
     ) -> None:
         raw = self._wix.get_product_raw(external_id)
         if raw is None:
@@ -126,8 +205,11 @@ class WixSnapshotService:
             json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
         ).hexdigest()
         _, archived = self._sync.archive_external_payload_if_changed(
-            channel="wix", entity_type="product", external_id=external_id,
-            payload=payload, payload_hash=payload_hash,
+            channel="wix",
+            entity_type="product",
+            external_id=external_id,
+            payload=payload,
+            payload_hash=payload_hash,
         )
         report.payloads_archived += int(archived)
         report.payloads_unchanged += int(not archived)
@@ -151,8 +233,12 @@ class WixSnapshotService:
                 # The normalizer, not string equality, defines semantic convergence.
                 wix_value = hub_value
             _, outcome = self._sync.upsert_scanned_conflict(
-                channel="wix", entity_type="product", internal_entity_id=product_id,
-                field_name=field_name, hub_value=hub_value, external_value=wix_value,
+                channel="wix",
+                entity_type="product",
+                internal_entity_id=product_id,
+                field_name=field_name,
+                hub_value=hub_value,
+                external_value=wix_value,
                 external_updated_at=_updated_at(raw),
             )
             if outcome == "created":
@@ -174,8 +260,12 @@ class WixSnapshotService:
         expected = _mapping_state(external_id)
         actual = {**expected, "state": "not_found", "error": error[:1000]}
         _, outcome = self._sync.upsert_scanned_conflict(
-            channel="wix", entity_type="product", internal_entity_id=product_id,
-            field_name="mapping", hub_value=expected, external_value=actual,
+            channel="wix",
+            entity_type="product",
+            internal_entity_id=product_id,
+            field_name="mapping",
+            hub_value=expected,
+            external_value=actual,
         )
         if outcome == "created":
             report.mapping_conflicts_created += 1
@@ -187,11 +277,52 @@ class WixSnapshotService:
     ) -> None:
         expected = _mapping_state(external_id)
         _, outcome = self._sync.upsert_scanned_conflict(
-            channel="wix", entity_type="product", internal_entity_id=product_id,
-            field_name="mapping", hub_value=expected, external_value=expected,
+            channel="wix",
+            entity_type="product",
+            internal_entity_id=product_id,
+            field_name="mapping",
+            hub_value=expected,
+            external_value=expected,
         )
         if outcome == "resolved":
             report.mapping_conflicts_resolved += 1
+
+
+def _canonical_wix_id(value: object) -> str:
+    """Normalise only for comparison; provenance retains the original external ID."""
+    return str(value or "").strip().removeprefix("product_")
+
+
+def _index_value(row: object, key: str) -> object:
+    if isinstance(row, Mapping):
+        return row.get(key)
+    return getattr(row, key, None)
+
+
+def _mapping_is_current(mapping: Any, index_entry: object) -> bool:
+    """Only skip a detail fetch when Wix supplied a trustworthy change marker."""
+    remote_revision = str(_index_value(index_entry, "revision") or "").strip()
+    local_revision = str(mapping.external_revision or "").strip()
+    if remote_revision and local_revision:
+        return remote_revision == local_revision
+
+    remote_updated_at = _updated_at(
+        {
+            "lastUpdatedDate": _index_value(index_entry, "updated_at")
+            or _index_value(index_entry, "lastUpdatedDate")
+            or _index_value(index_entry, "updatedDate")
+            or _index_value(index_entry, "updatedAt")
+            or _index_value(index_entry, "_updatedDate"),
+        }
+    )
+    local_updated_at = mapping.last_external_updated_at
+    if remote_updated_at is None or local_updated_at is None:
+        return False
+    if local_updated_at.tzinfo is None:
+        local_updated_at = local_updated_at.replace(tzinfo=datetime.timezone.utc)
+    return remote_updated_at.astimezone(datetime.timezone.utc) == local_updated_at.astimezone(
+        datetime.timezone.utc
+    )
 
 
 def _comparable_fields(product: Any, raw: dict[str, Any]) -> list[tuple[str, str, str]]:
@@ -203,7 +334,11 @@ def _comparable_fields(product: Any, raw: dict[str, Any]) -> list[tuple[str, str
             str(product.description or ""),
             str(raw.get("description") or raw.get("plainDescription") or ""),
         ),
-        ("visible", "true" if product.active else "false", "true" if bool(raw.get("visible", True)) else "false"),
+        (
+            "visible",
+            "true" if product.active else "false",
+            "true" if bool(raw.get("visible", True)) else "false",
+        ),
     ]
 
 

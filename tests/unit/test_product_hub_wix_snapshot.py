@@ -1,4 +1,5 @@
 """Read-only Wix source snapshot tests, including product-image provenance."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -17,11 +18,13 @@ from xw_office.services.product_hub.wix_snapshot import WixSnapshotService
 class _FakeWix:
     def __init__(self, raw: dict[str, Any]) -> None:
         self.raw = raw
+        self.raw_calls = 0
 
     def has_credentials(self) -> bool:
         return True
 
     def get_product_raw(self, product_id: str) -> dict[str, Any] | None:
+        self.raw_calls += 1
         return self.raw if product_id == "wix-1" else None
 
     def query_variants(self, product_id: str) -> list[dict[str, Any]]:
@@ -48,13 +51,18 @@ def test_snapshot_archives_mapped_wix_product_and_preserves_all_product_images(
     )
     wix = _FakeWix(
         {
-            "id": "wix-1", "revision": "rev-1", "name": "Wix title", "description": "",
+            "id": "wix-1",
+            "revision": "rev-1",
+            "name": "Wix title",
+            "description": "",
             "visible": True,
-            "media": {"items": [
-                {"id": "cover", "image": {"url": "https://cdn.example/cover.jpg"}},
-                {"id": "inside", "image": {"url": "https://cdn.example/inside.jpg"}},
-                {"id": "movie", "mediaType": "video", "url": "https://cdn.example/movie.mp4"},
-            ]},
+            "media": {
+                "items": [
+                    {"id": "cover", "image": {"url": "https://cdn.example/cover.jpg"}},
+                    {"id": "inside", "image": {"url": "https://cdn.example/inside.jpg"}},
+                    {"id": "movie", "mediaType": "video", "url": "https://cdn.example/movie.mp4"},
+                ]
+            },
         }
     )
     service = WixSnapshotService(factory, wix_client=wix)
@@ -81,6 +89,47 @@ def test_snapshot_archives_mapped_wix_product_and_preserves_all_product_images(
     assert cases["cases_created"] == 1
 
 
+def test_incremental_snapshot_uses_catalog_revision_to_skip_unchanged_details(
+    factory: sessionmaker[Session],
+) -> None:
+    class _Catalog:
+        def __init__(self) -> None:
+            self.rows: list[dict[str, str]] = [{"id": "wix-1", "revision": "rev-1"}]
+            self.calls = 0
+
+        def list_products(self, *, include_hidden: bool = True) -> list[object]:
+            self.calls += 1
+            assert include_hidden is True
+            return self.rows
+
+    products = ProductHubRepository(factory)
+    product, _ = products.create_product(sku="XW-CACHED", name="Hub title")
+    products.create_channel_mapping(
+        channel="wix", entity_type="product", internal_entity_id=product.id, external_id="wix-1"
+    )
+    wix = _FakeWix({"id": "wix-1", "revision": "rev-1", "name": "Hub title", "visible": True})
+    catalog = _Catalog()
+    service = WixSnapshotService(factory, wix_client=wix, wix_catalog_client=catalog)
+
+    first = service.run(force=True)
+    second = service.run()
+
+    assert first.full_refresh is True
+    assert first.products_fetched == 1
+    assert second.catalog_products_indexed == 1
+    assert second.products_fetched == 0
+    assert second.products_cached == 1
+    assert wix.raw_calls == 1
+
+    catalog.rows = [{"id": "wix-1", "revision": "rev-2"}]
+    wix.raw["revision"] = "rev-2"
+    third = service.run()
+
+    assert third.products_fetched == 1
+    assert third.products_cached == 0
+    assert wix.raw_calls == 2
+
+
 def test_snapshot_marks_removed_wix_image_stale_and_closes_converged_field_conflict(
     factory: sessionmaker[Session],
 ) -> None:
@@ -90,10 +139,17 @@ def test_snapshot_marks_removed_wix_image_stale_and_closes_converged_field_confl
         channel="wix", entity_type="product", internal_entity_id=product.id, external_id="wix-1"
     )
     wix = _FakeWix(
-        {"id": "wix-1", "name": "Different", "visible": True, "media": {"items": [
-            {"id": "cover", "image": {"url": "https://cdn.example/cover.jpg"}},
-            {"id": "old", "image": {"url": "https://cdn.example/old.jpg"}},
-        ]}}
+        {
+            "id": "wix-1",
+            "name": "Different",
+            "visible": True,
+            "media": {
+                "items": [
+                    {"id": "cover", "image": {"url": "https://cdn.example/cover.jpg"}},
+                    {"id": "old", "image": {"url": "https://cdn.example/old.jpg"}},
+                ]
+            },
+        }
     )
     service = WixSnapshotService(factory, wix_client=wix)
     service.run()
@@ -158,7 +214,10 @@ def test_missing_wix_object_creates_a_critical_mapping_case(
     products = ProductHubRepository(factory)
     product, _ = products.create_product(sku="XW-MISSING-WIX", name="Missing Wix object")
     products.create_channel_mapping(
-        channel="wix", entity_type="product", internal_entity_id=product.id, external_id="wix-missing"
+        channel="wix",
+        entity_type="product",
+        internal_entity_id=product.id,
+        external_id="wix-missing",
     )
     report = WixSnapshotService(factory, wix_client=_FakeWix({})).run()
 

@@ -35,6 +35,7 @@ from xw_office.services.product_hub.outbox_worker import OutboxWorker
 from xw_office.services.product_hub.sharing import SharingService
 from xw_office.services.product_hub.wix_push import WixPushService, wix_push_handler
 from xw_office.services.product_hub.wix_snapshot import WixSnapshotService
+from xw_office.services.wix.client import WixProductsClient
 from xw_office.services.wix.product_details_client import WixProductDetailsClient
 from xw_office.web.routers.inventory import build_inventory_router
 from xw_office.web.routers.conflicts import build_conflicts_router
@@ -274,6 +275,7 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
     # -- Product Hub (PR11): Wix push + outbox worker --------------------------------
 
     _wix_client = WixProductDetailsClient(secret_service=_EnvSecretSource())  # type: ignore[arg-type]
+    _wix_catalog_client = WixProductsClient(secret_service=_EnvSecretSource())  # type: ignore[arg-type]
     _wix_push_service = (
         WixPushService(
             _session_factory,
@@ -297,7 +299,9 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
         ConflictWizardService(_session_factory) if _session_factory is not None else None
     )
     _wix_snapshot_service = (
-        WixSnapshotService(_session_factory, wix_client=_wix_client)
+        WixSnapshotService(
+            _session_factory, wix_client=_wix_client, wix_catalog_client=_wix_catalog_client
+        )
         if _session_factory is not None
         else None
     )

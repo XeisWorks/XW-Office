@@ -182,18 +182,22 @@ export const api = {
       `/api/v1/conflicts/scan${productId ? `?product_id=${encodeURIComponent(productId)}` : ""}`,
       { method: "POST" },
     ),
-  scanWixConflicts: () =>
+  scanWixConflicts: (force = false) =>
     request<{
       differences_found: number;
       cases_created: number;
       cases_updated: number;
       source: {
+        catalog_products_indexed: number;
         products_fetched: number;
+        products_cached: number;
+        products_missing_from_index: number;
+        full_refresh: boolean;
         images_created: number;
         images_updated: number;
         errors: string[];
       };
-    }>("/api/v1/conflicts/scan/wix", { method: "POST" }),
+    }>(`/api/v1/conflicts/scan/wix${force ? "?force=true" : ""}`, { method: "POST" }),
   startConflict: (id: string, expectedRowVersion: number) =>
     request<ConflictCase>(`/api/v1/conflicts/${id}/start`, {
       method: "POST",

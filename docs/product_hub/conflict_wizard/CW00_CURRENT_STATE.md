@@ -21,6 +21,10 @@ Stand: 2026-09-17
 - Der Wix-Quellscan liest ausschließlich bereits gemappte Produkte read-only ein,
   archiviert geänderte Payloads und führt `name`, `description` und `visible` in die
   technische Konfliktliste über. sevdesk/Amazon bleiben bei ihren jeweiligen Importern.
+- Der reguläre Wix-Quellscan lädt zuerst den paginierten Produktindex und ruft
+  Detaildaten nur für neue oder anhand von Revision/Zeitstempel geänderte Mappings ab.
+  Die UI weist geladene und aus dem Snapshot übersprungene Produkte aus; ein bewusster
+  Vollabgleich (`?force=true`) bleibt für Diagnose und Erstabgleich verfügbar.
 - Wix-Produktbilder sind Canonical-Asset-Metadaten: erstes Bild `COVER`, weitere
   `GALLERY_IMAGE`, jeweils als Wix-URL ohne Download. Entfernte Bilder werden als
   `stale` markiert statt gelöscht.

@@ -1,4 +1,5 @@
 """Wix Store REST client — products and order status."""
+
 from __future__ import annotations
 
 import datetime
@@ -74,6 +75,8 @@ class WixProduct(BaseModel):
     brand_id: str = ""
     visible: bool = True
     inventory_quantity: int = 0
+    revision: str = ""
+    updated_at: str = ""
 
 
 def _parse_product(raw: dict[str, Any]) -> WixProduct:
@@ -107,6 +110,14 @@ def _parse_product(raw: dict[str, Any]) -> WixProduct:
     if not brand_id:
         brand_id = str(raw.get("brandId") or "").strip()
     visible = bool(raw.get("visible", True))
+    revision = str(raw.get("revision") or raw.get("_revision") or "")
+    updated_at = str(
+        raw.get("lastUpdatedDate")
+        or raw.get("updatedDate")
+        or raw.get("updatedAt")
+        or raw.get("_updatedDate")
+        or ""
+    )
     inv = raw.get("stock") or {}
     qty = 0
     if isinstance(inv, dict):
@@ -123,6 +134,8 @@ def _parse_product(raw: dict[str, Any]) -> WixProduct:
         brand_id=brand_id,
         visible=visible,
         inventory_quantity=qty,
+        revision=revision,
+        updated_at=updated_at,
     )
 
 
@@ -340,7 +353,9 @@ class WixProductsClient:
                         chosen_endpoint = endpoint
                         break
                 except Exception as exc:  # noqa: BLE001
-                    logger.info("WixProductsClient: product endpoint probe failed %s: %s", endpoint, exc)
+                    logger.info(
+                        "WixProductsClient: product endpoint probe failed %s: %s", endpoint, exc
+                    )
 
             if not chosen_endpoint:
                 logger.error("WixProductsClient: no working product query endpoint found")
@@ -474,7 +489,9 @@ class WixProductsClient:
                         last_error = exc
                         continue
         if last_error is not None:
-            raise RuntimeError(f"Wix Brand-Update fehlgeschlagen fuer Produkt {pid}: {last_error}") from last_error
+            raise RuntimeError(
+                f"Wix Brand-Update fehlgeschlagen fuer Produkt {pid}: {last_error}"
+            ) from last_error
         raise RuntimeError(f"Wix Brand-Update fehlgeschlagen fuer Produkt {pid}")
 
     def list_brands(self) -> list[dict[str, str]]:
@@ -491,7 +508,9 @@ class WixProductsClient:
         with httpx.Client(timeout=_TIMEOUT) as client:
             for method, url, payload in endpoints:
                 try:
-                    resp = self._request_with_retry(client, method, url, headers=headers, json_body=payload)
+                    resp = self._request_with_retry(
+                        client, method, url, headers=headers, json_body=payload
+                    )
                     data = resp.json() if resp.content else {}
                     raw: object = []
                     if isinstance(data, dict):
@@ -533,7 +552,9 @@ class WixProductsClient:
         with httpx.Client(timeout=_TIMEOUT) as client:
             for endpoint in self._brand_endpoint_candidates("/query"):
                 try:
-                    resp = client.request("POST", endpoint, headers=headers, json={"query": {"paging": {"limit": 1}}})
+                    resp = client.request(
+                        "POST", endpoint, headers=headers, json={"query": {"paging": {"limit": 1}}}
+                    )
                     if resp.status_code < 400:
                         self._brand_catalog_supported = True
                         return True
@@ -541,7 +562,6 @@ class WixProductsClient:
                     continue
         self._brand_catalog_supported = False
         return False
-
 
     def update_product_field(self, product_id: str, field_name: str, value: str) -> None:
         """Update a single product field via PATCH (generic, best-effort).
@@ -571,12 +591,14 @@ class WixProductsClient:
                 payload_candidates.append({"product": {fname: num_val}})
             except (ValueError, TypeError):
                 pass
-        
+
         if fname == "price":
-            payload_candidates.extend([
-                {"product": {"priceData": {"price": val}}},
-                {"product": {"variants": [{"priceData": {"price": val}}]}},
-            ])
+            payload_candidates.extend(
+                [
+                    {"product": {"priceData": {"price": val}}},
+                    {"product": {"variants": [{"priceData": {"price": val}}]}},
+                ]
+            )
         elif fname == "visible":
             # Convert boolean string
             bool_val = val.lower() in ("true", "1", "yes", "ja")
@@ -588,7 +610,7 @@ class WixProductsClient:
         elif fname == "categories":
             # categories may be an array
             payload_candidates.append({"product": {"categories": val.split(",")}})
-        
+
         # Fallback: generic nested structure
         payload_candidates.append({"product": {fname: val}})
 
@@ -615,7 +637,7 @@ class WixProductsClient:
                     except httpx.HTTPError as exc:
                         last_error = exc
                         continue
-        
+
         if last_error is not None:
             raise RuntimeError(
                 f"Wix field update failed for product {pid}, field {fname}: {last_error}"
@@ -640,7 +662,9 @@ class WixProductsClient:
         with httpx.Client(timeout=_TIMEOUT) as client:
             for method, url, payload in endpoints:
                 try:
-                    resp = self._request_with_retry(client, method, url, headers=headers, json_body=payload)
+                    resp = self._request_with_retry(
+                        client, method, url, headers=headers, json_body=payload
+                    )
                     data = resp.json() if resp.content else {}
                     brand_obj: dict[str, Any] = {}
                     if isinstance(data, dict):
@@ -663,7 +687,9 @@ class WixProductsClient:
                     logger.info("Wix create_brand endpoint failed %s: %s", url, exc)
                     continue
         if last_error is not None:
-            raise RuntimeError(f"Wix Brand konnte nicht erstellt werden: {last_error}") from last_error
+            raise RuntimeError(
+                f"Wix Brand konnte nicht erstellt werden: {last_error}"
+            ) from last_error
         raise RuntimeError("Wix Brand konnte nicht erstellt werden")
 
     def ensure_brand(self, brand_name: str, *, create_if_missing: bool = True) -> str:
@@ -721,10 +747,7 @@ def _wix_text(value: object) -> str:
 def _format_option_entry(entry: object) -> str:
     if isinstance(entry, dict):
         label = _wix_text(
-            entry.get("name")
-            or entry.get("optionName")
-            or entry.get("label")
-            or entry.get("key")
+            entry.get("name") or entry.get("optionName") or entry.get("label") or entry.get("key")
         )
         value = _wix_text(
             entry.get("value")
@@ -859,7 +882,9 @@ def _unreleased_piece_titles(raw: dict[str, Any]) -> list[str]:
 def _line_item_is_digital(raw: dict[str, Any]) -> bool:
     product_type = str(raw.get("productType") or "").strip().lower()
     item_type = raw.get("itemType") if isinstance(raw.get("itemType"), dict) else {}
-    physical_props = raw.get("physicalProperties") if isinstance(raw.get("physicalProperties"), dict) else {}
+    physical_props = (
+        raw.get("physicalProperties") if isinstance(raw.get("physicalProperties"), dict) else {}
+    )
     shippable_raw = physical_props.get("shippable")
     shippable = str(shippable_raw).strip().lower() if shippable_raw is not None else ""
     return bool(
@@ -1151,7 +1176,12 @@ class WixOrdersClient:
     def _merge_street_with_addition(cls, street1: str, street2: str) -> tuple[str, str]:
         primary = str(street1 or "").strip().rstrip(",")
         addition = str(street2 or "").strip().rstrip(",")
-        if primary and addition and not cls._contains_house_number(primary) and cls._looks_like_numeric_address_addition(addition):
+        if (
+            primary
+            and addition
+            and not cls._contains_house_number(primary)
+            and cls._looks_like_numeric_address_addition(addition)
+        ):
             return " ".join(part for part in (primary, addition) if part).strip(), ""
         return primary, addition
 
@@ -1176,14 +1206,42 @@ class WixOrdersClient:
             return {}
         buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
         shipping = order.get("shippingInfo") if isinstance(order.get("shippingInfo"), dict) else {}
-        shipping_address = shipping.get("shippingAddress") if isinstance(shipping.get("shippingAddress"), dict) else {}
-        shipment_details = shipping.get("shipmentDetails") if isinstance(shipping.get("shipmentDetails"), dict) else {}
-        destination = shipping.get("shippingDestination") if isinstance(shipping.get("shippingDestination"), dict) else {}
-        destination_address = destination.get("address") if isinstance(destination.get("address"), dict) else {}
-        destination_contact = destination.get("contactDetails") if isinstance(destination.get("contactDetails"), dict) else {}
-        logistics_destination = cls._nested_dict(order, "shippingInfo", "logistics", "shippingDestination")
-        logistics_address = logistics_destination.get("address") if isinstance(logistics_destination.get("address"), dict) else {}
-        logistics_contact = logistics_destination.get("contactDetails") if isinstance(logistics_destination.get("contactDetails"), dict) else {}
+        shipping_address = (
+            shipping.get("shippingAddress")
+            if isinstance(shipping.get("shippingAddress"), dict)
+            else {}
+        )
+        shipment_details = (
+            shipping.get("shipmentDetails")
+            if isinstance(shipping.get("shipmentDetails"), dict)
+            else {}
+        )
+        destination = (
+            shipping.get("shippingDestination")
+            if isinstance(shipping.get("shippingDestination"), dict)
+            else {}
+        )
+        destination_address = (
+            destination.get("address") if isinstance(destination.get("address"), dict) else {}
+        )
+        destination_contact = (
+            destination.get("contactDetails")
+            if isinstance(destination.get("contactDetails"), dict)
+            else {}
+        )
+        logistics_destination = cls._nested_dict(
+            order, "shippingInfo", "logistics", "shippingDestination"
+        )
+        logistics_address = (
+            logistics_destination.get("address")
+            if isinstance(logistics_destination.get("address"), dict)
+            else {}
+        )
+        logistics_contact = (
+            logistics_destination.get("contactDetails")
+            if isinstance(logistics_destination.get("contactDetails"), dict)
+            else {}
+        )
         address_node = cls._first_address_node(order)
 
         first = cls._address_field(
@@ -1217,7 +1275,9 @@ class WixOrdersClient:
             person_name = cls._norm_text(buyer.get("firstName"))
             fallback_last = cls._norm_text(buyer.get("lastName"))
             if fallback_last and fallback_last not in person_name:
-                person_name = " ".join(part for part in (person_name, fallback_last) if part).strip()
+                person_name = " ".join(
+                    part for part in (person_name, fallback_last) if part
+                ).strip()
         if company and person_name and company.casefold() == person_name.casefold():
             company = ""
         name = company or person_name
@@ -1278,7 +1338,14 @@ class WixOrdersClient:
                 destination,
                 logistics_destination,
                 shipping,
-                keys=("countryFullname", "country", "countryName", "countryCode", "isoCountry", "addressCountry"),
+                keys=(
+                    "countryFullname",
+                    "country",
+                    "countryName",
+                    "countryCode",
+                    "isoCountry",
+                    "addressCountry",
+                ),
             )
         )
         return {
@@ -1307,12 +1374,7 @@ class WixOrdersClient:
         if not parts or cls._has_usable_address_location(parts):
             return False
         return bool(
-            str(
-                parts.get("name")
-                or parts.get("company")
-                or parts.get("person_name")
-                or ""
-            ).strip()
+            str(parts.get("name") or parts.get("company") or parts.get("person_name") or "").strip()
         )
 
     @classmethod
@@ -1320,19 +1382,37 @@ class WixOrdersClient:
         if not isinstance(order, dict):
             return {}
         billing = order.get("billingInfo") if isinstance(order.get("billingInfo"), dict) else {}
-        details = billing.get("contactDetails") if isinstance(billing.get("contactDetails"), dict) else {}
+        details = (
+            billing.get("contactDetails") if isinstance(billing.get("contactDetails"), dict) else {}
+        )
         address = billing.get("address") if isinstance(billing.get("address"), dict) else {}
         first = cls._address_field(details, keys=("firstName", "givenName", "surename"))
         last = cls._address_field(details, keys=("lastName", "familyName", "familyname"))
-        company = cls._address_field(details, billing, keys=("company", "companyName", "businessName"))
+        company = cls._address_field(
+            details, billing, keys=("company", "companyName", "businessName")
+        )
         name = company or " ".join(part for part in (first, last) if part).strip()
-        street1 = cls._address_field(address, keys=("addressLine1", "addressLine", "streetAddress", "street", "address"))
-        street2 = cls._address_field(address, keys=("addressLine2", "addressAddition", "addressDetail"))
+        street1 = cls._address_field(
+            address, keys=("addressLine1", "addressLine", "streetAddress", "street", "address")
+        )
+        street2 = cls._address_field(
+            address, keys=("addressLine2", "addressAddition", "addressDetail")
+        )
         street1, street2 = cls._merge_street_with_addition(street1, street2)
         postal_code = cls._address_field(address, keys=("postalCode", "zipCode", "zip"))
         city = cls._address_field(address, keys=("city", "town", "region", "locality"))
         country = cls._resolve_country_name(
-            cls._address_field(address, keys=("countryFullname", "country", "countryName", "countryCode", "isoCountry", "addressCountry"))
+            cls._address_field(
+                address,
+                keys=(
+                    "countryFullname",
+                    "country",
+                    "countryName",
+                    "countryCode",
+                    "isoCountry",
+                    "addressCountry",
+                ),
+            )
         )
         return {
             "name": name,
@@ -1465,7 +1545,11 @@ class WixOrdersClient:
             if str(raw_item.get("xwMainCategoryLabel") or "").strip():
                 enriched_items.append(raw_item)
                 continue
-            catalog = raw_item.get("catalogReference") if isinstance(raw_item.get("catalogReference"), dict) else {}
+            catalog = (
+                raw_item.get("catalogReference")
+                if isinstance(raw_item.get("catalogReference"), dict)
+                else {}
+            )
             product_id = str(
                 catalog.get("catalogItemId")
                 or catalog.get("catalogProductId")
@@ -1654,7 +1738,9 @@ class WixOrdersClient:
             return None
         raw_items = [
             item
-            for item in (cached.get("lineItems") if isinstance(cached.get("lineItems"), list) else [])
+            for item in (
+                cached.get("lineItems") if isinstance(cached.get("lineItems"), list) else []
+            )
             if isinstance(item, dict)
         ]
         if not raw_items:
@@ -1687,7 +1773,9 @@ class WixOrdersClient:
             cached = self._cached_order(ref)
             if cached is not None:
                 return cached
-        return self._resolve_order_single_flight(ref, use_cache=use_cache, cancel_token=cancel_token)
+        return self._resolve_order_single_flight(
+            ref, use_cache=use_cache, cancel_token=cancel_token
+        )
 
     def _resolve_order_single_flight(
         self,
@@ -1779,7 +1867,9 @@ class WixOrdersClient:
         custom = str(item_type.get("custom") or "").strip().upper()
         return custom == "PAYLINK_ITEM"
 
-    def is_reference_manual_digital_license(self, reference: str, *, use_cache: bool = True) -> bool:
+    def is_reference_manual_digital_license(
+        self, reference: str, *, use_cache: bool = True
+    ) -> bool:
         """Backward-compatible broad classifier used by older callers."""
         order = self._resolve_order(reference, use_cache=use_cache)
         if not order:
@@ -1790,7 +1880,9 @@ class WixOrdersClient:
             return False
         return any(self.line_item_is_paylink_custom(item) for item in valid_items)
 
-    def is_reference_manual_licensed_delivery(self, reference: str, *, use_cache: bool = True) -> bool:
+    def is_reference_manual_licensed_delivery(
+        self, reference: str, *, use_cache: bool = True
+    ) -> bool:
         """Return whether a custom payment-link order needs manual licensing.
 
         The handling line is the explicit contract emitted by the Wix
@@ -1808,7 +1900,8 @@ class WixOrdersClient:
             return False
         has_custom = any(self.line_item_is_paylink_custom(item) for item in valid_items)
         has_handling = any(
-            "digital delivery handling" in " ".join(
+            "digital delivery handling"
+            in " ".join(
                 str(value or "")
                 for value in (
                     item.get("name"),
@@ -1822,7 +1915,11 @@ class WixOrdersClient:
 
     def fulfillment_status(self, reference: str) -> str:
         order = self._resolve_order(reference, use_cache=False)
-        return str(order.get("fulfillmentStatus") or "").strip().upper() if isinstance(order, dict) else ""
+        return (
+            str(order.get("fulfillmentStatus") or "").strip().upper()
+            if isinstance(order, dict)
+            else ""
+        )
 
     def _resolve_order_id(self, reference: str) -> str:
         order = self._resolve_order(reference)
@@ -1844,7 +1941,9 @@ class WixOrdersClient:
         name = parts.get("name", "")
         company = parts.get("company", "")
         person_name = parts.get("person_name", "")
-        name_lines = [line for line in (company, person_name if person_name != company else "") if line]
+        name_lines = [
+            line for line in (company, person_name if person_name != company else "") if line
+        ]
         if not name_lines and name:
             name_lines = [name]
         street1 = parts.get("street1", "")
@@ -1892,7 +1991,11 @@ class WixOrdersClient:
 
     @staticmethod
     def _customer_match_text(value: object) -> str:
-        text = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii")
+        text = (
+            unicodedata.normalize("NFKD", str(value or ""))
+            .encode("ascii", "ignore")
+            .decode("ascii")
+        )
         text = re.sub(r"\b(?:dr|prof|mag|dipl|ing|herr|frau)\.?\b", " ", text, flags=re.IGNORECASE)
         return " ".join(re.findall(r"[a-z0-9]+", text.casefold()))
 
@@ -1902,7 +2005,12 @@ class WixOrdersClient:
         billing = cls._billing_address_parts_from_order(order)
         shipping = cls._shipping_address_parts_from_order(order)
         buyer_name = " ".join(
-            part for part in (cls._norm_text(buyer.get("firstName")), cls._norm_text(buyer.get("lastName"))) if part
+            part
+            for part in (
+                cls._norm_text(buyer.get("firstName")),
+                cls._norm_text(buyer.get("lastName")),
+            )
+            if part
         )
         values = {
             buyer_name,
@@ -1931,12 +2039,16 @@ class WixOrdersClient:
             email
             for node in contacts
             if isinstance(node, dict)
-            for email in [str(node.get("email") or node.get("emailAddress") or "").strip().casefold()]
+            for email in [
+                str(node.get("email") or node.get("emailAddress") or "").strip().casefold()
+            ]
             if email
         }
 
     @classmethod
-    def _order_matches_customer(cls, order: dict[str, Any], *, customer_name: str, email: str) -> bool:
+    def _order_matches_customer(
+        cls, order: dict[str, Any], *, customer_name: str, email: str
+    ) -> bool:
         wanted_email = str(email or "").strip().casefold()
         if wanted_email and wanted_email in cls._order_customer_emails(order):
             return True
@@ -1946,11 +2058,15 @@ class WixOrdersClient:
         wanted_tokens = set(wanted_name.split())
         for candidate in cls._order_customer_names(order):
             candidate_tokens = set(candidate.split())
-            if wanted_name == candidate or (len(wanted_tokens) >= 2 and wanted_tokens <= candidate_tokens):
+            if wanted_name == candidate or (
+                len(wanted_tokens) >= 2 and wanted_tokens <= candidate_tokens
+            ):
                 return True
         return False
 
-    def _search_orders(self, field: str | None = None, value: str = "", *, limit: int = 100) -> list[dict[str, Any]]:
+    def _search_orders(
+        self, field: str | None = None, value: str = "", *, limit: int = 100
+    ) -> list[dict[str, Any]]:
         search: dict[str, Any] = {
             "sort": [{"fieldName": "createdDate", "order": "DESC"}],
             "cursorPaging": {"limit": max(1, min(int(limit), 100))},
@@ -1970,7 +2086,9 @@ class WixOrdersClient:
             logger.warning("WixOrdersClient customer order search failed: %s", exc)
             return []
         orders = payload.get("orders") if isinstance(payload, dict) else None
-        return [item for item in orders if isinstance(item, dict)] if isinstance(orders, list) else []
+        return (
+            [item for item in orders if isinstance(item, dict)] if isinstance(orders, list) else []
+        )
 
     def find_recent_orders_by_contact_or_email(
         self,
@@ -2042,28 +2160,49 @@ class WixOrdersClient:
             if cached:
                 lines = self.shipping_address_lines_from_order(cached)
                 if lines:
-                    return {"address_lines": lines, "order_number": str(cached.get("number") or ref), "source": "wix-cache"}
+                    return {
+                        "address_lines": lines,
+                        "order_number": str(cached.get("number") or ref),
+                        "source": "wix-cache",
+                    }
             order = self._resolve_order(ref)
             lines = self.shipping_address_lines_from_order(order)
             if lines:
-                return {"address_lines": lines, "order_number": str(order.get("number") or ref), "source": "wix-order"}
+                return {
+                    "address_lines": lines,
+                    "order_number": str(order.get("number") or ref),
+                    "source": "wix-order",
+                }
 
         cache = getattr(self, "_order_cache", None)
         site_id, account_id = self._cache_scope()
-        cached_orders = cache.get_recent_orders(site_id=site_id, account_id=account_id) if cache is not None and site_id else []
-        cached_orders.sort(key=lambda item: str(item.get("createdDate") or item.get("purchasedDate") or ""), reverse=True)
+        cached_orders = (
+            cache.get_recent_orders(site_id=site_id, account_id=account_id)
+            if cache is not None and site_id
+            else []
+        )
+        cached_orders.sort(
+            key=lambda item: str(item.get("createdDate") or item.get("purchasedDate") or ""),
+            reverse=True,
+        )
         for order in cached_orders:
             if self._order_matches_customer(order, customer_name=customer_name, email=email):
                 lines = self.shipping_address_lines_from_order(order)
                 if lines:
-                    return {"address_lines": lines, "order_number": str(order.get("number") or ""), "source": "wix-customer-cache"}
+                    return {
+                        "address_lines": lines,
+                        "order_number": str(order.get("number") or ""),
+                        "source": "wix-customer-cache",
+                    }
 
         searches: list[tuple[str | None, str, int]] = []
         if email:
             searches.append(("buyerInfo.email", email.strip(), 25))
         normalized_name = self._customer_match_text(customer_name)
         if normalized_name:
-            searches.append(("billingInfo.contactDetails.lastName", normalized_name.split()[-1], 25))
+            searches.append(
+                ("billingInfo.contactDetails.lastName", normalized_name.split()[-1], 25)
+            )
         searches.append((None, "", 100))
         seen: set[str] = set()
         for field, value, limit in searches:
@@ -2073,11 +2212,17 @@ class WixOrdersClient:
                     continue
                 seen.add(order_id)
                 self._cache_order(str(order.get("number") or order_id), order)
-                if not self._order_matches_customer(order, customer_name=customer_name, email=email):
+                if not self._order_matches_customer(
+                    order, customer_name=customer_name, email=email
+                ):
                     continue
                 lines = self.shipping_address_lines_from_order(order)
                 if lines:
-                    return {"address_lines": lines, "order_number": str(order.get("number") or ""), "source": "wix-customer"}
+                    return {
+                        "address_lines": lines,
+                        "order_number": str(order.get("number") or ""),
+                        "source": "wix-customer",
+                    }
         return {}
 
     @classmethod
@@ -2167,8 +2312,16 @@ class WixOrdersClient:
             if isinstance(logistics_destination, dict)
             else {}
         )
-        contact = destination.get("contactDetails") if isinstance(destination.get("contactDetails"), dict) else {}
-        shipment_details = shipping.get("shipmentDetails") if isinstance(shipping.get("shipmentDetails"), dict) else {}
+        contact = (
+            destination.get("contactDetails")
+            if isinstance(destination.get("contactDetails"), dict)
+            else {}
+        )
+        shipment_details = (
+            shipping.get("shipmentDetails")
+            if isinstance(shipping.get("shipmentDetails"), dict)
+            else {}
+        )
         buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
 
         email = self._address_field(
@@ -2248,7 +2401,9 @@ class WixOrdersClient:
                 resp.raise_for_status()
                 payload = resp.json() if resp.content else {}
             except httpx.HTTPError as exc:
-                logger.warning("WixOrdersClient payment details order_id=%s failed: %s", real_id, exc)
+                logger.warning(
+                    "WixOrdersClient payment details order_id=%s failed: %s", real_id, exc
+                )
                 return {}
         if not isinstance(payload, dict):
             return {}
@@ -2271,7 +2426,11 @@ class WixOrdersClient:
         amount = ""
         payments_to_read: list[dict[str, Any]] = []
         for source in sources:
-            for key in ("paymentProviderTransactionId", "paymentGatewayTransactionId", "externalTransactionId"):
+            for key in (
+                "paymentProviderTransactionId",
+                "paymentGatewayTransactionId",
+                "externalTransactionId",
+            ):
                 candidate = str(source.get(key) or payload.get(key) or "").strip()
                 if candidate:
                     provider_ids.append(candidate)
@@ -2286,29 +2445,42 @@ class WixOrdersClient:
                     or ""
                 ).strip()
             if not payment_status:
-                payment_status = str(source.get("paymentStatus") or payload.get("paymentStatus") or "").strip()
+                payment_status = str(
+                    source.get("paymentStatus") or payload.get("paymentStatus") or ""
+                ).strip()
             if not payment_created:
-                payment_created = str(source.get("paymentCreatedDate") or payload.get("paymentCreatedDate") or "").strip()
+                payment_created = str(
+                    source.get("paymentCreatedDate") or payload.get("paymentCreatedDate") or ""
+                ).strip()
             if not payment_updated:
-                payment_updated = str(source.get("paymentUpdatedDate") or payload.get("paymentUpdatedDate") or "").strip()
+                payment_updated = str(
+                    source.get("paymentUpdatedDate") or payload.get("paymentUpdatedDate") or ""
+                ).strip()
             if not amount:
                 amount = str(source.get("amount") or payload.get("amount") or "").strip()
             payments = source.get("payments")
             if isinstance(payments, list):
-                payments_to_read.extend(payment for payment in payments if isinstance(payment, dict))
+                payments_to_read.extend(
+                    payment for payment in payments if isinstance(payment, dict)
+                )
 
         # Wix currently returns the actual provider as
         # regularPaymentDetails.paymentProvider (for example "Stripe").  Older
         # payloads used provider, so accept both.  Prefer an approved payment
         # when an order contains multiple attempts.
         payments_to_read.sort(
-            key=lambda payment: str(payment.get("status") or "").strip().upper()
-            not in {"APPROVED", "PAID"}
+            key=lambda payment: (
+                str(payment.get("status") or "").strip().upper() not in {"APPROVED", "PAID"}
+            )
         )
         for payment in payments_to_read:
             if not isinstance(payment, dict):
                 continue
-            regular = payment.get("regularPaymentDetails") if isinstance(payment.get("regularPaymentDetails"), dict) else {}
+            regular = (
+                payment.get("regularPaymentDetails")
+                if isinstance(payment.get("regularPaymentDetails"), dict)
+                else {}
+            )
             for key in ("providerTransactionId", "gatewayTransactionId", "paymentOrderId"):
                 candidate = str(regular.get(key) or payment.get(key) or "").strip()
                 if candidate:
@@ -2328,12 +2500,21 @@ class WixOrdersClient:
             if not payment_status:
                 payment_status = str(payment.get("status") or regular.get("status") or "").strip()
             if not payment_created:
-                payment_created = str(payment.get("createdDate") or payment.get("createdAt") or "").strip()
+                payment_created = str(
+                    payment.get("createdDate") or payment.get("createdAt") or ""
+                ).strip()
             if not payment_updated:
-                payment_updated = str(payment.get("updatedDate") or payment.get("updatedAt") or "").strip()
+                payment_updated = str(
+                    payment.get("updatedDate") or payment.get("updatedAt") or ""
+                ).strip()
             amount_obj = payment.get("amount") if isinstance(payment.get("amount"), dict) else {}
             if not amount:
-                amount = str(amount_obj.get("amount") or amount_obj.get("value") or source.get("amount") or "").strip()
+                amount = str(
+                    amount_obj.get("amount")
+                    or amount_obj.get("value")
+                    or source.get("amount")
+                    or ""
+                ).strip()
 
         unique_provider_ids: list[str] = []
         for candidate in provider_ids:
@@ -2401,7 +2582,9 @@ class WixOrdersClient:
         return self._physical_fulfillment_line_items_from_order(order)
 
     @classmethod
-    def _physical_fulfillment_line_items_from_order(cls, order: dict[str, Any]) -> list[dict[str, object]]:
+    def _physical_fulfillment_line_items_from_order(
+        cls, order: dict[str, Any]
+    ) -> list[dict[str, object]]:
         raw_items = order.get("lineItems") if isinstance(order.get("lineItems"), list) else []
         items: list[dict[str, object]] = []
         for raw in raw_items:
@@ -2457,7 +2640,9 @@ class WixOrdersClient:
             except httpx.HTTPError as exc:
                 response = getattr(exc, "response", None)
                 if getattr(response, "status_code", None) == 409:
-                    logger.info("WixOrdersClient create fulfillment already exists ref=%s", reference)
+                    logger.info(
+                        "WixOrdersClient create fulfillment already exists ref=%s", reference
+                    )
                     return {"already_exists": True}
                 logger.warning("WixOrdersClient create fulfillment failed: %s", exc)
                 return {}
@@ -2519,7 +2704,9 @@ class WixOrdersClient:
                 resp.raise_for_status()
                 return resp.json() if resp.content else {}
             except httpx.HTTPError as exc:
-                logger.warning("WixOrdersClient refund payments order_id=%s failed: %s", real_id, exc)
+                logger.warning(
+                    "WixOrdersClient refund payments order_id=%s failed: %s", real_id, exc
+                )
                 return {}
 
     def refund_full_order(

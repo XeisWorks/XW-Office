@@ -96,7 +96,11 @@ class ConflictScanOut(BaseModel):
 
 class WixSourceSnapshotOut(BaseModel):
     mappings_seen: int
+    catalog_products_indexed: int
     products_fetched: int
+    products_cached: int
+    products_missing_from_index: int
+    full_refresh: bool
     payloads_archived: int
     payloads_unchanged: int
     images_created: int
