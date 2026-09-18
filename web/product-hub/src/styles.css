@@ -651,10 +651,13 @@ a {
 .conflict-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .conflict-heading h1 { margin-bottom: 0; }
 .critical-warning { margin: 1rem 0; padding: 0.85rem; border-left: 4px solid var(--color-bad-text); background: var(--color-bad-bg); }
-.comparison-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 1rem 0; border: 1px solid var(--color-border); border-radius: 8px; overflow-x: auto; background: var(--color-surface); }
-.comparison-head { padding: 0.6rem; font-weight: 700; background: var(--color-neutral-bg); }
-.comparison-row { display: grid; grid-column: 1 / -1; }
-.comparison-row > * { min-width: 9rem; padding: 0.75rem; border-top: 1px solid var(--color-border); overflow-wrap: anywhere; }
+.comparison-scroll { margin: 1rem 0; overflow-x: auto; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); }
+.comparison-table { width: 100%; min-width: max-content; border-collapse: collapse; }
+.comparison-table th, .comparison-table td { min-width: 14rem; padding: 0.75rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--color-border); overflow-wrap: anywhere; }
+.comparison-table th { font-weight: 700; background: var(--color-neutral-bg); }
+.comparison-table thead th { position: sticky; top: 0; z-index: 1; }
+.comparison-table th:first-child, .comparison-table td:first-child { width: 10rem; min-width: 10rem; }
+.comparison-table tbody tr:last-child > * { border-bottom: 0; }
 .decision-panel, .impact-panel { margin-top: 1rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); }
 .decision-panel h2, .impact-panel h2 { margin-top: 0; font-size: 1.1rem; }
 .decision-buttons, .secondary-actions, .custom-decision { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.6rem; }
@@ -665,6 +668,5 @@ a {
 
 @media (max-width: 700px) {
   .app-header { align-items: flex-start; flex-wrap: wrap; }
-  .comparison-grid { grid-template-columns: repeat(5, minmax(9rem, 1fr)); }
   .impact-row { grid-template-columns: 1fr; }
 }

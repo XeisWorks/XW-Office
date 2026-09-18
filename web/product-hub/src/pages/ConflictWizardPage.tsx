@@ -74,11 +74,13 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
       <Link to="/conflicts">← Zur Queue</Link>
       <div className="conflict-heading"><div><h1>{item.product_sku} · {item.product_name}</h1><p>{item.conflict_type}</p></div><StatusBadge label={item.severity} tone={item.severity === "CRITICAL" || item.severity === "HIGH" ? "bad" : item.severity === "MEDIUM" ? "warn" : "neutral"} /></div>
       {item.severity === "CRITICAL" && <div className="critical-warning">Kritischer Identitäts-/Mapping-Konflikt: keine automatische Auflösung.</div>}
-      <div className="comparison-grid">
-        <div className="comparison-head">Feld</div>{sources.map((source) => <div className="comparison-head" key={source}>{source === "hub" ? "Product Hub" : source}</div>)}
-        {item.fields.map((field) => <div className="comparison-row" key={field.id} style={{ gridTemplateColumns: `repeat(${sources.length + 1}, minmax(0, 1fr))` }}>
-          <strong>{field.field_path}</strong>{sources.map((source) => <div key={source}>{display([...field.observations].reverse().find((obs) => obs.source === source)?.raw_value)}</div>)}
-        </div>)}
+      <div className="comparison-scroll">
+        <table className="comparison-table">
+          <thead><tr><th scope="col">Feld</th>{sources.map((source) => <th scope="col" key={source}>{source === "hub" ? "Product Hub" : source}</th>)}</tr></thead>
+          <tbody>{item.fields.map((field) => <tr key={field.id}>
+            <th scope="row">{field.field_path}</th>{sources.map((source) => <td key={source}>{display([...field.observations].reverse().find((obs) => obs.source === source)?.raw_value)}</td>)}
+          </tr>)}</tbody>
+        </table>
       </div>
       <div className="decision-panel">
         <h2>Welcher Wert ist richtig?</h2>
