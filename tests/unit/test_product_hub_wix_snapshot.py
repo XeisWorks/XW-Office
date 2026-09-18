@@ -150,3 +150,30 @@ def test_catalog_v1_snapshot_avoids_v3_variant_and_inventory_probes(
     assert report.products_fetched == 1
     assert wix.variant_calls == 0
     assert wix.inventory_calls == 0
+
+
+def test_missing_wix_object_creates_a_critical_mapping_case(
+    factory: sessionmaker[Session],
+) -> None:
+    products = ProductHubRepository(factory)
+    product, _ = products.create_product(sku="XW-MISSING-WIX", name="Missing Wix object")
+    products.create_channel_mapping(
+        channel="wix", entity_type="product", internal_entity_id=product.id, external_id="wix-missing"
+    )
+    report = WixSnapshotService(factory, wix_client=_FakeWix({})).run()
+
+    assert report.products_fetched == 0
+    assert report.mapping_conflicts_created == 1
+    low = SyncRepository(factory).list_open_sync_conflicts(channel="wix")
+    assert len(low) == 1
+    assert low[0].field_name == "mapping"
+    assert low[0].external_value == {
+        "external_id": "wix-missing",
+        "state": "not_found",
+        "error": "product detail fetch returned nothing",
+    }
+    scan = ConflictWizardService(factory).scan_low_level_conflicts()
+    case = ConflictWizardService(factory).repository.list_cases()[0][0]
+    assert scan["cases_created"] == 1
+    assert case.conflict_type == "WRONG_PRODUCT_MAPPING"
+    assert case.severity == "CRITICAL"

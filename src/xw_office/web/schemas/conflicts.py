@@ -105,6 +105,9 @@ class WixSourceSnapshotOut(BaseModel):
     conflicts_created: int
     conflicts_updated: int
     conflicts_resolved: int
+    mapping_conflicts_created: int
+    mapping_conflicts_updated: int
+    mapping_conflicts_resolved: int
     errors: list[str] = Field(default_factory=list)
 
 

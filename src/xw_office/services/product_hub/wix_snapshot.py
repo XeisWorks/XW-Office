@@ -46,6 +46,9 @@ class WixSnapshotReport:
     conflicts_created: int = 0
     conflicts_updated: int = 0
     conflicts_resolved: int = 0
+    mapping_conflicts_created: int = 0
+    mapping_conflicts_updated: int = 0
+    mapping_conflicts_resolved: int = 0
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, object]:
@@ -60,6 +63,9 @@ class WixSnapshotReport:
             "conflicts_created": self.conflicts_created,
             "conflicts_updated": self.conflicts_updated,
             "conflicts_resolved": self.conflicts_resolved,
+            "mapping_conflicts_created": self.mapping_conflicts_created,
+            "mapping_conflicts_updated": self.mapping_conflicts_updated,
+            "mapping_conflicts_resolved": self.mapping_conflicts_resolved,
             "errors": list(self.errors),
         }
 
@@ -86,6 +92,12 @@ class WixSnapshotService:
             except Exception as exc:  # noqa: BLE001 - one remote object must not abort a scan
                 logger.exception("Wix snapshot failed for %s", mapping.external_id)
                 report.errors.append(f"{mapping.external_id}: {exc}")
+                self._record_mapping_failure(
+                    product_id=mapping.internal_entity_id,
+                    external_id=mapping.external_id,
+                    error=str(exc),
+                    report=report,
+                )
         return report
 
     def _snapshot_one(
@@ -94,6 +106,7 @@ class WixSnapshotService:
         raw = self._wix.get_product_raw(external_id)
         if raw is None:
             raise RuntimeError("product detail fetch returned nothing")
+        self._record_mapping_healthy(product_id=product_id, external_id=external_id, report=report)
         # A Catalog V1 shop returns product details/media through its V1 product
         # endpoint, but has no compatible V3 variants/inventory query endpoints.
         # Avoid four guaranteed 404 probes per product; V1 stock/inline variants
@@ -150,6 +163,36 @@ class WixSnapshotService:
                 report.conflicts_resolved += 1
         report.products_fetched += 1
 
+    def _record_mapping_failure(
+        self,
+        *,
+        product_id: uuid.UUID,
+        external_id: str,
+        error: str,
+        report: WixSnapshotReport,
+    ) -> None:
+        expected = _mapping_state(external_id)
+        actual = {**expected, "state": "not_found", "error": error[:1000]}
+        _, outcome = self._sync.upsert_scanned_conflict(
+            channel="wix", entity_type="product", internal_entity_id=product_id,
+            field_name="mapping", hub_value=expected, external_value=actual,
+        )
+        if outcome == "created":
+            report.mapping_conflicts_created += 1
+        elif outcome == "updated":
+            report.mapping_conflicts_updated += 1
+
+    def _record_mapping_healthy(
+        self, *, product_id: uuid.UUID, external_id: str, report: WixSnapshotReport
+    ) -> None:
+        expected = _mapping_state(external_id)
+        _, outcome = self._sync.upsert_scanned_conflict(
+            channel="wix", entity_type="product", internal_entity_id=product_id,
+            field_name="mapping", hub_value=expected, external_value=expected,
+        )
+        if outcome == "resolved":
+            report.mapping_conflicts_resolved += 1
+
 
 def _comparable_fields(product: Any, raw: dict[str, Any]) -> list[tuple[str, str, str]]:
     """The fields that already have safe Conflict-Wizard resolution semantics."""
@@ -204,3 +247,7 @@ def _is_catalog_v1(source: WixSnapshotSource) -> bool:
         return False
     version = detect_version()
     return str(getattr(version, "value", version)).lower() == "v1"
+
+
+def _mapping_state(external_id: str) -> dict[str, str]:
+    return {"external_id": external_id, "state": "mapped"}

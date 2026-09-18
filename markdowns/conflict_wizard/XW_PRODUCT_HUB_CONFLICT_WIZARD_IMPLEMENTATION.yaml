@@ -247,6 +247,11 @@ source_snapshots:
       storage: wix_url_metadata_only
       removed_remote_images: mark_stale_never_delete
     conflict_fields: [name, description, visible]
+    unresolved_mapping:
+      field: mapping
+      conflict_type: WRONG_PRODUCT_MAPPING
+      severity: CRITICAL
+      automatic_resolution: forbidden
     external_writes: forbidden
     required_service_secrets: [WIX_API_KEY, WIX_SITE_ID]
 
