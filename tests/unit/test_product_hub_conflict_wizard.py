@@ -328,7 +328,9 @@ def test_archive_hub_product_closes_case_without_hard_delete(factory: sessionmak
         assert refreshed is not None
         assert refreshed.active is False
         assert refreshed.archived_at is not None
+        assert refreshed.attributes["wix_publish_eligible"] is False
         assert session.execute(text("select count(*) from audit_log")).scalar_one() == 1
+    assert service.scan_low_level_conflicts()["differences_found"] == 0
 
 
 def test_conflict_api_is_independently_feature_flagged(factory: sessionmaker[Session]) -> None:

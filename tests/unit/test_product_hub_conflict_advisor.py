@@ -12,7 +12,11 @@ from xw_office.services.product_hub.conflicts.advisor import (
     find_wix_mapping_candidates,
 )
 from xw_office.services.wix.client import WixProduct, WixProductVariant
-from xw_office.web.routers.conflicts import _sanitize_wix_description, _wix_variant_matches
+from xw_office.web.routers.conflicts import (
+    _fallback_advice,
+    _sanitize_wix_description,
+    _wix_variant_matches,
+)
 
 
 def test_advisor_uses_strict_stateless_output_without_tools(
@@ -156,6 +160,19 @@ def test_wix_variant_verification_requires_matching_id_and_hub_sku() -> None:
     assert _wix_variant_matches(raw, "wix-small", "XW-6012")
     assert not _wix_variant_matches(raw, "wix-small", "XW-6212")
     assert not _wix_variant_matches(raw, "other-variant", "XW-6012")
+
+
+def test_fallback_advice_keeps_mapping_candidates_usable_without_ai() -> None:
+    result = _fallback_advice(
+        {
+            "conflict": {"type": "WRONG_PRODUCT_MAPPING"},
+            "mapping_lookup": {"candidates": [{"external_id": "wix-1"}]},
+        }
+    )
+
+    assert result.confidence == "medium"
+    assert "SKU" in result.recommendation
+    assert "KI-Einschätzung" in result.warnings[0]
 
 
 def test_wix_description_keeps_safe_formatting_and_removes_active_content() -> None:

@@ -498,6 +498,9 @@ class ConflictWizardService:
             now = _now()
             product.active = False
             product.archived_at = now
+            attributes = dict(product.attributes or {})
+            attributes["wix_publish_eligible"] = False
+            product.attributes = attributes
             product.row_version += 1
             if case.origin_sync_conflict_id is not None:
                 low = session.get(SyncConflict, case.origin_sync_conflict_id)
@@ -509,8 +512,9 @@ class ConflictWizardService:
                 AuditLog(
                     id=uuid.uuid4(), actor_type="user", actor_id=actor, source="conflict_wizard",
                     action="conflict.archive_hub_product", entity_type="product", entity_id=product.id,
-                    changed_fields=["active", "archived_at"], before_data={"active": True},
-                    after_data={"active": False}, correlation_id=case.id,
+                    changed_fields=["active", "archived_at", "attributes.wix_publish_eligible"],
+                    before_data={"active": True, "wix_publish_eligible": True},
+                    after_data={"active": False, "wix_publish_eligible": False}, correlation_id=case.id,
                 )
             )
             case.resolution_type = "ARCHIVE_HUB_PRODUCT"
@@ -732,6 +736,8 @@ def _resolve_owner(
 
 
 def _not_relevant(product: Product, low: SyncConflict, products: ProductHubRepository) -> bool:
+    if product.archived_at is not None:
+        return True
     if low.field_name in {"mapping", "channel_mapping"} and low.channel == "wix":
         publishable = product.attributes.get("wix_publish_eligible")
         return publishable is False or str(publishable).casefold() == "false"

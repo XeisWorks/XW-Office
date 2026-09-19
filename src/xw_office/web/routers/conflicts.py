@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from xw_office.repositories.product_hub_conflicts import ConflictOptimisticLockError
 from xw_office.services.product_hub.conflicts.advisor import (
+    ConflictAdvice,
     ConflictAdviceError,
     ConflictAdviceService,
     find_wix_mapping_candidates,
@@ -47,6 +48,33 @@ from xw_office.web.schemas.conflicts import (
 def _compact_description(value: object, limit: int = 260) -> str:
     text = " ".join(str(value or "").split())
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _fallback_advice(snapshot: dict[str, object]) -> ConflictAdvice:
+    """Keep deterministic conflict handling available when optional AI advice is down."""
+    conflict = snapshot.get("conflict") if isinstance(snapshot.get("conflict"), dict) else {}
+    lookup = snapshot.get("mapping_lookup") if isinstance(snapshot.get("mapping_lookup"), dict) else {}
+    candidates = lookup.get("candidates") if isinstance(lookup.get("candidates"), list) else []
+    is_mapping = conflict.get("type") == "WRONG_PRODUCT_MAPPING"
+    if is_mapping and candidates:
+        recommendation = "Prüfe den Wix-Vorschlag und bestätige nur die passende SKU bzw. Variante."
+        explanation = "Die Wix-Suche hat passende Kandidaten anhand von SKU und Produktdaten gefunden."
+    elif is_mapping:
+        recommendation = "Wix erneut prüfen oder einen Entwurf anlegen, nachdem die SKU im Hub geprüft wurde."
+        explanation = "Für die gespeicherte Wix-Verknüpfung liegt kein sicherer Ersatzkandidat vor."
+    else:
+        recommendation = "Wähle den fachlich richtigen Wert und prüfe anschließend die Vorschau."
+        explanation = "Die Werte unterscheiden sich zwischen Product Hub und dem verbundenen Kanal."
+    return ConflictAdvice(
+        title="Deterministische Konflikthilfe",
+        explanation=explanation,
+        likely_causes=["Verknüpfung oder Quelldaten wurden außerhalb des Product Hub geändert."],
+        recommendation=recommendation,
+        next_steps=["Vorschlag und SKU prüfen", "Änderung erst nach der Vorschau ausführen"],
+        confidence="medium" if candidates else "low",
+        warnings=["KI-Einschätzung ist momentan nicht verfügbar; es wurde keine automatische Entscheidung getroffen."],
+        evidence=[f"Konflikttyp: {conflict.get('type') or 'unbekannt'}"],
+    )
 
 
 def _wix_variant_matches(raw: dict[str, object], variant_id: str, sku: str) -> bool:
@@ -315,8 +343,8 @@ def build_conflicts_router(
             }
         try:
             result = get_advice_service().advise(snapshot)
-        except ConflictAdviceError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except ConflictAdviceError:
+            result = _fallback_advice(snapshot)
         return ConflictAdviceOut(
             **result.__dict__,
             mapping_search_status=mapping_search_status,
