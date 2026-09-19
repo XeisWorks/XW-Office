@@ -365,9 +365,10 @@ def build_conflicts_router(
         service: ConflictWizardService = Depends(get_service),
     ) -> ConflictCreateWixProductOut:
         """Create a hidden Wix draft from the Hub product, then map it here."""
-        if get_wix_details_client is None:
+        if get_wix_details_client is None or get_wix_catalog_client is None:
             raise HTTPException(status_code=503, detail="Wix-Anbindung ist nicht konfiguriert")
         created_external_id: str | None = None
+        operation = "created_and_mapped"
         try:
             bundle = service.detail(case_id)
             case = bundle["case"]
@@ -376,16 +377,31 @@ def build_conflicts_router(
             if case.row_version != body.expected_row_version:
                 raise ConflictOptimisticLockError("Der Konflikt wurde zwischenzeitlich geaendert")
             product = bundle["product"]
-            price = service.wix_creation_price(product.id)
-            if price is None:
-                raise ValueError("Dem Hub-Produkt fehlt ein aktueller Verkaufspreis in EUR")
-            external_id, catalog_version = get_wix_details_client().create_product(
-                name=product.name,
-                sku=product.sku,
-                product_type=product.product_type,
-                price=price,
-            )
-            created_external_id = external_id
+            normalized_sku = product.sku.strip().casefold()
+            existing = [
+                row
+                for row in get_wix_catalog_client().list_products(include_hidden=True)
+                if row.sku.strip().casefold() == normalized_sku and row.id.strip()
+            ]
+            if len(existing) > 1:
+                raise ValueError(
+                    f"Wix enthält mehrere Produkte mit der SKU {product.sku}; bitte zuerst in Wix bereinigen."
+                )
+            catalog_version = get_wix_details_client().detect_catalog_version()
+            if existing:
+                external_id = existing[0].id.strip()
+                operation = "reused_existing"
+            else:
+                price = service.wix_creation_price(product.id)
+                if price is None:
+                    raise ValueError("Dem Hub-Produkt fehlt ein aktueller Verkaufspreis in EUR")
+                external_id, catalog_version = get_wix_details_client().create_product(
+                    name=product.name,
+                    sku=product.sku,
+                    product_type=product.product_type,
+                    price=price,
+                )
+                created_external_id = external_id
             row = service.map_new_wix_product(
                 case_id, expected_row_version=body.expected_row_version, external_id=external_id
             )
@@ -421,6 +437,7 @@ def build_conflicts_router(
             **ConflictCaseOut.model_validate(row).model_dump(),
             external_id=external_id,
             catalog_version=catalog_version.value,
+            operation=operation,
         )
 
     @router.post(

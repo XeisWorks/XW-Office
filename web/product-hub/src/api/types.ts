@@ -325,7 +325,7 @@ export interface ConflictCaseDetail extends ConflictCase {
 export interface ConflictCreateWixProductResult extends ConflictCase {
   external_id: string;
   catalog_version: "v1" | "v3";
-  operation: "created_and_mapped";
+  operation: "created_and_mapped" | "reused_existing";
 }
 
 export interface ConflictAdvice {

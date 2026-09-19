@@ -137,3 +137,53 @@ def test_list_products_paginates_with_has_next_and_offset_without_cursor() -> No
     )
     assert len(rows) == 101
     assert rows[-1].sku == "XW-101"
+
+
+def test_list_products_reader_query_includes_hidden_products_and_variants() -> None:
+    payloads: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url.endswith("/stores/v3/catalog/products/query") or url.endswith(
+            "/stores/v3/products/query"
+        ):
+            return httpx.Response(404, text="not found")
+        if not url.endswith("/stores-reader/v1/products/query"):
+            return httpx.Response(404, text="unknown")
+        payload = request.read().decode("utf-8")
+        import json
+
+        payloads.append(json.loads(payload))
+        return httpx.Response(
+            200,
+            json={
+                "products": [
+                    {
+                        "id": "hidden-1",
+                        "name": "Verstecktes Produkt",
+                        "visible": False,
+                        "variants": [{"sku": "XW-101.3"}],
+                    }
+                ],
+                "pagingMetadata": {"hasNext": False},
+            },
+        )
+
+    original_client = httpx.Client
+
+    class _Client(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(handler)
+            super().__init__(*args, **kwargs)
+
+    httpx.Client = _Client  # type: ignore[assignment]
+    try:
+        client = WixProductsClient(secret_service=_SecretService(key="k", site="s"))  # type: ignore[arg-type]
+        rows = client.list_products(include_hidden=True)
+    finally:
+        httpx.Client = original_client  # type: ignore[assignment]
+
+    assert rows[0].sku == "XW-101.3"
+    assert payloads
+    assert payloads[0]["includeHiddenProducts"] is True
+    assert payloads[0]["includeVariants"] is True

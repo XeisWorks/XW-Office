@@ -204,10 +204,41 @@ class WixProductsClient:
         candidates = [
             f"{base_v3}/catalog/products/query",
             f"{base_v3}/products/query",
+            "https://www.wixapis.com/stores-reader/v1/products/query",
             "https://www.wixapis.com/stores/v1/products/query",
             "https://www.wixapis.com/ecom/v1/products/query",
         ]
         return list(dict.fromkeys(candidates))
+
+    @staticmethod
+    def _product_query_body(
+        endpoint: str,
+        *,
+        limit: int,
+        offset: int = 0,
+        cursor: str | None = None,
+        include_hidden: bool = True,
+    ) -> dict[str, Any]:
+        """Build a compatible query body for the selected Wix catalog API.
+
+        The legacy Stores Reader API uses top-level flags for hidden products and
+        variants. Catalog V3 uses the query object only and requires the admin
+        read scope for hidden products, so sending the legacy flags there can
+        make an otherwise valid query fail with HTTP 400.
+        """
+        query: dict[str, Any] = {
+            "paging": {
+                "limit": limit,
+                **({"offset": offset} if offset > 0 else {}),
+            }
+        }
+        if cursor:
+            query["cursorPaging"] = {"cursor": cursor}
+        body: dict[str, Any] = {"query": query}
+        if "/stores-reader/" in endpoint or "/stores/v1/" in endpoint:
+            body["includeHiddenProducts"] = include_hidden
+            body["includeVariants"] = True
+        return body
 
     @staticmethod
     def _extract_product_list(data: object) -> list[dict[str, Any]]:
@@ -345,7 +376,9 @@ class WixProductsClient:
                         "POST",
                         endpoint,
                         headers=headers,
-                        json_body={"query": {"paging": {"limit": 1}}},
+                        json_body=self._product_query_body(
+                            endpoint, limit=1, include_hidden=include_hidden
+                        ),
                         cancel_token=cancel_token,
                     )
                     data_probe = probe.json() if probe.content else {}
@@ -371,16 +404,13 @@ class WixProductsClient:
             while page < max_pages:
                 if cancel_token is not None:
                     cancel_token.raise_if_cancelled()
-                body: dict[str, Any] = {
-                    "query": {
-                        "paging": {
-                            "limit": _PRODUCTS_PAGE_SIZE,
-                            **({"offset": offset} if offset > 0 else {}),
-                        }
-                    }
-                }
-                if cursor:
-                    body["query"]["cursorPaging"] = {"cursor": cursor}
+                body = self._product_query_body(
+                    chosen_endpoint,
+                    limit=_PRODUCTS_PAGE_SIZE,
+                    offset=offset,
+                    cursor=cursor,
+                    include_hidden=include_hidden,
+                )
 
                 try:
                     resp = self._request_with_retry(

@@ -140,7 +140,10 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
     try {
       const result = await api.createWixProductForConflict(id, item.row_version);
       await load();
-      setMessage(`Wix-Produkt erstellt und mit dem Hub verknüpft (Catalog ${result.catalog_version.toUpperCase()}, ID ${result.external_id}). Bitte Inhalte und Sichtbarkeit in Wix prüfen.`);
+      const operationMessage = result.operation === "reused_existing"
+        ? "Bestehendes Wix-Produkt gefunden und mit dem Hub verknüpft"
+        : "Wix-Produkt erstellt und mit dem Hub verknüpft";
+      setMessage(`${operationMessage} (Catalog ${result.catalog_version.toUpperCase()}, ID ${result.external_id}). Bitte Inhalte und Sichtbarkeit in Wix prüfen.`);
       setMessageTone("success");
     } catch (error) { handleError(error); }
     finally { setDestructiveAction(null); }
