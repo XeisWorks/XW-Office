@@ -73,7 +73,10 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
     if (!item || !id) return;
     try {
       const updated = await api.applyConflict(id, item.row_version);
-      setItem({ ...item, ...updated }); setMessage(updated.status === "RESOLVED" ? "Fall verifiziert und abgeschlossen." : "Channel-Aktion wurde sicher in die Outbox gestellt.");
+      // The apply response contains the case, but not the updated action rows.
+      // Reload them so the confirmation state cannot leave a stale executable button.
+      await load();
+      setMessage(updated.status === "RESOLVED" ? "Fall verifiziert und abgeschlossen." : "Channel-Aktion wurde sicher in die Outbox gestellt.");
     } catch (error) { handleError(error); }
   }
 
@@ -160,6 +163,24 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
   const preferredCandidate = comparison?.candidate ?? advice?.mapping_candidates[0] ?? null;
   const otherCandidates = advice?.mapping_candidates.filter((candidate) => candidate.external_id !== preferredCandidate?.external_id) ?? [];
   const oldMappingStatus = comparison?.old_status === "not_found" ? "Bei Wix nicht gefunden" : "Nicht abrufbar";
+  const selectedActions = actions.filter((action) => action.selected);
+  const hasPlannedActions = selectedActions.some((action) => action.status === "PLANNED");
+  const executionFailed = selectedActions.some((action) => action.status === "FAILED");
+  const executionPending = selectedActions.some((action) => action.status === "QUEUED");
+  const executionComplete = selectedActions.length > 0 && selectedActions.every((action) => ["VERIFIED", "SKIPPED"].includes(action.status));
+  const executionButtonLabel = executionPending
+    ? "Ausführung angestoßen – wartet auf Wix"
+    : executionFailed
+      ? "Fehlgeschlagene Änderungen erneut ausführen"
+      : "Ausgewählte Änderungen ausführen";
+  const actionRows = actions.map((action) => (
+    <div className="impact-row" key={action.id}>
+      <span>{action.channel}</span>
+      <span>{displayConflictValue(action.field_path ?? "", action.before_value)} → {displayConflictValue(action.field_path ?? "", action.after_value)}</span>
+      <StatusBadge label={action.status} tone={action.status === "VERIFIED" ? "ok" : action.status === "SKIPPED" || action.status === "FAILED" ? "bad" : "warn"} />
+      {action.error && <span className="hint-error">{action.error}</span>}
+    </div>
+  ));
 
   return (
     <section>
@@ -255,7 +276,10 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
         {advice && <p>{advice.recommendation || advice.explanation}</p>}
       </div>
 
-      {actions.length > 0 && <div className="impact-panel"><h2>Vorschau der Änderungen</h2>{actions.map((action) => <div className="impact-row" key={action.id}><span>{action.channel}</span><span>{displayConflictValue(action.field_path ?? "", action.before_value)} → {displayConflictValue(action.field_path ?? "", action.after_value)}</span><StatusBadge label={action.status} tone={action.status === "VERIFIED" ? "ok" : action.status === "SKIPPED" || action.status === "FAILED" ? "bad" : "warn"} />{action.error && <span className="hint-error">{action.error}</span>}</div>)}<button className="primary-button" type="button" onClick={apply} disabled={!actions.some((action) => action.selected && action.status === "PLANNED")}>Ausgewählte Änderungen ausführen</button></div>}
+      {actions.length > 0 && <div className="impact-panel"><h2>Vorschau der Änderungen</h2>{actionRows}
+        {executionComplete && <div className="execution-confirmation" role="status"><span className="execution-check" aria-hidden="true">✓</span>Ausgewählte Änderungen erfolgreich ausgeführt</div>}
+        {!executionComplete && <button className={`primary-button ${executionPending ? "execution-pending" : ""}`} type="button" onClick={apply} disabled={!hasPlannedActions || executionPending}>{executionButtonLabel}</button>}
+      </div>}
 
       <details className="technical-details"><summary>Technische Details anzeigen</summary>
         {item.fields.map((field) => <div key={field.id}><h3>{field.field_path}</h3>{field.observations.map((observation) => <div key={observation.id}><strong>{observation.source}</strong><pre>{technicalValue(observation.raw_value)}</pre></div>)}</div>)}
