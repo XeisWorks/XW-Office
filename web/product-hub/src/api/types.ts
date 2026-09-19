@@ -317,6 +317,17 @@ export interface ConflictCaseDetail extends ConflictCase {
   actions: ConflictAction[];
 }
 
+export interface ConflictAdvice {
+  title: string;
+  explanation: string;
+  likely_causes: string[];
+  recommendation: string;
+  next_steps: string[];
+  confidence: "low" | "medium" | "high";
+  warnings: string[];
+  evidence: string[];
+}
+
 export interface ConflictSummary {
   open: number;
   critical: number;

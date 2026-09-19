@@ -28,7 +28,7 @@ from xw_office.repositories.product_hub_sharing import SharingRepository
 from xw_office.repositories.product_hub_sync import SyncRepository
 from xw_office.models.product_hub_sync import OutboxEvent
 from xw_office.services.product_hub.content_generation import ContentGenerationService
-from xw_office.services.product_hub.conflicts import ConflictWizardService
+from xw_office.services.product_hub.conflicts import ConflictAdviceService, ConflictWizardService
 from xw_office.services.product_hub.editing import EditingService
 from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.product_hub.outbox_worker import OutboxWorker
@@ -298,6 +298,11 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
     _conflict_service = (
         ConflictWizardService(_session_factory) if _session_factory is not None else None
     )
+    _conflict_advice_service = ConflictAdviceService(
+        api_key=_EnvSecretSource().get_secret("OPENAI_API_KEY"),
+        model=os.getenv("XW_PRODUCT_HUB_CONFLICT_AI_MODEL", "gpt-4.1-mini").strip()
+        or "gpt-4.1-mini",
+    )
     _wix_snapshot_service = (
         WixSnapshotService(
             _session_factory, wix_client=_wix_client, wix_catalog_client=_wix_catalog_client
@@ -352,6 +357,9 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
     def conflict_channel_apply_enabled() -> bool:
         return resolved.conflict_channel_apply_enabled and resolved.sync_push_enabled
 
+    def get_conflict_advice_service() -> ConflictAdviceService:
+        return _conflict_advice_service
+
     app.include_router(
         build_conflicts_router(
             get_conflict_service,
@@ -359,6 +367,7 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
             require_conflict_scan_enabled,
             require_product_hub_edit_enabled,
             conflict_channel_apply_enabled,
+            get_conflict_advice_service,
         ),
         dependencies=[
             Depends(require_bootstrap_token),

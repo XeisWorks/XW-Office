@@ -71,6 +71,17 @@ class ConflictCaseDetailOut(ConflictCaseOut):
     actions: list[ConflictActionOut]
 
 
+class ConflictAdviceOut(BaseModel):
+    title: str
+    explanation: str
+    likely_causes: list[str]
+    recommendation: str
+    next_steps: list[str]
+    confidence: str
+    warnings: list[str]
+    evidence: list[str]
+
+
 class ConflictPageOut(BaseModel):
     items: list[ConflictCaseOut]
     total: int

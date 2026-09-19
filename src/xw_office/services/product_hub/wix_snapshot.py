@@ -184,7 +184,10 @@ class WixSnapshotService:
     ) -> None:
         raw = self._wix.get_product_raw(external_id)
         if raw is None:
-            raise RuntimeError("product detail fetch returned nothing")
+            failure_reader = getattr(self._wix, "get_last_product_raw_failure", None)
+            failure = failure_reader() if callable(failure_reader) else None
+            error = str((failure or {}).get("error") or "product detail fetch returned nothing")
+            raise RuntimeError(error)
         self._record_mapping_healthy(product_id=product_id, external_id=external_id, report=report)
         # A Catalog V1 shop returns product details/media through its V1 product
         # endpoint, but has no compatible V3 variants/inventory query endpoints.
@@ -258,7 +261,13 @@ class WixSnapshotService:
         report: WixSnapshotReport,
     ) -> None:
         expected = _mapping_state(external_id)
-        actual = {**expected, "state": "not_found", "error": error[:1000]}
+        failure_reader = getattr(self._wix, "get_last_product_raw_failure", None)
+        failure = failure_reader() if callable(failure_reader) else None
+        actual = {
+            **expected,
+            **(failure if isinstance(failure, dict) else {"state": "not_found"}),
+            "error": error[:1000],
+        }
         _, outcome = self._sync.upsert_scanned_conflict(
             channel="wix",
             entity_type="product",

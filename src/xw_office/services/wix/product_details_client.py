@@ -39,6 +39,40 @@ _RETRY_BACKOFF_SEC = 0.4
 _BULK_CHUNK = 100  # max products per bulk request
 
 
+def _raw_fetch_failure(
+    statuses: list[int], failures: list[str], invalid_response: bool
+) -> dict[str, object]:
+    if any(status in {401, 403} for status in statuses):
+        return {
+            "state": "permission_denied",
+            "status_codes": sorted(set(statuses)),
+            "error": "Wix hat den Produktabruf wegen fehlender Berechtigung abgelehnt.",
+        }
+    if statuses and all(status in {404, 410} for status in statuses):
+        return {
+            "state": "not_found",
+            "status_codes": sorted(set(statuses)),
+            "error": "Wix hat unter dieser Produkt-ID kein Produkt gefunden.",
+        }
+    if any(status >= 500 or status == 429 for status in statuses) or failures:
+        return {
+            "state": "temporary_error",
+            "status_codes": sorted(set(statuses)),
+            "error": "Wix war beim Produktabruf voruebergehend nicht erreichbar.",
+        }
+    if invalid_response:
+        return {
+            "state": "invalid_response",
+            "status_codes": sorted(set(statuses)),
+            "error": "Wix hat geantwortet, aber keine gueltigen Produktdaten geliefert.",
+        }
+    return {
+        "state": "api_error",
+        "status_codes": sorted(set(statuses)),
+        "error": "Der Wix-Produktabruf ist fehlgeschlagen.",
+    }
+
+
 def _api_product_id(value: str) -> str:
     """Return the GUID expected by Wix Stores API endpoints.
 
@@ -279,6 +313,7 @@ class WixProductDetailsClient:
         self._http_client = http_client
         self._owns_http_client = http_client is None
         self._http_client_lock = RLock()
+        self._last_raw_fetch_failure: dict[str, object] | None = None
 
     def _client(self) -> httpx.Client:
         """Return the reusable connection pool for product/category requests."""
@@ -403,7 +438,18 @@ class WixProductDetailsClient:
         it does not change ``get_product``'s behavior or its callers.
         """
         pid = _api_product_id(product_id)
-        if not pid or not self.has_credentials():
+        self._last_raw_fetch_failure = None
+        if not pid:
+            self._last_raw_fetch_failure = {
+                "state": "invalid_mapping",
+                "error": "Die gespeicherte Wix-Produkt-ID ist leer oder ungueltig.",
+            }
+            return None
+        if not self.has_credentials():
+            self._last_raw_fetch_failure = {
+                "state": "configuration_error",
+                "error": "Wix-Zugangsdaten sind nicht vollstaendig konfiguriert.",
+            }
             return None
 
         version = self.detect_catalog_version()
@@ -411,21 +457,32 @@ class WixProductDetailsClient:
         headers = self._headers()
 
         client = self._client()
+        statuses: list[int] = []
+        failures: list[str] = []
+        invalid_response = False
         for url in urls:
             try:
                 resp = client.get(url, headers=headers)
+                statuses.append(resp.status_code)
                 if resp.status_code < 400:
                     raw = resp.json() if resp.content else {}
                     product_raw = raw.get("product") or raw
                     if isinstance(product_raw, dict) and product_raw.get("id"):
                         return product_raw
+                    invalid_response = True
             except Exception as exc:  # noqa: BLE001
+                failures.append(type(exc).__name__)
                 logger.debug(
                     "WixProductDetailsClient.get_product_raw %s failed at %s: %s", pid, url, exc
                 )
 
         logger.warning("WixProductDetailsClient: could not fetch raw product %s", pid)
+        self._last_raw_fetch_failure = _raw_fetch_failure(statuses, failures, invalid_response)
         return None
+
+    def get_last_product_raw_failure(self) -> dict[str, object] | None:
+        """Return a credential-free diagnostic for the latest raw-product read."""
+        return dict(self._last_raw_fetch_failure) if self._last_raw_fetch_failure else None
 
     def query_variants(self, product_id: str) -> list[dict[str, Any]]:
         """Return raw Catalog V3 variants for one product (Read-Only Variants API).

@@ -345,7 +345,46 @@ def test_get_product_raw_strips_wix_export_product_prefix_for_api_request() -> N
 
 
 def test_get_product_raw_returns_none_without_credentials() -> None:
-    assert _client_no_creds().get_product_raw("any-id") is None
+    client = _client_no_creds()
+    assert client.get_product_raw("any-id") is None
+    assert client.get_last_product_raw_failure() == {
+        "state": "configuration_error",
+        "error": "Wix-Zugangsdaten sind nicht vollstaendig konfiguriert.",
+    }
+
+
+def test_get_product_raw_distinguishes_not_found_from_permission_error() -> None:
+    def not_found(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json={"products": []})
+        return httpx.Response(404)
+
+    client = WixProductDetailsClient(
+        secret_service=_Secrets(),
+        http_client=httpx.Client(transport=httpx.MockTransport(not_found)),
+    )
+    assert client.get_product_raw("missing") is None
+    assert client.get_last_product_raw_failure() == {
+        "state": "not_found",
+        "status_codes": [404],
+        "error": "Wix hat unter dieser Produkt-ID kein Produkt gefunden.",
+    }
+
+    def forbidden(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json={"products": []})
+        return httpx.Response(403)
+
+    client = WixProductDetailsClient(
+        secret_service=_Secrets(),
+        http_client=httpx.Client(transport=httpx.MockTransport(forbidden)),
+    )
+    assert client.get_product_raw("forbidden") is None
+    assert client.get_last_product_raw_failure() == {
+        "state": "permission_denied",
+        "status_codes": [403],
+        "error": "Wix hat den Produktabruf wegen fehlender Berechtigung abgelehnt.",
+    }
 
 
 def test_query_variants_returns_variant_list() -> None:

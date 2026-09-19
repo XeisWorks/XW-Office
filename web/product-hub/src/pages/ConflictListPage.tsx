@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import StatusBadge from "../components/StatusBadge";
 import { useApi } from "../hooks/useApi";
+import { conflictTypeLabel } from "../utils/conflictPresentation";
 
 export default function ConflictListPage({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [severity, setSeverity] = useState("");
@@ -80,7 +81,7 @@ export default function ConflictListPage({ onUnauthorized }: { onUnauthorized: (
               <tr key={item.id}>
                 <td><StatusBadge label={item.severity} tone={item.severity === "CRITICAL" || item.severity === "HIGH" ? "bad" : item.severity === "MEDIUM" ? "warn" : "neutral"} /></td>
                 <td><Link to={`/conflicts/${item.id}`}>{item.title}</Link><div className="hint">{item.summary}</div></td>
-                <td>{item.conflict_type}</td><td>{item.status}</td><td>{new Date(item.last_seen_at).toLocaleString("de-AT")}</td>
+                <td>{conflictTypeLabel(item.conflict_type)}</td><td>{item.status}</td><td>{new Date(item.last_seen_at).toLocaleString("de-AT")}</td>
               </tr>
             ))}
             {!queue.data.items.length && <tr><td colSpan={5} className="hint">Keine passenden offenen Fälle.</td></tr>}

@@ -13,9 +13,14 @@ from xw_office.services.product_hub.conflicts.service import (
     StaleConflictError,
     UnsupportedConflictAction,
 )
+from xw_office.services.product_hub.conflicts.advisor import (
+    ConflictAdviceError,
+    ConflictAdviceService,
+)
 from xw_office.services.product_hub.wix_snapshot import WixSnapshotService
 from xw_office.web.schemas.conflicts import (
     ConflictActionOut,
+    ConflictAdviceOut,
     ConflictCaseDetailOut,
     ConflictCaseOut,
     ConflictDecisionRequest,
@@ -37,6 +42,7 @@ def build_conflicts_router(
     require_scan_enabled: Callable[[], None],
     require_edit_enabled: Callable[[], None],
     channel_apply_enabled: Callable[[], bool],
+    get_advice_service: Callable[[], ConflictAdviceService],
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1/conflicts", tags=["product-hub-conflicts"])
 
@@ -101,6 +107,41 @@ def build_conflicts_router(
             fields=fields,
             actions=[ConflictActionOut.model_validate(action) for action in bundle["actions"]],
         )
+
+    @router.post("/{case_id}/advice", response_model=ConflictAdviceOut)
+    def advice(
+        case_id: uuid.UUID, service: ConflictWizardService = Depends(get_service)
+    ) -> ConflictAdviceOut:
+        """Generate a labelled, read-only draft explanation; never decide or apply."""
+        try:
+            bundle = service.detail(case_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        case = bundle["case"]
+        product = bundle["product"]
+        snapshot = {
+            "product": {"sku": product.sku, "name": product.name},
+            "conflict": {
+                "type": case.conflict_type,
+                "severity": case.severity,
+                "summary": case.summary,
+            },
+            "fields": [
+                {
+                    "field": item["field"].field_path,
+                    "observations": [
+                        {"source": row.source, "value": row.raw_value}
+                        for row in item["observations"]
+                    ],
+                }
+                for item in bundle["fields"]
+            ],
+        }
+        try:
+            result = get_advice_service().advise(snapshot)
+        except ConflictAdviceError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return ConflictAdviceOut(**result.__dict__)
 
     @router.post(
         "/scan", response_model=ConflictScanOut, dependencies=[Depends(require_scan_enabled)]

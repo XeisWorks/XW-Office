@@ -2,6 +2,7 @@ import type {
   AuditLogEntry,
   BulletPointsUpdateRequest,
   ConflictAction,
+  ConflictAdvice,
   ConflictCase,
   ConflictCaseDetail,
   ConflictSummary,
@@ -101,7 +102,14 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new ApiError(response.status, text || `HTTP ${response.status}`);
+    let message = text;
+    try {
+      const parsed = JSON.parse(text) as { detail?: unknown };
+      if (typeof parsed.detail === "string") message = parsed.detail;
+    } catch {
+      // Non-JSON errors are already useful as plain text.
+    }
+    throw new ApiError(response.status, message || `HTTP ${response.status}`);
   }
   return (await response.json()) as T;
 }
@@ -177,6 +185,8 @@ export const api = {
     return request<Page<ConflictCase>>(`/api/v1/conflicts?${params.toString()}`);
   },
   getConflict: (id: string) => request<ConflictCaseDetail>(`/api/v1/conflicts/${id}`),
+  getConflictAdvice: (id: string) =>
+    request<ConflictAdvice>(`/api/v1/conflicts/${id}/advice`, { method: "POST" }),
   scanConflicts: (productId?: string) =>
     request<{ differences_found: number; cases_created: number; cases_updated: number }>(
       `/api/v1/conflicts/scan${productId ? `?product_id=${encodeURIComponent(productId)}` : ""}`,
