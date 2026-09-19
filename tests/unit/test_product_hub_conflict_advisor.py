@@ -11,8 +11,8 @@ from xw_office.services.product_hub.conflicts.advisor import (
     ConflictAdviceService,
     find_wix_mapping_candidates,
 )
-from xw_office.services.wix.client import WixProduct
-from xw_office.web.routers.conflicts import _sanitize_wix_description
+from xw_office.services.wix.client import WixProduct, WixProductVariant
+from xw_office.web.routers.conflicts import _sanitize_wix_description, _wix_variant_matches
 
 
 def test_advisor_uses_strict_stateless_output_without_tools(
@@ -116,6 +116,46 @@ def test_mapping_candidates_match_a_wix_variant_sku_to_its_parent_product() -> N
     assert candidates[0].sku == "XW-6012"
     assert candidates[0].score == 100
     assert "Exakte SKU" in candidates[0].match_reasons
+
+
+def test_mapping_candidate_carries_the_exact_wix_variant_and_its_name() -> None:
+    candidates = find_wix_mapping_candidates(
+        [
+            WixProduct(
+                id="bh-polka",
+                name="BH Polka",
+                skus=["XW-6012"],
+                variants=[
+                    WixProductVariant(
+                        id="wix-small",
+                        sku="XW-6012",
+                        name="Besetzung: Kleine Besetzung",
+                    )
+                ],
+            )
+        ],
+        product_name="BH-Polka [Kleine Besetzung]",
+        product_sku="XW-6012",
+    )
+
+    assert candidates[0].external_id == "bh-polka"
+    assert candidates[0].variant_external_id == "wix-small"
+    assert candidates[0].variant_name == "Besetzung: Kleine Besetzung"
+
+
+def test_wix_variant_verification_requires_matching_id_and_hub_sku() -> None:
+    raw = {
+        "variants": [
+            {
+                "id": "wix-small",
+                "variant": {"sku": "XW-6012"},
+            }
+        ]
+    }
+
+    assert _wix_variant_matches(raw, "wix-small", "XW-6012")
+    assert not _wix_variant_matches(raw, "wix-small", "XW-6212")
+    assert not _wix_variant_matches(raw, "other-variant", "XW-6012")
 
 
 def test_wix_description_keeps_safe_formatting_and_removes_active_content() -> None:

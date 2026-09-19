@@ -71,6 +71,7 @@ class WixProduct(BaseModel):
     name: str = ""
     sku: str = ""
     skus: list[str] = Field(default_factory=list)
+    variants: list["WixProductVariant"] = Field(default_factory=list)
     price: str = ""
     brand_name: str = ""
     brand_id: str = ""
@@ -91,6 +92,49 @@ class WixProduct(BaseModel):
                 seen.add(normalized)
                 values.append(value)
         return tuple(values)
+
+
+class WixProductVariant(BaseModel):
+    """A sellable Wix variant nested below one Catalog product."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = ""
+    sku: str = ""
+    name: str = ""
+
+
+def _variant_name(raw: dict[str, Any]) -> str:
+    """Return the human-readable option selection from V1 and V3 variant shapes."""
+    choices = raw.get("choices")
+    nested = raw.get("variant")
+    if not isinstance(choices, dict) and isinstance(nested, dict):
+        choices = nested.get("choices")
+    if not isinstance(choices, dict):
+        return ""
+    values = [
+        f"{str(key).strip()}: {str(value).strip()}"
+        for key, value in choices.items()
+        if str(key).strip() and str(value).strip()
+    ]
+    return " · ".join(values)
+
+
+def _product_variants(raw: dict[str, Any]) -> list[WixProductVariant]:
+    """Extract V1/V3 variants with their own stable Wix IDs and option labels."""
+    extracted: list[WixProductVariant] = []
+    seen: set[str] = set()
+    for item in raw.get("variants") or []:
+        if not isinstance(item, dict):
+            continue
+        nested = item.get("variant") if isinstance(item.get("variant"), dict) else {}
+        variant_id = str(item.get("id") or nested.get("id") or "").strip()
+        sku = str(item.get("sku") or nested.get("sku") or "").strip()
+        if not variant_id or variant_id.casefold() in seen:
+            continue
+        seen.add(variant_id.casefold())
+        extracted.append(WixProductVariant(id=variant_id, sku=sku, name=_variant_name(item)))
+    return extracted
 
 
 def _product_skus(raw: dict[str, Any]) -> list[str]:
@@ -125,6 +169,7 @@ def _product_skus(raw: dict[str, Any]) -> list[str]:
 def _parse_product(raw: dict[str, Any]) -> WixProduct:
     pid = str(raw.get("id") or "")
     name = str(raw.get("name") or "")
+    wix_variants = _product_variants(raw)
     skus = _product_skus(raw)
     sku = skus[0] if skus else ""
     price = ""
@@ -172,6 +217,7 @@ def _parse_product(raw: dict[str, Any]) -> WixProduct:
         name=name,
         sku=sku,
         skus=skus,
+        variants=wix_variants,
         price=price,
         brand_name=brand_name,
         brand_id=brand_id,

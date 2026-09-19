@@ -113,16 +113,16 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
     finally { if (adviceRequestFor.current === caseId) setAdviceLoading(false); }
   }
 
-  async function remapMapping(externalId: string, productName: string) {
+  async function remapMapping(externalId: string, productName: string, variantExternalId?: string, variantName?: string) {
     if (!item || !id) return;
     const confirmed = window.confirm(
-      `Wix-Mapping auf „${productName}“ (${externalId}) umstellen?\n\n` +
+      `Wix-Mapping auf „${productName}“${variantName ? ` – ${variantName}` : ""} (${externalId}) umstellen?\n\n` +
       "Es werden keine Wix-Daten geändert. Nur die Verknüpfung im Product Hub wird ersetzt.",
     );
     if (!confirmed) return;
     setRemappingId(externalId); setMessage("Wix-Kandidat wird nochmals verifiziert …");
     try {
-      await api.remapConflict(id, item.row_version, externalId);
+      await api.remapConflict(id, item.row_version, externalId, variantExternalId);
       await load();
       setMessage("Mapping geändert und Fall abgeschlossen. Bitte anschließend den Wix-Abgleich starten.");
     } catch (error) { handleError(error); }
@@ -219,6 +219,7 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
                 <span className="comparison-label">Vorschlag{preferredCandidate ? ` · ${preferredCandidate.score}%` : ""}</span>
                 {preferredCandidate ? <>
                   <strong>{preferredCandidate.name || "Ohne Produktname"}</strong>
+                  {preferredCandidate.variant_name && <span className="mapping-variant-name">{preferredCandidate.variant_name}</span>}
                   <span>{preferredCandidate.sku || "ohne SKU"}</span>
                   <span className="mapping-id">{preferredCandidate.external_id}</span>
                   <p>{preferredCandidate.match_reasons.join(" · ")}</p>
@@ -226,7 +227,7 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
                   {preferredCandidate.description
                     ? <div className="mapping-description" dangerouslySetInnerHTML={{ __html: preferredCandidate.description }} />
                     : <small>Beschreibung in Wix nicht verfügbar.</small>}
-                  <button className="primary-button preferred-mapping-button" type="button" disabled={remappingId !== null || destructiveAction !== null} onClick={() => remapMapping(preferredCandidate.external_id, preferredCandidate.name)}>
+                  <button className="primary-button preferred-mapping-button" type="button" disabled={remappingId !== null || destructiveAction !== null} onClick={() => remapMapping(preferredCandidate.external_id, preferredCandidate.name, preferredCandidate.variant_external_id, preferredCandidate.variant_name)}>
                     {remappingId === preferredCandidate.external_id ? "Wird verifiziert …" : "Vorschlag übernehmen"}
                   </button>
                 </> : <><p>{advice?.mapping_search_status === "unavailable" ? "Wix-Suche nicht verfügbar." : "Kein eindeutiger Wix-Kandidat gefunden."}</p><Link className="primary-button preferred-mapping-button" to={`/products/${item.product_id}`}>SKU im Hub ändern</Link></>}
@@ -237,8 +238,8 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
           {otherCandidates.length > 0 && <details className="alternative-candidates">
             <summary>Weitere mögliche Produkte ({otherCandidates.length})</summary>
             <div className="mapping-candidate-list">{otherCandidates.map((candidate) => <div className="mapping-candidate" key={candidate.external_id}>
-              <div><strong>{candidate.name || "Ohne Produktname"}</strong><span className="hint">{candidate.sku || "ohne SKU"} · {candidate.score}%</span><span className="mapping-id">{candidate.external_id}</span></div>
-              <button type="button" disabled={remappingId !== null} onClick={() => remapMapping(candidate.external_id, candidate.name)}>Diesen Vorschlag wählen</button>
+              <div><strong>{candidate.name || "Ohne Produktname"}</strong>{candidate.variant_name && <span className="mapping-variant-name">{candidate.variant_name}</span>}<span className="hint">{candidate.sku || "ohne SKU"} · {candidate.score}%</span><span className="mapping-id">{candidate.external_id}</span></div>
+              <button type="button" disabled={remappingId !== null} onClick={() => remapMapping(candidate.external_id, candidate.name, candidate.variant_external_id, candidate.variant_name)}>Diesen Vorschlag wählen</button>
             </div>)}</div>
           </details>}
 

@@ -108,13 +108,23 @@ class WixSnapshotService:
         if callable(credential_check) and not credential_check():
             report.errors.append("Wix credentials are not configured for the Product Hub service")
             return report
-        mappings = self._products.list_channel_mappings_by_channel(channel="wix")
+        mappings = [
+            *self._products.list_channel_mappings_by_channel(channel="wix", entity_type="product"),
+            *self._products.list_channel_mappings_by_channel(channel="wix", entity_type="variant"),
+        ]
         report.mappings_seen = len(mappings)
         catalog_index = self._load_catalog_index(mappings, report, force=force)
         for mapping in mappings:
             try:
+                product_id = _mapping_product_id(mapping, self._products)
+                if product_id is None:
+                    report.errors.append(f"{mapping.external_id}: mapped Product Hub variant is missing")
+                    continue
+                external_product_id = _mapping_external_product_id(mapping)
+                if not external_product_id:
+                    raise RuntimeError("Wix-Varianten-Mapping enthält keine übergeordnete Produkt-ID")
                 index_entry = (
-                    catalog_index.get(_canonical_wix_id(mapping.external_id))
+                    catalog_index.get(_canonical_wix_id(external_product_id))
                     if catalog_index is not None
                     else None
                 )
@@ -124,30 +134,29 @@ class WixSnapshotService:
                     # a critical case. Confirm absence with the established detail
                     # endpoint, which is also how legacy/malformed IDs are diagnosed.
                     self._snapshot_one(
-                        mapping.id, mapping.internal_entity_id, mapping.external_id, report
+                        mapping, product_id, external_product_id, report
                     )
                     continue
                 if (
                     index_entry is not None
                     and not force
+                    and mapping.entity_type == "product"
                     and _mapping_is_current(mapping, index_entry)
                 ):
                     report.products_cached += 1
                     self._record_mapping_healthy(
-                        product_id=mapping.internal_entity_id,
-                        external_id=mapping.external_id,
+                        mapping=mapping,
                         report=report,
                     )
                     continue
                 self._snapshot_one(
-                    mapping.id, mapping.internal_entity_id, mapping.external_id, report
+                    mapping, product_id, external_product_id, report
                 )
             except Exception as exc:  # noqa: BLE001 - one remote object must not abort a scan
                 logger.exception("Wix snapshot failed for %s", mapping.external_id)
                 report.errors.append(f"{mapping.external_id}: {exc}")
                 self._record_mapping_failure(
-                    product_id=mapping.internal_entity_id,
-                    external_id=mapping.external_id,
+                    mapping=mapping,
                     error=str(exc),
                     report=report,
                 )
@@ -178,18 +187,20 @@ class WixSnapshotService:
 
     def _snapshot_one(
         self,
-        mapping_id: uuid.UUID,
+        mapping: Any,
         product_id: uuid.UUID,
-        external_id: str,
+        external_product_id: str,
         report: WixSnapshotReport,
     ) -> None:
-        raw = self._wix.get_product_raw(external_id)
+        raw = self._wix.get_product_raw(external_product_id)
         if raw is None:
             failure_reader = getattr(self._wix, "get_last_product_raw_failure", None)
             failure = failure_reader() if callable(failure_reader) else None
             error = str((failure or {}).get("error") or "product detail fetch returned nothing")
             raise RuntimeError(error)
-        self._record_mapping_healthy(product_id=product_id, external_id=external_id, report=report)
+        if mapping.entity_type == "variant" and not _raw_has_variant(raw, mapping.external_id):
+            raise RuntimeError("Wix-Variante unter der gespeicherten ID nicht gefunden")
+        self._record_mapping_healthy(mapping=mapping, report=report)
         # A Catalog V1 shop returns product details/media through its V1 product
         # endpoint, but has no compatible V3 variants/inventory query endpoints.
         # Avoid four guaranteed 404 probes per product; V1 stock/inline variants
@@ -198,8 +209,8 @@ class WixSnapshotService:
             variants: list[dict[str, Any]] = []
             inventory: list[dict[str, Any]] = []
         else:
-            variants = self._wix.query_variants(external_id)
-            inventory = self._wix.query_inventory(external_id)
+            variants = self._wix.query_variants(external_product_id)
+            inventory = self._wix.query_inventory(external_product_id)
         payload: dict[str, object] = {
             "product": raw,
             "variants": variants,
@@ -211,14 +222,14 @@ class WixSnapshotService:
         _, archived = self._sync.archive_external_payload_if_changed(
             channel="wix",
             entity_type="product",
-            external_id=external_id,
+            external_id=external_product_id,
             payload=payload,
             payload_hash=payload_hash,
         )
         report.payloads_archived += int(archived)
         report.payloads_unchanged += int(not archived)
         self._products.record_channel_pull(
-            mapping_id,
+            mapping.id,
             external_revision=str(raw.get("revision") or raw.get("_revision") or "") or None,
             payload_hash=payload_hash,
             external_updated_at=_updated_at(raw),
@@ -232,6 +243,9 @@ class WixSnapshotService:
         product = self._products.get_product(product_id)
         if product is None:
             raise RuntimeError(f"mapped Product Hub product {product_id} is missing")
+        if mapping.entity_type != "product":
+            report.products_fetched += 1
+            return
         for field_name, hub_value, wix_value in _comparable_fields(product, raw):
             if equivalent(field_name, hub_value, wix_value):
                 # The normalizer, not string equality, defines semantic convergence.
@@ -256,12 +270,11 @@ class WixSnapshotService:
     def _record_mapping_failure(
         self,
         *,
-        product_id: uuid.UUID,
-        external_id: str,
+        mapping: Any,
         error: str,
         report: WixSnapshotReport,
     ) -> None:
-        expected = _mapping_state(external_id)
+        expected = _mapping_state(mapping)
         failure_reader = getattr(self._wix, "get_last_product_raw_failure", None)
         failure = failure_reader() if callable(failure_reader) else None
         actual = {
@@ -271,8 +284,8 @@ class WixSnapshotService:
         }
         _, outcome = self._sync.upsert_scanned_conflict(
             channel="wix",
-            entity_type="product",
-            internal_entity_id=product_id,
+            entity_type=mapping.entity_type,
+            internal_entity_id=mapping.internal_entity_id,
             field_name="mapping",
             hub_value=expected,
             external_value=actual,
@@ -283,13 +296,13 @@ class WixSnapshotService:
             report.mapping_conflicts_updated += 1
 
     def _record_mapping_healthy(
-        self, *, product_id: uuid.UUID, external_id: str, report: WixSnapshotReport
+        self, *, mapping: Any, report: WixSnapshotReport
     ) -> None:
-        expected = _mapping_state(external_id)
+        expected = _mapping_state(mapping)
         _, outcome = self._sync.upsert_scanned_conflict(
             channel="wix",
-            entity_type="product",
-            internal_entity_id=product_id,
+            entity_type=mapping.entity_type,
+            internal_entity_id=mapping.internal_entity_id,
             field_name="mapping",
             hub_value=expected,
             external_value=expected,
@@ -301,6 +314,32 @@ class WixSnapshotService:
 def _canonical_wix_id(value: object) -> str:
     """Normalise only for comparison; provenance retains the original external ID."""
     return canonical_wix_id(value)
+
+
+def _mapping_external_product_id(mapping: Any) -> str:
+    """A variant is fetched through its Wix parent product, never as a product itself."""
+    if mapping.entity_type == "variant":
+        return str(mapping.external_parent_id or "").strip()
+    return str(mapping.external_id or "").strip()
+
+
+def _mapping_product_id(mapping: Any, products: ProductHubRepository) -> uuid.UUID | None:
+    if mapping.entity_type == "product":
+        return mapping.internal_entity_id
+    variant = products.get_variant(mapping.internal_entity_id)
+    return variant.product_id if variant is not None else None
+
+
+def _raw_has_variant(raw: dict[str, Any], external_id: str) -> bool:
+    wanted = _canonical_wix_id(external_id).casefold()
+    for item in raw.get("variants") or []:
+        if not isinstance(item, dict):
+            continue
+        nested = item.get("variant") if isinstance(item.get("variant"), dict) else {}
+        actual = _canonical_wix_id(item.get("id") or nested.get("id")).casefold()
+        if actual == wanted:
+            return True
+    return False
 
 
 def _index_value(row: object, key: str) -> object:
@@ -394,5 +433,9 @@ def _is_catalog_v1(source: WixSnapshotSource) -> bool:
     return str(getattr(version, "value", version)).lower() == "v1"
 
 
-def _mapping_state(external_id: str) -> dict[str, str]:
-    return {"external_id": external_id, "state": "mapped"}
+def _mapping_state(mapping: Any) -> dict[str, str]:
+    state = {"external_id": str(mapping.external_id), "state": "mapped"}
+    if mapping.entity_type == "variant":
+        state["external_parent_id"] = str(mapping.external_parent_id or "")
+        state["entity_type"] = "variant"
+    return state

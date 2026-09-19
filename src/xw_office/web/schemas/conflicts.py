@@ -83,6 +83,8 @@ class ConflictMappingCandidateOut(BaseModel):
     external_id: str
     name: str
     sku: str
+    variant_external_id: str = ""
+    variant_name: str = ""
     score: int = Field(ge=0, le=100)
     match_reasons: list[str] = Field(default_factory=list)
     description: str = ""
@@ -178,6 +180,7 @@ class ConflictDecisionRequest(VersionedRequest):
 
 class ConflictMappingRequest(VersionedRequest):
     external_id: str = Field(min_length=1, max_length=240)
+    variant_external_id: str | None = Field(default=None, max_length=240)
     note: str | None = None
 
 

@@ -347,6 +347,8 @@ export interface ConflictMappingCandidate {
   external_id: string;
   name: string;
   sku: string;
+  variant_external_id: string;
+  variant_name: string;
   score: number;
   match_reasons: string[];
   description: string;

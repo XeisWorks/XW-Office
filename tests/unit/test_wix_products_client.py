@@ -191,3 +191,26 @@ def test_list_products_reader_query_includes_hidden_products_and_variants() -> N
     assert payloads
     assert payloads[0]["includeHiddenProducts"] is True
     assert payloads[0]["includeVariants"] is True
+
+
+def test_reader_variant_keeps_its_id_sku_and_option_name() -> None:
+    from xw_office.services.wix.client import _parse_product
+
+    product = _parse_product(
+        {
+            "id": "bh-polka",
+            "name": "BH Polka",
+            "variants": [
+                {
+                    "id": "wix-variant-small",
+                    "choices": {"Besetzung": "Kleine Besetzung"},
+                    "variant": {"sku": "XW-6012"},
+                }
+            ],
+        }
+    )
+
+    assert product.all_skus == ("XW-6012",)
+    assert product.variants[0].id == "wix-variant-small"
+    assert product.variants[0].sku == "XW-6012"
+    assert product.variants[0].name == "Besetzung: Kleine Besetzung"

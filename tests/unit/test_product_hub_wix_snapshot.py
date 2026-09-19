@@ -236,3 +236,42 @@ def test_missing_wix_object_creates_a_critical_mapping_case(
     assert scan["cases_created"] == 1
     assert case.conflict_type == "WRONG_PRODUCT_MAPPING"
     assert case.severity == "CRITICAL"
+
+
+def test_variant_mapping_is_checked_via_its_wix_parent_and_detects_a_missing_variant(
+    factory: sessionmaker[Session],
+) -> None:
+    products = ProductHubRepository(factory)
+    product, variant = products.create_product(sku="XW-VARIANT", name="Variant product")
+    products.create_channel_mapping(
+        channel="wix",
+        entity_type="variant",
+        internal_entity_id=variant.id,
+        external_id="wix-variant",
+        external_parent_id="wix-1",
+    )
+    wix = _FakeWix(
+        {
+            "id": "wix-1",
+            "name": "Variant product",
+            "visible": True,
+            "variants": [{"id": "wix-variant", "sku": "XW-VARIANT"}],
+        }
+    )
+
+    first = WixSnapshotService(factory, wix_client=wix).run()
+    assert first.products_fetched == 1
+    assert first.mapping_conflicts_created == 0
+
+    wix.raw["variants"] = []
+    report = WixSnapshotService(factory, wix_client=wix).run()
+    assert report.mapping_conflicts_created == 1
+    low = SyncRepository(factory).list_open_sync_conflicts(channel="wix")
+    assert low[0].entity_type == "variant"
+    assert low[0].internal_entity_id == variant.id
+
+    ConflictWizardService(factory).scan_low_level_conflicts()
+    case = ConflictWizardService(factory).repository.list_cases()[0][0]
+    assert case.product_id == product.id
+    assert case.variant_id == variant.id
+    assert case.title.startswith("XW-VARIANT")

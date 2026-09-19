@@ -89,6 +89,8 @@ class WixMappingCandidate:
     external_id: str
     name: str
     sku: str
+    variant_external_id: str
+    variant_name: str
     score: int
     match_reasons: list[str]
 
@@ -97,6 +99,8 @@ class WixMappingCandidate:
             "external_id": self.external_id,
             "name": self.name,
             "sku": self.sku,
+            "variant_external_id": self.variant_external_id,
+            "variant_name": self.variant_name,
             "score": self.score,
             "match_reasons": list(self.match_reasons),
         }
@@ -134,6 +138,17 @@ def _candidate_skus(row: object) -> list[str]:
     return values
 
 
+def _matching_variant(row: object, sku: str) -> object | None:
+    """Find the Wix variant that owns a matched SKU, if the parent has variants."""
+    wanted = _search_text(sku)
+    if not wanted:
+        return None
+    for variant in getattr(row, "variants", []) or []:
+        if _search_text(getattr(variant, "sku", "")) == wanted:
+            return variant
+    return None
+
+
 def find_wix_mapping_candidates(
     products: list[object],
     *,
@@ -160,6 +175,7 @@ def find_wix_mapping_candidates(
         candidate_name = str(getattr(row, "name", "") or "").strip()
         candidate_skus = _candidate_skus(row)
         candidate_sku = candidate_skus[0] if candidate_skus else ""
+        matched_variant: object | None = None
         candidate_name_normalized = _search_text(candidate_name)
         candidate_skus_normalized = [
             _search_text(candidate_sku) for candidate_sku in candidate_skus
@@ -185,6 +201,7 @@ def find_wix_mapping_candidates(
                 for candidate, normalized in zip(candidate_skus, candidate_skus_normalized, strict=True)
                 if normalized == sku
             )
+            matched_variant = _matching_variant(row, candidate_sku)
         elif any(_is_sku_variant(product_sku, candidate) for candidate in candidate_skus):
             reasons.append("SKU-Variante")
             scores.append(94.0)
@@ -193,6 +210,7 @@ def find_wix_mapping_candidates(
                 for candidate in candidate_skus
                 if _is_sku_variant(product_sku, candidate)
             )
+            matched_variant = _matching_variant(row, candidate_sku)
         if exact_name:
             reasons.append("Exakter Produktname")
             scores.append(100.0)
@@ -214,6 +232,8 @@ def find_wix_mapping_candidates(
                 external_id=external_id,
                 name=candidate_name,
                 sku=candidate_sku,
+                variant_external_id=str(getattr(matched_variant, "id", "") or "").strip(),
+                variant_name=str(getattr(matched_variant, "name", "") or "").strip(),
                 score=max(0, min(100, round(max(scores)))),
                 match_reasons=reasons,
             )

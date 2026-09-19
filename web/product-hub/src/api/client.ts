@@ -191,12 +191,13 @@ export const api = {
   getConflict: (id: string) => request<ConflictCaseDetail>(`/api/v1/conflicts/${id}`),
   getConflictAdvice: (id: string) =>
     request<ConflictAdvice>(`/api/v1/conflicts/${id}/advice`, { method: "POST" }),
-  remapConflict: (id: string, expectedRowVersion: number, externalId: string, note?: string) =>
+  remapConflict: (id: string, expectedRowVersion: number, externalId: string, variantExternalId?: string, note?: string) =>
     request<ConflictCase>(`/api/v1/conflicts/${id}/mapping`, {
       method: "POST",
       body: {
         expected_row_version: expectedRowVersion,
         external_id: externalId,
+        ...(variantExternalId ? { variant_external_id: variantExternalId } : {}),
         ...(note ? { note } : {}),
       },
     }),

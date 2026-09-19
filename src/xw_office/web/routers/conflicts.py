@@ -49,6 +49,21 @@ def _compact_description(value: object, limit: int = 260) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+def _wix_variant_matches(raw: dict[str, object], variant_id: str, sku: str) -> bool:
+    """Verify that a selected Wix variant belongs to this parent and owns this SKU."""
+    expected_id = canonical_wix_id(variant_id).casefold()
+    expected_sku = str(sku or "").strip().casefold()
+    for item in raw.get("variants") or []:
+        if not isinstance(item, dict):
+            continue
+        nested = item.get("variant") if isinstance(item.get("variant"), dict) else {}
+        actual_id = canonical_wix_id(item.get("id") or nested.get("id")).casefold()
+        actual_sku = str(item.get("sku") or nested.get("sku") or "").strip().casefold()
+        if actual_id == expected_id and actual_sku == expected_sku:
+            return True
+    return False
+
+
 class _WixDescriptionHTMLSanitizer(HTMLParser):
     """Keep a small, safe subset of Wix formatting for the conflict comparison."""
 
@@ -326,6 +341,9 @@ def build_conflicts_router(
         candidate = canonical_wix_id(body.external_id)
         if not candidate:
             raise HTTPException(status_code=400, detail="Wix-ID fehlt oder enthält mehrere IDs")
+        variant_candidate = canonical_wix_id(body.variant_external_id)
+        if body.variant_external_id and not variant_candidate:
+            raise HTTPException(status_code=400, detail="Wix-Varianten-ID fehlt oder enthält mehrere IDs")
         try:
             raw = get_wix_details_client().get_product_raw(candidate)
         except Exception as exc:
@@ -341,11 +359,22 @@ def build_conflicts_router(
                 status_code=400,
                 detail="Diese Wix-ID wurde nicht als erreichbares Produkt bestätigt.",
             )
+        if variant_candidate:
+            try:
+                hub_product = service.detail(case_id)["product"]
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            if not _wix_variant_matches(raw, variant_candidate, hub_product.sku):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Diese Wix-Variante gehört nicht zu diesem Produkt oder trägt nicht die Hub-SKU.",
+                )
         try:
             row = service.remap_wix_mapping(
                 case_id,
                 expected_row_version=body.expected_row_version,
                 external_id=candidate,
+                variant_external_id=variant_candidate or None,
                 note=body.note,
             )
         except KeyError as exc:

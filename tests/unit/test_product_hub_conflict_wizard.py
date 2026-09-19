@@ -251,6 +251,44 @@ def test_remap_rejects_existing_wix_id_with_legacy_prefix(factory: sessionmaker[
         )
 
 
+def test_remap_to_wix_variant_keeps_the_shared_parent_available(factory: sessionmaker[Session]) -> None:
+    products = ProductHubRepository(factory)
+    target, target_variant = products.create_product(sku="XW-6012", name="BH Polka small")
+    other, _ = products.create_product(sku="XW-6212", name="BH Polka medium")
+    mapping = products.create_channel_mapping(
+        channel="wix", entity_type="product", internal_entity_id=target.id, external_id="old-id"
+    )
+    products.create_channel_mapping(
+        channel="wix", entity_type="product", internal_entity_id=other.id, external_id="bh-polka"
+    )
+    SyncRepository(factory).create_sync_conflict(
+        channel="wix",
+        entity_type="product",
+        internal_entity_id=target.id,
+        field_name="mapping",
+        hub_value={"state": "mapped", "external_id": mapping.external_id},
+        external_value={"state": "not_found", "external_id": mapping.external_id},
+    )
+    service = ConflictWizardService(factory)
+    service.scan_low_level_conflicts()
+    case = service.repository.list_cases()[0][0]
+
+    service.remap_wix_mapping(
+        case.id,
+        expected_row_version=case.row_version,
+        external_id="bh-polka",
+        variant_external_id="wix-small",
+    )
+
+    with factory() as session:
+        remapped = session.get(type(mapping), mapping.id)
+        assert remapped is not None
+        assert remapped.entity_type == "variant"
+        assert remapped.internal_entity_id == target_variant.id
+        assert remapped.external_id == "wix-small"
+        assert remapped.external_parent_id == "bh-polka"
+
+
 def test_new_wix_product_is_mapped_and_audited(factory: sessionmaker[Session]) -> None:
     products = ProductHubRepository(factory)
     product, _variant = products.create_product(sku="XW-MAP-NEW", name="New Wix draft")

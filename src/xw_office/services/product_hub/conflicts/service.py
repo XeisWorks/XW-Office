@@ -119,7 +119,7 @@ class ConflictWizardService:
                         severity=severity,
                         status="OPEN",
                         priority_score=score,
-                        title=f"{product.sku} · {hub_field}",
+                        title=f"{variant.sku if variant is not None else product.sku} · {hub_field}",
                         summary=_conflict_summary(low.field_name, low.channel, low.external_value),
                         detected_at=low.detected_at,
                         last_seen_at=_now(),
@@ -269,6 +269,7 @@ class ConflictWizardService:
         *,
         expected_row_version: int,
         external_id: str,
+        variant_external_id: str | None = None,
         note: str | None = None,
         actor: str = "conflict-wizard",
     ) -> ConflictCase:
@@ -281,6 +282,9 @@ class ConflictWizardService:
         selected_id = canonical_wix_id(external_id)
         if not selected_id:
             raise ValueError("Wix-Produkt-ID fehlt oder enthält mehrere IDs")
+        selected_variant_id = canonical_wix_id(variant_external_id)
+        if variant_external_id and not selected_variant_id:
+            raise ValueError("Wix-Varianten-ID fehlt oder enthält mehrere IDs")
         with session_scope(self._factory) as session:
             case = session.get(ConflictCase, case_id)
             if case is None:
@@ -291,6 +295,9 @@ class ConflictWizardService:
                 )
             if case.conflict_type != "WRONG_PRODUCT_MAPPING":
                 raise ValueError("Nur Wix-Mapping-Konflikte koennen neu verknuepft werden")
+            product = session.get(Product, case.product_id)
+            if product is None:
+                raise KeyError("Hub-Produkt fuer dieses Mapping nicht gefunden")
             mapping = session.scalar(
                 select(ChannelMapping).where(
                     ChannelMapping.channel == "wix",
@@ -300,6 +307,22 @@ class ConflictWizardService:
             )
             if mapping is None:
                 raise KeyError("Wix-Mapping fuer dieses Produkt nicht gefunden")
+            target_variant: ProductVariant | None = None
+            if selected_variant_id:
+                target_variant = next(
+                    (
+                        row
+                        for row in session.scalars(
+                            select(ProductVariant)
+                            .where(ProductVariant.product_id == case.product_id)
+                            .order_by(ProductVariant.is_default.desc(), ProductVariant.sku)
+                        ).all()
+                        if row.sku.casefold() == product.sku.casefold()
+                    ),
+                    None,
+                )
+                if target_variant is None:
+                    raise ValueError("Zur Hub-SKU wurde keine passende Hub-Variante gefunden")
             duplicate = next(
                 (
                     row
@@ -309,7 +332,8 @@ class ConflictWizardService:
                             ChannelMapping.id != mapping.id,
                         )
                     ).all()
-                    if canonical_wix_id(row.external_id) == selected_id
+                    if canonical_wix_id(row.external_id)
+                    == (selected_variant_id or selected_id)
                 ),
                 None,
             )
@@ -317,8 +341,17 @@ class ConflictWizardService:
                 raise ValueError(
                     "Diese Wix-ID ist bereits einem anderen Hub-Produkt oder einer Variante zugeordnet"
                 )
-            previous_id = mapping.external_id
-            mapping.external_id = selected_id
+            before_data = {
+                "entity_type": mapping.entity_type,
+                "internal_entity_id": str(mapping.internal_entity_id),
+                "external_id": mapping.external_id,
+                "external_parent_id": mapping.external_parent_id,
+            }
+            mapping.external_id = selected_variant_id or selected_id
+            mapping.external_parent_id = selected_id if selected_variant_id else None
+            if target_variant is not None:
+                mapping.entity_type = "variant"
+                mapping.internal_entity_id = target_variant.id
             mapping.sync_status = "never"
             mapping.external_revision = None
             mapping.last_pulled_at = None
@@ -339,11 +372,21 @@ class ConflictWizardService:
                     actor_id=actor,
                     source="conflict_wizard",
                     action="conflict.remap_wix",
-                    entity_type="product",
-                    entity_id=case.product_id,
-                    changed_fields=["wix_mapping.external_id"],
-                    before_data={"external_id": previous_id},
-                    after_data={"external_id": selected_id, "note": note or ""},
+                    entity_type="variant" if target_variant is not None else "product",
+                    entity_id=target_variant.id if target_variant is not None else case.product_id,
+                    changed_fields=[
+                        "wix_mapping.external_id",
+                        "wix_mapping.external_parent_id",
+                        "wix_mapping.entity_type",
+                    ],
+                    before_data=before_data,
+                    after_data={
+                        "entity_type": mapping.entity_type,
+                        "internal_entity_id": str(mapping.internal_entity_id),
+                        "external_id": mapping.external_id,
+                        "external_parent_id": mapping.external_parent_id,
+                        "note": note or "",
+                    },
                     correlation_id=case.id,
                 )
             )

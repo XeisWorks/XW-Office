@@ -799,6 +799,7 @@ class ProductHubRepository:
         entity_type: str,
         internal_entity_id: uuid.UUID,
         external_id: str,
+        external_parent_id: str | None = None,
         sync_status: str = "synced",
     ) -> ChannelMapping:
         with self._scope() as session:
@@ -808,6 +809,7 @@ class ProductHubRepository:
                 entity_type=entity_type,
                 internal_entity_id=internal_entity_id,
                 external_id=external_id,
+                external_parent_id=external_parent_id,
                 sync_status=sync_status,
             )
             session.add(mapping)
