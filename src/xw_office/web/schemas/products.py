@@ -7,6 +7,7 @@ authenticated WebUI. They deliberately still only expose *metadata* for
 confirmed architecture decision; a future public/dealer-share schema (PR12) must
 define its own, separately field-whitelisted models rather than reusing these.
 """
+
 from __future__ import annotations
 
 import datetime
@@ -14,7 +15,7 @@ from decimal import Decimal
 import uuid
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 T = TypeVar("T")
 
@@ -343,6 +344,11 @@ class ProductUpdateRequest(BaseModel):
     product_type: str | None = None
     brand_name: str | None = None
     release_date: datetime.date | None = None
+
+
+class ProductSkuRenameRequest(BaseModel):
+    expected_row_version: int
+    sku: str = Field(min_length=1, max_length=80)
 
 
 class VariantUpdateRequest(BaseModel):

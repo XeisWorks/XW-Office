@@ -74,6 +74,7 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
     category: string;
     short_description: string;
     description: string;
+    sku: string;
   } | null>(null);
   const [productSaving, setProductSaving] = useState(false);
   const [productError, setProductError] = useState<string | null>(null);
@@ -85,6 +86,7 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
       category: current.category ?? "",
       short_description: current.short_description ?? "",
       description: current.description ?? "",
+      sku: current.sku,
     });
     setProductError(null);
     setEditingProduct(true);
@@ -104,6 +106,12 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
         short_description: productForm.short_description,
         description: productForm.description,
       });
+      if (productForm.sku.trim().toUpperCase() !== current.sku) {
+        await api.renameProductSku(id, {
+          expected_row_version: current.row_version + 1,
+          sku: productForm.sku,
+        });
+      }
       setEditingProduct(false);
       refresh();
     } catch (err) {
@@ -318,6 +326,13 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
                     <input
                       value={productForm.name}
                       onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    SKU
+                    <input
+                      value={productForm.sku}
+                      onChange={(e) => setProductForm({ ...productForm, sku: e.target.value })}
                     />
                   </label>
                   <label>

@@ -119,6 +119,18 @@ def _wix_description(raw: object) -> str:
     return _sanitize_wix_description(raw.get("description") or raw.get("plainDescription"))
 
 
+def _wix_product_type(raw: object) -> str:
+    if not isinstance(raw, dict):
+        return ""
+    product_type = str(raw.get("productType") or "").strip().casefold()
+    physical = (
+        raw.get("physicalProperties") if isinstance(raw.get("physicalProperties"), dict) else {}
+    )
+    if product_type == "digital" or physical.get("shippable") is False or raw.get("digitalFile"):
+        return "digital"
+    return "physisch" if product_type or physical else ""
+
+
 def build_conflicts_router(
     get_service: Callable[[], ConflictWizardService],
     get_wix_snapshot_service: Callable[[], WixSnapshotService],
@@ -259,6 +271,7 @@ def build_conflicts_router(
                                 str(mapping_candidates[0]["external_id"])
                             )
                             mapping_candidates[0]["description"] = _wix_description(raw)
+                            mapping_candidates[0]["product_type"] = _wix_product_type(raw)
                         except Exception:  # noqa: BLE001 - candidate metadata is optional
                             mapping_candidates[0]["description"] = ""
                 except Exception:  # noqa: BLE001 - advice remains useful if search fails
@@ -275,6 +288,10 @@ def build_conflicts_router(
                 "hub_name": product.name,
                 "hub_sku": product.sku,
                 "hub_description": _compact_description(product.description),
+                "hub_product_type": product.product_type,
+                "hub_category": product.category or "",
+                "hub_status": product.status,
+                "hub_active": product.active,
                 "old_external_id": current_external_id,
                 "old_status": old_status,
                 "candidate": mapping_candidates[0] if mapping_candidates else None,

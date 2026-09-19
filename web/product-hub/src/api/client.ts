@@ -18,6 +18,7 @@ import type {
   ProductImprovement,
   ProductListFilters,
   ProductReadiness,
+  ProductSkuRenameRequest,
   ProductUpdateRequest,
   ProductVariant,
   ReadinessSummary,
@@ -142,6 +143,8 @@ export const api = {
   // -- PR09: edit API -----------------------------------------------------------
   updateProduct: (id: string, body: ProductUpdateRequest) =>
     request<ProductDetail>(`/api/v1/products/${id}`, { method: "PATCH", body }),
+  renameProductSku: (id: string, body: ProductSkuRenameRequest) =>
+    request<ProductDetail>(`/api/v1/products/${id}/rename-sku`, { method: "POST", body }),
   getTags: (productId: string) => request<Tag[]>(`/api/v1/products/${productId}/tags`),
   addTag: (productId: string, tagCode: string) =>
     request<Tag>(`/api/v1/products/${productId}/tags`, {

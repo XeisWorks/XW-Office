@@ -1,4 +1,5 @@
 """Tests for the Product Hub Edit API (PR09)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -76,6 +77,27 @@ def test_patch_product_updates_and_bumps_row_version(db_path: str, seeded_produc
     assert body["row_version"] == 2
 
 
+def test_rename_product_sku_updates_matching_variant_and_keeps_old_alias(
+    db_path: str, seeded_product: Product
+) -> None:
+    client = _client(db_path)
+    response = client.post(
+        f"/api/v1/products/{seeded_product.id}/rename-sku",
+        headers=_auth_headers(),
+        json={"expected_row_version": 1, "sku": " xw-edit-1-d "},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["sku"] == "XW-EDIT-1-D"
+    variants = client.get(
+        f"/api/v1/products/{seeded_product.id}/variants", headers=_auth_headers()
+    ).json()
+    assert variants[0]["sku"] == "XW-EDIT-1-D"
+    old_sku = client.get("/api/v1/products/by-sku/XW-EDIT-1", headers=_auth_headers())
+    assert old_sku.status_code == 200
+    assert old_sku.json()["sku"] == "XW-EDIT-1-D"
+
+
 def test_patch_product_stale_row_version_returns_409_with_current_state(
     db_path: str, seeded_product: Product
 ) -> None:
@@ -126,9 +148,10 @@ def test_add_and_remove_tag(db_path: str, seeded_product: Product) -> None:
         f"/api/v1/products/{seeded_product.id}/tags/{tag_id}", headers=_auth_headers()
     )
     assert delete_response.status_code == 204
-    assert client.get(
-        f"/api/v1/products/{seeded_product.id}/tags", headers=_auth_headers()
-    ).json() == []
+    assert (
+        client.get(f"/api/v1/products/{seeded_product.id}/tags", headers=_auth_headers()).json()
+        == []
+    )
 
 
 def test_add_unknown_tag_returns_404(db_path: str, seeded_product: Product) -> None:
@@ -308,9 +331,7 @@ def test_generate_content_returns_draft_without_saving(
     assert body["description"] == "Ein tolles Stueck."
     assert body["bullet_points"] == ["Besetzung: Blasorchester"]
 
-    detail = client.get(
-        f"/api/v1/products/{seeded_product.id}", headers=_auth_headers()
-    ).json()
+    detail = client.get(f"/api/v1/products/{seeded_product.id}", headers=_auth_headers()).json()
     assert detail["description"] != "Ein tolles Stueck."
     assert "bullet_points" not in detail.get("attributes", {})
 

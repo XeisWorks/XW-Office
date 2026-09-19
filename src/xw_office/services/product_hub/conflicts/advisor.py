@@ -52,6 +52,8 @@ IDs oder Vergleichsdaten, die bereits in der Oberflaeche dargestellt werden.
 Nutze ausschliesslich die gelieferten Fakten. Behaupte insbesondere nicht, ein externes
 Produkt sei geloescht, wenn nur ein fehlgeschlagener Abruf belegt ist. Bei mapping_lookup
 musst du die Kandidaten nach exakter SKU, exaktem Namen und dann Namensnaehe bewerten.
+Eine SKU-Variante mit Format-Suffix wie -D ist ein moeglicher, aber nicht identischer
+Kandidat: weise darauf hin, dass Produkttyp und Ausgabe vor dem Mapping zu pruefen sind.
 Wenn ein Kandidat mit hoher Uebereinstimmung vorhanden ist, nenne genau seinen Namen,
 seine SKU und seine ID und formuliere als naechste Handlung: Kandidat in Wix pruefen und
 danach das Mapping gezielt uebernehmen. Wenn kein Kandidat gefunden wurde, empfehle nicht,
@@ -107,6 +109,18 @@ def _canonical_id(value: object) -> str:
     return str(value or "").strip().removeprefix("product_").casefold()
 
 
+def _is_sku_variant(first: str, second: str) -> bool:
+    """Return whether two SKUs differ only by a format-style suffix (for example -D)."""
+    first = re.sub(r"\s+", "", str(first or "").casefold())
+    second = re.sub(r"\s+", "", str(second or "").casefold())
+    if not first or not second or first == second:
+        return False
+    shorter, longer = sorted((first, second), key=len)
+    return (
+        longer.startswith(shorter) and len(longer) > len(shorter) and longer[len(shorter)] in "-_/."
+    )
+
+
 def find_wix_mapping_candidates(
     products: list[object],
     *,
@@ -149,9 +163,14 @@ def find_wix_mapping_candidates(
         if exact_sku:
             reasons.append("Exakte SKU")
             scores.append(100.0)
+        elif _is_sku_variant(product_sku, candidate_sku):
+            reasons.append("SKU-Variante")
+            scores.append(94.0)
         if exact_name:
             reasons.append("Exakter Produktname")
             scores.append(100.0)
+        elif reasons and name_score >= 70:
+            reasons.append(f"Ähnlicher Produktname ({round(name_score)} %)")
         if not reasons and sku_score >= 85 and name_score >= 78:
             reasons.extend(
                 [

@@ -232,6 +232,11 @@ export interface ProductUpdateRequest {
   active?: boolean;
 }
 
+export interface ProductSkuRenameRequest {
+  expected_row_version: number;
+  sku: string;
+}
+
 export interface ImprovementCreateRequest {
   description: string;
   title?: string;
@@ -339,12 +344,17 @@ export interface ConflictMappingCandidate {
   score: number;
   match_reasons: string[];
   description: string;
+  product_type: string;
 }
 
 export interface ConflictMappingComparison {
   hub_name: string;
   hub_sku: string;
   hub_description: string;
+  hub_product_type: string;
+  hub_category: string;
+  hub_status: string;
+  hub_active: boolean;
   old_external_id: string;
   old_status: string;
   candidate: ConflictMappingCandidate | null;

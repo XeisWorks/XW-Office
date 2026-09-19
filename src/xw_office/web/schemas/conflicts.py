@@ -78,12 +78,17 @@ class ConflictMappingCandidateOut(BaseModel):
     score: int = Field(ge=0, le=100)
     match_reasons: list[str] = Field(default_factory=list)
     description: str = ""
+    product_type: str = ""
 
 
 class ConflictMappingComparisonOut(BaseModel):
     hub_name: str
     hub_sku: str
     hub_description: str = ""
+    hub_product_type: str = ""
+    hub_category: str = ""
+    hub_status: str = ""
+    hub_active: bool = True
     old_external_id: str = ""
     old_status: str = ""
     candidate: ConflictMappingCandidateOut | None = None

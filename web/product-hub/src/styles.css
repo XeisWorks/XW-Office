@@ -662,6 +662,7 @@ a {
 .decision-panel h2, .impact-panel h2 { margin-top: 0; font-size: 1.1rem; }
 .decision-buttons, .secondary-actions, .custom-decision { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.6rem; }
 .decision-buttons button, .secondary-actions button, .custom-decision button { padding: 0.45rem 0.7rem; border: 1px solid var(--color-border); border-radius: 5px; background: var(--color-surface); cursor: pointer; }
+.decision-buttons a { padding: 0.45rem 0.7rem; border: 1px solid var(--color-border); border-radius: 5px; background: var(--color-surface); }
 .mapping-candidates { margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--color-border); }
 .mapping-candidates h4 { margin: 0 0 0.5rem; }
 .mapping-candidate-list { display: grid; gap: 0.6rem; }
@@ -684,6 +685,7 @@ a {
 .mapping-description ul, .mapping-description ol { margin: 0.25rem 0; padding-left: 1.2rem; }
 .comparison-label { color: var(--color-muted); font-size: 0.8rem; font-weight: 700; text-transform: uppercase; }
 .mapping-id { color: var(--color-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; overflow-wrap: anywhere; }
+.mapping-meta { color: var(--color-muted); font-size: 0.82rem; }
 .preferred-mapping-button { justify-self: start; margin-top: 0.35rem; }
 .compact-ai-advice { border-style: solid; }
 .compact-ai-advice h2 { margin-bottom: 0.35rem; }

@@ -149,6 +149,7 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
                 <span>{comparison.hub_sku || item.product_sku}</span>
                 <span className="mapping-id">{comparison.old_external_id || "Keine Wix-ID gespeichert"}</span>
                 <p>{oldMappingStatus}</p>
+                <span className="mapping-meta">{comparison.hub_product_type === "digital" ? "Digital" : "Physisch"} · {comparison.hub_active ? "aktiv" : "inaktiv"}{comparison.hub_category ? ` · ${comparison.hub_category}` : ""}</span>
                 <small>{comparison.hub_description || "Keine Produktbeschreibung im Product Hub."}</small>
               </div>
               <div className="mapping-side mapping-side-new">
@@ -158,13 +159,14 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
                   <span>{preferredCandidate.sku || "ohne SKU"}</span>
                   <span className="mapping-id">{preferredCandidate.external_id}</span>
                   <p>{preferredCandidate.match_reasons.join(" · ")}</p>
+                  {preferredCandidate.product_type && <span className="mapping-meta">{preferredCandidate.product_type === "digital" ? "Digital" : "Physisch"}</span>}
                   {preferredCandidate.description
                     ? <div className="mapping-description" dangerouslySetInnerHTML={{ __html: preferredCandidate.description }} />
                     : <small>Beschreibung in Wix nicht verfügbar.</small>}
                   <button className="primary-button preferred-mapping-button" type="button" disabled={remappingId !== null} onClick={() => remapMapping(preferredCandidate.external_id, preferredCandidate.name)}>
                     {remappingId === preferredCandidate.external_id ? "Wird verifiziert …" : "Vorschlag übernehmen"}
                   </button>
-                </> : <p>{advice?.mapping_search_status === "unavailable" ? "Wix-Suche nicht verfügbar." : "Kein eindeutiger Wix-Kandidat gefunden."}</p>}
+                </> : <><p>{advice?.mapping_search_status === "unavailable" ? "Wix-Suche nicht verfügbar." : "Kein eindeutiger Wix-Kandidat gefunden."}</p><Link className="primary-button preferred-mapping-button" to={`/products/${item.product_id}`}>SKU im Hub ändern</Link></>}
               </div>
             </div>}
           </article>
@@ -178,7 +180,7 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
           </details>}
 
           <div className="decision-panel compact-decision-panel">
-            <div className="decision-buttons"><button type="button" onClick={retryWix}>Wix erneut prüfen</button></div>
+            <div className="decision-buttons"><button type="button" onClick={retryWix}>Wix erneut prüfen</button><Link to={`/products/${item.product_id}`}>SKU im Hub ändern</Link></div>
             <details><summary>Weitere Aktionen</summary><div className="secondary-actions"><button type="button" onClick={() => decide("INTENTIONAL_DIFFERENCE")}>Als Ausnahme markieren</button><button type="button" onClick={later}>In einer Woche erinnern</button><button type="button" onClick={() => decide("IGNORE")}>Ignorieren</button></div></details>
           </div>
         </>

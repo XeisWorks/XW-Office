@@ -5,6 +5,7 @@ Auth is applied where this router is *included* (``web/app.py``), not here — t
 module only defines routes and stays independent of the app-level bootstrap-token
 wiring, matching this project's existing ``create_app(settings)`` factory style.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -15,7 +16,11 @@ from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 
 from xw_office.models.product_hub import Product
-from xw_office.repositories.product_hub import OptimisticLockError, ProductFilter, ProductHubRepository
+from xw_office.repositories.product_hub import (
+    OptimisticLockError,
+    ProductFilter,
+    ProductHubRepository,
+)
 from xw_office.services.product_hub.catalog_list import build_parent_product_summaries
 from xw_office.services.product_hub.content_generation import (
     ContentGenerationError,
@@ -23,7 +28,10 @@ from xw_office.services.product_hub.content_generation import (
     ProductContentContext,
 )
 from xw_office.services.product_hub.editing import EditingService, UnknownFieldError
-from xw_office.services.product_hub.readiness import build_readiness_summary, evaluate_product_readiness
+from xw_office.services.product_hub.readiness import (
+    build_readiness_summary,
+    evaluate_product_readiness,
+)
 from xw_office.web.schemas.products import (
     AssetUpdateRequest,
     AuditLogOut,
@@ -46,6 +54,7 @@ from xw_office.web.schemas.products import (
     ProductDetail,
     ProductImprovementOut,
     ProductReadinessOut,
+    ProductSkuRenameRequest,
     ProductUpdateRequest,
     ProductVariantOut,
     ReadinessSummaryOut,
@@ -126,7 +135,9 @@ def build_products_router(
         return Page(items=items, total=total, limit=limit, offset=offset)
 
     @router.get("/products/by-sku/{sku}", response_model=ProductDetail)
-    def get_product_by_sku(sku: str, repo: ProductHubRepository = Depends(get_repo)) -> ProductDetail:
+    def get_product_by_sku(
+        sku: str, repo: ProductHubRepository = Depends(get_repo)
+    ) -> ProductDetail:
         product = repo.get_product_by_sku(sku)
         if product is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
@@ -157,14 +168,36 @@ def build_products_router(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         return ProductDetail.model_validate(updated)
 
-    @write_router.post("/products/{product_id}/generate-content", response_model=ContentGenerateResponse)
+    @write_router.post("/products/{product_id}/rename-sku", response_model=ProductDetail)
+    def rename_product_sku(
+        product_id: uuid.UUID,
+        body: ProductSkuRenameRequest,
+        repo: ProductHubRepository = Depends(get_repo),
+        editing: EditingService = Depends(get_editing),
+    ) -> ProductDetail:
+        _get_product_or_404(repo, product_id)
+        try:
+            updated = editing.rename_product_sku(
+                product_id, expected_row_version=body.expected_row_version, sku=body.sku
+            )
+        except OptimisticLockError:
+            raise _conflict(_get_product_or_404(repo, product_id), ProductDetail) from None
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        return ProductDetail.model_validate(updated)
+
+    @write_router.post(
+        "/products/{product_id}/generate-content", response_model=ContentGenerateResponse
+    )
     def generate_product_content(
         product_id: uuid.UUID,
         repo: ProductHubRepository = Depends(get_repo),
         content_generation: ContentGenerationService = Depends(get_content_generation),
     ) -> ContentGenerateResponse:
         product = _get_product_or_404(repo, product_id)
-        raw_music_attributes = product.attributes.get("music_attributes") if product.attributes else None
+        raw_music_attributes = (
+            product.attributes.get("music_attributes") if product.attributes else None
+        )
         music_attributes = (
             {str(k): str(v) for k, v in raw_music_attributes.items() if v}
             if isinstance(raw_music_attributes, dict)
@@ -181,8 +214,12 @@ def build_products_router(
         try:
             generated = content_generation.generate(context)
         except ContentGenerationError as exc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
-        return ContentGenerateResponse(description=generated.description, bullet_points=generated.bullet_points)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            ) from exc
+        return ContentGenerateResponse(
+            description=generated.description, bullet_points=generated.bullet_points
+        )
 
     @write_router.put("/products/{product_id}/bullet-points", response_model=ProductDetail)
     def put_product_bullet_points(
@@ -209,7 +246,9 @@ def build_products_router(
         _get_product_or_404(repo, product_id)
         return [ProductVariantOut.model_validate(v) for v in repo.list_variants(product_id)]
 
-    @write_router.patch("/products/{product_id}/variants/{variant_id}", response_model=ProductVariantOut)
+    @write_router.patch(
+        "/products/{product_id}/variants/{variant_id}", response_model=ProductVariantOut
+    )
     def patch_product_variant(
         product_id: uuid.UUID,
         variant_id: uuid.UUID,
@@ -226,7 +265,9 @@ def build_products_router(
         except OptimisticLockError:
             current = repo.get_variant(variant_id)
             if current is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Variant not found") from None
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Variant not found"
+                ) from None
             raise _conflict(current, ProductVariantOut) from None
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -303,7 +344,8 @@ def build_products_router(
             current = repo.get_print_rule(variant_id)
             if current is None:
                 raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT, detail="Print rule was removed concurrently"
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Print rule was removed concurrently",
                 ) from None
             raise _conflict(current, PrintRuleOut) from None
         except UnknownFieldError as exc:
@@ -334,7 +376,9 @@ def build_products_router(
         except OptimisticLockError:
             current = repo.get_asset(asset_id)
             if current is None:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found") from None
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found"
+                ) from None
             raise _conflict(current, ProductAssetOut) from None
         except KeyError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -384,7 +428,9 @@ def build_products_router(
         product_id: uuid.UUID, repo: ProductHubRepository = Depends(get_repo)
     ) -> list[IdentifierOut]:
         _get_product_or_404(repo, product_id)
-        return [IdentifierOut.model_validate(i) for i in repo.list_identifiers(product_id=product_id)]
+        return [
+            IdentifierOut.model_validate(i) for i in repo.list_identifiers(product_id=product_id)
+        ]
 
     @write_router.post(
         "/products/{product_id}/identifiers",

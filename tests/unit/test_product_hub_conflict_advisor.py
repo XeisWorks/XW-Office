@@ -87,6 +87,18 @@ def test_mapping_candidates_exclude_name_only_or_sku_only_near_matches() -> None
     assert candidates == []
 
 
+def test_mapping_candidates_include_format_sku_variants() -> None:
+    candidates = find_wix_mapping_candidates(
+        [WixProduct(id="digital", name="Volksmusik #1 - Horn 1 in F", sku="XW-101.3-D")],
+        product_name="Volksmusik #1 - Horn 1 in F",
+        product_sku="XW-101.3",
+    )
+
+    assert candidates[0].external_id == "digital"
+    assert candidates[0].score == 100
+    assert "SKU-Variante" in candidates[0].match_reasons
+
+
 def test_wix_description_keeps_safe_formatting_and_removes_active_content() -> None:
     description = _sanitize_wix_description(
         '<p><strong>Alpenmusik</strong></p><script>alert("x")</script><img src=x onerror=bad()>'

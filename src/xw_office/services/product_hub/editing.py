@@ -14,12 +14,14 @@ identifiers, asset metadata, prices (append-only, never mutated in place), print
 rules, and the improvement/edition workflow. Outbox events are written here but
 nothing consumes them yet — no handler is registered until PR11's Wix push adapter.
 """
+
 from __future__ import annotations
 
 import datetime
 import uuid
 from decimal import Decimal
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
@@ -31,10 +33,15 @@ from xw_office.models.product_hub import (
     ProductIdentifier,
     ProductImprovement,
     ProductPrice,
+    ProductSkuAlias,
     ProductVariant,
     Tag,
 )
-from xw_office.repositories.product_hub import ProductHubRepository
+from xw_office.repositories.product_hub import (
+    OptimisticLockError,
+    ProductHubRepository,
+    normalize_sku,
+)
 from xw_office.repositories.product_hub_sync import append_outbox_event
 
 #: Fields the edit API allows on each entity — an explicit allowlist so a stray/renamed
@@ -57,7 +64,13 @@ PRODUCT_EDITABLE_FIELDS = frozenset(
 VARIANT_EDITABLE_FIELDS = frozenset({"name", "active", "stock_enabled", "weight_grams"})
 ASSET_EDITABLE_FIELDS = frozenset({"role", "sort_order"})
 PRINT_RULE_EDITABLE_FIELDS = frozenset(
-    {"min_stock_target", "reprint_batch_qty", "print_profile_id", "print_plan", "primary_print_asset_id"}
+    {
+        "min_stock_target",
+        "reprint_batch_qty",
+        "print_profile_id",
+        "print_plan",
+        "primary_print_asset_id",
+    }
 )
 IMPROVEMENT_EDITABLE_FIELDS = frozenset({"title", "description", "severity", "status"})
 
@@ -81,7 +94,12 @@ class EditingService:
     # -- product / variant ------------------------------------------------------
 
     def update_product(
-        self, product_id: uuid.UUID, *, expected_row_version: int, changes: dict[str, object], actor: str = ""
+        self,
+        product_id: uuid.UUID,
+        *,
+        expected_row_version: int,
+        changes: dict[str, object],
+        actor: str = "",
     ) -> Product:
         _check_allowed(changes, PRODUCT_EDITABLE_FIELDS, entity="product")
         with session_scope(self._session_factory) as session:
@@ -107,8 +125,98 @@ class EditingService:
             )
             return updated
 
+    def rename_product_sku(
+        self, product_id: uuid.UUID, *, expected_row_version: int, sku: str, actor: str = ""
+    ) -> Product:
+        """Rename a Hub SKU and its matching sellable variant without losing the old lookup."""
+        new_sku = normalize_sku(sku)
+        if not new_sku:
+            raise ValueError("SKU darf nicht leer sein")
+        with session_scope(self._session_factory) as session:
+            repo = ProductHubRepository(session)
+            product = session.get(Product, product_id)
+            if product is None:
+                raise KeyError(f"Product {product_id} not found")
+            if product.row_version != expected_row_version:
+                raise OptimisticLockError(
+                    f"Product {product_id} row_version is {product.row_version}, "
+                    f"expected {expected_row_version}"
+                )
+            old_sku = normalize_sku(product.sku)
+            if new_sku == old_sku:
+                return product
+            product_match = session.scalar(
+                select(Product.id).where(
+                    func.upper(Product.sku) == new_sku, Product.id != product_id
+                )
+            )
+            variant_match = session.scalar(
+                select(ProductVariant.id).where(func.upper(ProductVariant.sku) == new_sku)
+            )
+            alias_match = session.scalar(
+                select(ProductSkuAlias).where(func.upper(ProductSkuAlias.alias_sku) == new_sku)
+            )
+            if product_match is not None or variant_match is not None or alias_match is not None:
+                raise ValueError(f"SKU {new_sku} ist bereits vergeben")
+
+            variants = list(
+                session.scalars(
+                    select(ProductVariant).where(ProductVariant.product_id == product_id)
+                )
+            )
+            matching_variants = [
+                variant for variant in variants if normalize_sku(variant.sku) == old_sku
+            ]
+            product.sku = new_sku
+            product.row_version += 1
+            product.updated_at = datetime.datetime.now(datetime.timezone.utc)
+            for variant in matching_variants:
+                variant.sku = new_sku
+                variant.row_version += 1
+                variant.updated_at = datetime.datetime.now(datetime.timezone.utc)
+            old_alias = session.scalar(
+                select(ProductSkuAlias).where(func.upper(ProductSkuAlias.alias_sku) == old_sku)
+            )
+            if old_alias is not None and old_alias.product_id != product_id:
+                raise ValueError(
+                    f"Bisherige SKU {old_sku} ist bereits Alias eines anderen Produkts"
+                )
+            if old_alias is None:
+                session.add(
+                    ProductSkuAlias(
+                        product_id=product_id,
+                        variant_id=matching_variants[0].id if matching_variants else None,
+                        alias_sku=old_sku,
+                        source="sku_rename",
+                    )
+                )
+            repo.record_audit(
+                actor_type="user" if actor else "system",
+                actor_id=actor,
+                entity_type="product",
+                entity_id=product_id,
+                action="sku.rename",
+                changed_fields=["sku"],
+                before_data={"sku": old_sku},
+                after_data={"sku": new_sku},
+            )
+            append_outbox_event(
+                session,
+                aggregate_type="product",
+                aggregate_id=product_id,
+                event_type="product.sku_renamed",
+                payload={"old_sku": old_sku, "sku": new_sku},
+            )
+            session.flush()
+            return product
+
     def update_variant(
-        self, variant_id: uuid.UUID, *, expected_row_version: int, changes: dict[str, object], actor: str = ""
+        self,
+        variant_id: uuid.UUID,
+        *,
+        expected_row_version: int,
+        changes: dict[str, object],
+        actor: str = "",
     ) -> ProductVariant:
         _check_allowed(changes, VARIANT_EDITABLE_FIELDS, entity="variant")
         with session_scope(self._session_factory) as session:
@@ -249,12 +357,19 @@ class EditingService:
     # -- assets / print rules ------------------------------------------------------
 
     def update_asset(
-        self, asset_id: uuid.UUID, *, expected_row_version: int, changes: dict[str, object], actor: str = ""
+        self,
+        asset_id: uuid.UUID,
+        *,
+        expected_row_version: int,
+        changes: dict[str, object],
+        actor: str = "",
     ) -> ProductAsset:
         _check_allowed(changes, ASSET_EDITABLE_FIELDS, entity="asset")
         with session_scope(self._session_factory) as session:
             repo = ProductHubRepository(session)
-            updated = repo.update_asset(asset_id, expected_row_version=expected_row_version, **changes)
+            updated = repo.update_asset(
+                asset_id, expected_row_version=expected_row_version, **changes
+            )
             repo.record_audit(
                 actor_type="user" if actor else "system",
                 actor_id=actor,
