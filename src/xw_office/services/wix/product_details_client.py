@@ -96,6 +96,15 @@ class CatalogVersion(str, Enum):
     UNKNOWN = "unknown"
 
 
+class WixProductCreateError(RuntimeError):
+    """A user-facing, version-aware Wix create failure."""
+
+    def __init__(self, message: str, *, status_code: int | None = None, catalog_version: CatalogVersion = CatalogVersion.UNKNOWN) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.catalog_version = catalog_version
+
+
 @dataclass(frozen=True)
 class ProductFieldUpdate:
     """One field/value pair to be written to a product."""
@@ -382,11 +391,18 @@ class WixProductDetailsClient:
                 self._detected_version = CatalogVersion.V1
             elif resp.status_code < 400:
                 self._detected_version = CatalogVersion.V3
+            elif resp.status_code in (401, 403):
+                self._detected_version = CatalogVersion.UNKNOWN
             else:
                 # Other v3-style paths
                 alt_url = f"{self._V3_BASE}/products/query"
                 resp2 = self._client().post(alt_url, headers=headers, json=probe_body)
-                self._detected_version = CatalogVersion.V3 if resp2.status_code < 400 else CatalogVersion.V1
+                if resp2.status_code == 428:
+                    self._detected_version = CatalogVersion.V1
+                elif resp2.status_code < 400:
+                    self._detected_version = CatalogVersion.V3
+                else:
+                    self._detected_version = CatalogVersion.UNKNOWN
         except Exception as exc:  # noqa: BLE001
             logger.warning("WixProductDetailsClient: version probe failed: %s", exc)
             self._detected_version = CatalogVersion.UNKNOWN
@@ -397,6 +413,105 @@ class WixProductDetailsClient:
     # ------------------------------------------------------------------
     # Read: get product detail
     # ------------------------------------------------------------------
+
+    def create_product(
+        self,
+        *,
+        name: str,
+        sku: str,
+        product_type: str,
+        price: str,
+    ) -> tuple[str, CatalogVersion]:
+        """Create a hidden product using the connected site's catalog version.
+
+        Wix requires different request shapes for Catalog V1 and V3.  V1 only
+        supports physical products through this API, so digital products fail
+        with an explicit explanation instead of a generic server error.
+        """
+        if not self.has_credentials():
+            raise WixProductCreateError("Wix-Zugangsdaten fehlen.")
+        clean_name = str(name or "").strip()
+        clean_sku = str(sku or "").strip()
+        if not clean_name or not clean_sku or not str(price or "").strip():
+            raise WixProductCreateError("Name, SKU und Verkaufspreis sind fuer Wix erforderlich.")
+
+        version = self.detect_catalog_version()
+        if version == CatalogVersion.UNKNOWN:
+            raise WixProductCreateError(
+                "Die Wix-Katalogversion konnte nicht ermittelt werden. Bitte API-Key, Site-ID und Berechtigungen prüfen.",
+                catalog_version=version,
+            )
+        if version == CatalogVersion.V1 and str(product_type).strip().casefold() == "digital":
+            raise WixProductCreateError(
+                "Diese Wix-Site verwendet Catalog V1. Dort können Produkte über die API nur als physisch angelegt werden.",
+                catalog_version=version,
+            )
+
+        try:
+            amount = float(price)
+        except (TypeError, ValueError) as exc:
+            raise WixProductCreateError(
+                f"Der Verkaufspreis „{price}“ ist kein gültiger Betrag.", catalog_version=version
+            ) from exc
+
+        if version == CatalogVersion.V3:
+            payload: dict[str, Any] = {
+                "product": {
+                    "name": clean_name,
+                    "productType": "DIGITAL" if str(product_type).strip().casefold() == "digital" else "PHYSICAL",
+                    "visible": False,
+                    "variantsInfo": {
+                        "variants": [{"sku": clean_sku, "actualPrice": {"amount": str(price), "currency": "EUR"}}]
+                    },
+                }
+            }
+            if payload["product"]["productType"] == "PHYSICAL":
+                payload["product"]["physicalProperties"] = {}
+            url = f"{self._V3_BASE}/products"
+        else:
+            payload = {
+                "product": {
+                    "name": clean_name,
+                    "productType": "physical",
+                    "sku": clean_sku,
+                    "manageVariants": False,
+                    "visible": False,
+                    "priceData": {"price": amount},
+                }
+            }
+            url = f"{self._V1_BASE}/products"
+
+        try:
+            data = self._do_request("POST", url, headers=self._headers(), json_body=payload)
+        except httpx.HTTPStatusError as exc:
+            response = exc.response
+            detail = ""
+            try:
+                raw = response.json()
+                if isinstance(raw, dict):
+                    detail = str(raw.get("message") or raw.get("error") or raw.get("details") or "")
+            except ValueError:
+                detail = response.text[:500]
+            suffix = f" – {detail}" if detail else ""
+            raise WixProductCreateError(
+                f"Wix Catalog {version.value.upper()} hat die Anlage abgelehnt (HTTP {response.status_code}){suffix}",
+                status_code=response.status_code,
+                catalog_version=version,
+            ) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise WixProductCreateError(
+                f"Wix Catalog {version.value.upper()} konnte nicht erreicht werden: {exc}",
+                catalog_version=version,
+            ) from exc
+
+        product = data.get("product") if isinstance(data, dict) else None
+        product = product if isinstance(product, dict) else data
+        external_id = str(product.get("id") or product.get("_id") or "").strip() if isinstance(product, dict) else ""
+        if not external_id:
+            raise WixProductCreateError(
+                f"Wix Catalog {version.value.upper()} antwortete ohne Produkt-ID.", catalog_version=version
+            )
+        return external_id, version
 
     def get_product(self, product_id: str) -> WixProductDetail | None:
         """Fetch full product details for one product by ID."""

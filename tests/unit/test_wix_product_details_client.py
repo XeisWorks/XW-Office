@@ -11,6 +11,7 @@ import httpx
 from xw_office.services.wix.product_details_client import (
     CatalogVersion,
     WixProductDetail,
+    WixProductCreateError,
     WixProductDetailsClient,
     _parse_detail,
 )
@@ -225,6 +226,75 @@ def test_detect_version_cached_after_first_call() -> None:
         httpx.Client = original  # type: ignore[assignment]
 
     assert probe_count[0] == 1  # only one network call
+
+
+def test_create_product_uses_v3_after_version_probe() -> None:
+    calls: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        calls.append({"url": str(request.url), "payload": payload})
+        if str(request.url).endswith("/stores/v3/catalog/products/query"):
+            return httpx.Response(200, json={"products": []})
+        return httpx.Response(200, json={"product": {"id": "v3-created"}})
+
+    original = httpx.Client
+    httpx.Client = _with_transport(httpx.MockTransport(handler))  # type: ignore[assignment]
+    try:
+        product_id, version = _client().create_product(
+            name="V3 Produkt", sku="XW-V3", product_type="physical", price="12.90"
+        )
+    finally:
+        httpx.Client = original  # type: ignore[assignment]
+
+    assert product_id == "v3-created"
+    assert version == CatalogVersion.V3
+    create_call = calls[-1]
+    assert str(create_call["url"]).endswith("/stores/v3/products")
+    assert create_call["payload"]["product"]["variantsInfo"]["variants"][0]["actualPrice"]["amount"] == "12.90"  # type: ignore[index]
+
+
+def test_create_product_uses_v1_for_legacy_catalog() -> None:
+    calls: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        calls.append({"url": str(request.url), "payload": payload})
+        if "products/query" in str(request.url):
+            return httpx.Response(428, json={"message": "CATALOG_V1"})
+        return httpx.Response(200, json={"product": {"id": "v1-created"}})
+
+    original = httpx.Client
+    httpx.Client = _with_transport(httpx.MockTransport(handler))  # type: ignore[assignment]
+    try:
+        product_id, version = _client().create_product(
+            name="V1 Produkt", sku="XW-V1", product_type="physical", price="8.50"
+        )
+    finally:
+        httpx.Client = original  # type: ignore[assignment]
+
+    assert product_id == "v1-created"
+    assert version == CatalogVersion.V1
+    create_call = calls[-1]
+    assert str(create_call["url"]).endswith("/stores/v1/products")
+    assert create_call["payload"]["product"]["priceData"]["price"] == 8.5  # type: ignore[index]
+
+
+def test_create_product_surfaces_wix_http_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "products/query" in str(request.url):
+            return httpx.Response(200, json={"products": []})
+        return httpx.Response(403, json={"message": "Insufficient permissions"})
+
+    original = httpx.Client
+    httpx.Client = _with_transport(httpx.MockTransport(handler))  # type: ignore[assignment]
+    try:
+        with pytest.raises(WixProductCreateError, match="HTTP 403"):
+            _client().create_product(
+                name="No access", sku="XW-NO", product_type="physical", price="4.00"
+            )
+    finally:
+        httpx.Client = original  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------

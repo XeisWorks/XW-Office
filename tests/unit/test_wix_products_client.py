@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 import httpx
 
 from xw_office.services.wix.client import WixProductsClient
@@ -139,50 +137,3 @@ def test_list_products_paginates_with_has_next_and_offset_without_cursor() -> No
     )
     assert len(rows) == 101
     assert rows[-1].sku == "XW-101"
-
-
-def test_create_product_creates_hidden_v3_draft_with_variant_price() -> None:
-    requests: list[dict] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append({"url": str(request.url), "payload": json.loads(request.content)})
-        return httpx.Response(200, json={"product": {"id": "wix-draft-1"}})
-
-    original_client = httpx.Client
-
-    class _Client(httpx.Client):
-        def __init__(self, *args, **kwargs):
-            kwargs["transport"] = httpx.MockTransport(handler)
-            super().__init__(*args, **kwargs)
-
-    httpx.Client = _Client  # type: ignore[assignment]
-    try:
-        client = WixProductsClient(secret_service=_SecretService(key="k", site="s"))  # type: ignore[arg-type]
-        external_id = client.create_product(
-            name="Neues Produkt", sku="XW-NEW-1", product_type="physical", price="19.90"
-        )
-    finally:
-        httpx.Client = original_client  # type: ignore[assignment]
-
-    assert external_id == "wix-draft-1"
-    assert requests == [
-        {
-            "url": "https://www.wixapis.com/stores/v3/products",
-            "payload": {
-                "product": {
-                    "name": "Neues Produkt",
-                    "productType": "PHYSICAL",
-                    "visible": False,
-                    "physicalProperties": {},
-                    "variantsInfo": {
-                        "variants": [
-                            {
-                                "sku": "XW-NEW-1",
-                                "actualPrice": {"amount": "19.90", "currency": "EUR"},
-                            }
-                        ]
-                    },
-                }
-            },
-        }
-    ]

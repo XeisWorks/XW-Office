@@ -704,6 +704,9 @@ a {
 .execution-confirmation { display: inline-flex; align-items: center; gap: 0.5rem; margin-top: 1rem; padding: 0.55rem 1rem; border-radius: 6px; background: var(--color-ok-bg); color: var(--color-ok-text); font-weight: 700; }
 .execution-check { display: inline-grid; width: 1.25rem; height: 1.25rem; place-items: center; border-radius: 50%; background: var(--color-ok-text); color: white; }
 .execution-pending { opacity: 0.7; cursor: wait; }
+.success-message, .error-message { margin-top: 1rem; padding: 0.7rem 0.85rem; border-radius: 6px; font-weight: 600; }
+.success-message { background: var(--color-ok-bg); color: var(--color-ok-text); }
+.error-message { background: var(--color-bad-bg); color: var(--color-bad-text); }
 .conflict-explanation { margin-top: 1rem; padding: 1rem 1.15rem; border-left: 4px solid var(--color-brand); border-radius: 8px; background: var(--color-surface); }
 .conflict-explanation h2, .conflict-explanation h3 { margin: 0 0 0.5rem; }
 .conflict-explanation h3 { margin-top: 1rem; font-size: 1rem; }

@@ -22,6 +22,7 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
   const [destructiveAction, setDestructiveAction] = useState<"create-wix" | "archive-hub" | null>(null);
   const [custom, setCustom] = useState("");
   const [message, setMessage] = useState("");
+  const [messageTone, setMessageTone] = useState<"neutral" | "success" | "error">("neutral");
   const adviceRequestFor = useRef<string | null>(null);
 
   async function load() {
@@ -36,6 +37,7 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
     setActions(detail.actions);
     setAdvice(null);
     setMessage("");
+    setMessageTone("neutral");
     if (adviceRequestFor.current !== id) {
       adviceRequestFor.current = id;
       void loadAdvice(id);
@@ -50,6 +52,7 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
   function handleError(error: unknown) {
     if (error instanceof ApiError && error.status === 401) onUnauthorized();
     setMessage(error instanceof Error ? error.message : String(error));
+    setMessageTone("error");
   }
 
   async function decide(resolutionType: string, source?: string) {
@@ -76,7 +79,8 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
       // The apply response contains the case, but not the updated action rows.
       // Reload them so the confirmation state cannot leave a stale executable button.
       await load();
-      setMessage(updated.status === "RESOLVED" ? "Fall verifiziert und abgeschlossen." : "Channel-Aktion wurde sicher in die Outbox gestellt.");
+      setMessage(updated.status === "RESOLVED" ? "Änderung erfolgreich verifiziert und abgeschlossen." : "Änderung erfolgreich angestoßen und sicher in die Wix-Outbox gestellt.");
+      setMessageTone("success");
     } catch (error) { handleError(error); }
   }
 
@@ -89,11 +93,13 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
 
   async function retryWix() {
     setMessage("Wix-Verknüpfungen werden erneut geprüft …");
+    setMessageTone("neutral");
     try {
       await api.scanWixConflicts();
       adviceRequestFor.current = null;
       await load();
       setMessage("Wix-Prüfung abgeschlossen.");
+      setMessageTone("success");
     } catch (error) { handleError(error); }
   }
 
@@ -130,11 +136,12 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
       "Der Entwurf bleibt in Wix unsichtbar und wird danach mit diesem Hub-Produkt verknüpft.",
     );
     if (!confirmed) return;
-    setDestructiveAction("create-wix"); setMessage("Wix-Entwurf wird angelegt …");
+    setDestructiveAction("create-wix"); setMessage("Wix-Entwurf wird angelegt …"); setMessageTone("neutral");
     try {
-      await api.createWixProductForConflict(id, item.row_version);
-      setMessage("Wix-Entwurf angelegt und verknüpft. Bitte Inhalte und Sichtbarkeit in Wix prüfen.");
+      const result = await api.createWixProductForConflict(id, item.row_version);
       await load();
+      setMessage(`Wix-Produkt erstellt und mit dem Hub verknüpft (Catalog ${result.catalog_version.toUpperCase()}, ID ${result.external_id}). Bitte Inhalte und Sichtbarkeit in Wix prüfen.`);
+      setMessageTone("success");
     } catch (error) { handleError(error); }
     finally { setDestructiveAction(null); }
   }
@@ -146,7 +153,7 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
       "Das Produkt wird nicht endgültig gelöscht, sondern deaktiviert und bleibt im Archiv nachvollziehbar.",
     );
     if (!confirmed) return;
-    setDestructiveAction("archive-hub"); setMessage("Produkt wird im Hub archiviert …");
+    setDestructiveAction("archive-hub"); setMessage("Produkt wird im Hub archiviert …"); setMessageTone("neutral");
     try {
       await api.archiveHubProductForConflict(id, item.row_version);
       navigate("/conflicts");
@@ -284,7 +291,7 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
       <details className="technical-details"><summary>Technische Details anzeigen</summary>
         {item.fields.map((field) => <div key={field.id}><h3>{field.field_path}</h3>{field.observations.map((observation) => <div key={observation.id}><strong>{observation.source}</strong><pre>{technicalValue(observation.raw_value)}</pre></div>)}</div>)}
       </details>
-      {message && <p className="hint">{message}</p>}
+      {message && <p className={messageTone === "success" ? "success-message" : messageTone === "error" ? "error-message" : "hint"} role={messageTone === "error" ? "alert" : "status"}>{message}</p>}
     </section>
   );
 }

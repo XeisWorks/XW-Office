@@ -322,6 +322,12 @@ export interface ConflictCaseDetail extends ConflictCase {
   actions: ConflictAction[];
 }
 
+export interface ConflictCreateWixProductResult extends ConflictCase {
+  external_id: string;
+  catalog_version: "v1" | "v3";
+  operation: "created_and_mapped";
+}
+
 export interface ConflictAdvice {
   title: string;
   explanation: string;

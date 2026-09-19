@@ -28,6 +28,7 @@ from xw_office.web.schemas.conflicts import (
     ConflictAdviceOut,
     ConflictCaseDetailOut,
     ConflictCaseOut,
+    ConflictCreateWixProductOut,
     ConflictDecisionRequest,
     ConflictFieldOut,
     ConflictMappingRequest,
@@ -355,17 +356,18 @@ def build_conflicts_router(
 
     @router.post(
         "/{case_id}/create-wix-product",
-        response_model=ConflictCaseOut,
+        response_model=ConflictCreateWixProductOut,
         dependencies=[Depends(require_edit_enabled)],
     )
     def create_wix_product(
         case_id: uuid.UUID,
         body: VersionedRequest,
         service: ConflictWizardService = Depends(get_service),
-    ) -> ConflictCaseOut:
+    ) -> ConflictCreateWixProductOut:
         """Create a hidden Wix draft from the Hub product, then map it here."""
-        if get_wix_catalog_client is None:
+        if get_wix_details_client is None:
             raise HTTPException(status_code=503, detail="Wix-Anbindung ist nicht konfiguriert")
+        created_external_id: str | None = None
         try:
             bundle = service.detail(case_id)
             case = bundle["case"]
@@ -377,22 +379,49 @@ def build_conflicts_router(
             price = service.wix_creation_price(product.id)
             if price is None:
                 raise ValueError("Dem Hub-Produkt fehlt ein aktueller Verkaufspreis in EUR")
-            external_id = get_wix_catalog_client().create_product(
+            external_id, catalog_version = get_wix_details_client().create_product(
                 name=product.name,
                 sku=product.sku,
                 product_type=product.product_type,
                 price=price,
             )
+            created_external_id = external_id
             row = service.map_new_wix_product(
                 case_id, expected_row_version=body.expected_row_version, external_id=external_id
             )
         except KeyError as exc:
+            if created_external_id:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Wix-Produkt {created_external_id} wurde erstellt, aber die Hub-Verknüpfung ist fehlgeschlagen: {exc}",
+                ) from exc
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ConflictOptimisticLockError as exc:
+            if created_external_id:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Wix-Produkt {created_external_id} wurde erstellt, aber der Konflikt war inzwischen veraltet; die Hub-Verknüpfung wurde nicht gespeichert.",
+                ) from exc
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except (RuntimeError, ValueError) as exc:
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            if created_external_id:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Wix-Produkt {created_external_id} wurde erstellt, aber die Hub-Verknüpfung ist fehlgeschlagen: {exc}",
+                ) from exc
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return ConflictCaseOut.model_validate(row)
+        except Exception as exc:  # noqa: BLE001 - translate provider failures into API detail
+            detail = str(exc)
+            if created_external_id:
+                detail = f"Wix-Produkt {created_external_id} wurde erstellt, aber die Hub-Verknüpfung ist fehlgeschlagen: {detail}"
+            raise HTTPException(status_code=502, detail=detail) from exc
+        return ConflictCreateWixProductOut(
+            **ConflictCaseOut.model_validate(row).model_dump(),
+            external_id=external_id,
+            catalog_version=catalog_version.value,
+        )
 
     @router.post(
         "/{case_id}/archive-hub-product",

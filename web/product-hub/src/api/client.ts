@@ -5,6 +5,7 @@ import type {
   ConflictAdvice,
   ConflictCase,
   ConflictCaseDetail,
+  ConflictCreateWixProductResult,
   ConflictSummary,
   ChannelMapping,
   Edition,
@@ -200,7 +201,7 @@ export const api = {
       },
     }),
   createWixProductForConflict: (id: string, expectedRowVersion: number) =>
-    request<ConflictCase>(`/api/v1/conflicts/${id}/create-wix-product`, {
+    request<ConflictCreateWixProductResult>(`/api/v1/conflicts/${id}/create-wix-product`, {
       method: "POST",
       body: { expected_row_version: expectedRowVersion },
     }),

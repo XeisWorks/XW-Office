@@ -64,6 +64,14 @@ class ConflictCaseOut(BaseModel):
     row_version: int
 
 
+class ConflictCreateWixProductOut(ConflictCaseOut):
+    """Result of creating and mapping a Wix product from a conflict."""
+
+    external_id: str
+    catalog_version: str
+    operation: str = "created_and_mapped"
+
+
 class ConflictCaseDetailOut(ConflictCaseOut):
     product_sku: str
     product_name: str
