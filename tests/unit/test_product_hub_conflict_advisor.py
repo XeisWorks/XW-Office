@@ -12,6 +12,7 @@ from xw_office.services.product_hub.conflicts.advisor import (
     find_wix_mapping_candidates,
 )
 from xw_office.services.wix.client import WixProduct
+from xw_office.web.routers.conflicts import _sanitize_wix_description
 
 
 def test_advisor_uses_strict_stateless_output_without_tools(
@@ -84,3 +85,11 @@ def test_mapping_candidates_exclude_name_only_or_sku_only_near_matches() -> None
     )
 
     assert candidates == []
+
+
+def test_wix_description_keeps_safe_formatting_and_removes_active_content() -> None:
+    description = _sanitize_wix_description(
+        '<p><strong>Alpenmusik</strong></p><script>alert("x")</script><img src=x onerror=bad()>'
+    )
+
+    assert description == "<p><strong>Alpenmusik</strong></p>"

@@ -677,6 +677,11 @@ a {
 .mapping-side-new { border: 2px solid var(--color-brand); }
 .mapping-side p, .mapping-side small { margin: 0; }
 .mapping-side small { color: var(--color-muted); line-height: 1.35; }
+.mapping-description { color: var(--color-muted); font-size: 0.875rem; line-height: 1.35; }
+.mapping-description p { margin: 0.25rem 0; }
+.mapping-description p:first-child { margin-top: 0; }
+.mapping-description p:last-child { margin-bottom: 0; }
+.mapping-description ul, .mapping-description ol { margin: 0.25rem 0; padding-left: 1.2rem; }
 .comparison-label { color: var(--color-muted); font-size: 0.8rem; font-weight: 700; text-transform: uppercase; }
 .mapping-id { color: var(--color-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; overflow-wrap: anywhere; }
 .preferred-mapping-button { justify-self: start; margin-top: 0.35rem; }

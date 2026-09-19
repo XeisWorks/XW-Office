@@ -158,7 +158,9 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
                   <span>{preferredCandidate.sku || "ohne SKU"}</span>
                   <span className="mapping-id">{preferredCandidate.external_id}</span>
                   <p>{preferredCandidate.match_reasons.join(" · ")}</p>
-                  <small>{preferredCandidate.description || "Beschreibung in Wix nicht verfügbar."}</small>
+                  {preferredCandidate.description
+                    ? <div className="mapping-description" dangerouslySetInnerHTML={{ __html: preferredCandidate.description }} />
+                    : <small>Beschreibung in Wix nicht verfügbar.</small>}
                   <button className="primary-button preferred-mapping-button" type="button" disabled={remappingId !== null} onClick={() => remapMapping(preferredCandidate.external_id, preferredCandidate.name)}>
                     {remappingId === preferredCandidate.external_id ? "Wird verifiziert …" : "Vorschlag übernehmen"}
                   </button>

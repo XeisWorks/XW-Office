@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
+from html import escape
+from html.parser import HTMLParser
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
@@ -45,10 +47,76 @@ def _compact_description(value: object, limit: int = 260) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+class _WixDescriptionHTMLSanitizer(HTMLParser):
+    """Keep a small, safe subset of Wix formatting for the conflict comparison."""
+
+    _ALLOWED_TAGS = {"p", "strong", "b", "em", "i", "ul", "ol", "li", "br"}
+    _VOID_TAGS = {"br"}
+    _BLOCKED_TAGS = {"script", "style", "iframe", "object"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.open_tags: list[str] = []
+        self.blocked_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        tag = tag.casefold()
+        if tag in self._BLOCKED_TAGS:
+            self.blocked_depth += 1
+            return
+        if self.blocked_depth:
+            return
+        if tag not in self._ALLOWED_TAGS:
+            return
+        self.parts.append(f"<{tag}>")
+        if tag not in self._VOID_TAGS:
+            self.open_tags.append(tag)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.casefold() in self._BLOCKED_TAGS:
+            return
+        self.handle_starttag(tag, attrs)
+        if tag.casefold() not in self._VOID_TAGS:
+            self.handle_endtag(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.casefold()
+        if tag in self._BLOCKED_TAGS and self.blocked_depth:
+            self.blocked_depth -= 1
+            return
+        if self.blocked_depth:
+            return
+        if tag not in self.open_tags:
+            return
+        while self.open_tags:
+            closing_tag = self.open_tags.pop()
+            self.parts.append(f"</{closing_tag}>")
+            if closing_tag == tag:
+                break
+
+    def handle_data(self, data: str) -> None:
+        if not self.blocked_depth:
+            self.parts.append(escape(data))
+
+    def rendered(self) -> str:
+        while self.open_tags:
+            self.parts.append(f"</{self.open_tags.pop()}>")
+        return "".join(self.parts).strip()
+
+
+def _sanitize_wix_description(value: object) -> str:
+    parser = _WixDescriptionHTMLSanitizer()
+    parser.feed(str(value or "")[:4000])
+    parser.close()
+    return parser.rendered()
+
+
 def _wix_description(raw: object) -> str:
     if not isinstance(raw, dict):
         return ""
-    return _compact_description(raw.get("description") or raw.get("plainDescription"))
+    return _sanitize_wix_description(raw.get("description") or raw.get("plainDescription"))
 
 
 def build_conflicts_router(
