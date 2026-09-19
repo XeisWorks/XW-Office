@@ -26,6 +26,7 @@ from xw_office.repositories.product_hub_conflicts import (
 from xw_office.repositories.product_hub_sync import append_outbox_event
 from xw_office.services.product_hub.conflicts.classifier import classify
 from xw_office.services.product_hub.conflicts.normalizer import equivalent, normalize_value
+from xw_office.services.wix.identifiers import canonical_wix_id
 
 _TERMINAL_INTENTIONAL = {"INTENTIONAL_DIFFERENCE", "IGNORE"}
 _PRODUCT_FIELDS = {
@@ -243,6 +244,8 @@ class ConflictWizardService:
             selected = matches[-1].raw_value
         else:
             selected = None
+        if resolution_type not in _TERMINAL_INTENTIONAL:
+            selected = _coerce_selected_value(field.field_path, selected)
         case = self._repo.save_decision(
             case_id,
             expected_row_version=expected_row_version,
@@ -275,9 +278,9 @@ class ConflictWizardService:
         may use it, and the caller must have verified the candidate through Wix first.
         The old scanner conflict is closed so the next scan starts from the new ID.
         """
-        selected_id = str(external_id or "").strip()
+        selected_id = canonical_wix_id(external_id)
         if not selected_id:
-            raise ValueError("Wix-Produkt-ID fehlt")
+            raise ValueError("Wix-Produkt-ID fehlt oder enthält mehrere IDs")
         with session_scope(self._factory) as session:
             case = session.get(ConflictCase, case_id)
             if case is None:
@@ -297,16 +300,23 @@ class ConflictWizardService:
             )
             if mapping is None:
                 raise KeyError("Wix-Mapping fuer dieses Produkt nicht gefunden")
-            duplicate = session.scalar(
-                select(ChannelMapping).where(
-                    ChannelMapping.channel == "wix",
-                    ChannelMapping.entity_type == "product",
-                    ChannelMapping.external_id == selected_id,
-                    ChannelMapping.id != mapping.id,
-                )
+            duplicate = next(
+                (
+                    row
+                    for row in session.scalars(
+                        select(ChannelMapping).where(
+                            ChannelMapping.channel == "wix",
+                            ChannelMapping.id != mapping.id,
+                        )
+                    ).all()
+                    if canonical_wix_id(row.external_id) == selected_id
+                ),
+                None,
             )
             if duplicate is not None:
-                raise ValueError("Diese Wix-ID ist bereits einem anderen Produkt zugeordnet")
+                raise ValueError(
+                    "Diese Wix-ID ist bereits einem anderen Hub-Produkt oder einer Variante zugeordnet"
+                )
             previous_id = mapping.external_id
             mapping.external_id = selected_id
             mapping.sync_status = "never"
@@ -354,9 +364,9 @@ class ConflictWizardService:
         actor: str = "conflict-wizard",
     ) -> ConflictCase:
         """Attach a Wix product just created for this mapping conflict."""
-        selected_id = str(external_id or "").strip()
+        selected_id = canonical_wix_id(external_id)
         if not selected_id:
-            raise ValueError("Wix-Produkt-ID fehlt")
+            raise ValueError("Wix-Produkt-ID fehlt oder enthält mehrere IDs")
         with session_scope(self._factory) as session:
             case = session.get(ConflictCase, case_id)
             if case is None:
@@ -376,6 +386,23 @@ class ConflictWizardService:
             )
             if mapping is None:
                 raise KeyError("Wix-Mapping fuer dieses Produkt nicht gefunden")
+            duplicate = next(
+                (
+                    row
+                    for row in session.scalars(
+                        select(ChannelMapping).where(
+                            ChannelMapping.channel == "wix",
+                            ChannelMapping.id != mapping.id,
+                        )
+                    ).all()
+                    if canonical_wix_id(row.external_id) == selected_id
+                ),
+                None,
+            )
+            if duplicate is not None:
+                raise ValueError(
+                    "Diese Wix-ID ist bereits einem anderen Hub-Produkt oder einer Variante zugeordnet"
+                )
             previous_id = mapping.external_id
             mapping.external_id = selected_id
             mapping.sync_status = "never"
@@ -673,6 +700,20 @@ def _not_relevant(product: Product, low: SyncConflict, products: ProductHubRepos
 
 def _revision(low: SyncConflict) -> str | None:
     return low.external_updated_at.isoformat() if low.external_updated_at else None
+
+
+def _coerce_selected_value(field_path: str, value: object) -> object:
+    """Convert a user/source value to the Hub column's real type before planning."""
+    if field_path != "active":
+        return value
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().casefold()
+    if normalized in {"true", "1", "yes", "ja", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "nein", "off"}:
+        return False
+    raise ValueError("Aktiv/Sichtbar erwartet Ja oder Nein")
 
 
 def _now() -> datetime.datetime:

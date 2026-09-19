@@ -678,6 +678,25 @@ def test_update_compare_at_price_v1_uses_salePrice_field() -> None:
     assert "priceData" in body
 
 
+def test_conflict_patch_uses_v1_without_fetching_a_v3_revision() -> None:
+    patches, transport = _make_v1_patch_recorder()
+    original = httpx.Client
+    httpx.Client = _with_transport(transport)  # type: ignore[assignment]
+    try:
+        success, error, status = _client().patch_product_field_with_conflict_detection(
+            "P-2", field="visible", value=False
+        )
+    finally:
+        httpx.Client = original  # type: ignore[assignment]
+
+    assert success is True
+    assert error == ""
+    assert status is None
+    assert patches[-1]["url"].endswith("/stores/v1/products/P-2")
+    assert patches[-1]["body"]["product"]["visible"] is False
+    assert "revision" not in patches[-1]["body"]["product"]
+
+
 # ---------------------------------------------------------------------------
 # Bulk property update — v3
 # ---------------------------------------------------------------------------

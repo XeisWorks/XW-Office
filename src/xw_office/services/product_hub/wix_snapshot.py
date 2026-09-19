@@ -24,6 +24,7 @@ from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_sync import SyncRepository
 from xw_office.services.product_hub.conflicts.normalizer import equivalent
 from xw_office.services.product_hub.wix_import import _extract_media_items, _media_url
+from xw_office.services.wix.identifiers import canonical_wix_id
 
 logger = logging.getLogger(__name__)
 
@@ -299,7 +300,7 @@ class WixSnapshotService:
 
 def _canonical_wix_id(value: object) -> str:
     """Normalise only for comparison; provenance retains the original external ID."""
-    return str(value or "").strip().removeprefix("product_")
+    return canonical_wix_id(value)
 
 
 def _index_value(row: object, key: str) -> object:

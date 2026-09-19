@@ -26,6 +26,8 @@ from threading import RLock
 from typing import TYPE_CHECKING, Any
 
 import httpx
+
+from xw_office.services.wix.identifiers import canonical_wix_id
 from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
@@ -80,8 +82,7 @@ def _api_product_id(value: str) -> str:
     while the V1/V3 REST endpoints accept only the GUID.  Keep the mapping's original
     external ID for provenance; normalize only at the HTTP boundary.
     """
-    product_id = str(value or "").strip()
-    return product_id.removeprefix("product_")
+    return canonical_wix_id(value)
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -760,12 +761,12 @@ class WixProductDetailsClient:
     def patch_product_field_with_conflict_detection(
         self, product_id: str, *, field: str, value: Any
     ) -> tuple[bool, str, int | None]:
-        """Revision-aware v3 PATCH that surfaces the HTTP status code — needed to tell
-        a 409 revision conflict apart from any other failure, which ``update_product_*``
-        above cannot do (``_patch_v3`` swallows the status into a bare bool). Used by
-        the Product Hub push adapter (PR11). Unlike the legacy update methods, this
-        never falls back to v1 on a 428 — the Hub's push flow is v3-revision-based by
-        design (``get_product_revision`` always refetches the current revision first).
+        """Write one field using the site's actual Catalog API version.
+
+        Catalog V3 writes are revision-aware and return the HTTP status code so the
+        caller can distinguish a 409 revision conflict from another failure.  Catalog
+        V1 has no revision mechanism; it uses the established V1 PATCH payload and
+        returns ``None`` for the status code.
 
         Returns ``(success, error_message, http_status_code)``.
         """
@@ -774,6 +775,13 @@ class WixProductDetailsClient:
             raise ValueError("product_id fehlt")
         if not self.has_credentials():
             raise RuntimeError("Wix Credentials fehlen")
+
+        version = self.detect_catalog_version()
+        if version == CatalogVersion.V1:
+            success, error = self._patch_v1(pid, field, value)
+            return success, error, None
+        if version != CatalogVersion.V3:
+            return False, "Wix-Katalogversion konnte nicht bestimmt werden", None
 
         revision = self.get_product_revision(pid)
         payload = self._build_v3_payload(field, value, revision)

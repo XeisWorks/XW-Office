@@ -98,6 +98,35 @@ def test_decision_preview_and_hub_apply_are_audited(factory: sessionmaker[Sessio
         assert session.execute(text("select count(*) from audit_log")).scalar_one() == 1
 
 
+def test_use_wix_visible_value_is_stored_as_boolean(factory: sessionmaker[Session]) -> None:
+    product, _ = ProductHubRepository(factory).create_product(sku="XW-CW-VISIBLE", name="Sichtbar")
+    SyncRepository(factory).create_sync_conflict(
+        channel="wix",
+        entity_type="product",
+        internal_entity_id=product.id,
+        field_name="visible",
+        hub_value=True,
+        external_value="false",
+    )
+    service = ConflictWizardService(factory)
+    service.scan_low_level_conflicts()
+    case = service.repository.list_cases()[0][0]
+
+    decided = service.decide(
+        case.id, expected_row_version=case.row_version, resolution_type="USE_WIX"
+    )
+    service.preview(case.id)
+    applied = service.apply(
+        case.id, expected_row_version=decided.row_version, channel_apply_enabled=False
+    )
+
+    assert applied.status == "RESOLVED"
+    with factory() as session:
+        refreshed = session.get(Product, product.id)
+        assert refreshed is not None
+        assert refreshed.active is False
+
+
 def test_intentional_difference_is_not_reopened(factory: sessionmaker[Session]) -> None:
     _, service = _seed(factory)
     service.scan_low_level_conflicts()
@@ -189,6 +218,37 @@ def test_mapping_candidate_can_be_applied_with_audited_remap(factory: sessionmak
         refreshed_low = session.get(type(low), low.id)
         assert refreshed_low is not None and refreshed_low.resolution == "mapping_reassigned"
         assert session.execute(text("select count(*) from audit_log")).scalar_one() == 1
+
+
+def test_remap_rejects_existing_wix_id_with_legacy_prefix(factory: sessionmaker[Session]) -> None:
+    products = ProductHubRepository(factory)
+    target, _ = products.create_product(sku="XW-MAP-TARGET", name="Target")
+    other, _ = products.create_product(sku="XW-MAP-OTHER", name="Other")
+    mapping = products.create_channel_mapping(
+        channel="wix", entity_type="product", internal_entity_id=target.id, external_id="old-id"
+    )
+    products.create_channel_mapping(
+        channel="wix",
+        entity_type="product",
+        internal_entity_id=other.id,
+        external_id="product_replacement-id",
+    )
+    SyncRepository(factory).create_sync_conflict(
+        channel="wix",
+        entity_type="product",
+        internal_entity_id=target.id,
+        field_name="mapping",
+        hub_value={"state": "mapped", "external_id": mapping.external_id},
+        external_value={"state": "not_found", "external_id": mapping.external_id},
+    )
+    service = ConflictWizardService(factory)
+    service.scan_low_level_conflicts()
+    case = service.repository.list_cases()[0][0]
+
+    with pytest.raises(ValueError, match="bereits einem anderen"):
+        service.remap_wix_mapping(
+            case.id, expected_row_version=case.row_version, external_id="replacement-id"
+        )
 
 
 def test_new_wix_product_is_mapped_and_audited(factory: sessionmaker[Session]) -> None:

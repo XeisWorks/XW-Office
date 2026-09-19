@@ -16,6 +16,15 @@ def normalize_value(field_path: str, value: Any) -> Any:
     """Return a stable semantic comparison value for one field."""
     if value is None:
         return None
+    if field_path in {"active", "visible"}:
+        if isinstance(value, str):
+            normalized_bool = value.strip().casefold()
+            if normalized_bool in {"true", "1", "yes", "ja", "on"}:
+                return True
+            if normalized_bool in {"false", "0", "no", "nein", "off"}:
+                return False
+        if isinstance(value, bool):
+            return value
     if field_path in {"price", "price_net", "price_gross", "tax_rate", "vat"}:
         try:
             return str(

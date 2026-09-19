@@ -16,6 +16,8 @@ from typing import Any
 import httpx
 from rapidfuzz import fuzz
 
+from xw_office.services.wix.identifiers import canonical_wix_id
+
 _DEFAULT_MODEL = "gpt-4.1-mini"
 _TIMEOUT = 45.0
 
@@ -106,7 +108,7 @@ def _search_text(value: object) -> str:
 
 
 def _canonical_id(value: object) -> str:
-    return str(value or "").strip().removeprefix("product_").casefold()
+    return canonical_wix_id(value).casefold()
 
 
 def _is_sku_variant(first: str, second: str) -> bool:

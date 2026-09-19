@@ -22,6 +22,7 @@ from xw_office.services.product_hub.conflicts.service import (
 )
 from xw_office.services.product_hub.wix_snapshot import WixSnapshotService
 from xw_office.services.wix.client import WixProductsClient
+from xw_office.services.wix.identifiers import canonical_wix_id
 from xw_office.services.wix.product_details_client import WixProductDetailsClient
 from xw_office.web.schemas.conflicts import (
     ConflictActionOut,
@@ -322,7 +323,9 @@ def build_conflicts_router(
         """Apply a user-selected, Wix-verified replacement mapping."""
         if get_wix_details_client is None:
             raise HTTPException(status_code=503, detail="Wix-Prüfung ist nicht konfiguriert")
-        candidate = str(body.external_id).strip()
+        candidate = canonical_wix_id(body.external_id)
+        if not candidate:
+            raise HTTPException(status_code=400, detail="Wix-ID fehlt oder enthält mehrere IDs")
         try:
             raw = get_wix_details_client().get_product_raw(candidate)
         except Exception as exc:
@@ -332,8 +335,7 @@ def build_conflicts_router(
         raw_id = str((raw or {}).get("id") or "").strip()
         if (
             not raw_id
-            or raw_id.removeprefix("product_").casefold()
-            != candidate.removeprefix("product_").casefold()
+            or canonical_wix_id(raw_id).casefold() != candidate.casefold()
         ):
             raise HTTPException(
                 status_code=400,
