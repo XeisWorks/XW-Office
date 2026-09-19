@@ -126,6 +126,31 @@ def clean_unreleased_match_title(value: str) -> str:
     return " ".join(raw.split()).strip()
 
 
+def split_unreleased_titles(values: list[str], quantity: int) -> list[str]:
+    """Apply the legacy separators and discard obvious arranger-only lines."""
+    pieces: list[str] = []
+    for value in values:
+        for line in re.split(r"[\r\n]+", str(value or "")):
+            line = line.strip()
+            if not line:
+                continue
+            if re.match(r"^(arrangement|arr\.?|arrangiert)\b", line, re.IGNORECASE):
+                continue
+            numbered = re.split(r"(?:^|\s)\d+\s*[\).]\s*", line)
+            numbered = [part.strip() for part in numbered if part.strip()]
+            candidates = numbered if len(numbered) > 1 else [line]
+            for candidate in candidates:
+                separated = [
+                    part.strip()
+                    for part in re.split(r"\s*(?:;|\||/)\s*", candidate)
+                    if part.strip()
+                ]
+                pieces.extend(separated or [candidate])
+    if quantity > 0 and len(pieces) == quantity:
+        return pieces
+    return pieces
+
+
 def _title_match_variants(value: str) -> set[str]:
     normalized = normalize_legacy_title(value)
     if not normalized:
@@ -426,27 +451,7 @@ class ProductCatalogService:
 
     def split_unreleased_titles(self, values: list[str], quantity: int) -> list[str]:
         """Apply the legacy separators and discard obvious arranger-only lines."""
-        pieces: list[str] = []
-        for value in values:
-            for line in re.split(r"[\r\n]+", str(value or "")):
-                line = line.strip()
-                if not line:
-                    continue
-                if re.match(r"^(arrangement|arr\.?|arrangiert)\b", line, re.IGNORECASE):
-                    continue
-                numbered = re.split(r"(?:^|\s)\d+\s*[\).]\s*", line)
-                numbered = [part.strip() for part in numbered if part.strip()]
-                candidates = numbered if len(numbered) > 1 else [line]
-                for candidate in candidates:
-                    separated = [
-                        part.strip()
-                        for part in re.split(r"\s*(?:;|\||/)\s*", candidate)
-                        if part.strip()
-                    ]
-                    pieces.extend(separated or [candidate])
-        if quantity > 0 and len(pieces) == quantity:
-            return pieces
-        return pieces
+        return split_unreleased_titles(values, quantity)
 
     def list_unreleased_products(self) -> list[UnreleasedProduct]:
         if self._unreleased_products is None:

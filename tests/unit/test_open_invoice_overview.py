@@ -101,8 +101,9 @@ def test_open_invoice_overview_reads_persistent_wix_cache_for_notes_and_products
     assert overview.with_note == 1
     assert overview.plc == 1
     assert overview.cache_updates == {"20910": False, "20911": True}
-    assert [(item.title, item.description, item.quantity) for item in overview.print_products] == [
-        ("Marsch Eins\nPolka Zwei", "Produktbeschreibung", 2)
+    assert [(item.sku, item.title, item.description, item.quantity) for item in overview.print_products] == [
+        ("XW-010", "Marsch Eins", "Produktbeschreibung", 1),
+        ("XW-010", "Polka Zwei", "Produktbeschreibung", 1),
     ]
     assert [
         (item.title, item.shipping_name, item.order_reference)
@@ -110,6 +111,40 @@ def test_open_invoice_overview_reads_persistent_wix_cache_for_notes_and_products
     ] == [
         ("Marsch Eins", "Anna Versand", "20910"),
         ("Polka Zwei", "Anna Versand", "20910"),
+    ]
+
+
+def test_multi_title_xw010_keeps_one_row_when_title_count_differs_from_quantity() -> None:
+    summaries = [
+        InvoiceSummary.model_validate(
+            {"id": "phys", "invoiceNumber": "RE-P", "status": 100, "order_reference": "20910"}
+        ),
+    ]
+
+    class _CachedWix:
+        def get_cached_reference_digital_only(self, reference: str) -> bool | None:
+            return False
+
+        def get_cached_order_line_items(self, reference: str) -> list[object] | None:
+            return [
+                types.SimpleNamespace(
+                    sku="XW-010",
+                    name="Marsch Eins\nPolka Zwei",
+                    qty=3,
+                    note="Produktbeschreibung",
+                    is_unreleased=True,
+                    custom_piece_titles=["Marsch Eins", "Polka Zwei"],
+                )
+            ]
+
+    overview = overview_from_visible_summaries(
+        summaries,
+        digital_cache={},
+        wix_client=_CachedWix(),  # type: ignore[arg-type]
+    )
+
+    assert [(item.title, item.quantity) for item in overview.print_products] == [
+        ("Marsch Eins\nPolka Zwei", 3)
     ]
 
 

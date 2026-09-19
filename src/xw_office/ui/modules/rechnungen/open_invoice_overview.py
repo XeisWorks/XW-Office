@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.services.products.catalog import split_unreleased_titles
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 from xw_office.services.wix.client import WixOrdersClient
 
@@ -392,6 +393,22 @@ def note_has_plc_label_hint(note: object) -> bool:
     )
 
 
+def _separate_piece_titles(item: object, sku: str, qty: int) -> list[str]:
+    """Return one title per ordered piece for a multi-title XW-010 line item.
+
+    Mirrors ``PrintDecisionEngine._expand_multi_title_items``: only split when
+    the number of titles equals the ordered quantity, so no title is silently
+    assigned to the wrong print file.
+    """
+    if sku != "XW-010" or not bool(getattr(item, "is_unreleased", False)):
+        return []
+    raw_titles = getattr(item, "custom_piece_titles", None)
+    if not isinstance(raw_titles, list):
+        return []
+    titles = split_unreleased_titles([str(title or "") for title in raw_titles], qty)
+    return titles if len(titles) > 1 and len(titles) == qty else []
+
+
 class _ProductAccumulator:
     def __init__(
         self,
@@ -408,13 +425,19 @@ class _ProductAccumulator:
             sku = str(getattr(item, "sku", "") or "").strip().upper()
             if self._sku_filter is not None and not self._sku_filter(sku):
                 continue
-            title = str(getattr(item, "name", "") or "").strip() or sku or "Unbenanntes Produkt"
             description = str(getattr(item, "note", "") or "").strip()
             category_label = str(getattr(item, "category_label", "") or "").strip()
             try:
                 qty = max(1, int(getattr(item, "qty", 1) or 1))
             except (TypeError, ValueError):
                 qty = 1
+            piece_titles = _separate_piece_titles(item, sku, qty)
+            if piece_titles:
+                # One row per piece, each keeping the full order description.
+                for piece_title in piece_titles:
+                    self._rows[(sku, piece_title, description, category_label)] += 1
+                continue
+            title = str(getattr(item, "name", "") or "").strip() or sku or "Unbenanntes Produkt"
             self._rows[(sku, title, description, category_label)] += qty
 
     def to_list(self) -> list[PrintProductAggregate]:
