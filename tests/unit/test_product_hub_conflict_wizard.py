@@ -191,6 +191,48 @@ def test_mapping_candidate_can_be_applied_with_audited_remap(factory: sessionmak
         assert session.execute(text("select count(*) from audit_log")).scalar_one() == 1
 
 
+def test_new_wix_product_is_mapped_and_audited(factory: sessionmaker[Session]) -> None:
+    products = ProductHubRepository(factory)
+    product, _variant = products.create_product(sku="XW-MAP-NEW", name="New Wix draft")
+    mapping = products.create_channel_mapping(
+        channel="wix", entity_type="product", internal_entity_id=product.id, external_id="missing-id"
+    )
+    SyncRepository(factory).create_sync_conflict(
+        channel="wix", entity_type="product", internal_entity_id=product.id, field_name="mapping",
+        hub_value={"state": "mapped", "external_id": mapping.external_id},
+        external_value={"state": "not_found", "external_id": mapping.external_id},
+    )
+    service = ConflictWizardService(factory)
+    service.scan_low_level_conflicts()
+    case = service.repository.list_cases()[0][0]
+
+    resolved = service.map_new_wix_product(
+        case.id, expected_row_version=case.row_version, external_id="new-wix-id"
+    )
+
+    assert resolved.resolution_type == "CREATE_WIX_PRODUCT"
+    with factory() as session:
+        refreshed = session.get(type(mapping), mapping.id)
+        assert refreshed is not None and refreshed.external_id == "new-wix-id"
+        assert session.execute(text("select count(*) from audit_log")).scalar_one() == 1
+
+
+def test_archive_hub_product_closes_case_without_hard_delete(factory: sessionmaker[Session]) -> None:
+    product, service = _seed(factory)
+    service.scan_low_level_conflicts()
+    case = service.repository.list_cases()[0][0]
+
+    resolved = service.archive_hub_product(case.id, expected_row_version=case.row_version)
+
+    assert resolved.resolution_type == "ARCHIVE_HUB_PRODUCT"
+    with factory() as session:
+        refreshed = session.get(Product, product.id)
+        assert refreshed is not None
+        assert refreshed.active is False
+        assert refreshed.archived_at is not None
+        assert session.execute(text("select count(*) from audit_log")).scalar_one() == 1
+
+
 def test_conflict_api_is_independently_feature_flagged(factory: sessionmaker[Session]) -> None:
     _seed(factory)
     database_url = str(factory.kw["bind"].url)

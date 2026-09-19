@@ -690,11 +690,13 @@ a {
 .compact-ai-advice { border-style: solid; }
 .compact-ai-advice h2 { margin-bottom: 0.35rem; }
 .compact-ai-advice p { margin: 0; }
-.alternative-candidates, .compact-decision-panel { margin-top: 0.75rem; }
-.alternative-candidates summary, .compact-decision-panel summary { cursor: pointer; color: var(--color-muted); }
+.alternative-candidates, .compact-decision-panel, .mapping-action-panel { margin-top: 0.75rem; }
+.alternative-candidates summary, .compact-decision-panel summary, .mapping-action-panel summary { cursor: pointer; color: var(--color-muted); }
 .alternative-candidates .mapping-candidate-list { margin-top: 0.6rem; }
 .compact-decision-panel { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.7rem 1rem; }
 .compact-decision-panel .decision-buttons { margin: 0; }
+.mapping-action-panel .hint { margin: 0.15rem 0 0; }
+.danger-button { border-color: var(--color-bad-text) !important; color: var(--color-bad-text); }
 @media (max-width: 42rem) { .mapping-comparison-grid { grid-template-columns: 1fr; } .compact-decision-panel { align-items: stretch; flex-direction: column; } }
 .custom-decision input { min-width: 18rem; padding: 0.45rem; border: 1px solid var(--color-border); border-radius: 5px; }
 .impact-row { display: grid; grid-template-columns: 6rem minmax(12rem, 1fr) 7rem; gap: 0.75rem; align-items: center; padding: 0.55rem 0; border-bottom: 1px solid var(--color-border); }

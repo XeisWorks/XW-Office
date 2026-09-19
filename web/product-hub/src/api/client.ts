@@ -199,6 +199,16 @@ export const api = {
         ...(note ? { note } : {}),
       },
     }),
+  createWixProductForConflict: (id: string, expectedRowVersion: number) =>
+    request<ConflictCase>(`/api/v1/conflicts/${id}/create-wix-product`, {
+      method: "POST",
+      body: { expected_row_version: expectedRowVersion },
+    }),
+  archiveHubProductForConflict: (id: string, expectedRowVersion: number) =>
+    request<ConflictCase>(`/api/v1/conflicts/${id}/archive-hub-product`, {
+      method: "POST",
+      body: { expected_row_version: expectedRowVersion },
+    }),
   scanConflicts: (productId?: string) =>
     request<{ differences_found: number; cases_created: number; cases_updated: number }>(
       `/api/v1/conflicts/scan${productId ? `?product_id=${encodeURIComponent(productId)}` : ""}`,

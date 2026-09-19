@@ -19,6 +19,7 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
   const [advice, setAdvice] = useState<ConflictAdvice | null>(null);
   const [adviceLoading, setAdviceLoading] = useState(false);
   const [remappingId, setRemappingId] = useState<string | null>(null);
+  const [destructiveAction, setDestructiveAction] = useState<"create-wix" | "archive-hub" | null>(null);
   const [custom, setCustom] = useState("");
   const [message, setMessage] = useState("");
   const adviceRequestFor = useRef<string | null>(null);
@@ -119,6 +120,37 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
     finally { setRemappingId(null); }
   }
 
+  async function createWixProduct() {
+    if (!item || !id) return;
+    const confirmed = window.confirm(
+      `Wix-Entwurf für „${item.product_name}“ mit SKU ${item.product_sku} anlegen?\n\n` +
+      "Der Entwurf bleibt in Wix unsichtbar und wird danach mit diesem Hub-Produkt verknüpft.",
+    );
+    if (!confirmed) return;
+    setDestructiveAction("create-wix"); setMessage("Wix-Entwurf wird angelegt …");
+    try {
+      await api.createWixProductForConflict(id, item.row_version);
+      setMessage("Wix-Entwurf angelegt und verknüpft. Bitte Inhalte und Sichtbarkeit in Wix prüfen.");
+      await load();
+    } catch (error) { handleError(error); }
+    finally { setDestructiveAction(null); }
+  }
+
+  async function archiveHubProduct() {
+    if (!item || !id) return;
+    const confirmed = window.confirm(
+      `„${item.product_name}“ im Product Hub archivieren?\n\n` +
+      "Das Produkt wird nicht endgültig gelöscht, sondern deaktiviert und bleibt im Archiv nachvollziehbar.",
+    );
+    if (!confirmed) return;
+    setDestructiveAction("archive-hub"); setMessage("Produkt wird im Hub archiviert …");
+    try {
+      await api.archiveHubProductForConflict(id, item.row_version);
+      navigate("/conflicts");
+    } catch (error) { handleError(error); }
+    finally { setDestructiveAction(null); }
+  }
+
   if (!item) return <section><h1>Konflikt-Assistent</h1><p className="hint">{message || "Fall wird geladen …"}</p></section>;
 
   const guidance = deterministicGuidance(item);
@@ -163,7 +195,7 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
                   {preferredCandidate.description
                     ? <div className="mapping-description" dangerouslySetInnerHTML={{ __html: preferredCandidate.description }} />
                     : <small>Beschreibung in Wix nicht verfügbar.</small>}
-                  <button className="primary-button preferred-mapping-button" type="button" disabled={remappingId !== null} onClick={() => remapMapping(preferredCandidate.external_id, preferredCandidate.name)}>
+                  <button className="primary-button preferred-mapping-button" type="button" disabled={remappingId !== null || destructiveAction !== null} onClick={() => remapMapping(preferredCandidate.external_id, preferredCandidate.name)}>
                     {remappingId === preferredCandidate.external_id ? "Wird verifiziert …" : "Vorschlag übernehmen"}
                   </button>
                 </> : <><p>{advice?.mapping_search_status === "unavailable" ? "Wix-Suche nicht verfügbar." : "Kein eindeutiger Wix-Kandidat gefunden."}</p><Link className="primary-button preferred-mapping-button" to={`/products/${item.product_id}`}>SKU im Hub ändern</Link></>}
@@ -179,9 +211,13 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
             </div>)}</div>
           </details>}
 
-          <div className="decision-panel compact-decision-panel">
-            <div className="decision-buttons"><button type="button" onClick={retryWix}>Wix erneut prüfen</button><Link to={`/products/${item.product_id}`}>SKU im Hub ändern</Link></div>
-            <details><summary>Weitere Aktionen</summary><div className="secondary-actions"><button type="button" onClick={() => decide("INTENTIONAL_DIFFERENCE")}>Als Ausnahme markieren</button><button type="button" onClick={later}>In einer Woche erinnern</button><button type="button" onClick={() => decide("IGNORE")}>Ignorieren</button></div></details>
+          <div className="decision-panel mapping-action-panel">
+            <div>
+              <h2>Andere Auflösung wählen</h2>
+              <p className="hint">Die KI-Empfehlung bleibt hervorgehoben. Wähle hier, wenn das Produkt oder die Verknüpfung anders behandelt werden soll.</p>
+            </div>
+            <div className="decision-buttons"><button type="button" disabled={destructiveAction !== null} onClick={retryWix}>Wix erneut prüfen</button><Link to={`/products/${item.product_id}`}>Produkt im Hub bearbeiten</Link><button type="button" disabled={destructiveAction !== null} onClick={createWixProduct}>{destructiveAction === "create-wix" ? "Wix-Entwurf wird angelegt …" : "In Wix als Entwurf anlegen"}</button></div>
+            <details><summary>Weitere Aktionen</summary><div className="secondary-actions"><button type="button" onClick={() => decide("INTENTIONAL_DIFFERENCE")}>Als Ausnahme markieren</button><button type="button" onClick={later}>In einer Woche erinnern</button><button type="button" onClick={() => decide("IGNORE")}>Ignorieren</button><button className="danger-button" type="button" disabled={destructiveAction !== null} onClick={archiveHubProduct}>{destructiveAction === "archive-hub" ? "Wird archiviert …" : "Produkt im Hub archivieren"}</button></div></details>
           </div>
         </>
       ) : (

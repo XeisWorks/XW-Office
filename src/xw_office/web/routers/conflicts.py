@@ -354,6 +354,67 @@ def build_conflicts_router(
         return ConflictCaseOut.model_validate(row)
 
     @router.post(
+        "/{case_id}/create-wix-product",
+        response_model=ConflictCaseOut,
+        dependencies=[Depends(require_edit_enabled)],
+    )
+    def create_wix_product(
+        case_id: uuid.UUID,
+        body: VersionedRequest,
+        service: ConflictWizardService = Depends(get_service),
+    ) -> ConflictCaseOut:
+        """Create a hidden Wix draft from the Hub product, then map it here."""
+        if get_wix_catalog_client is None:
+            raise HTTPException(status_code=503, detail="Wix-Anbindung ist nicht konfiguriert")
+        try:
+            bundle = service.detail(case_id)
+            case = bundle["case"]
+            if case.conflict_type != "WRONG_PRODUCT_MAPPING":
+                raise ValueError("Nur Wix-Mapping-Konflikte koennen ein Wix-Produkt anlegen")
+            if case.row_version != body.expected_row_version:
+                raise ConflictOptimisticLockError("Der Konflikt wurde zwischenzeitlich geaendert")
+            product = bundle["product"]
+            price = service.wix_creation_price(product.id)
+            if price is None:
+                raise ValueError("Dem Hub-Produkt fehlt ein aktueller Verkaufspreis in EUR")
+            external_id = get_wix_catalog_client().create_product(
+                name=product.name,
+                sku=product.sku,
+                product_type=product.product_type,
+                price=price,
+            )
+            row = service.map_new_wix_product(
+                case_id, expected_row_version=body.expected_row_version, external_id=external_id
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConflictOptimisticLockError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return ConflictCaseOut.model_validate(row)
+
+    @router.post(
+        "/{case_id}/archive-hub-product",
+        response_model=ConflictCaseOut,
+        dependencies=[Depends(require_edit_enabled)],
+    )
+    def archive_hub_product(
+        case_id: uuid.UUID,
+        body: VersionedRequest,
+        service: ConflictWizardService = Depends(get_service),
+    ) -> ConflictCaseOut:
+        try:
+            row = service.archive_hub_product(
+                case_id, expected_row_version=body.expected_row_version
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConflictOptimisticLockError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return ConflictCaseOut.model_validate(row)
+
+    @router.post(
         "/scan", response_model=ConflictScanOut, dependencies=[Depends(require_scan_enabled)]
     )
     def scan(

@@ -314,6 +314,54 @@ class WixProductsClient:
     # Products
     # ------------------------------------------------------------------
 
+    def create_product(
+        self,
+        *,
+        name: str,
+        sku: str,
+        product_type: str,
+        price: str | None = None,
+    ) -> str:
+        """Create a hidden Wix Catalog v3 product and return its external ID.
+
+        A conflict resolution must never publish a newly-created product by
+        accident. The caller can enrich and publish the draft in Wix after it
+        was created and mapped successfully.
+        """
+        if not self.has_credentials():
+            raise RuntimeError("Wix Credentials fehlen")
+        clean_name = str(name or "").strip()
+        clean_sku = str(sku or "").strip()
+        if not clean_name or not clean_sku:
+            raise ValueError("Name und SKU sind fuer das Wix-Produkt erforderlich")
+
+        wix_type = "DIGITAL" if str(product_type).strip().casefold() == "digital" else "PHYSICAL"
+        variant: dict[str, Any] = {"sku": clean_sku}
+        if price:
+            variant["actualPrice"] = {"amount": str(price), "currency": "EUR"}
+        payload: dict[str, Any] = {
+            "product": {
+                "name": clean_name,
+                "productType": wix_type,
+                "visible": False,
+                "variantsInfo": {"variants": [variant]},
+            }
+        }
+        if wix_type == "PHYSICAL":
+            payload["product"]["physicalProperties"] = {}
+
+        endpoint = "https://www.wixapis.com/stores/v3/products"
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            response = self._request_with_retry(
+                client, "POST", endpoint, headers=self._build_headers(), json_body=payload
+            )
+        data = response.json() if response.content else {}
+        product = data.get("product") if isinstance(data, dict) else None
+        external_id = str((product or {}).get("id") or "").strip()
+        if not external_id:
+            raise RuntimeError("Wix hat keine Produkt-ID fuer den neuen Entwurf geliefert")
+        return external_id
+
     def list_products(
         self,
         *,

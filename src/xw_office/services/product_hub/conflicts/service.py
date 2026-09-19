@@ -187,6 +187,22 @@ class ConflictWizardService:
             actions=self._repo.actions(case_id),
         )
 
+    def wix_creation_price(self, product_id: uuid.UUID) -> str | None:
+        """Return the current retail gross price required by Wix Catalog v3."""
+        variant = self._products.get_default_variant(product_id)
+        price_list = self._products.get_price_list_by_code("RETAIL_EUR")
+        if variant is None or price_list is None:
+            return None
+        current = next(
+            (
+                price
+                for price in self._products.list_prices(variant.id)
+                if price.price_list_id == price_list.id and price.valid_until is None
+            ),
+            None,
+        )
+        return str(current.gross_amount) if current is not None and current.gross_amount is not None else None
+
     def decide(
         self,
         case_id: uuid.UUID,
@@ -325,6 +341,111 @@ class ConflictWizardService:
             case.resolution_note = note
             case.status = "RESOLVED"
             case.resolved_at = _now()
+            case.row_version += 1
+            session.flush()
+            return case
+
+    def map_new_wix_product(
+        self,
+        case_id: uuid.UUID,
+        *,
+        expected_row_version: int,
+        external_id: str,
+        actor: str = "conflict-wizard",
+    ) -> ConflictCase:
+        """Attach a Wix product just created for this mapping conflict."""
+        selected_id = str(external_id or "").strip()
+        if not selected_id:
+            raise ValueError("Wix-Produkt-ID fehlt")
+        with session_scope(self._factory) as session:
+            case = session.get(ConflictCase, case_id)
+            if case is None:
+                raise KeyError(f"Conflict case {case_id} not found")
+            if case.row_version != expected_row_version:
+                raise ConflictOptimisticLockError(
+                    f"Expected case row_version {expected_row_version}, found {case.row_version}"
+                )
+            if case.conflict_type != "WRONG_PRODUCT_MAPPING":
+                raise ValueError("Nur Wix-Mapping-Konflikte koennen ein Wix-Produkt anlegen")
+            mapping = session.scalar(
+                select(ChannelMapping).where(
+                    ChannelMapping.channel == "wix",
+                    ChannelMapping.entity_type == "product",
+                    ChannelMapping.internal_entity_id == case.product_id,
+                )
+            )
+            if mapping is None:
+                raise KeyError("Wix-Mapping fuer dieses Produkt nicht gefunden")
+            previous_id = mapping.external_id
+            mapping.external_id = selected_id
+            mapping.sync_status = "never"
+            mapping.external_revision = None
+            mapping.last_pulled_at = None
+            mapping.last_external_updated_at = None
+            mapping.last_success_at = None
+            mapping.source_payload_hash = None
+            mapping.last_error = None
+            if case.origin_sync_conflict_id is not None:
+                low = session.get(SyncConflict, case.origin_sync_conflict_id)
+                if low is not None and low.resolved_at is None:
+                    low.resolution = "wix_product_created"
+                    low.resolved_by = actor
+                    low.resolved_at = _now()
+            session.add(
+                AuditLog(
+                    id=uuid.uuid4(), actor_type="user", actor_id=actor, source="conflict_wizard",
+                    action="conflict.create_wix_product", entity_type="product", entity_id=case.product_id,
+                    changed_fields=["wix_mapping.external_id"], before_data={"external_id": previous_id},
+                    after_data={"external_id": selected_id}, correlation_id=case.id,
+                )
+            )
+            case.resolution_type = "CREATE_WIX_PRODUCT"
+            case.status = "RESOLVED"
+            case.resolved_at = _now()
+            case.row_version += 1
+            session.flush()
+            return case
+
+    def archive_hub_product(
+        self,
+        case_id: uuid.UUID,
+        *,
+        expected_row_version: int,
+        actor: str = "conflict-wizard",
+    ) -> ConflictCase:
+        """Archive the Hub product and close the current conflict safely."""
+        with session_scope(self._factory) as session:
+            case = session.get(ConflictCase, case_id)
+            if case is None:
+                raise KeyError(f"Conflict case {case_id} not found")
+            if case.row_version != expected_row_version:
+                raise ConflictOptimisticLockError(
+                    f"Expected case row_version {expected_row_version}, found {case.row_version}"
+                )
+            product = session.get(Product, case.product_id)
+            if product is None:
+                raise KeyError(f"Product {case.product_id} not found")
+            now = _now()
+            product.active = False
+            product.archived_at = now
+            product.row_version += 1
+            if case.origin_sync_conflict_id is not None:
+                low = session.get(SyncConflict, case.origin_sync_conflict_id)
+                if low is not None and low.resolved_at is None:
+                    low.resolution = "hub_product_archived"
+                    low.resolved_by = actor
+                    low.resolved_at = now
+            session.add(
+                AuditLog(
+                    id=uuid.uuid4(), actor_type="user", actor_id=actor, source="conflict_wizard",
+                    action="conflict.archive_hub_product", entity_type="product", entity_id=product.id,
+                    changed_fields=["active", "archived_at"], before_data={"active": True},
+                    after_data={"active": False}, correlation_id=case.id,
+                )
+            )
+            case.resolution_type = "ARCHIVE_HUB_PRODUCT"
+            case.status = "RESOLVED"
+            case.resolved_at = now
             case.row_version += 1
             session.flush()
             return case
