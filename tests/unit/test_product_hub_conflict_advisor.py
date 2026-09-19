@@ -99,6 +99,25 @@ def test_mapping_candidates_include_format_sku_variants() -> None:
     assert "SKU-Variante" in candidates[0].match_reasons
 
 
+def test_mapping_candidates_match_a_wix_variant_sku_to_its_parent_product() -> None:
+    candidates = find_wix_mapping_candidates(
+        [
+            WixProduct(
+                id="bh-polka",
+                name="BH Polka",
+                skus=["XW-6012", "XW-6212", "XW-6601"],
+            )
+        ],
+        product_name="BH-Polka [Kleine Besetzung]",
+        product_sku="XW-6012",
+    )
+
+    assert candidates[0].external_id == "bh-polka"
+    assert candidates[0].sku == "XW-6012"
+    assert candidates[0].score == 100
+    assert "Exakte SKU" in candidates[0].match_reasons
+
+
 def test_wix_description_keeps_safe_formatting_and_removes_active_content() -> None:
     description = _sanitize_wix_description(
         '<p><strong>Alpenmusik</strong></p><script>alert("x")</script><img src=x onerror=bad()>'

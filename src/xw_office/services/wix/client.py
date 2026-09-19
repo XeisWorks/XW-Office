@@ -70,6 +70,7 @@ class WixProduct(BaseModel):
     id: str = ""
     name: str = ""
     sku: str = ""
+    skus: list[str] = Field(default_factory=list)
     price: str = ""
     brand_name: str = ""
     brand_id: str = ""
@@ -78,25 +79,66 @@ class WixProduct(BaseModel):
     revision: str = ""
     updated_at: str = ""
 
+    @property
+    def all_skus(self) -> tuple[str, ...]:
+        """Return every product and variant SKU exactly once, in API order."""
+        values: list[str] = []
+        seen: set[str] = set()
+        for raw in (self.sku, *self.skus):
+            value = str(raw or "").strip()
+            normalized = value.casefold()
+            if value and normalized not in seen:
+                seen.add(normalized)
+                values.append(value)
+        return tuple(values)
+
+
+def _product_skus(raw: dict[str, Any]) -> list[str]:
+    """Extract product and variant SKUs from both Catalog V1 and V3 shapes.
+
+    In Catalog V1 variant-managed products store their SKU below
+    ``variants[].variant.sku``.  The parent ``product.sku`` is then empty, so
+    treating it as the only SKU makes an otherwise visible product impossible
+    to find by SKU.
+    """
+    values: list[str] = []
+
+    def add(value: object) -> None:
+        text = str(value or "").strip()
+        if text and text.casefold() not in {item.casefold() for item in values}:
+            values.append(text)
+
+    add(raw.get("sku"))
+    physical = raw.get("physicalProperties")
+    if isinstance(physical, dict):
+        add(physical.get("sku"))
+    for item in raw.get("variants") or []:
+        if not isinstance(item, dict):
+            continue
+        add(item.get("sku"))
+        nested = item.get("variant")
+        if isinstance(nested, dict):
+            add(nested.get("sku"))
+    return values
+
 
 def _parse_product(raw: dict[str, Any]) -> WixProduct:
     pid = str(raw.get("id") or "")
     name = str(raw.get("name") or "")
-    sku = ""
+    skus = _product_skus(raw)
+    sku = skus[0] if skus else ""
     price = ""
     variants: list[Any] = raw.get("variants") or []
     if variants and isinstance(variants[0], dict):
         v = variants[0]
-        sku = str(v.get("sku") or "")
-        pricing = v.get("priceData") or {}
+        nested_variant = v.get("variant") if isinstance(v.get("variant"), dict) else {}
+        pricing = v.get("priceData") or nested_variant.get("priceData") or {}
         if isinstance(pricing, dict):
             price = str(pricing.get("price") or "")
     if not price:
         pricing = raw.get("priceData") or {}
         if isinstance(pricing, dict):
             price = str(pricing.get("price") or "")
-    if not sku:
-        sku = str(raw.get("sku") or "")
     brand_name = ""
     brand_id = ""
     raw_brand = raw.get("brand")
@@ -129,6 +171,7 @@ def _parse_product(raw: dict[str, Any]) -> WixProduct:
         id=pid,
         name=name,
         sku=sku,
+        skus=skus,
         price=price,
         brand_name=brand_name,
         brand_id=brand_id,

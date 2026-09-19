@@ -381,7 +381,7 @@ def build_conflicts_router(
             existing = [
                 row
                 for row in get_wix_catalog_client().list_products(include_hidden=True)
-                if row.sku.strip().casefold() == normalized_sku and row.id.strip()
+                if normalized_sku in {sku.strip().casefold() for sku in row.all_skus} and row.id.strip()
             ]
             if len(existing) > 1:
                 raise ValueError(

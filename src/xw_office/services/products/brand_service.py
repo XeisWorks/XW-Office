@@ -128,9 +128,13 @@ class ProductBrandService:
         wix_ids_by_sku: dict[str, str] = {}
         if missing_wix_ids and self._wix_client.has_credentials():
             for wix_row in self._wix_client.list_products():
-                sku = str(wix_row.sku or "").strip().upper()
-                if sku and sku in missing_wix_ids and str(wix_row.id or "").strip():
-                    wix_ids_by_sku[sku] = str(wix_row.id or "").strip()
+                product_id = str(wix_row.id or "").strip()
+                if not product_id:
+                    continue
+                for raw_sku in wix_row.all_skus:
+                    sku = raw_sku.strip().upper()
+                    if sku and sku in missing_wix_ids:
+                        wix_ids_by_sku[sku] = product_id
 
         for sku, row in rows_by_sku.items():
             if sku not in item_by_sku:

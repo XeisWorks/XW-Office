@@ -121,6 +121,17 @@ def _is_sku_variant(first: str, second: str) -> bool:
     )
 
 
+def _candidate_skus(row: object) -> list[str]:
+    """Read all known SKUs from a catalog row, including Wix product variants."""
+    values: list[str] = []
+    raw_values = [getattr(row, "sku", ""), *(getattr(row, "skus", []) or [])]
+    for raw in raw_values:
+        value = str(raw or "").strip()
+        if value and value.casefold() not in {item.casefold() for item in values}:
+            values.append(value)
+    return values
+
+
 def find_wix_mapping_candidates(
     products: list[object],
     *,
@@ -145,15 +156,19 @@ def find_wix_mapping_candidates(
         if not canonical or canonical == current_id or canonical in seen:
             continue
         candidate_name = str(getattr(row, "name", "") or "").strip()
-        candidate_sku = str(getattr(row, "sku", "") or "").strip()
+        candidate_skus = _candidate_skus(row)
+        candidate_sku = candidate_skus[0] if candidate_skus else ""
         candidate_name_normalized = _search_text(candidate_name)
-        candidate_sku_normalized = _search_text(candidate_sku)
+        candidate_skus_normalized = [
+            _search_text(candidate_sku) for candidate_sku in candidate_skus
+        ]
         reasons: list[str] = []
         scores: list[float] = []
-        exact_sku = bool(sku and candidate_sku_normalized == sku)
+        exact_sku = bool(sku and sku in candidate_skus_normalized)
         exact_name = bool(name and candidate_name_normalized == name)
-        sku_score = (
-            fuzz.ratio(sku, candidate_sku_normalized) if sku and candidate_sku_normalized else 0.0
+        sku_score = max(
+            (fuzz.ratio(sku, value) for value in candidate_skus_normalized if sku and value),
+            default=0.0,
         )
         name_score = (
             fuzz.WRatio(name, candidate_name_normalized)
@@ -163,9 +178,19 @@ def find_wix_mapping_candidates(
         if exact_sku:
             reasons.append("Exakte SKU")
             scores.append(100.0)
-        elif _is_sku_variant(product_sku, candidate_sku):
+            candidate_sku = next(
+                candidate
+                for candidate, normalized in zip(candidate_skus, candidate_skus_normalized, strict=True)
+                if normalized == sku
+            )
+        elif any(_is_sku_variant(product_sku, candidate) for candidate in candidate_skus):
             reasons.append("SKU-Variante")
             scores.append(94.0)
+            candidate_sku = next(
+                candidate
+                for candidate in candidate_skus
+                if _is_sku_variant(product_sku, candidate)
+            )
         if exact_name:
             reasons.append("Exakter Produktname")
             scores.append(100.0)

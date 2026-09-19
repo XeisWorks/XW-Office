@@ -162,7 +162,10 @@ def test_list_products_reader_query_includes_hidden_products_and_variants() -> N
                         "id": "hidden-1",
                         "name": "Verstecktes Produkt",
                         "visible": False,
-                        "variants": [{"sku": "XW-101.3"}],
+                        "variants": [
+                            {"variant": {"sku": "XW-101.3"}},
+                            {"variant": {"sku": "XW-101.4"}},
+                        ],
                     }
                 ],
                 "pagingMetadata": {"hasNext": False},
@@ -184,6 +187,7 @@ def test_list_products_reader_query_includes_hidden_products_and_variants() -> N
         httpx.Client = original_client  # type: ignore[assignment]
 
     assert rows[0].sku == "XW-101.3"
+    assert rows[0].all_skus == ("XW-101.3", "XW-101.4")
     assert payloads
     assert payloads[0]["includeHiddenProducts"] is True
     assert payloads[0]["includeVariants"] is True
