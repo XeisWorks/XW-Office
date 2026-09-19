@@ -337,7 +337,7 @@ export interface ConflictAdvice {
   confidence: "low" | "medium" | "high";
   warnings: string[];
   evidence: string[];
-  mapping_search_status: "not_mapping" | "found" | "none" | "unavailable";
+  mapping_search_status: "not_mapping" | "found" | "ambiguous" | "none" | "unavailable";
   mapping_search_terms: string[];
   mapping_candidates: ConflictMappingCandidate[];
   mapping_comparison: ConflictMappingComparison | null;

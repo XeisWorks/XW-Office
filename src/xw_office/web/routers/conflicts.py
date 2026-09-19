@@ -308,7 +308,16 @@ def build_conflicts_router(
                         product_sku=product.sku,
                         current_external_id=current_external_id,
                     )
-                    mapping_search_status = "found" if candidates else "none"
+                    exact_sku_candidates = [
+                        candidate
+                        for candidate in candidates
+                        if "Exakte SKU" in candidate.match_reasons
+                    ]
+                    mapping_search_status = (
+                        "ambiguous"
+                        if len(exact_sku_candidates) > 1
+                        else "found" if candidates else "none"
+                    )
                     mapping_candidates = [candidate.as_dict() for candidate in candidates]
                     if mapping_candidates and get_wix_details_client is not None:
                         try:
@@ -339,7 +348,11 @@ def build_conflicts_router(
                 "hub_active": product.active,
                 "old_external_id": current_external_id,
                 "old_status": old_status,
-                "candidate": mapping_candidates[0] if mapping_candidates else None,
+                "candidate": (
+                    mapping_candidates[0]
+                    if mapping_candidates and mapping_search_status != "ambiguous"
+                    else None
+                ),
             }
         try:
             result = get_advice_service().advise(snapshot)

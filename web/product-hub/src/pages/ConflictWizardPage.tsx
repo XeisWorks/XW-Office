@@ -170,7 +170,9 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
   const isMappingConflict = item.conflict_type === "WRONG_PRODUCT_MAPPING";
   const sources = Array.from(new Set(item.fields.flatMap((field) => field.observations.map((obs) => obs.source))));
   const comparison = advice?.mapping_comparison;
-  const preferredCandidate = comparison?.candidate ?? advice?.mapping_candidates[0] ?? null;
+  const preferredCandidate = advice?.mapping_search_status === "ambiguous"
+    ? null
+    : comparison?.candidate ?? advice?.mapping_candidates[0] ?? null;
   const otherCandidates = advice?.mapping_candidates.filter((candidate) => candidate.external_id !== preferredCandidate?.external_id) ?? [];
   const oldMappingStatus = comparison?.old_status === "not_found" ? "Bei Wix nicht gefunden" : "Nicht abrufbar";
   const selectedActions = actions.filter((action) => action.selected);
