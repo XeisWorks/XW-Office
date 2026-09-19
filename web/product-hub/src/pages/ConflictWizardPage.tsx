@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import type { ConflictAction, ConflictAdvice, ConflictCaseDetail } from "../api/types";
@@ -11,8 +11,6 @@ import {
   technicalValue,
 } from "../utils/conflictPresentation";
 
-const CONFIDENCE_LABELS = { low: "niedrig", medium: "mittel", high: "hoch" };
-
 export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized: () => void }) {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -23,6 +21,7 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
   const [remappingId, setRemappingId] = useState<string | null>(null);
   const [custom, setCustom] = useState("");
   const [message, setMessage] = useState("");
+  const adviceRequestFor = useRef<string | null>(null);
 
   async function load() {
     if (!id) {
@@ -36,9 +35,16 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
     setActions(detail.actions);
     setAdvice(null);
     setMessage("");
+    if (adviceRequestFor.current !== id) {
+      adviceRequestFor.current = id;
+      void loadAdvice(id);
+    }
   }
 
-  useEffect(() => { load().catch(handleError); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    adviceRequestFor.current = null;
+    load().catch(handleError);
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleError(error: unknown) {
     if (error instanceof ApiError && error.status === 401) onUnauthorized();
@@ -81,17 +87,20 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
     setMessage("Wix-Verknüpfungen werden erneut geprüft …");
     try {
       await api.scanWixConflicts();
+      adviceRequestFor.current = null;
       await load();
       setMessage("Wix-Prüfung abgeschlossen.");
     } catch (error) { handleError(error); }
   }
 
-  async function askAi() {
-    if (!id) return;
+  async function loadAdvice(caseId: string) {
     setAdviceLoading(true); setMessage("");
-    try { setAdvice(await api.getConflictAdvice(id)); }
+    try {
+      const result = await api.getConflictAdvice(caseId);
+      if (adviceRequestFor.current === caseId) setAdvice(result);
+    }
     catch (error) { handleError(error); }
-    finally { setAdviceLoading(false); }
+    finally { if (adviceRequestFor.current === caseId) setAdviceLoading(false); }
   }
 
   async function remapMapping(externalId: string, productName: string) {
@@ -115,6 +124,11 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
   const guidance = deterministicGuidance(item);
   const isMappingConflict = item.conflict_type === "WRONG_PRODUCT_MAPPING";
   const sources = Array.from(new Set(item.fields.flatMap((field) => field.observations.map((obs) => obs.source))));
+  const comparison = advice?.mapping_comparison;
+  const preferredCandidate = comparison?.candidate ?? advice?.mapping_candidates[0] ?? null;
+  const otherCandidates = advice?.mapping_candidates.filter((candidate) => candidate.external_id !== preferredCandidate?.external_id) ?? [];
+  const oldMappingStatus = comparison?.old_status === "not_found" ? "Bei Wix nicht gefunden" : "Nicht abrufbar";
+
   return (
     <section>
       <Link to="/conflicts">← Zur Konfliktliste</Link>
@@ -122,72 +136,83 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
         <div><h1>{item.product_sku} · {item.product_name}</h1><p>{conflictTypeLabel(item.conflict_type)}</p></div>
         <StatusBadge label={item.severity} tone={item.severity === "CRITICAL" || item.severity === "HIGH" ? "bad" : item.severity === "MEDIUM" ? "warn" : "neutral"} />
       </div>
-      {item.severity === "CRITICAL" && <div className="critical-warning">Kritischer Identitäts- oder Verknüpfungskonflikt: Bitte manuell prüfen. Es wird nichts automatisch geändert.</div>}
-
-      <article className="conflict-explanation" aria-labelledby="conflict-explanation-title">
-        <h2 id="conflict-explanation-title">{guidance.title}</h2>
-        <p>{guidance.explanation}</p>
-        <h3>Meine Empfehlung</h3>
-        <p>{guidance.recommendation}</p>
-        <details><summary>Mögliche Ursachen</summary><ul>{guidance.possibleCauses.map((cause) => <li key={cause}>{cause}</li>)}</ul></details>
-      </article>
-
-      <div className="comparison-scroll">
-        <table className="comparison-table">
-          <thead><tr><th scope="col">Verglichenes Feld</th>{sources.map((source) => <th scope="col" key={source}>{source === "hub" ? "Product Hub" : source}</th>)}</tr></thead>
-          <tbody>{item.fields.map((field) => <tr key={field.id}>
-            <th scope="row">{conflictFieldLabel(field.field_path)}</th>
-            {sources.map((source) => <td key={source}>{displayConflictValue(field.field_path, [...field.observations].reverse().find((obs) => obs.source === source)?.raw_value)}</td>)}
-          </tr>)}</tbody>
-        </table>
-      </div>
 
       {isMappingConflict ? (
-        <div className="decision-panel">
-          <h2>Sichere nächste Schritte</h2>
-          <p>Bei einer fehlerhaften Produkt-Verknüpfung wird kein Wix-Wert automatisch übernommen. Wähle eine der folgenden Entscheidungen:</p>
-          <div className="decision-buttons">
-            <button className="primary-button" type="button" onClick={retryWix}>Wix erneut prüfen</button>
-            <button type="button" onClick={() => decide("INTENTIONAL_DIFFERENCE")}>Als beabsichtigte Ausnahme markieren</button>
-            <button type="button" onClick={() => decide("IGNORE")}>Ignorieren</button>
+        <>
+          <article className="mapping-comparison" aria-label="Vergleich der Wix-Verknüpfung">
+            <h2>Vergleich</h2>
+            {adviceLoading && <p className="hint">KI prüft die Wix-Verknüpfung und sucht passende Produkte …</p>}
+            {comparison && <div className="mapping-comparison-grid">
+              <div className="mapping-side mapping-side-old">
+                <span className="comparison-label">Bisher</span>
+                <strong>{comparison.hub_name || item.product_name}</strong>
+                <span>{comparison.hub_sku || item.product_sku}</span>
+                <span className="mapping-id">{comparison.old_external_id || "Keine Wix-ID gespeichert"}</span>
+                <p>{oldMappingStatus}</p>
+                <small>{comparison.hub_description || "Keine Produktbeschreibung im Product Hub."}</small>
+              </div>
+              <div className="mapping-side mapping-side-new">
+                <span className="comparison-label">Vorschlag{preferredCandidate ? ` · ${preferredCandidate.score}%` : ""}</span>
+                {preferredCandidate ? <>
+                  <strong>{preferredCandidate.name || "Ohne Produktname"}</strong>
+                  <span>{preferredCandidate.sku || "ohne SKU"}</span>
+                  <span className="mapping-id">{preferredCandidate.external_id}</span>
+                  <p>{preferredCandidate.match_reasons.join(" · ")}</p>
+                  <small>{preferredCandidate.description || "Beschreibung in Wix nicht verfügbar."}</small>
+                  <button className="primary-button preferred-mapping-button" type="button" disabled={remappingId !== null} onClick={() => remapMapping(preferredCandidate.external_id, preferredCandidate.name)}>
+                    {remappingId === preferredCandidate.external_id ? "Wird verifiziert …" : "Vorschlag übernehmen"}
+                  </button>
+                </> : <p>{advice?.mapping_search_status === "unavailable" ? "Wix-Suche nicht verfügbar." : "Kein eindeutiger Wix-Kandidat gefunden."}</p>}
+              </div>
+            </div>}
+          </article>
+
+          {otherCandidates.length > 0 && <details className="alternative-candidates">
+            <summary>Weitere mögliche Produkte ({otherCandidates.length})</summary>
+            <div className="mapping-candidate-list">{otherCandidates.map((candidate) => <div className="mapping-candidate" key={candidate.external_id}>
+              <div><strong>{candidate.name || "Ohne Produktname"}</strong><span className="hint">{candidate.sku || "ohne SKU"} · {candidate.score}%</span><span className="mapping-id">{candidate.external_id}</span></div>
+              <button type="button" disabled={remappingId !== null} onClick={() => remapMapping(candidate.external_id, candidate.name)}>Diesen Vorschlag wählen</button>
+            </div>)}</div>
+          </details>}
+
+          <div className="decision-panel compact-decision-panel">
+            <div className="decision-buttons"><button type="button" onClick={retryWix}>Wix erneut prüfen</button></div>
+            <details><summary>Weitere Aktionen</summary><div className="secondary-actions"><button type="button" onClick={() => decide("INTENTIONAL_DIFFERENCE")}>Als Ausnahme markieren</button><button type="button" onClick={later}>In einer Woche erinnern</button><button type="button" onClick={() => decide("IGNORE")}>Ignorieren</button></div></details>
           </div>
-          <div className="secondary-actions"><button type="button" onClick={later}>Eine Woche später erinnern</button></div>
-        </div>
+        </>
       ) : (
-        <div className="decision-panel">
-          <h2>Welcher Wert ist fachlich richtig?</h2>
-          <div className="decision-buttons">
-            {sources.map((source) => <button type="button" key={source} onClick={() => decide(`USE_${source.toUpperCase()}`, source)}>{source === "hub" ? "Product Hub" : source} übernehmen</button>)}
+        <>
+          <article className="conflict-explanation" aria-labelledby="conflict-explanation-title">
+            <h2 id="conflict-explanation-title">{guidance.title}</h2>
+            <p>{guidance.explanation}</p>
+            <h3>Meine Empfehlung</h3>
+            <p>{guidance.recommendation}</p>
+            <details><summary>Mögliche Ursachen</summary><ul>{guidance.possibleCauses.map((cause) => <li key={cause}>{cause}</li>)}</ul></details>
+          </article>
+          <div className="comparison-scroll">
+            <table className="comparison-table">
+              <thead><tr><th scope="col">Verglichenes Feld</th>{sources.map((source) => <th scope="col" key={source}>{source === "hub" ? "Product Hub" : source}</th>)}</tr></thead>
+              <tbody>{item.fields.map((field) => <tr key={field.id}>
+                <th scope="row">{conflictFieldLabel(field.field_path)}</th>
+                {sources.map((source) => <td key={source}>{displayConflictValue(field.field_path, [...field.observations].reverse().find((obs) => obs.source === source)?.raw_value)}</td>)}
+              </tr>)}</tbody>
+            </table>
           </div>
-          <div className="custom-decision"><input value={custom} onChange={(event) => setCustom(event.target.value)} placeholder="Eigener Wert" /><button type="button" onClick={() => decide("CUSTOM_VALUE")}>Eigenen Wert verwenden</button></div>
-          <div className="secondary-actions"><button type="button" onClick={() => decide("INTENTIONAL_DIFFERENCE")}>Unterschied ist beabsichtigt</button><button type="button" onClick={later}>Eine Woche später</button><button type="button" onClick={() => decide("IGNORE")}>Ignorieren</button></div>
-        </div>
+          <div className="decision-panel">
+            <h2>Welcher Wert ist fachlich richtig?</h2>
+            <div className="decision-buttons">
+              {sources.map((source) => <button type="button" key={source} onClick={() => decide(`USE_${source.toUpperCase()}`, source)}>{source === "hub" ? "Product Hub" : source} übernehmen</button>)}
+            </div>
+            <div className="custom-decision"><input value={custom} onChange={(event) => setCustom(event.target.value)} placeholder="Eigener Wert" /><button type="button" onClick={() => decide("CUSTOM_VALUE")}>Eigenen Wert verwenden</button></div>
+            <div className="secondary-actions"><button type="button" onClick={() => decide("INTENTIONAL_DIFFERENCE")}>Unterschied ist beabsichtigt</button><button type="button" onClick={later}>Eine Woche später</button><button type="button" onClick={() => decide("IGNORE")}>Ignorieren</button></div>
+          </div>
+        </>
       )}
 
-      <div className="ai-advice-panel">
-        <div><h2>Optionaler KI-Ratgeber</h2><p className="hint">Die KI erklärt und sucht nur. Eine Mapping-Änderung erfolgt ausschließlich nach deiner ausdrücklichen Bestätigung.</p></div>
-        <button type="button" onClick={askAi} disabled={adviceLoading}>{adviceLoading ? "KI erklärt und sucht …" : "KI erklären & Wix-Kandidaten suchen"}</button>
-        {advice && <div className="ai-advice-result">
-          <p className="ai-label">KI-Vorschlag – nicht automatisch übernommen</p>
-          <h3>{advice.title}</h3><p>{advice.explanation}</p>
-          <h4>Empfehlung</h4><p>{advice.recommendation}</p>
-          {advice.next_steps.length > 0 && <ol>{advice.next_steps.map((step) => <li key={step}>{step}</li>)}</ol>}
-          {advice.warnings.map((warning) => <p className="hint-error" key={warning}>{warning}</p>)}
-          {isMappingConflict && <div className="mapping-candidates">
-            <h4>Gefundene Wix-Kandidaten</h4>
-            {advice.mapping_search_terms.length > 0 && <p className="hint">Gesucht nach: {advice.mapping_search_terms.join(" · ")}</p>}
-            {advice.mapping_search_status === "unavailable" && <p className="hint-error">Die Wix-Suche war nicht verfügbar. Zuerst „Wix erneut prüfen“ ausführen.</p>}
-            {advice.mapping_search_status === "none" && <p className="hint">Unter SKU und Produktname wurde kein ausreichend ähnlicher Kandidat gefunden.</p>}
-            {advice.mapping_candidates.length > 0 && <>
-              <p className="hint">Diese Treffer sind Vorschläge. Prüfe Name und SKU, bevor du die Verknüpfung änderst.</p>
-              <div className="mapping-candidate-list">{advice.mapping_candidates.map((candidate) => <div className="mapping-candidate" key={candidate.external_id}>
-                <div><strong>{candidate.name || "Ohne Produktname"}</strong><span className="hint">{candidate.sku || "ohne SKU"} · {candidate.score}% Übereinstimmung</span><span className="hint">{candidate.external_id}</span><span className="hint">{candidate.match_reasons.join(" · ")}</span></div>
-                <button className="primary-button" type="button" disabled={remappingId !== null} onClick={() => remapMapping(candidate.external_id, candidate.name)}>Diese ID als Mapping übernehmen</button>
-              </div>)}</div>
-            </>}
-          </div>}
-          <details><summary>Belege und Einschätzung</summary><p>Vertrauen: {CONFIDENCE_LABELS[advice.confidence]}</p><ul>{advice.evidence.map((evidence) => <li key={evidence}>{evidence}</li>)}</ul></details>
-        </div>}
+      <div className="ai-advice-panel compact-ai-advice">
+        <h2>KI-Empfehlung</h2>
+        {adviceLoading && <p className="hint">Wird automatisch erstellt …</p>}
+        {advice && <p>{advice.recommendation || advice.explanation}</p>}
       </div>
 
       {actions.length > 0 && <div className="impact-panel"><h2>Vorschau der Änderungen</h2>{actions.map((action) => <div className="impact-row" key={action.id}><span>{action.channel}</span><span>{displayConflictValue(action.field_path ?? "", action.before_value)} → {displayConflictValue(action.field_path ?? "", action.after_value)}</span><StatusBadge label={action.status} tone={action.status === "VERIFIED" ? "ok" : action.status === "SKIPPED" || action.status === "FAILED" ? "bad" : "warn"} />{action.error && <span className="hint-error">{action.error}</span>}</div>)}<button className="primary-button" type="button" onClick={apply} disabled={!actions.some((action) => action.selected && action.status === "PLANNED")}>Ausgewählte Änderungen ausführen</button></div>}

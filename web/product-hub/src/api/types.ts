@@ -329,6 +329,7 @@ export interface ConflictAdvice {
   mapping_search_status: "not_mapping" | "found" | "none" | "unavailable";
   mapping_search_terms: string[];
   mapping_candidates: ConflictMappingCandidate[];
+  mapping_comparison: ConflictMappingComparison | null;
 }
 
 export interface ConflictMappingCandidate {
@@ -337,6 +338,16 @@ export interface ConflictMappingCandidate {
   sku: string;
   score: number;
   match_reasons: string[];
+  description: string;
+}
+
+export interface ConflictMappingComparison {
+  hub_name: string;
+  hub_sku: string;
+  hub_description: string;
+  old_external_id: string;
+  old_status: string;
+  candidate: ConflictMappingCandidate | null;
 }
 
 export interface ConflictSummary {

@@ -71,3 +71,16 @@ def test_mapping_candidates_prefer_exact_sku_and_exclude_broken_id() -> None:
     assert candidates[0].score == 100
     assert "Exakte SKU" in candidates[0].match_reasons
     assert all(candidate.external_id != "broken" for candidate in candidates)
+
+
+def test_mapping_candidates_exclude_name_only_or_sku_only_near_matches() -> None:
+    candidates = find_wix_mapping_candidates(
+        [
+            WixProduct(id="name-only", name="Testprodukt Deluxe", sku="OTHER-1"),
+            WixProduct(id="sku-only", name="Unverwandter Artikel", sku="XW-9"),
+        ],
+        product_name="Testprodukt",
+        product_sku="XW-1",
+    )
+
+    assert candidates == []

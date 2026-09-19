@@ -45,7 +45,10 @@ _SCHEMA: dict[str, Any] = {
 }
 
 _INSTRUCTIONS = """Du bist ein vorsichtiger Assistent fuer den internen XeisWorks Product Hub.
-Erklaere den vorliegenden Sync-Konflikt in einfachem Deutsch fuer einen Anfaenger.
+Erklaere den vorliegenden Sync-Konflikt in einfachem Deutsch fuer einen Anfaenger, aber
+maximal kompakt: title hoechstens 8 Woerter, explanation und recommendation jeweils
+hoechstens zwei kurze Saetze, next_steps hoechstens zwei kurze Punkte. Wiederhole keine
+IDs oder Vergleichsdaten, die bereits in der Oberflaeche dargestellt werden.
 Nutze ausschliesslich die gelieferten Fakten. Behaupte insbesondere nicht, ein externes
 Produkt sei geloescht, wenn nur ein fehlgeschlagener Abruf belegt ist. Bei mapping_lookup
 musst du die Kandidaten nach exakter SKU, exaktem Namen und dann Namensnaehe bewerten.
@@ -110,12 +113,12 @@ def find_wix_mapping_candidates(
     product_name: str,
     product_sku: str,
     current_external_id: str = "",
-    limit: int = 6,
+    limit: int = 3,
 ) -> list[WixMappingCandidate]:
     """Rank likely replacements without ever deciding or changing a mapping.
 
-    Exact SKU/name matches are preferred. Fuzzy names are included only as
-    suggestions so the UI can ask a human to verify the candidate.
+    Exact SKU/name matches are preferred. Fuzzy matches must corroborate both
+    SKU and name, so unrelated products are never presented as a likely fix.
     """
     name = _search_text(product_name)
     sku = _search_text(product_sku)
@@ -133,22 +136,30 @@ def find_wix_mapping_candidates(
         candidate_sku_normalized = _search_text(candidate_sku)
         reasons: list[str] = []
         scores: list[float] = []
-        if sku and candidate_sku_normalized == sku:
+        exact_sku = bool(sku and candidate_sku_normalized == sku)
+        exact_name = bool(name and candidate_name_normalized == name)
+        sku_score = (
+            fuzz.ratio(sku, candidate_sku_normalized) if sku and candidate_sku_normalized else 0.0
+        )
+        name_score = (
+            fuzz.WRatio(name, candidate_name_normalized)
+            if name and candidate_name_normalized
+            else 0.0
+        )
+        if exact_sku:
             reasons.append("Exakte SKU")
             scores.append(100.0)
-        elif sku and candidate_sku_normalized:
-            sku_score = fuzz.ratio(sku, candidate_sku_normalized)
-            if sku_score >= 78:
-                reasons.append(f"Ähnliche SKU ({round(sku_score)} %)")
-                scores.append(sku_score)
-        if name and candidate_name_normalized == name:
+        if exact_name:
             reasons.append("Exakter Produktname")
             scores.append(100.0)
-        elif name and candidate_name_normalized:
-            name_score = fuzz.WRatio(name, candidate_name_normalized)
-            if name_score >= 62:
-                reasons.append(f"Ähnlicher Produktname ({round(name_score)} %)")
-                scores.append(name_score)
+        if not reasons and sku_score >= 85 and name_score >= 78:
+            reasons.extend(
+                [
+                    f"Ähnliche SKU ({round(sku_score)} %)",
+                    f"Ähnlicher Produktname ({round(name_score)} %)",
+                ]
+            )
+            scores.extend([sku_score, name_score])
         if not reasons:
             continue
         seen.add(canonical)
@@ -161,7 +172,9 @@ def find_wix_mapping_candidates(
                 match_reasons=reasons,
             )
         )
-    ranked.sort(key=lambda candidate: (-candidate.score, candidate.name.casefold(), candidate.external_id))
+    ranked.sort(
+        key=lambda candidate: (-candidate.score, candidate.name.casefold(), candidate.external_id)
+    )
     return ranked[: max(1, limit)]
 
 
@@ -208,7 +221,7 @@ class ConflictAdviceService:
             "store": False,
             "instructions": _INSTRUCTIONS,
             "input": "Konfliktdaten:\n" + json.dumps(snapshot, ensure_ascii=False, default=str),
-            "max_output_tokens": 900,
+            "max_output_tokens": 350,
             "text": {
                 "format": {
                     "type": "json_schema",

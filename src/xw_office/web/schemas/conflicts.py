@@ -77,6 +77,16 @@ class ConflictMappingCandidateOut(BaseModel):
     sku: str
     score: int = Field(ge=0, le=100)
     match_reasons: list[str] = Field(default_factory=list)
+    description: str = ""
+
+
+class ConflictMappingComparisonOut(BaseModel):
+    hub_name: str
+    hub_sku: str
+    hub_description: str = ""
+    old_external_id: str = ""
+    old_status: str = ""
+    candidate: ConflictMappingCandidateOut | None = None
 
 
 class ConflictAdviceOut(BaseModel):
@@ -91,6 +101,7 @@ class ConflictAdviceOut(BaseModel):
     mapping_search_status: str = "not_mapping"
     mapping_search_terms: list[str] = Field(default_factory=list)
     mapping_candidates: list[ConflictMappingCandidateOut] = Field(default_factory=list)
+    mapping_comparison: ConflictMappingComparisonOut | None = None
 
 
 class ConflictPageOut(BaseModel):

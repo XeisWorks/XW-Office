@@ -40,6 +40,17 @@ from xw_office.web.schemas.conflicts import (
 )
 
 
+def _compact_description(value: object, limit: int = 260) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _wix_description(raw: object) -> str:
+    if not isinstance(raw, dict):
+        return ""
+    return _compact_description(raw.get("description") or raw.get("plainDescription"))
+
+
 def build_conflicts_router(
     get_service: Callable[[], ConflictWizardService],
     get_wix_snapshot_service: Callable[[], WixSnapshotService],
@@ -146,17 +157,21 @@ def build_conflicts_router(
         mapping_search_status = "not_mapping"
         mapping_search_terms: list[str] = []
         mapping_candidates: list[dict[str, object]] = []
+        mapping_comparison: dict[str, object] | None = None
         if case.conflict_type == "WRONG_PRODUCT_MAPPING":
             mapping_search_terms = [
                 term for term in (product.sku, product.name) if str(term or "").strip()
             ]
             current_external_id = ""
+            old_status = ""
             for field in snapshot["fields"]:
                 if field["field"] != "mapping":
                     continue
                 for observation in field["observations"]:
                     if observation["source"] == "hub" and isinstance(observation["value"], dict):
                         current_external_id = str(observation["value"].get("external_id") or "")
+                    if observation["source"] == "wix" and isinstance(observation["value"], dict):
+                        old_status = str(observation["value"].get("state") or "")
             if get_wix_catalog_client is None:
                 mapping_search_status = "unavailable"
             else:
@@ -170,6 +185,14 @@ def build_conflicts_router(
                     )
                     mapping_search_status = "found" if candidates else "none"
                     mapping_candidates = [candidate.as_dict() for candidate in candidates]
+                    if mapping_candidates and get_wix_details_client is not None:
+                        try:
+                            raw = get_wix_details_client().get_product_raw(
+                                str(mapping_candidates[0]["external_id"])
+                            )
+                            mapping_candidates[0]["description"] = _wix_description(raw)
+                        except Exception:  # noqa: BLE001 - candidate metadata is optional
+                            mapping_candidates[0]["description"] = ""
                 except Exception:  # noqa: BLE001 - advice remains useful if search fails
                     mapping_search_status = "unavailable"
                     # Keep provider details out of the beginner-facing search terms;
@@ -180,6 +203,14 @@ def build_conflicts_router(
                 "current_external_id": current_external_id,
                 "candidates": mapping_candidates,
             }
+            mapping_comparison = {
+                "hub_name": product.name,
+                "hub_sku": product.sku,
+                "hub_description": _compact_description(product.description),
+                "old_external_id": current_external_id,
+                "old_status": old_status,
+                "candidate": mapping_candidates[0] if mapping_candidates else None,
+            }
         try:
             result = get_advice_service().advise(snapshot)
         except ConflictAdviceError as exc:
@@ -189,6 +220,7 @@ def build_conflicts_router(
             mapping_search_status=mapping_search_status,
             mapping_search_terms=mapping_search_terms[:2],
             mapping_candidates=mapping_candidates,
+            mapping_comparison=mapping_comparison,
         )
 
     @router.post(
@@ -207,10 +239,16 @@ def build_conflicts_router(
         candidate = str(body.external_id).strip()
         try:
             raw = get_wix_details_client().get_product_raw(candidate)
-        except Exception as exc:  # noqa: BLE001 - convert remote failures to a user error
-            raise HTTPException(status_code=503, detail=f"Wix-Kandidat konnte nicht geprüft werden: {exc}") from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail=f"Wix-Kandidat konnte nicht geprüft werden: {exc}"
+            ) from exc
         raw_id = str((raw or {}).get("id") or "").strip()
-        if not raw_id or raw_id.removeprefix("product_").casefold() != candidate.removeprefix("product_").casefold():
+        if (
+            not raw_id
+            or raw_id.removeprefix("product_").casefold()
+            != candidate.removeprefix("product_").casefold()
+        ):
             raise HTTPException(
                 status_code=400,
                 detail="Diese Wix-ID wurde nicht als erreichbares Produkt bestätigt.",
