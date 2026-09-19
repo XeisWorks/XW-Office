@@ -153,6 +153,44 @@ def test_wix_apply_is_queued_and_only_readback_completion_resolves(
     assert service.repository.get_case(case.id).status == "RESOLVED"  # type: ignore[union-attr]
 
 
+def test_mapping_candidate_can_be_applied_with_audited_remap(factory: sessionmaker[Session]) -> None:
+    products = ProductHubRepository(factory)
+    product, _variant = products.create_product(sku="XW-MAP-1", name="Mapped product")
+    mapping = products.create_channel_mapping(
+        channel="wix",
+        entity_type="product",
+        internal_entity_id=product.id,
+        external_id="old-wix-id",
+    )
+    low = SyncRepository(factory).create_sync_conflict(
+        channel="wix",
+        entity_type="product",
+        internal_entity_id=product.id,
+        field_name="mapping",
+        hub_value={"state": "mapped", "external_id": mapping.external_id},
+        external_value={"state": "not_found", "external_id": mapping.external_id},
+    )
+    service = ConflictWizardService(factory)
+    service.scan_low_level_conflicts()
+    case = service.repository.list_cases()[0][0]
+
+    resolved = service.remap_wix_mapping(
+        case.id,
+        expected_row_version=case.row_version,
+        external_id="replacement-wix-id",
+        note="Kandidat aus Wix-Suche bestätigt",
+    )
+
+    assert resolved.status == "RESOLVED"
+    assert resolved.resolution_type == "REMAP_WIX"
+    with factory() as session:
+        refreshed = session.get(type(mapping), mapping.id)
+        assert refreshed is not None and refreshed.external_id == "replacement-wix-id"
+        refreshed_low = session.get(type(low), low.id)
+        assert refreshed_low is not None and refreshed_low.resolution == "mapping_reassigned"
+        assert session.execute(text("select count(*) from audit_log")).scalar_one() == 1
+
+
 def test_conflict_api_is_independently_feature_flagged(factory: sessionmaker[Session]) -> None:
     _seed(factory)
     database_url = str(factory.kw["bind"].url)

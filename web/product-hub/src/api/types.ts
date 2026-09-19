@@ -326,6 +326,17 @@ export interface ConflictAdvice {
   confidence: "low" | "medium" | "high";
   warnings: string[];
   evidence: string[];
+  mapping_search_status: "not_mapping" | "found" | "none" | "unavailable";
+  mapping_search_terms: string[];
+  mapping_candidates: ConflictMappingCandidate[];
+}
+
+export interface ConflictMappingCandidate {
+  external_id: string;
+  name: string;
+  sku: string;
+  score: number;
+  match_reasons: string[];
 }
 
 export interface ConflictSummary {

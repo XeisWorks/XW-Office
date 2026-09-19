@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator
-from dataclasses import dataclass
 import os
-from pathlib import Path
 import secrets
 import uuid
+from collections.abc import Generator
+from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse
@@ -22,13 +22,13 @@ from starlette.types import Scope
 from xw_office import __version__
 from xw_office.content import BrandProfile, BrandProfileCatalog
 from xw_office.core.database import session_scope
+from xw_office.models.product_hub_sync import OutboxEvent
 from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.repositories.product_hub_sharing import SharingRepository
 from xw_office.repositories.product_hub_sync import SyncRepository
-from xw_office.models.product_hub_sync import OutboxEvent
-from xw_office.services.product_hub.content_generation import ContentGenerationService
 from xw_office.services.product_hub.conflicts import ConflictAdviceService, ConflictWizardService
+from xw_office.services.product_hub.content_generation import ContentGenerationService
 from xw_office.services.product_hub.editing import EditingService
 from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.product_hub.outbox_worker import OutboxWorker
@@ -37,8 +37,8 @@ from xw_office.services.product_hub.wix_push import WixPushService, wix_push_han
 from xw_office.services.product_hub.wix_snapshot import WixSnapshotService
 from xw_office.services.wix.client import WixProductsClient
 from xw_office.services.wix.product_details_client import WixProductDetailsClient
-from xw_office.web.routers.inventory import build_inventory_router
 from xw_office.web.routers.conflicts import build_conflicts_router
+from xw_office.web.routers.inventory import build_inventory_router
 from xw_office.web.routers.products import build_products_router
 from xw_office.web.routers.share_public import build_share_public_router
 from xw_office.web.routers.sharing_admin import build_sharing_admin_router
@@ -360,6 +360,12 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
     def get_conflict_advice_service() -> ConflictAdviceService:
         return _conflict_advice_service
 
+    def get_wix_catalog_client() -> WixProductsClient:
+        return _wix_catalog_client
+
+    def get_wix_details_client() -> WixProductDetailsClient:
+        return _wix_client
+
     app.include_router(
         build_conflicts_router(
             get_conflict_service,
@@ -368,6 +374,8 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
             require_product_hub_edit_enabled,
             conflict_channel_apply_enabled,
             get_conflict_advice_service,
+            get_wix_catalog_client,
+            get_wix_details_client,
         ),
         dependencies=[
             Depends(require_bootstrap_token),

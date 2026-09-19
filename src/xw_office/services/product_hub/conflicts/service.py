@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
-from xw_office.models.product_hub import AuditLog, Product, ProductVariant
+from xw_office.models.product_hub import AuditLog, ChannelMapping, Product, ProductVariant
 from xw_office.models.product_hub_conflicts import (
     ConflictAction,
     ConflictCase,
@@ -18,11 +18,11 @@ from xw_office.models.product_hub_conflicts import (
     ConflictObservation,
 )
 from xw_office.models.product_hub_sync import OutboxEvent, SyncConflict
+from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_conflicts import (
     ConflictOptimisticLockError,
     ConflictRepository,
 )
-from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_sync import append_outbox_event
 from xw_office.services.product_hub.conflicts.classifier import classify
 from xw_office.services.product_hub.conflicts.normalizer import equivalent, normalize_value
@@ -119,7 +119,7 @@ class ConflictWizardService:
                         status="OPEN",
                         priority_score=score,
                         title=f"{product.sku} · {hub_field}",
-                        summary=f"{low.channel}: Product Hub und Channel unterscheiden sich.",
+                        summary=_conflict_summary(low.field_name, low.channel, low.external_value),
                         detected_at=low.detected_at,
                         last_seen_at=_now(),
                         source_scan_id=scan.id,
@@ -134,6 +134,7 @@ class ConflictWizardService:
                         severity=severity,
                         priority_score=score,
                         hub_row_version=product.row_version,
+                        summary=_conflict_summary(low.field_name, low.channel, low.external_value),
                     )
                     updated += 1
                 field = self._repo.get_or_create_field(case.id, hub_field)
@@ -242,6 +243,91 @@ class ConflictWizardService:
                 resolution_type=resolution_type,
             )
         return case
+
+    def remap_wix_mapping(
+        self,
+        case_id: uuid.UUID,
+        *,
+        expected_row_version: int,
+        external_id: str,
+        note: str | None = None,
+        actor: str = "conflict-wizard",
+    ) -> ConflictCase:
+        """Replace one broken Wix mapping after an explicit human selection.
+
+        This is intentionally narrower than a generic edit: only mapping conflicts
+        may use it, and the caller must have verified the candidate through Wix first.
+        The old scanner conflict is closed so the next scan starts from the new ID.
+        """
+        selected_id = str(external_id or "").strip()
+        if not selected_id:
+            raise ValueError("Wix-Produkt-ID fehlt")
+        with session_scope(self._factory) as session:
+            case = session.get(ConflictCase, case_id)
+            if case is None:
+                raise KeyError(f"Conflict case {case_id} not found")
+            if case.row_version != expected_row_version:
+                raise ConflictOptimisticLockError(
+                    f"Expected case row_version {expected_row_version}, found {case.row_version}"
+                )
+            if case.conflict_type != "WRONG_PRODUCT_MAPPING":
+                raise ValueError("Nur Wix-Mapping-Konflikte koennen neu verknuepft werden")
+            mapping = session.scalar(
+                select(ChannelMapping).where(
+                    ChannelMapping.channel == "wix",
+                    ChannelMapping.entity_type == "product",
+                    ChannelMapping.internal_entity_id == case.product_id,
+                )
+            )
+            if mapping is None:
+                raise KeyError("Wix-Mapping fuer dieses Produkt nicht gefunden")
+            duplicate = session.scalar(
+                select(ChannelMapping).where(
+                    ChannelMapping.channel == "wix",
+                    ChannelMapping.entity_type == "product",
+                    ChannelMapping.external_id == selected_id,
+                    ChannelMapping.id != mapping.id,
+                )
+            )
+            if duplicate is not None:
+                raise ValueError("Diese Wix-ID ist bereits einem anderen Produkt zugeordnet")
+            previous_id = mapping.external_id
+            mapping.external_id = selected_id
+            mapping.sync_status = "never"
+            mapping.external_revision = None
+            mapping.last_pulled_at = None
+            mapping.last_external_updated_at = None
+            mapping.last_success_at = None
+            mapping.source_payload_hash = None
+            mapping.last_error = None
+            if case.origin_sync_conflict_id is not None:
+                low = session.get(SyncConflict, case.origin_sync_conflict_id)
+                if low is not None and low.resolved_at is None:
+                    low.resolution = "mapping_reassigned"
+                    low.resolved_by = actor
+                    low.resolved_at = _now()
+            session.add(
+                AuditLog(
+                    id=uuid.uuid4(),
+                    actor_type="user",
+                    actor_id=actor,
+                    source="conflict_wizard",
+                    action="conflict.remap_wix",
+                    entity_type="product",
+                    entity_id=case.product_id,
+                    changed_fields=["wix_mapping.external_id"],
+                    before_data={"external_id": previous_id},
+                    after_data={"external_id": selected_id, "note": note or ""},
+                    correlation_id=case.id,
+                )
+            )
+            case.resolution_type = "REMAP_WIX"
+            case.resolution_note = note
+            case.status = "RESOLVED"
+            case.resolved_at = _now()
+            case.row_version += 1
+            session.flush()
+            return case
 
     def preview(
         self, case_id: uuid.UUID, *, channels: list[str] | None = None
@@ -470,3 +556,21 @@ def _revision(low: SyncConflict) -> str | None:
 
 def _now() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _conflict_summary(field_name: str, channel: str, external_value: object) -> str:
+    """Create a useful queue summary without exposing raw JSON implementation details."""
+    if field_name in {"mapping", "channel_mapping"} and channel == "wix":
+        state = ""
+        if isinstance(external_value, dict):
+            state = str(external_value.get("state") or "").strip()
+        messages = {
+            "not_found": "Wix-Produkt unter der gespeicherten ID nicht gefunden; mögliche Ersatz-ID suchen.",
+            "permission_denied": "Wix-Zugriff verweigert; zuerst Berechtigung prüfen.",
+            "temporary_error": "Wix vorübergehend nicht erreichbar; später erneut prüfen.",
+            "configuration_error": "Wix-Zugangsdaten fehlen; Dienstkonfiguration prüfen.",
+            "invalid_mapping": "Gespeicherte Wix-ID ist ungültig; Mapping korrigieren.",
+            "invalid_response": "Wix-Antwort ist unlesbar; Verbindung und Produkt prüfen.",
+        }
+        return messages.get(state, "Wix-Verknüpfung konnte nicht bestätigt werden; Details prüfen.")
+    return f"{channel}: Product Hub und Channel enthalten unterschiedliche Werte."

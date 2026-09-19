@@ -9,7 +9,9 @@ import pytest
 from xw_office.services.product_hub.conflicts.advisor import (
     ConflictAdviceError,
     ConflictAdviceService,
+    find_wix_mapping_candidates,
 )
+from xw_office.services.wix.client import WixProduct
 
 
 def test_advisor_uses_strict_stateless_output_without_tools(
@@ -51,3 +53,21 @@ def test_advisor_uses_strict_stateless_output_without_tools(
 def test_advisor_fails_cleanly_without_api_key() -> None:
     with pytest.raises(ConflictAdviceError, match="OPENAI_API_KEY"):
         ConflictAdviceService(api_key="").advise({})
+
+
+def test_mapping_candidates_prefer_exact_sku_and_exclude_broken_id() -> None:
+    candidates = find_wix_mapping_candidates(
+        [
+            WixProduct(id="broken", name="Altes Produkt", sku="XW-1"),
+            WixProduct(id="replacement", name="Testprodukt", sku="XW-1"),
+            WixProduct(id="similar", name="Testprodukt Deluxe", sku="XW-99"),
+        ],
+        product_name="Testprodukt",
+        product_sku="XW-1",
+        current_external_id="product_broken",
+    )
+
+    assert candidates[0].external_id == "replacement"
+    assert candidates[0].score == 100
+    assert "Exakte SKU" in candidates[0].match_reasons
+    assert all(candidate.external_id != "broken" for candidate in candidates)

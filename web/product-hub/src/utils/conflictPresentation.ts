@@ -62,6 +62,13 @@ export function conflictFieldLabel(field: string): string {
   return FIELD_LABELS[field] ?? field.replaceAll("_", " ");
 }
 
+export function conflictSummary(item: Pick<ConflictCaseDetail, "conflict_type" | "summary">): string {
+  if (item.conflict_type === "WRONG_PRODUCT_MAPPING") {
+    return "Gespeicherte Wix-ID nicht bestätigt; beim Öffnen werden mögliche Ersatz-IDs gesucht.";
+  }
+  return item.summary || "Product Hub und Channel enthalten unterschiedliche Werte.";
+}
+
 export function displayConflictValue(field: string, value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
   if (field === "mapping") {

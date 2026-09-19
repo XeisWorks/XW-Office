@@ -71,6 +71,14 @@ class ConflictCaseDetailOut(ConflictCaseOut):
     actions: list[ConflictActionOut]
 
 
+class ConflictMappingCandidateOut(BaseModel):
+    external_id: str
+    name: str
+    sku: str
+    score: int = Field(ge=0, le=100)
+    match_reasons: list[str] = Field(default_factory=list)
+
+
 class ConflictAdviceOut(BaseModel):
     title: str
     explanation: str
@@ -80,6 +88,9 @@ class ConflictAdviceOut(BaseModel):
     confidence: str
     warnings: list[str]
     evidence: list[str]
+    mapping_search_status: str = "not_mapping"
+    mapping_search_terms: list[str] = Field(default_factory=list)
+    mapping_candidates: list[ConflictMappingCandidateOut] = Field(default_factory=list)
 
 
 class ConflictPageOut(BaseModel):
@@ -138,6 +149,11 @@ class ConflictDecisionRequest(VersionedRequest):
     resolution_type: str
     selected_source: str | None = None
     custom_value: Any = None
+    note: str | None = None
+
+
+class ConflictMappingRequest(VersionedRequest):
+    external_id: str = Field(min_length=1, max_length=240)
     note: str | None = None
 
 

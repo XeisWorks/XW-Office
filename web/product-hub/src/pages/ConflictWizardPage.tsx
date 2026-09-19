@@ -20,6 +20,7 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
   const [actions, setActions] = useState<ConflictAction[]>([]);
   const [advice, setAdvice] = useState<ConflictAdvice | null>(null);
   const [adviceLoading, setAdviceLoading] = useState(false);
+  const [remappingId, setRemappingId] = useState<string | null>(null);
   const [custom, setCustom] = useState("");
   const [message, setMessage] = useState("");
 
@@ -93,6 +94,22 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
     finally { setAdviceLoading(false); }
   }
 
+  async function remapMapping(externalId: string, productName: string) {
+    if (!item || !id) return;
+    const confirmed = window.confirm(
+      `Wix-Mapping auf „${productName}“ (${externalId}) umstellen?\n\n` +
+      "Es werden keine Wix-Daten geändert. Nur die Verknüpfung im Product Hub wird ersetzt.",
+    );
+    if (!confirmed) return;
+    setRemappingId(externalId); setMessage("Wix-Kandidat wird nochmals verifiziert …");
+    try {
+      await api.remapConflict(id, item.row_version, externalId);
+      await load();
+      setMessage("Mapping geändert und Fall abgeschlossen. Bitte anschließend den Wix-Abgleich starten.");
+    } catch (error) { handleError(error); }
+    finally { setRemappingId(null); }
+  }
+
   if (!item) return <section><h1>Konflikt-Assistent</h1><p className="hint">{message || "Fall wird geladen …"}</p></section>;
 
   const guidance = deterministicGuidance(item);
@@ -128,11 +145,13 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
       {isMappingConflict ? (
         <div className="decision-panel">
           <h2>Sichere nächste Schritte</h2>
-          <p>Bei einer fehlerhaften Produkt-Verknüpfung kann kein Wert automatisch übernommen werden.</p>
+          <p>Bei einer fehlerhaften Produkt-Verknüpfung wird kein Wix-Wert automatisch übernommen. Wähle eine der folgenden Entscheidungen:</p>
           <div className="decision-buttons">
             <button className="primary-button" type="button" onClick={retryWix}>Wix erneut prüfen</button>
-            <button type="button" onClick={later}>Eine Woche später erinnern</button>
+            <button type="button" onClick={() => decide("INTENTIONAL_DIFFERENCE")}>Als beabsichtigte Ausnahme markieren</button>
+            <button type="button" onClick={() => decide("IGNORE")}>Ignorieren</button>
           </div>
+          <div className="secondary-actions"><button type="button" onClick={later}>Eine Woche später erinnern</button></div>
         </div>
       ) : (
         <div className="decision-panel">
@@ -146,14 +165,27 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
       )}
 
       <div className="ai-advice-panel">
-        <div><h2>Optionaler KI-Ratgeber</h2><p className="hint">Erklärt nur und macht einen Vorschlag. Die KI kann nichts speichern oder ausführen.</p></div>
-        <button type="button" onClick={askAi} disabled={adviceLoading}>{adviceLoading ? "KI prüft …" : "Mit KI erklären"}</button>
+        <div><h2>Optionaler KI-Ratgeber</h2><p className="hint">Die KI erklärt und sucht nur. Eine Mapping-Änderung erfolgt ausschließlich nach deiner ausdrücklichen Bestätigung.</p></div>
+        <button type="button" onClick={askAi} disabled={adviceLoading}>{adviceLoading ? "KI erklärt und sucht …" : "KI erklären & Wix-Kandidaten suchen"}</button>
         {advice && <div className="ai-advice-result">
           <p className="ai-label">KI-Vorschlag – nicht automatisch übernommen</p>
           <h3>{advice.title}</h3><p>{advice.explanation}</p>
           <h4>Empfehlung</h4><p>{advice.recommendation}</p>
           {advice.next_steps.length > 0 && <ol>{advice.next_steps.map((step) => <li key={step}>{step}</li>)}</ol>}
           {advice.warnings.map((warning) => <p className="hint-error" key={warning}>{warning}</p>)}
+          {isMappingConflict && <div className="mapping-candidates">
+            <h4>Gefundene Wix-Kandidaten</h4>
+            {advice.mapping_search_terms.length > 0 && <p className="hint">Gesucht nach: {advice.mapping_search_terms.join(" · ")}</p>}
+            {advice.mapping_search_status === "unavailable" && <p className="hint-error">Die Wix-Suche war nicht verfügbar. Zuerst „Wix erneut prüfen“ ausführen.</p>}
+            {advice.mapping_search_status === "none" && <p className="hint">Unter SKU und Produktname wurde kein ausreichend ähnlicher Kandidat gefunden.</p>}
+            {advice.mapping_candidates.length > 0 && <>
+              <p className="hint">Diese Treffer sind Vorschläge. Prüfe Name und SKU, bevor du die Verknüpfung änderst.</p>
+              <div className="mapping-candidate-list">{advice.mapping_candidates.map((candidate) => <div className="mapping-candidate" key={candidate.external_id}>
+                <div><strong>{candidate.name || "Ohne Produktname"}</strong><span className="hint">{candidate.sku || "ohne SKU"} · {candidate.score}% Übereinstimmung</span><span className="hint">{candidate.external_id}</span><span className="hint">{candidate.match_reasons.join(" · ")}</span></div>
+                <button className="primary-button" type="button" disabled={remappingId !== null} onClick={() => remapMapping(candidate.external_id, candidate.name)}>Diese ID als Mapping übernehmen</button>
+              </div>)}</div>
+            </>}
+          </div>}
           <details><summary>Belege und Einschätzung</summary><p>Vertrauen: {CONFIDENCE_LABELS[advice.confidence]}</p><ul>{advice.evidence.map((evidence) => <li key={evidence}>{evidence}</li>)}</ul></details>
         </div>}
       </div>

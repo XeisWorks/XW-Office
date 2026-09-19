@@ -187,6 +187,15 @@ export const api = {
   getConflict: (id: string) => request<ConflictCaseDetail>(`/api/v1/conflicts/${id}`),
   getConflictAdvice: (id: string) =>
     request<ConflictAdvice>(`/api/v1/conflicts/${id}/advice`, { method: "POST" }),
+  remapConflict: (id: string, expectedRowVersion: number, externalId: string, note?: string) =>
+    request<ConflictCase>(`/api/v1/conflicts/${id}/mapping`, {
+      method: "POST",
+      body: {
+        expected_row_version: expectedRowVersion,
+        external_id: externalId,
+        ...(note ? { note } : {}),
+      },
+    }),
   scanConflicts: (productId?: string) =>
     request<{ differences_found: number; cases_created: number; cases_updated: number }>(
       `/api/v1/conflicts/scan${productId ? `?product_id=${encodeURIComponent(productId)}` : ""}`,

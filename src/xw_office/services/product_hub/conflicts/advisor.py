@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from rapidfuzz import fuzz
 
 _DEFAULT_MODEL = "gpt-4.1-mini"
 _TIMEOUT = 45.0
@@ -45,10 +47,16 @@ _SCHEMA: dict[str, Any] = {
 _INSTRUCTIONS = """Du bist ein vorsichtiger Assistent fuer den internen XeisWorks Product Hub.
 Erklaere den vorliegenden Sync-Konflikt in einfachem Deutsch fuer einen Anfaenger.
 Nutze ausschliesslich die gelieferten Fakten. Behaupte insbesondere nicht, ein externes
-Produkt sei geloescht, wenn nur ein fehlgeschlagener Abruf belegt ist. Nenne Unsicherheit
-klar, zitiere konkrete Quellwerte im Feld evidence und empfehle nur sichere, manuelle
-Pruefschritte. Triff keine Entscheidung und fordere niemals eine automatische Aenderung,
-einen externen Write oder eine kritische Zusammenfuehrung."""
+Produkt sei geloescht, wenn nur ein fehlgeschlagener Abruf belegt ist. Bei mapping_lookup
+musst du die Kandidaten nach exakter SKU, exaktem Namen und dann Namensnaehe bewerten.
+Wenn ein Kandidat mit hoher Uebereinstimmung vorhanden ist, nenne genau seinen Namen,
+seine SKU und seine ID und formuliere als naechste Handlung: Kandidat in Wix pruefen und
+danach das Mapping gezielt uebernehmen. Wenn kein Kandidat gefunden wurde, empfehle nicht,
+blind weitere IDs zu probieren, sondern zuerst Berechtigung/Verbindung und danach eine
+manuelle Suche nach SKU und Produktname. Nenne Unsicherheit klar, zitiere konkrete
+Quellwerte im Feld evidence und empfehle nur sichere, manuelle Pruefschritte. Triff keine
+Entscheidung und fordere niemals eine automatische Aenderung, einen externen Write oder
+eine kritische Zusammenfuehrung."""
 
 
 class ConflictAdviceError(RuntimeError):
@@ -65,6 +73,96 @@ class ConflictAdvice:
     confidence: str
     warnings: list[str]
     evidence: list[str]
+
+
+@dataclass(frozen=True)
+class WixMappingCandidate:
+    """A read-only, ranked Wix product suggestion for a broken mapping."""
+
+    external_id: str
+    name: str
+    sku: str
+    score: int
+    match_reasons: list[str]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "external_id": self.external_id,
+            "name": self.name,
+            "sku": self.sku,
+            "score": self.score,
+            "match_reasons": list(self.match_reasons),
+        }
+
+
+def _search_text(value: object) -> str:
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return " ".join("".join(char if char.isalnum() else " " for char in text).split())
+
+
+def _canonical_id(value: object) -> str:
+    return str(value or "").strip().removeprefix("product_").casefold()
+
+
+def find_wix_mapping_candidates(
+    products: list[object],
+    *,
+    product_name: str,
+    product_sku: str,
+    current_external_id: str = "",
+    limit: int = 6,
+) -> list[WixMappingCandidate]:
+    """Rank likely replacements without ever deciding or changing a mapping.
+
+    Exact SKU/name matches are preferred. Fuzzy names are included only as
+    suggestions so the UI can ask a human to verify the candidate.
+    """
+    name = _search_text(product_name)
+    sku = _search_text(product_sku)
+    current_id = _canonical_id(current_external_id)
+    ranked: list[WixMappingCandidate] = []
+    seen: set[str] = set()
+    for row in products:
+        external_id = str(getattr(row, "id", "") or "").strip()
+        canonical = _canonical_id(external_id)
+        if not canonical or canonical == current_id or canonical in seen:
+            continue
+        candidate_name = str(getattr(row, "name", "") or "").strip()
+        candidate_sku = str(getattr(row, "sku", "") or "").strip()
+        candidate_name_normalized = _search_text(candidate_name)
+        candidate_sku_normalized = _search_text(candidate_sku)
+        reasons: list[str] = []
+        scores: list[float] = []
+        if sku and candidate_sku_normalized == sku:
+            reasons.append("Exakte SKU")
+            scores.append(100.0)
+        elif sku and candidate_sku_normalized:
+            sku_score = fuzz.ratio(sku, candidate_sku_normalized)
+            if sku_score >= 78:
+                reasons.append(f"Ähnliche SKU ({round(sku_score)} %)")
+                scores.append(sku_score)
+        if name and candidate_name_normalized == name:
+            reasons.append("Exakter Produktname")
+            scores.append(100.0)
+        elif name and candidate_name_normalized:
+            name_score = fuzz.WRatio(name, candidate_name_normalized)
+            if name_score >= 62:
+                reasons.append(f"Ähnlicher Produktname ({round(name_score)} %)")
+                scores.append(name_score)
+        if not reasons:
+            continue
+        seen.add(canonical)
+        ranked.append(
+            WixMappingCandidate(
+                external_id=external_id,
+                name=candidate_name,
+                sku=candidate_sku,
+                score=max(0, min(100, round(max(scores)))),
+                match_reasons=reasons,
+            )
+        )
+    ranked.sort(key=lambda candidate: (-candidate.score, candidate.name.casefold(), candidate.external_id))
+    return ranked[: max(1, limit)]
 
 
 def _response_text(payload: dict[str, Any]) -> str:

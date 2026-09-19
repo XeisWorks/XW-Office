@@ -8,16 +8,19 @@ from collections.abc import Callable
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from xw_office.repositories.product_hub_conflicts import ConflictOptimisticLockError
+from xw_office.services.product_hub.conflicts.advisor import (
+    ConflictAdviceError,
+    ConflictAdviceService,
+    find_wix_mapping_candidates,
+)
 from xw_office.services.product_hub.conflicts.service import (
     ConflictWizardService,
     StaleConflictError,
     UnsupportedConflictAction,
 )
-from xw_office.services.product_hub.conflicts.advisor import (
-    ConflictAdviceError,
-    ConflictAdviceService,
-)
 from xw_office.services.product_hub.wix_snapshot import WixSnapshotService
+from xw_office.services.wix.client import WixProductsClient
+from xw_office.services.wix.product_details_client import WixProductDetailsClient
 from xw_office.web.schemas.conflicts import (
     ConflictActionOut,
     ConflictAdviceOut,
@@ -25,14 +28,15 @@ from xw_office.web.schemas.conflicts import (
     ConflictCaseOut,
     ConflictDecisionRequest,
     ConflictFieldOut,
+    ConflictMappingRequest,
+    ConflictObservationOut,
     ConflictPageOut,
     ConflictPreviewRequest,
     ConflictScanOut,
     ConflictSnoozeRequest,
     ConflictSummaryOut,
-    WixSnapshotScanOut,
-    ConflictObservationOut,
     VersionedRequest,
+    WixSnapshotScanOut,
 )
 
 
@@ -43,6 +47,8 @@ def build_conflicts_router(
     require_edit_enabled: Callable[[], None],
     channel_apply_enabled: Callable[[], bool],
     get_advice_service: Callable[[], ConflictAdviceService],
+    get_wix_catalog_client: Callable[[], WixProductsClient] | None = None,
+    get_wix_details_client: Callable[[], WixProductDetailsClient] | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1/conflicts", tags=["product-hub-conflicts"])
 
@@ -137,11 +143,92 @@ def build_conflicts_router(
                 for item in bundle["fields"]
             ],
         }
+        mapping_search_status = "not_mapping"
+        mapping_search_terms: list[str] = []
+        mapping_candidates: list[dict[str, object]] = []
+        if case.conflict_type == "WRONG_PRODUCT_MAPPING":
+            mapping_search_terms = [
+                term for term in (product.sku, product.name) if str(term or "").strip()
+            ]
+            current_external_id = ""
+            for field in snapshot["fields"]:
+                if field["field"] != "mapping":
+                    continue
+                for observation in field["observations"]:
+                    if observation["source"] == "hub" and isinstance(observation["value"], dict):
+                        current_external_id = str(observation["value"].get("external_id") or "")
+            if get_wix_catalog_client is None:
+                mapping_search_status = "unavailable"
+            else:
+                try:
+                    catalog_rows = get_wix_catalog_client().list_products(include_hidden=True)
+                    candidates = find_wix_mapping_candidates(
+                        catalog_rows,
+                        product_name=product.name,
+                        product_sku=product.sku,
+                        current_external_id=current_external_id,
+                    )
+                    mapping_search_status = "found" if candidates else "none"
+                    mapping_candidates = [candidate.as_dict() for candidate in candidates]
+                except Exception:  # noqa: BLE001 - advice remains useful if search fails
+                    mapping_search_status = "unavailable"
+                    # Keep provider details out of the beginner-facing search terms;
+                    # the structured advice still receives the unavailable status.
+            snapshot["mapping_lookup"] = {
+                "status": mapping_search_status,
+                "search_terms": mapping_search_terms[:2],
+                "current_external_id": current_external_id,
+                "candidates": mapping_candidates,
+            }
         try:
             result = get_advice_service().advise(snapshot)
         except ConflictAdviceError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        return ConflictAdviceOut(**result.__dict__)
+        return ConflictAdviceOut(
+            **result.__dict__,
+            mapping_search_status=mapping_search_status,
+            mapping_search_terms=mapping_search_terms[:2],
+            mapping_candidates=mapping_candidates,
+        )
+
+    @router.post(
+        "/{case_id}/mapping",
+        response_model=ConflictCaseOut,
+        dependencies=[Depends(require_edit_enabled)],
+    )
+    def remap(
+        case_id: uuid.UUID,
+        body: ConflictMappingRequest,
+        service: ConflictWizardService = Depends(get_service),
+    ) -> ConflictCaseOut:
+        """Apply a user-selected, Wix-verified replacement mapping."""
+        if get_wix_details_client is None:
+            raise HTTPException(status_code=503, detail="Wix-Prüfung ist nicht konfiguriert")
+        candidate = str(body.external_id).strip()
+        try:
+            raw = get_wix_details_client().get_product_raw(candidate)
+        except Exception as exc:  # noqa: BLE001 - convert remote failures to a user error
+            raise HTTPException(status_code=503, detail=f"Wix-Kandidat konnte nicht geprüft werden: {exc}") from exc
+        raw_id = str((raw or {}).get("id") or "").strip()
+        if not raw_id or raw_id.removeprefix("product_").casefold() != candidate.removeprefix("product_").casefold():
+            raise HTTPException(
+                status_code=400,
+                detail="Diese Wix-ID wurde nicht als erreichbares Produkt bestätigt.",
+            )
+        try:
+            row = service.remap_wix_mapping(
+                case_id,
+                expected_row_version=body.expected_row_version,
+                external_id=candidate,
+                note=body.note,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConflictOptimisticLockError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return ConflictCaseOut.model_validate(row)
 
     @router.post(
         "/scan", response_model=ConflictScanOut, dependencies=[Depends(require_scan_enabled)]

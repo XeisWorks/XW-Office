@@ -114,6 +114,7 @@ class ConflictRepository:
         severity: str,
         priority_score: int,
         hub_row_version: int,
+        summary: str | None = None,
     ) -> ConflictCase:
         with self._scope() as session:
             row = _required(session, ConflictCase, case_id)
@@ -122,6 +123,8 @@ class ConflictRepository:
             row.severity = severity
             row.priority_score = priority_score
             row.hub_row_version = hub_row_version
+            if summary:
+                row.summary = summary
             row.row_version += 1
             session.flush()
             return row
