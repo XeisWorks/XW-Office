@@ -99,6 +99,52 @@ class ConflictMappingOwnerOut(BaseModel):
     variant_sku: str = ""
 
 
+class WixOnlyVariantOut(BaseModel):
+    external_id: str
+    name: str = ""
+    sku: str = ""
+    mapped: bool = False
+    suggested_hub_product_id: uuid.UUID | None = None
+    suggested_hub_product_name: str = ""
+
+
+class WixOnlyProductOut(BaseModel):
+    external_id: str
+    name: str = ""
+    sku: str = ""
+    parent_mapped: bool = False
+    suggested_hub_product_id: uuid.UUID | None = None
+    suggested_hub_product_name: str = ""
+    variants: list[WixOnlyVariantOut] = Field(default_factory=list)
+
+
+class WixOnlyReconciliationOut(BaseModel):
+    items: list[WixOnlyProductOut] = Field(default_factory=list)
+    total_products: int = 0
+    total_variants: int = 0
+
+
+class WixOnlyLinkRequest(BaseModel):
+    product_id: uuid.UUID
+    external_id: str = Field(min_length=1, max_length=240)
+    variant_external_id: str | None = Field(default=None, max_length=240)
+    sku: str = Field(min_length=1, max_length=120)
+
+
+class WixOnlyImportRequest(BaseModel):
+    external_id: str = Field(min_length=1, max_length=240)
+    variant_external_id: str | None = Field(default=None, max_length=240)
+    sku: str = Field(min_length=1, max_length=120)
+    name: str = Field(min_length=1, max_length=256)
+
+
+class WixOnlyImportOut(BaseModel):
+    product_id: uuid.UUID
+    product_name: str
+    sku: str
+    operation: str = "imported_as_draft"
+
+
 class ConflictCaseDetailOut(ConflictCaseOut):
     product_sku: str
     product_name: str

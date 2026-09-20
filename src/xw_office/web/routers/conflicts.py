@@ -46,6 +46,12 @@ from xw_office.web.schemas.conflicts import (
     ConflictSnoozeRequest,
     ConflictSummaryOut,
     VersionedRequest,
+    WixOnlyImportOut,
+    WixOnlyImportRequest,
+    WixOnlyLinkRequest,
+    WixOnlyProductOut,
+    WixOnlyReconciliationOut,
+    WixOnlyVariantOut,
     WixSnapshotScanOut,
 )
 
@@ -202,6 +208,32 @@ def _wix_product_type(raw: object) -> str:
     return "physisch" if product_type or physical else ""
 
 
+def _catalog_value(row: object, key: str) -> object:
+    return row.get(key) if isinstance(row, dict) else getattr(row, key, None)
+
+
+def _catalog_reconciliation_row(
+    rows: list[object], *, external_id: str, variant_external_id: str | None, sku: str
+) -> tuple[str, str] | None:
+    """Verify an action target against the current catalog index, not client data."""
+    parent_id = canonical_wix_id(external_id)
+    variant_id = canonical_wix_id(variant_external_id)
+    for row in rows:
+        if canonical_wix_id(_catalog_value(row, "id")) != parent_id:
+            continue
+        if variant_id:
+            for variant in _catalog_value(row, "variants") or []:
+                if canonical_wix_id(_catalog_value(variant, "id")) == variant_id:
+                    actual_sku = str(_catalog_value(variant, "sku") or "").strip()
+                    if actual_sku.casefold() == sku.strip().casefold():
+                        return str(_catalog_value(row, "name") or "").strip(), str(_catalog_value(variant, "name") or "").strip()
+            return None
+        actual_sku = str(_catalog_value(row, "sku") or "").strip()
+        if actual_sku.casefold() == sku.strip().casefold():
+            return str(_catalog_value(row, "name") or "").strip(), ""
+    return None
+
+
 def build_conflicts_router(
     get_service: Callable[[], ConflictWizardService],
     get_wix_snapshot_service: Callable[[], WixSnapshotService],
@@ -244,6 +276,108 @@ def build_conflicts_router(
             limit=limit,
             offset=offset,
         )
+
+    @router.get("/reconciliation/wix-only", response_model=WixOnlyReconciliationOut)
+    def wix_only_reconciliation(
+        service: ConflictWizardService = Depends(get_service),
+    ) -> WixOnlyReconciliationOut:
+        """List Wix products/variants without a Hub mapping and exact Hub candidates."""
+        if get_wix_catalog_client is None:
+            raise HTTPException(status_code=503, detail="Wix-Katalog ist nicht konfiguriert")
+        try:
+            rows = get_wix_catalog_client().list_products(include_hidden=True)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=503, detail=f"Wix-Katalog konnte nicht geladen werden: {exc}") from exc
+        products, mappings = service.wix_reconciliation_context()
+        products_by_sku = {product.sku.casefold(): product for product in products if product.sku}
+        mapped_parents = {
+            canonical_wix_id(row.external_id).casefold()
+            for row in mappings
+            if row.entity_type == "product" and canonical_wix_id(row.external_id)
+        }
+        mapped_variants = {
+            canonical_wix_id(row.external_id).casefold()
+            for row in mappings
+            if row.entity_type == "variant" and canonical_wix_id(row.external_id)
+        }
+        items: list[WixOnlyProductOut] = []
+        total_variants = 0
+        for row in rows:
+            external_id = canonical_wix_id(_catalog_value(row, "id"))
+            if not external_id:
+                continue
+            raw_variants = _catalog_value(row, "variants") or []
+            # Catalog V1's list response may expose the first variant SKU as
+            # ``product.sku``.  A parent with options is therefore never offered
+            # for automatic parent mapping/import; its concrete variants are.
+            sku = "" if raw_variants else str(_catalog_value(row, "sku") or "").strip()
+            suggested = products_by_sku.get(sku.casefold()) if sku else None
+            variants: list[WixOnlyVariantOut] = []
+            for variant in raw_variants:
+                variant_id = canonical_wix_id(_catalog_value(variant, "id"))
+                variant_sku = str(_catalog_value(variant, "sku") or "").strip()
+                if not variant_id or variant_id.casefold() in mapped_variants:
+                    continue
+                variant_candidate = products_by_sku.get(variant_sku.casefold()) if variant_sku else None
+                variants.append(WixOnlyVariantOut(
+                    external_id=variant_id, name=str(_catalog_value(variant, "name") or "").strip(),
+                    sku=variant_sku, suggested_hub_product_id=variant_candidate.id if variant_candidate else None,
+                    suggested_hub_product_name=variant_candidate.name if variant_candidate else "",
+                ))
+            parent_mapped = external_id.casefold() in mapped_parents
+            if parent_mapped and not variants:
+                continue
+            total_variants += len(variants)
+            items.append(WixOnlyProductOut(
+                external_id=external_id, name=str(_catalog_value(row, "name") or "").strip(), sku=sku,
+                parent_mapped=parent_mapped, suggested_hub_product_id=suggested.id if suggested else None,
+                suggested_hub_product_name=suggested.name if suggested else "", variants=variants,
+            ))
+        return WixOnlyReconciliationOut(items=items, total_products=len(items), total_variants=total_variants)
+
+    @router.post("/reconciliation/wix-only/link", dependencies=[Depends(require_edit_enabled)])
+    def link_wix_only(
+        body: WixOnlyLinkRequest, service: ConflictWizardService = Depends(get_service)
+    ) -> dict[str, str]:
+        if get_wix_catalog_client is None:
+            raise HTTPException(status_code=503, detail="Wix-Katalog ist nicht konfiguriert")
+        rows = get_wix_catalog_client().list_products(include_hidden=True)
+        if _catalog_reconciliation_row(rows, external_id=body.external_id, variant_external_id=body.variant_external_id, sku=body.sku) is None:
+            raise HTTPException(status_code=409, detail="Die Wix-Position oder ihre SKU hat sich geändert; bitte Liste neu laden")
+        products, _mappings = service.wix_reconciliation_context()
+        target = next((product for product in products if product.id == body.product_id), None)
+        if target is None or target.sku.casefold() != body.sku.strip().casefold():
+            raise HTTPException(status_code=400, detail="Das Hub-Produkt stimmt nicht exakt mit der Wix-SKU überein")
+        try:
+            mapping = service.link_wix_reconciliation_item(
+                product_id=body.product_id, external_id=body.external_id, variant_external_id=body.variant_external_id
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"external_id": mapping.external_id, "operation": "linked"}
+
+    @router.post(
+        "/reconciliation/wix-only/import", response_model=WixOnlyImportOut,
+        dependencies=[Depends(require_edit_enabled)],
+    )
+    def import_wix_only(
+        body: WixOnlyImportRequest, service: ConflictWizardService = Depends(get_service)
+    ) -> WixOnlyImportOut:
+        if get_wix_catalog_client is None:
+            raise HTTPException(status_code=503, detail="Wix-Katalog ist nicht konfiguriert")
+        rows = get_wix_catalog_client().list_products(include_hidden=True)
+        verified = _catalog_reconciliation_row(rows, external_id=body.external_id, variant_external_id=body.variant_external_id, sku=body.sku)
+        if verified is None:
+            raise HTTPException(status_code=409, detail="Die Wix-Position oder ihre SKU hat sich geändert; bitte Liste neu laden")
+        wix_name, variant_name = verified
+        try:
+            product = service.import_wix_reconciliation_item(
+                sku=body.sku, name=body.name or variant_name or wix_name or body.sku,
+                external_id=body.external_id, variant_external_id=body.variant_external_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return WixOnlyImportOut(product_id=product.id, product_name=product.name, sku=product.sku)
 
     @router.get("/{case_id}", response_model=ConflictCaseDetailOut)
     def detail(

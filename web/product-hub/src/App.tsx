@@ -7,6 +7,7 @@ import ProductListPage from "./pages/ProductListPage";
 import ProductDetailPage from "./pages/ProductDetailPage";
 import ConflictListPage from "./pages/ConflictListPage";
 import ConflictWizardPage from "./pages/ConflictWizardPage";
+import WixReconciliationPage from "./pages/WixReconciliationPage";
 
 export default function App() {
   const [hasToken, setHasToken] = useState<boolean>(() => Boolean(getToken()));
@@ -48,6 +49,7 @@ export default function App() {
             element={<ProductDetailPage onUnauthorized={handleUnauthorized} />}
           />
           <Route path="/conflicts" element={<ConflictListPage onUnauthorized={handleUnauthorized} />} />
+          <Route path="/conflicts/reconciliation/wix-only" element={<WixReconciliationPage onUnauthorized={handleUnauthorized} />} />
           <Route path="/conflicts/wizard" element={<ConflictWizardPage onUnauthorized={handleUnauthorized} />} />
           <Route path="/conflicts/:id" element={<ConflictWizardPage onUnauthorized={handleUnauthorized} />} />
           <Route path="*" element={<p className="hint">Seite nicht gefunden.</p>} />

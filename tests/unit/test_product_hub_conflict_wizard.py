@@ -295,6 +295,36 @@ def test_mapping_owner_identifies_current_hub_record_and_transfer_is_audited(
         assert session.execute(text("select count(*) from audit_log")).scalar_one() == 1
 
 
+def test_wix_only_reconciliation_can_link_or_import_only_unique_skus(
+    factory: sessionmaker[Session],
+) -> None:
+    products = ProductHubRepository(factory)
+    existing, _ = products.create_product(sku="XW-LINK", name="Existing Hub")
+    service = ConflictWizardService(factory)
+
+    linked = service.link_wix_reconciliation_item(
+        product_id=existing.id, external_id="wix-parent", variant_external_id="wix-variant"
+    )
+    assert linked.entity_type == "variant"
+    assert linked.external_id == "wix-variant"
+    assert linked.external_parent_id == "wix-parent"
+
+    imported = service.import_wix_reconciliation_item(
+        sku="XW-IMPORT", name="Imported from Wix", external_id="wix-import"
+    )
+    assert imported.status == "draft"
+    assert products.get_product(imported.id) is not None
+    mapping = products.get_channel_mapping(
+        channel="wix", entity_type="product", external_id="wix-import"
+    )
+    assert mapping is not None and mapping.internal_entity_id == imported.id
+
+    with pytest.raises(ValueError, match="bereits vorhanden"):
+        service.import_wix_reconciliation_item(
+            sku="XW-IMPORT", name="Duplicate", external_id="wix-import-two"
+        )
+
+
 def test_remap_to_wix_variant_keeps_the_shared_parent_available(factory: sessionmaker[Session]) -> None:
     products = ProductHubRepository(factory)
     target, target_variant = products.create_product(sku="XW-6012", name="BH Polka small")

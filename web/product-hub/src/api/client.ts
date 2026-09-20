@@ -7,6 +7,7 @@ import type {
   ConflictCaseDetail,
   ConflictCreateWixProductResult,
   ConflictMappingOwner,
+  WixOnlyReconciliation,
   WixVariantSkuUpdateResult,
   ConflictSummary,
   ChannelMapping,
@@ -186,6 +187,15 @@ export const api = {
 
   // -- Conflict Wizard ----------------------------------------------------------
   getConflictSummary: () => request<ConflictSummary>("/api/v1/conflicts/summary"),
+  getWixOnlyReconciliation: () => request<WixOnlyReconciliation>("/api/v1/conflicts/reconciliation/wix-only"),
+  linkWixOnlyReconciliation: (productId: string, externalId: string, sku: string, variantExternalId?: string) =>
+    request<{ external_id: string; operation: "linked" }>("/api/v1/conflicts/reconciliation/wix-only/link", {
+      method: "POST", body: { product_id: productId, external_id: externalId, sku, ...(variantExternalId ? { variant_external_id: variantExternalId } : {}) },
+    }),
+  importWixOnlyReconciliation: (externalId: string, sku: string, name: string, variantExternalId?: string) =>
+    request<{ product_id: string; product_name: string; sku: string; operation: "imported_as_draft" }>("/api/v1/conflicts/reconciliation/wix-only/import", {
+      method: "POST", body: { external_id: externalId, sku, name, ...(variantExternalId ? { variant_external_id: variantExternalId } : {}) },
+    }),
   listConflicts: (filters: Record<string, string> = {}) => {
     const params = new URLSearchParams(filters);
     return request<Page<ConflictCase>>(`/api/v1/conflicts?${params.toString()}`);

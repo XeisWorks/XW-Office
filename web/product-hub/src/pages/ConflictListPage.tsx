@@ -50,6 +50,7 @@ export default function ConflictListPage({ onUnauthorized }: { onUnauthorized: (
       <div className="list-toolbar">
         <div><h1>Konflikte</h1><p className="hint">Dauerhafte, auditierbare Bereinigungs-Queue</p></div>
         <div className="toolbar-actions">
+          <Link to="/conflicts/reconciliation/wix-only">Wix-only bearbeiten</Link>
           <button className="primary-button" type="button" onClick={() => scanWix()}>Wix aktualisieren & vergleichen</button>
           <button type="button" onClick={() => scanWix(true)}>Vollständigen Wix-Abgleich erzwingen</button>
           <button type="button" onClick={scan}>Nur Queue aktualisieren</button>

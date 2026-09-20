@@ -378,6 +378,31 @@ export interface ConflictMappingOwner {
   variant_sku: string;
 }
 
+export interface WixOnlyVariant {
+  external_id: string;
+  name: string;
+  sku: string;
+  mapped: boolean;
+  suggested_hub_product_id: string | null;
+  suggested_hub_product_name: string;
+}
+
+export interface WixOnlyProduct {
+  external_id: string;
+  name: string;
+  sku: string;
+  parent_mapped: boolean;
+  suggested_hub_product_id: string | null;
+  suggested_hub_product_name: string;
+  variants: WixOnlyVariant[];
+}
+
+export interface WixOnlyReconciliation {
+  items: WixOnlyProduct[];
+  total_products: number;
+  total_variants: number;
+}
+
 export interface ConflictMappingComparison {
   hub_name: string;
   hub_sku: string;

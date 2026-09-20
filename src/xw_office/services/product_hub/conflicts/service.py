@@ -18,7 +18,7 @@ from xw_office.models.product_hub_conflicts import (
     ConflictObservation,
 )
 from xw_office.models.product_hub_sync import OutboxEvent, SyncConflict
-from xw_office.repositories.product_hub import ProductHubRepository
+from xw_office.repositories.product_hub import ProductFilter, ProductHubRepository
 from xw_office.repositories.product_hub_conflicts import (
     ConflictOptimisticLockError,
     ConflictRepository,
@@ -546,6 +546,59 @@ class ConflictWizardService:
                 "variant_id": str(variant.id) if variant is not None else "",
                 "variant_sku": variant.sku if variant is not None else "",
             }
+
+    def wix_reconciliation_context(self) -> tuple[list[Product], list[ChannelMapping]]:
+        """Return the local, read-only side of the Wix-only reconciliation view."""
+        return (
+            self._products.list_products(ProductFilter(active=True)),
+            [
+                *self._products.list_channel_mappings_by_channel(channel="wix", entity_type="product"),
+                *self._products.list_channel_mappings_by_channel(channel="wix", entity_type="variant"),
+            ],
+        )
+
+    def link_wix_reconciliation_item(
+        self, *, product_id: uuid.UUID, external_id: str, variant_external_id: str | None = None
+    ) -> ChannelMapping:
+        """Attach an explicitly selected, verified Wix-only item to a Hub product."""
+        selected_parent = canonical_wix_id(external_id)
+        selected_variant = canonical_wix_id(variant_external_id)
+        selected_id = selected_variant or selected_parent
+        if not selected_parent or (variant_external_id and not selected_variant):
+            raise ValueError("Wix-Produkt- oder Varianten-ID ist ungültig")
+        product = self._products.get_product(product_id)
+        if product is None:
+            raise KeyError("Hub-Produkt wurde nicht gefunden")
+        _products, mappings = self.wix_reconciliation_context()
+        if any(canonical_wix_id(row.external_id) == selected_id for row in mappings):
+            raise ValueError("Diese Wix-ID ist bereits im Hub verknüpft")
+        if selected_variant:
+            variants = self._products.list_variants(product_id)
+            target = next((row for row in variants if row.sku.casefold() == product.sku.casefold()), None)
+            if target is None:
+                raise ValueError("Zur Hub-SKU wurde keine passende Hub-Variante gefunden")
+            return self._products.create_channel_mapping(
+                channel="wix", entity_type="variant", internal_entity_id=target.id,
+                external_id=selected_variant, external_parent_id=selected_parent, sync_status="never",
+            )
+        return self._products.create_channel_mapping(
+            channel="wix", entity_type="product", internal_entity_id=product_id,
+            external_id=selected_parent, sync_status="never",
+        )
+
+    def import_wix_reconciliation_item(
+        self, *, sku: str, name: str, external_id: str, variant_external_id: str | None = None
+    ) -> Product:
+        """Create a draft Hub product for a verified Wix-only SKU and map it."""
+        if self._products.get_product_by_sku(sku) is not None:
+            raise ValueError("Diese SKU ist im Hub bereits vorhanden; bitte stattdessen verknüpfen")
+        product, _variant = self._products.create_product(
+            sku=sku, name=name or sku, status="draft", product_type="physical", stock_enabled=True
+        )
+        self.link_wix_reconciliation_item(
+            product_id=product.id, external_id=external_id, variant_external_id=variant_external_id
+        )
+        return product
 
     def transfer_wix_mapping(
         self,
