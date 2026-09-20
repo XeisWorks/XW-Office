@@ -275,3 +275,36 @@ def test_variant_mapping_is_checked_via_its_wix_parent_and_detects_a_missing_var
     assert case.product_id == product.id
     assert case.variant_id == variant.id
     assert case.title.startswith("XW-VARIANT")
+
+
+def test_catalog_scan_surfaces_hub_product_without_wix_mapping_and_can_link_it(
+    factory: sessionmaker[Session],
+) -> None:
+    class _Catalog:
+        def list_products(self, *, include_hidden: bool = True) -> list[object]:
+            assert include_hidden is True
+            return [{"id": "wix-existing", "name": "Already in Wix", "sku": "XW-UNMAPPED"}]
+
+    products = ProductHubRepository(factory)
+    product, _ = products.create_product(sku="XW-UNMAPPED", name="Already in Wix")
+    service = WixSnapshotService(
+        factory,
+        wix_client=_FakeWix({"id": "wix-1"}),
+        wix_catalog_client=_Catalog(),
+    )
+
+    report = service.run()
+    assert report.unmapped_hub_products == 1
+    assert report.unmapped_mapping_conflicts_created == 1
+    low = SyncRepository(factory).list_open_sync_conflicts(channel="wix")
+    assert low[0].external_value == {"state": "unmapped", "sku": "XW-UNMAPPED"}
+
+    wizard = ConflictWizardService(factory)
+    wizard.scan_low_level_conflicts()
+    case = wizard.repository.list_cases()[0][0]
+    wizard.remap_wix_mapping(
+        case.id, expected_row_version=case.row_version, external_id="wix-existing"
+    )
+
+    mappings = products.list_channel_mappings(entity_type="product", internal_entity_id=product.id)
+    assert [(mapping.channel, mapping.external_id) for mapping in mappings] == [("wix", "wix-existing")]

@@ -305,8 +305,17 @@ class ConflictWizardService:
                     ChannelMapping.internal_entity_id == case.product_id,
                 )
             )
+            created_mapping = mapping is None
             if mapping is None:
-                raise KeyError("Wix-Mapping fuer dieses Produkt nicht gefunden")
+                mapping = ChannelMapping(
+                    id=uuid.uuid4(),
+                    channel="wix",
+                    entity_type="product",
+                    internal_entity_id=case.product_id,
+                    external_id=f"pending:{uuid.uuid4()}",
+                    sync_status="never",
+                )
+                session.add(mapping)
             target_variant: ProductVariant | None = None
             if selected_variant_id:
                 target_variant = next(
@@ -341,12 +350,16 @@ class ConflictWizardService:
                 raise ValueError(
                     "Diese Wix-ID ist bereits einem anderen Hub-Produkt oder einer Variante zugeordnet"
                 )
-            before_data = {
-                "entity_type": mapping.entity_type,
-                "internal_entity_id": str(mapping.internal_entity_id),
-                "external_id": mapping.external_id,
-                "external_parent_id": mapping.external_parent_id,
-            }
+            before_data = (
+                None
+                if created_mapping
+                else {
+                    "entity_type": mapping.entity_type,
+                    "internal_entity_id": str(mapping.internal_entity_id),
+                    "external_id": mapping.external_id,
+                    "external_parent_id": mapping.external_parent_id,
+                }
+            )
             mapping.external_id = selected_variant_id or selected_id
             mapping.external_parent_id = selected_id if selected_variant_id else None
             if target_variant is not None:
@@ -427,8 +440,17 @@ class ConflictWizardService:
                     ChannelMapping.internal_entity_id == case.product_id,
                 )
             )
+            created_mapping = mapping is None
             if mapping is None:
-                raise KeyError("Wix-Mapping fuer dieses Produkt nicht gefunden")
+                mapping = ChannelMapping(
+                    id=uuid.uuid4(),
+                    channel="wix",
+                    entity_type="product",
+                    internal_entity_id=case.product_id,
+                    external_id=f"pending:{uuid.uuid4()}",
+                    sync_status="never",
+                )
+                session.add(mapping)
             duplicate = next(
                 (
                     row
@@ -446,7 +468,7 @@ class ConflictWizardService:
                 raise ValueError(
                     "Diese Wix-ID ist bereits einem anderen Hub-Produkt oder einer Variante zugeordnet"
                 )
-            previous_id = mapping.external_id
+            previous_id = None if created_mapping else mapping.external_id
             mapping.external_id = selected_id
             mapping.sync_status = "never"
             mapping.external_revision = None
@@ -465,7 +487,7 @@ class ConflictWizardService:
                 AuditLog(
                     id=uuid.uuid4(), actor_type="user", actor_id=actor, source="conflict_wizard",
                     action="conflict.create_wix_product", entity_type="product", entity_id=case.product_id,
-                    changed_fields=["wix_mapping.external_id"], before_data={"external_id": previous_id},
+                    changed_fields=["wix_mapping.external_id"], before_data={"external_id": previous_id} if previous_id else None,
                     after_data={"external_id": selected_id}, correlation_id=case.id,
                 )
             )
@@ -781,6 +803,7 @@ def _conflict_summary(field_name: str, channel: str, external_value: object) -> 
             "temporary_error": "Wix vorübergehend nicht erreichbar; später erneut prüfen.",
             "configuration_error": "Wix-Zugangsdaten fehlen; Dienstkonfiguration prüfen.",
             "invalid_mapping": "Gespeicherte Wix-ID ist ungültig; Mapping korrigieren.",
+            "unmapped": "Für dieses Hub-Produkt besteht noch keine Wix-Verknüpfung.",
             "invalid_response": "Wix-Antwort ist unlesbar; Verbindung und Produkt prüfen.",
         }
         return messages.get(state, "Wix-Verknüpfung konnte nicht bestätigt werden; Details prüfen.")

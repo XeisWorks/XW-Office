@@ -174,7 +174,11 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
     ? null
     : comparison?.candidate ?? advice?.mapping_candidates[0] ?? null;
   const otherCandidates = advice?.mapping_candidates.filter((candidate) => candidate.external_id !== preferredCandidate?.external_id) ?? [];
-  const oldMappingStatus = comparison?.old_status === "not_found" ? "Bei Wix nicht gefunden" : "Nicht abrufbar";
+  const oldMappingStatus = comparison?.old_status === "not_found"
+    ? "Bei Wix nicht gefunden"
+    : comparison?.old_status === "unmapped"
+      ? "Noch nicht mit Wix verknüpft"
+      : "Nicht abrufbar";
   const selectedActions = actions.filter((action) => action.selected);
   const hasPlannedActions = selectedActions.some((action) => action.status === "PLANNED");
   const executionFailed = selectedActions.some((action) => action.status === "FAILED");

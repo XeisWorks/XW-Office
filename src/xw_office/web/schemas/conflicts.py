@@ -144,6 +144,7 @@ class ConflictScanOut(BaseModel):
 
 class WixSourceSnapshotOut(BaseModel):
     mappings_seen: int
+    unmapped_hub_products: int = 0
     catalog_products_indexed: int
     products_fetched: int
     products_cached: int
@@ -160,6 +161,9 @@ class WixSourceSnapshotOut(BaseModel):
     mapping_conflicts_created: int
     mapping_conflicts_updated: int
     mapping_conflicts_resolved: int
+    unmapped_mapping_conflicts_created: int = 0
+    unmapped_mapping_conflicts_updated: int = 0
+    unmapped_mapping_conflicts_resolved: int = 0
     errors: list[str] = Field(default_factory=list)
 
 

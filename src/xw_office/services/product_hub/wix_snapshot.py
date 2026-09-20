@@ -21,6 +21,7 @@ from typing import Any, Protocol
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.repositories.product_hub import ProductHubRepository
+from xw_office.repositories.product_hub import ProductFilter
 from xw_office.repositories.product_hub_sync import SyncRepository
 from xw_office.services.product_hub.conflicts.normalizer import equivalent
 from xw_office.services.product_hub.wix_import import _extract_media_items, _media_url
@@ -46,6 +47,7 @@ class WixCatalogIndexSource(Protocol):
 @dataclass
 class WixSnapshotReport:
     mappings_seen: int = 0
+    unmapped_hub_products: int = 0
     catalog_products_indexed: int = 0
     products_fetched: int = 0
     products_cached: int = 0
@@ -62,11 +64,15 @@ class WixSnapshotReport:
     mapping_conflicts_created: int = 0
     mapping_conflicts_updated: int = 0
     mapping_conflicts_resolved: int = 0
+    unmapped_mapping_conflicts_created: int = 0
+    unmapped_mapping_conflicts_updated: int = 0
+    unmapped_mapping_conflicts_resolved: int = 0
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, object]:
         return {
             "mappings_seen": self.mappings_seen,
+            "unmapped_hub_products": self.unmapped_hub_products,
             "catalog_products_indexed": self.catalog_products_indexed,
             "products_fetched": self.products_fetched,
             "products_cached": self.products_cached,
@@ -83,6 +89,9 @@ class WixSnapshotReport:
             "mapping_conflicts_created": self.mapping_conflicts_created,
             "mapping_conflicts_updated": self.mapping_conflicts_updated,
             "mapping_conflicts_resolved": self.mapping_conflicts_resolved,
+            "unmapped_mapping_conflicts_created": self.unmapped_mapping_conflicts_created,
+            "unmapped_mapping_conflicts_updated": self.unmapped_mapping_conflicts_updated,
+            "unmapped_mapping_conflicts_resolved": self.unmapped_mapping_conflicts_resolved,
             "errors": list(self.errors),
         }
 
@@ -114,6 +123,7 @@ class WixSnapshotService:
         ]
         report.mappings_seen = len(mappings)
         catalog_index = self._load_catalog_index(mappings, report, force=force)
+        self._scan_unmapped_hub_products(mappings, catalog_index, report)
         for mapping in mappings:
             try:
                 product_id = _mapping_product_id(mapping, self._products)
@@ -162,11 +172,56 @@ class WixSnapshotService:
                 )
         return report
 
+    def _scan_unmapped_hub_products(
+        self,
+        mappings: list[Any],
+        catalog_index: dict[str, object] | None,
+        report: WixSnapshotReport,
+    ) -> None:
+        """Surface active Hub products with no Wix relation as actionable cases.
+
+        The former mapped-only scan could only diagnose a stale relation.  It
+        silently skipped products that had never received one, even where the
+        current Wix catalogue was available to propose an exact SKU candidate.
+        This creates no mapping and writes nothing to Wix; it only records a
+        conflict for the existing wizard workflow.
+        """
+        if catalog_index is None:
+            return
+        mapped_product_ids: set[uuid.UUID] = set()
+        for mapping in mappings:
+            product_id = _mapping_product_id(mapping, self._products)
+            if product_id is not None:
+                mapped_product_ids.add(product_id)
+        for product in self._products.list_products(ProductFilter(active=True)):
+            if product.id in mapped_product_ids:
+                continue
+            publishable = (product.attributes or {}).get("wix_publish_eligible")
+            if publishable is False or str(publishable).casefold() == "false":
+                continue
+            report.unmapped_hub_products += 1
+            expected = {"state": "missing_mapping", "sku": product.sku}
+            actual = {"state": "unmapped", "sku": product.sku}
+            _, outcome = self._sync.upsert_scanned_conflict(
+                channel="wix",
+                entity_type="product",
+                internal_entity_id=product.id,
+                field_name="mapping",
+                hub_value=expected,
+                external_value=actual,
+            )
+            if outcome == "created":
+                report.unmapped_mapping_conflicts_created += 1
+            elif outcome == "updated":
+                report.unmapped_mapping_conflicts_updated += 1
+            elif outcome == "resolved":
+                report.unmapped_mapping_conflicts_resolved += 1
+
     def _load_catalog_index(
         self, mappings: list[Any], report: WixSnapshotReport, *, force: bool
     ) -> dict[str, object] | None:
         """Return a current Wix index, or safely fall back to detail reads."""
-        if force or self._catalog is None:
+        if self._catalog is None:
             return None
         try:
             rows = self._catalog.list_products(include_hidden=True)
