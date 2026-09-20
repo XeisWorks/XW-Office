@@ -83,6 +83,22 @@ class ConflictWixVariantSkuUpdateOut(BaseModel):
     operation: str = "updated"
 
 
+class ConflictMappingOwnerOut(BaseModel):
+    """Hub record that currently owns a selected Wix product or variant."""
+
+    found: bool = False
+    is_current_case_owner: bool = False
+    mapping_id: str = ""
+    external_id: str = ""
+    external_parent_id: str = ""
+    entity_type: str = ""
+    product_id: str = ""
+    product_name: str = ""
+    product_sku: str = ""
+    variant_id: str = ""
+    variant_sku: str = ""
+
+
 class ConflictCaseDetailOut(ConflictCaseOut):
     product_sku: str
     product_name: str
@@ -197,6 +213,15 @@ class ConflictMappingRequest(VersionedRequest):
     external_id: str = Field(min_length=1, max_length=240)
     variant_external_id: str | None = Field(default=None, max_length=240)
     note: str | None = None
+
+
+class ConflictMappingOwnerRequest(BaseModel):
+    external_id: str = Field(min_length=1, max_length=240)
+    variant_external_id: str | None = Field(default=None, max_length=240)
+
+
+class ConflictMappingTransferRequest(ConflictMappingRequest):
+    """Explicitly confirms moving an occupied Wix mapping to this Hub record."""
 
 
 class ConflictWixVariantSkuRequest(VersionedRequest):

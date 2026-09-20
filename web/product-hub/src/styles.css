@@ -671,6 +671,9 @@ a {
 .mapping-candidate .hint { overflow-wrap: anywhere; }
 .mapping-candidate-actions { justify-items: start; }
 .wix-sku-edit { margin-top: 1rem; }
+.mapping-collision { margin-top: 1rem; padding: 1rem; border: 1px solid var(--color-bad-text); border-radius: 8px; background: var(--color-bad-bg); }
+.mapping-collision h2 { margin-top: 0; }
+.mapping-collision small { display: block; margin-top: 0.75rem; }
 @media (max-width: 42rem) { .mapping-candidate { align-items: stretch; flex-direction: column; } }
 .mapping-comparison { margin-top: 1rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); }
 .mapping-comparison h2 { margin: 0 0 0.65rem; font-size: 1.1rem; }

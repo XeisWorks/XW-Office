@@ -498,6 +498,192 @@ class ConflictWizardService:
             session.flush()
             return case
 
+    def wix_mapping_owner(
+        self, *, external_id: str, variant_external_id: str | None = None
+    ) -> dict[str, object] | None:
+        """Return the Hub owner of a selected Wix product or variant ID.
+
+        This intentionally looks up the canonical *selected* ID.  A Wix parent
+        may therefore be mapped once while several of its individual variants
+        are mapped to separate Hub variants.
+        """
+        selected_id = canonical_wix_id(variant_external_id or external_id)
+        if not selected_id:
+            raise ValueError("Wix-Produkt-ID fehlt oder enthält mehrere IDs")
+        with session_scope(self._factory) as session:
+            mapping = next(
+                (
+                    row
+                    for row in session.scalars(
+                        select(ChannelMapping).where(ChannelMapping.channel == "wix")
+                    ).all()
+                    if canonical_wix_id(row.external_id) == selected_id
+                ),
+                None,
+            )
+            if mapping is None:
+                return None
+            variant = (
+                session.get(ProductVariant, mapping.internal_entity_id)
+                if mapping.entity_type == "variant"
+                else None
+            )
+            product = (
+                session.get(Product, variant.product_id)
+                if variant is not None
+                else session.get(Product, mapping.internal_entity_id)
+            )
+            if product is None:
+                return None
+            return {
+                "mapping_id": str(mapping.id),
+                "external_id": canonical_wix_id(mapping.external_id),
+                "external_parent_id": canonical_wix_id(mapping.external_parent_id),
+                "entity_type": mapping.entity_type,
+                "product_id": str(product.id),
+                "product_name": product.name,
+                "product_sku": product.sku,
+                "variant_id": str(variant.id) if variant is not None else "",
+                "variant_sku": variant.sku if variant is not None else "",
+            }
+
+    def transfer_wix_mapping(
+        self,
+        case_id: uuid.UUID,
+        *,
+        expected_row_version: int,
+        external_id: str,
+        variant_external_id: str | None = None,
+        note: str | None = None,
+        actor: str = "conflict-wizard",
+    ) -> ConflictCase:
+        """Move an explicitly confirmed Wix mapping to this conflict's Hub owner.
+
+        No Wix record is touched.  The former Hub owner becomes deliberately
+        unmapped and will be surfaced by the next reconciliation scan instead
+        of retaining a hidden duplicate reference.
+        """
+        selected_id = canonical_wix_id(external_id)
+        selected_variant_id = canonical_wix_id(variant_external_id)
+        selected_mapping_id = selected_variant_id or selected_id
+        if not selected_id or (variant_external_id and not selected_variant_id):
+            raise ValueError("Wix-Produkt- oder Varianten-ID fehlt oder enthält mehrere IDs")
+        with session_scope(self._factory) as session:
+            case = session.get(ConflictCase, case_id)
+            if case is None:
+                raise KeyError(f"Conflict case {case_id} not found")
+            if case.row_version != expected_row_version:
+                raise ConflictOptimisticLockError(
+                    f"Expected case row_version {expected_row_version}, found {case.row_version}"
+                )
+            if case.conflict_type != "WRONG_PRODUCT_MAPPING":
+                raise ValueError("Nur Wix-Mapping-Konflikte können übertragen werden")
+            product = session.get(Product, case.product_id)
+            if product is None:
+                raise KeyError("Hub-Produkt fuer dieses Mapping nicht gefunden")
+            target_variant: ProductVariant | None = None
+            if selected_variant_id:
+                target_variant = next(
+                    (
+                        row
+                        for row in session.scalars(
+                            select(ProductVariant)
+                            .where(ProductVariant.product_id == case.product_id)
+                            .order_by(ProductVariant.is_default.desc(), ProductVariant.sku)
+                        ).all()
+                        if row.sku.casefold() == product.sku.casefold()
+                    ),
+                    None,
+                )
+                if target_variant is None:
+                    raise ValueError("Zur Hub-SKU wurde keine passende Hub-Variante gefunden")
+            source_mapping = next(
+                (
+                    row
+                    for row in session.scalars(
+                        select(ChannelMapping).where(ChannelMapping.channel == "wix")
+                    ).all()
+                    if canonical_wix_id(row.external_id) == selected_mapping_id
+                ),
+                None,
+            )
+            if source_mapping is None:
+                raise ValueError("Diese Wix-Zuordnung ist nicht mehr belegt; bitte den Konflikt neu laden")
+            target_entity_type = "variant" if target_variant is not None else "product"
+            target_entity_id = target_variant.id if target_variant is not None else case.product_id
+            current_mappings = [
+                row
+                for row in session.scalars(
+                    select(ChannelMapping).where(ChannelMapping.channel == "wix")
+                ).all()
+                if row.id != source_mapping.id
+                and row.entity_type == target_entity_type
+                and row.internal_entity_id == target_entity_id
+            ]
+            source_before = {
+                "entity_type": source_mapping.entity_type,
+                "internal_entity_id": str(source_mapping.internal_entity_id),
+                "external_id": source_mapping.external_id,
+                "external_parent_id": source_mapping.external_parent_id,
+            }
+            replaced_before = [
+                {
+                    "entity_type": row.entity_type,
+                    "internal_entity_id": str(row.internal_entity_id),
+                    "external_id": row.external_id,
+                    "external_parent_id": row.external_parent_id,
+                }
+                for row in current_mappings
+            ]
+            for row in current_mappings:
+                session.delete(row)
+            session.flush()
+            source_mapping.entity_type = target_entity_type
+            source_mapping.internal_entity_id = target_entity_id
+            source_mapping.external_id = selected_mapping_id
+            source_mapping.external_parent_id = selected_id if selected_variant_id else None
+            source_mapping.sync_status = "never"
+            source_mapping.external_revision = None
+            source_mapping.last_pulled_at = None
+            source_mapping.last_external_updated_at = None
+            source_mapping.last_success_at = None
+            source_mapping.source_payload_hash = None
+            source_mapping.last_error = None
+            if case.origin_sync_conflict_id is not None:
+                low = session.get(SyncConflict, case.origin_sync_conflict_id)
+                if low is not None and low.resolved_at is None:
+                    low.resolution = "mapping_transferred"
+                    low.resolved_by = actor
+                    low.resolved_at = _now()
+            session.add(
+                AuditLog(
+                    id=uuid.uuid4(),
+                    actor_type="user",
+                    actor_id=actor,
+                    source="conflict_wizard",
+                    action="conflict.transfer_wix_mapping",
+                    entity_type=target_entity_type,
+                    entity_id=target_entity_id,
+                    changed_fields=["wix_mapping.owner", "wix_mapping.external_id"],
+                    before_data={"previous_owner": source_before, "replaced_target_mapping": replaced_before},
+                    after_data={
+                        "entity_type": target_entity_type,
+                        "internal_entity_id": str(target_entity_id),
+                        "external_id": selected_mapping_id,
+                        "external_parent_id": selected_id if selected_variant_id else None,
+                        "note": note or "",
+                    },
+                    correlation_id=case.id,
+                )
+            )
+            case.resolution_type = "TRANSFER_WIX_MAPPING"
+            case.resolution_note = note
+            case.status = "RESOLVED"
+            case.resolved_at = _now()
+            case.row_version += 1
+            session.flush()
+            return case
+
     def archive_hub_product(
         self,
         case_id: uuid.UUID,

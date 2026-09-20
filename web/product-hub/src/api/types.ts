@@ -364,6 +364,20 @@ export interface WixVariantSkuUpdateResult {
   operation: "updated";
 }
 
+export interface ConflictMappingOwner {
+  found: boolean;
+  is_current_case_owner: boolean;
+  mapping_id: string;
+  external_id: string;
+  external_parent_id: string;
+  entity_type: "product" | "variant" | "";
+  product_id: string;
+  product_name: string;
+  product_sku: string;
+  variant_id: string;
+  variant_sku: string;
+}
+
 export interface ConflictMappingComparison {
   hub_name: string;
   hub_sku: string;

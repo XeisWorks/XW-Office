@@ -251,6 +251,50 @@ def test_remap_rejects_existing_wix_id_with_legacy_prefix(factory: sessionmaker[
         )
 
 
+def test_mapping_owner_identifies_current_hub_record_and_transfer_is_audited(
+    factory: sessionmaker[Session],
+) -> None:
+    products = ProductHubRepository(factory)
+    target, _ = products.create_product(sku="XW-MAP-TARGET", name="Target")
+    owner, _ = products.create_product(sku="XW-MAP-OWNER", name="Existing owner")
+    old_mapping = products.create_channel_mapping(
+        channel="wix", entity_type="product", internal_entity_id=target.id, external_id="old-id"
+    )
+    products.create_channel_mapping(
+        channel="wix", entity_type="product", internal_entity_id=owner.id, external_id="product_taken-id"
+    )
+    SyncRepository(factory).create_sync_conflict(
+        channel="wix",
+        entity_type="product",
+        internal_entity_id=target.id,
+        field_name="mapping",
+        hub_value={"state": "mapped", "external_id": old_mapping.external_id},
+        external_value={"state": "not_found", "external_id": old_mapping.external_id},
+    )
+    service = ConflictWizardService(factory)
+    service.scan_low_level_conflicts()
+    case = service.repository.list_cases()[0][0]
+
+    found = service.wix_mapping_owner(external_id="taken-id")
+    assert found is not None
+    assert found["product_id"] == str(owner.id)
+    assert found["product_name"] == "Existing owner"
+    assert found["external_id"] == "taken-id"
+
+    resolved = service.transfer_wix_mapping(
+        case.id, expected_row_version=case.row_version, external_id="taken-id"
+    )
+
+    assert resolved.status == "RESOLVED"
+    assert resolved.resolution_type == "TRANSFER_WIX_MAPPING"
+    with factory() as session:
+        mappings = session.query(type(old_mapping)).filter_by(channel="wix").all()
+        assert len(mappings) == 1
+        assert mappings[0].internal_entity_id == target.id
+        assert mappings[0].external_id == "taken-id"
+        assert session.execute(text("select count(*) from audit_log")).scalar_one() == 1
+
+
 def test_remap_to_wix_variant_keeps_the_shared_parent_available(factory: sessionmaker[Session]) -> None:
     products = ProductHubRepository(factory)
     target, target_variant = products.create_product(sku="XW-6012", name="BH Polka small")

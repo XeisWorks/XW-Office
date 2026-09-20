@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
-import type { ConflictAction, ConflictAdvice, ConflictCaseDetail, ConflictMappingCandidate } from "../api/types";
+import type { ConflictAction, ConflictAdvice, ConflictCaseDetail, ConflictMappingCandidate, ConflictMappingOwner } from "../api/types";
 import StatusBadge from "../components/StatusBadge";
 import {
   conflictFieldLabel,
@@ -19,6 +19,8 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
   const [advice, setAdvice] = useState<ConflictAdvice | null>(null);
   const [adviceLoading, setAdviceLoading] = useState(false);
   const [remappingId, setRemappingId] = useState<string | null>(null);
+  const [mappingCollision, setMappingCollision] = useState<{ candidate: ConflictMappingCandidate; owner: ConflictMappingOwner } | null>(null);
+  const [transferringMapping, setTransferringMapping] = useState(false);
   const [skuEditCandidate, setSkuEditCandidate] = useState<ConflictMappingCandidate | null>(null);
   const [newWixSku, setNewWixSku] = useState("");
   const [updatingWixSku, setUpdatingWixSku] = useState(false);
@@ -118,6 +120,21 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
 
   async function remapMapping(externalId: string, productName: string, variantExternalId?: string, variantName?: string) {
     if (!item || !id) return;
+    const candidate: ConflictMappingCandidate = {
+      external_id: externalId, name: productName, sku: item.product_sku,
+      variant_external_id: variantExternalId || "", variant_name: variantName || "",
+      score: 0, match_reasons: [], description: "", product_type: "",
+    };
+    try {
+      setMessage("Bestehende Hub-Zuordnungen werden geprüft …");
+      setMessageTone("neutral");
+      const owner = await api.getConflictMappingOwner(id, externalId, variantExternalId);
+      if (owner.found) {
+        setMappingCollision({ candidate, owner });
+        setMessage("");
+        return;
+      }
+    } catch (error) { handleError(error); return; }
     const confirmed = window.confirm(
       `Wix-Mapping auf „${productName}“${variantName ? ` – ${variantName}` : ""} (${externalId}) umstellen?\n\n` +
       "Es werden keine Wix-Daten geändert. Nur die Verknüpfung im Product Hub wird ersetzt.",
@@ -130,6 +147,28 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
       setMessage("Mapping geändert und Fall abgeschlossen. Bitte anschließend den Wix-Abgleich starten.");
     } catch (error) { handleError(error); }
     finally { setRemappingId(null); }
+  }
+
+  async function transferMapping() {
+    if (!item || !id || !mappingCollision) return;
+    const { candidate, owner } = mappingCollision;
+    const target = candidate.variant_name ? `${candidate.name} – ${candidate.variant_name}` : candidate.name;
+    const confirmed = window.confirm(
+      `Die Wix-Zuordnung von „${owner.product_name}“ (${owner.product_sku}) auf „${item.product_name}“ (${item.product_sku}) übertragen?\n\n` +
+      `Die bisherige Hub-Zuordnung wird entfernt. In Wix selbst wird nichts geändert.`,
+    );
+    if (!confirmed) return;
+    setTransferringMapping(true);
+    setMessage("Wix-Zuordnung wird kontrolliert übertragen …");
+    setMessageTone("neutral");
+    try {
+      await api.transferWixMappingForConflict(id, item.row_version, candidate.external_id, candidate.variant_external_id || undefined);
+      setMappingCollision(null);
+      await load();
+      setMessage(`Wix-Zuordnung „${target}“ wurde von ${owner.product_name} auf dieses Hub-Produkt übertragen. Der bisherige Datensatz wird beim nächsten Abgleich als nicht verknüpft erkannt.`);
+      setMessageTone("success");
+    } catch (error) { handleError(error); }
+    finally { setTransferringMapping(false); }
   }
 
   function startWixSkuEdit(candidate: ConflictMappingCandidate) {
@@ -301,6 +340,18 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
               </div>
             </div>}
           </article>
+
+          {mappingCollision && <div className="mapping-collision" role="alert">
+            <h2>Wix-Zuordnung ist bereits belegt</h2>
+            <p>Die ausgewählte {mappingCollision.candidate.variant_name ? "Wix-Variante" : "Wix-ID"} gehört derzeit zu:</p>
+            <p><strong>{mappingCollision.owner.product_name}</strong> · {mappingCollision.owner.product_sku}{mappingCollision.owner.variant_sku ? ` · Variante ${mappingCollision.owner.variant_sku}` : ""}</p>
+            <div className="decision-buttons">
+              <Link to={`/products/${mappingCollision.owner.product_id}`}>Bestehendes Hub-Produkt anzeigen</Link>
+              <button className="danger-button" type="button" disabled={transferringMapping} onClick={transferMapping}>{transferringMapping ? "Wird übertragen …" : mappingCollision.owner.is_current_case_owner ? "Bestehende Zuordnung verwenden" : "Zuordnung hierher übertragen"}</button>
+              <button type="button" disabled={transferringMapping} onClick={() => setMappingCollision(null)}>Abbrechen</button>
+            </div>
+            <small>Die Übertragung ändert keine Wix-Daten. Der bisherige Hub-Datensatz verliert nur diese Wix-Verknüpfung und wird beim nächsten Abgleich erneut geprüft.</small>
+          </div>}
 
           {skuEditCandidate && <div className="custom-decision wix-sku-edit">
             <label htmlFor="wix-variant-sku">Neue Wix-SKU für <strong>{skuEditCandidate.name}</strong>{skuEditCandidate.variant_name ? ` – ${skuEditCandidate.variant_name}` : ""}</label>

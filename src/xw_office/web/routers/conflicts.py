@@ -34,6 +34,9 @@ from xw_office.web.schemas.conflicts import (
     ConflictDecisionRequest,
     ConflictFieldOut,
     ConflictMappingRequest,
+    ConflictMappingOwnerOut,
+    ConflictMappingOwnerRequest,
+    ConflictMappingTransferRequest,
     ConflictWixVariantSkuRequest,
     ConflictWixVariantSkuUpdateOut,
     ConflictObservationOut,
@@ -435,6 +438,82 @@ def build_conflicts_router(
                 )
         try:
             row = service.remap_wix_mapping(
+                case_id,
+                expected_row_version=body.expected_row_version,
+                external_id=candidate,
+                variant_external_id=variant_candidate or None,
+                note=body.note,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConflictOptimisticLockError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return ConflictCaseOut.model_validate(row)
+
+    @router.post("/{case_id}/mapping-owner", response_model=ConflictMappingOwnerOut)
+    def mapping_owner(
+        case_id: uuid.UUID,
+        body: ConflictMappingOwnerRequest,
+        service: ConflictWizardService = Depends(get_service),
+    ) -> ConflictMappingOwnerOut:
+        """Explain a mapping collision before offering a destructive transfer."""
+        try:
+            bundle = service.detail(case_id)
+            owner = service.wix_mapping_owner(
+                external_id=body.external_id, variant_external_id=body.variant_external_id
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if owner is None:
+            return ConflictMappingOwnerOut()
+        return ConflictMappingOwnerOut(
+            found=True,
+            is_current_case_owner=str(bundle["case"].product_id) == str(owner["product_id"]),
+            **owner,
+        )
+
+    @router.post(
+        "/{case_id}/transfer-wix-mapping",
+        response_model=ConflictCaseOut,
+        dependencies=[Depends(require_edit_enabled)],
+    )
+    def transfer_wix_mapping(
+        case_id: uuid.UUID,
+        body: ConflictMappingTransferRequest,
+        service: ConflictWizardService = Depends(get_service),
+    ) -> ConflictCaseOut:
+        """Transfer a verified, already occupied Wix mapping after confirmation."""
+        if get_wix_details_client is None:
+            raise HTTPException(status_code=503, detail="Wix-Prüfung ist nicht konfiguriert")
+        candidate = canonical_wix_id(body.external_id)
+        variant_candidate = canonical_wix_id(body.variant_external_id)
+        if not candidate or (body.variant_external_id and not variant_candidate):
+            raise HTTPException(status_code=400, detail="Wix-Produkt- oder Varianten-ID ist ungültig")
+        try:
+            raw = get_wix_details_client().get_product_raw(candidate)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=503, detail=f"Wix-Kandidat konnte nicht geprüft werden: {exc}"
+            ) from exc
+        raw_id = canonical_wix_id(str((raw or {}).get("id") or ""))
+        if not raw_id or raw_id.casefold() != candidate.casefold():
+            raise HTTPException(status_code=400, detail="Diese Wix-ID wurde nicht als Produkt bestätigt")
+        if variant_candidate:
+            try:
+                hub_product = service.detail(case_id)["product"]
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            if not _wix_variant_matches(raw, variant_candidate, hub_product.sku):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Diese Wix-Variante gehört nicht zu diesem Produkt oder trägt nicht die Hub-SKU.",
+                )
+        try:
+            row = service.transfer_wix_mapping(
                 case_id,
                 expected_row_version=body.expected_row_version,
                 external_id=candidate,

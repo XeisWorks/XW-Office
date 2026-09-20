@@ -6,6 +6,7 @@ import type {
   ConflictCase,
   ConflictCaseDetail,
   ConflictCreateWixProductResult,
+  ConflictMappingOwner,
   WixVariantSkuUpdateResult,
   ConflictSummary,
   ChannelMapping,
@@ -200,6 +201,23 @@ export const api = {
         external_id: externalId,
         ...(variantExternalId ? { variant_external_id: variantExternalId } : {}),
         ...(note ? { note } : {}),
+      },
+    }),
+  getConflictMappingOwner: (id: string, externalId: string, variantExternalId?: string) =>
+    request<ConflictMappingOwner>(`/api/v1/conflicts/${id}/mapping-owner`, {
+      method: "POST",
+      body: {
+        external_id: externalId,
+        ...(variantExternalId ? { variant_external_id: variantExternalId } : {}),
+      },
+    }),
+  transferWixMappingForConflict: (id: string, expectedRowVersion: number, externalId: string, variantExternalId?: string) =>
+    request<ConflictCase>(`/api/v1/conflicts/${id}/transfer-wix-mapping`, {
+      method: "POST",
+      body: {
+        expected_row_version: expectedRowVersion,
+        external_id: externalId,
+        ...(variantExternalId ? { variant_external_id: variantExternalId } : {}),
       },
     }),
   updateWixVariantSkuForConflict: (
