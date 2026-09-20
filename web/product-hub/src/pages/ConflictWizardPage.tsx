@@ -173,7 +173,12 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
   const preferredCandidate = advice?.mapping_search_status === "ambiguous"
     ? null
     : comparison?.candidate ?? advice?.mapping_candidates[0] ?? null;
-  const otherCandidates = advice?.mapping_candidates.filter((candidate) => candidate.external_id !== preferredCandidate?.external_id) ?? [];
+  const ambiguousCandidates = advice?.mapping_search_status === "ambiguous"
+    ? advice.mapping_candidates.filter((candidate) => candidate.match_reasons.includes("Exakte SKU"))
+    : [];
+  const otherCandidates = preferredCandidate
+    ? advice?.mapping_candidates.filter((candidate) => candidate.external_id !== preferredCandidate.external_id) ?? []
+    : [];
   const oldMappingStatus = comparison?.old_status === "not_found"
     ? "Bei Wix nicht gefunden"
     : comparison?.old_status === "unmapped"
@@ -222,7 +227,7 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
                 <small>{comparison.hub_description || "Keine Produktbeschreibung im Product Hub."}</small>
               </div>
               <div className="mapping-side mapping-side-new">
-                <span className="comparison-label">Vorschlag{preferredCandidate ? ` · ${preferredCandidate.score}%` : ""}</span>
+                <span className="comparison-label">{ambiguousCandidates.length > 0 ? "Mögliche Produkte" : "Vorschlag"}{preferredCandidate ? ` · ${preferredCandidate.score}%` : ""}</span>
                 {preferredCandidate ? <>
                   <strong>{preferredCandidate.name || "Ohne Produktname"}</strong>
                   {preferredCandidate.variant_name && <span className="mapping-variant-name">{preferredCandidate.variant_name}</span>}
@@ -236,6 +241,12 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
                   <button className="primary-button preferred-mapping-button" type="button" disabled={remappingId !== null || destructiveAction !== null} onClick={() => remapMapping(preferredCandidate.external_id, preferredCandidate.name, preferredCandidate.variant_external_id, preferredCandidate.variant_name)}>
                     {remappingId === preferredCandidate.external_id ? "Wird verifiziert …" : "Vorschlag übernehmen"}
                   </button>
+                </> : ambiguousCandidates.length > 0 ? <>
+                  <p>Mehrere Wix-Produkte verwenden diese SKU. Bitte das fachlich passende Produkt auswählen.</p>
+                  <div className="mapping-candidate-list">{ambiguousCandidates.map((candidate) => <div className="mapping-candidate" key={candidate.external_id}>
+                    <div><strong>{candidate.name || "Ohne Produktname"}</strong>{candidate.variant_name && <span className="mapping-variant-name">{candidate.variant_name}</span>}<span className="hint">{candidate.sku || "ohne SKU"} · {candidate.score}%</span><span className="mapping-id">{candidate.external_id}</span></div>
+                    <button type="button" disabled={remappingId !== null || destructiveAction !== null} onClick={() => remapMapping(candidate.external_id, candidate.name, candidate.variant_external_id, candidate.variant_name)}>Dieses Produkt verknüpfen</button>
+                  </div>)}</div>
                 </> : <><p>{advice?.mapping_search_status === "unavailable" ? "Wix-Suche nicht verfügbar." : "Kein eindeutiger Wix-Kandidat gefunden."}</p><Link className="primary-button preferred-mapping-button" to={`/products/${item.product_id}`}>SKU im Hub ändern</Link></>}
               </div>
             </div>}

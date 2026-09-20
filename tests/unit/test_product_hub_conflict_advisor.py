@@ -147,6 +147,23 @@ def test_mapping_candidate_carries_the_exact_wix_variant_and_its_name() -> None:
     assert candidates[0].variant_name == "Besetzung: Kleine Besetzung"
 
 
+def test_mapping_candidates_keep_multiple_exact_sku_products_distinct() -> None:
+    candidates = find_wix_mapping_candidates(
+        [
+            WixProduct(id="bh", name="BH Polka", skus=["XW-6012"]),
+            WixProduct(id="bier", name="Bier-Polka", skus=["XW-6012"]),
+        ],
+        product_name="BH-Polka [Kleine Besetzung]",
+        product_sku="XW-6012",
+    )
+
+    assert [(candidate.name, candidate.score) for candidate in candidates] == [
+        ("BH Polka", 100),
+        ("Bier-Polka", 100),
+    ]
+    assert all("Exakte SKU" in candidate.match_reasons for candidate in candidates)
+
+
 def test_wix_variant_verification_requires_matching_id_and_hub_sku() -> None:
     raw = {
         "variants": [
