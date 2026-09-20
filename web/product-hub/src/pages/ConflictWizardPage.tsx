@@ -11,6 +11,36 @@ import {
   technicalValue,
 } from "../utils/conflictPresentation";
 
+type DuplicateWixSkuEntry = {
+  external_id: string;
+  name: string;
+  sku: string;
+  variant_external_id: string;
+  variant_name: string;
+};
+
+function duplicateWixSkuEntries(item: ConflictCaseDetail): DuplicateWixSkuEntry[] {
+  const raw = item.fields.flatMap((field) => field.observations)
+    .find((observation) => observation.source === "wix")?.raw_value;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+  const matches = (raw as { matches?: unknown }).matches;
+  if (!Array.isArray(matches)) return [];
+  return matches.flatMap((match): DuplicateWixSkuEntry[] => {
+    if (!match || typeof match !== "object" || Array.isArray(match)) return [];
+    const row = match as Record<string, unknown>;
+    const externalId = String(row.external_id ?? "").trim();
+    const sku = String(row.sku ?? "").trim();
+    if (!externalId || !sku) return [];
+    return [{
+      external_id: externalId,
+      name: String(row.name ?? "").trim(),
+      sku,
+      variant_external_id: String(row.variant_external_id ?? "").trim(),
+      variant_name: String(row.variant_name ?? "").trim(),
+    }];
+  });
+}
+
 export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized: () => void }) {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -210,8 +240,9 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
       setSkuEditCandidate(null);
       setNewWixSku("");
       adviceRequestFor.current = null;
+      if (item.conflict_type === "DUPLICATE_SKU") await api.scanWixConflicts();
       await load();
-      setMessage(`Wix-Variante erfolgreich geändert: ${result.previous_sku} → ${result.sku} (Catalog ${result.catalog_version.toUpperCase()}).`);
+      setMessage(`Wix-Variante erfolgreich geändert: ${result.previous_sku} → ${result.sku} (Catalog ${result.catalog_version.toUpperCase()}).${item.conflict_type === "DUPLICATE_SKU" ? " Der Wix-Abgleich wurde erneut ausgeführt." : ""}`);
       setMessageTone("success");
     } catch (error) { handleError(error); }
     finally { setUpdatingWixSku(false); }
@@ -256,6 +287,8 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
 
   const guidance = deterministicGuidance(item);
   const isMappingConflict = item.conflict_type === "WRONG_PRODUCT_MAPPING";
+  const isDuplicateSkuConflict = item.conflict_type === "DUPLICATE_SKU";
+  const duplicateEntries = isDuplicateSkuConflict ? duplicateWixSkuEntries(item) : [];
   const sources = Array.from(new Set(item.fields.flatMap((field) => field.observations.map((obs) => obs.source))));
   const comparison = advice?.mapping_comparison;
   const preferredCandidate = advice?.mapping_search_status === "ambiguous"
@@ -376,6 +409,32 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
             <div className="decision-buttons"><button type="button" disabled={destructiveAction !== null} onClick={retryWix}>Wix erneut prüfen</button><Link to={`/products/${item.product_id}`}>Produkt im Hub bearbeiten</Link><button type="button" disabled={destructiveAction !== null} onClick={createWixProduct}>{destructiveAction === "create-wix" ? "Wix-Entwurf wird angelegt …" : "In Wix als Entwurf anlegen"}</button></div>
             <details><summary>Weitere Aktionen</summary><div className="secondary-actions"><button type="button" onClick={() => decide("INTENTIONAL_DIFFERENCE")}>Als Ausnahme markieren</button><button type="button" onClick={later}>In einer Woche erinnern</button><button type="button" onClick={() => decide("IGNORE")}>Ignorieren</button><button className="danger-button" type="button" disabled={destructiveAction !== null} onClick={archiveHubProduct}>{destructiveAction === "archive-hub" ? "Wird archiviert …" : "Produkt im Hub archivieren"}</button></div></details>
           </div>
+        </>
+      ) : isDuplicateSkuConflict ? (
+        <>
+          <article className="conflict-explanation" aria-labelledby="duplicate-sku-title">
+            <h2 id="duplicate-sku-title">{guidance.title}</h2>
+            <p>{guidance.explanation}</p>
+            <h3>Betroffene Wix-Positionen</h3>
+            {duplicateEntries.length > 0 ? <div className="mapping-candidate-list">{duplicateEntries.map((entry) => (
+              <div className="mapping-candidate" key={`${entry.external_id}:${entry.variant_external_id || "product"}`}>
+                <div><strong>{entry.name || "Ohne Produktname"}</strong>{entry.variant_name && <span className="mapping-variant-name">{entry.variant_name}</span>}<span className="hint">{entry.sku}</span><span className="mapping-id">{entry.external_id}</span></div>
+                <div className="mapping-candidate-actions">{entry.variant_external_id
+                  ? <button type="button" disabled={updatingWixSku} onClick={() => startWixSkuEdit({ ...entry, score: 0, match_reasons: [], description: "", product_type: "" })}>SKU in Wix ändern</button>
+                  : <span className="hint">Keine eindeutig bearbeitbare Variante</span>}</div>
+              </div>
+            ))}</div> : <p className="hint">Die Detaildaten werden beim nächsten Wix-Abgleich erneut geladen.</p>}
+            <p className="hint">Eine Änderung betrifft nur die ausgewählte Wix-Variante. Der Hub bleibt unverändert.</p>
+            <div className="decision-buttons"><button type="button" onClick={retryWix}>Wix erneut prüfen</button><Link to={`/products/${item.product_id}`}>Produkt im Hub bearbeiten</Link></div>
+            <details><summary>Weitere Aktionen</summary><div className="secondary-actions"><button type="button" onClick={() => decide("INTENTIONAL_DIFFERENCE")}>Als Ausnahme markieren</button><button type="button" onClick={later}>In einer Woche erinnern</button><button type="button" onClick={() => decide("IGNORE")}>Ignorieren</button><button className="danger-button" type="button" disabled={destructiveAction !== null} onClick={archiveHubProduct}>{destructiveAction === "archive-hub" ? "Wird archiviert …" : "Produkt im Hub archivieren"}</button></div></details>
+          </article>
+
+          {skuEditCandidate && <div className="custom-decision wix-sku-edit">
+            <label htmlFor="wix-variant-sku">Neue Wix-SKU für <strong>{skuEditCandidate.name}</strong>{skuEditCandidate.variant_name ? ` – ${skuEditCandidate.variant_name}` : ""}</label>
+            <input id="wix-variant-sku" value={newWixSku} onChange={(event) => setNewWixSku(event.target.value)} maxLength={120} autoFocus />
+            <button className="primary-button" type="button" disabled={updatingWixSku} onClick={updateWixSku}>{updatingWixSku ? "Wird in Wix gespeichert …" : "SKU in Wix speichern"}</button>
+            <button type="button" disabled={updatingWixSku} onClick={() => { setSkuEditCandidate(null); setNewWixSku(""); }}>Abbrechen</button>
+          </div>}
         </>
       ) : (
         <>

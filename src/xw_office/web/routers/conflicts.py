@@ -563,8 +563,11 @@ def build_conflicts_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         if case.row_version != body.expected_row_version:
             raise HTTPException(status_code=409, detail="Der Konflikt wurde zwischenzeitlich geaendert")
-        if case.conflict_type != "WRONG_PRODUCT_MAPPING":
-            raise HTTPException(status_code=400, detail="Diese Aktion ist nur für Wix-Mapping-Konflikte verfügbar")
+        if case.conflict_type not in {"WRONG_PRODUCT_MAPPING", "DUPLICATE_SKU"}:
+            raise HTTPException(
+                status_code=400,
+                detail="Diese Aktion ist nur für Wix-Mapping- oder SKU-Duplikat-Konflikte verfügbar",
+            )
 
         details_client = get_wix_details_client()
         try:

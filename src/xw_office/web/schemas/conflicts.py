@@ -191,6 +191,12 @@ class WixSourceSnapshotOut(BaseModel):
     unmapped_mapping_conflicts_created: int = 0
     unmapped_mapping_conflicts_updated: int = 0
     unmapped_mapping_conflicts_resolved: int = 0
+    duplicate_wix_skus: int = 0
+    duplicate_sku_conflicts_created: int = 0
+    duplicate_sku_conflicts_updated: int = 0
+    duplicate_sku_conflicts_resolved: int = 0
+    wix_only_catalog_products: int = 0
+    wix_only_catalog_variants: int = 0
     errors: list[str] = Field(default_factory=list)
 
 

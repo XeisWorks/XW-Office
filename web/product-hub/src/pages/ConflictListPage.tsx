@@ -36,7 +36,8 @@ export default function ConflictListPage({ onUnauthorized }: { onUnauthorized: (
       const imageCount = result.source.images_created + result.source.images_updated;
       const errors = result.source.errors.length ? ` ${result.source.errors.length} Fehler.` : "";
       const mode = result.source.full_refresh ? "Vollabgleich" : "Inkrementeller Abgleich";
-      setMessage(`${mode}: ${result.source.catalog_products_indexed} im Wix-Index, ${result.source.products_fetched} Details geladen, ${result.source.products_cached} unverändert übersprungen, ${imageCount} Bilder übernommen; ${result.cases_created} neue Fälle.${errors}`);
+      const reconciliation = `${result.source.duplicate_wix_skus} doppelte Wix-SKUs, ${result.source.wix_only_catalog_products} nur in Wix vorhandene Produkte, ${result.source.wix_only_catalog_variants} nicht einzeln verknüpfte Wix-Varianten`;
+      setMessage(`${mode}: ${result.source.catalog_products_indexed} im Wix-Index, ${result.source.products_fetched} Details geladen, ${result.source.products_cached} unverändert übersprungen, ${imageCount} Bilder übernommen; ${reconciliation}; ${result.cases_created} neue Fälle.${errors}`);
       setReload((value) => value + 1);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) onUnauthorized();

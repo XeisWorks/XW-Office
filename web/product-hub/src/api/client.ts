@@ -262,6 +262,10 @@ export const api = {
         products_fetched: number;
         products_cached: number;
         products_missing_from_index: number;
+        duplicate_wix_skus: number;
+        duplicate_sku_conflicts_created: number;
+        wix_only_catalog_products: number;
+        wix_only_catalog_variants: number;
         full_refresh: boolean;
         images_created: number;
         images_updated: number;

@@ -67,6 +67,12 @@ class WixSnapshotReport:
     unmapped_mapping_conflicts_created: int = 0
     unmapped_mapping_conflicts_updated: int = 0
     unmapped_mapping_conflicts_resolved: int = 0
+    duplicate_wix_skus: int = 0
+    duplicate_sku_conflicts_created: int = 0
+    duplicate_sku_conflicts_updated: int = 0
+    duplicate_sku_conflicts_resolved: int = 0
+    wix_only_catalog_products: int = 0
+    wix_only_catalog_variants: int = 0
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, object]:
@@ -92,6 +98,12 @@ class WixSnapshotReport:
             "unmapped_mapping_conflicts_created": self.unmapped_mapping_conflicts_created,
             "unmapped_mapping_conflicts_updated": self.unmapped_mapping_conflicts_updated,
             "unmapped_mapping_conflicts_resolved": self.unmapped_mapping_conflicts_resolved,
+            "duplicate_wix_skus": self.duplicate_wix_skus,
+            "duplicate_sku_conflicts_created": self.duplicate_sku_conflicts_created,
+            "duplicate_sku_conflicts_updated": self.duplicate_sku_conflicts_updated,
+            "duplicate_sku_conflicts_resolved": self.duplicate_sku_conflicts_resolved,
+            "wix_only_catalog_products": self.wix_only_catalog_products,
+            "wix_only_catalog_variants": self.wix_only_catalog_variants,
             "errors": list(self.errors),
         }
 
@@ -124,6 +136,7 @@ class WixSnapshotService:
         report.mappings_seen = len(mappings)
         catalog_index = self._load_catalog_index(mappings, report, force=force)
         self._scan_unmapped_hub_products(mappings, catalog_index, report)
+        self._scan_catalog_reconciliation(mappings, catalog_index, report)
         for mapping in mappings:
             try:
                 product_id = _mapping_product_id(mapping, self._products)
@@ -239,6 +252,80 @@ class WixSnapshotService:
             report.errors.append("Wix catalog index was empty; used full detail fallback")
             return None
         return index
+
+    def _scan_catalog_reconciliation(
+        self,
+        mappings: list[Any],
+        catalog_index: dict[str, object] | None,
+        report: WixSnapshotReport,
+    ) -> None:
+        """Reconcile Wix-wide SKU uniqueness and mapping coverage read-only.
+
+        A snapshot was originally centred on existing mappings.  This additional
+        pass also sees the rest of the catalog: it creates durable duplicate-SKU
+        cases for affected Hub products and exposes Wix-only records in the scan
+        report.  Records without any Hub counterpart intentionally remain a
+        report item instead of inventing a canonical Hub product.
+        """
+        if catalog_index is None:
+            return
+        rows = list(catalog_index.values())
+        by_sku: dict[str, list[dict[str, str]]] = {}
+        for row in rows:
+            for entry in _catalog_sku_entries(row):
+                key = entry["sku"].casefold()
+                by_sku.setdefault(key, []).append(entry)
+        duplicates = {sku: entries for sku, entries in by_sku.items() if len(entries) > 1}
+        report.duplicate_wix_skus = len(duplicates)
+
+        mapped_parents = {
+            _canonical_wix_id(_mapping_external_product_id(mapping)).casefold()
+            for mapping in mappings
+            if _canonical_wix_id(_mapping_external_product_id(mapping))
+        }
+        mapped_variant_ids = {
+            _canonical_wix_id(mapping.external_id).casefold()
+            for mapping in mappings
+            if mapping.entity_type == "variant" and _canonical_wix_id(mapping.external_id)
+        }
+        report.wix_only_catalog_products = sum(
+            1
+            for row in rows
+            if _canonical_wix_id(_index_value(row, "id")).casefold() not in mapped_parents
+        )
+        report.wix_only_catalog_variants = sum(
+            1
+            for row in rows
+            for entry in _catalog_sku_entries(row)
+            if entry["variant_external_id"]
+            and entry["variant_external_id"].casefold() not in mapped_variant_ids
+        )
+
+        for product in self._products.list_products(ProductFilter(active=True)):
+            sku = str(product.sku or "").strip()
+            expected = {"sku": sku}
+            entries = duplicates.get(sku.casefold()) if sku else None
+            actual: dict[str, object]
+            if entries:
+                actual = {"state": "duplicate_sku", "sku": sku, "matches": entries}
+            else:
+                # Same sentinel resolves a previously observed duplicate case
+                # without touching normal field-drift conflicts.
+                actual = expected
+            _, outcome = self._sync.upsert_scanned_conflict(
+                channel="wix",
+                entity_type="product",
+                internal_entity_id=product.id,
+                field_name="wix_sku_uniqueness",
+                hub_value=expected,
+                external_value=actual,
+            )
+            if outcome == "created":
+                report.duplicate_sku_conflicts_created += 1
+            elif outcome == "updated":
+                report.duplicate_sku_conflicts_updated += 1
+            elif outcome == "resolved":
+                report.duplicate_sku_conflicts_resolved += 1
 
     def _snapshot_one(
         self,
@@ -401,6 +488,54 @@ def _index_value(row: object, key: str) -> object:
     if isinstance(row, Mapping):
         return row.get(key)
     return getattr(row, key, None)
+
+
+def _catalog_sku_entries(row: object) -> list[dict[str, str]]:
+    """Flatten parent and variant SKUs from either Wix V1 or V3 index rows."""
+    parent_id = _canonical_wix_id(_index_value(row, "id"))
+    if not parent_id:
+        return []
+    parent_name = str(_index_value(row, "name") or "").strip()
+    entries: list[dict[str, str]] = []
+    variant_skus: set[str] = set()
+    variants = _index_value(row, "variants") or []
+    if isinstance(variants, (list, tuple)):
+        for variant in variants:
+            variant_id = _canonical_wix_id(_index_value(variant, "id"))
+            sku = str(_index_value(variant, "sku") or "").strip()
+            if not sku:
+                continue
+            variant_skus.add(sku.casefold())
+            entries.append(
+                {
+                    "external_id": parent_id,
+                    "name": parent_name,
+                    "sku": sku,
+                    "variant_external_id": variant_id,
+                    "variant_name": str(_index_value(variant, "name") or "").strip(),
+                }
+            )
+    candidate_skus: list[object] = [
+        _index_value(row, "sku"),
+        *(_index_value(row, "skus") or []),
+        *(_index_value(row, "all_skus") or []),
+    ]
+    seen = {(entry["variant_external_id"], entry["sku"].casefold()) for entry in entries}
+    for value in candidate_skus:
+        sku = str(value or "").strip()
+        if not sku or sku.casefold() in variant_skus or ("", sku.casefold()) in seen:
+            continue
+        seen.add(("", sku.casefold()))
+        entries.append(
+            {
+                "external_id": parent_id,
+                "name": parent_name,
+                "sku": sku,
+                "variant_external_id": "",
+                "variant_name": "",
+            }
+        )
+    return entries
 
 
 def _mapping_is_current(mapping: Any, index_entry: object) -> bool:

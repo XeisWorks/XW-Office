@@ -22,6 +22,7 @@ const TYPE_LABELS: Record<string, string> = {
 
 const FIELD_LABELS: Record<string, string> = {
   mapping: "Produkt-Verknüpfung",
+  wix_sku_uniqueness: "Wix-SKU-Eindeutigkeit",
   name: "Produkttitel",
   description: "Beschreibung",
   active: "Aktiv",
@@ -80,6 +81,14 @@ export function displayConflictValue(field: string, value: unknown): string {
       return id ? `${label} · ${id}` : label;
     }
   }
+  if (field === "wix_sku_uniqueness") {
+    const record = asRecord(value);
+    if (record) {
+      const sku = String(record.sku ?? "");
+      const matches = Array.isArray(record.matches) ? record.matches.length : 0;
+      return matches ? `${sku} · ${matches} Wix-Treffer` : sku || "SKU-Eindeutigkeit";
+    }
+  }
   if (typeof value === "boolean") return value ? "Ja" : "Nein";
   if (typeof value === "string" || typeof value === "number") return String(value);
   if (Array.isArray(value)) return value.map(String).join(", ");
@@ -94,6 +103,14 @@ export interface DeterministicGuidance {
 }
 
 export function deterministicGuidance(item: ConflictCaseDetail): DeterministicGuidance {
+  if (item.conflict_type === "DUPLICATE_SKU") {
+    return {
+      title: "Doppelte Wix-SKU bereinigen",
+      explanation: "Dieselbe SKU kommt im aktuellen Wix-Katalog bei mehreren Produkten oder Varianten vor. Dadurch ist eine automatische Verknüpfung nicht sicher.",
+      recommendation: "Prüfe die aufgeführten Wix-Positionen. Ändere die falsche Varianten-SKU in Wix oder verknüpfe das fachlich passende Produkt; erst danach erneut abgleichen.",
+      possibleCauses: ["Ein Produkt wurde kopiert.", "Eine Variante erhielt versehentlich dieselbe SKU.", "Eine alte Wix-Position wurde nicht umbenannt oder archiviert."],
+    };
+  }
   if (item.conflict_type === "WRONG_PRODUCT_MAPPING") {
     const wixValue = item.fields
       .flatMap((field) => field.observations)

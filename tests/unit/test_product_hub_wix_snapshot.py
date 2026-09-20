@@ -308,3 +308,70 @@ def test_catalog_scan_surfaces_hub_product_without_wix_mapping_and_can_link_it(
 
     mappings = products.list_channel_mappings(entity_type="product", internal_entity_id=product.id)
     assert [(mapping.channel, mapping.external_id) for mapping in mappings] == [("wix", "wix-existing")]
+
+
+def test_catalog_reconciliation_surfaces_duplicate_wix_sku_and_resolves_after_fix(
+    factory: sessionmaker[Session],
+) -> None:
+    class _Catalog:
+        def __init__(self) -> None:
+            self.rows: list[dict[str, object]] = [
+                {"id": "wix-bh", "name": "BH Polka", "sku": "XW-DUP"},
+                {
+                    "id": "wix-bier",
+                    "name": "Bier-Polka",
+                    "variants": [
+                        {
+                            "id": "wix-bier-small",
+                            "name": "Besetzung: Kleine Besetzung",
+                            "sku": "XW-DUP",
+                        }
+                    ],
+                },
+                {"id": "wix-only", "name": "Nur Wix", "sku": "XW-ONLY"},
+            ]
+
+        def list_products(self, *, include_hidden: bool = True) -> list[object]:
+            assert include_hidden is True
+            return self.rows
+
+    products = ProductHubRepository(factory)
+    product, _ = products.create_product(sku="XW-DUP", name="Hub Polka")
+    catalog = _Catalog()
+    service = WixSnapshotService(
+        factory, wix_client=_FakeWix({"id": "wix-bh"}), wix_catalog_client=catalog
+    )
+
+    first = service.run()
+
+    assert first.duplicate_wix_skus == 1
+    assert first.duplicate_sku_conflicts_created == 1
+    assert first.wix_only_catalog_products == 3
+    assert first.wix_only_catalog_variants == 1
+    low = [
+        row
+        for row in SyncRepository(factory).list_open_sync_conflicts(channel="wix")
+        if row.field_name == "wix_sku_uniqueness"
+    ]
+    assert len(low) == 1
+    assert low[0].internal_entity_id == product.id
+    assert low[0].field_name == "wix_sku_uniqueness"
+    assert low[0].external_value == {
+        "state": "duplicate_sku",
+        "sku": "XW-DUP",
+        "matches": [
+            {"external_id": "wix-bh", "name": "BH Polka", "sku": "XW-DUP", "variant_external_id": "", "variant_name": ""},
+            {"external_id": "wix-bier", "name": "Bier-Polka", "sku": "XW-DUP", "variant_external_id": "wix-bier-small", "variant_name": "Besetzung: Kleine Besetzung"},
+        ],
+    }
+
+    catalog.rows[1]["variants"] = [{"id": "wix-bier-small", "sku": "XW-BIER"}]
+    second = service.run()
+
+    assert second.duplicate_wix_skus == 0
+    assert second.duplicate_sku_conflicts_resolved == 1
+    assert not [
+        row
+        for row in SyncRepository(factory).list_open_sync_conflicts(channel="wix")
+        if row.field_name == "wix_sku_uniqueness"
+    ]
