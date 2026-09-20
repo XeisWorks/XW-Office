@@ -697,6 +697,45 @@ def test_conflict_patch_uses_v1_without_fetching_a_v3_revision() -> None:
     assert "revision" not in patches[-1]["body"]["product"]
 
 
+def test_update_variant_sku_v1_uses_variant_choices_not_parent_sku() -> None:
+    patches, transport = _make_v1_patch_recorder()
+    original = httpx.Client
+    httpx.Client = _with_transport(transport)  # type: ignore[assignment]
+    try:
+        success, error, version = _client().update_variant_sku(
+            "product_P-2",
+            choices={"Besetzung": "Kleine Besetzung"},
+            sku="XW-6012-KB",
+        )
+    finally:
+        httpx.Client = original  # type: ignore[assignment]
+
+    assert success is True
+    assert error == ""
+    assert version == CatalogVersion.V1
+    assert patches[-1]["url"].endswith("/stores/v1/products/P-2/variants")
+    assert patches[-1]["body"] == {
+        "variants": [{"choices": {"Besetzung": "Kleine Besetzung"}, "sku": "XW-6012-KB"}]
+    }
+
+
+def test_update_variant_sku_declines_catalog_v3() -> None:
+    patches, transport = _make_patch_recorder()
+    original = httpx.Client
+    httpx.Client = _with_transport(transport)  # type: ignore[assignment]
+    try:
+        success, error, version = _client().update_variant_sku(
+            "P-1", choices={"Size": "S"}, sku="XW-NEW"
+        )
+    finally:
+        httpx.Client = original  # type: ignore[assignment]
+
+    assert success is False
+    assert "Catalog V1" in error
+    assert version == CatalogVersion.V3
+    assert patches == []
+
+
 # ---------------------------------------------------------------------------
 # Bulk property update — v3
 # ---------------------------------------------------------------------------

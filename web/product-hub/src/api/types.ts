@@ -355,6 +355,15 @@ export interface ConflictMappingCandidate {
   product_type: string;
 }
 
+export interface WixVariantSkuUpdateResult {
+  external_id: string;
+  variant_external_id: string;
+  previous_sku: string;
+  sku: string;
+  catalog_version: string;
+  operation: "updated";
+}
+
 export interface ConflictMappingComparison {
   hub_name: string;
   hub_sku: string;

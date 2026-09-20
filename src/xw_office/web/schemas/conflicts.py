@@ -72,6 +72,17 @@ class ConflictCreateWixProductOut(ConflictCaseOut):
     operation: str = "created_and_mapped"
 
 
+class ConflictWixVariantSkuUpdateOut(BaseModel):
+    """Confirmed Wix-side SKU update for one explicitly selected variant."""
+
+    external_id: str
+    variant_external_id: str
+    previous_sku: str
+    sku: str
+    catalog_version: str
+    operation: str = "updated"
+
+
 class ConflictCaseDetailOut(ConflictCaseOut):
     product_sku: str
     product_name: str
@@ -186,6 +197,13 @@ class ConflictMappingRequest(VersionedRequest):
     external_id: str = Field(min_length=1, max_length=240)
     variant_external_id: str | None = Field(default=None, max_length=240)
     note: str | None = None
+
+
+class ConflictWixVariantSkuRequest(VersionedRequest):
+    external_id: str = Field(min_length=1, max_length=240)
+    variant_external_id: str = Field(min_length=1, max_length=240)
+    current_sku: str = Field(min_length=1, max_length=120)
+    sku: str = Field(min_length=1, max_length=120)
 
 
 class ConflictPreviewRequest(BaseModel):

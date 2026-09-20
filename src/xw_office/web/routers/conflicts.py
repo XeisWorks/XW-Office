@@ -34,6 +34,8 @@ from xw_office.web.schemas.conflicts import (
     ConflictDecisionRequest,
     ConflictFieldOut,
     ConflictMappingRequest,
+    ConflictWixVariantSkuRequest,
+    ConflictWixVariantSkuUpdateOut,
     ConflictObservationOut,
     ConflictPageOut,
     ConflictPreviewRequest,
@@ -77,19 +79,40 @@ def _fallback_advice(snapshot: dict[str, object]) -> ConflictAdvice:
     )
 
 
-def _wix_variant_matches(raw: dict[str, object], variant_id: str, sku: str) -> bool:
-    """Verify that a selected Wix variant belongs to this parent and owns this SKU."""
+def _wix_variant(raw: dict[str, object], variant_id: str) -> dict[str, object] | None:
+    """Return one raw Wix variant, accepting the V1 nested variant layout."""
     expected_id = canonical_wix_id(variant_id).casefold()
-    expected_sku = str(sku or "").strip().casefold()
     for item in raw.get("variants") or []:
         if not isinstance(item, dict):
             continue
         nested = item.get("variant") if isinstance(item.get("variant"), dict) else {}
         actual_id = canonical_wix_id(item.get("id") or nested.get("id")).casefold()
-        actual_sku = str(item.get("sku") or nested.get("sku") or "").strip().casefold()
-        if actual_id == expected_id and actual_sku == expected_sku:
-            return True
-    return False
+        if actual_id == expected_id:
+            return item
+    return None
+
+
+def _wix_variant_sku(item: dict[str, object]) -> str:
+    nested = item.get("variant") if isinstance(item.get("variant"), dict) else {}
+    return str(item.get("sku") or nested.get("sku") or "").strip()
+
+
+def _wix_variant_choices(item: dict[str, object]) -> dict[str, str]:
+    nested = item.get("variant") if isinstance(item.get("variant"), dict) else {}
+    raw_choices = item.get("choices") if isinstance(item.get("choices"), dict) else nested.get("choices")
+    if not isinstance(raw_choices, dict):
+        return {}
+    return {
+        str(key).strip(): str(value).strip()
+        for key, value in raw_choices.items()
+        if str(key).strip() and str(value).strip()
+    }
+
+
+def _wix_variant_matches(raw: dict[str, object], variant_id: str, sku: str) -> bool:
+    """Verify that a selected Wix variant belongs to this parent and owns this SKU."""
+    item = _wix_variant(raw, variant_id)
+    return item is not None and _wix_variant_sku(item).casefold() == str(sku or "").strip().casefold()
 
 
 class _WixDescriptionHTMLSanitizer(HTMLParser):
@@ -425,6 +448,120 @@ def build_conflicts_router(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return ConflictCaseOut.model_validate(row)
+
+    @router.post(
+        "/{case_id}/wix-variant-sku",
+        response_model=ConflictWixVariantSkuUpdateOut,
+        dependencies=[Depends(require_edit_enabled)],
+    )
+    def update_wix_variant_sku(
+        case_id: uuid.UUID,
+        body: ConflictWixVariantSkuRequest,
+        service: ConflictWizardService = Depends(get_service),
+    ) -> ConflictWixVariantSkuUpdateOut:
+        """Safely change the SKU of one known Wix Catalog V1 variant.
+
+        The selected product and variant are re-read immediately before the
+        write.  The full catalog is also checked so we never turn one duplicate
+        SKU conflict into another one accidentally.
+        """
+        if get_wix_details_client is None or get_wix_catalog_client is None:
+            raise HTTPException(status_code=503, detail="Wix-Anbindung ist nicht konfiguriert")
+        parent_id = canonical_wix_id(body.external_id)
+        variant_id = canonical_wix_id(body.variant_external_id)
+        expected_sku = str(body.current_sku or "").strip()
+        new_sku = str(body.sku or "").strip()
+        if not parent_id or not variant_id:
+            raise HTTPException(status_code=400, detail="Wix-Produkt- oder Varianten-ID ist ungültig")
+        if not new_sku:
+            raise HTTPException(status_code=400, detail="Die neue SKU darf nicht leer sein")
+        if expected_sku.casefold() == new_sku.casefold():
+            raise HTTPException(status_code=400, detail="Die neue SKU entspricht bereits der Wix-SKU")
+        try:
+            bundle = service.detail(case_id)
+            case = bundle["case"]
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if case.row_version != body.expected_row_version:
+            raise HTTPException(status_code=409, detail="Der Konflikt wurde zwischenzeitlich geaendert")
+        if case.conflict_type != "WRONG_PRODUCT_MAPPING":
+            raise HTTPException(status_code=400, detail="Diese Aktion ist nur für Wix-Mapping-Konflikte verfügbar")
+
+        details_client = get_wix_details_client()
+        try:
+            raw = details_client.get_product_raw(parent_id)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=503, detail=f"Wix-Variante konnte nicht geprüft werden: {exc}"
+            ) from exc
+        raw_id = canonical_wix_id(str((raw or {}).get("id") or ""))
+        if not raw_id or raw_id.casefold() != parent_id.casefold():
+            raise HTTPException(status_code=400, detail="Das ausgewählte Wix-Produkt wurde nicht bestätigt")
+        variant = _wix_variant(raw, variant_id)
+        if variant is None:
+            raise HTTPException(status_code=400, detail="Die ausgewählte Wix-Variante wurde nicht gefunden")
+        actual_sku = _wix_variant_sku(variant)
+        if actual_sku.casefold() != expected_sku.casefold():
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Die Wix-SKU wurde zwischenzeitlich geändert "
+                    f"(aktuell: {actual_sku or 'leer'}). Bitte Konflikt neu laden."
+                ),
+            )
+        choices = _wix_variant_choices(variant)
+        if not choices:
+            raise HTTPException(
+                status_code=400,
+                detail="Diese Wix-Variante hat keine Optionen und kann hier nicht eindeutig aktualisiert werden.",
+            )
+        try:
+            catalog_rows = get_wix_catalog_client().list_products(include_hidden=True)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=503, detail=f"Wix-SKU-Prüfung ist fehlgeschlagen: {exc}"
+            ) from exc
+        if not catalog_rows:
+            raise HTTPException(
+                status_code=503,
+                detail="Wix-SKU-Prüfung lieferte keinen Katalog; die Änderung wurde nicht ausgeführt.",
+            )
+        duplicate = next(
+            (
+                row
+                for row in catalog_rows
+                if any(str(sku).strip().casefold() == new_sku.casefold() for sku in row.all_skus)
+            ),
+            None,
+        )
+        if duplicate is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Die SKU {new_sku} wird in Wix bereits von „{duplicate.name or duplicate.id}“ verwendet. "
+                    "Es wurde nichts geändert."
+                ),
+            )
+
+        try:
+            success, error, catalog_version = details_client.update_variant_sku(
+                parent_id, choices=choices, sku=new_sku
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not success:
+            raise HTTPException(
+                status_code=502,
+                detail=(error or "Wix hat die SKU-Änderung abgelehnt")
+                + f" (Catalog {catalog_version.value.upper()}).",
+            )
+        return ConflictWixVariantSkuUpdateOut(
+            external_id=parent_id,
+            variant_external_id=variant_id,
+            previous_sku=actual_sku,
+            sku=new_sku,
+            catalog_version=catalog_version.value,
+        )
 
     @router.post(
         "/{case_id}/create-wix-product",

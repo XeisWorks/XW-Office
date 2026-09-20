@@ -6,6 +6,7 @@ import type {
   ConflictCase,
   ConflictCaseDetail,
   ConflictCreateWixProductResult,
+  WixVariantSkuUpdateResult,
   ConflictSummary,
   ChannelMapping,
   Edition,
@@ -201,6 +202,23 @@ export const api = {
         ...(note ? { note } : {}),
       },
     }),
+  updateWixVariantSkuForConflict: (
+    id: string,
+    expectedRowVersion: number,
+    externalId: string,
+    variantExternalId: string,
+    currentSku: string,
+    sku: string,
+  ) => request<WixVariantSkuUpdateResult>(`/api/v1/conflicts/${id}/wix-variant-sku`, {
+    method: "POST",
+    body: {
+      expected_row_version: expectedRowVersion,
+      external_id: externalId,
+      variant_external_id: variantExternalId,
+      current_sku: currentSku,
+      sku,
+    },
+  }),
   createWixProductForConflict: (id: string, expectedRowVersion: number) =>
     request<ConflictCreateWixProductResult>(`/api/v1/conflicts/${id}/create-wix-product`, {
       method: "POST",

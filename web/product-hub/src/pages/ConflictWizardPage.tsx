@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
-import type { ConflictAction, ConflictAdvice, ConflictCaseDetail } from "../api/types";
+import type { ConflictAction, ConflictAdvice, ConflictCaseDetail, ConflictMappingCandidate } from "../api/types";
 import StatusBadge from "../components/StatusBadge";
 import {
   conflictFieldLabel,
@@ -19,6 +19,9 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
   const [advice, setAdvice] = useState<ConflictAdvice | null>(null);
   const [adviceLoading, setAdviceLoading] = useState(false);
   const [remappingId, setRemappingId] = useState<string | null>(null);
+  const [skuEditCandidate, setSkuEditCandidate] = useState<ConflictMappingCandidate | null>(null);
+  const [newWixSku, setNewWixSku] = useState("");
+  const [updatingWixSku, setUpdatingWixSku] = useState(false);
   const [destructiveAction, setDestructiveAction] = useState<"create-wix" | "archive-hub" | null>(null);
   const [custom, setCustom] = useState("");
   const [message, setMessage] = useState("");
@@ -127,6 +130,52 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
       setMessage("Mapping geändert und Fall abgeschlossen. Bitte anschließend den Wix-Abgleich starten.");
     } catch (error) { handleError(error); }
     finally { setRemappingId(null); }
+  }
+
+  function startWixSkuEdit(candidate: ConflictMappingCandidate) {
+    if (!candidate.variant_external_id) {
+      setMessage("Diese Wix-Position ist keine eindeutig erkennbare Variante; die SKU kann hier nicht sicher geändert werden.");
+      setMessageTone("error");
+      return;
+    }
+    setSkuEditCandidate(candidate);
+    setNewWixSku(candidate.sku);
+    setMessage("");
+  }
+
+  async function updateWixSku() {
+    if (!item || !id || !skuEditCandidate || !skuEditCandidate.variant_external_id) return;
+    const cleanSku = newWixSku.trim();
+    if (!cleanSku) {
+      setMessage("Bitte eine neue SKU eingeben.");
+      setMessageTone("error");
+      return;
+    }
+    const confirmed = window.confirm(
+      `Wix-SKU der Variante „${skuEditCandidate.variant_name || skuEditCandidate.name}“ wirklich von ${skuEditCandidate.sku} auf ${cleanSku} ändern?\n\n` +
+      "Der Product Hub wird dabei nicht verändert. Vor dem Speichern prüft der Hub, ob die neue SKU in Wix bereits vergeben ist.",
+    );
+    if (!confirmed) return;
+    setUpdatingWixSku(true);
+    setMessage("Wix-SKU wird auf Eindeutigkeit geprüft und geändert …");
+    setMessageTone("neutral");
+    try {
+      const result = await api.updateWixVariantSkuForConflict(
+        id,
+        item.row_version,
+        skuEditCandidate.external_id,
+        skuEditCandidate.variant_external_id,
+        skuEditCandidate.sku,
+        cleanSku,
+      );
+      setSkuEditCandidate(null);
+      setNewWixSku("");
+      adviceRequestFor.current = null;
+      await load();
+      setMessage(`Wix-Variante erfolgreich geändert: ${result.previous_sku} → ${result.sku} (Catalog ${result.catalog_version.toUpperCase()}).`);
+      setMessageTone("success");
+    } catch (error) { handleError(error); }
+    finally { setUpdatingWixSku(false); }
   }
 
   async function createWixProduct() {
@@ -241,16 +290,24 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
                   <button className="primary-button preferred-mapping-button" type="button" disabled={remappingId !== null || destructiveAction !== null} onClick={() => remapMapping(preferredCandidate.external_id, preferredCandidate.name, preferredCandidate.variant_external_id, preferredCandidate.variant_name)}>
                     {remappingId === preferredCandidate.external_id ? "Wird verifiziert …" : "Vorschlag übernehmen"}
                   </button>
+                  {preferredCandidate.variant_external_id && <button type="button" disabled={updatingWixSku || destructiveAction !== null} onClick={() => startWixSkuEdit(preferredCandidate)}>SKU in Wix ändern</button>}
                 </> : ambiguousCandidates.length > 0 ? <>
                   <p>Mehrere Wix-Produkte verwenden diese SKU. Bitte das fachlich passende Produkt auswählen.</p>
                   <div className="mapping-candidate-list">{ambiguousCandidates.map((candidate) => <div className="mapping-candidate" key={candidate.external_id}>
                     <div><strong>{candidate.name || "Ohne Produktname"}</strong>{candidate.variant_name && <span className="mapping-variant-name">{candidate.variant_name}</span>}<span className="hint">{candidate.sku || "ohne SKU"} · {candidate.score}%</span><span className="mapping-id">{candidate.external_id}</span></div>
-                    <button type="button" disabled={remappingId !== null || destructiveAction !== null} onClick={() => remapMapping(candidate.external_id, candidate.name, candidate.variant_external_id, candidate.variant_name)}>Dieses Produkt verknüpfen</button>
+                    <div className="mapping-candidate-actions"><button type="button" disabled={remappingId !== null || destructiveAction !== null} onClick={() => remapMapping(candidate.external_id, candidate.name, candidate.variant_external_id, candidate.variant_name)}>Dieses Produkt verknüpfen</button>{candidate.variant_external_id && <button type="button" disabled={updatingWixSku || destructiveAction !== null} onClick={() => startWixSkuEdit(candidate)}>SKU in Wix ändern</button>}</div>
                   </div>)}</div>
                 </> : <><p>{advice?.mapping_search_status === "unavailable" ? "Wix-Suche nicht verfügbar." : "Kein eindeutiger Wix-Kandidat gefunden."}</p><Link className="primary-button preferred-mapping-button" to={`/products/${item.product_id}`}>SKU im Hub ändern</Link></>}
               </div>
             </div>}
           </article>
+
+          {skuEditCandidate && <div className="custom-decision wix-sku-edit">
+            <label htmlFor="wix-variant-sku">Neue Wix-SKU für <strong>{skuEditCandidate.name}</strong>{skuEditCandidate.variant_name ? ` – ${skuEditCandidate.variant_name}` : ""}</label>
+            <input id="wix-variant-sku" value={newWixSku} onChange={(event) => setNewWixSku(event.target.value)} maxLength={120} autoFocus />
+            <button className="primary-button" type="button" disabled={updatingWixSku} onClick={updateWixSku}>{updatingWixSku ? "Wird in Wix gespeichert …" : "SKU in Wix speichern"}</button>
+            <button type="button" disabled={updatingWixSku} onClick={() => { setSkuEditCandidate(null); setNewWixSku(""); }}>Abbrechen</button>
+          </div>}
 
           {otherCandidates.length > 0 && <details className="alternative-candidates">
             <summary>Weitere mögliche Produkte ({otherCandidates.length})</summary>

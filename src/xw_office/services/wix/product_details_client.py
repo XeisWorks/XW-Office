@@ -758,6 +758,54 @@ class WixProductDetailsClient:
         """Set the product brand name."""
         return self._update_single(product_id, "brand", brand_name)
 
+    def update_variant_sku(
+        self,
+        product_id: str,
+        *,
+        choices: dict[str, str],
+        sku: str,
+    ) -> tuple[bool, str, CatalogVersion]:
+        """Change one Catalog V1 variant SKU, identified by its option choices.
+
+        Catalog V1 variants are updated at ``/products/{id}/variants``.  The API
+        identifies an override by its complete ``choices`` object, rather than a
+        parent-product PATCH.  This is especially important for products such as
+        ``XW-6012`` where the parent product deliberately has no own SKU.
+        """
+        pid = _api_product_id(product_id)
+        clean_sku = str(sku or "").strip()
+        clean_choices = {
+            str(key).strip(): str(value).strip()
+            for key, value in choices.items()
+            if str(key).strip() and str(value).strip()
+        }
+        if not pid:
+            raise ValueError("product_id fehlt")
+        if not clean_sku:
+            raise ValueError("Die neue SKU darf nicht leer sein")
+        if not clean_choices:
+            raise ValueError("Die Wix-Variante hat keine verwertbaren Optionen")
+        if not self.has_credentials():
+            raise RuntimeError("Wix Credentials fehlen")
+
+        version = self.detect_catalog_version()
+        if version != CatalogVersion.V1:
+            return (
+                False,
+                "Die Varianten-SKU-Aktualisierung ist für diesen Wix-Katalog nur mit Catalog V1 verfügbar.",
+                version,
+            )
+
+        url = f"{self._V1_BASE}/products/{pid}/variants"
+        body = {"variants": [{"choices": clean_choices, "sku": clean_sku}]}
+        try:
+            self._do_request("PATCH", url, headers=self._headers(), json_body=body)
+            logger.info("WixProductDetailsClient v1 variant SKU updated: product %s", pid)
+            return True, "", version
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("WixProductDetailsClient v1 variant SKU PATCH failed: %s", exc)
+            return False, str(exc), version
+
     def patch_product_field_with_conflict_detection(
         self, product_id: str, *, field: str, value: Any
     ) -> tuple[bool, str, int | None]:
