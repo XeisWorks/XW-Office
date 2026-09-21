@@ -13,7 +13,10 @@ from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.repositories.product_hub_sync import SyncRepository
 from xw_office.repositories.settings_kv import SettingKvRepository
-from xw_office.services.product_hub.inventory import InventoryV2Service
+from xw_office.services.product_hub.inventory import (
+    InventoryV2Service,
+    LegacyInventoryShadowBridge,
+)
 
 
 @pytest.fixture
@@ -112,6 +115,37 @@ def test_legacy_baseline_requires_shadow_mode_and_never_rebases_a_variant(
     assert settings.get_value_json("inventory.stock_levels") == '{"XW-BASELINE": 7, "UNKNOWN": 3}'
     refreshed = service.legacy_baseline_preview()
     assert next(item for item in refreshed.items if item.sku == "XW-BASELINE").status == "ledger_already_initialized"
+
+
+def test_legacy_shadow_bridge_mirrors_only_baselined_active_variants(
+    session_factory: sessionmaker[Session], product_repo: ProductHubRepository
+) -> None:
+    _product, variant = product_repo.create_product(sku="XW-MIRROR", name="Mirror Produkt")
+    unseeded_product, _unseeded_variant = product_repo.create_product(
+        sku="XW-UNSEEDED", name="Unseeded Produkt"
+    )
+    del unseeded_product
+    service = InventoryV2Service(session_factory)
+    service.record_movement(
+        variant_id=variant.id, delta=10, reason="import_baseline",
+        source="test", idempotency_key="mirror-baseline",
+    )
+    bridge = LegacyInventoryShadowBridge(session_factory)
+
+    mirrored = bridge.mirror_absolute_stock(
+        sku="XW-MIRROR", new_stock=6, source="desktop-test"
+    )
+    assert mirrored.status == "mirrored"
+    location = InventoryRepository(session_factory).get_location_by_code("MAIN")
+    assert location is not None
+    stock = InventoryRepository(session_factory).get_stock(variant.id, location.id)
+    assert stock is not None and stock.on_hand == 6
+    assert bridge.mirror_absolute_stock(
+        sku="XW-MIRROR", new_stock=6, source="desktop-test"
+    ).status == "already_in_sync"
+    assert bridge.mirror_absolute_stock(
+        sku="XW-UNSEEDED", new_stock=2, source="desktop-test"
+    ).status == "baseline_required"
 
 
 def test_record_movement_crossing_below_threshold_opens_low_stock_alert(

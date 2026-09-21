@@ -1355,3 +1355,11 @@ variants. With `XW_PRODUCT_HUB_INVENTORY_SHADOW_ENABLED=true`, an explicitly
 confirmed action writes one idempotent `import_baseline` movement per safe SKU. The
 reviewed source hash must still match; malformed/unmapped/inactive/already-initialized
 entries are skipped, and the legacy JSON plus Wix/sevdesk remain untouched.
+
+The first live desktop bridge is now limited to `InventoryService.set_product_stock`:
+when the desktop's `product_hub.inventory_shadow_enabled` and a database are enabled,
+it mirrors a successfully completed legacy absolute-stock update to an already
+baselined, exact active Hub variant. Missing mappings, inactive variants and missing
+baselines are logged and never block the legacy operation. START/REPRINTS, invoice
+consumption, returns/recount and the print-decision path remain deliberately outside
+this first bridge step.

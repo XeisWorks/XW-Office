@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import Protocol
 
 from xw_office.core.config import AppConfig
 from xw_office.core.shared_paths import resolve_shared_path
@@ -31,6 +32,14 @@ _LEGACY_PRINT_PROFILE_MAP = {
     "canon_brochure_mono": "brochure_mono",
     "canon_brochure_duo": "brochure_duo",
 }
+
+
+class InventoryShadowMirror(Protocol):
+    """Narrow adapter boundary; legacy inventory remains usable without Product Hub."""
+
+    def mirror_absolute_stock(
+        self, *, sku: str, new_stock: int, source: str, external_reference: str = ""
+    ) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -142,10 +151,12 @@ class InventoryService:
         config: AppConfig,
         settings_repo: SettingKvRepository | None = None,
         print_queue: PrintQueueService | None = None,
+        shadow_mirror: InventoryShadowMirror | None = None,
     ) -> None:
         self._config = config
         self._settings_repo = settings_repo
         self._print_queue = print_queue
+        self._shadow_mirror = shadow_mirror
 
     def load_stock_levels(self) -> dict[str, int]:
         """Return stock levels by SKU (from DB setting if available)."""
@@ -629,6 +640,31 @@ class InventoryService:
         else:
             current_raw = self._settings_repo.get_value_json(_STOCK_KEY)
             self._settings_repo.set_value_json(_STOCK_KEY, mutate_stock(current_raw))
+        self._mirror_legacy_stock_update(wanted, quantity)
+
+    def _mirror_legacy_stock_update(self, sku: str, quantity: int) -> None:
+        """Mirror after a successful legacy write, without ever blocking that write.
+
+        Shadow mode supplements the legacy source. Missing Hub mappings and transient
+        Hub failures must therefore be observable but cannot make a completed invoice
+        or desktop stock correction fail.
+        """
+        if self._shadow_mirror is None:
+            return
+        try:
+            result = self._shadow_mirror.mirror_absolute_stock(
+                sku=sku,
+                new_stock=quantity,
+                source="legacy_inventory.set_product_stock",
+                external_reference=_STOCK_KEY,
+            )
+        except Exception:  # noqa: BLE001 - legacy operation is already complete
+            logger.exception("Inventory V2 shadow mirror failed for SKU %s", sku)
+            return
+        outcome = str(getattr(result, "status", "unknown"))
+        detail = str(getattr(result, "detail", ""))
+        if outcome not in {"mirrored", "already_in_sync"}:
+            logger.warning("Inventory V2 shadow mirror skipped %s (%s): %s", sku, outcome, detail)
 
     def save_product_print_config(
         self,

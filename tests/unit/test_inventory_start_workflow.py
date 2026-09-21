@@ -23,6 +23,15 @@ class _RepoStub:
         self.values[key] = value_json
 
 
+class _ShadowMirrorStub:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def mirror_absolute_stock(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        return type("Result", (), {"status": "mirrored", "detail": "ok"})()
+
+
 def _printing_config() -> PrintingSection:
     return PrintingSection(
         buffer_quantity=3,
@@ -76,6 +85,27 @@ def test_preflight_prints_only_when_stock_insufficient() -> None:
     assert by_sku["XW-6-003"].will_print is True
     assert by_sku["XW-6-003"].missing_qty == 1
     assert by_sku["XW-6-003"].final_print_qty == 4
+
+
+def test_manual_legacy_stock_update_is_mirrored_when_adapter_is_configured(tmp_path: Path) -> None:
+    repo = _RepoStub(
+        {
+            "inventory.products": _product_payload(tmp_path / "score.pdf"),
+            "inventory.stock_levels": json.dumps({"XW-6-003": 1}),
+        }
+    )
+    mirror = _ShadowMirrorStub()
+    service = InventoryService(AppConfig(), repo, shadow_mirror=mirror)
+
+    service.set_product_stock("xw-6-003", 7)
+
+    assert json.loads(repo.values["inventory.stock_levels"])["XW-6-003"] == 7
+    assert mirror.calls == [{
+        "sku": "XW-6-003",
+        "new_stock": 7,
+        "source": "legacy_inventory.set_product_stock",
+        "external_reference": "inventory.stock_levels",
+    }]
 
 
 def test_execute_full_mode_updates_stock_with_buffer_and_consumption(tmp_path: Path) -> None:

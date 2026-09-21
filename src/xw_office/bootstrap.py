@@ -49,6 +49,7 @@ from xw_office.services.ideas.stores import (
     default_notation_ideas_path,
 )
 from xw_office.services.inventory.service import InventoryService
+from xw_office.services.product_hub.inventory import LegacyInventoryShadowBridge
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.services.draft_invoice.service import DraftInvoiceService
 from xw_office.services.sendungen.service import OffeneSendungenService
@@ -472,6 +473,10 @@ def register_default_services(container: Container) -> None:
             c.config,
             c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
             c.resolve(PrintQueueService),
+            LegacyInventoryShadowBridge(c.resolve(SessionMaker))
+            if c.config.product_hub.inventory_shadow_enabled
+            and (c.config.database_url or "").strip()
+            else None,
         ),
     )
     container.register(
