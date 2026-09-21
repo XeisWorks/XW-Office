@@ -23,6 +23,7 @@ from xw_office.web.schemas.inventory import (
     LegacyInventoryBaselineApplyRequest,
     LegacyInventoryBaselineItemOut,
     LegacyInventoryBaselinePreviewOut,
+    LegacyInventoryShadowConflictOut,
     MovementCreateRequest,
     MovementOut,
     MovementResultOut,
@@ -97,6 +98,25 @@ def build_inventory_router(
             items=[baseline_item_out(item) for item in preview.items],
             assessed_at=preview.assessed_at,
         )
+
+    @router.get("/shadow-conflicts", response_model=list[LegacyInventoryShadowConflictOut])
+    def list_legacy_shadow_conflicts(
+        service: InventoryV2Service = Depends(get_service),
+    ) -> list[LegacyInventoryShadowConflictOut]:
+        return [
+            LegacyInventoryShadowConflictOut(
+                id=item.id,
+                variant_id=item.variant_id,
+                product_id=item.product_id,
+                sku=item.sku,
+                product_name=item.product_name,
+                variant_name=item.variant_name,
+                status=item.status,
+                detail=item.detail,
+                detected_at=item.detected_at,
+            )
+            for item in service.list_legacy_shadow_conflicts()
+        ]
 
     @router.get("/alerts", response_model=list[InventoryAlertOut])
     def list_alerts(repo: InventoryRepository = Depends(get_repo)) -> list[InventoryAlertOut]:

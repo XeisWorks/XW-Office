@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -95,6 +96,34 @@ def test_legacy_baseline_preview_and_confirmed_apply(db_path: str) -> None:
     )
     assert applied.status_code == 200
     assert applied.json()["applied_skus"] == ["XW-7000"]
+
+
+def test_shadow_conflicts_endpoint_returns_actionable_legacy_queue(db_path: str) -> None:
+    variant_id = _seed_variant(db_path)
+    engine = create_engine(db_path, future=True)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+    from xw_office.repositories.product_hub_sync import SyncRepository
+
+    SyncRepository(factory).create_sync_conflict(
+        channel="legacy_inventory",
+        entity_type="inventory_stock",
+        internal_entity_id=uuid.UUID(variant_id),
+        field_name="shadow_mirror",
+        hub_value={"sku": "XW-7000", "on_hand": 0},
+        external_value={
+            "sku": "XW-7000",
+            "status": "baseline_required",
+            "detail": "Keine bestätigte Hub-Ledger-Baseline für diese Variante",
+        },
+    )
+    engine.dispose()
+    client = _client(db_path)
+
+    response = client.get("/api/v1/inventory/shadow-conflicts", headers=_auth_headers())
+    assert response.status_code == 200
+    assert response.json()[0]["sku"] == "XW-7000"
+    assert response.json()[0]["product_name"] == "API Produkt"
+    assert response.json()[0]["status"] == "baseline_required"
 
 
 def test_record_movement_requires_edit_enabled(db_path: str) -> None:

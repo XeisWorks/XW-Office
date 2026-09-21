@@ -16,6 +16,7 @@ export default function InventoryCutoverPage({ onUnauthorized }: { onUnauthorize
   const [baselineMessage, setBaselineMessage] = useState("");
   const [applying, setApplying] = useState(false);
   const baseline = useApi(api.getLegacyInventoryBaselinePreview, [baselineReload], onUnauthorized);
+  const shadowConflicts = useApi(api.getLegacyInventoryShadowConflicts, [baselineReload], onUnauthorized);
 
   async function applyBaseline() {
     if (!baseline.data) return;
@@ -73,6 +74,23 @@ export default function InventoryCutoverPage({ onUnauthorized }: { onUnauthorize
           </tbody></table>
           <div className="decision-buttons"><button className="primary-button" type="button" disabled={applying || !baseline.data.shadow_enabled || !baseline.data.items.some((item) => item.status === "ready")} onClick={applyBaseline}>{applying ? "Baseline wird geschrieben ..." : "Geprüfte Baseline übernehmen"}</button><button type="button" disabled={applying} onClick={() => setBaselineReload((value) => value + 1)}>Vorschau aktualisieren</button></div>
         </>}
+      </article>
+      <article className="decision-panel">
+        <h2>Offene Shadow-Abweichungen</h2>
+        <p>Diese Queue entsteht, wenn eine abgeschlossene Legacy-Bestandsänderung nicht vollständig im Hub-Ledger gespiegelt werden konnte. Sie wird erst nach einem erfolgreichen absoluten Bestandsabgleich automatisch geschlossen.</p>
+        {shadowConflicts.loading && <p className="hint">Shadow-Abweichungen werden geladen ...</p>}
+        {shadowConflicts.error && <p className="hint-error">{shadowConflicts.error}</p>}
+        {shadowConflicts.data && <table className="data-table"><thead><tr><th>SKU</th><th>Hub-Produkt</th><th>Grund</th><th>Details</th><th>Erkannt</th></tr></thead><tbody>
+          {shadowConflicts.data.map((item) => <tr key={item.id}>
+            <td>{item.sku || "—"}</td>
+            <td>{item.product_id ? <Link to={`/products/${item.product_id}`}>{item.product_name}{item.variant_name ? ` · ${item.variant_name}` : ""}</Link> : item.product_name}</td>
+            <td><StatusBadge label={item.status} tone="bad" /></td>
+            <td className="hint">{item.detail}</td>
+            <td className="hint">{new Date(item.detected_at).toLocaleString("de-AT")}</td>
+          </tr>)}
+          {!shadowConflicts.data.length && <tr><td colSpan={5} className="hint">Keine offenen Shadow-Abweichungen. Erfolgreiche Spiegelungen werden weiterhin protokolliert.</td></tr>}
+        </tbody></table>}
+        <p className="hint">Nicht blind schließen: Bei Unterdeckung zuerst den tatsächlichen Legacy- und Hub-Bestand prüfen; bei fehlender Baseline die geprüfte Baseline oben übernehmen.</p>
       </article>
     </>}
   </section>;

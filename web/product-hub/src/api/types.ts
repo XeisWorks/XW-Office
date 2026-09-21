@@ -424,6 +424,18 @@ export interface InventoryCutoverReadiness {
   assessed_at: string;
 }
 
+export interface LegacyInventoryShadowConflict {
+  id: string;
+  variant_id: string;
+  product_id: string | null;
+  sku: string;
+  product_name: string;
+  variant_name: string;
+  status: "inactive" | "baseline_required" | "shortage" | "retry_required" | string;
+  detail: string;
+  detected_at: string;
+}
+
 export interface LegacyInventoryBaselineItem {
   sku: string;
   legacy_on_hand: number | null;

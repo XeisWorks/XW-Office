@@ -18,6 +18,7 @@ import type {
   InventoryCutoverReadiness,
   LegacyInventoryBaselineApplyResult,
   LegacyInventoryBaselinePreview,
+  LegacyInventoryShadowConflict,
   Page,
   ParentProductListItem,
   ProductAsset,
@@ -191,6 +192,7 @@ export const api = {
   // -- Conflict Wizard ----------------------------------------------------------
   getConflictSummary: () => request<ConflictSummary>("/api/v1/conflicts/summary"),
   getInventoryCutoverReadiness: () => request<InventoryCutoverReadiness>("/api/v1/inventory/cutover-readiness"),
+  getLegacyInventoryShadowConflicts: () => request<LegacyInventoryShadowConflict[]>("/api/v1/inventory/shadow-conflicts"),
   getLegacyInventoryBaselinePreview: () => request<LegacyInventoryBaselinePreview>("/api/v1/inventory/legacy-baseline/preview"),
   applyLegacyInventoryBaseline: (expectedSourceHash: string) => request<LegacyInventoryBaselineApplyResult>("/api/v1/inventory/legacy-baseline/apply", {
     method: "POST", body: { expected_source_hash: expectedSourceHash },

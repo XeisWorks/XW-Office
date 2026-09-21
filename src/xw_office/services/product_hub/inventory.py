@@ -160,6 +160,33 @@ class LegacyInventoryMirrorResult:
         self.detail = detail
 
 
+class LegacyInventoryShadowConflict:
+    """One unresolved legacy-to-ledger mirror deviation, enriched for the Web UI."""
+
+    def __init__(
+        self,
+        *,
+        id: uuid.UUID,
+        variant_id: uuid.UUID,
+        product_id: uuid.UUID | None,
+        sku: str,
+        product_name: str,
+        variant_name: str,
+        status: str,
+        detail: str,
+        detected_at: datetime.datetime,
+    ) -> None:
+        self.id = id
+        self.variant_id = variant_id
+        self.product_id = product_id
+        self.sku = sku
+        self.product_name = product_name
+        self.variant_name = variant_name
+        self.status = status
+        self.detail = detail
+        self.detected_at = detected_at
+
+
 class InventoryV2Service:
     def __init__(
         self,
@@ -429,6 +456,35 @@ class InventoryV2Service:
 
     # -- legacy stock baseline (first controlled shadow-bridge step) -----------------
 
+    def list_legacy_shadow_conflicts(self) -> list[LegacyInventoryShadowConflict]:
+        """Return the actionable legacy-mirror queue without exposing raw sync JSON.
+
+        A queue item remains until an absolute-stock mirror proves that the Hub
+        ledger matches the completed legacy write again. A later relative movement
+        alone is intentionally not considered proof of recovery.
+        """
+        items: list[LegacyInventoryShadowConflict] = []
+        for conflict in self._sync.list_open_sync_conflicts(channel="legacy_inventory"):
+            if conflict.entity_type != "inventory_stock" or conflict.field_name != "shadow_mirror":
+                continue
+            variant = self._products.get_variant(conflict.internal_entity_id)
+            product = self._products.get_product(variant.product_id) if variant is not None else None
+            payload = conflict.external_value if isinstance(conflict.external_value, dict) else {}
+            items.append(
+                LegacyInventoryShadowConflict(
+                    id=conflict.id,
+                    variant_id=conflict.internal_entity_id,
+                    product_id=variant.product_id if variant is not None else None,
+                    sku=str(payload.get("sku") or (variant.sku if variant is not None else "")),
+                    product_name=product.name if product is not None else "Gelöschtes Hub-Produkt",
+                    variant_name=(variant.name or "") if variant is not None else "",
+                    status=str(payload.get("status") or "unbekannt"),
+                    detail=str(payload.get("detail") or "Shadow-Abweichung benötigt Prüfung."),
+                    detected_at=conflict.detected_at,
+                )
+            )
+        return sorted(items, key=lambda item: item.detected_at, reverse=True)
+
     def legacy_baseline_preview(self) -> LegacyInventoryBaselinePreview:
         """Compare legacy ``inventory.stock_levels`` with Hub variants, read-only.
 
@@ -561,6 +617,56 @@ class LegacyInventoryShadowBridge:
         self._session_factory = session_factory
         self._products = ProductHubRepository(session_factory)
         self._inventory = InventoryRepository(session_factory)
+        self._sync = SyncRepository(session_factory)
+
+    def _record_issue(
+        self,
+        *,
+        variant_id: uuid.UUID,
+        sku: str,
+        status: str,
+        detail: str,
+        source: str,
+        current_on_hand: int | None = None,
+        requested_delta: int | None = None,
+        target_on_hand: int | None = None,
+    ) -> None:
+        """Upsert one durable queue item per variant instead of log-only drift."""
+        hub_value: dict[str, object] = {"sku": sku}
+        if current_on_hand is not None:
+            hub_value["on_hand"] = current_on_hand
+        external_value: dict[str, object] = {
+            "sku": sku,
+            "status": status,
+            "detail": detail,
+            "source": source,
+        }
+        if requested_delta is not None:
+            external_value["requested_delta"] = requested_delta
+        if target_on_hand is not None:
+            external_value["target_on_hand"] = target_on_hand
+        self._sync.upsert_scanned_conflict(
+            channel="legacy_inventory",
+            entity_type="inventory_stock",
+            internal_entity_id=variant_id,
+            field_name="shadow_mirror",
+            hub_value=hub_value,
+            external_value=external_value,
+        )
+
+    def _resolve_issue(self, variant_id: uuid.UUID) -> None:
+        conflict = self._sync.get_open_conflict(
+            channel="legacy_inventory",
+            entity_type="inventory_stock",
+            internal_entity_id=variant_id,
+            field_name="shadow_mirror",
+        )
+        if conflict is not None:
+            self._sync.resolve_sync_conflict(
+                conflict.id,
+                resolution="shadow_mirror_recovered",
+                resolved_by="legacy-inventory-shadow",
+            )
 
     def mirror_absolute_stock(
         self, *, sku: str, new_stock: int, source: str, external_reference: str = ""
@@ -576,10 +682,25 @@ class LegacyInventoryShadowBridge:
                 status="unmapped", detail="Keine exakte Hub-Variante oder SKU-Alias gefunden"
             )
         if not resolved.product.active or not resolved.variant.active:
+            self._record_issue(
+                variant_id=resolved.variant.id,
+                sku=clean_sku,
+                status="inactive",
+                detail="Die zugeordnete Hub-Variante ist nicht aktiv",
+                source=source,
+            )
             return LegacyInventoryMirrorResult(
                 status="inactive", detail="Die zugeordnete Hub-Variante ist nicht aktiv"
             )
         if self._inventory.count_movements_for_variant(resolved.variant.id) == 0:
+            self._record_issue(
+                variant_id=resolved.variant.id,
+                sku=clean_sku,
+                status="baseline_required",
+                detail="Keine bestätigte Hub-Ledger-Baseline für diese Variante",
+                source=source,
+                target_on_hand=int(new_stock),
+            )
             return LegacyInventoryMirrorResult(
                 status="baseline_required",
                 detail="Keine bestätigte Hub-Ledger-Baseline für diese Variante",
@@ -591,16 +712,22 @@ class LegacyInventoryShadowBridge:
         current_on_hand = current.on_hand if current is not None else 0
         delta = int(new_stock) - current_on_hand
         if delta == 0:
+            self._resolve_issue(resolved.variant.id)
             return LegacyInventoryMirrorResult(
                 status="already_in_sync", detail="Hub-Ledger entspricht dem Legacy-Bestand"
             )
-        return self.mirror_stock_movement(
+        result = self.mirror_stock_movement(
             sku=clean_sku,
             delta=delta,
             reason="manual_adjustment",
             source=source,
             external_reference=external_reference,
         )
+        if result.status in {"mirrored", "already_in_sync"}:
+            # This path knows the resulting legacy total, so it is a real
+            # convergence check rather than a best-effort relative movement.
+            self._resolve_issue(resolved.variant.id)
+        return result
 
     def mirror_stock_movement(
         self,
@@ -628,10 +755,26 @@ class LegacyInventoryShadowBridge:
                 status="unmapped", detail="Keine exakte Hub-Variante oder SKU-Alias gefunden"
             )
         if not resolved.product.active or not resolved.variant.active:
+            self._record_issue(
+                variant_id=resolved.variant.id,
+                sku=clean_sku,
+                status="inactive",
+                detail="Die zugeordnete Hub-Variante ist nicht aktiv",
+                source=source,
+                requested_delta=int(delta),
+            )
             return LegacyInventoryMirrorResult(
                 status="inactive", detail="Die zugeordnete Hub-Variante ist nicht aktiv"
             )
         if self._inventory.count_movements_for_variant(resolved.variant.id) == 0:
+            self._record_issue(
+                variant_id=resolved.variant.id,
+                sku=clean_sku,
+                status="baseline_required",
+                detail="Keine bestätigte Hub-Ledger-Baseline für diese Variante",
+                source=source,
+                requested_delta=int(delta),
+            )
             return LegacyInventoryMirrorResult(
                 status="baseline_required",
                 detail="Keine bestätigte Hub-Ledger-Baseline für diese Variante",
@@ -651,6 +794,16 @@ class LegacyInventoryShadowBridge:
                 if status == "shortage"
                 else "Keine Bestandsänderung zu spiegeln"
             )
+            if status == "shortage":
+                self._record_issue(
+                    variant_id=resolved.variant.id,
+                    sku=clean_sku,
+                    status=status,
+                    detail=detail,
+                    source=source,
+                    current_on_hand=current_on_hand,
+                    requested_delta=requested_delta,
+                )
             return LegacyInventoryMirrorResult(status=status, detail=detail)
         try:
             InventoryV2Service(self._session_factory).record_movement(
@@ -666,11 +819,34 @@ class LegacyInventoryShadowBridge:
                 ),
             )
         except NegativeStockError:
+            detail = "Der Hub-Bestand änderte sich parallel; bitte den Shadow-Abgleich erneut prüfen."
+            self._record_issue(
+                variant_id=resolved.variant.id,
+                sku=clean_sku,
+                status="retry_required",
+                detail=detail,
+                source=source,
+                current_on_hand=current_on_hand,
+                requested_delta=requested_delta,
+            )
             return LegacyInventoryMirrorResult(
                 status="retry_required",
                 detail="Der Hub-Bestand änderte sich parallel; bitte den Shadow-Abgleich erneut prüfen.",
             )
         if applied_delta != requested_delta:
+            detail = (
+                f"Nur {abs(applied_delta)} von {abs(requested_delta)} Legacy-Abgang gespiegelt; "
+                "die Unterdeckung benötigt fachliche Prüfung."
+            )
+            self._record_issue(
+                variant_id=resolved.variant.id,
+                sku=clean_sku,
+                status="shortage",
+                detail=detail,
+                source=source,
+                current_on_hand=current_on_hand,
+                requested_delta=requested_delta,
+            )
             return LegacyInventoryMirrorResult(
                 status="shortage",
                 detail=(

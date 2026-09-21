@@ -1371,3 +1371,11 @@ mirrored. A consumption that would make the Hub ledger negative is capped at ava
 stock and logged as a shortage instead of inventing stock or blocking the completed
 legacy workflow. Invoice fulfillment outside START, returns/recount and
 `PrintDecisionEngine` remain the next unbridged paths.
+
+Shadow-Mirror-Abweichungen sind nicht mehr nur Desktop-Logeinträge: Für eine
+zuordenbare Hub-Variante erzeugen fehlende Baseline, Inaktivität, Unterdeckung oder
+parallele Ledger-Änderung einen deduplizierten `legacy_inventory`-Sync-Konflikt.
+`/app/inventory/cutover` zeigt diese Queue mit SKU, Produkt/Variante, Ursache und
+Zeitpunkt. Sie wird nur durch einen erfolgreichen absoluten Bestandsabgleich
+geschlossen; eine spätere relative Bewegung allein darf keine echte Differenz
+verdecken.

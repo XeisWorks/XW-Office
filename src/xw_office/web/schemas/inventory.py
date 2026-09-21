@@ -110,6 +110,18 @@ class InventoryCutoverReadinessOut(BaseModel):
     assessed_at: datetime.datetime
 
 
+class LegacyInventoryShadowConflictOut(BaseModel):
+    id: uuid.UUID
+    variant_id: uuid.UUID
+    product_id: uuid.UUID | None = None
+    sku: str
+    product_name: str
+    variant_name: str = ""
+    status: str
+    detail: str
+    detected_at: datetime.datetime
+
+
 class LegacyInventoryBaselineItemOut(BaseModel):
     sku: str
     legacy_on_hand: int | None = None

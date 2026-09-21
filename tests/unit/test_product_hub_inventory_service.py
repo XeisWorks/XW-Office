@@ -156,6 +156,28 @@ def test_legacy_shadow_bridge_mirrors_only_baselined_active_variants(
     assert bridge.mirror_absolute_stock(
         sku="XW-UNSEEDED", new_stock=2, source="desktop-test"
     ).status == "baseline_required"
+    baseline_issues = SyncRepository(session_factory).list_open_sync_conflicts(
+        channel="legacy_inventory"
+    )
+    assert len(baseline_issues) == 1
+    assert baseline_issues[0].internal_entity_id == _unseeded_variant.id
+    assert baseline_issues[0].external_value["status"] == "baseline_required"
+
+    shortage = bridge.mirror_stock_movement(
+        sku="XW-MIRROR", delta=-99, reason="sale", source="desktop-test"
+    )
+    assert shortage.status == "shortage"
+    issues = InventoryV2Service(session_factory).list_legacy_shadow_conflicts()
+    assert len(issues) == 2
+    mirror_issue = next(issue for issue in issues if issue.variant_id == variant.id)
+    assert mirror_issue.status == "shortage"
+
+    # Only an absolute update proves convergence and closes the matching queue item.
+    assert bridge.mirror_absolute_stock(
+        sku="XW-MIRROR", new_stock=2, source="desktop-test"
+    ).status == "mirrored"
+    remaining = InventoryV2Service(session_factory).list_legacy_shadow_conflicts()
+    assert [issue.variant_id for issue in remaining] == [_unseeded_variant.id]
 
 
 def test_record_movement_crossing_below_threshold_opens_low_stock_alert(
