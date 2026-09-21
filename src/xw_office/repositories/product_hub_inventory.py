@@ -13,7 +13,7 @@ import datetime
 import uuid
 from collections.abc import Generator
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
@@ -178,6 +178,16 @@ class InventoryRepository:
                 .limit(limit)
             )
             return list(session.scalars(stmt).all())
+
+    def count_movements(self) -> int:
+        """Return the number of recorded Inventory V2 ledger events."""
+        with self._scope() as session:
+            return int(session.scalar(select(func.count()).select_from(InventoryMovement)) or 0)
+
+    def count_stock_rows(self) -> int:
+        """Return materialized Inventory V2 stock positions across all locations."""
+        with self._scope() as session:
+            return int(session.scalar(select(func.count()).select_from(InventoryStock)) or 0)
 
     # -- alerts ---------------------------------------------------------------------
 

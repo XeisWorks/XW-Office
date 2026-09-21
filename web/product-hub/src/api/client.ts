@@ -15,6 +15,7 @@ import type {
   GeneratedContent,
   ImprovementCreateRequest,
   ImprovementUpdateRequest,
+  InventoryCutoverReadiness,
   Page,
   ParentProductListItem,
   ProductAsset,
@@ -187,6 +188,7 @@ export const api = {
 
   // -- Conflict Wizard ----------------------------------------------------------
   getConflictSummary: () => request<ConflictSummary>("/api/v1/conflicts/summary"),
+  getInventoryCutoverReadiness: () => request<InventoryCutoverReadiness>("/api/v1/inventory/cutover-readiness"),
   getWixOnlyReconciliation: (includeDeferred = false) => request<WixOnlyReconciliation>(`/api/v1/conflicts/reconciliation/wix-only${includeDeferred ? "?include_deferred=true" : ""}`),
   linkWixOnlyReconciliation: (productId: string, externalId: string, sku: string, variantExternalId?: string) =>
     request<{ external_id: string; operation: "linked" }>("/api/v1/conflicts/reconciliation/wix-only/link", {

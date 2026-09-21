@@ -62,6 +62,28 @@ def test_record_movement_applies_delta(
     assert result.alert_opened is None  # no threshold set yet, nothing to cross
 
 
+def test_cutover_readiness_exposes_real_evidence_and_remaining_gates(
+    session_factory: sessionmaker[Session], variant_id: uuid.UUID
+) -> None:
+    service = InventoryV2Service(session_factory, shadow_enabled=True)
+    service.record_movement(
+        variant_id=variant_id, delta=8, reason="import_baseline",
+        source="test", idempotency_key="cutover-readiness-1",
+    )
+
+    readiness = service.cutover_readiness()
+    checks = {check.code: check for check in readiness.checks}
+    assert readiness.master_enabled is False
+    assert readiness.shadow_enabled is True
+    assert readiness.eligible is False
+    assert checks["shadow_mode"].state == "ready"
+    assert checks["ledger_evidence"].state == "ready"
+    assert checks["sevdesk_drift"].state == "ready"
+    assert checks["legacy_mutation_paths"].state == "blocked"
+    assert checks["channel_projections"].state == "blocked"
+    assert checks["operational_signoff"].state == "manual"
+
+
 def test_record_movement_crossing_below_threshold_opens_low_stock_alert(
     service: InventoryV2Service, inventory_repo: InventoryRepository, variant_id: uuid.UUID
 ) -> None:

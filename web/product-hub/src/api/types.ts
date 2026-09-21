@@ -409,6 +409,21 @@ export interface WixOnlyReconciliation {
   ignored_items: number;
 }
 
+export interface InventoryCutoverCheck {
+  code: string;
+  label: string;
+  state: "ready" | "blocked" | "manual";
+  detail: string;
+}
+
+export interface InventoryCutoverReadiness {
+  master_enabled: boolean;
+  shadow_enabled: boolean;
+  eligible: boolean;
+  checks: InventoryCutoverCheck[];
+  assessed_at: string;
+}
+
 export interface ConflictMappingComparison {
   hub_name: string;
   hub_sku: string;

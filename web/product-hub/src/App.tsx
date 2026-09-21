@@ -8,6 +8,7 @@ import ProductDetailPage from "./pages/ProductDetailPage";
 import ConflictListPage from "./pages/ConflictListPage";
 import ConflictWizardPage from "./pages/ConflictWizardPage";
 import WixReconciliationPage from "./pages/WixReconciliationPage";
+import InventoryCutoverPage from "./pages/InventoryCutoverPage";
 
 export default function App() {
   const [hasToken, setHasToken] = useState<boolean>(() => Boolean(getToken()));
@@ -35,6 +36,7 @@ export default function App() {
           </NavLink>
           <NavLink to="/products">Produkte</NavLink>
           <NavLink to="/conflicts">Konflikte</NavLink>
+          <NavLink to="/inventory/cutover">Lager-Cutover</NavLink>
         </nav>
         <button className="link-button" onClick={handleLogout} type="button">
           Abmelden
@@ -52,6 +54,7 @@ export default function App() {
           <Route path="/conflicts/reconciliation/wix-only" element={<WixReconciliationPage onUnauthorized={handleUnauthorized} />} />
           <Route path="/conflicts/wizard" element={<ConflictWizardPage onUnauthorized={handleUnauthorized} />} />
           <Route path="/conflicts/:id" element={<ConflictWizardPage onUnauthorized={handleUnauthorized} />} />
+          <Route path="/inventory/cutover" element={<InventoryCutoverPage onUnauthorized={handleUnauthorized} />} />
           <Route path="*" element={<p className="hint">Seite nicht gefunden.</p>} />
         </Routes>
       </main>

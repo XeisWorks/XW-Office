@@ -75,15 +75,49 @@ class MovementResult:
         self.alert_opened = alert_opened
 
 
+class InventoryCutoverCheck:
+    """One transparent PR15 gate; no gate is inferred from a feature flag alone."""
+
+    def __init__(self, *, code: str, label: str, state: str, detail: str) -> None:
+        self.code = code
+        self.label = label
+        self.state = state
+        self.detail = detail
+
+
+class InventoryCutoverReadiness:
+    def __init__(
+        self,
+        *,
+        master_enabled: bool,
+        shadow_enabled: bool,
+        eligible: bool,
+        checks: list[InventoryCutoverCheck],
+        assessed_at: datetime.datetime,
+    ) -> None:
+        self.master_enabled = master_enabled
+        self.shadow_enabled = shadow_enabled
+        self.eligible = eligible
+        self.checks = checks
+        self.assessed_at = assessed_at
+
+
 class InventoryV2Service:
     def __init__(
-        self, session_factory: sessionmaker[Session], *, public_base_url: str = ""
+        self,
+        session_factory: sessionmaker[Session],
+        *,
+        public_base_url: str = "",
+        shadow_enabled: bool = False,
+        master_enabled: bool = False,
     ) -> None:
         self._session_factory = session_factory
         self._inventory = InventoryRepository(session_factory)
         self._products = ProductHubRepository(session_factory)
         self._sync = SyncRepository(session_factory)
         self._public_base_url = public_base_url.rstrip("/")
+        self._shadow_enabled = shadow_enabled
+        self._master_enabled = master_enabled
 
     # -- ledger -----------------------------------------------------------------------
 
@@ -242,4 +276,94 @@ class InventoryV2Service:
             open_reprint_alerts=low_stock + out_of_stock,
             sync_errors=sync_errors,
             updated_at=datetime.datetime.now(datetime.timezone.utc),
+        )
+
+    # -- PR15 cutover readiness -------------------------------------------------------
+
+    def cutover_readiness(self) -> InventoryCutoverReadiness:
+        """Report the evidence required before Product Hub may become stock master.
+
+        This deliberately does not enable the master flag and does not turn a lack of
+        observed drift into approval.  Several PR15 prerequisites are operational
+        facts (backups, a representative shadow interval and a rollback rehearsal),
+        so the report labels them as manual gates instead of pretending that code can
+        certify them.
+        """
+        movement_count = self._inventory.count_movements()
+        stock_positions = self._inventory.count_stock_rows()
+        open_inventory_drifts = [
+            conflict
+            for conflict in self._sync.list_open_sync_conflicts(channel="sevdesk")
+            if conflict.entity_type == "inventory_stock" and conflict.field_name == "on_hand"
+        ]
+        all_open_sync_conflicts = self._sync.list_open_sync_conflicts()
+        checks = [
+            InventoryCutoverCheck(
+                code="shadow_mode",
+                label="Shadow Mode ist aktiv",
+                state="ready" if self._shadow_enabled else "blocked",
+                detail=(
+                    "Der Ledger darf im Shadow Mode Daten sammeln."
+                    if self._shadow_enabled
+                    else "XW_PRODUCT_HUB_INVENTORY_SHADOW_ENABLED ist nicht aktiviert."
+                ),
+            ),
+            InventoryCutoverCheck(
+                code="ledger_evidence",
+                label="Inventory-V2-Ledger enthält reale Bewegungen",
+                state="ready" if movement_count > 0 and stock_positions > 0 else "blocked",
+                detail=f"{movement_count} Ledger-Bewegungen, {stock_positions} Bestandspositionen erfasst.",
+            ),
+            InventoryCutoverCheck(
+                code="sevdesk_drift",
+                label="sevdesk-/Hub-Drift ist bereinigt",
+                state="ready" if movement_count > 0 and not open_inventory_drifts else "blocked",
+                detail=(
+                    "Keine offene Inventory-Drift in der Sync-Queue."
+                    if not open_inventory_drifts
+                    else f"{len(open_inventory_drifts)} offene Inventory-Drift-Konflikte."
+                ),
+            ),
+            InventoryCutoverCheck(
+                code="legacy_mutation_paths",
+                label="Alle Bestandsänderungen laufen durch Inventory V2",
+                state="blocked",
+                detail=(
+                    "Noch offen: START/REPRINTS, Rechnungs-Fulfillment, manuelle Korrektur, "
+                    "Retouren/Recount und PrintDecisionEngine verwenden weiterhin Legacy-Pfade."
+                ),
+            ),
+            InventoryCutoverCheck(
+                code="channel_projections",
+                label="Wix- und sevdesk-Bestandsprojektionen sind getestet",
+                state="blocked",
+                detail="Die PR15-Projektionsadapter sind noch nicht implementiert.",
+            ),
+            InventoryCutoverCheck(
+                code="sync_queue",
+                label="Keine ungeklärten Sync-Fehler",
+                state="ready" if not all_open_sync_conflicts else "blocked",
+                detail=(
+                    "Die Sync-Queue ist leer."
+                    if not all_open_sync_conflicts
+                    else f"{len(all_open_sync_conflicts)} offene Sync-Konflikte erfordern Prüfung."
+                ),
+            ),
+            InventoryCutoverCheck(
+                code="operational_signoff",
+                label="Backups, repräsentative Shadow-Phase und Rollback sind bestätigt",
+                state="manual",
+                detail=(
+                    "Muss außerhalb der Anwendung durch den Betriebsverantwortlichen "
+                    "bestätigt und dokumentiert werden."
+                ),
+            ),
+        ]
+        eligible = all(check.state == "ready" for check in checks)
+        return InventoryCutoverReadiness(
+            master_enabled=self._master_enabled,
+            shadow_enabled=self._shadow_enabled,
+            eligible=eligible,
+            checks=checks,
+            assessed_at=datetime.datetime.now(datetime.timezone.utc),
         )

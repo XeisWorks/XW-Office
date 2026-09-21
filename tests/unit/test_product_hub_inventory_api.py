@@ -61,6 +61,16 @@ def test_summary_returns_zero_counts_when_empty(db_path: str) -> None:
     assert body["out_of_stock"] == 0
 
 
+def test_cutover_readiness_is_read_only_and_explicitly_blocked_before_pr15(db_path: str) -> None:
+    client = _client(db_path)
+    response = client.get("/api/v1/inventory/cutover-readiness", headers=_auth_headers())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["master_enabled"] is False
+    assert body["eligible"] is False
+    assert any(check["code"] == "legacy_mutation_paths" and check["state"] == "blocked" for check in body["checks"])
+
+
 def test_record_movement_requires_edit_enabled(db_path: str) -> None:
     variant_id = _seed_variant(db_path)
     client = _client(db_path, edit_enabled=False)

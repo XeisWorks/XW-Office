@@ -103,6 +103,10 @@ class ContentWebSettings:
     conflict_wizard_enabled: bool = False
     conflict_scan_enabled: bool = False
     conflict_channel_apply_enabled: bool = False
+    #: PR15 remains opt-in. The readiness screen may report these flags, but cannot
+    #: enable the master through HTTP.
+    inventory_shadow_enabled: bool = False
+    inventory_master_enabled: bool = False
     #: Built PR08 React/PWA bundle (`npm run build` output of web/product-hub/).
     #: Served same-origin at /app/ when present; absent in plain-API deployments
     #: and in most local dev setups, where the mount below is simply skipped.
@@ -126,6 +130,12 @@ class ContentWebSettings:
             conflict_scan_enabled=_env_flag("XW_PRODUCT_HUB_CONFLICT_SCAN_ENABLED", default=False),
             conflict_channel_apply_enabled=_env_flag(
                 "XW_PRODUCT_HUB_CONFLICT_CHANNEL_APPLY_ENABLED", default=False
+            ),
+            inventory_shadow_enabled=_env_flag(
+                "XW_PRODUCT_HUB_INVENTORY_SHADOW_ENABLED", default=False
+            ),
+            inventory_master_enabled=_env_flag(
+                "XW_PRODUCT_HUB_INVENTORY_MASTER_ENABLED", default=False
             ),
             product_hub_web_dist=Path(
                 os.getenv("XW_PRODUCT_HUB_WEB_DIST", "").strip()
@@ -436,7 +446,12 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
 
     def get_inventory_service() -> InventoryV2Service:
         assert _session_factory is not None  # guarded by require_product_hub_enabled below
-        return InventoryV2Service(_session_factory, public_base_url=resolved.public_url)
+        return InventoryV2Service(
+            _session_factory,
+            public_base_url=resolved.public_url,
+            shadow_enabled=resolved.inventory_shadow_enabled,
+            master_enabled=resolved.inventory_master_enabled,
+        )
 
     app.include_router(
         build_inventory_router(

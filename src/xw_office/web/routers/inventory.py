@@ -16,6 +16,8 @@ from xw_office.repositories.product_hub_inventory import InventoryRepository, Ne
 from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.web.schemas.inventory import (
     InventoryAlertOut,
+    InventoryCutoverCheckOut,
+    InventoryCutoverReadinessOut,
     InventorySummaryOut,
     MovementCreateRequest,
     MovementOut,
@@ -49,6 +51,24 @@ def build_inventory_router(
             open_reprint_alerts=summary.open_reprint_alerts,
             sync_errors=summary.sync_errors,
             updated_at=summary.updated_at,
+        )
+
+    @router.get("/cutover-readiness", response_model=InventoryCutoverReadinessOut)
+    def get_cutover_readiness(
+        service: InventoryV2Service = Depends(get_service),
+    ) -> InventoryCutoverReadinessOut:
+        readiness = service.cutover_readiness()
+        return InventoryCutoverReadinessOut(
+            master_enabled=readiness.master_enabled,
+            shadow_enabled=readiness.shadow_enabled,
+            eligible=readiness.eligible,
+            checks=[
+                InventoryCutoverCheckOut(
+                    code=check.code, label=check.label, state=check.state, detail=check.detail
+                )
+                for check in readiness.checks
+            ],
+            assessed_at=readiness.assessed_at,
         )
 
     @router.get("/alerts", response_model=list[InventoryAlertOut])

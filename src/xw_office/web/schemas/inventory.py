@@ -93,3 +93,18 @@ class InventorySummaryOut(BaseModel):
     open_reprint_alerts: int
     sync_errors: int
     updated_at: datetime.datetime
+
+
+class InventoryCutoverCheckOut(BaseModel):
+    code: str
+    label: str
+    state: str
+    detail: str
+
+
+class InventoryCutoverReadinessOut(BaseModel):
+    master_enabled: bool
+    shadow_enabled: bool
+    eligible: bool
+    checks: list[InventoryCutoverCheckOut]
+    assessed_at: datetime.datetime

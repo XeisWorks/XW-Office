@@ -1338,3 +1338,13 @@ reconcile for a real period and actually look at the drift it finds; get backups
 confirmed and a rollback rehearsal done by a human who owns that call. None of that
 is a "continue autonomously" task — it's an operational readiness process this
 session correctly stopped short of.
+
+## PR15 readiness surface (implemented; no cutover)
+
+The Product Hub now exposes `GET /api/v1/inventory/cutover-readiness` and the
+WebUI page `/app/inventory/cutover`. It reports live ledger/stock evidence, open
+sevdesk inventory drift and the full sync queue, while explicitly keeping the
+remaining legacy mutation paths, missing channel projections and the human
+operational sign-off as blocking gates. `XW_PRODUCT_HUB_INVENTORY_SHADOW_ENABLED`
+and `XW_PRODUCT_HUB_INVENTORY_MASTER_ENABLED` are read-only deploy flags in this
+surface; the UI cannot enable the master or perform any stock/external write.
