@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from xw_office.core.config import AppConfig, PrintingSection
 from xw_office.services.inventory.service import (
     InventoryService,
@@ -134,6 +136,63 @@ def test_direct_wix_fulfillment_sale_is_mirrored_without_touching_legacy_stock()
         "external_reference": "wix-fulfillment:fulfillment-1;invoice:invoice-1;order:order-1",
         "idempotency_key": "wix-fulfillment:fulfillment-1:XW-6-003",
     }]
+
+
+def test_confirmed_return_and_recount_update_legacy_stock_with_typed_shadow_reasons(
+    tmp_path: Path,
+) -> None:
+    repo = _RepoStub(
+        {
+            "inventory.products": _product_payload(tmp_path / "score.pdf"),
+            "inventory.stock_levels": '{"XW-6-003": 4}',
+        }
+    )
+    mirror = _ShadowMirrorStub()
+    service = InventoryService(AppConfig(), repo, shadow_mirror=mirror)
+
+    returned = service.apply_stock_correction(
+        sku="XW-6-003", reason="return", quantity=2, reference="RMA-42"
+    )
+    recounted = service.apply_stock_correction(
+        sku="XW-6-003", reason="recount", target_stock=3, reference="INV-2026-09"
+    )
+
+    assert (returned.previous_stock, returned.new_stock, returned.delta) == (4, 6, 2)
+    assert (recounted.previous_stock, recounted.new_stock, recounted.delta) == (6, 3, -3)
+    assert json.loads(repo.values["inventory.stock_levels"])["XW-6-003"] == 3
+    assert service.list_products()[0].on_hand == 3
+    assert mirror.calls == [
+        {
+            "sku": "XW-6-003", "delta": 2, "reason": "return",
+            "source": "legacy_inventory.manual_stock_correction",
+            "external_reference": "inventory.stock_levels:return:RMA-42",
+        },
+        {
+            "sku": "XW-6-003", "delta": -3, "reason": "recount",
+            "source": "legacy_inventory.manual_stock_correction",
+            "external_reference": "inventory.stock_levels:recount:INV-2026-09",
+        },
+    ]
+
+
+def test_stock_correction_requires_a_reference_and_safe_input(tmp_path: Path) -> None:
+    repo = _RepoStub(
+        {
+            "inventory.products": _product_payload(tmp_path / "score.pdf"),
+            "inventory.stock_levels": '{"XW-6-003": 4}',
+        }
+    )
+    service = InventoryService(AppConfig(), repo)
+
+    with pytest.raises(RuntimeError, match="Referenz"):
+        service.apply_stock_correction(
+            sku="XW-6-003", reason="return", quantity=1, reference=""
+        )
+    with pytest.raises(RuntimeError, match="größer"):
+        service.apply_stock_correction(
+            sku="XW-6-003", reason="return", quantity=0, reference="RMA-0"
+        )
+    assert json.loads(repo.values["inventory.stock_levels"])["XW-6-003"] == 4
 
 
 def test_execute_full_mode_updates_stock_with_buffer_and_consumption(tmp_path: Path) -> None:

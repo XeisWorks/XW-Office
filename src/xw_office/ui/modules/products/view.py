@@ -377,6 +377,7 @@ class ProductsView(QWidget):
         self._brand_worker: BackgroundWorker | None = None
         self._product_create_worker: BackgroundWorker | None = None
         self._product_print_worker: BackgroundWorker | None = None
+        self._stock_correction_worker: BackgroundWorker | None = None
         self._direct_product_print_handles: list[JobHandle] = []
         self._local_background_jobs: BackgroundJobManager | None = None
         self._print_confirmed_skus: set[str] = set()
@@ -736,6 +737,13 @@ class ProductsView(QWidget):
         self._sync_produce_btn.clicked.connect(self._produce_selected_product)
         self._sync_produce_btn.setEnabled(False)
         bar.addWidget(self._sync_produce_btn)
+        self._sync_correction_btn = QPushButton("Retoure / Inventur")
+        self._sync_correction_btn.setToolTip(
+            "Bestätigte Retoure oder Inventurkorrektur für genau eine SKU buchen."
+        )
+        self._sync_correction_btn.clicked.connect(self._correct_selected_stock)
+        self._sync_correction_btn.setEnabled(False)
+        bar.addWidget(self._sync_correction_btn)
         self._sync_apply_btn = QPushButton("Wix -> Lokal uebernehmen")
         self._sync_apply_btn.clicked.connect(self._apply_wix_to_local)
         self._sync_apply_btn.setEnabled(False)
@@ -865,6 +873,7 @@ class ProductsView(QWidget):
         self._sync_brand_btn.setEnabled(bool(self._sync_rows))
         self._sync_print_btn.setEnabled(bool(self._sync_rows))
         self._sync_produce_btn.setEnabled(bool(self._sync_rows))
+        self._sync_correction_btn.setEnabled(bool(self._sync_rows))
         self._sync_search.refresh_suggestions()
         self._apply_sync_filters()
         conflicts = sum(1 for row in self._sync_rows if row.status != "sauber verknuepft")
@@ -883,6 +892,7 @@ class ProductsView(QWidget):
         self._sync_brand_btn.setEnabled(False)
         self._sync_print_btn.setEnabled(False)
         self._sync_produce_btn.setEnabled(False)
+        self._sync_correction_btn.setEnabled(False)
         self._sync_apply_btn.setEnabled(False)
         self._sync_status_lbl.setText(f"Fehler: {exc}")
         logger.exception("Sync source load failed: %s", exc)
@@ -1093,6 +1103,128 @@ class ProductsView(QWidget):
 
     def _selected_product_skus(self) -> list[str]:
         return self._selected_skus_from_data_table(self._sync_table)
+
+    def _correct_selected_stock(self) -> None:
+        if self._stock_correction_worker is not None and self._stock_correction_worker.isRunning():
+            return
+        skus = self._selected_product_skus()
+        if len(skus) != 1:
+            QMessageBox.information(
+                self,
+                "Bestandskorrektur",
+                "Bitte genau eine SKU auswählen.",
+            )
+            return
+        row = self._local_product_by_sku(skus[0])
+        if row is None:
+            QMessageBox.warning(
+                self,
+                "Bestandskorrektur",
+                "Die gewählte SKU benötigt einen lokalen Produktdatensatz.",
+            )
+            return
+        choice, accepted = QInputDialog.getItem(
+            self,
+            "Bestandskorrektur",
+            "Grund:",
+            ["Retoure (Bestand erhöhen)", "Inventurkorrektur (gezählten Bestand setzen)"],
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        reason = "return" if choice.startswith("Retoure") else "recount"
+        reference, accepted = QInputDialog.getText(
+            self,
+            "Bestandskorrektur",
+            "Referenz / Notiz (Pflicht):",
+        )
+        reference = reference.strip()
+        if not accepted or not reference:
+            if accepted:
+                QMessageBox.warning(self, "Bestandskorrektur", "Referenz oder Notiz darf nicht leer sein.")
+            return
+        if reason == "return":
+            quantity, accepted = QInputDialog.getInt(
+                self,
+                "Retoure buchen",
+                "Zurückgenommene Menge:",
+                1,
+                1,
+                999999,
+                1,
+            )
+            if not accepted:
+                return
+            question = (
+                f"Retoure für {row.sku}: +{quantity}\n"
+                f"Aktueller lokaler Bestand: {row.on_hand}\n\n"
+                "Legacy-Bestand schreiben und Shadow-Bewegung 'return' erzeugen?"
+            )
+            correction_kwargs: dict[str, object] = {"quantity": quantity}
+        else:
+            target_stock, accepted = QInputDialog.getInt(
+                self,
+                "Inventurkorrektur buchen",
+                "Physisch gezählter Bestand:",
+                max(0, int(row.on_hand)),
+                0,
+                999999,
+                1,
+            )
+            if not accepted:
+                return
+            question = (
+                f"Inventur für {row.sku}: Sollbestand {target_stock}\n"
+                f"Aktueller lokaler Bestand: {row.on_hand}\n\n"
+                "Legacy-Bestand schreiben und Shadow-Bewegung 'recount' erzeugen?"
+            )
+            correction_kwargs = {"target_stock": target_stock}
+        if QMessageBox.question(self, "Bestandskorrektur bestätigen", question) != QMessageBox.StandardButton.Yes:
+            return
+
+        self._sync_correction_btn.setEnabled(False)
+        self._sync_status_lbl.setText(f"Bestandskorrektur wird gebucht: {row.sku} ...")
+
+        def job() -> object:
+            inventory: InventoryService = self._container.resolve(InventoryService)
+            return inventory.apply_stock_correction(
+                sku=row.sku,
+                reason=reason,
+                reference=reference,
+                **correction_kwargs,
+            )
+
+        self._stock_correction_worker = BackgroundWorker(job)
+        self._stock_correction_worker.signals.result.connect(self._on_stock_correction_done)
+        self._stock_correction_worker.signals.error.connect(self._on_stock_correction_error)
+        self._stock_correction_worker.signals.finished.connect(self._on_stock_correction_finished)
+        self._stock_correction_worker.start()
+
+    def _on_stock_correction_done(self, payload: object) -> None:
+        sku = str(getattr(payload, "sku", "") or "Produkt")
+        reason = str(getattr(payload, "reason", "") or "Korrektur")
+        previous = getattr(payload, "previous_stock", "?")
+        new_stock = getattr(payload, "new_stock", "?")
+        delta = getattr(payload, "delta", "?")
+        reference = str(getattr(payload, "reference", "") or "")
+        label = "Retoure" if reason == "return" else "Inventurkorrektur"
+        self._sync_status_lbl.setText(f"{label} gebucht: {sku} {previous} → {new_stock}")
+        QMessageBox.information(
+            self,
+            "Bestandskorrektur erfolgreich",
+            f"{label}: {sku}\nBestand: {previous} → {new_stock} ({delta:+})\nReferenz: {reference}\n\n"
+            "Die Legacy-Daten wurden aktualisiert; der Shadow-Abgleich läuft im Hintergrund.",
+        )
+        self._load_sync_sources()
+
+    def _on_stock_correction_error(self, exc: BaseException) -> None:
+        self._sync_status_lbl.setText(f"Bestandskorrektur fehlgeschlagen: {exc}")
+        QMessageBox.warning(self, "Bestandskorrektur fehlgeschlagen", str(exc))
+
+    def _on_stock_correction_finished(self) -> None:
+        self._stock_correction_worker = None
+        self._sync_correction_btn.setEnabled(bool(self._sync_rows))
 
     def _print_selected_product(self) -> None:
         skus = self._selected_product_skus()

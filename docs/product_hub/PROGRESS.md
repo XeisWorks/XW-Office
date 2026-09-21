@@ -1385,9 +1385,12 @@ All current `PrintDecisionEngine` call sites now write the resulting sevDesk sto
 back through `InventoryService.set_product_stock`, including the invoice batch-print
 path that had previously omitted that local/shadow update. This preserves the
 existing legacy behavior and lets the activated Shadow bridge compare the confirmed
-absolute result with the Hub ledger. No executable desktop action for a returned
-item or a physical recount exists in the current codebase; these require a defined
-business workflow before they can safely create `return` or `recount` movements.
+absolute result with the Hub ledger. The Products sync view now provides the defined
+desktop workflow for exactly one selected local SKU: an operator must choose
+**Retoure** (additive) or **Inventurkorrektur** (set the counted target), supply a
+non-empty reference and confirm the before/after amount. The confirmed legacy write
+is then mirrored as `return` or `recount`; a mirror problem never rolls back the
+completed legacy correction and is visible in the Shadow queue.
 
 Shadow-Mirror-Abweichungen sind nicht mehr nur Desktop-Logeinträge: Für eine
 zuordenbare Hub-Variante erzeugen fehlende Baseline, Inaktivität, Unterdeckung oder

@@ -154,6 +154,18 @@ class LegacyPrintImportReport:
     unknown_profiles: list[str]
 
 
+@dataclass(frozen=True)
+class StockCorrectionResult:
+    """Confirmed manual stock correction, retained for UI feedback and audit context."""
+
+    sku: str
+    reason: str
+    previous_stock: int
+    new_stock: int
+    delta: int
+    reference: str
+
+
 class InventoryService:
     """Stock levels and print buffer rules for daily START workflow."""
 
@@ -727,6 +739,100 @@ class InventoryService:
                 f"wix-fulfillment:{key_suffix};invoice:{clean_invoice_id};order:{clean_order_reference}"
             ),
             idempotency_key=f"wix-fulfillment:{key_suffix}:{clean_sku}",
+        )
+
+    def apply_stock_correction(
+        self,
+        *,
+        sku: str,
+        reason: str,
+        quantity: int | None = None,
+        target_stock: int | None = None,
+        reference: str,
+    ) -> StockCorrectionResult:
+        """Apply one confirmed return or physical recount to legacy stock and Shadow.
+
+        The legacy JSON update remains the operational write during Shadow mode.  A
+        confirmed return is additive; a recount sets the physically counted target.
+        Both records keep a mandatory human reference and mirror the precise delta
+        with its business reason only after the legacy write succeeds.
+        """
+        wanted = str(sku or "").strip().upper()
+        clean_reason = str(reason or "").strip().lower()
+        clean_reference = str(reference or "").strip()
+        if not wanted:
+            raise RuntimeError("SKU fehlt bei der Bestandskorrektur")
+        if clean_reason not in {"return", "recount"}:
+            raise RuntimeError("Korrekturgrund muss Retoure oder Inventur sein")
+        if not clean_reference:
+            raise RuntimeError("Referenz oder Notiz ist für die Bestandskorrektur erforderlich")
+        if len(clean_reference) > 160:
+            raise RuntimeError("Referenz oder Notiz darf höchstens 160 Zeichen haben")
+        if self._settings_repo is None:
+            raise RuntimeError("Lokaler Einstellungs-Speicher ist nicht verfügbar")
+        if not any(row.sku.strip().upper() == wanted for row in self.list_products()):
+            raise RuntimeError(f"Lokaler Produktdatensatz nicht gefunden: {wanted}")
+
+        result: dict[str, int] = {}
+
+        def mutate_stock(raw: str | None) -> str:
+            try:
+                payload = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            try:
+                previous = max(0, int(payload.get(wanted, 0) or 0))
+            except (TypeError, ValueError):
+                previous = 0
+            if clean_reason == "return":
+                try:
+                    correction_qty = int(quantity if quantity is not None else 0)
+                except (TypeError, ValueError):
+                    correction_qty = 0
+                if correction_qty <= 0:
+                    raise RuntimeError("Retourmenge muss größer als 0 sein")
+                new_stock = previous + correction_qty
+            else:
+                if target_stock is None:
+                    raise RuntimeError("Gezählter Sollbestand fehlt")
+                try:
+                    new_stock = int(target_stock)
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError("Gezählter Sollbestand ist ungültig") from exc
+                if new_stock < 0:
+                    raise RuntimeError("Gezählter Sollbestand darf nicht negativ sein")
+            payload[wanted] = new_stock
+            result["previous"] = previous
+            result["new"] = new_stock
+            return json.dumps(payload, ensure_ascii=False)
+
+        atomic_mutator = getattr(self._settings_repo, "mutate_value_json", None)
+        if callable(atomic_mutator):
+            atomic_mutator(_STOCK_KEY, mutate_stock)
+        else:
+            current_raw = self._settings_repo.get_value_json(_STOCK_KEY)
+            self._settings_repo.set_value_json(_STOCK_KEY, mutate_stock(current_raw))
+        previous = result["previous"]
+        new_stock = result["new"]
+        if self.update_product_fields({wanted: {"on_hand": new_stock}}) <= 0:
+            raise RuntimeError(f"Lokaler Produktdatensatz nicht gefunden: {wanted}")
+        delta = new_stock - previous
+        self._mirror_legacy_stock_movement(
+            sku=wanted,
+            delta=delta,
+            reason=clean_reason,
+            source="legacy_inventory.manual_stock_correction",
+            external_reference=f"{_STOCK_KEY}:{clean_reason}:{clean_reference}",
+        )
+        return StockCorrectionResult(
+            sku=wanted,
+            reason=clean_reason,
+            previous_stock=previous,
+            new_stock=new_stock,
+            delta=delta,
+            reference=clean_reference,
         )
 
     def _mirror_legacy_stock_movement(

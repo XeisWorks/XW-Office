@@ -3,6 +3,7 @@
 from xw_office.services.inventory.service import (
 	InventoryService,
 	ProductRow,
+	StockCorrectionResult,
 	StartDecision,
 	StartExecutionReport,
 	StartMode,
@@ -12,6 +13,7 @@ from xw_office.services.inventory.service import (
 __all__ = [
 	"InventoryService",
 	"ProductRow",
+	"StockCorrectionResult",
 	"StartDecision",
 	"StartExecutionReport",
 	"StartMode",
