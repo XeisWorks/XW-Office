@@ -417,7 +417,8 @@ class InventoryV2Service:
                 detail=(
                     "set_product_stock, START und REPRINTS werden im aktivierten Shadow Mode gespiegelt. "
                     "Direktes Wix-Rechnungs-Fulfillment wird als sale gespiegelt. "
-                    "Noch offen: Retouren/Recount und PrintDecisionEngine."
+                    "Alle aktuellen PrintDecisionEngine-Aufrufe schreiben danach den Legacy-Bestand. "
+                    "Retouren/Recount haben noch keinen ausführbaren Desktop-Buchungspfad."
                 ),
             ),
             InventoryCutoverCheck(

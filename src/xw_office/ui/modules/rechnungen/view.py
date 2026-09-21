@@ -4199,7 +4199,11 @@ class RechnungenView(QWidget):
                 printed.append(f"{block.sku} ({qty}x)")
                 try:
                     engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
-                    engine.record_print_and_update_sevdesk(block, qty, invoice_ref=invoice_ref)
+                    new_stock = engine.record_print_and_update_sevdesk(
+                        block, qty, invoice_ref=invoice_ref
+                    )
+                    if new_stock > 0:
+                        self._container.resolve(InventoryService).set_product_stock(block.sku, new_stock)
                 except Exception as exc:
                     logger.warning("Stock update after batch product print failed: %s", exc)
                     warnings.append(f"{block.sku}: {exc}")

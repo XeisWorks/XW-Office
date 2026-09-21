@@ -1381,6 +1381,14 @@ fulfillment remains successful even when the mirror cannot be made; a mapped
 deviation enters the Shadow queue. Returns/recount and `PrintDecisionEngine` remain
 unbridged.
 
+All current `PrintDecisionEngine` call sites now write the resulting sevDesk stock
+back through `InventoryService.set_product_stock`, including the invoice batch-print
+path that had previously omitted that local/shadow update. This preserves the
+existing legacy behavior and lets the activated Shadow bridge compare the confirmed
+absolute result with the Hub ledger. No executable desktop action for a returned
+item or a physical recount exists in the current codebase; these require a defined
+business workflow before they can safely create `return` or `recount` movements.
+
 Shadow-Mirror-Abweichungen sind nicht mehr nur Desktop-Logeinträge: Für eine
 zuordenbare Hub-Variante erzeugen fehlende Baseline, Inaktivität, Unterdeckung oder
 parallele Ledger-Änderung einen deduplizierten `legacy_inventory`-Sync-Konflikt.
