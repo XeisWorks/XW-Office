@@ -240,10 +240,14 @@ def _extract_pdf_pages(
                     source_page.rect.width,
                     source_page.rect.height,
                 )
-                if target_size is None or _same_page_size(source_page.rect, target_size):
+                source_rotation_correction = (360 - source_rotation) % 360
+                if (
+                    source_rotation_correction == 0
+                    and (target_size is None or _same_page_size(source_page.rect, target_size))
+                ):
                     target.insert_pdf(source, from_page=page_index, to_page=page_index)
                 else:
-                    width, height = target_size
+                    width, height = target_size or (source_page.rect.width, source_page.rect.height)
                     target_page = target.new_page(width=width, height=height)
                     scale = min(width / source_page.rect.width, height / source_page.rect.height)
                     scale = min(scale, max(float(max_upscale_percent), 100.0) / 100.0)
@@ -256,6 +260,7 @@ def _extract_pdf_pages(
                         source,
                         page_index,
                         keep_proportion=True,
+                        rotate=source_rotation_correction,
                     )
                 if rotate_degrees:
                     page = target[target.page_count - 1]
