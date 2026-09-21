@@ -31,6 +31,10 @@ class _ShadowMirrorStub:
         self.calls.append(kwargs)
         return type("Result", (), {"status": "mirrored", "detail": "ok"})()
 
+    def mirror_stock_movement(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        return type("Result", (), {"status": "mirrored", "detail": "ok"})()
+
 
 def _printing_config() -> PrintingSection:
     return PrintingSection(
@@ -119,7 +123,8 @@ def test_execute_full_mode_updates_stock_with_buffer_and_consumption(tmp_path: P
         }
     )
     cfg = AppConfig(printing=_printing_config())
-    service = InventoryService(cfg, repo)
+    mirror = _ShadowMirrorStub()
+    service = InventoryService(cfg, repo, shadow_mirror=mirror)
 
     preflight = service.build_start_preflight(open_invoice_count=4)
     with patch("xw_office.services.inventory.service.print_pdf_by_plan") as mock_print:
@@ -135,6 +140,36 @@ def test_execute_full_mode_updates_stock_with_buffer_and_consumption(tmp_path: P
     assert stock_after["XW-4-001"] == 0
     # XW-6-003: on_hand=1, required=2, printed=(1+3)=4 -> 3
     assert stock_after["XW-6-003"] == 3
+
+
+def test_start_workflow_mirrors_print_and_sale_as_separate_ledger_reasons(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "score.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    repo = _RepoStub(
+        {
+            "daily_business.pending_requirements": json.dumps({"XW-6-003": 2}),
+            "inventory.stock_levels": json.dumps({"XW-6-003": 1}),
+            "inventory.products": _product_payload(pdf_path),
+        }
+    )
+    mirror = _ShadowMirrorStub()
+    service = InventoryService(AppConfig(printing=_printing_config()), repo, shadow_mirror=mirror)
+    preflight = service.build_start_preflight(open_invoice_count=1)
+    with patch("xw_office.services.inventory.service.print_pdf_by_plan"):
+        service.execute_start_workflow(preflight, StartMode.INVOICES_AND_PRINT)
+
+    assert mirror.calls == [
+        {
+            "sku": "XW-6-003", "delta": 4, "reason": "print_run",
+            "source": "legacy_inventory.execute_start_workflow",
+            "external_reference": "inventory.stock_levels",
+        },
+        {
+            "sku": "XW-6-003", "delta": -2, "reason": "sale",
+            "source": "legacy_inventory.execute_start_workflow",
+            "external_reference": "inventory.stock_levels",
+        },
+    ]
 
 
 def test_print_only_then_consumption_does_not_print_twice(tmp_path: Path) -> None:
@@ -222,7 +257,8 @@ def test_execute_reprint_workflow_only_adds_printed_stock(tmp_path: Path) -> Non
         }
     )
     cfg = AppConfig(printing=_printing_config())
-    service = InventoryService(cfg, repo)
+    mirror = _ShadowMirrorStub()
+    service = InventoryService(cfg, repo, shadow_mirror=mirror)
 
     decisions = [
         ReprintDecision(
@@ -246,6 +282,11 @@ def test_execute_reprint_workflow_only_adds_printed_stock(tmp_path: Path) -> Non
     stock_after = json.loads(repo.values["inventory.stock_levels"])
     # on_hand=2, printed=3 => 5, no invoice consumption
     assert stock_after["XW-6-003"] == 5
+    assert mirror.calls == [{
+        "sku": "XW-6-003", "delta": 3, "reason": "print_run",
+        "source": "legacy_inventory.execute_reprint_workflow",
+        "external_reference": "inventory.stock_levels",
+    }]
 
 
 def test_execute_start_workflow_skips_stock_increment_when_print_config_missing() -> None:

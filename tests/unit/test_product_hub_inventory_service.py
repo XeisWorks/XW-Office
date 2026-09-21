@@ -143,6 +143,16 @@ def test_legacy_shadow_bridge_mirrors_only_baselined_active_variants(
     assert bridge.mirror_absolute_stock(
         sku="XW-MIRROR", new_stock=6, source="desktop-test"
     ).status == "already_in_sync"
+    printed = bridge.mirror_stock_movement(
+        sku="XW-MIRROR", delta=3, reason="print_run", source="desktop-test"
+    )
+    sold = bridge.mirror_stock_movement(
+        sku="XW-MIRROR", delta=-2, reason="sale", source="desktop-test"
+    )
+    assert printed.status == "mirrored"
+    assert sold.status == "mirrored"
+    stock = InventoryRepository(session_factory).get_stock(variant.id, location.id)
+    assert stock is not None and stock.on_hand == 7
     assert bridge.mirror_absolute_stock(
         sku="XW-UNSEEDED", new_stock=2, source="desktop-test"
     ).status == "baseline_required"

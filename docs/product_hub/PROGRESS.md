@@ -1361,5 +1361,13 @@ when the desktop's `product_hub.inventory_shadow_enabled` and a database are ena
 it mirrors a successfully completed legacy absolute-stock update to an already
 baselined, exact active Hub variant. Missing mappings, inactive variants and missing
 baselines are logged and never block the legacy operation. START/REPRINTS, invoice
-consumption, returns/recount and the print-decision path remain deliberately outside
-this first bridge step.
+consumption outside START, returns/recount and the print-decision path initially
+remained outside this first bridge step.
+
+START and REPRINTS are now included in the desktop Shadow bridge as separate ledger
+reasons: production is `print_run`, invoice consumption is `sale`, and REPRINTS are
+only `print_run`. The legacy JSON is saved first; only then are the known movements
+mirrored. A consumption that would make the Hub ledger negative is capped at available
+stock and logged as a shortage instead of inventing stock or blocking the completed
+legacy workflow. Invoice fulfillment outside START, returns/recount and
+`PrintDecisionEngine` remain the next unbridged paths.

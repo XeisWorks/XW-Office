@@ -42,7 +42,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from xw_office.core.database import session_scope
 from xw_office.models.product_hub_inventory import InventoryAlert, InventoryMovement
 from xw_office.repositories.product_hub import ProductFilter, ProductHubRepository
-from xw_office.repositories.product_hub_inventory import InventoryRepository
+from xw_office.repositories.product_hub_inventory import InventoryRepository, NegativeStockError
 from xw_office.repositories.product_hub_sync import SyncRepository, append_outbox_event
 from xw_office.repositories.settings_kv import SettingKvRepository
 
@@ -388,8 +388,8 @@ class InventoryV2Service:
                 label="Alle Bestandsänderungen laufen durch Inventory V2",
                 state="blocked",
                 detail=(
-                    "set_product_stock wird im aktivierten Shadow Mode gespiegelt. Noch offen: "
-                    "START/REPRINTS, Rechnungs-Fulfillment, Retouren/Recount und PrintDecisionEngine."
+                    "set_product_stock, START und REPRINTS werden im aktivierten Shadow Mode gespiegelt. "
+                    "Noch offen: Rechnungs-Fulfillment, Retouren/Recount und PrintDecisionEngine."
                 ),
             ),
             InventoryCutoverCheck(
@@ -594,18 +594,91 @@ class LegacyInventoryShadowBridge:
             return LegacyInventoryMirrorResult(
                 status="already_in_sync", detail="Hub-Ledger entspricht dem Legacy-Bestand"
             )
-        InventoryV2Service(self._session_factory).record_movement(
-            variant_id=resolved.variant.id,
+        return self.mirror_stock_movement(
+            sku=clean_sku,
             delta=delta,
             reason="manual_adjustment",
-            source=source or "legacy_inventory_mirror",
-            idempotency_key=f"legacy-mirror:{uuid.uuid4()}",
-            external_reference=external_reference or LEGACY_STOCK_LEVELS_KEY,
-            note=(
-                f"Shadow-Mirror der Legacy-SKU {clean_sku}: "
-                f"{current_on_hand} → {int(new_stock)}."
-            ),
+            source=source,
+            external_reference=external_reference,
         )
+
+    def mirror_stock_movement(
+        self,
+        *,
+        sku: str,
+        delta: int,
+        reason: str,
+        source: str,
+        external_reference: str = "",
+    ) -> LegacyInventoryMirrorResult:
+        """Mirror one known legacy movement with its business reason.
+
+        A negative delta is clamped only when the Hub ledger would otherwise become
+        negative.  This preserves the invariant and makes the legacy shortage visible
+        instead of manufacturing stock or silently creating an impossible movement.
+        """
+        clean_sku = str(sku or "").strip().upper()
+        if not clean_sku:
+            return LegacyInventoryMirrorResult(status="rejected", detail="SKU fehlt")
+        if reason not in {"sale", "print_run", "return", "damage", "manual_adjustment", "recount"}:
+            return LegacyInventoryMirrorResult(status="rejected", detail="Ungültiger Bewegungsgrund")
+        resolved = self._products.resolve_sku(clean_sku)
+        if resolved is None:
+            return LegacyInventoryMirrorResult(
+                status="unmapped", detail="Keine exakte Hub-Variante oder SKU-Alias gefunden"
+            )
+        if not resolved.product.active or not resolved.variant.active:
+            return LegacyInventoryMirrorResult(
+                status="inactive", detail="Die zugeordnete Hub-Variante ist nicht aktiv"
+            )
+        if self._inventory.count_movements_for_variant(resolved.variant.id) == 0:
+            return LegacyInventoryMirrorResult(
+                status="baseline_required",
+                detail="Keine bestätigte Hub-Ledger-Baseline für diese Variante",
+            )
+        location = self._inventory.get_or_create_location(
+            code=DEFAULT_LOCATION_CODE, name=DEFAULT_LOCATION_NAME
+        )
+        stock = self._inventory.get_stock(resolved.variant.id, location.id)
+        current_on_hand = stock.on_hand if stock is not None else 0
+        requested_delta = int(delta)
+        applied_delta = max(-current_on_hand, requested_delta)
+        if applied_delta == 0:
+            status = "shortage" if requested_delta < 0 else "already_in_sync"
+            detail = (
+                f"Legacy-Verbrauch von {-requested_delta} kann nicht vollständig gespiegelt werden; "
+                "Hub-Bestand ist bereits 0."
+                if status == "shortage"
+                else "Keine Bestandsänderung zu spiegeln"
+            )
+            return LegacyInventoryMirrorResult(status=status, detail=detail)
+        try:
+            InventoryV2Service(self._session_factory).record_movement(
+                variant_id=resolved.variant.id,
+                delta=applied_delta,
+                reason=reason,
+                source=source or "legacy_inventory_mirror",
+                idempotency_key=f"legacy-mirror:{uuid.uuid4()}",
+                external_reference=external_reference or LEGACY_STOCK_LEVELS_KEY,
+                note=(
+                    f"Shadow-Mirror der Legacy-SKU {clean_sku}: "
+                    f"{current_on_hand} → {current_on_hand + applied_delta}."
+                ),
+            )
+        except NegativeStockError:
+            return LegacyInventoryMirrorResult(
+                status="retry_required",
+                detail="Der Hub-Bestand änderte sich parallel; bitte den Shadow-Abgleich erneut prüfen.",
+            )
+        if applied_delta != requested_delta:
+            return LegacyInventoryMirrorResult(
+                status="shortage",
+                detail=(
+                    f"Nur {abs(applied_delta)} von {abs(requested_delta)} Legacy-Abgang gespiegelt; "
+                    "die Unterdeckung benötigt fachliche Prüfung."
+                ),
+            )
         return LegacyInventoryMirrorResult(
-            status="mirrored", detail=f"Hub-Ledger um {delta:+d} auf {int(new_stock)} gespiegelt"
+            status="mirrored",
+            detail=f"Hub-Ledger um {applied_delta:+d} ({reason}) gespiegelt",
         )

@@ -41,6 +41,10 @@ class InventoryShadowMirror(Protocol):
         self, *, sku: str, new_stock: int, source: str, external_reference: str = ""
     ) -> object: ...
 
+    def mirror_stock_movement(
+        self, *, sku: str, delta: int, reason: str, source: str, external_reference: str = ""
+    ) -> object: ...
+
 
 @dataclass(frozen=True)
 class StartDecision:
@@ -324,6 +328,14 @@ class InventoryService:
             printed_skus.append(decision.sku)
 
         self._save_stock_levels(stock_levels)
+        for decision in preflight.decisions:
+            if decision.sku in printed_skus:
+                self._mirror_legacy_stock_movement(
+                    sku=decision.sku,
+                    delta=max(0, int(decision.final_print_qty)),
+                    reason="print_run",
+                    source="legacy_inventory.execute_reprint_workflow",
+                )
         return ReprintExecutionReport(
             decisions_count=len(preflight.decisions),
             printed_skus=printed_skus,
@@ -369,6 +381,7 @@ class InventoryService:
         printed_skus: list[str] = []
         consumed_skus: list[str] = []
         warnings: list[str] = []
+        shadow_movements: list[tuple[str, int, str]] = []
 
         for decision in preflight.decisions:
             current = max(0, int(stock_levels.get(decision.sku, decision.on_hand_qty)))
@@ -385,10 +398,19 @@ class InventoryService:
 
             if produced > 0:
                 printed_skus.append(decision.sku)
+                shadow_movements.append((decision.sku, produced, "print_run"))
             if consumed > 0:
                 consumed_skus.append(decision.sku)
+                shadow_movements.append((decision.sku, -consumed, "sale"))
 
         self._save_stock_levels(stock_levels)
+        for sku, delta, reason in shadow_movements:
+            self._mirror_legacy_stock_movement(
+                sku=sku,
+                delta=delta,
+                reason=reason,
+                source="legacy_inventory.execute_start_workflow",
+            )
         return StartExecutionReport(
             mode=mode,
             open_invoice_count=preflight.open_invoice_count,
@@ -665,6 +687,28 @@ class InventoryService:
         detail = str(getattr(result, "detail", ""))
         if outcome not in {"mirrored", "already_in_sync"}:
             logger.warning("Inventory V2 shadow mirror skipped %s (%s): %s", sku, outcome, detail)
+
+    def _mirror_legacy_stock_movement(
+        self, *, sku: str, delta: int, reason: str, source: str
+    ) -> None:
+        """Mirror a known START/REPRINTS movement after its legacy write succeeds."""
+        if self._shadow_mirror is None or delta == 0:
+            return
+        try:
+            result = self._shadow_mirror.mirror_stock_movement(
+                sku=sku,
+                delta=delta,
+                reason=reason,
+                source=source,
+                external_reference=_STOCK_KEY,
+            )
+        except Exception:  # noqa: BLE001 - completed legacy print/invoice work stays intact
+            logger.exception("Inventory V2 shadow movement mirror failed for SKU %s", sku)
+            return
+        outcome = str(getattr(result, "status", "unknown"))
+        detail = str(getattr(result, "detail", ""))
+        if outcome not in {"mirrored", "already_in_sync"}:
+            logger.warning("Inventory V2 shadow movement skipped %s (%s): %s", sku, outcome, detail)
 
     def save_product_print_config(
         self,
