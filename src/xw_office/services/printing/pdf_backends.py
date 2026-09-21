@@ -234,6 +234,7 @@ def _extract_pdf_pages(
         for page_index in selected_indices:
             if page_index <= max_page:
                 source_page = source[page_index]
+                source_rotation = int(source_page.rotation or 0) % 360
                 target_size = _normalized_page_dimensions(
                     normalize_page_size,
                     source_page.rect.width,
@@ -258,7 +259,9 @@ def _extract_pdf_pages(
                     )
                 if rotate_degrees:
                     page = target[target.page_count - 1]
-                    page.set_rotation((int(page.rotation or 0) + rotate_degrees) % 360)
+                    extra_rotation = 0 if source_rotation else rotate_degrees
+                    if extra_rotation:
+                        page.set_rotation((int(page.rotation or 0) + extra_rotation) % 360)
         if target.page_count == 0:
             raise RuntimeError("Seitenauswahl enthaelt keine gueltigen PDF-Seiten")
         handle = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf", prefix="xw_print_pages_")
