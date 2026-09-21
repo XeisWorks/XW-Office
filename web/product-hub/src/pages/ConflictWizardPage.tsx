@@ -272,13 +272,15 @@ export default function ConflictWizardPage({ onUnauthorized }: { onUnauthorized:
     if (!item || !id) return;
     const confirmed = window.confirm(
       `„${item.product_name}“ im Product Hub archivieren?\n\n` +
-      "Das Produkt wird nicht endgültig gelöscht, sondern deaktiviert und bleibt im Archiv nachvollziehbar.",
+      "Das Produkt und alle aktiven Varianten werden deaktiviert, aber nicht gelöscht. Bestehende Wix-Verknüpfungen bleiben als Historie erhalten; Wix selbst wird nicht geändert.",
     );
     if (!confirmed) return;
     setDestructiveAction("archive-hub"); setMessage("Produkt wird im Hub archiviert …"); setMessageTone("neutral");
     try {
-      await api.archiveHubProductForConflict(id, item.row_version);
-      navigate("/conflicts");
+      const resolved = await api.archiveHubProductForConflict(id, item.row_version);
+      setMessage(`Erfolg: ${resolved.resolution_note || "Produkt wurde im Hub archiviert; Wix blieb unverändert."}`);
+      setMessageTone("success");
+      window.setTimeout(() => navigate("/conflicts"), 1800);
     } catch (error) { handleError(error); }
     finally { setDestructiveAction(null); }
   }

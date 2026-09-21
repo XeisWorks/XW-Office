@@ -58,6 +58,39 @@ class ConflictScan(Base):
     error_summary: Mapped[str | None] = mapped_column(Text)
 
 
+class WixReconciliationDisposition(Base):
+    """A deliberate, durable decision for a Wix-only catalog position.
+
+    Wix catalog records do not necessarily belong in the Hub immediately.  This
+    table keeps an explicit ``ignored`` or time-limited ``deferred`` decision
+    separate from mappings, so an item cannot silently disappear simply because
+    a user has seen it once.
+    """
+
+    __tablename__ = "wix_reconciliation_disposition"
+    __table_args__ = (
+        UniqueConstraint(
+            "external_id", "variant_external_id", name="uq_wix_reconciliation_item"
+        ),
+        Index("ix_wix_reconciliation_disposition_due", "disposition", "deferred_until"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    external_id: Mapped[str] = mapped_column(String(240), nullable=False)
+    # Empty string means the Wix parent product.  Keeping this non-null makes
+    # the composite uniqueness portable between SQLite tests and PostgreSQL.
+    variant_external_id: Mapped[str] = mapped_column(String(240), default="", nullable=False)
+    disposition: Mapped[str] = mapped_column(String(20), nullable=False)
+    deferred_until: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class ConflictCase(Base):
     __tablename__ = "conflict_case"
     __table_args__ = (

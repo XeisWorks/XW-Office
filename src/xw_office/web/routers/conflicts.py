@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import uuid
 from collections.abc import Callable
 from html import escape
@@ -46,6 +47,8 @@ from xw_office.web.schemas.conflicts import (
     ConflictSnoozeRequest,
     ConflictSummaryOut,
     VersionedRequest,
+    WixOnlyDispositionOut,
+    WixOnlyDispositionRequest,
     WixOnlyImportOut,
     WixOnlyImportRequest,
     WixOnlyLinkRequest,
@@ -279,6 +282,7 @@ def build_conflicts_router(
 
     @router.get("/reconciliation/wix-only", response_model=WixOnlyReconciliationOut)
     def wix_only_reconciliation(
+        include_deferred: bool = False,
         service: ConflictWizardService = Depends(get_service),
     ) -> WixOnlyReconciliationOut:
         """List Wix products/variants without a Hub mapping and exact Hub candidates."""
@@ -289,6 +293,56 @@ def build_conflicts_router(
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=503, detail=f"Wix-Katalog konnte nicht geladen werden: {exc}") from exc
         products, mappings = service.wix_reconciliation_context()
+        dispositions = {
+            (row.external_id.casefold(), row.variant_external_id.casefold()): row
+            for row in service.wix_reconciliation_dispositions()
+        }
+        now = datetime.datetime.now(datetime.UTC)
+
+        def as_utc(value: datetime.datetime) -> datetime.datetime:
+            return value if value.tzinfo is not None else value.replace(tzinfo=datetime.UTC)
+
+        deferred_count = sum(
+            1
+            for row in dispositions.values()
+            if row.disposition == "deferred"
+            and row.deferred_until is not None
+            and as_utc(row.deferred_until) > now
+        )
+        ignored_count = sum(1 for row in dispositions.values() if row.disposition == "ignored")
+
+        def is_hidden(parent_id: str, variant_id: str = "") -> bool:
+            disposition = dispositions.get((parent_id.casefold(), variant_id.casefold()))
+            return bool(
+                disposition
+                and (
+                    disposition.disposition == "ignored"
+                    or (
+                        disposition.disposition == "deferred"
+                        and disposition.deferred_until is not None
+                        and as_utc(disposition.deferred_until) > now
+                    )
+                )
+            )
+
+        def disposition_for(
+            parent_id: str, variant_id: str = ""
+        ) -> tuple[str, datetime.datetime | None]:
+            disposition = dispositions.get((parent_id.casefold(), variant_id.casefold()))
+            if (
+                disposition is not None
+                and disposition.disposition == "deferred"
+                and (
+                    disposition.deferred_until is None
+                    or as_utc(disposition.deferred_until) <= now
+                )
+            ):
+                return "active", None
+            return (
+                (disposition.disposition, disposition.deferred_until)
+                if disposition is not None
+                else ("active", None)
+            )
         products_by_sku = {product.sku.casefold(): product for product in products if product.sku}
         mapped_parents = {
             canonical_wix_id(row.external_id).casefold()
@@ -318,22 +372,35 @@ def build_conflicts_router(
                 variant_sku = str(_catalog_value(variant, "sku") or "").strip()
                 if not variant_id or variant_id.casefold() in mapped_variants:
                     continue
+                if is_hidden(external_id, variant_id) and not include_deferred:
+                    continue
                 variant_candidate = products_by_sku.get(variant_sku.casefold()) if variant_sku else None
+                variant_disposition, variant_deferred_until = disposition_for(external_id, variant_id)
                 variants.append(WixOnlyVariantOut(
                     external_id=variant_id, name=str(_catalog_value(variant, "name") or "").strip(),
                     sku=variant_sku, suggested_hub_product_id=variant_candidate.id if variant_candidate else None,
                     suggested_hub_product_name=variant_candidate.name if variant_candidate else "",
+                    disposition=variant_disposition, deferred_until=variant_deferred_until,
                 ))
             parent_mapped = external_id.casefold() in mapped_parents
-            if parent_mapped and not variants:
+            parent_hidden = is_hidden(external_id)
+            if (parent_mapped or (parent_hidden and not include_deferred)) and not variants:
                 continue
             total_variants += len(variants)
+            parent_disposition, parent_deferred_until = disposition_for(external_id)
             items.append(WixOnlyProductOut(
                 external_id=external_id, name=str(_catalog_value(row, "name") or "").strip(), sku=sku,
                 parent_mapped=parent_mapped, suggested_hub_product_id=suggested.id if suggested else None,
                 suggested_hub_product_name=suggested.name if suggested else "", variants=variants,
+                disposition=parent_disposition, deferred_until=parent_deferred_until,
             ))
-        return WixOnlyReconciliationOut(items=items, total_products=len(items), total_variants=total_variants)
+        return WixOnlyReconciliationOut(
+            items=items,
+            total_products=len(items),
+            total_variants=total_variants,
+            deferred_items=deferred_count,
+            ignored_items=ignored_count,
+        )
 
     @router.post("/reconciliation/wix-only/link", dependencies=[Depends(require_edit_enabled)])
     def link_wix_only(
@@ -378,6 +445,33 @@ def build_conflicts_router(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return WixOnlyImportOut(product_id=product.id, product_name=product.name, sku=product.sku)
+
+    @router.post(
+        "/reconciliation/wix-only/disposition",
+        response_model=WixOnlyDispositionOut,
+        dependencies=[Depends(require_edit_enabled)],
+    )
+    def set_wix_only_disposition(
+        body: WixOnlyDispositionRequest,
+        service: ConflictWizardService = Depends(get_service),
+    ) -> WixOnlyDispositionOut:
+        """Store an explicit defer/ignore/reopen decision; Wix remains untouched."""
+        try:
+            row = service.set_wix_reconciliation_disposition(
+                external_id=body.external_id,
+                variant_external_id=body.variant_external_id,
+                disposition=body.disposition,
+                deferred_until=body.deferred_until,
+                note=body.note,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return WixOnlyDispositionOut(
+            external_id=row.external_id,
+            variant_external_id=row.variant_external_id,
+            disposition=row.disposition,
+            deferred_until=row.deferred_until,
+        )
 
     @router.get("/{case_id}", response_model=ConflictCaseDetailOut)
     def detail(

@@ -385,6 +385,8 @@ export interface WixOnlyVariant {
   mapped: boolean;
   suggested_hub_product_id: string | null;
   suggested_hub_product_name: string;
+  disposition: "active" | "deferred" | "ignored";
+  deferred_until: string | null;
 }
 
 export interface WixOnlyProduct {
@@ -394,6 +396,8 @@ export interface WixOnlyProduct {
   parent_mapped: boolean;
   suggested_hub_product_id: string | null;
   suggested_hub_product_name: string;
+  disposition: "active" | "deferred" | "ignored";
+  deferred_until: string | null;
   variants: WixOnlyVariant[];
 }
 
@@ -401,6 +405,8 @@ export interface WixOnlyReconciliation {
   items: WixOnlyProduct[];
   total_products: number;
   total_variants: number;
+  deferred_items: number;
+  ignored_items: number;
 }
 
 export interface ConflictMappingComparison {

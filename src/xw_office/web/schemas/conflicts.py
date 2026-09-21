@@ -106,6 +106,8 @@ class WixOnlyVariantOut(BaseModel):
     mapped: bool = False
     suggested_hub_product_id: uuid.UUID | None = None
     suggested_hub_product_name: str = ""
+    disposition: str = "active"
+    deferred_until: datetime.datetime | None = None
 
 
 class WixOnlyProductOut(BaseModel):
@@ -115,6 +117,8 @@ class WixOnlyProductOut(BaseModel):
     parent_mapped: bool = False
     suggested_hub_product_id: uuid.UUID | None = None
     suggested_hub_product_name: str = ""
+    disposition: str = "active"
+    deferred_until: datetime.datetime | None = None
     variants: list[WixOnlyVariantOut] = Field(default_factory=list)
 
 
@@ -122,6 +126,8 @@ class WixOnlyReconciliationOut(BaseModel):
     items: list[WixOnlyProductOut] = Field(default_factory=list)
     total_products: int = 0
     total_variants: int = 0
+    deferred_items: int = 0
+    ignored_items: int = 0
 
 
 class WixOnlyLinkRequest(BaseModel):
@@ -143,6 +149,21 @@ class WixOnlyImportOut(BaseModel):
     product_name: str
     sku: str
     operation: str = "imported_as_draft"
+
+
+class WixOnlyDispositionRequest(BaseModel):
+    external_id: str = Field(min_length=1, max_length=240)
+    variant_external_id: str | None = Field(default=None, max_length=240)
+    disposition: str = Field(pattern="^(ignored|deferred|active)$")
+    deferred_until: datetime.datetime | None = None
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class WixOnlyDispositionOut(BaseModel):
+    external_id: str
+    variant_external_id: str = ""
+    disposition: str
+    deferred_until: datetime.datetime | None = None
 
 
 class ConflictCaseDetailOut(ConflictCaseOut):

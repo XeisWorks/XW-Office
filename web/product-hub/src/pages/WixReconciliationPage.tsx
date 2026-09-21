@@ -6,9 +6,10 @@ import { useApi } from "../hooks/useApi";
 
 export default function WixReconciliationPage({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [reload, setReload] = useState(0);
+  const [showDeferred, setShowDeferred] = useState(false);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState("");
-  const result = useApi(api.getWixOnlyReconciliation, [reload], onUnauthorized);
+  const result = useApi(() => api.getWixOnlyReconciliation(showDeferred), [reload, showDeferred], onUnauthorized);
 
   function handleError(error: unknown) {
     if (error instanceof ApiError && error.status === 401) onUnauthorized();
@@ -27,11 +28,38 @@ export default function WixReconciliationPage({ onUnauthorized }: { onUnauthoriz
   }
 
   async function importDraft(externalId: string, sku: string, name: string, variantExternalId?: string) {
-    if (!window.confirm(`Für „${name}“ mit SKU ${sku} einen Hub-Entwurf anlegen und verknüpfen?`)) return;
+    if (!window.confirm(
+      `Für „${name}“ mit SKU ${sku} einen Hub-Entwurf anlegen und verknüpfen?\n\n` +
+      "Es werden nur Name, SKU und die Wix-Verknüpfung angelegt. Preise, Bilder, Texte und Sichtbarkeit werden nicht kopiert; Wix bleibt unverändert.",
+    )) return;
     setBusy(`${externalId}:${variantExternalId || "product"}`);
     try {
       const created = await api.importWixOnlyReconciliation(externalId, sku, name, variantExternalId);
-      setMessage(`Hub-Entwurf „${created.product_name}“ wurde angelegt und verknüpft.`);
+      setMessage(`Erfolg: Hub-Entwurf „${created.product_name}“ wurde angelegt und verknüpft. Bitte Inhalte und Freigabe im Hub ergänzen.`);
+      setReload((value) => value + 1);
+    } catch (error) { handleError(error); }
+    finally { setBusy(""); }
+  }
+
+  async function setDisposition(
+    externalId: string,
+    disposition: "active" | "deferred" | "ignored",
+    variantExternalId?: string,
+  ) {
+    const key = `${externalId}:${variantExternalId || "product"}`;
+    const label = disposition === "ignored" ? "dauerhaft ausblenden" : disposition === "deferred" ? "30 Tage zurückstellen" : "wieder in die Arbeitsliste aufnehmen";
+    if (!window.confirm(`${label}? Wix wird dabei nicht geändert.`)) return;
+    setBusy(key);
+    try {
+      const deferredUntil = disposition === "deferred"
+        ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+        : undefined;
+      await api.setWixOnlyReconciliationDisposition(externalId, disposition, variantExternalId, deferredUntil);
+      setMessage(disposition === "ignored"
+        ? "Position dauerhaft ausgeblendet. Sie bleibt über ‚Ausgeblendete anzeigen‘ wieder aktivierbar."
+        : disposition === "deferred"
+          ? "Position wurde für 30 Tage zurückgestellt. Wix blieb unverändert."
+          : "Position ist wieder in der regulären Arbeitsliste.");
       setReload((value) => value + 1);
     } catch (error) { handleError(error); }
     finally { setBusy(""); }
@@ -40,11 +68,18 @@ export default function WixReconciliationPage({ onUnauthorized }: { onUnauthoriz
   function actions(entry: WixOnlyProduct | WixOnlyVariant, parentId: string, parentName: string, variant = false) {
     const key = `${parentId}:${variant ? entry.external_id : "product"}`;
     const sku = entry.sku;
-    if (!sku) return <span className="hint">Ohne SKU: nur manuelle Prüfung möglich.</span>;
+    const variantId = variant ? entry.external_id : undefined;
+    if (entry.disposition !== "active") return <div className="mapping-candidate-actions">
+      <span className="hint">{entry.disposition === "ignored" ? "Dauerhaft ausgeblendet" : `Zurückgestellt bis ${new Date(entry.deferred_until!).toLocaleDateString("de-AT")}`}</span>
+      <button type="button" disabled={busy === key} onClick={() => setDisposition(parentId, "active", variantId)}>Wieder aufnehmen</button>
+    </div>;
     return <div className="mapping-candidate-actions">
-      {entry.suggested_hub_product_id
-        ? <button type="button" disabled={busy === key} onClick={() => link(entry.suggested_hub_product_id!, parentId, sku, variant ? entry.external_id : undefined)}>Mit „{entry.suggested_hub_product_name}“ verknüpfen</button>
-        : <button className="primary-button" type="button" disabled={busy === key} onClick={() => importDraft(parentId, sku, variant ? `${parentName} – ${entry.name || sku}` : entry.name || sku, variant ? entry.external_id : undefined)}>Als Hub-Entwurf übernehmen</button>}
+      {!sku ? <span className="hint">Ohne SKU: keine automatische Verknüpfung oder Anlage.</span>
+        : entry.suggested_hub_product_id
+        ? <button type="button" disabled={busy === key} onClick={() => link(entry.suggested_hub_product_id!, parentId, sku, variantId)}>Mit „{entry.suggested_hub_product_name}“ verknüpfen</button>
+        : <button className="primary-button" type="button" disabled={busy === key} onClick={() => importDraft(parentId, sku, variant ? `${parentName} – ${entry.name || sku}` : entry.name || sku, variantId)}>Als Hub-Entwurf übernehmen</button>}
+      <button type="button" disabled={busy === key} onClick={() => setDisposition(parentId, "deferred", variantId)}>In 30 Tagen prüfen</button>
+      <button type="button" disabled={busy === key} onClick={() => setDisposition(parentId, "ignored", variantId)}>Dauerhaft ausblenden</button>
     </div>;
   }
 
@@ -56,6 +91,7 @@ export default function WixReconciliationPage({ onUnauthorized }: { onUnauthoriz
     {result.error && <p className="hint-error">{result.error}</p>}
     {result.data && <>
       <p className="hint">{result.data.total_products} Wix-Produkte mit offenen Zuordnungen · {result.data.total_variants} Wix-Varianten ohne eigene Hub-Verknüpfung</p>
+      <label className="reconciliation-toggle"><input type="checkbox" checked={showDeferred} onChange={(event) => setShowDeferred(event.target.checked)} /> Ausgeblendete anzeigen ({result.data.deferred_items} zurückgestellt, {result.data.ignored_items} ignoriert)</label>
       <div className="reconciliation-list">{result.data.items.map((item) => <article className="mapping-comparison" key={item.external_id}>
         <h2>{item.name || "Ohne Produktname"}</h2>
         <div className="mapping-candidate"><div><strong>Wix-Produkt</strong><span>{item.sku || "ohne eigene SKU"}</span><span className="mapping-id">{item.external_id}</span></div>{!item.parent_mapped && actions(item, item.external_id, item.name)}</div>

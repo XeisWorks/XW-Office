@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.models.base import Base
-from xw_office.models.product_hub import Product
+from xw_office.models.product_hub import Product, ProductVariant
 from xw_office.models.product_hub_conflicts import ConflictAction
 from xw_office.models.product_hub_sync import OutboxEvent
 from xw_office.repositories.product_hub import ProductHubRepository
@@ -403,8 +404,32 @@ def test_archive_hub_product_closes_case_without_hard_delete(factory: sessionmak
         assert refreshed.active is False
         assert refreshed.archived_at is not None
         assert refreshed.attributes["wix_publish_eligible"] is False
+        assert session.query(ProductVariant).filter_by(product_id=product.id).one().active is False
         assert session.execute(text("select count(*) from audit_log")).scalar_one() == 1
     assert service.scan_low_level_conflicts()["differences_found"] == 0
+
+
+def test_wix_only_reconciliation_disposition_is_durable_and_reopenable(
+    factory: sessionmaker[Session],
+) -> None:
+    service = ConflictWizardService(factory)
+    due = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
+
+    deferred = service.set_wix_reconciliation_disposition(
+        external_id="WIX-PARENT", variant_external_id="WIX-VARIANT",
+        disposition="deferred", deferred_until=due,
+    )
+    assert deferred.disposition == "deferred"
+    assert deferred.variant_external_id == "wix-variant"
+
+    reopened = service.set_wix_reconciliation_disposition(
+        external_id="wix-parent", variant_external_id="wix-variant", disposition="active"
+    )
+    assert reopened.id == deferred.id
+    assert reopened.disposition == "active"
+    assert reopened.deferred_until is None
+    with factory() as session:
+        assert session.execute(text("select count(*) from audit_log")).scalar_one() == 2
 
 
 def test_conflict_api_is_independently_feature_flagged(factory: sessionmaker[Session]) -> None:

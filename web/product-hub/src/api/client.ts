@@ -187,7 +187,7 @@ export const api = {
 
   // -- Conflict Wizard ----------------------------------------------------------
   getConflictSummary: () => request<ConflictSummary>("/api/v1/conflicts/summary"),
-  getWixOnlyReconciliation: () => request<WixOnlyReconciliation>("/api/v1/conflicts/reconciliation/wix-only"),
+  getWixOnlyReconciliation: (includeDeferred = false) => request<WixOnlyReconciliation>(`/api/v1/conflicts/reconciliation/wix-only${includeDeferred ? "?include_deferred=true" : ""}`),
   linkWixOnlyReconciliation: (productId: string, externalId: string, sku: string, variantExternalId?: string) =>
     request<{ external_id: string; operation: "linked" }>("/api/v1/conflicts/reconciliation/wix-only/link", {
       method: "POST", body: { product_id: productId, external_id: externalId, sku, ...(variantExternalId ? { variant_external_id: variantExternalId } : {}) },
@@ -196,6 +196,20 @@ export const api = {
     request<{ product_id: string; product_name: string; sku: string; operation: "imported_as_draft" }>("/api/v1/conflicts/reconciliation/wix-only/import", {
       method: "POST", body: { external_id: externalId, sku, name, ...(variantExternalId ? { variant_external_id: variantExternalId } : {}) },
     }),
+  setWixOnlyReconciliationDisposition: (
+    externalId: string,
+    disposition: "active" | "deferred" | "ignored",
+    variantExternalId?: string,
+    deferredUntil?: string,
+  ) => request<{ external_id: string; variant_external_id: string; disposition: string; deferred_until: string | null }>("/api/v1/conflicts/reconciliation/wix-only/disposition", {
+    method: "POST",
+    body: {
+      external_id: externalId,
+      disposition,
+      ...(variantExternalId ? { variant_external_id: variantExternalId } : {}),
+      ...(deferredUntil ? { deferred_until: deferredUntil } : {}),
+    },
+  }),
   listConflicts: (filters: Record<string, string> = {}) => {
     const params = new URLSearchParams(filters);
     return request<Page<ConflictCase>>(`/api/v1/conflicts?${params.toString()}`);

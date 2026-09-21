@@ -6,7 +6,7 @@ import datetime
 import uuid
 from typing import Any, TypedDict
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
@@ -16,6 +16,7 @@ from xw_office.models.product_hub_conflicts import (
     ConflictCase,
     ConflictField,
     ConflictObservation,
+    WixReconciliationDisposition,
 )
 from xw_office.models.product_hub_sync import OutboxEvent, SyncConflict
 from xw_office.repositories.product_hub import ProductFilter, ProductHubRepository
@@ -557,6 +558,76 @@ class ConflictWizardService:
             ],
         )
 
+    def wix_reconciliation_dispositions(self) -> list[WixReconciliationDisposition]:
+        """Return durable decisions for Wix-only catalog positions."""
+        with session_scope(self._factory) as session:
+            return session.scalars(select(WixReconciliationDisposition)).all()
+
+    def set_wix_reconciliation_disposition(
+        self,
+        *,
+        external_id: str,
+        variant_external_id: str | None = None,
+        disposition: str,
+        deferred_until: datetime.datetime | None = None,
+        note: str | None = None,
+        actor: str = "conflict-wizard",
+    ) -> WixReconciliationDisposition:
+        """Persist an explicit ignore/defer/reopen decision without touching Wix."""
+        parent_id = canonical_wix_id(external_id)
+        variant_id = canonical_wix_id(variant_external_id)
+        if not parent_id or (variant_external_id and not variant_id):
+            raise ValueError("Wix-Produkt- oder Varianten-ID ist ungÃ¼ltig")
+        if disposition not in {"ignored", "deferred", "active"}:
+            raise ValueError("UngÃ¼ltige Wiedervorlage-Entscheidung")
+        if disposition == "deferred" and deferred_until is None:
+            raise ValueError("FÃ¼r â€šSpÃ¤ter prÃ¼fenâ€˜ fehlt ein Wiedervorlagedatum")
+        if disposition != "deferred":
+            deferred_until = None
+        if deferred_until is not None and deferred_until.tzinfo is None:
+            raise ValueError("Das Wiedervorlagedatum muss eine Zeitzone enthalten")
+        key_parent, key_variant = parent_id.casefold(), variant_id.casefold()
+        with session_scope(self._factory) as session:
+            row = session.scalar(
+                select(WixReconciliationDisposition).where(
+                    WixReconciliationDisposition.external_id == key_parent,
+                    WixReconciliationDisposition.variant_external_id == key_variant,
+                )
+            )
+            before = None
+            if row is None:
+                row = WixReconciliationDisposition(
+                    id=uuid.uuid4(), external_id=key_parent, variant_external_id=key_variant,
+                    disposition=disposition, deferred_until=deferred_until, note=note,
+                )
+                session.add(row)
+            else:
+                before = {
+                    "disposition": row.disposition,
+                    "deferred_until": row.deferred_until.isoformat() if row.deferred_until else None,
+                    "note": row.note,
+                }
+                row.disposition = disposition
+                row.deferred_until = deferred_until
+                row.note = note
+            session.flush()
+            session.add(
+                AuditLog(
+                    id=uuid.uuid4(), actor_type="user", actor_id=actor, source="wix_reconciliation",
+                    action="wix_reconciliation.set_disposition", entity_type="wix_reconciliation",
+                    entity_id=row.id, changed_fields=["disposition", "deferred_until", "note"],
+                    before_data=before,
+                    after_data={
+                        "external_id": parent_id, "variant_external_id": variant_id,
+                        "disposition": disposition,
+                        "deferred_until": deferred_until.isoformat() if deferred_until else None,
+                        "note": note,
+                        "wix_changed": False,
+                    },
+                )
+            )
+            return row
+
     def link_wix_reconciliation_item(
         self, *, product_id: uuid.UUID, external_id: str, variant_external_id: str | None = None
     ) -> ChannelMapping:
@@ -757,12 +828,32 @@ class ConflictWizardService:
             if product is None:
                 raise KeyError(f"Product {case.product_id} not found")
             now = _now()
+            variants = session.scalars(
+                select(ProductVariant).where(ProductVariant.product_id == product.id)
+            ).all()
+            active_variants = [variant for variant in variants if variant.active]
+            mapping_count = session.scalar(
+                select(func.count())
+                .select_from(ChannelMapping)
+                .where(
+                    ChannelMapping.channel == "wix",
+                    or_(
+                        (ChannelMapping.entity_type == "product")
+                        & (ChannelMapping.internal_entity_id == product.id),
+                        (ChannelMapping.entity_type == "variant")
+                        & (ChannelMapping.internal_entity_id.in_([variant.id for variant in variants] or [uuid.uuid4()])),
+                    ),
+                )
+            ) or 0
             product.active = False
             product.archived_at = now
             attributes = dict(product.attributes or {})
             attributes["wix_publish_eligible"] = False
             product.attributes = attributes
             product.row_version += 1
+            for variant in active_variants:
+                variant.active = False
+                variant.row_version += 1
             if case.origin_sync_conflict_id is not None:
                 low = session.get(SyncConflict, case.origin_sync_conflict_id)
                 if low is not None and low.resolved_at is None:
@@ -773,12 +864,20 @@ class ConflictWizardService:
                 AuditLog(
                     id=uuid.uuid4(), actor_type="user", actor_id=actor, source="conflict_wizard",
                     action="conflict.archive_hub_product", entity_type="product", entity_id=product.id,
-                    changed_fields=["active", "archived_at", "attributes.wix_publish_eligible"],
-                    before_data={"active": True, "wix_publish_eligible": True},
-                    after_data={"active": False, "wix_publish_eligible": False}, correlation_id=case.id,
+                    changed_fields=["active", "archived_at", "attributes.wix_publish_eligible", "variants.active"],
+                    before_data={"active": True, "wix_publish_eligible": True, "active_variants": len(active_variants)},
+                    after_data={
+                        "active": False, "wix_publish_eligible": False,
+                        "archived_variants": len(active_variants), "wix_mappings_retained": mapping_count,
+                        "wix_changed": False,
+                    }, correlation_id=case.id,
                 )
             )
             case.resolution_type = "ARCHIVE_HUB_PRODUCT"
+            case.resolution_note = (
+                f"Hub-Produkt und {len(active_variants)} aktive Variante(n) archiviert; "
+                f"{mapping_count} Wix-VerknÃ¼pfung(en) als Historie erhalten; Wix unverÃ¤ndert."
+            )
             case.status = "RESOLVED"
             case.resolved_at = now
             case.row_version += 1

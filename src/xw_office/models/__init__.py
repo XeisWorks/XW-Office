@@ -50,6 +50,7 @@ from xw_office.models.product_hub_conflicts import (
     ConflictObservation,
     ConflictScan,
     ResolutionRule,
+    WixReconciliationDisposition,
 )
 from xw_office.models.product_hub_sharing import ExportLog, SharedCatalogView
 from xw_office.models.product_hub_sync import (
@@ -72,6 +73,7 @@ __all__ = [
     "ConflictField",
     "ConflictObservation",
     "ConflictScan",
+    "WixReconciliationDisposition",
     "ChannelCategoryMapping",
     "ChannelMapping",
     "CustomerAftercareCase",
