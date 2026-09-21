@@ -62,7 +62,7 @@ def test_product_print_profiles_use_pdf_xchange_native_backend() -> None:
         assert profile.printer_name == printer_name
         assert profile.backend == "pdf_xchange"
         assert profile.native_pdf_exe.endswith("PXCEditor.exe")
-    assert profiles["noten_a5"].rotate_degrees == 90
+    assert profiles["noten_a5"].rotate_degrees == 0
     assert profiles["noten_a5"].normalize_page_size == "A5"
     assert profiles["noten_a5"].max_upscale_percent == 110.0
 
