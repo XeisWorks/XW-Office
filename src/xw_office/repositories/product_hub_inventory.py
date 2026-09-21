@@ -184,6 +184,18 @@ class InventoryRepository:
         with self._scope() as session:
             return int(session.scalar(select(func.count()).select_from(InventoryMovement)) or 0)
 
+    def count_movements_for_variant(self, variant_id: uuid.UUID) -> int:
+        """Return ledger events for one variant, used to prevent re-baselining it."""
+        with self._scope() as session:
+            return int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(InventoryMovement)
+                    .where(InventoryMovement.variant_id == variant_id)
+                )
+                or 0
+            )
+
     def count_stock_rows(self) -> int:
         """Return materialized Inventory V2 stock positions across all locations."""
         with self._scope() as session:

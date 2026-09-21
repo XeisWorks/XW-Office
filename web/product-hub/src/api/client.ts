@@ -16,6 +16,8 @@ import type {
   ImprovementCreateRequest,
   ImprovementUpdateRequest,
   InventoryCutoverReadiness,
+  LegacyInventoryBaselineApplyResult,
+  LegacyInventoryBaselinePreview,
   Page,
   ParentProductListItem,
   ProductAsset,
@@ -189,6 +191,10 @@ export const api = {
   // -- Conflict Wizard ----------------------------------------------------------
   getConflictSummary: () => request<ConflictSummary>("/api/v1/conflicts/summary"),
   getInventoryCutoverReadiness: () => request<InventoryCutoverReadiness>("/api/v1/inventory/cutover-readiness"),
+  getLegacyInventoryBaselinePreview: () => request<LegacyInventoryBaselinePreview>("/api/v1/inventory/legacy-baseline/preview"),
+  applyLegacyInventoryBaseline: (expectedSourceHash: string) => request<LegacyInventoryBaselineApplyResult>("/api/v1/inventory/legacy-baseline/apply", {
+    method: "POST", body: { expected_source_hash: expectedSourceHash },
+  }),
   getWixOnlyReconciliation: (includeDeferred = false) => request<WixOnlyReconciliation>(`/api/v1/conflicts/reconciliation/wix-only${includeDeferred ? "?include_deferred=true" : ""}`),
   linkWixOnlyReconciliation: (productId: string, externalId: string, sku: string, variantExternalId?: string) =>
     request<{ external_id: string; operation: "linked" }>("/api/v1/conflicts/reconciliation/wix-only/link", {

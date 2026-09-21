@@ -12,6 +12,7 @@ from xw_office.models.product_hub_sync import OutboxEvent
 from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.repositories.product_hub_sync import SyncRepository
+from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.product_hub.inventory import InventoryV2Service
 
 
@@ -82,6 +83,35 @@ def test_cutover_readiness_exposes_real_evidence_and_remaining_gates(
     assert checks["legacy_mutation_paths"].state == "blocked"
     assert checks["channel_projections"].state == "blocked"
     assert checks["operational_signoff"].state == "manual"
+
+
+def test_legacy_baseline_requires_shadow_mode_and_never_rebases_a_variant(
+    session_factory: sessionmaker[Session],
+    product_repo: ProductHubRepository,
+) -> None:
+    product, variant = product_repo.create_product(sku="XW-BASELINE", name="Baseline Produkt")
+    del product
+    settings = SettingKvRepository(session_factory)
+    settings.set_value_json("inventory.stock_levels", '{"XW-BASELINE": 7, "UNKNOWN": 3}')
+
+    disabled = InventoryV2Service(session_factory, shadow_enabled=False)
+    preview = disabled.legacy_baseline_preview()
+    assert [item.status for item in preview.items] == ["missing_hub_variant", "ready"]
+    with pytest.raises(ValueError, match="Shadow Mode"):
+        disabled.apply_legacy_baseline(expected_source_hash=preview.source_hash)
+
+    service = InventoryV2Service(session_factory, shadow_enabled=True)
+    preview = service.legacy_baseline_preview()
+    applied = service.apply_legacy_baseline(expected_source_hash=preview.source_hash)
+    assert applied.applied_skus == ["XW-BASELINE"]
+    assert [item.sku for item in applied.blocked_items] == ["UNKNOWN"]
+    location = InventoryRepository(session_factory).get_location_by_code("MAIN")
+    assert location is not None
+    stock = InventoryRepository(session_factory).get_stock(variant.id, location.id)
+    assert stock is not None and stock.on_hand == 7
+    assert settings.get_value_json("inventory.stock_levels") == '{"XW-BASELINE": 7, "UNKNOWN": 3}'
+    refreshed = service.legacy_baseline_preview()
+    assert next(item for item in refreshed.items if item.sku == "XW-BASELINE").status == "ledger_already_initialized"
 
 
 def test_record_movement_crossing_below_threshold_opens_low_stock_alert(

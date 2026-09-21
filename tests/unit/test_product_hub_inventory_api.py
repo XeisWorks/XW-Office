@@ -22,12 +22,16 @@ def db_path(tmp_path: Path) -> str:
     return f"sqlite:///{db_file}"
 
 
-def _client(db_path: str, *, token: str = "secret-token", edit_enabled: bool = True) -> TestClient:
+def _client(
+    db_path: str, *, token: str = "secret-token", edit_enabled: bool = True,
+    shadow_enabled: bool = False,
+) -> TestClient:
     settings = ContentWebSettings(
         bootstrap_token=token,
         database_url=db_path,
         product_hub_catalog_read_enabled=True,
         product_hub_edit_enabled=edit_enabled,
+        inventory_shadow_enabled=shadow_enabled,
     )
     return TestClient(create_app(settings))
 
@@ -69,6 +73,28 @@ def test_cutover_readiness_is_read_only_and_explicitly_blocked_before_pr15(db_pa
     assert body["master_enabled"] is False
     assert body["eligible"] is False
     assert any(check["code"] == "legacy_mutation_paths" and check["state"] == "blocked" for check in body["checks"])
+
+
+def test_legacy_baseline_preview_and_confirmed_apply(db_path: str) -> None:
+    _seed_variant(db_path)
+    engine = create_engine(db_path, future=True)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+    from xw_office.repositories.settings_kv import SettingKvRepository
+
+    SettingKvRepository(factory).set_value_json("inventory.stock_levels", '{"XW-7000": 9}')
+    engine.dispose()
+    client = _client(db_path, shadow_enabled=True)
+
+    preview = client.get("/api/v1/inventory/legacy-baseline/preview", headers=_auth_headers())
+    assert preview.status_code == 200
+    assert preview.json()["items"][0]["status"] == "ready"
+    applied = client.post(
+        "/api/v1/inventory/legacy-baseline/apply",
+        headers=_auth_headers(),
+        json={"expected_source_hash": preview.json()["source_hash"]},
+    )
+    assert applied.status_code == 200
+    assert applied.json()["applied_skus"] == ["XW-7000"]
 
 
 def test_record_movement_requires_edit_enabled(db_path: str) -> None:

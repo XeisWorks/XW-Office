@@ -424,6 +424,28 @@ export interface InventoryCutoverReadiness {
   assessed_at: string;
 }
 
+export interface LegacyInventoryBaselineItem {
+  sku: string;
+  legacy_on_hand: number | null;
+  variant_id: string | null;
+  product_name: string;
+  status: "ready" | "missing_hub_variant" | "inactive_hub_variant" | "ledger_already_initialized" | "invalid_legacy_value" | "invalid_source";
+  detail: string;
+}
+
+export interface LegacyInventoryBaselinePreview {
+  source_present: boolean;
+  source_hash: string;
+  shadow_enabled: boolean;
+  items: LegacyInventoryBaselineItem[];
+  assessed_at: string;
+}
+
+export interface LegacyInventoryBaselineApplyResult {
+  applied_skus: string[];
+  blocked_items: LegacyInventoryBaselineItem[];
+}
+
 export interface ConflictMappingComparison {
   hub_name: string;
   hub_sku: string;

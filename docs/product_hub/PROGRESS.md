@@ -1348,3 +1348,10 @@ remaining legacy mutation paths, missing channel projections and the human
 operational sign-off as blocking gates. `XW_PRODUCT_HUB_INVENTORY_SHADOW_ENABLED`
 and `XW_PRODUCT_HUB_INVENTORY_MASTER_ENABLED` are read-only deploy flags in this
 surface; the UI cannot enable the master or perform any stock/external write.
+
+The next controlled bridge step is also available: `/app/inventory/cutover` shows a
+read-only preview of legacy `inventory.stock_levels` against exact active Hub
+variants. With `XW_PRODUCT_HUB_INVENTORY_SHADOW_ENABLED=true`, an explicitly
+confirmed action writes one idempotent `import_baseline` movement per safe SKU. The
+reviewed source hash must still match; malformed/unmapped/inactive/already-initialized
+entries are skipped, and the legacy JSON plus Wix/sevdesk remain untouched.

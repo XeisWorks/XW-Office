@@ -19,6 +19,10 @@ from xw_office.web.schemas.inventory import (
     InventoryCutoverCheckOut,
     InventoryCutoverReadinessOut,
     InventorySummaryOut,
+    LegacyInventoryBaselineApplyOut,
+    LegacyInventoryBaselineApplyRequest,
+    LegacyInventoryBaselineItemOut,
+    LegacyInventoryBaselinePreviewOut,
     MovementCreateRequest,
     MovementOut,
     MovementResultOut,
@@ -71,6 +75,29 @@ def build_inventory_router(
             assessed_at=readiness.assessed_at,
         )
 
+    def baseline_item_out(item: object) -> LegacyInventoryBaselineItemOut:
+        return LegacyInventoryBaselineItemOut(
+            sku=str(getattr(item, "sku")),
+            legacy_on_hand=getattr(item, "legacy_on_hand"),
+            variant_id=getattr(item, "variant_id"),
+            product_name=str(getattr(item, "product_name")),
+            status=str(getattr(item, "status")),
+            detail=str(getattr(item, "detail")),
+        )
+
+    @router.get("/legacy-baseline/preview", response_model=LegacyInventoryBaselinePreviewOut)
+    def get_legacy_baseline_preview(
+        service: InventoryV2Service = Depends(get_service),
+    ) -> LegacyInventoryBaselinePreviewOut:
+        preview = service.legacy_baseline_preview()
+        return LegacyInventoryBaselinePreviewOut(
+            source_present=preview.source_present,
+            source_hash=preview.source_hash,
+            shadow_enabled=preview.shadow_enabled,
+            items=[baseline_item_out(item) for item in preview.items],
+            assessed_at=preview.assessed_at,
+        )
+
     @router.get("/alerts", response_model=list[InventoryAlertOut])
     def list_alerts(repo: InventoryRepository = Depends(get_repo)) -> list[InventoryAlertOut]:
         return [InventoryAlertOut.model_validate(a) for a in repo.list_open_alerts()]
@@ -119,6 +146,22 @@ def build_inventory_router(
         return MovementResultOut(
             movement=MovementOut.model_validate(result.movement),
             alert_opened=result.alert_opened.id if result.alert_opened is not None else None,
+        )
+
+    @write_router.post("/legacy-baseline/apply", response_model=LegacyInventoryBaselineApplyOut)
+    def apply_legacy_baseline(
+        body: LegacyInventoryBaselineApplyRequest,
+        service: InventoryV2Service = Depends(get_service),
+    ) -> LegacyInventoryBaselineApplyOut:
+        try:
+            result = service.apply_legacy_baseline(
+                expected_source_hash=body.expected_source_hash
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        return LegacyInventoryBaselineApplyOut(
+            applied_skus=result.applied_skus,
+            blocked_items=[baseline_item_out(item) for item in result.blocked_items],
         )
 
     @write_router.put("/variants/{variant_id}/thresholds", response_model=StockOut)

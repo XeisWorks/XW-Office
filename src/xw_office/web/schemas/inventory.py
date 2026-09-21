@@ -108,3 +108,29 @@ class InventoryCutoverReadinessOut(BaseModel):
     eligible: bool
     checks: list[InventoryCutoverCheckOut]
     assessed_at: datetime.datetime
+
+
+class LegacyInventoryBaselineItemOut(BaseModel):
+    sku: str
+    legacy_on_hand: int | None = None
+    variant_id: uuid.UUID | None = None
+    product_name: str = ""
+    status: str
+    detail: str
+
+
+class LegacyInventoryBaselinePreviewOut(BaseModel):
+    source_present: bool
+    source_hash: str
+    shadow_enabled: bool
+    items: list[LegacyInventoryBaselineItemOut]
+    assessed_at: datetime.datetime
+
+
+class LegacyInventoryBaselineApplyRequest(BaseModel):
+    expected_source_hash: str
+
+
+class LegacyInventoryBaselineApplyOut(BaseModel):
+    applied_skus: list[str]
+    blocked_items: list[LegacyInventoryBaselineItemOut]

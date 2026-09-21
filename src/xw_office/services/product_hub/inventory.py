@@ -33,6 +33,8 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
+import json
 import uuid
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -42,9 +44,11 @@ from xw_office.models.product_hub_inventory import InventoryAlert, InventoryMove
 from xw_office.repositories.product_hub import ProductFilter, ProductHubRepository
 from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.repositories.product_hub_sync import SyncRepository, append_outbox_event
+from xw_office.repositories.settings_kv import SettingKvRepository
 
 DEFAULT_LOCATION_CODE = "MAIN"
 DEFAULT_LOCATION_NAME = "Hauptlager"
+LEGACY_STOCK_LEVELS_KEY = "inventory.stock_levels"
 
 #: Fixed per the build plan: "client_request_id=UUID5(<namespace>, <alert uuid>)".
 _XW_FLOW_NAMESPACE = uuid.UUID("6f6f9f0e-6b0a-4c8e-9a8b-3a6a9a6c9a6a")
@@ -102,6 +106,52 @@ class InventoryCutoverReadiness:
         self.assessed_at = assessed_at
 
 
+class LegacyInventoryBaselineItem:
+    """One legacy stock entry and whether it is safe to seed into the V2 ledger."""
+
+    def __init__(
+        self,
+        *,
+        sku: str,
+        legacy_on_hand: int | None,
+        variant_id: uuid.UUID | None,
+        product_name: str,
+        status: str,
+        detail: str,
+    ) -> None:
+        self.sku = sku
+        self.legacy_on_hand = legacy_on_hand
+        self.variant_id = variant_id
+        self.product_name = product_name
+        self.status = status
+        self.detail = detail
+
+
+class LegacyInventoryBaselinePreview:
+    def __init__(
+        self,
+        *,
+        source_present: bool,
+        source_hash: str,
+        shadow_enabled: bool,
+        items: list[LegacyInventoryBaselineItem],
+        assessed_at: datetime.datetime,
+    ) -> None:
+        self.source_present = source_present
+        self.source_hash = source_hash
+        self.shadow_enabled = shadow_enabled
+        self.items = items
+        self.assessed_at = assessed_at
+
+
+class LegacyInventoryBaselineApplyResult:
+    def __init__(
+        self, *, applied_skus: list[str], blocked_items: list[LegacyInventoryBaselineItem]
+    ) -> None:
+        self.applied_skus = applied_skus
+        self.blocked_items = blocked_items
+
+
 class InventoryV2Service:
     def __init__(
         self,
@@ -115,6 +165,7 @@ class InventoryV2Service:
         self._inventory = InventoryRepository(session_factory)
         self._products = ProductHubRepository(session_factory)
         self._sync = SyncRepository(session_factory)
+        self._settings = SettingKvRepository(session_factory)
         self._public_base_url = public_base_url.rstrip("/")
         self._shadow_enabled = shadow_enabled
         self._master_enabled = master_enabled
@@ -367,3 +418,125 @@ class InventoryV2Service:
             checks=checks,
             assessed_at=datetime.datetime.now(datetime.timezone.utc),
         )
+
+    # -- legacy stock baseline (first controlled shadow-bridge step) -----------------
+
+    def legacy_baseline_preview(self) -> LegacyInventoryBaselinePreview:
+        """Compare legacy ``inventory.stock_levels`` with Hub variants, read-only.
+
+        A baseline is only safe for an exact SKU/alias whose Hub variant has no
+        prior V2 movement.  The preview never coerces malformed or negative legacy
+        values and never guesses a variant; those entries remain explicit blockers.
+        """
+        raw = self._settings.get_value_json(LEGACY_STOCK_LEVELS_KEY)
+        source_hash = hashlib.sha256((raw or "").encode("utf-8")).hexdigest()
+        try:
+            values = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            values = None
+        items: list[LegacyInventoryBaselineItem] = []
+        if not isinstance(values, dict):
+            return LegacyInventoryBaselinePreview(
+                source_present=bool(raw), source_hash=source_hash,
+                shadow_enabled=self._shadow_enabled,
+                items=[
+                    LegacyInventoryBaselineItem(
+                        sku="", legacy_on_hand=None, variant_id=None, product_name="",
+                        status="invalid_source",
+                        detail="inventory.stock_levels ist kein gültiges JSON-Objekt.",
+                    )
+                ] if raw else [],
+                assessed_at=datetime.datetime.now(datetime.timezone.utc),
+            )
+        for raw_sku, raw_quantity in sorted(values.items(), key=lambda item: str(item[0]).casefold()):
+            sku = str(raw_sku or "").strip().upper()
+            try:
+                quantity = int(raw_quantity)
+            except (TypeError, ValueError):
+                quantity = None
+            if not sku or quantity is None or quantity < 0:
+                items.append(LegacyInventoryBaselineItem(
+                    sku=sku or str(raw_sku or ""), legacy_on_hand=None, variant_id=None,
+                    product_name="", status="invalid_legacy_value",
+                    detail="SKU oder Bestandsmenge ist leer, ungültig oder negativ.",
+                ))
+                continue
+            resolved = self._products.resolve_sku(sku)
+            if resolved is None:
+                items.append(LegacyInventoryBaselineItem(
+                    sku=sku, legacy_on_hand=quantity, variant_id=None, product_name="",
+                    status="missing_hub_variant",
+                    detail="Keine eindeutige aktive Hub-Variante für diese Legacy-SKU gefunden.",
+                ))
+                continue
+            if not resolved.product.active or not resolved.variant.active:
+                items.append(LegacyInventoryBaselineItem(
+                    sku=sku, legacy_on_hand=quantity, variant_id=resolved.variant.id,
+                    product_name=resolved.product.name, status="inactive_hub_variant",
+                    detail="Die zugeordnete Hub-Variante oder ihr Produkt ist archiviert/deaktiviert.",
+                ))
+                continue
+            movement_count = self._inventory.count_movements_for_variant(resolved.variant.id)
+            if movement_count:
+                items.append(LegacyInventoryBaselineItem(
+                    sku=sku, legacy_on_hand=quantity, variant_id=resolved.variant.id,
+                    product_name=resolved.product.name, status="ledger_already_initialized",
+                    detail=f"Für diese Variante existieren bereits {movement_count} Ledger-Bewegung(en); keine Re-Baseline.",
+                ))
+                continue
+            items.append(LegacyInventoryBaselineItem(
+                sku=sku, legacy_on_hand=quantity, variant_id=resolved.variant.id,
+                product_name=resolved.product.name, status="ready",
+                detail="Exakte Hub-Variante gefunden; Baseline kann einmalig und idempotent geschrieben werden.",
+            ))
+        return LegacyInventoryBaselinePreview(
+            source_present=raw is not None, source_hash=source_hash,
+            shadow_enabled=self._shadow_enabled, items=items,
+            assessed_at=datetime.datetime.now(datetime.timezone.utc),
+        )
+
+    def apply_legacy_baseline(self, *, expected_source_hash: str) -> LegacyInventoryBaselineApplyResult:
+        """Write a one-time baseline for currently safe preview items.
+
+        The legacy blob hash must still match the reviewed preview.  Existing ledger
+        movements are never overwritten, and a disabled shadow flag fails closed.
+        """
+        if not self._shadow_enabled:
+            raise ValueError("Shadow Mode ist nicht aktiviert; keine Baseline wurde geschrieben")
+        preview = self.legacy_baseline_preview()
+        if preview.source_hash != expected_source_hash:
+            raise ValueError("Der Legacy-Bestand hat sich seit der Vorschau geändert; bitte neu prüfen")
+        if not preview.source_present:
+            raise ValueError("inventory.stock_levels ist nicht vorhanden; keine Baseline möglich")
+        applied: list[str] = []
+        blocked = [item for item in preview.items if item.status != "ready"]
+        for item in preview.items:
+            if item.status != "ready" or item.variant_id is None or item.legacy_on_hand is None:
+                continue
+            movement_count = self._inventory.count_movements_for_variant(item.variant_id)
+            if movement_count:
+                blocked.append(
+                    LegacyInventoryBaselineItem(
+                        sku=item.sku,
+                        legacy_on_hand=item.legacy_on_hand,
+                        variant_id=item.variant_id,
+                        product_name=item.product_name,
+                        status="ledger_already_initialized",
+                        detail=(
+                            "Die Variante wurde seit der Vorschau initialisiert; "
+                            "keine Re-Baseline geschrieben."
+                        ),
+                    )
+                )
+                continue
+            self.record_movement(
+                variant_id=item.variant_id,
+                delta=item.legacy_on_hand,
+                reason="import_baseline",
+                source="legacy_inventory_baseline",
+                idempotency_key=f"legacy-baseline:{item.sku}:{preview.source_hash[:24]}",
+                external_reference=LEGACY_STOCK_LEVELS_KEY,
+                note="Einmalige, bestätigte Baseline aus inventory.stock_levels; Legacy-Daten unverändert.",
+            )
+            applied.append(item.sku)
+        return LegacyInventoryBaselineApplyResult(applied_skus=applied, blocked_items=blocked)
