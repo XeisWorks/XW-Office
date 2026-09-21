@@ -205,6 +205,7 @@ def register_default_services(container: Container) -> None:
             c.resolve(MailDeliveryService),
             c.resolve(DraftInvoiceService),
             c.resolve(PrintQueueService),
+            c.resolve(InventoryService),
         ),
     )
     container.register(

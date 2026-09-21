@@ -273,6 +273,14 @@ class _WixOrdersStub:
         return dict(self.payment_details.get(order_id, {}))
 
 
+class _InventoryFulfillmentStub:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def record_wix_fulfillment_sale(self, **kwargs: object) -> None:
+        self.calls.append(kwargs)
+
+
 class _MailServiceStub:
     def __init__(self, *, configured: bool = True) -> None:
         self.configured = configured
@@ -709,6 +717,44 @@ def test_product_step_falls_back_to_physical_order_line_items() -> None:
     assert flags.product_ready is True
     assert flags.wix_fulfilled is True
     assert wix._created_fulfillment == ("54321", [{"id": "physical-1", "quantity": 2}])
+
+
+def test_direct_wix_fulfillment_mirrors_only_completed_physical_skus() -> None:
+    summary = InvoiceSummary(id="10c", invoiceNumber="RE-TEST-10C", order_reference="54322")
+    wix = _WixOrdersStub()
+    wix._fulfillable_items = [
+        {"id": "physical-1", "quantity": 2},
+        {"id": "digital-1", "quantity": 1},
+    ]
+    wix.line_items["54322"] = [
+        SimpleNamespace(line_item_id="physical-1", sku="XW-7001", is_digital=False),
+        SimpleNamespace(line_item_id="digital-1", sku="XW-DIGITAL", is_digital=True),
+    ]
+    inventory = _InventoryFulfillmentStub()
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        _InvoiceClientStub([summary]),  # type: ignore[arg-type]
+        None,
+        wix,  # type: ignore[arg-type]
+        inventory_service=inventory,  # type: ignore[arg-type]
+    )
+
+    flags = svc._run_product_step(summary, svc.read_fulfillment_flags("10c"))  # noqa: SLF001
+
+    assert flags.wix_fulfilled is True
+    assert inventory.calls == [{
+        "sku": "XW-7001",
+        "quantity": 2,
+        "invoice_id": "10c",
+        "order_reference": "54322",
+        "fulfillment_id": "fulfillment-1",
+    }]
+
+    # START consumes these lines through execute_start_workflow; never book twice.
+    svc._run_product_step(  # noqa: SLF001
+        summary, svc.read_fulfillment_flags("10c"), inventory_already_accounted=True
+    )
+    assert len(inventory.calls) == 1
 
 
 def test_invoice_list_hints_follow_legacy_alarm_rules() -> None:

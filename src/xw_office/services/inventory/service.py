@@ -42,7 +42,14 @@ class InventoryShadowMirror(Protocol):
     ) -> object: ...
 
     def mirror_stock_movement(
-        self, *, sku: str, delta: int, reason: str, source: str, external_reference: str = ""
+        self,
+        *,
+        sku: str,
+        delta: int,
+        reason: str,
+        source: str,
+        external_reference: str = "",
+        idempotency_key: str = "",
     ) -> object: ...
 
 
@@ -688,20 +695,64 @@ class InventoryService:
         if outcome not in {"mirrored", "already_in_sync"}:
             logger.warning("Inventory V2 shadow mirror skipped %s (%s): %s", sku, outcome, detail)
 
+    def record_wix_fulfillment_sale(
+        self,
+        *,
+        sku: str,
+        quantity: int,
+        invoice_id: str,
+        order_reference: str,
+        fulfillment_id: str = "",
+    ) -> None:
+        """Mirror a completed Wix physical fulfillment without changing legacy JSON.
+
+        START already books its invoice consumption through its own legacy workflow;
+        this entry point is exclusively for the direct, outside-START fulfillment
+        action. The deterministic key makes a repeated fulfillment response safe.
+        """
+        clean_sku = str(sku or "").strip().upper()
+        qty = max(0, int(quantity or 0))
+        if not clean_sku or qty == 0:
+            return
+        clean_invoice_id = str(invoice_id or "").strip()
+        clean_order_reference = str(order_reference or "").strip()
+        clean_fulfillment_id = str(fulfillment_id or "").strip()
+        key_suffix = clean_fulfillment_id or f"{clean_invoice_id}:{clean_order_reference}"
+        self._mirror_legacy_stock_movement(
+            sku=clean_sku,
+            delta=-qty,
+            reason="sale",
+            source="wix_fulfillment.direct",
+            external_reference=(
+                f"wix-fulfillment:{key_suffix};invoice:{clean_invoice_id};order:{clean_order_reference}"
+            ),
+            idempotency_key=f"wix-fulfillment:{key_suffix}:{clean_sku}",
+        )
+
     def _mirror_legacy_stock_movement(
-        self, *, sku: str, delta: int, reason: str, source: str
+        self,
+        *,
+        sku: str,
+        delta: int,
+        reason: str,
+        source: str,
+        external_reference: str = _STOCK_KEY,
+        idempotency_key: str = "",
     ) -> None:
         """Mirror a known START/REPRINTS movement after its legacy write succeeds."""
         if self._shadow_mirror is None or delta == 0:
             return
         try:
-            result = self._shadow_mirror.mirror_stock_movement(
-                sku=sku,
-                delta=delta,
-                reason=reason,
-                source=source,
-                external_reference=_STOCK_KEY,
-            )
+            mirror_args: dict[str, object] = {
+                "sku": sku,
+                "delta": delta,
+                "reason": reason,
+                "source": source,
+                "external_reference": external_reference,
+            }
+            if idempotency_key:
+                mirror_args["idempotency_key"] = idempotency_key
+            result = self._shadow_mirror.mirror_stock_movement(**mirror_args)
         except Exception:  # noqa: BLE001 - completed legacy print/invoice work stays intact
             logger.exception("Inventory V2 shadow movement mirror failed for SKU %s", sku)
             return

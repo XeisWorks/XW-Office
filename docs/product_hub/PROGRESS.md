@@ -1372,6 +1372,15 @@ stock and logged as a shortage instead of inventing stock or blocking the comple
 legacy workflow. Invoice fulfillment outside START, returns/recount and
 `PrintDecisionEngine` remain the next unbridged paths.
 
+The direct (outside-START) Wix fulfillment action now mirrors the exact completed
+physical Wix line items into the Hub ledger as `sale` movements. It leaves legacy
+`inventory.stock_levels` unchanged, uses the Wix fulfillment ID plus SKU as a
+deterministic idempotency key, and never runs from START because START already
+consumes the same invoice positions in its dedicated inventory workflow. Wix
+fulfillment remains successful even when the mirror cannot be made; a mapped
+deviation enters the Shadow queue. Returns/recount and `PrintDecisionEngine` remain
+unbridged.
+
 Shadow-Mirror-Abweichungen sind nicht mehr nur Desktop-Logeinträge: Für eine
 zuordenbare Hub-Variante erzeugen fehlende Baseline, Inaktivität, Unterdeckung oder
 parallele Ledger-Änderung einen deduplizierten `legacy_inventory`-Sync-Konflikt.

@@ -416,7 +416,8 @@ class InventoryV2Service:
                 state="blocked",
                 detail=(
                     "set_product_stock, START und REPRINTS werden im aktivierten Shadow Mode gespiegelt. "
-                    "Noch offen: Rechnungs-Fulfillment, Retouren/Recount und PrintDecisionEngine."
+                    "Direktes Wix-Rechnungs-Fulfillment wird als sale gespiegelt. "
+                    "Noch offen: Retouren/Recount und PrintDecisionEngine."
                 ),
             ),
             InventoryCutoverCheck(
@@ -737,6 +738,7 @@ class LegacyInventoryShadowBridge:
         reason: str,
         source: str,
         external_reference: str = "",
+        idempotency_key: str = "",
     ) -> LegacyInventoryMirrorResult:
         """Mirror one known legacy movement with its business reason.
 
@@ -811,7 +813,7 @@ class LegacyInventoryShadowBridge:
                 delta=applied_delta,
                 reason=reason,
                 source=source or "legacy_inventory_mirror",
-                idempotency_key=f"legacy-mirror:{uuid.uuid4()}",
+                idempotency_key=idempotency_key or f"legacy-mirror:{uuid.uuid4()}",
                 external_reference=external_reference or LEGACY_STOCK_LEVELS_KEY,
                 note=(
                     f"Shadow-Mirror der Legacy-SKU {clean_sku}: "

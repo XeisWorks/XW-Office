@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.core.app_paths import state_dir
@@ -23,6 +23,9 @@ from xw_office.services.sevdesk.invoice_client import InvoiceClient, InvoiceSumm
 from xw_office.services.sevdesk.invoice_client import DEFAULT_SENSITIVE_COUNTRY_CODES
 from xw_office.services.shipping.countries import country_label_for_address
 from xw_office.services.wix.client import WixOrdersClient
+
+if TYPE_CHECKING:
+    from xw_office.services.inventory.service import InventoryService
 
 try:
     import fitz
@@ -228,6 +231,7 @@ class InvoiceProcessingService:
         mail_service: MailDeliveryService | None = None,
         draft_invoice_service: DraftInvoiceService | None = None,
         print_queue: PrintQueueService | None = None,
+        inventory_service: InventoryService | None = None,
     ) -> None:
         self._invoices = invoice_client
         self._settings_repo = settings_repo
@@ -247,6 +251,7 @@ class InvoiceProcessingService:
         ] = {}
         self._mail_service = mail_service
         self._drafts = draft_invoice_service
+        self._inventory = inventory_service
 
     def load_invoice_table_rows(
         self,
@@ -556,7 +561,10 @@ class InvoiceProcessingService:
                         if progress_callback is not None:
                             progress_callback(f"START: Label fuer {label} wird gedruckt...")
                         flags = run_phase("label_print", lambda: self._run_label_print_step(summary, flags))
-                    flags = run_phase("wix_fulfillment", lambda: self._run_product_step(summary, flags))
+                    flags = run_phase(
+                        "wix_fulfillment",
+                        lambda: self._run_product_step(summary, flags, inventory_already_accounted=True),
+                    )
                 if progress_callback is not None:
                     progress_callback(f"START: Mail fuer {label} wird gesendet...")
                 flags = run_phase(
@@ -739,7 +747,11 @@ class InvoiceProcessingService:
                         run_phase(summary, "payment", lambda: self._run_payment_step(summary, flags)),
                     )
                     self.write_fulfillment_flags(summary.id, flags)
-                flags = run_phase(summary, "wix_fulfillment", lambda: self._run_product_step(summary, flags))
+                flags = run_phase(
+                    summary,
+                    "wix_fulfillment",
+                    lambda: self._run_product_step(summary, flags, inventory_already_accounted=True),
+                )
                 self.write_fulfillment_flags(summary.id, flags)
                 if progress_callback is not None:
                     progress_callback(f"START: Mail fuer {label} wird gesendet...")
@@ -1749,7 +1761,13 @@ class InvoiceProcessingService:
         logger.info("Invoice %s label printed", summary.invoice_number or summary.id)
         return self._next_flags(flags, label_printed=True)
 
-    def _run_product_step(self, summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
+    def _run_product_step(
+        self,
+        summary: InvoiceSummary,
+        flags: FulfillmentFlags,
+        *,
+        inventory_already_accounted: bool = False,
+    ) -> FulfillmentFlags:
         if not summary.order_reference.strip() or self._wix_orders is None:
             return self._next_flags(flags, product_ready=False, wix_fulfilled=False)
 
@@ -1797,7 +1815,78 @@ class InvoiceProcessingService:
                 wix_fulfilled=False,
                 last_warning=f"Wix-Fulfillment konnte nicht erstellt werden fuer {reference}",
             )
+        if not inventory_already_accounted:
+            self._mirror_direct_wix_fulfillment_stock(
+                summary=summary,
+                reference=reference,
+                fulfilled_items=items,
+                created=created,
+            )
         return self._next_flags(flags, product_ready=True, wix_fulfilled=True)
+
+    def _mirror_direct_wix_fulfillment_stock(
+        self,
+        *,
+        summary: InvoiceSummary,
+        reference: str,
+        fulfilled_items: list[dict[str, object]],
+        created: object,
+    ) -> None:
+        """Mirror precisely the physical line quantities of a direct Wix fulfillment.
+
+        This must not run from START: START's dedicated inventory workflow has
+        already consumed exactly the same order lines. A direct retry, however,
+        creates a Wix fulfillment without touching legacy ``stock_levels`` and is
+        therefore the missing shadow movement path.
+        """
+        if self._inventory is None or self._wix_orders is None:
+            return
+        quantities_by_line_id = {
+            str(item.get("id") or "").strip(): max(0, int(item.get("quantity") or 0))
+            for item in fulfilled_items
+            if str(item.get("id") or "").strip()
+        }
+        if not quantities_by_line_id:
+            return
+        try:
+            order_items = self._wix_orders.fetch_order_line_items(reference)
+        except Exception as exc:  # noqa: BLE001 - Wix fulfillment is already complete
+            logger.warning(
+                "Inventory shadow mirror could not load Wix lines invoice=%s order=%s: %s",
+                summary.id,
+                reference,
+                exc,
+            )
+            return
+        fulfillment_id = self._created_fulfillment_id(created)
+        for line in order_items:
+            line_id = str(getattr(line, "line_item_id", "") or "").strip()
+            quantity = quantities_by_line_id.get(line_id, 0)
+            sku = str(getattr(line, "sku", "") or "").strip().upper()
+            if quantity <= 0 or not sku or bool(getattr(line, "is_digital", False)):
+                continue
+            try:
+                self._inventory.record_wix_fulfillment_sale(
+                    sku=sku,
+                    quantity=quantity,
+                    invoice_id=str(summary.id),
+                    order_reference=reference,
+                    fulfillment_id=fulfillment_id,
+                )
+            except Exception:  # noqa: BLE001 - completed Wix fulfillment stays intact
+                logger.exception(
+                    "Inventory shadow mirror failed invoice=%s order=%s sku=%s",
+                    summary.id,
+                    reference,
+                    sku,
+                )
+
+    @staticmethod
+    def _created_fulfillment_id(created: object) -> str:
+        if not isinstance(created, dict):
+            return ""
+        nested = created.get("fulfillment") if isinstance(created.get("fulfillment"), dict) else {}
+        return str(created.get("id") or nested.get("id") or "").strip()
 
     @staticmethod
     def _normalize_wix_fulfillment_items(raw_items: list[dict[str, Any]] | object) -> list[dict[str, object]]:

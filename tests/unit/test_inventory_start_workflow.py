@@ -112,6 +112,30 @@ def test_manual_legacy_stock_update_is_mirrored_when_adapter_is_configured(tmp_p
     }]
 
 
+def test_direct_wix_fulfillment_sale_is_mirrored_without_touching_legacy_stock() -> None:
+    repo = _RepoStub({"inventory.stock_levels": '{"XW-6-003": 9}'})
+    mirror = _ShadowMirrorStub()
+    service = InventoryService(AppConfig(), repo, shadow_mirror=mirror)
+
+    service.record_wix_fulfillment_sale(
+        sku="xw-6-003",
+        quantity=2,
+        invoice_id="invoice-1",
+        order_reference="order-1",
+        fulfillment_id="fulfillment-1",
+    )
+
+    assert json.loads(repo.values["inventory.stock_levels"])["XW-6-003"] == 9
+    assert mirror.calls == [{
+        "sku": "XW-6-003",
+        "delta": -2,
+        "reason": "sale",
+        "source": "wix_fulfillment.direct",
+        "external_reference": "wix-fulfillment:fulfillment-1;invoice:invoice-1;order:order-1",
+        "idempotency_key": "wix-fulfillment:fulfillment-1:XW-6-003",
+    }]
+
+
 def test_execute_full_mode_updates_stock_with_buffer_and_consumption(tmp_path: Path) -> None:
     pdf_path = tmp_path / "score.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n")
