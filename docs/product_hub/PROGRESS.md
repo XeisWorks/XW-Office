@@ -71,12 +71,11 @@ needed.
 - `web/schemas/products.py` / `web/routers/products.py` — `GET /api/v1/products` now
   returns `ParentProductListItem` (was the flat `ProductListItem`) — one row per
   fachliches Product, `variants: [...]` embedded for the expand UI.
-- Known gap: `channel_mapping` is product-scoped only (confirmed during the Master
-  Seed V2 grouping run below — see the "Astronaut" conflict), so only a product's
-  *default* variant can honestly report a real Wix sync state; every other variant
-  falls back to its own `sync_wix` hint. ISBN/ASIN were **not** added as list columns
-  (would need another batched `product_identifier` query) — noted as a remaining gap,
-  not silently dropped.
+- Variant-level `channel_mapping` rows now take precedence for Wix and sevDesk. A
+  legacy product-level mapping remains a compatibility fallback for its default
+  variant only; siblings never inherit it. ISBN/ASIN were **not** added as list
+  columns (would need another batched `product_identifier` query) — noted as a
+  remaining gap, not silently dropped.
 
 **Frontend** (`web/product-hub/`):
 - `pages/ProductListPage.tsx` — SKU is now a pinned, always-visible, always-first,
@@ -1408,3 +1407,9 @@ sevDesk stock. A convergent later read closes the matching queue item automatica
 Products with several stock variants sharing the legacy parent-level sevDesk Part are
 explicitly skipped until variant-level Part mapping exists; unavailable sevDesk reads
 are reported as errors, never converted into a false stock-zero drift.
+
+Variant-level `channel_mapping` support now applies to sevDesk reconciliation and the
+catalog read model. A `sevdesk` mapping on a `product_variant` is authoritative and
+allows every mapped variant of a grouped product to be checked independently. The
+legacy product-level Part ID remains a compatibility fallback only for a product with
+exactly one active stock variant; it is never copied across sibling variants.

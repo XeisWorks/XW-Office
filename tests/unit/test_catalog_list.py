@@ -159,6 +159,29 @@ def test_wix_mapping_present_reports_synced_state(product_repo: ProductHubReposi
     assert summary.wix_state == "synced"
 
 
+def test_variant_level_channel_mappings_drive_grouped_variant_states(
+    product_repo: ProductHubRepository, grouping: GroupingService
+) -> None:
+    parent, parent_variant = product_repo.create_product(sku="XW-1", name="A")
+    child, child_variant = product_repo.create_product(sku="XW-1-D", name="A")
+    product_repo.create_channel_mapping(
+        channel="sevdesk", entity_type="variant", internal_entity_id=child_variant.id, external_id="part-2"
+    )
+    product_repo.create_channel_mapping(
+        channel="wix", entity_type="variant", internal_entity_id=child_variant.id, external_id="wix-2"
+    )
+    grouping.group_products_into_parent(parent_product_id=parent.id, child_product_ids=[child.id])
+    refreshed_parent = product_repo.get_product(parent.id)
+    assert refreshed_parent is not None
+
+    [summary] = build_parent_product_summaries(product_repo, [refreshed_parent])
+    by_sku = {variant.sku: variant for variant in summary.variants}
+
+    assert by_sku[parent_variant.sku].sevdesk_state == "pending"
+    assert by_sku[child_variant.sku].sevdesk_state == "synced"
+    assert by_sku[child_variant.sku].wix_state == "synced"
+
+
 def test_tags_are_aggregated_per_product(product_repo: ProductHubRepository) -> None:
     product, _variant = product_repo.create_product(sku="XW-1", name="A")
     tag = product_repo.get_or_create_tag(code="amazon", label="Amazon")

@@ -109,9 +109,53 @@ def test_reconciliation_skips_ambiguous_parent_part_mapping(
     ).run()
 
     assert result.compared == 0
-    assert result.skipped == 1
-    assert result.items[0].detail == "Mehrere Lager-Varianten teilen einen sevDesk-Part"
+    assert result.skipped == 2
+    assert {item.sku for item in result.items} == {"XW-RECON", "XW-RECON-SECOND"}
+    assert all("jeder Variante" in item.detail for item in result.items)
     assert part_client.requests == []
+
+
+def test_reconciliation_uses_distinct_variant_level_sevdesk_mappings(
+    session_factory: sessionmaker[Session],
+) -> None:
+    product_id, default_variant_id = _live_product_with_part(session_factory)
+    second_variant_id = uuid.uuid4()
+    with session_factory.begin() as session:
+        session.add(
+            ProductVariant(
+                id=second_variant_id,
+                product_id=product_id,
+                sku="XW-RECON-SECOND",
+                name="Second stock variant",
+                active=True,
+                stock_enabled=True,
+                is_default=False,
+                option_values={},
+                attributes={},
+            )
+        )
+    products = ProductHubRepository(session_factory)
+    products.create_channel_mapping(
+        channel="sevdesk",
+        entity_type="variant",
+        internal_entity_id=default_variant_id,
+        external_id="part-1",
+    )
+    products.create_channel_mapping(
+        channel="sevdesk",
+        entity_type="variant",
+        internal_entity_id=second_variant_id,
+        external_id="part-2",
+    )
+    part_client = FakePartClient({"part-1": 0, "part-2": 0})
+
+    result = SevdeskInventoryReconciliationService(
+        session_factory, part_client, shadow_enabled=True
+    ).run()
+
+    assert result.compared == 2
+    assert result.skipped == 0
+    assert [request[0] for request in part_client.requests] == ["part-1", "part-2"]
 
 
 def test_reconciliation_reports_part_read_error_without_creating_false_drift(

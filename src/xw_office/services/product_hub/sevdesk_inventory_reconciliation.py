@@ -6,7 +6,7 @@ import uuid
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from xw_office.models.product_hub import ProductVariant
+from xw_office.models.product_hub import ChannelMapping, Product, ProductVariant
 from xw_office.repositories.product_hub import ProductFilter, ProductHubRepository
 from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.sevdesk.part_client import PartClient
@@ -70,12 +70,18 @@ class SevdeskInventoryReconciliationService:
         if not self._shadow_enabled:
             raise RuntimeError("Inventory Shadow Mode ist nicht aktiviert")
         products = self._products.list_products(ProductFilter(status="live", active=True))
-        physical = [
-            product
-            for product in products
-            if product.product_type == "physical" and str(product.sevdesk_part_id or "").strip()
-        ]
+        physical = [product for product in products if product.product_type == "physical"]
         variants = self._products.list_variants_for_products([product.id for product in physical])
+        variant_mappings = self._sevdesk_mapping_by_entity(
+            self._products.list_channel_mappings_for_entities(
+                [variant.id for variant in variants], entity_type="variant"
+            )
+        )
+        product_mappings = self._sevdesk_mapping_by_entity(
+            self._products.list_channel_mappings_for_entities(
+                [product.id for product in physical], entity_type="product"
+            )
+        )
         by_product: dict[uuid.UUID, list[ProductVariant]] = {}
         for variant in variants:
             if variant.active and variant.stock_enabled:
@@ -84,52 +90,96 @@ class SevdeskInventoryReconciliationService:
         items: list[SevdeskInventoryReconciliationItem] = []
         for product in physical:
             eligible = by_product.get(product.id, [])
-            part_id = str(product.sevdesk_part_id or "").strip()
-            if len(eligible) != 1:
+            parent_part_id = self._parent_part_id(product, product_mappings.get(product.id))
+            for variant in eligible:
+                variant_mapping = variant_mappings.get(variant.id)
+                part_id = str(variant_mapping.external_id).strip() if variant_mapping else ""
+                if not part_id and len(eligible) == 1:
+                    part_id = parent_part_id
+                if not part_id:
+                    items.append(
+                        SevdeskInventoryReconciliationItem(
+                            sku=variant.sku,
+                            product_name=product.name,
+                            sevdesk_part_id="",
+                            hub_on_hand=None,
+                            sevdesk_on_hand=None,
+                            state="skipped",
+                            detail=(
+                                "Mehrere Lager-Varianten: jeder Variante muss ein eigener "
+                                "sevDesk-Part zugeordnet werden"
+                                if len(eligible) > 1
+                                else "Keine sevDesk-Part-Zuordnung fuer Variante"
+                            ),
+                        )
+                    )
+                    continue
+                self._compare_variant(
+                    items=items, product=product, variant=variant, part_id=part_id
+                )
+            if not eligible:
                 items.append(
                     SevdeskInventoryReconciliationItem(
                         sku=product.sku,
                         product_name=product.name,
-                        sevdesk_part_id=part_id,
+                        sevdesk_part_id=parent_part_id,
                         hub_on_hand=None,
                         sevdesk_on_hand=None,
                         state="skipped",
-                        detail=(
-                            "Keine aktive Lager-Variante" if not eligible
-                            else "Mehrere Lager-Varianten teilen einen sevDesk-Part"
-                        ),
+                        detail="Keine aktive Lager-Variante",
                     )
                 )
-                continue
-            variant = eligible[0]
-            hub_on_hand = self._inventory.variant_on_hand(variant.id)
-            try:
-                sevdesk_on_hand = int(self._part_client.get_part_stock(part_id, strict=True))
-            except Exception as exc:  # noqa: BLE001 - continue with independent products
-                items.append(
-                    SevdeskInventoryReconciliationItem(
-                        sku=variant.sku,
-                        product_name=product.name,
-                        sevdesk_part_id=part_id,
-                        hub_on_hand=hub_on_hand,
-                        sevdesk_on_hand=None,
-                        state="error",
-                        detail=str(exc),
-                    )
-                )
-                continue
-            drift = self._inventory.reconcile_variant_stock(
-                variant.id, sevdesk_on_hand=sevdesk_on_hand
-            )
+        return SevdeskInventoryReconciliationResult(items=items)
+
+    @staticmethod
+    def _sevdesk_mapping_by_entity(
+        mappings: list[ChannelMapping],
+    ) -> dict[uuid.UUID, ChannelMapping]:
+        return {
+            mapping.internal_entity_id: mapping
+            for mapping in mappings
+            if mapping.channel == "sevdesk" and str(mapping.external_id or "").strip()
+        }
+
+    @staticmethod
+    def _parent_part_id(product: Product, mapping: ChannelMapping | None) -> str:
+        if mapping is not None and str(mapping.external_id or "").strip():
+            return str(mapping.external_id).strip()
+        return str(product.sevdesk_part_id or "").strip()
+
+    def _compare_variant(
+        self,
+        *,
+        items: list[SevdeskInventoryReconciliationItem],
+        product: Product,
+        variant: ProductVariant,
+        part_id: str,
+    ) -> None:
+        hub_on_hand = self._inventory.variant_on_hand(variant.id)
+        try:
+            sevdesk_on_hand = int(self._part_client.get_part_stock(part_id, strict=True))
+        except Exception as exc:  # noqa: BLE001 - continue with independent products
             items.append(
                 SevdeskInventoryReconciliationItem(
                     sku=variant.sku,
                     product_name=product.name,
                     sevdesk_part_id=part_id,
                     hub_on_hand=hub_on_hand,
-                    sevdesk_on_hand=sevdesk_on_hand,
-                    state="drift" if drift else "equal",
-                    detail="Abweichung in der Sync-Queue erfasst" if drift else "Bestände stimmen überein",
+                    sevdesk_on_hand=None,
+                    state="error",
+                    detail=str(exc),
                 )
             )
-        return SevdeskInventoryReconciliationResult(items=items)
+            return
+        drift = self._inventory.reconcile_variant_stock(variant.id, sevdesk_on_hand=sevdesk_on_hand)
+        items.append(
+            SevdeskInventoryReconciliationItem(
+                sku=variant.sku,
+                product_name=product.name,
+                sevdesk_part_id=part_id,
+                hub_on_hand=hub_on_hand,
+                sevdesk_on_hand=sevdesk_on_hand,
+                state="drift" if drift else "equal",
+                detail="Abweichung in der Sync-Queue erfasst" if drift else "Bestaende stimmen ueberein",
+            )
+        )

@@ -184,10 +184,19 @@ def build_parent_product_summaries(
 
     stock_by_variant = repo.sum_stock_on_hand_for_variants(variant_ids)
 
+    product_mappings = repo.list_channel_mappings_for_entities(product_ids, entity_type="product")
     wix_by_product: dict[uuid.UUID, ChannelMapping] = {
-        m.internal_entity_id: m
-        for m in repo.list_channel_mappings_for_entities(product_ids, entity_type="product")
-        if m.channel == "wix"
+        m.internal_entity_id: m for m in product_mappings if m.channel == "wix"
+    }
+    sevdesk_by_product: dict[uuid.UUID, ChannelMapping] = {
+        m.internal_entity_id: m for m in product_mappings if m.channel == "sevdesk"
+    }
+    variant_mappings = repo.list_channel_mappings_for_entities(variant_ids, entity_type="variant")
+    wix_by_variant: dict[uuid.UUID, ChannelMapping] = {
+        m.internal_entity_id: m for m in variant_mappings if m.channel == "wix"
+    }
+    sevdesk_by_variant: dict[uuid.UUID, ChannelMapping] = {
+        m.internal_entity_id: m for m in variant_mappings if m.channel == "sevdesk"
     }
 
     tags_by_product: dict[uuid.UUID, list[str]] = {}
@@ -240,13 +249,13 @@ def build_parent_product_summaries(
                     gross_values.append(current_price.gross_amount)
                 currency = currency or current_price.currency
 
-            # channel_mapping is product-scoped, not variant-scoped (confirmed during
-            # the Master Seed V2 grouping run - see PROGRESS.md's "Astronaut" finding)
-            # - only the default variant can honestly claim the product's own mapping;
-            # every other variant falls back to its own sync_wix hint.
+            # Variant mappings are authoritative. A legacy product mapping may only
+            # describe its default variant; applying it to every grouped sibling
+            # would report false channel health.
             wix_state = _channel_state(
                 sync_flag=_bool_attr(attrs, "sync_wix"),
-                mapping=wix_by_product.get(product.id) if variant.is_default else None,
+                mapping=wix_by_variant.get(variant.id)
+                or (wix_by_product.get(product.id) if variant.is_default else None),
             )
             variant_wix_states.append(wix_state)
             sevdesk_flag = _bool_attr(attrs, "sync_sevdesk")
@@ -273,7 +282,11 @@ def build_parent_product_summaries(
                     currency=current_price.currency if current_price else None,
                     stock=stock_by_variant.get(variant.id),
                     wix_state=wix_state,
-                    sevdesk_state=_channel_state(sync_flag=sevdesk_flag, mapping=None),
+                    sevdesk_state=_channel_state(
+                        sync_flag=sevdesk_flag,
+                        mapping=sevdesk_by_variant.get(variant.id)
+                        or (sevdesk_by_product.get(product.id) if variant.is_default else None),
+                    ),
                     amazon_state=_channel_state(sync_flag=amazon_flag, mapping=None),
                 )
             )
