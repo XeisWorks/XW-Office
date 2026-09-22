@@ -105,7 +105,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
   if (response.status === 409) {
     const body = await response.json().catch(() => null);
-    throw new ConflictApiError(body);
+    const detail = body && typeof body === "object" && "detail" in body ? body.detail : undefined;
+    if (detail && typeof detail === "object") throw new ConflictApiError(detail);
+    throw new ApiError(409, typeof detail === "string" ? detail : "Konflikt beim Speichern.");
   }
   if (response.status === 204) {
     return undefined as T;

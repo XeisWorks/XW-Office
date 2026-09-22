@@ -97,6 +97,10 @@ a {
   color: var(--color-bad-text);
 }
 
+.hint-success {
+  color: var(--success, #167a3d);
+}
+
 .token-gate {
   display: flex;
   align-items: center;

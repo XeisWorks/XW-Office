@@ -182,6 +182,7 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
   const [sevdeskPartId, setSevdeskPartId] = useState("");
   const [sevdeskMappingSaving, setSevdeskMappingSaving] = useState(false);
   const [sevdeskMappingError, setSevdeskMappingError] = useState<string | null>(null);
+  const [sevdeskMappingSuccess, setSevdeskMappingSuccess] = useState<string | null>(null);
 
   async function handleSevdeskMapping(event: FormEvent) {
     event.preventDefault();
@@ -189,9 +190,11 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
     if (!sevdeskVariantId || !partId) return;
     setSevdeskMappingSaving(true);
     setSevdeskMappingError(null);
+    setSevdeskMappingSuccess(null);
     try {
       await api.assignVariantSevdeskPart(id, sevdeskVariantId, { part_id: partId });
       setSevdeskPartId("");
+      setSevdeskMappingSuccess("sevDesk-Part wurde der Variante zugeordnet.");
       refresh();
     } catch (err) {
       setSevdeskMappingError(err instanceof Error ? err.message : String(err));
@@ -204,8 +207,10 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
     if (!window.confirm("sevDesk-Part-Zuordnung dieser Variante entfernen?")) return;
     setSevdeskMappingSaving(true);
     setSevdeskMappingError(null);
+    setSevdeskMappingSuccess(null);
     try {
       await api.removeVariantSevdeskPart(id, variantId);
+      setSevdeskMappingSuccess("sevDesk-Part-Zuordnung wurde entfernt.");
       refresh();
     } catch (err) {
       setSevdeskMappingError(err instanceof Error ? err.message : String(err));
@@ -585,6 +590,7 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
               </form>
               <p className="hint">Aendert keine sevDesk-Daten. Eine alte Produkt-Zuordnung wird nur auf die ausgewaehlte Variante umgehaengt.</p>
               {sevdeskMappingError && <p className="hint hint-error">{sevdeskMappingError}</p>}
+              {sevdeskMappingSuccess && <p className="hint hint-success">{sevdeskMappingSuccess}</p>}
               <AsyncState
                 loading={channels.loading}
                 error={channels.error}
