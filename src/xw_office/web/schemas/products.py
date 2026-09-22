@@ -182,6 +182,7 @@ class ChannelMappingOut(BaseModel):
     id: uuid.UUID
     channel: str
     entity_type: str
+    internal_entity_id: uuid.UUID
     external_id: str
     sync_status: str
     last_pulled_at: datetime.datetime | None = None
@@ -357,6 +358,10 @@ class VariantUpdateRequest(BaseModel):
     active: bool | None = None
     stock_enabled: bool | None = None
     weight_grams: Decimal | None = None
+
+
+class SevdeskPartMappingRequest(BaseModel):
+    part_id: str = Field(min_length=1, max_length=240)
 
 
 class AssetUpdateRequest(BaseModel):

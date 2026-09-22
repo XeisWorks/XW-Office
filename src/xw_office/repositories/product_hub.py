@@ -1154,6 +1154,98 @@ class ProductHubRepository:
             session.flush()
             return mapping
 
+    def assign_sevdesk_part_to_variant(
+        self, *, product_id: uuid.UUID, variant_id: uuid.UUID, part_id: str
+    ) -> ChannelMapping:
+        """Assign one sevDesk Part to one exact Hub variant.
+
+        A sevDesk Part must not be represented by both the old product-level row and
+        a variant row. When the old row belongs to this product, this explicit action
+        migrates it in place. A Part owned elsewhere is rejected instead of silently
+        stealing a stock relation.
+        """
+        clean_part_id = str(part_id or "").strip()
+        if not clean_part_id:
+            raise ValueError("sevDesk Part-ID is required")
+        with self._scope() as session:
+            variant = session.get(ProductVariant, variant_id)
+            if variant is None or variant.product_id != product_id:
+                raise KeyError(f"Variant {variant_id} does not belong to product {product_id}")
+            part_mappings = list(
+                session.scalars(
+                    select(ChannelMapping).where(
+                        ChannelMapping.channel == "sevdesk",
+                        ChannelMapping.external_id == clean_part_id,
+                    )
+                ).all()
+            )
+            if len(part_mappings) > 1:
+                raise ValueError("Diese sevDesk Part-ID ist mehrfach im Hub zugeordnet")
+            part_mapping = part_mappings[0] if part_mappings else None
+            target_mapping = session.scalar(
+                select(ChannelMapping).where(
+                    ChannelMapping.channel == "sevdesk",
+                    ChannelMapping.entity_type == "variant",
+                    ChannelMapping.internal_entity_id == variant_id,
+                )
+            )
+            if part_mapping is not None and not (
+                part_mapping.entity_type == "variant" and part_mapping.internal_entity_id == variant_id
+            ):
+                if not (
+                    part_mapping.entity_type == "product"
+                    and part_mapping.internal_entity_id == product_id
+                ):
+                    raise ValueError("Diese sevDesk Part-ID ist bereits einer anderen Hub-Entitaet zugeordnet")
+                if target_mapping is not None and target_mapping.id != part_mapping.id:
+                    session.delete(target_mapping)
+                part_mapping.entity_type = "variant"
+                part_mapping.internal_entity_id = variant_id
+                mapping = part_mapping
+            elif target_mapping is not None:
+                target_mapping.external_id = clean_part_id
+                mapping = target_mapping
+            else:
+                mapping = ChannelMapping(
+                    id=uuid.uuid4(),
+                    channel="sevdesk",
+                    entity_type="variant",
+                    internal_entity_id=variant_id,
+                    external_id=clean_part_id,
+                )
+                session.add(mapping)
+            mapping.sync_status = "never"
+            mapping.external_revision = None
+            mapping.last_pulled_at = None
+            mapping.last_pushed_at = None
+            mapping.last_external_updated_at = None
+            mapping.last_success_at = None
+            mapping.source_payload_hash = None
+            mapping.last_error = None
+            session.flush()
+            return mapping
+
+    def remove_sevdesk_part_from_variant(
+        self, *, product_id: uuid.UUID, variant_id: uuid.UUID
+    ) -> bool:
+        """Remove a variant-only sevDesk Part mapping; legacy product mapping stays intact."""
+        with self._scope() as session:
+            variant = session.get(ProductVariant, variant_id)
+            if variant is None or variant.product_id != product_id:
+                raise KeyError(f"Variant {variant_id} does not belong to product {product_id}")
+            mapping = session.scalar(
+                select(ChannelMapping).where(
+                    ChannelMapping.channel == "sevdesk",
+                    ChannelMapping.entity_type == "variant",
+                    ChannelMapping.internal_entity_id == variant_id,
+                )
+            )
+            if mapping is None:
+                return False
+            session.delete(mapping)
+            session.flush()
+            return True
+
     def reparent_channel_mapping(
         self, mapping_id: uuid.UUID, *, internal_entity_id: uuid.UUID
     ) -> ChannelMapping:

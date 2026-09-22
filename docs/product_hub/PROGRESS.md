@@ -1413,3 +1413,10 @@ catalog read model. A `sevdesk` mapping on a `product_variant` is authoritative 
 allows every mapped variant of a grouped product to be checked independently. The
 legacy product-level Part ID remains a compatibility fallback only for a product with
 exactly one active stock variant; it is never copied across sibling variants.
+
+The Product Detail page's **Sync / Kanaele** tab now exposes the controlled mapping
+action: choose a Hub variant and enter its sevDesk Part-ID. The action never writes to
+sevDesk. It rejects a Part already owned by another Hub entity and, when explicitly
+moving this product's old parent-level mapping, migrates that one row to the selected
+variant instead of retaining two competing mappings. Variant mappings can also be
+removed there.

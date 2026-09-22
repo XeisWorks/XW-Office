@@ -30,6 +30,7 @@ import type {
   ProductUpdateRequest,
   ProductVariant,
   ReadinessSummary,
+  SevdeskPartMappingRequest,
   Tag,
 } from "./types";
 
@@ -144,6 +145,15 @@ export const api = {
   getImprovements: (id: string) =>
     request<ProductImprovement[]>(`/api/v1/products/${id}/improvements`),
   getChannels: (id: string) => request<ChannelMapping[]>(`/api/v1/products/${id}/channels`),
+  assignVariantSevdeskPart: (productId: string, variantId: string, body: SevdeskPartMappingRequest) =>
+    request<ChannelMapping>(`/api/v1/products/${productId}/variants/${variantId}/channels/sevdesk`, {
+      method: "PUT",
+      body,
+    }),
+  removeVariantSevdeskPart: (productId: string, variantId: string) =>
+    request<void>(`/api/v1/products/${productId}/variants/${variantId}/channels/sevdesk`, {
+      method: "DELETE",
+    }),
   getAudit: (id: string) => request<AuditLogEntry[]>(`/api/v1/products/${id}/audit`),
   getReadiness: (id: string) => request<ProductReadiness>(`/api/v1/products/${id}/readiness`),
   getReadinessSummary: () => request<ReadinessSummary>(`/api/v1/catalog/readiness-summary`),

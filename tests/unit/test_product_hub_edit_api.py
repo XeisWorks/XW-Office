@@ -129,6 +129,64 @@ def test_patch_product_variant(db_path: str, seeded_product: Product) -> None:
     assert response.json()["row_version"] == 2
 
 
+def test_assign_and_remove_variant_sevdesk_part_mapping(db_path: str, seeded_product: Product) -> None:
+    client = _client(db_path)
+    variant_id = client.get(
+        f"/api/v1/products/{seeded_product.id}/variants", headers=_auth_headers()
+    ).json()[0]["id"]
+
+    assigned = client.put(
+        f"/api/v1/products/{seeded_product.id}/variants/{variant_id}/channels/sevdesk",
+        headers=_auth_headers(),
+        json={"part_id": "part-42"},
+    )
+
+    assert assigned.status_code == 200
+    assert assigned.json()["entity_type"] == "variant"
+    assert assigned.json()["internal_entity_id"] == variant_id
+    assert assigned.json()["external_id"] == "part-42"
+    channels = client.get(
+        f"/api/v1/products/{seeded_product.id}/channels", headers=_auth_headers()
+    )
+    assert [item["external_id"] for item in channels.json()] == ["part-42"]
+
+    removed = client.delete(
+        f"/api/v1/products/{seeded_product.id}/variants/{variant_id}/channels/sevdesk",
+        headers=_auth_headers(),
+    )
+    assert removed.status_code == 204
+    assert client.get(
+        f"/api/v1/products/{seeded_product.id}/channels", headers=_auth_headers()
+    ).json() == []
+
+
+def test_assign_variant_sevdesk_part_migrates_old_parent_mapping(
+    db_path: str, seeded_product: Product
+) -> None:
+    engine = create_engine(db_path, future=True)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+    repo = ProductHubRepository(factory)
+    variant = repo.get_default_variant(seeded_product.id)
+    assert variant is not None
+    repo.create_channel_mapping(
+        channel="sevdesk", entity_type="product", internal_entity_id=seeded_product.id, external_id="part-42"
+    )
+    engine.dispose()
+    client = _client(db_path)
+
+    response = client.put(
+        f"/api/v1/products/{seeded_product.id}/variants/{variant.id}/channels/sevdesk",
+        headers=_auth_headers(),
+        json={"part_id": "part-42"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["entity_type"] == "variant"
+    assert len(client.get(
+        f"/api/v1/products/{seeded_product.id}/channels", headers=_auth_headers()
+    ).json()) == 1
+
+
 def test_add_and_remove_tag(db_path: str, seeded_product: Product) -> None:
     client = _client(db_path)
     add_response = client.post(

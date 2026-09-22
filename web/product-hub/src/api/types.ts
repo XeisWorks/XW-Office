@@ -153,12 +153,17 @@ export interface ChannelMapping {
   id: string;
   channel: "wix" | "sevdesk" | "amazon" | "vlb";
   entity_type: string;
+  internal_entity_id: string;
   external_id: string;
   sync_status: "never" | "pending" | "synced" | "conflict" | "error" | "disabled";
   last_pulled_at: string | null;
   last_pushed_at: string | null;
   last_success_at: string | null;
   last_error: string | null;
+}
+
+export interface SevdeskPartMappingRequest {
+  part_id: string;
 }
 
 export interface AuditLogEntry {

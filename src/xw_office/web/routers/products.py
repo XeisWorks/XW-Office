@@ -60,6 +60,7 @@ from xw_office.web.schemas.products import (
     ReadinessSummaryOut,
     TagAddRequest,
     TagOut,
+    SevdeskPartMappingRequest,
     VariantUpdateRequest,
 )
 
@@ -274,6 +275,42 @@ def build_products_router(
         except UnknownFieldError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         return ProductVariantOut.model_validate(updated)
+
+    @write_router.put(
+        "/products/{product_id}/variants/{variant_id}/channels/sevdesk",
+        response_model=ChannelMappingOut,
+    )
+    def assign_variant_sevdesk_part(
+        product_id: uuid.UUID,
+        variant_id: uuid.UUID,
+        body: SevdeskPartMappingRequest,
+        repo: ProductHubRepository = Depends(get_repo),
+    ) -> ChannelMappingOut:
+        _get_product_or_404(repo, product_id)
+        try:
+            mapping = repo.assign_sevdesk_part_to_variant(
+                product_id=product_id, variant_id=variant_id, part_id=body.part_id
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        return ChannelMappingOut.model_validate(mapping)
+
+    @write_router.delete(
+        "/products/{product_id}/variants/{variant_id}/channels/sevdesk",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    def remove_variant_sevdesk_part(
+        product_id: uuid.UUID,
+        variant_id: uuid.UUID,
+        repo: ProductHubRepository = Depends(get_repo),
+    ) -> None:
+        _get_product_or_404(repo, product_id)
+        try:
+            repo.remove_sevdesk_part_from_variant(product_id=product_id, variant_id=variant_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     @router.get(
         "/products/{product_id}/variants/{variant_id}/prices", response_model=list[PriceOut]
@@ -561,7 +598,13 @@ def build_products_router(
         product_id: uuid.UUID, repo: ProductHubRepository = Depends(get_repo)
     ) -> list[ChannelMappingOut]:
         _get_product_or_404(repo, product_id)
-        mappings = repo.list_channel_mappings(entity_type="product", internal_entity_id=product_id)
+        variants = repo.list_variants(product_id)
+        mappings = [
+            *repo.list_channel_mappings(entity_type="product", internal_entity_id=product_id),
+            *repo.list_channel_mappings_for_entities(
+                [variant.id for variant in variants], entity_type="variant"
+            ),
+        ]
         return [ChannelMappingOut.model_validate(m) for m in mappings]
 
     @router.get("/products/{product_id}/audit", response_model=list[AuditLogOut])

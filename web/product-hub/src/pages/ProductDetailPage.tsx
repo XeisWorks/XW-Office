@@ -177,6 +177,43 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
     }
   }
 
+  // -- sevDesk variant mapping ----------------------------------------------------
+  const [sevdeskVariantId, setSevdeskVariantId] = useState("");
+  const [sevdeskPartId, setSevdeskPartId] = useState("");
+  const [sevdeskMappingSaving, setSevdeskMappingSaving] = useState(false);
+  const [sevdeskMappingError, setSevdeskMappingError] = useState<string | null>(null);
+
+  async function handleSevdeskMapping(event: FormEvent) {
+    event.preventDefault();
+    const partId = sevdeskPartId.trim();
+    if (!sevdeskVariantId || !partId) return;
+    setSevdeskMappingSaving(true);
+    setSevdeskMappingError(null);
+    try {
+      await api.assignVariantSevdeskPart(id, sevdeskVariantId, { part_id: partId });
+      setSevdeskPartId("");
+      refresh();
+    } catch (err) {
+      setSevdeskMappingError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSevdeskMappingSaving(false);
+    }
+  }
+
+  async function handleRemoveSevdeskMapping(variantId: string) {
+    if (!window.confirm("sevDesk-Part-Zuordnung dieser Variante entfernen?")) return;
+    setSevdeskMappingSaving(true);
+    setSevdeskMappingError(null);
+    try {
+      await api.removeVariantSevdeskPart(id, variantId);
+      refresh();
+    } catch (err) {
+      setSevdeskMappingError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSevdeskMappingSaving(false);
+    }
+  }
+
   // -- tags ----------------------------------------------------------------------
   const [tagCode, setTagCode] = useState("");
   const [tagError, setTagError] = useState<string | null>(null);
@@ -521,6 +558,33 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
 
           {tab === "channels" && (
             <>
+              <form className="tag-add-form" onSubmit={handleSevdeskMapping}>
+                <select
+                  aria-label="Hub-Variante fuer sevDesk-Part"
+                  value={sevdeskVariantId}
+                  onChange={(event) => setSevdeskVariantId(event.target.value)}
+                  disabled={sevdeskMappingSaving || variants.loading}
+                >
+                  <option value="">Variante waehlen</option>
+                  {(variants.data ?? []).map((variant) => (
+                    <option key={variant.id} value={variant.id}>
+                      {variant.sku}{variant.name ? ` - ${variant.name}` : ""}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  aria-label="sevDesk Part-ID"
+                  placeholder="sevDesk Part-ID"
+                  value={sevdeskPartId}
+                  onChange={(event) => setSevdeskPartId(event.target.value)}
+                  disabled={sevdeskMappingSaving}
+                />
+                <button type="submit" disabled={sevdeskMappingSaving || !sevdeskVariantId || !sevdeskPartId.trim()}>
+                  {sevdeskMappingSaving ? "Wird gespeichert ..." : "sevDesk-Part zuordnen"}
+                </button>
+              </form>
+              <p className="hint">Aendert keine sevDesk-Daten. Eine alte Produkt-Zuordnung wird nur auf die ausgewaehlte Variante umgehaengt.</p>
+              {sevdeskMappingError && <p className="hint hint-error">{sevdeskMappingError}</p>}
               <AsyncState
                 loading={channels.loading}
                 error={channels.error}
@@ -536,21 +600,38 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
                       <th>Sync-Status</th>
                       <th>Zuletzt erfolgreich</th>
                       <th>Letzter Fehler</th>
+                      <th>Aktion</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {channels.data.map((channel) => (
+                    {channels.data.map((channel) => {
+                      const variant = channel.entity_type === "variant"
+                        ? variants.data?.find((item) => item.id === channel.internal_entity_id)
+                        : undefined;
+                      return (
                       <tr key={channel.id}>
                         <td>{channel.channel}</td>
-                        <td>{channel.entity_type}</td>
+                        <td>{variant ? `Variante ${variant.sku}` : channel.entity_type}</td>
                         <td>{channel.external_id}</td>
                         <td>
                           <StatusBadge label={channel.sync_status} tone={syncTone(channel.sync_status)} />
                         </td>
                         <td>{formatDate(channel.last_success_at)}</td>
                         <td>{channel.last_error ?? "—"}</td>
+                        <td>
+                          {channel.channel === "sevdesk" && channel.entity_type === "variant" && (
+                            <button
+                              type="button"
+                              disabled={sevdeskMappingSaving}
+                              onClick={() => handleRemoveSevdeskMapping(channel.internal_entity_id)}
+                            >
+                              Entfernen
+                            </button>
+                          )}
+                        </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               )}
