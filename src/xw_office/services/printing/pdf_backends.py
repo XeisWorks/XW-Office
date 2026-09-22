@@ -68,6 +68,7 @@ class NativePdfCliBackend(PdfPrintBackend):
             job.pages,
             rotate_degrees=job.rotate_degrees,
             normalize_page_size=job.normalize_page_size,
+            normalize_orientation=job.orientation,
             max_upscale_percent=job.max_upscale_percent,
         )
 
@@ -191,19 +192,24 @@ def _prepare_native_print_pdf(
     *,
     rotate_degrees: int = 0,
     normalize_page_size: str = "",
+    normalize_orientation: str = "",
     max_upscale_percent: float = 100.0,
 ) -> _PreparedNativePdf:
     normalized_rotation = int(rotate_degrees or 0) % 360
     if normalized_rotation not in {0, 90, 180, 270}:
         raise RuntimeError(f"Ungueltige PDF-Drehung im Profil: {rotate_degrees}")
     normalized_page_size = str(normalize_page_size or "").strip().upper()
-    if pages is None and normalized_rotation == 0 and not normalized_page_size:
+    normalized_orientation = str(normalize_orientation or "").strip().casefold()
+    if normalized_orientation not in {"", "portrait", "landscape"}:
+        raise RuntimeError(f"Ungueltige PDF-Ausrichtung im Profil: {normalize_orientation}")
+    if pages is None and normalized_rotation == 0 and not normalized_page_size and not normalized_orientation:
         return _PreparedNativePdf(path=str(pdf_path), cleanup=False)
     temp_path = _extract_pdf_pages(
         pdf_path,
         pages,
         rotate_degrees=normalized_rotation,
         normalize_page_size=normalized_page_size,
+        normalize_orientation=normalized_orientation,
         max_upscale_percent=max_upscale_percent,
     )
     if not temp_path or temp_path == str(pdf_path):
@@ -217,6 +223,7 @@ def _extract_pdf_pages(
     *,
     rotate_degrees: int = 0,
     normalize_page_size: str = "",
+    normalize_orientation: str = "",
     max_upscale_percent: float = 100.0,
 ) -> str:
     page_indices = None if pages is None else sorted({int(page) for page in pages if int(page) >= 0})
@@ -239,20 +246,31 @@ def _extract_pdf_pages(
                     normalize_page_size,
                     source_page.rect.width,
                     source_page.rect.height,
+                    orientation=normalize_orientation,
                 )
                 source_rotation_correction = (360 - source_rotation) % 360
+                orientation_rotation = _orientation_rotation(
+                    source_page.rect.width,
+                    source_page.rect.height,
+                    normalize_orientation,
+                )
+                content_width = source_page.rect.width
+                content_height = source_page.rect.height
+                if orientation_rotation in {90, 270}:
+                    content_width, content_height = content_height, content_width
                 if (
                     source_rotation_correction == 0
+                    and orientation_rotation == 0
                     and (target_size is None or _same_page_size(source_page.rect, target_size))
                 ):
                     target.insert_pdf(source, from_page=page_index, to_page=page_index)
                 else:
                     width, height = target_size or (source_page.rect.width, source_page.rect.height)
                     target_page = target.new_page(width=width, height=height)
-                    scale = min(width / source_page.rect.width, height / source_page.rect.height)
+                    scale = min(width / content_width, height / content_height)
                     scale = min(scale, max(float(max_upscale_percent), 100.0) / 100.0)
-                    fitted_width = source_page.rect.width * scale
-                    fitted_height = source_page.rect.height * scale
+                    fitted_width = content_width * scale
+                    fitted_height = content_height * scale
                     left = (width - fitted_width) / 2.0
                     top = (height - fitted_height) / 2.0
                     target_page.show_pdf_page(
@@ -260,7 +278,7 @@ def _extract_pdf_pages(
                         source,
                         page_index,
                         keep_proportion=True,
-                        rotate=source_rotation_correction,
+                        rotate=(source_rotation_correction + orientation_rotation) % 360,
                     )
                 if rotate_degrees:
                     page = target[target.page_count - 1]
@@ -283,6 +301,8 @@ def _normalized_page_dimensions(
     page_size: str,
     source_width: float,
     source_height: float,
+    *,
+    orientation: str = "",
 ) -> tuple[float, float] | None:
     normalized = str(page_size or "").strip().upper()
     if not normalized:
@@ -291,9 +311,21 @@ def _normalized_page_dimensions(
         raise RuntimeError(f"Nicht unterstuetztes natives PDF-Seitenformat: {page_size}")
     a5_short = 148.0 * 72.0 / 25.4
     a5_long = 210.0 * 72.0 / 25.4
+    if orientation == "landscape":
+        return a5_long, a5_short
+    if orientation == "portrait":
+        return a5_short, a5_long
     if source_width >= source_height:
         return a5_long, a5_short
     return a5_short, a5_long
+
+
+def _orientation_rotation(source_width: float, source_height: float, orientation: str) -> int:
+    if orientation == "landscape" and source_width < source_height:
+        return 90
+    if orientation == "portrait" and source_width > source_height:
+        return 90
+    return 0
 
 
 def _same_page_size(rect: Any, target_size: tuple[float, float]) -> bool:

@@ -33,6 +33,7 @@ def _printing_config() -> PrintingSection:
                 "label": "Noten A5",
                 "printer_name": "A5",
                 "dpi": 600,
+                "orientation": "landscape",
                 "normalize_page_size": "A5",
                 "max_upscale_percent": 110,
             },
@@ -85,6 +86,7 @@ def test_resolve_plan_targets_maps_legacy_profile_aliases() -> None:
     assert len(targets) == 1
     assert targets[0].printer_name == "A5"
     assert targets[0].rotate_degrees == 0
+    assert targets[0].orientation == "landscape"
     assert targets[0].normalize_page_size == "A5"
     assert targets[0].max_upscale_percent == 110
 

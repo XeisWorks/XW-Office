@@ -255,6 +255,45 @@ def test_prepare_native_print_pdf_bakes_source_rotation_into_page_content(
         Path(prepared.path).unlink(missing_ok=True)
 
 
+def test_prepare_native_print_pdf_fits_portrait_content_to_landscape_a5_after_rotation(
+    tmp_path: Path,
+) -> None:
+    from xw_office.services.printing.pdf_backends import _prepare_native_print_pdf
+
+    mm_to_pt = 72.0 / 25.4
+    pdf = tmp_path / "portrait-a4-score.pdf"
+    source = fitz.open()
+    page = source.new_page(width=210 * mm_to_pt, height=297 * mm_to_pt)
+    page.draw_rect(page.rect, color=(0, 0, 0), width=1)
+    source.save(pdf)
+    source.close()
+
+    prepared = _prepare_native_print_pdf(
+        str(pdf),
+        None,
+        normalize_page_size="A5",
+        normalize_orientation="landscape",
+        max_upscale_percent=110,
+    )
+
+    try:
+        normalized = fitz.open(prepared.path)
+        try:
+            page = normalized[0]
+            assert page.rotation == 0
+            assert page.rect.width == pytest.approx(210 * mm_to_pt, abs=0.02)
+            assert page.rect.height == pytest.approx(148 * mm_to_pt, abs=0.02)
+            drawings = page.get_drawings()
+            assert drawings
+            content_rect = drawings[0]["rect"]
+            assert content_rect.width > page.rect.width * 0.99
+            assert content_rect.height > page.rect.height * 0.99
+        finally:
+            normalized.close()
+    finally:
+        Path(prepared.path).unlink(missing_ok=True)
+
+
 def test_pdf_xchange_without_spooler_confirmation_fails_closed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
