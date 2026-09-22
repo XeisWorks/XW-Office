@@ -1399,3 +1399,12 @@ parallele Ledger-Änderung einen deduplizierten `legacy_inventory`-Sync-Konflikt
 Zeitpunkt. Sie wird nur durch einen erfolgreichen absoluten Bestandsabgleich
 geschlossen; eine spätere relative Bewegung allein darf keine echte Differenz
 verdecken.
+
+The desktop Products sync view now also has **Hub / sevDesk pruefen** for the next
+Shadow-phase evidence step. It reads sevDesk stock for live physical Hub products
+with exactly one active stock variant and one mapped sevDesk Part, then records only
+the existing `sevdesk` inventory conflict queue. It never changes Hub, Wix, or
+sevDesk stock. A convergent later read closes the matching queue item automatically.
+Products with several stock variants sharing the legacy parent-level sevDesk Part are
+explicitly skipped until variant-level Part mapping exists; unavailable sevDesk reads
+are reported as errors, never converted into a false stock-zero drift.

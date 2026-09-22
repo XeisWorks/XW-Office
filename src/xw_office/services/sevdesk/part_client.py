@@ -300,11 +300,15 @@ class PartClient:
                 categories.append({"id": cat_id, "name": name})
         return categories
 
-    def get_part_stock(self, part_id: str) -> int:
+    def get_part_stock(self, part_id: str, *, strict: bool = False) -> int:
         """Return current stock for a single sevDesk Part.
 
         Uses GET /Part/{partId}/getStock which returns {"objects": <number>}.
         Falls back to full Part fetch if the dedicated endpoint is unavailable.
+
+        ``strict=True`` is intended for reconciliation: a failed or malformed
+        read must be reported to the caller, never misrepresented as stock zero.
+        The default retains the legacy print-planning behaviour.
         """
         try:
             response = self._conn.get(f"/Part/{part_id}/getStock")
@@ -324,10 +328,14 @@ class PartClient:
             elif isinstance(objects, dict):
                 raw = objects
             else:
+                if strict:
+                    raise ValueError(f"sevDesk Part {part_id} returned no stock payload")
                 return 0
             return max(0, int(float(raw.get("stock") or 0)))
         except Exception as exc:  # noqa: BLE001
             logger.warning("get_part_stock fallback failed for %s: %s", part_id, exc)
+            if strict:
+                raise RuntimeError(f"sevDesk stock could not be read for Part {part_id}") from exc
             return 0
 
     def set_part_stock(self, part_id: str, new_stock: int) -> None:

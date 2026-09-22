@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from xw_office.services.sevdesk.part_client import PartClient
 
 
@@ -166,3 +168,12 @@ def test_bulk_snapshot_supports_cache_only_stock_reads_and_stock_writes() -> Non
 
     assert client.get_cached_part_stock("10") == 12
     assert conn.put_calls == [("/Part/10", {"stock": 12.0})]
+
+
+def test_get_part_stock_strict_rejects_unreadable_stock_instead_of_returning_zero() -> None:
+    conn = _ConnStub([{"objects": []}])
+    client = PartClient(conn)  # type: ignore[arg-type]
+
+    assert client.get_part_stock("10") == 0
+    with pytest.raises(RuntimeError, match="could not be read"):
+        client.get_part_stock("10", strict=True)

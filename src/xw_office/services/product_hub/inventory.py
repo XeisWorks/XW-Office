@@ -311,6 +311,13 @@ class InventoryV2Service:
 
     # -- shadow reconcile (sevdesk stock supplied by the caller, not fetched live) -----
 
+    def variant_on_hand(self, variant_id: uuid.UUID, *, location_code: str = DEFAULT_LOCATION_CODE) -> int:
+        location = self._inventory.get_or_create_location(
+            code=location_code, name=DEFAULT_LOCATION_NAME
+        )
+        stock = self._inventory.get_stock(variant_id, location.id)
+        return stock.on_hand if stock is not None else 0
+
     def reconcile_variant_stock(
         self, variant_id: uuid.UUID, *, sevdesk_on_hand: int, location_code: str = DEFAULT_LOCATION_CODE
     ) -> bool:
@@ -318,30 +325,16 @@ class InventoryV2Service:
         `sync_conflict` (not a silent correction — shadow mode never writes stock from
         this comparison) if they differ and none is already open. Returns whether a
         (new or already-open) drift exists."""
-        location = self._inventory.get_or_create_location(
-            code=location_code, name=DEFAULT_LOCATION_NAME
-        )
-        stock = self._inventory.get_stock(variant_id, location.id)
-        hub_on_hand = stock.on_hand if stock is not None else 0
-        if hub_on_hand == sevdesk_on_hand:
-            return False
-
-        existing = self._sync.get_open_conflict(
+        hub_on_hand = self.variant_on_hand(variant_id, location_code=location_code)
+        self._sync.upsert_scanned_conflict(
             channel="sevdesk",
             entity_type="inventory_stock",
             internal_entity_id=variant_id,
             field_name="on_hand",
+            hub_value=str(hub_on_hand),
+            external_value=str(sevdesk_on_hand),
         )
-        if existing is None:
-            self._sync.create_sync_conflict(
-                channel="sevdesk",
-                entity_type="inventory_stock",
-                internal_entity_id=variant_id,
-                field_name="on_hand",
-                hub_value=str(hub_on_hand),
-                external_value=str(sevdesk_on_hand),
-            )
-        return True
+        return hub_on_hand != sevdesk_on_hand
 
     # -- summary tile (PR14 GET /api/v1/inventory/summary) ----------------------------
 

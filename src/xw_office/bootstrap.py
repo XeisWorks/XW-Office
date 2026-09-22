@@ -50,6 +50,9 @@ from xw_office.services.ideas.stores import (
 )
 from xw_office.services.inventory.service import InventoryService
 from xw_office.services.product_hub.inventory import LegacyInventoryShadowBridge
+from xw_office.services.product_hub.sevdesk_inventory_reconciliation import (
+    SevdeskInventoryReconciliationService,
+)
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.services.draft_invoice.service import DraftInvoiceService
 from xw_office.services.sendungen.service import OffeneSendungenService
@@ -510,6 +513,14 @@ def register_default_services(container: Container) -> None:
     # This keeps local dev/test environments (no DB) working without needing env vars.
     if (container.config.database_url or "").strip():
         container.register(SessionMaker, lambda c: create_session_factory(c.config))
+        container.register(
+            SevdeskInventoryReconciliationService,
+            lambda c: SevdeskInventoryReconciliationService(
+                c.resolve(SessionMaker),
+                c.resolve(PartClient),
+                shadow_enabled=c.config.product_hub.inventory_shadow_enabled,
+            ),
+        )
         container.register(PcRegistryRepository, lambda c: PcRegistryRepository(c.resolve(SessionMaker)))
         container.register(PlcShipmentRepository, lambda c: PlcShipmentRepository(c.resolve(SessionMaker)))
         container.register(

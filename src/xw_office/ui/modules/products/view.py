@@ -48,6 +48,10 @@ from xw_office.services.products.print_decision import (
     PrintDecisionEngine,
     resolve_piece_print_config,
 )
+from xw_office.services.product_hub.sevdesk_inventory_reconciliation import (
+    SevdeskInventoryReconciliationResult,
+    SevdeskInventoryReconciliationService,
+)
 from xw_office.services.sevdesk.part_client import PartClient, SevdeskPart
 from xw_office.services.wix.client import WixProduct, WixProductsClient
 from xw_office.ui.modules.products.bulk_field_dialog import BulkFieldEditorDialog
@@ -378,6 +382,7 @@ class ProductsView(QWidget):
         self._product_create_worker: BackgroundWorker | None = None
         self._product_print_worker: BackgroundWorker | None = None
         self._stock_correction_worker: BackgroundWorker | None = None
+        self._inventory_reconcile_worker: BackgroundWorker | None = None
         self._direct_product_print_handles: list[JobHandle] = []
         self._local_background_jobs: BackgroundJobManager | None = None
         self._print_confirmed_skus: set[str] = set()
@@ -715,6 +720,12 @@ class ProductsView(QWidget):
             lambda: self._load_sync_sources(refresh_sevdesk_cache=True)
         )
         bar.addWidget(self._sync_refresh_sevdesk_btn)
+        self._sync_reconcile_inventory_btn = QPushButton("Hub / sevDesk prüfen")
+        self._sync_reconcile_inventory_btn.setToolTip(
+            "Liest sevDesk-Bestände und erfasst Abweichungen nur in der Hub-Sync-Queue."
+        )
+        self._sync_reconcile_inventory_btn.clicked.connect(self._reconcile_hub_sevdesk_inventory)
+        bar.addWidget(self._sync_reconcile_inventory_btn)
         self._sync_fields_btn = QPushButton("Felder fuer Auswahl aendern")
         self._sync_fields_btn.clicked.connect(self._bulk_edit_fields)
         self._sync_fields_btn.setEnabled(False)
@@ -855,6 +866,58 @@ class ProductsView(QWidget):
         self._sevdesk_worker.signals.result.connect(self._on_sync_sources_loaded)
         self._sevdesk_worker.signals.error.connect(self._on_sync_sources_error)
         self._sevdesk_worker.start()
+
+    def _reconcile_hub_sevdesk_inventory(self) -> None:
+        if self._inventory_reconcile_worker is not None and self._inventory_reconcile_worker.isRunning():
+            return
+        try:
+            service: SevdeskInventoryReconciliationService = self._container.resolve(
+                SevdeskInventoryReconciliationService
+            )
+        except KeyError:
+            QMessageBox.warning(
+                self,
+                "Hub / sevDesk prüfen",
+                "Product-Hub-Reconciliation benötigt eine konfigurierte Datenbank.",
+            )
+            return
+        self._sync_reconcile_inventory_btn.setEnabled(False)
+        self._sync_status_lbl.setText("Hub-/sevDesk-Bestände werden rein lesend verglichen ...")
+        self._inventory_reconcile_worker = BackgroundWorker(service.run)
+        self._inventory_reconcile_worker.signals.result.connect(self._on_inventory_reconcile_done)
+        self._inventory_reconcile_worker.signals.error.connect(self._on_inventory_reconcile_error)
+        self._inventory_reconcile_worker.signals.finished.connect(self._on_inventory_reconcile_finished)
+        self._inventory_reconcile_worker.start()
+
+    def _on_inventory_reconcile_done(self, payload: object) -> None:
+        if not isinstance(payload, SevdeskInventoryReconciliationResult):
+            self._sync_status_lbl.setText("Hub-/sevDesk-Abgleich lieferte kein Ergebnis")
+            return
+        self._sync_status_lbl.setText(
+            f"Hub-/sevDesk-Abgleich: {payload.compared} geprüft, {payload.drifts} Abweichung(en), "
+            f"{payload.skipped} übersprungen, {payload.errors} Fehler"
+        )
+        details = [
+            f"Geprüft: {payload.compared}",
+            f"Abweichungen: {payload.drifts}",
+            f"Übersprungen: {payload.skipped}",
+            f"Fehler: {payload.errors}",
+        ]
+        notable = [item for item in payload.items if item.state != "equal"]
+        if notable:
+            details.extend(["", "Hinweise:"])
+            details.extend(
+                f"- {item.sku}: {item.detail}" for item in notable[:12]
+            )
+        QMessageBox.information(self, "Hub / sevDesk prüfen", "\n".join(details))
+
+    def _on_inventory_reconcile_error(self, exc: BaseException) -> None:
+        self._sync_status_lbl.setText(f"Hub-/sevDesk-Abgleich fehlgeschlagen: {exc}")
+        QMessageBox.warning(self, "Hub / sevDesk prüfen", str(exc))
+
+    def _on_inventory_reconcile_finished(self) -> None:
+        self._inventory_reconcile_worker = None
+        self._sync_reconcile_inventory_btn.setEnabled(True)
 
     def _on_sync_sources_loaded(self, payload: object) -> None:
         self._sync_load_btn.setEnabled(True)
