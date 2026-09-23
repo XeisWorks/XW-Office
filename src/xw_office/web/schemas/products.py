@@ -11,8 +11,8 @@ define its own, separately field-whitelisted models rather than reusing these.
 from __future__ import annotations
 
 import datetime
-from decimal import Decimal
 import uuid
+from decimal import Decimal
 from typing import Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -135,6 +135,9 @@ class ProductVariantOut(BaseModel):
     is_default: bool
     active: bool
     stock_enabled: bool
+    weight_grams: Decimal | None = None
+    option_values: dict[str, object] = Field(default_factory=dict)
+    attributes: dict[str, object] = Field(default_factory=dict)
     row_version: int
     updated_at: datetime.datetime
 
@@ -269,6 +272,24 @@ class ProductOnboardingResultOut(BaseModel):
     hub_state: str
     complete: bool
     channels: list[ChannelOnboardingResultOut]
+
+
+class VariantOnboardingRequest(BaseModel):
+    sku: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=300)
+    option_name: str = Field(min_length=1, max_length=80)
+    option_value: str = Field(min_length=1, max_length=120)
+    existing_default_option_value: str = Field(min_length=1, max_length=120)
+    price_gross: Decimal = Field(ge=0)
+    tax_rate: Decimal = Field(ge=0, le=100)
+    sevdesk_category_id: str = Field(min_length=1)
+    sevdesk_category_name: str = ""
+    weight_grams: Decimal | None = Field(default=None, ge=0)
+    resume_variant_id: uuid.UUID | None = None
+
+
+class VariantOnboardingResultOut(ProductOnboardingResultOut):
+    pass
 
 
 # -- PR09: edit API -----------------------------------------------------------------

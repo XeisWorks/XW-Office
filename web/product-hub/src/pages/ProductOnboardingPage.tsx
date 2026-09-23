@@ -66,6 +66,8 @@ export default function ProductOnboardingPage({ onUnauthorized }: Props) {
         sku: form.sku.trim().toUpperCase(),
         name: form.name.trim(),
         sevdesk_category_name: selectedCategory?.name ?? form.sevdesk_category_name,
+        weight_grams: form.product_type === "digital" || form.weight_grams === ""
+          ? undefined : form.weight_grams,
         ...(result && !result.complete ? { resume_product_id: result.product_id } : {}),
       });
       setResult(response);

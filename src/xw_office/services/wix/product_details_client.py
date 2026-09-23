@@ -26,9 +26,9 @@ from threading import RLock
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from pydantic import BaseModel, ConfigDict
 
 from xw_office.services.wix.identifiers import canonical_wix_id
-from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from xw_office.services.secrets.service import SecretService
@@ -462,7 +462,12 @@ class WixProductDetailsClient:
                     "productType": "DIGITAL" if str(product_type).strip().casefold() == "digital" else "PHYSICAL",
                     "visible": False,
                     "variantsInfo": {
-                        "variants": [{"sku": clean_sku, "actualPrice": {"amount": str(price), "currency": "EUR"}}]
+                        "variants": [
+                            {
+                                "sku": clean_sku,
+                                "price": {"actualPrice": {"amount": str(price)}},
+                            }
+                        ]
                     },
                 }
             }
@@ -805,6 +810,216 @@ class WixProductDetailsClient:
         except Exception as exc:  # noqa: BLE001
             logger.debug("WixProductDetailsClient v1 variant SKU PATCH failed: %s", exc)
             return False, str(exc), version
+
+    def ensure_product_variant(
+        self,
+        product_id: str,
+        *,
+        option_name: str,
+        option_value: str,
+        existing_default_option_value: str,
+        sku: str,
+        price: str,
+        weight_grams: float | None = None,
+    ) -> tuple[str, CatalogVersion, str]:
+        """Add one sellable choice to a one-dimensional Wix product.
+
+        Returns ``(variant_id, catalog_version, operation)``. Existing products
+        without options are converted into two real variants: the previous default
+        and the new choice. Existing IDs are retained wherever Wix supplies them.
+        """
+        pid = _api_product_id(product_id)
+        option = str(option_name or "").strip()
+        choice = str(option_value or "").strip()
+        previous_choice = str(existing_default_option_value or "").strip()
+        clean_sku = str(sku or "").strip()
+        if not all((pid, option, choice, previous_choice, clean_sku, str(price or "").strip())):
+            raise ValueError("Produkt-ID, Option, bestehende und neue Auswahl, SKU und Preis sind erforderlich")
+        raw = self.get_product_raw(pid)
+        if raw is None:
+            failure = self.get_last_product_raw_failure() or {}
+            raise RuntimeError(str(failure.get("error") or "Wix-Produkt konnte nicht geladen werden"))
+        version = self.detect_catalog_version()
+        if version == CatalogVersion.V1:
+            return self._ensure_variant_v1(
+                pid, raw, option=option, choice=choice, previous_choice=previous_choice,
+                sku=clean_sku, price=price, weight_grams=weight_grams,
+            )
+        if version == CatalogVersion.V3:
+            return self._ensure_variant_v3(
+                pid, raw, option=option, choice=choice, previous_choice=previous_choice,
+                sku=clean_sku, price=price, weight_grams=weight_grams,
+            )
+        raise RuntimeError("Wix-Katalogversion konnte nicht bestimmt werden")
+
+    @staticmethod
+    def _variant_sku(raw_variant: dict[str, Any]) -> str:
+        nested = raw_variant.get("variant") if isinstance(raw_variant.get("variant"), dict) else {}
+        return str(raw_variant.get("sku") or nested.get("sku") or "").strip()
+
+    def _ensure_variant_v1(self, pid: str, raw: dict[str, Any], **values: Any):
+        option, choice = values["option"], values["choice"]
+        existing_options = raw.get("productOptions") if isinstance(raw.get("productOptions"), list) else []
+        if len(existing_options) > 1:
+            raise ValueError("Der Wix-V1-Produktdatensatz hat mehrere Optionen; bitte in Wix ergänzen")
+        choices = [values["previous_choice"]]
+        if existing_options:
+            existing_name = str(existing_options[0].get("name") or "").strip()
+            if existing_name.casefold() != option.casefold():
+                raise ValueError(f"Wix verwendet bereits die Option {existing_name!r}")
+            choices = [
+                str(item.get("description") or item.get("value") or "").strip()
+                for item in existing_options[0].get("choices", [])
+                if isinstance(item, dict)
+            ]
+        if choice.casefold() not in {item.casefold() for item in choices}:
+            choices.append(choice)
+        product_options = [{
+            "name": option,
+            "optionType": "drop_down",
+            "choices": [{"value": item, "description": item} for item in choices],
+        }]
+        self._do_request(
+            "PATCH", f"{self._V1_BASE}/products/{pid}", headers=self._headers(),
+            json_body={"product": {"manageVariants": True, "productOptions": product_options}},
+        )
+        override: dict[str, Any] = {
+            "choices": {option: choice}, "sku": values["sku"],
+            "priceData": {"price": float(values["price"])},
+        }
+        if values.get("weight_grams") is not None:
+            override["weight"] = float(values["weight_grams"]) / 1000
+        data = self._do_request(
+            "PATCH", f"{self._V1_BASE}/products/{pid}/variants", headers=self._headers(),
+            json_body={"variants": [override]},
+        )
+        variants = data.get("variants", []) if isinstance(data, dict) else []
+        matched = next((row for row in variants if isinstance(row, dict) and self._variant_sku(row) == values["sku"]), None)
+        return str((matched or {}).get("id") or ""), CatalogVersion.V1, "created"
+
+    def _ensure_variant_v3(self, pid: str, raw: dict[str, Any], **values: Any):
+        option, choice = values["option"], values["choice"]
+        raw_options = raw.get("options") if isinstance(raw.get("options"), list) else []
+        if len(raw_options) > 1:
+            raise ValueError("Der Wix-V3-Produktdatensatz hat mehrere Optionen; bitte in Wix ergänzen")
+        variants_info = raw.get("variantsInfo") if isinstance(raw.get("variantsInfo"), dict) else {}
+        raw_variants = variants_info.get("variants") if isinstance(variants_info.get("variants"), list) else []
+        if not raw_variants and isinstance(raw.get("variants"), list):
+            raw_variants = raw["variants"]
+        for row in raw_variants:
+            if isinstance(row, dict) and self._variant_sku(row).casefold() == values["sku"].casefold():
+                return str(row.get("id") or ""), CatalogVersion.V3, "reused"
+        choices = [values["previous_choice"]]
+        option_render_type = "TEXT_CHOICES"
+        request_option: dict[str, Any] = {
+            "name": option,
+            "optionRenderType": option_render_type,
+            "choicesSettings": {
+                "choices": [
+                    {"choiceType": "CHOICE_TEXT", "name": values["previous_choice"]}
+                ]
+            },
+        }
+        if raw_options:
+            raw_option = raw_options[0]
+            existing_name = str(raw_option.get("name") or "").strip()
+            if existing_name.casefold() != option.casefold():
+                raise ValueError(f"Wix verwendet bereits die Option {existing_name!r}")
+            option_render_type = str(
+                raw_option.get("optionRenderType") or "TEXT_CHOICES"
+            )
+            if option_render_type != "TEXT_CHOICES":
+                raise ValueError(
+                    "Der Varianten-Wizard unterstützt bestehende Wix-Optionen nur als Textauswahl"
+                )
+            settings = raw_option.get("choicesSettings")
+            raw_option_choices = settings.get("choices", []) if isinstance(settings, dict) else []
+            choices = [str(item.get("name") or "").strip() for item in raw_option_choices if isinstance(item, dict)]
+            writable_choices: list[dict[str, Any]] = []
+            for item in raw_option_choices:
+                if not isinstance(item, dict):
+                    continue
+                writable_choices.append(
+                    {
+                        key: item[key]
+                        for key in (
+                            "choiceId",
+                            "name",
+                            "choiceType",
+                            "colorCode",
+                            "media",
+                        )
+                        if item.get(key) not in (None, "")
+                    }
+                )
+            request_option = {
+                key: raw_option[key]
+                for key in ("id", "name", "optionRenderType")
+                if raw_option.get(key) not in (None, "")
+            }
+            request_option["choicesSettings"] = {"choices": writable_choices}
+        if choice.casefold() not in {item.casefold() for item in choices}:
+            choices.append(choice)
+            request_option["choicesSettings"]["choices"].append(
+                {"choiceType": "CHOICE_TEXT", "name": choice}
+            )
+
+        request_variants: list[dict[str, Any]] = []
+        for index, row in enumerate(raw_variants):
+            if not isinstance(row, dict):
+                continue
+            row_choices = row.get("choices") if isinstance(row.get("choices"), list) else []
+            if not row_choices and index == 0 and not raw_options:
+                row_choices = [{
+                    "optionChoiceNames": {
+                        "optionName": option,
+                        "choiceName": values["previous_choice"],
+                        "renderType": option_render_type,
+                    }
+                }]
+            if not row_choices:
+                raise ValueError("Bestehende Wix-Variante konnte keiner Auswahl zugeordnet werden")
+            converted: dict[str, Any] = {
+                "id": row.get("id"), "sku": self._variant_sku(row),
+                "choices": row_choices,
+                "visible": bool(row.get("visible", True)),
+            }
+            for variant_field in (
+                "price",
+                "barcode",
+                "physicalProperties",
+                "digitalProperties",
+                "revenueDetails",
+            ):
+                if row.get(variant_field) not in (None, "", {}):
+                    converted[variant_field] = row[variant_field]
+            if not isinstance(converted.get("price"), dict):
+                raise ValueError("Eine bestehende Wix-Variante hat keinen Preis")
+            request_variants.append({k: v for k, v in converted.items() if v not in (None, "")})
+        new_variant: dict[str, Any] = {
+            "sku": values["sku"],
+            "choices": [{"optionChoiceNames": {
+                "optionName": option,
+                "choiceName": choice,
+                "renderType": option_render_type,
+            }}],
+            "price": {"actualPrice": {"amount": str(values["price"])}},
+            "visible": True,
+        }
+        if values.get("weight_grams") is not None:
+            new_variant["physicalProperties"] = {"weight": float(values["weight_grams"]) / 1000}
+        request_variants.append(new_variant)
+        payload = {"product": {
+            "id": pid, "revision": str(raw.get("revision") or raw.get("_revision") or ""),
+            "options": [request_option],
+            "variantsInfo": {"variants": request_variants},
+        }}
+        data = self._do_request("PATCH", f"{self._V3_BASE}/products/{pid}", headers=self._headers(), json_body=payload)
+        product = data.get("product", data) if isinstance(data, dict) else {}
+        returned_info = product.get("variantsInfo", {}) if isinstance(product, dict) else {}
+        returned = returned_info.get("variants", []) if isinstance(returned_info, dict) else []
+        matched = next((row for row in returned if isinstance(row, dict) and self._variant_sku(row) == values["sku"]), None)
+        return str((matched or {}).get("id") or ""), CatalogVersion.V3, "created"
 
     def patch_product_field_with_conflict_detection(
         self, product_id: str, *, field: str, value: Any

@@ -5,17 +5,17 @@ All tests run without network access via httpx.MockTransport.
 from __future__ import annotations
 
 import json
-import pytest
+
 import httpx
+import pytest
 
 from xw_office.services.wix.product_details_client import (
     CatalogVersion,
-    WixProductDetail,
     WixProductCreateError,
+    WixProductDetail,
     WixProductDetailsClient,
     _parse_detail,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -251,7 +251,8 @@ def test_create_product_uses_v3_after_version_probe() -> None:
     assert version == CatalogVersion.V3
     create_call = calls[-1]
     assert str(create_call["url"]).endswith("/stores/v3/products")
-    assert create_call["payload"]["product"]["variantsInfo"]["variants"][0]["actualPrice"]["amount"] == "12.90"  # type: ignore[index]
+    variant = create_call["payload"]["product"]["variantsInfo"]["variants"][0]  # type: ignore[index]
+    assert variant["price"]["actualPrice"]["amount"] == "12.90"
 
 
 def test_create_product_uses_v1_for_legacy_catalog() -> None:
@@ -736,9 +737,90 @@ def test_update_variant_sku_declines_catalog_v3() -> None:
     assert patches == []
 
 
+def test_ensure_product_variant_v3_converts_default_variant_without_losing_it() -> None:
+    patches: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "query" in url:
+            return httpx.Response(200, json={"products": []})
+        if request.method == "GET":
+            return httpx.Response(200, json={"product": {
+                "id": "P-1", "revision": "7", "options": [],
+                "variantsInfo": {"variants": [{
+                    "id": "old-v", "sku": "XW-4057", "visible": True,
+                    "price": {"actualPrice": {"amount": "27.90"}}, "choices": [],
+                }]},
+            }})
+        payload = json.loads(request.content)
+        patches.append(payload)
+        return httpx.Response(200, json={"product": {"variantsInfo": {"variants": [
+            {"id": "old-v", "sku": "XW-4057"},
+            {"id": "new-v", "sku": "XW-4057-KB"},
+        ]}}})
+
+    client = WixProductDetailsClient(
+        secret_service=_Secrets(), http_client=httpx.Client(transport=httpx.MockTransport(handler))
+    )  # type: ignore[arg-type]
+    variant_id, version, operation = client.ensure_product_variant(
+        "P-1", option_name="Besetzung", option_value="Kleine Besetzung",
+        existing_default_option_value="7-stimmig", sku="XW-4057-KB", price="29.90",
+    )
+
+    assert (variant_id, version, operation) == ("new-v", CatalogVersion.V3, "created")
+    product = patches[0]["product"]
+    assert product["revision"] == "7"
+    assert [choice["name"] for choice in product["options"][0]["choicesSettings"]["choices"]] == ["7-stimmig", "Kleine Besetzung"]
+    assert product["variantsInfo"]["variants"][0]["id"] == "old-v"
+    assert product["variantsInfo"]["variants"][0]["choices"][0]["optionChoiceNames"]["choiceName"] == "7-stimmig"
+
+
 # ---------------------------------------------------------------------------
 # Bulk property update — v3
 # ---------------------------------------------------------------------------
+
+
+def test_ensure_product_variant_v3_preserves_existing_option_and_choice_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+    client = _client()
+    raw = {
+        "revision": "8",
+        "options": [{
+            "id": "option-1", "name": "Besetzung", "optionRenderType": "TEXT_CHOICES",
+            "choicesSettings": {"choices": [{
+                "choiceId": "choice-1", "name": "7-stimmig", "choiceType": "CHOICE_TEXT",
+            }]},
+        }],
+        "variantsInfo": {"variants": [{
+            "id": "variant-1", "sku": "XW-4057",
+            "choices": [{"optionChoiceIds": {
+                "optionId": "option-1", "choiceId": "choice-1",
+            }}],
+            "price": {"actualPrice": {"amount": "27.90"}},
+        }]},
+    }
+
+    def fake_request(*args, **kwargs):
+        captured.update(kwargs["json_body"])
+        return {"product": {"variantsInfo": {"variants": [
+            {"id": "variant-1", "sku": "XW-4057"},
+            {"id": "variant-2", "sku": "XW-4057-KB"},
+        ]}}}
+
+    monkeypatch.setattr(client, "_do_request", fake_request)
+    client._ensure_variant_v3(
+        "P-1", raw, option="Besetzung", choice="Kleine Besetzung",
+        previous_choice="7-stimmig", sku="XW-4057-KB", price="29.90",
+    )
+
+    product = captured["product"]
+    assert product["options"][0]["id"] == "option-1"
+    option_choices = product["options"][0]["choicesSettings"]["choices"]
+    assert option_choices[0]["choiceId"] == "choice-1"
+    existing_choice = product["variantsInfo"]["variants"][0]["choices"][0]
+    assert existing_choice["optionChoiceIds"]["choiceId"] == "choice-1"
 
 
 def test_bulk_update_property_v3_sends_correct_payload() -> None:

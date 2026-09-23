@@ -472,6 +472,10 @@ export default function ProductDetailPage({ onUnauthorized }: ProductDetailPageP
 
           {tab === "variants" && (
             <>
+              <div className="variant-section-heading">
+                <h2>Varianten</h2>
+                <Link className="primary-button" to={`/products/${id}/variants/new`}>Variante hinzufügen</Link>
+              </div>
               <AsyncState
                 loading={variants.loading}
                 error={variants.error}

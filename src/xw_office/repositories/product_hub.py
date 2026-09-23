@@ -7,13 +7,13 @@ tables (identifiers, assets, price lists...). This repository does not touch
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import dataclass
 import datetime
-from decimal import Decimal
 import re
 import uuid
 from collections.abc import Generator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import Select, func, select
@@ -339,6 +339,61 @@ class ProductHubRepository:
                 .order_by(ProductVariant.is_default.desc(), ProductVariant.sku)
             )
             return list(session.scalars(stmt).all())
+
+    def create_variant(
+        self,
+        *,
+        product_id: uuid.UUID,
+        sku: str,
+        name: str,
+        option_values: dict[str, object],
+        stock_enabled: bool = True,
+        weight_grams: Decimal | None = None,
+    ) -> ProductVariant:
+        clean_sku = normalize_sku(sku)
+        if not clean_sku:
+            raise ValueError("sku is required")
+        clean_options = {
+            str(key).strip(): str(value).strip()
+            for key, value in option_values.items()
+            if str(key).strip() and str(value).strip()
+        }
+        if not clean_options:
+            raise ValueError("option_values are required")
+        with self._scope() as session:
+            if session.get(Product, product_id) is None:
+                raise KeyError(f"Product {product_id} not found")
+            if session.scalar(
+                select(ProductVariant).where(func.upper(ProductVariant.sku) == clean_sku)
+            ) is not None:
+                raise ValueError(f"SKU {clean_sku} already exists")
+            for existing in session.scalars(
+                select(ProductVariant).where(ProductVariant.product_id == product_id)
+            ):
+                existing_options = {
+                    str(key).strip().casefold(): str(value).strip().casefold()
+                    for key, value in (existing.option_values or {}).items()
+                }
+                candidate_options = {
+                    key.casefold(): value.casefold() for key, value in clean_options.items()
+                }
+                if existing_options == candidate_options:
+                    raise ValueError("Diese Optionskombination existiert bereits")
+            variant = ProductVariant(
+                id=uuid.uuid4(),
+                product_id=product_id,
+                sku=clean_sku,
+                name=str(name or "").strip() or clean_sku,
+                is_default=False,
+                active=True,
+                stock_enabled=stock_enabled,
+                weight_grams=weight_grams,
+                option_values=clean_options,
+                attributes={},
+            )
+            session.add(variant)
+            session.flush()
+            return variant
 
     def list_variants_for_products(self, product_ids: list[uuid.UUID]) -> list[ProductVariant]:
         """Batched sibling of :meth:`list_variants` — one query for a whole page of

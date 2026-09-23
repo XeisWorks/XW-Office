@@ -67,6 +67,8 @@ from xw_office.web.schemas.products import (
     SevdeskPartMappingRequest,
     TagAddRequest,
     TagOut,
+    VariantOnboardingRequest,
+    VariantOnboardingResultOut,
     VariantUpdateRequest,
 )
 
@@ -188,6 +190,31 @@ def build_products_router(
                 )
                 for item in result.channels
             ],
+        )
+
+    @write_router.post(
+        "/products/{product_id}/variant-onboarding",
+        response_model=VariantOnboardingResultOut,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def onboard_product_variant(
+        product_id: uuid.UUID,
+        body: VariantOnboardingRequest,
+        onboarding: ProductOnboardingService = Depends(get_onboarding),
+    ) -> VariantOnboardingResultOut:
+        try:
+            result = onboarding.onboard_variant(product_id=product_id, **body.model_dump())
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        return VariantOnboardingResultOut(
+            product_id=result.product_id, variant_id=result.variant_id, sku=result.sku,
+            hub_state=result.hub_state, complete=result.complete,
+            channels=[ChannelOnboardingResultOut(
+                channel=item.channel, state=item.state, external_id=item.external_id,
+                message=item.message,
+            ) for item in result.channels],
         )
 
     @router.get("/products/by-sku/{sku}", response_model=ProductDetail)

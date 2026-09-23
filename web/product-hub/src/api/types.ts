@@ -74,6 +74,20 @@ export interface ProductOnboardingResult {
   channels: ChannelOnboardingResult[];
 }
 
+export interface VariantOnboardingRequest {
+  sku: string;
+  name: string;
+  option_name: string;
+  option_value: string;
+  existing_default_option_value: string;
+  price_gross: string;
+  tax_rate: string;
+  sevdesk_category_id: string;
+  sevdesk_category_name: string;
+  weight_grams?: string;
+  resume_variant_id?: string;
+}
+
 /** One channel's aggregated status for a product/variant row - see catalog_list.py's
  * `_channel_state`. "not_applicable" is a deliberate, non-error state (e.g. a
  * sevdesk-only shipping line item was never meant to have a Wix listing). */
@@ -149,6 +163,9 @@ export interface ProductVariant {
   is_default: boolean;
   active: boolean;
   stock_enabled: boolean;
+  weight_grams: string | null;
+  option_values: Record<string, unknown>;
+  attributes: Record<string, unknown>;
   row_version: number;
   updated_at: string;
 }

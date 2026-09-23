@@ -28,6 +28,7 @@ import type {
   ProductOnboardingOptions,
   ProductOnboardingRequest,
   ProductOnboardingResult,
+  VariantOnboardingRequest,
   ProductReadiness,
   ProductSkuRenameRequest,
   ProductUpdateRequest,
@@ -166,6 +167,10 @@ export const api = {
     request<ProductOnboardingOptions>("/api/v1/product-onboarding/options"),
   onboardProduct: (body: ProductOnboardingRequest) =>
     request<ProductOnboardingResult>("/api/v1/product-onboarding", { method: "POST", body }),
+  onboardVariant: (productId: string, body: VariantOnboardingRequest) =>
+    request<ProductOnboardingResult>(`/api/v1/products/${productId}/variant-onboarding`, {
+      method: "POST", body,
+    }),
 
   // -- PR09: edit API -----------------------------------------------------------
   updateProduct: (id: string, body: ProductUpdateRequest) =>

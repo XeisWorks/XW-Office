@@ -60,6 +60,14 @@ class FakeWixDetails:
         self.catalog.products.append(SimpleNamespace(id=product_id, all_skus=(sku,)))
         return product_id, CatalogVersion.V3
 
+    def ensure_product_variant(self, product_id: str, **values):
+        sku = str(values["sku"])
+        for product in self.catalog.products:
+            if product.id == product_id:
+                product.all_skus = (*product.all_skus, sku)
+                return f"variant-{len(product.all_skus)}", CatalogVersion.V3, "created"
+        raise RuntimeError("parent missing")
+
 
 def _service(tmp_path: Path):
     engine = create_engine(f"sqlite:///{tmp_path / 'onboarding.db'}", future=True)
@@ -151,3 +159,30 @@ def test_existing_sku_requires_explicit_resume_product_id(tmp_path: Path) -> Non
         assert "existiert bereits" in str(exc)
     else:
         raise AssertionError("duplicate onboarding must fail")
+
+
+def test_variant_onboarding_keeps_parent_and_creates_both_channel_rows(tmp_path: Path) -> None:
+    service, factory, parts, wix_catalog, _details = _service(tmp_path)
+    parent = _onboard(service)
+
+    result = service.onboard_variant(
+        product_id=parent.product_id,
+        sku="XW-NEW-1-KB",
+        name="Kleine Besetzung",
+        option_name="Besetzung",
+        option_value="Kleine Besetzung",
+        existing_default_option_value="7-stimmig",
+        price_gross=Decimal("24.90"),
+        tax_rate=Decimal(10),
+        sevdesk_category_id="7",
+        sevdesk_category_name="Noten",
+    )
+
+    assert result.complete is True
+    assert len(ProductHubRepository(factory).list_products()) == 1
+    variants = ProductHubRepository(factory).list_variants(parent.product_id)
+    assert len(variants) == 2
+    assert variants[0].option_values == {"Besetzung": "7-stimmig"}
+    assert variants[1].option_values == {"Besetzung": "Kleine Besetzung"}
+    assert "XW-NEW-1-KB" in parts.parts
+    assert wix_catalog.products[0].all_skus == ("XW-NEW-1", "XW-NEW-1-KB")

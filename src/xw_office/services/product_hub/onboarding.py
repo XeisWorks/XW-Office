@@ -47,6 +47,19 @@ class ProductOnboardingResult:
         return all(item.state in {"created", "reused", "synced"} for item in self.channels)
 
 
+@dataclass(frozen=True)
+class VariantOnboardingResult:
+    product_id: uuid.UUID
+    variant_id: uuid.UUID
+    sku: str
+    hub_state: str
+    channels: tuple[ChannelOnboardingResult, ...]
+
+    @property
+    def complete(self) -> bool:
+        return all(item.state in {"created", "reused", "synced"} for item in self.channels)
+
+
 class ProductOnboardingService:
     """Create the minimum viable product record in Hub, sevDesk and Wix."""
 
@@ -143,6 +156,143 @@ class ProductOnboardingService:
             hub_state=hub_state,
             channels=channel_results,
         )
+
+    def onboard_variant(
+        self,
+        *,
+        product_id: uuid.UUID,
+        sku: str,
+        name: str,
+        option_name: str,
+        option_value: str,
+        existing_default_option_value: str,
+        price_gross: Decimal,
+        tax_rate: Decimal,
+        sevdesk_category_id: str,
+        sevdesk_category_name: str = "",
+        weight_grams: Decimal | None = None,
+        resume_variant_id: uuid.UUID | None = None,
+    ) -> VariantOnboardingResult:
+        clean_sku = normalize_sku(sku)
+        required_values = (
+            clean_sku,
+            str(name).strip(),
+            str(option_name).strip(),
+            str(option_value).strip(),
+        )
+        if not all(required_values):
+            raise ValueError("SKU, Variantenname, Option und Auswahl sind erforderlich.")
+        if not str(existing_default_option_value).strip():
+            raise ValueError("Die Bezeichnung der bestehenden Variante ist erforderlich.")
+        if price_gross < 0 or tax_rate < 0 or tax_rate > 100:
+            raise ValueError("Preis oder Steuersatz ist ungültig.")
+        if not str(sevdesk_category_id or "").strip():
+            raise ValueError("Eine sevDesk-Produktkategorie ist erforderlich.")
+        product, variant, hub_state = self._ensure_hub_variant(
+            product_id=product_id, sku=clean_sku, name=name,
+            option_name=option_name, option_value=option_value,
+            existing_default_option_value=existing_default_option_value,
+            price_gross=price_gross, tax_rate=tax_rate,
+            weight_grams=weight_grams, resume_variant_id=resume_variant_id,
+        )
+        sevdesk = self._ensure_sevdesk(
+            product_id=product.id, variant_id=variant.id, sku=clean_sku,
+            name=f"{product.name} – {name}", product_type=product.product_type,
+            price_gross=price_gross, tax_rate=tax_rate,
+            category_id=sevdesk_category_id, category_name=sevdesk_category_name,
+        )
+        wix = self._ensure_wix_variant(
+            product_id=product.id, variant_id=variant.id, sku=clean_sku,
+            option_name=option_name, option_value=option_value,
+            existing_default_option_value=existing_default_option_value,
+            price_gross=price_gross, weight_grams=weight_grams,
+        )
+        return VariantOnboardingResult(
+            product_id=product.id, variant_id=variant.id, sku=clean_sku,
+            hub_state=hub_state, channels=(sevdesk, wix),
+        )
+
+    def _ensure_hub_variant(self, **values: object):
+        product_id = values["product_id"]
+        resume_variant_id = values.get("resume_variant_id")
+        with session_scope(self._session_factory) as session:
+            repo = ProductHubRepository(session)
+            product = repo.get_product(product_id)  # type: ignore[arg-type]
+            if product is None:
+                raise ValueError("Das Hauptprodukt wurde nicht gefunden.")
+            if resume_variant_id:
+                variant = repo.get_variant(resume_variant_id)  # type: ignore[arg-type]
+                resume_matches = (
+                    variant is not None
+                    and variant.product_id == product.id
+                    and variant.sku == values["sku"]
+                )
+                if not resume_matches:
+                    raise ValueError("Variante und Wiederaufnahme-ID passen nicht zusammen.")
+                assert variant is not None
+                return product, variant, "reused"
+            default_variant = repo.get_default_variant(product.id)
+            if default_variant is not None and not default_variant.option_values:
+                default_variant.option_values = {
+                    str(values["option_name"]): str(values["existing_default_option_value"])
+                }
+                default_variant.row_version += 1
+            variant = repo.create_variant(
+                product_id=product.id, sku=str(values["sku"]), name=str(values["name"]),
+                option_values={str(values["option_name"]): str(values["option_value"])},
+                stock_enabled=product.product_type != "digital",
+                weight_grams=values.get("weight_grams"),  # type: ignore[arg-type]
+            )
+            price_list = repo.get_price_list_by_code("RETAIL_EUR")
+            if price_list is None:
+                raise RuntimeError("Preisliste RETAIL_EUR fehlt im Product Hub.")
+            gross = values["price_gross"]  # type: ignore[assignment]
+            tax = values["tax_rate"]  # type: ignore[assignment]
+            net = (gross / (Decimal(1) + tax / Decimal(100))).quantize(
+                Decimal("0.0001"), rounding=ROUND_HALF_UP
+            )
+            repo.set_price(variant.id, price_list_id=price_list.id, currency="EUR",
+                           net_amount=net, gross_amount=gross, tax_rate=tax,
+                           source="variant_onboarding_wizard")
+            repo.record_audit(actor_type="user", actor_id="variant-onboarding-wizard",
+                              source="product_hub_web", entity_type="product_variant",
+                              entity_id=variant.id, action="create",
+                              changed_fields=["sku", "name", "option_values", "price"])
+            return product, variant, "created"
+
+    def _ensure_wix_variant(self, *, product_id: uuid.UUID, variant_id: uuid.UUID, sku: str,
+                            option_name: str, option_value: str,
+                            existing_default_option_value: str, price_gross: Decimal,
+                            weight_grams: Decimal | None) -> ChannelOnboardingResult:
+        mapping = self._existing_mapping(
+            channel="wix", entity_type="variant", internal_id=variant_id
+        )
+        if mapping is not None:
+            return ChannelOnboardingResult("wix", "synced", mapping.external_id)
+        parent_mapping = self._existing_mapping(
+            channel="wix", entity_type="product", internal_id=product_id
+        )
+        if parent_mapping is None:
+            return ChannelOnboardingResult(
+                "wix", "error", message="Das Hauptprodukt ist nicht mit Wix verknüpft."
+            )
+        try:
+            external_id, _version, operation = self._wix_details.ensure_product_variant(
+                parent_mapping.external_id, option_name=option_name, option_value=option_value,
+                existing_default_option_value=existing_default_option_value, sku=sku,
+                price=str(price_gross),
+                weight_grams=float(weight_grams) if weight_grams is not None else None,
+            )
+            if not external_id:
+                raise RuntimeError("Wix hat die Variante ohne Varianten-ID zurückgegeben.")
+            ProductHubRepository(self._session_factory).create_channel_mapping(
+                channel="wix", entity_type="variant", internal_entity_id=variant_id,
+                external_id=external_id, external_parent_id=parent_mapping.external_id,
+                sync_status="synced",
+            )
+            return ChannelOnboardingResult("wix", operation, external_id)
+        except Exception as exc:  # noqa: BLE001 - provider boundary; resumable Hub variant
+            return ChannelOnboardingResult("wix", "error", message=str(exc))
 
     def _ensure_hub_product(
         self,
@@ -325,5 +475,6 @@ class ProductOnboardingService:
 __all__ = [
     "ChannelOnboardingResult",
     "ProductOnboardingResult",
+    "VariantOnboardingResult",
     "ProductOnboardingService",
 ]
