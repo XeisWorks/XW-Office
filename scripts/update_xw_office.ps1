@@ -79,6 +79,7 @@ Write-UpdateLog "Update gestartet. Repo: $RepoRoot"
 
 # 2) Sicherstellen, dass XW-Office nicht laeuft.
 if (-not $SkipRunningCheck) {
+    $running = $null
     try {
         $running = Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
             Where-Object {
@@ -86,13 +87,14 @@ if (-not $SkipRunningCheck) {
                 $_.CommandLine -and
                 ($_.CommandLine -match [regex]::Escape($RepoRoot) -or $_.CommandLine -match 'xw_office')
             }
-        if ($running) {
-            $pids = ($running | Select-Object -ExpandProperty ProcessId) -join ', '
-            Stop-UpdateWithError "XW-Office scheint noch zu laufen (PID $pids). Bitte App schliessen und Update erneut starten. Mit -SkipRunningCheck kann diese Pruefung uebersprungen werden."
-        }
     }
     catch {
         Write-UpdateLog "WARNUNG: Laufende-Prozess-Pruefung nicht moeglich ($($_.Exception.Message)). Fahre fort."
+    }
+
+    if ($running) {
+        $pids = ($running | Select-Object -ExpandProperty ProcessId) -join ', '
+        Stop-UpdateWithError "XW-Office scheint noch zu laufen (PID $pids). Bitte App schliessen und Update erneut starten. Mit -SkipRunningCheck kann diese Pruefung uebersprungen werden."
     }
 }
 
