@@ -21,20 +21,24 @@ from starlette.types import Scope
 
 from xw_office import __version__
 from xw_office.content import BrandProfile, BrandProfileCatalog
+from xw_office.core.config import load_config
 from xw_office.core.database import session_scope
 from xw_office.models.product_hub_sync import OutboxEvent
 from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.repositories.product_hub_sharing import SharingRepository
 from xw_office.repositories.product_hub_sync import SyncRepository
+from xw_office.services.http_client import build_sevdesk_connection
 from xw_office.services.product_hub.conflicts import ConflictAdviceService, ConflictWizardService
 from xw_office.services.product_hub.content_generation import ContentGenerationService
 from xw_office.services.product_hub.editing import EditingService
 from xw_office.services.product_hub.inventory import InventoryV2Service
+from xw_office.services.product_hub.onboarding import ProductOnboardingService
 from xw_office.services.product_hub.outbox_worker import OutboxWorker
 from xw_office.services.product_hub.sharing import SharingService
 from xw_office.services.product_hub.wix_push import WixPushService, wix_push_handler
 from xw_office.services.product_hub.wix_snapshot import WixSnapshotService
+from xw_office.services.sevdesk.part_client import PartClient
 from xw_office.services.wix.client import WixProductsClient
 from xw_office.services.wix.product_details_client import WixProductDetailsClient
 from xw_office.web.routers.conflicts import build_conflicts_router
@@ -272,12 +276,33 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
     def get_content_generation_service() -> ContentGenerationService:
         return _content_generation_service
 
+    _runtime_config = load_config()
+    _sevdesk_parts = PartClient(build_sevdesk_connection(_runtime_config))
+    _onboarding_wix_details = WixProductDetailsClient(secret_service=_EnvSecretSource())  # type: ignore[arg-type]
+    _onboarding_wix_catalog = WixProductsClient(secret_service=_EnvSecretSource())  # type: ignore[arg-type]
+    _onboarding_service = (
+        ProductOnboardingService(
+            _session_factory,
+            sevdesk_parts=_sevdesk_parts,
+            wix_catalog=_onboarding_wix_catalog,
+            wix_details=_onboarding_wix_details,
+            sevdesk_configured=bool(_runtime_config.sevdesk.api_token.strip()),
+        )
+        if _session_factory is not None
+        else None
+    )
+
+    def get_onboarding_service() -> ProductOnboardingService:
+        assert _onboarding_service is not None
+        return _onboarding_service
+
     app.include_router(
         build_products_router(
             get_product_repo,
             get_editing_service,
             require_product_hub_edit_enabled,
             get_content_generation_service,
+            get_onboarding_service,
         ),
         dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
     )

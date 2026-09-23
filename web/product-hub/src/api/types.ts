@@ -35,6 +35,45 @@ export interface ProductDetail extends ProductListItem {
   attributes: Record<string, unknown>;
 }
 
+export interface SevdeskCategory {
+  id: string;
+  name: string;
+}
+
+export interface ProductOnboardingOptions {
+  sevdesk_categories: SevdeskCategory[];
+}
+
+export interface ProductOnboardingRequest {
+  sku: string;
+  name: string;
+  product_type: "physical" | "digital";
+  price_gross: string;
+  tax_rate: string;
+  sevdesk_category_id: string;
+  sevdesk_category_name: string;
+  brand_name?: string;
+  category?: string;
+  weight_grams?: string;
+  resume_product_id?: string;
+}
+
+export interface ChannelOnboardingResult {
+  channel: "wix" | "sevdesk";
+  state: "created" | "reused" | "synced" | "error";
+  external_id: string;
+  message: string;
+}
+
+export interface ProductOnboardingResult {
+  product_id: string;
+  variant_id: string;
+  sku: string;
+  hub_state: "created" | "reused";
+  complete: boolean;
+  channels: ChannelOnboardingResult[];
+}
+
 /** One channel's aggregated status for a product/variant row - see catalog_list.py's
  * `_channel_state`. "not_applicable" is a deliberate, non-error state (e.g. a
  * sevdesk-only shipping line item was never meant to have a Wix listing). */

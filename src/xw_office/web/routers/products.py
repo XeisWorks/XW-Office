@@ -28,6 +28,7 @@ from xw_office.services.product_hub.content_generation import (
     ProductContentContext,
 )
 from xw_office.services.product_hub.editing import EditingService, UnknownFieldError
+from xw_office.services.product_hub.onboarding import ProductOnboardingService
 from xw_office.services.product_hub.readiness import (
     build_readiness_summary,
     evaluate_product_readiness,
@@ -37,6 +38,7 @@ from xw_office.web.schemas.products import (
     AuditLogOut,
     BulletPointsUpdateRequest,
     ChannelMappingOut,
+    ChannelOnboardingResultOut,
     ContentGenerateResponse,
     EditionCreateRequest,
     EditionOut,
@@ -45,22 +47,26 @@ from xw_office.web.schemas.products import (
     ImprovementCreateRequest,
     ImprovementUpdateRequest,
     Page,
+    ParentProductListItem,
     PriceOut,
     PriceSetRequest,
     PrintRuleOut,
     PrintRuleUpsertRequest,
-    ParentProductListItem,
     ProductAssetOut,
     ProductDetail,
     ProductImprovementOut,
+    ProductOnboardingOptionsOut,
+    ProductOnboardingRequest,
+    ProductOnboardingResultOut,
     ProductReadinessOut,
     ProductSkuRenameRequest,
     ProductUpdateRequest,
     ProductVariantOut,
     ReadinessSummaryOut,
+    SevdeskCategoryOut,
+    SevdeskPartMappingRequest,
     TagAddRequest,
     TagOut,
-    SevdeskPartMappingRequest,
     VariantUpdateRequest,
 )
 
@@ -68,6 +74,7 @@ RepoDependency = Callable[[], Generator[ProductHubRepository, None, None]]
 EditingDependency = Callable[[], EditingService]
 EditGateDependency = Callable[[], None]
 ContentGenerationDependency = Callable[[], ContentGenerationService]
+OnboardingDependency = Callable[[], ProductOnboardingService]
 
 
 def build_products_router(
@@ -75,6 +82,7 @@ def build_products_router(
     get_editing: EditingDependency,
     require_edit_enabled: EditGateDependency,
     get_content_generation: ContentGenerationDependency,
+    get_onboarding: OnboardingDependency,
 ) -> APIRouter:
     """Build the products router, parameterized by a repo + editing-service dependency.
 
@@ -134,6 +142,53 @@ def build_products_router(
         summaries = build_parent_product_summaries(repo, repo.list_products(page_filters))
         items = [ParentProductListItem.model_validate(s) for s in summaries]
         return Page(items=items, total=total, limit=limit, offset=offset)
+
+    @write_router.get(
+        "/product-onboarding/options", response_model=ProductOnboardingOptionsOut
+    )
+    def product_onboarding_options(
+        onboarding: ProductOnboardingService = Depends(get_onboarding),
+    ) -> ProductOnboardingOptionsOut:
+        try:
+            categories = onboarding.list_sevdesk_categories()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        return ProductOnboardingOptionsOut(
+            sevdesk_categories=[SevdeskCategoryOut(**item) for item in categories]
+        )
+
+    @write_router.post(
+        "/product-onboarding", response_model=ProductOnboardingResultOut,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def onboard_product(
+        body: ProductOnboardingRequest,
+        onboarding: ProductOnboardingService = Depends(get_onboarding),
+    ) -> ProductOnboardingResultOut:
+        try:
+            result = onboarding.onboard(**body.model_dump())
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            ) from exc
+        return ProductOnboardingResultOut(
+            product_id=result.product_id,
+            variant_id=result.variant_id,
+            sku=result.sku,
+            hub_state=result.hub_state,
+            complete=result.complete,
+            channels=[
+                ChannelOnboardingResultOut(
+                    channel=item.channel,
+                    state=item.state,
+                    external_id=item.external_id,
+                    message=item.message,
+                )
+                for item in result.channels
+            ],
+        )
 
     @router.get("/products/by-sku/{sku}", response_model=ProductDetail)
     def get_product_by_sku(

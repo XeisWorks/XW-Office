@@ -232,6 +232,45 @@ class ReadinessSummaryOut(BaseModel):
     open_improvements: int
 
 
+class SevdeskCategoryOut(BaseModel):
+    id: str
+    name: str
+
+
+class ProductOnboardingOptionsOut(BaseModel):
+    sevdesk_categories: list[SevdeskCategoryOut]
+
+
+class ProductOnboardingRequest(BaseModel):
+    sku: str = Field(min_length=1, max_length=80)
+    name: str = Field(min_length=1, max_length=300)
+    product_type: str = Field(pattern="^(physical|digital)$")
+    price_gross: Decimal = Field(ge=0)
+    tax_rate: Decimal = Field(ge=0, le=100)
+    sevdesk_category_id: str = Field(min_length=1)
+    sevdesk_category_name: str = ""
+    brand_name: str = ""
+    category: str = ""
+    weight_grams: Decimal | None = Field(default=None, ge=0)
+    resume_product_id: uuid.UUID | None = None
+
+
+class ChannelOnboardingResultOut(BaseModel):
+    channel: str
+    state: str
+    external_id: str = ""
+    message: str = ""
+
+
+class ProductOnboardingResultOut(BaseModel):
+    product_id: uuid.UUID
+    variant_id: uuid.UUID
+    sku: str
+    hub_state: str
+    complete: bool
+    channels: list[ChannelOnboardingResultOut]
+
+
 # -- PR09: edit API -----------------------------------------------------------------
 #
 # Response schemas below add ``row_version`` (required by every PATCH's If-Match-style

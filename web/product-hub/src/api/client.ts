@@ -25,6 +25,9 @@ import type {
   ProductDetail,
   ProductImprovement,
   ProductListFilters,
+  ProductOnboardingOptions,
+  ProductOnboardingRequest,
+  ProductOnboardingResult,
   ProductReadiness,
   ProductSkuRenameRequest,
   ProductUpdateRequest,
@@ -159,6 +162,10 @@ export const api = {
   getAudit: (id: string) => request<AuditLogEntry[]>(`/api/v1/products/${id}/audit`),
   getReadiness: (id: string) => request<ProductReadiness>(`/api/v1/products/${id}/readiness`),
   getReadinessSummary: () => request<ReadinessSummary>(`/api/v1/catalog/readiness-summary`),
+  getProductOnboardingOptions: () =>
+    request<ProductOnboardingOptions>("/api/v1/product-onboarding/options"),
+  onboardProduct: (body: ProductOnboardingRequest) =>
+    request<ProductOnboardingResult>("/api/v1/product-onboarding", { method: "POST", body }),
 
   // -- PR09: edit API -----------------------------------------------------------
   updateProduct: (id: string, body: ProductUpdateRequest) =>

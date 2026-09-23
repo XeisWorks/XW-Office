@@ -438,6 +438,7 @@ class WixProductsClient:
         self,
         *,
         include_hidden: bool = True,
+        strict: bool = False,
         cancel_token: CancellationToken | None = None,
     ) -> list[WixProduct]:
         """Fetch all products from Wix Catalog (paginated).
@@ -481,6 +482,8 @@ class WixProductsClient:
 
             if not chosen_endpoint:
                 logger.error("WixProductsClient: no working product query endpoint found")
+                if strict:
+                    raise RuntimeError("Wix-Produktkatalog ist nicht erreichbar.")
                 return []
 
             logger.info("WixProductsClient: using product query endpoint %s", chosen_endpoint)
@@ -512,6 +515,8 @@ class WixProductsClient:
                     )
                 except Exception:
                     logger.exception("WixProductsClient: HTTP error on page %s", page)
+                    if strict:
+                        raise
                     break
 
                 data = resp.json() if resp.content else {}

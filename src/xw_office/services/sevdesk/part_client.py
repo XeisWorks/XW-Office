@@ -223,7 +223,7 @@ class PartClient:
         logger.info("PartClient: fetched %s raw parts", len(rows))
         return rows
 
-    def find_part_by_sku(self, sku: str) -> SevdeskPart | None:
+    def find_part_by_sku(self, sku: str, *, strict: bool = False) -> SevdeskPart | None:
         """Look up a single Part by its partNumber/SKU via GET /Part?partNumber=…."""
         try:
             response = self._conn.get("/Part", params={"partNumber": sku, "embed": "category,unity"})
@@ -236,6 +236,8 @@ class PartClient:
                     return _parse_part(raw)
         except Exception as exc:  # noqa: BLE001
             logger.warning("find_part_by_sku(%r) failed: %s", sku, exc)
+            if strict:
+                raise
         return None
 
     def get_part_by_id(self, part_id: str) -> SevdeskPart | None:

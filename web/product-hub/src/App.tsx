@@ -9,6 +9,7 @@ import ConflictListPage from "./pages/ConflictListPage";
 import ConflictWizardPage from "./pages/ConflictWizardPage";
 import WixReconciliationPage from "./pages/WixReconciliationPage";
 import InventoryCutoverPage from "./pages/InventoryCutoverPage";
+import ProductOnboardingPage from "./pages/ProductOnboardingPage";
 
 export default function App() {
   const [hasToken, setHasToken] = useState<boolean>(() => Boolean(getToken()));
@@ -46,6 +47,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<DashboardPage onUnauthorized={handleUnauthorized} />} />
           <Route path="/products" element={<ProductListPage onUnauthorized={handleUnauthorized} />} />
+          <Route path="/products/new" element={<ProductOnboardingPage onUnauthorized={handleUnauthorized} />} />
           <Route
             path="/products/:id"
             element={<ProductDetailPage onUnauthorized={handleUnauthorized} />}
