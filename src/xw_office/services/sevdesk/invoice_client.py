@@ -460,6 +460,8 @@ class InvoiceClient:
         offset: int = 0,
         embed_contact: bool = True,
         status: int | None = None,
+        request_timeout: float | None = None,
+        max_retries: int | None = None,
     ) -> list[InvoiceSummary]:
         """Return invoice rows (newest first by API default).
 
@@ -472,7 +474,12 @@ class InvoiceClient:
         if status is not None:
             params["status"] = status
 
-        response = self._conn.get("/Invoice", params=params)
+        request_kwargs: dict[str, object] = {"params": params}
+        if request_timeout is not None:
+            request_kwargs["timeout"] = max(0.1, float(request_timeout))
+        if max_retries is not None:
+            request_kwargs["max_retries"] = max(0, int(max_retries))
+        response = self._conn.get("/Invoice", **request_kwargs)
         payload = response.json()
         objects = payload.get("objects")
         if not isinstance(objects, list):
@@ -532,6 +539,8 @@ class InvoiceClient:
         offset: int = 0,
         embed_contact: bool = True,
         excluded_statuses: set[int] | None = None,
+        request_timeout: float | None = None,
+        max_retries: int | None = None,
     ) -> list[InvoiceSummary]:
         """Return newest invoices excluding drafts, with offset in filtered space."""
         excluded = set(excluded_statuses or {100})
@@ -548,6 +557,8 @@ class InvoiceClient:
                 offset=raw_offset,
                 embed_contact=embed_contact,
                 status=None,
+                request_timeout=request_timeout,
+                max_retries=max_retries,
             )
             if not batch:
                 break

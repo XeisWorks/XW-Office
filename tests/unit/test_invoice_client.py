@@ -125,6 +125,20 @@ def test_invoice_client_list_parses_objects() -> None:
     assert rows[0].status_label() == "Bezahlt"
 
 
+def test_recent_invoice_list_can_use_short_single_attempt_request() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"objects": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://example.test/api/v1")
+    inv = InvoiceClient(SevdeskConnection(client=client, config=AppConfig()))
+
+    assert inv.list_recent_non_draft_summaries(request_timeout=12, max_retries=0) == []
+    assert len(seen) == 1
+
+
 def test_invoice_client_fetch_invoice_positions_uses_invoice_filter_params() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/InvoicePos")

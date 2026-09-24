@@ -330,6 +330,8 @@ class InvoiceProcessingService:
         *,
         limit: int = 50,
         offset: int = 0,
+        request_timeout: float | None = None,
+        max_retries: int | None = None,
     ) -> tuple[list[dict[str, str]], list[InvoiceSummary]]:
         """Return newest non-draft invoices for the Rechnungen history pane."""
         key = ("recent_non_draft", int(limit), int(offset))
@@ -340,7 +342,12 @@ class InvoiceProcessingService:
             if (now - ts) <= _BATCH_CACHE_TTL_SECONDS:
                 return list(cached_rows), list(cached_summaries)
 
-        summaries = self._invoices.list_recent_non_draft_summaries(limit=limit, offset=offset)
+        summaries = self._invoices.list_recent_non_draft_summaries(
+            limit=limit,
+            offset=offset,
+            request_timeout=request_timeout,
+            max_retries=max_retries,
+        )
         self._apply_sensitive_country_flags(summaries)
         self._apply_unreleased_sku_flags(summaries)
         rows = [s.as_table_row() for s in summaries]

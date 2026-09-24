@@ -74,14 +74,15 @@ def sevdesk_get_with_retry(
     config: AppConfig,
     path: str,
     cancel_token: CancellationToken | None = None,
+    max_retries: int | None = None,
     **kwargs: object,
 ) -> httpx.Response:
     """GET with retries on transient status codes (safe for read-only calls)."""
-    max_retries = max(0, int(config.sevdesk.http_max_retries))
+    retry_count = max(0, int(config.sevdesk.http_max_retries if max_retries is None else max_retries))
     backoff = float(config.sevdesk.http_retry_backoff_seconds)
     last_response: httpx.Response | None = None
 
-    for attempt in range(max_retries + 1):
+    for attempt in range(retry_count + 1):
         if cancel_token is not None:
             cancel_token.raise_if_cancelled()
         response = client.get(path, **kwargs)  # type: ignore[arg-type]
@@ -92,7 +93,7 @@ def sevdesk_get_with_retry(
 
         code = response.status_code
         retriable = code in (429, 500, 502, 503, 504)
-        if not retriable or attempt >= max_retries:
+        if not retriable or attempt >= retry_count:
             raise_for_sevdesk(response)
 
         retry_after_hdr = response.headers.get("Retry-After")
@@ -107,7 +108,7 @@ def sevdesk_get_with_retry(
             path,
             code,
             attempt + 1,
-            max_retries,
+            retry_count,
             delay,
         )
         end_at = time.monotonic() + delay
@@ -127,10 +128,17 @@ class SevdeskConnection:
     client: httpx.Client
     config: AppConfig
 
-    def get(self, path: str, **kwargs: object) -> httpx.Response:
+    def get(self, path: str, *, max_retries: int | None = None, **kwargs: object) -> httpx.Response:
         """GET *path* with retry policy from config."""
         cancel_token = kwargs.pop("cancel_token", None)
-        return sevdesk_get_with_retry(self.client, self.config, path, cancel_token=cancel_token, **kwargs)
+        return sevdesk_get_with_retry(
+            self.client,
+            self.config,
+            path,
+            cancel_token=cancel_token,
+            max_retries=max_retries,
+            **kwargs,
+        )
 
     def put(self, path: str, **kwargs: object) -> httpx.Response:
         """PUT *path* (no retry — write operations are not idempotent-safe)."""

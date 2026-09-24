@@ -149,6 +149,7 @@ _DRAFT_STATUS = 100
 _OPEN_STATUS: int | None = None
 _DRAFT_INITIAL_LOAD_LIMIT = 50
 _OPEN_AUTO_LOAD_LIMIT = 50
+_RECENT_INVOICE_LOAD_TIMEOUT_SECONDS = 12.0
 # Contexts are immutable enough for one application session.  The persistent
 # Wix snapshot cache is retained for 180 days; dropping the UI representation
 # after 75 seconds only caused needless conversion work when users revisited a
@@ -1984,11 +1985,15 @@ class RechnungenView(QWidget):
             append,
         )
 
-        self._overlay.show_with_message(
-            "Rechnungen werden geladen…" if not append else "Weitere Rechnungen werden geladen…",
-        )
-        self._overlay.setGeometry(self.rect())
-        self._overlay.raise_()
+        if not append:
+            self._overlay.show_with_message("Rechnungen werden geladen…")
+            self._overlay.setGeometry(self.rect())
+            self._overlay.raise_()
+        else:
+            self._container.resolve(AppSignals).status_message.emit(
+                "Weitere Rechnungen werden im Hintergrund geladen…",
+                0,
+            )
 
         def job() -> tuple[list[dict[str, str]], list[InvoiceSummary], bool, int | None]:
             if status_filter == _DRAFT_STATUS:
@@ -2000,7 +2005,19 @@ class RechnungenView(QWidget):
             else:
                 recent_loader = getattr(service, "load_recent_non_draft_batch", None)
                 if callable(recent_loader):
-                    rows, sums = recent_loader(limit=page_limit, offset=offset)
+                    try:
+                        rows, sums = recent_loader(
+                            limit=page_limit,
+                            offset=offset,
+                            request_timeout=_RECENT_INVOICE_LOAD_TIMEOUT_SECONDS,
+                            max_retries=0,
+                        )
+                    except TypeError as exc:
+                        # Keep custom/test service implementations compatible
+                        # while the production service uses the short timeout.
+                        if "request_timeout" not in str(exc) and "max_retries" not in str(exc):
+                            raise
+                        rows, sums = recent_loader(limit=page_limit, offset=offset)
                 else:
                     rows, sums = service.load_invoice_batch(
                         status=status_filter,
@@ -2453,6 +2470,13 @@ class RechnungenView(QWidget):
     def _on_load_error(self, exc: Exception) -> None:
         logger.error("Invoice load failed: %s", exc)
         self._pending_auto_open_load = False
+        if self._append_mode:
+            self._container.resolve(AppSignals).status_message.emit(
+                f"Weitere Rechnungen konnten nicht geladen werden: {exc}",
+                10000,
+            )
+            self._append_mode = False
+            return
         QMessageBox.warning(
             self,
             "Fehler",
