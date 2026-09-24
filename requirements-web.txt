@@ -6,10 +6,12 @@ PyYAML>=6,<7
 uvicorn>=0.34,<1
 # Product Hub Read API (PR07): xw_office.repositories.product_hub /
 # xw_office.core.database pull these in transitively (SQLAlchemy for the ORM/session,
-# psycopg2 as the Postgres driver, python-dotenv because core.config imports it even
+# psycopg2 as the desktop-compatible Postgres driver, psycopg as the driver for
+# Railway's postgresql+psycopg URL, and python-dotenv because core.config imports it even
 # though load_config() itself is never called from this lean web app).
 sqlalchemy>=2,<3
 psycopg2-binary>=2.9,<3
+psycopg[binary]>=3.1,<4
 python-dotenv>=1,<2
 # Product Hub Wix push (PR11): xw_office.services.wix.product_details_client needs
 # httpx. Importing anything under xw_office.services.wix.* also runs that package's
