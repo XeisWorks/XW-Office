@@ -32,6 +32,12 @@ class BackgroundWorker(QThread):
     """
 
     signals: WorkerSignals
+    # A worker may outlive its visual owner (for example while a network
+    # request is unwinding during navigation or shutdown).  Keep a process
+    # level reference until QThread has actually stopped; otherwise Python can
+    # destroy the wrapper early and Qt terminates the process with
+    # "QThread: Destroyed while thread is still running".
+    _running_workers: set["BackgroundWorker"] = set()
 
     def __init__(
         self,
@@ -46,6 +52,17 @@ class BackgroundWorker(QThread):
         self._kwargs = kwargs
         self._cancelled = Event()
         self.finished.connect(self.signals.finished.emit)
+        self.finished.connect(self._release_running_reference)
+
+    def start(self, priority: QThread.Priority = QThread.InheritPriority) -> None:
+        """Start the worker while retaining it until its native thread stops."""
+        type(self)._running_workers.add(self)
+        super().start(priority)
+
+    def _release_running_reference(self) -> None:
+        # QThread.finished is emitted only after ``isRunning()`` becomes false
+        # (covered by the worker lifecycle test), so releasing here is safe.
+        type(self)._running_workers.discard(self)
 
     def cancel(self) -> None:
         """Request cancellation and suppress a result that arrives afterwards.

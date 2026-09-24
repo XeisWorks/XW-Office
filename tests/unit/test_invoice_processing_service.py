@@ -167,6 +167,14 @@ class _RepoStub:
         self._data[key] = value_json
 
 
+class _UnavailableRepoStub(_RepoStub):
+    calls = 0
+
+    def get_value_json(self, key: str) -> str | None:
+        self.calls += 1
+        raise ConnectionError("database unavailable")
+
+
 def test_last_start_overview_round_trips_through_settings_repository() -> None:
     repo = _RepoStub({})
     service = InvoiceProcessingService(AppConfig(), _InvoiceClientStub([]), repo)  # type: ignore[arg-type]
@@ -407,6 +415,19 @@ def test_is_flagged_sku_uses_same_settings_as_hint_logic() -> None:
     assert svc.is_flagged_sku("XW-123") is True
     assert svc.is_flagged_sku("XW-561.14-P") is True
     assert svc.is_flagged_sku("XW-9999") is False
+
+
+def test_sku_flags_fall_back_when_settings_database_is_unavailable() -> None:
+    repo = _UnavailableRepoStub({})
+    svc = InvoiceProcessingService(
+        AppConfig(),
+        _InvoiceClientStub([]),
+        repo,
+    )  # type: ignore[arg-type]
+
+    assert svc.is_flagged_sku("XW-010") is True
+    assert svc.is_flagged_sku("XW-010") is True
+    assert repo.calls == 1
 
 
 def test_sku_flags_support_custom_suffixes_for_hints_and_orders() -> None:

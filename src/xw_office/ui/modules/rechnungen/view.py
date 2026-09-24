@@ -2201,7 +2201,10 @@ class RechnungenView(QWidget):
         def run_refresh() -> None:
             if not self.isVisible():
                 return
-            self._refresh_open_invoice_overview()
+            try:
+                self._refresh_open_invoice_overview()
+            except Exception:  # noqa: BLE001 - a best-effort overview must not abort the Qt event loop.
+                logger.exception("Open-invoice overview refresh failed; keeping the invoice list usable")
 
         QTimer.singleShot(0, run_refresh)
 

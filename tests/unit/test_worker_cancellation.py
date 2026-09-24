@@ -1,6 +1,7 @@
 """Cancellation behavior for background workers."""
 from __future__ import annotations
 
+import weakref
 from threading import Event
 
 from xw_office.core.worker import BackgroundWorker
@@ -38,3 +39,22 @@ def test_worker_finished_signal_emits_after_qthread_stops(qtbot: object) -> None
     qtbot.waitUntil(lambda: bool(running_states), timeout=2000)
 
     assert running_states == [False]
+
+
+def test_running_worker_is_retained_without_an_owner_reference(qtbot: object) -> None:
+    started = Event()
+    release = Event()
+
+    def job() -> None:
+        started.set()
+        release.wait(timeout=2)
+
+    worker = BackgroundWorker(job)
+    worker_ref = weakref.ref(worker)
+    worker.start()
+    assert started.wait(timeout=1)
+    del worker
+
+    assert worker_ref() is not None
+    release.set()
+    qtbot.waitUntil(lambda: worker_ref() is None, timeout=2000)

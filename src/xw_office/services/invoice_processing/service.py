@@ -44,6 +44,7 @@ _SENSITIVE_COUNTRIES_KEY = "rechnungen.sensitive_country_codes"
 _ALLOWED_COUNTRIES_KEY = "rechnungen.allowed_country_codes"
 _SKU_FLAGS_KEY = "rechnungen.sku_flags"
 _FULFILLMENT_STATUS_KEY = "rechnungen.fulfillment_status"
+_SKU_FLAGS_RETRY_DELAY_SECONDS = 30.0
 _FULFILLMENT_MAIL_TEMPLATE_KEY = "rechnungen.fulfillment_mail_template_html"
 _FULFILLMENT_MAIL_SUBJECT_KEY = "rechnungen.fulfillment_mail_subject"
 _LAST_START_OVERVIEW_KEY = "rechnungen.last_start_overview_v1"
@@ -245,6 +246,8 @@ class InvoiceProcessingService:
         self._wix_order_summary_cache: dict[str, dict[str, str]] = {}
         self._wix_hint_cache: dict[str, InvoiceListHintFlags] = {}
         self._payment_check_account_cache: dict[str, int | None] = {}
+        self._sku_flags_cache: tuple[set[str], tuple[str, ...], tuple[str, ...]] | None = None
+        self._sku_flags_retry_after = 0.0
         self._batch_cache: dict[
             tuple[int | None, int, int],
             tuple[float, list[dict[str, str]], list[InvoiceSummary]],
@@ -2530,21 +2533,39 @@ class InvoiceProcessingService:
     def _load_sku_flags(self) -> tuple[set[str], tuple[str, ...], tuple[str, ...]]:
         if self._settings_repo is None:
             return self._default_sku_flags()
-        raw = self._settings_repo.get_value_json(_SKU_FLAGS_KEY)
+        if self._sku_flags_cache is not None and time.monotonic() < self._sku_flags_retry_after:
+            return self._sku_flags_cache
+        try:
+            raw = self._settings_repo.get_value_json(_SKU_FLAGS_KEY)
+        except Exception as exc:  # noqa: BLE001 - settings storage is optional for this hint.
+            fallback = self._sku_flags_cache or self._default_sku_flags()
+            self._sku_flags_cache = fallback
+            self._sku_flags_retry_after = time.monotonic() + _SKU_FLAGS_RETRY_DELAY_SECONDS
+            logger.warning("SKU flags unavailable from settings; using cached/default flags: %s", exc)
+            return fallback
+        self._sku_flags_retry_after = 0.0
         if not raw:
-            return self._default_sku_flags()
+            flags = self._default_sku_flags()
+            self._sku_flags_cache = flags
+            return flags
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            return self._default_sku_flags()
+            flags = self._default_sku_flags()
+            self._sku_flags_cache = flags
+            return flags
         if not isinstance(data, dict):
-            return self._default_sku_flags()
+            flags = self._default_sku_flags()
+            self._sku_flags_cache = flags
+            return flags
 
         exact_raw = data.get("exact")
         prefixes_raw = data.get("prefixes")
         suffixes_raw = data.get("suffixes", _DEFAULT_SKU_FLAGS["suffixes"])
         if not isinstance(exact_raw, list) or not isinstance(prefixes_raw, list):
-            return self._default_sku_flags()
+            flags = self._default_sku_flags()
+            self._sku_flags_cache = flags
+            return flags
         if not isinstance(suffixes_raw, list):
             suffixes_raw = _DEFAULT_SKU_FLAGS["suffixes"]
 
@@ -2552,8 +2573,12 @@ class InvoiceProcessingService:
         prefixes = tuple(str(item).strip().upper() for item in prefixes_raw if str(item).strip())
         suffixes = tuple(str(item).strip().upper() for item in suffixes_raw if str(item).strip())
         if not exact and not prefixes and not suffixes:
-            return self._default_sku_flags()
-        return exact, prefixes, suffixes
+            flags = self._default_sku_flags()
+            self._sku_flags_cache = flags
+            return flags
+        flags = (exact, prefixes, suffixes)
+        self._sku_flags_cache = flags
+        return flags
 
     def _default_sku_flags(self) -> tuple[set[str], tuple[str, ...], tuple[str, ...]]:
         exact = {str(item).strip().upper() for item in _DEFAULT_SKU_FLAGS["exact"]}
