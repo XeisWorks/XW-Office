@@ -355,7 +355,13 @@ class OffeneSendungenDialog(QDialog):
         if self._load_worker is not None and self._load_worker.isRunning():
             return
         self._load_seq += 1
-        self._detail_seq += 1
+        # A preserving refresh is intentionally allowed to run alongside the
+        # selected case's detail extraction.  The initial cache-only load is
+        # followed by a silent Graph refresh after 600 ms; invalidating the
+        # detail sequence here made every extraction taking longer than that
+        # appear to be stuck at "Laden..." forever.
+        if not preserve:
+            self._invalidate_detail_load()
         seq = self._load_seq
         selected = self._current_case()
         selected_id = selected.id if preserve and selected is not None else ""
@@ -487,7 +493,7 @@ class OffeneSendungenDialog(QDialog):
         case = self._current_case()
         if case is None:
             return
-        self._detail_seq += 1
+        self._invalidate_detail_load()
         seq = self._detail_seq
         case_id = case.id
         self._set_detail_loading("Analysiere Mailverlauf..." if force else "Lade Details...")
@@ -504,6 +510,13 @@ class OffeneSendungenDialog(QDialog):
         worker.signals.error.connect(lambda exc, token=seq: self._on_detail_error(token, exc))
         worker.signals.finished.connect(lambda w=worker: self._on_detail_worker_finished(w))
         worker.start()
+
+    def _invalidate_detail_load(self) -> None:
+        """Ignore obsolete detail results and stop publishing redundant work."""
+        self._detail_seq += 1
+        worker = self._detail_worker
+        if worker is not None and worker.isRunning():
+            worker.cancel()
 
     def _on_detail_worker_finished(self, worker: BackgroundWorker) -> None:
         if self._detail_worker is worker:

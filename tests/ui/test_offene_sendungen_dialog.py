@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from time import sleep
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog
@@ -100,6 +101,14 @@ class _FakeContainer:
         raise KeyError(str(typ))
 
 
+class _SlowExtractionService(_FakeSendungenService):
+    def extract_case_details(self, case_id: str, *, force: bool = False) -> SendungExtraction:
+        # The dialog starts its silent Graph refresh after 600 ms.  A real
+        # OpenAI/Wix extraction can easily outlast that refresh.
+        sleep(0.8)
+        return super().extract_case_details(case_id, force=force)
+
+
 def _wait_dialog_loaded(qtbot: object, dialog: OffeneSendungenDialog) -> None:
     qtbot.waitUntil(lambda: "Max Muster" in dialog._address.toPlainText(), timeout=3000)  # noqa: SLF001
 
@@ -126,6 +135,16 @@ def test_dialog_loads_cases_and_prefills_shipping_fields(qtbot: object) -> None:
     return_index = dialog._products_model.index(0, 6)  # noqa: SLF001
     assert free_index.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
     assert return_index.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
+
+
+def test_initial_detail_load_survives_silent_refresh(qtbot: object) -> None:
+    service = _SlowExtractionService()
+    dialog = OffeneSendungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+
+    qtbot.waitUntil(lambda: service.refresh_called == 1, timeout=3000)
+    qtbot.waitUntil(lambda: "Ein Musikbuch" in dialog._summary.text(), timeout=3000)  # noqa: SLF001
+    assert dialog._detail_status.text().startswith("Quelle: openai")  # noqa: SLF001
 
 
 def test_dialog_uses_compact_case_label_and_mail_spacing(qtbot: object) -> None:
