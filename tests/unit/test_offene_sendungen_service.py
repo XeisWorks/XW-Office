@@ -100,6 +100,41 @@ def test_refresh_count_from_graph_silent_uses_legacy_inbox_scope_and_outlook_fla
     assert [case.id for case in cases] == ["m1", "m2"]
 
 
+def test_refresh_loads_queue_metadata_and_fetches_selected_mail_body_on_demand(monkeypatch) -> None:
+    calls: list[object] = []
+
+    class _GraphClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def list_inbox_messages(self, **kwargs: object) -> list[dict[str, Any]]:
+            calls.append(kwargs)
+            message = _message("m1", "Bestellung 20868", "Bitte an neue Adresse senden")
+            message.pop("body")
+            return [message]
+
+        def get_conversation_thread_text(self, *_args: object, **_kwargs: object) -> str:
+            calls.append("thread")
+            return ""
+
+        def get_message_body(self, message_id: str) -> str:
+            calls.append(message_id)
+            return "Versandadresse:\nMax Muster\nHauptstrasse 1\n1010 Wien\nAT\n\n2x Musikbuch Alpen"
+
+    monkeypatch.setattr("xw_office.services.sendungen.service.GraphMailClient", _GraphClient)
+    service = OffeneSendungenService(_Repo(), _Secrets())  # type: ignore[arg-type]
+    service._secrets.values["OPENAI_API_KEY"] = ""  # noqa: SLF001
+
+    service.refresh_from_graph()
+    case = service.load_open_cases()[0]
+    details = service.extract_case_details(case.id)
+
+    assert calls[0]["include_body"] is False  # type: ignore[index]
+    assert case.body == ""
+    assert calls[-1] == "m1"
+    assert details.address_lines == ["Max Muster", "Hauptstrasse 1", "1010 Wien", "AT"]
+
+
 def test_refresh_count_from_graph_silent_excludes_legacy_system_messages(monkeypatch) -> None:
     class _GraphClient:
         def __init__(self, **_kwargs: object) -> None:

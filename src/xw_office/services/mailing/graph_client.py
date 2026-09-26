@@ -216,12 +216,22 @@ class GraphMailClient:
         days: int = 20,
         exclude_sender: str | None = None,
         top: int = 50,
+        include_body: bool = True,
     ) -> list[dict[str, Any]]:
+        """List inbox messages, optionally without their full body payload.
+
+        Callers that only populate a queue should use ``include_body=False``.
+        This keeps a large inbox refresh small; the selected message can be
+        fetched with :meth:`get_message_body` when its detail view opens.
+        """
         cutoff = _utc_cutoff_iso(days)
         base_url = f"https://graph.microsoft.com/v1.0/{self._mailbox_segment}/mailFolders/inbox/messages"
         fallback_url = f"https://graph.microsoft.com/v1.0/{self._mailbox_segment}/messages"
+        select_fields = "id,internetMessageId,subject,from,receivedDateTime,bodyPreview,conversationId,isRead,flag"
+        if include_body:
+            select_fields += ",body"
         params = {
-            "$select": "id,internetMessageId,subject,from,receivedDateTime,bodyPreview,body,conversationId,isRead,flag",
+            "$select": select_fields,
             "$orderby": "receivedDateTime desc",
             "$top": str(top),
             "$filter": f"receivedDateTime ge {cutoff}",

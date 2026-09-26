@@ -429,7 +429,14 @@ class OffeneSendungenService:
             logger.info("MS Graph silent token missing; using cached offene Sendungen")
             return self._load_cached_raw_messages()
         try:
-            values = client.list_inbox_messages(days=max(1, lookback_days), top=max(1, min(max_items, 200)))
+            # The queue needs metadata only.  Fetching the full body for up
+            # to 150 messages made each background refresh unnecessarily
+            # large; the selected message is loaded on demand below.
+            values = client.list_inbox_messages(
+                days=max(1, lookback_days),
+                top=max(1, min(max_items, 200)),
+                include_body=False,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("MS Graph fetch failed for offene Sendungen: %s", exc)
             return self._load_cached_raw_messages()
@@ -525,13 +532,21 @@ class OffeneSendungenService:
     def _full_case_text(self, case: SendungCase) -> str:
         base = case.thread_text or case.body or case.snippet
         client = self._graph_client()
-        if client is not None and case.thread_id:
+        if client is None:
+            return str(base or "").strip()
+        if case.thread_id:
             try:
                 thread = client.get_conversation_thread_text(case.thread_id, days=60, top=30)
                 if thread.strip():
                     return thread
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Sendung conversation fetch failed for %s: %s", case.id, exc)
+        try:
+            body = client.get_message_body(case.id)
+            if body.strip():
+                return body
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Sendung body fetch failed for %s: %s", case.id, exc)
         return str(base or "").strip()
 
     def _openai_extract(self, case: SendungCase, api_key: str) -> SendungExtraction:
