@@ -20,3 +20,4 @@ node_modules/
 test-results/
 data/
 docs/invoices/Sendungen_*.csv
+docs/product_workflow/migration_preview.local.json
