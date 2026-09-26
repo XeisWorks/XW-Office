@@ -3,7 +3,7 @@ project: XW-Office unified product workflow
 language: de-AT
 execution: one task at a time
 baseline_commit: aff6b85e54be3a5fb7eed88812225ec702ed3084
-status: planned_not_implemented
+status: in_progress
 rules:
 - Reuse existing Product Hub, outbox, conflict wizard, Graph and OpenAI services
 - Do not modify protected architecture archive
@@ -17,7 +17,7 @@ phases:
   tasks:
   - id: T01
     title: Iststand und Verbraucher erfassen
-    status: pending
+    status: done
     depends_on_tasks: []
     implementation:
     - AGENTS.md lesen; main sauber aktualisieren; BUILD_PLAN-Codepfade und aktuellen Alembic-Head prüfen
