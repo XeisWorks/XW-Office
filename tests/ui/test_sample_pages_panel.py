@@ -3,7 +3,13 @@ from __future__ import annotations
 from xw_office.bootstrap import register_default_services
 from xw_office.core.config import AppConfig
 from xw_office.core.container import Container
-from xw_office.ui.modules.layout.sample_pages_panel import SamplePagesPanel
+from xw_office.ui.modules.layout.sample_pages_panel import (
+    _LEGACY_OUTPUT_FOLDER,
+    _LEGACY_WATERMARK_IMAGE,
+    SamplePagesPanel,
+    _default_output_folder,
+    _default_watermark_image,
+)
 from xw_office.ui.modules.layout.view import LayoutView
 
 
@@ -33,3 +39,15 @@ def test_sample_pages_panel_add_and_remove_rows(qtbot, tmp_path) -> None:
     panel._table.selectRow(0)  # noqa: SLF001
     panel._remove_selected()  # noqa: SLF001
     assert panel._table.rowCount() == 0  # noqa: SLF001
+
+
+def test_sample_pages_panel_uses_legacy_default_paths(qtbot) -> None:
+    from xw_office.services.layout.sample_pages_service import SamplePageExportService
+
+    panel = SamplePagesPanel(SamplePageExportService())
+    qtbot.addWidget(panel)
+
+    assert _LEGACY_OUTPUT_FOLDER.endswith(r"02 XeisWorks\27 Notenbeispiele")
+    assert _LEGACY_WATERMARK_IMAGE.endswith(r"01 Grafik\XeisWorks_NEU.png")
+    assert panel._output_folder_edit.text() == _default_output_folder()  # noqa: SLF001
+    assert panel._watermark_image_edit.text() == _default_watermark_image()  # noqa: SLF001

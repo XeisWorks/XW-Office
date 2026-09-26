@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from xw_office.core.shared_paths import resolve_shared_path
 from xw_office.core.worker import BackgroundWorker
 from xw_office.services.layout.sample_pages_models import (
     DEFAULT_MAX_SIZE_KB,
@@ -39,6 +40,8 @@ if TYPE_CHECKING:
     from xw_office.repositories.settings_kv import SettingKvRepository
 
 _OUTPUT_FOLDER_SETTING_KEY = "layout.sample_pages.output_folder"
+_LEGACY_OUTPUT_FOLDER = r"C:\Users\bernh\OneDrive - XeisWorks\02 XeisWorks\27 Notenbeispiele"
+_LEGACY_WATERMARK_IMAGE = r"C:\Users\bernh\OneDrive - XeisWorks\02 XeisWorks\01 Grafik\XeisWorks_NEU.png"
 _COL_PDF = 0
 _COL_PAGES = 1
 _COL_WATERMARK_PAGES = 2
@@ -46,7 +49,11 @@ _COL_STATUS = 3
 
 
 def _default_output_folder() -> str:
-    return str(Path.home() / "XeisWorks_Beispielseiten")
+    return resolve_shared_path(_LEGACY_OUTPUT_FOLDER)
+
+
+def _default_watermark_image() -> str:
+    return resolve_shared_path(_LEGACY_WATERMARK_IMAGE)
 
 
 class SamplePagesPanel(QWidget):
@@ -129,7 +136,7 @@ class SamplePagesPanel(QWidget):
 
         watermark_row = QHBoxLayout()
         watermark_row.addWidget(QLabel("Wasserzeichen-Bild:"))
-        self._watermark_image_edit = QLineEdit()
+        self._watermark_image_edit = QLineEdit(_default_watermark_image())
         self._watermark_image_edit.setPlaceholderText("Für Wasserzeichen-Seiten erforderlich (PNG, JPG, WebP …)")
         watermark_row.addWidget(self._watermark_image_edit, stretch=1)
         watermark_button = QPushButton("Bild wählen…")
