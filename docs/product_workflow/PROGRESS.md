@@ -23,6 +23,6 @@ Offene externe Einrichtung:
 - Reale Wix-/sevDesk-Leseprüfung, Editor-Link-Strategie und ein persistenter Railway-Worker.
 - Amazon-SP-API-Rollen und Produktidentifikatoren erst für P07.
 
-Commit: noch nicht erstellt.
+Commit: `9d37dff` (`docs: record unified product workflow baseline`).
 
 Nächster freigegebener Task: **T02 – Migration als Vorschau planen**.
