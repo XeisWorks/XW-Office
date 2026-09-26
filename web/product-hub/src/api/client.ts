@@ -28,6 +28,7 @@ import type {
   ProductOnboardingOptions,
   ProductOnboardingRequest,
   ProductOnboardingResult,
+  ProductDraft, ProductDraftTemplate,
   VariantOnboardingRequest,
   ProductReadiness,
   ProductSkuRenameRequest,
@@ -141,6 +142,10 @@ function buildQuery(filters: ProductListFilters): string {
 }
 
 export const api = {
+  listDraftTemplates: () => request<ProductDraftTemplate[]>("/api/v1/product-drafts/templates"),
+  createDraft: (body: { template_code?: string; data?: Record<string, unknown> }) => request<ProductDraft>("/api/v1/product-drafts", { method: "POST", body }),
+  getDraft: (id: string) => request<ProductDraft>(`/api/v1/product-drafts/${id}`),
+  saveDraft: (id: string, body: { expected_row_version: number; current_step?: number; completed_steps?: number[]; data?: Record<string, unknown> }) => request<ProductDraft>(`/api/v1/product-drafts/${id}`, { method: "PATCH", body }),
   listProducts: (filters: ProductListFilters = {}) =>
     request<Page<ParentProductListItem>>(`/api/v1/products?${buildQuery(filters)}`),
   getProduct: (id: string) => request<ProductDetail>(`/api/v1/products/${id}`),

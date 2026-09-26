@@ -11,6 +11,7 @@ import WixReconciliationPage from "./pages/WixReconciliationPage";
 import InventoryCutoverPage from "./pages/InventoryCutoverPage";
 import ProductOnboardingPage from "./pages/ProductOnboardingPage";
 import VariantOnboardingPage from "./pages/VariantOnboardingPage";
+import ProductDraftWizardPage from "./pages/ProductDraftWizardPage";
 
 export default function App() {
   const [hasToken, setHasToken] = useState<boolean>(() => Boolean(getToken()));
@@ -49,6 +50,7 @@ export default function App() {
           <Route path="/" element={<DashboardPage onUnauthorized={handleUnauthorized} />} />
           <Route path="/products" element={<ProductListPage onUnauthorized={handleUnauthorized} />} />
           <Route path="/products/new" element={<ProductOnboardingPage onUnauthorized={handleUnauthorized} />} />
+          <Route path="/products/wizard" element={<ProductDraftWizardPage onUnauthorized={handleUnauthorized} />} />
           <Route path="/products/:id/variants/new" element={<VariantOnboardingPage onUnauthorized={handleUnauthorized} />} />
           <Route
             path="/products/:id"

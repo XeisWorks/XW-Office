@@ -58,6 +58,11 @@ export interface ProductOnboardingRequest {
   resume_product_id?: string;
 }
 
+export interface ProductDraftOption { id: string; name: string; values: unknown[]; sort_order: number; row_version: number; }
+export interface ProductDraftVariant { id: string; sku: string; option_values: Record<string, unknown>; price_gross: string | null; tax_rate: string | null; currency: string; selected: boolean; row_version: number; }
+export interface ProductDraft { id: string; source_product_id: string | null; template_code: string | null; current_step: number; schema_version: number; completed_steps: number[]; data: Record<string, unknown>; row_version: number; options: ProductDraftOption[]; variants: ProductDraftVariant[]; }
+export interface ProductDraftTemplate { code: string; name: string; data: Record<string, unknown>; }
+
 export interface ChannelOnboardingResult {
   channel: "wix" | "sevdesk";
   state: "created" | "reused" | "synced" | "error";

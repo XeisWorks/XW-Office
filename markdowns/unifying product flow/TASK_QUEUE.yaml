@@ -92,7 +92,7 @@ phases:
     rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
   - id: T07
     title: Gemeinsame Wizard-Oberfläche
-    status: pending
+    status: done
     depends_on_tasks:
     - T06
     implementation:

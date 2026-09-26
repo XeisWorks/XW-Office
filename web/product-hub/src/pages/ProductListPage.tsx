@@ -303,7 +303,7 @@ export default function ProductListPage({ onUnauthorized }: ProductListPageProps
       <div className="list-toolbar">
         <h1>Produkte</h1>
         <div className="list-toolbar-actions">
-          <button type="button" className="primary-button" onClick={() => navigate("/products/new")}>
+          <button type="button" className="primary-button" onClick={() => navigate("/products/wizard")}>
             Neues Produkt
           </button>
           <div className="column-picker" ref={columnPickerRef}>

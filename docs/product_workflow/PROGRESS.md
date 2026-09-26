@@ -196,3 +196,15 @@ expliziten Auswahl übernommen; ein Cover ist stets als neu zu erzeugen markiert
 Test: `python -m pytest tests/unit/test_product_hub_drafts.py -q` → 3 bestanden.
 
 Nächster freigegebener Task: **T07 – Gemeinsame Wizard-Oberfläche**.
+
+## T07 – Gemeinsame Wizard-Oberfläche
+
+Status: erledigt am 2026-09-27. Die React-WebUI enthält `/products/wizard` als
+gemeinsamen Draft-Wizard mit Vorlagenauswahl, Fortsetzen und versionsbasiertem Autosave.
+Bei HTTP 409 lädt sie den aktuellen Entwurf statt Eingaben zu überschreiben. Der Desktop
+startet die gemeinsame WebUI bereits über die T04-Browserbrücke; Tokens erscheinen nicht
+in URLs. Unvollständige Entwürfe bleiben speicherbar.
+
+Test: `npm --prefix web/product-hub run build` → erfolgreich.
+
+Nächster freigegebener Task: **T08 – Serverseitigen OneDrive-Zugriff integrieren**.
