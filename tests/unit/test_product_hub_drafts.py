@@ -78,7 +78,25 @@ def test_stale_autosave_returns_current_draft_and_sku_check_is_not_reservation(t
 
     assert client.get("/api/v1/product-drafts/sku-availability?sku=XW-FREE", headers=_headers()).json()["available"] is True
     engine = create_engine(f"sqlite:///{tmp_path / 'drafts.db'}", future=True)
-    repo = ProductHubRepository(sessionmaker(bind=engine, future=True))
+    repo = ProductHubRepository(sessionmaker(bind=engine, expire_on_commit=False, future=True))
     repo.create_product(sku="XW-TAKEN", name="Taken")
     engine.dispose()
     assert client.get("/api/v1/product-drafts/sku-availability?sku=XW-TAKEN", headers=_headers()).json()["available"] is False
+
+
+def test_templates_and_copy_create_an_isolated_editable_draft(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    templates = client.get("/api/v1/product-drafts/templates", headers=_headers())
+    assert {item["code"] for item in templates.json()} == {
+        "mnozil-single", "musicheroes-booklet", "additional-part"
+    }
+    engine = create_engine(f"sqlite:///{tmp_path / 'drafts.db'}", future=True)
+    repo = ProductHubRepository(sessionmaker(bind=engine, expire_on_commit=False, future=True))
+    product, variant = repo.create_product(sku="XW-COPY-1", name="Original")
+    copied = client.post(f"/api/v1/products/{product.id}/copy-draft", headers=_headers(), json={})
+    assert copied.status_code == 201
+    assert copied.json()["source_product_id"] == str(product.id)
+    assert copied.json()["variants"][0]["sku"] == "XW-COPY-1-COPY"
+    assert copied.json()["data"]["cover_status"] == "regenerate_required"
+    assert repo.get_variant(variant.id).sku == "XW-COPY-1"
+    engine.dispose()

@@ -340,6 +340,16 @@ class ProductDraftCreateRequest(BaseModel):
     data: dict[str, object] = Field(default_factory=dict)
 
 
+class ProductDraftCopyRequest(BaseModel):
+    include_asset_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class ProductDraftTemplateOut(BaseModel):
+    code: str
+    name: str
+    data: dict[str, object]
+
+
 class ProductDraftUpdateRequest(BaseModel):
     expected_row_version: int
     current_step: int | None = Field(default=None, ge=0, le=7)

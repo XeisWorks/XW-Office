@@ -58,10 +58,12 @@ from xw_office.web.schemas.products import (
     ProductAssetOut,
     ProductDetail,
     ProductDraftCreateRequest,
+    ProductDraftCopyRequest,
     ProductDraftOptionCreateRequest,
     ProductDraftOptionOut,
     ProductDraftOut,
     ProductDraftUpdateRequest,
+    ProductDraftTemplateOut,
     ProductDraftVariantCreateRequest,
     ProductDraftVariantOut,
     ProductImprovementOut,
@@ -89,6 +91,12 @@ EditGateDependency = Callable[[], None]
 ContentGenerationDependency = Callable[[], ContentGenerationService]
 OnboardingDependency = Callable[[], ProductOnboardingService]
 DraftDependency = Callable[[], Generator[ProductDraftRepository, None, None]]
+
+DRAFT_TEMPLATES = {
+    "mnozil-single": ("Mnozil-Einzeltitel", {"product_type": "physical", "music_attributes": {"series": "Mnozil"}}),
+    "musicheroes-booklet": ("MusikHeroes-Heft", {"product_type": "physical", "music_attributes": {"series": "MusikHeroes"}}),
+    "additional-part": ("Zusatzstimme", {"product_type": "physical", "music_attributes": {"kind": "Zusatzstimme"}}),
+}
 
 
 def build_products_router(
@@ -141,6 +149,10 @@ def build_products_router(
     ) -> SkuAvailabilityOut:
         return SkuAvailabilityOut(sku=sku.strip().upper(), available=drafts.sku_available(sku))
 
+    @router.get("/product-drafts/templates", response_model=list[ProductDraftTemplateOut])
+    def list_product_draft_templates() -> list[ProductDraftTemplateOut]:
+        return [ProductDraftTemplateOut(code=code, name=name, data=data) for code, (name, data) in DRAFT_TEMPLATES.items()]
+
     @router.get("/product-drafts/{draft_id}", response_model=ProductDraftOut)
     def get_product_draft(
         draft_id: uuid.UUID, drafts: ProductDraftRepository = Depends(get_drafts)
@@ -154,7 +166,26 @@ def build_products_router(
     def create_product_draft(
         body: ProductDraftCreateRequest, drafts: ProductDraftRepository = Depends(get_drafts)
     ) -> ProductDraftOut:
-        return _draft_out(drafts, drafts.create(**body.model_dump()))
+        values = body.model_dump()
+        template = values.get("template_code", "")
+        template = {"musicheroes": "musicheroes-booklet"}.get(template, template)
+        values["template_code"] = template
+        if template and template not in DRAFT_TEMPLATES:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown draft template")
+        if template:
+            values["data"] = {**DRAFT_TEMPLATES[template][1], **values["data"]}
+        return _draft_out(drafts, drafts.create(**values))
+
+    @write_router.post("/products/{product_id}/copy-draft", response_model=ProductDraftOut,
+                       status_code=status.HTTP_201_CREATED)
+    def copy_product_to_draft(product_id: uuid.UUID, body: ProductDraftCopyRequest,
+                              drafts: ProductDraftRepository = Depends(get_drafts)) -> ProductDraftOut:
+        try:
+            return _draft_out(drafts, drafts.create_from_product(product_id, **body.model_dump()))
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     @write_router.patch("/product-drafts/{draft_id}", response_model=ProductDraftOut)
     def patch_product_draft(

@@ -12,9 +12,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
 from xw_office.models.product_hub import (
+    Product,
+    ProductAsset,
     ProductDraft,
     ProductDraftOption,
     ProductDraftVariant,
+    ProductPrice,
     ProductSkuAlias,
     ProductVariant,
 )
@@ -56,6 +59,61 @@ class ProductDraftRepository:
                 completed_steps=[], current_step=0, schema_version=1, row_version=1,
             )
             session.add(draft)
+            session.flush()
+            return draft
+
+    def create_from_product(
+        self, product_id: uuid.UUID, *, include_asset_ids: list[uuid.UUID] | None = None
+    ) -> ProductDraft:
+        """Create an isolated copy draft, never copying provider mappings or inventory."""
+        with self._scope() as session:
+            product = session.get(Product, product_id)
+            if product is None:
+                raise KeyError(f"Product {product_id} not found")
+            variants = list(session.scalars(
+                select(ProductVariant).where(ProductVariant.product_id == product_id)
+            ).all())
+            selected_ids = set(include_asset_ids or [])
+            assets = list(session.scalars(
+                select(ProductAsset).where(ProductAsset.product_id == product_id, ProductAsset.id.in_(selected_ids))
+            ).all()) if selected_ids else []
+            if selected_ids != {asset.id for asset in assets}:
+                raise ValueError("Selected assets do not belong to the source product")
+            draft = ProductDraft(
+                id=uuid.uuid4(), source_product_id=product.id, current_step=0, schema_version=1,
+                completed_steps=[], row_version=1,
+                data={
+                    "title_full": product.name,
+                    "title_short": (product.attributes or {}).get("title_short", ""),
+                    "description": product.description or "",
+                    "short_description": product.short_description or "",
+                    "brand_name": product.brand_name or "",
+                    "product_type": product.product_type,
+                    "asset_references": [
+                        {"source_asset_id": str(asset.id), "role": asset.role, "explicitly_selected": True}
+                        for asset in assets
+                    ],
+                    "cover_status": "regenerate_required",
+                },
+            )
+            session.add(draft)
+            option_values: dict[str, list[str]] = {}
+            for variant in variants:
+                for key, value in (variant.option_values or {}).items():
+                    option_values.setdefault(str(key), []).append(str(value))
+            for index, (name, values) in enumerate(option_values.items()):
+                session.add(ProductDraftOption(id=uuid.uuid4(), draft_id=draft.id, name=name,
+                    values=list(dict.fromkeys(values)), sort_order=index, row_version=1))
+            for variant in variants:
+                gross = session.scalar(select(ProductPrice.gross_amount).where(
+                    ProductPrice.variant_id == variant.id, ProductPrice.valid_until.is_(None)
+                ).order_by(ProductPrice.valid_from.desc()).limit(1))
+                tax = session.scalar(select(ProductPrice.tax_rate).where(
+                    ProductPrice.variant_id == variant.id, ProductPrice.valid_until.is_(None)
+                ).order_by(ProductPrice.valid_from.desc()).limit(1))
+                session.add(ProductDraftVariant(id=uuid.uuid4(), draft_id=draft.id,
+                    sku=f"{variant.sku}-COPY", option_values=dict(variant.option_values or {}),
+                    price_gross=gross, tax_rate=tax, currency="EUR", selected=True, row_version=1))
             session.flush()
             return draft
 

@@ -81,7 +81,7 @@ phases:
     rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
   - id: T06
     title: Vorlagen und Kopieren
-    status: pending
+    status: done
     depends_on_tasks:
     - T05
     implementation:

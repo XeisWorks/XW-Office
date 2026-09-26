@@ -183,3 +183,16 @@ Tests:
   auf PostgreSQL kompatibel erweitert.
 
 Nächster freigegebener Task: **T06 – Vorlagen und Kopieren**.
+
+## T06 – Vorlagen und Kopieren
+
+Status: erledigt am 2026-09-27. Drei Startvorlagen (Mnozil-Einzeltitel,
+MusikHeroes-Heft, Zusatzstimme) stehen über die Draft-API bereit. Ein Produkt kann
+als isolierter Entwurf kopiert werden: neue Draft-UUID und editierbare `-COPY`-SKU-
+Vorschläge, Texte/Optionen/Variantenpreise übernommen, aber keine Provider-IDs,
+Mappings, Bestände, ASINs oder Audit-Historie. Asset-Referenzen werden nur aus einer
+expliziten Auswahl übernommen; ein Cover ist stets als neu zu erzeugen markiert.
+
+Test: `python -m pytest tests/unit/test_product_hub_drafts.py -q` → 3 bestanden.
+
+Nächster freigegebener Task: **T07 – Gemeinsame Wizard-Oberfläche**.
