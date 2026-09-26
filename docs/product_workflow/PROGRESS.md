@@ -62,7 +62,7 @@ Tests:
   dass `inventory.products` unverändert bleibt.
 - `git diff --check` → ohne Befund.
 
-Commit: noch nicht erstellt.
+Commit: `8129bee` (`docs: record product migration preview`).
 
 Nächster freigegebener Task: **T03 – Hub-API für Desktop-Verbraucher ergänzen**.
 
@@ -89,6 +89,6 @@ Tests:
   belegt identische Produkt-UUID sowie Bruttopreis `27.9000`.
 - `git diff --check` → ohne Befund.
 
-Commit: noch nicht erstellt.
+Commit: `33674bd` (`feat: add desktop product hub read contract`).
 
 Nächster freigegebener Task: **T04 – Migration und Desktop-Umschaltung**.
