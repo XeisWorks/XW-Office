@@ -22,6 +22,7 @@ from xw_office.core.shared_paths import resolve_shared_path
 
 if TYPE_CHECKING:
     from xw_office.repositories.settings_kv import SettingKvRepository
+    from xw_office.services.product_hub.desktop_client import ProductHubDesktopClient
     from xw_office.services.sevdesk.part_client import SevdeskPart
 
 logger = logging.getLogger(__name__)
@@ -293,8 +294,16 @@ class ProductCatalogService:
     The interface stays stable.
     """
 
-    def __init__(self, settings_repo: "SettingKvRepository | None" = None) -> None:
+    def __init__(
+        self,
+        settings_repo: "SettingKvRepository | None" = None,
+        *,
+        hub_client: "ProductHubDesktopClient | None" = None,
+        prefer_hub: bool = False,
+    ) -> None:
         self._settings_repo = settings_repo
+        self._hub_client = hub_client
+        self._prefer_hub = prefer_hub and hub_client is not None
         # In-memory cache: canonical SKU -> Product
         self._by_sku: dict[str, Product] = {}
         # Alias map: any_sku -> canonical_sku
@@ -344,6 +353,10 @@ class ProductCatalogService:
     def resolve_sku(self, raw_sku: str) -> Product | None:
         """Return Product for raw_sku including alias lookup."""
         sku = raw_sku.strip().upper()
+        if self._prefer_hub and sku and sku not in _UNRELEASED_DYNAMIC_SKUS:
+            hub_product = self._resolve_hub_product(sku)
+            if hub_product is not None:
+                return hub_product
         product = self._by_sku.get(sku)
         if product is not None:
             return product
@@ -351,6 +364,60 @@ class ProductCatalogService:
         if canonical is not None:
             return self._by_sku.get(canonical)
         return None
+
+    def _resolve_hub_product(self, sku: str) -> Product | None:
+        """Hydrate the legacy-compatible print shape from the Hub read contract.
+
+        A broken network connection falls back to the legacy snapshot, so a desktop
+        cannot lose a print operation merely because the Hub is temporarily down.
+        """
+        assert self._hub_client is not None
+        try:
+            snapshot = self._hub_client.get_product_snapshot_by_sku(sku)
+        except Exception as exc:  # noqa: BLE001 - controlled local fallback
+            logger.warning("Product Hub lookup failed for %s; using legacy catalog: %s", sku, exc)
+            return None
+        variants = [item for item in snapshot.variants if isinstance(item, dict)]
+        variant = next((item for item in variants if str(item.get("sku") or "").upper() == sku), None)
+        variant = variant or next((item for item in variants if item.get("is_default")), None)
+        if variant is None:
+            logger.warning("Product Hub snapshot has no usable variant for %s", sku)
+            return None
+        rule = variant.get("print_rule") if isinstance(variant.get("print_rule"), dict) else {}
+        assets = [item for item in snapshot.assets if isinstance(item, dict)]
+        print_assets = [
+            item for item in assets
+            if item.get("role") == "PRINT_PDF"
+            and item.get("storage_kind") == "NETWORK_PATH"
+            and item.get("variant_id") in (None, str(variant.get("id") or ""))
+        ]
+        print_assets.sort(key=lambda item: int(item.get("sort_order") or 0))
+        path = str(print_assets[0].get("uri") or "").strip() if print_assets else ""
+        product_data = snapshot.product
+        product = Product(
+            id=str(product_data.get("id") or ""), sku=str(variant.get("sku") or sku),
+            name=str(variant.get("name") or product_data.get("name") or sku),
+            category=str(product_data.get("category") or ""),
+            brand_name=str(product_data.get("brand_name") or ""),
+            is_digital=str(product_data.get("product_type") or "") == "digital",
+            print_file_path=resolve_shared_path(path),
+            print_rule=PrintRule(
+                min_stock_target=int(rule.get("min_stock_target") or 5),
+                reprint_batch_qty=int(rule.get("reprint_batch_qty") or 3),
+            ),
+            status=str(product_data.get("status") or "draft"),
+        )
+        self._by_sku[sku] = product
+        legacy_config = self._direct_print_config.get(sku) or {}
+        self._direct_print_config[sku] = {
+            "default": {
+                "path": product.print_file_path,
+                "profile_id": str(rule.get("print_profile_id") or "").strip(),
+                "print_plan": [item for item in (rule.get("print_plan") or []) if isinstance(item, dict)],
+            },
+            "titles": legacy_config.get("titles") if isinstance(legacy_config.get("titles"), dict) else {},
+        }
+        return product
 
     def resolve_print_config(self, raw_sku: str, *, title: str = "") -> dict[str, object]:
         sku = raw_sku.strip().upper()

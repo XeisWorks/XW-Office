@@ -30,6 +30,18 @@ def test_desktop_client_uses_bearer_auth_and_returns_v1_snapshot() -> None:
     assert snapshot.variants[0]["id"] == "variant-1"
 
 
+def test_desktop_client_can_resolve_a_snapshot_by_sku() -> None:
+    client = ProductHubDesktopClient(
+        base_url="https://hub.example",
+        token="desktop-token",
+        transport=httpx.MockTransport(lambda request: httpx.Response(
+            200,
+            json={"contract_version": "v1", "product": {"id": "product-1"}, "variants": [], "assets": []},
+        )),
+    )
+    assert client.get_product_snapshot_by_sku("XW 1").contract_version == "v1"
+
+
 def test_desktop_client_rejects_missing_configuration_and_unknown_contract() -> None:
     with pytest.raises(ProductHubDesktopClientError, match="nicht konfiguriert"):
         ProductHubDesktopClient(base_url="", token="").get_product_snapshot("product-1")

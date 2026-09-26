@@ -404,5 +404,10 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     )
     yaml_data.setdefault("product_hub", {})["desktop_api_token"] = os.getenv(
         "XW_PRODUCT_HUB_DESKTOP_API_TOKEN", "")
+    hub_read_flag = os.getenv("XW_PRODUCT_HUB_CATALOG_READ_ENABLED", "").strip()
+    if hub_read_flag:
+        yaml_data.setdefault("product_hub", {})["catalog_read_enabled"] = (
+            hub_read_flag.lower() in {"1", "true", "yes", "ja", "on"}
+        )
 
     return _merge_dataclass(AppConfig, yaml_data)

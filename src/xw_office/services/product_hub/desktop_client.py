@@ -37,9 +37,14 @@ class ProductHubDesktopClient:
         self._timeout_seconds = timeout_seconds
 
     def get_product_snapshot(self, product_id: str) -> DesktopHubSnapshot:
+        return self._get_snapshot(f"/api/v1/desktop/products/{quote(str(product_id), safe='')}/snapshot")
+
+    def get_product_snapshot_by_sku(self, sku: str) -> DesktopHubSnapshot:
+        return self._get_snapshot(f"/api/v1/desktop/products/by-sku/{quote(str(sku), safe='')}/snapshot")
+
+    def _get_snapshot(self, path: str) -> DesktopHubSnapshot:
         if not self._base_url or not self._token:
             raise ProductHubDesktopClientError("Product-Hub-Desktop-API ist nicht konfiguriert.")
-        path = f"/api/v1/desktop/products/{quote(str(product_id), safe='')}/snapshot"
         try:
             with httpx.Client(
                 base_url=self._base_url,

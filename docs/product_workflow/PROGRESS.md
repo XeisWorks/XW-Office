@@ -95,8 +95,9 @@ Nächster freigegebener Task: **T04 – Migration und Desktop-Umschaltung**.
 
 ## T04 – Migration und Desktop-Umschaltung
 
-Status: in Arbeit. Die freigegebene additive Produktionsmigration ist ausgeführt;
-die native Druckbrücke über Hub-IDs ist noch nicht implementiert.
+Status: erledigt am 2026-09-26. Die freigegebene additive Produktionsmigration und
+die native Hub-zu-Druck-Brücke sind implementiert; pro PC ist nur noch die bewusste
+Konfiguration und Sichtprüfung erforderlich.
 
 Produktionsmigration (2026-09-26):
 
@@ -116,6 +117,10 @@ Produktionsmigration (2026-09-26):
   `XW_PRODUCT_HUB_DESKTOP_API_URL` startet PRODUKTE den gemeinsamen Product Hub im
   Systembrowser, ohne Token in URLs zu übergeben. Ohne diese bewusste Einrichtung
   bleibt die bewährte Desktop-Ansicht aktiv.
+- Der bestehende `ProductCatalogService` liest bei aktivem Flag zuerst den
+  versionierten Hub-Snapshot (Hub-ID, Variante, private Pfadmetadaten, PrintRule,
+  Druckprofil und -plan). Netzwerk-/Vertragsfehler fallen kontrolliert auf den lokalen
+  Legacy-Snapshot zurück; titelbezogene Alt-Konfigurationen bleiben erhalten.
 
 Tests:
 
@@ -123,6 +128,18 @@ Tests:
 - Der Migrations-Integrationstest beweist Asset-/Rule-Ergänzung und unveränderte
   `inventory.products`-Daten.
 - `git diff --check` → ohne Befund.
+
+Einrichtung pro Desktop-PC:
+
+```text
+XW_PRODUCT_HUB_CATALOG_READ_ENABLED=true
+XW_PRODUCT_HUB_DESKTOP_API_URL=https://<dein-Content-Web-Service>
+XW_PRODUCT_HUB_DESKTOP_API_TOKEN=<bestehender Bootstrap-Token>
+```
+
+Danach PRODUKTE öffnen, einen bekannten Druckauftrag gegen den Hub-Snapshot prüfen und
+bei einem Problem nur `XW_PRODUCT_HUB_CATALOG_READ_ENABLED=false` setzen. Dadurch wird
+ohne Doppelpflege auf den bisherigen lokalen Katalog zurückgeschaltet.
 
 Offen für T04-Abnahme:
 

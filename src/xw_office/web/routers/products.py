@@ -331,20 +331,14 @@ def build_products_router(
         _get_product_or_404(repo, product_id)
         return [ProductVariantOut.model_validate(v) for v in repo.list_variants(product_id)]
 
-    @router.get(
-        "/desktop/products/{product_id}/snapshot", response_model=DesktopProductSnapshotV1
-    )
-    def get_desktop_product_snapshot(
-        product_id: uuid.UUID, repo: ProductHubRepository = Depends(get_repo)
-    ) -> DesktopProductSnapshotV1:
+    def _desktop_snapshot(product: Product, repo: ProductHubRepository) -> DesktopProductSnapshotV1:
         """Versioned, authenticated read contract for desktop print consumers.
 
         All data comes from one Hub revision boundary; callers must treat it as
         read-only and use the product/variant row versions for cache invalidation.
         """
-        product = _get_product_or_404(repo, product_id)
         variants = []
-        for variant in repo.list_variants(product_id):
+        for variant in repo.list_variants(product.id):
             variants.append(
                 DesktopVariantSnapshotV1(
                     **ProductVariantOut.model_validate(variant).model_dump(),
@@ -359,8 +353,23 @@ def build_products_router(
         return DesktopProductSnapshotV1(
             product=ProductDetail.model_validate(product),
             variants=variants,
-            assets=[ProductAssetOut.model_validate(asset) for asset in repo.list_assets(product_id)],
+            assets=[ProductAssetOut.model_validate(asset) for asset in repo.list_assets(product.id)],
         )
+
+    @router.get("/desktop/products/by-sku/{sku}/snapshot", response_model=DesktopProductSnapshotV1)
+    def get_desktop_product_snapshot_by_sku(
+        sku: str, repo: ProductHubRepository = Depends(get_repo)
+    ) -> DesktopProductSnapshotV1:
+        resolved = repo.resolve_sku(sku)
+        if resolved is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+        return _desktop_snapshot(resolved.product, repo)
+
+    @router.get("/desktop/products/{product_id}/snapshot", response_model=DesktopProductSnapshotV1)
+    def get_desktop_product_snapshot(
+        product_id: uuid.UUID, repo: ProductHubRepository = Depends(get_repo)
+    ) -> DesktopProductSnapshotV1:
+        return _desktop_snapshot(_get_product_or_404(repo, product_id), repo)
 
     @write_router.patch(
         "/products/{product_id}/variants/{variant_id}", response_model=ProductVariantOut

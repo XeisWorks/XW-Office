@@ -78,6 +78,7 @@ from xw_office.services.sevdesk.tax_set_client import TaxSetClient
 from xw_office.services.sevdesk.refund_client import SevDeskRefundClient
 from xw_office.services.statistics.service import StatisticsService
 from xw_office.services.products.catalog import ProductCatalogService
+from xw_office.services.product_hub.desktop_client import ProductHubDesktopClient
 from xw_office.services.products.classification_rules import ReferenceClassifier
 from xw_office.services.products.brand_service import ProductBrandService
 from xw_office.services.products.field_bulk_service import ProductFieldBulkService
@@ -145,6 +146,17 @@ def register_default_services(container: Container) -> None:
         ProductCatalogService,
         lambda c: ProductCatalogService(
             c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
+            hub_client=(
+                ProductHubDesktopClient(
+                    base_url=c.config.product_hub.desktop_api_url,
+                    token=c.config.product_hub.desktop_api_token,
+                )
+                if c.config.product_hub.catalog_read_enabled
+                and c.config.product_hub.desktop_api_url.strip()
+                and c.config.product_hub.desktop_api_token.strip()
+                else None
+            ),
+            prefer_hub=c.config.product_hub.catalog_read_enabled,
         ),
     )
     container.register(
