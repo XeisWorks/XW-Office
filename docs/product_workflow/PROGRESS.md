@@ -65,3 +65,30 @@ Tests:
 Commit: noch nicht erstellt.
 
 Nächster freigegebener Task: **T03 – Hub-API für Desktop-Verbraucher ergänzen**.
+
+## T03 – Hub-API für Desktop-Verbraucher ergänzen
+
+Status: erledigt am 2026-09-26.
+
+Änderungen:
+
+- `GET /api/v1/desktop/products/{id}/snapshot` liefert einen expliziten,
+  authentifizierten `v1`-Lesevertrag: Produkt, Varianten, Preise, PrintRules samt
+  `print_plan` und Asset-Metadaten. Produktions-PDFs werden weiterhin nicht gestreamt.
+- `ProductHubDesktopClient` besitzt ausschließlich diese Leseoperation, prüft die
+  Vertragsversion und verwendet den Bearer-Token. `XW_PRODUCT_HUB_DESKTOP_API_URL` und
+  `XW_PRODUCT_HUB_DESKTOP_API_TOKEN` sind als Desktop-Konfiguration dokumentiert.
+- Die vorhandene PrintRule-Ausgabe enthält nun auch den bestehenden `print_plan`.
+  Die PySide-Ansicht bleibt bis T04 auf dem Legacy-Pfad; es gab keine UI-Umschaltung und
+  keinen Desktop-Providerwrite.
+
+Tests:
+
+- `python -m pytest tests/unit/test_product_hub_web_api.py tests/unit/test_product_hub_desktop_client.py -q` → 21 bestanden; eine bekannte Starlette/httpx-Deprecation-Warnung.
+- Der Integrationstest leitet den Desktop-Client auf die echte FastAPI-Snapshotroute und
+  belegt identische Produkt-UUID sowie Bruttopreis `27.9000`.
+- `git diff --check` → ohne Befund.
+
+Commit: noch nicht erstellt.
+
+Nächster freigegebener Task: **T04 – Migration und Desktop-Umschaltung**.

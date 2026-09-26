@@ -280,6 +280,8 @@ class ProductHubSection:
     inventory_shadow_enabled: bool = False
     inventory_master_enabled: bool = False
     shared_catalog_enabled: bool = False
+    desktop_api_url: str = ""
+    desktop_api_token: str = ""
 
 
 @dataclass(frozen=True)
@@ -397,5 +399,10 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     else:
         yaml_data["database_url"] = db_url or db_public_url
     yaml_data["fernet_master_key"] = os.getenv("FERNET_MASTER_KEY", "")
+    yaml_data.setdefault("product_hub", {})["desktop_api_url"] = os.getenv(
+        "XW_PRODUCT_HUB_DESKTOP_API_URL", ""
+    )
+    yaml_data.setdefault("product_hub", {})["desktop_api_token"] = os.getenv(
+        "XW_PRODUCT_HUB_DESKTOP_API_TOKEN", "")
 
     return _merge_dataclass(AppConfig, yaml_data)

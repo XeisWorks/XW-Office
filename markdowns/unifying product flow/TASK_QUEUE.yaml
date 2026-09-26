@@ -43,7 +43,7 @@ phases:
   tasks:
   - id: T03
     title: Hub-API für Desktop-Verbraucher ergänzen
-    status: pending
+    status: done
     depends_on_tasks:
     - T02
     implementation:

@@ -362,8 +362,29 @@ class PrintRuleOut(BaseModel):
     min_stock_target: int
     reprint_batch_qty: int
     print_profile_id: str | None = None
+    print_plan: list[object] = Field(default_factory=list)
     primary_print_asset_id: uuid.UUID | None = None
     row_version: int
+
+
+class DesktopVariantSnapshotV1(ProductVariantOut):
+    """Stable, read-only desktop contract for one sellable Hub variant."""
+
+    prices: list[PriceOut] = Field(default_factory=list)
+    print_rule: PrintRuleOut | None = None
+
+
+class DesktopProductSnapshotV1(BaseModel):
+    """One authenticated Hub response a desktop print consumer can cache safely.
+
+    ``PRINT_PDF`` remains metadata only; the desktop resolves the returned local
+    ``NETWORK_PATH`` itself and this endpoint never streams a score.
+    """
+
+    contract_version: str = "v1"
+    product: ProductDetail
+    variants: list[DesktopVariantSnapshotV1]
+    assets: list[ProductAssetOut]
 
 
 class PrintRuleUpsertRequest(BaseModel):

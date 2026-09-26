@@ -40,6 +40,8 @@ from xw_office.web.schemas.products import (
     ChannelMappingOut,
     ChannelOnboardingResultOut,
     ContentGenerateResponse,
+    DesktopProductSnapshotV1,
+    DesktopVariantSnapshotV1,
     EditionCreateRequest,
     EditionOut,
     IdentifierAddRequest,
@@ -328,6 +330,37 @@ def build_products_router(
     ) -> list[ProductVariantOut]:
         _get_product_or_404(repo, product_id)
         return [ProductVariantOut.model_validate(v) for v in repo.list_variants(product_id)]
+
+    @router.get(
+        "/desktop/products/{product_id}/snapshot", response_model=DesktopProductSnapshotV1
+    )
+    def get_desktop_product_snapshot(
+        product_id: uuid.UUID, repo: ProductHubRepository = Depends(get_repo)
+    ) -> DesktopProductSnapshotV1:
+        """Versioned, authenticated read contract for desktop print consumers.
+
+        All data comes from one Hub revision boundary; callers must treat it as
+        read-only and use the product/variant row versions for cache invalidation.
+        """
+        product = _get_product_or_404(repo, product_id)
+        variants = []
+        for variant in repo.list_variants(product_id):
+            variants.append(
+                DesktopVariantSnapshotV1(
+                    **ProductVariantOut.model_validate(variant).model_dump(),
+                    prices=[PriceOut.model_validate(price) for price in repo.list_prices(variant.id)],
+                    print_rule=(
+                        PrintRuleOut.model_validate(rule)
+                        if (rule := repo.get_print_rule(variant.id)) is not None
+                        else None
+                    ),
+                )
+            )
+        return DesktopProductSnapshotV1(
+            product=ProductDetail.model_validate(product),
+            variants=variants,
+            assets=[ProductAssetOut.model_validate(asset) for asset in repo.list_assets(product_id)],
+        )
 
     @write_router.patch(
         "/products/{product_id}/variants/{variant_id}", response_model=ProductVariantOut

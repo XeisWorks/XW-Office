@@ -3,15 +3,18 @@ from __future__ import annotations
 
 from pathlib import Path
 import uuid
+from decimal import Decimal
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from xw_office.models.base import Base
-from xw_office.models.product_hub import Product
+from xw_office.models.product_hub import PriceList, Product
 from xw_office.repositories.product_hub import ProductHubRepository
+from xw_office.services.product_hub.desktop_client import ProductHubDesktopClient
 from xw_office.web import ContentWebSettings, create_app
 
 
@@ -123,6 +126,57 @@ def test_get_product_variants(db_path: str, seeded_product: Product) -> None:
     assert response.status_code == 200
     assert len(response.json()) == 1
     assert response.json()[0]["is_default"] is True
+
+
+def test_desktop_snapshot_exposes_versioned_variant_and_print_contract(
+    db_path: str, seeded_product: Product
+) -> None:
+    engine = create_engine(db_path, future=True)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+    repo = ProductHubRepository(factory)
+    variant = repo.get_default_variant(seeded_product.id)
+    assert variant is not None
+    with factory() as session:
+        session.add(PriceList(id=uuid.uuid4(), code="RETAIL_EUR", name="Retail EUR"))
+        session.commit()
+    price_list = repo.get_price_list_by_code("RETAIL_EUR")
+    assert price_list is not None
+    repo.set_price(variant.id, price_list_id=price_list.id, gross_amount=Decimal("27.90"))
+    repo.upsert_print_rule(
+        variant.id,
+        min_stock_target=5,
+        reprint_batch_qty=3,
+        print_profile_id="noten_duplex",
+        print_plan=[{"range": "Alle Seiten", "profile_id": "noten_duplex"}],
+    )
+    engine.dispose()
+
+    client = _client(db_path)
+    response = client.get(
+        f"/api/v1/desktop/products/{seeded_product.id}/snapshot", headers=_auth_headers()
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["contract_version"] == "v1"
+    assert payload["product"]["id"] == str(seeded_product.id)
+    assert payload["variants"][0]["id"] == str(variant.id)
+    assert payload["variants"][0]["print_rule"]["print_plan"] == [
+        {"range": "Alle Seiten", "profile_id": "noten_duplex"}
+    ]
+    assert payload["variants"][0]["prices"][0]["gross_amount"] == "27.9000"
+
+    def desktop_transport(request: httpx.Request) -> httpx.Response:
+        upstream = client.get(request.url.path, headers=dict(request.headers))
+        return httpx.Response(upstream.status_code, json=upstream.json())
+
+    desktop_snapshot = ProductHubDesktopClient(
+        base_url="https://hub.test",
+        token="secret-token",
+        transport=httpx.MockTransport(desktop_transport),
+    ).get_product_snapshot(str(seeded_product.id))
+    assert desktop_snapshot.product["id"] == payload["product"]["id"]
+    assert desktop_snapshot.variants[0]["prices"][0]["gross_amount"] == "27.9000"
 
 
 def test_get_product_assets(db_path: str, seeded_product: Product) -> None:
