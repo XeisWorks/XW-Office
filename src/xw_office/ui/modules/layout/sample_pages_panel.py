@@ -41,7 +41,8 @@ if TYPE_CHECKING:
 _OUTPUT_FOLDER_SETTING_KEY = "layout.sample_pages.output_folder"
 _COL_PDF = 0
 _COL_PAGES = 1
-_COL_STATUS = 2
+_COL_WATERMARK_PAGES = 2
+_COL_STATUS = 3
 
 
 def _default_output_folder() -> str:
@@ -65,8 +66,9 @@ class SamplePagesPanel(QWidget):
 
         root = QVBoxLayout(self)
         intro = QLabel(
-            "Wählt aus einer oder mehreren PDFs bestimmte Seiten aus (z. B. 1,5,7 oder 8-12) und "
-            "exportiert jede als webkomprimiertes JPG in den Ausgabeordner."
+            "Wählt aus einer oder mehreren PDFs bestimmte Seiten aus (z. B. 1,5,7 oder 8-12). "
+            "Normale Seiten werden als webkomprimierte JPGs exportiert; für Wasserzeichen-Seiten "
+            "wird das Bild diagonal halb abgedeckt und mit dem gewählten Wasserzeichen versehen."
         )
         intro.setWordWrap(True)
         root.addWidget(intro)
@@ -81,12 +83,20 @@ class SamplePagesPanel(QWidget):
         file_row.addStretch()
         root.addLayout(file_row)
 
-        self._table = QTableWidget(0, 3)
-        self._table.setHorizontalHeaderLabels(["PDF-Datei", "Seiten (z. B. 1,5,7 oder 8-12)", "Status"])
+        self._table = QTableWidget(0, 4)
+        self._table.setHorizontalHeaderLabels(
+            [
+                "PDF-Datei",
+                "Normale Seiten (z. B. 1,5,7 oder 8-12)",
+                "Wasserzeichen-Seiten (halb-abgeschnitten)",
+                "Status",
+            ]
+        )
         self._table.verticalHeader().setVisible(False)
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(_COL_PDF, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(_COL_PAGES, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(_COL_WATERMARK_PAGES, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(_COL_STATUS, QHeaderView.ResizeMode.Stretch)
         self._table.setMinimumHeight(180)
         root.addWidget(self._table, stretch=1)
@@ -116,6 +126,16 @@ class SamplePagesPanel(QWidget):
         numbers_row.addWidget(self._max_size_spin)
         numbers_row.addStretch()
         settings_layout.addLayout(numbers_row)
+
+        watermark_row = QHBoxLayout()
+        watermark_row.addWidget(QLabel("Wasserzeichen-Bild:"))
+        self._watermark_image_edit = QLineEdit()
+        self._watermark_image_edit.setPlaceholderText("Für Wasserzeichen-Seiten erforderlich (PNG, JPG, WebP …)")
+        watermark_row.addWidget(self._watermark_image_edit, stretch=1)
+        watermark_button = QPushButton("Bild wählen…")
+        watermark_button.clicked.connect(self._pick_watermark_image)
+        watermark_row.addWidget(watermark_button)
+        settings_layout.addLayout(watermark_row)
         root.addWidget(settings_group)
 
         action_row = QHBoxLayout()
@@ -160,6 +180,17 @@ class SamplePagesPanel(QWidget):
             self._output_folder_edit.setText(selected)
             self._save_output_folder(selected)
 
+    def _pick_watermark_image(self) -> None:
+        start = self._watermark_image_edit.text().strip() or str(Path.home())
+        selected, _filter = QFileDialog.getOpenFileName(
+            self,
+            "Wasserzeichen-Bild auswählen",
+            start,
+            "Bilddateien (*.png *.jpg *.jpeg *.webp *.bmp);;Alle Dateien (*)",
+        )
+        if selected:
+            self._watermark_image_edit.setText(selected)
+
     # ------------------------------------------------------------------
     # PDF table
     # ------------------------------------------------------------------
@@ -178,6 +209,7 @@ class SamplePagesPanel(QWidget):
             pdf_item.setToolTip(path)
             self._table.setItem(row, _COL_PDF, pdf_item)
             self._table.setItem(row, _COL_PAGES, QTableWidgetItem(""))
+            self._table.setItem(row, _COL_WATERMARK_PAGES, QTableWidgetItem(""))
             self._table.setItem(row, _COL_STATUS, QTableWidgetItem(""))
 
     def _remove_selected(self) -> None:
@@ -191,23 +223,38 @@ class SamplePagesPanel(QWidget):
         for row in range(self._table.rowCount()):
             pdf_item = self._table.item(row, _COL_PDF)
             pages_item = self._table.item(row, _COL_PAGES)
+            watermark_pages_item = self._table.item(row, _COL_WATERMARK_PAGES)
             status_item = self._table.item(row, _COL_STATUS)
             raw_path = str(pdf_item.data(Qt.ItemDataRole.UserRole) or "") if pdf_item else ""
             pdf_path = Path(raw_path)
             pages_text = pages_item.text() if pages_item else ""
-            if not raw_path or not pages_text.strip():
+            watermark_pages_text = watermark_pages_item.text() if watermark_pages_item else ""
+            if not raw_path or not pages_text.strip() and not watermark_pages_text.strip():
                 if status_item:
                     status_item.setText("Übersprungen: keine Seitenangabe.")
                 continue
             try:
                 with fitz.open(pdf_path) as doc:
                     page_count = doc.page_count
-                pages = parse_page_numbers(pages_text, page_count=page_count)
+                pages = parse_page_numbers(pages_text, page_count=page_count) if pages_text.strip() else ()
+                watermark_pages = (
+                    parse_page_numbers(watermark_pages_text, page_count=page_count)
+                    if watermark_pages_text.strip()
+                    else ()
+                )
+                overlap = sorted(set(pages).intersection(watermark_pages))
+                if overlap:
+                    raise SamplePageExportError(
+                        "Seiten dürfen nicht gleichzeitig normal und mit Wasserzeichen ausgewählt sein: "
+                        f"{', '.join(map(str, overlap))}."
+                    )
             except Exception as exc:  # noqa: BLE001 - surfaced per row, then re-raised with file context
                 if status_item:
                     status_item.setText(f"Fehler: {exc}")
                 raise SamplePageExportError(f'"{pdf_path.name}": {exc}') from exc
-            jobs.append(SamplePageJob(pdf_path=pdf_path, pages=pages))
+            jobs.append(
+                SamplePageJob(pdf_path=pdf_path, pages=pages, watermarked_pages=watermark_pages)
+            )
             if status_item:
                 status_item.setText("Bereit.")
         return jobs
@@ -226,12 +273,30 @@ class SamplePagesPanel(QWidget):
             QMessageBox.information(self, "Keine Auswahl", "Bitte mindestens eine PDF mit Seitenangabe hinzufügen.")
             return
 
+        watermark_image = self._watermark_image_edit.text().strip()
+        if any(job.watermarked_pages for job in jobs):
+            if not watermark_image:
+                QMessageBox.warning(
+                    self,
+                    "Wasserzeichen-Bild fehlt",
+                    "Bitte für die Wasserzeichen-Seiten ein Wasserzeichen-Bild auswählen.",
+                )
+                return
+            if not Path(watermark_image).is_file():
+                QMessageBox.warning(
+                    self,
+                    "Wasserzeichen-Bild nicht gefunden",
+                    f'Die Wasserzeichen-Datei existiert nicht:\n{watermark_image}',
+                )
+                return
+
         output_folder = self._output_folder_edit.text().strip() or _default_output_folder()
         self._save_output_folder(output_folder)
         settings = SamplePageExportSettings(
             output_folder=Path(output_folder),
             target_height_px=self._height_spin.value(),
             max_size_kb=self._max_size_spin.value(),
+            watermark_path=Path(watermark_image) if watermark_image else None,
         )
 
         worker: BackgroundWorker
@@ -262,9 +327,13 @@ class SamplePagesPanel(QWidget):
         if not isinstance(results, list):
             return
         total_kb = sum(r.file_size_bytes for r in results if isinstance(r, SamplePageExportResult)) / 1024
+        watermarked_count = sum(
+            r.is_watermarked for r in results if isinstance(r, SamplePageExportResult)
+        )
         self._progress.setValue(100)
         self._status_label.setText(
-            f"{len(results)} Seite(n) exportiert nach {output_folder} (gesamt {total_kb:.0f} KB)."
+            f"{len(results)} Seite(n) exportiert nach {output_folder} "
+            f"({watermarked_count} mit Wasserzeichen, gesamt {total_kb:.0f} KB)."
         )
         self._last_output_folder = output_folder
         self._open_folder_button.setEnabled(True)

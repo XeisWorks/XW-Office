@@ -27,6 +27,8 @@ def test_sample_pages_panel_add_and_remove_rows(qtbot, tmp_path) -> None:
 
     panel._add_pdf_paths([str(pdf_path)])  # noqa: SLF001 - UI smoke test
     assert panel._table.rowCount() == 1  # noqa: SLF001
+    assert panel._table.columnCount() == 4  # noqa: SLF001
+    assert panel._table.item(0, 2) is not None  # noqa: SLF001
 
     panel._table.selectRow(0)  # noqa: SLF001
     panel._remove_selected()  # noqa: SLF001

@@ -85,3 +85,40 @@ def test_export_rejects_page_out_of_range(tmp_path) -> None:
             [SamplePageJob(pdf_path=pdf_path, pages=(5,))],
             SamplePageExportSettings(output_folder=tmp_path / "out"),
         )
+
+
+def test_export_applies_half_cut_watermark_to_selected_pages(tmp_path) -> None:
+    pdf_path = _make_pdf(tmp_path, page_count=2, name="A.pdf")
+    with fitz.open(pdf_path) as doc:
+        for page in doc:
+            page.draw_rect(page.rect, color=None, fill=(1, 0, 0), overlay=False)
+        doc.save(tmp_path / "red.pdf")
+
+    watermark_path = tmp_path / "watermark.png"
+    Image.new("RGBA", (120, 30), (0, 0, 255, 255)).save(watermark_path)
+    service = SamplePageExportService()
+
+    results = service.export(
+        [SamplePageJob(pdf_path=tmp_path / "red.pdf", pages=(1,), watermarked_pages=(2,))],
+        SamplePageExportSettings(
+            output_folder=tmp_path / "out",
+            target_height_px=400,
+            max_size_kb=200,
+            watermark_path=watermark_path,
+        ),
+    )
+
+    assert [result.is_watermarked for result in results] == [False, True]
+    with Image.open(results[1].output_path) as image:
+        # The lower-right triangle is lightened by the half-cut overlay.
+        assert image.getpixel((image.width - 5, image.height - 5))[1] > 180
+
+
+def test_export_rejects_pages_selected_in_both_output_modes(tmp_path) -> None:
+    pdf_path = _make_pdf(tmp_path, page_count=1)
+
+    with pytest.raises(SamplePageExportError, match="sowohl normal"):
+        SamplePageExportService().export(
+            [SamplePageJob(pdf_path=pdf_path, pages=(1,), watermarked_pages=(1,))],
+            SamplePageExportSettings(output_folder=tmp_path / "out"),
+        )

@@ -14,10 +14,11 @@ class SamplePageExportError(Exception):
 
 @dataclass(frozen=True)
 class SamplePageJob:
-    """One source PDF plus the 1-based page numbers to export from it."""
+    """One source PDF plus 1-based regular and watermarked page numbers."""
 
     pdf_path: Path
     pages: tuple[int, ...]
+    watermarked_pages: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,7 @@ class SamplePageExportSettings:
     output_folder: Path
     target_height_px: int = DEFAULT_TARGET_HEIGHT_PX
     max_size_kb: int = DEFAULT_MAX_SIZE_KB
+    watermark_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,7 @@ class SamplePageExportResult:
     output_path: Path
     quality_used: int
     file_size_bytes: int
+    is_watermarked: bool = False
 
 
 def parse_page_numbers(raw: str, *, page_count: int) -> tuple[int, ...]:
