@@ -1,0 +1,100 @@
+schema_version: 1
+status: implementation_spec_not_rendered
+template:
+  background: reference/Cover_Blasmusik.jpg
+  source_size_px:
+  - 1527
+  - 2047
+  reference: reference/Cabernet_reference.jpg
+  output_height_px: 1000
+  format: jpg
+  draw_card: false
+  draw_shadow: false
+  draw_black_bar: false
+  preserve_aspect_ratio: true
+  selection: onedrive_folder_thumbnails
+  geometry_status: visually_estimated_requires_calibration
+  coordinates: normalized_to_full_image
+  shared_text_center_x: 0.29
+  boxes:
+    composer:
+    - 0.115
+    - 0.162
+    - 0.35
+    - 0.02
+    title:
+    - 0.112
+    - 0.183
+    - 0.355
+    - 0.063
+    arrangement_label:
+    - 0.135
+    - 0.25
+    - 0.315
+    - 0.017
+    arranger:
+    - 0.12
+    - 0.267
+    - 0.345
+    - 0.018
+    edition:
+    - 0.17
+    - 0.289
+    - 0.245
+    - 0.02
+rasterization:
+  reference_height_px: 1000
+  virtual_dpi: 96
+  template_calibration: 1.0
+  require_reference_comparison: true
+  fit_both_width_and_height: true
+  bbox_offset_aware: true
+  silent_font_fallback: false
+text_styles:
+  composer:
+    family: Book Antiqua
+    size_pt: 14.3
+    color: '#4b4b4b'
+  title:
+    family: Deneane
+    size_pt: 36
+    color: '#000000'
+    max_lines: 3
+    proposed_size_pt_by_lines:
+      1: 36
+      2: 31
+      3: 26
+    minimum_size_pt_proposed: 18
+    manual_newlines: true
+    overflow: block_export_with_explanation
+  arrangement_label:
+    text: 'Arrangement:'
+    family: Book Antiqua
+    size_pt: 11.5
+    color: '#4b4b4b'
+    small_caps: true
+    underline: true
+  arranger:
+    family: Book Antiqua
+    size_pt: 12.5
+    color: '#4b4b4b'
+  edition:
+    family: Book Antiqua
+    size_pt: 12
+    color: '#ffffff'
+    small_caps: true
+fonts:
+  source: private_runtime_font_directory
+  verify_font_family_metadata: true
+  do_not_commit_font_binaries: true
+  small_caps: OpenType features where supported; otherwise controlled glyph-size rendering
+  missing: draft_allowed_export_blocked
+validation_cases:
+- 1 line short title
+- 2 lines Cabernet / Polka
+- 3 lines long title
+- umlauts and apostrophes
+- long composer and arranger
+- missing fonts
+- no added card or black bar
+- same anchors for each background

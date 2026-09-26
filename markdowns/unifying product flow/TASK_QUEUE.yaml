@@ -1,0 +1,261 @@
+schema_version: 1
+project: XW-Office unified product workflow
+language: de-AT
+execution: one task at a time
+baseline_commit: aff6b85e54be3a5fb7eed88812225ec702ed3084
+status: planned_not_implemented
+rules:
+- Reuse existing Product Hub, outbox, conflict wizard, Graph and OpenAI services
+- Do not modify protected architecture archive
+- No production provider writes during automated tests
+- No silent substitution of fonts, PDFs, IDs or API capabilities
+- Record actual tests, commit and remaining blockers in PROGRESS.md
+phases:
+- id: P00
+  title: Bestand und Verträge
+  depends_on: []
+  tasks:
+  - id: T01
+    title: Iststand und Verbraucher erfassen
+    status: pending
+    depends_on_tasks: []
+    implementation:
+    - AGENTS.md lesen; main sauber aktualisieren; BUILD_PLAN-Codepfade und aktuellen Alembic-Head prüfen
+    - Settings/Hub/Druck/Inventory/Graph/OpenAI-Verbraucher und reale Deploymentkonfiguration dokumentieren
+    acceptance:
+    - CURRENT_STATE.md mit belegten Einstiegspunkten; keine Produktwrites
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+  - id: T02
+    title: Migration als Vorschau planen
+    status: pending
+    depends_on_tasks:
+    - T01
+    implementation:
+    - Settings-Produkte auf Hub-UUIDs/Varianten/Aliase matchen; Konflikte und fehlende Druckpfade listen
+    - Backup-/Rollback-Verfahren und Schreibsperre für Legacy definieren
+    acceptance:
+    - Report erhält sämtliche Druck-/Aliaszuordnungen; mehrdeutige Treffer bleiben offen
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+- id: P01
+  title: Eine Produktquelle
+  depends_on:
+  - P00
+  tasks:
+  - id: T03
+    title: Hub-API für Desktop-Verbraucher ergänzen
+    status: pending
+    depends_on_tasks:
+    - T02
+    implementation:
+    - Bestehende Repositories/Services verwenden; fehlende Leseverträge für Druckprofile und Varianten ergänzen
+    - Versionierte DTOs und authentifizierten Desktop-Client bauen
+    acceptance:
+    - Web und Desktop liefern gleiche Produkt-UUIDs und Preise; kein Desktop-Providerwrite
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+  - id: T04
+    title: Migration und Desktop-Umschaltung
+    status: pending
+    depends_on_tasks:
+    - T03
+    implementation:
+    - Freigegebene eindeutige Zuordnungen additiv migrieren; Legacy-Snapshot erhalten
+    - PRODUKTE startet gemeinsame WebUI; native Druckaktionen über Hub-ID; alten schreibenden Katalog deaktivieren
+    acceptance:
+    - Shadow-Vergleich dokumentiert; Druck-/Bestandsfunktion erhalten; Rollback reaktiviert keine Doppelpflege
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+- id: P02
+  title: Dauerhafter Wizard
+  depends_on:
+  - P01
+  tasks:
+  - id: T05
+    title: Entwurf, Optionen und Preise modellieren
+    status: pending
+    depends_on_tasks:
+    - T04
+    implementation:
+    - Bestehende Modelle erweitern; Migration vom aktuellen Head
+    - Draft-Autosave mit row_version; atomare SKU-Prüfung; Produktoptionen und selektierte Kombinationen
+    acceptance:
+    - Refresh/Gerätewechsel setzt fort; konkurrierende Änderung liefert Konflikt; eigene Preise je Variante
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+  - id: T06
+    title: Vorlagen und Kopieren
+    status: pending
+    depends_on_tasks:
+    - T05
+    implementation:
+    - Drei Vorlagen; Kopiermaske mit expliziter Assetübernahme
+    - Neue UUID/SKU, keine Provider-IDs/Bestände/ASIN; bestehende Titelregeln übernehmen
+    acceptance:
+    - Kopie verändert Original nicht; Vorschlags-SKU bleibt editierbar
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+  - id: T07
+    title: Gemeinsame Wizard-Oberfläche
+    status: pending
+    depends_on_tasks:
+    - T06
+    implementation:
+    - Schritte 0–7 aus BUILD_PLAN; kanalabhängige Validierung
+    - Native Hülle mit sicherer Navigation und Systembrowser-Fallback; keine Tokens in URLs
+    acceptance:
+    - Gleicher Draft im Browser und Desktop; unvollständiger Draft speicherbar
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+- id: P03
+  title: OneDrive und Beispielseiten
+  depends_on:
+  - P02
+  tasks:
+  - id: T08
+    title: Serverseitigen OneDrive-Zugriff integrieren
+    status: pending
+    depends_on_tasks:
+    - T07
+    implementation:
+    - Vorhandene Graph-Auth wiederverwenden soweit serverfähig; Reconnect/Refresh
+    - Drive-/Item-ID und Version speichern; Rootauflösung für drei Windows-Profile
+    acceptance:
+    - 'Büro-PC aus: Server liest gewählte Datei; drei Benutzerpfade lösen identische Datei auf; keine öffentlichen
+      PDF-Links'
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+  - id: T09
+    title: Asset-Aufträge und PDF-Auswahl
+    status: pending
+    depends_on_tasks:
+    - T08
+    implementation:
+    - Authentifizierte Thumbnail-API; Auswahl pro Variante und Wasserzeichen
+    - SamplePageExportService in persistenten Worker integrieren; versionierte Rezepte und private temporäre Dateien
+    acceptance:
+    - 1000px/200KB oder expliziter Größenfehler; Neustart fortsetzbar; gleiche Quelle/Rezept ergibt Wiederverwendung
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+- id: P04
+  title: Konfigurierbare Cover
+  depends_on:
+  - P03
+  tasks:
+  - id: T10
+    title: Vorlagenordner und Fontverwaltung
+    status: pending
+    depends_on_tasks:
+    - T09
+    implementation:
+    - Graph-Ordner mit Miniaturen; private Fontdateien und Familienprüfung
+    - COVER_SPEC laden; vorhandenen Hintergrund nur skalieren
+    acceptance:
+    - Fehlende Fonts werden erklärt; Balken/Schild nicht doppelt gezeichnet
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+  - id: T11
+    title: Textlayout und Vorschau
+    status: pending
+    depends_on_tasks:
+    - T10
+    implementation:
+    - Punktkonvention und fixe Boxen kalibrieren; 1/2/3 Zeilen mit Breiten-/Höhenprüfung
+    - Kapitälchen/Unterstreichung; Variante übernimmt Besetzung als editierbaren Edition-Vorschlag
+    acceptance:
+    - Referenz Cabernet visuell verglichen; lange Texte ohne Überlappung; Browserpreview entspricht JPG
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+- id: P05
+  title: Vollständige Wix- und sevDesk-Anlage
+  depends_on:
+  - P04
+  tasks:
+  - id: T12
+    title: Outbox-Neuanlage absichern
+    status: pending
+    depends_on_tasks:
+    - T11
+    implementation:
+    - Direkte onboarding-Writes durch transaktionale Jobs ersetzen
+    - 'Remote-Erfolg/lokaler Fehler: Reconcile vor erneutem Create; operation key/Lock/Backoff'
+    acceptance:
+    - Timeout nach Remote-Create erzeugt kein Duplikat; Restart setzt fehlende Jobs fort
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+  - id: T13
+    title: Wix-Inhalte, Optionen und Medien
+    status: pending
+    depends_on_tasks:
+    - T12
+    implementation:
+    - Katalogversion/Caps prüfen; Optionen/Varianten/Preise/Marke/Kategorien/Infobereiche und Medien schreiben
+    - Digital-Datei und Inventar getrennt prüfen; Readback jedes bestätigten Felds
+    acceptance:
+    - Cabernet-Option Besetzung mit zwei SKU/Preisen/Covern; Wix standardmäßig verborgen; V1 digital erklärt blockiert
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+  - id: T14
+    title: sevDesk-Varianten und Readback
+    status: pending
+    depends_on_tasks:
+    - T13
+    implementation:
+    - Part je SKU mit echter Kategorie/Unity; Decimal-Konvertierung an API-Grenze
+    - Preis/Steuer/Text/Kategorie prüfen; bestehende eindeutige Parts kontrolliert verknüpfen
+    acceptance:
+    - Zwei Varianten ergeben zwei richtige Parts; Mapping allein ergibt keinen Erfolgsstatus
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+  - id: T15
+    title: KI-Vorschläge und Abschlusslinks
+    status: pending
+    depends_on_tasks:
+    - T14
+    implementation:
+    - Bestehenden ContentGenerationService mit bestätigten Musikdaten nutzen; keine üblichen Fakten erfinden
+    - Wix-/sevDesk-Editorlinks anhand echter IDs verifizieren; Übersichts-Fallback
+    acceptance:
+    - KI-Fehler verliert keine Eingaben; Übernahme separat; Editor öffnet richtiges Produkt; kein Social-Autopost
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+- id: P06
+  title: Rückabgleich und Betriebsabnahme
+  depends_on:
+  - P05
+  tasks:
+  - id: T16
+    title: Feldzuständigkeit und Konflikte
+    status: pending
+    depends_on_tasks:
+    - T15
+    implementation:
+    - Bestehenden Konfliktwizard auf relevante sevDesk-/Wix-Felder erweitern
+    - Snapshots und bewusste Kanalüberschreibungen; Preise über Price-Service
+    acceptance:
+    - Externe Korrektur wird angeboten; gleichzeitige Bearbeitung nicht überschrieben; keine Sync-Schleife
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+  - id: T17
+    title: Durchgängigen Betrieb prüfen
+    status: pending
+    depends_on_tasks:
+    - T16
+    implementation:
+    - Worker/API-Konfiguration, Build-SHA, Health und Backup-Restore dokumentieren
+    - Büro-PC-aus-, Browserrefresh-, Workerrestart- und drei-Profil-Druck-Szenario ausführen
+    acceptance:
+    - Abnahmeprotokoll; verbleibende Live-Checks ausdrücklich offen; keine Behauptung ungeprüfter Funktion
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+- id: P07
+  title: Amazon Deutschland
+  depends_on:
+  - P06
+  tasks:
+  - id: T18
+    title: DE-Schemas und Katalogabgleich
+    status: pending
+    depends_on_tasks:
+    - T17
+    implementation:
+    - SP-API-Rollen und DE-Konfiguration; aktuelle Produktart-/Pflichtfeldschemas
+    - Vorhandene ASIN vs neuer Artikel; Identifikatoren oder gültige Ausnahme prüfen
+    acceptance:
+    - Nur DE auswählbar; keine erfundenen ASIN/GTIN; unterstützte Variation-Themes geprüft
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
+  - id: T19
+    title: Validierung und Einreichung
+    status: pending
+    depends_on_tasks:
+    - T18
+    implementation:
+    - VALIDATION_PREVIEW soweit unterstützt; Issues in Wizard; explizite Submission über Outbox
+    - Listingstatus nachverfolgen; Updates vor Attributverlust schützen; Amazon-Bilder separat prüfen
+    acceptance:
+    - Bestehendes Angebot und neuer Artikel als getrennte Szenarien; ACCEPTED nicht als LIVE ausgeben
+    rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
