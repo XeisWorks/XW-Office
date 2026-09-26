@@ -18,6 +18,11 @@ depends_on = None
 
 def upgrade() -> None:
     bind = op.get_bind()
+    # Older installations created ``alembic_version.version_num`` as VARCHAR(32).
+    # This revision identifier is longer, and Alembic updates that value *after* this
+    # function returns. Widen it first so an upgrade from revision 016 remains atomic.
+    if bind.dialect.name == "postgresql":
+        op.execute("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(128)")
     if "wix_reconciliation_disposition" in set(sa.inspect(bind).get_table_names()):
         return
     op.create_table(

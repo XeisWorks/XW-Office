@@ -178,6 +178,8 @@ Tests:
 - `python -m pytest tests/unit/test_product_hub_drafts.py -q` → 2 bestanden.
 - `python -m ruff check ...` → ohne Befund.
 - `python -m alembic heads` → `018_product_wizard_drafts (head)`.
-- Migration von Revision 017 auf ein frisches SQLite-Testschema → drei Draft-Tabellen vorhanden.
+- Migration von Produktionsrevision 016 auf ein frisches SQLite-Testschema → Revision 017 und
+  drei Draft-Tabellen vorhanden; die historische `alembic_version`-Breite wird vor Revision 017
+  auf PostgreSQL kompatibel erweitert.
 
 Nächster freigegebener Task: **T06 – Vorlagen und Kopieren**.
