@@ -137,12 +137,22 @@ XW_PRODUCT_HUB_DESKTOP_API_URL=https://<dein-Content-Web-Service>
 XW_PRODUCT_HUB_DESKTOP_API_TOKEN=<bestehender Bootstrap-Token>
 ```
 
+Produktiv eingerichtet (2026-09-26):
+
+- Das Windows-Benutzerprofil dieses Arbeits-PCs hat die drei Desktop-Variablen gesetzt;
+  der API-Token wurde ausschließlich direkt aus Railway bezogen und weder ausgegeben noch
+  im Repository hinterlegt.
+- `https://products.xeisworks.at/health` sowie ein authentifizierter Hub-API-Aufruf wurden
+  mit HTTP 200 verifiziert.
+- Weitere Desktop-PCs benötigen dieselbe lokale Konfiguration in ihrem jeweiligen
+  Benutzerprofil. Der Web-Service selbst benötigt diese Desktop-Variablen nicht.
+
 Danach PRODUKTE öffnen, einen bekannten Druckauftrag gegen den Hub-Snapshot prüfen und
 bei einem Problem nur `XW_PRODUCT_HUB_CATALOG_READ_ENABLED=false` setzen. Dadurch wird
 ohne Doppelpflege auf den bisherigen lokalen Katalog zurückgeschaltet.
 
 Offen für T04-Abnahme:
 
-- Konfiguration und manueller Shadow-Vergleich auf jedem Desktop-PC.
+- Manueller Shadow-Vergleich auf jedem weiteren Desktop-PC.
 - Native Rechnungs-/Druckaktionen müssen Hub-Snapshot und Hub-ID verwenden, bevor
   der Legacy-Katalog als reine Rückfallquelle gilt.
