@@ -92,3 +92,40 @@ Tests:
 Commit: `33674bd` (`feat: add desktop product hub read contract`).
 
 Nächster freigegebener Task: **T04 – Migration und Desktop-Umschaltung**.
+
+## T04 – Migration und Desktop-Umschaltung
+
+Status: in Arbeit. Die freigegebene additive Produktionsmigration ist ausgeführt;
+die native Druckbrücke über Hub-IDs ist noch nicht implementiert.
+
+Produktionsmigration (2026-09-26):
+
+- Vorheriger Hub-Snapshot lokal unter `.tmp/product_workflow/hub_before_t04.json`
+  gesichert (3.25 MB, nicht eingecheckt).
+- 170 fehlende `PRINT_PDF`-Metadaten als private `NETWORK_PATH`-Assets und 70 neue
+  PrintRules aus eindeutig zugeordneten Legacy-Zeilen ergänzt.
+- Wiederholte Vorschau danach: 0 weitere Asset-/Rule-Änderungen, 70 bestehende
+  Regeln geschützt; `XW-412.2` und `XW-7501` weiter offen.
+- `inventory.products` sowie externe Provider blieben unverändert.
+
+Änderungen:
+
+- `apply_legacy_print_migration.py` verlangt ausdrücklich `--apply --yes`, führt nur
+  additive Hub-Writes aus und bewahrt vorhandene Regeln sowie Legacy-Settings.
+- Bei aktivem `product_hub.catalog_read_enabled` und konfigurierter
+  `XW_PRODUCT_HUB_DESKTOP_API_URL` startet PRODUKTE den gemeinsamen Product Hub im
+  Systembrowser, ohne Token in URLs zu übergeben. Ohne diese bewusste Einrichtung
+  bleibt die bewährte Desktop-Ansicht aktiv.
+
+Tests:
+
+- `python -m pytest tests/unit/test_apply_legacy_print_migration.py tests/unit/test_product_hub_migration_preview.py tests/unit/test_product_hub_web_api.py tests/unit/test_product_hub_desktop_client.py -q` → 26 bestanden; eine bekannte Starlette/httpx-Deprecation-Warnung.
+- Der Migrations-Integrationstest beweist Asset-/Rule-Ergänzung und unveränderte
+  `inventory.products`-Daten.
+- `git diff --check` → ohne Befund.
+
+Offen für T04-Abnahme:
+
+- Konfiguration und manueller Shadow-Vergleich auf jedem Desktop-PC.
+- Native Rechnungs-/Druckaktionen müssen Hub-Snapshot und Hub-ID verwenden, bevor
+  der Legacy-Katalog als reine Rückfallquelle gilt.

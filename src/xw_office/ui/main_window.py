@@ -342,6 +342,11 @@ class MainWindow(QMainWindow):
         return MollieView(self._container)
 
     def _build_products_page(self) -> QWidget:
+        hub = self._container.config.product_hub
+        if hub.catalog_read_enabled and hub.desktop_api_url.strip():
+            from xw_office.ui.modules.products.hub_launcher import ProductHubLauncherView
+
+            return ProductHubLauncherView(hub_base_url=hub.desktop_api_url)
         from xw_office.ui.modules.products.view import ProductsView
 
         return ProductsView(self._container)

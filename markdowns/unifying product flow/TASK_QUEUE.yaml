@@ -54,7 +54,7 @@ phases:
     rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
   - id: T04
     title: Migration und Desktop-Umschaltung
-    status: pending
+    status: in_progress
     depends_on_tasks:
     - T03
     implementation:
