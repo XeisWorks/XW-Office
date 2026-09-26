@@ -70,7 +70,7 @@ phases:
   tasks:
   - id: T05
     title: Entwurf, Optionen und Preise modellieren
-    status: pending
+    status: done
     depends_on_tasks:
     - T04
     implementation:

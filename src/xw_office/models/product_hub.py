@@ -185,6 +185,69 @@ class ProductVariant(Base):
     )
 
 
+class ProductDraft(Base):
+    """Durable, incomplete wizard state; never a sellable product by itself.
+
+    A draft deliberately has no SKU uniqueness constraint: a suggested SKU is not a
+    reservation.  Final creation is still protected by ``product_variant.sku`` and
+    the wizard checks its availability atomically through the repository.
+    """
+
+    __tablename__ = "product_draft"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    source_product_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("product.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    template_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    current_step: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    completed_steps: Mapped[list[object]] = mapped_column(JSONVariant, default=list, nullable=False)
+    data: Mapped[dict[str, object]] = mapped_column(JSONVariant, default=dict, nullable=False)
+    row_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class ProductDraftOption(Base):
+    """One named option and its permitted values within a wizard draft."""
+
+    __tablename__ = "product_draft_option"
+    __table_args__ = (UniqueConstraint("draft_id", "name", name="uq_product_draft_option_name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    draft_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("product_draft.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    values: Mapped[list[object]] = mapped_column(JSONVariant, default=list, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    row_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class ProductDraftVariant(Base):
+    """A deliberately selected sellable option combination with its own price."""
+
+    __tablename__ = "product_draft_variant"
+    __table_args__ = (UniqueConstraint("draft_id", "sku", name="uq_product_draft_variant_sku"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    draft_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("product_draft.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sku: Mapped[str] = mapped_column(String(80), nullable=False)
+    option_values: Mapped[dict[str, object]] = mapped_column(JSONVariant, default=dict, nullable=False)
+    price_gross: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    tax_rate: Mapped[Decimal | None] = mapped_column(Numeric(7, 4), nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), default="EUR", nullable=False)
+    selected: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    row_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
 class ProductIdentifier(Base):
     """ISBN/ASIN/FNSKU/EAN/etc. attached to a product or a variant (never both)."""
 
@@ -560,6 +623,9 @@ __all__ = [
     "ProductSkuAlias",
     "ProductFamily",
     "ProductVariant",
+    "ProductDraft",
+    "ProductDraftOption",
+    "ProductDraftVariant",
     "ProductIdentifier",
     "Category",
     "ProductCategory",

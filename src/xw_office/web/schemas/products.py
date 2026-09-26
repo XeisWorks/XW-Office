@@ -292,6 +292,84 @@ class VariantOnboardingResultOut(ProductOnboardingResultOut):
     pass
 
 
+class ProductDraftOptionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    draft_id: uuid.UUID
+    name: str
+    values: list[object] = Field(default_factory=list)
+    sort_order: int
+    row_version: int
+
+
+class ProductDraftVariantOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    draft_id: uuid.UUID
+    sku: str
+    option_values: dict[str, object] = Field(default_factory=dict)
+    price_gross: Decimal | None = None
+    tax_rate: Decimal | None = None
+    currency: str
+    selected: bool
+    row_version: int
+
+
+class ProductDraftOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    source_product_id: uuid.UUID | None = None
+    template_code: str | None = None
+    current_step: int
+    schema_version: int
+    completed_steps: list[object] = Field(default_factory=list)
+    data: dict[str, object] = Field(default_factory=dict)
+    row_version: int
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+    options: list[ProductDraftOptionOut] = Field(default_factory=list)
+    variants: list[ProductDraftVariantOut] = Field(default_factory=list)
+
+
+class ProductDraftCreateRequest(BaseModel):
+    source_product_id: uuid.UUID | None = None
+    template_code: str = Field(default="", max_length=80)
+    data: dict[str, object] = Field(default_factory=dict)
+
+
+class ProductDraftUpdateRequest(BaseModel):
+    expected_row_version: int
+    current_step: int | None = Field(default=None, ge=0, le=7)
+    completed_steps: list[int] | None = None
+    data: dict[str, object] | None = None
+    template_code: str | None = Field(default=None, max_length=80)
+
+
+class ProductDraftOptionCreateRequest(BaseModel):
+    expected_draft_row_version: int
+    name: str = Field(min_length=1, max_length=80)
+    values: list[str] = Field(min_length=1, max_length=100)
+    sort_order: int = Field(default=0, ge=0)
+
+
+class ProductDraftVariantCreateRequest(BaseModel):
+    expected_draft_row_version: int
+    sku: str = Field(min_length=1, max_length=80)
+    option_values: dict[str, object] = Field(default_factory=dict)
+    price_gross: Decimal | None = Field(default=None, ge=0)
+    tax_rate: Decimal | None = Field(default=None, ge=0, le=100)
+    currency: str = Field(default="EUR", min_length=3, max_length=3)
+    selected: bool = True
+
+
+class SkuAvailabilityOut(BaseModel):
+    sku: str
+    available: bool
+
+
 # -- PR09: edit API -----------------------------------------------------------------
 #
 # Response schemas below add ``row_version`` (required by every PATCH's If-Match-style

@@ -21,6 +21,7 @@ from xw_office.repositories.product_hub import (
     ProductFilter,
     ProductHubRepository,
 )
+from xw_office.repositories.product_hub_drafts import ProductDraftRepository
 from xw_office.services.product_hub.catalog_list import build_parent_product_summaries
 from xw_office.services.product_hub.content_generation import (
     ContentGenerationError,
@@ -56,6 +57,13 @@ from xw_office.web.schemas.products import (
     PrintRuleUpsertRequest,
     ProductAssetOut,
     ProductDetail,
+    ProductDraftCreateRequest,
+    ProductDraftOptionCreateRequest,
+    ProductDraftOptionOut,
+    ProductDraftOut,
+    ProductDraftUpdateRequest,
+    ProductDraftVariantCreateRequest,
+    ProductDraftVariantOut,
     ProductImprovementOut,
     ProductOnboardingOptionsOut,
     ProductOnboardingRequest,
@@ -67,6 +75,7 @@ from xw_office.web.schemas.products import (
     ReadinessSummaryOut,
     SevdeskCategoryOut,
     SevdeskPartMappingRequest,
+    SkuAvailabilityOut,
     TagAddRequest,
     TagOut,
     VariantOnboardingRequest,
@@ -79,6 +88,7 @@ EditingDependency = Callable[[], EditingService]
 EditGateDependency = Callable[[], None]
 ContentGenerationDependency = Callable[[], ContentGenerationService]
 OnboardingDependency = Callable[[], ProductOnboardingService]
+DraftDependency = Callable[[], Generator[ProductDraftRepository, None, None]]
 
 
 def build_products_router(
@@ -87,6 +97,7 @@ def build_products_router(
     require_edit_enabled: EditGateDependency,
     get_content_generation: ContentGenerationDependency,
     get_onboarding: OnboardingDependency,
+    get_drafts: DraftDependency,
 ) -> APIRouter:
     """Build the products router, parameterized by a repo + editing-service dependency.
 
@@ -115,6 +126,88 @@ def build_products_router(
             status_code=status.HTTP_409_CONFLICT,
             detail=jsonable_encoder(out_schema.model_validate(current)),
         )
+
+    def _draft_out(repo: ProductDraftRepository, draft: object) -> ProductDraftOut:
+        output = ProductDraftOut.model_validate(draft)
+        return output.model_copy(update={
+            "options": [ProductDraftOptionOut.model_validate(item) for item in repo.list_options(output.id)],
+            "variants": [ProductDraftVariantOut.model_validate(item) for item in repo.list_variants(output.id)],
+        })
+
+    @router.get("/product-drafts/sku-availability", response_model=SkuAvailabilityOut)
+    def draft_sku_availability(
+        sku: str = Query(min_length=1, max_length=80),
+        drafts: ProductDraftRepository = Depends(get_drafts),
+    ) -> SkuAvailabilityOut:
+        return SkuAvailabilityOut(sku=sku.strip().upper(), available=drafts.sku_available(sku))
+
+    @router.get("/product-drafts/{draft_id}", response_model=ProductDraftOut)
+    def get_product_draft(
+        draft_id: uuid.UUID, drafts: ProductDraftRepository = Depends(get_drafts)
+    ) -> ProductDraftOut:
+        draft = drafts.get(draft_id)
+        if draft is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft not found")
+        return _draft_out(drafts, draft)
+
+    @write_router.post("/product-drafts", response_model=ProductDraftOut, status_code=status.HTTP_201_CREATED)
+    def create_product_draft(
+        body: ProductDraftCreateRequest, drafts: ProductDraftRepository = Depends(get_drafts)
+    ) -> ProductDraftOut:
+        return _draft_out(drafts, drafts.create(**body.model_dump()))
+
+    @write_router.patch("/product-drafts/{draft_id}", response_model=ProductDraftOut)
+    def patch_product_draft(
+        draft_id: uuid.UUID, body: ProductDraftUpdateRequest,
+        drafts: ProductDraftRepository = Depends(get_drafts),
+    ) -> ProductDraftOut:
+        changes = body.model_dump(exclude={"expected_row_version"}, exclude_unset=True)
+        try:
+            return _draft_out(drafts, drafts.update(
+                draft_id, expected_row_version=body.expected_row_version, **changes
+            ))
+        except OptimisticLockError:
+            current = drafts.get(draft_id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft not found") from None
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail=jsonable_encoder(_draft_out(drafts, current))) from None
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    @write_router.post("/product-drafts/{draft_id}/options", response_model=ProductDraftOptionOut,
+                       status_code=status.HTTP_201_CREATED)
+    def add_product_draft_option(
+        draft_id: uuid.UUID, body: ProductDraftOptionCreateRequest,
+        drafts: ProductDraftRepository = Depends(get_drafts),
+    ) -> ProductDraftOptionOut:
+        try:
+            return ProductDraftOptionOut.model_validate(drafts.add_option(draft_id, **body.model_dump()))
+        except OptimisticLockError:
+            current = drafts.get(draft_id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft not found") from None
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail=jsonable_encoder(_draft_out(drafts, current))) from None
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    @write_router.post("/product-drafts/{draft_id}/variants", response_model=ProductDraftVariantOut,
+                       status_code=status.HTTP_201_CREATED)
+    def add_product_draft_variant(
+        draft_id: uuid.UUID, body: ProductDraftVariantCreateRequest,
+        drafts: ProductDraftRepository = Depends(get_drafts),
+    ) -> ProductDraftVariantOut:
+        try:
+            return ProductDraftVariantOut.model_validate(drafts.add_variant(draft_id, **body.model_dump()))
+        except OptimisticLockError:
+            current = drafts.get(draft_id)
+            if current is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft not found") from None
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail=jsonable_encoder(_draft_out(drafts, current))) from None
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     @router.get("/products", response_model=Page[ParentProductListItem])
     def list_products(

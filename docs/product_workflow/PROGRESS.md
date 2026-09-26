@@ -156,3 +156,28 @@ Offen für T04-Abnahme:
 - Manueller Shadow-Vergleich auf jedem weiteren Desktop-PC.
 - Native Rechnungs-/Druckaktionen müssen Hub-Snapshot und Hub-ID verwenden, bevor
   der Legacy-Katalog als reine Rückfallquelle gilt.
+
+## T05 – Entwurf, Optionen und Preise modellieren
+
+Status: erledigt am 2026-09-27. Der Hub besitzt jetzt eine additive, dauerhafte
+Wizard-Draft-Schicht; sie erstellt weder Produktstammdaten noch Provider-Einträge.
+
+- `product_draft` speichert Schritt, Schema-Version, abgeschlossene Schritte, Eingabedaten
+  und `row_version`. Autosave verwendet eine erwartete Version; ein veralteter Stand erhält
+  HTTP 409 mit dem aktuellen vollständigen Entwurf.
+- `product_draft_option` modelliert Option und erlaubte Werte. `product_draft_variant`
+  speichert ausschließlich bewusst ausgewählte Kombinationen samt SKU, Brutto-EUR-Preis,
+  Steuer und eigener Versionsnummer. Es wird kein kartesisches Produkt erzeugt.
+- Die authentifizierte API kann Entwürfe anlegen, laden und versioniert speichern sowie
+  Optionen/Kombinationen hinzufügen. Die SKU-Verfügbarkeit prüft Varianten und Aliase in
+  einer DB-Transaktion; ein freier Vorschlag reserviert nichts.
+- Migration `018_product_wizard_drafts` ist additiv und hängt an Alembic-Head 017.
+
+Tests:
+
+- `python -m pytest tests/unit/test_product_hub_drafts.py -q` → 2 bestanden.
+- `python -m ruff check ...` → ohne Befund.
+- `python -m alembic heads` → `018_product_wizard_drafts (head)`.
+- Migration von Revision 017 auf ein frisches SQLite-Testschema → drei Draft-Tabellen vorhanden.
+
+Nächster freigegebener Task: **T06 – Vorlagen und Kopieren**.

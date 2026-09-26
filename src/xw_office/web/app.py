@@ -25,6 +25,7 @@ from xw_office.core.config import load_config
 from xw_office.core.database import session_scope
 from xw_office.models.product_hub_sync import OutboxEvent
 from xw_office.repositories.product_hub import ProductHubRepository
+from xw_office.repositories.product_hub_drafts import ProductDraftRepository
 from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.repositories.product_hub_sharing import SharingRepository
 from xw_office.repositories.product_hub_sync import SyncRepository
@@ -258,6 +259,11 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
         with session_scope(_session_factory) as session:
             yield ProductHubRepository(session)
 
+    def get_product_draft_repo() -> Generator[ProductDraftRepository, None, None]:
+        assert _session_factory is not None  # guarded by require_product_hub_enabled above
+        with session_scope(_session_factory) as session:
+            yield ProductDraftRepository(session)
+
     def get_editing_service() -> EditingService:
         assert _session_factory is not None  # guarded by require_product_hub_enabled above
         return EditingService(_session_factory)
@@ -303,6 +309,7 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
             require_product_hub_edit_enabled,
             get_content_generation_service,
             get_onboarding_service,
+            get_product_draft_repo,
         ),
         dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
     )
