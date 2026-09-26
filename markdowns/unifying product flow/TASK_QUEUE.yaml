@@ -27,7 +27,7 @@ phases:
     rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
   - id: T02
     title: Migration als Vorschau planen
-    status: in_progress
+    status: done
     depends_on_tasks:
     - T01
     implementation:

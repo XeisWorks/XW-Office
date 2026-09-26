@@ -29,9 +29,9 @@ Nächster freigegebener Task: **T02 – Migration als Vorschau planen**.
 
 ## T02 – Migration als Vorschau planen
 
-Status: in Arbeit – der schreibgeschützte Preview-Runner ist implementiert und getestet;
-der echte Bericht kann ohne eine explizit bereitgestellte Datenbankverbindung nicht
-erzeugt werden.
+Status: erledigt am 2026-09-26. Der echte Bericht wurde über die öffentliche Railway-
+Verbindung in einer PostgreSQL-Read-only-Transaktion erzeugt; Details stehen in
+`MIGRATION_PREVIEW.md`.
 
 Änderungen:
 
@@ -52,8 +52,8 @@ python scripts/product_hub/preview_legacy_product_migration.py `
 ```
 
 `migration_preview.local.json` enthält lokale Druckpfade und wird deshalb nicht als
-allgemeiner Repository-Artefakt eingecheckt. Erst dieser echte Bericht erfüllt die
-Abnahme von T02; derzeit ist `DATABASE_URL` im Prozess nicht gesetzt.
+allgemeiner Repository-Artefakt eingecheckt. Der echte Bericht umfasst 507 Zeilen,
+505 eindeutige Zuordnungen und zwei bewusst offene Zuordnungen.
 
 Tests:
 
@@ -61,3 +61,7 @@ Tests:
 - Der CLI-Test erstellt eine temporäre SQLite-Datenbank, erzeugt den Bericht und beweist,
   dass `inventory.products` unverändert bleibt.
 - `git diff --check` → ohne Befund.
+
+Commit: noch nicht erstellt.
+
+Nächster freigegebener Task: **T03 – Hub-API für Desktop-Verbraucher ergänzen**.
