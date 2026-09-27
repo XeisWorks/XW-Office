@@ -38,6 +38,7 @@ from xw_office.services.product_hub.onboarding import ProductOnboardingService
 from xw_office.services.product_hub.onedrive import OneDriveAssetClient
 from xw_office.services.product_hub.onedrive_assets import OneDriveAssetService
 from xw_office.services.product_hub.asset_jobs import ProductAssetJobService
+from xw_office.services.product_hub.cover_templates import CoverTemplateService
 from xw_office.services.product_hub.outbox_worker import OutboxWorker
 from xw_office.services.product_hub.sharing import SharingService
 from xw_office.services.product_hub.wix_push import WixPushService, wix_push_handler
@@ -46,6 +47,7 @@ from xw_office.services.sevdesk.part_client import PartClient
 from xw_office.services.wix.client import WixProductsClient
 from xw_office.services.wix.product_details_client import WixProductDetailsClient
 from xw_office.web.routers.conflicts import build_conflicts_router
+from xw_office.web.routers.covers import build_covers_router
 from xw_office.web.routers.inventory import build_inventory_router
 from xw_office.web.routers.products import build_products_router
 from xw_office.web.routers.share_public import build_share_public_router
@@ -285,6 +287,13 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
                                 detail="Product asset jobs are not configured")
         return _asset_job_service
 
+    def get_cover_templates() -> CoverTemplateService:
+        try:
+            return CoverTemplateService.from_environment()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail="Cover templates are not configured") from exc
+
     def get_editing_service() -> EditingService:
         assert _session_factory is not None  # guarded by require_product_hub_enabled above
         return EditingService(_session_factory)
@@ -334,6 +343,10 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
             get_onedrive_assets,
             get_asset_jobs,
         ),
+        dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
+    )
+    app.include_router(
+        build_covers_router(get_cover_templates),
         dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
     )
 

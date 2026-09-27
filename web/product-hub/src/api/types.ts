@@ -63,6 +63,9 @@ export interface ProductDraftVariant { id: string; sku: string; option_values: R
 export interface ProductDraft { id: string; source_product_id: string | null; template_code: string | null; current_step: number; schema_version: number; completed_steps: number[]; data: Record<string, unknown>; row_version: number; options: ProductDraftOption[]; variants: ProductDraftVariant[]; }
 export interface ProductDraftTemplate { code: string; name: string; data: Record<string, unknown>; }
 export interface OneDriveBrowseItem { drive_id: string; item_id: string; name: string; etag: string; size: number; is_folder: boolean; }
+export interface CoverTemplate { item_id: string; name: string; etag: string; size: number; }
+export interface CoverFontReadiness { available_families: string[]; missing_families: string[]; export_ready: boolean; }
+export interface CoverConfiguration { output_width_px: number; output_height_px: number; output_format: string; preserve_aspect_ratio: boolean; required_families: string[]; }
 
 export interface ChannelOnboardingResult {
   channel: "wix" | "sevdesk";

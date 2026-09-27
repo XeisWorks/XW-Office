@@ -15,10 +15,9 @@
 ## Offener Infrastrukturpunkt fuer T09
 
 - Status: erledigt am 2026-09-27 durch einen neuen, bucket-spezifischen R2-Token.
-- Cloudflare R2 ist erreichbar, aber der hinterlegte Zugriffsschluessel verweigert
-  `PutObject` und `DeleteObject`. Der kontrollierte Test hat kein Objekt hinterlassen.
-  Fuer die persistente Render-Pipeline braucht der R2-API-Token mindestens Object
-  Read & Write fuer den vorgesehenen Bucket.
+- Der vorherige Zugriffsschluessel verweigerte `PutObject` und `DeleteObject`; der
+  neue Token mit Object Read & Write wurde danach erfolgreich per kontrolliertem
+  Schreib-/Lese-/Löschtest verifiziert. Es gibt keinen offenen R2-Blocker.
 
 ## T09 – Asset-Auftraege und Beispielseiten (2026-09-27)
 
@@ -34,3 +33,33 @@
   Renderer und R2-Pfadbegrenzung bestanden; Web-Build und Ruff bestanden.
 - Produktion: R2-Schreib-/Lese-/Löschtest erfolgreich, Deploy erfolgreich,
   Datenbankmigration `019_product_asset_jobs` auf Head und Healthcheck gruen.
+
+## T10 – Vorlagenordner und Fontverwaltung (2026-09-27)
+
+- Erledigt: Der Product Hub liest die versionierte `COVER_SPEC.yaml` zur
+  Laufzeit, validiert die feste 1527×2047-zu-746×1000-Geometrie und verweigert
+  Spezifikationen, die Karte, Schatten oder schwarzen Balken neu zeichnen
+  wollten. Ein Hintergrund wird ausschliesslich proportional skaliert; ein
+  inkompatibles Seitenverhaeltnis wird erklaert statt gestreckt.
+- Sicherheit: Die authentifizierten Cover-Endpunkte listen nur Vorlagen aus dem
+  explizit konfigurierten OneDrive-Unterordner. Miniaturen werden serverseitig
+  aus dem Bild abgeleitet und mit `private, no-store` ausgeliefert; weder Graph-
+  Token, Download-URLs noch das Originalbild gelangen in den Browser.
+- Bedienung: Der fortsetzbare Entwurf zeigt Miniaturen, speichert nur die
+  stabile Vorlagen-ID, ETag und Metadaten und bleibt auch bei fehlenden
+  Schriften speicherbar. Die UI erklaert dann klar, dass der Coverexport
+  blockiert ist.
+- Fonts: Private TTF/OTF-Dateien werden nur ueber ihre eingebettete
+  Familienmetadaten geprueft. Die laut Spec verlangten Familien `Book Antiqua`
+  und `Deneane` werden nicht durch Systemfonts ersetzt.
+- Betrieb: `Dockerfile.web` nimmt ausschliesslich die geometrische
+  `COVER_SPEC.yaml` ins Laufzeitimage auf, niemals Vorlagen oder Fontdateien.
+  In Railway fehlen weiterhin die bewusst nicht versionierten Werte
+  `XW_COVER_TEMPLATE_FOLDER_ID` und `XW_COVER_FONT_FOLDER_ID`; bis zu deren
+  Einrichtung antwortet die Cover-API kontrolliert mit Konfigurationsfehler.
+- Tests: 25 gezielte Python-Tests fuer Cover, OneDrive, Assets, Render-Jobs und
+  Sample-Renderer bestanden; Ruff, Compileall, TypeScript, ESLint, Vitest
+  (7 Tests) und der Vite-Produktionsbuild bestanden.
+- Naechster Task: T11 – Textlayout und Vorschau. Dafuer fehlen noch die echte
+  Cabernet-Referenz samt den privaten Fonts fuer den verpflichtenden visuellen
+  Vergleich; es wurde kein Provider-Write und kein Produkt-Test erzeugt.

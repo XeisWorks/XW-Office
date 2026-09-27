@@ -27,6 +27,9 @@ RUN python -m pip install --no-cache-dir -r requirements-web.txt
 COPY src ./src
 COPY alembic.ini ./alembic.ini
 COPY config/content_brands.yaml ./config/content_brands.yaml
+# Runtime contract for the private cover renderer.  It contains geometry only;
+# private backgrounds and commercial fonts are fetched from OneDrive at runtime.
+COPY ["markdowns/unifying product flow/COVER_SPEC.yaml", "./markdowns/unifying product flow/COVER_SPEC.yaml"]
 COPY --from=web-build /web/dist ./web/product-hub/dist
 
 EXPOSE 8000

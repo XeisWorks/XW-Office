@@ -30,6 +30,7 @@ import type {
   ProductOnboardingResult,
   ProductDraft, ProductDraftTemplate,
   OneDriveBrowseItem,
+  CoverTemplate, CoverFontReadiness, CoverConfiguration,
   VariantOnboardingRequest,
   ProductReadiness,
   ProductSkuRenameRequest,
@@ -132,6 +133,20 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return (await response.json()) as T;
 }
 
+async function requestBlob(path: string): Promise<Blob> {
+  const token = getToken();
+  const response = await fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (response.status === 401) {
+    clearToken();
+    throw new ApiError(401, "Nicht angemeldet oder Token abgelaufen.");
+  }
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new ApiError(response.status, text || `HTTP ${response.status}`);
+  }
+  return response.blob();
+}
+
 function buildQuery(filters: ProductListFilters): string {
   const params = new URLSearchParams();
   if (filters.search) params.set("search", filters.search);
@@ -148,6 +163,10 @@ export const api = {
   getDraft: (id: string) => request<ProductDraft>(`/api/v1/product-drafts/${id}`),
   saveDraft: (id: string, body: { expected_row_version: number; current_step?: number; completed_steps?: number[]; data?: Record<string, unknown> }) => request<ProductDraft>(`/api/v1/product-drafts/${id}`, { method: "PATCH", body }),
   listOneDriveChildren: (itemId?: string) => request<OneDriveBrowseItem[]>(`/api/v1/onedrive/children${itemId ? `?item_id=${encodeURIComponent(itemId)}` : ""}`),
+  getCoverConfiguration: () => request<CoverConfiguration>("/api/v1/covers/configuration"),
+  listCoverTemplates: () => request<CoverTemplate[]>("/api/v1/covers/templates"),
+  getCoverFontReadiness: () => request<CoverFontReadiness>("/api/v1/covers/font-readiness"),
+  getCoverTemplateThumbnail: (templateId: string) => requestBlob(`/api/v1/covers/templates/${encodeURIComponent(templateId)}/thumbnail`),
   listProducts: (filters: ProductListFilters = {}) =>
     request<Page<ParentProductListItem>>(`/api/v1/products?${buildQuery(filters)}`),
   getProduct: (id: string) => request<ProductDetail>(`/api/v1/products/${id}`),

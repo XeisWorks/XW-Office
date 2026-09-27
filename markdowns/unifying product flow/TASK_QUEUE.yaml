@@ -136,7 +136,7 @@ phases:
   tasks:
   - id: T10
     title: Vorlagenordner und Fontverwaltung
-    status: pending
+    status: done
     depends_on_tasks:
     - T09
     implementation:
