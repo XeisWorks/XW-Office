@@ -37,6 +37,7 @@ from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.product_hub.onboarding import ProductOnboardingService
 from xw_office.services.product_hub.onedrive import OneDriveAssetClient
 from xw_office.services.product_hub.onedrive_assets import OneDriveAssetService
+from xw_office.services.product_hub.asset_jobs import ProductAssetJobService
 from xw_office.services.product_hub.outbox_worker import OutboxWorker
 from xw_office.services.product_hub.sharing import SharingService
 from xw_office.services.product_hub.wix_push import WixPushService, wix_push_handler
@@ -276,6 +277,14 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                                 detail="OneDrive asset access is not configured") from exc
 
+    _asset_job_service = ProductAssetJobService(_session_factory) if _session_factory is not None else None
+
+    def get_asset_jobs() -> ProductAssetJobService:
+        if _asset_job_service is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail="Product asset jobs are not configured")
+        return _asset_job_service
+
     def get_editing_service() -> EditingService:
         assert _session_factory is not None  # guarded by require_product_hub_enabled above
         return EditingService(_session_factory)
@@ -323,6 +332,7 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
             get_onboarding_service,
             get_product_draft_repo,
             get_onedrive_assets,
+            get_asset_jobs,
         ),
         dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
     )
@@ -347,6 +357,8 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
         _handler = wix_push_handler(_wix_push_service, _handler_repo)
         _outbox_worker.register_handler("product.updated", _handler)
         _outbox_worker.register_handler("price.changed", _handler)
+    if _outbox_worker is not None and _asset_job_service is not None:
+        _outbox_worker.register_handler("product.asset_render_requested", _asset_job_service.run)
 
     # -- Conflict Wizard (CW00-CW07): durable workflow over low-level drift --------
 

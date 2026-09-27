@@ -32,6 +32,7 @@ def test_attach_stores_private_stable_onedrive_reference(tmp_path: Path) -> None
     assert asset.storage_kind == "ONEDRIVE"
     assert asset.uri == "onedrive://drive/item"
     assert asset.source_external_id == "drive:item"
+    assert asset.source_version == "etag"
     assert asset.public_share_allowed is False
 
 

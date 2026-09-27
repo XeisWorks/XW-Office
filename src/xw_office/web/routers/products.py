@@ -31,6 +31,7 @@ from xw_office.services.product_hub.content_generation import (
 from xw_office.services.product_hub.editing import EditingService, UnknownFieldError
 from xw_office.services.product_hub.onboarding import ProductOnboardingService
 from xw_office.services.product_hub.onedrive_assets import OneDriveAssetService
+from xw_office.services.product_hub.asset_jobs import ProductAssetJobService
 from xw_office.services.product_hub.readiness import (
     build_readiness_summary,
     evaluate_product_readiness,
@@ -57,6 +58,7 @@ from xw_office.web.schemas.products import (
     PrintRuleOut,
     PrintRuleUpsertRequest,
     ProductAssetOut,
+    ProductAssetJobOut,
     ProductDetail,
     ProductDraftCreateRequest,
     ProductDraftCopyRequest,
@@ -73,6 +75,7 @@ from xw_office.web.schemas.products import (
     ProductOnboardingResultOut,
     OneDriveAssetAttachRequest,
     OneDriveBrowseItemOut,
+    SamplePageJobRequest,
     ProductReadinessOut,
     ProductSkuRenameRequest,
     ProductUpdateRequest,
@@ -95,6 +98,7 @@ ContentGenerationDependency = Callable[[], ContentGenerationService]
 OnboardingDependency = Callable[[], ProductOnboardingService]
 DraftDependency = Callable[[], Generator[ProductDraftRepository, None, None]]
 OneDriveAssetDependency = Callable[[], OneDriveAssetService]
+AssetJobDependency = Callable[[], ProductAssetJobService]
 
 DRAFT_TEMPLATES = {
     "mnozil-single": ("Mnozil-Einzeltitel", {"product_type": "physical", "music_attributes": {"series": "Mnozil"}}),
@@ -111,6 +115,7 @@ def build_products_router(
     get_onboarding: OnboardingDependency,
     get_drafts: DraftDependency,
     get_onedrive_assets: OneDriveAssetDependency,
+    get_asset_jobs: AssetJobDependency,
 ) -> APIRouter:
     """Build the products router, parameterized by a repo + editing-service dependency.
 
@@ -659,6 +664,28 @@ def build_products_router(
             return [OneDriveBrowseItemOut.model_validate(item) for item in assets.list_children(item_id)]
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    @router.get("/products/{product_id}/asset-jobs/{job_id}", response_model=ProductAssetJobOut)
+    def get_product_asset_job(
+        product_id: uuid.UUID, job_id: uuid.UUID, jobs: ProductAssetJobService = Depends(get_asset_jobs)
+    ) -> ProductAssetJobOut:
+        job = jobs.get(job_id)
+        if job is None or job.product_id != product_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset job not found")
+        return ProductAssetJobOut.model_validate(job)
+
+    @write_router.post("/products/{product_id}/asset-jobs/sample-pages", response_model=ProductAssetJobOut,
+                       status_code=status.HTTP_202_ACCEPTED)
+    def enqueue_sample_page_job(
+        product_id: uuid.UUID, body: SamplePageJobRequest,
+        jobs: ProductAssetJobService = Depends(get_asset_jobs),
+    ) -> ProductAssetJobOut:
+        try:
+            return ProductAssetJobOut.model_validate(jobs.enqueue(product_id=product_id, **body.model_dump()))
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     @write_router.patch("/products/{product_id}/assets/{asset_id}", response_model=ProductAssetOut)
     def patch_product_asset(

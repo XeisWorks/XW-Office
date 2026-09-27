@@ -156,6 +156,7 @@ class ProductAssetOut(BaseModel):
     size_bytes: int | None = None
     source_channel: str | None = None
     source_external_id: str | None = None
+    source_version: str | None = None
     source_url: str | None = None
     public_share_allowed: bool
     health_status: str
@@ -555,6 +556,30 @@ class OneDriveBrowseItemOut(BaseModel):
     etag: str
     size: int
     is_folder: bool
+
+
+class SamplePageJobRequest(BaseModel):
+    source_asset_id: uuid.UUID
+    pages: list[int] = Field(min_length=1, max_length=30)
+    watermarked_pages: list[int] = Field(default_factory=list, max_length=30)
+    watermark_asset_id: uuid.UUID | None = None
+    variant_id: uuid.UUID | None = None
+
+
+class ProductAssetJobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    product_id: uuid.UUID
+    source_asset_id: uuid.UUID
+    variant_id: uuid.UUID | None = None
+    job_key: str
+    recipe: dict[str, object]
+    status: str
+    output_manifest: list[dict[str, object]]
+    last_error: str | None = None
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
 
 
 class ImprovementCreateRequest(BaseModel):

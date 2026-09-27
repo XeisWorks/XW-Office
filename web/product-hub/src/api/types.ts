@@ -190,6 +190,7 @@ export interface ProductAsset {
   size_bytes: number | null;
   source_channel: string | null;
   source_external_id: string | null;
+  source_version: string | null;
   source_url: string | null;
   public_share_allowed: boolean;
   health_status: "unknown" | "ok" | "missing" | "unreadable" | "checksum_mismatch" | "stale";

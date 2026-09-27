@@ -175,6 +175,46 @@ class OutboxEvent(Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class ProductAssetJob(Base):
+    """Durable, idempotent request to render private product assets.
+
+    The input source remains a private ``ProductAsset``.  Rendered object keys and
+    metadata are recorded in ``output_manifest`` only after every upload succeeds.
+    ``job_key`` is a hash of the source version and recipe, so a retry or browser
+    refresh reuses the existing job instead of generating duplicate thumbnails.
+    """
+
+    __tablename__ = "product_asset_job"
+    __table_args__ = (
+        UniqueConstraint("job_key", name="uq_product_asset_job_key"),
+        Index("ix_product_asset_job_product_status", "product_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("product.id", ondelete="CASCADE"), nullable=False
+    )
+    source_asset_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("product_asset.id", ondelete="CASCADE"), nullable=False
+    )
+    variant_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("product_variant.id", ondelete="SET NULL"), nullable=True
+    )
+    job_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    recipe: Mapped[dict[str, object]] = mapped_column(JSONVariant, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    output_manifest: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONVariant, nullable=False, default=list
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 __all__ = [
     "JSONVariant",
     "SYNC_DIRECTIONS",
@@ -184,4 +224,5 @@ __all__ = [
     "SyncCursor",
     "ExternalPayloadArchive",
     "OutboxEvent",
+    "ProductAssetJob",
 ]

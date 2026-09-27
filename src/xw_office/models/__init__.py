@@ -59,6 +59,7 @@ from xw_office.models.product_hub_sharing import ExportLog, SharedCatalogView
 from xw_office.models.product_hub_sync import (
     ExternalPayloadArchive,
     OutboxEvent,
+    ProductAssetJob,
     SyncConflict,
     SyncCursor,
     SyncItem,
@@ -93,6 +94,7 @@ __all__ = [
     "InventoryMovement",
     "InventoryStock",
     "OutboxEvent",
+    "ProductAssetJob",
     "PcRegistry",
     "PlcShipment",
     "PriceList",

@@ -27,6 +27,7 @@ class OneDriveAssetService:
             return repo.add_asset(product_id=product_id, variant_id=variant_id, role=role,
                 storage_kind="ONEDRIVE", uri=f"onedrive://{item.drive_id}/{item.item_id}",
                 source_channel="onedrive", source_external_id=f"{item.drive_id}:{item.item_id}",
+                source_version=item.etag,
                 original_filename=item.name, size_bytes=item.size, public_share_allowed=False)
 
     def list_children(self, item_id: str | None = None):

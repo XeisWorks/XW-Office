@@ -25,6 +25,7 @@ COPY requirements-web.txt ./requirements-web.txt
 RUN python -m pip install --no-cache-dir -r requirements-web.txt
 
 COPY src ./src
+COPY alembic.ini ./alembic.ini
 COPY config/content_brands.yaml ./config/content_brands.yaml
 COPY --from=web-build /web/dist ./web/product-hub/dist
 

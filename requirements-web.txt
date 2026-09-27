@@ -10,6 +10,7 @@ uvicorn>=0.34,<1
 # Railway's postgresql+psycopg URL, and python-dotenv because core.config imports it even
 # though load_config() itself is never called from this lean web app).
 sqlalchemy>=2,<3
+alembic>=1.13,<2
 psycopg2-binary>=2.9,<3
 psycopg[binary]>=3.1,<4
 python-dotenv>=1,<2
@@ -23,5 +24,8 @@ httpx>=0.27,<1
 rapidfuzz>=3,<4
 msal>=1.28,<2
 boto3>=1.35,<2
+# Persistent R2 sample-page renderer (T09).
+PyMuPDF>=1.24,<2
+Pillow>=10,<12
 # Product Hub dealer sharing (PR12): XLSX export (web/routers/share_public.py).
 openpyxl>=3.1,<4

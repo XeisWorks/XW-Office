@@ -414,6 +414,7 @@ class ProductAsset(Base):
     checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_channel: Mapped[str | None] = mapped_column(String(20), nullable=True)
     source_external_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    source_version: Mapped[str | None] = mapped_column(String(300), nullable=True)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     public_share_allowed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     health_status: Mapped[str] = mapped_column(
