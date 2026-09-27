@@ -1,5 +1,5 @@
 schema_version: 1
-status: implementation_spec_not_rendered
+status: locally_calibrated_against_veilchenpolka_pending_server_configuration
 template:
   background: reference/Cover_Blasmusik.jpg
   source_size_px:
@@ -13,7 +13,7 @@ template:
   draw_black_bar: false
   preserve_aspect_ratio: true
   selection: onedrive_folder_thumbnails
-  geometry_status: visually_estimated_requires_calibration
+  geometry_status: locally_compared_against_veilchenpolka_pending_server_smoke_test
   coordinates: normalized_to_full_image
   shared_text_center_x: 0.29
   boxes:
@@ -52,7 +52,10 @@ rasterization:
   silent_font_fallback: false
 text_styles:
   composer:
-    family: Book Antiqua
+    # The legacy request called this "Book Antiqua". BOOKOS.TTF was verified
+    # by embedded metadata as Bookman Old Style; use that real family name so
+    # the private renderer can remain fail-closed instead of guessing by file name.
+    family: Bookman Old Style
     size_pt: 14.3
     color: '#4b4b4b'
   title:
@@ -69,17 +72,17 @@ text_styles:
     overflow: block_export_with_explanation
   arrangement_label:
     text: 'Arrangement:'
-    family: Book Antiqua
+    family: Bookman Old Style
     size_pt: 11.5
     color: '#4b4b4b'
     small_caps: true
     underline: true
   arranger:
-    family: Book Antiqua
+    family: Bookman Old Style
     size_pt: 12.5
     color: '#4b4b4b'
   edition:
-    family: Book Antiqua
+    family: Bookman Old Style
     size_pt: 12
     color: '#ffffff'
     small_caps: true

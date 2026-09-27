@@ -104,10 +104,15 @@ class CoverTemplateService:
     @classmethod
     def from_environment(cls) -> "CoverTemplateService":
         configured_spec = os.getenv("XW_COVER_SPEC_PATH", "").strip()
+        client = OneDriveAssetClient.from_environment()
         return cls(
-            OneDriveAssetClient.from_environment(),
-            template_folder_id=os.getenv("XW_COVER_TEMPLATE_FOLDER_ID", ""),
-            font_folder_id=os.getenv("XW_COVER_FONT_FOLDER_ID", ""),
+            client,
+            template_folder_id=_configured_folder_id(
+                client, "XW_COVER_TEMPLATE_FOLDER_ID", "XW_COVER_TEMPLATE_FOLDER_PATH"
+            ),
+            font_folder_id=_configured_folder_id(
+                client, "XW_COVER_FONT_FOLDER_ID", "XW_COVER_FONT_FOLDER_PATH"
+            ),
             spec_path=Path(configured_spec) if configured_spec else None,
         )
 
@@ -345,6 +350,20 @@ def _load_spec(path: Path) -> CoverRenderSpec:
         boxes=boxes,
         styles=normalized_styles,
     )
+
+
+def _configured_folder_id(
+    client: OneDriveAssetClient, item_id_variable: str, path_variable: str
+) -> str:
+    item_id = os.getenv(item_id_variable, "").strip()
+    path = os.getenv(path_variable, "").strip()
+    if item_id and path:
+        raise CoverConfigurationError(f"Set only one of {item_id_variable} or {path_variable}")
+    if item_id:
+        return item_id
+    if path:
+        return client.resolve_relative_folder(path).item_id
+    raise CoverConfigurationError(f"{item_id_variable} or {path_variable} must be configured")
 
 
 def _fit_font(draw: object, lines: list[str], font_path: Path, start_size: float, max_width: int, max_height: int, min_size: int):

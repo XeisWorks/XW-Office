@@ -11,6 +11,7 @@ from xw_office.services.product_hub.cover_templates import (
     CoverConfigurationError,
     CoverPreviewRequest,
     CoverTemplateService,
+    _configured_folder_id,
 )
 from xw_office.services.product_hub.onedrive import OneDriveItem
 from xw_office.web.routers.covers import build_covers_router
@@ -120,12 +121,23 @@ def test_cover_service_requires_both_private_folder_ids() -> None:
         CoverTemplateService(_Client(), template_folder_id="templates", font_folder_id="")
 
 
+def test_cover_folder_can_be_configured_by_relative_path_without_exposing_a_windows_path(monkeypatch) -> None:
+    class _Resolver:
+        def resolve_relative_folder(self, path: str) -> OneDriveItem:
+            assert path == "02 XeisWorks/14 Schriftarten/Cover Renderer"
+            return OneDriveItem("drive", "fonts", "Cover Renderer", "etag", 0, is_folder=True)
+
+    monkeypatch.delenv("XW_COVER_FONT_FOLDER_ID", raising=False)
+    monkeypatch.setenv("XW_COVER_FONT_FOLDER_PATH", "02 XeisWorks/14 Schriftarten/Cover Renderer")
+    assert _configured_folder_id(_Resolver(), "XW_COVER_FONT_FOLDER_ID", "XW_COVER_FONT_FOLDER_PATH") == "fonts"
+
+
 def test_font_readiness_explains_missing_private_fonts() -> None:
     service = CoverTemplateService(_Client(), template_folder_id="templates", font_folder_id="fonts")
 
     result = service.font_readiness()
     assert result.export_ready is False
-    assert result.missing_families == ("Book Antiqua", "Deneane")
+    assert result.missing_families == ("Bookman Old Style", "Deneane")
 
 
 def test_preview_fails_closed_without_the_private_fonts() -> None:
@@ -166,7 +178,7 @@ def test_cover_routes_expose_only_private_thumbnails_and_safe_configuration() ->
     configuration = client.get("/api/v1/covers/configuration")
     assert configuration.status_code == 200
     assert configuration.json()["output_height_px"] == 1000
-    assert configuration.json()["required_families"] == ["Book Antiqua", "Deneane"]
+    assert configuration.json()["required_families"] == ["Bookman Old Style", "Deneane"]
 
     thumbnail = client.get("/api/v1/covers/templates/cover/thumbnail")
     assert thumbnail.status_code == 200

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from urllib.parse import quote
 
 import msal
 import requests
@@ -70,6 +71,31 @@ class OneDriveAssetClient:
 
     def get_root(self) -> OneDriveItem:
         return self.get_item(self.root_drive_id, self.root_item_id)
+
+    def resolve_relative_folder(self, relative_path: str) -> OneDriveItem:
+        """Resolve a human-maintained path below the approved root to one stable ID.
+
+        Paths are a deployment convenience only: all later reads still use the
+        opaque item ID and are checked against the configured root.  This keeps
+        Windows sync paths out of server configuration while allowing a folder
+        selected in OneDrive to be named naturally.
+        """
+        parts = [part.strip() for part in relative_path.replace("\\", "/").split("/")]
+        if not parts or any(not part or part in {".", ".."} for part in parts):
+            raise OneDriveConfigurationError("OneDrive relative folder path is invalid")
+        encoded_path = "/".join(quote(part, safe="") for part in parts)
+        response = requests.get(
+            f"https://graph.microsoft.com/v1.0/drives/{self.root_drive_id}/items/{self.root_item_id}:/{encoded_path}",
+            headers=self._headers(),
+            params={"$select": "id,name,eTag,size,folder,parentReference"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        item = self._item_from_payload(self.root_drive_id, response.json())
+        if not item.item_id or not item.is_folder:
+            raise OneDriveConfigurationError("Configured OneDrive path is not a folder")
+        self.assert_within_root(item.drive_id, item.item_id)
+        return item
 
     def list_children(self, item_id: str | None = None, *, limit: int = 100) -> list[OneDriveItem]:
         """List immediate children of the configured root only."""

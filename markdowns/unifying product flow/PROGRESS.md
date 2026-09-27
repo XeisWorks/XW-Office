@@ -50,8 +50,8 @@
   Schriften speicherbar. Die UI erklaert dann klar, dass der Coverexport
   blockiert ist.
 - Fonts: Private TTF/OTF-Dateien werden nur ueber ihre eingebettete
-  Familienmetadaten geprueft. Die laut Spec verlangten Familien `Book Antiqua`
-  und `Deneane` werden nicht durch Systemfonts ersetzt.
+  Familienmetadaten geprueft. Die laut Spec verlangten Familien werden nicht
+  durch Systemfonts ersetzt.
 - Betrieb: `Dockerfile.web` nimmt ausschliesslich die geometrische
   `COVER_SPEC.yaml` ins Laufzeitimage auf, niemals Vorlagen oder Fontdateien.
   In Railway fehlen weiterhin die bewusst nicht versionierten Werte
@@ -82,8 +82,30 @@
   realer Laufzeitfont als Testeingabe, Umlaut/Apostroph und privater
   Preview-Antwort); Ruff und Compileall sowie ESLint, TypeScript und
   Vite-Produktionsbuild bestanden.
-- Abnahmeblocker: Weder lokale `.env` noch Railway enthalten die privaten
-  Cover-/Font-Ordner-IDs, und die Cabernet-Referenz ist nicht im Repo. Deshalb
-  bleibt T11 `in_progress`: Der visuelle Cabernet-Vergleich und die Abnahme
-  von 1/2/3 Zeilen mit den echten kommerziellen Fonts stehen noch aus. Es
+- Abnahmeblocker: Die bereitgestellten Quellen sind lokal verifiziert, aber das
+  verbundene Railway-Projekt hat aktuell keinen selektierten Service. Die
+  produktiven OneDrive-Pfade können deshalb noch nicht gesetzt und der
+  Server-Smoke-Test nicht ausgeführt werden. T11 bleibt `in_progress`; es
   wurden keine Provider-Writes ausgefuehrt.
+
+## T11 – bereitgestellte lokale Quellen (2026-09-27)
+
+- Hintergrundquelle: `29 Web-Grafiken/Cover-Hintergründe` enthält sieben
+  Vorlagen, darunter `Cover_Blasmusik.jpg`; die Referenz `veilchenpolka.jpg`
+  wurde als verbindlicher visueller Vergleich ausgewählt.
+- Fonts: Im privaten OneDrive-Unterordner `14 Schriftarten/Cover Renderer`
+  liegen jetzt `BookmanOldStyle-Regular.ttf` und `Deneane-Regular.ttf`. Ihre
+  eingebetteten Familien sind `Bookman Old Style` beziehungsweise `Deneane`.
+  Die angefragte Bezeichnung „Book Antiqua“ wird deshalb korrekt als
+  `Bookman Old Style` in der Spec geführt, statt über den Legacy-Dateinamen zu
+  raten. Fontdateien bleiben ausserhalb des Repos.
+- Visueller Vergleich: Ein lokales JPG mit `Cover_Blasmusik.jpg`, den beiden
+  verifizierten Fonts und den Daten aus `veilchenpolka.jpg` wurde proportional
+  auf 746×1000 gerendert. Karte, Schatten und Balken stammen unverändert aus
+  dem Hintergrund; die Textanker stimmen mit der 597×800-Referenz überein.
+- Betrieb: Der Graph-Client kann nun sichere, slash-getrennte Ordnerpfade
+  relativ zu `XW_ONEDRIVE_ROOT` in eine geprüfte Item-ID auflösen. Sobald der
+  Railway-Service auswählbar ist, sind die beiden Werte (bei OneDrive-Root)
+  `02 XeisWorks/29 Web-Grafiken/Cover-Hintergründe` und
+  `02 XeisWorks/14 Schriftarten/Cover Renderer`; bei einem Root `02 XeisWorks`
+  entfällt dieses erste Pfadsegment.
