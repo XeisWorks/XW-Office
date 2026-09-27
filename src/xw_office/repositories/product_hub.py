@@ -884,6 +884,8 @@ class ProductHubRepository:
         source_external_id: str | None = None,
         source_url: str | None = None,
         public_share_allowed: bool = False,
+        original_filename: str | None = None,
+        size_bytes: int | None = None,
     ) -> ProductAsset:
         with self._scope() as session:
             asset = ProductAsset(
@@ -894,6 +896,8 @@ class ProductHubRepository:
                 sort_order=sort_order,
                 storage_kind=storage_kind,
                 uri=uri,
+                original_filename=original_filename,
+                size_bytes=size_bytes,
                 source_channel=source_channel,
                 source_external_id=source_external_id,
                 source_url=source_url,

@@ -60,7 +60,7 @@ IDENTIFIER_SCHEMES = (
     "CUSTOM",
 )
 ASSET_ROLES = ("COVER", "SAMPLE_SCORE", "PRINT_PDF", "PREVIEW_PDF", "AUDIO", "DOWNLOAD", "OTHER")
-ASSET_STORAGE_KINDS = ("OBJECT_STORAGE", "NETWORK_PATH", "WIX_MEDIA", "EXTERNAL_URL")
+ASSET_STORAGE_KINDS = ("OBJECT_STORAGE", "NETWORK_PATH", "ONEDRIVE", "WIX_MEDIA", "EXTERNAL_URL")
 ASSET_HEALTH_STATUSES = ("unknown", "ok", "missing", "unreadable", "checksum_mismatch", "stale")
 IMPROVEMENT_STATUSES = ("open", "planned", "resolved", "wont_fix")
 IMPROVEMENT_SEVERITIES = ("info", "minor", "major", "critical")
