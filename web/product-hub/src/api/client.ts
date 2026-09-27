@@ -133,9 +133,15 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return (await response.json()) as T;
 }
 
-async function requestBlob(path: string): Promise<Blob> {
+async function requestBlob(path: string, options: RequestOptions = {}): Promise<Blob> {
   const token = getToken();
-  const response = await fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  if (options.body !== undefined) headers["Content-Type"] = "application/json";
+  const response = await fetch(path, {
+    method: options.method ?? "GET",
+    headers,
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+  });
   if (response.status === 401) {
     clearToken();
     throw new ApiError(401, "Nicht angemeldet oder Token abgelaufen.");
@@ -167,6 +173,8 @@ export const api = {
   listCoverTemplates: () => request<CoverTemplate[]>("/api/v1/covers/templates"),
   getCoverFontReadiness: () => request<CoverFontReadiness>("/api/v1/covers/font-readiness"),
   getCoverTemplateThumbnail: (templateId: string) => requestBlob(`/api/v1/covers/templates/${encodeURIComponent(templateId)}/thumbnail`),
+  previewCover: (body: { template_id: string; composer?: string; title?: string; arranger?: string; edition?: string }) =>
+    requestBlob("/api/v1/covers/preview", { method: "POST", body }),
   listProducts: (filters: ProductListFilters = {}) =>
     request<Page<ParentProductListItem>>(`/api/v1/products?${buildQuery(filters)}`),
   getProduct: (id: string) => request<ProductDetail>(`/api/v1/products/${id}`),

@@ -37,6 +37,8 @@ class CoverRenderSpec:
     output_format: str
     preserve_aspect_ratio: bool
     required_families: tuple[str, ...]
+    boxes: dict[str, tuple[float, float, float, float]]
+    styles: dict[str, dict[str, object]]
 
     @property
     def output_width_px(self) -> int:
@@ -70,6 +72,15 @@ class PreparedCoverBackground:
     width: int
     height: int
     template: CoverTemplate
+
+
+@dataclass(frozen=True)
+class CoverPreviewRequest:
+    template_id: str
+    composer: str = ""
+    title: str = ""
+    arranger: str = ""
+    edition: str = ""
 
 
 class CoverTemplateService:
@@ -147,6 +158,32 @@ class CoverTemplateService:
             template=template,
         )
 
+    def render_preview(self, request: CoverPreviewRequest) -> PreparedCoverBackground:
+        """Render one private JPG preview with only verified private fonts.
+
+        The result stays in memory. This method deliberately has no storage or
+        provider write side effect, so a browser preview and the later JPG export
+        use the same layout without publishing an unfinished cover.
+        """
+        from PIL import Image, ImageDraw
+
+        background = self.prepare_background(request.template_id)
+        with TemporaryDirectory(prefix="xw-cover-render-") as directory:
+            font_paths = self._materialize_fonts(Path(directory))
+            image = Image.open(io.BytesIO(background.content)).convert("RGB")
+            draw = ImageDraw.Draw(image)
+            self._draw_fitted(draw, image, "composer", request.composer, font_paths)
+            self._draw_fitted(draw, image, "title", request.title, font_paths)
+            self._draw_fitted(draw, image, "arranger", request.arranger, font_paths)
+            self._draw_fitted(draw, image, "arrangement_label", "", font_paths)
+            self._draw_fitted(draw, image, "edition", request.edition, font_paths)
+            output = io.BytesIO()
+            image.save(output, format="JPEG", quality=95, optimize=True)
+        return PreparedCoverBackground(
+            content=output.getvalue(), mime_type="image/jpeg", width=image.width, height=image.height,
+            template=background.template,
+        )
+
     def font_readiness(self) -> CoverFontReadiness:
         items = self._client.list_children(self._font_folder_id)
         available: set[str] = set()
@@ -185,6 +222,63 @@ class CoverTemplateService:
                 raise CoverConfigurationError(f"Private font '{item.name}' cannot be loaded") from exc
         return {str(family).strip().casefold()} if str(family).strip() else set()
 
+    def _materialize_fonts(self, directory: Path) -> dict[str, Path]:
+        from PIL import ImageFont
+
+        paths: dict[str, Path] = {}
+        for item in self._client.list_children(self._font_folder_id):
+            if item.is_folder or Path(item.name).suffix.casefold() not in _FONT_EXTENSIONS:
+                continue
+            path = directory / item.name
+            path.write_bytes(self._client.download(item.drive_id, item.item_id))
+            try:
+                family, _style = ImageFont.truetype(str(path), size=16).getname()
+            except Exception as exc:  # noqa: BLE001
+                raise CoverConfigurationError(f"Private font '{item.name}' cannot be loaded") from exc
+            if family:
+                paths[str(family).strip().casefold()] = path
+        missing = [family for family in self._spec.required_families if family.casefold() not in paths]
+        if missing:
+            raise CoverConfigurationError(f"Cover export blocked: missing font {', '.join(missing)}")
+        return paths
+
+    def _draw_fitted(self, draw: object, image: object, key: str, value: str, font_paths: dict[str, Path]) -> None:
+        style = self._spec.styles[key]
+        box = self._spec.boxes[key]
+        text = str(style.get("text") or value or "").strip()
+        if not text:
+            return
+        family = str(style["family"]).casefold()
+        base_size = float(style["size_pt"]) * 96 / 72 * image.height / 1000
+        x, y, width, height = (round(box[0] * image.width), round(box[1] * image.height),
+                               round(box[2] * image.width), round(box[3] * image.height))
+        if key == "title":
+            lines = _title_lines(text, draw, font_paths[family], base_size, width, height, style)
+            proposed = style.get("proposed_size_pt_by_lines")
+            if isinstance(proposed, dict):
+                base_size = float(proposed.get(len(lines), style["size_pt"])) * 96 / 72 * image.height / 1000
+        else:
+            lines = [text.upper() if style.get("small_caps") else text]
+            if style.get("small_caps"):
+                # The commercial face is loaded from private storage.  If it has
+                # no OpenType small-caps feature, this documented glyph-size
+                # treatment is the controlled fallback from COVER_SPEC.
+                base_size *= 0.78
+        min_size = max(7, round(base_size * (0.78 if style.get("small_caps") else 0.55)))
+        font = _fit_font(draw, lines, font_paths[family], base_size, width, height, min_size)
+        rendered = "\n".join(lines)
+        spacing = max(1, round(font.size * 0.08))
+        bbox = draw.multiline_textbbox((0, 0), rendered, font=font, spacing=spacing, align="center")
+        text_width, text_height = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        if text_width > width or text_height > height:
+            raise CoverConfigurationError(f"{key} does not fit the configured cover box")
+        target_x = x + (width - text_width) / 2 - bbox[0]
+        target_y = y + (height - text_height) / 2 - bbox[1]
+        draw.multiline_text((target_x, target_y), rendered, font=font, fill=str(style["color"]), spacing=spacing, align="center")
+        if style.get("underline"):
+            line_y = target_y + text_height + 1
+            draw.line((target_x, line_y, target_x + text_width, line_y), fill=str(style["color"]), width=1)
+
 
 def _load_spec(path: Path) -> CoverRenderSpec:
     try:
@@ -197,6 +291,9 @@ def _load_spec(path: Path) -> CoverRenderSpec:
     styles = raw.get("text_styles")
     if not isinstance(template, dict) or not isinstance(styles, dict):
         raise CoverConfigurationError("COVER_SPEC is missing template or text_styles")
+    raw_boxes = template.get("boxes")
+    if not isinstance(raw_boxes, dict):
+        raise CoverConfigurationError("COVER_SPEC is missing template boxes")
     source_size = template.get("source_size_px")
     output_height = template.get("output_height_px")
     output_format = str(template.get("format") or "").casefold()
@@ -220,6 +317,24 @@ def _load_spec(path: Path) -> CoverRenderSpec:
             required_families.append(family)
     if not required_families:
         raise CoverConfigurationError("COVER_SPEC does not declare any font families")
+    boxes: dict[str, tuple[float, float, float, float]] = {}
+    required_boxes = ("composer", "title", "arrangement_label", "arranger", "edition")
+    for key in required_boxes:
+        raw_box = raw_boxes.get(key)
+        if (
+            not isinstance(raw_box, list) or len(raw_box) != 4
+            or not all(isinstance(value, (int, float)) and 0 <= value <= 1 for value in raw_box)
+            or raw_box[2] <= 0 or raw_box[3] <= 0
+            or raw_box[0] + raw_box[2] > 1 or raw_box[1] + raw_box[3] > 1
+        ):
+            raise CoverConfigurationError(f"COVER_SPEC has an invalid {key} box")
+        boxes[key] = tuple(float(value) for value in raw_box)
+    normalized_styles: dict[str, dict[str, object]] = {}
+    for key in required_boxes:
+        style = styles.get(key)
+        if not isinstance(style, dict) or not isinstance(style.get("family"), str) or not isinstance(style.get("size_pt"), (int, float)) or not isinstance(style.get("color"), str):
+            raise CoverConfigurationError(f"COVER_SPEC has an invalid {key} text style")
+        normalized_styles[key] = style
     return CoverRenderSpec(
         source_width_px=source_size[0],
         source_height_px=source_size[1],
@@ -227,4 +342,48 @@ def _load_spec(path: Path) -> CoverRenderSpec:
         output_format=output_format,
         preserve_aspect_ratio=True,
         required_families=tuple(required_families),
+        boxes=boxes,
+        styles=normalized_styles,
     )
+
+
+def _fit_font(draw: object, lines: list[str], font_path: Path, start_size: float, max_width: int, max_height: int, min_size: int):
+    from PIL import ImageFont
+
+    for size in range(max(round(start_size), min_size), min_size - 1, -1):
+        font = ImageFont.truetype(str(font_path), size=size)
+        bbox = draw.multiline_textbbox((0, 0), "\n".join(lines), font=font, spacing=max(1, round(size * 0.08)), align="center")
+        if bbox[2] - bbox[0] <= max_width and bbox[3] - bbox[1] <= max_height:
+            return font
+    return ImageFont.truetype(str(font_path), size=min_size)
+
+
+def _title_lines(text: str, draw: object, font_path: Path, base_size: float, width: int, height: int, style: dict[str, object]) -> list[str]:
+    manual = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(manual) > 1:
+        if len(manual) > 3:
+            raise CoverConfigurationError("Title supports at most three manual lines")
+        return manual
+    clean = " ".join(text.split())
+    words = clean.split()
+    if not words:
+        return [""]
+    proposed = style.get("proposed_size_pt_by_lines")
+    for count in range(1, 4):
+        candidates = _wrap_words(words, count)
+        size_pt = float(proposed.get(count, style["size_pt"])) if isinstance(proposed, dict) else float(style["size_pt"])
+        font = _fit_font(draw, candidates, font_path, size_pt * 96 / 72, width, height, max(8, round(float(style.get("minimum_size_pt_proposed", 18)) * 96 / 72)))
+        bbox = draw.multiline_textbbox((0, 0), "\n".join(candidates), font=font, spacing=max(1, round(font.size * 0.08)), align="center")
+        if bbox[2] - bbox[0] <= width and bbox[3] - bbox[1] <= height:
+            return candidates
+    raise CoverConfigurationError("Title does not fit in three cover lines")
+
+
+def _wrap_words(words: list[str], count: int) -> list[str]:
+    if count == 1:
+        return [" ".join(words)]
+    lines = [""] * count
+    for word in words:
+        target = min(range(count), key=lambda index: len(lines[index]))
+        lines[target] = f"{lines[target]} {word}".strip()
+    return [line for line in lines if line]

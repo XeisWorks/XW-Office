@@ -3,6 +3,14 @@ import { useNavigate } from "react-router-dom";
 import { api, ApiError, ConflictApiError } from "../api/client";
 import type { CoverConfiguration, CoverFontReadiness, CoverTemplate, OneDriveBrowseItem, ProductDraft, ProductDraftTemplate } from "../api/types";
 
+function suggestedEditionFromSelectedVariant(draft: ProductDraft): string {
+  const variant = draft.variants.find((item) => item.selected);
+  const ensemble = draft.options.find((option) => option.name.toLocaleLowerCase("de-AT").includes("besetzung"));
+  if (!variant || !ensemble) return "";
+  const value = variant.option_values[ensemble.id] ?? variant.option_values[ensemble.name];
+  return typeof value === "string" ? value : "";
+}
+
 export default function ProductDraftWizardPage({ onUnauthorized }: { onUnauthorized: () => void }) {
   const navigate = useNavigate();
   const [templates, setTemplates] = useState<ProductDraftTemplate[]>([]);
@@ -18,6 +26,11 @@ export default function ProductDraftWizardPage({ onUnauthorized }: { onUnauthori
   const [coverThumbnailUrls, setCoverThumbnailUrls] = useState<Record<string, string>>({});
   const [coverLoading, setCoverLoading] = useState(false);
   const [coverError, setCoverError] = useState("");
+  const [coverComposer, setCoverComposer] = useState("");
+  const [coverArranger, setCoverArranger] = useState("");
+  const [coverEdition, setCoverEdition] = useState("");
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState("");
+  const [coverPreviewing, setCoverPreviewing] = useState(false);
 
   useEffect(() => { api.listDraftTemplates().then(setTemplates).catch((e: unknown) => {
     if (e instanceof ApiError && e.status === 401) onUnauthorized(); else setMessage("Vorlagen konnten nicht geladen werden.");
@@ -73,6 +86,17 @@ export default function ProductDraftWizardPage({ onUnauthorized }: { onUnauthori
     return () => { cancelled = true; generatedUrls.forEach((url) => URL.revokeObjectURL(url)); };
   }, [draft?.id, onUnauthorized]);
 
+  useEffect(() => {
+    if (!draft) return;
+    setCoverComposer(String(draft.data.cover_composer ?? ""));
+    setCoverArranger(String(draft.data.cover_arranger ?? ""));
+    setCoverEdition(String(draft.data.cover_edition ?? "") || suggestedEditionFromSelectedVariant(draft));
+    // Draft changes from a save must not discard text currently being edited.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft?.id]);
+
+  useEffect(() => () => { if (coverPreviewUrl) URL.revokeObjectURL(coverPreviewUrl); }, [coverPreviewUrl]);
+
   async function start(templateCode = "") {
     try {
       const next = await api.createDraft({ template_code: templateCode, data: title ? { title_full: title } : {} });
@@ -109,6 +133,27 @@ export default function ProductDraftWizardPage({ onUnauthorized }: { onUnauthori
       original_filename: template.name, size_bytes: template.size,
     } });
   }
+  async function saveCoverText() {
+    await save(3, {
+      cover_composer: coverComposer,
+      cover_arranger: coverArranger,
+      cover_edition: coverEdition,
+    });
+  }
+  async function previewCover() {
+    if (!selectedCoverId) return;
+    setCoverPreviewing(true);
+    try {
+      const nextUrl = URL.createObjectURL(await api.previewCover({
+        template_id: selectedCoverId, composer: coverComposer, title, arranger: coverArranger, edition: coverEdition,
+      }));
+      setCoverPreviewUrl((current) => { if (current) URL.revokeObjectURL(current); return nextUrl; });
+      setCoverError("");
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) onUnauthorized();
+      else setCoverError(e instanceof Error ? e.message : "Cover-Vorschau konnte nicht erstellt werden.");
+    } finally { setCoverPreviewing(false); }
+  }
 
   const selectedSource = draft?.data.source_asset;
   const selectedName = typeof selectedSource === "object" && selectedSource !== null
@@ -118,9 +163,10 @@ export default function ProductDraftWizardPage({ onUnauthorized }: { onUnauthori
   const selectedCover = draft?.data.cover_background;
   const selectedCoverId = typeof selectedCover === "object" && selectedCover !== null
     ? String((selectedCover as Record<string, unknown>).item_id ?? "") : "";
+  const suggestedEdition = draft ? suggestedEditionFromSelectedVariant(draft) : "";
 
   return <section className="onboarding-page"><div className="onboarding-heading"><div><p className="eyebrow">Gemeinsamer Wizard</p><h1>Produktentwurf</h1><p className="hint">Unvollständige Angaben werden sicher gespeichert. Veröffentlichung startet erst nach vollständiger Prüfung.</p></div><button className="link-button" onClick={() => navigate("/products")}>Zurück</button></div>
     {!draft ? <div className="wizard-card"><label>Arbeitstitel <input value={title} onChange={(e) => setTitle(e.target.value)} /></label><div className="wizard-actions"><button className="primary-button" onClick={() => start()}>Leer beginnen</button>{templates.map((item) => <button key={item.code} onClick={() => start(item.code)}>{item.name}</button>)}</div></div> : <><div className="wizard-card"><p>Schritt {draft.current_step} von 7 · Version {draft.row_version}</p><label>Vollständiger Titel <input value={title} onChange={(e) => setTitle(e.target.value)} /></label><div className="wizard-actions"><button onClick={() => save(Math.min(7, draft.current_step + 1))}>Speichern & weiter</button><button className="primary-button" onClick={() => save(draft.current_step)}>Jetzt speichern</button></div></div><div className="wizard-card"><h2>Noten-PDF aus OneDrive</h2><p className="hint">Es werden nur Metadaten aus dem freigegebenen Produkt-Ordner angezeigt. Es gibt keinen öffentlichen PDF-Link.</p>{oneDriveTrail.length > 0 && <button onClick={() => { void loadOneDriveFolder(parentId, parentTrail); }}>Ordner zurück</button>}<p className="hint">{oneDriveTrail.map((item) => item.name).join(" / ") || "Stammordner"}</p>{oneDriveLoading ? <p>Lade OneDrive…</p> : <ul className="wizard-list">{oneDriveItems.map((item) => <li key={item.item_id}><button onClick={() => item.is_folder ? void loadOneDriveFolder(item.item_id, [...oneDriveTrail, item]) : void selectOneDriveFile(item)}>{item.is_folder ? "Ordner: " : "PDF: "}{item.name}</button>{!item.is_folder && <span className="hint"> ({Math.ceil(item.size / 1024)} KB)</span>}</li>)}</ul>}{selectedName && <p className="hint">Ausgewählt: {selectedName}. Die stabile OneDrive-Referenz wird beim Produktabschluss übernommen.</p>}</div></>}
-    {draft && <div className="wizard-card"><h2>Coverhintergrund</h2><p className="hint">Vorlagen und Miniaturen bleiben im angemeldeten Wizard privat. Schild, Schatten und Balken werden nicht neu gezeichnet.</p>{coverLoading ? <p>Lade Cover-Vorlagen…</p> : <div className="wizard-actions">{coverTemplates.map((item) => <button key={item.item_id} onClick={() => void selectCoverTemplate(item)} className={selectedCoverId === item.item_id ? "primary-button" : ""}>{coverThumbnailUrls[item.item_id] && <img src={coverThumbnailUrls[item.item_id]} alt="" width={72} height={96} style={{ objectFit: "contain", verticalAlign: "middle", marginRight: 8 }} />}{item.name}</button>)}</div>}{coverConfig && <p className="hint">Ausgabe: {coverConfig.output_width_px} × {coverConfig.output_height_px} px, proportional skaliert.</p>}{coverFontReadiness && !coverFontReadiness.export_ready && <p className="error-message">Coverexport blockiert: Schrift fehlt ({coverFontReadiness.missing_families.join(", ")}). Der Entwurf bleibt speicherbar.</p>}{selectedCoverId && <p className="hint">Vorlage ausgewählt und im Entwurf gespeichert. Textsatz und finale Vorschau folgen im nächsten Schritt.</p>}{coverError && <p className="error-message">{coverError}</p>}</div>}
+    {draft && <div className="wizard-card"><h2>Coverhintergrund</h2><p className="hint">Vorlagen und Miniaturen bleiben im angemeldeten Wizard privat. Schild, Schatten und Balken werden nicht neu gezeichnet.</p>{coverLoading ? <p>Lade Cover-Vorlagen…</p> : <div className="wizard-actions">{coverTemplates.map((item) => <button key={item.item_id} onClick={() => void selectCoverTemplate(item)} className={selectedCoverId === item.item_id ? "primary-button" : ""}>{coverThumbnailUrls[item.item_id] && <img src={coverThumbnailUrls[item.item_id]} alt="" width={72} height={96} style={{ objectFit: "contain", verticalAlign: "middle", marginRight: 8 }} />}{item.name}</button>)}</div>}{coverConfig && <p className="hint">Ausgabe: {coverConfig.output_width_px} × {coverConfig.output_height_px} px, proportional skaliert.</p>}{coverFontReadiness && !coverFontReadiness.export_ready && <p className="error-message">Coverexport blockiert: Schrift fehlt ({coverFontReadiness.missing_families.join(", ")}). Der Entwurf bleibt speicherbar.</p>}{selectedCoverId && <><div className="wizard-actions"><label>Komponist:in <input value={coverComposer} onChange={(e) => setCoverComposer(e.target.value)} /></label><label>Arrangeur:in <input value={coverArranger} onChange={(e) => setCoverArranger(e.target.value)} /></label><label>Edition <input value={coverEdition} onChange={(e) => setCoverEdition(e.target.value)} /></label></div>{suggestedEdition && <p className="hint">Vorschlag aus ausgewählter Besetzung: {suggestedEdition} <button onClick={() => setCoverEdition(suggestedEdition)}>als Edition übernehmen</button></p>}<div className="wizard-actions"><button onClick={() => void saveCoverText()}>Covertext speichern</button><button className="primary-button" disabled={!coverFontReadiness?.export_ready || coverPreviewing} onClick={() => void previewCover()}>{coverPreviewing ? "Erstelle Vorschau…" : "Private Vorschau erstellen"}</button></div>{coverPreviewUrl && <img src={coverPreviewUrl} alt="Private Covervorschau" style={{ display: "block", maxWidth: 300, width: "100%", height: "auto" }} />}</>}{coverError && <p className="error-message">{coverError}</p>}</div>}
     {message && <p className="hint">{message}</p>}</section>;
 }

@@ -5,9 +5,9 @@ from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from xw_office.services.product_hub.cover_templates import CoverTemplateService
+from xw_office.services.product_hub.cover_templates import CoverPreviewRequest, CoverTemplateService
 
 
 class CoverTemplateOut(BaseModel):
@@ -31,6 +31,16 @@ class CoverConfigurationOut(BaseModel):
     output_format: str
     preserve_aspect_ratio: bool
     required_families: list[str]
+
+
+class CoverPreviewIn(BaseModel):
+    """Text only; clients never send private backgrounds or font material."""
+
+    template_id: str = Field(min_length=1, max_length=256)
+    composer: str = Field(default="", max_length=250)
+    title: str = Field(default="", max_length=250)
+    arranger: str = Field(default="", max_length=250)
+    edition: str = Field(default="", max_length=100)
 
 
 CoverServiceDependency = Callable[[], CoverTemplateService]
@@ -79,5 +89,21 @@ def build_covers_router(get_cover_service: CoverServiceDependency) -> APIRouter:
         return CoverFontReadinessOut(
             available_families=list(result.available_families),
             missing_families=list(result.missing_families), export_ready=result.export_ready,
+        )
+
+    @router.post("/preview")
+    def cover_preview(
+        request: CoverPreviewIn, service: CoverTemplateService = Depends(get_cover_service)
+    ) -> Response:
+        try:
+            preview = service.render_preview(CoverPreviewRequest(**request.model_dump()))
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+        return Response(
+            content=preview.content,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "private, no-store"},
         )
     return router

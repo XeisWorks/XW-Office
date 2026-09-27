@@ -63,3 +63,27 @@
 - Naechster Task: T11 – Textlayout und Vorschau. Dafuer fehlen noch die echte
   Cabernet-Referenz samt den privaten Fonts fuer den verpflichtenden visuellen
   Vergleich; es wurde kein Provider-Write und kein Produkt-Test erzeugt.
+
+## T11 – Textlayout und Vorschau (2026-09-27, Implementierung erledigt; Abnahme offen)
+
+- Renderer: Der Server erzeugt eine private JPG-Vorschau ausschliesslich aus
+  dem gewaehlten OneDrive-Hintergrund und den per eingebetteter Familienmetadaten
+  verifizierten privaten Fonts. Feste Boxen, Punkt-zu-Pixel-Konvention,
+  Breiten-/Hoehenpruefung, Titelumbruch bis drei Zeilen, Unterstreichung und
+  die kontrollierte Kapitaelchen-Behandlung folgen `COVER_SPEC.yaml`. Es gibt
+  weder Systemfont-Fallback noch nachgezeichnete Karte, Schatten oder Balken.
+- API/UI: `POST /api/v1/covers/preview` akzeptiert nur Text und eine bereits
+  konfigurierte Vorlagen-ID, gibt ausschliesslich `private, no-store`-JPGs
+  zurueck und blockiert bei fehlenden Fonts nachvollziehbar. Der Wizard
+  speichert Komponist:in, Arrangeur:in und Edition im Draft und ruft denselben
+  Renderer fuer die Browservorschau auf. Die ausgewählte Besetzung liefert nur
+  einen editierbaren Editionsvorschlag und überschreibt keine manuelle Eingabe.
+- Tests: 9 gezielte Cover-Tests bestanden (einschliesslich fehlender Fonts,
+  realer Laufzeitfont als Testeingabe, Umlaut/Apostroph und privater
+  Preview-Antwort); Ruff und Compileall sowie ESLint, TypeScript und
+  Vite-Produktionsbuild bestanden.
+- Abnahmeblocker: Weder lokale `.env` noch Railway enthalten die privaten
+  Cover-/Font-Ordner-IDs, und die Cabernet-Referenz ist nicht im Repo. Deshalb
+  bleibt T11 `in_progress`: Der visuelle Cabernet-Vergleich und die Abnahme
+  von 1/2/3 Zeilen mit den echten kommerziellen Fonts stehen noch aus. Es
+  wurden keine Provider-Writes ausgefuehrt.
