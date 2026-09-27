@@ -120,7 +120,7 @@ phases:
     rollback: Disable new path via feature flag; retain data and read-only legacy snapshot; never restore dual writes.
   - id: T09
     title: Asset-Aufträge und PDF-Auswahl
-    status: pending
+    status: done
     depends_on_tasks:
     - T08
     implementation:
