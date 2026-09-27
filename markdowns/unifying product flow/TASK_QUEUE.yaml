@@ -108,7 +108,7 @@ phases:
   tasks:
   - id: T08
     title: Serverseitigen OneDrive-Zugriff integrieren
-    status: pending
+    status: done
     depends_on_tasks:
     - T07
     implementation:
