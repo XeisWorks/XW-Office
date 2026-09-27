@@ -30,6 +30,7 @@ from xw_office.services.product_hub.content_generation import (
 )
 from xw_office.services.product_hub.editing import EditingService, UnknownFieldError
 from xw_office.services.product_hub.onboarding import ProductOnboardingService
+from xw_office.services.product_hub.onedrive_assets import OneDriveAssetService
 from xw_office.services.product_hub.readiness import (
     build_readiness_summary,
     evaluate_product_readiness,
@@ -70,6 +71,7 @@ from xw_office.web.schemas.products import (
     ProductOnboardingOptionsOut,
     ProductOnboardingRequest,
     ProductOnboardingResultOut,
+    OneDriveAssetAttachRequest,
     ProductReadinessOut,
     ProductSkuRenameRequest,
     ProductUpdateRequest,
@@ -91,6 +93,7 @@ EditGateDependency = Callable[[], None]
 ContentGenerationDependency = Callable[[], ContentGenerationService]
 OnboardingDependency = Callable[[], ProductOnboardingService]
 DraftDependency = Callable[[], Generator[ProductDraftRepository, None, None]]
+OneDriveAssetDependency = Callable[[], OneDriveAssetService]
 
 DRAFT_TEMPLATES = {
     "mnozil-single": ("Mnozil-Einzeltitel", {"product_type": "physical", "music_attributes": {"series": "Mnozil"}}),
@@ -106,6 +109,7 @@ def build_products_router(
     get_content_generation: ContentGenerationDependency,
     get_onboarding: OnboardingDependency,
     get_drafts: DraftDependency,
+    get_onedrive_assets: OneDriveAssetDependency,
 ) -> APIRouter:
     """Build the products router, parameterized by a repo + editing-service dependency.
 
@@ -670,6 +674,17 @@ def build_products_router(
         except UnknownFieldError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         return ProductAssetOut.model_validate(updated)
+
+    @write_router.post("/products/{product_id}/assets/onedrive", response_model=ProductAssetOut,
+                       status_code=status.HTTP_201_CREATED)
+    def attach_onedrive_asset(product_id: uuid.UUID, body: OneDriveAssetAttachRequest,
+                              assets: OneDriveAssetService = Depends(get_onedrive_assets)) -> ProductAssetOut:
+        try:
+            return ProductAssetOut.model_validate(assets.attach(product_id=product_id, **body.model_dump()))
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     @router.get("/products/{product_id}/tags", response_model=list[TagOut])
     def get_product_tags(

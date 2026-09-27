@@ -539,6 +539,13 @@ class AssetUpdateRequest(BaseModel):
     sort_order: int | None = None
 
 
+class OneDriveAssetAttachRequest(BaseModel):
+    role: str = Field(min_length=1, max_length=20)
+    drive_id: str = Field(min_length=1, max_length=300)
+    item_id: str = Field(min_length=1, max_length=300)
+    variant_id: uuid.UUID | None = None
+
+
 class ImprovementCreateRequest(BaseModel):
     description: str
     variant_id: uuid.UUID | None = None

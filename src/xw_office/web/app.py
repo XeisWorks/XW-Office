@@ -35,6 +35,8 @@ from xw_office.services.product_hub.content_generation import ContentGenerationS
 from xw_office.services.product_hub.editing import EditingService
 from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.product_hub.onboarding import ProductOnboardingService
+from xw_office.services.product_hub.onedrive import OneDriveAssetClient
+from xw_office.services.product_hub.onedrive_assets import OneDriveAssetService
 from xw_office.services.product_hub.outbox_worker import OutboxWorker
 from xw_office.services.product_hub.sharing import SharingService
 from xw_office.services.product_hub.wix_push import WixPushService, wix_push_handler
@@ -264,6 +266,16 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
         with session_scope(_session_factory) as session:
             yield ProductDraftRepository(session)
 
+    def get_onedrive_assets() -> OneDriveAssetService:
+        if _session_factory is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail="OneDrive asset access is not configured")
+        try:
+            return OneDriveAssetService(_session_factory, OneDriveAssetClient.from_environment())
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail="OneDrive asset access is not configured") from exc
+
     def get_editing_service() -> EditingService:
         assert _session_factory is not None  # guarded by require_product_hub_enabled above
         return EditingService(_session_factory)
@@ -310,6 +322,7 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
             get_content_generation_service,
             get_onboarding_service,
             get_product_draft_repo,
+            get_onedrive_assets,
         ),
         dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
     )
