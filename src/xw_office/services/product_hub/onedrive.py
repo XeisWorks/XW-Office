@@ -29,6 +29,11 @@ class OneDriveAssetClient:
         self.root_item_id = root_item_id.strip()
         if not all((self.tenant_id, self.client_id, self.client_secret, self.root_item_id)):
             raise OneDriveConfigurationError("OneDrive server access is not configured")
+        if "\\" in self.root_item_id or ":" not in self.root_item_id:
+            raise OneDriveConfigurationError("XW_ONEDRIVE_ROOT must be drive_id:item_id")
+        self.root_drive_id, self.root_item_id = self.root_item_id.split(":", 1)
+        if not self.root_drive_id or not self.root_item_id:
+            raise OneDriveConfigurationError("XW_ONEDRIVE_ROOT must be drive_id:item_id")
         self._app = msal.ConfidentialClientApplication(self.client_id, authority=f"https://login.microsoftonline.com/{self.tenant_id}", client_credential=self.client_secret)
 
     @classmethod
@@ -47,6 +52,9 @@ class OneDriveAssetClient:
         response.raise_for_status()
         payload = response.json()
         return OneDriveItem(drive_id=drive_id, item_id=item_id, name=str(payload.get("name") or ""), etag=str(payload.get("eTag") or ""), size=int(payload.get("size") or 0))
+
+    def get_root(self) -> OneDriveItem:
+        return self.get_item(self.root_drive_id, self.root_item_id)
 
     def download(self, drive_id: str, item_id: str) -> bytes:
         response = requests.get(f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/content", headers=self._headers(), timeout=60)
