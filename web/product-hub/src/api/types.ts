@@ -62,6 +62,7 @@ export interface ProductDraftOption { id: string; name: string; values: unknown[
 export interface ProductDraftVariant { id: string; sku: string; option_values: Record<string, unknown>; price_gross: string | null; tax_rate: string | null; currency: string; selected: boolean; row_version: number; }
 export interface ProductDraft { id: string; source_product_id: string | null; template_code: string | null; current_step: number; schema_version: number; completed_steps: number[]; data: Record<string, unknown>; row_version: number; options: ProductDraftOption[]; variants: ProductDraftVariant[]; }
 export interface ProductDraftTemplate { code: string; name: string; data: Record<string, unknown>; }
+export interface OneDriveBrowseItem { drive_id: string; item_id: string; name: string; etag: string; size: number; is_folder: boolean; }
 
 export interface ChannelOnboardingResult {
   channel: "wix" | "sevdesk";
@@ -183,7 +184,7 @@ export interface ProductAsset {
   variant_id: string | null;
   role: "COVER" | "GALLERY_IMAGE" | "SAMPLE_SCORE" | "PRINT_PDF" | "PREVIEW_PDF" | "AUDIO" | "DOWNLOAD" | "OTHER";
   sort_order: number;
-  storage_kind: "OBJECT_STORAGE" | "NETWORK_PATH" | "WIX_MEDIA" | "EXTERNAL_URL";
+  storage_kind: "OBJECT_STORAGE" | "NETWORK_PATH" | "ONEDRIVE" | "WIX_MEDIA" | "EXTERNAL_URL";
   uri: string;
   mime_type: string | null;
   size_bytes: number | null;

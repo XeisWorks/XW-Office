@@ -387,7 +387,7 @@ class ProductPrice(Base):
 class ProductAsset(Base):
     """Media/production asset with explicit role and provenance.
 
-    ``PRINT_PDF`` assets always use ``storage_kind='NETWORK_PATH'`` and
+    ``PRINT_PDF`` assets use private ``NETWORK_PATH`` or ``ONEDRIVE`` storage and
     ``public_share_allowed=False`` — the WebUI exposes metadata/health only, never a
     download/stream endpoint (confirmed architecture decision, see docs/product_hub/).
     """

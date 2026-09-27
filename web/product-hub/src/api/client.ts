@@ -29,6 +29,7 @@ import type {
   ProductOnboardingRequest,
   ProductOnboardingResult,
   ProductDraft, ProductDraftTemplate,
+  OneDriveBrowseItem,
   VariantOnboardingRequest,
   ProductReadiness,
   ProductSkuRenameRequest,
@@ -146,6 +147,7 @@ export const api = {
   createDraft: (body: { template_code?: string; data?: Record<string, unknown> }) => request<ProductDraft>("/api/v1/product-drafts", { method: "POST", body }),
   getDraft: (id: string) => request<ProductDraft>(`/api/v1/product-drafts/${id}`),
   saveDraft: (id: string, body: { expected_row_version: number; current_step?: number; completed_steps?: number[]; data?: Record<string, unknown> }) => request<ProductDraft>(`/api/v1/product-drafts/${id}`, { method: "PATCH", body }),
+  listOneDriveChildren: (itemId?: string) => request<OneDriveBrowseItem[]>(`/api/v1/onedrive/children${itemId ? `?item_id=${encodeURIComponent(itemId)}` : ""}`),
   listProducts: (filters: ProductListFilters = {}) =>
     request<Page<ParentProductListItem>>(`/api/v1/products?${buildQuery(filters)}`),
   getProduct: (id: string) => request<ProductDetail>(`/api/v1/products/${id}`),

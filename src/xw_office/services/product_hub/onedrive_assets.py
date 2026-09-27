@@ -16,7 +16,10 @@ class OneDriveAssetService:
 
     def attach(self, *, product_id: uuid.UUID, role: str, drive_id: str, item_id: str,
                variant_id: uuid.UUID | None = None) -> ProductAsset:
+        self._client.assert_within_root(drive_id, item_id)
         item = self._client.get_item(drive_id, item_id)
+        if item.is_folder:
+            raise ValueError("A OneDrive folder cannot be attached as a product asset")
         with session_scope(self._session_factory) as session:
             repo = ProductHubRepository(session)
             if repo.get_product(product_id) is None:
@@ -25,3 +28,6 @@ class OneDriveAssetService:
                 storage_kind="ONEDRIVE", uri=f"onedrive://{item.drive_id}/{item.item_id}",
                 source_channel="onedrive", source_external_id=f"{item.drive_id}:{item.item_id}",
                 original_filename=item.name, size_bytes=item.size, public_share_allowed=False)
+
+    def list_children(self, item_id: str | None = None):
+        return self._client.list_children(item_id)

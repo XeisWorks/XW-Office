@@ -19,6 +19,8 @@ class OneDriveItem:
     name: str
     etag: str
     size: int
+    parent_id: str = ""
+    is_folder: bool = False
 
 
 class OneDriveAssetClient:
@@ -50,11 +52,57 @@ class OneDriveAssetClient:
     def get_item(self, drive_id: str, item_id: str) -> OneDriveItem:
         response = requests.get(f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}", headers=self._headers(), timeout=30)
         response.raise_for_status()
-        payload = response.json()
-        return OneDriveItem(drive_id=drive_id, item_id=item_id, name=str(payload.get("name") or ""), etag=str(payload.get("eTag") or ""), size=int(payload.get("size") or 0))
+        return self._item_from_payload(drive_id, response.json())
+
+    @staticmethod
+    def _item_from_payload(drive_id: str, payload: dict[str, object]) -> OneDriveItem:
+        parent = payload.get("parentReference")
+        parent_id = str(parent.get("id") or "") if isinstance(parent, dict) else ""
+        return OneDriveItem(
+            drive_id=drive_id,
+            item_id=str(payload.get("id") or ""),
+            name=str(payload.get("name") or ""),
+            etag=str(payload.get("eTag") or ""),
+            size=int(payload.get("size") or 0),
+            parent_id=parent_id,
+            is_folder=isinstance(payload.get("folder"), dict),
+        )
 
     def get_root(self) -> OneDriveItem:
         return self.get_item(self.root_drive_id, self.root_item_id)
+
+    def list_children(self, item_id: str | None = None, *, limit: int = 100) -> list[OneDriveItem]:
+        """List immediate children of the configured root only."""
+        parent_id = item_id or self.root_item_id
+        self.assert_within_root(self.root_drive_id, parent_id)
+        response = requests.get(
+            f"https://graph.microsoft.com/v1.0/drives/{self.root_drive_id}/items/{parent_id}/children",
+            headers=self._headers(),
+            params={"$select": "id,name,eTag,size,folder,parentReference", "$top": min(max(limit, 1), 100)},
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        values = payload.get("value", [])
+        if not isinstance(values, list):
+            raise OneDriveConfigurationError("Microsoft Graph returned an invalid child listing")
+        return [self._item_from_payload(self.root_drive_id, value) for value in values if isinstance(value, dict)]
+
+    def assert_within_root(self, drive_id: str, item_id: str) -> None:
+        """Reject IDs outside the configured subtree before reading their content."""
+        if drive_id != self.root_drive_id:
+            raise ValueError("The selected item is outside the configured OneDrive drive")
+        current_id = item_id
+        # Graph item IDs are opaque. Following parent IDs avoids fragile path/name
+        # matching and also catches a file moved outside the approved root.
+        for _ in range(100):
+            if current_id == self.root_item_id:
+                return
+            current = self.get_item(drive_id, current_id)
+            if not current.parent_id:
+                break
+            current_id = current.parent_id
+        raise ValueError("The selected item is outside the configured OneDrive root")
 
     def download(self, drive_id: str, item_id: str) -> bytes:
         response = requests.get(f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/content", headers=self._headers(), timeout=60)

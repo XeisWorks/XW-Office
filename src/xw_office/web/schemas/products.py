@@ -546,6 +546,17 @@ class OneDriveAssetAttachRequest(BaseModel):
     variant_id: uuid.UUID | None = None
 
 
+class OneDriveBrowseItemOut(BaseModel):
+    """Private Graph metadata for the product wizard; intentionally no download URL."""
+
+    drive_id: str
+    item_id: str
+    name: str
+    etag: str
+    size: int
+    is_folder: bool
+
+
 class ImprovementCreateRequest(BaseModel):
     description: str
     variant_id: uuid.UUID | None = None

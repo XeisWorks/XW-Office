@@ -72,6 +72,7 @@ from xw_office.web.schemas.products import (
     ProductOnboardingRequest,
     ProductOnboardingResultOut,
     OneDriveAssetAttachRequest,
+    OneDriveBrowseItemOut,
     ProductReadinessOut,
     ProductSkuRenameRequest,
     ProductUpdateRequest,
@@ -647,6 +648,17 @@ def build_products_router(
     ) -> list[ProductAssetOut]:
         _get_product_or_404(repo, product_id)
         return [ProductAssetOut.model_validate(a) for a in repo.list_assets(product_id)]
+
+    @router.get("/onedrive/children", response_model=list[OneDriveBrowseItemOut])
+    def list_onedrive_children(
+        item_id: str | None = Query(default=None, min_length=1, max_length=300),
+        assets: OneDriveAssetService = Depends(get_onedrive_assets),
+    ) -> list[OneDriveBrowseItemOut]:
+        """Browse the approved OneDrive root without issuing public file URLs."""
+        try:
+            return [OneDriveBrowseItemOut.model_validate(item) for item in assets.list_children(item_id)]
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     @write_router.patch("/products/{product_id}/assets/{asset_id}", response_model=ProductAssetOut)
     def patch_product_asset(
