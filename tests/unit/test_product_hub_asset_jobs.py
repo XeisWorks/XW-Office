@@ -8,6 +8,7 @@ from xw_office.models.base import Base
 from xw_office.models.product_hub_sync import OutboxEvent
 from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.services.product_hub.asset_jobs import AssetJobError, ProductAssetJobService
+from xw_office.services.product_hub.r2_storage import R2Storage
 
 
 def _factory(tmp_path: Path):
@@ -59,3 +60,13 @@ def test_sample_page_job_requires_private_onedrive_source(tmp_path: Path) -> Non
 
     with pytest.raises(AssetJobError, match="OneDrive"):
         ProductAssetJobService(factory).enqueue(product_id=product.id, source_asset_id=other.id, pages=[1])
+
+
+def test_private_r2_uri_cannot_escape_the_configured_bucket() -> None:
+    storage = object.__new__(R2Storage)
+    storage.bucket = "private-bucket"
+
+    with pytest.raises(ValueError, match="configured private R2 bucket"):
+        storage.get_private_uri("r2://other-bucket/object.jpg")
+    with pytest.raises(ValueError, match="Invalid private R2 object key"):
+        storage.get_private_uri("r2://private-bucket/a/../object.jpg")

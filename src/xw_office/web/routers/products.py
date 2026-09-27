@@ -13,6 +13,7 @@ from collections.abc import Callable, Generator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from xw_office.models.product_hub import Product
@@ -673,6 +674,21 @@ def build_products_router(
         if job is None or job.product_id != product_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset job not found")
         return ProductAssetJobOut.model_validate(job)
+
+    @router.get("/products/{product_id}/assets/{asset_id}/preview")
+    def get_sample_page_preview(
+        product_id: uuid.UUID, asset_id: uuid.UUID,
+        jobs: ProductAssetJobService = Depends(get_asset_jobs),
+    ) -> Response:
+        try:
+            content, mime_type = jobs.read_preview(product_id=product_id, asset_id=asset_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        return Response(content=content, media_type=mime_type, headers={"Cache-Control": "private, no-store"})
 
     @write_router.post("/products/{product_id}/asset-jobs/sample-pages", response_model=ProductAssetJobOut,
                        status_code=status.HTTP_202_ACCEPTED)

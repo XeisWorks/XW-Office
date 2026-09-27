@@ -29,3 +29,16 @@ class R2Storage:
         digest = sha256(content).hexdigest()
         self._client.put_object(Bucket=self.bucket, Key=key, Body=content, ContentType=content_type, Metadata={"sha256": digest})
         return f"r2://{self.bucket}/{key}"
+
+    def get_private(self, key: str) -> bytes:
+        response = self._client.get_object(Bucket=self.bucket, Key=key)
+        return bytes(response["Body"].read())
+
+    def get_private_uri(self, uri: str) -> bytes:
+        prefix = f"r2://{self.bucket}/"
+        if not uri.startswith(prefix):
+            raise ValueError("Asset is not in the configured private R2 bucket")
+        key = uri.removeprefix(prefix)
+        if not key or key.startswith("/") or ".." in key.split("/"):
+            raise ValueError("Invalid private R2 object key")
+        return self.get_private(key)

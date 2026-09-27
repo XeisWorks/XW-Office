@@ -111,6 +111,17 @@ class ProductAssetJobService:
         with session_scope(self._session_factory) as session:
             return session.get(ProductAssetJob, job_id)
 
+    def read_preview(self, *, product_id: uuid.UUID, asset_id: uuid.UUID) -> tuple[bytes, str]:
+        """Return an authenticated sample image, never a source PDF or R2 URL."""
+        with session_scope(self._session_factory) as session:
+            asset = session.get(ProductAsset, asset_id)
+            if asset is None or asset.product_id != product_id:
+                raise KeyError("Sample-page asset not found")
+            if asset.role != "SAMPLE_SCORE" or asset.storage_kind != "OBJECT_STORAGE":
+                raise AssetJobError("Only generated sample-page images can be previewed")
+            uri, mime_type = asset.uri, asset.mime_type or "image/jpeg"
+        return R2Storage.from_environment().get_private_uri(uri), mime_type
+
     def run(self, event: OutboxEvent) -> None:
         job_id = uuid.UUID(str(event.payload["asset_job_id"]))
         with session_scope(self._session_factory) as session:
