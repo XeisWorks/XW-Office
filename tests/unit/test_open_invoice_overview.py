@@ -187,6 +187,44 @@ def test_open_invoice_overview_filters_print_products_by_sku() -> None:
     ]
 
 
+def test_open_invoice_overview_includes_b2b_wix_buyer_note() -> None:
+    summaries = [
+        InvoiceSummary.model_validate(
+            {
+                "id": "b2b",
+                "invoiceNumber": "RE-B2B",
+                "status": 100,
+                "order_reference": "21402",
+            }
+        ),
+    ]
+
+    class _CachedWix:
+        def get_cached_reference_digital_only(self, reference: str) -> bool | None:
+            return False if reference == "21402" else None
+
+        def get_cached_order_line_items(self, _reference: str) -> list[object]:
+            return []
+
+        def get_cached_order_buyer_note(self, reference: str) -> str:
+            return "Bitte um kurze Info, ob Rabatt oder Skonto möglich wäre." if reference == "21402" else ""
+
+        def get_cached_order_summary(self, reference: str) -> dict[str, str] | None:
+            if reference != "21402":
+                return None
+            return {"wix_customer_name": "Pro Musica / Gerhard Mayr"}
+
+    overview = overview_from_visible_summaries(
+        summaries,
+        digital_cache={},
+        wix_client=_CachedWix(),  # type: ignore[arg-type]
+    )
+
+    assert [(item.customer_name, item.note, item.order_reference) for item in overview.buyer_notes] == [
+        ("Pro Musica / Gerhard Mayr", "Bitte um kurze Info, ob Rabatt oder Skonto möglich wäre.", "21402")
+    ]
+
+
 def test_open_invoice_overview_uses_category_label_when_variant_note_missing() -> None:
     summaries = [
         InvoiceSummary.model_validate(

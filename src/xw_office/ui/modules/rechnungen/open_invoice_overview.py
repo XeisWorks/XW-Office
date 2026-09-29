@@ -36,6 +36,15 @@ class UnreleasedAssignment:
 
 
 @dataclass(frozen=True)
+class BuyerNote:
+    """One buyer message shown alongside the print and unreleased work."""
+
+    customer_name: str
+    note: str
+    order_reference: str = ""
+
+
+@dataclass(frozen=True)
 class OpenInvoiceOverview:
     """Counts shown in the OFFENE RECHNUNGEN box."""
 
@@ -50,6 +59,7 @@ class OpenInvoiceOverview:
     complete: bool
     cache_updates: dict[str, bool] = field(default_factory=dict)
     print_products: list[PrintProductAggregate] = field(default_factory=list)
+    buyer_notes: list[BuyerNote] = field(default_factory=list)
     unreleased_assignments: list[UnreleasedAssignment] = field(default_factory=list)
     seq: int = 0
 
@@ -88,6 +98,7 @@ def overview_from_visible_summaries(
     known_refs: set[str] = set()
     cache_updates: dict[str, bool] = {}
     products = _ProductAccumulator(sku_filter=sku_filter) if include_print_products else None
+    buyer_notes = _BuyerNoteAccumulator()
     unreleased = _UnreleasedAccumulator()
     for summary in summaries:
         ref = str(summary.order_reference or "").strip()
@@ -120,6 +131,11 @@ def overview_from_visible_summaries(
             if cached_note:
                 has_note = True
                 has_plc = has_plc or note_has_plc_label_hint(cached_note)
+            customer_name = _cached_order_customer_name(wix_client, ref) or str(summary.contact_name or "").strip()
+            buyer_notes.add(customer_name, buyer_note, ref)
+            buyer_notes.add(customer_name, cached_note, ref)
+        elif buyer_note:
+            buyer_notes.add(str(summary.contact_name or "").strip(), buyer_note, "")
         if has_note:
             with_note += 1
         if has_plc:
@@ -137,6 +153,7 @@ def overview_from_visible_summaries(
         complete=unknown == 0,
         cache_updates=cache_updates,
         print_products=products.to_list() if products is not None else [],
+        buyer_notes=buyer_notes.to_list(),
         unreleased_assignments=unreleased.to_list(),
     )
 
@@ -182,6 +199,7 @@ def resolve_open_invoice_overview(
     with_note = 0
     plc = 0
     products = _ProductAccumulator(sku_filter=sku_filter)
+    buyer_notes = _BuyerNoteAccumulator()
     unreleased = _UnreleasedAccumulator()
     # Each row is an independent, network-bound Wix lookup (digital-only check
     # plus line items). Resolving them concurrently instead of one-by-one is
@@ -234,6 +252,11 @@ def resolve_open_invoice_overview(
                 )
         if row["buyer_note"]:
             with_note += 1
+            buyer_notes.add(
+                str(row.get("customer_name") or "").strip(),
+                str(row["buyer_note"] or "").strip(),
+                str(row.get("ref") or "").strip(),
+            )
         if row["has_plc"]:
             plc += 1
 
@@ -249,6 +272,7 @@ def resolve_open_invoice_overview(
         complete=unknown == 0,
         cache_updates=cache_updates,
         print_products=products.to_list(),
+        buyer_notes=buyer_notes.to_list(),
         unreleased_assignments=unreleased.to_list(),
         seq=seq,
     )
@@ -276,6 +300,7 @@ def _resolve_one_summary(
             "has_plc": has_plc,
             "items": items,
             "shipping_name": "",
+            "customer_name": str(summary.contact_name or "").strip(),
         }
     digital_known_in_ui_cache = ref in known_digital
     resolved_remotely = False
@@ -334,6 +359,7 @@ def _resolve_one_summary(
         "has_plc": has_plc,
         "items": items,
         "shipping_name": shipping_name,
+        "customer_name": _cached_order_customer_name(wix_client, ref) or str(summary.contact_name or "").strip(),
     }
 
 
@@ -511,6 +537,34 @@ class _UnreleasedAccumulator:
         )
 
 
+class _BuyerNoteAccumulator:
+    def __init__(self) -> None:
+        self._rows: dict[tuple[str, str, str], BuyerNote] = {}
+
+    def add(self, customer_name: object, note: object, order_reference: object) -> None:
+        text = " ".join(str(note or "").split())
+        if not text:
+            return
+        customer = " ".join(str(customer_name or "").split()) or "Käufer nicht verfügbar"
+        reference = str(order_reference or "").strip()
+        key = (customer.casefold(), text.casefold(), reference.casefold())
+        self._rows[key] = BuyerNote(
+            customer_name=customer,
+            note=text,
+            order_reference=reference,
+        )
+
+    def to_list(self) -> list[BuyerNote]:
+        return sorted(
+            self._rows.values(),
+            key=lambda row: (
+                row.customer_name.casefold(),
+                row.order_reference.casefold(),
+                row.note.casefold(),
+            ),
+        )
+
+
 def _cached_reference_digital_only(wix_client: WixOrdersClient, reference: str) -> bool | None:
     resolver = getattr(wix_client, "get_cached_reference_digital_only", None)
     if not callable(resolver):
@@ -532,6 +586,20 @@ def _cached_order_buyer_note(wix_client: WixOrdersClient | None, reference: str)
     except Exception as exc:  # noqa: BLE001
         logger.debug("Cached buyer-note lookup failed ref=%s: %s", reference, exc)
         return ""
+
+
+def _cached_order_customer_name(wix_client: WixOrdersClient | None, reference: str) -> str:
+    resolver = getattr(wix_client, "get_cached_order_summary", None)
+    if not callable(resolver):
+        return ""
+    try:
+        summary = resolver(reference)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Cached customer-name lookup failed ref=%s: %s", reference, exc)
+        return ""
+    if not isinstance(summary, dict):
+        return ""
+    return str(summary.get("wix_customer_name") or "").strip()
 
 
 def _cached_order_line_items(wix_client: WixOrdersClient | None, reference: str) -> list[Any] | None:
@@ -626,6 +694,21 @@ def overview_payload_from_object(payload: object) -> OpenInvoiceOverview | None:
                         order_reference=str(row.get("order_reference") or "").strip(),
                     )
                 )
+    notes_raw = payload.get("buyer_notes")
+    buyer_notes: list[BuyerNote] = []
+    if isinstance(notes_raw, list):
+        for row in notes_raw:
+            if not isinstance(row, dict):
+                continue
+            note = str(row.get("note") or "").strip()
+            if note:
+                buyer_notes.append(
+                    BuyerNote(
+                        customer_name=str(row.get("customer_name") or "").strip(),
+                        note=note,
+                        order_reference=str(row.get("order_reference") or "").strip(),
+                    )
+                )
     return OpenInvoiceOverview(
         key=str(payload.get("overview_key") or payload.get("key") or ""),
         total=_int_value(payload.get("total")),
@@ -638,6 +721,7 @@ def overview_payload_from_object(payload: object) -> OpenInvoiceOverview | None:
         complete=not bool(payload.get("unknown")),
         cache_updates=cache_updates,
         print_products=[],
+        buyer_notes=buyer_notes,
         unreleased_assignments=unreleased_assignments,
         seq=_int_value(payload.get("seq")),
     )

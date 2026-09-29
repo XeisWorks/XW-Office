@@ -100,6 +100,7 @@ from xw_office.ui.modules.rechnungen.digital_licenses_dialog import DigitalLicen
 from xw_office.ui.modules.rechnungen.offene_sendungen_dialog import OffeneSendungenDialog
 from xw_office.ui.modules.rechnungen.special_order_dialog import SpecialOrderDialog
 from xw_office.ui.modules.rechnungen.open_invoice_overview import (
+    BuyerNote,
     OpenInvoiceOverview,
     PrintProductAggregate,
     UnreleasedAssignment,
@@ -135,6 +136,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class _PrintRunSnapshot:
     print_products: list[PrintProductAggregate]
+    buyer_notes: list[BuyerNote]
     unreleased_assignments: list[UnreleasedAssignment]
     saved_at: str
     mode_label: str = "START"
@@ -1176,10 +1178,13 @@ class RechnungenView(QWidget):
         self._open_overview_complete = False
         self._open_overview_products_text = ""
         self._open_overview_products: list[PrintProductAggregate] = []
+        self._open_overview_buyer_notes: list[BuyerNote] = []
         self._open_overview_unreleased: list[UnreleasedAssignment] = []
         self._session_print_products: list[PrintProductAggregate] = []
+        self._session_buyer_notes: list[BuyerNote] = []
         self._session_unreleased: list[UnreleasedAssignment] = []
         self._last_run_print_products: list[PrintProductAggregate] = []
+        self._last_run_buyer_notes: list[BuyerNote] = []
         self._last_run_unreleased: list[UnreleasedAssignment] = []
         self._print_products_last_run = False
         self._print_run_history: list[_PrintRunSnapshot] = []
@@ -1382,7 +1387,7 @@ class RechnungenView(QWidget):
         form_open.addRow("Mit Käufernotiz:", self._open_note)
         detail_main.addWidget(self._gb_open)
 
-        self._gb_open_products = QGroupBox("PRINT-PRODUKTE OFFEN")
+        self._gb_open_products = QGroupBox("PRINT-PRODUKTE")
         open_products_layout = QVBoxLayout(self._gb_open_products)
         open_products_layout.setContentsMargins(10, 8, 10, 10)
         open_products_header = QHBoxLayout()
@@ -1413,16 +1418,6 @@ class RechnungenView(QWidget):
         self._open_products_text = QTextBrowser()
         self._open_products_text.setReadOnly(True)
         self._open_products_text.hide()
-        self._print_products_tabs = QTabWidget()
-        self._print_products_tabs.setDocumentMode(True)
-        self._print_products_tabs.currentChanged.connect(self._on_print_products_tab_changed)
-        current_page = QWidget()
-        current_layout = QVBoxLayout(current_page)
-        current_layout.setContentsMargins(0, 0, 0, 0)
-        current_layout.addWidget(self._gb_open_products)
-        self._print_product_tab_pages = [current_page]
-        self._print_products_tabs.addTab(current_page, "AKTUELL")
-        detail_main.addWidget(self._print_products_tabs)
 
         self._gb_unreleased = QGroupBox("UNRELEASED")
         unreleased_layout = QVBoxLayout(self._gb_unreleased)
@@ -1445,7 +1440,38 @@ class RechnungenView(QWidget):
         self._unreleased_text = QTextBrowser()
         self._unreleased_text.setReadOnly(True)
         self._unreleased_text.hide()
-        detail_main.addWidget(self._gb_unreleased)
+
+        self._gb_buyer_notes = QGroupBox("KÄUFER-NOTIZEN")
+        buyer_notes_layout = QVBoxLayout(self._gb_buyer_notes)
+        buyer_notes_layout.setContentsMargins(10, 8, 10, 10)
+        buyer_notes_layout.setSpacing(5)
+        self._buyer_notes_status = QLabel("Käufernotizen werden ermittelt...")
+        self._buyer_notes_status.setWordWrap(True)
+        self._buyer_notes_status.setStyleSheet("color: #cbd5e1;")
+        buyer_notes_layout.addWidget(self._buyer_notes_status)
+        self._buyer_notes_rows = QWidget()
+        self._buyer_notes_rows_layout = QVBoxLayout(self._buyer_notes_rows)
+        self._buyer_notes_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._buyer_notes_rows_layout.setSpacing(5)
+        buyer_notes_layout.addWidget(self._buyer_notes_rows)
+        self._buyer_notes_text = QTextBrowser()
+        self._buyer_notes_text.setReadOnly(True)
+        self._buyer_notes_text.hide()
+
+        # A single run selector drives all three operational panels.
+        self._print_products_tabs = QTabWidget()
+        self._print_products_tabs.setDocumentMode(True)
+        self._print_products_tabs.currentChanged.connect(self._on_print_products_tab_changed)
+        current_page = QWidget()
+        current_layout = QVBoxLayout(current_page)
+        current_layout.setContentsMargins(0, 0, 0, 0)
+        current_layout.setSpacing(10)
+        current_layout.addWidget(self._gb_open_products)
+        current_layout.addWidget(self._gb_buyer_notes)
+        current_layout.addWidget(self._gb_unreleased)
+        self._print_product_tab_pages = [current_page]
+        self._print_products_tabs.addTab(current_page, "AKTUELL")
+        detail_main.addWidget(self._print_products_tabs)
 
         self._gb_info = QGroupBox("INFO")
         self._gb_info.setCheckable(True)
@@ -1818,8 +1844,10 @@ class RechnungenView(QWidget):
             if self._print_products_tabs is not None:
                 self._print_products_tabs.setCurrentIndex(0)
             self._session_print_products = list(self._open_overview_products)
+            self._session_buyer_notes = list(self._open_overview_buyer_notes)
             self._session_unreleased = list(self._open_overview_unreleased)
-            self._gb_open_products.setTitle("PRINT-PRODUKTE OFFEN")
+            self._gb_open_products.setTitle("PRINT-PRODUKTE")
+            self._gb_buyer_notes.setTitle("KÄUFER-NOTIZEN")
             self._gb_unreleased.setTitle("UNRELEASED")
             current_overview = OpenInvoiceOverview(
                 key=self._open_overview_key,
@@ -1832,9 +1860,11 @@ class RechnungenView(QWidget):
                 plc=0,
                 complete=self._open_overview_complete,
                 print_products=list(self._session_print_products),
+                buyer_notes=list(self._session_buyer_notes),
                 unreleased_assignments=list(self._session_unreleased),
             )
             self._render_open_print_products(current_overview)
+            self._render_buyer_notes(current_overview)
             self._render_unreleased_assignments(current_overview)
             note = (
                 "START + Noten läuft: Mengen und Druckplan bleiben bearbeitbar. "
@@ -2617,6 +2647,7 @@ class RechnungenView(QWidget):
             self._open_overview_complete = True
             self._open_overview_products_text = ""
             self._open_overview_products = []
+            self._open_overview_buyer_notes = []
             self._open_overview_unreleased = []
             return
 
@@ -2641,9 +2672,11 @@ class RechnungenView(QWidget):
                     plc=self._open_overview_cached_plc,
                     complete=True,
                     print_products=list(self._open_overview_products),
+                    buyer_notes=list(self._open_overview_buyer_notes),
                     unreleased_assignments=list(self._open_overview_unreleased),
                 )
                 self._render_open_print_products(self._print_product_display_overview(cached_overview))
+                self._render_buyer_notes(cached_overview)
                 self._render_unreleased_assignments(cached_overview)
             return
 
@@ -2868,10 +2901,13 @@ class RechnungenView(QWidget):
         self._open_overview_complete = overview.complete
         self._open_overview_products_text = self._format_open_print_products(overview)
         self._open_overview_products = list(overview.print_products)
+        self._open_overview_buyer_notes = list(overview.buyer_notes)
         self._open_overview_unreleased = list(overview.unreleased_assignments)
         self._merge_session_print_products(overview.print_products)
+        self._merge_session_buyer_notes(overview.buyer_notes)
         self._merge_session_unreleased(overview.unreleased_assignments)
         self._render_open_print_products(self._print_product_display_overview(overview))
+        self._render_buyer_notes(overview)
         self._render_unreleased_assignments(overview)
 
     def mark_print_products_last_run(
@@ -2885,6 +2921,7 @@ class RechnungenView(QWidget):
         """Freeze, rotate and persist the PRINT/UNRELEASED dashboard after START."""
         snapshot = _PrintRunSnapshot(
             print_products=list(self._session_print_products),
+            buyer_notes=list(self._session_buyer_notes),
             unreleased_assignments=list(self._session_unreleased),
             saved_at=datetime.now().astimezone().isoformat(timespec="seconds"),
             mode_label=mode_label,
@@ -2895,6 +2932,7 @@ class RechnungenView(QWidget):
         self._print_run_history.insert(0, snapshot)
         self._print_run_history = self._print_run_history[:3]
         self._last_run_print_products = list(snapshot.print_products)
+        self._last_run_buyer_notes = list(snapshot.buyer_notes)
         self._last_run_unreleased = list(snapshot.unreleased_assignments)
         self._active_print_history_index = 0
         self._print_products_last_run = True
@@ -2943,21 +2981,23 @@ class RechnungenView(QWidget):
             tabs.setCurrentIndex(1)
 
     def _on_print_products_tab_changed(self, index: int) -> None:
-        if not hasattr(self, "_gb_unreleased"):
+        if not hasattr(self, "_gb_unreleased") or not hasattr(self, "_gb_buyer_notes"):
             return
         if self._print_products_tabs is not None and 0 <= index < len(self._print_product_tab_pages):
             page = self._print_product_tab_pages[index]
             layout = page.layout()
             if layout is not None and self._gb_open_products.parentWidget() is not page:
-                self._gb_open_products.setParent(page)
-                layout.addWidget(self._gb_open_products)
+                for panel in (self._gb_open_products, self._gb_buyer_notes, self._gb_unreleased):
+                    panel.setParent(page)
+                    layout.addWidget(panel)
         self._active_print_history_index = index - 1 if index > 0 else None
         self._print_products_last_run = self._active_print_history_index is not None
         self._render_active_print_tab()
 
     def _render_active_print_tab(self) -> None:
         if self._active_print_history_index is None:
-            self._gb_open_products.setTitle("PRINT-PRODUKTE OFFEN")
+            self._gb_open_products.setTitle("PRINT-PRODUKTE")
+            self._gb_buyer_notes.setTitle("KÄUFER-NOTIZEN")
             self._gb_unreleased.setTitle("UNRELEASED")
             overview = OpenInvoiceOverview(
                 key=self._open_overview_key,
@@ -2970,12 +3010,14 @@ class RechnungenView(QWidget):
                 plc=0,
                 complete=self._open_overview_complete,
                 print_products=list(self._open_overview_products),
+                buyer_notes=list(self._open_overview_buyer_notes),
                 unreleased_assignments=list(self._open_overview_unreleased),
             )
         else:
             snapshot = self._print_run_history[self._active_print_history_index]
             title = "last run" if self._active_print_history_index == 0 else f"run −{self._active_print_history_index + 1}"
             self._gb_open_products.setTitle(f"PRINT PRODUKTE ({title})")
+            self._gb_buyer_notes.setTitle(f"KÄUFER-NOTIZEN ({title})")
             self._gb_unreleased.setTitle(f"UNRELEASED ({title})")
             overview = OpenInvoiceOverview(
                 key=f"history-{self._active_print_history_index}",
@@ -2988,9 +3030,11 @@ class RechnungenView(QWidget):
                 plc=0,
                 complete=True,
                 print_products=list(snapshot.print_products),
+                buyer_notes=list(snapshot.buyer_notes),
                 unreleased_assignments=list(snapshot.unreleased_assignments),
             )
         self._render_open_print_products(overview)
+        self._render_buyer_notes(overview)
         self._render_unreleased_assignments(overview)
 
     def _merge_session_print_products(self, products: list[PrintProductAggregate]) -> None:
@@ -3020,6 +3064,17 @@ class RechnungenView(QWidget):
             if key not in positions:
                 positions[key] = len(self._session_unreleased)
                 self._session_unreleased.append(item)
+
+    def _merge_session_buyer_notes(self, notes: list[BuyerNote]) -> None:
+        positions = {
+            self._buyer_note_session_key(item): index
+            for index, item in enumerate(self._session_buyer_notes)
+        }
+        for item in notes:
+            key = self._buyer_note_session_key(item)
+            if key not in positions:
+                positions[key] = len(self._session_buyer_notes)
+                self._session_buyer_notes.append(item)
 
     @staticmethod
     def _unreleased_session_key(item: UnreleasedAssignment) -> tuple[str, str, str]:
@@ -3054,8 +3109,17 @@ class RechnungenView(QWidget):
             complete=overview.complete,
             cache_updates=overview.cache_updates,
             print_products=list(snapshot.print_products),
+            buyer_notes=list(snapshot.buyer_notes),
             unreleased_assignments=list(snapshot.unreleased_assignments),
             seq=overview.seq,
+        )
+
+    @staticmethod
+    def _buyer_note_session_key(item: BuyerNote) -> tuple[str, str, str]:
+        return (
+            str(item.customer_name or "").strip().casefold(),
+            str(item.note or "").strip().casefold(),
+            str(item.order_reference or "").strip().casefold(),
         )
 
     def _snapshot_payload(self, snapshot: _PrintRunSnapshot) -> dict[str, object]:
@@ -3074,6 +3138,14 @@ class RechnungenView(QWidget):
                     "category_label": item.category_label,
                 }
                 for item in snapshot.print_products
+            ],
+            "buyer_notes": [
+                {
+                    "customer_name": item.customer_name,
+                    "note": item.note,
+                    "order_reference": item.order_reference,
+                }
+                for item in snapshot.buyer_notes
             ],
             "unreleased_assignments": [
                 {
@@ -3169,6 +3241,17 @@ class RechnungenView(QWidget):
                     quantity=quantity,
                     category_label=str(row.get("category_label") or "").strip(),
                 ))
+            buyer_notes: list[BuyerNote] = []
+            for row in raw.get("buyer_notes") if isinstance(raw.get("buyer_notes"), list) else []:
+                if not isinstance(row, dict):
+                    continue
+                note = str(row.get("note") or "").strip()
+                if note:
+                    buyer_notes.append(BuyerNote(
+                        customer_name=str(row.get("customer_name") or "").strip() or "Käufer nicht verfügbar",
+                        note=note,
+                        order_reference=str(row.get("order_reference") or "").strip(),
+                    ))
             assignments: list[UnreleasedAssignment] = []
             for row in raw.get("unreleased_assignments") if isinstance(raw.get("unreleased_assignments"), list) else []:
                 if not isinstance(row, dict):
@@ -3190,6 +3273,7 @@ class RechnungenView(QWidget):
                 failures = 0
             restored.append(_PrintRunSnapshot(
                 print_products=products,
+                buyer_notes=buyer_notes,
                 unreleased_assignments=assignments,
                 saved_at=str(raw.get("saved_at") or ""),
                 mode_label=str(raw.get("mode_label") or "START"),
@@ -3201,6 +3285,7 @@ class RechnungenView(QWidget):
             return
         self._print_run_history = restored
         self._last_run_print_products = list(restored[0].print_products)
+        self._last_run_buyer_notes = list(restored[0].buyer_notes)
         self._last_run_unreleased = list(restored[0].unreleased_assignments)
         self._active_print_history_index = 0
         self._print_products_last_run = True
@@ -3294,7 +3379,11 @@ class RechnungenView(QWidget):
         self._unreleased_spinner.setVisible(loading)
         self._unreleased_text.setPlainText(message)
 
-    def _build_unreleased_row(self, item: UnreleasedAssignment) -> QWidget:
+    def _build_unreleased_row(
+        self,
+        buyer_name: str,
+        assignments: list[UnreleasedAssignment],
+    ) -> QWidget:
         row = QWidget()
         row.setStyleSheet(
             "QWidget { background-color: #1f2933; border: 1px solid #334155; border-radius: 4px; }"
@@ -3304,10 +3393,19 @@ class RechnungenView(QWidget):
         layout.setContentsMargins(8, 6, 8, 6)
         layout.setSpacing(7)
 
-        title = QLabel(item.title)
-        title.setWordWrap(True)
-        title.setStyleSheet("color: #ffffff; font-weight: 600;")
-        layout.addWidget(title, stretch=3)
+        titles_column = QVBoxLayout()
+        titles_column.setContentsMargins(0, 0, 0, 0)
+        titles_column.setSpacing(2)
+        for item in assignments:
+            title = QLabel(item.title)
+            title.setWordWrap(True)
+            title.setStyleSheet("color: #ffffff; font-weight: 600;")
+            titles_column.addWidget(title)
+            if item.order_reference:
+                reference = QLabel(f"Wix {item.order_reference}")
+                reference.setStyleSheet("color: #93c5fd; font-size: 10px;")
+                titles_column.addWidget(reference)
+        layout.addLayout(titles_column, stretch=3)
 
         arrow = QLabel("→")
         arrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -3317,14 +3415,10 @@ class RechnungenView(QWidget):
         recipient_column = QVBoxLayout()
         recipient_column.setContentsMargins(0, 0, 0, 0)
         recipient_column.setSpacing(0)
-        recipient = QLabel(item.shipping_name or "Versandname nicht verfügbar")
+        recipient = QLabel(buyer_name or "Versandname nicht verfügbar")
         recipient.setWordWrap(True)
         recipient.setStyleSheet("color: #ffffff; font-weight: 700;")
         recipient_column.addWidget(recipient)
-        if item.order_reference:
-            reference = QLabel(f"Wix {item.order_reference}")
-            reference.setStyleSheet("color: #93c5fd; font-size: 10px;")
-            recipient_column.addWidget(reference)
         layout.addLayout(recipient_column, stretch=2)
         return row
 
@@ -3354,21 +3448,88 @@ class RechnungenView(QWidget):
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(8, 0, 8, 0)
         header_layout.setSpacing(7)
-        left = QLabel("TITEL UND SONSTIGE BEMERKUNGEN")
+        left = QLabel("PRODUKTE UND BEMERKUNGEN")
         left.setStyleSheet("color: #94a3b8; font-size: 10px; font-weight: 700;")
-        right = QLabel("VERSANDNAME")
+        right = QLabel("KÄUFER")
         right.setStyleSheet("color: #94a3b8; font-size: 10px; font-weight: 700;")
         header_layout.addWidget(left, stretch=3)
         header_layout.addSpacing(20)
         header_layout.addWidget(right, stretch=2)
         self._unreleased_rows_layout.addWidget(header)
         plain_lines: list[str] = []
+        by_buyer: dict[str, list[UnreleasedAssignment]] = {}
         for item in assignments:
-            self._unreleased_rows_layout.addWidget(self._build_unreleased_row(item))
-            reference = f" [{item.order_reference}]" if item.order_reference else ""
-            plain_lines.append(f"{item.title} -> {item.shipping_name}{reference}")
+            buyer = item.shipping_name or "Versandname nicht verfügbar"
+            by_buyer.setdefault(buyer, []).append(item)
+        for buyer, buyer_assignments in by_buyer.items():
+            self._unreleased_rows_layout.addWidget(self._build_unreleased_row(buyer, buyer_assignments))
+            for item in buyer_assignments:
+                reference = f" [{item.order_reference}]" if item.order_reference else ""
+                plain_lines.append(f"{item.title} -> {buyer}{reference}")
         self._unreleased_rows_layout.addStretch(1)
         self._unreleased_text.setPlainText("\n".join(plain_lines))
+
+    def _clear_buyer_note_rows(self) -> None:
+        while self._buyer_notes_rows_layout.count():
+            item = self._buyer_notes_rows_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _set_buyer_notes_message(self, message: str) -> None:
+        self._clear_buyer_note_rows()
+        self._buyer_notes_status.setText(message)
+        self._buyer_notes_status.show()
+        self._buyer_notes_text.setPlainText(message)
+
+    def _build_buyer_note_row(self, item: BuyerNote) -> QWidget:
+        row = QWidget()
+        row.setStyleSheet(
+            "QWidget { background-color: #1f2933; border: 1px solid #334155; border-radius: 4px; }"
+            "QLabel { border: none; background: transparent; }"
+        )
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(2)
+        header = QHBoxLayout()
+        customer = QLabel(item.customer_name or "Käufer nicht verfügbar")
+        customer.setStyleSheet("color: #ffffff; font-weight: 700;")
+        header.addWidget(customer)
+        header.addStretch(1)
+        if item.order_reference:
+            reference = QLabel(f"Wix {item.order_reference}")
+            reference.setStyleSheet("color: #93c5fd; font-size: 10px;")
+            header.addWidget(reference)
+        layout.addLayout(header)
+        note = QLabel(item.note)
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #cbd5e1;")
+        layout.addWidget(note)
+        return row
+
+    def _render_buyer_notes(self, overview: OpenInvoiceOverview) -> None:
+        historical = self._active_print_history_index is not None
+        notes = (
+            self._print_run_history[self._active_print_history_index].buyer_notes
+            if historical and self._active_print_history_index < len(self._print_run_history)
+            else list(overview.buyer_notes)
+        )
+        if not notes:
+            self._set_buyer_notes_message(
+                "Keine Käufernotizen im gewählten Lauf gefunden."
+                if historical
+                else "Keine Käufernotizen in offenen Rechnungen gefunden."
+            )
+            return
+        self._clear_buyer_note_rows()
+        self._buyer_notes_status.hide()
+        plain_lines: list[str] = []
+        for item in notes:
+            self._buyer_notes_rows_layout.addWidget(self._build_buyer_note_row(item))
+            reference = f" [{item.order_reference}]" if item.order_reference else ""
+            plain_lines.append(f"{item.customer_name}: {item.note}{reference}")
+        self._buyer_notes_rows_layout.addStretch(1)
+        self._buyer_notes_text.setPlainText("\n".join(plain_lines))
 
     def _clear_open_print_product_rows(self) -> None:
         while self._open_products_rows_layout.count():
@@ -5174,6 +5335,7 @@ class RechnungenView(QWidget):
     def _populate_detail_for_summary(self, summary: InvoiceSummary) -> None:
         self._gb_open.hide()
         self._gb_open_products.hide()
+        self._gb_buyer_notes.hide()
         self._gb_unreleased.hide()
         self._gb_info.show()
         self._gb_shipping.show()
@@ -5219,6 +5381,7 @@ class RechnungenView(QWidget):
     def _reset_detail(self) -> None:
         self._gb_open.show()
         self._gb_open_products.show()
+        self._gb_buyer_notes.show()
         self._gb_unreleased.show()
         self._gb_info.hide()
         self._gb_shipping.hide()

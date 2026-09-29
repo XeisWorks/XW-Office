@@ -27,6 +27,7 @@ from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 from xw_office.services.wix.client import WixOrdersClient
 from xw_office.ui.main_window import MainWindow
 from xw_office.ui.modules.rechnungen.open_invoice_overview import (
+    BuyerNote,
     OpenInvoiceOverview,
     PrintProductAggregate,
     UnreleasedAssignment,
@@ -936,6 +937,11 @@ def test_last_run_print_and_unreleased_panels_restore_after_restart(qtbot: objec
         shipping_name="Anna Versand",
         order_reference="20910",
     )
+    buyer_note = BuyerNote(
+        customer_name="Anna Versand",
+        note="Bitte sauber verpacken.",
+        order_reference="20910",
+    )
     view._apply_open_invoice_overview(  # noqa: SLF001
         OpenInvoiceOverview(
             key="run-persist",
@@ -948,6 +954,7 @@ def test_last_run_print_and_unreleased_panels_restore_after_restart(qtbot: objec
             plc=0,
             complete=True,
             print_products=[product],
+            buyer_notes=[buyer_note],
             unreleased_assignments=[assignment],
         )
     )
@@ -960,9 +967,41 @@ def test_last_run_print_and_unreleased_panels_restore_after_restart(qtbot: objec
     restarted._restore_last_start_overview()  # noqa: SLF001
 
     assert restarted._gb_open_products.title() == "PRINT PRODUKTE (last run)"  # noqa: SLF001
+    assert restarted._gb_buyer_notes.title() == "KÄUFER-NOTIZEN (last run)"  # noqa: SLF001
     assert restarted._gb_unreleased.title() == "UNRELEASED (last run)"  # noqa: SLF001
     assert "Unreleased-Produkt" in restarted._open_products_text.toPlainText()  # noqa: SLF001
+    assert "Bitte sauber verpacken." in restarted._buyer_notes_text.toPlainText()  # noqa: SLF001
     assert "Marsch für Anna -> Anna Versand [20910]" in restarted._unreleased_text.toPlainText()  # noqa: SLF001
+
+
+def test_unreleased_assignments_are_grouped_by_buyer(qtbot: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    assignments = [
+        UnreleasedAssignment(title="Marsch", shipping_name="Anna Versand", order_reference="20910"),
+        UnreleasedAssignment(title="Polka", shipping_name="Anna Versand", order_reference="20911"),
+        UnreleasedAssignment(title="Walzer", shipping_name="Bruno Versand", order_reference="20912"),
+    ]
+
+    view._apply_open_invoice_overview(  # noqa: SLF001
+        OpenInvoiceOverview(
+            key="grouped-unreleased",
+            total=3,
+            with_ref=3,
+            physical=3,
+            digital=0,
+            unknown=0,
+            with_note=0,
+            plc=0,
+            complete=True,
+            unreleased_assignments=assignments,
+        )
+    )
+
+    # Header, one row for Anna, one row for Bruno, then the layout stretch.
+    assert view._unreleased_rows_layout.count() == 4  # noqa: SLF001
+    assert view._unreleased_text.toPlainText().count("Anna Versand") == 2  # noqa: SLF001
 
 
 def test_print_all_products_button_prints_displayed_quantities(qtbot: object, monkeypatch: object) -> None:
