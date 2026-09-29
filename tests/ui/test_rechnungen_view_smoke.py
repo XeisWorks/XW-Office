@@ -922,6 +922,46 @@ def test_print_products_remain_frozen_after_completed_run(qtbot: object) -> None
     assert "Zweites Produkt" not in text
 
 
+def test_print_product_description_is_compact_and_omits_unreleased_title_echo() -> None:
+    regular = PrintProductAggregate(
+        sku="XW-501.03-P",
+        title="Christkindl-Hits",
+        description="Besetzung: MH-ZST physisch GESAMT",
+        quantity=1,
+    )
+    unreleased = PrintProductAggregate(
+        sku="XW-010",
+        title="In deinen Augen",
+        description=(
+            "Name des Stückes / der Stücke: Freunde, ja heute feiern wir | "
+            "Sonstige Bemerkungen: 2Flh, Btp, Tuba C"
+        ),
+        quantity=1,
+    )
+
+    assert RechnungenView._open_product_description(regular) == "MH-ZST physisch GESAMT"  # noqa: SLF001
+    assert RechnungenView._open_product_description(unreleased) == "2Flh, Btp, Tuba C"  # noqa: SLF001
+    assert RechnungenView._open_product_description(  # noqa: SLF001
+        PrintProductAggregate(
+            sku="XW-010",
+            title="Freunde, ja heute feiern wir",
+            description="Name des Stückes / der Stücke: Freunde, ja heute feiern wir",
+            quantity=1,
+        )
+    ) == ""
+
+
+def test_analysis_panel_and_load_more_button_have_usable_width(qtbot: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+
+    assert view._detail_scroll.minimumWidth() == 390  # noqa: SLF001
+    assert view._detail_scroll.maximumWidth() == 520  # noqa: SLF001
+    assert view._main_splitter.handleWidth() == 10  # noqa: SLF001
+    assert view._btn_more.minimumWidth() == 230  # noqa: SLF001
+
+
 def test_last_run_print_and_unreleased_panels_restore_after_restart(qtbot: object) -> None:
     container, invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)

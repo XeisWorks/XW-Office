@@ -1352,7 +1352,7 @@ class RechnungenView(QWidget):
         self._btn_more = QPushButton("Weitere Rechnungen laden")
         self._btn_more.setToolTip(f"Naechste bis zu {_PAGE_SIZE} Entwuerfe anhaengen")
         self._btn_more.setFixedHeight(28)
-        self._btn_more.setFixedWidth(150)
+        self._btn_more.setMinimumWidth(230)
         self._btn_more.clicked.connect(self._load_more)
         load_more_row.addWidget(self._btn_more)
         left_layout.addLayout(load_more_row)
@@ -1363,8 +1363,8 @@ class RechnungenView(QWidget):
         detail_scroll = QScrollArea()
         self._detail_scroll = detail_scroll
         detail_scroll.setWidgetResizable(True)
-        detail_scroll.setMinimumWidth(360)
-        detail_scroll.setMaximumWidth(460)
+        detail_scroll.setMinimumWidth(390)
+        detail_scroll.setMaximumWidth(520)
 
         detail_content = QWidget()
         detail_main = QVBoxLayout(detail_content)
@@ -1691,9 +1691,16 @@ class RechnungenView(QWidget):
         detail_scroll.setWidget(detail_content)
 
         splitter.addWidget(detail_scroll)
+        self._main_splitter = splitter
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(10)
+        splitter.setStyleSheet(
+            "QSplitter::handle { background: #475569; }"
+            "QSplitter::handle:hover { background: #94a3b8; }"
+        )
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([920, 390])
+        splitter.setSizes([880, 450])
         layout.addWidget(splitter, stretch=1)
 
         self._overlay = ProgressOverlay(self)
@@ -3792,10 +3799,11 @@ class RechnungenView(QWidget):
             "QLabel { border: none; background: transparent; }"
         )
         layout = QHBoxLayout(row)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(8)
+        layout.setContentsMargins(7, 5, 7, 5)
+        layout.setSpacing(6)
 
         checkbox = QCheckBox()
+        checkbox.setFixedWidth(28)
         checkbox.setChecked(self._open_product_checks.get(self._open_product_check_key(item), True))
         checkbox.setToolTip("Produkt in PRINT SELECTED PRODUCTS einbeziehen")
         checkbox.setStyleSheet("QCheckBox { background: transparent; border: none; }")
@@ -3810,7 +3818,7 @@ class RechnungenView(QWidget):
         qty_input = QSpinBox()
         qty_input.setRange(0, 999)
         qty_input.setValue(self._open_product_quantity(item))
-        qty_input.setFixedWidth(64)
+        qty_input.setFixedWidth(54)
         qty_input.setEnabled(self._print_allowed)
         qty_input.setToolTip(
             "Offene Druckmenge. Manuelle Korrekturen bleiben relativ; später erkannte Stücke werden addiert."
@@ -3826,20 +3834,22 @@ class RechnungenView(QWidget):
         title = QLabel(str(item.title or item.sku or "Unbenanntes Produkt"))
         title.setWordWrap(True)
         title.setStyleSheet("color: #ffffff; font-weight: 700;")
-        description = QLabel(self._open_product_description(item))
-        description.setWordWrap(True)
-        description.setStyleSheet("color: #cbd5e1; font-size: 11px;")
+        description_text = self._open_product_description(item)
         text_col.addWidget(title)
-        text_col.addWidget(description)
+        if description_text:
+            description = QLabel(description_text)
+            description.setWordWrap(True)
+            description.setStyleSheet("color: #cbd5e1; font-size: 11px;")
+            text_col.addWidget(description)
         layout.addLayout(text_col, stretch=1)
 
         sku_label = QLabel(str(item.sku or "-"))
-        sku_label.setStyleSheet("color: #93c5fd;")
-        sku_label.setMinimumWidth(74)
+        sku_label.setStyleSheet("color: #93c5fd; font-size: 10px;")
+        sku_label.setMinimumWidth(60)
         layout.addWidget(sku_label)
 
         action = QToolButton()
-        action.setFixedSize(32, 28)
+        action.setFixedSize(28, 26)
         action.setEnabled(self._print_allowed)
         action.setStyleSheet(
             "QToolButton { background-color: #334155; border: 1px solid #64748b; border-radius: 4px; }"
@@ -3875,11 +3885,37 @@ class RechnungenView(QWidget):
         desc_raw = str(item.description or "").strip()
         desc_parts = [part.strip() for part in desc_raw.split("|") if part.strip()]
         desc_parts = [part for part in desc_parts if "rabatt" not in part.casefold()]
+        normalized_parts: list[str] = []
+        for part in desc_parts:
+            prefix, separator, value = part.partition(":")
+            if separator and prefix.strip().casefold() == "besetzung":
+                part = value.strip()
+            if part:
+                normalized_parts.append(part)
+        desc_parts = normalized_parts
+        if str(item.sku or "").strip().upper() == "XW-010":
+            cleaned_parts: list[str] = []
+            for part in desc_parts:
+                normalized = part.casefold()
+                if "name des stückes" in normalized or "name des stueckes" in normalized:
+                    # The individual piece title is already the row heading.
+                    note_marker = "sonstige bemerkungen:"
+                    note_index = normalized.find(note_marker)
+                    if note_index < 0:
+                        continue
+                    part = part[note_index + len(note_marker):].strip()
+                prefix, separator, value = part.partition(":")
+                if separator and "sonstige bemerkungen" in prefix.casefold():
+                    part = value.strip()
+                if part:
+                    cleaned_parts.append(part)
+            desc_parts = cleaned_parts
         if desc_parts:
-            text = " | ".join(desc_parts)
-            return text if text.casefold().startswith("besetzung:") else f"Besetzung: {text}"
+            return " | ".join(desc_parts)
+        if str(item.sku or "").strip().upper() == "XW-010":
+            return ""
         category = str(getattr(item, "category_label", "") or "").strip()
-        return f"Besetzung: {category}" if category else "Besetzung: unbekannt"
+        return category
 
     def _plain_open_print_product_line(self, item: PrintProductAggregate) -> str:
         return (
