@@ -98,7 +98,7 @@ class ProductPreflightDialog(QDialog):
         self._name = QLineEdit(draft.name)
         self._sku = QLineEdit(draft.sku)
         self._price = QLineEdit(self._fmt_currency(draft.price_gross))
-        self._tax = QLineEdit(self._fmt_num(draft.tax_rate))
+        self._tax = QLineEdit(self._fmt_num(draft.tax_rate if draft.tax_rate is not None else 10.0))
         self._category = QComboBox()
         self._category.setEditable(False)
         self._category.addItem("")

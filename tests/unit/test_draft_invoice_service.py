@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from xw_office.services.draft_invoice.service import DraftInvoiceService, ProductIssueDecision, ProductIssueTarget
 from xw_office.services.sevdesk.part_client import SevdeskPart
 
@@ -185,6 +187,14 @@ def test_preview_marks_missing_part_as_dialog_candidate() -> None:
     assert preview["items"][0]["status"] == "Produktdialog vor Erstellung"
 
 
+def test_missing_product_dialog_defaults_to_ten_percent_tax() -> None:
+    service, _connection, _parts, _invoices = _service()
+
+    plan = service.build_missing_product_plan(["20519"])
+
+    assert plan.issues[0].draft.tax_rate == 10.0
+
+
 def test_create_draft_keeps_unmapped_position_when_part_missing() -> None:
     service, connection, parts, _invoices = _service()
 
@@ -231,6 +241,46 @@ def test_apply_missing_product_plan_creates_part_and_patches_existing_draft() ->
     assert invoices.updated_positions[0]["name"] == "Gepruefte Positionsbezeichnung"
     assert invoices.updated_positions[0]["text"] == "Die richtige Produktbeschreibung"
     assert invoices.updated_positions[0]["taxRate"] == 0
+
+
+def test_apply_missing_product_plan_replaces_sku_fallback_with_dialog_description() -> None:
+    service, _connection, _parts, invoices = _service()
+    invoices.fetch_invoice_positions = lambda _invoice_id: [
+        {
+            "id": "POS-1",
+            "objectName": "InvoicePos",
+            "name": "Produkt Eins",
+            "text": "XW-100",
+            "quantity": 2,
+            "price": 12.5,
+            "taxRate": 0,
+            "positionNumber": 0,
+            "unity": {"id": 1, "objectName": "Unity"},
+        }
+    ]
+    plan = service.build_missing_product_plan(
+        ["20519"],
+        targets_by_reference={
+            "20519": [
+                ProductIssueTarget(
+                    invoice_id="INV-1",
+                    invoice_number="RE-TEST-1",
+                    wix_order_number="20519",
+                    customer_name="Max Mustermann",
+                ),
+            ]
+        },
+    )
+    issue = plan.issues[0]
+    decision = ProductIssueDecision(
+        action="create_part",
+        draft=replace(issue.draft, text="Kleine Besetzung"),
+    )
+
+    service.apply_missing_product_plan(plan, {issue.sku: decision})
+
+    assert invoices.updated_positions is not None
+    assert invoices.updated_positions[0]["text"] == "Kleine Besetzung"
 
 
 def test_repair_draft_product_mapping_only_adds_part_reference_without_auto_create() -> None:

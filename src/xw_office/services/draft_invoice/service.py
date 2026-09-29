@@ -302,6 +302,7 @@ class DraftInvoiceService:
                                 target.invoice_id,
                                 target.wix_order_number,
                                 create_missing_products=False,
+                                description_overrides={issue.sku: decision.draft.text},
                             )
                         except Exception as exc:  # noqa: BLE001
                             warnings.append(
@@ -359,7 +360,7 @@ class DraftInvoiceService:
                 text=self._description_from_category(category),
                 internal_comment=str(wix_product_id or "").strip(),
                 price_gross=round(float(wix_price_gross), 2) if wix_price_gross is not None else None,
-                tax_rate=19.0,
+                tax_rate=10.0,
                 unity={"id": 1, "objectName": "Unity"},
                 category_id=str(category.get("id") or "").strip(),
                 category_name=str(category.get("name") or "").strip(),
@@ -383,6 +384,7 @@ class DraftInvoiceService:
         wix_order_number: str,
         *,
         create_missing_products: bool = False,
+        description_overrides: dict[str, str] | None = None,
     ) -> bool:
         """Patch an existing draft so invoice positions point to real sevDesk parts."""
         order = self._resolve_order_required(wix_order_number)
@@ -392,7 +394,11 @@ class DraftInvoiceService:
         positions = self._invoices.fetch_invoice_positions(invoice_id)
         if not invoice or not positions:
             return False
-        patched_positions = self._patched_positions_for_order(order, positions)
+        patched_positions = self._patched_positions_for_order(
+            order,
+            positions,
+            description_overrides=description_overrides,
+        )
         if patched_positions == positions:
             return False
         self._invoices.update_invoice_draft(invoice, patched_positions)
@@ -477,6 +483,8 @@ class DraftInvoiceService:
         self,
         order: dict[str, Any],
         positions: list[dict[str, Any]],
+        *,
+        description_overrides: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         raw_items = self._order_line_items(order)
         if not raw_items or not positions:
@@ -493,12 +501,19 @@ class DraftInvoiceService:
             if part is None or not part.id.strip():
                 continue
             updated = dict(patched[index])
+            had_part = isinstance(updated.get("part"), dict) and bool(
+                str(updated["part"].get("id") or "").strip()
+            )
             # START must not alter commercial data on an already reviewed
             # sevDesk draft.  It merely repairs the product association.
             # Replacing the description with Wix order metadata or replacing a
             # tax-free line's 0 % rate with the article's domestic VAT rate
             # caused incorrect final invoices.
             updated["part"] = {"id": str(part.id), "objectName": "Part"}
+            override = str((description_overrides or {}).get(sku) or "").strip()
+            current_text = str(updated.get("text") or "").strip()
+            if override and not had_part and (not current_text or current_text.casefold() == sku.casefold()):
+                updated["text"] = override
             if part.unity and isinstance(part.unity, dict) and part.unity.get("id"):
                 updated["unity"] = dict(part.unity)
             patched[index] = updated
@@ -518,7 +533,7 @@ class DraftInvoiceService:
             "text": str(draft.text or "").strip(),
             "internalComment": str(draft.internal_comment or "").strip(),
             "priceGross": round(float(draft.price_gross or issue.wix_price_gross or 0.0), 2),
-            "taxRate": float(draft.tax_rate if draft.tax_rate is not None else 19.0),
+            "taxRate": float(draft.tax_rate if draft.tax_rate is not None else 10.0),
             "unity": dict(draft.unity or {"id": 1, "objectName": "Unity"}),
             "stockEnabled": not issue.is_digital,
             "stock": 0,
@@ -571,7 +586,7 @@ class DraftInvoiceService:
                 or ""
             ).strip(),
             price_gross=round(self._line_item_unit_price(raw_item), 2),
-            tax_rate=19.0,
+            tax_rate=10.0,
             unity={"id": 1, "objectName": "Unity"},
             category_id=str(category.get("id") or "").strip(),
             category_name=str(category.get("name") or "").strip(),

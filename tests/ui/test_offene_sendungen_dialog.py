@@ -130,6 +130,7 @@ def test_dialog_loads_cases_and_prefills_shipping_fields(qtbot: object) -> None:
     qtbot.waitUntil(lambda: service.refresh_called == 1, timeout=3000)
     assert dialog._status.text() == "1 offene Sendungen"  # noqa: SLF001
     assert "Ein Musikbuch" in dialog._summary.text()  # noqa: SLF001
+    assert dialog._manual_text.toPlainText() == "Ein Musikbuch an Max Muster senden."  # noqa: SLF001
     assert dialog._cell_text(0, 1) == "Musikbuch Alpen"  # noqa: SLF001
     free_index = dialog._products_model.index(0, 4)  # noqa: SLF001
     return_index = dialog._products_model.index(0, 6)  # noqa: SLF001

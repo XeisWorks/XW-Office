@@ -155,6 +155,7 @@ class OffeneSendungenDialog(QDialog):
         self._delivery_pdf_by_case: dict[str, Path] = {}
         self._recipient_names: dict[str, str] = {}
         self._silent_refresh_scheduled = False
+        self._silent_refresh_pending = False
         self._silent_refresh_timer = QTimer(self)
         self._silent_refresh_timer.setSingleShot(True)
         self._silent_refresh_timer.timeout.connect(
@@ -282,8 +283,9 @@ class OffeneSendungenDialog(QDialog):
         product_row.addStretch(1)
         products_lay.addLayout(product_row)
 
-        products_lay.addWidget(QLabel("Zusatztext Lieferschein:"))
+        products_lay.addWidget(QLabel("Kurznotiz (bearbeitbar):"))
         self._manual_text = QPlainTextEdit()
+        self._manual_text.setPlaceholderText("OpenAI-Kurznotiz für den Lieferschein")
         self._manual_text.setMinimumHeight(58)
         self._manual_text.setMaximumHeight(85)
         products_lay.addWidget(self._manual_text)
@@ -435,11 +437,19 @@ class OffeneSendungenDialog(QDialog):
             and self._cases
             and self._cases[selected_row].id == selected_id
         )
+        if not preserve and not self._silent_refresh_scheduled:
+            self._silent_refresh_pending = True
         if self._cases and not selection_preserved:
             self._on_case_selected(selected_row)
-        if not preserve and not self._silent_refresh_scheduled:
-            self._silent_refresh_scheduled = True
-            self._silent_refresh_timer.start(600)
+        elif not preserve:
+            self._schedule_silent_refresh_after_detail()
+
+    def _schedule_silent_refresh_after_detail(self) -> None:
+        if not self._silent_refresh_pending or self._silent_refresh_scheduled:
+            return
+        self._silent_refresh_pending = False
+        self._silent_refresh_scheduled = True
+        self._silent_refresh_timer.start(600)
 
     def _case_list_text(self, case: SendungCase, *, recipient_name: str = "") -> str:
         raw_date = str(case.received_at or "").strip()
@@ -487,6 +497,7 @@ class OffeneSendungenDialog(QDialog):
         )
         self._thread.setPlainText(self._compact_thread_text(case.thread_text or case.body or case.snippet))
         self._set_detail_loading("Lade OpenAI-Auswertung und gespeicherte Korrekturen...")
+        self._summary.setText(case.subject or "Sendung wird geladen...")
         self._extract_selected(force=False)
 
     def _extract_selected(self, *, force: bool) -> None:
@@ -571,11 +582,12 @@ class OffeneSendungenDialog(QDialog):
                 self._recipient_names[case.id] = recipient_name
                 item.setText(self._case_list_text(case, recipient_name=recipient_name))
         self._set_products(products)
-        self._manual_text.setPlainText(manual_text)
+        self._manual_text.setPlainText(manual_text or extraction.summary)
         notes = ", ".join(extraction.confidence_notes or [])
         suffix = f" | {notes}" if notes else ""
         self._detail_status.setText(f"Quelle: {extraction.source}{suffix}")
         self._set_actions_enabled(True)
+        self._schedule_silent_refresh_after_detail()
 
     def _on_detail_error(self, seq: int, exc: Exception) -> None:
         if not isValid(self):
@@ -584,6 +596,7 @@ class OffeneSendungenDialog(QDialog):
             return
         self._detail_status.setText("Quelle: Laden fehlgeschlagen")
         self._set_actions_enabled(True)
+        self._schedule_silent_refresh_after_detail()
         QMessageBox.warning(self, "OFFENE SENDUNGEN", f"Details konnten nicht geladen werden:\n\n{exc}")
 
     def _set_detail_loading(self, message: str) -> None:
@@ -729,8 +742,7 @@ class OffeneSendungenDialog(QDialog):
             case.id,
             address_lines=self._address_lines(),
             products=self._products_from_table(),
-            manual_text=self._manual_text.toPlainText(),
-            summary=self._summary.text(),
+            short_note=self._manual_text.toPlainText(),
         )
         self._delivery_pdf_by_case[case.id] = path
         return path
@@ -739,15 +751,14 @@ class OffeneSendungenDialog(QDialog):
         request = self._delivery_note_request()
         if request is None:
             return
-        case_id, address, products, manual_text, summary = request
+        case_id, address, products, short_note, _summary = request
 
         def job() -> Path:
             return self._service.generate_delivery_note_pdf(
                 case_id,
                 address_lines=address,
                 products=products,
-                manual_text=manual_text,
-                summary=summary,
+                short_note=short_note,
             )
 
         self._start_action(
@@ -765,15 +776,14 @@ class OffeneSendungenDialog(QDialog):
         request = self._delivery_note_request()
         if request is None:
             return
-        case_id, address, products, manual_text, summary = request
+        case_id, address, products, short_note, _summary = request
 
         def job() -> Path:
             path = self._service.generate_delivery_note_pdf(
                 case_id,
                 address_lines=address,
                 products=products,
-                manual_text=manual_text,
-                summary=summary,
+                short_note=short_note,
             )
             self._service.print_delivery_note(
                 path,

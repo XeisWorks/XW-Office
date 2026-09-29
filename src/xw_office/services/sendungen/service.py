@@ -356,22 +356,24 @@ class OffeneSendungenService:
         products: list[SendungProductLine],
         manual_text: str = "",
         summary: str = "",
+        short_note: str = "",
     ) -> Path:
         case = self._find_case(case_id)
         if case is None:
             raise RuntimeError("Sendungsfall nicht gefunden")
+        note = str(short_note or "").strip()
         self.save_manual_fields(
             case.id,
             address_lines=address_lines,
             products=products,
-            manual_text=manual_text,
+            manual_text=note or manual_text,
         )
         return self._render_delivery_note_pdf(
             case,
             address_lines=[line for line in address_lines if str(line).strip()],
             products=products,
             manual_text=manual_text,
-            summary=summary,
+            summary=note or summary,
         )
 
     def print_delivery_note(
