@@ -428,6 +428,10 @@ class DigitalLicenseService:
         meta = self._wix_orders.resolve_order_summary(ref) if ref else {}
         customer_name = (
             str(meta.get("wix_customer_name") or "").strip()
+            or self._combined_license_name(
+                str(meta.get("wix_customer_company") or ""),
+                str(meta.get("wix_customer_person_name") or ""),
+            )
             or str(summary.contact_name or "").strip()
         )
         customer_email = str(meta.get("wix_customer_email") or "").strip()
@@ -466,6 +470,21 @@ class DigitalLicenseService:
     def _license_name(value: str) -> str:
         parts = [part for part in str(value or "").replace("\n", " ").split() if part]
         return " ".join(parts)
+
+    @staticmethod
+    def _combined_license_name(company: str, person_name: str) -> str:
+        company = " ".join(str(company or "").split())
+        person_name = " ".join(str(person_name or "").split())
+        if company and person_name and company.casefold() != person_name.casefold():
+            return f"{company} / {person_name}"
+        return company or person_name
+
+    @staticmethod
+    def _mail_first_name(customer_name: str) -> str:
+        # Licences are labelled "Company / Firstname Lastname".  The greeting
+        # addresses the named person, not the company prefix.
+        person_name = str(customer_name or "").rsplit("/", maxsplit=1)[-1].strip()
+        return person_name.split(" ")[0] if person_name else "there"
 
     @staticmethod
     def _normalize_fulfillment_items(raw_items: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -534,7 +553,7 @@ class DigitalLicenseService:
 
     @staticmethod
     def _mail_body(case: DigitalLicenseCase) -> str:
-        first_name = str(case.customer_name or "").strip().split(" ")[0] or "there"
+        first_name = DigitalLicenseService._mail_first_name(case.customer_name)
         product_lines = "\n".join(f"- {line.name}" for line in case.lines)
         return (
             f"Dear {first_name},\n\n"
@@ -548,7 +567,7 @@ class DigitalLicenseService:
 
     @staticmethod
     def _mail_html_body(case: DigitalLicenseCase) -> str:
-        first_name = html.escape(str(case.customer_name or "").strip().split(" ")[0] or "there")
+        first_name = html.escape(DigitalLicenseService._mail_first_name(case.customer_name))
         product_lines = "".join(f"<li>{html.escape(line.name)}</li>" for line in case.lines)
         return (
             '<html><body style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#1f1f1f;">'

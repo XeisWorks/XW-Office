@@ -236,6 +236,31 @@ def test_best_address_lines_prefers_shipping_then_billing() -> None:
     assert "AUSTRIA" in lines2
 
 
+def test_order_summary_preserves_billing_company_and_contact_for_licensing() -> None:
+    order = {
+        "number": "20999",
+        "billingInfo": {
+            "contactDetails": {
+                "firstName": "Sienamarie",
+                "lastName": "Fox",
+                "company": "University of Florida",
+            },
+            "address": {
+                "addressLine1": "PO Box 117007",
+                "postalCode": "32611-7007",
+                "city": "Gainesville",
+                "countryCode": "US",
+            },
+        },
+    }
+
+    summary = WixOrdersClient._summary_from_order(order)  # noqa: SLF001
+
+    assert summary["wix_customer_company"] == "University of Florida"
+    assert summary["wix_customer_person_name"] == "Sienamarie Fox"
+    assert summary["wix_customer_name"] == "University of Florida / Sienamarie Fox"
+
+
 def test_best_address_lines_supports_nested_shipping_address_variants() -> None:
     order = {
         "shippingInfo": {

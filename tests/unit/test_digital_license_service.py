@@ -65,6 +65,15 @@ class _WixCustom(_Wix):
         return [WixOrderItem(sku="", name="Spezialarrangement", qty=1)]
 
 
+class _WixCompanyAndContact(_Wix):
+    def resolve_order_summary(self, reference: str) -> dict[str, str]:
+        return {
+            "wix_customer_company": "University of Florida",
+            "wix_customer_person_name": "Sienamarie Fox",
+            "wix_customer_email": "sienamarie.fox@example.test",
+        }
+
+
 class _WixRegularDigital(_Wix):
     def is_reference_manual_digital_license(self, reference: str, *, use_cache: bool = True) -> bool:
         assert use_cache is False
@@ -123,6 +132,16 @@ def test_list_open_cases_ignores_handling_line(tmp_path: Path) -> None:
     assert cases[0].customer_email == "anna@example.test"
     assert [line.name for line in cases[0].lines] == ["Playable Piece"]
     assert cases[0].lines[0].missing_print_file is False
+
+
+def test_license_case_combines_company_and_person_name(tmp_path: Path) -> None:
+    pdf = tmp_path / "piece.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+
+    case = _service(_Settings(), pdf, wix=_WixCompanyAndContact()).list_open_cases()[0]
+
+    assert case.customer_name == "University of Florida / Sienamarie Fox"
+    assert "Dear Sienamarie," in DigitalLicenseService._mail_body(case)
 
 
 def test_list_open_cases_skips_completed_invoice(tmp_path: Path) -> None:

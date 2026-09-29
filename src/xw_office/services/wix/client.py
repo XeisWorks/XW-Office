@@ -1515,7 +1515,8 @@ class WixOrdersClient:
         company = cls._address_field(
             details, billing, keys=("company", "companyName", "businessName")
         )
-        name = company or " ".join(part for part in (first, last) if part).strip()
+        person_name = " ".join(part for part in (first, last) if part).strip()
+        name = company or person_name
         street1 = cls._address_field(
             address, keys=("addressLine1", "addressLine", "streetAddress", "street", "address")
         )
@@ -1540,6 +1541,8 @@ class WixOrdersClient:
         )
         return {
             "name": name,
+            "company": company,
+            "person_name": person_name,
             "street1": street1,
             "street2": street2,
             "postal_code": postal_code,
@@ -2354,20 +2357,36 @@ class WixOrdersClient:
         buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
         first = cls._norm_text(buyer.get("firstName"))
         last = cls._norm_text(buyer.get("lastName"))
-        full_name = " ".join(part for part in (first, last) if part).strip()
+        buyer_name = " ".join(part for part in (first, last) if part).strip()
         email = cls._norm_text(buyer.get("email"))
 
         shipping_lines = cls.best_address_lines_from_order(order)
         shipping_parts = cls._shipping_address_parts_from_order(order)
         billing_lines = cls.billing_address_lines_from_order(order)
         billing_parts = cls._billing_address_parts_from_order(order)
-        if not full_name:
-            full_name = shipping_parts.get("name", "")
+        # Billing data identifies the purchaser most reliably.  Preserve both
+        # a company and its named contact for licences, rather than discarding
+        # one of them when Wix provides both fields.
+        company = str(
+            billing_parts.get("company") or shipping_parts.get("company") or ""
+        ).strip()
+        person_name = str(
+            billing_parts.get("person_name")
+            or shipping_parts.get("person_name")
+            or buyer_name
+            or ""
+        ).strip()
+        if company and person_name and company.casefold() != person_name.casefold():
+            full_name = f"{company} / {person_name}"
+        else:
+            full_name = company or person_name or str(shipping_parts.get("name") or "").strip()
 
         return {
             "wix_order_id": cls._norm_text(order.get("id")),
             "wix_order_number": cls._norm_text(order.get("number")),
             "wix_customer_name": full_name,
+            "wix_customer_company": company,
+            "wix_customer_person_name": person_name,
             "wix_customer_email": email,
             "wix_shipping_name": shipping_parts.get("person_name", ""),
             "wix_shipping_street": shipping_parts.get("street1", ""),

@@ -555,8 +555,17 @@ class OffeneSendungenService:
         thread_text = self._full_case_text(case)
         prompt = (
             "Du analysierst den vollstaendigen Mailverlauf einer Shop-Sendung. "
+            "Klaere zuerst die aktuell offene Absicht: 'shipment' fuer einen echten Versandauftrag, "
+            "'complaint' fuer Reklamation, fehlende, falsche oder beschaedigte Ware mit Nachsendung, "
+            "'address_change', 'information_request' oder 'other'. "
+            "Eine Reklamation, Nachfrage oder Erwaehnung eines frueher bestellten Produkts ist niemals "
+            "eine neue Bestellung. Erfinde keine Bestellung. Bei einer Reklamation darf die Kurznotiz "
+            "nicht behaupten, jemand bestelle oder kaufe etwas: Sie beginnt mit 'Reklamation:' und nennt "
+            "den fehlenden/falschen/beschaedigten Teil sowie die verlangte Abhilfe (z. B. Nachsendung). "
             "Extrahiere die aktuell gueltige Lieferadresse und alle physischen Produkte, "
-            "die tatsaechlich verschickt werden muessen. Ignoriere digitale Downloads, "
+            "die in der aktuellen Aktion tatsaechlich verschickt werden muessen. Bei einer Reklamation "
+            "nur den konkret nachzusendenden Teil, nicht das urspruenglich gekaufte Gesamtprodukt. "
+            "Ignoriere digitale Downloads, "
             "Signaturen, alte ueberholte Adressen und reine Rueckfragen. "
             "Wenn im Verlauf eine Adresse korrigiert wurde, verwende die zuletzt gueltige. "
             "Uebernimm Strasse, Hausnummer und alle Adresszusaetze (z. B. Top, Stiege, Tuer, "
@@ -564,6 +573,7 @@ class OffeneSendungenService:
             "Antworte ausschliesslich als JSON.\n\n"
             "JSON-Schema:\n"
             "{\n"
+            '  "case_type": "shipment|complaint|address_change|information_request|other",\n'
             '  "summary": "kurze deutsche Zusammenfassung",\n'
             '  "order_number": "Bestellnummer oder leer",\n'
             '  "address_lines": ["Name", "Strasse", "PLZ Ort", "Land"],\n'
@@ -586,7 +596,11 @@ class OffeneSendungenService:
             thread_text,
         )
         extraction = SendungExtraction(
-            summary=str(data.get("summary") or "").strip() or self._fallback_summary(case),
+            summary=self._normalize_case_summary(
+                str(data.get("summary") or "").strip() or self._fallback_summary(case),
+                str(data.get("case_type") or ""),
+                thread_text,
+            ),
             address_lines=address_lines,
             products=self._normalize_products(data.get("products")),
             order_number=str(data.get("order_number") or case.order_number or "").strip(),
@@ -610,6 +624,37 @@ class OffeneSendungenService:
                 thread_text=thread_text,
             )
         return extraction
+
+    @staticmethod
+    def _normalize_case_summary(summary: str, case_type: str, thread_text: str) -> str:
+        """Keep a complaint summary from being phrased as a new order.
+
+        The model has the full conversation and therefore remains responsible
+        for the details.  This small guard only fixes the misleading order
+        verb when it has explicitly classified the thread as a complaint or
+        the mail text clearly contains a complaint marker.
+        """
+        text = str(summary or "").strip()
+        intent = str(case_type or "").strip().casefold()
+        thread = str(thread_text or "").casefold()
+        is_complaint = intent == "complaint" or any(
+            marker in thread
+            for marker in (
+                "reklam",
+                "fehlende",
+                "fehlt",
+                "nicht erhalten",
+                "falsch geliefert",
+                "beschädigt",
+                "beschaedigt",
+            )
+        )
+        if not text or not is_complaint:
+            return text
+        corrected = re.sub(r"\b(bestellt|bestellung|kauft|gekauft)\b", "reklamiert", text, flags=re.IGNORECASE)
+        if not corrected.casefold().startswith("reklamation"):
+            corrected = f"Reklamation: {corrected}"
+        return corrected
 
     def _fallback_extract(self, case: SendungCase) -> SendungExtraction:
         text = self._full_case_text(case) or case.body or case.snippet

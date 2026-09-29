@@ -258,6 +258,18 @@ def test_extract_case_details_fallback_reads_address_and_products() -> None:
     assert details.products[0].name == "Musikbuch Alpen"
 
 
+def test_complaint_summary_is_not_described_as_a_new_order() -> None:
+    summary = OffeneSendungenService._normalize_case_summary(  # noqa: SLF001
+        "Fabian Taschler bestellt das Hochzeitsblech mit der Ergänzung der 3. Stimme.",
+        "complaint",
+        "Ich reklamiere eine fehlende Stimme meines Stimmensatzes und bitte um Nachsendung.",
+    )
+
+    assert summary.startswith("Reklamation:")
+    assert "bestellt" not in summary.casefold()
+    assert "reklamiert" in summary.casefold()
+
+
 def test_restore_street_details_keeps_house_number_and_unit() -> None:
     repaired = OffeneSendungenService._restore_street_details(  # noqa: SLF001
         ["Marienbergstraße", "6263 Fügen", "AUSTRIA"],
