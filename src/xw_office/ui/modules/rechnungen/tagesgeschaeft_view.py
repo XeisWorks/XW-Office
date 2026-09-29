@@ -1335,8 +1335,14 @@ class TagesgeschaeftView(QWidget):
 
         if self._rechnungen_view is not None:
             if processed > 0:
-                self._rechnungen_view.mark_print_products_last_run()
-            self._rechnungen_view._reload_first_page()  # noqa: SLF001
+                mode_label = "START SELECTED" if self._start_selected_only else "START"
+                self._rechnungen_view.mark_print_products_last_run(
+                    processed=processed,
+                    failures=failures,
+                    selected_only=self._start_selected_only,
+                    mode_label=mode_label,
+                )
+            self._rechnungen_view._reload_first_page(preserve_print_tab=True)
         self._refresh_badges()
         if pending_license_ids and not aborted:
             self._offer_digital_license_delivery(pending_license_ids)

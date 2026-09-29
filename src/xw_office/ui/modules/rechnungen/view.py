@@ -1,7 +1,7 @@
 """Rechnungen module — invoice list from sevDesk."""
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 import html
 import json
@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyleOptionViewItem,
     QTableView,
+    QTabWidget,
     QTextBrowser,
     QToolButton,
     QVBoxLayout,
@@ -130,6 +131,17 @@ if TYPE_CHECKING:
     from xw_office.core.container import Container
 
 logger = logging.getLogger(__name__)
+
+@dataclass
+class _PrintRunSnapshot:
+    print_products: list[PrintProductAggregate]
+    unreleased_assignments: list[UnreleasedAssignment]
+    saved_at: str
+    mode_label: str = "START"
+    processed: int = 0
+    failures: int = 0
+    selected_only: bool = False
+
 
 _TABLE_COLUMNS = [
     "sevDesk",
@@ -1170,6 +1182,10 @@ class RechnungenView(QWidget):
         self._last_run_print_products: list[PrintProductAggregate] = []
         self._last_run_unreleased: list[UnreleasedAssignment] = []
         self._print_products_last_run = False
+        self._print_run_history: list[_PrintRunSnapshot] = []
+        self._active_print_history_index: int | None = None
+        self._print_products_tabs: QTabWidget | None = None
+        self._print_product_tab_pages: list[QWidget] = []
         self._open_product_checks: dict[tuple[str, str, str], bool] = {}
         # Store manual corrections relative to the discovered quantity.  An
         # absolute override would swallow products found by later overview
@@ -1397,7 +1413,16 @@ class RechnungenView(QWidget):
         self._open_products_text = QTextBrowser()
         self._open_products_text.setReadOnly(True)
         self._open_products_text.hide()
-        detail_main.addWidget(self._gb_open_products)
+        self._print_products_tabs = QTabWidget()
+        self._print_products_tabs.setDocumentMode(True)
+        self._print_products_tabs.currentChanged.connect(self._on_print_products_tab_changed)
+        current_page = QWidget()
+        current_layout = QVBoxLayout(current_page)
+        current_layout.setContentsMargins(0, 0, 0, 0)
+        current_layout.addWidget(self._gb_open_products)
+        self._print_product_tab_pages = [current_page]
+        self._print_products_tabs.addTab(current_page, "AKTUELL")
+        detail_main.addWidget(self._print_products_tabs)
 
         self._gb_unreleased = QGroupBox("UNRELEASED")
         unreleased_layout = QVBoxLayout(self._gb_unreleased)
@@ -1788,7 +1813,10 @@ class RechnungenView(QWidget):
         if next_state:
             # A new START run owns a fresh in-memory snapshot.  Keep showing
             # the already resolved open rows while further Wix batches arrive.
+            self._active_print_history_index = None
             self._print_products_last_run = False
+            if self._print_products_tabs is not None:
+                self._print_products_tabs.setCurrentIndex(0)
             self._session_print_products = list(self._open_overview_products)
             self._session_unreleased = list(self._open_overview_unreleased)
             self._gb_open_products.setTitle("PRINT-PRODUKTE OFFEN")
@@ -1944,7 +1972,12 @@ class RechnungenView(QWidget):
         service: PrinterStatusService = self._container.resolve(PrinterStatusService)
         self._on_printer_status(service.snapshot().printing_allowed)
 
-    def _reload_first_page(self) -> None:
+    def _reload_first_page(self, *, preserve_print_tab: bool = False) -> None:
+        if not preserve_print_tab:
+            self._active_print_history_index = None
+            self._print_products_last_run = False
+            if self._print_products_tabs is not None:
+                self._print_products_tabs.setCurrentIndex(0)
         self._next_offset = 0
         self._active_load_status = _DRAFT_STATUS
         self._draft_offset = 0
@@ -2841,29 +2874,124 @@ class RechnungenView(QWidget):
         self._render_open_print_products(self._print_product_display_overview(overview))
         self._render_unreleased_assignments(overview)
 
-    def mark_print_products_last_run(self) -> None:
-        """Freeze and persist the PRINT/UNRELEASED dashboard after START."""
-        self._print_products_last_run = True
-        self._gb_open_products.setTitle("PRINT PRODUKTE (last run)")
-        self._gb_unreleased.setTitle("UNRELEASED (last run)")
-        self._last_run_print_products = list(self._session_print_products)
-        self._last_run_unreleased = list(self._session_unreleased)
-        overview = OpenInvoiceOverview(
-            key="session-last-run",
-            total=0,
-            with_ref=0,
-            physical=0,
-            digital=0,
-            unknown=0,
-            with_note=0,
-            plc=0,
-            complete=True,
-            print_products=list(self._last_run_print_products),
-            unreleased_assignments=list(self._last_run_unreleased),
+    def mark_print_products_last_run(
+        self,
+        *,
+        processed: int = 0,
+        failures: int = 0,
+        selected_only: bool = False,
+        mode_label: str = "START",
+    ) -> None:
+        """Freeze, rotate and persist the PRINT/UNRELEASED dashboard after START."""
+        snapshot = _PrintRunSnapshot(
+            print_products=list(self._session_print_products),
+            unreleased_assignments=list(self._session_unreleased),
+            saved_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+            mode_label=mode_label,
+            processed=max(0, int(processed or 0)),
+            failures=max(0, int(failures or 0)),
+            selected_only=bool(selected_only),
         )
+        self._print_run_history.insert(0, snapshot)
+        self._print_run_history = self._print_run_history[:3]
+        self._last_run_print_products = list(snapshot.print_products)
+        self._last_run_unreleased = list(snapshot.unreleased_assignments)
+        self._active_print_history_index = 0
+        self._print_products_last_run = True
+        self._rebuild_print_product_tabs(select_history=True)
+        self._render_active_print_tab()
+        self._persist_print_run_history()
+
+    def _print_tab_label(self, index: int) -> str:
+        if index == 0:
+            return "AKTUELL"
+        if index == 1:
+            return "LAST RUN"
+        return f"RUN −{index}"
+
+    def _print_tab_tooltip(self, index: int) -> str:
+        if index == 0:
+            return "Aktuell geladene Rechnungsentwürfe mit Status 100"
+        snapshot = self._print_run_history[index - 1]
+        scope = "SELECTED" if snapshot.selected_only else "ALL DRAFTS"
+        return (
+            f"{snapshot.saved_at} · {snapshot.mode_label} · {scope} · "
+            f"{snapshot.processed} verarbeitet, {snapshot.failures} Fehler"
+        )
+
+    def _rebuild_print_product_tabs(self, *, select_history: bool = False) -> None:
+        tabs = self._print_products_tabs
+        if tabs is None:
+            return
+        while tabs.count() < 1 + len(self._print_run_history):
+            page = QWidget()
+            layout = QVBoxLayout(page)
+            layout.setContentsMargins(0, 0, 0, 0)
+            self._print_product_tab_pages.append(page)
+            tabs.addTab(page, "")
+        while tabs.count() > 1 + len(self._print_run_history):
+            page = tabs.widget(tabs.count() - 1)
+            tabs.removeTab(tabs.count() - 1)
+            if page is not None:
+                page.deleteLater()
+            if self._print_product_tab_pages:
+                self._print_product_tab_pages.pop()
+        for index in range(tabs.count()):
+            tabs.setTabText(index, self._print_tab_label(index))
+            tabs.setTabToolTip(index, self._print_tab_tooltip(index))
+        if select_history and self._print_run_history:
+            tabs.setCurrentIndex(1)
+
+    def _on_print_products_tab_changed(self, index: int) -> None:
+        if not hasattr(self, "_gb_unreleased"):
+            return
+        if self._print_products_tabs is not None and 0 <= index < len(self._print_product_tab_pages):
+            page = self._print_product_tab_pages[index]
+            layout = page.layout()
+            if layout is not None and self._gb_open_products.parentWidget() is not page:
+                self._gb_open_products.setParent(page)
+                layout.addWidget(self._gb_open_products)
+        self._active_print_history_index = index - 1 if index > 0 else None
+        self._print_products_last_run = self._active_print_history_index is not None
+        self._render_active_print_tab()
+
+    def _render_active_print_tab(self) -> None:
+        if self._active_print_history_index is None:
+            self._gb_open_products.setTitle("PRINT-PRODUKTE OFFEN")
+            self._gb_unreleased.setTitle("UNRELEASED")
+            overview = OpenInvoiceOverview(
+                key=self._open_overview_key,
+                total=0,
+                with_ref=0,
+                physical=0,
+                digital=0,
+                unknown=0 if self._open_overview_complete else 1,
+                with_note=0,
+                plc=0,
+                complete=self._open_overview_complete,
+                print_products=list(self._open_overview_products),
+                unreleased_assignments=list(self._open_overview_unreleased),
+            )
+        else:
+            snapshot = self._print_run_history[self._active_print_history_index]
+            title = "last run" if self._active_print_history_index == 0 else f"run −{self._active_print_history_index + 1}"
+            self._gb_open_products.setTitle(f"PRINT PRODUKTE ({title})")
+            self._gb_unreleased.setTitle(f"UNRELEASED ({title})")
+            overview = OpenInvoiceOverview(
+                key=f"history-{self._active_print_history_index}",
+                total=0,
+                with_ref=0,
+                physical=0,
+                digital=0,
+                unknown=0,
+                with_note=0,
+                plc=0,
+                complete=True,
+                print_products=list(snapshot.print_products),
+                unreleased_assignments=list(snapshot.unreleased_assignments),
+            )
         self._render_open_print_products(overview)
         self._render_unreleased_assignments(overview)
-        self._persist_last_start_overview()
 
     def _merge_session_print_products(self, products: list[PrintProductAggregate]) -> None:
         """Append new products and retain the largest quantity seen this session."""
@@ -2911,8 +3039,9 @@ class RechnungenView(QWidget):
         )
 
     def _print_product_display_overview(self, overview: OpenInvoiceOverview) -> OpenInvoiceOverview:
-        if not self._print_products_last_run:
+        if self._active_print_history_index is None:
             return overview
+        snapshot = self._print_run_history[self._active_print_history_index]
         return OpenInvoiceOverview(
             key=overview.key,
             total=overview.total,
@@ -2924,10 +3053,50 @@ class RechnungenView(QWidget):
             plc=overview.plc,
             complete=overview.complete,
             cache_updates=overview.cache_updates,
-            print_products=list(self._last_run_print_products),
-            unreleased_assignments=list(self._last_run_unreleased),
+            print_products=list(snapshot.print_products),
+            unreleased_assignments=list(snapshot.unreleased_assignments),
             seq=overview.seq,
         )
+
+    def _snapshot_payload(self, snapshot: _PrintRunSnapshot) -> dict[str, object]:
+        return {
+            "saved_at": snapshot.saved_at,
+            "mode_label": snapshot.mode_label,
+            "processed": snapshot.processed,
+            "failures": snapshot.failures,
+            "selected_only": snapshot.selected_only,
+            "print_products": [
+                {
+                    "sku": item.sku,
+                    "title": item.title,
+                    "description": item.description,
+                    "quantity": item.quantity,
+                    "category_label": item.category_label,
+                }
+                for item in snapshot.print_products
+            ],
+            "unreleased_assignments": [
+                {
+                    "title": item.title,
+                    "shipping_name": item.shipping_name,
+                    "order_reference": item.order_reference,
+                }
+                for item in snapshot.unreleased_assignments
+            ],
+        }
+
+    def _persist_print_run_history(self) -> None:
+        try:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            writer = getattr(service, "write_last_start_overview", None)
+            if callable(writer):
+                writer({
+                    "schema_version": 2,
+                    "saved_at": self._print_run_history[0].saved_at if self._print_run_history else "",
+                    "runs": [self._snapshot_payload(snapshot) for snapshot in self._print_run_history],
+                })
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PRINT run history persistence failed: %s", exc)
 
     def _persist_last_start_overview(self) -> None:
         try:
@@ -2963,6 +3132,82 @@ class RechnungenView(QWidget):
             logger.warning("Last START overview persistence failed: %s", exc)
 
     def _restore_last_start_overview(self) -> None:
+        if self._start_workflow_running or self._print_run_history:
+            return
+        try:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            reader = getattr(service, "read_last_start_overview", None)
+            payload = reader() if callable(reader) else {}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PRINT run history restore failed: %s", exc)
+            return
+        if not isinstance(payload, dict):
+            return
+        raw_runs = payload.get("runs")
+        if not isinstance(raw_runs, list):
+            raw_runs = [payload] if str(payload.get("saved_at") or "").strip() else []
+        restored: list[_PrintRunSnapshot] = []
+        for raw in raw_runs[:3]:
+            if not isinstance(raw, dict):
+                continue
+            products: list[PrintProductAggregate] = []
+            for row in raw.get("print_products") if isinstance(raw.get("print_products"), list) else []:
+                if not isinstance(row, dict):
+                    continue
+                sku = str(row.get("sku") or "").strip()
+                title = str(row.get("title") or "").strip()
+                if not sku and not title:
+                    continue
+                try:
+                    quantity = max(0, int(row.get("quantity") or 0))
+                except (TypeError, ValueError):
+                    quantity = 0
+                products.append(PrintProductAggregate(
+                    sku=sku,
+                    title=title,
+                    description=str(row.get("description") or "").strip(),
+                    quantity=quantity,
+                    category_label=str(row.get("category_label") or "").strip(),
+                ))
+            assignments: list[UnreleasedAssignment] = []
+            for row in raw.get("unreleased_assignments") if isinstance(raw.get("unreleased_assignments"), list) else []:
+                if not isinstance(row, dict):
+                    continue
+                title = str(row.get("title") or "").strip()
+                if title:
+                    assignments.append(UnreleasedAssignment(
+                        title=title,
+                        shipping_name=str(row.get("shipping_name") or "").strip() or "Versandname nicht verfÃ¼gbar",
+                        order_reference=str(row.get("order_reference") or "").strip(),
+                    ))
+            try:
+                processed = max(0, int(raw.get("processed") or 0))
+            except (TypeError, ValueError):
+                processed = 0
+            try:
+                failures = max(0, int(raw.get("failures") or 0))
+            except (TypeError, ValueError):
+                failures = 0
+            restored.append(_PrintRunSnapshot(
+                print_products=products,
+                unreleased_assignments=assignments,
+                saved_at=str(raw.get("saved_at") or ""),
+                mode_label=str(raw.get("mode_label") or "START"),
+                processed=processed,
+                failures=failures,
+                selected_only=bool(raw.get("selected_only")),
+            ))
+        if not restored:
+            return
+        self._print_run_history = restored
+        self._last_run_print_products = list(restored[0].print_products)
+        self._last_run_unreleased = list(restored[0].unreleased_assignments)
+        self._active_print_history_index = 0
+        self._print_products_last_run = True
+        self._rebuild_print_product_tabs(select_history=True)
+        self._render_active_print_tab()
+
+    def _restore_legacy_start_overview(self) -> None:
         if self._start_workflow_running or self._print_products_last_run:
             return
         try:
@@ -3084,18 +3329,19 @@ class RechnungenView(QWidget):
         return row
 
     def _render_unreleased_assignments(self, overview: OpenInvoiceOverview) -> None:
+        historical = self._active_print_history_index is not None
         assignments = (
-            self._last_run_unreleased
-            if self._print_products_last_run
+            self._print_run_history[self._active_print_history_index].unreleased_assignments
+            if historical and self._active_print_history_index < len(self._print_run_history)
             else list(overview.unreleased_assignments)
         )
-        if overview.unknown and not assignments and not self._print_products_last_run:
+        if overview.unknown and not assignments and not historical:
             self._set_unreleased_message("Unreleased-Zuordnungen werden ermittelt...", loading=True)
             return
         if not assignments:
             message = (
-                "Keine Unreleased-Zuordnungen im letzten Lauf gefunden."
-                if self._print_products_last_run
+                "Keine Unreleased-Zuordnungen im gewÃ¤hlten Lauf gefunden."
+                if historical
                 else "Keine Unreleased-Zuordnungen in offenen Rechnungen gefunden."
             )
             self._set_unreleased_message(message)
@@ -3139,6 +3385,15 @@ class RechnungenView(QWidget):
         self._open_products_text.setPlainText(message)
 
     def _render_open_print_products(self, overview: OpenInvoiceOverview) -> None:
+        if self._active_print_history_index is not None and self._active_print_history_index < len(self._print_run_history):
+            snapshot = self._print_run_history[self._active_print_history_index]
+            overview = replace(
+                overview,
+                unknown=0,
+                complete=True,
+                print_products=list(snapshot.print_products),
+                unreleased_assignments=list(snapshot.unreleased_assignments),
+            )
         if overview.unknown and not overview.print_products:
             self._set_open_products_message("Print-Produkte werden ermittelt...", loading=True)
             self._update_print_all_products_button()
@@ -3169,13 +3424,16 @@ class RechnungenView(QWidget):
         self._update_print_all_products_button()
 
     def _displayed_print_products(self) -> list[PrintProductAggregate]:
-        products = self._last_run_print_products if self._print_products_last_run else self._open_overview_products
+        if self._active_print_history_index is not None and self._active_print_history_index < len(self._print_run_history):
+            products = self._print_run_history[self._active_print_history_index].print_products
+        else:
+            products = self._open_overview_products
         return [self._open_product_with_quantity(item) for item in products if str(item.sku or "").strip()]
 
-    @staticmethod
-    def _open_product_check_key(item: PrintProductAggregate) -> tuple[str, str, str]:
+    def _open_product_check_key(self, item: PrintProductAggregate) -> tuple[str, str, str]:
+        context = "current" if self._active_print_history_index is None else f"history:{self._active_print_history_index}"
         return (
-            str(item.sku or "").strip().casefold(),
+            f"{context}|{str(item.sku or '').strip().casefold()}",
             str(item.title or "").strip().casefold(),
             str(item.description or "").strip().casefold(),
         )
@@ -3268,6 +3526,16 @@ class RechnungenView(QWidget):
                 "Keine aktivierten Print-Produkte in der aktuellen Liste gefunden.",
             )
             return
+        if self._active_print_history_index is not None:
+            answer = QMessageBox.question(
+                self,
+                "PRINT HISTORICAL RUN",
+                "Diese Produkte stammen aus einem abgeschlossenen Lauf.\n\nErneut drucken?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         products_key = self._print_all_products_key(products)
         if products_key == self._last_print_all_products_key:
             answer = QMessageBox.question(
