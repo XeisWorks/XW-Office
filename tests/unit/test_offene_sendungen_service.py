@@ -13,7 +13,11 @@ from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerA
 
 class _Repo:
     def __init__(self) -> None:
-        self.values: dict[str, str] = {}
+        # A test cache belongs to the dedicated shipping mailbox unless a
+        # test explicitly exercises migration from the former shop@ queue.
+        self.values: dict[str, str] = {
+            "daily_business.offene_sendungen.source_mailbox": json.dumps("shipping@xeisworks.at")
+        }
 
     def get_value_json(self, key: str) -> str | None:
         return self.values.get(key)
@@ -135,7 +139,7 @@ def test_refresh_loads_queue_metadata_and_fetches_selected_mail_body_on_demand(m
     assert details.address_lines == ["Max Muster", "Hauptstrasse 1", "1010 Wien", "AT"]
 
 
-def test_refresh_count_from_graph_silent_excludes_legacy_system_messages(monkeypatch) -> None:
+def test_refresh_count_from_graph_silent_accepts_every_unresolved_shipping_mail(monkeypatch) -> None:
     class _GraphClient:
         def __init__(self, **_kwargs: object) -> None:
             pass
@@ -148,13 +152,37 @@ def test_refresh_count_from_graph_silent_excludes_legacy_system_messages(monkeyp
                 _message("m1", "Neue Bestellung 21029", sender="office@xeisworks.at"),
                 _message("m2", "Your order was placed", sender="no-reply@mystore.wix.com"),
                 _message("m3", "AW: Ihre Rechnung RE-262067", sender="office@xeisworks.at"),
+                _message("m4", "Bereits erledigt", flag_status="complete"),
             ]
 
     monkeypatch.setattr("xw_office.services.sendungen.service.GraphMailClient", _GraphClient)
     service = OffeneSendungenService(_Repo(), _Secrets())  # type: ignore[arg-type]
 
-    assert service.refresh_count_from_graph_silent() == 1
-    assert [case.id for case in service.load_open_cases()] == ["m3"]
+    assert service.refresh_count_from_graph_silent() == 3
+    assert [case.id for case in service.load_open_cases()] == ["m1", "m2", "m3"]
+
+
+def test_old_shop_mail_cache_is_not_shown_in_shipping_queue() -> None:
+    repo = _Repo()
+    repo.values["daily_business.offene_sendungen.source_mailbox"] = json.dumps("shop@xeisworks.at")
+    repo.values["daily_business.offene_sendungen.cases"] = json.dumps(
+        [
+            {
+                "id": "old-shop-mail",
+                "received_at": "2026-06-30T10:00:00Z",
+                "sender": "office@xeisworks.at",
+                "subject": "Neue Bestellung 21029",
+                "snippet": "",
+                "body": "",
+                "thread_id": "thread-old",
+                "order_number": "21029",
+            }
+        ]
+    )
+
+    service = OffeneSendungenService(repo, _Secrets())  # type: ignore[arg-type]
+
+    assert service.load_open_cases() == []
 
 
 def test_mark_done_sets_outlook_flag_before_local_done(monkeypatch) -> None:

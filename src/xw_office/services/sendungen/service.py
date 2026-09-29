@@ -28,11 +28,10 @@ _DONE_CASES_KEY = "daily_business.offene_sendungen.done"
 _EXTRACTIONS_KEY = "daily_business.offene_sendungen.extractions"
 _MANUAL_KEY = "daily_business.offene_sendungen.manual"
 _WIX_ADDRESS_KEY = "daily_business.offene_sendungen.wix_addresses"
+_SOURCE_MAILBOX_KEY = "daily_business.offene_sendungen.source_mailbox"
 _DEFAULT_MODEL = "gpt-4.1-mini"
 _MEMORY_CACHE_SECONDS = 120.0
-_EXCLUDED_WIX_SENDER = "no-reply@mystore.wix.com"
-_EXCLUDED_ORDER_SENDER = "office@xeisworks.at"
-_EXCLUDED_ORDER_SUBJECT_PREFIX = "neue bestellung"
+_DEFAULT_SHIPPING_MAILBOX = "shipping@xeisworks.at"
 #: Sentinel ``SendungCase.sender`` for cases injected via create_manual_case
 #: (e.g. from a Lieferkorrektur) — preserved across refresh_from_graph
 #: instead of being overwritten by the next Graph fetch.
@@ -114,6 +113,12 @@ class OffeneSendungenService:
             ):
                 return list(self._open_cases_cache)
         all_cases = self._load_cached_cases()
+        if not self._has_current_mailbox_cache():
+            # The queue used to read shop@.  Never surface its cached mails
+            # after switching to the dedicated shipping@ mailbox.  Manually
+            # created Lieferkorrektur cases are independent of the mailbox and
+            # remain available until the next Graph refresh.
+            all_cases = [case for case in all_cases if case.sender == _MANUAL_CASE_SENDER]
         done = self._load_done_ids()
         open_cases = [case for case in all_cases if case.id not in done]
         with self._cache_lock:
@@ -173,7 +178,10 @@ class OffeneSendungenService:
         )
         candidates = [msg for msg in messages if self._is_sendung_candidate(msg)]
         manual_cases = [case for case in self._load_cached_cases() if case.sender == _MANUAL_CASE_SENDER]
-        self._save_cases(manual_cases + [self._to_case(msg) for msg in candidates])
+        self._save_cases(
+            manual_cases + [self._to_case(msg) for msg in candidates],
+            source_mailbox=self._shipping_mailbox(),
+        )
         return self.load_open_cases()
 
     def create_manual_case(
@@ -447,10 +455,16 @@ class OffeneSendungenService:
         self._save_raw_messages(filtered)
         return filtered
 
+    def _shipping_mailbox(self) -> str:
+        """Return the dedicated mailbox used exclusively for shipping jobs."""
+        return (
+            self._secrets.get_secret("MS_GRAPH_SHIPPING_MAILBOX").strip()
+            or _DEFAULT_SHIPPING_MAILBOX
+        )
+
     def _graph_client(self, *, write: bool = False) -> GraphMailClient | None:
         tenant_id = self._secrets.get_secret("MS_GRAPH_TENANT_ID")
         client_id = self._secrets.get_secret("MS_GRAPH_CLIENT_ID")
-        mailbox = self._secrets.get_secret("MS_GRAPH_MAILBOX")
         if not tenant_id or not client_id:
             return None
         scopes = ["Mail.Read", "Mail.Read.Shared", "Mail.Send", "Mail.Send.Shared"]
@@ -459,7 +473,7 @@ class OffeneSendungenService:
         return GraphMailClient(
             tenant_id=tenant_id,
             client_id=client_id,
-            mailbox_user=mailbox or None,
+            mailbox_user=self._shipping_mailbox(),
             scopes=scopes,
         )
 
@@ -477,27 +491,12 @@ class OffeneSendungenService:
 
     @staticmethod
     def _is_sendung_candidate(msg: dict[str, Any]) -> bool:
-        """Apply the legacy Offene-Sendungen inbox exclusions.
-
-        The legacy Daily Business panel treated every non-system inbox mail as
-        actionable. Requiring shipping keywords here hid legitimate replies
-        whose subject and preview only contained an order or invoice reference.
-        """
+        """Accept every unresolved mail in the dedicated shipping mailbox."""
         if not str(msg.get("id") or "").strip():
             return False
         flag_obj = msg.get("flag") if isinstance(msg.get("flag"), dict) else {}
         flag_status = str(flag_obj.get("flagStatus") or "").strip().lower()
-        if flag_status == "complete":
-            return False
-        from_obj = msg.get("from") if isinstance(msg.get("from"), dict) else {}
-        email_obj = from_obj.get("emailAddress") if isinstance(from_obj.get("emailAddress"), dict) else {}
-        sender = str(email_obj.get("address") or "").strip().lower()
-        subject = str(msg.get("subject") or "").strip().lower()
-        if sender == _EXCLUDED_WIX_SENDER:
-            return False
-        if sender == _EXCLUDED_ORDER_SENDER and subject.startswith(_EXCLUDED_ORDER_SUBJECT_PREFIX):
-            return False
-        return True
+        return flag_status != "complete"
 
     def _to_case(self, msg: dict[str, Any]) -> SendungCase:
         from_obj = msg.get("from") if isinstance(msg.get("from"), dict) else {}
@@ -1061,7 +1060,7 @@ class OffeneSendungenService:
             )
         return out
 
-    def _save_cases(self, cases: list[SendungCase]) -> None:
+    def _save_cases(self, cases: list[SendungCase], *, source_mailbox: str | None = None) -> None:
         self._invalidate_memory_cache()
         if self._repo is None:
             return
@@ -1081,6 +1080,16 @@ class OffeneSendungenService:
             for c in cases
         ]
         self._repo.set_value_json(_OPEN_CASES_KEY, json.dumps(payload, ensure_ascii=False))
+        if source_mailbox is not None:
+            self._repo.set_value_json(_SOURCE_MAILBOX_KEY, json.dumps(source_mailbox.lower()))
+
+    def _has_current_mailbox_cache(self) -> bool:
+        raw = self._repo.get_value_json(_SOURCE_MAILBOX_KEY) if self._repo is not None else None
+        try:
+            source_mailbox = str(json.loads(raw)) if raw else ""
+        except json.JSONDecodeError:
+            source_mailbox = ""
+        return source_mailbox.strip().lower() == self._shipping_mailbox().lower()
 
     def _load_done_ids(self) -> set[str]:
         raw = self._repo.get_value_json(_DONE_CASES_KEY) if self._repo is not None else None
@@ -1100,6 +1109,8 @@ class OffeneSendungenService:
             self._repo.set_value_json(_DONE_CASES_KEY, json.dumps(sorted(ids), ensure_ascii=False))
 
     def _load_cached_raw_messages(self) -> list[dict[str, Any]]:
+        if not self._has_current_mailbox_cache():
+            return []
         raw = self._repo.get_value_json(f"{_OPEN_CASES_KEY}.raw_graph") if self._repo is not None else None
         if not raw:
             return []
@@ -1112,6 +1123,7 @@ class OffeneSendungenService:
     def _save_raw_messages(self, messages: list[dict[str, Any]]) -> None:
         if self._repo is not None:
             self._repo.set_value_json(f"{_OPEN_CASES_KEY}.raw_graph", json.dumps(messages, ensure_ascii=False))
+            self._repo.set_value_json(_SOURCE_MAILBOX_KEY, json.dumps(self._shipping_mailbox().lower()))
 
     def _load_json_map(self, key: str) -> dict[str, Any]:
         raw = self._repo.get_value_json(key) if self._repo is not None else None
