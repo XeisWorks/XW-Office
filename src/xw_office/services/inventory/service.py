@@ -72,6 +72,7 @@ class StartPreflight:
     open_invoice_count: int
     decisions: list[StartDecision]
     missing_position_data: bool
+    b2b_holds: list[dict[str, str]] = field(default_factory=list)
 
 
 class StartMode(str, Enum):

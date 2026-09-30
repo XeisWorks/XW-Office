@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 import time
+from datetime import date
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QTimer, QSize, Qt
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QInputDialog,
     QStyle,
     QVBoxLayout,
     QWidget,
@@ -46,6 +48,7 @@ from xw_office.services.inventory.service import (
     StartPreflight,
 )
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.services.b2b_credit import B2bCreditService
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.digital_licenses import DigitalLicenseService
@@ -332,6 +335,7 @@ class TagesgeschaeftView(QWidget):
         self._digital_licenses_count = 0
         self._transfer_count = 0
         self._mollie_count = 0
+        self._b2b_credit_count = 0
         self._lieferkorrektur_review_count = 0
         self._lieferkorrektur_due_count = 0
         self._lieferkorrektur_due_check_ts = 0.0
@@ -590,6 +594,11 @@ class TagesgeschaeftView(QWidget):
         self._btn_lieferkorrektur_due_alert.hide()
         alerts_lay.addWidget(self._btn_lieferkorrektur_due_alert)
 
+        self._btn_b2b_credit_alert = self._build_alert_button("B2B ZAHLUNGEN")
+        self._btn_b2b_credit_alert.clicked.connect(self._on_b2b_credit_alert_clicked)
+        self._btn_b2b_credit_alert.hide()
+        alerts_lay.addWidget(self._btn_b2b_credit_alert)
+
         bar_lay.addStretch()
         bar_lay.addWidget(self._btn_start)
         bar_lay.addWidget(self._btn_stop)
@@ -622,6 +631,7 @@ class TagesgeschaeftView(QWidget):
             self._btn_statistics,
             self._btn_special_order,
             self._btn_start,
+            self._btn_b2b_credit_alert,
         ):
             button.setEnabled(ready)
 
@@ -735,6 +745,15 @@ class TagesgeschaeftView(QWidget):
             counts["lieferkorrektur_review"] = max(0, int(aftercare_service.count_pending_review()))
             counts["lieferkorrektur_due"] = max(0, int(aftercare_service.count_due()))
             counts["lieferkorrektur_new_review_cases"] = new_review_cases
+            try:
+                b2b_service: B2bCreditService = self._container.resolve(B2bCreditService)
+                b2b_summaries = invoice_service.load_invoice_summaries(status=100, limit=1000, offset=0)
+                counts["b2b_credit"] = (
+                    len(b2b_service.evaluate(b2b_summaries)) + b2b_service.count_due_plans()
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("B2B credit badge refresh failed: %s", exc)
+                counts["b2b_credit"] = 0
             return counts
 
         self._badge_worker = BackgroundWorker(job)
@@ -752,6 +771,7 @@ class TagesgeschaeftView(QWidget):
         digital_licenses_count = max(0, int(counts.get("digital_licenses", 0)))
         transfer_count = max(0, int(counts.get("transfer", counts.get("refunds", 0))))
         transfer_login_required = bool(counts.get("transfer_login_required"))
+        self._b2b_credit_count = max(0, int(counts.get("b2b_credit", 0)))
 
         self._sendungen_count = sendungen_count
         self._digital_licenses_count = digital_licenses_count
@@ -781,6 +801,9 @@ class TagesgeschaeftView(QWidget):
         )
         self._update_alert_button(
             self._btn_lieferkorrektur_due_alert, "LIEFERKORREKTUR FAELLIG", lieferkorrektur_due_count
+        )
+        self._update_alert_button(
+            self._btn_b2b_credit_alert, "B2B ZAHLUNGEN", self._b2b_credit_count
         )
         if int(counts.get("lieferkorrektur_new_review_cases", 0)) > 0:
             self._lieferkorrektur_deferred_case_ids.clear()
@@ -835,6 +858,30 @@ class TagesgeschaeftView(QWidget):
             "MOLLIE AUTHORIZATION",
             fallback_count=self._mollie_count,
         )
+        self._refresh_badges()
+
+    def _on_b2b_credit_alert_clicked(self) -> None:
+        """Re-run the read-only gate and show the same controlled hold dialog."""
+        if self._rechnungen_view is None:
+            return
+        try:
+            invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            summaries = invoice_service.load_invoice_summaries(status=100, limit=1000, offset=0)
+            service: B2bCreditService = self._container.resolve(B2bCreditService)
+            holds = [hold.as_dict() for hold in service.evaluate(summaries)]
+            if holds:
+                self._show_b2b_credit_holds(holds)
+            elif service.count_due_plans() > 0:
+                QMessageBox.information(
+                    self,
+                    "B2B-Zahlungsplan",
+                    "Mindestens eine Rate ist fällig. Bitte in sevDesk die nächste Teilrechnung "
+                    "prüfen/erstellen und nach Zahlung den Zahlungseingang kontrollieren.",
+                )
+            else:
+                QMessageBox.information(self, "B2B-Zahlungen", "Aktuell keine B2B-Kreditfreigabe offen.")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "B2B-Zahlungen", f"Prüfung fehlgeschlagen:\n{exc}")
         self._refresh_badges()
 
     def _on_lieferkorrektur_review_alert_clicked(self) -> None:
@@ -999,11 +1046,18 @@ class TagesgeschaeftView(QWidget):
                 if self._start_selected_only
                 else invoice_service.count_invoices(status=100)
             )
+            if self._start_selected_only:
+                summaries = list(self._start_selected_summaries)
+            else:
+                summaries = invoice_service.load_invoice_summaries(status=100, limit=1000, offset=0)
+            credit_service: B2bCreditService = self._container.resolve(B2bCreditService)
+            b2b_holds = [hold.as_dict() for hold in credit_service.evaluate(summaries)]
             if not self._start_include_product_print:
                 return StartPreflight(
                     open_invoice_count=open_count,
                     decisions=[],
                     missing_position_data=True,
+                    b2b_holds=b2b_holds,
                 )
             inventory_service: InventoryService = self._container.resolve(InventoryService)
             requirements = invoice_service.build_inventory_requirements(
@@ -1013,9 +1067,15 @@ class TagesgeschaeftView(QWidget):
                     else None
                 )
             )
-            return inventory_service.build_start_preflight(
+            inventory_preflight = inventory_service.build_start_preflight(
                 open_count,
                 requirements=requirements,
+            )
+            return StartPreflight(
+                open_invoice_count=inventory_preflight.open_invoice_count,
+                decisions=inventory_preflight.decisions,
+                missing_position_data=inventory_preflight.missing_position_data,
+                b2b_holds=b2b_holds,
             )
 
         self._start_worker = BackgroundWorker(job)
@@ -1032,6 +1092,10 @@ class TagesgeschaeftView(QWidget):
             return
         if not isinstance(result, StartPreflight):
             self._set_start_running(False)
+            return
+        if result.b2b_holds:
+            self._set_start_running(False)
+            self._show_b2b_credit_holds(result.b2b_holds)
             return
         signals: AppSignals = self._container.resolve(AppSignals)
         self._start_selected_mode = StartMode.INVOICES_AND_PRINT
@@ -1114,6 +1178,89 @@ class TagesgeschaeftView(QWidget):
         self._start_product_worker.signals.error.connect(self._on_start_preflight_error)
         self._start_product_worker.signals.finished.connect(lambda: setattr(self, "_start_product_worker", None))
         self._start_product_worker.start()
+
+    def _show_b2b_credit_holds(self, holds: list[dict[str, str]]) -> None:
+        """Explain the hard stop and offer a controlled per-customer limit edit."""
+        lines = [
+            "START wurde sicher angehalten. Es wurden keine Rechnungen finalisiert,"
+            " gedruckt, versendet oder erfüllt.",
+            "",
+        ]
+        for hold in holds:
+            customer = hold.get("customer_name") or "Unbekannter Kunde"
+            invoice = hold.get("invoice_number") or hold.get("invoice_id") or "-"
+            amount = hold.get("net_amount") or "-"
+            limit = hold.get("limit") or "-"
+            status = hold.get("payment_status") or "UNKNOWN"
+            lines.append(f"{invoice} / Auftrag {hold.get('order_reference') or '-'} — {customer}")
+            lines.append(f"  Netto {amount} EUR | Limit {limit} EUR | Wix: {status}")
+            lines.append(f"  {hold.get('reason') or ''}")
+        lines.extend(
+            [
+                "",
+                "Für eine vertrauenswürdige Firma kann das Limit jetzt angepasst werden."
+                " Danach START bitte bewusst erneut ausführen.",
+                "Alternativ den Kunden zuerst eine 30/35/35-Zahlungsvereinbarung anbieten;"
+                " die Rechnungen werden dabei nicht automatisch erstellt.",
+            ]
+        )
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("B2B-Kreditfreigabe erforderlich")
+        dialog.setText("\n".join(lines))
+        plan_button = dialog.addButton("30/35/35-Plan speichern", QMessageBox.ButtonRole.ActionRole)
+        edit_button = dialog.addButton("Kundenlimit bearbeiten", QMessageBox.ButtonRole.ActionRole)
+        dialog.addButton(QMessageBox.StandardButton.Close)
+        dialog.exec()
+        clicked = dialog.clickedButton()
+        if clicked is plan_button:
+            try:
+                service = self._container.resolve(B2bCreditService)
+                saved = 0
+                for payload in holds:
+                    hold = service.hold_from_dict(payload)
+                    service.save_plan(service.create_installment_plan(hold, accepted_on=date.today()))
+                    saved += 1
+                QMessageBox.information(
+                    self,
+                    "Zahlungsplan gespeichert",
+                    f"{saved} Zahlungsplan/Pläne wurden gespeichert.\n"
+                    "Die eigentlichen sevDesk-Anzahlungs-/Teilrechnungen bitte zunächst manuell erstellen. "
+                    "Fällige Schritte erscheinen danach als B2B-Alarm.",
+                )
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.critical(self, "Zahlungsplan", f"Plan konnte nicht gespeichert werden:\n{exc}")
+            self._refresh_badges()
+            return
+        if clicked is not edit_button:
+            return
+        hold = holds[0]
+        customer = str(hold.get("customer_name") or "").strip()
+        if not customer:
+            QMessageBox.warning(self, "Kundenlimit", "Für diesen Datensatz ist kein Kundenname verfügbar.")
+            return
+        current = float(hold.get("limit") or self._container.config.b2b_credit.default_net_limit)
+        value, accepted = QInputDialog.getDouble(
+            self,
+            "Kundenlimit",
+            f"Neues Netto-Limit für {customer} (EUR):",
+            current,
+            0.0,
+            100000000.0,
+            2,
+        )
+        if not accepted:
+            return
+        try:
+            self._container.resolve(B2bCreditService).set_customer_limit(customer, value)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Kundenlimit", f"Limit konnte nicht gespeichert werden:\n{exc}")
+            return
+        QMessageBox.information(
+            self,
+            "Kundenlimit gespeichert",
+            "Das Limit wurde gespeichert. Bitte START erneut anklicken; die Freigabe wird dann neu geprüft.",
+        )
 
     def _on_start_product_preflight_ready(self, result: object) -> None:
         if self._start_abort_requested:

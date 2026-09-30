@@ -134,6 +134,19 @@ clearing:
   sepa_lookback_days: 45
   b2b_year_prefixes: ["24", "25", "26", "27"]
 
+b2b_credit:
+  # Current Wix classification: NOT_PAID = B2B, PAID = B2C.
+  enabled: true
+  default_net_limit: 1000.0
+  # Optional sevDesk online-account name used by the future payment monitor.
+  payment_account_name: ""
+  reminder_days_before_due: 7
+  first_due_days: 7
+  second_send_after_days: 14
+  second_due_after_days: 21
+  third_send_after_days: 35
+  third_due_after_days: 42
+
 sku_rules:
   print_prefixes: ["XW-4", "XW-6", "XW-7"]
   unreleased_prefixes: ["XW-600"]

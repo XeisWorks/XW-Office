@@ -122,6 +122,7 @@ class InvoiceSummary(BaseModel):
     invoice_date: str | None = Field(default=None, alias="invoiceDate")
     delivery_date: str | None = Field(default=None, alias="deliveryDate")
     status_code: int | None = Field(default=None, alias="status")
+    sum_net: str | float | None = Field(default=None, alias="sumNet")
     sum_gross: str | float | None = Field(default=None, alias="sumGross")
     contact_name: str = ""
     buyer_note: str = ""

@@ -201,6 +201,21 @@ class ClearingSection:
 
 
 @dataclass(frozen=True)
+class B2bCreditSection:
+    """Safety gate for unpaid B2B invoices before START can have side effects."""
+
+    enabled: bool = True
+    default_net_limit: float = 1000.0
+    payment_account_name: str = ""
+    reminder_days_before_due: int = 7
+    first_due_days: int = 7
+    second_send_after_days: int = 14
+    second_due_after_days: int = 21
+    third_send_after_days: int = 35
+    third_due_after_days: int = 42
+
+
+@dataclass(frozen=True)
 class SkuRulesSection:
     print_prefixes: list[str] = field(default_factory=lambda: ["XW-4", "XW-6", "XW-7"])
     unreleased_prefixes: list[str] = field(default_factory=lambda: ["XW-600"])
@@ -304,6 +319,7 @@ class AppConfig:
     inventory: InventorySection = field(default_factory=InventorySection)
     crm: CrmSection = field(default_factory=CrmSection)
     clearing: ClearingSection = field(default_factory=ClearingSection)
+    b2b_credit: B2bCreditSection = field(default_factory=B2bCreditSection)
     sku_rules: SkuRulesSection = field(default_factory=SkuRulesSection)
     digital_licenses: DigitalLicensesSection = field(default_factory=DigitalLicensesSection)
     transfers: TransfersSection = field(default_factory=TransfersSection)
