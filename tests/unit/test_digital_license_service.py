@@ -141,7 +141,9 @@ def test_license_case_combines_company_and_person_name(tmp_path: Path) -> None:
     case = _service(_Settings(), pdf, wix=_WixCompanyAndContact()).list_open_cases()[0]
 
     assert case.customer_name == "University of Florida / Sienamarie Fox"
-    assert "Dear Sienamarie," in DigitalLicenseService._mail_body(case)
+    body = DigitalLicenseService._mail_body(case)
+    assert "Dear Sienamarie," in body
+    assert "Best regards,\nBernhard\nXeisWorks" in body
 
 
 def test_list_open_cases_skips_completed_invoice(tmp_path: Path) -> None:
@@ -195,6 +197,8 @@ def test_mail_html_uses_small_unlinked_dark_gray_signature(tmp_path: Path) -> No
 
     body = DigitalLicenseService._mail_html_body(case)
 
+    assert "Best regards,</p>" in body
+    assert "Bernhard<br>" in body
     assert "font-size:8.5pt" in body
     assert "color:#555555" in body
     assert "office@xeisworks.at" in body

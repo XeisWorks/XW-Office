@@ -562,6 +562,7 @@ class DigitalLicenseService:
             "the attached file(s).\n\n"
             f"Included:\n{product_lines}\n\n"
             "Best regards,\n"
+            "Bernhard\n"
             "XeisWorks"
         )
 
@@ -579,6 +580,7 @@ class DigitalLicenseService:
             f"<p>Included:</p><ul>{product_lines}</ul>"
             "<p>Best regards,</p>"
             '<div style="font-family:Calibri,Arial,sans-serif;font-size:8.5pt;color:#555555;line-height:1.25;">'
+            "Bernhard<br>"
             "<strong>XeisWorks</strong><br>"
             "Musikverlag Mag. Bernhard Holl<br>"
             "office@xeisworks.at<br>"

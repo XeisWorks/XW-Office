@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
@@ -261,14 +262,35 @@ class DigitalLicensesDialog(QDialog):
             "Hast du die E-Mail mit Rechnung und allen Noten-PDFs gesendet?\n\nDanach wird Wix-Fulfillment abgeschlossen.",
         ) != QMessageBox.StandardButton.Yes:
             return
-        self._run_action(lambda: self._service.mark_done(case), "Markiere Versand als erledigt...")
 
-    def _run_action(self, job: object, message: str) -> None:
+        def job() -> int:
+            self._service.mark_done(case)
+            return self._service.open_count()
+
+        self._run_action(job, "Markiere Versand als erledigt...", self._on_mark_done_finished)
+
+    def _on_mark_done_finished(self, payload: object) -> None:
+        try:
+            remaining = int(payload)
+        except (TypeError, ValueError):
+            remaining = self._service.open_count()
+        if remaining <= 0:
+            QTimer.singleShot(0, self.accept)
+            return
+        self._load_cases()
+
+    def _run_action(
+        self,
+        job: object,
+        message: str,
+        on_result: Callable[[object], None] | None = None,
+    ) -> None:
         if self._action_worker is not None and self._action_worker.isRunning():
             return
         self._status.setText(message)
         self._action_worker = BackgroundWorker(job)  # type: ignore[arg-type]
-        self._action_worker.signals.result.connect(lambda _payload: self._load_cases())
+        result_handler = on_result or (lambda _payload: self._load_cases())
+        self._action_worker.signals.result.connect(result_handler)
         self._action_worker.signals.error.connect(self._on_error)
         self._action_worker.signals.finished.connect(lambda: setattr(self, "_action_worker", None))
         self._action_worker.start()
