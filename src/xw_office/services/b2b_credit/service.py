@@ -272,8 +272,8 @@ class B2bCreditService:
         third = (gross - first - second).quantize(_MONEY, rounding=ROUND_HALF_UP)
         rows = (
             InstallmentPlanRow(1, Decimal("30"), first, accepted, accepted + timedelta(days=self._config.first_due_days)),
-            InstallmentPlanRow(2, Decimal("35"), second, accepted + timedelta(days=self._config.second_send_after_days - self._config.reminder_days_before_due), accepted + timedelta(days=self._config.second_due_after_days)),
-            InstallmentPlanRow(3, Decimal("35"), third, accepted + timedelta(days=self._config.third_send_after_days - self._config.reminder_days_before_due), accepted + timedelta(days=self._config.third_due_after_days)),
+            InstallmentPlanRow(2, Decimal("35"), second, accepted + timedelta(days=self._config.second_send_after_days), accepted + timedelta(days=self._config.second_due_after_days)),
+            InstallmentPlanRow(3, Decimal("35"), third, accepted + timedelta(days=self._config.third_send_after_days), accepted + timedelta(days=self._config.third_due_after_days)),
         )
         return InstallmentPlan(
             invoice_id=hold.invoice_id,
