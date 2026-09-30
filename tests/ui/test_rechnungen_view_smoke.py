@@ -367,6 +367,15 @@ def test_tagesgeschaeft_contains_rechnungen_view(qtbot: object) -> None:
     assert widgets.index(view._btn_label_menu) == widgets.index(view._btn_statistics) - 1  # noqa: SLF001
     assert widgets.index(view._btn_statistics) == widgets.index(view._btn_special_order) - 1  # noqa: SLF001
     assert widgets.index(view._btn_start) == widgets.index(view._btn_stop) - 1  # noqa: SLF001
+    for alert_button in (
+        view._btn_sendungen_alert,
+        view._btn_digital_licenses_alert,
+        view._btn_transfer_alert,
+        view._btn_mollie_alert,
+        view._btn_lieferkorrektur_review_alert,
+        view._btn_lieferkorrektur_due_alert,
+    ):
+        assert alert_button.parentWidget() is view._btn_start.parentWidget()  # noqa: SLF001
     assert not hasattr(view, "_btn_beenden")
 
 

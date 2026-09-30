@@ -436,19 +436,20 @@ class TagesgeschaeftView(QWidget):
         self._main_layout.setSpacing(0)
 
         action_bar = QWidget()
-        action_bar_lay = QVBoxLayout(action_bar)
-        action_bar_lay.setContentsMargins(12, 4, 12, 4)
-        action_bar_lay.setSpacing(2)
-
-        bar = QWidget()
-        bar_lay = QHBoxLayout(bar)
-        bar_lay.setContentsMargins(0, 0, 0, 0)
+        bar_lay = QHBoxLayout(action_bar)
+        bar_lay.setContentsMargins(12, 4, 12, 4)
         bar_lay.setSpacing(8)
+        action_bar.setObjectName("invoiceActionBar")
 
         self._btn_refresh = QToolButton()
         self._btn_refresh.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         self._btn_refresh.setIconSize(QSize(19, 19))
         self._btn_refresh.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._btn_refresh.setObjectName("invoiceRefreshButton")
+        self._btn_refresh.setStyleSheet(
+            "QToolButton { background: #c9a24d; color: #111827; border: 1px solid #e8c96f;"
+            " border-radius: 6px; } QToolButton:hover { background: #e8c96f; }"
+        )
         self._btn_refresh.setToolTip("Rechnungen aktualisieren")
         self._btn_refresh.setAccessibleName("Rechnungen aktualisieren")
         self._btn_refresh.setFixedHeight(34)
@@ -468,6 +469,11 @@ class TagesgeschaeftView(QWidget):
             self._btn_label_menu.setIcon(QIcon(str(label_icon)))
         self._btn_label_menu.setIconSize(QSize(19, 19))
         self._btn_label_menu.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._btn_label_menu.setObjectName("invoiceLabelButton")
+        self._btn_label_menu.setStyleSheet(
+            "QToolButton { background: #c9a24d; color: #111827; border: 1px solid #e8c96f;"
+            " border-radius: 6px; } QToolButton:hover { background: #e8c96f; }"
+        )
         self._btn_label_menu.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._btn_label_menu.setToolTip("Label drucken: Custom-Label oder PLC-Label")
         self._btn_label_menu.setAccessibleName("Label drucken")
@@ -484,6 +490,11 @@ class TagesgeschaeftView(QWidget):
         )
         self._btn_statistics.setIconSize(QSize(19, 19))
         self._btn_statistics.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._btn_statistics.setObjectName("invoiceStatisticsButton")
+        self._btn_statistics.setStyleSheet(
+            "QToolButton { background: #c9a24d; color: #111827; border: 1px solid #e8c96f;"
+            " border-radius: 6px; } QToolButton:hover { background: #e8c96f; }"
+        )
         self._btn_statistics.setToolTip("Statistik-Zentrale öffnen")
         self._btn_statistics.setAccessibleName("Statistik-Zentrale öffnen")
         self._btn_statistics.setFixedSize(40, 34)
@@ -496,12 +507,11 @@ class TagesgeschaeftView(QWidget):
         self._btn_special_order.clicked.connect(self._open_special_order)
         bar_lay.addWidget(self._btn_special_order)
 
-        bar_lay.addStretch()
-
         self._btn_start = QToolButton()
         self._btn_start.setText("START")
         self._btn_start.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
         self._btn_start.setIconSize(QSize(18, 18))
+        self._btn_start.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._btn_start.setToolTip("START: Rechnungen + Labels + Fulfillment + Mail")
         self._btn_start.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self._btn_start.setFixedHeight(34)
@@ -513,7 +523,6 @@ class TagesgeschaeftView(QWidget):
             " QToolButton:pressed { background-color: #14532d; }"
             " QToolButton:disabled { background-color: #cbd5e1; color: #64748b; }"
             " QToolButton::menu-button { border-left: 1px solid rgba(255,255,255,0.35); width: 26px; }"
-            " QToolButton::menu-arrow { image: none; }"
         )
         self._btn_start.clicked.connect(
             lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, include_product_print=False)
@@ -543,14 +552,11 @@ class TagesgeschaeftView(QWidget):
             " font-weight: bold; font-size: 13px; }"
             " QPushButton:hover { background-color: #b91c1c; }"
             " QPushButton:pressed { background-color: #991b1b; }"
-            " QPushButton:disabled { background-color: #cfd8dc; color: #607d8b; }"
+            " QPushButton:disabled { background-color: #4b1f24; color: #fca5a5; border: 1px solid #7f1d1d; }"
         )
         self._btn_stop.clicked.connect(self._on_start_stop_clicked)
 
-        self._alerts_bar = QWidget()
-        alerts_lay = QHBoxLayout(self._alerts_bar)
-        alerts_lay.setContentsMargins(0, 0, 0, 0)
-        alerts_lay.setSpacing(6)
+        alerts_lay = bar_lay
 
         self._btn_sendungen_alert = self._build_alert_button("OFFENE SENDUNGEN")
         self._btn_sendungen_alert.clicked.connect(self._on_sendungen_alert_clicked)
@@ -584,15 +590,10 @@ class TagesgeschaeftView(QWidget):
         self._btn_lieferkorrektur_due_alert.hide()
         alerts_lay.addWidget(self._btn_lieferkorrektur_due_alert)
 
-        alerts_lay.addStretch()
-
         bar_lay.addStretch()
         bar_lay.addWidget(self._btn_start)
         bar_lay.addWidget(self._btn_stop)
 
-        action_bar_lay.addWidget(bar)
-        action_bar_lay.addWidget(self._alerts_bar)
-        self._alerts_bar.hide()
         self._main_layout.addWidget(action_bar)
 
         self._invoice_loading = QLabel("Rechnungen-Oberflaeche wird vorbereitet...")
@@ -780,19 +781,6 @@ class TagesgeschaeftView(QWidget):
         )
         self._update_alert_button(
             self._btn_lieferkorrektur_due_alert, "LIEFERKORREKTUR FAELLIG", lieferkorrektur_due_count
-        )
-        self._alerts_bar.setVisible(
-            any(
-                not button.isHidden()
-                for button in (
-                    self._btn_sendungen_alert,
-                    self._btn_digital_licenses_alert,
-                    self._btn_transfer_alert,
-                    self._btn_mollie_alert,
-                    self._btn_lieferkorrektur_review_alert,
-                    self._btn_lieferkorrektur_due_alert,
-                )
-            )
         )
         if int(counts.get("lieferkorrektur_new_review_cases", 0)) > 0:
             self._lieferkorrektur_deferred_case_ids.clear()

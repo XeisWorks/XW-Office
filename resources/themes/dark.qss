@@ -1,6 +1,11 @@
 /* XeisWorks Office — Dark Theme Overrides */
 /* Applied on top of qt-material dark_gold theme */
 
+QWidget#invoiceActionBar {
+    background-color: #111827;
+    border-bottom: 1px solid #374151;
+}
+
 /* Sidebar specific */
 Sidebar {
     background-color: #16213e;
