@@ -175,9 +175,10 @@ class B2bCreditService:
         if order_id and callable(fetch):
             try:
                 payload = fetch(order_id)
-                fresh_status = str(payload.get("paymentStatus") or "").strip().upper()
-                if fresh_status:
-                    return fresh_status
+                if isinstance(payload, dict):
+                    fresh_status = str(payload.get("paymentStatus") or "").strip().upper()
+                    if fresh_status:
+                        return fresh_status
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Wix payment status failed ref=%s: %s", reference, exc)
         return str(order.get("paymentStatus") or order.get("payment_status") or "").strip().upper()
