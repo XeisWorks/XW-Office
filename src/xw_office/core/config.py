@@ -64,6 +64,14 @@ class WixSection:
 
 
 @dataclass(frozen=True)
+class FlowApiSection:
+    """Read-only XW-Flow endpoints used for cross-repository analytics."""
+
+    base_url: str = ""
+    timeout_seconds: float = 10.0
+
+
+@dataclass(frozen=True)
 class FinanzOnlineSection:
     wsdl_url: str = ""
     operation_name: str = "submitUva"
@@ -290,6 +298,7 @@ class AppConfig:
     app: AppSection = field(default_factory=AppSection)
     sevdesk: SevdeskSection = field(default_factory=SevdeskSection)
     wix: WixSection = field(default_factory=WixSection)
+    flow_api: FlowApiSection = field(default_factory=FlowApiSection)
     finanzonline: FinanzOnlineSection = field(default_factory=FinanzOnlineSection)
     printing: PrintingSection = field(default_factory=PrintingSection)
     inventory: InventorySection = field(default_factory=InventorySection)
@@ -343,6 +352,10 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     yaml_data.setdefault("wix", {})["api_key"] = os.getenv("WIX_API_KEY", "")
     yaml_data.setdefault("wix", {})["site_id"] = os.getenv("WIX_SITE_ID", "")
     yaml_data.setdefault("wix", {})["account_id"] = os.getenv("WIX_ACCOUNT_ID", "")
+    yaml_data.setdefault("flow_api", {})["base_url"] = os.getenv(
+        "XW_FLOW_API_BASE_URL",
+        yaml_data.setdefault("flow_api", {}).get("base_url", ""),
+    )
     yaml_data.setdefault("finanzonline", {})["wsdl_url"] = os.getenv(
         "FON_SOAP_WSDL",
         yaml_data.setdefault("finanzonline", {}).get("wsdl_url", ""),

@@ -10,12 +10,16 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from xw_office.core.worker import BackgroundWorker
 from xw_office.services.statistics import StatsSummary, StatisticsService
+from xw_office.services.plc.statistics import PlcStatisticsService
+from xw_office.ui.modules.statistics.plc_view import PlcStatisticsView
+from xw_office.ui.modules.statistics.web_analytics import WebAnalyticsView
 from xw_office.ui.widgets.data_table import DataTable
 
 if TYPE_CHECKING:
@@ -53,6 +57,17 @@ class StatisticsView(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(10)
+        tabs = QTabWidget()
+        root.addWidget(tabs)
+
+        sevdesk_page = QWidget()
+        sevdesk_root = QVBoxLayout(sevdesk_page)
+        sevdesk_root.setContentsMargins(0, 0, 0, 0)
+        sevdesk_root.setSpacing(10)
+        tabs.addTab(sevdesk_page, "sevDesk")
+        tabs.addTab(WebAnalyticsView(container), "Webshop & Zahlungen")
+        plc_service: PlcStatisticsService = container.resolve(PlcStatisticsService)
+        tabs.addTab(PlcStatisticsView(plc_service), "PLC-Versand")
 
         bar = QHBoxLayout()
         self._status_lbl = QLabel("Statistiken werden geladen...")
@@ -62,7 +77,7 @@ class StatisticsView(QWidget):
         self._refresh_btn = QPushButton("Aktualisieren")
         self._refresh_btn.clicked.connect(self._load)
         bar.addWidget(self._refresh_btn)
-        root.addLayout(bar)
+        sevdesk_root.addLayout(bar)
 
         self._cards_row = QHBoxLayout()
         self._cards_row.setSpacing(10)
@@ -73,15 +88,15 @@ class StatisticsView(QWidget):
         for card in (self._card_total, self._card_paid, self._card_open, self._card_gross):
             self._cards_row.addWidget(card)
         self._cards_row.addStretch()
-        root.addLayout(self._cards_row)
+        sevdesk_root.addLayout(self._cards_row)
 
         monthly_lbl = QLabel("Umsatz nach Monat")
         monthly_lbl.setObjectName("sectionLabel")
-        root.addWidget(monthly_lbl)
+        sevdesk_root.addWidget(monthly_lbl)
 
         self._table = DataTable(["Monat", "Rechnungen", "Brutto EUR"])
         self._table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        root.addWidget(self._table)
+        sevdesk_root.addWidget(self._table)
 
         self._load()
 
@@ -155,4 +170,21 @@ class StatisticsView(QWidget):
                 }
                 for row in reversed(s.by_month)
             ]
+        )
+
+    def request_shutdown(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.cancel()
+        for child in self.findChildren(QWidget):
+            request_shutdown = getattr(child, "request_shutdown", None)
+            if callable(request_shutdown):
+                request_shutdown()
+
+    def shutdown_complete(self) -> bool:
+        if self._worker is not None and self._worker.isRunning():
+            return False
+        return all(
+            not callable(getattr(child, "shutdown_complete", None))
+            or bool(child.shutdown_complete())
+            for child in self.findChildren(QWidget)
         )

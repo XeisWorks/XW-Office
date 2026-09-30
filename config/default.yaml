@@ -24,6 +24,11 @@ wix:
   base_url_v1: "https://www.wixapis.com/stores/v1"
   base_url_v3: "https://www.wixapis.com/stores/v3"
 
+flow_api:
+  # Optional read-only analytics endpoint of wix-sevdesk-api.
+  base_url: ""
+  timeout_seconds: 10
+
 finanzonline:
   wsdl_url: ""
   operation_name: "submitUva"

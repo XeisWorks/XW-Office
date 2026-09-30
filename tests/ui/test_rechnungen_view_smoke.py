@@ -342,27 +342,32 @@ def test_tagesgeschaeft_contains_rechnungen_view(qtbot: object) -> None:
     qtbot.addWidget(view)
     _wait_embedded_rechnungen(qtbot, view)
     assert hasattr(view, "_rechnungen_view")  # noqa: SLF001
-    assert view._btn_start.text() == "▶ START"  # noqa: SLF001
+    assert view._btn_start.text() == "START"  # noqa: SLF001
     assert view._btn_start.menu() is not None  # noqa: SLF001
     assert [action.text() for action in view._btn_start.menu().actions()] == [  # noqa: SLF001
         "Selected",
         "+ Noten",
         "+ Noten Selected",
     ]
-    assert view._btn_refresh.text() == "Aktualisieren"  # noqa: SLF001
+    assert view._btn_refresh.text() == ""  # noqa: SLF001
+    assert not view._btn_refresh.icon().isNull()  # noqa: SLF001
     assert view._btn_draft.text() == "Entwurf"  # noqa: SLF001
-    assert view._btn_custom_label.text() == "Custom-Label"  # noqa: SLF001
-    assert view._btn_manual_plc_label.text() == "PLC-Label"  # noqa: SLF001
-    assert view._btn_plc_statistics.text() == "PLC-Übersicht"  # noqa: SLF001
+    assert view._btn_label_menu.text() == ""  # noqa: SLF001
+    assert [action.text() for action in view._btn_label_menu.menu().actions()] == [  # noqa: SLF001
+        "Custom-Label …",
+        "PLC-Label …",
+    ]
+    assert view._btn_statistics.text() == ""  # noqa: SLF001
+    assert not view._btn_statistics.icon().isNull()  # noqa: SLF001
     assert view._btn_stop.text() == "STOP"  # noqa: SLF001
     assert not view._btn_stop.isEnabled()  # noqa: SLF001
     assert not view._rechnungen_view._toolbar.isVisible()  # noqa: SLF001
     bar_layout = view._btn_start.parentWidget().layout()  # noqa: SLF001
     widgets = [bar_layout.itemAt(i).widget() for i in range(bar_layout.count())]
-    assert widgets.index(view._btn_manual_plc_label) == widgets.index(view._btn_plc_statistics) - 1  # noqa: SLF001
-    assert widgets.index(view._btn_plc_statistics) == widgets.index(view._btn_special_order) - 1  # noqa: SLF001
+    assert widgets.index(view._btn_label_menu) == widgets.index(view._btn_statistics) - 1  # noqa: SLF001
+    assert widgets.index(view._btn_statistics) == widgets.index(view._btn_special_order) - 1  # noqa: SLF001
     assert widgets.index(view._btn_start) == widgets.index(view._btn_stop) - 1  # noqa: SLF001
-    assert widgets.index(view._btn_stop) == widgets.index(view._btn_beenden) - 1  # noqa: SLF001
+    assert not hasattr(view, "_btn_beenden")
 
 
 def test_start_click_disables_start_immediately(qtbot: object, monkeypatch) -> None:

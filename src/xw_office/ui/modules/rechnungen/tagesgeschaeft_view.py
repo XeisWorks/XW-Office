@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import time
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QCloseEvent, QHideEvent, QShowEvent
+from PySide6.QtCore import QTimer, QSize, Qt
+from PySide6.QtGui import QCloseEvent, QHideEvent, QIcon, QShowEvent
 from PySide6.QtWidgets import (
     QApplication,
     QToolButton,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -434,14 +436,23 @@ class TagesgeschaeftView(QWidget):
         self._main_layout.setSpacing(0)
 
         action_bar = QWidget()
-        action_bar.setFixedHeight(44)
-        bar_lay = QHBoxLayout(action_bar)
-        bar_lay.setContentsMargins(12, 4, 12, 4)
+        action_bar_lay = QVBoxLayout(action_bar)
+        action_bar_lay.setContentsMargins(12, 4, 12, 4)
+        action_bar_lay.setSpacing(2)
+
+        bar = QWidget()
+        bar_lay = QHBoxLayout(bar)
+        bar_lay.setContentsMargins(0, 0, 0, 0)
         bar_lay.setSpacing(8)
 
-        self._btn_refresh = QPushButton("Aktualisieren")
-        self._btn_refresh.setToolTip("Erste Rechnungsseite neu laden")
+        self._btn_refresh = QToolButton()
+        self._btn_refresh.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
+        self._btn_refresh.setIconSize(QSize(19, 19))
+        self._btn_refresh.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._btn_refresh.setToolTip("Rechnungen aktualisieren")
+        self._btn_refresh.setAccessibleName("Rechnungen aktualisieren")
         self._btn_refresh.setFixedHeight(34)
+        self._btn_refresh.setFixedWidth(38)
         self._btn_refresh.clicked.connect(self._reload_invoice_view)
         bar_lay.addWidget(self._btn_refresh)
 
@@ -451,27 +462,33 @@ class TagesgeschaeftView(QWidget):
         self._btn_draft.clicked.connect(self._create_invoice_draft)
         bar_lay.addWidget(self._btn_draft)
 
-        self._btn_custom_label = QPushButton("Custom-Label")
-        self._btn_custom_label.setToolTip("Freie Lieferadresse eingeben und direkt als Label drucken")
-        self._btn_custom_label.setFixedHeight(34)
-        self._btn_custom_label.clicked.connect(self._open_custom_label)
-        bar_lay.addWidget(self._btn_custom_label)
+        self._btn_label_menu = QToolButton()
+        label_icon = Path(__file__).resolve().parents[5] / "icons" / "labelprint.png"
+        if label_icon.exists():
+            self._btn_label_menu.setIcon(QIcon(str(label_icon)))
+        self._btn_label_menu.setIconSize(QSize(19, 19))
+        self._btn_label_menu.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._btn_label_menu.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._btn_label_menu.setToolTip("Label drucken: Custom-Label oder PLC-Label")
+        self._btn_label_menu.setAccessibleName("Label drucken")
+        self._btn_label_menu.setFixedSize(40, 34)
+        label_menu = QMenu(self._btn_label_menu)
+        label_menu.addAction("Custom-Label …").triggered.connect(self._open_custom_label)
+        label_menu.addAction("PLC-Label …").triggered.connect(self._open_manual_plc_label)
+        self._btn_label_menu.setMenu(label_menu)
+        bar_lay.addWidget(self._btn_label_menu)
 
-        self._btn_manual_plc_label = QPushButton("PLC-Label")
-        self._btn_manual_plc_label.setToolTip(
-            "PLC-Label mit manuell eingegebener Empfängeradresse erstellen"
+        self._btn_statistics = QToolButton()
+        self._btn_statistics.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
         )
-        self._btn_manual_plc_label.setFixedHeight(34)
-        self._btn_manual_plc_label.clicked.connect(self._open_manual_plc_label)
-        bar_lay.addWidget(self._btn_manual_plc_label)
-
-        self._btn_plc_statistics = QPushButton("PLC-Übersicht")
-        self._btn_plc_statistics.setToolTip(
-            "Wochen-, Monats- und Jahresstatistik der gedruckten PLC-Labels"
-        )
-        self._btn_plc_statistics.setFixedHeight(34)
-        self._btn_plc_statistics.clicked.connect(self._open_plc_statistics)
-        bar_lay.addWidget(self._btn_plc_statistics)
+        self._btn_statistics.setIconSize(QSize(19, 19))
+        self._btn_statistics.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._btn_statistics.setToolTip("Statistik-Zentrale öffnen")
+        self._btn_statistics.setAccessibleName("Statistik-Zentrale öffnen")
+        self._btn_statistics.setFixedSize(40, 34)
+        self._btn_statistics.clicked.connect(self._open_statistics)
+        bar_lay.addWidget(self._btn_statistics)
 
         self._btn_special_order = QPushButton("Sonderauftrag")
         self._btn_special_order.setToolTip("Wix Payment Link fuer Sonderauftrag erstellen")
@@ -482,16 +499,19 @@ class TagesgeschaeftView(QWidget):
         bar_lay.addStretch()
 
         self._btn_start = QToolButton()
-        self._btn_start.setText("▶ START")
+        self._btn_start.setText("START")
+        self._btn_start.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        self._btn_start.setIconSize(QSize(18, 18))
         self._btn_start.setToolTip("START: Rechnungen + Labels + Fulfillment + Mail")
         self._btn_start.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self._btn_start.setFixedHeight(34)
         self._btn_start.setFixedWidth(145)
         self._btn_start.setStyleSheet(
-            "QToolButton { background-color: #1976d2; color: white; border-radius: 6px;"
+            "QToolButton { background-color: #15803d; color: white; border-radius: 6px;"
             " font-weight: bold; font-size: 13px; }"
-            " QToolButton:hover { background-color: #1565c0; }"
-            " QToolButton:pressed { background-color: #0d47a1; }"
+            " QToolButton:hover { background-color: #166534; }"
+            " QToolButton:pressed { background-color: #14532d; }"
+            " QToolButton:disabled { background-color: #cbd5e1; color: #64748b; }"
             " QToolButton::menu-button { border-left: 1px solid rgba(255,255,255,0.35); width: 26px; }"
             " QToolButton::menu-arrow { image: none; }"
         )
@@ -512,68 +532,67 @@ class TagesgeschaeftView(QWidget):
         self._btn_start.setMenu(start_menu)
 
         self._btn_stop = QPushButton("STOP")
+        self._btn_stop.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop))
+        self._btn_stop.setIconSize(QSize(18, 18))
         self._btn_stop.setToolTip("Laufenden START nach der aktuellen Rechnung anhalten")
         self._btn_stop.setFixedHeight(34)
-        self._btn_stop.setFixedWidth(100)
+        self._btn_stop.setFixedWidth(92)
         self._btn_stop.setEnabled(False)
         self._btn_stop.setStyleSheet(
-            "QPushButton { background-color: #ef6c00; color: white; border-radius: 6px;"
+            "QPushButton { background-color: #dc2626; color: white; border-radius: 6px;"
             " font-weight: bold; font-size: 13px; }"
-            " QPushButton:hover { background-color: #e65100; }"
-            " QPushButton:pressed { background-color: #bf360c; }"
+            " QPushButton:hover { background-color: #b91c1c; }"
+            " QPushButton:pressed { background-color: #991b1b; }"
             " QPushButton:disabled { background-color: #cfd8dc; color: #607d8b; }"
         )
         self._btn_stop.clicked.connect(self._on_start_stop_clicked)
 
+        self._alerts_bar = QWidget()
+        alerts_lay = QHBoxLayout(self._alerts_bar)
+        alerts_lay.setContentsMargins(0, 0, 0, 0)
+        alerts_lay.setSpacing(6)
+
         self._btn_sendungen_alert = self._build_alert_button("OFFENE SENDUNGEN")
         self._btn_sendungen_alert.clicked.connect(self._on_sendungen_alert_clicked)
         self._btn_sendungen_alert.hide()
-        bar_lay.addWidget(self._btn_sendungen_alert)
+        alerts_lay.addWidget(self._btn_sendungen_alert)
 
         self._btn_digital_licenses_alert = self._build_alert_button("DIGITALE LIEFERUNG OFFEN")
         self._btn_digital_licenses_alert.clicked.connect(self._on_digital_licenses_alert_clicked)
         self._btn_digital_licenses_alert.hide()
-        bar_lay.addWidget(self._btn_digital_licenses_alert)
+        alerts_lay.addWidget(self._btn_digital_licenses_alert)
 
         self._btn_transfer_alert = self._build_alert_button("UEBERWEISUNG OFFEN")
         self._btn_transfer_alert.clicked.connect(self._on_transfer_alert_clicked)
         self._btn_transfer_alert.hide()
-        bar_lay.addWidget(self._btn_transfer_alert)
+        alerts_lay.addWidget(self._btn_transfer_alert)
 
         self._btn_mollie_alert = self._build_alert_button("MOLLIE AUTH")
         self._btn_mollie_alert.clicked.connect(self._on_mollie_alert_clicked)
         self._btn_mollie_alert.hide()
-        bar_lay.addWidget(self._btn_mollie_alert)
+        alerts_lay.addWidget(self._btn_mollie_alert)
 
         self._btn_lieferkorrektur_review_alert = self._build_alert_button("KORREKTUR ZU PRUEFEN")
         self._btn_lieferkorrektur_review_alert.clicked.connect(
             self._on_lieferkorrektur_review_alert_clicked
         )
         self._btn_lieferkorrektur_review_alert.hide()
-        bar_lay.addWidget(self._btn_lieferkorrektur_review_alert)
+        alerts_lay.addWidget(self._btn_lieferkorrektur_review_alert)
 
         self._btn_lieferkorrektur_due_alert = self._build_alert_button("LIEFERKORREKTUR FAELLIG")
         self._btn_lieferkorrektur_due_alert.clicked.connect(self._on_lieferkorrektur_due_alert_clicked)
         self._btn_lieferkorrektur_due_alert.hide()
-        bar_lay.addWidget(self._btn_lieferkorrektur_due_alert)
+        alerts_lay.addWidget(self._btn_lieferkorrektur_due_alert)
 
-        bar_lay.addSpacing(18)
+        alerts_lay.addStretch()
+
+        bar_lay.addStretch()
         bar_lay.addWidget(self._btn_start)
         bar_lay.addWidget(self._btn_stop)
 
-        self._btn_beenden = QPushButton("■  Beenden")
-        self._btn_beenden.setToolTip("App beenden (laufende Hintergrundaufgaben werden abgewartet)")
-        self._btn_beenden.setFixedHeight(34)
-        self._btn_beenden.setFixedWidth(130)
-        self._btn_beenden.setStyleSheet(
-            "QPushButton { background-color: #c62828; color: white; border-radius: 6px;"
-            " font-weight: bold; font-size: 13px; }"
-            " QPushButton:hover { background-color: #b71c1c; }"
-            " QPushButton:pressed { background-color: #7f0000; }"
-        )
-        self._btn_beenden.clicked.connect(self._on_beenden_clicked)
-        bar_lay.addWidget(self._btn_beenden)
-
+        action_bar_lay.addWidget(bar)
+        action_bar_lay.addWidget(self._alerts_bar)
+        self._alerts_bar.hide()
         self._main_layout.addWidget(action_bar)
 
         self._invoice_loading = QLabel("Rechnungen-Oberflaeche wird vorbereitet...")
@@ -598,9 +617,8 @@ class TagesgeschaeftView(QWidget):
         for button in (
             self._btn_refresh,
             self._btn_draft,
-            self._btn_custom_label,
-            self._btn_manual_plc_label,
-            self._btn_plc_statistics,
+            self._btn_label_menu,
+            self._btn_statistics,
             self._btn_special_order,
             self._btn_start,
         ):
@@ -625,6 +643,10 @@ class TagesgeschaeftView(QWidget):
     def _open_plc_statistics(self) -> None:
         if self._rechnungen_view is not None:
             self._rechnungen_view.open_plc_statistics_dialog()
+
+    def _open_statistics(self) -> None:
+        signals: AppSignals = self._container.resolve(AppSignals)
+        signals.navigate_to_module.emit(ModuleKey.STATISTICS.value)
 
     def _open_special_order(self) -> None:
         if self._rechnungen_view is not None:
@@ -758,6 +780,19 @@ class TagesgeschaeftView(QWidget):
         )
         self._update_alert_button(
             self._btn_lieferkorrektur_due_alert, "LIEFERKORREKTUR FAELLIG", lieferkorrektur_due_count
+        )
+        self._alerts_bar.setVisible(
+            any(
+                not button.isHidden()
+                for button in (
+                    self._btn_sendungen_alert,
+                    self._btn_digital_licenses_alert,
+                    self._btn_transfer_alert,
+                    self._btn_mollie_alert,
+                    self._btn_lieferkorrektur_review_alert,
+                    self._btn_lieferkorrektur_due_alert,
+                )
+            )
         )
         if int(counts.get("lieferkorrektur_new_review_cases", 0)) > 0:
             self._lieferkorrektur_deferred_case_ids.clear()
@@ -1506,12 +1541,3 @@ class TagesgeschaeftView(QWidget):
             "Fehler",
             f"Nachdrucke-Workflow konnte nicht ausgefuehrt werden:\n\n{exc}",
         )
-
-    def _on_beenden_clicked(self) -> None:
-        """Gracefully shut down the application."""
-        logger.info("User requested application shutdown via BEENDEN button.")
-        window = self.window()
-        if isinstance(window, QWidget):
-            window.close()
-            return
-        QApplication.quit()

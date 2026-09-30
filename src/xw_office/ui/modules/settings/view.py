@@ -93,6 +93,7 @@ _EXTRA_SECRET_KEYS: tuple[str, ...] = (
     "FON_PIN",
     "XW_SPECIAL_ORDER_ENDPOINT",
     "XW_SPECIAL_ORDER_SECRET",
+    "XW_FLOW_API_SECRET",
 )
 
 _DEFAULT_FULFILLMENT_SUBJECT = "Ihre Rechnung {{invoice_number}}"
