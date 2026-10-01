@@ -4,6 +4,7 @@ from __future__ import annotations
 import subprocess
 from threading import Event
 import types
+from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QCheckBox, QMessageBox, QSpinBox, QToolButton
@@ -215,6 +216,11 @@ class _FakeInvoiceProcessingService:
 
     def is_flagged_sku(self, _sku: str) -> bool:
         return False
+
+    def export_invoice_preview_pdf(self, invoice_id: str, target_dir: str) -> Path:
+        target = Path(target_dir) / f"{invoice_id}.pdf"
+        target.write_bytes(b"%PDF-1.4 preview")
+        return target
 
     def read_last_start_overview(self) -> dict[str, object]:
         return dict(self.last_start_overview)
@@ -595,22 +601,33 @@ def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
     assert view._btn_custom_label.text() == "CUSTOM-LABEL"  # noqa: SLF001
     assert view._btn_manual_plc_label.text() == "PLC-LABEL"  # noqa: SLF001
     assert view._btn_plc_statistics.text() == "PLC-ÜBERSICHT"  # noqa: SLF001
-    assert view._btn_print.text().strip() == "Rechnung"  # noqa: SLF001
-    assert view._btn_print_label.text().strip() == "Versandlabel"  # noqa: SLF001
-    assert view._btn_print_plc.text().strip() == "PLC-Label"  # noqa: SLF001
-    assert view._btn_print_music.text().strip() == "Noten"  # noqa: SLF001
+    assert view._btn_print.text() == "Drucken"  # noqa: SLF001
+    assert view._btn_view.text() == "Ansehen"  # noqa: SLF001
+    assert view._btn_open_sevdesk_invoice.text() == "In sevDesk oeffnen"  # noqa: SLF001
+    assert [action.text() for action in view._print_menu.actions() if not action.isSeparator()] == [  # noqa: SLF001
+        "Rechnung",
+        "Versandlabel",
+        "PLC-Label",
+        "Noten / Produkte",
+    ]
+    assert [action.text() for action in view._view_menu.actions()] == [  # noqa: SLF001
+        "Rechnungs-PDF",
+        "PLC-Label",
+        "Zolldokument",
+    ]
     assert not view._btn_print.icon().isNull()  # noqa: SLF001
-    assert not view._btn_print_label.icon().isNull()  # noqa: SLF001
-    assert not view._btn_print_plc.icon().isNull()  # noqa: SLF001
-    assert not view._btn_print_music.icon().isNull()  # noqa: SLF001
-    assert view._btn_print_label.parentWidget() is view._gb_actions  # noqa: SLF001
+    assert not view._btn_view.icon().isNull()  # noqa: SLF001
+    assert not view._btn_open_sevdesk_invoice.icon().isNull()  # noqa: SLF001
     actions_layout = view._gb_actions.layout()  # noqa: SLF001
     assert actions_layout.getItemPosition(actions_layout.indexOf(view._btn_print)) == (0, 0, 1, 1)  # noqa: SLF001
-    assert actions_layout.getItemPosition(actions_layout.indexOf(view._btn_print_label)) == (0, 1, 1, 1)  # noqa: SLF001
-    assert actions_layout.getItemPosition(actions_layout.indexOf(view._btn_print_music)) == (0, 2, 1, 1)  # noqa: SLF001
+    assert actions_layout.getItemPosition(actions_layout.indexOf(view._btn_view)) == (0, 1, 1, 1)  # noqa: SLF001
+    assert actions_layout.getItemPosition(actions_layout.indexOf(view._btn_open_sevdesk_invoice)) == (0, 2, 1, 1)  # noqa: SLF001
+    assert actions_layout.getItemPosition(actions_layout.indexOf(view._btn_open_wix_order)) == (1, 0, 1, 1)  # noqa: SLF001
+    assert actions_layout.getItemPosition(actions_layout.indexOf(view._btn_customer_mail)) == (1, 1, 1, 1)  # noqa: SLF001
+    assert actions_layout.getItemPosition(actions_layout.indexOf(view._btn_send_invoice)) == (1, 2, 1, 1)  # noqa: SLF001
     assert view._btn_open_wix_order.text().strip() == "WIX ORDER"  # noqa: SLF001
     assert view._btn_customer_mail.text() == "✉️ Kundenmail"  # noqa: SLF001
-    assert view._btn_send_invoice.text() == "✉️ Rechnung"  # noqa: SLF001
+    assert view._btn_send_invoice.text() == "Rechnung senden"  # noqa: SLF001
     assert view._shipping_editor is not None  # noqa: SLF001
     assert view._shipping_status.isHidden()  # noqa: SLF001
     assert view._shipping_editor.height() == 28 + (5 * view._shipping_editor.fontMetrics().lineSpacing())  # noqa: SLF001
@@ -619,11 +636,13 @@ def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
     assert view._shipping_editor.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff  # noqa: SLF001
     assert not view._gb_info.isChecked()  # noqa: SLF001
     assert view._info_content.isHidden()  # noqa: SLF001
+
     assert view._gb_actions.isHidden()  # noqa: SLF001
     assert not view._btn_print.isEnabled()  # noqa: SLF001
-    assert not view._btn_print_label.isEnabled()  # noqa: SLF001
-    assert not view._btn_print_plc.isEnabled()  # noqa: SLF001
-    assert not view._btn_print_music.isEnabled()  # noqa: SLF001
+    assert not view._btn_view.isEnabled()  # noqa: SLF001
+    assert not view._btn_open_sevdesk_invoice.isEnabled()  # noqa: SLF001
+    assert not view._print_invoice_action.isEnabled()  # noqa: SLF001
+    assert not view._view_invoice_action.isEnabled()  # noqa: SLF001
     assert not view._btn_open_wix_order.isEnabled()  # noqa: SLF001
     assert not view._btn_customer_mail.isEnabled()  # noqa: SLF001
     assert not view._btn_send_invoice.isEnabled()  # noqa: SLF001
@@ -642,9 +661,57 @@ def test_detail_info_is_collapsed_by_default_and_expands_on_click(qtbot: object)
     assert not view._gb_info.isChecked()  # noqa: SLF001
     assert view._info_content.isHidden()  # noqa: SLF001
 
+
     view._gb_info.setChecked(True)  # noqa: SLF001
 
     assert not view._info_content.isHidden()  # noqa: SLF001
+
+
+def test_selected_invoice_opens_its_sevdesk_deep_link(qtbot: object, monkeypatch: object) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    object.__setattr__(container.config.sevdesk, "base_url", "https://tenant.example/api/v1")
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = invoice_service._draft  # noqa: SLF001
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    view._table.select_source_row(0)  # noqa: SLF001
+    opened: list[str] = []
+
+    def open_url(url: object) -> bool:
+        opened.append(url.toString())
+        return True
+
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.view.QDesktopServices.openUrl", open_url)
+
+    view._on_open_sevdesk_invoice_clicked()  # noqa: SLF001
+
+    assert opened == ["https://tenant.example/#/invoices/draft-1"]
+    assert view._btn_open_sevdesk_invoice.text() == "Rechnung bearbeiten"  # noqa: SLF001
+
+
+def test_invoice_pdf_preview_opens_local_pdf_without_printing(qtbot: object, monkeypatch: object) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = invoice_service._draft  # noqa: SLF001
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    view._table.select_source_row(0)  # noqa: SLF001
+    opened: list[str] = []
+
+    def open_url(url: object) -> bool:
+        opened.append(url.toLocalFile())
+        return True
+
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.view.QDesktopServices.openUrl", open_url)
+
+    view._on_open_invoice_pdf_clicked()  # noqa: SLF001
+    qtbot.waitUntil(lambda: view._invoice_pdf_preview_worker is None, timeout=3000)  # noqa: SLF001
+
+    assert len(opened) == 1
+    assert opened[0].endswith("draft-1.pdf")
+    assert Path(opened[0]).is_file()
 
 
 def test_detail_buttons_use_same_row_actions_as_invoice_list(qtbot: object, monkeypatch) -> None:

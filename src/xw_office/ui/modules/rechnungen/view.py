@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 import time
+from tempfile import TemporaryDirectory
 from pathlib import Path
 from urllib.parse import quote
 from collections.abc import Callable
@@ -18,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QAbstractListModel, QEvent, QModelIndex, QRect, QSize, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import (
+    QAction,
     QColor,
     QCloseEvent,
     QDesktopServices,
@@ -44,6 +46,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListView,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
@@ -1098,6 +1101,7 @@ class RechnungenView(QWidget):
         self._hint_worker: BackgroundWorker | None = None
         self._fulfillment_step_worker: BackgroundWorker | None = None
         self._invoice_mail_worker: BackgroundWorker | None = None
+        self._invoice_pdf_preview_worker: BackgroundWorker | None = None
         self._delete_draft_worker: BackgroundWorker | None = None
         self._open_overview_worker: BackgroundWorker | None = None
         self._product_print_worker: BackgroundWorker | None = None
@@ -1203,7 +1207,9 @@ class RechnungenView(QWidget):
         self._plc_archive_index_ready = False
         self._pending_plc_archive_popup: InvoiceSummary | None = None
         self._selected_plc_label_path = ""
+        self._selected_plc_customs_path = ""
         self._plc_archive_lookup_cache: dict[tuple[str, str], str] = {}
+        self._invoice_preview_tempdir = TemporaryDirectory(prefix="xw-office-invoice-preview-")
         self._printer_status_initialized = False
         self._post_load_prefetch_seq = 0
         self._deferred_load_payload: tuple[
@@ -1580,52 +1586,103 @@ class RechnungenView(QWidget):
         self._plc_last.hide()
 
         action_button_style = (
-            "QPushButton { background-color: #334155; color: #f8fafc; border: 1px solid #64748b; "
+            "QPushButton, QToolButton { background-color: #334155; color: #f8fafc; border: 1px solid #64748b; "
             "border-radius: 5px; font-weight: 600; padding: 5px 7px; }"
-            "QPushButton:hover { background-color: #475569; border-color: #94a3b8; }"
-            "QPushButton:pressed { background-color: #1e293b; }"
-            "QPushButton:disabled { background-color: #1f2937; color: #64748b; border-color: #334155; }"
+            "QPushButton:hover, QToolButton:hover { background-color: #475569; border-color: #94a3b8; }"
+            "QPushButton:pressed, QToolButton:pressed { background-color: #1e293b; }"
+            "QPushButton:disabled, QToolButton:disabled { background-color: #1f2937; color: #64748b; border-color: #334155; }"
         )
-        print_icon_path = Path(__file__).resolve().parents[5] / "icons" / "print.png"
+        icons_dir = Path(__file__).resolve().parents[5] / "icons"
+        print_icon_path = icons_dir / "print.png"
         print_icon = QIcon(str(print_icon_path)) if print_icon_path.exists() else QIcon()
+        eye_icon = QIcon(str(icons_dir / "eye.svg"))
+        edit_icon = QIcon(str(icons_dir / "edit.svg"))
 
-        self._btn_print = QPushButton("  Rechnung")
+        self._print_invoice_action = QAction("Rechnung", self)
+        self._print_invoice_action.setToolTip("Rechnung drucken")
+        self._print_invoice_action.triggered.connect(self._on_print_clicked)
+        self._print_label_action = QAction("Versandlabel", self)
+        self._print_label_action.setToolTip("Versandlabel mit der angezeigten Wix-Adresse drucken")
+        self._print_label_action.triggered.connect(self._on_print_label_clicked)
+        self._print_plc_action = QAction("PLC-Label", self)
+        self._print_plc_action.setToolTip("PLC-Label drucken")
+        self._print_plc_action.triggered.connect(self._on_print_plc_selected)
+        self._print_music_action = QAction("Noten / Produkte", self)
+        self._print_music_action.setToolTip("Noten und Produkt-PDFs drucken")
+        self._print_music_action.triggered.connect(self._on_print_music_clicked)
+        self._print_menu = QMenu(self)
+        self._print_menu.addActions((
+            self._print_invoice_action,
+            self._print_label_action,
+            self._print_plc_action,
+        ))
+        self._print_menu.addSeparator()
+        self._print_menu.addAction(self._print_music_action)
+        for action in (
+            self._print_invoice_action,
+            self._print_label_action,
+            self._print_plc_action,
+            self._print_music_action,
+        ):
+            action.setEnabled(False)
+
+        self._btn_print = QToolButton()
+        self._btn_print.setText("Drucken")
         self._btn_print.setIcon(print_icon)
         self._btn_print.setIconSize(QSize(18, 18))
-        self._btn_print.setToolTip("Rechnung drucken")
+        self._btn_print.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._btn_print.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._btn_print.setMenu(self._print_menu)
+        self._btn_print.setToolTip("Druckart auswÃ¤hlen")
         self._btn_print.setStyleSheet(action_button_style)
-        self._btn_print.clicked.connect(self._on_print_clicked)
         self._btn_print.setEnabled(False)
         actions_layout.addWidget(self._btn_print, 0, 0)
 
-        self._btn_print_label = QPushButton("  Versandlabel")
-        self._btn_print_label.setIcon(print_icon)
-        self._btn_print_label.setIconSize(QSize(18, 18))
-        self._btn_print_label.setToolTip("Versandlabel mit der angezeigten Wix-Adresse drucken")
-        self._btn_print_label.setStyleSheet(action_button_style)
-        self._btn_print_label.clicked.connect(self._on_print_label_clicked)
-        self._btn_print_label.setEnabled(False)
-        actions_layout.addWidget(self._btn_print_label, 0, 1)
+        self._view_invoice_action = QAction("Rechnungs-PDF", self)
+        self._view_invoice_action.setToolTip("Rechnungs-PDF ansehen")
+        self._view_invoice_action.triggered.connect(self._on_open_invoice_pdf_clicked)
+        self._view_plc_action = QAction("PLC-Label", self)
+        self._view_plc_action.setToolTip("Archiviertes PLC-Label ansehen")
+        self._view_plc_action.triggered.connect(self._on_open_plc_label_clicked)
+        self._view_customs_action = QAction("Zolldokument", self)
+        self._view_customs_action.setToolTip("Archiviertes PLC-Zolldokument ansehen")
+        self._view_customs_action.triggered.connect(self._on_open_plc_customs_clicked)
+        self._view_menu = QMenu(self)
+        self._view_menu.addActions((
+            self._view_invoice_action,
+            self._view_plc_action,
+            self._view_customs_action,
+        ))
+        for action in (
+            self._view_invoice_action,
+            self._view_plc_action,
+            self._view_customs_action,
+        ):
+            action.setEnabled(False)
 
-        self._btn_print_music = QPushButton("  Noten")
-        self._btn_print_music.setIcon(print_icon)
-        self._btn_print_music.setIconSize(QSize(18, 18))
-        self._btn_print_music.setToolTip("Noten drucken")
-        self._btn_print_music.setStyleSheet(action_button_style)
-        self._btn_print_music.clicked.connect(self._on_print_music_clicked)
-        self._btn_print_music.setEnabled(False)
-        actions_layout.addWidget(self._btn_print_music, 0, 2)
+        self._btn_view = QToolButton()
+        self._btn_view.setText("Ansehen")
+        self._btn_view.setIcon(eye_icon)
+        self._btn_view.setIconSize(QSize(18, 18))
+        self._btn_view.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._btn_view.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._btn_view.setMenu(self._view_menu)
+        self._btn_view.setToolTip("Rechnung und archivierte Dokumente ansehen")
+        self._btn_view.setStyleSheet(action_button_style)
+        self._btn_view.setEnabled(False)
+        actions_layout.addWidget(self._btn_view, 0, 1)
 
-        self._btn_print_plc = QPushButton("  PLC-Label")
-        self._btn_print_plc.setIcon(print_icon)
-        self._btn_print_plc.setIconSize(QSize(18, 18))
-        self._btn_print_plc.setToolTip("PLC-Label drucken")
-        self._btn_print_plc.setStyleSheet(action_button_style)
-        self._btn_print_plc.clicked.connect(self._on_print_plc_selected)
-        self._btn_print_plc.setEnabled(False)
-        actions_layout.addWidget(self._btn_print_plc, 1, 0)
+        self._btn_open_sevdesk_invoice = QPushButton()
+        self._btn_open_sevdesk_invoice.setIcon(edit_icon)
+        self._btn_open_sevdesk_invoice.setIconSize(QSize(18, 18))
+        self._btn_open_sevdesk_invoice.setText("In sevDesk oeffnen")
+        self._btn_open_sevdesk_invoice.setToolTip("Ausgewaehlte Rechnung in sevDesk oeffnen")
+        self._btn_open_sevdesk_invoice.setStyleSheet(action_button_style)
+        self._btn_open_sevdesk_invoice.clicked.connect(self._on_open_sevdesk_invoice_clicked)
+        self._btn_open_sevdesk_invoice.setEnabled(False)
+        actions_layout.addWidget(self._btn_open_sevdesk_invoice, 0, 2)
 
-        wix_icon_path = Path(__file__).resolve().parents[5] / "icons" / "wix.png"
+        wix_icon_path = icons_dir / "wix.png"
         self._btn_open_wix_order = QPushButton("  WIX ORDER")
         if wix_icon_path.exists():
             self._btn_open_wix_order.setIcon(QIcon(str(wix_icon_path)))
@@ -1634,27 +1691,23 @@ class RechnungenView(QWidget):
         self._btn_open_wix_order.setStyleSheet(action_button_style)
         self._btn_open_wix_order.clicked.connect(lambda: self._run_selected_row_action("wix"))
         self._btn_open_wix_order.setEnabled(False)
-        actions_layout.addWidget(self._btn_open_wix_order, 1, 1)
+        actions_layout.addWidget(self._btn_open_wix_order, 1, 0)
 
         self._btn_customer_mail = QPushButton("✉️ Kundenmail")
         self._btn_customer_mail.setToolTip("Kundenmail wie über die Aktion in der Rechnungsliste öffnen")
         self._btn_customer_mail.setStyleSheet(action_button_style)
         self._btn_customer_mail.clicked.connect(lambda: self._run_selected_row_action("mail"))
         self._btn_customer_mail.setEnabled(False)
-        actions_layout.addWidget(self._btn_customer_mail, 1, 2)
+        actions_layout.addWidget(self._btn_customer_mail, 1, 1)
 
         self._btn_send_invoice = QPushButton("✉️ Rechnung")
+        self._btn_send_invoice.setText("Rechnung senden")
+        self._btn_send_invoice.setToolTip("Rechnung per E-Mail senden")
         self._btn_send_invoice.setStyleSheet(action_button_style)
         self._btn_send_invoice.clicked.connect(self._on_send_invoice_clicked)
         self._btn_send_invoice.setEnabled(False)
-        actions_layout.addWidget(self._btn_send_invoice, 2, 0)
+        actions_layout.addWidget(self._btn_send_invoice, 1, 2)
 
-        self._btn_open_plc_label = QPushButton("PLC-PDF öffnen")
-        self._btn_open_plc_label.setStyleSheet(action_button_style)
-        self._btn_open_plc_label.clicked.connect(self._on_open_plc_label_clicked)
-        self._btn_open_plc_label.setEnabled(False)
-        self._btn_open_plc_label.hide()
-        actions_layout.addWidget(self._btn_open_plc_label, 2, 1)
         self._gb_actions.hide()
         detail_main.addWidget(self._gb_actions)
 
@@ -1818,6 +1871,7 @@ class RechnungenView(QWidget):
                 self._hint_worker,
                 self._fulfillment_step_worker,
                 self._invoice_mail_worker,
+                self._invoice_pdf_preview_worker,
                 self._delete_draft_worker,
                 self._open_overview_worker,
                 self._product_print_worker,
@@ -4375,15 +4429,23 @@ class RechnungenView(QWidget):
         self._overlay.raise_()
         for button in (
             self._btn_print,
-            self._btn_print_plc,
-            self._btn_print_music,
-            self._btn_print_label,
+            self._btn_view,
+            self._btn_open_sevdesk_invoice,
             self._btn_open_wix_order,
             self._btn_customer_mail,
-            self._btn_open_plc_label,
             self._btn_send_invoice,
         ):
             button.setEnabled(False)
+        for action in (
+            self._print_invoice_action,
+            self._print_label_action,
+            self._print_plc_action,
+            self._print_music_action,
+            self._view_invoice_action,
+            self._view_plc_action,
+            self._view_customs_action,
+        ):
+            action.setEnabled(False)
 
     def _clear_detail_actions_busy(self) -> None:
         self._overlay.hide()
@@ -4675,7 +4737,7 @@ class RechnungenView(QWidget):
         if row is not None and 0 <= row < len(self._summaries):
             invoice_ref = self._summaries[row].invoice_number or self._summaries[row].id
 
-        self._btn_print_music.setEnabled(False)
+        self._print_music_action.setEnabled(False)
         signals: AppSignals = self._container.resolve(AppSignals)
         total_copies = sum(qty for _block, qty, _job in selected_jobs)
         signals.status_message.emit(
@@ -5079,6 +5141,73 @@ class RechnungenView(QWidget):
             return
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
             QMessageBox.warning(self, "PLC-PDF öffnen", "Das PLC-Label konnte nicht geöffnet werden.")
+
+    def _on_open_plc_customs_clicked(self) -> None:
+        path = str(self._selected_plc_customs_path or "").strip()
+        if not path:
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+            QMessageBox.warning(self, "Zolldokument oeffnen", "Das Zolldokument konnte nicht geoeffnet werden.")
+
+    def _on_open_invoice_pdf_clicked(self) -> None:
+        summary = self._require_selected_invoice()
+        if summary is None:
+            return
+        if self._invoice_pdf_preview_worker is not None and self._invoice_pdf_preview_worker.isRunning():
+            return
+
+        self._set_detail_actions_busy("Rechnungs-PDF wird geladen...")
+        invoice_id = str(summary.id or "").strip()
+        target_dir = self._invoice_preview_tempdir.name
+
+        def job() -> dict[str, str]:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            path = service.export_invoice_preview_pdf(invoice_id, target_dir)
+            return {"invoice": summary.invoice_number or invoice_id, "path": os.fspath(path)}
+
+        self._invoice_pdf_preview_worker = BackgroundWorker(job)
+        self._invoice_pdf_preview_worker.signals.result.connect(self._on_invoice_pdf_preview_result)
+        self._invoice_pdf_preview_worker.signals.error.connect(self._on_invoice_pdf_preview_error)
+        self._invoice_pdf_preview_worker.signals.finished.connect(self._on_invoice_pdf_preview_finished)
+        self._invoice_pdf_preview_worker.start()
+
+    def _on_invoice_pdf_preview_result(self, payload: object) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        path = str(data.get("path") or "").strip()
+        if not path or not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+            QMessageBox.warning(
+                self,
+                "Rechnungs-PDF ansehen",
+                "Das Rechnungs-PDF konnte nicht geoeffnet werden.",
+            )
+
+    def _on_invoice_pdf_preview_error(self, exc: Exception) -> None:
+        QMessageBox.warning(
+            self,
+            "Rechnungs-PDF ansehen",
+            f"Rechnungs-PDF konnte nicht geladen werden:\n\n{exc}",
+        )
+
+    def _on_invoice_pdf_preview_finished(self) -> None:
+        self._invoice_pdf_preview_worker = None
+        self._clear_detail_actions_busy()
+
+    def _on_open_sevdesk_invoice_clicked(self) -> None:
+        summary = self._require_selected_invoice()
+        if summary is None:
+            return
+        base = str(
+            self._container.config.sevdesk.base_url or "https://my.sevdesk.de/api/v1"
+        ).strip().rstrip("/")
+        if base.endswith("/api/v1"):
+            base = base[:-7]
+        url = f"{base}/#/invoices/{quote(str(summary.id or '').strip(), safe='')}"
+        if not QDesktopServices.openUrl(QUrl(url)):
+            QMessageBox.warning(
+                self,
+                "sevDesk oeffnen",
+                "Die Rechnung konnte nicht in sevDesk geoeffnet werden.",
+            )
 
     def _open_customer_mail(self, summary: InvoiceSummary) -> None:
         if self._customer_mail_worker is not None and self._customer_mail_worker.isRunning():
@@ -5918,20 +6047,36 @@ class RechnungenView(QWidget):
     def _update_plc_controls(self) -> None:
         selected = self._selected_summary()
         enabled = self._print_allowed and (selected is not None)
-        self._btn_print.setEnabled(enabled)
-        self._btn_print_plc.setEnabled(selected is not None)
-        self._btn_print_music.setEnabled(enabled)
-        self._btn_print_label.setEnabled(enabled and len(self._current_shipping_lines()) >= 2)
+        has_selection = selected is not None
+        self._btn_print.setEnabled(has_selection)
+        self._print_invoice_action.setEnabled(enabled)
+        self._print_label_action.setEnabled(enabled and len(self._current_shipping_lines()) >= 2)
+        self._print_plc_action.setEnabled(has_selection)
+        self._print_music_action.setEnabled(enabled)
+        self._btn_view.setEnabled(has_selection)
+        self._view_invoice_action.setEnabled(has_selection)
+        self._btn_open_sevdesk_invoice.setEnabled(has_selection)
         self._btn_open_wix_order.setEnabled(selected is not None)
         self._btn_customer_mail.setEnabled(selected is not None)
         self._btn_send_invoice.setEnabled(selected is not None)
 
         self._selected_plc_label_path = ""
+        self._selected_plc_customs_path = ""
         if selected is not None:
             self._selected_plc_label_path = self._resolve_plc_archive_path_for_summary(selected)
+            self._selected_plc_customs_path = self._resolve_plc_customs_archive_path_for_summary(selected)
         has_archived_plc = bool(self._selected_plc_label_path)
-        self._btn_open_plc_label.setVisible(has_archived_plc)
-        self._btn_open_plc_label.setEnabled(has_archived_plc)
+        has_archived_customs = bool(self._selected_plc_customs_path)
+        self._view_plc_action.setEnabled(has_archived_plc)
+        self._view_customs_action.setEnabled(has_archived_customs)
+        if selected is not None and selected.status_code == _DRAFT_STATUS:
+            self._btn_open_sevdesk_invoice.setText("Rechnung bearbeiten")
+            self._btn_open_sevdesk_invoice.setToolTip("Rechnungsentwurf in sevDesk bearbeiten")
+        else:
+            self._btn_open_sevdesk_invoice.setText("In sevDesk oeffnen")
+            self._btn_open_sevdesk_invoice.setToolTip(
+                "Rechnung in sevDesk oeffnen; Bearbeitung haengt von der Festschreibung ab"
+            )
 
     @staticmethod
     def _normalize_shipping_lines(lines: list[str] | None) -> list[str]:

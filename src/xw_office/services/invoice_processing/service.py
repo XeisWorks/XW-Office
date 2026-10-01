@@ -1007,6 +1007,25 @@ class InvoiceProcessingService:
         target.write_bytes(pdf_bytes)
         return target
 
+    def export_invoice_preview_pdf(self, invoice_id: str, target_dir: Path | str) -> Path:
+        """Persist a rendered invoice PDF for local viewing without fulfillment effects."""
+        summary = self._load_summary_by_id(invoice_id)
+        pdf_bytes = self._get_invoice_pdf_bytes(
+            summary.id,
+            expected_invoice_number=summary.invoice_number,
+        )
+        if not pdf_bytes:
+            raise RuntimeError("PDF nicht verfuegbar")
+        directory = Path(target_dir).expanduser().resolve(strict=False)
+        directory.mkdir(parents=True, exist_ok=True)
+        invoice_number = str(summary.invoice_number or summary.id or "invoice").strip()
+        safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", invoice_number).strip("._") or "invoice"
+        # Keep every preview distinct: an external PDF viewer may still lock an
+        # earlier file while the user opens the same invoice again.
+        target = directory / f"{safe}_{int(time.time() * 1000)}.pdf"
+        target.write_bytes(pdf_bytes)
+        return target
+
     def retry_fulfillment_step(
         self,
         invoice_id: str,
