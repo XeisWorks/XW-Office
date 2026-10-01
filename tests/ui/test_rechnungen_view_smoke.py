@@ -686,8 +686,35 @@ def test_selected_invoice_opens_its_sevdesk_deep_link(qtbot: object, monkeypatch
 
     view._on_open_sevdesk_invoice_clicked()  # noqa: SLF001
 
-    assert opened == ["https://tenant.example/#/invoices/draft-1"]
+    assert opened == ["https://tenant.example/invoices/draft-1"]
     assert view._btn_open_sevdesk_invoice.text() == "Rechnung bearbeiten"  # noqa: SLF001
+
+
+def test_invoice_send_requires_confirmation(qtbot: object, monkeypatch: object) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = invoice_service._draft  # noqa: SLF001
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    view._table.select_source_row(0)  # noqa: SLF001
+    prompts: list[tuple[str, str]] = []
+
+    def decline(_parent: object, title: str, text: str, *_args: object) -> QMessageBox.StandardButton:
+        prompts.append((title, text))
+        return QMessageBox.StandardButton.No
+
+    monkeypatch.setattr(QMessageBox, "question", decline)
+
+    view._on_send_invoice_clicked()  # noqa: SLF001
+
+    assert prompts == [
+        (
+            "Rechnung senden",
+            "Rechnung RE-DRAFT wirklich an den Kunden senden?\n\nDer Versand wird danach sofort gestartet.",
+        )
+    ]
+    assert view._invoice_mail_worker is None  # noqa: SLF001
 
 
 def test_invoice_pdf_preview_opens_local_pdf_without_printing(qtbot: object, monkeypatch: object) -> None:

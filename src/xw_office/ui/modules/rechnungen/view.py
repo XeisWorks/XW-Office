@@ -4781,6 +4781,16 @@ class RechnungenView(QWidget):
             return
         if self._invoice_mail_worker is not None and self._invoice_mail_worker.isRunning():
             return
+        answer = QMessageBox.question(
+            self,
+            "Rechnung senden",
+            f"Rechnung {summary.invoice_number or summary.id} wirklich an den Kunden senden?\n\n"
+            "Der Versand wird danach sofort gestartet.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
 
         self._set_detail_actions_busy("Rechnungsmail wird gesendet...")
 
@@ -5196,18 +5206,21 @@ class RechnungenView(QWidget):
         summary = self._require_selected_invoice()
         if summary is None:
             return
-        base = str(
-            self._container.config.sevdesk.base_url or "https://my.sevdesk.de/api/v1"
-        ).strip().rstrip("/")
-        if base.endswith("/api/v1"):
-            base = base[:-7]
-        url = f"{base}/#/invoices/{quote(str(summary.id or '').strip(), safe='')}"
+        url = self._sevdesk_invoice_url(summary.id)
         if not QDesktopServices.openUrl(QUrl(url)):
             QMessageBox.warning(
                 self,
                 "sevDesk oeffnen",
                 "Die Rechnung konnte nicht in sevDesk geoeffnet werden.",
             )
+
+    def _sevdesk_invoice_url(self, invoice_id: str) -> str:
+        base = str(
+            self._container.config.sevdesk.base_url or "https://my.sevdesk.de/api/v1"
+        ).strip().rstrip("/")
+        if base.endswith("/api/v1"):
+            base = base[:-7]
+        return f"{base}/invoices/{quote(str(invoice_id or '').strip(), safe='')}"
 
     def _open_customer_mail(self, summary: InvoiceSummary) -> None:
         if self._customer_mail_worker is not None and self._customer_mail_worker.isRunning():
@@ -6263,11 +6276,7 @@ class RechnungenView(QWidget):
             "\n".join(message_lines),
         )
         if self._open_draft_after_create and invoice_id:
-            base = str(self._container.config.sevdesk.base_url or "https://my.sevdesk.de/api/v1").strip().rstrip("/")
-            if base.endswith("/api/v1"):
-                base = base[:-7]
-            url = f"{base}/#/invoices/{invoice_id}"
-            QDesktopServices.openUrl(QUrl(url))
+            QDesktopServices.openUrl(QUrl(self._sevdesk_invoice_url(invoice_id)))
         self._reload_first_page()
 
     def _on_create_draft_error(self, exc: Exception) -> None:
