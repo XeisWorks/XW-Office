@@ -5220,7 +5220,7 @@ class RechnungenView(QWidget):
         ).strip().rstrip("/")
         if base.endswith("/api/v1"):
             base = base[:-7]
-        return f"{base}/invoices/{quote(str(invoice_id or '').strip(), safe='')}"
+        return f"{base}/fi/detail/type/RE/id/{quote(str(invoice_id or '').strip(), safe='')}"
 
     def _open_customer_mail(self, summary: InvoiceSummary) -> None:
         if self._customer_mail_worker is not None and self._customer_mail_worker.isRunning():

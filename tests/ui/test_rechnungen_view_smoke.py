@@ -686,7 +686,7 @@ def test_selected_invoice_opens_its_sevdesk_deep_link(qtbot: object, monkeypatch
 
     view._on_open_sevdesk_invoice_clicked()  # noqa: SLF001
 
-    assert opened == ["https://tenant.example/invoices/draft-1"]
+    assert opened == ["https://tenant.example/fi/detail/type/RE/id/draft-1"]
     assert view._btn_open_sevdesk_invoice.text() == "Rechnung bearbeiten"  # noqa: SLF001
 
 
