@@ -14,6 +14,7 @@ from xw_office.core.shared_paths import resolve_shared_path
 from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.printing.planned_pdf_printer import print_pdf_by_plan
 from xw_office.services.printing.print_queue import PrintQueueService
+from xw_office.services.invoice_processing.buyer_notes import BuyerNoteCase
 
 try:
     import fitz
@@ -73,6 +74,7 @@ class StartPreflight:
     decisions: list[StartDecision]
     missing_position_data: bool
     b2b_holds: list[dict[str, str]] = field(default_factory=list)
+    buyer_note_cases: list[BuyerNoteCase] = field(default_factory=list)
 
 
 class StartMode(str, Enum):

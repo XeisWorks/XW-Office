@@ -48,6 +48,7 @@ from xw_office.services.inventory.service import (
     StartPreflight,
 )
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.services.invoice_processing.buyer_notes import BuyerNoteCase, BuyerNoteReviewSelection
 from xw_office.services.b2b_credit import B2bCreditService
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
@@ -61,6 +62,7 @@ from xw_office.services.transfers.service import OffeneUeberweisungenService
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 from xw_office.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 from xw_office.ui.modules.rechnungen.reprint_dialog import ReprintPreviewDialog
+from xw_office.ui.modules.rechnungen.buyer_note_review_dialog import BuyerNoteReviewDialog
 from xw_office.ui.modules.rechnungen.view import RechnungenView
 from xw_office.ui.widgets.data_table import DataTable
 from xw_office.ui.widgets.search_bar import SearchBar
@@ -331,6 +333,7 @@ class TagesgeschaeftView(QWidget):
         self._start_selected_invoice_ids: list[str] = []
         self._start_selected_summaries: list[InvoiceSummary] = []
         self._start_selected_only = False
+        self._start_buyer_note_actions: dict[str, tuple[BuyerNoteCase, BuyerNoteReviewSelection]] = {}
         self._sendungen_count = 0
         self._digital_licenses_count = 0
         self._transfer_count = 0
@@ -1005,6 +1008,7 @@ class TagesgeschaeftView(QWidget):
         self._start_selected_only = bool(selected_only)
         self._start_selected_invoice_ids = []
         self._start_selected_summaries = []
+        self._start_buyer_note_actions = {}
         if selected_only:
             if self._rechnungen_view is None:
                 return
@@ -1052,12 +1056,14 @@ class TagesgeschaeftView(QWidget):
                 summaries = invoice_service.load_invoice_summaries(status=100, limit=1000, offset=0)
             credit_service: B2bCreditService = self._container.resolve(B2bCreditService)
             b2b_holds = [hold.as_dict() for hold in credit_service.evaluate(summaries)]
+            buyer_note_cases = invoice_service.load_buyer_note_cases(summaries)
             if not self._start_include_product_print:
                 return StartPreflight(
                     open_invoice_count=open_count,
                     decisions=[],
                     missing_position_data=True,
                     b2b_holds=b2b_holds,
+                    buyer_note_cases=buyer_note_cases,
                 )
             inventory_service: InventoryService = self._container.resolve(InventoryService)
             requirements = invoice_service.build_inventory_requirements(
@@ -1076,6 +1082,7 @@ class TagesgeschaeftView(QWidget):
                 decisions=inventory_preflight.decisions,
                 missing_position_data=inventory_preflight.missing_position_data,
                 b2b_holds=b2b_holds,
+                buyer_note_cases=buyer_note_cases,
             )
 
         self._start_worker = BackgroundWorker(job)
@@ -1100,6 +1107,17 @@ class TagesgeschaeftView(QWidget):
         signals: AppSignals = self._container.resolve(AppSignals)
         self._start_selected_mode = StartMode.INVOICES_AND_PRINT
         self._pending_start_preflight = result
+        if result.buyer_note_cases:
+            review = BuyerNoteReviewDialog(
+                result.buyer_note_cases,
+                allow_delivery_note=self._start_requested_mode == StartMode.INVOICES_AND_PRINT,
+                parent=self,
+            )
+            if review.exec() != QDialog.DialogCode.Accepted:
+                self._set_start_running(False)
+                signals.status_message.emit("START abgebrochen – Käufernotizen nicht bestätigt", 3500)
+                return
+            self._start_buyer_note_actions = review.selections()
         if not self._start_include_product_print:
             logger.info(
                 "Tagesgeschaeft START: direct invoice flow selected_only=%s",
@@ -1372,6 +1390,7 @@ class TagesgeschaeftView(QWidget):
                 should_abort=lambda: self._start_abort_requested,
                 progress_callback=lambda message: signals.status_message.emit(message, 5000),
                 invoice_ids=list(self._start_selected_invoice_ids) if self._start_selected_only else None,
+                buyer_note_actions=dict(self._start_buyer_note_actions),
             )
             inventory_report: StartExecutionReport | None = None
             inventory_warning = ""

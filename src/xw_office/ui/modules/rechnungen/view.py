@@ -3211,6 +3211,8 @@ class RechnungenView(QWidget):
                     "customer_name": item.customer_name,
                     "note": item.note,
                     "order_reference": item.order_reference,
+                    "source": item.source,
+                    "source_label": item.source_label,
                 }
                 for item in snapshot.buyer_notes
             ],
@@ -3318,6 +3320,8 @@ class RechnungenView(QWidget):
                         customer_name=str(row.get("customer_name") or "").strip() or "Käufer nicht verfügbar",
                         note=note,
                         order_reference=str(row.get("order_reference") or "").strip(),
+                        source=str(row.get("source") or "unknown").strip() or "unknown",
+                        source_label=str(row.get("source_label") or "Quelle unbekannt").strip() or "Quelle unbekannt",
                     ))
             assignments: list[UnreleasedAssignment] = []
             for row in raw.get("unreleased_assignments") if isinstance(raw.get("unreleased_assignments"), list) else []:
@@ -3567,6 +3571,9 @@ class RechnungenView(QWidget):
             reference = QLabel(f"Wix {item.order_reference}")
             reference.setStyleSheet("color: #93c5fd; font-size: 10px;")
             header.addWidget(reference)
+        source = QLabel(item.source_label or "Quelle unbekannt")
+        source.setStyleSheet("color: #fbbf24; font-size: 10px; font-weight: 600;")
+        header.addWidget(source)
         layout.addLayout(header)
         note = QLabel(item.note)
         note.setWordWrap(True)
@@ -6014,6 +6021,21 @@ class RechnungenView(QWidget):
         self._wix_order_no.setText(data.get("wix_order_number") or data.get("wix_order_id") or "—")
         self._wix_customer.setText(data.get("wix_customer_name") or "—")
         self._wix_customer_email.setText(data.get("wix_customer_email") or "—")
+        selected = self._selected_summary()
+        sevdesk_note = str(selected.buyer_note or "").strip() if selected is not None else ""
+        wix_note = str(data.get("wix_buyer_note") or "").strip()
+        note_blocks = []
+        if sevdesk_note:
+            note_blocks.append(f"sevDesk-Rechnung:\n{sevdesk_note}")
+        if wix_note:
+            note_blocks.append(f"Wix-Bestellung:\n{wix_note}")
+        if note_blocks:
+            self._dl_note.setText("\n\n".join(note_blocks))
+            self._gb_note.setTitle("Käufernotiz · Quellen")
+            self._gb_note.show()
+        elif selected is not None and not sevdesk_note:
+            self._dl_note.setText("")
+            self._gb_note.hide()
         shipping_country = str(data.get("wix_shipping_country") or "").strip()
         if shipping_country:
             self._dl_country.setText(shipping_country)

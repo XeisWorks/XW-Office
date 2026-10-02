@@ -58,6 +58,7 @@ from xw_office.services.invoice_processing.service import InvoiceProcessingServi
 from xw_office.services.b2b_credit import B2bCreditService
 from xw_office.services.draft_invoice.service import DraftInvoiceService
 from xw_office.services.sendungen.service import OffeneSendungenService
+from xw_office.services.sendungen.delivery_note import DeliveryNoteService
 from xw_office.services.special_orders import SpecialOrderService
 from xw_office.services.transfers.service import OffeneUeberweisungenService
 from xw_office.services.layout.service import LayoutToolsService
@@ -213,6 +214,10 @@ def register_default_services(container: Container) -> None:
         ),
     )
     container.register(
+        DeliveryNoteService,
+        lambda c: DeliveryNoteService(),
+    )
+    container.register(
         InvoiceProcessingService,
         lambda c: InvoiceProcessingService(
             c.config,
@@ -223,6 +228,7 @@ def register_default_services(container: Container) -> None:
             c.resolve(DraftInvoiceService),
             c.resolve(PrintQueueService),
             c.resolve(InventoryService),
+            c.resolve(DeliveryNoteService),
         ),
     )
     container.register(

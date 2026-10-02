@@ -2401,6 +2401,7 @@ class WixOrdersClient:
             "wix_billing_city": billing_parts.get("city", ""),
             "wix_billing_country": billing_parts.get("country", ""),
             "wix_billing_address": "\n".join(billing_lines),
+            "wix_buyer_note": cls._norm_text(order.get("buyerNote") or order.get("buyerNotes")),
         }
 
     def resolve_order_summary(

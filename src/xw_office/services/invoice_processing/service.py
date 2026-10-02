@@ -15,12 +15,20 @@ from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.core.app_paths import state_dir
 from xw_office.core.config import AppConfig
 from xw_office.services.draft_invoice.service import DraftInvoiceService
+from xw_office.services.invoice_processing.buyer_notes import (
+    BuyerNoteCase,
+    BuyerNoteProduct,
+    BuyerNoteReviewSelection,
+    BuyerNoteSource,
+    normalized_lines,
+)
 from xw_office.services.mailing.service import MailAttachment, MailDeliveryService
 from xw_office.services.printing.invoice_printer import InvoicePrinter
 from xw_office.services.printing.label_printer import LabelPrinter
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.sevdesk.invoice_client import InvoiceClient, InvoiceSummary
 from xw_office.services.sevdesk.invoice_client import DEFAULT_SENSITIVE_COUNTRY_CODES
+from xw_office.services.sendungen.delivery_note import DeliveryNoteContext, DeliveryNoteService
 from xw_office.services.shipping.countries import country_label_for_address
 from xw_office.services.wix.client import WixOrdersClient
 
@@ -218,6 +226,7 @@ class _StartPostTask:
     flags: FulfillmentFlags
     digital_only: bool
     manual_licensed: bool = False
+    buyer_note_selection: BuyerNoteReviewSelection | None = None
 
 
 class InvoiceProcessingService:
@@ -233,6 +242,7 @@ class InvoiceProcessingService:
         draft_invoice_service: DraftInvoiceService | None = None,
         print_queue: PrintQueueService | None = None,
         inventory_service: InventoryService | None = None,
+        delivery_note_service: DeliveryNoteService | None = None,
     ) -> None:
         self._invoices = invoice_client
         self._settings_repo = settings_repo
@@ -255,6 +265,7 @@ class InvoiceProcessingService:
         self._mail_service = mail_service
         self._drafts = draft_invoice_service
         self._inventory = inventory_service
+        self._delivery_notes = delivery_note_service or DeliveryNoteService()
 
     def load_invoice_table_rows(
         self,
@@ -482,6 +493,7 @@ class InvoiceProcessingService:
         progress_callback: Callable[[str], None] | None = None,
         mail_recipient_override: str | None = None,
         invoice_ids: list[str] | None = None,
+        buyer_note_actions: dict[str, tuple[BuyerNoteCase, BuyerNoteReviewSelection]] | None = None,
     ) -> dict[str, object]:
         """Execute invoice processing flow for all open drafts (status=100)."""
         started = time.perf_counter()
@@ -500,11 +512,13 @@ class InvoiceProcessingService:
                 should_abort=should_abort,
                 progress_callback=progress_callback,
                 mail_recipient_override=mail_recipient_override,
+                buyer_note_actions=buyer_note_actions,
             )
         updates: dict[str, FulfillmentFlags] = {}
         processed = 0
         failures = 0
         successful = 0
+        skipped = 0
         aborted = False
         pending_manual_license_ids: list[str] = []
         for summary in summaries:
@@ -514,6 +528,10 @@ class InvoiceProcessingService:
                 break
             processed += 1
             summary = self._resolve_current_start_summary(summary)
+            note_action = (buyer_note_actions or {}).get(str(summary.id))
+            if note_action is not None and note_action[1].action == "skip":
+                skipped += 1
+                continue
             label = summary.invoice_number or summary.order_reference or summary.id
             flags = self.read_fulfillment_flags(summary.id)
 
@@ -600,6 +618,7 @@ class InvoiceProcessingService:
             "processed": processed,
             "failures": failures,
             "successful": successful,
+            "skipped": skipped,
             "full_mode": full_mode,
             "print_products": bool(print_products),
             "aborted": aborted,
@@ -615,6 +634,7 @@ class InvoiceProcessingService:
         should_abort: Callable[[], bool] | None,
         progress_callback: Callable[[str], None] | None,
         mail_recipient_override: str | None,
+        buyer_note_actions: dict[str, tuple[BuyerNoteCase, BuyerNoteReviewSelection]] | None,
     ) -> dict[str, object]:
         """Execute full START with all physical output before Wix/mail follow-up."""
         updates: dict[str, FulfillmentFlags] = {}
@@ -622,6 +642,7 @@ class InvoiceProcessingService:
         processed_ids: set[str] = set()
         failed_ids: set[str] = set()
         successful_ids: set[str] = set()
+        skipped_ids: set[str] = set()
         pending_manual_license_ids: list[str] = []
         aborted = False
 
@@ -658,6 +679,10 @@ class InvoiceProcessingService:
 
             summary = self._resolve_current_start_summary(original_summary)
             processed_ids.add(str(summary.id))
+            note_action = (buyer_note_actions or {}).get(str(summary.id))
+            if note_action is not None and note_action[1].action == "skip":
+                skipped_ids.add(str(summary.id))
+                continue
             label = summary.invoice_number or summary.order_reference or summary.id
             flags = self.read_fulfillment_flags(summary.id)
 
@@ -698,6 +723,35 @@ class InvoiceProcessingService:
                     summary,
                     run_phase(summary, "payment", lambda: self._run_payment_step(summary, flags)),
                 )
+                if note_action is not None and note_action[1].action == "delivery_note":
+                    case, selection = note_action
+                    address_lines = normalized_lines(selection.address_lines or case.address_lines)
+                    if not address_lines:
+                        raise RuntimeError("Lieferschein kann ohne Lieferadresse nicht gedruckt werden")
+                    if progress_callback is not None:
+                        progress_callback(f"START: Lieferschein fuer {label} wird gedruckt...")
+                    delivery_note = run_phase(
+                        summary,
+                        "delivery_note_generate",
+                        lambda: self._delivery_notes.generate_pdf(
+                            DeliveryNoteContext(
+                                invoice_number=str(summary.invoice_number or "").strip(),
+                                order_reference=str(summary.order_reference or "").strip(),
+                                customer_name=case.customer_name or str(summary.contact_name or "").strip(),
+                                address_lines=address_lines,
+                                products=case.products,
+                                buyer_note=case.note_text,
+                                manual_note=selection.manual_note,
+                            )
+                        ),
+                    )
+                    run_phase(
+                        summary,
+                        "delivery_note_print",
+                        lambda: self._invoice_printer.print_pdf_bytes(
+                            delivery_note.read_bytes(), wait=True
+                        ),
+                    )
                 flags = persist(
                     summary,
                     run_phase(summary, "invoice_print", lambda: self._run_invoice_print_step(summary, flags)),
@@ -706,7 +760,20 @@ class InvoiceProcessingService:
                     progress_callback(f"START: Label fuer {label} wird gedruckt...")
                 flags = persist(
                     summary,
-                    run_phase(summary, "label_print", lambda: self._run_label_print_step(summary, flags)),
+                    run_phase(
+                        summary,
+                        "label_print",
+                        lambda: self._run_label_print_step_compat(
+                            summary,
+                            flags,
+                            shipping_lines=(
+                                note_action[1].address_lines
+                                if note_action is not None
+                                and note_action[1].action == "delivery_note"
+                                else ()
+                            ),
+                        ),
+                    ),
                 )
                 post_tasks.append(_StartPostTask(summary=summary, flags=flags, digital_only=False))
             except Exception as exc:
@@ -760,7 +827,7 @@ class InvoiceProcessingService:
                 flags = run_phase(
                     summary,
                     "wix_fulfillment",
-                    lambda: self._run_product_step(summary, flags, inventory_already_accounted=True),
+                    lambda: self._run_product_step_compat(summary, flags),
                 )
                 self.write_fulfillment_flags(summary.id, flags)
                 if progress_callback is not None:
@@ -808,11 +875,44 @@ class InvoiceProcessingService:
             "processed": processed,
             "failures": failures,
             "successful": successful,
+            "skipped": len(skipped_ids),
             "full_mode": True,
             "print_products": bool(print_products),
             "aborted": aborted,
             "pending_digital_license_case_ids": pending_manual_license_ids,
         }
+
+    def _run_product_step_compat(
+        self, summary: InvoiceSummary, flags: FulfillmentFlags
+    ) -> FulfillmentFlags:
+        """Keep lightweight legacy test/adapters compatible with the new kwarg."""
+        try:
+            return self._run_product_step(summary, flags, inventory_already_accounted=True)
+        except TypeError as exc:
+            if "unexpected keyword argument" not in str(exc):
+                raise
+            return self._run_product_step(summary, flags)
+
+    def _run_label_print_step_compat(
+        self,
+        summary: InvoiceSummary,
+        flags: FulfillmentFlags,
+        *,
+        shipping_lines: tuple[str, ...] = (),
+    ) -> FulfillmentFlags:
+        """Use the review-confirmed address while preserving legacy adapters."""
+        if not shipping_lines:
+            return self._run_label_print_step(summary, flags)
+        try:
+            return self._run_label_print_step(
+                summary,
+                flags,
+                shipping_lines_override=shipping_lines,
+            )
+        except TypeError as exc:
+            if "unexpected keyword argument" not in str(exc):
+                raise
+            return self._run_label_print_step(summary, flags)
 
     def _start_processing_priority(self, summary: InvoiceSummary) -> tuple[int, str]:
         """Process physical invoices before digital-only orders for faster visible output."""
@@ -872,6 +972,80 @@ class InvoiceProcessingService:
     def is_manual_licensed_delivery(self, summary: InvoiceSummary) -> bool:
         """Public classification used by START pre-flight UI components."""
         return self._is_manual_licensed_delivery(summary)
+
+    def load_buyer_note_cases(self, summaries: list[InvoiceSummary]) -> list[BuyerNoteCase]:
+        """Resolve source-aware buyer notes for one exact START scope."""
+        cases: list[BuyerNoteCase] = []
+        for summary in summaries:
+            sources: list[BuyerNoteSource] = []
+            if str(summary.buyer_note or "").strip():
+                sources.append(BuyerNoteSource("sevdesk_invoice", "sevDesk-Rechnung", summary.buyer_note.strip()))
+
+            ref = str(summary.order_reference or "").strip()
+            order: dict[str, Any] = {}
+            if ref and self._wix_orders is not None and self._wix_orders.has_credentials():
+                try:
+                    order = self._wix_orders.resolve_order(ref) or {}
+                except Exception as exc:  # noqa: BLE001 - review remains available with sevDesk data.
+                    logger.warning("Buyer-note Wix resolve failed ref=%s: %s", ref, exc)
+            if order:
+                wix_note = str(order.get("buyerNote") or order.get("buyerNotes") or "").strip()
+                if wix_note:
+                    sources.append(BuyerNoteSource("wix_order", "Wix-Bestellung", wix_note))
+
+            if not sources:
+                continue
+
+            address = self._get_wix_address_lines_cached(ref) if ref else []
+            raw_items = order.get("lineItems") if isinstance(order.get("lineItems"), list) else []
+            item_dicts = [item for item in raw_items if isinstance(item, dict)]
+            physical: bool | None = None
+            if item_dicts and self._wix_orders is not None:
+                physical = not all(self._wix_orders.line_item_is_digital(item) for item in item_dicts)
+            products: list[BuyerNoteProduct] = []
+            if ref and self._wix_orders is not None and physical is not False:
+                # Keep mixed/unknown orders useful for the review by loading
+                # normalized line items once; digital-only products are filtered.
+                try:
+                    items = self._wix_orders.fetch_order_line_items(ref)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Buyer-note line-item resolve failed ref=%s: %s", ref, exc)
+                    items = []
+                for item in items or []:
+                    products.append(
+                        BuyerNoteProduct(
+                            quantity=str(getattr(item, "qty", 1) or 1),
+                            name=str(getattr(item, "name", "") or "").strip(),
+                            sku=str(getattr(item, "sku", "") or "").strip(),
+                            note=str(getattr(item, "note", "") or "").strip(),
+                        )
+                    )
+            if not address:
+                try:
+                    fallback = self.get_cached_invoice_detail_context(summary) or self.get_invoice_detail_context(summary)
+                    address = [str(line).strip() for line in fallback.get("shipping_lines", []) if str(line).strip()]
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Buyer-note address fallback failed invoice=%s: %s", summary.id, exc)
+
+            customer_name = str(summary.contact_name or "").strip()
+            if order and self._wix_orders is not None:
+                try:
+                    customer_name = str(self._wix_orders.resolve_order_summary(ref).get("wix_customer_name") or customer_name).strip()
+                except Exception:  # noqa: BLE001
+                    pass
+            cases.append(
+                BuyerNoteCase(
+                    invoice_id=str(summary.id or "").strip(),
+                    invoice_number=str(summary.invoice_number or "").strip(),
+                    order_reference=ref,
+                    customer_name=customer_name,
+                    sources=tuple(sources),
+                    physical_delivery=physical,
+                    address_lines=normalized_lines(address),
+                    products=tuple(products),
+                )
+            )
+        return cases
 
     def _prefetch_wix_order_context(self, summaries: list[InvoiceSummary]) -> None:
         if self._wix_orders is None or not self._wix_orders.has_credentials():
@@ -1779,11 +1953,17 @@ class InvoiceProcessingService:
         logger.info("Invoice %s printed", summary.invoice_number or summary.id)
         return self._next_flags(flags, invoice_printed=True)
 
-    def _run_label_print_step(self, summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
+    def _run_label_print_step(
+        self,
+        summary: InvoiceSummary,
+        flags: FulfillmentFlags,
+        *,
+        shipping_lines_override: tuple[str, ...] = (),
+    ) -> FulfillmentFlags:
         if not flags.invoice_printed:
             raise RuntimeError("Labeldruck erst nach Rechnungsdruck möglich")
         full = self._invoices.fetch_invoice_by_id(summary.id)
-        lines = self._shipping_lines_from_invoice(full, summary)
+        lines = list(shipping_lines_override) or self._shipping_lines_from_invoice(full, summary)
         if not lines:
             raise RuntimeError("Keine Lieferadresse für Labeldruck")
         self._label_printer.print_address(lines, wait=True)

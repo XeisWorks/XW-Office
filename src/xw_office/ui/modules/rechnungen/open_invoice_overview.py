@@ -42,6 +42,8 @@ class BuyerNote:
     customer_name: str
     note: str
     order_reference: str = ""
+    source: str = "unknown"
+    source_label: str = "Quelle unbekannt"
 
 
 @dataclass(frozen=True)
@@ -132,10 +134,16 @@ def overview_from_visible_summaries(
                 has_note = True
                 has_plc = has_plc or note_has_plc_label_hint(cached_note)
             customer_name = _cached_order_customer_name(wix_client, ref) or str(summary.contact_name or "").strip()
-            buyer_notes.add(customer_name, buyer_note, ref)
-            buyer_notes.add(customer_name, cached_note, ref)
+            buyer_notes.add(customer_name, buyer_note, ref, source="sevdesk_invoice", source_label="sevDesk-Rechnung")
+            buyer_notes.add(customer_name, cached_note, ref, source="wix_order", source_label="Wix-Bestellung")
         elif buyer_note:
-            buyer_notes.add(str(summary.contact_name or "").strip(), buyer_note, "")
+            buyer_notes.add(
+                str(summary.contact_name or "").strip(),
+                buyer_note,
+                "",
+                source="sevdesk_invoice",
+                source_label="sevDesk-Rechnung",
+            )
         if has_note:
             with_note += 1
         if has_plc:
@@ -256,6 +264,8 @@ def resolve_open_invoice_overview(
                 str(row.get("customer_name") or "").strip(),
                 str(row["buyer_note"] or "").strip(),
                 str(row.get("ref") or "").strip(),
+                source=str(row.get("note_source") or "wix_order"),
+                source_label=str(row.get("note_source_label") or "Wix-Bestellung"),
             )
         if row["has_plc"]:
             plc += 1
@@ -356,6 +366,8 @@ def _resolve_one_summary(
         "digital": bool(is_digital),
         "unknown": is_digital is None,
         "buyer_note": buyer_note,
+        "note_source": "sevdesk_invoice" if str(summary.buyer_note or "").strip() else "wix_order",
+        "note_source_label": "sevDesk-Rechnung" if str(summary.buyer_note or "").strip() else "Wix-Bestellung",
         "has_plc": has_plc,
         "items": items,
         "shipping_name": shipping_name,
@@ -539,19 +551,30 @@ class _UnreleasedAccumulator:
 
 class _BuyerNoteAccumulator:
     def __init__(self) -> None:
-        self._rows: dict[tuple[str, str, str], BuyerNote] = {}
+        self._rows: dict[tuple[str, str, str, str], BuyerNote] = {}
 
-    def add(self, customer_name: object, note: object, order_reference: object) -> None:
+    def add(
+        self,
+        customer_name: object,
+        note: object,
+        order_reference: object,
+        *,
+        source: str = "unknown",
+        source_label: str = "Quelle unbekannt",
+    ) -> None:
         text = " ".join(str(note or "").split())
         if not text:
             return
         customer = " ".join(str(customer_name or "").split()) or "Käufer nicht verfügbar"
         reference = str(order_reference or "").strip()
-        key = (customer.casefold(), text.casefold(), reference.casefold())
+        source_key = str(source or "unknown").strip() or "unknown"
+        key = (customer.casefold(), text.casefold(), reference.casefold(), source_key.casefold())
         self._rows[key] = BuyerNote(
             customer_name=customer,
             note=text,
             order_reference=reference,
+            source=source_key,
+            source_label=str(source_label or "Quelle unbekannt").strip() or "Quelle unbekannt",
         )
 
     def to_list(self) -> list[BuyerNote]:
@@ -707,6 +730,8 @@ def overview_payload_from_object(payload: object) -> OpenInvoiceOverview | None:
                         customer_name=str(row.get("customer_name") or "").strip(),
                         note=note,
                         order_reference=str(row.get("order_reference") or "").strip(),
+                        source=str(row.get("source") or "unknown").strip() or "unknown",
+                        source_label=str(row.get("source_label") or "Quelle unbekannt").strip() or "Quelle unbekannt",
                     )
                 )
     return OpenInvoiceOverview(
