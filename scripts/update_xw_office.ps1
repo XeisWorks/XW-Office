@@ -30,10 +30,11 @@
     dass die Prozesserkennung auf einem PC nicht zuverlaessig funktioniert.
 
 .PARAMETER ExcludeProcessId
-    Schliesst eine einzelne Prozess-ID von der Laeuft-bereits-Pruefung aus. Wird vom
-    fensterlosen GUI-Bootstrap (scripts\xw_office_gui.pyw) gesetzt, wenn dieser den
-    automatischen Update-Check vor dem eigentlichen App-Start ausfuehrt: der Bootstrap-Prozess
-    selbst zaehlt an dieser Stelle noch nicht als laufende App.
+    Schliesst Prozess-IDs von der Laeuft-bereits-Pruefung aus. Wird vom fensterlosen
+    GUI-Bootstrap (scripts\xw_office_gui.pyw) gesetzt, wenn dieser den automatischen
+    Update-Check vor dem eigentlichen App-Start ausfuehrt. Unter Windows kann pythonw.exe
+    im virtuellen Environment einen Redirector-Prozess und einen Kindprozess verwenden;
+    beide gehoeren in diesem Fall zum selben Bootstrap-Start und werden ausgeschlossen.
 
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\update_xw_office.ps1
@@ -42,7 +43,7 @@
 param(
     [switch]$StartAfterUpdate,
     [switch]$SkipRunningCheck,
-    [int]$ExcludeProcessId = 0
+    [string]$ExcludeProcessId = '0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -77,13 +78,19 @@ function Stop-UpdateWithError {
 
 Write-UpdateLog "Update gestartet. Repo: $RepoRoot"
 
+$ExcludedProcessIds = @(
+    $ExcludeProcessId -split ',' |
+        Where-Object { $_.Trim() } |
+        ForEach-Object { [int]$_.Trim() }
+)
+
 # 2) Sicherstellen, dass XW-Office nicht laeuft.
 if (-not $SkipRunningCheck) {
     $running = $null
     try {
         $running = Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
             Where-Object {
-                $_.ProcessId -ne $ExcludeProcessId -and
+                $_.ProcessId -notin $ExcludedProcessIds -and
                 $_.CommandLine -and
                 ($_.CommandLine -match [regex]::Escape($RepoRoot) -or $_.CommandLine -match 'xw_office')
             }

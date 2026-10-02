@@ -138,7 +138,11 @@ def _run_update(repo_root: Path) -> bool:
                 "-File",
                 str(update_script),
                 "-ExcludeProcessId",
-                str(os.getpid()),
+                # A venv's pythonw.exe can be a Windows redirector which starts the
+                # actual interpreter as its child.  Excluding only this interpreter
+                # would make the updater mistake the redirector for an already
+                # running Office instance.
+                f"{os.getpid()},{os.getppid()}",
             ],
             capture_output=True,
             text=True,
