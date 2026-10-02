@@ -2127,6 +2127,71 @@ def test_rechnungen_sorts_staged_loads_by_actuality_descending(qtbot: object) ->
     ]
 
 
+def test_rechnungen_clearing_search_restores_staged_drafts_and_recent_invoices(
+    qtbot: object,
+) -> None:
+    container = _build_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+
+    draft = InvoiceSummary.model_validate(
+        {
+            "id": "11",
+            "invoiceNumber": "RE-DRAFT",
+            "invoiceDate": "2026-06-01T00:00:00",
+            "status": 100,
+            "contact_name": "Draft Customer",
+        }
+    )
+    recent_invoice = InvoiceSummary.model_validate(
+        {
+            "id": "99",
+            "invoiceNumber": "RE-RECENT",
+            "invoiceDate": "2026-07-01T00:00:00",
+            "status": 1000,
+            "contact_name": "Recent Customer",
+        }
+    )
+    search_result = InvoiceSummary.model_validate(
+        {
+            "id": "55",
+            "invoiceNumber": "RE-SEARCH",
+            "invoiceDate": "2026-08-01T00:00:00",
+            "status": 1000,
+            "contact_name": "Search Customer",
+        }
+    )
+
+    view._apply_load_result_data(  # noqa: SLF001
+        [draft.as_table_row()],
+        [draft],
+        False,
+        100,
+        False,
+        allow_background_prefetch=False,
+    )
+    view._apply_load_result_data(  # noqa: SLF001
+        [recent_invoice.as_table_row()],
+        [recent_invoice],
+        False,
+        None,
+        True,
+        allow_background_prefetch=False,
+    )
+
+    view._search_active = True  # noqa: SLF001
+    view._table.set_data([search_result.as_table_row()])  # noqa: SLF001
+    view._summaries = [search_result]  # noqa: SLF001
+
+    view._on_search("")  # noqa: SLF001
+
+    assert [summary.invoice_number for summary in view._summaries] == [
+        "RE-RECENT",
+        "RE-DRAFT",
+    ]
+    assert view._table.model().sourceModel().rowCount() == 2  # noqa: SLF001
+
+
 def test_main_window_rechnungen_warms_drafts_but_defers_open_invoice_contexts(
     qtbot: object,
     monkeypatch,

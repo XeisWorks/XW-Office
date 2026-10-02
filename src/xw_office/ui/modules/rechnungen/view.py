@@ -2251,6 +2251,12 @@ class RechnungenView(QWidget):
             )
             self._table.set_data(sorted_rows)
             self._summaries = sorted_summaries
+            # Keep the non-search baseline in sync with staged loads. The
+            # initial load starts with drafts and the recent non-draft page is
+            # appended afterwards; clearing a search must restore both parts.
+            self._loaded_rows = list(sorted_rows)
+            self._loaded_summaries = list(sorted_summaries)
+            self._loaded_has_more = has_more
         else:
             sorted_rows, sorted_summaries = self._sort_rows_by_actuality(rows, summaries)
             self._table.set_data(sorted_rows)
