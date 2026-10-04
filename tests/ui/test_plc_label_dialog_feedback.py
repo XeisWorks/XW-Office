@@ -290,6 +290,33 @@ def test_customs_table_uses_only_physical_wix_items_and_builds_cn23_values(qtbot
     assert "Verpackung/Differenz 0.250 kg" in dialog._customs_summary.text()  # noqa: SLF001
 
 
+def test_multiple_parcels_split_physical_items_and_prepare_two_packing_lists(qtbot: object) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+    dialog._packing_items = [  # noqa: SLF001
+        WixOrderItem(sku="XW-400", name="Alpenmarsch", qty=2),
+        WixOrderItem(sku="XW-PDF", name="Download", qty=1, is_digital=True),
+    ]
+    dialog._package_count.setValue(2)  # noqa: SLF001
+
+    assert dialog._packing_table.rowCount() == 1  # noqa: SLF001
+    assert dialog._packing_table.item(0, 2).text() == "2"  # noqa: SLF001
+    assert dialog._packing_table.item(0, 3).text() == "0"  # noqa: SLF001
+    dialog._packing_table.item(0, 2).setText("1")  # noqa: SLF001
+    dialog._packing_table.item(0, 3).setText("1")  # noqa: SLF001
+    dialog._parcel_weight_edits[0].setText("0,31")  # noqa: SLF001
+    dialog._parcel_weight_edits[1].setText("0,29")  # noqa: SLF001
+
+    parcels, packing_lists = dialog._build_parcels_and_packing_lists(  # noqa: SLF001
+        reference="21104",
+        package_type="PC",
+    )
+
+    assert [parcel.weight_kg for parcel in parcels] == [0.31, 0.29]
+    assert [item.quantity for item in packing_lists[0].items] == [1]
+    assert [item.quantity for item in packing_lists[1].items] == [1]
+    assert all("Download" not in item.name for packing_list in packing_lists for item in packing_list.items)
+
 def test_incomplete_wix_customs_weight_expands_details_automatically(qtbot: object) -> None:
     dialog = PlcLabelPrintDialog(_container(), None)
     qtbot.addWidget(dialog)

@@ -83,6 +83,16 @@ printing:
       placement_mode: "paper_origin"
       scale_mode: "none"
       alignment: "center"
+    - id: "packing_list"
+      label: "Packlisten (2 × A6 auf A5)"
+      printer_name: "Paketmarke A5"
+      # One landscape A5 PDF page contains two portrait A6 packing lists.
+      # Keep this profile separate so PLC label calibration remains untouched.
+      page_size: "A5"
+      orientation: "landscape"
+      placement_mode: "paper_origin"
+      scale_mode: "none"
+      alignment: "center"
     - id: "plc_customs"
       label: "PLC-Zollformular"
       printer_name: "Zollformular XW 100"

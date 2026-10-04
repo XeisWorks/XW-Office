@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QRadioButton,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -53,6 +54,7 @@ from xw_office.services.plc.models import (
 from xw_office.services.plc.pricing import quote_plc_price
 from xw_office.services.plc.customs_document import ensure_customs_a5_print_file
 from xw_office.services.plc.label_archive import PlcLabelArchive
+from xw_office.services.plc.packing_list import PackingListContext, PackingListItem, PackingListService
 from xw_office.services.plc.service import PlcDuplicateShipmentError, PlcShipmentService
 from xw_office.services.plc.webservice import PlcWebserviceResult, webservice_settings_from_secrets
 from xw_office.services.printing.print_jobs import PdfPrintJob
@@ -154,6 +156,41 @@ def queue_archived_plc_customs(
     )
 
 
+def queue_packing_lists(
+    container: Container,
+    pdf_path: str | os.PathLike[str],
+    reference: str,
+) -> str:
+    """Queue an A5 landscape sheet containing two A6 portrait packing lists."""
+    profile = container.config.printing.resolve_profile("packing_list")
+    if profile is None:
+        profile = container.config.printing.resolve_profile("plc_label")
+    printer = str(getattr(profile, "printer_name", "") or "").strip()
+    if not printer:
+        raise RuntimeError("Packlisten-Drucker ist nicht konfiguriert")
+    if not os.path.isfile(pdf_path):
+        raise RuntimeError(f"Packlisten-PDF fehlt: {pdf_path}")
+    queue: PrintQueueService = container.resolve(PrintQueueService)
+    return queue.enqueue(
+        PdfPrintJob(
+            pdf_path=os.fspath(pdf_path),
+            printer_name=printer,
+            copies=1,
+            job_kind="label",
+            description=f"Packlisten {reference}",
+            page_size="A5",
+            orientation="landscape",
+            placement_mode=str(getattr(profile, "placement_mode", "paper_origin") or "paper_origin"),  # type: ignore[arg-type]
+            scale_mode="none",
+            alignment="center",
+            dpi=int(profile.dpi) if profile is not None and profile.dpi else None,
+            x_offset_mm=float(getattr(profile, "x_offset_mm", 0.0) or 0.0),
+            y_offset_mm=float(getattr(profile, "y_offset_mm", 0.0) or 0.0),
+            cleanup_paths=(),
+        )
+    )
+
+
 @dataclass
 class _PlcDialogContext:
     order_number: str
@@ -191,6 +228,9 @@ class PlcLabelPrintDialog(QDialog):
         self._load_worker: BackgroundWorker | None = None
         self._send_worker: BackgroundWorker | None = None
         self._context = _PlcDialogContext(order_number="", address_lines=[], weight_kg=0.0, items=[])
+        self._packing_items: list[WixOrderItem] = []
+        self._parcel_weight_edits: list[QLineEdit] = []
+        self._pending_packing_contexts: tuple[PackingListContext, ...] = ()
         self._label_archive = PlcLabelArchive()
         self._product_catalog = self._load_products()
         self._product_user_set = False
@@ -268,7 +308,15 @@ class PlcLabelPrintDialog(QDialog):
         self._weight_edit = QLineEdit()
         self._weight_edit.setPlaceholderText("z.B. 0,45")
         self._weight_edit.textChanged.connect(self._on_weight_edit)
-        form.addRow("Gewicht (kg):", self._weight_edit)
+        self._weight_label = QLabel("Gewicht (kg):")
+        form.addRow(self._weight_label, self._weight_edit)
+
+        self._package_count = QSpinBox()
+        self._package_count.setRange(1, 20)
+        self._package_count.setValue(1)
+        self._package_count.setToolTip("Für mehrere physische Pakete werden je Paket eine PLC-Marke und Packliste erstellt.")
+        self._package_count.valueChanged.connect(self._on_package_count_changed)
+        form.addRow("Anzahl Pakete:", self._package_count)
 
         self._primary_order_number = QLineEdit()
         self._primary_order_number.setPlaceholderText("z. B. 21104")
@@ -338,6 +386,25 @@ class PlcLabelPrintDialog(QDialog):
         form.addRow("Status:", self._status)
 
         root.addLayout(form)
+
+        self._parcel_group = QGroupBox("Paketaufteilung")
+        parcel_layout = QVBoxLayout(self._parcel_group)
+        parcel_hint = QLabel(
+            "Verteile jede physische Position exakt auf die Pakete und trage das tatsächliche Bruttogewicht je Paket ein. "
+            "Für jedes Paket wird eine eigene Packliste erstellt."
+        )
+        parcel_hint.setWordWrap(True)
+        parcel_hint.setStyleSheet("color: #64748b;")
+        parcel_layout.addWidget(parcel_hint)
+        self._packing_table = QTableWidget(0, 0, self._parcel_group)
+        self._packing_table.setMinimumHeight(170)
+        self._packing_table.verticalHeader().setVisible(False)
+        self._packing_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        parcel_layout.addWidget(self._packing_table)
+        self._parcel_weights_form = QFormLayout()
+        parcel_layout.addLayout(self._parcel_weights_form)
+        self._parcel_group.setVisible(False)
+        root.addWidget(self._parcel_group)
 
         self._customs_group = QGroupBox("Zollerklärung (CN23)")
         customs_layout = QVBoxLayout(self._customs_group)
@@ -481,6 +548,8 @@ class PlcLabelPrintDialog(QDialog):
             self._primary_order_number.setText(result.order_number)
             self._primary_order_number.blockSignals(False)
         self._populate_customs_table(result.items)
+        self._packing_items = list(result.items)
+        self._rebuild_parcel_controls()
         self._sync_product_options()
         self._update_customs_visibility()
         physical_count = sum(max(1, int(item.qty or 1)) for item in result.items if not item.is_digital)
@@ -513,6 +582,57 @@ class PlcLabelPrintDialog(QDialog):
         self._weight_user_set = True
         self._update_price()
         self._update_customs_summary()
+
+    def _on_package_count_changed(self, _value: int) -> None:
+        self._rebuild_parcel_controls()
+
+    def _rebuild_parcel_controls(self) -> None:
+        package_count = int(self._package_count.value())
+        is_multiple = package_count > 1
+        self._parcel_group.setVisible(is_multiple)
+        self._weight_label.setText("Gesamtgewicht (kg):" if is_multiple else "Gewicht (kg):")
+        if not is_multiple:
+            return
+
+        physical_items = [item for item in self._packing_items if not item.is_digital]
+        self._packing_table.blockSignals(True)
+        self._packing_table.clear()
+        self._packing_table.setColumnCount(2 + package_count)
+        self._packing_table.setHorizontalHeaderLabels(
+            ["Produkt", "Bestellt", *[f"Paket {number}" for number in range(1, package_count + 1)]]
+        )
+        self._packing_table.setRowCount(0)
+        for row, item in enumerate(physical_items):
+            self._packing_table.insertRow(row)
+            item_name = str(item.name or "Produkt").strip()
+            if item.custom_piece_titles:
+                item_name = f"{item_name} – {', '.join(item.custom_piece_titles)}"
+            product_cell = QTableWidgetItem(item_name)
+            product_cell.setData(Qt.ItemDataRole.UserRole, item)
+            product_cell.setFlags(product_cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self._packing_table.setItem(row, 0, product_cell)
+            ordered = max(1, int(item.qty or 1))
+            ordered_cell = QTableWidgetItem(str(ordered))
+            ordered_cell.setFlags(ordered_cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self._packing_table.setItem(row, 1, ordered_cell)
+            for package_column in range(package_count):
+                self._packing_table.setItem(row, 2 + package_column, QTableWidgetItem(str(ordered if package_column == 0 else 0)))
+        header = self._packing_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for column in range(1, 2 + package_count):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        self._packing_table.blockSignals(False)
+
+        while self._parcel_weights_form.count():
+            child = self._parcel_weights_form.takeAt(0)
+            if child.widget() is not None:
+                child.widget().deleteLater()
+        self._parcel_weight_edits = []
+        for number in range(1, package_count + 1):
+            edit = QLineEdit()
+            edit.setPlaceholderText("z.B. 0,45")
+            self._parcel_weight_edits.append(edit)
+            self._parcel_weights_form.addRow(f"Paket {number} (kg):", edit)
 
     def _on_order_number_edit(self, _value: str) -> None:
         self._order_numbers_edited = True
@@ -813,6 +933,91 @@ class PlcLabelPrintDialog(QDialog):
             )
         return out
 
+    def _build_parcels_and_packing_lists(
+        self,
+        *,
+        reference: str,
+        package_type: str,
+    ) -> tuple[tuple[PlcParcel, ...], tuple[PackingListContext, ...]]:
+        """Validate the visible parcel split and retain its exact print content."""
+        package_count = int(self._package_count.value())
+        if package_count == 1:
+            weight = self._gross_weight_kg()
+            if weight is None:
+                raise ValueError("Bitte Gewicht angeben.")
+            return (
+                (PlcParcel(weight_kg=weight, package_type=package_type, reference=reference),),
+                (),
+            )
+
+        if self._packing_table.rowCount() == 0:
+            raise ValueError("Für mehrere Pakete wurden keine physischen Artikel gefunden.")
+        if len(self._parcel_weight_edits) != package_count:
+            raise ValueError("Paketgewichte bitte erneut eingeben.")
+
+        assignments: list[list[PackingListItem]] = [[] for _ in range(package_count)]
+        for row in range(self._packing_table.rowCount()):
+            product_cell = self._packing_table.item(row, 0)
+            ordered_cell = self._packing_table.item(row, 1)
+            item = product_cell.data(Qt.ItemDataRole.UserRole) if product_cell is not None else None
+            try:
+                ordered = int(str(ordered_cell.text() if ordered_cell is not None else ""))
+            except ValueError as exc:
+                raise ValueError(f"Position {row + 1}: Bestellmenge ist ungültig.") from exc
+            quantities: list[int] = []
+            for package_index in range(package_count):
+                cell = self._packing_table.item(row, 2 + package_index)
+                try:
+                    quantity = int(str(cell.text() if cell is not None else ""))
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Position {row + 1}, Paket {package_index + 1}: Bitte eine ganze Stückzahl eintragen."
+                    ) from exc
+                if quantity < 0:
+                    raise ValueError(f"Position {row + 1}: Negative Stückzahlen sind nicht erlaubt.")
+                quantities.append(quantity)
+            if sum(quantities) != ordered:
+                name = str(product_cell.text() if product_cell is not None else f"Position {row + 1}")
+                raise ValueError(f"'{name}': aufgeteilt {sum(quantities)}, bestellt {ordered}.")
+            name = str(getattr(item, "name", "") or (product_cell.text() if product_cell is not None else "Produkt")).strip()
+            if getattr(item, "custom_piece_titles", None):
+                name = f"{name} – {', '.join(item.custom_piece_titles)}"
+            sku = str(getattr(item, "sku", "") or "").strip()
+            for package_index, quantity in enumerate(quantities):
+                if quantity:
+                    assignments[package_index].append(PackingListItem(quantity=quantity, name=name, sku=sku))
+
+        weights: list[float] = []
+        for package_index, edit in enumerate(self._parcel_weight_edits):
+            try:
+                weight = float(edit.text().strip().replace(",", "."))
+            except ValueError as exc:
+                raise ValueError(f"Paket {package_index + 1}: Gewicht ist ungültig.") from exc
+            if weight <= 0:
+                raise ValueError(f"Paket {package_index + 1}: Gewicht muss größer als 0 sein.")
+            weights.append(weight)
+        self._weight_edit.setText(f"{sum(weights):.2f}".replace(".", ","))
+
+        parcels: list[PlcParcel] = []
+        contexts: list[PackingListContext] = []
+        for package_index, (items, weight) in enumerate(zip(assignments, weights), start=1):
+            if not items:
+                raise ValueError(f"Paket {package_index} enthält keine Artikel.")
+            parcel_reference = clean_reference(f"{reference}-P{package_index}")
+            parcels.append(PlcParcel(weight_kg=weight, package_type=package_type, reference=parcel_reference))
+            contexts.append(
+                PackingListContext(
+                    reference=reference,
+                    invoice_number=self._summary.invoice_number or self._summary.id,
+                    customer_name=self._summary.contact_name,
+                    package_number=package_index,
+                    package_count=package_count,
+                    weight_kg=weight,
+                    items=tuple(items),
+                )
+            )
+        return tuple(parcels), tuple(contexts)
+
     def _send_to_plc(self) -> None:
         if self._manual_entry:
             missing_fields = [
@@ -857,17 +1062,22 @@ class PlcLabelPrintDialog(QDialog):
             QMessageBox.warning(self, "PLC", "Versandprodukt ist nicht konfiguriert.")
             return
 
-        weight_raw = self._weight_edit.text().strip().replace(",", ".")
-        if not weight_raw:
-            QMessageBox.warning(self, "PLC", "Bitte Gewicht angeben.")
+        ref = self._build_reference()
+        if self._package_count.value() > 1 and address_group == "NON_EU":
+            QMessageBox.warning(
+                self,
+                "PLC",
+                "Mehrpaket-Sendungen außerhalb der EU benötigen eine paketweise Zollartikelaufteilung und sind noch nicht verfügbar.",
+            )
             return
         try:
-            float(weight_raw)
-        except ValueError:
-            QMessageBox.warning(self, "PLC", "Gewicht ist ungueltig.")
+            parcels, packing_contexts = self._build_parcels_and_packing_lists(
+                reference=ref,
+                package_type=pakettyp,
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "PLC", str(exc))
             return
-
-        ref = self._build_reference()
         invoice_id = self._summary.id or ref
         invoice_number = self._summary.invoice_number or self._summary.id or ref
         articles: list[PlcCustomsArticle] = []
@@ -888,7 +1098,7 @@ class PlcLabelPrintDialog(QDialog):
             mode=self._current_mode(),
             product_id=product_id,
             recipient=address,
-            parcels=(PlcParcel(weight_kg=float(weight_raw), package_type=pakettyp, reference=ref),),
+            parcels=parcels,
             customs_description=self._customs_edit.toPlainText().strip(),
             articles=tuple(articles),
         )
@@ -899,6 +1109,7 @@ class PlcLabelPrintDialog(QDialog):
             return
 
         transport = str(self._transport_combo.currentData() or "webservice")
+        self._pending_packing_contexts = packing_contexts
         self._start_send(shipment, transport)
 
     def _start_send(self, shipment: PlcShipmentDraft, transport: str) -> None:
@@ -943,8 +1154,10 @@ class PlcLabelPrintDialog(QDialog):
         archive_path = None
         customs_path = None
         customs_print_path = None
+        packing_list_path = None
         job_id = ""
         customs_job_id = ""
+        packing_list_job_id = ""
         try:
             customs_pdf = result.webservice_result.shipment_documents
             if shipment.country_group == "NON_EU" and not customs_pdf:
@@ -966,11 +1179,21 @@ class PlcLabelPrintDialog(QDialog):
             service.mark_print_queued(shipment, job_id)
             if customs_print_path is not None:
                 customs_job_id = self._queue_customs_document(customs_print_path, shipment.reference)
+            if self._pending_packing_contexts:
+                packing_list_path = PackingListService().generate_pdf(
+                    self._pending_packing_contexts,
+                    output_dir=archive_path.parent / "packlists",
+                )
+                packing_list_job_id = queue_packing_lists(
+                    self._container,
+                    packing_list_path,
+                    shipment.reference,
+                )
         except Exception as exc:  # noqa: BLE001 - shipment was created; preserve the recovery message.
             self._status.setText("PLC-Sendung erstellt, Druckauftrag fehlgeschlagen")
             archived = "\n".join(
                 f"- {path}"
-                for path in (archive_path, customs_path, customs_print_path)
+                for path in (archive_path, customs_path, customs_print_path, packing_list_path)
                 if path is not None
             )
             archive_note = (
@@ -992,11 +1215,16 @@ class PlcLabelPrintDialog(QDialog):
             self._status.setText(
                 f"PLC-Label und Zollformular archiviert; Druckaufträge {job_id[:8]}… / {customs_job_id[:8]}…"
             )
+        elif packing_list_job_id:
+            self._status.setText(
+                f"PLC-Label und {len(self._pending_packing_contexts)} Packlisten archiviert; "
+                f"Druckaufträge {job_id[:8]}… / {packing_list_job_id[:8]}…"
+            )
         else:
             self._status.setText(f"PLC-Label archiviert; Druckauftrag {job_id[:8]}…")
         logger.info(
             "PLC label created reference=%s tracking=%s archive=%s print_job=%s "
-            "customs_archive=%s customs_print_archive=%s customs_job=%s",
+            "customs_archive=%s customs_print_archive=%s customs_job=%s packing_list=%s packing_job=%s",
             shipment.reference,
             tracking,
             archive_path,
@@ -1004,9 +1232,15 @@ class PlcLabelPrintDialog(QDialog):
             customs_path,
             customs_print_path,
             customs_job_id,
+            packing_list_path,
+            packing_list_job_id,
         )
         self._show_success_overlay(
-            "PLC-Label + Zollformular erstellt" if customs_job_id else "PLC-Label erstellt"
+            "PLC-Label + Zollformular erstellt"
+            if customs_job_id
+            else f"PLC-Label + {len(self._pending_packing_contexts)} Packlisten erstellt"
+            if packing_list_job_id
+            else "PLC-Label erstellt"
         )
 
     def _show_success_overlay(self, message: str) -> None:
