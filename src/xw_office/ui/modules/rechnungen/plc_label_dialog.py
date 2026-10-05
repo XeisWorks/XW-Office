@@ -236,6 +236,7 @@ class PlcLabelPrintDialog(QDialog):
         self._context = _PlcDialogContext(order_number="", address_lines=[], weight_kg=0.0, items=[])
         self._packing_items: list[WixOrderItem] = []
         self._parcel_weight_edits: list[QLineEdit] = []
+        self._parcel_contents_labels: list[QLabel] = []
         self._pending_packing_contexts: tuple[PackingListContext, ...] = ()
         self._label_archive = PlcLabelArchive()
         self._product_catalog = self._load_products()
@@ -418,6 +419,7 @@ class PlcLabelPrintDialog(QDialog):
         self._packing_table.verticalHeader().setVisible(False)
         self._packing_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         self._packing_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._packing_table.itemChanged.connect(self._update_parcel_summaries)
         self._parcel_rendered_package_count = 1
         parcel_layout.addWidget(self._packing_table)
         self._parcel_weights_form = QFormLayout()
@@ -756,6 +758,12 @@ class PlcLabelPrintDialog(QDialog):
         is_multiple = package_count > 1
         self._parcel_group.setVisible(is_multiple)
         self._weight_label.setText("Gesamtgewicht (kg):" if is_multiple else "Gewicht (kg):")
+        self._weight_edit.setReadOnly(is_multiple)
+        self._weight_edit.setToolTip(
+            "Wird aus den einzelnen Paketgewichten berechnet."
+            if is_multiple
+            else "Bruttogewicht der Sendung in Kilogramm."
+        )
         if not is_multiple:
             self._packing_table.clear()
             self._packing_table.setRowCount(0)
@@ -816,13 +824,27 @@ class PlcLabelPrintDialog(QDialog):
 
         self._clear_parcel_weight_inputs()
         for number in range(1, package_count + 1):
+            row_widget = QWidget(self._parcel_group)
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(8)
             edit = QLineEdit()
             edit.setPlaceholderText("z.B. 0,45")
+            edit.setMaximumWidth(105)
             if number <= len(saved_weights):
                 edit.setText(saved_weights[number - 1])
+            contents = QLabel("Keine Produkte zugeordnet")
+            contents.setWordWrap(True)
+            contents.setStyleSheet("color: #94a3b8;")
+            row_layout.addWidget(edit)
+            row_layout.addWidget(contents, 1)
             self._parcel_weight_edits.append(edit)
-            self._parcel_weights_form.addRow(f"Paket {number} (kg):", edit)
+            self._parcel_contents_labels.append(contents)
+            self._parcel_weights_form.addRow(f"Paket {number} (kg):", row_widget)
+            edit.textChanged.connect(self._on_parcel_weight_edit)
         self._parcel_rendered_package_count = package_count
+        self._update_parcel_summaries()
+        self._on_parcel_weight_edit("")
 
     def _clear_parcel_weight_inputs(self) -> None:
         while self._parcel_weights_form.count():
@@ -830,6 +852,45 @@ class PlcLabelPrintDialog(QDialog):
             if child.widget() is not None:
                 child.widget().deleteLater()
         self._parcel_weight_edits = []
+        self._parcel_contents_labels = []
+
+    def _update_parcel_summaries(self, _item: QTableWidgetItem | None = None) -> None:
+        """Show the actual contents beside each parcel's narrow weight field."""
+        package_count = int(self._package_count.value())
+        if package_count <= 1 or len(self._parcel_contents_labels) != package_count:
+            return
+        for package_index, label in enumerate(self._parcel_contents_labels):
+            lines: list[str] = []
+            for row in range(1, self._packing_table.rowCount()):
+                product_cell = self._packing_table.item(row, 0)
+                quantity_cell = self._packing_table.item(row, 2 + package_index)
+                if product_cell is None or quantity_cell is None:
+                    continue
+                parsed = self._split_package_quantity(quantity_cell.text())
+                if parsed is None or parsed == (0, 0):
+                    continue
+                lines.append(f"{quantity_cell.text().strip()} × {product_cell.text().strip()}")
+            text = "\n".join(lines) if lines else "Keine Produkte zugeordnet"
+            label.setText(text)
+            label.setToolTip(text)
+
+    def _on_parcel_weight_edit(self, _value: str) -> None:
+        weights: list[float] = []
+        for edit in self._parcel_weight_edits:
+            try:
+                weight = float(edit.text().strip().replace(",", "."))
+            except ValueError:
+                return
+            if weight <= 0:
+                return
+            weights.append(weight)
+        if len(weights) != int(self._package_count.value()):
+            return
+        self._weight_edit.blockSignals(True)
+        self._weight_edit.setText(f"{sum(weights):.2f}".replace(".", ","))
+        self._weight_edit.blockSignals(False)
+        self._update_price()
+        self._update_customs_summary()
 
     def _auto_distribute_by_weight(self) -> None:
         """Place complete product lines into parcels without crossing the safe target weight.
@@ -944,6 +1005,7 @@ class PlcLabelPrintDialog(QDialog):
                     if cell is not None:
                         cell.setText(str(max(1, int(item.qty or 1))))
         self._packing_table.blockSignals(False)
+        self._update_parcel_summaries()
 
         estimated_gross_weights = [weight + _PACKING_WEIGHT_RESERVE_KG for weight in bin_weights]
         for edit, estimated_gross in zip(self._parcel_weight_edits, estimated_gross_weights):
@@ -1031,19 +1093,38 @@ class PlcLabelPrintDialog(QDialog):
 
     def _update_price(self) -> None:
         product = self._find_product()
-        quote = quote_plc_price(
-            product_id=product.get("product_id"),
-            country_iso2=self._current_country(),
-            weight_kg=self._weight_edit.text(),
-        )
-        if quote is None:
+        package_count = int(self._package_count.value())
+        if package_count > 1:
+            weights = [edit.text() for edit in self._parcel_weight_edits]
+        else:
+            weights = [self._weight_edit.text()]
+        quotes = [
+            quote_plc_price(
+                product_id=product.get("product_id"),
+                country_iso2=self._current_country(),
+                weight_kg=weight,
+            )
+            for weight in weights
+        ]
+        if not quotes or any(quote is None for quote in quotes):
             self._price_label.setText("Preis: —")
-            self._price_label.setToolTip("Für diese Kombination ist kein Preis hinterlegt.")
+            self._price_label.setToolTip(
+                "Für mindestens ein Paketgewicht ist kein Tarif hinterlegt oder das Gewicht fehlt."
+            )
             return
-        price = f"{quote.price_eur:.2f}".replace(".", ",")
-        self._price_label.setText(f"Preis: {price} €")
-        max_weight = f"{quote.max_weight_kg:f}".replace(".", ",")
-        self._price_label.setToolTip(f"{quote.tariff_name}, bis {max_weight} kg")
+        parcel_quotes = [quote for quote in quotes if quote is not None]
+        total = sum(quote.price_eur for quote in parcel_quotes)
+        price = f"{total:.2f}".replace(".", ",")
+        suffix = f" ({package_count} Pakete)" if package_count > 1 else ""
+        self._price_label.setText(f"Preis: {price} €{suffix}")
+        details = []
+        for index, (weight, quote) in enumerate(zip(weights, parcel_quotes), start=1):
+            max_weight = f"{quote.max_weight_kg:f}".replace(".", ",")
+            details.append(
+                f"Paket {index}: {str(weight).strip()} kg · {quote.price_eur:.2f} € "
+                f"({quote.tariff_name}, bis {max_weight} kg)"
+            )
+        self._price_label.setToolTip("\n".join(details))
 
     def _sync_product_options(self) -> None:
         group = self._current_country_group()

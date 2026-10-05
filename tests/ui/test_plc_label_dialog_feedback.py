@@ -339,6 +339,31 @@ def test_multiple_parcel_weights_are_used_instead_of_total_weight(qtbot: object)
     assert dialog._weight_edit.text() == "21,90"  # noqa: SLF001
 
 
+def test_multiple_parcel_price_sums_individual_tariffs_and_shows_contents(qtbot: object) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+    dialog._country_combo.setEditText("Austria")  # noqa: SLF001
+    dialog._packing_items = [  # noqa: SLF001
+        WixOrderItem(sku="XW-400", name="Alpenmarsch", qty=10),
+        WixOrderItem(sku="XW-401", name="Partitur", qty=2),
+    ]
+    dialog._package_count.setValue(2)  # noqa: SLF001
+    dialog._packing_table.item(1, 2).setText("10+1")  # noqa: SLF001
+    dialog._packing_table.item(1, 3).setText("0")  # noqa: SLF001
+    dialog._packing_table.item(2, 2).setText("0")  # noqa: SLF001
+    dialog._packing_table.item(2, 3).setText("2")  # noqa: SLF001
+    dialog._parcel_weight_edits[0].setText("2,01")  # noqa: SLF001
+    dialog._parcel_weight_edits[1].setText("8")  # noqa: SLF001
+
+    assert dialog._weight_edit.isReadOnly()  # noqa: SLF001
+    assert dialog._weight_edit.text() == "10,01"  # noqa: SLF001
+    assert dialog._price_label.text() == "Preis: 13,60 € (2 Pakete)"  # noqa: SLF001
+    assert "Paket 1: 2,01 kg · 6.39 €" in dialog._price_label.toolTip()  # noqa: SLF001
+    assert dialog._parcel_weight_edits[0].maximumWidth() == 105  # noqa: SLF001
+    assert dialog._parcel_contents_labels[0].text() == "10+1 × Alpenmarsch"  # noqa: SLF001
+    assert dialog._parcel_contents_labels[1].text() == "2 × Partitur"  # noqa: SLF001
+
+
 def test_packlist_print_button_uses_current_parcel_contexts(
     qtbot: object,
     monkeypatch: object,
