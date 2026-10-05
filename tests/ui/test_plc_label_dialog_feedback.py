@@ -13,6 +13,7 @@ from xw_office.core.container import Container
 from xw_office.core.signals import AppSignals
 from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.plc.models import PlcCustomsArticle, PlcParcel, PlcShipmentDraft
+from xw_office.services.plc.packing_list import PackingListService
 from xw_office.services.plc.polling import ShipmentAddress
 from xw_office.services.plc.service import PlcShipmentService
 from xw_office.services.plc.webservice import PlcWebserviceResult
@@ -316,6 +317,56 @@ def test_multiple_parcels_split_physical_items_and_prepare_two_packing_lists(qtb
     assert [item.quantity for item in packing_lists[0].items] == [1]
     assert [item.quantity for item in packing_lists[1].items] == [1]
     assert all("Download" not in item.name for packing_list in packing_lists for item in packing_list.items)
+
+
+def test_multiple_parcel_weights_are_used_instead_of_total_weight(qtbot: object) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+    dialog._packing_items = [WixOrderItem(sku="XW-400", name="Alpenmarsch", qty=2)]  # noqa: SLF001
+    dialog._package_count.setValue(2)  # noqa: SLF001
+    dialog._packing_table.item(1, 2).setText("1")  # noqa: SLF001
+    dialog._packing_table.item(1, 3).setText("1")  # noqa: SLF001
+    dialog._parcel_weight_edits[0].setText("11,69")  # noqa: SLF001
+    dialog._parcel_weight_edits[1].setText("10,21")  # noqa: SLF001
+
+    parcels, packing_lists = dialog._build_parcels_and_packing_lists(  # noqa: SLF001
+        reference="21104",
+        package_type="PC",
+    )
+
+    assert [parcel.weight_kg for parcel in parcels] == [11.69, 10.21]
+    assert [packing_list.weight_kg for packing_list in packing_lists] == [11.69, 10.21]
+    assert dialog._weight_edit.text() == "21,90"  # noqa: SLF001
+
+
+def test_packlist_print_button_uses_current_parcel_contexts(
+    qtbot: object,
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+    dialog._packing_items = [WixOrderItem(sku="XW-400", name="Alpenmarsch", qty=2)]  # noqa: SLF001
+    dialog._package_count.setValue(2)  # noqa: SLF001
+    dialog._packing_table.item(1, 2).setText("1")  # noqa: SLF001
+    dialog._packing_table.item(1, 3).setText("1")  # noqa: SLF001
+    dialog._parcel_weight_edits[0].setText("11,69")  # noqa: SLF001
+    dialog._parcel_weight_edits[1].setText("10,21")  # noqa: SLF001
+    printed_contexts: list[object] = []
+
+    def generate_pdf(_self: object, contexts: object, *, output_dir: Path) -> Path:
+        printed_contexts.extend(contexts)
+        assert output_dir.name == "packlists"
+        return tmp_path / "packlists.pdf"
+
+    monkeypatch.setattr(PackingListService, "generate_pdf", generate_pdf)
+    monkeypatch.setattr(plc_dialog_module, "queue_packing_lists", lambda *_args: "print-job-123")
+
+    dialog._print_packing_lists()  # noqa: SLF001
+
+    assert dialog._packing_print_btn.text() == "Packliste drucken"  # noqa: SLF001
+    assert [context.weight_kg for context in printed_contexts] == [11.69, 10.21]
+    assert "Druckauftrag print-jo" in dialog._status.text()  # noqa: SLF001
 
 
 def test_weight_distribution_keeps_duplicate_skus_together_and_adds_parcels(qtbot: object) -> None:

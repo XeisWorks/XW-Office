@@ -7,6 +7,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QTimer, Qt, QUrl
@@ -481,8 +482,10 @@ class PlcLabelPrintDialog(QDialog):
         self._customs_group.setVisible(False)
 
         buttons = QDialogButtonBox(self)
+        self._packing_print_btn = buttons.addButton("Packliste drucken", QDialogButtonBox.ButtonRole.ActionRole)
         self._send_btn = buttons.addButton("Senden an PLC", QDialogButtonBox.ButtonRole.AcceptRole)
         buttons.addButton("Abbrechen", QDialogButtonBox.ButtonRole.RejectRole)
+        self._packing_print_btn.clicked.connect(self._print_packing_lists)
         self._send_btn.clicked.connect(self._send_to_plc)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
@@ -1371,6 +1374,33 @@ class PlcLabelPrintDialog(QDialog):
                 )
             )
         return tuple(parcels), tuple(contexts)
+
+    def _print_packing_lists(self) -> None:
+        """Print the current multi-parcel packing lists without creating a PLC shipment."""
+        if self._package_count.value() < 2:
+            QMessageBox.information(
+                self,
+                "Packliste",
+                "Eine Packliste kann erstellt werden, sobald mindestens zwei Pakete angelegt sind.",
+            )
+            return
+        product = self._find_product()
+        package_type = str(product.get("pakettyp") or "PC").strip() or "PC"
+        reference = self._build_reference()
+        try:
+            _parcels, packing_contexts = self._build_parcels_and_packing_lists(
+                reference=reference,
+                package_type=package_type,
+            )
+            output_dir = Path(__file__).resolve().parents[4] / "state" / "plc_labels" / "packlists"
+            pdf_path = PackingListService().generate_pdf(packing_contexts, output_dir=output_dir)
+            job_id = queue_packing_lists(self._container, pdf_path, reference)
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.warning(self, "Packliste", f"Packliste konnte nicht gedruckt werden: {exc}")
+            return
+        self._status.setText(
+            f"{len(packing_contexts)} Packlisten an Drucker übergeben (Druckauftrag {job_id[:8]}…)."
+        )
 
     def _send_to_plc(self) -> None:
         if self._manual_entry:
