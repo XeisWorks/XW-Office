@@ -79,6 +79,9 @@ _CUSTOMS_ARTICLE_NAME = "Printed sheet music book"
 _CUSTOMS_ORIGIN_ISO2 = "AT"
 _CUSTOMS_HS_TARIFF = "49040000"
 _SUCCESS_OVERLAY_MS = 700
+_MAX_PARCEL_GROSS_WEIGHT_KG = 12.0
+_PACKING_WEIGHT_RESERVE_KG = 0.8
+_PACKING_TARGET_NET_WEIGHT_KG = _MAX_PARCEL_GROSS_WEIGHT_KG - _PACKING_WEIGHT_RESERVE_KG
 
 
 def queue_archived_plc_label(
@@ -317,6 +320,14 @@ class PlcLabelPrintDialog(QDialog):
         self._package_count.setToolTip("Für mehrere physische Pakete werden je Paket eine PLC-Marke und Packliste erstellt.")
         self._package_count.valueChanged.connect(self._on_package_count_changed)
         form.addRow("Anzahl Pakete:", self._package_count)
+        self._auto_distribute_btn = QPushButton(
+            f"Nach Gewicht verteilen (max. {_PACKING_TARGET_NET_WEIGHT_KG:.1f} kg Warengewicht)"
+        )
+        self._auto_distribute_btn.setToolTip(
+            "Hält gleiche Produkte zusammen, ergänzt bei Bedarf Pakete und lässt je Paket 800 g Reserve bis zur 12-kg-Grenze."
+        )
+        self._auto_distribute_btn.clicked.connect(self._auto_distribute_by_weight)
+        form.addRow("Paketaufteilung:", self._auto_distribute_btn)
 
         self._primary_order_number = QLineEdit()
         self._primary_order_number.setPlaceholderText("z. B. 21104")
@@ -391,7 +402,9 @@ class PlcLabelPrintDialog(QDialog):
         parcel_layout = QVBoxLayout(self._parcel_group)
         parcel_hint = QLabel(
             "Verteile jede physische Position exakt auf die Pakete und trage das tatsächliche Bruttogewicht je Paket ein. "
-            "Für jedes Paket wird eine eigene Packliste erstellt."
+            "Für jedes Paket wird eine eigene Packliste erstellt. Die Gewichtsverteilung plant höchstens "
+            f"{_PACKING_TARGET_NET_WEIGHT_KG:.1f} kg Warengewicht je Paket, damit {int(_PACKING_WEIGHT_RESERVE_KG * 1000)} g "
+            "Reserve für Verpackung und ungenaue Wix-Gewichte bleiben."
         )
         parcel_hint.setWordWrap(True)
         parcel_hint.setStyleSheet("color: #64748b;")
@@ -633,6 +646,134 @@ class PlcLabelPrintDialog(QDialog):
             edit.setPlaceholderText("z.B. 0,45")
             self._parcel_weight_edits.append(edit)
             self._parcel_weights_form.addRow(f"Paket {number} (kg):", edit)
+
+    def _auto_distribute_by_weight(self) -> None:
+        """Place complete product lines into parcels without crossing the safe target weight.
+
+        The allocation deliberately never splits a product line. A new parcel is
+        created when the next complete line no longer fits, rather than spreading
+        identical products across cartons.
+        """
+        physical_items = [item for item in self._packing_items if not item.is_digital]
+        if not physical_items:
+            QMessageBox.warning(self, "Paketaufteilung", "Keine physischen Produkte zum Verteilen gefunden.")
+            return
+
+        # The table normally has one row per Wix item. Wix can, however, return
+        # the same SKU in more than one line. Group those lines before packing
+        # so every instance of the same product is guaranteed to stay together.
+        product_groups: dict[str, list[tuple[int, WixOrderItem, float]]] = {}
+        missing_weights: list[str] = []
+        for row, item in enumerate(physical_items):
+            quantity = max(1, int(item.qty or 1))
+            unit_weight = float(item.unit_weight_kg or 0)
+            title = str(item.name or item.sku or f"Position {row + 1}").strip()
+            if unit_weight <= 0:
+                missing_weights.append(title)
+                continue
+            line_weight = quantity * unit_weight
+            sku = str(item.sku or "").strip().casefold()
+            product_key = sku or str(item.name or "").strip().casefold() or f"row:{row}"
+            product_groups.setdefault(product_key, []).append((row, item, line_weight))
+
+        if missing_weights:
+            QMessageBox.warning(
+                self,
+                "Gewicht fehlt",
+                "Die automatische Verteilung benötigt ein Wix-Gewicht für jedes physische Produkt.\n\n"
+                "Ohne Gewicht: " + ", ".join(missing_weights),
+            )
+            return
+        weighted_groups = [
+            (entries, sum(entry[2] for entry in entries)) for entries in product_groups.values()
+        ]
+        too_heavy = [
+            f"{entries[0][1].name or entries[0][1].sku or 'Produkt'} ({group_weight:.2f} kg)"
+            for entries, group_weight in weighted_groups
+            if group_weight > _PACKING_TARGET_NET_WEIGHT_KG + 0.0001
+        ]
+        if too_heavy:
+            QMessageBox.warning(
+                self,
+                "Produkt zu schwer für ein Paket",
+                "Dieses Produkt würde allein die sichere Grenze von "
+                f"{_PACKING_TARGET_NET_WEIGHT_KG:.1f} kg Warengewicht überschreiten:\n\n"
+                + "\n".join(too_heavy)
+                + "\n\nSie wird nicht automatisch geteilt, weil gleiche Produkte zusammenbleiben sollen. "
+                "Bitte Gewicht oder Paketstrategie manuell prüfen.",
+            )
+            return
+
+        # First-fit decreasing by complete products: deterministic, fast and
+        # easy to verify at the packing station. A group represents all rows
+        # with the same SKU, never only a single Wix line.
+        bins: list[list[list[tuple[int, WixOrderItem, float]]]] = []
+        bin_weights: list[float] = []
+        for group, group_weight in sorted(weighted_groups, key=lambda entry: entry[1], reverse=True):
+            fitting = [
+                index
+                for index, weight in enumerate(bin_weights)
+                if weight + group_weight <= _PACKING_TARGET_NET_WEIGHT_KG + 0.0001
+            ]
+            if fitting:
+                # Best fit keeps the number of cartons as small as possible.
+                target = max(fitting, key=lambda index: bin_weights[index])
+                bins[target].append(group)
+                bin_weights[target] += group_weight
+            else:
+                bins.append([group])
+                bin_weights.append(group_weight)
+
+        if len(bins) > self._package_count.maximum():
+            QMessageBox.warning(
+                self,
+                "Zu viele Pakete",
+                f"Die sichere Verteilung benötigt {len(bins)} Pakete; erlaubt sind höchstens "
+                f"{self._package_count.maximum()}.",
+            )
+            return
+
+        self._package_count.blockSignals(True)
+        self._package_count.setValue(len(bins))
+        self._package_count.blockSignals(False)
+        self._rebuild_parcel_controls()
+
+        if len(bins) == 1:
+            estimated_gross = bin_weights[0] + _PACKING_WEIGHT_RESERVE_KG
+            self._weight_edit.setText(f"{estimated_gross:.2f}".replace(".", ","))
+            self._status.setText(
+                f"Gewichtsverteilung: 1 Paket mit {bin_weights[0]:.2f} kg Warengewicht + "
+                f"{_PACKING_WEIGHT_RESERVE_KG:.2f} kg Reserve. Tatsächliches Bruttogewicht prüfen."
+            )
+            return
+
+        self._packing_table.blockSignals(True)
+        for row in range(self._packing_table.rowCount()):
+            for package_index in range(len(bins)):
+                cell = self._packing_table.item(row, 2 + package_index)
+                if cell is not None:
+                    cell.setText("0")
+        for package_index, entries in enumerate(bins):
+            for product_rows in entries:
+                for row, item, _line_weight in product_rows:
+                    cell = self._packing_table.item(row, 2 + package_index)
+                    if cell is not None:
+                        cell.setText(str(max(1, int(item.qty or 1))))
+        self._packing_table.blockSignals(False)
+
+        estimated_gross_weights = [weight + _PACKING_WEIGHT_RESERVE_KG for weight in bin_weights]
+        for edit, estimated_gross in zip(self._parcel_weight_edits, estimated_gross_weights):
+            edit.setText(f"{estimated_gross:.2f}".replace(".", ","))
+            edit.setToolTip(
+                f"Vorschlag: {estimated_gross - _PACKING_WEIGHT_RESERVE_KG:.2f} kg Warengewicht + "
+                f"{_PACKING_WEIGHT_RESERVE_KG:.2f} kg Reserve. Tatsächliches Bruttogewicht prüfen."
+            )
+        self._weight_edit.setText(f"{sum(estimated_gross_weights):.2f}".replace(".", ","))
+        self._status.setText(
+            f"Gewichtsverteilung: {len(bins)} Pakete, gleiche Produkte bleiben zusammen; "
+            f"je Paket {int(_PACKING_WEIGHT_RESERVE_KG * 1000)} g Reserve eingeplant. "
+            "Tatsächliche Bruttogewichte prüfen."
+        )
 
     def _on_order_number_edit(self, _value: str) -> None:
         self._order_numbers_edited = True
@@ -995,6 +1136,10 @@ class PlcLabelPrintDialog(QDialog):
                 raise ValueError(f"Paket {package_index + 1}: Gewicht ist ungültig.") from exc
             if weight <= 0:
                 raise ValueError(f"Paket {package_index + 1}: Gewicht muss größer als 0 sein.")
+            if weight > _MAX_PARCEL_GROSS_WEIGHT_KG + 0.0001:
+                raise ValueError(
+                    f"Paket {package_index + 1}: Gewicht {weight:.2f} kg überschreitet die 12-kg-Grenze."
+                )
             weights.append(weight)
         self._weight_edit.setText(f"{sum(weights):.2f}".replace(".", ","))
 

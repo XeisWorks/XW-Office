@@ -317,6 +317,47 @@ def test_multiple_parcels_split_physical_items_and_prepare_two_packing_lists(qtb
     assert [item.quantity for item in packing_lists[1].items] == [1]
     assert all("Download" not in item.name for packing_list in packing_lists for item in packing_list.items)
 
+
+def test_weight_distribution_keeps_duplicate_skus_together_and_adds_parcels(qtbot: object) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+    dialog._packing_items = [  # noqa: SLF001
+        WixOrderItem(sku="XW-SAME", name="Gleicher Artikel", qty=8, unit_weight_kg=0.5),
+        WixOrderItem(sku="XW-SAME", name="Gleicher Artikel", qty=8, unit_weight_kg=0.5),
+        WixOrderItem(sku="XW-OTHER", name="Anderer Artikel", qty=8, unit_weight_kg=0.7),
+    ]
+    dialog._package_count.setValue(2)  # noqa: SLF001
+
+    dialog._auto_distribute_by_weight()  # noqa: SLF001
+
+    assert dialog._package_count.value() == 2  # noqa: SLF001
+    assert dialog._packing_table.item(0, 2).text() == "8"  # noqa: SLF001
+    assert dialog._packing_table.item(1, 2).text() == "8"  # noqa: SLF001
+    assert dialog._packing_table.item(2, 3).text() == "8"  # noqa: SLF001
+    assert [edit.text() for edit in dialog._parcel_weight_edits] == ["8,80", "6,40"]  # noqa: SLF001
+    assert "800 g Reserve" in dialog._status.text()  # noqa: SLF001
+
+
+def test_weight_distribution_expands_to_additional_safe_parcel(qtbot: object) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+    dialog._packing_items = [  # noqa: SLF001
+        WixOrderItem(sku="XW-1", name="Produkt 1", qty=10, unit_weight_kg=0.6),
+        WixOrderItem(sku="XW-2", name="Produkt 2", qty=10, unit_weight_kg=0.6),
+        WixOrderItem(sku="XW-3", name="Produkt 3", qty=10, unit_weight_kg=0.6),
+    ]
+    dialog._package_count.setValue(2)  # noqa: SLF001
+
+    dialog._auto_distribute_by_weight()  # noqa: SLF001
+
+    assert dialog._package_count.value() == 3  # noqa: SLF001
+    assert [edit.text() for edit in dialog._parcel_weight_edits] == ["6,80", "6,80", "6,80"]  # noqa: SLF001
+    assert all(
+        sum(int(dialog._packing_table.item(row, 2 + parcel).text()) for row in range(3)) == 10  # noqa: SLF001
+        for parcel in range(3)
+    )
+
+
 def test_incomplete_wix_customs_weight_expands_details_automatically(qtbot: object) -> None:
     dialog = PlcLabelPrintDialog(_container(), None)
     qtbot.addWidget(dialog)
