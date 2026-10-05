@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
     QLineEdit,
@@ -82,6 +83,7 @@ _SUCCESS_OVERLAY_MS = 700
 _MAX_PARCEL_GROSS_WEIGHT_KG = 12.0
 _PACKING_WEIGHT_RESERVE_KG = 0.8
 _PACKING_TARGET_NET_WEIGHT_KG = _MAX_PARCEL_GROSS_WEIGHT_KG - _PACKING_WEIGHT_RESERVE_KG
+_PACKAGE_QUANTITY_PATTERN = re.compile(r"^(\d+)(?:\s*\+\s*(\d+))?$")
 
 
 def queue_archived_plc_label(
@@ -404,7 +406,8 @@ class PlcLabelPrintDialog(QDialog):
             "Verteile jede physische Position exakt auf die Pakete und trage das tatsächliche Bruttogewicht je Paket ein. "
             "Für jedes Paket wird eine eigene Packliste erstellt. Die Gewichtsverteilung plant höchstens "
             f"{_PACKING_TARGET_NET_WEIGHT_KG:.1f} kg Warengewicht je Paket, damit {int(_PACKING_WEIGHT_RESERVE_KG * 1000)} g "
-            "Reserve für Verpackung und ungenaue Wix-Gewichte bleiben."
+            "Reserve für Verpackung und ungenaue Wix-Gewichte bleiben. Bei B2B kann ein Gratisstück als 10+1 "
+            "eingetragen werden; für die Verteilung zählt dann nur die 10."
         )
         parcel_hint.setWordWrap(True)
         parcel_hint.setStyleSheet("color: #64748b;")
@@ -413,6 +416,8 @@ class PlcLabelPrintDialog(QDialog):
         self._packing_table.setMinimumHeight(170)
         self._packing_table.verticalHeader().setVisible(False)
         self._packing_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        self._packing_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._parcel_rendered_package_count = 1
         parcel_layout.addWidget(self._packing_table)
         self._parcel_weights_form = QFormLayout()
         parcel_layout.addLayout(self._parcel_weights_form)
@@ -597,26 +602,185 @@ class PlcLabelPrintDialog(QDialog):
         self._update_customs_summary()
 
     def _on_package_count_changed(self, _value: int) -> None:
-        self._rebuild_parcel_controls()
+        state = self._snapshot_parcel_state()
+        self._rebuild_parcel_controls(state=self._resize_parcel_state(state, self._package_count.value()))
 
-    def _rebuild_parcel_controls(self) -> None:
+    def _snapshot_parcel_state(self) -> tuple[list[list[str]], list[str]] | None:
+        """Return current parcel quantities/weights without the controls row."""
+        if self._parcel_rendered_package_count <= 1:
+            return None
+        physical_items = [item for item in self._packing_items if not item.is_digital]
+        if self._packing_table.rowCount() != len(physical_items) + 1:
+            return None
+        quantities = [
+            [
+                str(cell.text()) if (cell := self._packing_table.item(row + 1, column)) is not None else "0"
+                for column in range(2, 2 + self._parcel_rendered_package_count)
+            ]
+            for row in range(len(physical_items))
+        ]
+        return quantities, [edit.text() for edit in self._parcel_weight_edits]
+
+    @staticmethod
+    def _split_package_quantity(value: str) -> tuple[int, int] | None:
+        match = _PACKAGE_QUANTITY_PATTERN.fullmatch(str(value).strip())
+        if match is None:
+            return None
+        return int(match.group(1)), int(match.group(2) or 0)
+
+    @staticmethod
+    def _format_package_quantity(ordered: int, bonus: int) -> str:
+        return str(ordered) if bonus == 0 else f"{ordered}+{bonus}"
+
+    def _resize_parcel_state(
+        self,
+        state: tuple[list[list[str]], list[str]] | None,
+        package_count: int,
+    ) -> tuple[list[list[str]], list[str]] | None:
+        """Keep entered values when the spinbox adds/removes a package."""
+        if state is None:
+            return None
+        quantities, weights = state
+        old_count = max((len(row) for row in quantities), default=len(weights))
+        if old_count > package_count:
+            # A direct spinbox reduction must not silently lose physical pieces.
+            # Merge removed values into the first remaining package instead.
+            for row in quantities:
+                for column in range(package_count, len(row)):
+                    source = self._split_package_quantity(row[column])
+                    target = self._split_package_quantity(row[0]) if row else None
+                    if source is None or target is None:
+                        continue
+                    row[0] = self._format_package_quantity(target[0] + source[0], target[1] + source[1])
+                del row[package_count:]
+            del weights[package_count:]
+        return quantities, weights
+
+    def _set_package_count(
+        self,
+        package_count: int,
+        *,
+        state: tuple[list[list[str]], list[str]] | None = None,
+    ) -> None:
+        self._package_count.blockSignals(True)
+        self._package_count.setValue(package_count)
+        self._package_count.blockSignals(False)
+        self._rebuild_parcel_controls(state=state)
+
+    def _add_parcel(self) -> None:
+        current = int(self._package_count.value())
+        if current >= self._package_count.maximum():
+            QMessageBox.warning(
+                self,
+                "Paketaufteilung",
+                f"Es sind höchstens {self._package_count.maximum()} Pakete möglich.",
+            )
+            return
+        self._set_package_count(current + 1, state=self._snapshot_parcel_state())
+        self._status.setText(f"Paket {current + 1} hinzugefügt.")
+
+    def _clear_package(self, package_index: int) -> None:
+        for row in range(1, self._packing_table.rowCount()):
+            cell = self._packing_table.item(row, 2 + package_index)
+            if cell is not None:
+                cell.setText("0")
+        self._status.setText(f"Paket {package_index + 1} geleert.")
+
+    def _delete_parcel(self, package_index: int) -> None:
+        package_count = int(self._package_count.value())
+        if package_count <= 1:
+            return
+        state = self._snapshot_parcel_state()
+        if state is None:
+            return
+        quantities, weights = state
+        transfer_to = 0 if package_index != 0 else 1
+        for row in quantities:
+            source = self._split_package_quantity(row[package_index])
+            target = self._split_package_quantity(row[transfer_to])
+            if source is None or target is None:
+                QMessageBox.warning(
+                    self,
+                    "Paket löschen",
+                    "Bitte zuerst alle Mengen als ganze Zahl oder im Format 10+1 eintragen.",
+                )
+                return
+            row[transfer_to] = self._format_package_quantity(target[0] + source[0], target[1] + source[1])
+            del row[package_index]
+        if package_index < len(weights):
+            del weights[package_index]
+        self._set_package_count(package_count - 1, state=(quantities, weights))
+        self._status.setText(
+            f"Paket {package_index + 1} gelöscht; dessen Mengen wurden in ein verbleibendes Paket übernommen. "
+            "Paketgewicht prüfen."
+        )
+
+    def _package_action_widget(self, package_index: int) -> QWidget:
+        widget = QWidget(self._packing_table)
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(3, 1, 3, 1)
+        layout.setSpacing(2)
+        clear_button = QToolButton(widget)
+        clear_button.setText("↺")
+        clear_button.setToolTip(f"Liste für Paket {package_index + 1} leeren")
+        clear_button.setAccessibleName(clear_button.toolTip())
+        clear_button.clicked.connect(lambda _checked=False, index=package_index: self._clear_package(index))
+        delete_button = QToolButton(widget)
+        delete_button.setText("🗑")
+        delete_button.setToolTip(f"Paket {package_index + 1} löschen")
+        delete_button.setAccessibleName(delete_button.toolTip())
+        delete_button.clicked.connect(lambda _checked=False, index=package_index: self._delete_parcel(index))
+        layout.addWidget(clear_button)
+        layout.addWidget(delete_button)
+        layout.addStretch()
+        return widget
+
+    def _add_parcel_widget(self) -> QWidget:
+        widget = QWidget(self._packing_table)
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(3, 1, 3, 1)
+        add_button = QToolButton(widget)
+        add_button.setText("+")
+        add_button.setToolTip("Paket hinzufügen")
+        add_button.setAccessibleName(add_button.toolTip())
+        add_button.clicked.connect(lambda _checked=False: self._add_parcel())
+        layout.addWidget(add_button)
+        layout.addStretch()
+        return widget
+
+    def _rebuild_parcel_controls(self, *, state: tuple[list[list[str]], list[str]] | None = None) -> None:
         package_count = int(self._package_count.value())
         is_multiple = package_count > 1
         self._parcel_group.setVisible(is_multiple)
         self._weight_label.setText("Gesamtgewicht (kg):" if is_multiple else "Gewicht (kg):")
         if not is_multiple:
+            self._packing_table.clear()
+            self._packing_table.setRowCount(0)
+            self._packing_table.setColumnCount(0)
+            self._clear_parcel_weight_inputs()
+            self._parcel_rendered_package_count = 1
             return
 
         physical_items = [item for item in self._packing_items if not item.is_digital]
+        saved_quantities, saved_weights = state or ([], [])
         self._packing_table.blockSignals(True)
         self._packing_table.clear()
-        self._packing_table.setColumnCount(2 + package_count)
+        add_column = 2 + package_count
+        self._packing_table.setColumnCount(add_column + 1)
         self._packing_table.setHorizontalHeaderLabels(
-            ["Produkt", "Bestellt", *[f"Paket {number}" for number in range(1, package_count + 1)]]
+            ["Produkt", "Bestellt", *[f"Paket {number}" for number in range(1, package_count + 1)], "+"]
         )
-        self._packing_table.setRowCount(0)
-        for row, item in enumerate(physical_items):
-            self._packing_table.insertRow(row)
+        self._packing_table.setRowCount(len(physical_items) + 1)
+        self._packing_table.setRowHeight(0, 30)
+        for column in range(add_column + 1):
+            controls_cell = QTableWidgetItem("")
+            controls_cell.setFlags(controls_cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self._packing_table.setItem(0, column, controls_cell)
+        for package_index in range(package_count):
+            self._packing_table.setCellWidget(0, 2 + package_index, self._package_action_widget(package_index))
+        self._packing_table.setCellWidget(0, add_column, self._add_parcel_widget())
+        for item_index, item in enumerate(physical_items):
+            row = item_index + 1
             item_name = str(item.name or "Produkt").strip()
             if item.custom_piece_titles:
                 item_name = f"{item_name} – {', '.join(item.custom_piece_titles)}"
@@ -629,23 +793,40 @@ class PlcLabelPrintDialog(QDialog):
             ordered_cell.setFlags(ordered_cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._packing_table.setItem(row, 1, ordered_cell)
             for package_column in range(package_count):
-                self._packing_table.setItem(row, 2 + package_column, QTableWidgetItem(str(ordered if package_column == 0 else 0)))
+                previous = (
+                    saved_quantities[item_index][package_column]
+                    if item_index < len(saved_quantities) and package_column < len(saved_quantities[item_index])
+                    else str(ordered if package_column == 0 else 0)
+                )
+                self._packing_table.setItem(row, 2 + package_column, QTableWidgetItem(previous))
         header = self._packing_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in range(1, 2 + package_count):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(False)
+        for column in range(add_column):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(add_column, QHeaderView.ResizeMode.Fixed)
+        self._packing_table.setColumnWidth(0, 480)
+        self._packing_table.setColumnWidth(1, 85)
+        for column in range(2, add_column):
+            self._packing_table.setColumnWidth(column, 105)
+        self._packing_table.setColumnWidth(add_column, 48)
         self._packing_table.blockSignals(False)
 
+        self._clear_parcel_weight_inputs()
+        for number in range(1, package_count + 1):
+            edit = QLineEdit()
+            edit.setPlaceholderText("z.B. 0,45")
+            if number <= len(saved_weights):
+                edit.setText(saved_weights[number - 1])
+            self._parcel_weight_edits.append(edit)
+            self._parcel_weights_form.addRow(f"Paket {number} (kg):", edit)
+        self._parcel_rendered_package_count = package_count
+
+    def _clear_parcel_weight_inputs(self) -> None:
         while self._parcel_weights_form.count():
             child = self._parcel_weights_form.takeAt(0)
             if child.widget() is not None:
                 child.widget().deleteLater()
         self._parcel_weight_edits = []
-        for number in range(1, package_count + 1):
-            edit = QLineEdit()
-            edit.setPlaceholderText("z.B. 0,45")
-            self._parcel_weight_edits.append(edit)
-            self._parcel_weights_form.addRow(f"Paket {number} (kg):", edit)
 
     def _auto_distribute_by_weight(self) -> None:
         """Place complete product lines into parcels without crossing the safe target weight.
@@ -748,7 +929,7 @@ class PlcLabelPrintDialog(QDialog):
             return
 
         self._packing_table.blockSignals(True)
-        for row in range(self._packing_table.rowCount()):
+        for row in range(1, self._packing_table.rowCount()):
             for package_index in range(len(bins)):
                 cell = self._packing_table.item(row, 2 + package_index)
                 if cell is not None:
@@ -756,7 +937,7 @@ class PlcLabelPrintDialog(QDialog):
         for package_index, entries in enumerate(bins):
             for product_rows in entries:
                 for row, item, _line_weight in product_rows:
-                    cell = self._packing_table.item(row, 2 + package_index)
+                    cell = self._packing_table.item(row + 1, 2 + package_index)
                     if cell is not None:
                         cell.setText(str(max(1, int(item.qty or 1))))
         self._packing_table.blockSignals(False)
@@ -1074,6 +1255,13 @@ class PlcLabelPrintDialog(QDialog):
             )
         return out
 
+    def _is_b2b_packing_order(self) -> bool:
+        reference = self._summary.order_reference.strip() or self._primary_order_number.text().strip()
+        return any(
+            prefix and reference.startswith(prefix)
+            for prefix in self._container.config.sku_rules.b2b_reference_prefixes
+        )
+
     def _build_parcels_and_packing_lists(
         self,
         *,
@@ -1091,42 +1279,63 @@ class PlcLabelPrintDialog(QDialog):
                 (),
             )
 
-        if self._packing_table.rowCount() == 0:
+        if self._packing_table.rowCount() <= 1:
             raise ValueError("Für mehrere Pakete wurden keine physischen Artikel gefunden.")
         if len(self._parcel_weight_edits) != package_count:
             raise ValueError("Paketgewichte bitte erneut eingeben.")
 
         assignments: list[list[PackingListItem]] = [[] for _ in range(package_count)]
+        ordered_total = 0
+        bonus_total = 0
+        position_number = 0
         for row in range(self._packing_table.rowCount()):
             product_cell = self._packing_table.item(row, 0)
             ordered_cell = self._packing_table.item(row, 1)
             item = product_cell.data(Qt.ItemDataRole.UserRole) if product_cell is not None else None
+            if not isinstance(item, WixOrderItem):
+                # First row holds the clear/delete/add controls.
+                continue
+            position_number += 1
             try:
                 ordered = int(str(ordered_cell.text() if ordered_cell is not None else ""))
             except ValueError as exc:
-                raise ValueError(f"Position {row + 1}: Bestellmenge ist ungültig.") from exc
+                raise ValueError(f"Position {position_number}: Bestellmenge ist ungültig.") from exc
             quantities: list[int] = []
+            bonus_quantities: list[int] = []
             for package_index in range(package_count):
                 cell = self._packing_table.item(row, 2 + package_index)
-                try:
-                    quantity = int(str(cell.text() if cell is not None else ""))
-                except ValueError as exc:
+                parsed = self._split_package_quantity(str(cell.text() if cell is not None else ""))
+                if parsed is None:
                     raise ValueError(
-                        f"Position {row + 1}, Paket {package_index + 1}: Bitte eine ganze Stückzahl eintragen."
-                    ) from exc
-                if quantity < 0:
-                    raise ValueError(f"Position {row + 1}: Negative Stückzahlen sind nicht erlaubt.")
+                        f"Position {position_number}, Paket {package_index + 1}: Bitte eine ganze Stückzahl "
+                        "oder das B2B-Format 10+1 eintragen."
+                    )
+                quantity, bonus_quantity = parsed
                 quantities.append(quantity)
+                bonus_quantities.append(bonus_quantity)
             if sum(quantities) != ordered:
-                name = str(product_cell.text() if product_cell is not None else f"Position {row + 1}")
+                name = str(product_cell.text() if product_cell is not None else f"Position {position_number}")
                 raise ValueError(f"'{name}': aufgeteilt {sum(quantities)}, bestellt {ordered}.")
+            ordered_total += ordered
+            bonus_total += sum(bonus_quantities)
             name = str(getattr(item, "name", "") or (product_cell.text() if product_cell is not None else "Produkt")).strip()
             if getattr(item, "custom_piece_titles", None):
                 name = f"{name} – {', '.join(item.custom_piece_titles)}"
             sku = str(getattr(item, "sku", "") or "").strip()
-            for package_index, quantity in enumerate(quantities):
-                if quantity:
-                    assignments[package_index].append(PackingListItem(quantity=quantity, name=name, sku=sku))
+            for package_index, (quantity, bonus_quantity) in enumerate(zip(quantities, bonus_quantities)):
+                physical_quantity = quantity + bonus_quantity
+                if physical_quantity:
+                    assignments[package_index].append(PackingListItem(quantity=physical_quantity, name=name, sku=sku))
+
+        if bonus_total:
+            if not self._is_b2b_packing_order():
+                raise ValueError("Das Format 10+1 ist nur für B2B-Bestellungen erlaubt.")
+            maximum_bonus = ordered_total // 10
+            if bonus_total > maximum_bonus:
+                raise ValueError(
+                    f"B2B-Gratisstücke: maximal {maximum_bonus} bei {ordered_total} bestellten Produkten erlaubt; "
+                    f"eingetragen sind {bonus_total}."
+                )
 
         weights: list[float] = []
         for package_index, edit in enumerate(self._parcel_weight_edits):

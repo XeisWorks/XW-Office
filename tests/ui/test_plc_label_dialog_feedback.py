@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtWidgets import QDialog, QLabel, QMessageBox
+from PySide6.QtWidgets import QDialog, QHeaderView, QLabel, QMessageBox
 
 from xw_office.bootstrap import register_default_services
 from xw_office.core.config import AppConfig
@@ -299,11 +299,11 @@ def test_multiple_parcels_split_physical_items_and_prepare_two_packing_lists(qtb
     ]
     dialog._package_count.setValue(2)  # noqa: SLF001
 
-    assert dialog._packing_table.rowCount() == 1  # noqa: SLF001
-    assert dialog._packing_table.item(0, 2).text() == "2"  # noqa: SLF001
-    assert dialog._packing_table.item(0, 3).text() == "0"  # noqa: SLF001
-    dialog._packing_table.item(0, 2).setText("1")  # noqa: SLF001
-    dialog._packing_table.item(0, 3).setText("1")  # noqa: SLF001
+    assert dialog._packing_table.rowCount() == 2  # noqa: SLF001
+    assert dialog._packing_table.item(1, 2).text() == "2"  # noqa: SLF001
+    assert dialog._packing_table.item(1, 3).text() == "0"  # noqa: SLF001
+    dialog._packing_table.item(1, 2).setText("1")  # noqa: SLF001
+    dialog._packing_table.item(1, 3).setText("1")  # noqa: SLF001
     dialog._parcel_weight_edits[0].setText("0,31")  # noqa: SLF001
     dialog._parcel_weight_edits[1].setText("0,29")  # noqa: SLF001
 
@@ -331,9 +331,9 @@ def test_weight_distribution_keeps_duplicate_skus_together_and_adds_parcels(qtbo
     dialog._auto_distribute_by_weight()  # noqa: SLF001
 
     assert dialog._package_count.value() == 2  # noqa: SLF001
-    assert dialog._packing_table.item(0, 2).text() == "8"  # noqa: SLF001
     assert dialog._packing_table.item(1, 2).text() == "8"  # noqa: SLF001
-    assert dialog._packing_table.item(2, 3).text() == "8"  # noqa: SLF001
+    assert dialog._packing_table.item(2, 2).text() == "8"  # noqa: SLF001
+    assert dialog._packing_table.item(3, 3).text() == "8"  # noqa: SLF001
     assert [edit.text() for edit in dialog._parcel_weight_edits] == ["8,80", "6,40"]  # noqa: SLF001
     assert "800 g Reserve" in dialog._status.text()  # noqa: SLF001
 
@@ -353,9 +353,56 @@ def test_weight_distribution_expands_to_additional_safe_parcel(qtbot: object) ->
     assert dialog._package_count.value() == 3  # noqa: SLF001
     assert [edit.text() for edit in dialog._parcel_weight_edits] == ["6,80", "6,80", "6,80"]  # noqa: SLF001
     assert all(
-        sum(int(dialog._packing_table.item(row, 2 + parcel).text()) for row in range(3)) == 10  # noqa: SLF001
+        sum(int(dialog._packing_table.item(row, 2 + parcel).text()) for row in range(1, 4)) == 10  # noqa: SLF001
         for parcel in range(3)
     )
+
+
+def test_parcel_controls_add_clear_delete_and_keep_columns_resizable(qtbot: object) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+    dialog._packing_items = [WixOrderItem(sku="XW-400", name="Alpenmarsch", qty=4)]  # noqa: SLF001
+    dialog._package_count.setValue(2)  # noqa: SLF001
+
+    header = dialog._packing_table.horizontalHeader()  # noqa: SLF001
+    assert header.sectionResizeMode(0) == QHeaderView.ResizeMode.Interactive
+    assert header.sectionResizeMode(2) == QHeaderView.ResizeMode.Interactive
+    assert dialog._packing_table.cellWidget(0, 2) is not None  # noqa: SLF001
+    assert dialog._packing_table.cellWidget(0, 4) is not None  # noqa: SLF001
+
+    dialog._add_parcel()  # noqa: SLF001
+    assert dialog._package_count.value() == 3  # noqa: SLF001
+    dialog._packing_table.item(1, 2).setText("1")  # noqa: SLF001
+    dialog._packing_table.item(1, 3).setText("2")  # noqa: SLF001
+    dialog._packing_table.item(1, 4).setText("1")  # noqa: SLF001
+    dialog._clear_package(1)  # noqa: SLF001
+    assert dialog._packing_table.item(1, 3).text() == "0"  # noqa: SLF001
+
+    dialog._packing_table.item(1, 3).setText("2")  # noqa: SLF001
+    dialog._delete_parcel(1)  # noqa: SLF001
+    assert dialog._package_count.value() == 2  # noqa: SLF001
+    assert dialog._packing_table.item(1, 2).text() == "3"  # noqa: SLF001
+    assert dialog._packing_table.item(1, 3).text() == "1"  # noqa: SLF001
+
+
+def test_b2b_bonus_quantity_is_printed_but_not_counted_as_ordered(qtbot: object) -> None:
+    summary = plc_dialog_module.InvoiceSummary(id="b2b", order_reference="12345")
+    dialog = PlcLabelPrintDialog(_container(), summary)
+    qtbot.addWidget(dialog)
+    dialog._packing_items = [WixOrderItem(sku="XW-400", name="Alpenmarsch", qty=20)]  # noqa: SLF001
+    dialog._package_count.setValue(2)  # noqa: SLF001
+    dialog._packing_table.item(1, 2).setText("10+1")  # noqa: SLF001
+    dialog._packing_table.item(1, 3).setText("10+1")  # noqa: SLF001
+    dialog._parcel_weight_edits[0].setText("1,0")  # noqa: SLF001
+    dialog._parcel_weight_edits[1].setText("1,0")  # noqa: SLF001
+
+    _parcels, packing_lists = dialog._build_parcels_and_packing_lists(  # noqa: SLF001
+        reference="12345",
+        package_type="PC",
+    )
+
+    assert [item.quantity for item in packing_lists[0].items] == [11]
+    assert [item.quantity for item in packing_lists[1].items] == [11]
 
 
 def test_incomplete_wix_customs_weight_expands_details_automatically(qtbot: object) -> None:
