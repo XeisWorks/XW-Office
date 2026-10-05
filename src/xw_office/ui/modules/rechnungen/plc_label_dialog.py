@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QTimer, Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QBrush, QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from xw_office.core.worker import BackgroundWorker
+from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.plc.polling import (
     DEFAULT_PLC_IMPORT_DIR,
     DEFAULT_TEST_PLC_IMPORT_DIR,
@@ -57,6 +58,7 @@ from xw_office.services.plc.pricing import quote_plc_price
 from xw_office.services.plc.customs_document import ensure_customs_a5_print_file
 from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.plc.packing_list import PackingListContext, PackingListItem, PackingListService
+from xw_office.services.plc.partial_fulfillment import PartialFulfillmentStore
 from xw_office.services.plc.service import PlcDuplicateShipmentError, PlcShipmentService
 from xw_office.services.plc.webservice import PlcWebserviceResult, webservice_settings_from_secrets
 from xw_office.services.printing.print_jobs import PdfPrintJob
@@ -235,10 +237,22 @@ class PlcLabelPrintDialog(QDialog):
         self._send_worker: BackgroundWorker | None = None
         self._context = _PlcDialogContext(order_number="", address_lines=[], weight_kg=0.0, items=[])
         self._packing_items: list[WixOrderItem] = []
+        self._packing_open_quantities: list[int] = []
         self._parcel_weight_edits: list[QLineEdit] = []
         self._parcel_contents_labels: list[QLabel] = []
         self._pending_packing_contexts: tuple[PackingListContext, ...] = ()
+        self._pending_fulfillment_order = ""
+        self._pending_fulfillment_quantities: dict[str, int] = {}
+        self._last_allocation_warnings: tuple[str, ...] = ()
         self._label_archive = PlcLabelArchive()
+        try:
+            settings_repo = container.resolve(SettingKvRepository)
+        except KeyError:
+            settings_repo = None
+        self._partial_fulfillments = PartialFulfillmentStore(
+            Path(__file__).resolve().parents[4] / "state" / "plc_partial_fulfillments.json",
+            settings_repo,
+        )
         self._product_catalog = self._load_products()
         self._product_user_set = False
         self._address_edited = bool(address_override_lines)
@@ -572,6 +586,11 @@ class PlcLabelPrintDialog(QDialog):
             self._primary_order_number.blockSignals(False)
         self._populate_customs_table(result.items)
         self._packing_items = list(result.items)
+        self._packing_open_quantities = [
+            quantity
+            for item, quantity in zip(self._packing_items, self._open_quantities_for_items(self._packing_items))
+            if not item.is_digital
+        ]
         self._rebuild_parcel_controls()
         self._sync_product_options()
         self._update_customs_visibility()
@@ -605,6 +624,38 @@ class PlcLabelPrintDialog(QDialog):
         self._weight_user_set = True
         self._update_price()
         self._update_customs_summary()
+
+    @staticmethod
+    def _packing_item_key(item: WixOrderItem) -> str:
+        """Use Wix's stable line identifier, with a deterministic legacy fallback."""
+        line_item_id = str(item.line_item_id or "").strip()
+        if line_item_id:
+            return f"line:{line_item_id}"
+        catalog_item_id = str(item.catalog_item_id or "").strip()
+        if catalog_item_id:
+            return f"catalog:{catalog_item_id}:{str(item.sku or '').strip()}"
+        return f"product:{str(item.sku or '').strip()}:{str(item.name or '').strip()}"
+
+    def _partial_fulfillment_order_key(self) -> str:
+        return self._primary_order_number.text().strip() or self._summary.order_reference.strip()
+
+    def _open_quantities_for_items(self, items: list[WixOrderItem]) -> list[int]:
+        fulfilled = self._partial_fulfillments.fulfilled_quantities(self._partial_fulfillment_order_key())
+        outstanding: list[int] = []
+        consumed_by_key: dict[str, int] = {}
+        for item in items:
+            ordered = max(1, int(item.qty or 1))
+            key = self._packing_item_key(item)
+            already_consumed = consumed_by_key.get(key, 0)
+            fulfilled_for_line = min(ordered, max(0, fulfilled.get(key, 0) - already_consumed))
+            consumed_by_key[key] = already_consumed + fulfilled_for_line
+            outstanding.append(ordered - fulfilled_for_line)
+        return outstanding
+
+    def _open_quantity_for_item(self, item_index: int, item: WixOrderItem) -> int:
+        if item_index < len(self._packing_open_quantities):
+            return max(0, self._packing_open_quantities[item_index])
+        return max(1, int(item.qty or 1))
 
     def _on_package_count_changed(self, _value: int) -> None:
         state = self._snapshot_parcel_state()
@@ -779,7 +830,7 @@ class PlcLabelPrintDialog(QDialog):
         add_column = 2 + package_count
         self._packing_table.setColumnCount(add_column + 1)
         self._packing_table.setHorizontalHeaderLabels(
-            ["Produkt", "Bestellt", *[f"Paket {number}" for number in range(1, package_count + 1)], "+"]
+            ["Produkt", "Bestellt / offen", *[f"Paket {number}" for number in range(1, package_count + 1)], "+"]
         )
         self._packing_table.setRowCount(len(physical_items) + 1)
         self._packing_table.setRowHeight(0, 30)
@@ -800,14 +851,18 @@ class PlcLabelPrintDialog(QDialog):
             product_cell.setFlags(product_cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._packing_table.setItem(row, 0, product_cell)
             ordered = max(1, int(item.qty or 1))
-            ordered_cell = QTableWidgetItem(str(ordered))
+            open_quantity = self._open_quantity_for_item(item_index, item)
+            ordered_cell = QTableWidgetItem(f"{ordered} / offen {open_quantity}")
+            ordered_cell.setData(Qt.ItemDataRole.UserRole, {"ordered": ordered, "open": open_quantity})
             ordered_cell.setFlags(ordered_cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            if open_quantity != ordered:
+                ordered_cell.setForeground(QBrush(QColor("#dc2626")))
             self._packing_table.setItem(row, 1, ordered_cell)
             for package_column in range(package_count):
                 previous = (
                     saved_quantities[item_index][package_column]
                     if item_index < len(saved_quantities) and package_column < len(saved_quantities[item_index])
-                    else str(ordered if package_column == 0 else 0)
+                    else str(open_quantity if package_column == 0 else 0)
                 )
                 self._packing_table.setItem(row, 2 + package_column, QTableWidgetItem(previous))
         header = self._packing_table.horizontalHeader()
@@ -910,7 +965,9 @@ class PlcLabelPrintDialog(QDialog):
         product_groups: dict[str, list[tuple[int, WixOrderItem, float]]] = {}
         missing_weights: list[str] = []
         for row, item in enumerate(physical_items):
-            quantity = max(1, int(item.qty or 1))
+            quantity = self._open_quantity_for_item(row, item)
+            if quantity <= 0:
+                continue
             unit_weight = float(item.unit_weight_kg or 0)
             title = str(item.name or item.sku or f"Position {row + 1}").strip()
             if unit_weight <= 0:
@@ -921,6 +978,13 @@ class PlcLabelPrintDialog(QDialog):
             product_key = sku or str(item.name or "").strip().casefold() or f"row:{row}"
             product_groups.setdefault(product_key, []).append((row, item, line_weight))
 
+        if not product_groups and not missing_weights:
+            QMessageBox.information(
+                self,
+                "Paketaufteilung",
+                "Für diese Bestellung sind keine offenen Produkte mehr vorhanden.",
+            )
+            return
         if missing_weights:
             QMessageBox.warning(
                 self,
@@ -1003,7 +1067,7 @@ class PlcLabelPrintDialog(QDialog):
                 for row, item, _line_weight in product_rows:
                     cell = self._packing_table.item(row + 1, 2 + package_index)
                     if cell is not None:
-                        cell.setText(str(max(1, int(item.qty or 1))))
+                        cell.setText(str(self._open_quantity_for_item(row, item)))
         self._packing_table.blockSignals(False)
         self._update_parcel_summaries()
 
@@ -1346,13 +1410,66 @@ class PlcLabelPrintDialog(QDialog):
             for prefix in self._container.config.sku_rules.b2b_reference_prefixes
         )
 
+    def _confirm_allocation_warnings(self, *, action: str) -> bool:
+        if not self._last_allocation_warnings:
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Unvollständige Paketaufteilung")
+        box.setText("Nicht alle offenen Produkte sind auf die Pakete verteilt.")
+        box.setInformativeText("\n".join(self._last_allocation_warnings))
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        proceed = box.button(QMessageBox.StandardButton.Yes)
+        if proceed is not None:
+            proceed.setText(f"✓ Trotzdem {action}")
+            proceed.setStyleSheet("color: #15803d; font-weight: 700;")
+        cancel = box.button(QMessageBox.StandardButton.No)
+        if cancel is not None:
+            cancel.setText("✕ Abbrechen")
+            cancel.setStyleSheet("color: #b91c1c; font-weight: 700;")
+        return box.exec() == QMessageBox.StandardButton.Yes
+
+    def _capture_pending_fulfillment(self) -> tuple[str, dict[str, int]]:
+        quantities: dict[str, int] = {}
+        for row in range(1, self._packing_table.rowCount()):
+            product_cell = self._packing_table.item(row, 0)
+            item = product_cell.data(Qt.ItemDataRole.UserRole) if product_cell is not None else None
+            if not isinstance(item, WixOrderItem):
+                continue
+            dispatched = 0
+            for package_index in range(int(self._package_count.value())):
+                cell = self._packing_table.item(row, 2 + package_index)
+                parsed = self._split_package_quantity(str(cell.text() if cell is not None else ""))
+                if parsed is not None:
+                    dispatched += parsed[0]
+            if dispatched:
+                item_key = self._packing_item_key(item)
+                quantities[item_key] = quantities.get(item_key, 0) + dispatched
+        return self._partial_fulfillment_order_key(), quantities
+
+    def _record_pending_fulfillment(self) -> None:
+        if not self._pending_fulfillment_order or not self._pending_fulfillment_quantities:
+            return
+        try:
+            self._partial_fulfillments.add_dispatched_quantities(
+                self._pending_fulfillment_order,
+                self._pending_fulfillment_quantities,
+            )
+        except Exception:  # noqa: BLE001 - dispatched labels must remain usable if local state fails.
+            logger.exception("Could not persist partial PLC fulfillment")
+        finally:
+            self._pending_fulfillment_order = ""
+            self._pending_fulfillment_quantities = {}
+
     def _build_parcels_and_packing_lists(
         self,
         *,
         reference: str,
         package_type: str,
+        allow_partial: bool = False,
     ) -> tuple[tuple[PlcParcel, ...], tuple[PackingListContext, ...]]:
         """Validate the visible parcel split and retain its exact print content."""
+        self._last_allocation_warnings = ()
         package_count = int(self._package_count.value())
         if package_count == 1:
             weight = self._gross_weight_kg()
@@ -1369,6 +1486,7 @@ class PlcLabelPrintDialog(QDialog):
             raise ValueError("Paketgewichte bitte erneut eingeben.")
 
         assignments: list[list[PackingListItem]] = [[] for _ in range(package_count)]
+        allocation_warnings: list[str] = []
         ordered_total = 0
         bonus_total = 0
         position_number = 0
@@ -1380,10 +1498,16 @@ class PlcLabelPrintDialog(QDialog):
                 # First row holds the clear/delete/add controls.
                 continue
             position_number += 1
-            try:
-                ordered = int(str(ordered_cell.text() if ordered_cell is not None else ""))
-            except ValueError as exc:
-                raise ValueError(f"Position {position_number}: Bestellmenge ist ungültig.") from exc
+            quantity_state = ordered_cell.data(Qt.ItemDataRole.UserRole) if ordered_cell is not None else None
+            if isinstance(quantity_state, dict):
+                ordered = int(quantity_state.get("ordered", 0))
+                open_quantity = int(quantity_state.get("open", ordered))
+            else:
+                try:
+                    ordered = int(str(ordered_cell.text() if ordered_cell is not None else ""))
+                except ValueError as exc:
+                    raise ValueError(f"Position {position_number}: Bestellmenge ist ungültig.") from exc
+                open_quantity = ordered
             quantities: list[int] = []
             bonus_quantities: list[int] = []
             for package_index in range(package_count):
@@ -1397,10 +1521,13 @@ class PlcLabelPrintDialog(QDialog):
                 quantity, bonus_quantity = parsed
                 quantities.append(quantity)
                 bonus_quantities.append(bonus_quantity)
-            if sum(quantities) != ordered:
+            if sum(quantities) != open_quantity:
                 name = str(product_cell.text() if product_cell is not None else f"Position {position_number}")
-                raise ValueError(f"'{name}': aufgeteilt {sum(quantities)}, bestellt {ordered}.")
-            ordered_total += ordered
+                warning = f"'{name}': aufgeteilt {sum(quantities)}, offen {open_quantity} (bestellt {ordered})."
+                if not allow_partial:
+                    raise ValueError(warning)
+                allocation_warnings.append(warning)
+            ordered_total += open_quantity
             bonus_total += sum(bonus_quantities)
             name = str(getattr(item, "name", "") or (product_cell.text() if product_cell is not None else "Produkt")).strip()
             if getattr(item, "custom_piece_titles", None):
@@ -1440,7 +1567,9 @@ class PlcLabelPrintDialog(QDialog):
         contexts: list[PackingListContext] = []
         for package_index, (items, weight) in enumerate(zip(assignments, weights), start=1):
             if not items:
-                raise ValueError(f"Paket {package_index} enthält keine Artikel.")
+                if not allow_partial:
+                    raise ValueError(f"Paket {package_index} enthält keine Artikel.")
+                allocation_warnings.append(f"Paket {package_index} enthält keine zugeordneten Artikel.")
             parcel_reference = clean_reference(f"{reference}-P{package_index}")
             parcels.append(PlcParcel(weight_kg=weight, package_type=package_type, reference=parcel_reference))
             contexts.append(
@@ -1454,6 +1583,7 @@ class PlcLabelPrintDialog(QDialog):
                     items=tuple(items),
                 )
             )
+        self._last_allocation_warnings = tuple(allocation_warnings)
         return tuple(parcels), tuple(contexts)
 
     def _print_packing_lists(self) -> None:
@@ -1472,7 +1602,10 @@ class PlcLabelPrintDialog(QDialog):
             _parcels, packing_contexts = self._build_parcels_and_packing_lists(
                 reference=reference,
                 package_type=package_type,
+                allow_partial=True,
             )
+            if not self._confirm_allocation_warnings(action="Packliste drucken"):
+                return
             output_dir = Path(__file__).resolve().parents[4] / "state" / "plc_labels" / "packlists"
             pdf_path = PackingListService().generate_pdf(packing_contexts, output_dir=output_dir)
             job_id = queue_packing_lists(self._container, pdf_path, reference)
@@ -1539,9 +1672,12 @@ class PlcLabelPrintDialog(QDialog):
             parcels, packing_contexts = self._build_parcels_and_packing_lists(
                 reference=ref,
                 package_type=pakettyp,
+                allow_partial=True,
             )
         except ValueError as exc:
             QMessageBox.warning(self, "PLC", str(exc))
+            return
+        if not self._confirm_allocation_warnings(action="PLC-Marke drucken"):
             return
         invoice_id = self._summary.id or ref
         invoice_number = self._summary.invoice_number or self._summary.id or ref
@@ -1575,6 +1711,7 @@ class PlcLabelPrintDialog(QDialog):
 
         transport = str(self._transport_combo.currentData() or "webservice")
         self._pending_packing_contexts = packing_contexts
+        self._pending_fulfillment_order, self._pending_fulfillment_quantities = self._capture_pending_fulfillment()
         self._start_send(shipment, transport)
 
     def _start_send(self, shipment: PlcShipmentDraft, transport: str) -> None:
@@ -1616,6 +1753,9 @@ class PlcLabelPrintDialog(QDialog):
         if result.webservice_result is None:
             self._on_send_error(shipment, RuntimeError("PLC-Webservice lieferte kein Label"))
             return
+        # PLC accepted the shipment and returned a label. From this point on,
+        # the dispatched base quantities must no longer be offered as open.
+        self._record_pending_fulfillment()
         archive_path = None
         customs_path = None
         customs_print_path = None

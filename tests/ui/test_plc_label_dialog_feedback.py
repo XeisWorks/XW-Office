@@ -14,6 +14,7 @@ from xw_office.core.signals import AppSignals
 from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.plc.models import PlcCustomsArticle, PlcParcel, PlcShipmentDraft
 from xw_office.services.plc.packing_list import PackingListService
+from xw_office.services.plc.partial_fulfillment import PartialFulfillmentStore
 from xw_office.services.plc.polling import ShipmentAddress
 from xw_office.services.plc.service import PlcShipmentService
 from xw_office.services.plc.webservice import PlcWebserviceResult
@@ -337,6 +338,46 @@ def test_multiple_parcel_weights_are_used_instead_of_total_weight(qtbot: object)
     assert [parcel.weight_kg for parcel in parcels] == [11.69, 10.21]
     assert [packing_list.weight_kg for packing_list in packing_lists] == [11.69, 10.21]
     assert dialog._weight_edit.text() == "21,90"  # noqa: SLF001
+
+
+def test_partial_allocation_can_produce_packlists_and_next_label_shows_open_quantity(
+    qtbot: object,
+    tmp_path: Path,
+) -> None:
+    store = PartialFulfillmentStore(tmp_path / "partial.json")
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+    dialog._partial_fulfillments = store  # noqa: SLF001
+    dialog._primary_order_number.setText("21104")  # noqa: SLF001
+    dialog._packing_items = [WixOrderItem(sku="XW-400", name="Alpenmarsch", qty=10)]  # noqa: SLF001
+    dialog._package_count.setValue(2)  # noqa: SLF001
+    dialog._packing_table.item(1, 2).setText("4")  # noqa: SLF001
+    dialog._packing_table.item(1, 3).setText("0")  # noqa: SLF001
+    dialog._parcel_weight_edits[0].setText("1,0")  # noqa: SLF001
+    dialog._parcel_weight_edits[1].setText("1,0")  # noqa: SLF001
+
+    _parcels, packing_lists = dialog._build_parcels_and_packing_lists(  # noqa: SLF001
+        reference="21104",
+        package_type="PC",
+        allow_partial=True,
+    )
+    order_key, sent_quantities = dialog._capture_pending_fulfillment()  # noqa: SLF001
+    store.add_dispatched_quantities(order_key, sent_quantities)
+
+    assert [item.quantity for item in packing_lists[0].items] == [4]
+    assert not packing_lists[1].items
+    assert "offen 10" in dialog._last_allocation_warnings[0]  # noqa: SLF001
+
+    next_dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(next_dialog)
+    next_dialog._partial_fulfillments = store  # noqa: SLF001
+    next_dialog._primary_order_number.setText("21104")  # noqa: SLF001
+    next_dialog._packing_items = [WixOrderItem(sku="XW-400", name="Alpenmarsch", qty=10)]  # noqa: SLF001
+    next_dialog._packing_open_quantities = next_dialog._open_quantities_for_items(next_dialog._packing_items)  # noqa: SLF001
+    next_dialog._package_count.setValue(2)  # noqa: SLF001
+
+    assert next_dialog._packing_table.item(1, 1).text() == "10 / offen 6"  # noqa: SLF001
+    assert next_dialog._packing_table.item(1, 2).text() == "6"  # noqa: SLF001
 
 
 def test_multiple_parcel_price_sums_individual_tariffs_and_shows_contents(qtbot: object) -> None:
