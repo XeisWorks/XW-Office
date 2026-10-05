@@ -1479,6 +1479,30 @@ class RechnungenView(QWidget):
         self._print_products_tabs.addTab(current_page, "AKTUELL")
         detail_main.addWidget(self._print_products_tabs)
 
+        self._detail_invoice_header = QWidget()
+        detail_invoice_header_layout = QHBoxLayout(self._detail_invoice_header)
+        detail_invoice_header_layout.setContentsMargins(2, 0, 2, 0)
+        detail_invoice_header_layout.setSpacing(8)
+        detail_invoice_title = QLabel("RECHNUNGSINFOS")
+        detail_invoice_title.setStyleSheet("font-size: 14px; font-weight: 700; color: #f8fafc;")
+        detail_invoice_header_layout.addWidget(detail_invoice_title)
+        detail_invoice_header_layout.addStretch(1)
+        self._btn_close_detail = QToolButton()
+        self._btn_close_detail.setText("×")
+        self._btn_close_detail.setAccessibleName("Rechnungsinfos schließen")
+        self._btn_close_detail.setToolTip("Rechnungsinfos schließen und zur Übersicht zurückkehren")
+        self._btn_close_detail.setFixedSize(30, 30)
+        self._btn_close_detail.setStyleSheet(
+            "QToolButton { background-color: #334155; color: #f8fafc; border: 1px solid #64748b; "
+            "border-radius: 5px; font-size: 22px; font-weight: 700; padding-bottom: 2px; }"
+            "QToolButton:hover { background-color: #b91c1c; border-color: #fca5a5; }"
+            "QToolButton:pressed { background-color: #991b1b; }"
+        )
+        self._btn_close_detail.clicked.connect(self._close_invoice_detail)
+        detail_invoice_header_layout.addWidget(self._btn_close_detail)
+        self._detail_invoice_header.hide()
+        detail_main.addWidget(self._detail_invoice_header)
+
         self._gb_info = QGroupBox("INFO")
         self._gb_info.setCheckable(True)
         self._gb_info.setChecked(False)
@@ -5525,9 +5549,11 @@ class RechnungenView(QWidget):
 
     def _populate_detail_for_summary(self, summary: InvoiceSummary) -> None:
         self._gb_open.hide()
+        self._print_products_tabs.hide()
         self._gb_open_products.hide()
         self._gb_buyer_notes.hide()
         self._gb_unreleased.hide()
+        self._detail_invoice_header.show()
         self._gb_info.show()
         self._gb_shipping.show()
         self._dl_number.setText(summary.invoice_number or "")
@@ -5571,9 +5597,11 @@ class RechnungenView(QWidget):
 
     def _reset_detail(self) -> None:
         self._gb_open.show()
+        self._print_products_tabs.show()
         self._gb_open_products.show()
         self._gb_buyer_notes.show()
         self._gb_unreleased.show()
+        self._detail_invoice_header.hide()
         self._gb_info.hide()
         self._gb_shipping.hide()
         for lbl in (
@@ -5590,6 +5618,13 @@ class RechnungenView(QWidget):
         self._gb_actions.hide()
         self._update_plc_controls()
         self._reset_stuecke()
+
+    def _close_invoice_detail(self) -> None:
+        """Deselect the current invoice and restore the overview in the detail pane."""
+        selection_model = self._table.selectionModel()
+        if selection_model is not None:
+            selection_model.clearSelection()
+        self._refresh_detail_for_selection()
 
     def _update_action_state(self) -> None:
         row_data = self._table.selected_row_data() or {}

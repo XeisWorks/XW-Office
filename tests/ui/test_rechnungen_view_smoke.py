@@ -667,6 +667,28 @@ def test_detail_info_is_collapsed_by_default_and_expands_on_click(qtbot: object)
     assert not view._info_content.isHidden()  # noqa: SLF001
 
 
+def test_invoice_detail_hides_run_tabs_and_close_restores_overview(qtbot: object) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = invoice_service._draft  # noqa: SLF001
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+
+    view._table.select_source_row(0)  # noqa: SLF001
+
+    assert view._print_products_tabs.isHidden()  # noqa: SLF001
+    assert not view._detail_invoice_header.isHidden()  # noqa: SLF001
+    assert view._btn_close_detail.toolTip().startswith("Rechnungsinfos schließen")  # noqa: SLF001
+
+    view._btn_close_detail.click()  # noqa: SLF001
+
+    assert view._table.selected_source_row() is None  # noqa: SLF001
+    assert not view._print_products_tabs.isHidden()  # noqa: SLF001
+    assert view._detail_invoice_header.isHidden()  # noqa: SLF001
+    assert view._gb_info.isHidden()  # noqa: SLF001
+
+
 def test_selected_invoice_opens_its_sevdesk_deep_link(qtbot: object, monkeypatch: object) -> None:
     container, invoice_service = _build_rechnungen_test_container()
     object.__setattr__(container.config.sevdesk, "base_url", "https://tenant.example/api/v1")
