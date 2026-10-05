@@ -72,6 +72,14 @@ class FlowApiSection:
 
 
 @dataclass(frozen=True)
+class FlowShippingApiSection:
+    """XW-Flow bridge used by the desktop shipment queue."""
+
+    base_url: str = ""
+    timeout_seconds: float = 10.0
+
+
+@dataclass(frozen=True)
 class FinanzOnlineSection:
     wsdl_url: str = ""
     operation_name: str = "submitUva"
@@ -314,6 +322,7 @@ class AppConfig:
     sevdesk: SevdeskSection = field(default_factory=SevdeskSection)
     wix: WixSection = field(default_factory=WixSection)
     flow_api: FlowApiSection = field(default_factory=FlowApiSection)
+    flow_shipping_api: FlowShippingApiSection = field(default_factory=FlowShippingApiSection)
     finanzonline: FinanzOnlineSection = field(default_factory=FinanzOnlineSection)
     printing: PrintingSection = field(default_factory=PrintingSection)
     inventory: InventorySection = field(default_factory=InventorySection)
@@ -371,6 +380,10 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     yaml_data.setdefault("flow_api", {})["base_url"] = os.getenv(
         "XW_FLOW_API_BASE_URL",
         yaml_data.setdefault("flow_api", {}).get("base_url", ""),
+    )
+    yaml_data.setdefault("flow_shipping_api", {})["base_url"] = os.getenv(
+        "XW_FLOW_SHIPPING_API_BASE_URL",
+        yaml_data.setdefault("flow_shipping_api", {}).get("base_url", ""),
     )
     yaml_data.setdefault("finanzonline", {})["wsdl_url"] = os.getenv(
         "FON_SOAP_WSDL",

@@ -54,6 +54,7 @@ from xw_office.services.product_hub.sevdesk_inventory_reconciliation import (
     SevdeskInventoryReconciliationService,
 )
 from xw_office.services.flow_api import FlowAnalyticsClient
+from xw_office.services.sendungen.xw_flow_client import XwFlowShipmentClient
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.services.b2b_credit import B2bCreditService
 from xw_office.services.draft_invoice.service import DraftInvoiceService
@@ -245,7 +246,12 @@ def register_default_services(container: Container) -> None:
             c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
             c.resolve(SecretService),
             c.resolve(WixOrdersClient),
+            c.resolve(XwFlowShipmentClient),
         ),
+    )
+    container.register(
+        XwFlowShipmentClient,
+        lambda c: XwFlowShipmentClient(c.config, c.resolve(SecretService)),
     )
     container.register(
         CustomerAftercareInboxService,

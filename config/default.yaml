@@ -29,6 +29,11 @@ flow_api:
   base_url: ""
   timeout_seconds: 10
 
+flow_shipping_api:
+  # XW-Flow's delivery-share bridge. Secret: XW_OFFICE_BRIDGE_SECRET.
+  base_url: ""
+  timeout_seconds: 10
+
 finanzonline:
   wsdl_url: ""
   operation_name: "submitUva"

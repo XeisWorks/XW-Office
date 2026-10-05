@@ -20,6 +20,7 @@ from xw_office.services.printing.invoice_printer import InvoicePrinter
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.wix.client import WixOrdersClient
+from xw_office.services.sendungen.xw_flow_client import XwFlowShipmentClient
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,9 @@ _DEFAULT_SHIPPING_MAILBOX = "shipping@xeisworks.at"
 #: (e.g. from a Lieferkorrektur) — preserved across refresh_from_graph
 #: instead of being overwritten by the next Graph fetch.
 _MANUAL_CASE_SENDER = "lieferkorrektur"
+_SOURCE_GRAPH = "graph_mail"
+_SOURCE_MANUAL = "manual"
+_SOURCE_FLOW = "xw_flow_share"
 _FOOTER_LINES = [
     "XeisWorks",
     "Musikverlag Mag. Bernhard Holl",
@@ -58,6 +62,8 @@ class SendungCase:
     order_number: str
     thread_text: str = ""
     sender_name: str = ""
+    source_type: str = _SOURCE_GRAPH
+    source_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -91,10 +97,12 @@ class OffeneSendungenService:
         settings_repo: SettingKvRepository | None,
         secrets: SecretService,
         wix_orders: WixOrdersClient | None = None,
+        flow_shipments: XwFlowShipmentClient | None = None,
     ) -> None:
         self._repo = settings_repo
         self._secrets = secrets
         self._wix_orders = wix_orders
+        self._flow_shipments = flow_shipments
         self._cache_lock = RLock()
         self._open_cases_cache: list[SendungCase] | None = None
         self._open_cases_cache_at = 0.0
@@ -118,7 +126,7 @@ class OffeneSendungenService:
             # after switching to the dedicated shipping@ mailbox.  Manually
             # created Lieferkorrektur cases are independent of the mailbox and
             # remain available until the next Graph refresh.
-            all_cases = [case for case in all_cases if case.sender == _MANUAL_CASE_SENDER]
+            all_cases = [case for case in all_cases if case.source_type != _SOURCE_GRAPH]
         done = self._load_done_ids()
         open_cases = [case for case in all_cases if case.id not in done]
         with self._cache_lock:
@@ -177,12 +185,44 @@ class OffeneSendungenService:
             allow_interactive_auth=allow_interactive_auth,
         )
         candidates = [msg for msg in messages if self._is_sendung_candidate(msg)]
-        manual_cases = [case for case in self._load_cached_cases() if case.sender == _MANUAL_CASE_SENDER]
+        existing = self._load_cached_cases()
+        non_graph_cases = [case for case in existing if case.source_type != _SOURCE_GRAPH]
+        flow_cases = self._refresh_flow_cases(existing)
         self._save_cases(
-            manual_cases + [self._to_case(msg) for msg in candidates],
+            [case for case in non_graph_cases if case.source_type != _SOURCE_FLOW]
+            + flow_cases
+            + [self._to_case(msg) for msg in candidates],
             source_mailbox=self._shipping_mailbox(),
         )
         return self.load_open_cases()
+
+    def _refresh_flow_cases(self, existing: list[SendungCase]) -> list[SendungCase]:
+        """Fetch a full successful Flow snapshot, preserving its cache on error."""
+        previous = [case for case in existing if case.source_type == _SOURCE_FLOW]
+        if self._flow_shipments is None or not self._flow_shipments.is_configured():
+            return previous
+        try:
+            remote_cases = self._flow_shipments.fetch_open_cases()
+        except Exception as exc:  # noqa: BLE001 - stale cache is intentional for queue safety
+            logger.warning("XW-Flow shipment refresh failed: %s", exc)
+            return previous
+        return [
+            SendungCase(
+                id=f"flow:{remote.id}",
+                received_at=remote.created_at,
+                sender="XW-Flow Share",
+                subject=remote.title or "Neue Lieferung",
+                snippet=remote.body_text[:700],
+                body=remote.body_text,
+                thread_id="",
+                order_number=self._extract_order_number(f"{remote.title}\n{remote.body_text}"),
+                thread_text=remote.body_text,
+                sender_name="XW-Flow",
+                source_type=_SOURCE_FLOW,
+                source_id=remote.id,
+            )
+            for remote in remote_cases
+        ]
 
     def create_manual_case(
         self,
@@ -217,6 +257,8 @@ class OffeneSendungenService:
             body=str(note or "").strip(),
             thread_id="",
             order_number="",
+            source_type=_SOURCE_MANUAL,
+            source_id=cid,
         )
         cases = self._load_cached_cases()
         cases.append(case)
@@ -244,7 +286,13 @@ class OffeneSendungenService:
         cid = str(case_id or "").strip()
         if not cid:
             return
-        if done:
+        case = self._find_case(cid)
+        source_type = case.source_type if case is not None else _SOURCE_GRAPH
+        if source_type == _SOURCE_FLOW:
+            if self._flow_shipments is None:
+                raise RuntimeError("XW-Flow Versand-Bridge ist nicht konfiguriert")
+            self._flow_shipments.set_status(case.source_id or cid.removeprefix("flow:"), completed=done)
+        elif source_type == _SOURCE_GRAPH and done:
             client = self._graph_client(write=True)
             if client is None:
                 raise RuntimeError("MS Graph ist nicht konfiguriert")
@@ -521,6 +569,8 @@ class OffeneSendungenService:
             order_number=order_number,
             thread_text=str(msg.get("threadText") or "").strip(),
             sender_name=sender_name,
+            source_type=_SOURCE_GRAPH,
+            source_id=str(msg.get("id") or "").strip(),
         )
 
     def _find_case(self, case_id: str) -> SendungCase | None:
@@ -532,6 +582,8 @@ class OffeneSendungenService:
 
     def _full_case_text(self, case: SendungCase) -> str:
         base = case.thread_text or case.body or case.snippet
+        if case.source_type != _SOURCE_GRAPH:
+            return str(base or "").strip()
         client = self._graph_client()
         if client is None:
             return str(base or "").strip()
@@ -1056,6 +1108,11 @@ class OffeneSendungenService:
                     order_number=str(item.get("order_number") or "").strip(),
                     thread_text=str(item.get("thread_text") or "").strip(),
                     sender_name=str(item.get("sender_name") or "").strip(),
+                    source_type=str(
+                        item.get("source_type")
+                        or (_SOURCE_MANUAL if str(item.get("sender") or "").strip() == _MANUAL_CASE_SENDER else _SOURCE_GRAPH)
+                    ).strip(),
+                    source_id=str(item.get("source_id") or item.get("id") or "").strip(),
                 )
             )
         return out
@@ -1076,6 +1133,8 @@ class OffeneSendungenService:
                 "order_number": c.order_number,
                 "thread_text": c.thread_text,
                 "sender_name": c.sender_name,
+                "source_type": c.source_type,
+                "source_id": c.source_id,
             }
             for c in cases
         ]
