@@ -50,6 +50,7 @@ def test_product_print_profiles_use_pdf_xchange_native_backend() -> None:
 
     expected_printers = {
         "noten_simplex": "Noten A4 Simplex",
+        "noten_simplex_color": "Noten A4 Simplex Color",
         "noten_duplex": "Noten A4 Duplex",
         "noten_a5": "Noten A5",
         "brochure_mono": "Canon Broschüre Mono",

@@ -213,6 +213,12 @@ def test_product_print_config_dialog_builds_plan_rows_with_start_end(qtbot: obje
                 {"id": "invoice", "label": "Rechnungsdruck", "printer_name": "Rechnungen"},
                 {"id": "noten_duplex", "label": "Noten Duplex", "printer_name": "Printer A"},
                 {
+                    "id": "noten_simplex_color",
+                    "label": "Noten A4 Simplex Color",
+                    "printer_name": "Noten A4 Simplex Color",
+                    "backend": "pdf_xchange",
+                },
+                {
                     "id": "noten_native_pilot",
                     "label": "Pilot",
                     "printer_name": "Printer A",
@@ -250,6 +256,7 @@ def test_product_print_config_dialog_builds_plan_rows_with_start_end(qtbot: obje
     assert "invoice" not in profile_ids
     assert "noten_native_pilot" not in profile_ids
     assert "noten_a5" in profile_ids
+    assert "noten_simplex_color" in profile_ids
 
 
 def test_print_plan_summary_flags_gap_and_overlap(qtbot: object, tmp_path) -> None:
