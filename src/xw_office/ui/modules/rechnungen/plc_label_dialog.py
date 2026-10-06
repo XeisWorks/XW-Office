@@ -416,9 +416,15 @@ class PlcLabelPrintDialog(QDialog):
         self._status.setStyleSheet("color: #64748b;")
         form.addRow("Status:", self._status)
 
-        root.addLayout(form)
+        self._plc_panel = QWidget(self)
+        plc_panel_layout = QVBoxLayout(self._plc_panel)
+        plc_panel_layout.setContentsMargins(0, 0, 0, 0)
+        plc_panel_layout.addLayout(form)
+        # The PLC entry form deliberately stays compact; the wider right
+        # column is reserved for the package split and its packing-list data.
+        self._plc_panel.setMaximumWidth(530)
 
-        self._parcel_group = QGroupBox("Paketaufteilung")
+        self._parcel_group = QGroupBox("Paketaufteilung / Packliste")
         parcel_layout = QVBoxLayout(self._parcel_group)
         parcel_hint = QLabel(
             "Verteile jede physische Position exakt auf die Pakete und trage das tatsächliche Bruttogewicht je Paket ein. "
@@ -444,7 +450,12 @@ class PlcLabelPrintDialog(QDialog):
         self._parcel_weights_form = QFormLayout()
         parcel_layout.addLayout(self._parcel_weights_form)
         self._parcel_group.setVisible(False)
-        root.addWidget(self._parcel_group)
+
+        self._main_columns = QHBoxLayout()
+        self._main_columns.setSpacing(16)
+        self._main_columns.addWidget(self._plc_panel, 0)
+        self._main_columns.addWidget(self._parcel_group, 1)
+        root.addLayout(self._main_columns, 1)
 
         self._customs_group = QGroupBox("Zollerklärung (CN23)")
         customs_layout = QVBoxLayout(self._customs_group)

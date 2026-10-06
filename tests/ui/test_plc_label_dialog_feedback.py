@@ -481,6 +481,10 @@ def test_parcel_controls_add_clear_delete_and_keep_columns_resizable(qtbot: obje
     dialog._packing_items = [WixOrderItem(sku="XW-400", name="Alpenmarsch", qty=4)]  # noqa: SLF001
     dialog._package_count.setValue(2)  # noqa: SLF001
 
+    assert dialog._main_columns.itemAt(0).widget() is dialog._plc_panel  # noqa: SLF001
+    assert dialog._main_columns.itemAt(1).widget() is dialog._parcel_group  # noqa: SLF001
+    assert dialog._plc_panel.maximumWidth() == 530  # noqa: SLF001
+    assert dialog._parcel_group.title() == "Paketaufteilung / Packliste"  # noqa: SLF001
     header = dialog._packing_table.horizontalHeader()  # noqa: SLF001
     assert header.sectionResizeMode(0) == QHeaderView.ResizeMode.Interactive
     assert header.sectionResizeMode(2) == QHeaderView.ResizeMode.Interactive
