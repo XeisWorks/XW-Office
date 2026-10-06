@@ -127,6 +127,22 @@ und Anzahl + Drucken. Der Detaildialog zeigt den vollstaendigen Pfad und die Pro
 readonly; bei eigenen Artikeln fuehrt eine Bearbeiten-Aktion zur editierbaren Zuordnung.
 Desktop, Fenster und Taskleiste verwenden das eigene Drucker-Icon.
 
+Der offizielle Katalog wird lokal im Windows-Benutzer-Cache zwischengespeichert und
+beim naechsten Start sofort angezeigt (zunaechst noch ungeprueft). Im Hintergrund und
+danach alle 60 Sekunden wird auf Railway ein kleiner Inhaltsfingerprint geprueft.
+Unveraenderte Daten werden nicht erneut vollstaendig uebertragen oder in der UI aufgebaut;
+Aenderungen und Loeschungen an Office-Katalog, Hub-Produkten, Varianten, PDFs oder Druckregeln
+fuehren zum Neuladen. Lokale PDF-Pfadaufloesungen werden spaetestens nach fuenf Minuten
+erneuert. "Neu laden" erzwingt dies sofort. Eigene Artikel werden bei jeder Pruefung neu gelesen.
+Tabwechsel, Suche und Favoriten arbeiten ohne Datenbankabfrage auf dem geladenen Katalog.
+Zeilen-Buttons werden nur fuer den sichtbaren Tabellenausschnitt erzeugt; Mengen bleiben
+beim Scrollen erhalten.
+
+Vor jedem offiziellen Druck wird der Fingerprint nochmals auf Railway geprueft.
+Ein veralteter Cache kann somit weder geaenderte Druckeinstellungen umgehen noch einen
+Druck bei fehlender Datenbankverbindung freigeben. Verbindungsfehler werden sichtbar gemeldet;
+eine vorhandene Cache-Anzeige bleibt lesbar, ist aber keine bestaetigte Druckfreigabe.
+
 Offizielle Lesevorgaenge laufen auf PostgreSQL in einer readonly-Transaktion; eigene
 Schreibvorgaenge sind auf das separate Schema beschraenkt. Die Provisionierung erzeugt
 zusaetzlich den eingeschraenkten DB-Login `xw_print_center`: nur SELECT auf den benoetigten

@@ -30,8 +30,11 @@ class PrintCenterService:
         self._printing = printing
         self._queue = queue
 
-    def list_articles(self) -> list[PrintArticle]:
-        return self._official.list_articles() + self._own.list_articles()
+    def cached_articles(self) -> list[PrintArticle]:
+        return self._official.cached_articles()
+
+    def list_articles(self, *, force_refresh: bool = False) -> list[PrintArticle]:
+        return self._official.list_articles(force_refresh=force_refresh) + self._own.list_articles()
 
     def printing_settings(self) -> PrintingSection:
         return self._printing()

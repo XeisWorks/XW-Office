@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 import os
 import sys
 from dataclasses import replace
+from pathlib import Path
 
+from PySide6.QtCore import QStandardPaths
 from PySide6.QtWidgets import QApplication
 
 from xw_office.app import _handle_exception, _retain_main_window
@@ -15,6 +18,7 @@ from xw_office.core.container import Container
 from xw_office.core.database import create_session_factory
 from xw_office.core.logging_setup import install_qt_message_handler, setup_logging
 from xw_office.print_center.official import OfficialCatalogue
+from xw_office.print_center.cache import CatalogueCache
 from xw_office.print_center.icons import printer_icon
 from xw_office.print_center.repository import OwnArticleRepository
 from xw_office.print_center.service import PrintCenterService
@@ -40,10 +44,19 @@ def create_print_center_application() -> QApplication:
     sessions = create_session_factory(
         replace(config, database_url=database_url) if database_url else config
     )
+    database_identity = hashlib.sha256(
+        (database_url or config.database_url or "").encode()
+    ).hexdigest()[:24]
+    cache_path = Path(QStandardPaths.writableLocation(
+        QStandardPaths.StandardLocation.CacheLocation
+    )) / f"official-{database_identity}.json"
     container = Container(config)
     container.register(
         OfficialCatalogue,
-        lambda _: OfficialCatalogue(sessions, prefer_hub=config.product_hub.catalog_read_enabled),
+        lambda _: OfficialCatalogue(
+            sessions, prefer_hub=config.product_hub.catalog_read_enabled,
+            cache=CatalogueCache(cache_path),
+        ),
     )
     container.register(OwnArticleRepository, lambda _: OwnArticleRepository(sessions))
     container.register(PrintQueueService, lambda _: PrintQueueService())

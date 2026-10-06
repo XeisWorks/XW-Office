@@ -21,6 +21,7 @@ from xw_office.print_center.models import (
     ArticleInput, OwnArticle, PrintArticle, PrintCenterBase, PrintStep,
 )
 from xw_office.print_center.official import OfficialCatalogue
+from xw_office.print_center.cache import CatalogueCache
 from xw_office.print_center.repository import OwnArticleRepository, provision_storage
 from xw_office.print_center.service import PrintCenterService
 from xw_office.services.printing.print_jobs import PdfPrintJob, PrintJobResult
@@ -192,6 +193,77 @@ def test_generic_unreleased_sku_never_prints_another_titles_default(
         assert len(articles) == 1
         assert articles[0].pdf_path == ""
     assert all(call.args[0] == "Unreleased" for call in resolver.call_args_list)
+
+
+def test_catalogue_cache_hits_updates_deletions_and_force_reload(
+    sessions: sessionmaker[Session], pdf: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_official(sessions, pdf)
+    cache = CatalogueCache(tmp_path / "official.json")
+    catalog = OfficialCatalogue(sessions, prefer_hub=True, cache=cache)
+    loader = MagicMock(wraps=catalog._load_articles)
+    monkeypatch.setattr(catalog, "_load_articles", loader)
+    initial = catalog.list_articles()
+    assert loader.call_count == 1
+    assert catalog.list_articles() == initial
+    assert loader.call_count == 1
+    assert catalog.cached_articles() == initial
+    restarted = OfficialCatalogue(sessions, prefer_hub=True, cache=cache)
+    assert restarted.cached_articles() == initial
+    restarted_loader = MagicMock(wraps=restarted._load_articles)
+    monkeypatch.setattr(restarted, "_load_articles", restarted_loader)
+    assert restarted.list_articles() == initial
+    restarted_loader.assert_not_called()
+    with sessions.begin() as session:
+        session.scalar(select(Product)).name = "Neuer Hubname"
+    changed = catalog.list_articles()
+    assert any(a.name == "Neuer Hubname" for a in changed)
+    assert loader.call_count == 2
+    with sessions.begin() as session:
+        session.delete(session.scalar(select(PrintRule)))
+    deleted_rule = catalog.list_articles()
+    assert next(a for a in deleted_rule if a.id == "office:SCORE:").profile_id == ""
+    assert loader.call_count == 3
+    catalog.list_articles(force_refresh=True)
+    assert loader.call_count == 4
+    catalog._last_resolution = 0.0
+    catalog.list_articles()
+    assert loader.call_count == 5
+
+
+def test_print_checks_database_even_with_a_warm_catalogue_cache(
+    sessions: sessionmaker[Session], printing: PrintingSection, pdf: str,
+) -> None:
+    seed_official(sessions, pdf)
+    catalog = OfficialCatalogue(sessions)
+    queue = queue_mock()
+    center = PrintCenterService(
+        catalog, OwnArticleRepository(sessions), lambda: printing, queue,
+    )
+    selection = center.list_articles()[0]
+    with sessions.begin() as session:
+        session.get(SettingKV, "inventory.products").value_json = json.dumps([{
+            "sku": "SCORE", "name": "Offiziell", "print_file_path": pdf,
+            "print_profile_id": "raster",
+        }])
+    with pytest.raises(ValueError, match="PDF-XChange"):
+        center.print_article(selection, 1)
+    queue.enqueue_and_wait.assert_not_called()
+
+
+def test_broken_local_cache_is_reported_and_does_not_mask_db_failure(
+    sessions: sessionmaker[Session], tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "official.json"
+    path.write_text("invalid json", encoding="utf-8")
+    catalog = OfficialCatalogue(sessions, cache=CatalogueCache(path))
+    assert catalog.cached_articles() == []
+    assert "Cache konnte nicht gelesen" in caplog.text
+    catalog.list_articles()
+    monkeypatch.setattr(catalog, "_fingerprint", MagicMock(side_effect=RuntimeError("DB offline")))
+    with pytest.raises(RuntimeError, match="DB offline"):
+        catalog.list_articles()
 
 
 def test_print_own_dispatches_complete_sets_and_waits_for_confirmation(

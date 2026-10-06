@@ -46,6 +46,7 @@ class ArticleDialog(QDialog):
         root.addWidget(hint)
         self.plan_table = QTableWidget(0, 2)
         self.plan_table.setHorizontalHeaderLabels(["Seitenbereich", "Druckprofil"])
+        self.plan_table.setColumnWidth(0, 170)
         self.plan_table.horizontalHeader().setStretchLastSection(True)
         root.addWidget(self.plan_table)
         row = QHBoxLayout()
@@ -79,9 +80,7 @@ class ArticleDialog(QDialog):
         self.plan_table.setCellWidget(row, 0, range_edit)
         combo = QComboBox()
         for profile in self._profiles:
-            combo.addItem(
-                f"{profile.label or profile.id} - {profile.printer_name}", profile.id
-            )
+            combo.addItem(profile.printer_name or profile.label or profile.id, profile.id)
         if step:
             index = combo.findData(step.profile_id)
             if index < 0:

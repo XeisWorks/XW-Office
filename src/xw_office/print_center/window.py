@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path, PureWindowsPath
 
-from PySide6.QtCore import QSettings, QSize, QUrl, Qt
+from PySide6.QtCore import QEvent, QObject, QSettings, QSize, QTimer, QUrl, Qt
 from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
@@ -32,6 +32,8 @@ class PrintCenterWindow(QMainWindow):
         self._worker: BackgroundWorker | None = None
         self._articles: list[PrintArticle] = []
         self._visible: list[PrintArticle] = []
+        self._control_rows: set[int] = set()
+        self._copy_counts: dict[str, int] = {}
         self._settings = QSettings("XeisWorks", "Druckcenter")
         saved_favorites = self._settings.value("favorites", [], type=list)
         self._favorites: set[str] = (
@@ -58,7 +60,7 @@ class PrintCenterWindow(QMainWindow):
         self.favorite_only.toggled.connect(self._render)
         search_row.addWidget(self.favorite_only)
         self.refresh_button = QPushButton("Neu laden")
-        self.refresh_button.clicked.connect(self.reload)
+        self.refresh_button.clicked.connect(lambda: self.reload(force_refresh=True))
         search_row.addWidget(self.refresh_button)
         root.addLayout(search_row)
         self.table = QTableWidget(0, 5)
@@ -79,6 +81,13 @@ class PrintCenterWindow(QMainWindow):
         self.table.setColumnWidth(4, 260)
         self.table.verticalHeader().setDefaultSectionSize(48)
         self.table.itemSelectionChanged.connect(self._selection_changed)
+        self._controls_timer = QTimer(self)
+        self._controls_timer.setSingleShot(True)
+        self._controls_timer.timeout.connect(self._sync_visible_controls)
+        self.table.verticalScrollBar().valueChanged.connect(
+            lambda: self._controls_timer.start(0)
+        )
+        self.table.viewport().installEventFilter(self)
         root.addWidget(self.table, stretch=1)
         actions = QHBoxLayout()
         self.new_button = QPushButton("Artikel anlegen")
@@ -98,15 +107,32 @@ class PrintCenterWindow(QMainWindow):
         self.status.setWordWrap(True)
         root.addWidget(self.status)
         self._selection_changed()
+        cached = self._service.cached_articles()
+        if isinstance(cached, list) and cached:
+            self._articles = cached
+            self._render()
+            self.status.setText("Lokaler Katalog angezeigt; Aktualitaet wird auf Railway geprueft.")
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setInterval(60_000)
+        self._refresh_timer.timeout.connect(self.reload)
+        self._refresh_timer.start()
         self.reload()
 
-    def reload(self) -> None:
-        self._run(self._service.list_articles, self._loaded, "Katalog wird geladen ...")
+    def reload(self, *, force_refresh: bool = False) -> None:
+        self._run(
+            lambda: self._service.list_articles(force_refresh=force_refresh), self._loaded,
+            "Katalog-Aktualitaet wird geprueft ...", block_ui=False,
+        )
 
     def _run(
         self, operation: Callable[[], object], on_result: Callable[[object], None], message: str,
+        *, block_ui: bool = True,
     ) -> None:
         if self._worker is not None:
+            if block_ui:
+                QMessageBox.information(
+                    self, "Vorgang laeuft", "Bitte den laufenden Vorgang zuerst abwarten."
+                )
             return
         self.status.setText(message)
         worker = BackgroundWorker(operation)
@@ -114,7 +140,8 @@ class PrintCenterWindow(QMainWindow):
         worker.signals.result.connect(on_result)
         worker.signals.error.connect(self._error)
         worker.signals.finished.connect(self._finished)
-        self.centralWidget().setEnabled(False)
+        if block_ui:
+            self.centralWidget().setEnabled(False)
         worker.start()
 
     def _finished(self) -> None:
@@ -141,8 +168,9 @@ class PrintCenterWindow(QMainWindow):
     def _loaded(self, result: object) -> None:
         if not isinstance(result, list) or not all(isinstance(a, PrintArticle) for a in result):
             raise TypeError("Ungueltige Katalogantwort.")
-        self._articles = result
-        self._render()
+        if result != self._articles:
+            self._articles = result
+            self._render()
         self.status.setText(
             f"{sum(a.source == 'official' for a in self._articles)} offizielle Produkte, "
             f"{sum(a.source == 'own' for a in self._articles)} eigene Druckartikel."
@@ -160,17 +188,45 @@ class PrintCenterWindow(QMainWindow):
             and (not query or query in f"{a.name} {a.sku}".casefold())
             and (not self.favorite_only.isChecked() or a.id in self._favorites)
         ]
+        self.table.setUpdatesEnabled(False)
+        self.table.setRowCount(0)
+        self._control_rows.clear()
         self.table.setRowCount(len(self._visible))
-        for index, article in enumerate(self._visible):
-            for column, value in enumerate((
-                "", article.name, article.sku,
-                PureWindowsPath(article.pdf_path).name if article.pdf_path else "(nicht zugeordnet)",
-            )):
-                self.table.setItem(index, column, QTableWidgetItem(value))
-            self.table.setCellWidget(index, 0, self._favorite_control(article))
-            self.table.setCellWidget(index, 4, self._row_actions(article))
+        try:
+            for index, article in enumerate(self._visible):
+                for column, value in enumerate((
+                    "★" if article.id in self._favorites else "☆", article.name, article.sku,
+                    PureWindowsPath(article.pdf_path).name
+                    if article.pdf_path else "(nicht zugeordnet)",
+                )):
+                    self.table.setItem(index, column, QTableWidgetItem(value))
+            self._sync_visible_controls()
+        finally:
+            self.table.setUpdatesEnabled(True)
         self.table.clearSelection()
         self._selection_changed()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.table.viewport() and event.type() == QEvent.Type.Resize:
+            self._controls_timer.start(0)
+        return super().eventFilter(watched, event)
+
+    def _sync_visible_controls(self) -> None:
+        if not self._visible:
+            return
+        first = max(0, self.table.rowAt(0))
+        last = self.table.rowAt(self.table.viewport().height() - 1)
+        if last < 0:
+            last = min(len(self._visible) - 1, first + self.table.viewport().height() // 48 + 1)
+        rows = set(range(first, min(last + 2, len(self._visible))))
+        for row in self._control_rows - rows:
+            self.table.removeCellWidget(row, 0)
+            self.table.removeCellWidget(row, 4)
+        for row in rows - self._control_rows:
+            article = self._visible[row]
+            self.table.setCellWidget(row, 0, self._favorite_control(article))
+            self.table.setCellWidget(row, 4, self._row_actions(article))
+        self._control_rows = rows
 
     def _favorite_control(self, article: PrintArticle) -> QToolButton:
         button = QToolButton()
@@ -210,7 +266,10 @@ class PrintCenterWindow(QMainWindow):
         copies = QSpinBox()
         copies.setObjectName("article_copies")
         copies.setRange(1, 999)
-        copies.setValue(1)
+        copies.setValue(self._copy_counts.get(article.id, 1))
+        copies.valueChanged.connect(
+            lambda value: self._copy_counts.__setitem__(article.id, value)
+        )
         copies.setFixedWidth(76)
         copies.setToolTip("Anzahl Exemplare")
         copies.setAccessibleName(copies.toolTip())
@@ -247,6 +306,11 @@ class PrintCenterWindow(QMainWindow):
         self.delete_button.setEnabled(article is not None and article.source == "own")
 
     def _edit_article(self, *, new: bool, article: PrintArticle | None = None) -> None:
+        if self._worker is not None:
+            QMessageBox.information(
+                self, "Vorgang laeuft", "Bitte die laufende Aktualitaetspruefung abwarten."
+            )
+            return
         article = None if new else article or self._selected()
         if not new and (article is None or article.source != "own"):
             return
@@ -270,6 +334,11 @@ class PrintCenterWindow(QMainWindow):
         self.status.setText("Eigener Artikel gespeichert. Keine externe Synchronisation.")
 
     def _delete_article(self) -> None:
+        if self._worker is not None:
+            QMessageBox.information(
+                self, "Vorgang laeuft", "Bitte die laufende Aktualitaetspruefung abwarten."
+            )
+            return
         article = self._selected()
         if article is None or article.source != "own":
             return
@@ -307,6 +376,11 @@ class PrintCenterWindow(QMainWindow):
         self._render()
 
     def _print(self, article: PrintArticle, copies: int) -> None:
+        if self._worker is not None:
+            QMessageBox.information(
+                self, "Aktualisierung laeuft", "Bitte die laufende Aktualitaetspruefung abwarten."
+            )
+            return
         if QMessageBox.question(
             self, "Produktdruck", f"{copies} Exemplar(e) von '{article.name}' drucken?\n"
             "Es erfolgt keine Bestandsbuchung."

@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 from pathlib import Path
+from time import perf_counter
 
 import pytest
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QMessageBox, QSpinBox, QToolButton
+from PySide6.QtWidgets import QComboBox, QMessageBox, QSpinBox, QToolButton
 from pytestqt.qtbot import QtBot
 
 from xw_office.core.config import PrintingSection
@@ -143,6 +144,77 @@ def test_editor_rejects_official_article(qtbot: QtBot) -> None:
         ArticleDialog(
             PrintingSection(), PrintArticle(id="office:X:", name="X", source="official")
         )
+
+
+def test_profile_names_match_office_without_duplicate_labels(qtbot: QtBot) -> None:
+    printing = PrintingSection(print_profiles=[
+        {"id": "score", "label": "Noten A4 Simplex", "printer_name": "Noten A4 Simplex",
+         "backend": "pdf_xchange"},
+        {"id": "other", "label": "Anderes Profil", "printer_name": "Canon",
+         "backend": "pdf_xchange"},
+    ])
+    dialog = ArticleDialog(printing)
+    qtbot.addWidget(dialog)
+    combo = dialog.plan_table.cellWidget(0, 1)
+    assert isinstance(combo, QComboBox)
+    assert [combo.itemText(i) for i in range(combo.count())] == ["Noten A4 Simplex", "Canon"]
+    assert combo.itemData(0) == "score"
+
+
+def test_large_catalogue_builds_only_visible_controls_and_scroll_keeps_counts(qtbot: QtBot) -> None:
+    service = MagicMock(spec=PrintCenterService)
+    service.cached_articles.return_value = []
+    service.list_articles.return_value = []
+    service.shutdown.return_value = True
+    window = PrintCenterWindow(service)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window._worker is None)
+    window._articles = [
+        PrintArticle(id=f"perf:{i}", source="official", name=f"Product {i}") for i in range(1000)
+    ]
+    started = perf_counter()
+    window._render()
+    assert perf_counter() - started < 1.0
+    assert window.table.rowCount() == 1000
+    assert len(window._control_rows) < 25
+    assert window.table.cellWidget(999, 4) is None
+    copies = window.table.cellWidget(0, 4).findChild(QSpinBox, "article_copies")
+    copies.setValue(9)
+    window.table.scrollToBottom()
+    qtbot.waitUntil(lambda: window.table.cellWidget(999, 4) is not None)
+    assert len(window._control_rows) < 25
+    window.table.scrollToTop()
+    qtbot.waitUntil(lambda: window.table.cellWidget(0, 4) is not None)
+    assert window.table.cellWidget(0, 4).findChild(QSpinBox, "article_copies").value() == 9
+    initial_calls = service.list_articles.call_count
+    window.tabs.setCurrentIndex(1)
+    window.tabs.setCurrentIndex(0)
+    window.search.setText("Product 99")
+    assert service.list_articles.call_count == initial_calls
+    assert window.table.rowCount() == 11
+
+
+def test_background_refresh_skips_unchanged_table_and_force_reload(qtbot: QtBot) -> None:
+    service = MagicMock(spec=PrintCenterService)
+    cached = [PrintArticle(id="cached", source="official", name="Snapshot")]
+    service.cached_articles.return_value = cached
+    service.list_articles.return_value = cached
+    service.shutdown.return_value = True
+    window = PrintCenterWindow(service)
+    qtbot.addWidget(window)
+    window.show()
+    assert window.table.rowCount() == 1
+    assert window.centralWidget().isEnabled()
+    qtbot.waitUntil(lambda: window._worker is None)
+    controls = window.table.cellWidget(0, 4)
+    window.reload()
+    qtbot.waitUntil(lambda: window._worker is None)
+    assert window.table.cellWidget(0, 4) is controls
+    assert window._refresh_timer.interval() == 60_000
+    window.refresh_button.click()
+    qtbot.waitUntil(lambda: window._worker is None)
+    service.list_articles.assert_called_with(force_refresh=True)
 
 
 def test_window_cannot_close_with_active_operation(
