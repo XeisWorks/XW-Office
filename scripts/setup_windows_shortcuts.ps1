@@ -3,9 +3,10 @@
     Erzeugt oder aktualisiert die Windows-Start-Verknuepfungen fuer XW-Office auf diesem PC.
 
 .DESCRIPTION
-    Legt im Startmenue einen Ordner "XeisWorks Office" mit zwei Verknuepfungen an:
+    Legt im Startmenue einen Ordner "XeisWorks Office" mit drei Verknuepfungen an:
       - XeisWorks Office         (fensterloser Alltagsstart ueber pythonw.exe)
       - XeisWorks Office - Debug (sichtbare Diagnosekonsole)
+      - XeisWorks Druckcenter    (separates Druckfenster ohne Office-Navigation)
     Der normale Start prueft beim Start automatisch und ohne zu blockieren, ob ein
     Source-Update vorliegt, und bietet es bei Bedarf per Dialog an (siehe
     scripts\xw_office_gui.pyw). Eine eigene Verknuepfung "XeisWorks Office aktualisieren"
@@ -16,14 +17,18 @@
     Verknuepfungen, es werden weder Benutzerdaten noch das lokale .venv angefasst.
 
 .PARAMETER IncludeDesktopShortcut
-    Legt zusaetzlich eine Desktop-Verknuepfung fuer den normalen Alltagsstart an.
+    Legt zusaetzlich Desktop-Verknuepfungen fuer Office und Druckcenter an.
+
+.PARAMETER PrintCenterOnly
+    Aktualisiert nur Druckcenter-Verknuepfungen, ohne Office-Verknuepfungen anzufassen.
 
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_windows_shortcuts.ps1
 #>
 [CmdletBinding()]
 param(
-    [switch]$IncludeDesktopShortcut
+    [switch]$IncludeDesktopShortcut,
+    [switch]$PrintCenterOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -55,6 +60,7 @@ try {
     $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
     $VenvPythonw = Join-Path $RepoRoot '.venv\Scripts\pythonw.exe'
     $GuiBootstrap = Join-Path $RepoRoot 'scripts\xw_office_gui.pyw'
+    $PrintCenterBootstrap = Join-Path $RepoRoot 'scripts\xw_print_center_gui.pyw'
     $DebugCmd = Join-Path $RepoRoot 'run_xw_office_debug.cmd'
     $IconPath = Join-Path $RepoRoot 'icons\xw_office.ico'
 
@@ -82,6 +88,29 @@ try {
     New-Item -ItemType Directory -Force -Path $AppFolder | Out-Null
 
     $script:Shell = New-Object -ComObject WScript.Shell
+
+    if (-not (Test-Path $PrintCenterBootstrap)) {
+        throw "Druckcenter-Bootstrap nicht gefunden unter '$PrintCenterBootstrap'."
+    }
+    New-XwShortcut -Path (Join-Path $AppFolder 'XeisWorks Druckcenter.lnk') `
+        -TargetPath $VenvPythonw `
+        -Arguments "`"$PrintCenterBootstrap`"" `
+        -WorkingDirectory $RepoRoot `
+        -IconLocation $IconArg `
+        -Description 'Druckcenter: offizielle Produkte lesen und eigene Druckartikel verwalten'
+    if ($IncludeDesktopShortcut) {
+        $Desktop = [Environment]::GetFolderPath('Desktop')
+        New-XwShortcut -Path (Join-Path $Desktop 'XeisWorks Druckcenter.lnk') `
+            -TargetPath $VenvPythonw `
+            -Arguments "`"$PrintCenterBootstrap`"" `
+            -WorkingDirectory $RepoRoot `
+            -IconLocation $IconArg `
+            -Description 'XeisWorks Druckcenter ohne die Office-Oberflaeche starten'
+    }
+    if ($PrintCenterOnly) {
+        Write-Host 'Druckcenter-Verknuepfungen eingerichtet.'
+        exit 0
+    }
 
     New-XwShortcut -Path (Join-Path $AppFolder 'XeisWorks Office.lnk') `
         -TargetPath $VenvPythonw `

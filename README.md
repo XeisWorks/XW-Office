@@ -6,6 +6,8 @@ PySide6 desktop application for XeisWorks music publishing business management.
 
 - **Rechnungen:** Invoice processing, printing, fulfillment
 - **Produkte:** Inventory management, Wix/sevDesk sync, print plans
+- **Druckcenter:** Separater Desktop-Start fuer Produktdruck ohne Bestellung; eigene Druckartikel
+  ohne SKU und ohne externe Synchronisation
 - **CRM:** Customer management, deduplication, merge
 - **Steuern:** UVA, payment clearing, expense auditing
 - **Statistik:** Revenue analytics, charts, export
@@ -88,6 +90,53 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\update_xw_office.ps1
 
 Logs liegen unabhaengig vom gewaehlten Start immer unter `logs\` im Repo
 (`xw_office.log`, `xw_office_crash.log`, `xw_office_bootstrap.log`, `xw_office_update.log`).
+
+## Eigenstaendiges Druckcenter
+
+```powershell
+# Einmalig auf der bestehenden Office-Datenbank: additive Migration
+.venv\Scripts\python.exe -m alembic upgrade head
+
+# Einmalig: eingeschraenktes Druckcenter-Konto erzeugen (URL nur lokal in .env)
+.venv\Scripts\python.exe scripts\provision_print_center_access.py --apply
+
+# Nur Druckcenter-Verknuepfungen im Startmenue und auf dem Desktop erzeugen
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_windows_shortcuts.ps1 -PrintCenterOnly -IncludeDesktopShortcut
+
+# Alternativ mit Diagnosekonsole
+.venv\Scripts\python.exe -m xw_office.print_center
+```
+
+Das Druckcenter startet ohne Office-Navigation, Bestandsbuchung oder Wix/sevDesk-Abgleich.
+Es nutzt dieselbe `.env`/`DATABASE_URL`-Verbindung und dieselben Office-Druckprofile aus der
+Konfiguration. Offizielle Produkte aus dem Office-Katalog und Product Hub sind readonly;
+PDF-/Profilzuordnungen werden nur dort gepflegt. Titelbezogene Druckzuordnungen erscheinen als
+eigene Auswahlzeilen. Bei aktivem Hub-Lesemodus haben Hub-Zuordnungen fuer die SKU Vorrang,
+sonst die bestehenden Office-Zuordnungen.
+
+Eigene Artikel werden ausschliesslich in `print_center.article` gespeichert, mit technischer
+UUID, aber ohne SKU, Fremdschluessel zum Office-Katalog oder Sync-Outbox. Name, PDF-Pfad,
+Notiz und mehrteiliger Druckplan sind im Druckcenter bearbeitbar. Gleichzeitige Aenderungen
+auf anderen PCs werden durch Versionspruefung erkannt. Favoriten sind lokal pro Windows-Benutzer.
+Die separate SQLAlchemy-Metadatenbasis wird nicht von den Office-Produkten aufgelistet.
+Die Migration veraendert keine offiziellen Produktdaten.
+
+Offizielle Lesevorgaenge laufen auf PostgreSQL in einer readonly-Transaktion; eigene
+Schreibvorgaenge sind auf das separate Schema beschraenkt. Die Provisionierung erzeugt
+zusaetzlich den eingeschraenkten DB-Login `xw_print_center`: nur SELECT auf den benoetigten
+Office-Tabellen, SELECT/INSERT/UPDATE/DELETE auf eigenen Artikeln. Die geheime URL wird
+ausschliesslich in der lokalen `.env` unter `XW_PRINT_CENTER_DATABASE_URL` gespeichert,
+nicht ins Repo oder in Logs. Auf weiteren PCs diese URL sicher in deren `.env` hinterlegen.
+Ein bereits existierendes Konto wird nicht automatisch rotiert. Ohne diese optionale URL
+nutzt das Druckcenter das vorhandene Office-Konto; die readonly-Transaktion bleibt aktiv,
+aber dann ist die Trennung keine eigenstaendige Datenbank-Berechtigungsgrenze.
+
+PDF-Dateien bleiben auf OneDrive/Netzwerk/lokal und muessen auf dem Druck-PC erreichbar sein.
+Zum Druck sind ausschliesslich native PDF-XChange-Profile erlaubt; kein Raster-/Acrobat-Fallback.
+Eine Erfolgsmeldung erscheint erst nach Windows-Spooler-Bestaetigung aller Druckschritte.
+Bei Teilausfaellen bitte die bereits gedruckten Seiten vor einer Wiederholung pruefen.
+Ohne Railway-Verbindung werden Fehler sichtbar gemeldet, nicht durch einen lokalen Schreibcache
+oder einen vermeintlich erfolgreichen Druck ersetzt.
 
 ## Roadmap / Copilot
 

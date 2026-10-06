@@ -57,6 +57,7 @@ dev = [
 
 [project.scripts]
 xw-office = "xw_office.__main__:main"
+xw-print-center = "xw_office.print_center.__main__:main"
 xw-content-web = "xw_office.web.__main__:main"
 
 [tool.setuptools.packages.find]
