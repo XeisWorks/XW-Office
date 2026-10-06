@@ -227,12 +227,6 @@ class B2bCreditSection:
 class SkuRulesSection:
     print_prefixes: list[str] = field(default_factory=lambda: ["XW-4", "XW-6", "XW-7"])
     unreleased_prefixes: list[str] = field(default_factory=lambda: ["XW-600"])
-    # Legacy convention: reference starting with "1" = B2B, "2" = B2C — a
-    # simple but load-bearing numbering scheme used across fulfillment,
-    # refunds, and PLC labeling. Kept configurable since it's a business
-    # decision, not a code constant.
-    b2b_reference_prefixes: list[str] = field(default_factory=lambda: ["1"])
-    b2c_reference_prefixes: list[str] = field(default_factory=lambda: ["2"])
 
 
 @dataclass(frozen=True)

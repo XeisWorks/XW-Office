@@ -83,7 +83,6 @@ from xw_office.services.sevdesk.refund_client import SevDeskRefundClient
 from xw_office.services.statistics.service import StatisticsService
 from xw_office.services.products.catalog import ProductCatalogService
 from xw_office.services.product_hub.desktop_client import ProductHubDesktopClient
-from xw_office.services.products.classification_rules import ReferenceClassifier
 from xw_office.services.products.brand_service import ProductBrandService
 from xw_office.services.products.field_bulk_service import ProductFieldBulkService
 from xw_office.services.products.print_decision import PrintDecisionEngine
@@ -169,10 +168,6 @@ def register_default_services(container: Container) -> None:
             catalog=c.resolve(ProductCatalogService),
             part_client=c.resolve(PartClient),
         ),
-    )
-    container.register(
-        ReferenceClassifier,
-        lambda c: ReferenceClassifier.from_config(c.config.sku_rules),
     )
     container.register(
         WixOrderCache,

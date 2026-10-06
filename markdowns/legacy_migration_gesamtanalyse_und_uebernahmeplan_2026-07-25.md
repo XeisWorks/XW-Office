@@ -249,16 +249,16 @@ Der vorhandene Legacy-Code in `C:\Users\XeisWorks\GitHub\sevDesk\travel_costs\` 
 
 ---
 
-### 4.9 SKU-Regelwerk konsolidieren (Sonderanfertigungen, Besetzungs-Labels, B2B/B2C-Klassifikation)
+### 4.9 SKU-Regelwerk konsolidieren (Sonderanfertigungen, Besetzungs-Labels)
 
-**Geschäftswert:** Drei kleine, aber geschäftskritische Konventionen: (1) Sonderanfertigungs-SKUs (`XW-600.x`) mit Komponisten-Auswahl + Freitext-Stücktitel aus Wix-Custom-Feld, (2) SKU-Präfix → Besetzungs-Label-Zuordnung für Packzettel, (3) die Konvention "Referenznummer beginnt mit 2 → B2C, beginnt mit 1 → B2B", die quer durch Fulfillment, Rückerstattungen und PLC-Labeling verwendet wird.
+**Geschäftswert:** Zwei kleine, aber geschäftskritische Konventionen: (1) Sonderanfertigungs-SKUs (`XW-600.x`) mit Komponisten-Auswahl + Freitext-Stücktitel aus Wix-Custom-Feld und (2) SKU-Präfix → Besetzungs-Label-Zuordnung für Packzettel. Wix-Bestellnummern sind chronologisch und enthalten B2B- und B2C-Bestellungen gemischt; sie dürfen daher nicht zur Kundenklassifikation verwendet werden.
 
 **Legacy:** `sevdesk_wix_fulfillment/rules/sku_rules.py` + verstreute Prüfungen in `services/invoice_processor.py` — bereits im Legacy **ad hoc über mehrere Dateien verteilt**, nicht zentralisiert.
-**XW-Office-Zustand:** Teilweise vorhanden: `XW-600.0` gehört zu den konfigurierbaren Sonder-SKUs; Wix-Optionen liefern Besetzungsdaten, und der Rechnungsbereich zeigt sie an. Eine zentrale `B2B`/`B2C`-Klassifikation anhand des Referenzpräfixes wurde im Neubau nicht gefunden. Die vorhandenen Regeln sind außerdem über Wix-, Rechnungs- und Produktcode verteilt.
+**XW-Office-Zustand:** Teilweise vorhanden: `XW-600.0` gehört zu den konfigurierbaren Sonder-SKUs; Wix-Optionen liefern Besetzungsdaten, und der Rechnungsbereich zeigt sie an. Eine Kundenklassifikation muss aus einer expliziten Quelle oder bewussten Bedienerauswahl stammen, nie aus der Wix-Bestellnummer.
 
-**Integrationsvorschlag:** Als explizite, benannte, testbare Regel-Objekte in `services/products/classification_rules.py` bündeln — **einmal** definiert, von allen drei Konsumenten (Fulfillment, Rückerstattung, PLC) referenziert, statt wie im Legacy an drei Stellen einzeln nachgebaut. Das behebt gleichzeitig einen Legacy-eigenen Schwachpunkt (Streuung), nicht nur eine Neubau-Lücke.
+**Integrationsvorschlag:** Keine B2B/B2C-Präfixklassifikation neu einführen. Wo ein Kundentyp fachlich erforderlich ist, muss er explizit erfasst oder aus einer verlässlichen Kundendatenquelle übernommen werden. Sonder-SKU- und Besetzungslogik bleiben davon unabhängig.
 
-**Priorität:** P1 — gezielt die fehlende B2B/B2C-Klassifikation und die Zentralisierung angehen; vorhandene Sonder-SKU- und Besetzungslogik nicht doppelt implementieren.
+**Priorität:** P1 — vorhandene Sonder-SKU- und Besetzungslogik gezielt konsolidieren, ohne die historische Nummernregel zu reaktivieren.
 
 ---
 

@@ -165,9 +165,6 @@ b2b_credit:
 sku_rules:
   print_prefixes: ["XW-4", "XW-6", "XW-7"]
   unreleased_prefixes: ["XW-600"]
-  # Legacy convention: reference starting with "1" = B2B, "2" = B2C.
-  b2b_reference_prefixes: ["1"]
-  b2c_reference_prefixes: ["2"]
 
 digital_licenses:
   output_dir: "C:\\Users\\XeisWorks\\OneDrive - XeisWorks\\02 XeisWorks\\24 Digitale Lizensierung"
