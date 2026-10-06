@@ -63,6 +63,7 @@ try {
     $PrintCenterBootstrap = Join-Path $RepoRoot 'scripts\xw_print_center_gui.pyw'
     $DebugCmd = Join-Path $RepoRoot 'run_xw_office_debug.cmd'
     $IconPath = Join-Path $RepoRoot 'icons\xw_office.ico'
+    $PrintCenterIconPath = Join-Path $RepoRoot 'icons\print_center.ico'
 
     if (-not (Test-Path $VenvPythonw)) {
         Write-Error (
@@ -92,11 +93,15 @@ try {
     if (-not (Test-Path $PrintCenterBootstrap)) {
         throw "Druckcenter-Bootstrap nicht gefunden unter '$PrintCenterBootstrap'."
     }
+    if (-not (Test-Path $PrintCenterIconPath)) {
+        throw "Druckcenter-Icon nicht gefunden unter '$PrintCenterIconPath'."
+    }
+    $PrintCenterIconArg = "$PrintCenterIconPath,0"
     New-XwShortcut -Path (Join-Path $AppFolder 'XeisWorks Druckcenter.lnk') `
         -TargetPath $VenvPythonw `
         -Arguments "`"$PrintCenterBootstrap`"" `
         -WorkingDirectory $RepoRoot `
-        -IconLocation $IconArg `
+        -IconLocation $PrintCenterIconArg `
         -Description 'Druckcenter: offizielle Produkte lesen und eigene Druckartikel verwalten'
     if ($IncludeDesktopShortcut) {
         $Desktop = [Environment]::GetFolderPath('Desktop')
@@ -104,7 +109,7 @@ try {
             -TargetPath $VenvPythonw `
             -Arguments "`"$PrintCenterBootstrap`"" `
             -WorkingDirectory $RepoRoot `
-            -IconLocation $IconArg `
+            -IconLocation $PrintCenterIconArg `
             -Description 'XeisWorks Druckcenter ohne die Office-Oberflaeche starten'
     }
     if ($PrintCenterOnly) {

@@ -121,6 +121,12 @@ auf anderen PCs werden durch Versionspruefung erkannt. Favoriten sind lokal pro 
 Die separate SQLAlchemy-Metadatenbasis wird nicht von den Office-Produkten aufgelistet.
 Die Migration veraendert keine offiziellen Produktdaten.
 
+Favoriten werden direkt ueber den Stern in der Tabelle umgeschaltet; die PDF-Spalte zeigt
+nur den Dateinamen. Jede Zeile hat Aktionen fuer PDF-Oeffnen, Druckpfad/Einstellungen
+und Anzahl + Drucken. Der Detaildialog zeigt den vollstaendigen Pfad und die Profilwerte
+readonly; bei eigenen Artikeln fuehrt eine Bearbeiten-Aktion zur editierbaren Zuordnung.
+Desktop, Fenster und Taskleiste verwenden das eigene Drucker-Icon.
+
 Offizielle Lesevorgaenge laufen auf PostgreSQL in einer readonly-Transaktion; eigene
 Schreibvorgaenge sind auf das separate Schema beschraenkt. Die Provisionierung erzeugt
 zusaetzlich den eingeschraenkten DB-Login `xw_print_center`: nur SELECT auf den benoetigten

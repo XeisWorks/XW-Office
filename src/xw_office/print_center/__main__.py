@@ -6,16 +6,16 @@ import os
 import sys
 from dataclasses import replace
 
-from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from xw_office.app import _handle_exception, _retain_main_window
-from xw_office.core.app_paths import app_icon_path, ensure_app_user_model_id
+from xw_office.core.app_paths import ensure_app_user_model_id
 from xw_office.core.config import load_config
 from xw_office.core.container import Container
 from xw_office.core.database import create_session_factory
 from xw_office.core.logging_setup import install_qt_message_handler, setup_logging
 from xw_office.print_center.official import OfficialCatalogue
+from xw_office.print_center.icons import printer_icon
 from xw_office.print_center.repository import OwnArticleRepository
 from xw_office.print_center.service import PrintCenterService
 from xw_office.print_center.window import PrintCenterWindow
@@ -33,7 +33,7 @@ def create_print_center_application() -> QApplication:
     app = QApplication(sys.argv)
     app.setApplicationName("XeisWorks Druckcenter")
     app.setApplicationDisplayName("XeisWorks Druckcenter")
-    app.setWindowIcon(QIcon(str(app_icon_path())))
+    app.setWindowIcon(printer_icon())
     apply_app_theme(app, config.app.theme)
     sys.excepthook = _handle_exception
     database_url = os.getenv("XW_PRINT_CENTER_DATABASE_URL", "").strip()
@@ -55,6 +55,7 @@ def create_print_center_application() -> QApplication:
         ),
     )
     window = PrintCenterWindow(container.resolve(PrintCenterService))
+    window.setWindowIcon(printer_icon())
     _retain_main_window(app, window)
     window.show()
     logger.info("Standalone print center started; Office synchronization is not initialized.")

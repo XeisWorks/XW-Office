@@ -3,19 +3,21 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
-from PySide6.QtCore import QSettings, QUrl, Qt
+from PySide6.QtCore import QSettings, QSize, QUrl, Qt
 from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
+    QAbstractItemView, QCheckBox, QDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
     QMessageBox, QPushButton, QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QToolButton, QStyle, QVBoxLayout, QWidget,
 )
 
 from xw_office.core.shared_paths import resolve_shared_path
 from xw_office.core.worker import BackgroundWorker
 from xw_office.print_center.article_dialog import ArticleDialog
+from xw_office.print_center.details_dialog import PrintDetailsDialog
+from xw_office.print_center.icons import printer_icon
 from xw_office.print_center.models import PrintArticle, PrintReceipt
 from xw_office.print_center.service import PrintCenterService
 from xw_office.services.printing.planned_pdf_printer import PrintPlanPartialFailure
@@ -37,7 +39,7 @@ class PrintCenterWindow(QMainWindow):
             if isinstance(saved_favorites, list) else set()
         )
         self.setWindowTitle("XeisWorks Druckcenter")
-        self.resize(1050, 720)
+        self.resize(1200, 720)
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
@@ -59,20 +61,25 @@ class PrintCenterWindow(QMainWindow):
         self.refresh_button.clicked.connect(self.reload)
         search_row.addWidget(self.refresh_button)
         root.addLayout(search_row)
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Favorit", "Name", "SKU", "PDF"])
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["★", "Name", "SKU", "PDF", "Aktionen"])
+        favorite_header = QTableWidgetItem("★")
+        favorite_header.setToolTip("Favoriten")
+        self.table.setHorizontalHeaderItem(0, favorite_header)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setColumnWidth(1, 320)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(0, 48)
+        self.table.setColumnWidth(2, 110)
+        self.table.setColumnWidth(4, 260)
+        self.table.verticalHeader().setDefaultSectionSize(48)
         self.table.itemSelectionChanged.connect(self._selection_changed)
         root.addWidget(self.table, stretch=1)
-        self.details = QLabel("Bitte einen Druckartikel auswaehlen.")
-        self.details.setWordWrap(True)
-        self.details.setTextFormat(Qt.TextFormat.PlainText)
-        self.details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        root.addWidget(self.details)
         actions = QHBoxLayout()
         self.new_button = QPushButton("Artikel anlegen")
         self.edit_button = QPushButton("Bearbeiten")
@@ -80,24 +87,11 @@ class PrintCenterWindow(QMainWindow):
         self.new_button.clicked.connect(lambda: self._edit_article(new=True))
         self.edit_button.clicked.connect(lambda: self._edit_article(new=False))
         self.delete_button.clicked.connect(self._delete_article)
-        self.preview_button = QPushButton("PDF oeffnen")
-        self.preview_button.clicked.connect(self._preview)
-        self.favorite_button = QPushButton("Favorit umschalten")
-        self.favorite_button.clicked.connect(self._toggle_favorite)
-        self.copies = QSpinBox()
-        self.copies.setRange(1, 999)
-        self.copies.setValue(1)
-        self.print_button = QPushButton("Drucken")
-        self.print_button.clicked.connect(self._print)
         for button in (
             self.new_button, self.edit_button, self.delete_button,
-            self.preview_button, self.favorite_button,
         ):
             actions.addWidget(button)
         actions.addStretch()
-        actions.addWidget(QLabel("Anzahl:"))
-        actions.addWidget(self.copies)
-        actions.addWidget(self.print_button)
         root.addLayout(actions)
         self.status = QLabel("Daten werden aus Railway geladen.")
         self.status.setTextFormat(Qt.TextFormat.PlainText)
@@ -169,12 +163,74 @@ class PrintCenterWindow(QMainWindow):
         self.table.setRowCount(len(self._visible))
         for index, article in enumerate(self._visible):
             for column, value in enumerate((
-                "*" if article.id in self._favorites else "", article.name,
-                article.sku, article.pdf_path or "(nicht zugeordnet)",
+                "", article.name, article.sku,
+                PureWindowsPath(article.pdf_path).name if article.pdf_path else "(nicht zugeordnet)",
             )):
                 self.table.setItem(index, column, QTableWidgetItem(value))
+            self.table.setCellWidget(index, 0, self._favorite_control(article))
+            self.table.setCellWidget(index, 4, self._row_actions(article))
         self.table.clearSelection()
         self._selection_changed()
+
+    def _favorite_control(self, article: PrintArticle) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("article_favorite")
+        button.setText("★" if article.id in self._favorites else "☆")
+        button.setToolTip("Favorit entfernen" if article.id in self._favorites else "Als Favorit merken")
+        button.setAccessibleName(button.toolTip())
+        button.setStyleSheet(
+            "QToolButton { font-size: 22px; color: #e2b640; padding: 0px; "
+            "margin: 0px; border: none; min-width: 0px; }"
+        )
+        button.clicked.connect(lambda: self._toggle_favorite(article))
+        return button
+
+    def _row_actions(self, article: PrintArticle) -> QWidget:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(5)
+        preview = QToolButton()
+        preview.setObjectName("article_pdf")
+        preview.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
+        preview.setIconSize(QSize(20, 20))
+        preview.setToolTip("PDF oeffnen")
+        preview.setAccessibleName(preview.toolTip())
+        preview.setEnabled(bool(article.pdf_path))
+        preview.clicked.connect(lambda: self._preview(article))
+        layout.addWidget(preview)
+        details = QToolButton()
+        details.setObjectName("article_details")
+        details.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        details.setIconSize(QSize(20, 20))
+        details.setToolTip("Druckpfad und Druckeinstellungen anzeigen")
+        details.setAccessibleName(details.toolTip())
+        details.clicked.connect(lambda: self._show_print_details(article))
+        layout.addWidget(details)
+        copies = QSpinBox()
+        copies.setObjectName("article_copies")
+        copies.setRange(1, 999)
+        copies.setValue(1)
+        copies.setFixedWidth(76)
+        copies.setToolTip("Anzahl Exemplare")
+        copies.setAccessibleName(copies.toolTip())
+        layout.addWidget(copies)
+        print_button = QToolButton()
+        print_button.setObjectName("article_print")
+        print_button.setIcon(printer_icon())
+        print_button.setIconSize(QSize(24, 24))
+        print_button.setToolTip("Mit hinterlegten Einstellungen drucken")
+        print_button.setAccessibleName(print_button.toolTip())
+        print_button.setEnabled(bool(article.pdf_path and (article.profile_id or article.print_plan)))
+        print_button.clicked.connect(lambda: self._print(article, copies.value()))
+        layout.addWidget(print_button)
+        return widget
+
+    def _show_print_details(self, article: PrintArticle) -> None:
+        dialog = PrintDetailsDialog(article, self._service.printing_settings(), self)
+        dialog.exec()
+        if dialog.edit_requested:
+            self._edit_article(new=False, article=article)
 
     def _selected(self) -> PrintArticle | None:
         selection = self.table.selectionModel().selectedRows()
@@ -189,36 +245,9 @@ class PrintCenterWindow(QMainWindow):
         self.delete_button.setVisible(own_tab)
         self.edit_button.setEnabled(article is not None and article.source == "own")
         self.delete_button.setEnabled(article is not None and article.source == "own")
-        self.preview_button.setEnabled(article is not None and bool(article.pdf_path))
-        self.favorite_button.setEnabled(article is not None)
-        self.print_button.setEnabled(
-            article is not None and bool(article.pdf_path)
-            and bool(article.profile_id or article.print_plan)
-        )
-        if article is None:
-            self.details.setText("Bitte einen Druckartikel auswaehlen.")
-            return
-        printing = self._service.printing_settings()
-        lines = [f"{article.name}\nPDF: {article.pdf_path or '(nicht zugeordnet)'}"]
-        steps = article.print_plan
-        profile_ids = [(step.range, step.profile_id) for step in steps]
-        if not steps and article.profile_id:
-            profile_ids = [("Alle Seiten", article.profile_id)]
-        for page_range, profile_id in profile_ids:
-            profile = printing.resolve_profile(profile_id)
-            description = (
-                f"{profile.label or profile.id} / {profile.printer_name} / {profile.backend}"
-                if profile else f"{profile_id} (Profil nicht verfuegbar)"
-            )
-            lines.append(f"{page_range}: {description}")
-        if not profile_ids:
-            lines.append("Kein Druckprofil: bitte in XW-Office zuordnen.")
-        if article.notes:
-            lines.append(article.notes)
-        self.details.setText("\n".join(lines))
 
-    def _edit_article(self, *, new: bool) -> None:
-        article = None if new else self._selected()
+    def _edit_article(self, *, new: bool, article: PrintArticle | None = None) -> None:
+        article = None if new else article or self._selected()
         if not new and (article is None or article.source != "own"):
             return
         dialog = ArticleDialog(self._service.printing_settings(), article, self)
@@ -261,10 +290,7 @@ class PrintCenterWindow(QMainWindow):
             deleted, "Artikel wird geloescht ...",
         )
 
-    def _preview(self) -> None:
-        article = self._selected()
-        if article is None:
-            return
+    def _preview(self, article: PrintArticle) -> None:
         path = resolve_shared_path(article.pdf_path)
         if not Path(path).is_file() or not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
             QMessageBox.warning(self, "PDF oeffnen", "Die PDF konnte nicht geoeffnet werden.")
@@ -272,10 +298,7 @@ class PrintCenterWindow(QMainWindow):
     def _store_favorites(self) -> None:
         self._settings.setValue("favorites", sorted(self._favorites))
 
-    def _toggle_favorite(self) -> None:
-        article = self._selected()
-        if article is None:
-            return
+    def _toggle_favorite(self, article: PrintArticle) -> None:
         if article.id in self._favorites:
             self._favorites.remove(article.id)
         else:
@@ -283,11 +306,7 @@ class PrintCenterWindow(QMainWindow):
         self._store_favorites()
         self._render()
 
-    def _print(self) -> None:
-        article = self._selected()
-        if article is None:
-            return
-        copies = self.copies.value()
+    def _print(self, article: PrintArticle, copies: int) -> None:
         if QMessageBox.question(
             self, "Produktdruck", f"{copies} Exemplar(e) von '{article.name}' drucken?\n"
             "Es erfolgt keine Bestandsbuchung."
