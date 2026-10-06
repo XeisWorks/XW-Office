@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QTimer, Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QBrush, QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -1471,24 +1471,91 @@ class PlcLabelPrintDialog(QDialog):
     def _is_b2b_packing_order(self) -> bool:
         return self._customer_type_b2b.isChecked()
 
+    def _allocation_warning_rows(self) -> list[tuple[str, str, str]]:
+        """Turn validation messages into compact, operator-readable table rows."""
+        rows: list[tuple[str, str, str]] = []
+        pattern = re.compile(r"^'(?P<name>.+?)': aufgeteilt (?P<assigned>\d+), offen (?P<open>\d+)")
+        for warning in self._last_allocation_warnings:
+            match = pattern.match(warning)
+            if match:
+                rows.append((match["name"], match["assigned"], match["open"]))
+            else:
+                rows.append((warning.rstrip("."), "–", "leer"))
+        return rows
+
     def _confirm_allocation_warnings(self, *, action: str) -> bool:
         if not self._last_allocation_warnings:
             return True
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle("Unvollständige Paketaufteilung")
-        box.setText("Nicht alle offenen Produkte sind auf die Pakete verteilt.")
-        box.setInformativeText("\n".join(self._last_allocation_warnings))
-        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        proceed = box.button(QMessageBox.StandardButton.Yes)
-        if proceed is not None:
-            proceed.setText(f"✓ Trotzdem {action}")
-            proceed.setStyleSheet("color: #15803d; font-weight: 700;")
-        cancel = box.button(QMessageBox.StandardButton.No)
-        if cancel is not None:
-            cancel.setText("✕ Abbrechen")
-            cancel.setStyleSheet("color: #b91c1c; font-weight: 700;")
-        return box.exec() == QMessageBox.StandardButton.Yes
+        rows = self._allocation_warning_rows()
+        assigned_total = sum(int(assigned) for _name, assigned, _open in rows if assigned.isdigit())
+        open_total = sum(int(open_quantity) for _name, _assigned, open_quantity in rows if open_quantity.isdigit())
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Paketaufteilung prüfen")
+        dialog.setMinimumWidth(570)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setSpacing(12)
+
+        title_row = QHBoxLayout()
+        warning_icon = QLabel(dialog)
+        warning_icon.setPixmap(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning).pixmap(34, 34))
+        title_row.addWidget(warning_icon, alignment=Qt.AlignmentFlag.AlignTop)
+        title = QLabel("Paketaufteilung unvollständig", dialog)
+        title.setStyleSheet("font-size: 16px; font-weight: 700;")
+        title_row.addWidget(title, 1)
+        layout.addLayout(title_row)
+
+        intro = QLabel("Der Teilversand kann trotzdem gedruckt werden. Nicht verteilte Produkte bleiben offen.", dialog)
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color: #94a3b8;")
+        layout.addWidget(intro)
+        totals = QLabel(
+            f'<span style="color:#16a34a; font-weight:700;">{assigned_total} Stk. verteilt</span>'
+            f'&nbsp;&nbsp;&nbsp;<span style="color:#dc2626; font-weight:700;">{open_total} Stk. offen</span>',
+            dialog,
+        )
+        layout.addWidget(totals)
+
+        table = QTableWidget(len(rows), 3, dialog)
+        table.setObjectName("allocation_warning_table")
+        table.setHorizontalHeaderLabels(["Produkt", "Verteilt", "Offen"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        for row, (name, assigned, open_quantity) in enumerate(rows):
+            table.setItem(row, 0, QTableWidgetItem(name))
+            assigned_item = QTableWidgetItem(assigned)
+            assigned_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            assigned_item.setForeground(QBrush(QColor("#16a34a")))
+            table.setItem(row, 1, assigned_item)
+            open_item = QTableWidgetItem(open_quantity)
+            open_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            open_item.setForeground(QBrush(QColor("#dc2626")))
+            table.setItem(row, 2, open_item)
+            table.setRowHeight(row, 25)
+        table.setMinimumHeight(88)
+        table.setMaximumHeight(min(270, 30 + max(1, len(rows)) * 25))
+        layout.addWidget(table)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel = QPushButton("✕ Zurück und prüfen", dialog)
+        cancel.setStyleSheet("color: #dc2626; font-weight: 700;")
+        cancel.clicked.connect(dialog.reject)
+        proceed = QPushButton(f"✓ {action} trotzdem", dialog)
+        proceed.setDefault(True)
+        proceed.setStyleSheet("color: #16a34a; font-weight: 700;")
+        proceed.clicked.connect(dialog.accept)
+        buttons.addWidget(cancel)
+        buttons.addWidget(proceed)
+        layout.addLayout(buttons)
+        return dialog.exec() == QDialog.DialogCode.Accepted
 
     def _capture_pending_fulfillment(self) -> tuple[str, dict[str, int]]:
         quantities: dict[str, int] = {}
@@ -1597,7 +1664,14 @@ class PlcLabelPrintDialog(QDialog):
             for package_index, (quantity, bonus_quantity) in enumerate(zip(quantities, bonus_quantities)):
                 physical_quantity = quantity + bonus_quantity
                 if physical_quantity:
-                    assignments[package_index].append(PackingListItem(quantity=physical_quantity, name=name, sku=sku))
+                    assignments[package_index].append(
+                        PackingListItem(
+                            quantity=physical_quantity,
+                            display_quantity=self._format_package_quantity(quantity, bonus_quantity),
+                            name=name,
+                            sku=sku,
+                        )
+                    )
 
         if bonus_total:
             if not self._is_b2b_packing_order():

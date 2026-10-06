@@ -14,7 +14,7 @@ def test_two_portrait_a6_packing_lists_share_one_landscape_a5_page(tmp_path) -> 
             package_number=1,
             package_count=2,
             weight_kg=0.41,
-            items=(PackingListItem(quantity=2, name="Notenheft", sku="NH-1"),),
+            items=(PackingListItem(quantity=22, display_quantity="20+2", name="Notenheft", sku="NH-1"),),
         ),
         PackingListContext(
             reference="21104",
@@ -34,7 +34,9 @@ def test_two_portrait_a6_packing_lists_share_one_landscape_a5_page(tmp_path) -> 
     assert document[0].rect.width == fitz.paper_size("a5")[1]
     assert document[0].rect.height == fitz.paper_size("a5")[0]
     text = document[0].get_text()
+    assert text.count("PACKLISTE") == 2
     assert "PAKET 1 VON 2" in text
     assert "PAKET 2 VON 2" in text
+    assert "20+2" in text
     assert "Notenheft" in text
     assert "Partitur" in text

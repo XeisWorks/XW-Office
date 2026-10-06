@@ -538,6 +538,22 @@ def test_b2b_bonus_quantity_is_printed_but_not_counted_as_ordered(qtbot: object)
 
     assert [item.quantity for item in packing_lists[0].items] == [11]
     assert [item.quantity for item in packing_lists[1].items] == [11]
+    assert [item.display_quantity for item in packing_lists[0].items] == ["10+1"]
+    assert [item.display_quantity for item in packing_lists[1].items] == ["10+1"]
+
+
+def test_allocation_warning_rows_are_compact_and_operator_readable(qtbot: object) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+    dialog._last_allocation_warnings = (  # noqa: SLF001
+        "'Alpenmarsch': aufgeteilt 4, offen 10 (bestellt 10).",
+        "Paket 2 enthält keine zugeordneten Artikel.",
+    )
+
+    assert dialog._allocation_warning_rows() == [  # noqa: SLF001
+        ("Alpenmarsch", "4", "10"),
+        ("Paket 2 enthält keine zugeordneten Artikel", "–", "leer"),
+    ]
 
 
 def test_incomplete_wix_customs_weight_expands_details_automatically(qtbot: object) -> None:

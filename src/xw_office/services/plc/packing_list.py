@@ -14,6 +14,7 @@ class PackingListItem:
     quantity: int
     name: str
     sku: str = ""
+    display_quantity: str = ""
 
 
 @dataclass(frozen=True)
@@ -85,18 +86,24 @@ class PackingListService:
         ink = (0.08, 0.08, 0.08)
 
         page.draw_rect(area, color=(0.82, 0.82, 0.82), width=0.6)
+        logo_width = 92
+        header_top = area.y0 + 9
         if logo_path.is_file():
-            page.insert_image(fitz.Rect(left, area.y0 + 14, left + 78, area.y0 + 45), filename=str(logo_path), keep_proportion=True)
+            page.insert_image(
+                fitz.Rect(right - logo_width, header_top, right, header_top + 48),
+                filename=str(logo_path),
+                keep_proportion=True,
+            )
         page.insert_textbox(
-            fitz.Rect(left, area.y0 + 48, right, area.y0 + 74),
+            fitz.Rect(left, header_top + 11, right - logo_width - 7, header_top + 38),
             "PACKLISTE",
             fontsize=14,
             fontname="hebo",
             color=ink,
         )
-        page.draw_rect(fitz.Rect(left, area.y0 + 74, right, area.y0 + 104), color=red, fill=red)
+        page.draw_rect(fitz.Rect(left, area.y0 + 64, right, area.y0 + 94), color=red, fill=red)
         page.insert_textbox(
-            fitz.Rect(left + 7, area.y0 + 74, right - 7, area.y0 + 104),
+            fitz.Rect(left + 7, area.y0 + 64, right - 7, area.y0 + 94),
             f"PAKET {context.package_number} VON {context.package_count}",
             fontsize=12,
             fontname="hebo",
@@ -109,9 +116,9 @@ class PackingListService:
             f"Kunde: {context.customer_name or '-'}",
             f"Paketgewicht: {context.weight_kg:.2f} kg",
         ]
-        page.insert_textbox(fitz.Rect(left, area.y0 + 113, right, area.y0 + 164), "\n".join(meta), fontsize=7.6, color=(0.18, 0.18, 0.18))
+        page.insert_textbox(fitz.Rect(left, area.y0 + 103, right, area.y0 + 154), "\n".join(meta), fontsize=7.6, color=(0.18, 0.18, 0.18))
 
-        y = area.y0 + 174
+        y = area.y0 + 164
         page.draw_rect(fitz.Rect(left, y, right, y + 18), color=red, fill=red)
         page.insert_text((left + 6, y + 12), "Menge", fontsize=7.2, fontname="hebo", color=(1, 1, 1))
         page.insert_text((left + 47, y + 12), "Inhalt", fontsize=7.2, fontname="hebo", color=(1, 1, 1))
@@ -121,7 +128,15 @@ class PackingListService:
             row_height = 22
             fill = (0.975, 0.975, 0.975) if row % 2 else (1, 1, 1)
             page.draw_rect(fitz.Rect(left, y, right, y + row_height), color=(0.86, 0.86, 0.86), fill=fill, width=0.3)
-            page.insert_textbox(fitz.Rect(left + 5, y + 5, left + 39, y + 19), str(item.quantity), fontsize=8.5, fontname="hebo", align=1, color=ink)
+            quantity = item.display_quantity or str(item.quantity)
+            quantity_width = fitz.get_text_length(quantity, fontname="hebo", fontsize=8.5)
+            page.insert_text(
+                (left + 22 - quantity_width / 2, y + 14),
+                quantity,
+                fontsize=8.5,
+                fontname="hebo",
+                color=ink,
+            )
             product = " · ".join(part for part in (item.name, item.sku) if part)[:95]
             page.insert_textbox(fitz.Rect(left + 47, y + 4, right - 5, y + 20), product, fontsize=7.1, color=ink)
             y += row_height
