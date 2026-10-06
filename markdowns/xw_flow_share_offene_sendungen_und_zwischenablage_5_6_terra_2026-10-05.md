@@ -353,6 +353,30 @@ Erfüllt ist die Umsetzung erst, wenn folgender Ablauf auf dem echten Android-Ge
 5. Der Fall lässt sich prüfen, drucken und erledigen.
 6. Nach Refresh ist er weder in XW-Flow noch in XW-Office erneut offen.
 
+### Dashboard-Abgleich zwischen XW-Flow und XW-Office
+
+XW-Flow zeigt im Dashboard dieselben offenen Share- und `shipping@`-Mailfälle
+wie der entsprechende Teil des Alarms in `XW-Office` → `RECHNUNGEN` →
+`OFFENE SENDUNGEN`. Lokal in Office angelegte manuelle Zusatzfälle bleiben
+Office-intern. Share-Fälle bleiben in `shipment_cases` die maßgebliche
+XW-Flow-Quelle. XW-Office spiegelt bei einem erfolgreichen Queue-Refresh nur
+Kennung, Betreff und Eingangszeit der offenen `shipping@`-Mails über
+`XW_OFFICE_BRIDGE_SECRET` nach XW-Flow; Mailtext, Absender und Anhänge werden
+nicht übertragen. Nicht mehr offene Mailfälle werden beim nächsten Snapshot
+geschlossen. Der Office-Alert muss für seinen Badge denselben stillen
+Graph-/Flow-Refresh ausführen, damit neue Share-Fälle auch dann sichtbar
+werden, wenn die Sendungsansicht noch nicht geöffnet wurde.
+
+Für mehrere Office-PCs kann `XW_OFFICE_BRIDGE_SECRET` in **Einstellungen** →
+**System** → **Token-Verwaltung** einmal in `Weitere Tokens (JSON)` geladen
+und mit **Tokens sicher speichern** in der gemeinsamen Office-Datenbank
+verschlüsselt gespeichert werden. Dazu muss Office auf allen PCs dieselbe
+Datenbank und denselben `FERNET_MASTER_KEY` verwenden. Die initiale
+Übernahme kann aus der lokalen `.env` erfolgen; danach ist keine Kopie dieses
+Bridge-Secrets in jede einzelne Office-`.env` mehr nötig. Den
+`FERNET_MASTER_KEY` selbst niemals in Git speichern; er muss auf jedem PC
+sicher verfügbar bleiben, da er die Datenbank-Secrets entschlüsselt.
+
 ## 8. Bewusst nicht empfohlen
 
 ### XW-Flow sendet für jeden Share eine Mail an `shipping@...`

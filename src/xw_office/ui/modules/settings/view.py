@@ -94,6 +94,7 @@ _EXTRA_SECRET_KEYS: tuple[str, ...] = (
     "XW_SPECIAL_ORDER_ENDPOINT",
     "XW_SPECIAL_ORDER_SECRET",
     "XW_FLOW_API_SECRET",
+    "XW_OFFICE_BRIDGE_SECRET",
 )
 
 _DEFAULT_FULFILLMENT_SUBJECT = "Ihre Rechnung {{invoice_number}}"
@@ -298,7 +299,10 @@ class SettingsView(QWidget):
             for key in _EXTRA_SECRET_KEYS
             if secret_service.get_secret(key)
         }
-        self._extra_tokens_json.setPlaceholderText('{"MOLLIE_ACCESS_TOKEN": "...", "STRIPE_SECRET_KEY": "..."}')
+        self._extra_tokens_json.setPlaceholderText(
+            '{"MOLLIE_ACCESS_TOKEN": "...", "STRIPE_SECRET_KEY": "...", '
+            '"XW_OFFICE_BRIDGE_SECRET": "..."}'
+        )
         self._extra_tokens_json.setPlainText(json.dumps(extra_tokens_obj, ensure_ascii=False, indent=2))
         self._extra_tokens_json.setMinimumHeight(100)
         sec_edit.addRow("Weitere Tokens (JSON):", self._extra_tokens_json)

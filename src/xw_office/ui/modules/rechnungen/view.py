@@ -2481,7 +2481,7 @@ class RechnungenView(QWidget):
             digital_licenses: DigitalLicenseService = self._container.resolve(DigitalLicenseService)
             return {
                 "mollie": max(0, int(counts.get("mollie", 0))),
-                "sendungen": max(0, int(sendungen_service.open_count())),
+                "sendungen": max(0, int(sendungen_service.refresh_count_from_graph_silent())),
                 "digital_licenses": max(0, int(digital_licenses.open_count(limit=30, use_cache=True))),
             }
 

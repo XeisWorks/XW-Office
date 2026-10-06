@@ -18,6 +18,13 @@ class FlowShipmentCase:
     created_at: str
 
 
+@dataclass(frozen=True)
+class FlowShippingEmailCase:
+    external_id: str
+    title: str
+    received_at: str
+
+
 class XwFlowShipmentClient:
     def __init__(self, config: AppConfig, secrets: SecretService) -> None:
         self._config = config
@@ -73,4 +80,23 @@ class XwFlowShipmentClient:
                 f"/api/v1/office-bridge/shipment-cases/{case_id}",
                 json={"status": "completed" if completed else "open"},
             )
+            response.raise_for_status()
+
+    def sync_shipping_email_cases(self, cases: list[FlowShippingEmailCase]) -> None:
+        connection = self._connection()
+        if connection is None:
+            return
+        base_url, headers, timeout = connection
+        payload = {
+            "cases": [
+                {
+                    "external_id": case.external_id,
+                    "title": case.title[:300],
+                    "received_at": case.received_at or None,
+                }
+                for case in cases
+            ]
+        }
+        with httpx.Client(base_url=base_url, headers=headers, timeout=timeout) as client:
+            response = client.put("/api/v1/office-bridge/shipment-cases/shipping-email-snapshot", json=payload)
             response.raise_for_status()

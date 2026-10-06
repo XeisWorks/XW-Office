@@ -6,7 +6,7 @@ from xw_office.core.config import AppConfig
 from xw_office.core.container import Container
 from xw_office.core.signals import AppSignals
 from xw_office.services.secrets.service import SecretService
-from xw_office.ui.modules.settings.view import SettingsView
+from xw_office.ui.modules.settings.view import SettingsView, _EXTRA_SECRET_KEYS
 
 
 class _FakeSecretService:
@@ -24,6 +24,10 @@ def _build_container_with_secrets(values: dict[str, str]) -> Container:
     register_default_services(container)
     container.register(SecretService, lambda _: _FakeSecretService(values))
     return container
+
+
+def test_office_bridge_secret_is_available_for_encrypted_shared_storage() -> None:
+    assert "XW_OFFICE_BRIDGE_SECRET" in _EXTRA_SECRET_KEYS
 
 
 def test_settings_transfer_graph_status_green(qtbot: object) -> None:

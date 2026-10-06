@@ -20,7 +20,7 @@ from xw_office.services.printing.invoice_printer import InvoicePrinter
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.wix.client import WixOrdersClient
-from xw_office.services.sendungen.xw_flow_client import XwFlowShipmentClient
+from xw_office.services.sendungen.xw_flow_client import FlowShippingEmailCase, XwFlowShipmentClient
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +194,26 @@ class OffeneSendungenService:
             + [self._to_case(msg) for msg in candidates],
             source_mailbox=self._shipping_mailbox(),
         )
-        return self.load_open_cases()
+        open_cases = self.load_open_cases()
+        self._sync_shipping_email_snapshot(open_cases)
+        return open_cases
+
+    def _sync_shipping_email_snapshot(self, cases: list[SendungCase]) -> None:
+        if self._flow_shipments is not None and self._flow_shipments.is_configured():
+            try:
+                self._flow_shipments.sync_shipping_email_cases(
+                    [
+                        FlowShippingEmailCase(
+                            external_id=case.source_id or case.id,
+                            title=case.subject,
+                            received_at=case.received_at,
+                        )
+                        for case in cases
+                        if case.source_type == _SOURCE_GRAPH
+                    ]
+                )
+            except Exception as exc:  # noqa: BLE001 - dashboard mirror must not block Office
+                logger.warning("XW-Flow shipping-mail snapshot failed: %s", exc)
 
     def _refresh_flow_cases(self, existing: list[SendungCase]) -> list[SendungCase]:
         """Fetch a full successful Flow snapshot, preserving its cache on error."""
@@ -273,7 +292,7 @@ class OffeneSendungenService:
         return case
 
     def refresh_count_from_graph_silent(self, *, lookback_days: int = 20, max_items: int = 120) -> int:
-        """Refresh Graph-backed cases only when cached MS auth is already available."""
+        """Refresh mail and XW-Flow cases without starting interactive MS auth."""
         return len(
             self.refresh_from_graph(
                 lookback_days=lookback_days,
@@ -303,6 +322,8 @@ class OffeneSendungenService:
         else:
             ids.discard(cid)
         self._save_done_ids(ids)
+        if source_type == _SOURCE_GRAPH:
+            self._sync_shipping_email_snapshot(self.load_open_cases())
 
     def load_manual_fields(self, case_id: str) -> dict[str, Any]:
         data = self._load_json_map(_MANUAL_KEY)

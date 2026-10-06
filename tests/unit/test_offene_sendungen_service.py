@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from xw_office.services.sendungen.service import OffeneSendungenService, SendungProductLine
+from xw_office.services.sendungen.xw_flow_client import FlowShippingEmailCase, FlowShipmentCase
 
 from xw_office.services.customer_aftercare import fulfillment as aftercare_fulfillment
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
@@ -183,6 +184,58 @@ def test_old_shop_mail_cache_is_not_shown_in_shipping_queue() -> None:
     service = OffeneSendungenService(repo, _Secrets())  # type: ignore[arg-type]
 
     assert service.load_open_cases() == []
+
+
+def test_refresh_merges_flow_cases_and_mirrors_open_shipping_mail_metadata(monkeypatch) -> None:
+    class _GraphClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def has_silent_token(self) -> bool:
+            return True
+
+        def list_inbox_messages(self, **_kwargs: object) -> list[dict[str, Any]]:
+            return [_message("synthetic-mail-id", "Synthetic Versandauftrag")]
+
+        def mark_message_followup_complete(self, _message_id: str) -> None:
+            pass
+
+    class _FlowClient:
+        def __init__(self) -> None:
+            self.snapshot: list[FlowShippingEmailCase] | None = None
+
+        def is_configured(self) -> bool:
+            return True
+
+        def fetch_open_cases(self) -> list[FlowShipmentCase]:
+            return [
+                FlowShipmentCase(
+                    id="synthetic-flow-id",
+                    title="Synthetic Share-Auftrag",
+                    body_text="Bitte an Testadresse versenden.",
+                    source_url="",
+                    created_at="2026-10-05T09:15:00Z",
+                )
+            ]
+
+        def sync_shipping_email_cases(self, cases: list[FlowShippingEmailCase]) -> None:
+            self.snapshot = cases
+
+    monkeypatch.setattr("xw_office.services.sendungen.service.GraphMailClient", _GraphClient)
+    flow = _FlowClient()
+    service = OffeneSendungenService(_Repo(), _Secrets(), flow_shipments=flow)  # type: ignore[arg-type]
+
+    cases = service.refresh_from_graph()
+
+    assert {case.source_type for case in cases} == {"graph_mail", "xw_flow_share"}
+    assert flow.snapshot is not None
+    assert len(flow.snapshot) == 1
+    assert flow.snapshot[0].external_id == "synthetic-mail-id"
+    assert flow.snapshot[0].title == "Synthetic Versandauftrag"
+
+    service.mark_done("synthetic-mail-id", done=True)
+
+    assert flow.snapshot == []
 
 
 def test_mark_done_sets_outlook_flag_before_local_done(monkeypatch) -> None:
