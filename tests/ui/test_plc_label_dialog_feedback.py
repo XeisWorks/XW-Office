@@ -376,7 +376,11 @@ def test_partial_allocation_can_produce_packlists_and_next_label_shows_open_quan
     next_dialog._packing_open_quantities = next_dialog._open_quantities_for_items(next_dialog._packing_items)  # noqa: SLF001
     next_dialog._package_count.setValue(2)  # noqa: SLF001
 
-    assert next_dialog._packing_table.item(1, 1).text() == "10 / offen 6"  # noqa: SLF001
+    assert next_dialog._packing_table.item(1, 1).text() == "10/6"  # noqa: SLF001
+    quantities = next_dialog._packing_table.cellWidget(1, 1)  # noqa: SLF001
+    assert quantities is not None
+    assert quantities.findChild(QLabel, "ordered_quantity").text() == "10"
+    assert quantities.findChild(QLabel, "open_quantity").text() == "6"
     assert next_dialog._packing_table.item(1, 2).text() == "6"  # noqa: SLF001
 
 
@@ -494,8 +498,7 @@ def test_parcel_controls_add_clear_delete_and_keep_columns_resizable(qtbot: obje
     assert not dialog._parcel_delete_buttons[0][1].icon().isNull()  # noqa: SLF001
     clear_button = dialog._packing_table.cellWidget(0, 2).findChild(QPushButton)  # noqa: SLF001
     assert clear_button is not None and clear_button.text() == "Liste leeren"
-    assert dialog._send_btn.maximumWidth() == 230  # noqa: SLF001
-    assert dialog._packing_print_btn.minimumWidth() == 230  # noqa: SLF001
+    assert dialog._print_actions.itemAt(0).spacerItem() is not None  # noqa: SLF001
 
     dialog._add_parcel()  # noqa: SLF001
     assert dialog._package_count.value() == 3  # noqa: SLF001
@@ -513,9 +516,14 @@ def test_parcel_controls_add_clear_delete_and_keep_columns_resizable(qtbot: obje
 
 
 def test_b2b_bonus_quantity_is_printed_but_not_counted_as_ordered(qtbot: object) -> None:
-    summary = plc_dialog_module.InvoiceSummary(id="b2b", order_reference="12345")
+    summary = plc_dialog_module.InvoiceSummary(id="b2b", order_reference="21402")
     dialog = PlcLabelPrintDialog(_container(), summary)
     qtbot.addWidget(dialog)
+    assert dialog._customer_type_b2b.isChecked()  # noqa: SLF001
+    assert dialog._is_b2b_packing_order()  # noqa: SLF001
+    dialog._customer_type_b2c.setChecked(True)  # noqa: SLF001
+    assert not dialog._is_b2b_packing_order()  # noqa: SLF001
+    dialog._customer_type_b2b.setChecked(True)  # noqa: SLF001
     dialog._packing_items = [WixOrderItem(sku="XW-400", name="Alpenmarsch", qty=20)]  # noqa: SLF001
     dialog._package_count.setValue(2)  # noqa: SLF001
     dialog._packing_table.item(1, 2).setText("10+1")  # noqa: SLF001
@@ -524,7 +532,7 @@ def test_b2b_bonus_quantity_is_printed_but_not_counted_as_ordered(qtbot: object)
     dialog._parcel_weight_edits[1].setText("1,0")  # noqa: SLF001
 
     _parcels, packing_lists = dialog._build_parcels_and_packing_lists(  # noqa: SLF001
-        reference="12345",
+        reference="21402",
         package_type="PC",
     )
 

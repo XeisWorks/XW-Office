@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QTimer, Qt, QUrl
-from PySide6.QtGui import QBrush, QColor, QDesktopServices
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
     QFrame,
-    QGridLayout,
     QGroupBox,
     QHeaderView,
     QHBoxLayout,
@@ -308,16 +307,16 @@ class PlcLabelPrintDialog(QDialog):
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
-        mode_row = QHBoxLayout()
-        self._mode_live = QRadioButton("LIVE")
-        self._mode_test = QRadioButton("TEST")
-        self._mode_live.setChecked(True)
-        mode_row.addWidget(self._mode_live)
-        mode_row.addWidget(self._mode_test)
-        mode_row.addStretch()
-        mode_wrap = QWidget()
-        mode_wrap.setLayout(mode_row)
-        form.addRow("Modus:", mode_wrap)
+        customer_type_row = QHBoxLayout()
+        self._customer_type_b2b = QRadioButton("B2B")
+        self._customer_type_b2c = QRadioButton("B2C")
+        self._customer_type_b2b.setChecked(True)
+        customer_type_row.addWidget(self._customer_type_b2b)
+        customer_type_row.addWidget(self._customer_type_b2c)
+        customer_type_row.addStretch()
+        customer_type_wrap = QWidget()
+        customer_type_wrap.setLayout(customer_type_row)
+        form.addRow("Kundentyp:", customer_type_wrap)
 
         self._transport_combo = QComboBox()
         self._transport_combo.addItem("Webservice (direkt, Standard)", "webservice")
@@ -513,22 +512,18 @@ class PlcLabelPrintDialog(QDialog):
         root.addWidget(self._customs_group)
         self._customs_group.setVisible(False)
 
-        print_actions = QGridLayout()
-        print_actions.setColumnStretch(0, 0)
-        print_actions.setColumnStretch(1, 1)
+        self._print_actions = QHBoxLayout()
+        self._print_actions.addStretch()
         self._send_btn = QPushButton("Senden an PLC")
-        self._send_btn.setMaximumWidth(230)
         self._packing_print_btn = QPushButton("Packliste drucken")
-        self._packing_print_btn.setMinimumWidth(230)
         cancel_button = QPushButton("Abbrechen")
-        cancel_button.setMaximumWidth(150)
-        print_actions.addWidget(self._send_btn, 0, 0)
-        print_actions.addWidget(self._packing_print_btn, 0, 1)
-        print_actions.addWidget(cancel_button, 1, 1, Qt.AlignmentFlag.AlignRight)
+        self._print_actions.addWidget(self._send_btn)
+        self._print_actions.addWidget(self._packing_print_btn)
+        self._print_actions.addWidget(cancel_button)
         self._packing_print_btn.clicked.connect(self._print_packing_lists)
         self._send_btn.clicked.connect(self._send_to_plc)
         cancel_button.clicked.connect(self.reject)
-        root.addLayout(print_actions)
+        root.addLayout(self._print_actions)
 
     def _load_context(self) -> None:
         def job() -> _PlcDialogContext:
@@ -806,6 +801,28 @@ class PlcLabelPrintDialog(QDialog):
         layout.addWidget(clear_button)
         return widget
 
+    def _ordered_open_widget(self, ordered: int, open_quantity: int) -> QWidget:
+        """Render the order and remaining quantities as compact coloured values."""
+        widget = QWidget(self._packing_table)
+        widget.setToolTip(f"Bestellt: {ordered}; offen: {open_quantity}")
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(6, 0, 6, 0)
+        layout.setSpacing(4)
+
+        ordered_label = QLabel(str(ordered), widget)
+        ordered_label.setObjectName("ordered_quantity")
+        ordered_label.setStyleSheet("color: #16a34a; font-weight: 600;")
+        separator = QLabel("/", widget)
+        separator.setStyleSheet("color: #94a3b8;")
+        open_label = QLabel(str(open_quantity), widget)
+        open_label.setObjectName("open_quantity")
+        open_label.setStyleSheet("color: #dc2626; font-weight: 600;")
+        layout.addWidget(ordered_label)
+        layout.addWidget(separator)
+        layout.addWidget(open_label)
+        layout.addStretch()
+        return widget
+
     def _refresh_parcel_header_delete_buttons(self, package_count: int) -> None:
         for _column, button in self._parcel_delete_buttons:
             button.deleteLater()
@@ -896,12 +913,11 @@ class PlcLabelPrintDialog(QDialog):
             self._packing_table.setItem(row, 0, product_cell)
             ordered = max(1, int(item.qty or 1))
             open_quantity = self._open_quantity_for_item(item_index, item)
-            ordered_cell = QTableWidgetItem(f"{ordered} / offen {open_quantity}")
+            ordered_cell = QTableWidgetItem(f"{ordered}/{open_quantity}")
             ordered_cell.setData(Qt.ItemDataRole.UserRole, {"ordered": ordered, "open": open_quantity})
             ordered_cell.setFlags(ordered_cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            if open_quantity != ordered:
-                ordered_cell.setForeground(QBrush(QColor("#dc2626")))
             self._packing_table.setItem(row, 1, ordered_cell)
+            self._packing_table.setCellWidget(row, 1, self._ordered_open_widget(ordered, open_quantity))
             for package_column in range(package_count):
                 previous = (
                     saved_quantities[item_index][package_column]
@@ -914,11 +930,14 @@ class PlcLabelPrintDialog(QDialog):
         for column in range(add_column):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(add_column, QHeaderView.ResizeMode.Fixed)
-        self._packing_table.setColumnWidth(0, 480)
-        self._packing_table.setColumnWidth(1, 85)
+        self._packing_table.resizeColumnToContents(0)
+        self._packing_table.resizeColumnToContents(1)
+        self._packing_table.setColumnWidth(0, min(max(self._packing_table.columnWidth(0) + 24, 280), 520))
+        self._packing_table.setColumnWidth(1, max(self._packing_table.columnWidth(1) + 20, 115))
         for column in range(2, add_column):
-            self._packing_table.setColumnWidth(column, 105)
-        self._packing_table.setColumnWidth(add_column, 48)
+            self._packing_table.resizeColumnToContents(column)
+            self._packing_table.setColumnWidth(column, max(self._packing_table.columnWidth(column) + 16, 118))
+        self._packing_table.setColumnWidth(add_column, 52)
         self._refresh_parcel_header_delete_buttons(package_count)
         self._packing_table.blockSignals(False)
 
@@ -1137,7 +1156,8 @@ class PlcLabelPrintDialog(QDialog):
         self._country_combo.setEditText(country_name_en(value))
 
     def _current_mode(self) -> str:
-        return "LIVE" if self._mode_live.isChecked() else "TEST"
+        # The direct web-service transfer is the only remaining PLC mode.
+        return "LIVE"
 
     def _build_reference(self) -> str:
         order_numbers = [
@@ -1449,11 +1469,7 @@ class PlcLabelPrintDialog(QDialog):
         return out
 
     def _is_b2b_packing_order(self) -> bool:
-        reference = self._summary.order_reference.strip() or self._primary_order_number.text().strip()
-        return any(
-            prefix and reference.startswith(prefix)
-            for prefix in self._container.config.sku_rules.b2b_reference_prefixes
-        )
+        return self._customer_type_b2b.isChecked()
 
     def _confirm_allocation_warnings(self, *, action: str) -> bool:
         if not self._last_allocation_warnings:
