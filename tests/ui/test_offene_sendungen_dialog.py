@@ -163,6 +163,31 @@ def test_dialog_uses_compact_case_label_and_mail_spacing(qtbot: object) -> None:
     assert dialog._btn_done.text() == "✓"  # noqa: SLF001
 
 
+def test_flow_share_shows_only_sender_and_received_and_preserves_original_text(qtbot: object) -> None:
+    service = _FakeSendungenService()
+    original_text = "Super!\nBitte senden\n\n\nZusatzwunsch 👍"
+    service._cases[0] = replace(  # type: ignore[index]
+        service._cases[0],
+        sender="XW-Flow Share",
+        thread_text=original_text,
+        source_type="xw_flow_share",
+    )
+    dialog = OffeneSendungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    dialog.show()
+    _wait_dialog_loaded(qtbot, dialog)
+
+    assert dialog._meta.text() == "Von: XW-Flow Share\nEmpfangen: 2026-07-10T09:00:00Z"  # noqa: SLF001
+    assert dialog._thread.toPlainText() == original_text  # noqa: SLF001
+    qtbot.waitUntil(lambda: dialog._thread.height() < 250, timeout=2000)  # noqa: SLF001
+
+    short_height = dialog._thread.height()  # noqa: SLF001
+    longer_text = "\n".join(f"Zeile {line}" for line in range(30))
+    dialog._thread.setPlainText(longer_text)  # noqa: SLF001
+    qtbot.waitUntil(lambda: dialog._thread.height() > short_height, timeout=2000)  # noqa: SLF001
+    assert dialog._thread.toPlainText() == longer_text  # noqa: SLF001
+
+
 def test_dialog_product_options_are_individually_editable(qtbot: object) -> None:
     service = _FakeSendungenService()
     dialog = OffeneSendungenDialog(_FakeContainer(service))  # type: ignore[arg-type]

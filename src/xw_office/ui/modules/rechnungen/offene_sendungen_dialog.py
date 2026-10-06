@@ -9,7 +9,7 @@ import re
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl
-from PySide6.QtGui import QCloseEvent, QDesktopServices
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QResizeEvent
 from PySide6.QtWidgets import (
     QDialog,
     QAbstractItemView,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
+    QSizePolicy,
     QSplitter,
     QScrollArea,
     QTableView,
@@ -138,6 +139,32 @@ class _SendungProductsModel(QAbstractTableModel):
         return [row for row in self._rows if str(row.name or "").strip()]
 
 
+class _ContentSizedPlainTextEdit(QPlainTextEdit):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setMinimumHeight(42)
+        self.setMaximumHeight(420)
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.timeout.connect(self._resize_to_contents)
+        self.textChanged.connect(self._schedule_resize)
+        self.document().documentLayout().documentSizeChanged.connect(self._schedule_resize)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._schedule_resize()
+
+    def _schedule_resize(self, *_args: object) -> None:
+        if not self._resize_timer.isActive():
+            self._resize_timer.start(0)
+
+    def _resize_to_contents(self) -> None:
+        document_height = self.document().documentLayout().documentSize().height()
+        height = round(document_height) + 2 * self.frameWidth() + 12
+        self.setFixedHeight(max(42, min(height, 420)))
+
+
 class OffeneSendungenDialog(QDialog):
     """Sendungen workflow based on legacy Daily-Business behavior, without UI blocking."""
 
@@ -244,11 +271,9 @@ class OffeneSendungenDialog(QDialog):
         self._meta.setStyleSheet("font-size: 10px; color: #94a3b8;")
         right_lay.addWidget(self._meta)
 
-        self._thread = QPlainTextEdit()
+        self._thread = _ContentSizedPlainTextEdit()
         self._thread.setReadOnly(True)
         self._thread.setPlaceholderText("Mailverlauf / Inhalt")
-        self._thread.setMinimumHeight(250)
-        self._thread.setMaximumHeight(420)
         right_lay.addWidget(self._thread)
 
         self._detail_status = QLabel("Quelle: -")
@@ -484,18 +509,22 @@ class OffeneSendungenDialog(QDialog):
         case = self._current_case()
         if case is None:
             return
-        self._meta.setText(
-            "\n".join(
-                [
-                    f"Von: {case.sender}",
-                    f"Betreff: {case.subject}",
-                    f"Empfangen: {case.received_at}",
-                    f"Wix-Order-Nr: {case.order_number or 'nicht erkannt'}",
-                    f"Conversation: {case.thread_id or '-'}",
-                ]
-            )
+        is_flow_share = case.source_type == "xw_flow_share"
+        metadata = [
+            f"Von: {case.sender}",
+            f"Empfangen: {case.received_at}",
+        ]
+        if not is_flow_share:
+            metadata[1:1] = [
+                f"Betreff: {case.subject}",
+                f"Wix-Order-Nr: {case.order_number or 'nicht erkannt'}",
+                f"Conversation: {case.thread_id or '-'}",
+            ]
+        self._meta.setText("\n".join(metadata))
+        original_text = case.thread_text or case.body or case.snippet
+        self._thread.setPlainText(
+            original_text if is_flow_share else self._compact_thread_text(original_text)
         )
-        self._thread.setPlainText(self._compact_thread_text(case.thread_text or case.body or case.snippet))
         self._set_detail_loading("Lade OpenAI-Auswertung und gespeicherte Korrekturen...")
         self._summary.setText(case.subject or "Sendung wird geladen...")
         self._extract_selected(force=False)
@@ -547,7 +576,7 @@ class OffeneSendungenDialog(QDialog):
         if case is None or case.id != case_id or not isinstance(extraction, SendungExtraction):
             return
         self._summary.setText(extraction.summary)
-        if extraction.thread_text:
+        if extraction.thread_text and case.source_type != "xw_flow_share":
             self._thread.setPlainText(self._compact_thread_text(extraction.thread_text))
         address = extraction.address_lines
         products = extraction.products
