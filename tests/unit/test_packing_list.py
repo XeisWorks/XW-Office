@@ -40,3 +40,23 @@ def test_two_portrait_a6_packing_lists_share_one_landscape_a5_page(tmp_path) -> 
     assert "20+2" in text
     assert "Notenheft" in text
     assert "Partitur" in text
+
+
+def test_packing_list_compacts_rows_when_more_than_eight_items_are_assigned(tmp_path) -> None:
+    items = tuple(PackingListItem(quantity=1, name=f"Artikel {number}", sku=f"XW-{number}") for number in range(1, 11))
+    context = PackingListContext(
+        reference="21104",
+        invoice_number="RE-21104",
+        customer_name="Ada Example",
+        package_number=1,
+        package_count=1,
+        weight_kg=1.2,
+        items=items,
+    )
+
+    pdf_path = PackingListService().generate_pdf((context,), output_dir=tmp_path)
+
+    document = fitz.open(pdf_path)
+    text = document[0].get_text()
+    assert "Artikel 1" in text
+    assert "Artikel 10" in text
