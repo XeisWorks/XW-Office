@@ -17,9 +17,9 @@ from PySide6.QtWidgets import (
     QComboBox,
     QCompleter,
     QDialog,
-    QDialogButtonBox,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHeaderView,
     QHBoxLayout,
@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QRadioButton,
+    QStyle,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -240,6 +241,7 @@ class PlcLabelPrintDialog(QDialog):
         self._packing_open_quantities: list[int] = []
         self._parcel_weight_edits: list[QLineEdit] = []
         self._parcel_contents_labels: list[QLabel] = []
+        self._parcel_delete_buttons: list[tuple[int, QToolButton]] = []
         self._pending_packing_contexts: tuple[PackingListContext, ...] = ()
         self._pending_fulfillment_order = ""
         self._pending_fulfillment_quantities: dict[str, int] = {}
@@ -434,6 +436,9 @@ class PlcLabelPrintDialog(QDialog):
         self._packing_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         self._packing_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._packing_table.itemChanged.connect(self._update_parcel_summaries)
+        packing_header = self._packing_table.horizontalHeader()
+        packing_header.sectionResized.connect(lambda *_args: self._layout_parcel_header_buttons())
+        packing_header.geometriesChanged.connect(self._layout_parcel_header_buttons)
         self._parcel_rendered_package_count = 1
         parcel_layout.addWidget(self._packing_table)
         self._parcel_weights_form = QFormLayout()
@@ -497,14 +502,22 @@ class PlcLabelPrintDialog(QDialog):
         root.addWidget(self._customs_group)
         self._customs_group.setVisible(False)
 
-        buttons = QDialogButtonBox(self)
-        self._packing_print_btn = buttons.addButton("Packliste drucken", QDialogButtonBox.ButtonRole.ActionRole)
-        self._send_btn = buttons.addButton("Senden an PLC", QDialogButtonBox.ButtonRole.AcceptRole)
-        buttons.addButton("Abbrechen", QDialogButtonBox.ButtonRole.RejectRole)
+        print_actions = QGridLayout()
+        print_actions.setColumnStretch(0, 0)
+        print_actions.setColumnStretch(1, 1)
+        self._send_btn = QPushButton("Senden an PLC")
+        self._send_btn.setMaximumWidth(230)
+        self._packing_print_btn = QPushButton("Packliste drucken")
+        self._packing_print_btn.setMinimumWidth(230)
+        cancel_button = QPushButton("Abbrechen")
+        cancel_button.setMaximumWidth(150)
+        print_actions.addWidget(self._send_btn, 0, 0)
+        print_actions.addWidget(self._packing_print_btn, 0, 1)
+        print_actions.addWidget(cancel_button, 1, 1, Qt.AlignmentFlag.AlignRight)
         self._packing_print_btn.clicked.connect(self._print_packing_lists)
         self._send_btn.clicked.connect(self._send_to_plc)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
+        cancel_button.clicked.connect(self.reject)
+        root.addLayout(print_actions)
 
     def _load_context(self) -> None:
         def job() -> _PlcDialogContext:
@@ -775,28 +788,47 @@ class PlcLabelPrintDialog(QDialog):
         widget = QWidget(self._packing_table)
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(3, 1, 3, 1)
-        layout.setSpacing(2)
-        clear_button = QToolButton(widget)
-        clear_button.setText("↺")
-        clear_button.setToolTip(f"Liste für Paket {package_index + 1} leeren")
+        clear_button = QPushButton("Liste leeren", widget)
+        clear_button.setToolTip(f"Alle Produktmengen in Paket {package_index + 1} auf 0 setzen")
         clear_button.setAccessibleName(clear_button.toolTip())
         clear_button.clicked.connect(lambda _checked=False, index=package_index: self._clear_package(index))
-        delete_button = QToolButton(widget)
-        delete_button.setText("🗑")
-        delete_button.setToolTip(f"Paket {package_index + 1} löschen")
-        delete_button.setAccessibleName(delete_button.toolTip())
-        delete_button.clicked.connect(lambda _checked=False, index=package_index: self._delete_parcel(index))
         layout.addWidget(clear_button)
-        layout.addWidget(delete_button)
-        layout.addStretch()
         return widget
+
+    def _refresh_parcel_header_delete_buttons(self, package_count: int) -> None:
+        for _column, button in self._parcel_delete_buttons:
+            button.deleteLater()
+        self._parcel_delete_buttons = []
+        header = self._packing_table.horizontalHeader()
+        for package_index in range(package_count):
+            column = 2 + package_index
+            button = QToolButton(header.viewport())
+            button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
+            button.setToolTip(f"Paket {package_index + 1} löschen")
+            button.setAccessibleName(button.toolTip())
+            button.setAutoRaise(True)
+            button.setFixedSize(22, 20)
+            button.clicked.connect(lambda _checked=False, index=package_index: self._delete_parcel(index))
+            button.show()
+            self._parcel_delete_buttons.append((column, button))
+        self._layout_parcel_header_buttons()
+
+    def _layout_parcel_header_buttons(self) -> None:
+        header = self._packing_table.horizontalHeader()
+        for column, button in self._parcel_delete_buttons:
+            if column >= self._packing_table.columnCount():
+                button.hide()
+                continue
+            x = header.sectionViewportPosition(column) + max(1, header.sectionSize(column) - button.width() - 2)
+            y = max(0, (header.height() - button.height()) // 2)
+            button.move(x, y)
+            button.setVisible(header.sectionSize(column) >= button.width() + 28)
 
     def _add_parcel_widget(self) -> QWidget:
         widget = QWidget(self._packing_table)
         layout = QHBoxLayout(widget)
-        layout.setContentsMargins(3, 1, 3, 1)
-        add_button = QToolButton(widget)
-        add_button.setText("+")
+        layout.setContentsMargins(3, 3, 3, 3)
+        add_button = QPushButton("+", widget)
         add_button.setToolTip("Paket hinzufügen")
         add_button.setAccessibleName(add_button.toolTip())
         add_button.clicked.connect(lambda _checked=False: self._add_parcel())
@@ -819,6 +851,7 @@ class PlcLabelPrintDialog(QDialog):
             self._packing_table.clear()
             self._packing_table.setRowCount(0)
             self._packing_table.setColumnCount(0)
+            self._refresh_parcel_header_delete_buttons(0)
             self._clear_parcel_weight_inputs()
             self._parcel_rendered_package_count = 1
             return
@@ -833,7 +866,7 @@ class PlcLabelPrintDialog(QDialog):
             ["Produkt", "Bestellt / offen", *[f"Paket {number}" for number in range(1, package_count + 1)], "+"]
         )
         self._packing_table.setRowCount(len(physical_items) + 1)
-        self._packing_table.setRowHeight(0, 30)
+        self._packing_table.setRowHeight(0, 32)
         for column in range(add_column + 1):
             controls_cell = QTableWidgetItem("")
             controls_cell.setFlags(controls_cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -875,6 +908,7 @@ class PlcLabelPrintDialog(QDialog):
         for column in range(2, add_column):
             self._packing_table.setColumnWidth(column, 105)
         self._packing_table.setColumnWidth(add_column, 48)
+        self._refresh_parcel_header_delete_buttons(package_count)
         self._packing_table.blockSignals(False)
 
         self._clear_parcel_weight_inputs()

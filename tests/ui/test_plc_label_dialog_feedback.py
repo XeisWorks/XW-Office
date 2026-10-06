@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtWidgets import QDialog, QHeaderView, QLabel, QMessageBox
+from PySide6.QtWidgets import QDialog, QHeaderView, QLabel, QMessageBox, QPushButton
 
 from xw_office.bootstrap import register_default_services
 from xw_office.core.config import AppConfig
@@ -486,6 +486,12 @@ def test_parcel_controls_add_clear_delete_and_keep_columns_resizable(qtbot: obje
     assert header.sectionResizeMode(2) == QHeaderView.ResizeMode.Interactive
     assert dialog._packing_table.cellWidget(0, 2) is not None  # noqa: SLF001
     assert dialog._packing_table.cellWidget(0, 4) is not None  # noqa: SLF001
+    assert dialog._packing_table.horizontalHeaderItem(2).text() == "Paket 1"  # noqa: SLF001
+    assert not dialog._parcel_delete_buttons[0][1].icon().isNull()  # noqa: SLF001
+    clear_button = dialog._packing_table.cellWidget(0, 2).findChild(QPushButton)  # noqa: SLF001
+    assert clear_button is not None and clear_button.text() == "Liste leeren"
+    assert dialog._send_btn.maximumWidth() == 230  # noqa: SLF001
+    assert dialog._packing_print_btn.minimumWidth() == 230  # noqa: SLF001
 
     dialog._add_parcel()  # noqa: SLF001
     assert dialog._package_count.value() == 3  # noqa: SLF001
