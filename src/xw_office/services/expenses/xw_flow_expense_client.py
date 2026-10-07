@@ -31,6 +31,7 @@ class FlowExpense:
     reimbursement_status: str
     source_url: str
     note: str
+    attachment_ids: tuple[str, ...]
 
 
 class XwFlowExpenseClient:
@@ -68,6 +69,7 @@ class XwFlowExpenseClient:
             reimbursement_status=str(raw.get("reimbursement_status") or ""),
             source_url=str(raw.get("source_url") or ""),
             note=str(raw.get("note") or ""),
+            attachment_ids=tuple(str(item) for item in raw.get("attachment_ids") or []),
         )
 
     def fetch(self, *, tenant_key: str, start: date, end: date, active_only: bool = False) -> list[FlowExpense]:
@@ -168,3 +170,16 @@ class XwFlowExpenseClient:
                 json={"categories": categories},
             )
             response.raise_for_status()
+
+    def attachment_view_url(self, *, expense_id: str, attachment_id: str) -> str:
+        connection = self._connection()
+        if connection is None:
+            raise RuntimeError("XW-Flow Ausgaben-Bridge ist nicht konfiguriert")
+        base_url, headers, timeout = connection
+        with httpx.Client(base_url=base_url, headers=headers, timeout=timeout) as client:
+            response = client.post(
+                f"/api/v1/office-bridge/expense-captures/{expense_id}/attachments/{attachment_id}/view-url",
+                json={},
+            )
+            response.raise_for_status()
+        return str(response.json().get("view_url") or "")

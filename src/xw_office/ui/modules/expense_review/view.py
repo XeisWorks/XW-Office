@@ -145,6 +145,7 @@ class _PositionDelegate(QStyledItemDelegate):
 class _DocumentDelegate(QStyledItemDelegate):
     url_clicked = Signal(str)
     supplier_link_requested = Signal(object)
+    attachment_requested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -170,6 +171,8 @@ class _DocumentDelegate(QStyledItemDelegate):
                 continue
             if kind == "add_supplier":
                 self.supplier_link_requested.emit(row)
+            elif kind == "attachment":
+                self.attachment_requested.emit(row)
             elif url.startswith("https://"):
                 self.url_clicked.emit(url)
                 return True
@@ -189,6 +192,9 @@ class _DocumentDelegate(QStyledItemDelegate):
             result.append((QRect(left, top, 22, 22), "website", supplier_url))
         else:
             result.append((QRect(left, top, 22, 22), "add_supplier", ""))
+        for _attachment_id in row.get("__manual_attachment_ids") or []:
+            result.append((QRect(left + 27, top, 22, 22), "attachment", ""))
+            left += 27
         return result
 
     @staticmethod
@@ -694,6 +700,7 @@ class ExpenseReviewView(QWidget):
         self._position_delegate.position_clicked.connect(self._assign_position)
         self._document_delegate.url_clicked.connect(self._open_url)
         self._document_delegate.supplier_link_requested.connect(self._add_supplier_link_from_row)
+        self._document_delegate.attachment_requested.connect(self._open_manual_attachment)
         return page
 
     def _configure_manual_table(self) -> None:
@@ -876,6 +883,7 @@ class ExpenseReviewView(QWidget):
                     "__transaction_id": f"manual:{item.id}",
                     "__manual_id": item.id,
                     "__manual_version": item.version,
+                    "__manual_attachment_ids": list(item.attachment_ids),
                     "__positions": positions,
                     "__position_key": item.category_key,
                     "__align__Betrag": "right",
@@ -886,6 +894,21 @@ class ExpenseReviewView(QWidget):
             ]
         )
         self._manual_table.resizeColumnsToContents()
+
+    def _open_manual_attachment(self, row: object) -> None:
+        data = row if isinstance(row, dict) else {}
+        expense_id = str(data.get("__manual_id") or "")
+        attachment_ids = [str(item) for item in data.get("__manual_attachment_ids") or []]
+        if not expense_id or not attachment_ids:
+            return
+        worker = BackgroundWorker(
+            lambda: self.flow_expense_client.attachment_view_url(
+                expense_id=expense_id, attachment_id=attachment_ids[0]
+            )
+        )
+        worker.signals.result.connect(self._open_url)
+        worker.signals.error.connect(self._on_manual_error)
+        worker.start()
 
     def _on_load_finished(self) -> None:
         self._worker = None
