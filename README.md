@@ -73,11 +73,13 @@ in
 
 ```bash
 # Einmalig: Startmenue-Verknuepfungen erzeugen (idempotent, pro PC)
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_windows_shortcuts.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_windows_shortcuts.ps1 -IncludeDesktopShortcut
 
 # Danach: Startmenue -> "XeisWorks Office" (normal) oder
 #         Startmenue -> "XeisWorks Office - Debug" (sichtbare Konsole)
 # "XeisWorks Office" per Rechtsklick im Startmenue an die Taskleiste anheften.
+# Das Skript aktualisiert bei erneutem Ausfuehren auch Desktop- und vorhandene
+# Taskleisten-Verknuepfungen samt Icon und Windows-App-Identitaet.
 ```
 
 Der normale Start prueft automatisch und lautlos, ob ein Fast-forward-only-Update vorliegt, und
