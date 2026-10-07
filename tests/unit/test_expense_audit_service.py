@@ -327,7 +327,7 @@ def test_document_link_is_persisted_and_reused_from_cache(
     )[0]
 
     assert live.documents[0].document_number == "VB 2026-7"
-    assert cached.documents[0].url.endswith("/fi/detail/type/VB/id/V-7")
+    assert cached.documents[0].url.endswith("/ex/detail/id/V-7")
     assert cached.document_link_scan_complete is True
 
 
