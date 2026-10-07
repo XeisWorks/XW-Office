@@ -55,6 +55,23 @@ _HEADERS = ["Datum", "Empfänger", "Zweck / Referenz", "Betrag", "Position", "Be
 _ROOT = Path(__file__).resolve().parents[5]
 
 
+def _make_labels_copyable(widget: QWidget) -> None:
+    flags = Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextSelectableByKeyboard
+    for label in widget.findChildren(QLabel):
+        label.setTextInteractionFlags(flags)
+
+
+def _show_copyable_message(
+    parent: QWidget, title: str, text: str, icon: QMessageBox.Icon = QMessageBox.Icon.Information
+) -> None:
+    box = QMessageBox(icon, title, text, parent=parent)
+    box.setTextInteractionFlags(
+        Qt.TextInteractionFlag.TextSelectableByMouse
+        | Qt.TextInteractionFlag.TextSelectableByKeyboard
+    )
+    box.exec()
+
+
 class _PositionDelegate(QStyledItemDelegate):
     position_clicked = Signal(str, str)
 
@@ -235,6 +252,7 @@ class _RuleDialog(QDialog):
         buttons.accepted.connect(self._accept_if_valid)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
+        _make_labels_copyable(self)
 
     @staticmethod
     def _masked_iban(value: str) -> str:
@@ -243,7 +261,7 @@ class _RuleDialog(QDialog):
 
     def _accept_if_valid(self) -> None:
         if not (self.use_payee.isChecked() or self.use_iban.isChecked() or self.keyword.text().strip()):
-            QMessageBox.information(self, "Zuordnungsregel", "Bitte mindestens ein Kriterium wählen.")
+            _show_copyable_message(self, "Zuordnungsregel", "Bitte mindestens ein Kriterium wählen.")
             return
         self.accept()
 
@@ -276,6 +294,7 @@ class _PositionDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
+        _make_labels_copyable(self)
 
     def _choose_color(self) -> None:
         color = QColorDialog.getColor(QColor(self.color.text()), self)
@@ -310,6 +329,7 @@ class _SupplierDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
+        _make_labels_copyable(self)
 
 
 class _PurposeRuleDialog(QDialog):
@@ -343,10 +363,11 @@ class _PurposeRuleDialog(QDialog):
         buttons.accepted.connect(self._accept_if_valid)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
+        _make_labels_copyable(self)
 
     def _accept_if_valid(self) -> None:
         if not self.payee.text().strip() or not self.remove_text.text().strip():
-            QMessageBox.information(self, "Zweckbereinigung", "Empfänger und Text sind erforderlich.")
+            _show_copyable_message(self, "Zweckbereinigung", "Empfänger und Text sind erforderlich.")
             return
         self.accept()
 
@@ -374,10 +395,11 @@ class _StandaloneRuleDialog(QDialog):
         buttons.accepted.connect(self._accept_if_valid)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
+        _make_labels_copyable(self)
 
     def _accept_if_valid(self) -> None:
         if not any((self.payee.text().strip(), self.iban.text().strip(), self.purpose.text().strip())):
-            QMessageBox.information(self, "Zuordnungsregel", "Bitte mindestens ein Kriterium eingeben.")
+            _show_copyable_message(self, "Zuordnungsregel", "Bitte mindestens ein Kriterium eingeben.")
             return
         self.accept()
 
@@ -431,6 +453,7 @@ class _AssignmentWizard(QDialog):
         links.addWidget(skip)
         links.addWidget(close)
         root.addLayout(links)
+        _make_labels_copyable(self)
         self._show_current()
 
     def _show_current(self) -> None:
@@ -762,7 +785,7 @@ class ExpenseReviewView(QWidget):
     def _remember_selected_rule(self) -> None:
         selected = self._table.selected_row_data()
         if not selected:
-            QMessageBox.information(self, "Ausgabenprüfung", "Bitte zuerst eine Zahlung auswählen.")
+            _show_copyable_message(self, "Ausgabenprüfung", "Bitte zuerst eine Zahlung auswählen.")
             return
         dialog = _RuleDialog(
             self._positions,
@@ -905,7 +928,7 @@ class ExpenseReviewView(QWidget):
                 url=dialog.url.text(),
             )
         except ValueError as exc:
-            QMessageBox.warning(self, "Lieferantenportal", str(exc))
+            _show_copyable_message(self, "Lieferantenportal", str(exc), QMessageBox.Icon.Warning)
             return
         self._refresh_settings()
 
@@ -923,7 +946,7 @@ class ExpenseReviewView(QWidget):
                 url=dialog.url.text(),
             )
         except ValueError as exc:
-            QMessageBox.warning(self, "Lieferantenportal", str(exc))
+            _show_copyable_message(self, "Lieferantenportal", str(exc), QMessageBox.Icon.Warning)
             return
         self._load(refresh=False)
 
@@ -955,7 +978,7 @@ class ExpenseReviewView(QWidget):
                 url=dialog.url.text(),
             )
         except ValueError as exc:
-            QMessageBox.warning(self, "Lieferantenportal", str(exc))
+            _show_copyable_message(self, "Lieferantenportal", str(exc), QMessageBox.Icon.Warning)
             return
         self._load(refresh=False)
 
@@ -969,7 +992,7 @@ class ExpenseReviewView(QWidget):
     def _add_purpose_rule_from_selected(self) -> None:
         selected = self._table.selected_row_data()
         if not selected:
-            QMessageBox.information(self, "Zweckbereinigung", "Bitte zuerst eine Zahlung auswählen.")
+            _show_copyable_message(self, "Zweckbereinigung", "Bitte zuerst eine Zahlung auswählen.")
             return
         payee = str(selected.get("__raw_payee") or selected.get("__payee") or "")
         dialog = _PurposeRuleDialog(
@@ -987,7 +1010,7 @@ class ExpenseReviewView(QWidget):
                 label=dialog.label.text(),
             )
         except ValueError as exc:
-            QMessageBox.warning(self, "Zweckbereinigung", str(exc))
+            _show_copyable_message(self, "Zweckbereinigung", str(exc), QMessageBox.Icon.Warning)
             return
         self._load(refresh=False)
 
@@ -1002,7 +1025,7 @@ class ExpenseReviewView(QWidget):
                 label=dialog.label.text(),
             )
         except ValueError as exc:
-            QMessageBox.warning(self, "Zweckbereinigung", str(exc))
+            _show_copyable_message(self, "Zweckbereinigung", str(exc), QMessageBox.Icon.Warning)
             return
         self._refresh_settings()
 
@@ -1032,7 +1055,7 @@ class ExpenseReviewView(QWidget):
                 label=dialog.label.text(),
             )
         except ValueError as exc:
-            QMessageBox.warning(self, "Zweckbereinigung", str(exc))
+            _show_copyable_message(self, "Zweckbereinigung", str(exc), QMessageBox.Icon.Warning)
             return
         self._load(refresh=False)
 
@@ -1061,4 +1084,4 @@ class ExpenseReviewView(QWidget):
 
     def _on_error(self, exc: Exception) -> None:
         self._status.setText("Abruf fehlgeschlagen")
-        QMessageBox.warning(self, "Ausgabenprüfung", str(exc))
+        _show_copyable_message(self, "Ausgabenprüfung", str(exc), QMessageBox.Icon.Warning)

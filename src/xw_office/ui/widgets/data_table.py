@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QBrush, QColor, QKeyEvent, QKeySequence
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
-from PySide6.QtWidgets import QHeaderView, QTableView, QWidget
+from PySide6.QtWidgets import QApplication, QHeaderView, QTableView, QWidget
 from PySide6.QtCore import QItemSelectionModel
 from PySide6.QtCore import QPoint
 
@@ -116,6 +116,26 @@ class DataTable(QTableView):
         self.horizontalHeader().setStretchLastSection(True)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.horizontalHeader().setHighlightSections(False)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Copy the visible table selection as tab-separated text."""
+        if event.matches(QKeySequence.StandardKey.Copy):
+            indexes = sorted(self.selectionModel().selectedIndexes(), key=lambda item: (item.row(), item.column()))
+            if indexes:
+                rows: list[list[str]] = []
+                current_row = indexes[0].row()
+                values: list[str] = []
+                for index in indexes:
+                    if index.row() != current_row:
+                        rows.append(values)
+                        current_row = index.row()
+                        values = []
+                    values.append(str(index.data(Qt.ItemDataRole.DisplayRole) or ""))
+                rows.append(values)
+                QApplication.clipboard().setText("\n".join("\t".join(row) for row in rows))
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def set_data(self, rows: Sequence[dict[str, Any]]) -> None:
         self._model.set_data(rows)
