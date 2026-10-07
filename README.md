@@ -49,9 +49,9 @@ The recommended custom domain and phased roadmap are documented in
 git clone --recurse-submodules https://github.com/XeisWorks/XW-Office.git
 cd XW-Office
 
-# Create virtual environment
-python -m venv venv
-venv\Scripts\activate
+# Create the repository-local virtual environment (Windows)
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 
 # Install dependencies
 pip install -e ".[dev]"
@@ -63,6 +63,32 @@ copy .env.example .env
 # Run (visible console, for development/diagnosis)
 python -m xw_office
 ```
+
+### Verbindliche Python-Umgebung
+
+Die Desktop-Anwendung und ihre Tests laufen ausnahmslos mit der repository-lokalen
+`.venv`. Dadurch werden `PySide6`, `msal` und die übrigen Desktop-Abhängigkeiten nicht
+mit einer globalen Python-Installation vermischt. Falls die Umgebung noch nicht existiert:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+```
+
+Alternativ kann die venv ohne Aktivierung direkt verwendet werden:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pytest
+```
+
+Für Eingabeaufforderung (`cmd.exe`) lautet die Aktivierung
+`.venv\Scripts\activate.bat`. Die Startskripte `run_xw_office.cmd` und
+`run_xw_office_debug.cmd` wählen `.venv\Scripts\python.exe` automatisch, sofern die
+Umgebung vorhanden ist. `requirements-web.txt` ist ausschließlich für das schlanke
+Web-/Railway-Image gedacht und installiert keine Desktop-Abhängigkeiten.
 
 ### Empfohlene VS-Code-Erweiterungen
 
