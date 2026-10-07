@@ -10,7 +10,7 @@ def sevdesk_document_url(base_url: str, resource_type: str, external_id: str) ->
     base = base.removesuffix("/api/v1")
     type_code = {
         "Invoice": "RE",
-        "Voucher": "VO",
-        "CreditNote": "GU",
+        "Voucher": "VB",
+        "CreditNote": "GS",
     }.get(resource_type, resource_type)
     return f"{base}/fi/detail/type/{quote(type_code)}/id/{quote(str(external_id).strip())}"
