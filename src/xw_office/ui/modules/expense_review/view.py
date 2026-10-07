@@ -128,7 +128,8 @@ class _PositionDelegate(QStyledItemDelegate):
     def _button_rects(cell: QRect, positions: list[dict[str, str]]) -> list[tuple[QRect, dict[str, str]]]:
         diameter = 28
         gap = 5
-        left = cell.left() + 5
+        content_width = len(positions) * diameter + max(0, len(positions) - 1) * gap
+        left = cell.left() + max(0, (cell.width() - content_width) // 2)
         top = cell.top() + max(1, (cell.height() - diameter) // 2)
         return [
             (QRect(left + index * (diameter + gap), top, diameter, diameter), position)
@@ -620,13 +621,12 @@ class ExpenseReviewView(QWidget):
         self._period.setCurrentIndex(self._period.findData(_CUSTOM_PERIOD))
 
     def _configure_expense_table(self, table: DataTable) -> None:
-        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header = table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         table.setItemDelegateForColumn(4, self._position_delegate)
         table.setItemDelegateForColumn(5, self._document_delegate)
-        table.setColumnWidth(4, 180)
-        table.setColumnWidth(5, 150)
         if table is self._table:
-            header = table.horizontalHeader()
             state = self._settings.value("expense_review/bank_table_header")
             if state is not None:
                 header.restoreState(state)
@@ -656,6 +656,13 @@ class ExpenseReviewView(QWidget):
         header.addStretch()
         refresh = QPushButton()
         refresh.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
+        refresh.setIconSize(QSize(26, 26))
+        refresh.setFixedSize(38, 38)
+        refresh.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        refresh.setStyleSheet(
+            "QPushButton { background: transparent; border: none; }"
+            "QPushButton:hover { background: #27324b; border-radius: 6px; }"
+        )
         refresh.setToolTip("Fehlende Belege erneut prüfen")
         refresh.clicked.connect(self._refresh_missing_receipts)
         header.addWidget(refresh)
@@ -833,6 +840,7 @@ class ExpenseReviewView(QWidget):
                 for row in rows
             ]
         )
+        table.resizeColumnsToContents()
 
     @staticmethod
     def _amount_text(row: BankExpenseRow, *, receipt_mode: bool) -> str:
@@ -841,9 +849,8 @@ class ExpenseReviewView(QWidget):
 
     @staticmethod
     def _amount_color(row: BankExpenseRow, *, receipt_mode: bool) -> str:
-        if not receipt_mode:
-            return ""
-        return "#d98b8b" if row.amount < 0 else "#7fbd93"
+        del receipt_mode
+        return "#ff9c9c" if row.amount < 0 else "#7ce7a0" if row.amount > 0 else ""
 
     @staticmethod
     def _document_text(row: BankExpenseRow) -> str:
