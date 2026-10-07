@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Protocol
 
 import httpx
@@ -23,6 +26,69 @@ class CancellationToken(Protocol):
     def raise_if_cancelled(self) -> None: ...
 
 
+class SevdeskRateLimiter:
+    """Pace a shared sevDesk connection and honor server cooldowns."""
+
+    def __init__(self, *, requests_per_second: int, cooldown_seconds: int) -> None:
+        rate = max(0, int(requests_per_second))
+        self._interval_seconds = 1.0 / rate if rate else 0.0
+        self._cooldown_seconds = max(0.0, float(cooldown_seconds))
+        self._next_allowed_at = 0.0
+        self._lock = threading.Lock()
+
+    def acquire(self, cancel_token: CancellationToken | None = None) -> None:
+        if self._interval_seconds <= 0:
+            return
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                delay = self._next_allowed_at - now
+                if delay <= 0:
+                    self._next_allowed_at = now + self._interval_seconds
+                    return
+            # Re-check the shared deadline after sleeping.  Another request may
+            # have received a 429 and extended the cooldown in the meantime.
+            self._wait(delay, cancel_token)
+
+    def observe(self, response: httpx.Response) -> None:
+        if response.status_code != 429:
+            return
+        delay = self._retry_after_seconds(response.headers.get("Retry-After"))
+        if delay is None:
+            delay = self._cooldown_seconds
+        with self._lock:
+            self._next_allowed_at = max(
+                self._next_allowed_at,
+                time.monotonic() + max(0.0, delay),
+            )
+        logger.warning("sevDesk rate-limit cooldown active for %.1f seconds", delay)
+
+    @staticmethod
+    def _retry_after_seconds(value: str | None) -> float | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return max(0.0, float(text))
+        except ValueError:
+            pass
+        try:
+            retry_at = parsedate_to_datetime(text)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+
+    @staticmethod
+    def _wait(delay: float, cancel_token: CancellationToken | None) -> None:
+        end_at = time.monotonic() + max(0.0, delay)
+        while time.monotonic() < end_at:
+            if cancel_token is not None:
+                cancel_token.raise_if_cancelled()
+            time.sleep(min(0.1, max(0.0, end_at - time.monotonic())))
+
+
 def build_sevdesk_http_client(config: AppConfig, *, api_token: str | None = None) -> httpx.Client:
     """Create a configured httpx client for sevDesk API v1.
 
@@ -33,6 +99,7 @@ def build_sevdesk_http_client(config: AppConfig, *, api_token: str | None = None
     headers = {
         "Authorization": token,
         "Accept": "application/json",
+        "User-Agent": "XW-Office sevDesk integration",
     }
     return httpx.Client(base_url=base, headers=headers, timeout=DEFAULT_TIMEOUT)
 
@@ -75,6 +142,7 @@ def sevdesk_get_with_retry(
     path: str,
     cancel_token: CancellationToken | None = None,
     max_retries: int | None = None,
+    rate_limiter: SevdeskRateLimiter | None = None,
     **kwargs: object,
 ) -> httpx.Response:
     """GET with retries on transient status codes (safe for read-only calls)."""
@@ -85,7 +153,11 @@ def sevdesk_get_with_retry(
     for attempt in range(retry_count + 1):
         if cancel_token is not None:
             cancel_token.raise_if_cancelled()
+        if rate_limiter is not None:
+            rate_limiter.acquire(cancel_token)
         response = client.get(path, **kwargs)  # type: ignore[arg-type]
+        if rate_limiter is not None:
+            rate_limiter.observe(response)
         last_response = response
 
         if response.is_success:
@@ -127,6 +199,7 @@ class SevdeskConnection:
 
     client: httpx.Client
     config: AppConfig
+    rate_limiter: SevdeskRateLimiter | None = None
 
     def get(self, path: str, *, max_retries: int | None = None, **kwargs: object) -> httpx.Response:
         """GET *path* with retry policy from config."""
@@ -137,32 +210,35 @@ class SevdeskConnection:
             path,
             cancel_token=cancel_token,
             max_retries=max_retries,
+            rate_limiter=self.rate_limiter,
             **kwargs,
         )
 
-    def put(self, path: str, **kwargs: object) -> httpx.Response:
-        """PUT *path* (no retry — write operations are not idempotent-safe)."""
-        response: httpx.Response = self.client.put(path, **kwargs)  # type: ignore[arg-type]
+    def _write_request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
+        if self.rate_limiter is not None:
+            self.rate_limiter.acquire()
+        request = getattr(self.client, method)
+        response: httpx.Response = request(path, **kwargs)
+        if self.rate_limiter is not None:
+            self.rate_limiter.observe(response)
         raise_for_sevdesk(response)
         return response
+
+    def put(self, path: str, **kwargs: object) -> httpx.Response:
+        """PUT *path* (no retry — write operations are not idempotent-safe)."""
+        return self._write_request("put", path, **kwargs)
 
     def patch(self, path: str, **kwargs: object) -> httpx.Response:
         """PATCH *path* (no retry; write operations are not idempotent-safe)."""
-        response: httpx.Response = self.client.patch(path, **kwargs)  # type: ignore[arg-type]
-        raise_for_sevdesk(response)
-        return response
+        return self._write_request("patch", path, **kwargs)
 
     def post(self, path: str, **kwargs: object) -> httpx.Response:
         """POST *path* (no retry — write operations are not idempotent-safe)."""
-        response: httpx.Response = self.client.post(path, **kwargs)  # type: ignore[arg-type]
-        raise_for_sevdesk(response)
-        return response
+        return self._write_request("post", path, **kwargs)
 
     def delete(self, path: str, **kwargs: object) -> httpx.Response:
         """DELETE *path* (no retry — write operations are not idempotent-safe)."""
-        response: httpx.Response = self.client.delete(path, **kwargs)  # type: ignore[arg-type]
-        raise_for_sevdesk(response)
-        return response
+        return self._write_request("delete", path, **kwargs)
 
 
 def build_sevdesk_connection(config: AppConfig, *, api_token: str | None = None) -> SevdeskConnection:
@@ -170,4 +246,8 @@ def build_sevdesk_connection(config: AppConfig, *, api_token: str | None = None)
     return SevdeskConnection(
         client=build_sevdesk_http_client(config, api_token=api_token),
         config=config,
+        rate_limiter=SevdeskRateLimiter(
+            requests_per_second=config.sevdesk.rate_limit.requests_per_second,
+            cooldown_seconds=config.sevdesk.rate_limit.cooldown_seconds,
+        ),
     )

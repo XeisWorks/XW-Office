@@ -5,6 +5,8 @@ import pytest
 from xw_office.core.config import AppConfig
 from xw_office.core.exceptions import SevdeskApiError
 from xw_office.services.http_client import (
+    SevdeskRateLimiter,
+    build_sevdesk_connection,
     humanize_sevdesk_error,
     raise_for_sevdesk,
     sevdesk_get_with_retry,
@@ -48,3 +50,42 @@ def test_sevdesk_get_retries_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> N
     response = sevdesk_get_with_retry(client, cfg, "/Invoice", params={})
     assert response.status_code == 200
     assert attempts["n"] == 2
+
+
+def test_built_connection_paces_requests_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = {"value": 100.0}
+    sleeps: list[float] = []
+
+    monkeypatch.setattr("xw_office.services.http_client.time.monotonic", lambda: now["value"])
+
+    def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+        now["value"] += delay
+
+    monkeypatch.setattr("xw_office.services.http_client.time.sleep", fake_sleep)
+    connection = build_sevdesk_connection(AppConfig())
+    assert connection.rate_limiter is not None
+
+    connection.rate_limiter.acquire()
+    connection.rate_limiter.acquire()
+
+    assert sum(sleeps) == pytest.approx(0.5)
+
+
+def test_rate_limiter_applies_retry_after_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = {"value": 200.0}
+    sleeps: list[float] = []
+
+    monkeypatch.setattr("xw_office.services.http_client.time.monotonic", lambda: now["value"])
+
+    def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+        now["value"] += delay
+
+    monkeypatch.setattr("xw_office.services.http_client.time.sleep", fake_sleep)
+    limiter = SevdeskRateLimiter(requests_per_second=2, cooldown_seconds=5)
+    limiter.acquire()
+    limiter.observe(httpx.Response(429, headers={"Retry-After": "3"}))
+    limiter.acquire()
+
+    assert sum(sleeps) == pytest.approx(3.0)

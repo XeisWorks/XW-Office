@@ -1159,7 +1159,7 @@ class InvoiceProcessingService:
         """Finalize a sevDesk invoice without printing or sending an email."""
         current = self._resolve_current_start_summary(summary)
         if int(current.status_code or 0) == 100:
-            self._invoices.send_invoice_document(current.id, send_type="VPR", send_draft=False)
+            self._invoices.send_invoice_document(current.id, send_type="VPDF", send_draft=False)
             self._invoice_detail_cache.pop(str(current.id or "").strip(), None)
             current = self._resolve_current_start_summary(current)
         return current
@@ -1559,10 +1559,18 @@ class InvoiceProcessingService:
     ) -> FulfillmentFlags:
         if printed_copy:
             self._invoices.send_invoice_document(summary.id, send_type="VPR", send_draft=False)
-        elif digital_only:
-            logger.info("Invoice %s: digital-only finalization delegated to sendViaEmail", summary.id)
         else:
-            logger.info("Invoice %s: mail-only finalization delegated to sendViaEmail", summary.id)
+            # ``sendViaEmail`` can finalize a draft itself, but a transient mail
+            # or rate-limit failure then leaves it without a final invoice
+            # number.  That also makes the Graph fallback PDF unusable.  Finalize
+            # first through the documented non-draft sendBy operation.  VPDF
+            # records a digital document without claiming a physical print.
+            self._invoices.send_invoice_document(summary.id, send_type="VPDF", send_draft=False)
+            logger.info(
+                "Invoice %s: %s invoice finalized as VPDF before mail",
+                summary.id,
+                "digital-only" if digital_only else "mail-only",
+            )
         # Finalization can assign the definitive invoice number. Do not let a
         # draft-era detail response (often containing only header="Rechnung")
         # leak into the subsequent mail subject/template rendering.

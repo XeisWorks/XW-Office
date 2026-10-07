@@ -443,7 +443,7 @@ def test_fullflow_skips_print_for_digital_only_wix_orders() -> None:
     assert result["processed"] == 1
     assert result["failures"] == 0
     assert result["successful"] == 1
-    assert invoice_client.send_calls == []
+    assert invoice_client.send_calls == [("INV-DIGI-001", "VPDF", False)]
     assert invoice_client.mail_calls[0]["invoice_id"] == "INV-DIGI-001"
     assert invoice_client.mail_calls[0]["to_email"] == "digital@example.test"
     assert len(mailer.calls) == 0
@@ -451,6 +451,57 @@ def test_fullflow_skips_print_for_digital_only_wix_orders() -> None:
     assert stored["INV-DIGI-001"]["mail_sent"] is True
     assert not mock_inv_print.called
     assert not mock_label_print.called
+
+
+def test_digital_fullflow_finalizes_before_graph_mail_fallback() -> None:
+    class _FinalizingInvoiceClient(_InvoiceClientE2E):
+        def __init__(self) -> None:
+            super().__init__()
+            self.finalized = False
+            self.fail_mail = True
+
+        def fetch_invoice_by_id(self, invoice_id: str) -> dict:
+            payload = super().fetch_invoice_by_id(invoice_id)
+            payload["status"] = 200 if self.finalized else 100
+            payload["invoiceNumber"] = "RE-263001" if self.finalized else ""
+            return payload
+
+        def send_invoice_document(
+            self, invoice_id: str, *, send_type: str, send_draft: bool
+        ) -> None:
+            super().send_invoice_document(
+                invoice_id,
+                send_type=send_type,
+                send_draft=send_draft,
+            )
+            self.finalized = True
+
+    invoice_client = _FinalizingInvoiceClient()
+    invoice_client.list_invoice_summaries = lambda **_: [
+        InvoiceSummary(
+            id="INV-DIGI-FALLBACK",
+            invoice_number="",
+            contact_name="John Doe",
+            order_reference="WIX-12345",
+            status_code=100,
+        )
+    ]
+    mailer = _MailServiceStub()
+    service = InvoiceProcessingService(
+        AppConfig(),
+        invoice_client,
+        _SettingsRepoE2E(),
+        _WixOrdersDigitalOnlyStub(),
+        mailer,
+    )
+
+    result = service.run_start_fullflow(full_mode=True)
+
+    assert result["failures"] == 0
+    assert invoice_client.send_calls == [("INV-DIGI-FALLBACK", "VPDF", False)]
+    assert len(mailer.calls) == 1
+    attachment = mailer.calls[0]["attachments"][0]
+    assert attachment.filename == "RE-263001.pdf"
 
 
 def test_fullflow_routes_manual_license_before_generic_digital_only() -> None:
@@ -517,7 +568,7 @@ def test_start_fullflow_honors_abort_between_invoices() -> None:
     assert result["successful"] == 1
     assert result["failures"] == 0
     assert result["aborted"] is True
-    assert invoice_client.send_calls == []
+    assert invoice_client.send_calls == [("INV-001", "VPDF", False)]
     assert invoice_client.mail_calls[0]["invoice_id"] == "INV-001"
     assert len(mailer.calls) == 0
 
@@ -542,7 +593,7 @@ def test_mail_only_fullflow_uses_sevdesk_email_when_no_print_copy_exists() -> No
 
     assert result["processed"] == 1
     assert result["failures"] == 0
-    assert invoice_client.send_calls == []
+    assert invoice_client.send_calls == [("INV-ORDER-001", "VPDF", False)]
     assert invoice_client.mail_calls[0]["invoice_id"] == "INV-ORDER-001"
     assert invoice_client.mail_calls[0]["to_email"] == "john@example.test"
     assert len(mailer.calls) == 0

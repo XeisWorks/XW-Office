@@ -52,7 +52,9 @@ class TestCoreOperations:
         result = service.run_start_fullflow(full_mode=False)
 
         assert result["processed"] >= 1
-        assert not invoice_client.send_invoice_document.called
+        invoice_client.send_invoice_document.assert_called_once_with(
+            "INV-001", send_type="VPDF", send_draft=False
+        )
         assert invoice_client.send_invoice_via_email.called
 
     def test_check_products_preflight_validation(self) -> None:

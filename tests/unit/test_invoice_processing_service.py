@@ -831,7 +831,11 @@ def test_start_fullflow_repairs_draft_products_before_finalize() -> None:
 
     assert result["successful"] == 1
     assert drafts.calls == [("11", "20519")]
-    assert not hasattr(client, "last_send_document")
+    assert client.last_send_document == {
+        "invoice_id": "11",
+        "send_type": "VPDF",
+        "send_draft": False,
+    }
     assert client.mail_calls[0]["invoice_id"] == "11"
     assert mailer.calls == []
 
@@ -854,7 +858,11 @@ def test_start_fullflow_processes_only_requested_invoice_ids() -> None:
 
     assert result["processed"] == 1
     assert result["successful"] == 1
-    assert not hasattr(client, "last_send_document")
+    assert client.last_send_document == {
+        "invoice_id": "12",
+        "send_type": "VPDF",
+        "send_draft": False,
+    }
     assert client.mail_calls[0]["invoice_id"] == "12"
 
 
