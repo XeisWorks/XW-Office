@@ -109,6 +109,34 @@ from xw_office.repositories import (
 )
 
 
+def _build_expense_audit_service(container: Container) -> ExpenseAuditService:
+    """Build the expense review with one isolated sevDesk provider per tenant."""
+    secrets = container.resolve(SecretService)
+    providers = {
+        "xw": SevdeskExpenseProvider(
+            container.resolve(SevdeskConnection),
+            account_name="XeisWorks",
+            base_url=container.config.sevdesk.base_url,
+        ),
+        "wuedara": SevdeskExpenseProvider(
+            build_sevdesk_connection(
+                container.config,
+                api_token=secrets.get_secret("WUEDARA_SEVDESK_API_TOKEN"),
+            ),
+            account_name="WüdaraMusi",
+            base_url=container.config.sevdesk.base_url,
+        ),
+    }
+    has_database = bool((container.config.database_url or "").strip())
+    return ExpenseAuditService(
+        container.resolve(SettingKvRepository) if has_database else None,
+        expense_check_repo=container.resolve(ExpenseCheckRepository) if has_database else None,
+        bank_provider=providers["xw"],
+        pipeline_repo=container.resolve(ExpensePipelineRepository) if has_database else None,
+        tenant_providers=providers,
+    )
+
+
 def register_default_services(container: Container) -> None:
     """Wire default singletons (Phase 1–6 baseline)."""
     container.register(BackgroundJobManager, lambda c: BackgroundJobManager())
@@ -377,19 +405,7 @@ def register_default_services(container: Container) -> None:
     container.register(PaymentClearingService, build_payment_clearing)
     container.register(
         ExpenseAuditService,
-        lambda c: ExpenseAuditService(
-            c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
-            expense_check_repo=(
-                c.resolve(ExpenseCheckRepository) if (c.config.database_url or "").strip() else None
-            ),
-            bank_provider=SevdeskExpenseProvider(
-                c.resolve(SevdeskConnection),
-                base_url=c.config.sevdesk.base_url,
-            ),
-            pipeline_repo=(
-                c.resolve(ExpensePipelineRepository) if (c.config.database_url or "").strip() else None
-            ),
-        ),
+        lambda c: _build_expense_audit_service(c),
     )
     container.register(
         StatisticsService,

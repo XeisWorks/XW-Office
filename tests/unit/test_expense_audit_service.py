@@ -241,12 +241,19 @@ def _bank_row(*, external_id: str = "TX-1", purpose: str = "Hosting MusikHeroes"
 class _BankProviderStub:
     base_url = "https://my.sevdesk.de/api/v1"
 
-    def __init__(self, rows: list[BankExpense], scan: DocumentLinkScan | None = None) -> None:
+    def __init__(
+        self,
+        rows: list[BankExpense],
+        scan: DocumentLinkScan | None = None,
+        *,
+        account_id: str = "XEISWORKS",
+    ) -> None:
         self.rows = rows
         self.scan = scan or DocumentLinkScan((), True)
+        self.account_id = account_id
 
     def find_account(self) -> SimpleNamespace:
-        return SimpleNamespace(id="XEISWORKS")
+        return SimpleNamespace(id=self.account_id)
 
     def fetch(self, start: date, end: date, *, outgoing_only: bool = True) -> tuple[SimpleNamespace, list[BankExpense]]:
         return self.find_account(), self.rows
@@ -384,6 +391,43 @@ def test_purpose_rule_removes_boilerplate_for_matching_payee_only(
     assert displayed[0].purpose == "Vorschreibung 3. Quartal 2026"
     assert displayed[0].raw_purpose.endswith("wird verwiesen")
     assert displayed[1].purpose.endswith("wird verwiesen")
+
+
+def test_wuedara_tenant_keeps_positions_rules_and_links_separate(
+    session_factory: sessionmaker[Session],
+) -> None:
+    pipeline = ExpensePipelineRepository(session_factory)
+    xw_provider = _BankProviderStub([_bank_row()])
+    wuedara_provider = _BankProviderStub(
+        [replace(_bank_row(), purpose="Hosting Rechnung - Bitte entfernen")],
+        account_id="WUEDARA",
+    )
+    service = ExpenseAuditService(
+        bank_provider=xw_provider,  # type: ignore[arg-type]
+        pipeline_repo=pipeline,
+        tenant_providers={"xw": xw_provider, "wuedara": wuedara_provider},  # type: ignore[dict-item]
+    )
+    wuedara = service.for_tenant("wuedara")
+
+    assert {item.key for item in wuedara.list_positions()} == {"xw", "mh", "wm", "bh", "priv"}
+    wuedara.add_position_rule(position_key="wm", payee="Hosting GmbH")
+    wuedara.add_purpose_rule(payee="Hosting GmbH", remove_text="Bitte entfernen")
+    wuedara.add_supplier_link(
+        payee="Hosting GmbH",
+        iban="AT001234",
+        label="Wüdara Portal",
+        url="https://example.test/wuedara",
+    )
+
+    wuedara_rows = wuedara.list_bank_expenses(start=date(2026, 9, 1), end=date(2026, 9, 30))
+    xw_rows = service.list_bank_expenses(start=date(2026, 9, 1), end=date(2026, 9, 30))
+
+    assert wuedara_rows[0].position_key == "wm"
+    assert wuedara_rows[0].supplier_url == "https://example.test/wuedara"
+    assert xw_rows[0].position_key == ""
+    assert service.list_purpose_rules() == []
+    assert len(wuedara.list_purpose_rules()) == 1
+    assert service.list_supplier_links() == []
 
 
 def test_document_resolver_uses_typed_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:

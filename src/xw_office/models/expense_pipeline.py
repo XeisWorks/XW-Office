@@ -166,6 +166,7 @@ class ExpensePurposeRule(Base):
     __table_args__ = (Index("ix_expense_purpose_rule_enabled", "enabled", "payee_normalized"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    tenant_key: Mapped[str] = mapped_column(String(32), nullable=False, default="xw")
     payee_normalized: Mapped[str] = mapped_column(String(300), nullable=False)
     remove_text: Mapped[str] = mapped_column(Text, nullable=False)
     label: Mapped[str] = mapped_column(String(200), nullable=False, default="")

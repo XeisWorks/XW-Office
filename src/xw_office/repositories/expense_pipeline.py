@@ -69,6 +69,7 @@ class ExpensePipelineRepository:
         start: datetime.date,
         end: datetime.date,
         direction: str = "outgoing",
+        account_id: str = "",
     ) -> list[ExpenseTransactionSnapshot]:
         with self._scope() as session:
             stmt = select(ExpenseTransactionSnapshot).where(
@@ -77,6 +78,8 @@ class ExpensePipelineRepository:
             )
             if direction:
                 stmt = stmt.where(ExpenseTransactionSnapshot.direction == direction)
+            if account_id:
+                stmt = stmt.where(ExpenseTransactionSnapshot.account_id == account_id)
             stmt = stmt.order_by(ExpenseTransactionSnapshot.value_date, ExpenseTransactionSnapshot.external_id)
             return list(session.scalars(stmt).all())
 
@@ -523,9 +526,11 @@ class ExpensePipelineRepository:
             session.refresh(row)
             return row
 
-    def list_purpose_rules(self, *, enabled_only: bool = False) -> list[ExpensePurposeRule]:
+    def list_purpose_rules(
+        self, *, enabled_only: bool = False, tenant_key: str = "xw"
+    ) -> list[ExpensePurposeRule]:
         with self._scope() as session:
-            stmt = select(ExpensePurposeRule)
+            stmt = select(ExpensePurposeRule).where(ExpensePurposeRule.tenant_key == tenant_key)
             if enabled_only:
                 stmt = stmt.where(ExpensePurposeRule.enabled.is_(True))
             return list(
@@ -535,11 +540,12 @@ class ExpensePipelineRepository:
             )
 
     def add_purpose_rule(
-        self, *, payee_normalized: str, remove_text: str, label: str = ""
+        self, *, payee_normalized: str, remove_text: str, label: str = "", tenant_key: str = "xw"
     ) -> ExpensePurposeRule:
         with self._scope() as session:
             existing = session.scalar(
                 select(ExpensePurposeRule).where(
+                    ExpensePurposeRule.tenant_key == tenant_key,
                     ExpensePurposeRule.payee_normalized == payee_normalized,
                     ExpensePurposeRule.remove_text == remove_text,
                 )
@@ -547,6 +553,7 @@ class ExpensePipelineRepository:
             if existing is not None:
                 return existing
             row = ExpensePurposeRule(
+                tenant_key=tenant_key,
                 payee_normalized=payee_normalized,
                 remove_text=remove_text,
                 label=label,
@@ -660,14 +667,17 @@ class ExpensePipelineRepository:
             session.refresh(row)
             return row
 
-    def delete_document_links_for_document(self, *, resource_type: str, external_id: str) -> int:
+    def delete_document_links_for_document(
+        self, *, resource_type: str, external_id: str, transaction_ids: list[uuid.UUID] | None = None
+    ) -> int:
         with self._scope() as session:
-            result = session.execute(
-                delete(ExpenseDocumentLink).where(
-                    ExpenseDocumentLink.resource_type == resource_type,
-                    ExpenseDocumentLink.external_id == external_id,
-                )
+            stmt = delete(ExpenseDocumentLink).where(
+                ExpenseDocumentLink.resource_type == resource_type,
+                ExpenseDocumentLink.external_id == external_id,
             )
+            if transaction_ids is not None:
+                stmt = stmt.where(ExpenseDocumentLink.transaction_id.in_(transaction_ids))
+            result = session.execute(stmt)
             return int(getattr(result, "rowcount", 0) or 0)
 
     def set_supplier_link_enabled(self, link_id: uuid.UUID, enabled: bool) -> bool:

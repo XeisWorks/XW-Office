@@ -51,6 +51,15 @@ def test_expense_review_uses_positions_and_settings_tab(qtbot: object) -> None:
     assert "MusikHeroes" not in headers
     assert view.findChildren(type(view._wizard_button))
     assert {item.initials for item in view._positions} == {"XW", "MH", "WM", "BH", "PRIV"}
+    assert [view._tenant_tabs.tabText(index) for index in range(view._tenant_tabs.count())] == [
+        "XeisWorks",
+        "WüdaraMusi",
+    ]
+    view._tenant_tabs.setCurrentIndex(1)
+    qtbot.waitUntil(  # type: ignore[attr-defined]
+        lambda: "Konto WüdaraMusi" in view._status.text(), timeout=3000
+    )
+    assert view._account_label.text() == "Konto: WüdaraMusi"
 
 
 def test_expense_review_period_presets_fill_editable_dates(qtbot: object) -> None:

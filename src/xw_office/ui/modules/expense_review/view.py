@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QStyle,
     QStyledItemDelegate,
+    QTabBar,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -511,6 +512,10 @@ class ExpenseReviewView(QWidget):
         self._container = container
         self._worker: BackgroundWorker | None = None
         self._assignment_workers: list[BackgroundWorker] = []
+        self._tenant_key = "xw"
+        self._tenant_tabs = QTabBar()
+        self._tenant_tabs.addTab("XeisWorks")
+        self._tenant_tabs.addTab("WüdaraMusi")
         self._rows: list[BankExpenseRow] = []
         self._all_rows: list[BankExpenseRow] = []
         self._missing_loaded_period: tuple[date, date] | None = None
@@ -525,6 +530,7 @@ class ExpenseReviewView(QWidget):
         self._period_sync = False
         self._start = QDateEdit()
         self._end = QDateEdit()
+        self._account_label = QLabel()
         self._status = QLabel("Noch nicht geladen")
         self._wizard_button = QPushButton("Offene Zuordnungen prüfen")
         self._table = DataTable(_HEADERS)
@@ -540,12 +546,21 @@ class ExpenseReviewView(QWidget):
 
     @property
     def service(self) -> ExpenseAuditService:
-        return self._container.resolve(ExpenseAuditService)
+        service = self._container.resolve(ExpenseAuditService)
+        for_tenant = getattr(service, "for_tenant", None)
+        return for_tenant(self._tenant_key) if callable(for_tenant) else service
+
+    @property
+    def _tenant_label(self) -> str:
+        return "WüdaraMusi" if self._tenant_key == "wuedara" else "XeisWorks"
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
+        self._tenant_tabs.currentChanged.connect(self._on_tenant_changed)
+        root.addWidget(self._tenant_tabs)
         controls = QHBoxLayout()
-        controls.addWidget(QLabel("Konto: XeisWorks"))
+        self._account_label.setText(f"Konto: {self._tenant_label}")
+        controls.addWidget(self._account_label)
         self._start.setCalendarPopup(True)
         self._end.setCalendarPopup(True)
         today = datetime.now(tz=ZoneInfo("Europe/Vienna")).date()
@@ -763,8 +778,13 @@ class ExpenseReviewView(QWidget):
         )
         self._worker.signals.result.connect(self._on_loaded)
         self._worker.signals.error.connect(self._on_error)
-        self._worker.signals.finished.connect(lambda: setattr(self, "_worker", None))
+        self._tenant_tabs.setEnabled(False)
+        self._worker.signals.finished.connect(self._on_load_finished)
         self._worker.start()
+
+    def _on_load_finished(self) -> None:
+        self._worker = None
+        self._tenant_tabs.setEnabled(True)
 
     def _on_loaded(self, payload: object) -> None:
         self._all_rows = [
@@ -777,7 +797,9 @@ class ExpenseReviewView(QWidget):
         incomplete = any(not row.document_link_scan_complete for row in self._all_rows)
         open_count = sum(not row.position_key for row in self._rows)
         suffix = " · Belegscan unvollständig" if incomplete else ""
-        self._status.setText(f"{len(self._rows)} ausgehende Zahlungen · Konto XeisWorks{suffix}")
+        self._status.setText(
+            f"{len(self._rows)} ausgehende Zahlungen · Konto {self._tenant_label}{suffix}"
+        )
         self._wizard_button.setText(f"{open_count} offene Zuordnungen prüfen")
         self._wizard_button.setVisible(open_count > 0)
         self._refresh_settings()
@@ -794,6 +816,25 @@ class ExpenseReviewView(QWidget):
         )
         if self._missing_loaded_period != period:
             self._refresh_missing_receipts()
+
+    def _on_tenant_changed(self, index: int) -> None:
+        tenant_key = "wuedara" if index == 1 else "xw"
+        if tenant_key == self._tenant_key:
+            return
+        self._header_save_timer.stop()
+        self._save_table_header()
+        self._tenant_key = tenant_key
+        self._account_label.setText(f"Konto: {self._tenant_label}")
+        state_key = f"expense_review/{self._tenant_key}/bank_table_header"
+        state = self._settings.value(state_key)
+        if state is not None:
+            self._table.horizontalHeader().restoreState(state)
+        self._rows = []
+        self._all_rows = []
+        self._missing_loaded_period = None
+        self._table.set_data([])
+        self._missing_table.set_data([])
+        self._load(refresh=True)
 
     def _populate(
         self, table: DataTable, rows: list[BankExpenseRow], *, receipt_mode: bool = False
@@ -1197,7 +1238,10 @@ class ExpenseReviewView(QWidget):
         self._header_save_timer.start(350)
 
     def _save_table_header(self) -> None:
-        self._settings.setValue("expense_review/bank_table_header", self._table.horizontalHeader().saveState())
+        self._settings.setValue(
+            f"expense_review/{self._tenant_key}/bank_table_header",
+            self._table.horizontalHeader().saveState(),
+        )
         self._settings.sync()
 
     def closeEvent(self, event: Any) -> None:

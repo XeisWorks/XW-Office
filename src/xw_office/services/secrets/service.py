@@ -14,6 +14,7 @@ from xw_office.repositories.api_secret import ApiSecretRepository
 
 SUPPORTED_SECRET_KEYS: tuple[str, ...] = (
     "SEVDESK_API_TOKEN",
+    "WUEDARA_SEVDESK_API_TOKEN",
     "WIX_API_KEY",
     "WIX_SITE_ID",
     "WIX_ACCOUNT_ID",

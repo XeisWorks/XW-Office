@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import Enum
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from xw_office.core.fuzzy_match import fuzzy_ratio
@@ -194,13 +195,46 @@ class ExpenseAuditService:
         expense_check_repo: "ExpenseCheckRepository | None" = None,
         bank_provider: SevdeskExpenseProvider | None = None,
         pipeline_repo: "ExpensePipelineRepository | None" = None,
+        tenant_key: str = "xw",
+        tenant_providers: dict[str, SevdeskExpenseProvider] | None = None,
     ) -> None:
         self._repo = settings_repo
         self._expense_repo = expense_check_repo
-        self._bank_provider = bank_provider
+        self._tenant_key = tenant_key.strip().lower() or "xw"
+        self._tenant_providers = dict(tenant_providers or {})
+        self._bank_provider = self._tenant_providers.get(self._tenant_key, bank_provider)
         self._pipeline_repo = pipeline_repo
         self._memory_profile_flags: dict[tuple[str, str], str] = {}
         self._document_scan_lock = threading.Lock()
+
+    def for_tenant(self, tenant_key: str) -> "ExpenseAuditService":
+        """Return an independent, account-bound view of this shared service."""
+        key = tenant_key.strip().lower() or "xw"
+        return ExpenseAuditService(
+            self._repo,
+            expense_check_repo=self._expense_repo,
+            bank_provider=self._tenant_providers.get(key),
+            pipeline_repo=self._pipeline_repo,
+            tenant_key=key,
+            tenant_providers=self._tenant_providers,
+        )
+
+    def _stored_position_key(self, key: str) -> str:
+        normalized = key.strip().lower()
+        return normalized if self._tenant_key == "xw" else f"{self._tenant_key}:{normalized}"
+
+    def _public_position_key(self, key: str) -> str:
+        prefix = f"{self._tenant_key}:"
+        return key[len(prefix) :] if key.startswith(prefix) else key
+
+    def _owns_position_key(self, key: str) -> bool:
+        return ":" not in key if self._tenant_key == "xw" else key.startswith(f"{self._tenant_key}:")
+
+    def _cache_account_id(self, account_id: str) -> str:
+        return account_id if self._tenant_key == "xw" else f"{self._tenant_key}:{account_id}"
+
+    def _cache_document_type(self, resource_type: str) -> str:
+        return resource_type if self._tenant_key == "xw" else f"{self._tenant_key}:{resource_type}"
 
     def list_positions(self, *, enabled_only: bool = True) -> list[ExpensePositionView]:
         if self._pipeline_repo is None:
@@ -208,7 +242,7 @@ class ExpenseAuditService:
         self._pipeline_repo.ensure_positions(
             [
                 {
-                    "key": item.key,
+                    "key": self._stored_position_key(item.key),
                     "label": item.label,
                     "initials": item.initials,
                     "color": item.color,
@@ -220,9 +254,15 @@ class ExpenseAuditService:
         )
         return [
             ExpensePositionView(
-                row.key, row.label, row.initials, row.color, row.sort_order, row.enabled
+                self._public_position_key(row.key),
+                row.label,
+                row.initials,
+                row.color,
+                row.sort_order,
+                row.enabled,
             )
             for row in self._pipeline_repo.list_positions(enabled_only=enabled_only)
+            if self._owns_position_key(row.key)
         ]
 
     def describe(self) -> str:
@@ -250,9 +290,17 @@ class ExpenseAuditService:
             account, rows = self._bank_provider.fetch(start, end, outgoing_only=outgoing_only)
         elif self._pipeline_repo is not None:
             rows = []
-            cached_snapshots = self._pipeline_repo.list_snapshots(
-                start=start, end=end, direction="outgoing" if outgoing_only else ""
-            )
+            cached_snapshots = [
+                snapshot
+                for snapshot in self._pipeline_repo.list_snapshots(
+                    start=start, end=end, direction="outgoing" if outgoing_only else ""
+                )
+                if (
+                    ":" not in snapshot.account_id
+                    if self._tenant_key == "xw"
+                    else snapshot.account_id.startswith(f"{self._tenant_key}:")
+                )
+            ]
             for snapshot in cached_snapshots:
                 rows.append(
                     BankExpense(
@@ -278,16 +326,20 @@ class ExpenseAuditService:
         snapshot_ids: dict[str, uuid.UUID] = {}
         existing_external_ids: set[str] = set()
         if self._pipeline_repo is not None and refresh:
+            cached_account_id = self._cache_account_id(str(getattr(account, "id", "")))
             existing_external_ids = {
                 snapshot.external_id
                 for snapshot in self._pipeline_repo.list_snapshots(
-                    start=start, end=end, direction="outgoing" if outgoing_only else ""
+                    start=start,
+                    end=end,
+                    direction="outgoing" if outgoing_only else "",
+                    account_id=cached_account_id,
                 )
             }
             for row in rows:
                 snapshot = self._pipeline_repo.upsert_snapshot(
                     {
-                        "account_id": row.account_id,
+                        "account_id": cached_account_id,
                         "external_id": row.external_id,
                         "value_date": row.value_date,
                         "entry_date": row.entry_date,
@@ -313,7 +365,7 @@ class ExpenseAuditService:
             and account is not None
             and all(row.external_id in existing_external_ids for row in rows)
             and self._pipeline_repo.has_complete_import_run(
-                account_id=account.id,
+                account_id=self._cache_account_id(account.id),
                 period_start=start,
                 period_end=end,
             )
@@ -327,16 +379,44 @@ class ExpenseAuditService:
             try:
                 account = account or self._bank_provider.find_account()
                 with self._document_scan_lock:
-                    cached_fingerprints = (
+                    cached_document_fingerprints = (
                         self._pipeline_repo.list_document_scan_fingerprints()
                         if self._pipeline_repo is not None
                         else {}
                     )
+                    cache_type_prefix = f"{self._tenant_key}:"
+                    cached_fingerprints = {
+                        (
+                            resource_type[len(cache_type_prefix) :]
+                            if self._tenant_key != "xw"
+                            else resource_type,
+                            external_id,
+                        ): fingerprint
+                        for (resource_type, external_id), fingerprint in cached_document_fingerprints.items()
+                        if (
+                            ":" not in resource_type
+                            if self._tenant_key == "xw"
+                            else resource_type.startswith(cache_type_prefix)
+                        )
+                    }
                     retry_cached_documents = (
                         set(cached_fingerprints)
                         if has_new_transactions
                         else (
-                            self._pipeline_repo.list_unlinked_document_scan_keys()
+                            {
+                                (
+                                    resource_type[len(cache_type_prefix) :]
+                                    if self._tenant_key != "xw"
+                                    else resource_type,
+                                    external_id,
+                                )
+                                for resource_type, external_id in self._pipeline_repo.list_unlinked_document_scan_keys()
+                                if (
+                                    ":" not in resource_type
+                                    if self._tenant_key == "xw"
+                                    else resource_type.startswith(cache_type_prefix)
+                                )
+                            }
                             if self._pipeline_repo is not None and retry_unlinked_documents
                             else set()
                         )
@@ -357,9 +437,10 @@ class ExpenseAuditService:
                             self._pipeline_repo.delete_document_links_for_document(
                                 resource_type=document.resource_type,
                                 external_id=document.external_id,
+                                transaction_ids=list(snapshot_ids.values()),
                             )
                             self._pipeline_repo.upsert_document_scan(
-                                resource_type=document.resource_type,
+                                resource_type=self._cache_document_type(document.resource_type),
                                 external_id=document.external_id,
                                 fingerprint=document.fingerprint,
                             )
@@ -373,7 +454,7 @@ class ExpenseAuditService:
                                     document_number=link.document_number,
                                 )
                         self._pipeline_repo.record_import_run(
-                            account_id=account.id,
+                            account_id=self._cache_account_id(account.id),
                             account_name=str(getattr(account, "name", "")),
                             period_start=start,
                             period_end=end,
@@ -388,7 +469,7 @@ class ExpenseAuditService:
                 link_scan_complete = False
                 if self._pipeline_repo is not None and account is not None:
                     self._pipeline_repo.record_import_run(
-                        account_id=account.id,
+                        account_id=self._cache_account_id(account.id),
                         account_name=str(getattr(account, "name", "")),
                         period_start=start,
                         period_end=end,
@@ -425,19 +506,34 @@ class ExpenseAuditService:
             else {}
         )
         supplier_links = (
-            self._pipeline_repo.list_supplier_links(profile_key=profile_key)
+            [
+                link
+                for link in self._pipeline_repo.list_all_supplier_links()
+                if link.profile_key == self._tenant_key
+                or (self._tenant_key == "xw" and link.profile_key == "")
+            ]
             if self._pipeline_repo is not None
             else []
         )
         purpose_rules = (
-            self._pipeline_repo.list_purpose_rules(enabled_only=True)
+            self._pipeline_repo.list_purpose_rules(
+                enabled_only=True, tenant_key=self._tenant_key
+            )
             if self._pipeline_repo is not None
             else []
         )
 
         result: list[BankExpenseRow] = []
         rules = self._pipeline_repo.list_rules(profile_key) if self._pipeline_repo and profile_key else []
-        position_rules = self._pipeline_repo.list_position_rules() if self._pipeline_repo else []
+        position_rules = (
+            [
+                rule
+                for rule in self._pipeline_repo.list_position_rules()
+                if self._owns_position_key(rule.position_key)
+            ]
+            if self._pipeline_repo
+            else []
+        )
         for row in rows:
             projection = project_expense_text(
                 payee_name=row.payee_name,
@@ -490,7 +586,7 @@ class ExpenseAuditService:
                     )
                     position_assignments[tx_uuid] = position_assignment
                 if position_assignment is not None:
-                    position_key = position_assignment.position_key
+                    position_key = self._public_position_key(position_assignment.position_key)
                     position_source = position_assignment.source
                     if position_assignment.matched_rule_id:
                         matching = next(
@@ -632,7 +728,7 @@ class ExpenseAuditService:
             raise ValueError(f"Unbekannte Kategorie: {position_key}")
         self._pipeline_repo.assign_position(
             transaction_id=uuid.UUID(transaction_id),
-            position_key=position_key,
+            position_key=self._stored_position_key(position_key),
             source="manual",
         )
 
@@ -651,7 +747,7 @@ class ExpenseAuditService:
         normalized_payee = normalize_german_text(payee)
         normalized_iban = iban.replace(" ", "").upper().strip()
         rule = self._pipeline_repo.add_position_rule(
-            position_key=position_key,
+            position_key=self._stored_position_key(position_key),
             label=label or f"{position_key.upper()} · {payee or purpose_contains}",
             payee_normalized=normalized_payee,
             counterparty_iban=normalized_iban,
@@ -659,7 +755,7 @@ class ExpenseAuditService:
         )
         self._pipeline_repo.assign_position(
             transaction_id=uuid.UUID(transaction_id),
-            position_key=position_key,
+            position_key=self._stored_position_key(position_key),
             source="manual",
             matched_rule_id=rule.id,
         )
@@ -676,7 +772,7 @@ class ExpenseAuditService:
         if self._pipeline_repo is None:
             raise RuntimeError("Datenbank für Kategorienregeln nicht verfügbar")
         self._pipeline_repo.add_position_rule(
-            position_key=position_key,
+            position_key=self._stored_position_key(position_key),
             label=label.strip(),
             payee_normalized=normalize_german_text(payee),
             counterparty_iban=iban.replace(" ", "").upper().strip(),
@@ -692,7 +788,7 @@ class ExpenseAuditService:
         existing = next((item for item in current if item.key == key), None)
         sort_order = existing.sort_order if existing else (max((item.sort_order for item in current), default=0) + 10)
         self._pipeline_repo.upsert_position(
-            key=key,
+            key=self._stored_position_key(key),
             label=label,
             initials=initials,
             color=color,
@@ -703,7 +799,19 @@ class ExpenseAuditService:
     def list_position_rules(self) -> list[ExpensePositionRule]:
         if self._pipeline_repo is None:
             return []
-        return self._pipeline_repo.list_position_rules(enabled_only=False)
+        return [
+            SimpleNamespace(
+                id=item.id,
+                position_key=self._public_position_key(item.position_key),
+                label=item.label,
+                payee_normalized=item.payee_normalized,
+                counterparty_iban=item.counterparty_iban,
+                purpose_contains=item.purpose_contains,
+                enabled=item.enabled,
+            )
+            for item in self._pipeline_repo.list_position_rules(enabled_only=False)
+            if self._owns_position_key(item.position_key)
+        ]  # type: ignore[return-value]
 
     def set_position_rule_enabled(self, rule_id: str, enabled: bool) -> bool:
         if self._pipeline_repo is None:
@@ -713,7 +821,12 @@ class ExpenseAuditService:
     def list_supplier_links(self) -> list[ExpenseSupplierLink]:
         if self._pipeline_repo is None:
             return []
-        return self._pipeline_repo.list_all_supplier_links()
+        return [
+            item
+            for item in self._pipeline_repo.list_all_supplier_links()
+            if item.profile_key == self._tenant_key
+            or (self._tenant_key == "xw" and item.profile_key == "")
+        ]
 
     def set_supplier_link_enabled(self, link_id: str, enabled: bool) -> bool:
         if self._pipeline_repo is None:
@@ -747,7 +860,7 @@ class ExpenseAuditService:
         if not normalized_url.startswith("https://"):
             raise ValueError("Lieferantenlinks müssen mit https:// beginnen")
         self._pipeline_repo.add_supplier_link(
-            profile_key="",
+            profile_key=self._tenant_key,
             payee_normalized=normalize_german_text(payee),
             counterparty_iban=iban.replace(" ", "").upper().strip(),
             label=label.strip() or payee.strip(),
@@ -757,7 +870,7 @@ class ExpenseAuditService:
     def list_purpose_rules(self) -> list[ExpensePurposeRule]:
         if self._pipeline_repo is None:
             return []
-        return self._pipeline_repo.list_purpose_rules()
+        return self._pipeline_repo.list_purpose_rules(tenant_key=self._tenant_key)
 
     def add_purpose_rule(self, *, payee: str, remove_text: str, label: str = "") -> None:
         if self._pipeline_repo is None:
@@ -765,6 +878,7 @@ class ExpenseAuditService:
         if not payee.strip() or not remove_text.strip():
             raise ValueError("Empfänger und zu entfernender Text sind erforderlich")
         self._pipeline_repo.add_purpose_rule(
+            tenant_key=self._tenant_key,
             payee_normalized=normalize_german_text(payee),
             remove_text=remove_text.strip(),
             label=label.strip() or payee.strip(),
