@@ -5,7 +5,18 @@ import datetime
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, DateTime, Index, Numeric, String, Text, Uuid, func
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Index,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from xw_office.models.base import Base
@@ -64,6 +75,24 @@ class ExpenseDocumentLink(Base):
     document_number: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="sevdesk")
     resolved_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ExpenseDocumentScan(Base):
+    """Cache marker for a fully resolved sevDesk document header."""
+
+    __tablename__ = "expense_document_scan"
+    __table_args__ = (
+        UniqueConstraint("resource_type", "external_id", name="uq_expense_document_scan"),
+        Index("ix_expense_document_scan_fingerprint", "resource_type", "fingerprint"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    resource_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    scanned_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 

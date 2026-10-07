@@ -14,6 +14,7 @@ import io
 import json
 import logging
 import re
+import threading
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.expenses.bank_provider import (
     BankDocumentLink,
     BankExpense,
+    SevdeskBankAccount,
     SevdeskExpenseProvider,
 )
 from xw_office.services.expenses.reference_parser import project_expense_text
@@ -194,6 +196,7 @@ class ExpenseAuditService:
         self._bank_provider = bank_provider
         self._pipeline_repo = pipeline_repo
         self._memory_profile_flags: dict[tuple[str, str], str] = {}
+        self._document_scan_lock = threading.Lock()
 
     def list_positions(self, *, enabled_only: bool = True) -> list[ExpensePositionView]:
         if self._pipeline_repo is None:
@@ -231,17 +234,20 @@ class ExpenseAuditService:
         end: datetime.date,
         profile_key: str = "",
         refresh: bool = True,
+        force_document_refresh: bool = False,
     ) -> list[BankExpenseRow]:
-        """Load outgoing sevDesk transactions and persist normalized snapshots."""
+        """Load outgoing transactions and incrementally resolve linked documents."""
         if self._bank_provider is None:
             return []
+        account: SevdeskBankAccount | None = None
         if refresh:
-            _account, rows = self._bank_provider.fetch(start, end, outgoing_only=True)
+            account, rows = self._bank_provider.fetch(start, end, outgoing_only=True)
         elif self._pipeline_repo is not None:
             rows = []
-            for snapshot in self._pipeline_repo.list_snapshots(
+            cached_snapshots = self._pipeline_repo.list_snapshots(
                 start=start, end=end, direction="outgoing"
-            ):
+            )
+            for snapshot in cached_snapshots:
                 rows.append(
                     BankExpense(
                         external_id=snapshot.external_id,
@@ -263,31 +269,16 @@ class ExpenseAuditService:
             rows = []
 
         links_by_transaction: dict[str, list[BankDocumentLink]] = {}
-        # Cached rows may contain known links, but without a fresh scan we must
-        # not claim that every unlinked row is a genuinely missing receipt.
-        link_scan_complete = refresh
-        if refresh:
-            try:
-                account = self._bank_provider.find_account()
-                scan = self._bank_provider.resolve_document_links(start, end, account_id=account.id)
-                link_scan_complete = scan.complete
-                for link in scan.links:
-                    links_by_transaction.setdefault(link.transaction_external_id, []).append(link)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("sevDesk-Belegscan unvollständig: %s", exc)
-                link_scan_complete = False
-
-        result: list[BankExpenseRow] = []
-        rules = self._pipeline_repo.list_rules(profile_key) if self._pipeline_repo and profile_key else []
-        position_rules = self._pipeline_repo.list_position_rules() if self._pipeline_repo else []
-        for row in rows:
-            projection = project_expense_text(
-                payee_name=row.payee_name,
-                payment_reference=row.payment_reference,
-                purpose=row.purpose,
-            )
-            snapshot_id = ""
-            if self._pipeline_repo is not None:
+        snapshot_ids: dict[str, uuid.UUID] = {}
+        existing_external_ids: set[str] = set()
+        if self._pipeline_repo is not None and refresh:
+            existing_external_ids = {
+                snapshot.external_id
+                for snapshot in self._pipeline_repo.list_snapshots(
+                    start=start, end=end, direction="outgoing"
+                )
+            }
+            for row in rows:
                 snapshot = self._pipeline_repo.upsert_snapshot(
                     {
                         "account_id": row.account_id,
@@ -305,22 +296,139 @@ class ExpenseAuditService:
                         "sevdesk_status": row.sevdesk_status,
                     }
                 )
-                snapshot_id = str(snapshot.id)
-                for link in links_by_transaction.get(row.external_id, []):
-                    self._pipeline_repo.add_document_link(
-                        transaction_id=snapshot.id,
-                        resource_type=link.resource_type,
-                        external_id=link.external_id,
-                        document_number=link.document_number,
+                snapshot_ids[row.external_id] = snapshot.id
+        elif self._pipeline_repo is not None:
+            snapshot_ids = {snapshot.external_id: snapshot.id for snapshot in cached_snapshots}
+
+        link_scan_complete = False
+        completed_scan_exists = (
+            self._pipeline_repo is not None
+            and account is not None
+            and all(row.external_id in existing_external_ids for row in rows)
+            and self._pipeline_repo.has_complete_import_run(
+                account_id=account.id,
+                period_start=start,
+                period_end=end,
+            )
+        )
+        if refresh and completed_scan_exists and not force_document_refresh:
+            # A refresh still obtains current bank movements, but avoids paging
+            # every historical sevDesk document for a range already checked.
+            # The UI exposes an explicit force action for a manual re-check.
+            link_scan_complete = True
+        elif refresh:
+            try:
+                account = account or self._bank_provider.find_account()
+                with self._document_scan_lock:
+                    cached_fingerprints = (
+                        self._pipeline_repo.list_document_scan_fingerprints()
+                        if self._pipeline_repo is not None
+                        else {}
                     )
+                    scan = self._bank_provider.resolve_document_links(
+                        start,
+                        end,
+                        account_id=account.id,
+                        cached_fingerprints=cached_fingerprints,
+                        force=force_document_refresh,
+                    )
+                    link_scan_complete = scan.complete
+                    for link in scan.links:
+                        links_by_transaction.setdefault(link.transaction_external_id, []).append(link)
+                    if self._pipeline_repo is not None:
+                        for document in scan.scanned_documents:
+                            self._pipeline_repo.delete_document_links_for_document(
+                                resource_type=document.resource_type,
+                                external_id=document.external_id,
+                            )
+                            self._pipeline_repo.upsert_document_scan(
+                                resource_type=document.resource_type,
+                                external_id=document.external_id,
+                                fingerprint=document.fingerprint,
+                            )
+                        for link in scan.links:
+                            transaction_id = snapshot_ids.get(link.transaction_external_id)
+                            if transaction_id is not None:
+                                self._pipeline_repo.add_document_link(
+                                    transaction_id=transaction_id,
+                                    resource_type=link.resource_type,
+                                    external_id=link.external_id,
+                                    document_number=link.document_number,
+                                )
+                        self._pipeline_repo.record_import_run(
+                            account_id=account.id,
+                            account_name=str(getattr(account, "name", "")),
+                            period_start=start,
+                            period_end=end,
+                            status="complete" if scan.complete else "partial",
+                            sevdesk_last_sync_at=getattr(account, "last_sync_at", None),
+                            transaction_count=len(rows),
+                            linked_count=len(scan.links),
+                            error_count=scan.error_count,
+                        )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("sevDesk-Belegscan unvollständig: %s", exc)
+                link_scan_complete = False
+                if self._pipeline_repo is not None and account is not None:
+                    self._pipeline_repo.record_import_run(
+                        account_id=account.id,
+                        account_name=str(getattr(account, "name", "")),
+                        period_start=start,
+                        period_end=end,
+                        status="partial",
+                        sevdesk_last_sync_at=getattr(account, "last_sync_at", None),
+                        transaction_count=len(rows),
+                        linked_count=0,
+                        error_count=1,
+                        error_text=str(exc)[:2000],
+                    )
+        elif self._pipeline_repo is not None and rows:
+            link_scan_complete = self._pipeline_repo.has_complete_import_run(
+                account_id=rows[0].account_id,
+                period_start=start,
+                period_end=end,
+            )
+
+        persisted_links_by_transaction = (
+            self._pipeline_repo.list_document_links_for_transactions(list(snapshot_ids.values()))
+            if self._pipeline_repo is not None
+            else {}
+        )
+        transaction_ids = list(snapshot_ids.values())
+        profile_assignments = (
+            self._pipeline_repo.list_assignments_for_transactions(
+                transaction_ids=transaction_ids, profile_key=profile_key
+            )
+            if self._pipeline_repo is not None and profile_key
+            else {}
+        )
+        position_assignments = (
+            self._pipeline_repo.list_position_assignments_for_transactions(transaction_ids)
+            if self._pipeline_repo is not None
+            else {}
+        )
+        supplier_links = (
+            self._pipeline_repo.list_supplier_links(profile_key=profile_key)
+            if self._pipeline_repo is not None
+            else []
+        )
+
+        result: list[BankExpenseRow] = []
+        rules = self._pipeline_repo.list_rules(profile_key) if self._pipeline_repo and profile_key else []
+        position_rules = self._pipeline_repo.list_position_rules() if self._pipeline_repo else []
+        for row in rows:
+            projection = project_expense_text(
+                payee_name=row.payee_name,
+                payment_reference=row.payment_reference,
+                purpose=row.purpose,
+            )
+            snapshot_id = str(snapshot_ids.get(row.external_id) or "")
             status = ""
             source = ""
             if profile_key:
                 status, source = self._match_profile_rule(row, profile_key, rules)
                 if self._pipeline_repo is not None and snapshot_id:
-                    profile_assignment = self._pipeline_repo.get_assignment(
-                        transaction_id=uuid.UUID(snapshot_id), profile_key=profile_key
-                    )
+                    profile_assignment = profile_assignments.get(uuid.UUID(snapshot_id))
                     if profile_assignment is not None:
                         status = profile_assignment.status
                         source = profile_assignment.source
@@ -331,7 +439,7 @@ class ExpenseAuditService:
             position_rule_label = ""
             if self._pipeline_repo is not None and snapshot_id:
                 tx_uuid = uuid.UUID(snapshot_id)
-                persisted_links = self._pipeline_repo.list_document_links(tx_uuid)
+                persisted_links = persisted_links_by_transaction.get(tx_uuid, [])
                 document_links = [
                     BankDocumentLink(
                         transaction_external_id=row.external_id,
@@ -341,9 +449,7 @@ class ExpenseAuditService:
                     )
                     for link in persisted_links
                 ]
-                position_assignment = self._pipeline_repo.get_position_assignment(
-                    transaction_id=tx_uuid
-                )
+                position_assignment = position_assignments.get(tx_uuid)
                 matched_position_rule = self._match_position_rule(row, position_rules)
                 if position_assignment is None and matched_position_rule is not None:
                     position_assignment = self._pipeline_repo.assign_position(
@@ -352,6 +458,7 @@ class ExpenseAuditService:
                         source="automatic",
                         matched_rule_id=matched_position_rule.id,
                     )
+                    position_assignments[tx_uuid] = position_assignment
                 if position_assignment is not None:
                     position_key = position_assignment.position_key
                     position_source = position_assignment.source
@@ -384,19 +491,13 @@ class ExpenseAuditService:
                 sevdesk_link = document_views[0].url
             supplier_url = ""
             if self._pipeline_repo is not None:
-                supplier_links = self._pipeline_repo.list_supplier_links(
-                    profile_key=profile_key,
-                    payee_normalized=row.payee_normalized,
-                    iban=row.counterparty_iban,
+                match = self._matching_supplier_link(
+                    supplier_links, row.payee_normalized, row.counterparty_iban
+                ) or self._matching_supplier_link(
+                    supplier_links, projection.merchant_key, row.counterparty_iban
                 )
-                if not supplier_links:
-                    supplier_links = self._pipeline_repo.list_supplier_links(
-                        profile_key=profile_key,
-                        payee_normalized=projection.merchant_key,
-                        iban=row.counterparty_iban,
-                    )
-                if supplier_links:
-                    supplier_url = supplier_links[0].url
+                if match is not None:
+                    supplier_url = match.url
             result.append(
                 BankExpenseRow(
                     transaction_id=snapshot_id or row.external_id,
@@ -423,6 +524,19 @@ class ExpenseAuditService:
                 )
             )
         return result
+
+    @staticmethod
+    def _matching_supplier_link(
+        links: Sequence[ExpenseSupplierLink], payee_normalized: str, iban: str
+    ) -> ExpenseSupplierLink | None:
+        """Mirror repository supplier matching without opening a session per row."""
+        for link in links:
+            if link.payee_normalized != payee_normalized:
+                continue
+            if iban and link.counterparty_iban not in ("", iban):
+                continue
+            return link
+        return None
 
     @staticmethod
     def _match_position_rule(

@@ -7,6 +7,7 @@ from xw_office.models.digital_license_fulfillment import DigitalLicenseFulfillme
 from xw_office.models.expense_check import ExpenseIgnoreRule, ExpenseShiftEntry
 from xw_office.models.expense_pipeline import (
     ExpenseDocumentLink,
+    ExpenseDocumentScan,
     ExpenseImportRun,
     ExpenseMatchRule,
     ExpenseProfileAssignment,
@@ -97,6 +98,7 @@ __all__ = [
     "DigitalLicenseFulfillment",
     "ExpenseIgnoreRule",
     "ExpenseDocumentLink",
+    "ExpenseDocumentScan",
     "ExpenseImportRun",
     "ExpenseMatchRule",
     "ExpenseProfileAssignment",

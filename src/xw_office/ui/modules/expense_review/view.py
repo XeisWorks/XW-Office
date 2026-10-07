@@ -400,6 +400,12 @@ class ExpenseReviewView(QWidget):
         reload_button = QPushButton("Neu laden")
         reload_button.clicked.connect(lambda: self._load(refresh=True))
         controls.addWidget(reload_button)
+        rescan_button = QPushButton("Belege neu prüfen")
+        rescan_button.setToolTip("Ignoriert den Cache und prüft alle sevDesk-Belege des Zeitraums erneut.")
+        rescan_button.clicked.connect(
+            lambda: self._load(refresh=True, force_document_refresh=True)
+        )
+        controls.addWidget(rescan_button)
         controls.addStretch()
         self._wizard_button.clicked.connect(self._open_wizard)
         self._wizard_button.setVisible(False)
@@ -491,7 +497,7 @@ class ExpenseReviewView(QWidget):
         tabs.addTab(suppliers, "Lieferantenportale")
         return tabs
 
-    def _load(self, *, refresh: bool = True) -> None:
+    def _load(self, *, refresh: bool = True, force_document_refresh: bool = False) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
         self._positions = self.service.list_positions()
@@ -499,7 +505,12 @@ class ExpenseReviewView(QWidget):
         start = cast(date, self._start.date().toPython())
         end = cast(date, self._end.date().toPython())
         self._worker = BackgroundWorker(
-            lambda: self.service.list_bank_expenses(start=start, end=end, refresh=refresh)
+            lambda: self.service.list_bank_expenses(
+                start=start,
+                end=end,
+                refresh=refresh,
+                force_document_refresh=force_document_refresh,
+            )
         )
         self._worker.signals.result.connect(self._on_loaded)
         self._worker.signals.error.connect(self._on_error)

@@ -251,7 +251,13 @@ class _BankProviderStub:
         return self.find_account(), self.rows
 
     def resolve_document_links(
-        self, start: date, end: date, *, account_id: str | None = None
+        self,
+        start: date,
+        end: date,
+        *,
+        account_id: str | None = None,
+        cached_fingerprints: object | None = None,
+        force: bool = False,
     ) -> DocumentLinkScan:
         return self.scan
 
@@ -322,7 +328,7 @@ def test_document_link_is_persisted_and_reused_from_cache(
 
     assert live.documents[0].document_number == "VB 2026-7"
     assert cached.documents[0].url.endswith("/fi/detail/type/VB/id/V-7")
-    assert cached.document_link_scan_complete is False
+    assert cached.document_link_scan_complete is True
 
 
 def test_document_resolver_uses_typed_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -358,3 +364,49 @@ def test_document_resolver_uses_typed_endpoint(monkeypatch: pytest.MonkeyPatch) 
     assert scan.complete is True
     assert scan.links[0].document_number == "VB 7"
     assert calls == ["/Voucher/V-7/getCheckAccountTransactions"]
+
+
+def test_document_resolver_skips_unchanged_cached_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class _Response:
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"objects": []}
+
+    class _Connection:
+        def get(self, path: str) -> _Response:
+            calls.append(path)
+            return _Response()
+
+    provider = SevdeskExpenseProvider(_Connection())  # type: ignore[arg-type]
+
+    def fake_list(path: str, *, params: dict[str, object] | None = None) -> list[dict[str, object]]:
+        if path == "/Voucher":
+            return [{"id": "V-7", "voucherDate": "2026-09-05", "voucherNumber": "VB 7"}]
+        return []
+
+    monkeypatch.setattr(provider, "_list", fake_list)
+    first = provider.resolve_document_links(
+        date(2026, 9, 1), date(2026, 9, 30), account_id="XEISWORKS"
+    )
+    cached_fingerprints = {
+        (document.resource_type, document.external_id): document.fingerprint
+        for document in first.scanned_documents
+    }
+    calls.clear()
+
+    second = provider.resolve_document_links(
+        date(2026, 9, 1),
+        date(2026, 9, 30),
+        account_id="XEISWORKS",
+        cached_fingerprints=cached_fingerprints,
+    )
+
+    assert first.resolved_document_count == 1
+    assert second.links == ()
+    assert second.cached_document_count == 1
+    assert second.resolved_document_count == 0
+    assert calls == []

@@ -6,12 +6,14 @@ import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
 from xw_office.models.expense_pipeline import (
     ExpenseDocumentLink,
+    ExpenseDocumentScan,
+    ExpenseImportRun,
     ExpenseMatchRule,
     ExpensePosition,
     ExpensePositionAssignment,
@@ -79,6 +81,58 @@ class ExpensePipelineRepository:
             )
             return list(session.scalars(stmt).all())
 
+    def record_import_run(
+        self,
+        *,
+        account_id: str,
+        account_name: str,
+        period_start: datetime.date,
+        period_end: datetime.date,
+        status: str,
+        sevdesk_last_sync_at: datetime.datetime | None,
+        transaction_count: int,
+        linked_count: int,
+        error_count: int = 0,
+        error_text: str = "",
+    ) -> ExpenseImportRun:
+        with self._scope() as session:
+            row = ExpenseImportRun(
+                account_id=account_id,
+                account_name=account_name,
+                period_start=period_start,
+                period_end=period_end,
+                status=status,
+                sevdesk_last_sync_at=sevdesk_last_sync_at,
+                finished_at=datetime.datetime.now(datetime.UTC),
+                transaction_count=transaction_count,
+                linked_count=linked_count,
+                error_count=error_count,
+                error_text=error_text,
+            )
+            session.add(row)
+            session.flush()
+            session.refresh(row)
+            return row
+
+    def has_complete_import_run(
+        self, *, account_id: str, period_start: datetime.date, period_end: datetime.date
+    ) -> bool:
+        with self._scope() as session:
+            return (
+                session.scalar(
+                    select(ExpenseImportRun.id)
+                    .where(
+                        ExpenseImportRun.account_id == account_id,
+                        ExpenseImportRun.period_start == period_start,
+                        ExpenseImportRun.period_end == period_end,
+                        ExpenseImportRun.status == "complete",
+                    )
+                    .order_by(ExpenseImportRun.finished_at.desc())
+                    .limit(1)
+                )
+                is not None
+            )
+
     def list_positions(self, *, enabled_only: bool = True) -> list[ExpensePosition]:
         with self._scope() as session:
             stmt = select(ExpensePosition)
@@ -133,6 +187,21 @@ class ExpensePipelineRepository:
                     ExpensePositionAssignment.transaction_id == transaction_id
                 )
             )
+
+    def list_position_assignments_for_transactions(
+        self, transaction_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, ExpensePositionAssignment]:
+        if not transaction_ids:
+            return {}
+        with self._scope() as session:
+            rows = list(
+                session.scalars(
+                    select(ExpensePositionAssignment).where(
+                        ExpensePositionAssignment.transaction_id.in_(transaction_ids)
+                    )
+                ).all()
+            )
+        return {row.transaction_id: row for row in rows}
 
     def assign_position(
         self,
@@ -433,6 +502,81 @@ class ExpensePipelineRepository:
                     )
                 ).all()
             )
+
+    def list_assignments_for_transactions(
+        self, *, transaction_ids: list[uuid.UUID], profile_key: str
+    ) -> dict[uuid.UUID, ExpenseProfileAssignment]:
+        if not transaction_ids or not profile_key:
+            return {}
+        with self._scope() as session:
+            rows = list(
+                session.scalars(
+                    select(ExpenseProfileAssignment).where(
+                        ExpenseProfileAssignment.transaction_id.in_(transaction_ids),
+                        ExpenseProfileAssignment.profile_key == profile_key,
+                    )
+                ).all()
+            )
+        return {row.transaction_id: row for row in rows}
+
+    def list_document_links_for_transactions(
+        self, transaction_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, list[ExpenseDocumentLink]]:
+        if not transaction_ids:
+            return {}
+        with self._scope() as session:
+            rows = list(
+                session.scalars(
+                    select(ExpenseDocumentLink).where(
+                        ExpenseDocumentLink.transaction_id.in_(transaction_ids)
+                    )
+                ).all()
+            )
+        result: dict[uuid.UUID, list[ExpenseDocumentLink]] = {}
+        for row in rows:
+            result.setdefault(row.transaction_id, []).append(row)
+        return result
+
+    def list_document_scan_fingerprints(self) -> dict[tuple[str, str], str]:
+        with self._scope() as session:
+            return {
+                (row.resource_type, row.external_id): row.fingerprint
+                for row in session.scalars(select(ExpenseDocumentScan)).all()
+            }
+
+    def upsert_document_scan(
+        self, *, resource_type: str, external_id: str, fingerprint: str
+    ) -> ExpenseDocumentScan:
+        with self._scope() as session:
+            row = session.scalar(
+                select(ExpenseDocumentScan).where(
+                    ExpenseDocumentScan.resource_type == resource_type,
+                    ExpenseDocumentScan.external_id == external_id,
+                )
+            )
+            if row is None:
+                row = ExpenseDocumentScan(
+                    resource_type=resource_type,
+                    external_id=external_id,
+                    fingerprint=fingerprint,
+                )
+                session.add(row)
+            else:
+                row.fingerprint = fingerprint
+                row.scanned_at = datetime.datetime.now(datetime.UTC)
+            session.flush()
+            session.refresh(row)
+            return row
+
+    def delete_document_links_for_document(self, *, resource_type: str, external_id: str) -> int:
+        with self._scope() as session:
+            result = session.execute(
+                delete(ExpenseDocumentLink).where(
+                    ExpenseDocumentLink.resource_type == resource_type,
+                    ExpenseDocumentLink.external_id == external_id,
+                )
+            )
+            return int(getattr(result, "rowcount", 0) or 0)
 
     def set_supplier_link_enabled(self, link_id: uuid.UUID, enabled: bool) -> bool:
         with self._scope() as session:

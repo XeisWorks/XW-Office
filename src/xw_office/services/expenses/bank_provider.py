@@ -4,8 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+import hashlib
 import logging
-from typing import Any
+from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
 from xw_office.core.text_normalize import normalize_german_text
@@ -31,10 +32,20 @@ class BankDocumentLink:
 
 
 @dataclass(frozen=True)
+class ScannedExpenseDocument:
+    resource_type: str
+    external_id: str
+    fingerprint: str
+
+
+@dataclass(frozen=True)
 class DocumentLinkScan:
     links: tuple[BankDocumentLink, ...]
     complete: bool
     error_count: int = 0
+    scanned_documents: tuple[ScannedExpenseDocument, ...] = ()
+    cached_document_count: int = 0
+    resolved_document_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -178,7 +189,13 @@ class SevdeskExpenseProvider:
         return account, rows
 
     def resolve_document_links(
-        self, start: date, end: date, *, account_id: str | None = None
+        self,
+        start: date,
+        end: date,
+        *,
+        account_id: str | None = None,
+        cached_fingerprints: Mapping[tuple[str, str], str] | None = None,
+        force: bool = False,
     ) -> DocumentLinkScan:
         """Resolve concrete documents, keeping partial failures explicit.
 
@@ -187,7 +204,11 @@ class SevdeskExpenseProvider:
         ``payDate`` keeps older documents paid in the selected period eligible.
         """
         links: list[BankDocumentLink] = []
+        scanned_documents: list[ScannedExpenseDocument] = []
         errors = 0
+        cached_count = 0
+        resolved_count = 0
+        cached_fingerprints = cached_fingerprints or {}
         for resource_type, number_key, date_key in (
             ("Invoice", "invoiceNumber", "invoiceDate"),
             ("Voucher", "voucherNumber", "voucherDate"),
@@ -209,6 +230,10 @@ class SevdeskExpenseProvider:
                 )
                 if not document_id or not relevant_date:
                     continue
+                fingerprint = _document_fingerprint(resource_type, document, date_key, number_key)
+                if not force and cached_fingerprints.get((resource_type, document_id)) == fingerprint:
+                    cached_count += 1
+                    continue
                 try:
                     response = self._connection.get(
                         f"/{resource_type}/{document_id}/getCheckAccountTransactions"
@@ -222,6 +247,10 @@ class SevdeskExpenseProvider:
                     )
                     errors += 1
                     continue
+                scanned_documents.append(
+                    ScannedExpenseDocument(resource_type, document_id, fingerprint)
+                )
+                resolved_count += 1
                 for transaction in _objects(response.json()):
                     transaction_id = str(transaction.get("id") or "").strip()
                     transaction_account = transaction.get("checkAccount")
@@ -243,7 +272,14 @@ class SevdeskExpenseProvider:
                                 ).strip(),
                             )
                         )
-        return DocumentLinkScan(tuple(links), complete=errors == 0, error_count=errors)
+        return DocumentLinkScan(
+            tuple(links),
+            complete=errors == 0,
+            error_count=errors,
+            scanned_documents=tuple(scanned_documents),
+            cached_document_count=cached_count,
+            resolved_document_count=resolved_count,
+        )
 
     def _list(self, path: str, *, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []
@@ -257,3 +293,20 @@ class SevdeskExpenseProvider:
             if len(batch) < 500:
                 return output
             offset += len(batch)
+
+
+def _document_fingerprint(
+    resource_type: str, document: Mapping[str, Any], date_key: str, number_key: str
+) -> str:
+    """Stable header fingerprint; changed documents must be resolved again."""
+    values = (
+        resource_type,
+        str(document.get("id") or ""),
+        str(document.get("update") or document.get("lastUpdate") or ""),
+        str(document.get("status") or ""),
+        str(document.get(date_key) or document.get("date") or ""),
+        str(document.get("payDate") or ""),
+        str(document.get(number_key) or document.get("number") or ""),
+        str(document.get("sumGross") or document.get("amount") or ""),
+    )
+    return hashlib.sha256("\x1f".join(values).encode("utf-8")).hexdigest()
