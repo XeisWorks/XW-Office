@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDateEdit,
@@ -44,6 +44,7 @@ class ExpenseReviewView(QWidget):
         self._table = DataTable(_HEADERS)
         self._missing_table = DataTable(_HEADERS)
         self._build_ui()
+        QTimer.singleShot(0, self._load)
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)

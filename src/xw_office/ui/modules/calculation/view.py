@@ -694,11 +694,11 @@ class CalculationView(QWidget):
                     cell.font = cell.font.copy(bold=True)
             for row_index in range(2, ws_products.max_row + 1):
                 ws_products.cell(row_index, 3).number_format = '0'
-                ws_products.cell(row_index, 4).number_format = '€ #,##0.00'
+                ws_products.cell(row_index, 4).number_format = '€ #.##0,00'
             for row_index in range(2, ws_categories.max_row + 1):
                 ws_categories.cell(row_index, 2).number_format = '0'
-                ws_categories.cell(row_index, 3).number_format = '€ #,##0.00'
-                ws_categories.cell(row_index, 4).number_format = '€ #,##0.00'
+                ws_categories.cell(row_index, 3).number_format = '€ #.##0,00'
+                ws_categories.cell(row_index, 4).number_format = '€ #.##0,00'
 
             ws_docs = wb.create_sheet("Belege")
             ws_docs.append(["Beleg", "Datum", "Typ", "SKU", "Menge", "Netto", "Regel", "Warnung"])
