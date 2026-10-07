@@ -164,6 +164,10 @@ def test_musikheroes_sr_keeps_negative_net_and_quantity() -> None:
     assert row.canceled_quantity == 7.0
     assert row.net_quantity == -5.0
     assert round(row.net_amount, 2) == 45.28
+    assert all(
+        not (item.source_kind == "invoice" and item.document_type == "SR" and item.signed_net)
+        for item in result.document_rows
+    )
 
 
 def test_credit_note_uses_credit_note_date_not_origin_invoice_date() -> None:
@@ -189,6 +193,7 @@ def test_credit_note_uses_credit_note_date_not_origin_invoice_date() -> None:
     assert july_result.summary.document_count == 1
     assert july_result.summary.total_net_quantity == 0.0
     assert round(july_result.summary.total_net_amount, 2) == -22.64
+    assert all(item.signed_quantity == 0.0 for item in july_result.document_rows)
 
 
 def test_refresh_data_clears_provider_cache() -> None:
