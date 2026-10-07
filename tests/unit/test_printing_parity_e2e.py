@@ -504,6 +504,101 @@ def test_digital_fullflow_finalizes_before_graph_mail_fallback() -> None:
     assert attachment.filename == "RE-263001.pdf"
 
 
+def test_fullflow_resumes_incomplete_finalized_digital_invoice_once() -> None:
+    class _FinalizedInvoiceClient(_InvoiceClientE2E):
+        def list_invoice_summaries(
+            self, *, limit: int, offset: int, status: int | None = None
+        ) -> list[InvoiceSummary]:
+            return []
+
+        def fetch_invoice_by_id(self, invoice_id: str) -> dict:
+            payload = super().fetch_invoice_by_id(invoice_id)
+            payload.update(
+                {
+                    "status": 200,
+                    "invoiceNumber": "RE-RESUME-1",
+                    "customerInternalNote": "WIX-21466",
+                }
+            )
+            return payload
+
+    invoice_client = _FinalizedInvoiceClient()
+    repo = _SettingsRepoE2E()
+    repo.values["rechnungen.fulfillment_status"] = json.dumps(
+        {
+            "INV-RESUME-1": FulfillmentFlags(
+                payment_applicable=True,
+                payment_booked=True,
+                last_run_iso="2026-10-07T10:00:00+00:00",
+                last_error="Wix temporarily unavailable",
+            ).as_row_payload()
+        }
+    )
+    service = InvoiceProcessingService(
+        AppConfig(),
+        invoice_client,
+        repo,
+        _WixOrdersDigitalOnlyStub(),
+        _MailServiceStub(),
+    )
+
+    first = service.run_start_fullflow(full_mode=True)
+    second = service.run_start_fullflow(full_mode=True)
+
+    assert first["resumed"] == 1
+    assert first["failures"] == 0
+    assert first["successful"] == 1
+    assert second["resumed"] == 0
+    assert invoice_client.send_calls == []
+    assert len(invoice_client.mail_calls) == 1
+    flags = service.read_fulfillment_flags("INV-RESUME-1")
+    assert flags.wix_fulfilled is True
+    assert flags.mail_sent is True
+    assert flags.last_error == ""
+
+
+def test_fullflow_never_resumes_cancelled_digital_invoice() -> None:
+    class _CancelledInvoiceClient(_InvoiceClientE2E):
+        def list_invoice_summaries(
+            self, *, limit: int, offset: int, status: int | None = None
+        ) -> list[InvoiceSummary]:
+            return []
+
+        def fetch_invoice_by_id(self, invoice_id: str) -> dict:
+            payload = super().fetch_invoice_by_id(invoice_id)
+            payload.update(
+                {
+                    "status": 1001,
+                    "invoiceNumber": "RE-CANCELLED-1",
+                    "customerInternalNote": "WIX-21466",
+                }
+            )
+            return payload
+
+    invoice_client = _CancelledInvoiceClient()
+    repo = _SettingsRepoE2E()
+    repo.values["rechnungen.fulfillment_status"] = json.dumps(
+        {
+            "INV-CANCELLED-1": FulfillmentFlags(
+                last_run_iso="2026-10-07T10:00:00+00:00",
+                last_error="mail failed",
+            ).as_row_payload()
+        }
+    )
+    service = InvoiceProcessingService(
+        AppConfig(),
+        invoice_client,
+        repo,
+        _WixOrdersDigitalOnlyStub(),
+        _MailServiceStub(),
+    )
+
+    result = service.run_start_fullflow(full_mode=True)
+
+    assert result["resumed"] == 0
+    assert invoice_client.mail_calls == []
+
+
 def test_fullflow_routes_manual_license_before_generic_digital_only() -> None:
     config = AppConfig()
     invoice_client = _InvoiceClientE2E()

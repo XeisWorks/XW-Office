@@ -501,21 +501,33 @@ class DraftInvoiceService:
             if part is None or not part.id.strip():
                 continue
             updated = dict(patched[index])
-            had_part = isinstance(updated.get("part"), dict) and bool(
-                str(updated["part"].get("id") or "").strip()
-            )
+            current_part = updated.get("part") if isinstance(updated.get("part"), dict) else {}
+            current_part_id = str(current_part.get("id") or "").strip()
+            had_part = bool(current_part_id)
             # START must not alter commercial data on an already reviewed
             # sevDesk draft.  It merely repairs the product association.
             # Replacing the description with Wix order metadata or replacing a
             # tax-free line's 0 % rate with the article's domestic VAT rate
             # caused incorrect final invoices.
-            updated["part"] = {"id": str(part.id), "objectName": "Part"}
+            # sevDesk embeds additional fields into ``part`` and ``unity`` on
+            # reads. Replacing those rich objects with minimal references made
+            # an already-correct position compare unequal on every START and
+            # caused a needless invoice write. Preserve the server object when
+            # its semantic ID is already correct.
+            if current_part_id != str(part.id).strip():
+                updated["part"] = {"id": str(part.id), "objectName": "Part"}
             override = str((description_overrides or {}).get(sku) or "").strip()
             current_text = str(updated.get("text") or "").strip()
             if override and not had_part and (not current_text or current_text.casefold() == sku.casefold()):
                 updated["text"] = override
             if part.unity and isinstance(part.unity, dict) and part.unity.get("id"):
-                updated["unity"] = dict(part.unity)
+                current_unity = (
+                    updated.get("unity") if isinstance(updated.get("unity"), dict) else {}
+                )
+                if str(current_unity.get("id") or "").strip() != str(
+                    part.unity.get("id") or ""
+                ).strip():
+                    updated["unity"] = dict(part.unity)
             patched[index] = updated
         return patched
 
@@ -632,7 +644,14 @@ class DraftInvoiceService:
 
     def _parts_by_sku(self) -> dict[str, SevdeskPart]:
         mapping: dict[str, SevdeskPart] = {}
-        for part in self._parts.list_parts(max_pages=40):
+        # Refresh once for the preflight and retain the snapshot so the
+        # following per-draft repairs can resolve SKUs without one API request
+        # per position.
+        try:
+            parts = self._parts.list_parts(max_pages=40, refresh_cache=True)
+        except TypeError:  # Compatibility with lightweight adapters/tests.
+            parts = self._parts.list_parts(max_pages=40)
+        for part in parts:
             sku = str(part.sku or "").strip().upper()
             if sku and sku not in mapping:
                 mapping[sku] = part

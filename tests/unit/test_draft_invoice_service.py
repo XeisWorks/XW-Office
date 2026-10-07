@@ -302,3 +302,32 @@ def test_repair_draft_product_mapping_only_adds_part_reference_without_auto_crea
     assert invoices.updated_positions[0]["name"] == "Gepruefte Positionsbezeichnung"
     assert invoices.updated_positions[0]["text"] == "Die richtige Produktbeschreibung"
     assert invoices.updated_positions[0]["taxRate"] == 0
+
+
+def test_repair_draft_product_mapping_is_noop_for_embedded_matching_references() -> None:
+    service, _connection, parts, invoices = _service()
+    parts.parts["XW-100"] = SevdeskPart(
+        id="P-1",
+        sku="XW-100",
+        name="Produkt Eins",
+        unity={"id": 1, "objectName": "Unity", "name": "Stueck"},
+    )
+    invoices.fetch_invoice_positions = lambda _invoice_id: [
+        {
+            "id": "POS-1",
+            "objectName": "InvoicePos",
+            "name": "Gepruefte Positionsbezeichnung",
+            "text": "Die richtige Produktbeschreibung",
+            "quantity": 2,
+            "price": 12.5,
+            "taxRate": 0,
+            "positionNumber": 0,
+            "part": {"id": "P-1", "objectName": "Part", "name": "Produkt Eins"},
+            "unity": {"id": 1, "objectName": "Unity", "name": "Stueck"},
+        }
+    ]
+
+    repaired = service.repair_draft_product_mapping("INV-1", "20519")
+
+    assert repaired is False
+    assert invoices.updated_positions is None

@@ -225,6 +225,9 @@ class PartClient:
 
     def find_part_by_sku(self, sku: str, *, strict: bool = False) -> SevdeskPart | None:
         """Look up a single Part by its partNumber/SKU via GET /Part?partNumber=…."""
+        cached = self.get_cached_part_by_sku(sku)
+        if cached is not None:
+            return cached
         try:
             response = self._conn.get("/Part", params={"partNumber": sku, "embed": "category,unity"})
             payload = response.json()
@@ -276,6 +279,19 @@ class PartClient:
         created = _parse_part(raw)
         if not created.id.strip():
             raise RuntimeError("sevDesk-Part wurde erstellt, aber ohne ID zurueckgegeben.")
+        with self._cache_lock:
+            if self._parts_cache:
+                self._parts_cache = [
+                    part
+                    for part in self._parts_cache
+                    if part.id.strip() != created.id.strip()
+                    and part.sku.strip().upper() != created.sku.strip().upper()
+                ]
+                self._parts_cache.append(created)
+                self._parts_by_id[created.id.strip()] = created
+                if created.sku.strip():
+                    self._parts_by_sku[created.sku.strip().upper()] = created
+                self._parts_cache_updated_at = datetime.now(timezone.utc)
         logger.info("PartClient: created part %s for SKU %s", created.id, created.sku)
         return created
 

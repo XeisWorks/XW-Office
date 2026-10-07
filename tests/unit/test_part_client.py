@@ -170,6 +170,20 @@ def test_bulk_snapshot_supports_cache_only_stock_reads_and_stock_writes() -> Non
     assert conn.put_calls == [("/Part/10", {"stock": 12.0})]
 
 
+def test_find_part_by_sku_reuses_bulk_snapshot_without_extra_http_call() -> None:
+    conn = _ConnStub(
+        [{"objects": [{"id": "10", "partNumber": "XW-4-001", "name": "Etuede A"}]}]
+    )
+    client = PartClient(conn)  # type: ignore[arg-type]
+    client.list_parts(refresh_cache=True)
+
+    part = client.find_part_by_sku("xw-4-001")
+
+    assert part is not None
+    assert part.id == "10"
+    assert len(conn.calls) == 1
+
+
 def test_get_part_stock_strict_rejects_unreadable_stock_instead_of_returning_zero() -> None:
     conn = _ConnStub([{"objects": []}])
     client = PartClient(conn)  # type: ignore[arg-type]

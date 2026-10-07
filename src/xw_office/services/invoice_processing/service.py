@@ -501,11 +501,26 @@ class InvoiceProcessingService:
             progress_callback("START: Entwuerfe werden geladen...")
         summaries = self._load_start_target_summaries(invoice_ids=invoice_ids)
         if full_mode:
+            if invoice_ids is None:
+                resume_result = self._resume_incomplete_digital_fulfillment(
+                    should_abort=should_abort,
+                    progress_callback=progress_callback,
+                    mail_recipient_override=mail_recipient_override,
+                )
+            else:
+                resume_result = {
+                    "processed": 0,
+                    "failures": 0,
+                    "successful": 0,
+                    "aborted": False,
+                }
+            if bool(resume_result["aborted"]):
+                summaries = []
             if progress_callback is not None:
                 progress_callback("START: Wix-Kontext wird geladen...")
             self._prefetch_wix_order_context(summaries)
             summaries.sort(key=lambda item: self._start_processing_priority(item))
-            return self._run_start_fullflow_print_first(
+            result = self._run_start_fullflow_print_first(
                 summaries=summaries,
                 started=started,
                 print_products=print_products,
@@ -514,6 +529,13 @@ class InvoiceProcessingService:
                 mail_recipient_override=mail_recipient_override,
                 buyer_note_actions=buyer_note_actions,
             )
+            result["processed"] = int(result["processed"]) + int(resume_result["processed"])
+            result["failures"] = int(result["failures"]) + int(resume_result["failures"])
+            result["successful"] = int(result["successful"]) + int(resume_result["successful"])
+            result["aborted"] = bool(result["aborted"]) or bool(resume_result["aborted"])
+            result["resumed"] = int(resume_result["processed"])
+            result["resume_failures"] = int(resume_result["failures"])
+            return result
         updates: dict[str, FulfillmentFlags] = {}
         processed = 0
         failures = 0
@@ -1422,6 +1444,102 @@ class InvoiceProcessingService:
                 for summary in summaries
             ]
         return summaries
+
+    def _resume_incomplete_digital_fulfillment(
+        self,
+        *,
+        should_abort: Callable[[], bool] | None,
+        progress_callback: Callable[[str], None] | None,
+        mail_recipient_override: str | None,
+    ) -> dict[str, int | bool]:
+        """Resume missing post-finalization steps for known digital invoices.
+
+        START normally selects sevDesk drafts only. Once ``sendBy`` succeeds, a
+        later payment/Wix/mail failure would therefore disappear from the next
+        draft run. Persisted fulfillment flags provide the recovery journal.
+        Physical and manual-license deliveries stay manual to avoid accidental
+        printing or external delivery actions.
+        """
+        states = self._load_fulfillment_flags_map()
+        candidate_ids = [
+            invoice_id
+            for invoice_id, flags in states.items()
+            if flags.last_run_iso
+            and not flags.invoice_printed
+            and not flags.label_printed
+            and (
+                flags.last_error
+                or not flags.mail_sent
+                or (flags.payment_applicable and not flags.payment_booked)
+            )
+        ]
+        candidate_ids.sort(key=lambda invoice_id: states[invoice_id].last_run_iso, reverse=True)
+        if not candidate_ids:
+            return {"processed": 0, "failures": 0, "successful": 0, "aborted": False}
+
+        processed = 0
+        failures = 0
+        successful = 0
+        aborted = False
+        for invoice_id in candidate_ids[:100]:
+            if should_abort is not None and should_abort():
+                aborted = True
+                break
+            flags = states[invoice_id]
+            try:
+                summary = self._load_summary_by_id(invoice_id)
+                # Only active accounting states are eligible. In particular,
+                # never revive a cancelled invoice (1001) from an old journal.
+                if int(summary.status_code or 0) not in {200, 300, 1000}:
+                    continue
+                if not summary.order_reference.strip():
+                    continue
+                self._prefetch_wix_order_context([summary])
+                if self._is_manual_licensed_delivery(summary) or not self._is_digital_only(summary):
+                    continue
+
+                processed += 1
+                if progress_callback is not None:
+                    label = summary.invoice_number or summary.order_reference or summary.id
+                    progress_callback(f"START: Unvollstaendige digitale Rechnung {label} wird fortgesetzt...")
+                logger.info("START resume digital invoice=%s", summary.id)
+
+                if not flags.payment_booked:
+                    flags = self._run_payment_step(summary, flags)
+                    self.write_fulfillment_flags(summary.id, flags)
+                if not flags.wix_fulfilled:
+                    flags = self._run_product_step_compat(summary, flags)
+                    self.write_fulfillment_flags(summary.id, flags)
+                if not flags.mail_sent:
+                    flags = self._run_mail_step(
+                        summary,
+                        flags,
+                        recipient_override=mail_recipient_override,
+                    )
+                    self.write_fulfillment_flags(summary.id, flags)
+                if flags.last_error:
+                    flags = self._next_flags(flags)
+                    self.write_fulfillment_flags(summary.id, flags)
+                successful += 1
+                logger.info("START resume digital invoice=%s outcome=ok", summary.id)
+            except Exception as exc:
+                failures += 1
+                self.write_fulfillment_flags(invoice_id, self._with_error(flags, exc))
+                logger.warning("START resume digital invoice=%s outcome=failed: %s", invoice_id, exc)
+
+        logger.info(
+            "START resume metric processed=%s failures=%s successful=%s aborted=%s",
+            processed,
+            failures,
+            successful,
+            aborted,
+        )
+        return {
+            "processed": processed,
+            "failures": failures,
+            "successful": successful,
+            "aborted": aborted,
+        }
 
     def _load_summary_by_id(self, invoice_id: str) -> InvoiceSummary:
         raw = self._invoices.fetch_invoice_by_id(invoice_id)
