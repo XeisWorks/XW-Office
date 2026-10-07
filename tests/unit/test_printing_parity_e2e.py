@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timezone
 import json
 from unittest.mock import patch
 
@@ -529,7 +530,7 @@ def test_fullflow_resumes_incomplete_finalized_digital_invoice_once() -> None:
             "INV-RESUME-1": FulfillmentFlags(
                 payment_applicable=True,
                 payment_booked=True,
-                last_run_iso="2026-10-07T10:00:00+00:00",
+                last_run_iso=datetime.now(timezone.utc).isoformat(),
                 last_error="Wix temporarily unavailable",
             ).as_row_payload()
         }
@@ -580,8 +581,50 @@ def test_fullflow_never_resumes_cancelled_digital_invoice() -> None:
     repo.values["rechnungen.fulfillment_status"] = json.dumps(
         {
             "INV-CANCELLED-1": FulfillmentFlags(
-                last_run_iso="2026-10-07T10:00:00+00:00",
+                last_run_iso=datetime.now(timezone.utc).isoformat(),
                 last_error="mail failed",
+            ).as_row_payload()
+        }
+    )
+    service = InvoiceProcessingService(
+        AppConfig(),
+        invoice_client,
+        repo,
+        _WixOrdersDigitalOnlyStub(),
+        _MailServiceStub(),
+    )
+
+    result = service.run_start_fullflow(full_mode=True)
+
+    assert result["resumed"] == 0
+    assert invoice_client.mail_calls == []
+
+
+def test_fullflow_ignores_stale_digital_resume_journal() -> None:
+    class _OldInvoiceClient(_InvoiceClientE2E):
+        def list_invoice_summaries(
+            self, *, limit: int, offset: int, status: int | None = None
+        ) -> list[InvoiceSummary]:
+            return []
+
+        def fetch_invoice_by_id(self, invoice_id: str) -> dict:
+            payload = super().fetch_invoice_by_id(invoice_id)
+            payload.update(
+                {
+                    "status": 200,
+                    "invoiceNumber": "RE-OLD-1",
+                    "customerInternalNote": "WIX-21466",
+                }
+            )
+            return payload
+
+    invoice_client = _OldInvoiceClient()
+    repo = _SettingsRepoE2E()
+    repo.values["rechnungen.fulfillment_status"] = json.dumps(
+        {
+            "INV-OLD-1": FulfillmentFlags(
+                last_run_iso="2020-01-01T00:00:00+00:00",
+                last_error="old failure",
             ).as_row_payload()
         }
     )

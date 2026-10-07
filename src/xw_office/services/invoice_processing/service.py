@@ -52,6 +52,7 @@ _SENSITIVE_COUNTRIES_KEY = "rechnungen.sensitive_country_codes"
 _ALLOWED_COUNTRIES_KEY = "rechnungen.allowed_country_codes"
 _SKU_FLAGS_KEY = "rechnungen.sku_flags"
 _FULFILLMENT_STATUS_KEY = "rechnungen.fulfillment_status"
+_FULFILLMENT_RESUME_MAX_AGE = timedelta(hours=24)
 _SKU_FLAGS_RETRY_DELAY_SECONDS = 30.0
 _FULFILLMENT_MAIL_TEMPLATE_KEY = "rechnungen.fulfillment_mail_template_html"
 _FULFILLMENT_MAIL_SUBJECT_KEY = "rechnungen.fulfillment_mail_subject"
@@ -1461,10 +1462,22 @@ class InvoiceProcessingService:
         printing or external delivery actions.
         """
         states = self._load_fulfillment_flags_map()
+        now = datetime.now(timezone.utc)
+
+        def is_recent(last_run_iso: str) -> bool:
+            try:
+                stamp = datetime.fromisoformat(last_run_iso)
+            except (TypeError, ValueError):
+                return False
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            return now - stamp <= _FULFILLMENT_RESUME_MAX_AGE
+
         candidate_ids = [
             invoice_id
             for invoice_id, flags in states.items()
             if flags.last_run_iso
+            and is_recent(flags.last_run_iso)
             and not flags.invoice_printed
             and not flags.label_printed
             and (
@@ -1473,6 +1486,17 @@ class InvoiceProcessingService:
                 or (flags.payment_applicable and not flags.payment_booked)
             )
         ]
+        stale_count = sum(
+            1
+            for flags in states.values()
+            if flags.last_run_iso and not is_recent(flags.last_run_iso)
+        )
+        if stale_count:
+            logger.info(
+                "START resume skipped stale fulfillment states=%s max_age_hours=%s",
+                stale_count,
+                int(_FULFILLMENT_RESUME_MAX_AGE.total_seconds() // 3600),
+            )
         candidate_ids.sort(key=lambda invoice_id: states[invoice_id].last_run_iso, reverse=True)
         if not candidate_ids:
             return {"processed": 0, "failures": 0, "successful": 0, "aborted": False}
