@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 from zoneinfo import ZoneInfo
@@ -46,6 +47,9 @@ from xw_office.core.worker import BackgroundWorker
 from xw_office.services.commission.service import format_euro_amount
 from xw_office.services.expenses.reference_parser import format_expense_original_details
 from xw_office.services.expenses.service import BankExpenseRow, ExpenseAuditService, ExpensePositionView
+from xw_office.services.expenses.xw_flow_expense_client import FlowExpense, XwFlowExpenseClient
+from xw_office.services.secrets.service import SecretService
+from xw_office.ui.modules.expense_review.manual_expense_dialog import ManualExpenseDialog
 from xw_office.ui.widgets.data_table import DataTable
 
 if False:  # pragma: no cover
@@ -511,6 +515,7 @@ class ExpenseReviewView(QWidget):
         super().__init__(parent)
         self._container = container
         self._worker: BackgroundWorker | None = None
+        self._manual_worker: BackgroundWorker | None = None
         self._assignment_workers: list[BackgroundWorker] = []
         self._tenant_key = "xw"
         self._tenant_tabs = QTabBar()
@@ -535,6 +540,9 @@ class ExpenseReviewView(QWidget):
         self._wizard_button = QPushButton("Offene Zuordnungen prüfen")
         self._table = DataTable(_HEADERS)
         self._missing_table = DataTable(_HEADERS)
+        self._manual_table = DataTable(
+            ["Datum", "Empfänger", "Zweck", "Betrag", "USt.", "Zahlungsart", "Kategorie", "Beleg", "Prüfung", "Rückzahlung"]
+        )
         self._position_table = DataTable(["Kürzel", "Kategorie", "Farbe", "Aktiv"])
         self._rule_table = DataTable(["Kategorie", "Bezeichnung", "Empfänger", "IBAN", "Zweck", "Aktiv"])
         self._supplier_table = DataTable(["Bezeichnung", "Empfänger", "IBAN", "Website", "Aktiv"])
@@ -549,6 +557,13 @@ class ExpenseReviewView(QWidget):
         service = self._container.resolve(ExpenseAuditService)
         for_tenant = getattr(service, "for_tenant", None)
         return for_tenant(self._tenant_key) if callable(for_tenant) else service
+
+    @property
+    def flow_expense_client(self) -> XwFlowExpenseClient:
+        return XwFlowExpenseClient(
+            self._container.config,
+            self._container.resolve(SecretService),
+        )
 
     @property
     def _tenant_label(self) -> str:
@@ -653,6 +668,23 @@ class ExpenseReviewView(QWidget):
         layout = QVBoxLayout(page)
         self._configure_expense_table(self._table)
         layout.addWidget(self._table, stretch=1)
+        manual_header = QHBoxLayout()
+        manual_header.addWidget(QLabel("Zusätzliche Ausgaben – bar oder privat bezahlt"))
+        manual_header.addStretch()
+        add_manual = QPushButton("+")
+        add_manual.setToolTip("Neue zusätzliche Ausgabe")
+        add_manual.setFixedSize(38, 32)
+        add_manual.clicked.connect(self._add_manual_expense)
+        manual_header.addWidget(add_manual)
+        manual_refresh = QPushButton()
+        manual_refresh.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
+        manual_refresh.setToolTip("Zusätzliche Ausgaben aktualisieren")
+        manual_refresh.setFixedSize(38, 32)
+        manual_refresh.clicked.connect(self._load_manual_expenses)
+        manual_header.addWidget(manual_refresh)
+        layout.addLayout(manual_header)
+        self._configure_manual_table()
+        layout.addWidget(self._manual_table, stretch=1)
         actions = QHBoxLayout()
         purpose_rule = QPushButton("Zweck für Empfänger bereinigen")
         purpose_rule.clicked.connect(self._add_purpose_rule_from_selected)
@@ -663,6 +695,17 @@ class ExpenseReviewView(QWidget):
         self._document_delegate.url_clicked.connect(self._open_url)
         self._document_delegate.supplier_link_requested.connect(self._add_supplier_link_from_row)
         return page
+
+    def _configure_manual_table(self) -> None:
+        header = self._manual_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self._manual_table.setItemDelegateForColumn(6, self._position_delegate)
+        state = self._settings.value(f"expense_review/{self._tenant_key}/manual_table_header")
+        if state is not None:
+            header.restoreState(state)
+        header.sectionResized.connect(lambda *_args: self._schedule_table_header_save())
+        header.sectionMoved.connect(lambda *_args: self._schedule_table_header_save())
 
     def _build_missing_tab(self) -> QWidget:
         page = QWidget()
@@ -781,6 +824,68 @@ class ExpenseReviewView(QWidget):
         self._tenant_tabs.setEnabled(False)
         self._worker.signals.finished.connect(self._on_load_finished)
         self._worker.start()
+        self._load_manual_expenses()
+
+    def _load_manual_expenses(self) -> None:
+        if not hasattr(self._container, "config"):
+            return
+        if self._manual_worker is not None and self._manual_worker.isRunning():
+            return
+        start = cast(date, self._start.date().toPython())
+        end = cast(date, self._end.date().toPython())
+        client = self.flow_expense_client
+        category_snapshot = [position.__dict__ for position in self.service.list_positions(enabled_only=False)]
+
+        def fetch_manual() -> list[FlowExpense]:
+            try:
+                client.sync_categories(tenant_key=self._tenant_key, positions=category_snapshot)
+            except Exception:
+                # Category mirroring is additive; a temporary bridge problem must
+                # not hide already captured expenses.
+                pass
+            return client.fetch(tenant_key=self._tenant_key, start=start, end=end, active_only=False)
+
+        self._manual_worker = BackgroundWorker(
+            fetch_manual
+        )
+        self._manual_worker.signals.result.connect(self._on_manual_loaded)
+        self._manual_worker.signals.error.connect(self._on_manual_error)
+        self._manual_worker.signals.finished.connect(lambda: setattr(self, "_manual_worker", None))
+        self._manual_worker.start()
+
+    def _on_manual_error(self, exc: Exception) -> None:
+        if hasattr(self._container, "config") and self.flow_expense_client.is_configured():
+            self._status.setText(f"Zusätzliche Ausgaben nicht geladen: {exc}")
+
+    def _on_manual_loaded(self, payload: object) -> None:
+        values = [item for item in payload if isinstance(item, FlowExpense)] if isinstance(payload, list) else []
+        positions = [position.__dict__ for position in self._positions]
+        self._manual_table.set_data(
+            [
+                {
+                    "Datum": item.expense_date or "offen",
+                    "Empfänger": item.recipient,
+                    "Zweck": item.purpose,
+                    "Betrag": format_euro_amount(item.gross_amount or Decimal("0")),
+                    "USt.": f"{item.tax_rate_bps / 100:g} %" if item.tax_rate_bps is not None else "unbekannt",
+                    "Zahlungsart": item.payment_source,
+                    "Kategorie": "",
+                    "Beleg": "vorhanden" if item.receipt_state == "attached" else "fehlt",
+                    "Prüfung": item.accounting_status,
+                    "Rückzahlung": item.reimbursement_status,
+                    "__transaction_id": f"manual:{item.id}",
+                    "__manual_id": item.id,
+                    "__manual_version": item.version,
+                    "__positions": positions,
+                    "__position_key": item.category_key,
+                    "__align__Betrag": "right",
+                    "__align__Kategorie": "center",
+                    "__fg__Betrag": "#ff9c9c",
+                }
+                for item in values
+            ]
+        )
+        self._manual_table.resizeColumnsToContents()
 
     def _on_load_finished(self) -> None:
         self._worker = None
@@ -829,11 +934,15 @@ class ExpenseReviewView(QWidget):
         state = self._settings.value(state_key)
         if state is not None:
             self._table.horizontalHeader().restoreState(state)
+        manual_state = self._settings.value(f"expense_review/{self._tenant_key}/manual_table_header")
+        if manual_state is not None:
+            self._manual_table.horizontalHeader().restoreState(manual_state)
         self._rows = []
         self._all_rows = []
         self._missing_loaded_period = None
         self._table.set_data([])
         self._missing_table.set_data([])
+        self._manual_table.set_data([])
         self._load(refresh=True)
 
     def _populate(
@@ -920,6 +1029,9 @@ class ExpenseReviewView(QWidget):
         return f"{row.position_source or 'zugeordnet'}{suffix}"
 
     def _assign_position(self, transaction_id: str, position_key: str) -> None:
+        if transaction_id.startswith("manual:"):
+            self._assign_manual_position(transaction_id.removeprefix("manual:"), position_key)
+            return
         self._all_rows = [
             replace(row, position_key=position_key, position_source="manual")
             if row.transaction_id == transaction_id
@@ -945,6 +1057,28 @@ class ExpenseReviewView(QWidget):
         worker.signals.error.connect(self._on_error)
         worker.signals.finished.connect(lambda: self._assignment_workers.remove(worker))
         self._assignment_workers.append(worker)
+        worker.start()
+
+    def _assign_manual_position(self, expense_id: str, position_key: str) -> None:
+        selected = next(
+            (row for row in self._manual_table.source_rows_data() if row.get("__manual_id") == expense_id),
+            None,
+        )
+        if not selected:
+            return
+        position = next((item for item in self._positions if item.key == position_key), None)
+        if position is None:
+            return
+        worker = BackgroundWorker(
+            lambda: self.flow_expense_client.update_category(
+                expense_id=expense_id,
+                version=int(selected.get("__manual_version") or 1),
+                category_key=position_key,
+                category_label=position.label,
+            )
+        )
+        worker.signals.result.connect(lambda _: self._load_manual_expenses())
+        worker.signals.error.connect(self._on_manual_error)
         worker.start()
 
     def _refresh_missing_receipts(self) -> None:
@@ -1242,7 +1376,22 @@ class ExpenseReviewView(QWidget):
             f"expense_review/{self._tenant_key}/bank_table_header",
             self._table.horizontalHeader().saveState(),
         )
+        self._settings.setValue(
+            f"expense_review/{self._tenant_key}/manual_table_header",
+            self._manual_table.horizontalHeader().saveState(),
+        )
         self._settings.sync()
+
+    def _add_manual_expense(self) -> None:
+        if not hasattr(self._container, "config"):
+            _show_copyable_message(self, "Zusätzliche Ausgabe", "XW-Flow Ausgaben-Bridge ist in diesem Testcontainer nicht verfügbar.", QMessageBox.Icon.Warning)
+            return
+        if not self.flow_expense_client.is_configured():
+            _show_copyable_message(self, "Zusätzliche Ausgabe", "XW-Flow Ausgaben-Bridge ist nicht konfiguriert.", QMessageBox.Icon.Warning)
+            return
+        dialog = ManualExpenseDialog(self.flow_expense_client, self._tenant_key, self._positions, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._load_manual_expenses()
 
     def closeEvent(self, event: Any) -> None:
         self._save_table_header()
