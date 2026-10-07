@@ -16,6 +16,8 @@
     Das Skript ist idempotent: wiederholtes Ausfuehren aktualisiert nur die
     Verknuepfungen, es werden weder Benutzerdaten noch das lokale .venv angefasst.
     Eine vorhandene angeheftete Office-Verknuepfung wird ebenfalls aktualisiert.
+    Alte Debug-Anheftungen werden auf den fensterlosen Alltagsstart umgestellt;
+    der Debug-Start bleibt separat im Startmenue verfuegbar.
 
 .PARAMETER IncludeDesktopShortcut
     Legt Desktop-Verknuepfungen fuer Office und Druckcenter an. Eine vorhandene
@@ -35,6 +37,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:OfficeAppUserModelId = 'at.xeisworks.xwoffice'
+$script:OfficeDebugAppUserModelId = 'at.xeisworks.xwoffice.debug'
 $script:PrintCenterAppUserModelId = 'at.xeisworks.printcenter'
 
 if (-not ('XwShortcutIdentity' -as [type])) {
@@ -220,7 +223,7 @@ try {
         -TargetPath $DebugCmd `
         -WorkingDirectory $RepoRoot `
         -IconLocation $IconArg `
-        -AppUserModelId $script:OfficeAppUserModelId `
+        -AppUserModelId $script:OfficeDebugAppUserModelId `
         -Description 'XeisWorks Office mit sichtbarer Diagnosekonsole starten'
 
     $OldUpdateShortcut = Join-Path $AppFolder 'XeisWorks Office aktualisieren.lnk'
@@ -245,13 +248,15 @@ try {
     if (Test-Path $TaskbarPinFolder) {
         Get-ChildItem -Path $TaskbarPinFolder -Filter '*.lnk' -File | ForEach-Object {
             $pinnedShortcut = $script:Shell.CreateShortcut($_.FullName)
-            if ($pinnedShortcut.Arguments -like '*xw_office_gui.pyw*') {
-                $pinnedShortcut.IconLocation = $IconArg
-                $pinnedShortcut.Description = 'XeisWorks Office starten (ohne Konsolenfenster)'
-                $pinnedShortcut.Save()
-                [XwShortcutIdentity]::SetAppUserModelId(
-                    $_.FullName, $script:OfficeAppUserModelId
-                )
+            if ($pinnedShortcut.Arguments -like '*xw_office_gui.pyw*' -or
+                $pinnedShortcut.TargetPath -eq $DebugCmd) {
+                New-XwShortcut -Path $_.FullName `
+                    -TargetPath $VenvPythonw `
+                    -Arguments "`"$GuiBootstrap`"" `
+                    -WorkingDirectory $RepoRoot `
+                    -IconLocation $IconArg `
+                    -AppUserModelId $script:OfficeAppUserModelId `
+                    -Description 'XeisWorks Office starten (ohne Konsolenfenster)'
                 $script:UpdatedOfficePins++
                 Write-Host "Angeheftete Office-Verknuepfung aktualisiert: $($_.FullName)"
             }
@@ -259,7 +264,7 @@ try {
     }
     if ($script:UpdatedOfficePins -eq 0) {
         Write-Warning (
-            'Keine angeheftete Office-Verknuepfung mit xw_office_gui.pyw gefunden. ' +
+            'Keine angeheftete Office-Verknuepfung gefunden. ' +
             'Falls das Taskleisten-Symbol weiter falsch aussieht, die alte Anheftung ' +
             'entfernen und "XeisWorks Office" erneut aus dem Startmenue anheften.'
         )

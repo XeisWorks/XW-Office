@@ -11,6 +11,12 @@ import sys
 from pathlib import Path
 
 APP_USER_MODEL_ID = "at.xeisworks.xwoffice"
+DEBUG_APP_USER_MODEL_ID = f"{APP_USER_MODEL_ID}.debug"
+
+
+def office_app_user_model_id(start_mode: str) -> str:
+    """Keep console diagnostics separate from the windowless taskbar launcher."""
+    return DEBUG_APP_USER_MODEL_ID if start_mode == "debug" else APP_USER_MODEL_ID
 
 
 def find_repo_root() -> Path:

@@ -80,6 +80,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_windows_shortc
 # "XeisWorks Office" per Rechtsklick im Startmenue an die Taskleiste anheften.
 # Das Skript aktualisiert bei erneutem Ausfuehren auch Desktop- und vorhandene
 # Taskleisten-Verknuepfungen samt Icon und Windows-App-Identitaet.
+# Alte Debug-Anheftungen werden auf den fensterlosen Start umgestellt.
+# Der Debug-Start bleibt mit eigener Taskleisten-Identitaet im Startmenue verfuegbar.
 ```
 
 Der normale Start prueft automatisch und lautlos, ob ein Fast-forward-only-Update vorliegt, und

@@ -11,7 +11,11 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from xw_office.bootstrap import register_default_services
-from xw_office.core.app_paths import app_icon_path, ensure_app_user_model_id
+from xw_office.core.app_paths import (
+    app_icon_path,
+    ensure_app_user_model_id,
+    office_app_user_model_id,
+)
 from xw_office.core.config import AppConfig, load_config
 from xw_office.core.container import Container
 from xw_office.core.database import create_engine_from_config, ensure_core_tables
@@ -101,11 +105,11 @@ def _register_workstation(container: Container) -> None:
 
 def create_application() -> QApplication:
     """Build and return the fully wired QApplication."""
-    ensure_app_user_model_id()
+    start_mode = os.getenv("XW_OFFICE_START_MODE") or ("gui" if sys.stdout is None else "console")
+    ensure_app_user_model_id(office_app_user_model_id(start_mode))
 
     setup_logging()
     install_qt_message_handler()
-    start_mode = os.getenv("XW_OFFICE_START_MODE") or ("gui" if sys.stdout is None else "console")
     log_startup_info(start_mode, APP_VERSION)
     logger.info("Starting XeisWorks Office...")
 
