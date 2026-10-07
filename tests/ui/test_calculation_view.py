@@ -44,7 +44,7 @@ def test_commission_view_uses_compact_tables_and_collapsed_documents(qtbot: obje
     view = CalculationView(_ContainerStub())  # type: ignore[arg-type]
     qtbot.addWidget(view)
 
-    assert view._product_table._model._columns == ["Name", "Verkauft", "Netto"]  # noqa: SLF001
+    assert view._product_table._model._columns == ["SKU", "Name", "Verkauft", "Netto"]  # noqa: SLF001
     assert view._category_table._model._columns == [  # noqa: SLF001
         "Kategorie",
         "Menge",

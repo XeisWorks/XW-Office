@@ -40,6 +40,7 @@ SIDEBAR_ENTRIES: list[SidebarEntry] = [
     SidebarEntry(ModuleKey.PRODUCTS, "Produkte", "products", "Geschaeft"),
     SidebarEntry(ModuleKey.CRM, "CRM", "crm", "Geschaeft"),
     SidebarEntry(ModuleKey.TAXES, "Steuern", "taxes", "Finanzen"),
+    SidebarEntry(ModuleKey.EXPENSE_REVIEW, "Ausgabenprüfung", "expenses", "Finanzen"),
     SidebarEntry(ModuleKey.CLEARING, "Zahlungsclearing", "payment", "Finanzen"),
     SidebarEntry(ModuleKey.STATISTICS, "Statistik", "statistics", "Finanzen"),
     SidebarEntry(ModuleKey.CALCULATION, "Provisionen", "calculation", "Finanzen"),

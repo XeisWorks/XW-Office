@@ -9,22 +9,31 @@ recurring payment whose reference changes each month is still recognized.
 from __future__ import annotations
 
 import csv
+import datetime
 import io
 import json
 import logging
 import re
 import uuid
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING
 
 from xw_office.core.fuzzy_match import fuzzy_ratio
 from xw_office.core.text_normalize import clean_bank_purpose, normalize_german_text
 from xw_office.repositories.settings_kv import SettingKvRepository
+from xw_office.services.expenses.bank_provider import (
+    BankDocumentLink,
+    BankExpense,
+    SevdeskExpenseProvider,
+)
+from xw_office.services.sevdesk.urls import sevdesk_document_url
 
 if TYPE_CHECKING:
     from xw_office.models.expense_check import ExpenseIgnoreRule, ExpenseShiftEntry
     from xw_office.repositories.expense_check import ExpenseCheckRepository
+    from xw_office.repositories.expense_pipeline import ExpensePipelineRepository
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +55,25 @@ class ExpenseRow:
     category: str
     status: str
     note: str
+
+
+@dataclass(frozen=True)
+class BankExpenseRow:
+    """Normalized bank row shared by the central and profile-filtered views."""
+
+    transaction_id: str
+    value_date: datetime.date
+    payee: str
+    purpose: str
+    amount: Decimal
+    currency: str
+    iban: str = ""
+    profile_status: str = ""
+    review_status: str = "open"
+    sevdesk_url: str = ""
+    supplier_url: str = ""
+    rule_source: str = ""
+    document_link_scan_complete: bool = True
 
 
 class ExpenseAction(str, Enum):
@@ -119,15 +147,213 @@ class ExpenseAuditService:
         settings_repo: SettingKvRepository | None = None,
         *,
         expense_check_repo: "ExpenseCheckRepository | None" = None,
+        bank_provider: SevdeskExpenseProvider | None = None,
+        pipeline_repo: "ExpensePipelineRepository | None" = None,
     ) -> None:
         self._repo = settings_repo
         self._expense_repo = expense_check_repo
+        self._bank_provider = bank_provider
+        self._pipeline_repo = pipeline_repo
+        self._memory_profile_flags: dict[tuple[str, str], str] = {}
 
     def describe(self) -> str:
         return (
             "Ausgaben-Check: Belege pruefen und fuer UVA/FIBU vorbereiten "
             "(DB-Liste + Filter + CSV-Export, mit Ignore-Regeln und Perioden-Verschiebung)."
         )
+
+    def list_bank_expenses(
+        self,
+        *,
+        start: datetime.date,
+        end: datetime.date,
+        profile_key: str = "",
+        refresh: bool = True,
+    ) -> list[BankExpenseRow]:
+        """Load outgoing sevDesk transactions and persist normalized snapshots."""
+        if self._bank_provider is None:
+            return []
+        if refresh:
+            _account, rows = self._bank_provider.fetch(start, end, outgoing_only=True)
+        elif self._pipeline_repo is not None:
+            rows = []
+            for snapshot in self._pipeline_repo.list_snapshots(
+                start=start, end=end, direction="outgoing"
+            ):
+                rows.append(
+                    BankExpense(
+                        external_id=snapshot.external_id,
+                        account_id=snapshot.account_id,
+                        value_date=snapshot.value_date,
+                        entry_date=snapshot.entry_date,
+                        amount=Decimal(str(snapshot.amount)),
+                        currency=snapshot.currency,
+                        direction=snapshot.direction,
+                        payee_name=snapshot.payee_name,
+                        payee_normalized=snapshot.payee_normalized,
+                        counterparty_iban=snapshot.counterparty_iban,
+                        payment_reference=snapshot.payment_reference,
+                        purpose=snapshot.purpose,
+                        sevdesk_status=snapshot.sevdesk_status,
+                    )
+                )
+        else:
+            rows = []
+
+        links_by_transaction: dict[str, list[BankDocumentLink]] = {}
+        link_scan_complete = True
+        if refresh:
+            try:
+                account = self._bank_provider.find_account()
+                for link in self._bank_provider.resolve_document_links(
+                    start, end, account_id=account.id
+                ):
+                    links_by_transaction.setdefault(link.transaction_external_id, []).append(link)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("sevDesk-Belegscan unvollständig: %s", exc)
+                link_scan_complete = False
+
+        result: list[BankExpenseRow] = []
+        rules = self._pipeline_repo.list_rules(profile_key) if self._pipeline_repo and profile_key else []
+        for row in rows:
+            snapshot_id = ""
+            if self._pipeline_repo is not None:
+                snapshot = self._pipeline_repo.upsert_snapshot(
+                    {
+                        "account_id": row.account_id,
+                        "external_id": row.external_id,
+                        "value_date": row.value_date,
+                        "entry_date": row.entry_date,
+                        "amount": row.amount,
+                        "currency": row.currency,
+                        "direction": row.direction,
+                        "payee_name": row.payee_name,
+                        "payee_normalized": row.payee_normalized,
+                        "counterparty_iban": row.counterparty_iban,
+                        "payment_reference": row.payment_reference,
+                        "purpose": row.purpose,
+                        "sevdesk_status": row.sevdesk_status,
+                    }
+                )
+                snapshot_id = str(snapshot.id)
+                for link in links_by_transaction.get(row.external_id, []):
+                    self._pipeline_repo.add_document_link(
+                        transaction_id=snapshot.id,
+                        resource_type=link.resource_type,
+                        external_id=link.external_id,
+                        document_number=link.document_number,
+                    )
+            status = ""
+            source = ""
+            if profile_key:
+                status, source = self._match_profile_rule(row, profile_key, rules)
+                if self._pipeline_repo is not None and snapshot_id:
+                    assignment = self._pipeline_repo.get_assignment(
+                        transaction_id=uuid.UUID(snapshot_id), profile_key=profile_key
+                    )
+                    if assignment is not None:
+                        status = assignment.status
+                        source = assignment.source
+                status = status or self._memory_profile_flags.get((profile_key, row.external_id), "")
+            document_links = links_by_transaction.get(row.external_id, [])
+            sevdesk_link = ""
+            if document_links:
+                first_link = document_links[0]
+                sevdesk_link = sevdesk_document_url(
+                    self._bank_provider.base_url,
+                    first_link.resource_type,
+                    first_link.external_id,
+                )
+            supplier_url = ""
+            if self._pipeline_repo is not None:
+                supplier_links = self._pipeline_repo.list_supplier_links(
+                    profile_key=profile_key,
+                    payee_normalized=row.payee_normalized,
+                    iban=row.counterparty_iban,
+                )
+                if not supplier_links:
+                    supplier_links = self._pipeline_repo.list_supplier_links(
+                        profile_key=profile_key,
+                        payee_normalized=normalize_german_text(row.display_reference),
+                        iban=row.counterparty_iban,
+                    )
+                if supplier_links:
+                    supplier_url = supplier_links[0].url
+            result.append(
+                BankExpenseRow(
+                    transaction_id=snapshot_id or row.external_id,
+                    value_date=row.value_date,
+                    payee=row.payee_name,
+                    iban=row.counterparty_iban,
+                    purpose=row.display_reference,
+                    amount=row.amount,
+                    currency=row.currency,
+                    sevdesk_url=sevdesk_link,
+                    supplier_url=supplier_url,
+                    profile_status=status,
+                    rule_source=source,
+                    document_link_scan_complete=link_scan_complete,
+                )
+            )
+        return result
+
+    def flag_profile_transaction(
+        self,
+        *,
+        transaction_id: str,
+        profile_key: str,
+        payee: str,
+        iban: str = "",
+        include: bool = True,
+    ) -> None:
+        """Flag one transaction and remember exact IBAN/payee candidates."""
+        status = "included" if include else "excluded"
+        self._memory_profile_flags[(profile_key, transaction_id)] = status
+        if self._pipeline_repo is None:
+            return
+        try:
+            tx_id = uuid.UUID(transaction_id)
+        except ValueError:
+            return
+        self._pipeline_repo.add_assignment(
+            transaction_id=tx_id,
+            profile_key=profile_key,
+            status=status,
+            source="manual",
+        )
+        if include:
+            normalized_iban = iban.replace(" ", "").upper().strip()
+            if normalized_iban:
+                self._pipeline_repo.add_rule(
+                    profile_key=profile_key,
+                    action="candidate",
+                    match_field="iban",
+                    value_normalized=normalized_iban,
+                    value_original=iban,
+                )
+            normalized_payee = normalize_german_text(payee)
+            if normalized_payee:
+                self._pipeline_repo.add_rule(
+                    profile_key=profile_key,
+                    action="candidate",
+                    match_field="payee",
+                    value_normalized=normalized_payee,
+                    value_original=payee,
+                )
+
+    @staticmethod
+    def _match_profile_rule(
+        row: BankExpense,
+        profile_key: str,
+        rules: list[object],
+    ) -> tuple[str, str]:
+        for rule in rules:
+            match_field = str(getattr(rule, "match_field", ""))
+            expected = str(getattr(rule, "value_normalized", ""))
+            actual = row.counterparty_iban if match_field == "iban" else row.payee_normalized
+            if expected and actual and expected == actual:
+                return "candidate", f"{profile_key}:{match_field}"
+        return "", ""
 
     # ------------------------------------------------------------------ #
     # Existing list/filter/export (unchanged behavior)                    #

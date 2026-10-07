@@ -1,6 +1,7 @@
 """Expense audit."""
 
 from xw_office.services.expenses.service import (
+    BankExpenseRow,
     ExpenseAction,
     ExpenseAuditService,
     ExpenseRow,
@@ -12,6 +13,7 @@ from xw_office.services.expenses.service import (
 __all__ = [
     "ExpenseAction",
     "ExpenseAuditService",
+    "BankExpenseRow",
     "ExpenseRow",
     "ExpenseRowClassification",
     "IgnoreRuleView",

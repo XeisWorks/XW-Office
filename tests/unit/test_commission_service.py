@@ -157,13 +157,13 @@ def test_musikheroes_sr_keeps_negative_net_and_quantity() -> None:
     result = service.run_profile("musikheroes", period)
 
     assert result.summary.total_net_quantity == -5.0
-    assert round(result.summary.total_net_amount, 2) == -70.90
+    assert round(result.summary.total_net_amount, 2) == 45.28
     assert result.summary.anomaly_count == 0
     row = result.product_rows[0]
     assert row.sold_quantity == 2.0
     assert row.canceled_quantity == 7.0
     assert row.net_quantity == -5.0
-    assert round(row.net_amount, 2) == -70.90
+    assert round(row.net_amount, 2) == 45.28
 
 
 def test_credit_note_uses_credit_note_date_not_origin_invoice_date() -> None:
@@ -187,6 +187,7 @@ def test_credit_note_uses_credit_note_date_not_origin_invoice_date() -> None:
 
     assert june_result.summary.document_count == 3
     assert july_result.summary.document_count == 1
+    assert july_result.summary.total_net_quantity == 0.0
     assert round(july_result.summary.total_net_amount, 2) == -22.64
 
 
@@ -235,7 +236,7 @@ def test_invoice_header_discount_is_distributed_over_positions() -> None:
 
     result = service.run_profile("musikheroes", period)
 
-    assert round(result.summary.total_net_amount, 2) == -82.22
+    assert round(result.summary.total_net_amount, 2) == 33.96
     assert result.source_stats["invoices_with_discount"] == 1
 
 
@@ -253,7 +254,7 @@ def test_draft_documents_are_excluded() -> None:
     result = service.run_profile("musikheroes", period)
 
     assert result.summary.total_net_quantity == -6.0
-    assert round(result.summary.total_net_amount, 2) == -93.54
+    assert round(result.summary.total_net_amount, 2) == 22.64
     assert result.source_stats["documents_skipped_draft"] == 1
 
 
@@ -295,7 +296,7 @@ def test_category_profile_excludes_free_text_and_other_category_products() -> No
 
     result = service.run_profile("musikheroes", period)
 
-    assert round(result.summary.total_net_amount, 2) == -70.90
+    assert round(result.summary.total_net_amount, 2) == 45.28
     assert all(row.name != "Mnoschil" for row in result.product_rows)
     assert result.source_stats["positions_skipped_no_profile_match"] == 2
 

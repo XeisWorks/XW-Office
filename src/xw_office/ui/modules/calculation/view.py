@@ -42,6 +42,7 @@ from xw_office.services.commission.service import (
     format_commission_summary,
     format_quantity,
 )
+from xw_office.services.expenses.service import BankExpenseRow, ExpenseAuditService
 from xw_office.services.calculation.service import (
     ArticleEntry,
     CalculationService,
@@ -69,7 +70,7 @@ _ARTICLE_HEADERS = [
     "Provision EUR",
     "Notiz",
 ]
-_PRODUCT_HEADERS = ["Name", "Verkauft", "Netto"]
+_PRODUCT_HEADERS = ["SKU", "Name", "Verkauft", "Netto"]
 _CATEGORY_HEADERS = ["Kategorie", "Menge", "Netto", "Brutto"]
 _DOC_HEADERS = ["Beleg", "Datum", "Typ", "SKU", "Menge", "Netto", "Regel"]
 
@@ -84,6 +85,7 @@ class CalculationView(QWidget):
         self._articles: list[ArticleEntry] = []
         self._worker: BackgroundWorker | None = None
         self._commission_worker: BackgroundWorker | None = None
+        self._embedded_expense_worker: BackgroundWorker | None = None
         self._export_worker: BackgroundWorker | None = None
         self._last_commission_result: CommissionRunResult | None = None
         self._active_profile_key: str = ""
@@ -321,7 +323,10 @@ class CalculationView(QWidget):
         products_lay.addWidget(QLabel("Produkte"))
         self._product_table = DataTable(_PRODUCT_HEADERS)
         self._product_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self._product_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
         )
         self._product_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         products_lay.addWidget(self._product_table, stretch=1)
@@ -332,6 +337,30 @@ class CalculationView(QWidget):
         result_splitter.setStretchFactor(1, 2)
         result_splitter.setSizes([430, 760])
         lay.addWidget(result_splitter, stretch=4)
+
+        self._embedded_expenses_group = QGroupBox("Ausgaben MusikHeroes")
+        self._embedded_expenses_group.setCheckable(True)
+        self._embedded_expenses_group.setChecked(True)
+        expenses_layout = QVBoxLayout(self._embedded_expenses_group)
+        self._embedded_expenses_status = QLabel("Noch nicht geladen")
+        expenses_layout.addWidget(self._embedded_expenses_status)
+        self._embedded_expenses_table = DataTable(
+            ["Datum", "Empfänger", "Zahlungsreferenz / Verwendungszweck", "Betrag", "Flag", "Beleg"]
+        )
+        self._embedded_expenses_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.Stretch
+        )
+        expenses_layout.addWidget(self._embedded_expenses_table)
+        expense_actions = QHBoxLayout()
+        include_expense = QPushButton("MusikHeroes einschließen")
+        include_expense.clicked.connect(lambda: self._flag_embedded_expense(True))
+        exclude_expense = QPushButton("MusikHeroes ausschließen")
+        exclude_expense.clicked.connect(lambda: self._flag_embedded_expense(False))
+        expense_actions.addWidget(include_expense)
+        expense_actions.addWidget(exclude_expense)
+        expense_actions.addStretch()
+        expenses_layout.addLayout(expense_actions)
+        lay.addWidget(self._embedded_expenses_group)
 
         self._documents_group = QGroupBox("Belege")
         self._documents_group.setCheckable(True)
@@ -429,6 +458,76 @@ class CalculationView(QWidget):
         self._populate_category_table(payload)
         self._populate_doc_table(payload)
         self._populate_anomaly_table(payload)
+        self._load_embedded_expenses(payload)
+
+    def _load_embedded_expenses(self, result: CommissionRunResult) -> None:
+        if self._embedded_expense_worker is not None and self._embedded_expense_worker.isRunning():
+            return
+        try:
+            service: ExpenseAuditService = self._container.resolve(ExpenseAuditService)
+        except KeyError:
+            self._embedded_expenses_status.setText("Ausgabenpipeline nicht konfiguriert")
+            return
+        period = result.period
+        self._embedded_expenses_status.setText("Ausgaben werden geladen …")
+        self._embedded_expense_worker = BackgroundWorker(
+            lambda: service.list_bank_expenses(
+                start=period.start,
+                end=period.end,
+                profile_key=result.profile.key,
+                refresh=True,
+            )
+        )
+        self._embedded_expense_worker.signals.result.connect(self._on_embedded_expenses_loaded)
+        self._embedded_expense_worker.signals.error.connect(
+            lambda exc: self._embedded_expenses_status.setText(f"Ausgaben nicht verfügbar: {exc}")
+        )
+        self._embedded_expense_worker.signals.finished.connect(
+            lambda: setattr(self, "_embedded_expense_worker", None)
+        )
+        self._embedded_expense_worker.start()
+
+    def _on_embedded_expenses_loaded(self, payload: object) -> None:
+        rows = [row for row in payload if isinstance(row, BankExpenseRow)] if isinstance(payload, list) else []
+        self._embedded_expenses_table.set_data(
+            [
+                {
+                    "Datum": row.value_date.strftime("%d.%m.%Y"),
+                    "Empfänger": row.payee,
+                    "Zahlungsreferenz / Verwendungszweck": row.purpose,
+                    "Betrag": format_euro_amount(row.amount),
+                    "Flag": row.profile_status or "—",
+                    "Beleg": "sevDesk" if row.sevdesk_url else ("Lieferantenportal" if row.supplier_url else "fehlt"),
+                    "__transaction_id": row.transaction_id,
+                    "__iban": row.iban,
+                    "__payee": row.payee,
+                    "__align__Betrag": "right",
+                }
+                for row in rows
+            ]
+        )
+        self._embedded_expenses_status.setText(
+            f"{len(rows)} ausgehende Zahlungen · informativ, nicht provisionswirksam"
+        )
+
+    def _flag_embedded_expense(self, include: bool) -> None:
+        selected = self._embedded_expenses_table.selected_row_data()
+        if not selected:
+            QMessageBox.information(self, "Provisionen", "Bitte zuerst eine Ausgabe auswählen.")
+            return
+        try:
+            service: ExpenseAuditService = self._container.resolve(ExpenseAuditService)
+        except KeyError:
+            return
+        service.flag_profile_transaction(
+            transaction_id=str(selected.get("__transaction_id") or ""),
+            profile_key=self._active_profile_key or "musikheroes",
+            payee=str(selected.get("__payee") or ""),
+            iban=str(selected.get("__iban") or ""),
+            include=include,
+        )
+        if self._last_commission_result is not None:
+            self._load_embedded_expenses(self._last_commission_result)
 
     def _clarify_unreleased_titles(self, result: CommissionRunResult) -> bool:
         try:
@@ -506,14 +605,8 @@ class CalculationView(QWidget):
                 [
                     "sku",
                     "name",
-                    "sold_quantity",
-                    "canceled_quantity",
-                    "credited_quantity",
-                    "net_quantity",
-                    "net_amount",
-                    "gross_amount",
-                    "categories",
-                    "warning",
+                    "menge",
+                    "netto",
                 ]
             ]
             for row in result.product_rows:
@@ -521,14 +614,8 @@ class CalculationView(QWidget):
                     [
                         row.sku,
                         row.name,
-                        f"{row.sold_quantity:.2f}",
-                        f"{row.canceled_quantity:.2f}",
-                        f"{row.credited_quantity:.2f}",
-                        f"{row.net_quantity:.2f}",
-                        f"{row.net_amount:.2f}",
-                        f"{row.gross_amount:.2f}",
-                        ", ".join(row.category_names),
-                        row.warning,
+                        f"{format_quantity(row.net_quantity)} Stk.",
+                        format_euro_amount(row.net_amount),
                     ]
                 )
             with Path(path).open("w", encoding="utf-8-sig", newline="") as handle:
@@ -573,14 +660,8 @@ class CalculationView(QWidget):
                 [
                     "SKU",
                     "Name",
-                    "Verkauft",
-                    "Storno",
-                    "Gutschrift",
-                    "Netto-Menge",
-                    "Netto EUR",
-                    "Brutto EUR",
-                    "Kategorien",
-                    "Warnung",
+                    "Menge",
+                    "Netto",
                 ]
             )
             for row in result.product_rows:
@@ -588,14 +669,8 @@ class CalculationView(QWidget):
                     [
                         row.sku,
                         row.name,
-                        row.sold_quantity,
-                        row.canceled_quantity,
-                        row.credited_quantity,
                         row.net_quantity,
                         row.net_amount,
-                        row.gross_amount,
-                        ", ".join(row.category_names),
-                        row.warning,
                     ]
                 )
 
@@ -613,6 +688,17 @@ class CalculationView(QWidget):
                         row.share_of_net_amount * 100.0,
                     ]
                 )
+
+            for sheet in (ws_products, ws_categories):
+                for cell in sheet[1]:
+                    cell.font = cell.font.copy(bold=True)
+            for row_index in range(2, ws_products.max_row + 1):
+                ws_products.cell(row_index, 3).number_format = '0'
+                ws_products.cell(row_index, 4).number_format = '€ #,##0.00'
+            for row_index in range(2, ws_categories.max_row + 1):
+                ws_categories.cell(row_index, 2).number_format = '0'
+                ws_categories.cell(row_index, 3).number_format = '€ #,##0.00'
+                ws_categories.cell(row_index, 4).number_format = '€ #,##0.00'
 
             ws_docs = wb.create_sheet("Belege")
             ws_docs.append(["Beleg", "Datum", "Typ", "SKU", "Menge", "Netto", "Regel", "Warnung"])
@@ -665,9 +751,11 @@ class CalculationView(QWidget):
         self._product_table.set_data(
             [
                 {
+                    "SKU": row.sku,
                     "Name": row.name,
                     "Verkauft": f"{format_quantity(row.net_quantity)} Stk.",
                     "Netto": format_euro_amount(row.net_amount),
+                    "__align__SKU": "left",
                     "__align__Verkauft": "right",
                     "__align__Netto": "right",
                     "__sort__Verkauft": row.net_quantity,

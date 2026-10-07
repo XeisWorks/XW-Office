@@ -970,28 +970,31 @@ class CommissionService:
         if source_kind == "invoice":
             is_cancel = invoice_type in _CANCEL_INVOICE_TYPES
             signed_quantity = -abs(raw_quantity) if is_cancel else abs(raw_quantity)
-            signed_net = adjusted_net
-            signed_gross = adjusted_gross
+            # A cancellation invoice is the quantity side of a correction pair.
+            # Its monetary side is represented by the related credit note and must
+            # not be deducted a second time.
+            signed_net = 0.0 if is_cancel else adjusted_net
+            signed_gross = 0.0 if is_cancel else adjusted_gross
             rule = f"invoice:discount:{net_factor:.6f}" if net_factor < 1.0 else "invoice:standard"
             if is_cancel:
                 rule = "invoice:sr-cancel"
-                if adjusted_net > 0:
-                    signed_net = -abs(adjusted_net)
-                    warning = (
-                        f"{sku}: SR-Beleg {doc_number} mit positivem Roh-Netto erkannt, "
-                        "Vorzeichen korrigiert"
-                    )
-                if adjusted_gross > 0:
-                    signed_gross = -abs(adjusted_gross)
         else:
-            signed_quantity = -abs(raw_quantity)
+            # A credit note is the monetary side of the same correction pair.
+            # It has no additional quantity effect; the SR already supplied it.
+            signed_quantity = 0.0
             signed_net = raw_net if raw_net <= 0 else -abs(raw_net)
             signed_gross = raw_gross if raw_gross <= 0 else -abs(raw_gross)
             rule = "credit-note"
 
         if signed_quantity < 0 and signed_net > 0 and not warning:
             warning = f"{sku}: Netto positiv trotz negativer Menge ({doc_number})"
-        elif abs(signed_quantity) < 1e-9 and abs(signed_net) > 1e-6 and not warning:
+        elif (
+            source_kind == "invoice"
+            and invoice_type not in _CANCEL_INVOICE_TYPES
+            and abs(signed_quantity) < 1e-9
+            and abs(signed_net) > 1e-6
+            and not warning
+        ):
             warning = f"{sku}: Menge 0 bei Umsatz != 0 ({doc_number})"
 
         return DocumentContribution(
@@ -1104,7 +1107,7 @@ def _format_de_number(value: float, *, trim: bool = False) -> str:
     return formatted
 
 
-def format_euro_amount(value: float) -> str:
+def format_euro_amount(value: float | Decimal) -> str:
     """Format a monetary amount in the German euro style used in commission views."""
     return f"€ {_format_de_number(value)}"
 

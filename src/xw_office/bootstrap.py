@@ -24,6 +24,7 @@ from xw_office.services.customer_aftercare.trigger_service import CustomerAfterc
 from xw_office.services.sevdesk.tax_policy import CustomerAftercareTaxPolicy
 from xw_office.services.daily_business.service import DailyBusinessService
 from xw_office.services.digital_licenses import DigitalLicenseService
+from xw_office.services.expenses.bank_provider import SevdeskExpenseProvider
 from xw_office.services.expenses.service import ExpenseAuditService
 from xw_office.services.finanzonline import (
     FinanzOnlineClient,
@@ -101,6 +102,7 @@ from xw_office.repositories import (
     CustomerAftercareRepository,
     DigitalLicenseFulfillmentRepository,
     ExpenseCheckRepository,
+    ExpensePipelineRepository,
     PcRegistryRepository,
     PlcShipmentRepository,
     SettingKvRepository,
@@ -377,6 +379,13 @@ def register_default_services(container: Container) -> None:
             expense_check_repo=(
                 c.resolve(ExpenseCheckRepository) if (c.config.database_url or "").strip() else None
             ),
+            bank_provider=SevdeskExpenseProvider(
+                c.resolve(SevdeskConnection),
+                base_url=c.config.sevdesk.base_url,
+            ),
+            pipeline_repo=(
+                c.resolve(ExpensePipelineRepository) if (c.config.database_url or "").strip() else None
+            ),
         ),
     )
     container.register(
@@ -567,6 +576,10 @@ def register_default_services(container: Container) -> None:
         container.register(
             ExpenseCheckRepository,
             lambda c: ExpenseCheckRepository(c.resolve(SessionMaker)),
+        )
+        container.register(
+            ExpensePipelineRepository,
+            lambda c: ExpensePipelineRepository(c.resolve(SessionMaker)),
         )
         container.register(
             CustomerAftercareRepository,
