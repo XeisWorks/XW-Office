@@ -30,6 +30,18 @@ fuer die Abschlusspruefung erlaubt.
 - sevDesk Rechnungen, Online-Konten und CheckAccountTransactions
 - SEPA-Zahlungen aus bereits vorhandenen sevDesk-Transaktionen
 
+### Aktualisierung 07.10.2026: Mollie-Payments
+
+Der Zahlungsimport liest `/payments` als einzige Zahlungsquelle, einschliesslich
+Payments ohne Mollie-Order. Massgeblich sind `paidAt`, der Betrag des einzelnen
+EUR-Payments und dessen `tr_`-ID. Offene/fehlgeschlagene Payments werden nicht
+importiert; identische Payment-IDs werden dedupliziert. Verknuepfte Orders werden
+nur zur Referenz-/Kundenaufloesung gelesen, nicht erneut als Zahlung importiert.
+Die Zuordnung zu Wix erfolgt ueber Payment-ID und `metadata.wix_transaction_id`.
+Ein fehlendes Zahlungsdatum ist ein expliziter Analysefehler, kein Fallback auf
+das Erstellungsdatum. Fuer alte ordergebundene Payments bleibt die bisherige
+Mollie-Ordernummer (gegebenenfalls Wix-Order-UUID) erhalten.
+
 ### Matching
 
 - Primaer: Provider-ID -> Wix Order -> Wix Bestellnummer -> sevDesk Rechnungsreferenz

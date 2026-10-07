@@ -838,8 +838,8 @@ def test_analyze_surfaces_gateway_last_warning(tmp_path: Path) -> None:
 def test_mollie_gateway_surfaces_403_settlements_as_last_warning() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         path = str(request.url)
-        if "/orders" in path:
-            return httpx.Response(200, json={"_embedded": {"orders": []}})
+        if "/payments" in path:
+            return httpx.Response(200, json={"_embedded": {"payments": []}})
         if "/refunds" in path:
             return httpx.Response(200, json={"_embedded": {"refunds": []}})
         if "/settlements" in path:
@@ -869,8 +869,8 @@ def test_mollie_gateway_surfaces_403_settlements_as_last_warning() -> None:
 def test_mollie_gateway_resolves_refund_order_number_from_payment() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
-        if path == "/v2/orders":
-            return httpx.Response(200, json={"_embedded": {"orders": []}})
+        if path == "/v2/payments":
+            return httpx.Response(200, json={"_embedded": {"payments": []}})
         if path == "/v2/refunds":
             return httpx.Response(
                 200,

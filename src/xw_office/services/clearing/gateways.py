@@ -282,45 +282,63 @@ class MollieClearingGateway:
             return []
         headers = {"Authorization": f"Bearer {self._token}"}
         out: list[ProviderTransaction] = []
+        seen_payment_ids: set[str] = set()
+        order_cache: dict[str, dict[str, Any]] = {}
         with httpx.Client(base_url="https://api.mollie.com/v2", headers=headers, timeout=TIMEOUT) as client:
-            for raw in self._list("/orders", "orders"):
-                created = parse_datetime(raw.get("paidAt") or raw.get("createdAt"))
-                if created is None or not start <= created < end or str(raw.get("status") or "").lower() != "paid":
+            for raw in self._list("/payments", "payments"):
+                if str(raw.get("status") or "").lower() != "paid":
                     continue
-                order_id = str(raw.get("id") or "")
-                details_response = client.get(f"/orders/{order_id}", params={"embed": "payments"})
-                details_response.raise_for_status()
-                details = details_response.json()
-                amount = self._amount(details.get("amount") or raw.get("amount"))
+                created = parse_datetime(raw.get("paidAt"))
+                if created is None:
+                    raise ValueError("Bezahltes Mollie-Payment ohne gueltiges paidAt.")
+                if not start <= created < end:
+                    continue
+                raw_amount = raw.get("amount")
+                if not isinstance(raw_amount, dict) or str(raw_amount.get("currency") or "").upper() != "EUR":
+                    continue
+                amount = self._amount(raw_amount)
+                ref = str(raw.get("id") or "").strip()
+                if not ref or amount <= 0:
+                    raise ValueError("Bezahltes Mollie-Payment ohne ID oder positiven Betrag.")
+                if ref in seen_payment_ids:
+                    continue
+                seen_payment_ids.add(ref)
+                order_id = str(raw.get("orderId") or self._link_resource_id(raw, "order") or "").strip()
+                details: dict[str, Any] = {}
+                if order_id:
+                    if order_id not in order_cache:
+                        response = client.get(f"/orders/{order_id}")
+                        response.raise_for_status()
+                        order_cache[order_id] = response.json()
+                    details = order_cache[order_id]
                 billing = cast(
                     dict[str, Any],
-                    details.get("billingAddress")
-                    if isinstance(details.get("billingAddress"), dict)
+                    raw.get("billingAddress") or details.get("billingAddress")
+                    if isinstance(raw.get("billingAddress") or details.get("billingAddress"), dict)
                     else {},
                 )
                 first = str(billing.get("givenName") or "").strip()
                 last = str(billing.get("familyName") or "").strip()
                 customer = " ".join(part for part in (first, last) if part)
-                email = str(billing.get("email") or "").strip()
+                email = str(raw.get("billingEmail") or billing.get("email") or "").strip()
                 order_number = str(details.get("orderNumber") or raw.get("orderNumber") or "")
-                payments = ((details.get("_embedded") or {}).get("payments") or [])
-                paid = [p for p in payments if isinstance(p, dict) and p.get("status") == "paid"] or [{}]
-                for payment in paid:
-                    ref = str(payment.get("id") or order_id)
-                    out.append(
-                        ProviderTransaction(
-                            provider="mollie",
-                            provider_ref=ref,
-                            provider_order_id=order_id,
-                            order_number=order_number,
-                            kind=TransactionKind.PAYMENT,
-                            amount=amount,
-                            created_at=created,
-                            customer=customer or email,
-                            email=email,
-                            source_id=ref,
-                        )
+                metadata = raw.get("metadata")
+                wix_ref = str(metadata.get("wix_transaction_id") or "").strip() if isinstance(metadata, dict) else ""
+                out.append(
+                    ProviderTransaction(
+                        provider="mollie",
+                        provider_ref=ref,
+                        provider_order_id=order_id,
+                        order_number=order_number,
+                        kind=TransactionKind.PAYMENT,
+                        amount=amount,
+                        created_at=created,
+                        customer=customer or email,
+                        email=email,
+                        source_id=ref,
+                        provider_reference_ids=(wix_ref,) if wix_ref else (),
                     )
+                )
             for raw in self._list("/refunds", "refunds"):
                 created = parse_datetime(raw.get("createdAt"))
                 if (
