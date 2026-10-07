@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
 
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
@@ -71,15 +71,13 @@ class ExpensePipelineRepository:
         direction: str = "outgoing",
     ) -> list[ExpenseTransactionSnapshot]:
         with self._scope() as session:
-            stmt = (
-                select(ExpenseTransactionSnapshot)
-                .where(
-                    ExpenseTransactionSnapshot.value_date >= start,
-                    ExpenseTransactionSnapshot.value_date <= end,
-                    ExpenseTransactionSnapshot.direction == direction,
-                )
-                .order_by(ExpenseTransactionSnapshot.value_date, ExpenseTransactionSnapshot.external_id)
+            stmt = select(ExpenseTransactionSnapshot).where(
+                ExpenseTransactionSnapshot.value_date >= start,
+                ExpenseTransactionSnapshot.value_date <= end,
             )
+            if direction:
+                stmt = stmt.where(ExpenseTransactionSnapshot.direction == direction)
+            stmt = stmt.order_by(ExpenseTransactionSnapshot.value_date, ExpenseTransactionSnapshot.external_id)
             return list(session.scalars(stmt).all())
 
     def record_import_run(
@@ -621,6 +619,22 @@ class ExpensePipelineRepository:
                 (row.resource_type, row.external_id): row.fingerprint
                 for row in session.scalars(select(ExpenseDocumentScan)).all()
             }
+
+    def list_unlinked_document_scan_keys(self) -> set[tuple[str, str]]:
+        """Return cached documents that have never yielded a bank-link."""
+        with self._scope() as session:
+            rows = session.execute(
+                select(ExpenseDocumentScan.resource_type, ExpenseDocumentScan.external_id)
+                .outerjoin(
+                    ExpenseDocumentLink,
+                    and_(
+                        ExpenseDocumentLink.resource_type == ExpenseDocumentScan.resource_type,
+                        ExpenseDocumentLink.external_id == ExpenseDocumentScan.external_id,
+                    ),
+                )
+                .where(ExpenseDocumentLink.id.is_(None))
+            ).all()
+        return {(str(resource_type), str(external_id)) for resource_type, external_id in rows}
 
     def upsert_document_scan(
         self, *, resource_type: str, external_id: str, fingerprint: str

@@ -195,6 +195,7 @@ class SevdeskExpenseProvider:
         *,
         account_id: str | None = None,
         cached_fingerprints: Mapping[tuple[str, str], str] | None = None,
+        retry_cached_documents: set[tuple[str, str]] | None = None,
         force: bool = False,
     ) -> DocumentLinkScan:
         """Resolve concrete documents, keeping partial failures explicit.
@@ -209,6 +210,7 @@ class SevdeskExpenseProvider:
         cached_count = 0
         resolved_count = 0
         cached_fingerprints = cached_fingerprints or {}
+        retry_cached_documents = retry_cached_documents or set()
         for resource_type, number_key, date_key in (
             ("Invoice", "invoiceNumber", "invoiceDate"),
             ("Voucher", "voucherNumber", "voucherDate"),
@@ -231,7 +233,12 @@ class SevdeskExpenseProvider:
                 if not document_id or not relevant_date:
                     continue
                 fingerprint = _document_fingerprint(resource_type, document, date_key, number_key)
-                if not force and cached_fingerprints.get((resource_type, document_id)) == fingerprint:
+                cache_key = (resource_type, document_id)
+                if (
+                    not force
+                    and cache_key not in retry_cached_documents
+                    and cached_fingerprints.get(cache_key) == fingerprint
+                ):
                     cached_count += 1
                     continue
                 try:

@@ -258,6 +258,7 @@ class _BankProviderStub:
         *,
         account_id: str | None = None,
         cached_fingerprints: object | None = None,
+        retry_cached_documents: object | None = None,
         force: bool = False,
     ) -> DocumentLinkScan:
         return self.scan
@@ -330,6 +331,27 @@ def test_document_link_is_persisted_and_reused_from_cache(
     assert live.documents[0].document_number == "VB 2026-7"
     assert cached.documents[0].url.endswith("/ex/detail/id/V-7")
     assert cached.document_link_scan_complete is True
+
+
+def test_bank_expenses_can_include_incoming_transactions_for_receipt_review(
+    session_factory: sessionmaker[Session],
+) -> None:
+    pipeline = ExpensePipelineRepository(session_factory)
+    income = replace(
+        _bank_row(external_id="TX-2", purpose="Erlös"),
+        amount=Decimal("42.00"),
+        direction="incoming",
+    )
+    service = ExpenseAuditService(
+        bank_provider=_BankProviderStub([_bank_row(), income]),  # type: ignore[arg-type]
+        pipeline_repo=pipeline,
+    )
+
+    rows = service.list_bank_expenses(
+        start=date(2026, 9, 1), end=date(2026, 9, 30), outgoing_only=False
+    )
+
+    assert [row.amount for row in rows] == [Decimal("-23.10"), Decimal("42.00")]
 
 
 def test_purpose_rule_removes_boilerplate_for_matching_payee_only(
@@ -443,3 +465,14 @@ def test_document_resolver_skips_unchanged_cached_document(
     assert second.cached_document_count == 1
     assert second.resolved_document_count == 0
     assert calls == []
+
+    retried = provider.resolve_document_links(
+        date(2026, 9, 1),
+        date(2026, 9, 30),
+        account_id="XEISWORKS",
+        cached_fingerprints=cached_fingerprints,
+        retry_cached_documents=set(cached_fingerprints),
+    )
+
+    assert retried.resolved_document_count == 1
+    assert calls == ["/Voucher/V-7/getCheckAccountTransactions"]

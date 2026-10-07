@@ -44,7 +44,7 @@ def test_expense_review_uses_positions_and_settings_tab(qtbot: object) -> None:
         view._table.model().headerData(column, Qt.Orientation.Horizontal)
         for column in range(view._table.model().columnCount())
     ]
-    assert "Position" in headers
+    assert "Kategorie" in headers
     assert "MusikHeroes" not in headers
     assert view.findChildren(type(view._wizard_button))
     assert {item.initials for item in view._positions} == {"XW", "MH", "WM", "BH", "PRIV"}

@@ -51,7 +51,7 @@ if False:  # pragma: no cover
     from xw_office.core.container import Container
 
 
-_HEADERS = ["Datum", "Empfänger", "Zweck / Referenz", "Betrag", "Position", "Beleg"]
+_HEADERS = ["Datum", "Empfänger", "Zweck / Referenz", "Betrag", "Kategorie", "Beleg"]
 _ROOT = Path(__file__).resolve().parents[5]
 
 
@@ -77,8 +77,6 @@ class _PositionDelegate(QStyledItemDelegate):
 
     def paint(self, painter: QPainter, option: Any, index: Any) -> None:
         painter.save()
-        if option.state & QStyle.StateFlag.State_Selected:
-            painter.fillRect(option.rect, option.palette.highlight())
         row = index.data(Qt.ItemDataRole.UserRole) or {}
         positions = row.get("__positions") or []
         active = str(row.get("__position_key") or "")
@@ -242,7 +240,7 @@ class _RuleDialog(QDialog):
         self.use_iban.setEnabled(bool(iban))
         self.keyword = QLineEdit()
         self.keyword.setPlaceholderText("optional, z. B. musikheroes")
-        layout.addRow("Position", self.position)
+        layout.addRow("Kategorie", self.position)
         layout.addRow("Empfänger exakt", self.use_payee)
         layout.addRow("IBAN exakt", self.use_iban)
         layout.addRow("Zweck enthält", self.keyword)
@@ -269,7 +267,7 @@ class _RuleDialog(QDialog):
 class _PositionDialog(QDialog):
     def __init__(self, position: ExpensePositionView | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Position bearbeiten" if position else "Position anlegen")
+        self.setWindowTitle("Kategorie bearbeiten" if position else "Kategorie anlegen")
         layout = QFormLayout(self)
         self.key = QLineEdit(position.key if position else "")
         self.key.setEnabled(position is None)
@@ -375,7 +373,7 @@ class _PurposeRuleDialog(QDialog):
 class _StandaloneRuleDialog(QDialog):
     def __init__(self, positions: list[ExpensePositionView], parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Zuordnungsregel anlegen")
+        self.setWindowTitle("Kategorienregel anlegen")
         layout = QFormLayout(self)
         self.position = QComboBox()
         for item in positions:
@@ -384,7 +382,7 @@ class _StandaloneRuleDialog(QDialog):
         self.payee = QLineEdit()
         self.iban = QLineEdit()
         self.purpose = QLineEdit()
-        layout.addRow("Position", self.position)
+        layout.addRow("Kategorie", self.position)
         layout.addRow("Bezeichnung", self.label)
         layout.addRow("Empfänger exakt", self.payee)
         layout.addRow("IBAN exakt", self.iban)
@@ -496,7 +494,12 @@ class ExpenseReviewView(QWidget):
         super().__init__(parent)
         self._container = container
         self._worker: BackgroundWorker | None = None
+        self._assignment_workers: list[BackgroundWorker] = []
         self._rows: list[BankExpenseRow] = []
+        self._all_rows: list[BankExpenseRow] = []
+        self._missing_loaded_period: tuple[date, date] | None = None
+        self._load_period: tuple[date, date] | None = None
+        self._last_load_was_refresh = False
         self._positions: list[ExpensePositionView] = []
         self._settings = QSettings("XeisWorks", "XW Office")
         self._header_save_timer = QTimer(self)
@@ -508,8 +511,8 @@ class ExpenseReviewView(QWidget):
         self._wizard_button = QPushButton("Offene Zuordnungen prüfen")
         self._table = DataTable(_HEADERS)
         self._missing_table = DataTable(_HEADERS)
-        self._position_table = DataTable(["Kürzel", "Position", "Farbe", "Aktiv"])
-        self._rule_table = DataTable(["Position", "Bezeichnung", "Empfänger", "IBAN", "Zweck", "Aktiv"])
+        self._position_table = DataTable(["Kürzel", "Kategorie", "Farbe", "Aktiv"])
+        self._rule_table = DataTable(["Kategorie", "Bezeichnung", "Empfänger", "IBAN", "Zweck", "Aktiv"])
         self._supplier_table = DataTable(["Bezeichnung", "Empfänger", "IBAN", "Website", "Aktiv"])
         self._purpose_rule_table = DataTable(["Bezeichnung", "Empfänger", "Text entfernen", "Aktiv"])
         self._position_delegate = _PositionDelegate(self)
@@ -560,6 +563,7 @@ class ExpenseReviewView(QWidget):
         tabs.addTab(self._build_bank_tab(), "Kontobewegungen")
         tabs.addTab(self._build_missing_tab(), "Fehlende Belege")
         tabs.addTab(self._build_settings_tab(), "Einstellungen")
+        tabs.currentChanged.connect(self._on_main_tab_changed)
         root.addWidget(tabs, stretch=1)
 
     def _configure_expense_table(self, table: DataTable) -> None:
@@ -582,9 +586,6 @@ class ExpenseReviewView(QWidget):
         self._configure_expense_table(self._table)
         layout.addWidget(self._table, stretch=1)
         actions = QHBoxLayout()
-        remember = QPushButton("Regel für Auswahl merken")
-        remember.clicked.connect(self._remember_selected_rule)
-        actions.addWidget(remember)
         purpose_rule = QPushButton("Zweck für Empfänger bereinigen")
         purpose_rule.clicked.connect(self._add_purpose_rule_from_selected)
         actions.addWidget(purpose_rule)
@@ -598,6 +599,14 @@ class ExpenseReviewView(QWidget):
     def _build_missing_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
+        header = QHBoxLayout()
+        header.addStretch()
+        refresh = QPushButton()
+        refresh.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
+        refresh.setToolTip("Fehlende Belege erneut prüfen")
+        refresh.clicked.connect(self._refresh_missing_receipts)
+        header.addWidget(refresh)
+        layout.addLayout(header)
         self._configure_expense_table(self._missing_table)
         layout.addWidget(self._missing_table, stretch=1)
         return page
@@ -608,7 +617,7 @@ class ExpenseReviewView(QWidget):
         position_layout = QVBoxLayout(positions)
         position_layout.addWidget(self._position_table)
         position_actions = QHBoxLayout()
-        add_position = QPushButton("Position anlegen")
+        add_position = QPushButton("Kategorie anlegen")
         add_position.clicked.connect(lambda: self._edit_position(None))
         edit_position = QPushButton("Auswahl bearbeiten")
         edit_position.clicked.connect(self._edit_selected_position)
@@ -616,7 +625,7 @@ class ExpenseReviewView(QWidget):
         position_actions.addWidget(edit_position)
         position_actions.addStretch()
         position_layout.addLayout(position_actions)
-        tabs.addTab(positions, "Positionen")
+        tabs.addTab(positions, "Kategorien")
 
         rules = QWidget()
         rule_layout = QVBoxLayout(rules)
@@ -667,19 +676,29 @@ class ExpenseReviewView(QWidget):
         tabs.addTab(purpose_rules, "Verwendungszwecke")
         return tabs
 
-    def _load(self, *, refresh: bool = True, force_document_refresh: bool = False) -> None:
+    def _load(
+        self,
+        *,
+        refresh: bool = True,
+        force_document_refresh: bool = False,
+        retry_unlinked_documents: bool = False,
+    ) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
         self._positions = self.service.list_positions()
         self._status.setText("Bankbewegungen werden geladen …")
         start = cast(date, self._start.date().toPython())
         end = cast(date, self._end.date().toPython())
+        self._load_period = (start, end)
+        self._last_load_was_refresh = refresh
         self._worker = BackgroundWorker(
             lambda: self.service.list_bank_expenses(
                 start=start,
                 end=end,
                 refresh=refresh,
                 force_document_refresh=force_document_refresh,
+                outgoing_only=False,
+                retry_unlinked_documents=retry_unlinked_documents,
             )
         )
         self._worker.signals.result.connect(self._on_loaded)
@@ -688,11 +707,14 @@ class ExpenseReviewView(QWidget):
         self._worker.start()
 
     def _on_loaded(self, payload: object) -> None:
-        self._rows = [row for row in payload if isinstance(row, BankExpenseRow)] if isinstance(payload, list) else []
+        self._all_rows = [
+            row for row in payload if isinstance(row, BankExpenseRow)
+        ] if isinstance(payload, list) else []
+        self._rows = [row for row in self._all_rows if row.amount < 0]
         self._populate(self._table, self._rows)
-        missing = [row for row in self._rows if row.document_link_scan_complete and not row.documents]
-        self._populate(self._missing_table, missing)
-        incomplete = any(not row.document_link_scan_complete for row in self._rows)
+        missing = [row for row in self._all_rows if row.document_link_scan_complete and not row.documents]
+        self._populate(self._missing_table, missing, receipt_mode=True)
+        incomplete = any(not row.document_link_scan_complete for row in self._all_rows)
         open_count = sum(not row.position_key for row in self._rows)
         suffix = " · Belegscan unvollständig" if incomplete else ""
         self._status.setText(f"{len(self._rows)} ausgehende Zahlungen · Konto XeisWorks{suffix}")
@@ -700,7 +722,22 @@ class ExpenseReviewView(QWidget):
         self._wizard_button.setVisible(open_count > 0)
         self._refresh_settings()
 
-    def _populate(self, table: DataTable, rows: list[BankExpenseRow]) -> None:
+        if self._last_load_was_refresh:
+            self._missing_loaded_period = self._load_period
+
+    def _on_main_tab_changed(self, index: int) -> None:
+        if index != 1:
+            return
+        period = (
+            cast(date, self._start.date().toPython()),
+            cast(date, self._end.date().toPython()),
+        )
+        if self._missing_loaded_period != period:
+            self._refresh_missing_receipts()
+
+    def _populate(
+        self, table: DataTable, rows: list[BankExpenseRow], *, receipt_mode: bool = False
+    ) -> None:
         position_payload = [position.__dict__ for position in self._positions]
         table.set_data(
             [
@@ -708,8 +745,8 @@ class ExpenseReviewView(QWidget):
                     "Datum": row.value_date.strftime("%d.%m.%Y"),
                     "Empfänger": row.payee,
                     "Zweck / Referenz": row.purpose,
-                    "Betrag": format_euro_amount(row.amount),
-                    "Position": "",
+                    "Betrag": self._amount_text(row, receipt_mode=receipt_mode),
+                    "Kategorie": "",
                     "Beleg": self._document_text(row),
                     "__transaction_id": row.transaction_id,
                     "__iban": row.iban,
@@ -734,13 +771,26 @@ class ExpenseReviewView(QWidget):
                         source=row.display_source,
                         confidence=row.display_confidence,
                     ),
-                    "__tooltip__Position": self._position_tooltip(row),
+                    "__tooltip__Kategorie": self._position_tooltip(row),
                     "__tooltip__Beleg": self._document_tooltip(row),
                     "__align__Betrag": "right",
+                    "__align__Kategorie": "center",
+                    "__fg__Betrag": self._amount_color(row, receipt_mode=receipt_mode),
                 }
                 for row in rows
             ]
         )
+
+    @staticmethod
+    def _amount_text(row: BankExpenseRow, *, receipt_mode: bool) -> str:
+        amount = format_euro_amount(row.amount)
+        return f"+{amount}" if receipt_mode and row.amount > 0 else amount
+
+    @staticmethod
+    def _amount_color(row: BankExpenseRow, *, receipt_mode: bool) -> str:
+        if not receipt_mode:
+            return ""
+        return "#d98b8b" if row.amount < 0 else "#7fbd93"
 
     @staticmethod
     def _document_text(row: BankExpenseRow) -> str:
@@ -769,18 +819,35 @@ class ExpenseReviewView(QWidget):
         return f"{row.position_source or 'zugeordnet'}{suffix}"
 
     def _assign_position(self, transaction_id: str, position_key: str) -> None:
-        try:
-            self.service.assign_transaction_position(transaction_id=transaction_id, position_key=position_key)
-        except Exception as exc:  # noqa: BLE001
-            self._on_error(exc)
-            return
-        self._rows = [
+        self._all_rows = [
             replace(row, position_key=position_key, position_source="manual")
             if row.transaction_id == transaction_id
             else row
-            for row in self._rows
+            for row in self._all_rows
         ]
-        self._on_loaded(self._rows)
+        self._rows = [row for row in self._all_rows if row.amount < 0]
+        self._populate(self._table, self._rows)
+        missing = [
+            row for row in self._all_rows if row.document_link_scan_complete and not row.documents
+        ]
+        self._populate(self._missing_table, missing, receipt_mode=True)
+        self._table.clearSelection()
+        self._missing_table.clearSelection()
+        QTimer.singleShot(0, self._table.clearSelection)
+        QTimer.singleShot(0, self._missing_table.clearSelection)
+
+        worker = BackgroundWorker(
+            lambda: self.service.assign_transaction_position(
+                transaction_id=transaction_id, position_key=position_key
+            )
+        )
+        worker.signals.error.connect(self._on_error)
+        worker.signals.finished.connect(lambda: self._assignment_workers.remove(worker))
+        self._assignment_workers.append(worker)
+        worker.start()
+
+    def _refresh_missing_receipts(self) -> None:
+        self._load(refresh=True, retry_unlinked_documents=True)
 
     def _remember_selected_rule(self) -> None:
         selected = self._table.selected_row_data()
@@ -817,7 +884,7 @@ class ExpenseReviewView(QWidget):
             [
                 {
                     "Kürzel": item.initials,
-                    "Position": item.label,
+                    "Kategorie": item.label,
                     "Farbe": item.color,
                     "Aktiv": "ja" if item.enabled else "nein",
                     "__key": item.key,
@@ -828,7 +895,7 @@ class ExpenseReviewView(QWidget):
         self._rule_table.set_data(
             [
                 {
-                    "Position": str(getattr(item, "position_key", "")).upper(),
+                    "Kategorie": str(getattr(item, "position_key", "")).upper(),
                     "Bezeichnung": str(getattr(item, "label", "")),
                     "Empfänger": str(getattr(item, "payee_normalized", "")),
                     "IBAN": _RuleDialog._masked_iban(str(getattr(item, "counterparty_iban", ""))),

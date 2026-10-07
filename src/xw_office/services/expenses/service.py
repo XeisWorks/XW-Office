@@ -239,17 +239,19 @@ class ExpenseAuditService:
         profile_key: str = "",
         refresh: bool = True,
         force_document_refresh: bool = False,
+        outgoing_only: bool = True,
+        retry_unlinked_documents: bool = False,
     ) -> list[BankExpenseRow]:
-        """Load outgoing transactions and incrementally resolve linked documents."""
+        """Load bank transactions and incrementally resolve linked documents."""
         if self._bank_provider is None:
             return []
         account: SevdeskBankAccount | None = None
         if refresh:
-            account, rows = self._bank_provider.fetch(start, end, outgoing_only=True)
+            account, rows = self._bank_provider.fetch(start, end, outgoing_only=outgoing_only)
         elif self._pipeline_repo is not None:
             rows = []
             cached_snapshots = self._pipeline_repo.list_snapshots(
-                start=start, end=end, direction="outgoing"
+                start=start, end=end, direction="outgoing" if outgoing_only else ""
             )
             for snapshot in cached_snapshots:
                 rows.append(
@@ -279,7 +281,7 @@ class ExpenseAuditService:
             existing_external_ids = {
                 snapshot.external_id
                 for snapshot in self._pipeline_repo.list_snapshots(
-                    start=start, end=end, direction="outgoing"
+                    start=start, end=end, direction="outgoing" if outgoing_only else ""
                 )
             }
             for row in rows:
@@ -305,6 +307,7 @@ class ExpenseAuditService:
             snapshot_ids = {snapshot.external_id: snapshot.id for snapshot in cached_snapshots}
 
         link_scan_complete = False
+        has_new_transactions = any(row.external_id not in existing_external_ids for row in rows)
         completed_scan_exists = (
             self._pipeline_repo is not None
             and account is not None
@@ -315,7 +318,7 @@ class ExpenseAuditService:
                 period_end=end,
             )
         )
-        if refresh and completed_scan_exists and not force_document_refresh:
+        if refresh and completed_scan_exists and not force_document_refresh and not retry_unlinked_documents:
             # A refresh still obtains current bank movements, but avoids paging
             # every historical sevDesk document for a range already checked.
             # The UI exposes an explicit force action for a manual re-check.
@@ -329,11 +332,21 @@ class ExpenseAuditService:
                         if self._pipeline_repo is not None
                         else {}
                     )
+                    retry_cached_documents = (
+                        set(cached_fingerprints)
+                        if has_new_transactions
+                        else (
+                            self._pipeline_repo.list_unlinked_document_scan_keys()
+                            if self._pipeline_repo is not None and retry_unlinked_documents
+                            else set()
+                        )
+                    )
                     scan = self._bank_provider.resolve_document_links(
                         start,
                         end,
                         account_id=account.id,
                         cached_fingerprints=cached_fingerprints,
+                        retry_cached_documents=retry_cached_documents,
                         force=force_document_refresh,
                     )
                     link_scan_complete = scan.complete
@@ -613,10 +626,10 @@ class ExpenseAuditService:
 
     def assign_transaction_position(self, *, transaction_id: str, position_key: str) -> None:
         if self._pipeline_repo is None:
-            raise RuntimeError("Datenbank für Positionszuordnung nicht verfügbar")
+            raise RuntimeError("Datenbank für Kategoriezuordnung nicht verfügbar")
         valid = {position.key for position in self.list_positions()}
         if position_key not in valid:
-            raise ValueError(f"Unbekannte Position: {position_key}")
+            raise ValueError(f"Unbekannte Kategorie: {position_key}")
         self._pipeline_repo.assign_position(
             transaction_id=uuid.UUID(transaction_id),
             position_key=position_key,
@@ -634,7 +647,7 @@ class ExpenseAuditService:
         label: str = "",
     ) -> None:
         if self._pipeline_repo is None:
-            raise RuntimeError("Datenbank für Positionsregeln nicht verfügbar")
+            raise RuntimeError("Datenbank für Kategorienregeln nicht verfügbar")
         normalized_payee = normalize_german_text(payee)
         normalized_iban = iban.replace(" ", "").upper().strip()
         rule = self._pipeline_repo.add_position_rule(
@@ -661,7 +674,7 @@ class ExpenseAuditService:
         purpose_contains: str = "",
     ) -> None:
         if self._pipeline_repo is None:
-            raise RuntimeError("Datenbank für Positionsregeln nicht verfügbar")
+            raise RuntimeError("Datenbank für Kategorienregeln nicht verfügbar")
         self._pipeline_repo.add_position_rule(
             position_key=position_key,
             label=label.strip(),
@@ -674,7 +687,7 @@ class ExpenseAuditService:
         self, *, key: str, label: str, initials: str, color: str, enabled: bool = True
     ) -> None:
         if self._pipeline_repo is None:
-            raise RuntimeError("Datenbank für Positionen nicht verfügbar")
+            raise RuntimeError("Datenbank für Kategorien nicht verfügbar")
         current = self.list_positions(enabled_only=False)
         existing = next((item for item in current if item.key == key), None)
         sort_order = existing.sort_order if existing else (max((item.sort_order for item in current), default=0) + 10)
