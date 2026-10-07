@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from xw_office.core.worker import BackgroundWorker
 from xw_office.services.commission.service import format_euro_amount
+from xw_office.services.expenses.reference_parser import format_expense_original_details
 from xw_office.services.expenses.service import BankExpenseRow, ExpenseAuditService
 from xw_office.ui.widgets.data_table import DataTable
 
@@ -27,7 +28,7 @@ if False:  # pragma: no cover
     from xw_office.core.container import Container
 
 
-_HEADERS = ["Datum", "Empfänger", "Zahlungsreferenz / Verwendungszweck", "Betrag", "MusikHeroes", "Beleg"]
+_HEADERS = ["Datum", "Empfänger", "Zweck / Referenz", "Betrag", "MusikHeroes", "Beleg"]
 
 
 class ExpenseReviewView(QWidget):
@@ -132,7 +133,7 @@ class ExpenseReviewView(QWidget):
                 {
                     "Datum": row.value_date.strftime("%d.%m.%Y"),
                     "Empfänger": row.payee,
-                    "Zahlungsreferenz / Verwendungszweck": row.purpose,
+                    "Zweck / Referenz": row.purpose,
                     "Betrag": format_euro_amount(row.amount),
                     "MusikHeroes": row.profile_status or "—",
                     "Beleg": "sevDesk" if row.sevdesk_url else ("Lieferantenportal" if row.supplier_url else "fehlt"),
@@ -141,6 +142,20 @@ class ExpenseReviewView(QWidget):
                     "__payee": row.payee,
                     "__sevdesk_url": row.sevdesk_url,
                     "__supplier_url": row.supplier_url,
+                    "__tooltip__Empfänger": format_expense_original_details(
+                        raw_payee=row.raw_payee,
+                        raw_payment_reference=row.raw_payment_reference,
+                        raw_purpose=row.raw_purpose,
+                        source=row.display_source,
+                        confidence=row.display_confidence,
+                    ),
+                    "__tooltip__Zweck / Referenz": format_expense_original_details(
+                        raw_payee=row.raw_payee,
+                        raw_payment_reference=row.raw_payment_reference,
+                        raw_purpose=row.raw_purpose,
+                        source=row.display_source,
+                        confidence=row.display_confidence,
+                    ),
                     "__align__Betrag": "right",
                 }
                 for row in rows

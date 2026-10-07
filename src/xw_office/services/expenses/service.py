@@ -28,6 +28,7 @@ from xw_office.services.expenses.bank_provider import (
     BankExpense,
     SevdeskExpenseProvider,
 )
+from xw_office.services.expenses.reference_parser import project_expense_text
 from xw_office.services.sevdesk.urls import sevdesk_document_url
 
 if TYPE_CHECKING:
@@ -74,6 +75,11 @@ class BankExpenseRow:
     supplier_url: str = ""
     rule_source: str = ""
     document_link_scan_complete: bool = True
+    raw_payee: str = ""
+    raw_payment_reference: str = ""
+    raw_purpose: str = ""
+    display_source: str = ""
+    display_confidence: float = 0.0
 
 
 class ExpenseAction(str, Enum):
@@ -216,6 +222,11 @@ class ExpenseAuditService:
         result: list[BankExpenseRow] = []
         rules = self._pipeline_repo.list_rules(profile_key) if self._pipeline_repo and profile_key else []
         for row in rows:
+            projection = project_expense_text(
+                payee_name=row.payee_name,
+                payment_reference=row.payment_reference,
+                purpose=row.purpose,
+            )
             snapshot_id = ""
             if self._pipeline_repo is not None:
                 snapshot = self._pipeline_repo.upsert_snapshot(
@@ -274,7 +285,7 @@ class ExpenseAuditService:
                 if not supplier_links:
                     supplier_links = self._pipeline_repo.list_supplier_links(
                         profile_key=profile_key,
-                        payee_normalized=normalize_german_text(row.display_reference),
+                        payee_normalized=projection.merchant_key,
                         iban=row.counterparty_iban,
                     )
                 if supplier_links:
@@ -283,9 +294,9 @@ class ExpenseAuditService:
                 BankExpenseRow(
                     transaction_id=snapshot_id or row.external_id,
                     value_date=row.value_date,
-                    payee=row.payee_name,
+                    payee=projection.payee,
                     iban=row.counterparty_iban,
-                    purpose=row.display_reference,
+                    purpose=projection.purpose,
                     amount=row.amount,
                     currency=row.currency,
                     sevdesk_url=sevdesk_link,
@@ -293,6 +304,11 @@ class ExpenseAuditService:
                     profile_status=status,
                     rule_source=source,
                     document_link_scan_complete=link_scan_complete,
+                    raw_payee=row.payee_name,
+                    raw_payment_reference=row.payment_reference,
+                    raw_purpose=row.purpose,
+                    display_source=projection.source,
+                    display_confidence=projection.confidence,
                 )
             )
         return result
@@ -350,7 +366,24 @@ class ExpenseAuditService:
         for rule in rules:
             match_field = str(getattr(rule, "match_field", ""))
             expected = str(getattr(rule, "value_normalized", ""))
-            actual = row.counterparty_iban if match_field == "iban" else row.payee_normalized
+            if match_field == "iban":
+                actual = row.counterparty_iban
+            elif match_field == "payee":
+                actual = row.payee_normalized or project_expense_text(
+                    payee_name=row.payee_name,
+                    payment_reference=row.payment_reference,
+                    purpose=row.purpose,
+                ).merchant_key
+            elif match_field == "purpose":
+                actual = normalize_german_text(
+                    project_expense_text(
+                        payee_name=row.payee_name,
+                        payment_reference=row.payment_reference,
+                        purpose=row.purpose,
+                    ).purpose
+                )
+            else:
+                actual = ""
             if expected and actual and expected == actual:
                 return "candidate", f"{profile_key}:{match_field}"
         return "", ""

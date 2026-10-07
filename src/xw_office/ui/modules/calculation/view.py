@@ -42,6 +42,7 @@ from xw_office.services.commission.service import (
     format_commission_summary,
     format_quantity,
 )
+from xw_office.services.expenses.reference_parser import format_expense_original_details
 from xw_office.services.expenses.service import BankExpenseRow, ExpenseAuditService
 from xw_office.services.calculation.service import (
     ArticleEntry,
@@ -345,7 +346,7 @@ class CalculationView(QWidget):
         self._embedded_expenses_status = QLabel("Noch nicht geladen")
         expenses_layout.addWidget(self._embedded_expenses_status)
         self._embedded_expenses_table = DataTable(
-            ["Datum", "Empfänger", "Zahlungsreferenz / Verwendungszweck", "Betrag", "Flag", "Beleg"]
+            ["Datum", "Empfänger", "Zweck / Referenz", "Betrag", "Flag", "Beleg"]
         )
         self._embedded_expenses_table.horizontalHeader().setSectionResizeMode(
             2, QHeaderView.ResizeMode.Stretch
@@ -494,13 +495,27 @@ class CalculationView(QWidget):
                 {
                     "Datum": row.value_date.strftime("%d.%m.%Y"),
                     "Empfänger": row.payee,
-                    "Zahlungsreferenz / Verwendungszweck": row.purpose,
+                    "Zweck / Referenz": row.purpose,
                     "Betrag": format_euro_amount(row.amount),
                     "Flag": row.profile_status or "—",
                     "Beleg": "sevDesk" if row.sevdesk_url else ("Lieferantenportal" if row.supplier_url else "fehlt"),
                     "__transaction_id": row.transaction_id,
                     "__iban": row.iban,
                     "__payee": row.payee,
+                    "__tooltip__Empfänger": format_expense_original_details(
+                        raw_payee=row.raw_payee,
+                        raw_payment_reference=row.raw_payment_reference,
+                        raw_purpose=row.raw_purpose,
+                        source=row.display_source,
+                        confidence=row.display_confidence,
+                    ),
+                    "__tooltip__Zweck / Referenz": format_expense_original_details(
+                        raw_payee=row.raw_payee,
+                        raw_payment_reference=row.raw_payment_reference,
+                        raw_purpose=row.raw_purpose,
+                        source=row.display_source,
+                        confidence=row.display_confidence,
+                    ),
                     "__align__Betrag": "right",
                 }
                 for row in rows

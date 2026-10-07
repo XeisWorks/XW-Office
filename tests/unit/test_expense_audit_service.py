@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+from datetime import date
+from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
@@ -9,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.models.base import Base
 from xw_office.repositories.expense_check import ExpenseCheckRepository
+from xw_office.services.expenses.bank_provider import BankExpense
 from xw_office.services.expenses.service import ExpenseAction, ExpenseAuditService, ExpenseRow
 
 
@@ -180,3 +184,30 @@ def test_ignore_rule_actions_without_db_raise() -> None:
         svc.add_ignore_rule(mandant="X", purpose_text="Miete", scope="once")
     assert svc.list_ignore_rules() == []
     assert svc.remove_ignore_rule(str("00000000-0000-0000-0000-000000000000")) is False
+
+
+def test_profile_rule_matches_derived_card_merchant() -> None:
+    row = BankExpense(
+        external_id="TX-GITHUB",
+        account_id="XEISWORKS",
+        value_date=date(2026, 9, 4),
+        entry_date=None,
+        amount=Decimal("-23.10"),
+        currency="EUR",
+        direction="outgoing",
+        payee_name="",
+        payee_normalized="",
+        counterparty_iban="",
+        payment_reference="",
+        purpose=(
+            "Bezahlung Karte MC/000008551E-COMM 25,16 USD D002 04.09. 04:34"
+            "GITHUB, INC.\\SAN FRANCISCO\\94SPESEN: 1,25"
+        ),
+        sevdesk_status="",
+    )
+    rule = SimpleNamespace(match_field="payee", value_normalized="github inc")
+
+    assert ExpenseAuditService._match_profile_rule(row, "musikheroes", [rule]) == (
+        "candidate",
+        "musikheroes:payee",
+    )
