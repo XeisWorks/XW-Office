@@ -159,6 +159,23 @@ class ExpenseSupplierLink(Base):
     )
 
 
+class ExpensePurposeRule(Base):
+    """Display-only cleanup for recurring bank-purpose boilerplate."""
+
+    __tablename__ = "expense_purpose_rule"
+    __table_args__ = (Index("ix_expense_purpose_rule_enabled", "enabled", "payee_normalized"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    payee_normalized: Mapped[str] = mapped_column(String(300), nullable=False)
+    remove_text: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    priority: Mapped[int] = mapped_column(default=100, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class ExpensePosition(Base):
     """User-maintained cost/project position shown in expense review."""
 

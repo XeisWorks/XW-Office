@@ -17,14 +17,18 @@ import re
 import threading
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING
 
 from xw_office.core.fuzzy_match import fuzzy_ratio
 from xw_office.core.text_normalize import clean_bank_purpose, normalize_german_text
-from xw_office.models.expense_pipeline import ExpensePositionRule, ExpenseSupplierLink
+from xw_office.models.expense_pipeline import (
+    ExpensePositionRule,
+    ExpensePurposeRule,
+    ExpenseSupplierLink,
+)
 from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.expenses.bank_provider import (
     BankDocumentLink,
@@ -412,6 +416,11 @@ class ExpenseAuditService:
             if self._pipeline_repo is not None
             else []
         )
+        purpose_rules = (
+            self._pipeline_repo.list_purpose_rules(enabled_only=True)
+            if self._pipeline_repo is not None
+            else []
+        )
 
         result: list[BankExpenseRow] = []
         rules = self._pipeline_repo.list_rules(profile_key) if self._pipeline_repo and profile_key else []
@@ -421,6 +430,14 @@ class ExpenseAuditService:
                 payee_name=row.payee_name,
                 payment_reference=row.payment_reference,
                 purpose=row.purpose,
+            )
+            projection = replace(
+                projection,
+                purpose=self._apply_purpose_rules(
+                    projection.purpose,
+                    row.payee_normalized or projection.merchant_key,
+                    purpose_rules,
+                ),
             )
             snapshot_id = str(snapshot_ids.get(row.external_id) or "")
             status = ""
@@ -537,6 +554,21 @@ class ExpenseAuditService:
                 continue
             return link
         return None
+
+    @staticmethod
+    def _apply_purpose_rules(
+        purpose: str, payee_normalized: str, rules: Sequence[ExpensePurposeRule]
+    ) -> str:
+        """Apply recipient-scoped display cleanup without altering source data."""
+        result = purpose
+        normalized_payee = normalize_german_text(payee_normalized)
+        for rule in rules:
+            if rule.payee_normalized != normalized_payee or not rule.remove_text.strip():
+                continue
+            result = re.sub(re.escape(rule.remove_text.strip()), "", result, flags=re.IGNORECASE)
+        result = re.sub(r"\s{2,}", " ", result)
+        result = re.sub(r"\s+([,.;:])", r"\1", result).strip(" \t-–—,;")
+        return result or purpose
 
     @staticmethod
     def _match_position_rule(
@@ -675,6 +707,24 @@ class ExpenseAuditService:
             return False
         return self._pipeline_repo.set_supplier_link_enabled(uuid.UUID(link_id), enabled)
 
+    def update_supplier_link(
+        self, *, link_id: str, payee: str, iban: str, label: str, url: str
+    ) -> None:
+        if self._pipeline_repo is None:
+            raise RuntimeError("Datenbank für Lieferantenlinks nicht verfügbar")
+        normalized_url = url.strip()
+        if not normalized_url.startswith("https://"):
+            raise ValueError("Lieferantenlinks müssen mit https:// beginnen")
+        updated = self._pipeline_repo.update_supplier_link(
+            link_id=uuid.UUID(link_id),
+            payee_normalized=normalize_german_text(payee),
+            counterparty_iban=iban.replace(" ", "").upper().strip(),
+            label=label.strip() or payee.strip(),
+            url=normalized_url,
+        )
+        if updated is None:
+            raise ValueError("Lieferantenlink wurde nicht gefunden")
+
     def add_supplier_link(
         self, *, payee: str, iban: str, label: str, url: str
     ) -> None:
@@ -690,6 +740,43 @@ class ExpenseAuditService:
             label=label.strip() or payee.strip(),
             url=normalized_url,
         )
+
+    def list_purpose_rules(self) -> list[ExpensePurposeRule]:
+        if self._pipeline_repo is None:
+            return []
+        return self._pipeline_repo.list_purpose_rules()
+
+    def add_purpose_rule(self, *, payee: str, remove_text: str, label: str = "") -> None:
+        if self._pipeline_repo is None:
+            raise RuntimeError("Datenbank für Zweckregeln nicht verfügbar")
+        if not payee.strip() or not remove_text.strip():
+            raise ValueError("Empfänger und zu entfernender Text sind erforderlich")
+        self._pipeline_repo.add_purpose_rule(
+            payee_normalized=normalize_german_text(payee),
+            remove_text=remove_text.strip(),
+            label=label.strip() or payee.strip(),
+        )
+
+    def update_purpose_rule(
+        self, *, rule_id: str, payee: str, remove_text: str, label: str
+    ) -> None:
+        if self._pipeline_repo is None:
+            raise RuntimeError("Datenbank für Zweckregeln nicht verfügbar")
+        if not payee.strip() or not remove_text.strip():
+            raise ValueError("Empfänger und zu entfernender Text sind erforderlich")
+        updated = self._pipeline_repo.update_purpose_rule(
+            rule_id=uuid.UUID(rule_id),
+            payee_normalized=normalize_german_text(payee),
+            remove_text=remove_text.strip(),
+            label=label.strip() or payee.strip(),
+        )
+        if updated is None:
+            raise ValueError("Zweckregel wurde nicht gefunden")
+
+    def set_purpose_rule_enabled(self, rule_id: str, enabled: bool) -> bool:
+        if self._pipeline_repo is None:
+            return False
+        return self._pipeline_repo.set_purpose_rule_enabled(uuid.UUID(rule_id), enabled)
 
     def flag_profile_transaction(
         self,

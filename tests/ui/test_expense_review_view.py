@@ -19,6 +19,9 @@ class _ExpenseServiceStub:
     def list_supplier_links(self) -> list[object]:
         return []
 
+    def list_purpose_rules(self) -> list[object]:
+        return []
+
 
 class _ContainerStub:
     def __init__(self) -> None:

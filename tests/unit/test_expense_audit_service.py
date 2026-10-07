@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
@@ -329,6 +330,38 @@ def test_document_link_is_persisted_and_reused_from_cache(
     assert live.documents[0].document_number == "VB 2026-7"
     assert cached.documents[0].url.endswith("/ex/detail/id/V-7")
     assert cached.document_link_scan_complete is True
+
+
+def test_purpose_rule_removes_boilerplate_for_matching_payee_only(
+    session_factory: sessionmaker[Session],
+) -> None:
+    pipeline = ExpensePipelineRepository(session_factory)
+    row = replace(
+        _bank_row(
+            purpose="Vorschreibung 3. Quartal 2026 - Auf die Buchungen im SVS-Kontoauszug wird verwiesen"
+        ),
+        payee_name="SVS",
+        payee_normalized="svs",
+        payment_reference="",
+    )
+    service = ExpenseAuditService(
+        bank_provider=_BankProviderStub(
+            [row, replace(row, external_id="TX-2", payee_name="Andere GmbH", payee_normalized="andere gmbh")]
+        ),  # type: ignore[arg-type]
+        pipeline_repo=pipeline,
+    )
+    service.add_purpose_rule(
+        payee="SVS",
+        remove_text="Auf die Buchungen im SVS-Kontoauszug wird verwiesen",
+    )
+
+    displayed = service.list_bank_expenses(
+        start=date(2026, 9, 1), end=date(2026, 9, 30)
+    )
+
+    assert displayed[0].purpose == "Vorschreibung 3. Quartal 2026"
+    assert displayed[0].raw_purpose.endswith("wird verwiesen")
+    assert displayed[1].purpose.endswith("wird verwiesen")
 
 
 def test_document_resolver_uses_typed_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:

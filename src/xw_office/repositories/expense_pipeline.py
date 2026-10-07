@@ -19,6 +19,7 @@ from xw_office.models.expense_pipeline import (
     ExpensePositionAssignment,
     ExpensePositionRule,
     ExpenseProfileAssignment,
+    ExpensePurposeRule,
     ExpenseReviewDecision,
     ExpenseSupplierLink,
     ExpenseTransactionSnapshot,
@@ -502,6 +503,83 @@ class ExpensePipelineRepository:
                     )
                 ).all()
             )
+
+    def update_supplier_link(
+        self,
+        *,
+        link_id: uuid.UUID,
+        payee_normalized: str,
+        counterparty_iban: str,
+        label: str,
+        url: str,
+    ) -> ExpenseSupplierLink | None:
+        with self._scope() as session:
+            row = session.get(ExpenseSupplierLink, link_id)
+            if row is None:
+                return None
+            row.payee_normalized = payee_normalized
+            row.counterparty_iban = counterparty_iban
+            row.label = label
+            row.url = url
+            session.flush()
+            session.refresh(row)
+            return row
+
+    def list_purpose_rules(self, *, enabled_only: bool = False) -> list[ExpensePurposeRule]:
+        with self._scope() as session:
+            stmt = select(ExpensePurposeRule)
+            if enabled_only:
+                stmt = stmt.where(ExpensePurposeRule.enabled.is_(True))
+            return list(
+                session.scalars(
+                    stmt.order_by(ExpensePurposeRule.priority, ExpensePurposeRule.created_at)
+                ).all()
+            )
+
+    def add_purpose_rule(
+        self, *, payee_normalized: str, remove_text: str, label: str = ""
+    ) -> ExpensePurposeRule:
+        with self._scope() as session:
+            existing = session.scalar(
+                select(ExpensePurposeRule).where(
+                    ExpensePurposeRule.payee_normalized == payee_normalized,
+                    ExpensePurposeRule.remove_text == remove_text,
+                )
+            )
+            if existing is not None:
+                return existing
+            row = ExpensePurposeRule(
+                payee_normalized=payee_normalized,
+                remove_text=remove_text,
+                label=label,
+            )
+            session.add(row)
+            session.flush()
+            session.refresh(row)
+            return row
+
+    def update_purpose_rule(
+        self, *, rule_id: uuid.UUID, payee_normalized: str, remove_text: str, label: str
+    ) -> ExpensePurposeRule | None:
+        with self._scope() as session:
+            row = session.get(ExpensePurposeRule, rule_id)
+            if row is None:
+                return None
+            row.payee_normalized = payee_normalized
+            row.remove_text = remove_text
+            row.label = label
+            session.flush()
+            session.refresh(row)
+            return row
+
+    def set_purpose_rule_enabled(self, rule_id: uuid.UUID, enabled: bool) -> bool:
+        with self._scope() as session:
+            row = session.get(ExpensePurposeRule, rule_id)
+            if row is None:
+                return False
+            row.enabled = bool(enabled)
+            session.flush()
+            return True
 
     def list_assignments_for_transactions(
         self, *, transaction_ids: list[uuid.UUID], profile_key: str

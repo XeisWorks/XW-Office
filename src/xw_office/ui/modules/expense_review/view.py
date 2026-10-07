@@ -7,10 +7,20 @@ from pathlib import Path
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from PySide6.QtCore import QDate, QEvent, QRect, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import (
+    QDate,
+    QEvent,
+    QRect,
+    QRectF,
+    QSettings,
+    QSize,
+    Qt,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -98,26 +108,36 @@ class _PositionDelegate(QStyledItemDelegate):
 
 class _DocumentDelegate(QStyledItemDelegate):
     url_clicked = Signal(str)
+    supplier_link_requested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._sevdesk = QIcon(str(_ROOT / "icons" / "sevdesk.png"))
-        self._website = QApplication.style().standardIcon(QStyle.StandardPixmap.SP_DriveNetIcon)
 
     def paint(self, painter: QPainter, option: Any, index: Any) -> None:
         super().paint(painter, option, index)
         row = index.data(Qt.ItemDataRole.UserRole) or {}
         for rect, kind, _url in self._icon_rects(option.rect, row):
-            (self._sevdesk if kind == "sevdesk" else self._website).paint(painter, rect)
+            if kind == "sevdesk":
+                self._sevdesk.paint(painter, rect)
+            elif kind == "website":
+                self._paint_globe(painter, rect)
+            else:
+                self._paint_link_add(painter, rect)
 
     def editorEvent(self, event: QEvent, model: Any, option: Any, index: Any) -> bool:
         if event.type() != QEvent.Type.MouseButtonRelease or not isinstance(event, QMouseEvent):
             return False
         row = index.data(Qt.ItemDataRole.UserRole) or {}
-        for rect, _kind, url in self._icon_rects(option.rect, row):
-            if rect.contains(event.position().toPoint()) and url.startswith("https://"):
+        for rect, kind, url in self._icon_rects(option.rect, row):
+            if not rect.contains(event.position().toPoint()):
+                continue
+            if kind == "add_supplier":
+                self.supplier_link_requested.emit(row)
+            elif url.startswith("https://"):
                 self.url_clicked.emit(url)
                 return True
+            return True
         return False
 
     @staticmethod
@@ -131,7 +151,51 @@ class _DocumentDelegate(QStyledItemDelegate):
         supplier_url = str(row.get("__supplier_url") or "")
         if supplier_url:
             result.append((QRect(left, top, 22, 22), "website", supplier_url))
+        else:
+            result.append((QRect(left, top, 22, 22), "add_supplier", ""))
         return result
+
+    @staticmethod
+    def _paint_globe(painter: QPainter, rect: QRect) -> None:
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        area = QRectF(rect.adjusted(1, 1, -1, -1))
+        painter.setBrush(QColor("#08b7d6"))
+        painter.setPen(QPen(QColor("#14d5bf"), 1.5))
+        painter.drawEllipse(area)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor("#062f63"), 1.5))
+        painter.drawEllipse(area)
+        painter.drawEllipse(
+            QRectF(area.left() + area.width() * 0.27, area.top(), area.width() * 0.46, area.height())
+        )
+        painter.drawLine(
+            int(area.left()), int(area.center().y()), int(area.right()), int(area.center().y())
+        )
+        painter.restore()
+
+    @staticmethod
+    def _paint_link_add(painter: QPainter, rect: QRect) -> None:
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = QColor("#e5e7eb")
+        pen = QPen(color, 3.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.drawLine(rect.left() + 4, rect.bottom() - 7, rect.right() - 9, rect.top() + 6)
+        painter.drawLine(rect.left() + 8, rect.bottom() - 3, rect.right() - 5, rect.top() + 10)
+        badge = QRect(rect.right() - 9, rect.bottom() - 9, 11, 11)
+        painter.setBrush(QColor("#111827"))
+        painter.setPen(QPen(QColor("#f9fafb"), 1.2))
+        painter.drawEllipse(badge)
+        painter.setPen(QPen(QColor("#f9fafb"), 1.8))
+        painter.drawLine(
+            badge.center().x() - 3, badge.center().y(), badge.center().x() + 3, badge.center().y()
+        )
+        painter.drawLine(
+            badge.center().x(), badge.center().y() - 3, badge.center().x(), badge.center().y() + 3
+        )
+        painter.restore()
 
 
 class _RuleDialog(QDialog):
@@ -220,14 +284,22 @@ class _PositionDialog(QDialog):
 
 
 class _SupplierDialog(QDialog):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        label: str = "",
+        payee: str = "",
+        iban: str = "",
+        url: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Lieferantenportal anlegen")
+        self.setWindowTitle("Lieferantenportal bearbeiten" if url else "Lieferantenportal anlegen")
         layout = QFormLayout(self)
-        self.label = QLineEdit()
-        self.payee = QLineEdit()
-        self.iban = QLineEdit()
-        self.url = QLineEdit("https://")
+        self.label = QLineEdit(label)
+        self.payee = QLineEdit(payee)
+        self.iban = QLineEdit(iban)
+        self.url = QLineEdit(url or "https://")
         layout.addRow("Bezeichnung", self.label)
         layout.addRow("Empfänger exakt", self.payee)
         layout.addRow("IBAN optional", self.iban)
@@ -238,6 +310,45 @@ class _SupplierDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
+
+
+class _PurposeRuleDialog(QDialog):
+    def __init__(
+        self,
+        *,
+        label: str = "",
+        payee: str = "",
+        remove_text: str = "",
+        sample: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Verwendungszweck bereinigen")
+        layout = QFormLayout(self)
+        self.label = QLineEdit(label)
+        self.payee = QLineEdit(payee)
+        self.remove_text = QLineEdit(remove_text)
+        self.remove_text.setPlaceholderText("Text, der künftig ausgeblendet wird")
+        layout.addRow("Bezeichnung", self.label)
+        layout.addRow("Empfänger", self.payee)
+        layout.addRow("Text entfernen", self.remove_text)
+        if sample:
+            preview = QLabel(sample)
+            preview.setWordWrap(True)
+            preview.setStyleSheet("color: #9ca3af;")
+            layout.addRow("Aktuelle Anzeige", preview)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._accept_if_valid)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def _accept_if_valid(self) -> None:
+        if not self.payee.text().strip() or not self.remove_text.text().strip():
+            QMessageBox.information(self, "Zweckbereinigung", "Empfänger und Text sind erforderlich.")
+            return
+        self.accept()
 
 
 class _StandaloneRuleDialog(QDialog):
@@ -364,6 +475,10 @@ class ExpenseReviewView(QWidget):
         self._worker: BackgroundWorker | None = None
         self._rows: list[BankExpenseRow] = []
         self._positions: list[ExpensePositionView] = []
+        self._settings = QSettings("XeisWorks", "XW Office")
+        self._header_save_timer = QTimer(self)
+        self._header_save_timer.setSingleShot(True)
+        self._header_save_timer.timeout.connect(self._save_table_header)
         self._start = QDateEdit()
         self._end = QDateEdit()
         self._status = QLabel("Noch nicht geladen")
@@ -373,6 +488,7 @@ class ExpenseReviewView(QWidget):
         self._position_table = DataTable(["Kürzel", "Position", "Farbe", "Aktiv"])
         self._rule_table = DataTable(["Position", "Bezeichnung", "Empfänger", "IBAN", "Zweck", "Aktiv"])
         self._supplier_table = DataTable(["Bezeichnung", "Empfänger", "IBAN", "Website", "Aktiv"])
+        self._purpose_rule_table = DataTable(["Bezeichnung", "Empfänger", "Text entfernen", "Aktiv"])
         self._position_delegate = _PositionDelegate(self)
         self._document_delegate = _DocumentDelegate(self)
         self._build_ui()
@@ -429,6 +545,13 @@ class ExpenseReviewView(QWidget):
         table.setItemDelegateForColumn(5, self._document_delegate)
         table.setColumnWidth(4, 180)
         table.setColumnWidth(5, 150)
+        if table is self._table:
+            header = table.horizontalHeader()
+            state = self._settings.value("expense_review/bank_table_header")
+            if state is not None:
+                header.restoreState(state)
+            header.sectionResized.connect(lambda *_args: self._schedule_table_header_save())
+            header.sectionMoved.connect(lambda *_args: self._schedule_table_header_save())
 
     def _build_bank_tab(self) -> QWidget:
         page = QWidget()
@@ -439,10 +562,14 @@ class ExpenseReviewView(QWidget):
         remember = QPushButton("Regel für Auswahl merken")
         remember.clicked.connect(self._remember_selected_rule)
         actions.addWidget(remember)
+        purpose_rule = QPushButton("Zweck für Empfänger bereinigen")
+        purpose_rule.clicked.connect(self._add_purpose_rule_from_selected)
+        actions.addWidget(purpose_rule)
         actions.addStretch()
         layout.addLayout(actions)
         self._position_delegate.position_clicked.connect(self._assign_position)
         self._document_delegate.url_clicked.connect(self._open_url)
+        self._document_delegate.supplier_link_requested.connect(self._add_supplier_link_from_row)
         return page
 
     def _build_missing_tab(self) -> QWidget:
@@ -490,11 +617,31 @@ class ExpenseReviewView(QWidget):
         add_supplier.clicked.connect(self._add_supplier)
         toggle_supplier = QPushButton("Auswahl aktivieren/deaktivieren")
         toggle_supplier.clicked.connect(self._toggle_selected_supplier)
+        edit_supplier = QPushButton("Auswahl bearbeiten")
+        edit_supplier.clicked.connect(self._edit_selected_supplier)
         supplier_actions.addWidget(add_supplier)
+        supplier_actions.addWidget(edit_supplier)
         supplier_actions.addWidget(toggle_supplier)
         supplier_actions.addStretch()
         supplier_layout.addLayout(supplier_actions)
         tabs.addTab(suppliers, "Lieferantenportale")
+
+        purpose_rules = QWidget()
+        purpose_layout = QVBoxLayout(purpose_rules)
+        purpose_layout.addWidget(self._purpose_rule_table)
+        purpose_actions = QHBoxLayout()
+        add_purpose = QPushButton("Zweckregel anlegen")
+        add_purpose.clicked.connect(self._add_purpose_rule)
+        edit_purpose = QPushButton("Auswahl bearbeiten")
+        edit_purpose.clicked.connect(self._edit_selected_purpose_rule)
+        toggle_purpose = QPushButton("Ausgewählte Regel aktivieren/deaktivieren")
+        toggle_purpose.clicked.connect(self._toggle_selected_purpose_rule)
+        purpose_actions.addWidget(add_purpose)
+        purpose_actions.addWidget(edit_purpose)
+        purpose_actions.addWidget(toggle_purpose)
+        purpose_actions.addStretch()
+        purpose_layout.addLayout(purpose_actions)
+        tabs.addTab(purpose_rules, "Verwendungszwecke")
         return tabs
 
     def _load(self, *, refresh: bool = True, force_document_refresh: bool = False) -> None:
@@ -545,6 +692,7 @@ class ExpenseReviewView(QWidget):
                     "__iban": row.iban,
                     "__payee": row.payee,
                     "__purpose": row.purpose,
+                    "__raw_payee": row.raw_payee,
                     "__positions": position_payload,
                     "__position_key": row.position_key,
                     "__documents": [document.__dict__ for document in row.documents],
@@ -576,14 +724,16 @@ class ExpenseReviewView(QWidget):
         if row.documents:
             return "     " * len(row.documents) + ("  " if row.supplier_url else "")
         if row.supplier_url:
-            return "      Lieferantenportal"
-        return "nicht geprüft" if not row.document_link_scan_complete else "Link pflegen"
+            return "      "
+        return "nicht geprüft" if not row.document_link_scan_complete else "      "
 
     @staticmethod
     def _document_tooltip(row: BankExpenseRow) -> str:
         parts = [f"sevDesk: {doc.document_number}" for doc in row.documents]
         if row.supplier_url:
             parts.append("Lieferantenportal öffnen")
+        else:
+            parts.append("Lieferantenportal-Link anlegen")
         return "\n".join(parts) or (
             "Belegscan unvollständig" if not row.document_link_scan_complete else "Kein Link hinterlegt"
         )
@@ -681,6 +831,19 @@ class ExpenseReviewView(QWidget):
                 for item in self.service.list_supplier_links()
             ]
         )
+        self._purpose_rule_table.set_data(
+            [
+                {
+                    "Bezeichnung": str(getattr(item, "label", "")),
+                    "Empfänger": str(getattr(item, "payee_normalized", "")),
+                    "Text entfernen": str(getattr(item, "remove_text", "")),
+                    "Aktiv": "ja" if getattr(item, "enabled", False) else "nein",
+                    "__id": str(getattr(item, "id", "")),
+                    "__enabled": bool(getattr(item, "enabled", False)),
+                }
+                for item in self.service.list_purpose_rules()
+            ]
+        )
 
     def _edit_selected_position(self) -> None:
         selected = self._position_table.selected_row_data()
@@ -731,7 +894,7 @@ class ExpenseReviewView(QWidget):
         self._refresh_settings()
 
     def _add_supplier(self) -> None:
-        dialog = _SupplierDialog(self)
+        dialog = _SupplierDialog(parent=self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
@@ -746,12 +909,150 @@ class ExpenseReviewView(QWidget):
             return
         self._refresh_settings()
 
+    def _add_supplier_link_from_row(self, row: object) -> None:
+        data = row if isinstance(row, dict) else {}
+        payee = str(data.get("__raw_payee") or data.get("__payee") or "")
+        dialog = _SupplierDialog(label=str(data.get("__payee") or payee), payee=payee, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self.service.add_supplier_link(
+                payee=dialog.payee.text(),
+                iban=str(data.get("__iban") or ""),
+                label=dialog.label.text(),
+                url=dialog.url.text(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Lieferantenportal", str(exc))
+            return
+        self._load(refresh=False)
+
+    def _edit_selected_supplier(self) -> None:
+        selected = self._supplier_table.selected_row_data()
+        if not selected:
+            return
+        supplier = next(
+            (item for item in self.service.list_supplier_links() if str(item.id) == selected.get("__id")),
+            None,
+        )
+        if supplier is None:
+            return
+        dialog = _SupplierDialog(
+            label=supplier.label,
+            payee=supplier.payee_normalized,
+            iban=supplier.counterparty_iban,
+            url=supplier.url,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self.service.update_supplier_link(
+                link_id=str(supplier.id),
+                payee=dialog.payee.text(),
+                iban=dialog.iban.text(),
+                label=dialog.label.text(),
+                url=dialog.url.text(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Lieferantenportal", str(exc))
+            return
+        self._load(refresh=False)
+
     def _toggle_selected_supplier(self) -> None:
         selected = self._supplier_table.selected_row_data()
         if selected and self.service.set_supplier_link_enabled(
             str(selected.get("__id") or ""), not bool(selected.get("__enabled"))
         ):
             self._refresh_settings()
+
+    def _add_purpose_rule_from_selected(self) -> None:
+        selected = self._table.selected_row_data()
+        if not selected:
+            QMessageBox.information(self, "Zweckbereinigung", "Bitte zuerst eine Zahlung auswählen.")
+            return
+        payee = str(selected.get("__raw_payee") or selected.get("__payee") or "")
+        dialog = _PurposeRuleDialog(
+            label=payee,
+            payee=payee,
+            sample=str(selected.get("__purpose") or ""),
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self.service.add_purpose_rule(
+                payee=dialog.payee.text(),
+                remove_text=dialog.remove_text.text(),
+                label=dialog.label.text(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Zweckbereinigung", str(exc))
+            return
+        self._load(refresh=False)
+
+    def _add_purpose_rule(self) -> None:
+        dialog = _PurposeRuleDialog(parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self.service.add_purpose_rule(
+                payee=dialog.payee.text(),
+                remove_text=dialog.remove_text.text(),
+                label=dialog.label.text(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Zweckbereinigung", str(exc))
+            return
+        self._refresh_settings()
+
+    def _edit_selected_purpose_rule(self) -> None:
+        selected = self._purpose_rule_table.selected_row_data()
+        if not selected:
+            return
+        rule = next(
+            (item for item in self.service.list_purpose_rules() if str(item.id) == selected.get("__id")),
+            None,
+        )
+        if rule is None:
+            return
+        dialog = _PurposeRuleDialog(
+            label=rule.label,
+            payee=rule.payee_normalized,
+            remove_text=rule.remove_text,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self.service.update_purpose_rule(
+                rule_id=str(rule.id),
+                payee=dialog.payee.text(),
+                remove_text=dialog.remove_text.text(),
+                label=dialog.label.text(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Zweckbereinigung", str(exc))
+            return
+        self._load(refresh=False)
+
+    def _toggle_selected_purpose_rule(self) -> None:
+        selected = self._purpose_rule_table.selected_row_data()
+        if selected and self.service.set_purpose_rule_enabled(
+            str(selected.get("__id") or ""), not bool(selected.get("__enabled"))
+        ):
+            self._refresh_settings()
+
+    def _schedule_table_header_save(self) -> None:
+        self._header_save_timer.start(350)
+
+    def _save_table_header(self) -> None:
+        self._settings.setValue("expense_review/bank_table_header", self._table.horizontalHeader().saveState())
+        self._settings.sync()
+
+    def closeEvent(self, event: Any) -> None:
+        self._save_table_header()
+        super().closeEvent(event)
 
     @staticmethod
     def _open_url(url: str) -> None:
