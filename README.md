@@ -64,6 +64,28 @@ copy .env.example .env
 python -m xw_office
 ```
 
+### Empfohlene VS-Code-Erweiterungen
+
+Die Workspace-Empfehlungen stehen in [`.vscode/extensions.json`](.vscode/extensions.json).
+Die Erweiterungen sind Entwicklungswerkzeuge, keine Laufzeitabhaengigkeiten der App,
+und muessen auf jedem Entwicklungs-PC bzw. im verwendeten VS-Code-Profil installiert sein.
+
+| Erweiterung | Extension-ID | Nutzen |
+|---|---|---|
+| YAML (Red Hat) | `redhat.vscode-yaml` | YAML-Validierung, Autovervollstaendigung und Schema-Unterstuetzung fuer Konfigurationen. |
+| GitLens (GitKraken) | `eamodio.gitlens` | Git-Blame und Commit-/Dateihistorie zur Nachverfolgung von Codeaenderungen. |
+
+```powershell
+code --install-extension redhat.vscode-yaml
+code --install-extension eamodio.gitlens
+
+# Installierte Erweiterungen und Versionen pruefen
+code --list-extensions --show-versions
+```
+
+GitLens ist ein Werkzeug zur Historienanalyse; die Repository-Regeln bleiben unveraendert:
+`main` ist der gemeinsame Code-Stand, Updates erfolgen per Fast-forward und ohne Force-Push.
+
 ### Windows-Desktop-Start (Alltagsbetrieb)
 
 Fuer den taeglichen Betrieb gibt es einen fensterlosen Start ohne Konsole, mit eigenem Icon und
