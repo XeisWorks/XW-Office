@@ -12,7 +12,13 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.models.base import Base
 from xw_office.repositories.expense_check import ExpenseCheckRepository
-from xw_office.services.expenses.bank_provider import BankExpense
+from xw_office.repositories.expense_pipeline import ExpensePipelineRepository
+from xw_office.services.expenses.bank_provider import (
+    BankDocumentLink,
+    BankExpense,
+    DocumentLinkScan,
+    SevdeskExpenseProvider,
+)
 from xw_office.services.expenses.service import ExpenseAction, ExpenseAuditService, ExpenseRow
 
 
@@ -211,3 +217,144 @@ def test_profile_rule_matches_derived_card_merchant() -> None:
         "candidate",
         "musikheroes:payee",
     )
+
+
+def _bank_row(*, external_id: str = "TX-1", purpose: str = "Hosting MusikHeroes") -> BankExpense:
+    return BankExpense(
+        external_id=external_id,
+        account_id="XEISWORKS",
+        value_date=date(2026, 9, 4),
+        entry_date=date(2026, 9, 4),
+        amount=Decimal("-23.10"),
+        currency="EUR",
+        direction="outgoing",
+        payee_name="Hosting GmbH",
+        payee_normalized="hosting gmbh",
+        counterparty_iban="AT001234",
+        payment_reference="RE 123",
+        purpose=purpose,
+        sevdesk_status="",
+    )
+
+
+class _BankProviderStub:
+    base_url = "https://my.sevdesk.de/api/v1"
+
+    def __init__(self, rows: list[BankExpense], scan: DocumentLinkScan | None = None) -> None:
+        self.rows = rows
+        self.scan = scan or DocumentLinkScan((), True)
+
+    def find_account(self) -> SimpleNamespace:
+        return SimpleNamespace(id="XEISWORKS")
+
+    def fetch(self, start: date, end: date, *, outgoing_only: bool = True) -> tuple[SimpleNamespace, list[BankExpense]]:
+        return self.find_account(), self.rows
+
+    def resolve_document_links(
+        self, start: date, end: date, *, account_id: str | None = None
+    ) -> DocumentLinkScan:
+        return self.scan
+
+
+def test_position_rule_assigns_only_unique_composite_match(
+    session_factory: sessionmaker[Session],
+) -> None:
+    pipeline = ExpensePipelineRepository(session_factory)
+    service = ExpenseAuditService(
+        bank_provider=_BankProviderStub([_bank_row()]),  # type: ignore[arg-type]
+        pipeline_repo=pipeline,
+    )
+    assert {item.key for item in service.list_positions()} == {"xw", "mh", "wm", "bh", "priv"}
+    pipeline.add_position_rule(
+        position_key="mh",
+        payee_normalized="hosting gmbh",
+        purpose_contains="musikheroes",
+    )
+
+    rows = service.list_bank_expenses(start=date(2026, 9, 1), end=date(2026, 9, 30))
+
+    assert rows[0].position_key == "mh"
+    assert rows[0].position_source == "automatic"
+
+
+def test_ambiguous_rules_do_not_assign_and_manual_assignment_wins(
+    session_factory: sessionmaker[Session],
+) -> None:
+    pipeline = ExpensePipelineRepository(session_factory)
+    provider = _BankProviderStub([_bank_row()])
+    service = ExpenseAuditService(bank_provider=provider, pipeline_repo=pipeline)  # type: ignore[arg-type]
+    service.list_positions()
+    pipeline.add_position_rule(position_key="mh", payee_normalized="hosting gmbh")
+    pipeline.add_position_rule(position_key="xw", counterparty_iban="AT001234")
+
+    first = service.list_bank_expenses(start=date(2026, 9, 1), end=date(2026, 9, 30))[0]
+    assert first.position_key == ""
+
+    service.assign_transaction_position(transaction_id=first.transaction_id, position_key="wm")
+    second = service.list_bank_expenses(start=date(2026, 9, 1), end=date(2026, 9, 30))[0]
+    assert second.position_key == "wm"
+    assert second.position_source == "manual"
+
+
+def test_document_link_is_persisted_and_reused_from_cache(
+    session_factory: sessionmaker[Session],
+) -> None:
+    pipeline = ExpensePipelineRepository(session_factory)
+    scan = DocumentLinkScan(
+        (
+            BankDocumentLink(
+                transaction_external_id="TX-1",
+                resource_type="Voucher",
+                external_id="V-7",
+                document_number="VB 2026-7",
+            ),
+        ),
+        True,
+    )
+    provider = _BankProviderStub([_bank_row()], scan)
+    service = ExpenseAuditService(bank_provider=provider, pipeline_repo=pipeline)  # type: ignore[arg-type]
+
+    live = service.list_bank_expenses(start=date(2026, 9, 1), end=date(2026, 9, 30))[0]
+    provider.scan = DocumentLinkScan((), False, 1)
+    cached = service.list_bank_expenses(
+        start=date(2026, 9, 1), end=date(2026, 9, 30), refresh=False
+    )[0]
+
+    assert live.documents[0].document_number == "VB 2026-7"
+    assert cached.documents[0].url.endswith("/fi/detail/type/VB/id/V-7")
+    assert cached.document_link_scan_complete is False
+
+
+def test_document_resolver_uses_typed_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class _Response:
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {
+                "objects": [
+                    {"id": "TX-1", "checkAccount": {"id": "XEISWORKS"}}
+                ]
+            }
+
+    class _Connection:
+        def get(self, path: str) -> _Response:
+            calls.append(path)
+            return _Response()
+
+    provider = SevdeskExpenseProvider(_Connection())  # type: ignore[arg-type]
+
+    def fake_list(path: str, *, params: dict[str, object] | None = None) -> list[dict[str, object]]:
+        if path == "/Voucher":
+            return [{"id": "V-7", "voucherDate": "2026-09-05", "voucherNumber": "VB 7"}]
+        return []
+
+    monkeypatch.setattr(provider, "_list", fake_list)
+
+    scan = provider.resolve_document_links(
+        date(2026, 9, 1), date(2026, 9, 30), account_id="XEISWORKS"
+    )
+
+    assert scan.complete is True
+    assert scan.links[0].document_number == "VB 7"
+    assert calls == ["/Voucher/V-7/getCheckAccountTransactions"]

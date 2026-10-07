@@ -43,8 +43,10 @@ def main() -> int:
     links = _read(links_path, {"by_purpose": {}})
     ignores = _read(ignore_path, {})
     shifts = _read(shift_path, {})
-    flags = cache.get("flags") if isinstance(cache.get("flags"), dict) else {}
-    by_purpose = links.get("by_purpose") if isinstance(links.get("by_purpose"), dict) else {}
+    raw_flags = cache.get("flags")
+    flags: dict[str, Any] = raw_flags if isinstance(raw_flags, dict) else {}
+    raw_by_purpose = links.get("by_purpose")
+    by_purpose: dict[str, Any] = raw_by_purpose if isinstance(raw_by_purpose, dict) else {}
 
     flag_rows = [entry for rows in flags.values() if isinstance(rows, list) for entry in rows if isinstance(entry, dict)]
     link_rows = [(str(key), str(url)) for key, url in by_purpose.items() if str(url).startswith("https://")]
@@ -68,15 +70,12 @@ def main() -> int:
     repo = ExpensePipelineRepository(create_session_factory(config))
 
     for entry in flag_rows:
-        original = str(entry.get("original") or "").strip()
         normalized = str(entry.get("normalized") or "").strip()
         if normalized:
-            repo.add_rule(
-                profile_key="musikheroes",
-                action="candidate",
-                match_field="payee",
-                value_normalized=normalize_german_text(normalized),
-                value_original=original or normalized,
+            repo.add_position_rule(
+                position_key="mh",
+                label=f"Legacy MusikHeroes · {normalized}",
+                purpose_contains=normalize_german_text(normalized),
                 source="legacy_import",
             )
     for purpose, url in link_rows:

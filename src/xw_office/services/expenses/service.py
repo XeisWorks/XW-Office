@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING
 
 from xw_office.core.fuzzy_match import fuzzy_ratio
 from xw_office.core.text_normalize import clean_bank_purpose, normalize_german_text
+from xw_office.models.expense_pipeline import ExpensePositionRule, ExpenseSupplierLink
 from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.expenses.bank_provider import (
     BankDocumentLink,
@@ -80,6 +82,37 @@ class BankExpenseRow:
     raw_purpose: str = ""
     display_source: str = ""
     display_confidence: float = 0.0
+    position_key: str = ""
+    position_source: str = ""
+    position_rule_label: str = ""
+    documents: tuple["ExpenseDocumentView", ...] = ()
+
+
+@dataclass(frozen=True)
+class ExpenseDocumentView:
+    resource_type: str
+    external_id: str
+    document_number: str
+    url: str
+
+
+@dataclass(frozen=True)
+class ExpensePositionView:
+    key: str
+    label: str
+    initials: str
+    color: str
+    sort_order: int
+    enabled: bool = True
+
+
+DEFAULT_EXPENSE_POSITIONS: tuple[ExpensePositionView, ...] = (
+    ExpensePositionView("xw", "XeisWorks", "XW", "#c6922d", 10),
+    ExpensePositionView("mh", "MusikHeroes", "MH", "#c0392b", 20),
+    ExpensePositionView("wm", "WüdaraMusi", "WM", "#2e8b57", 30),
+    ExpensePositionView("bh", "Blechhaufn", "BH", "#2878b5", 40),
+    ExpensePositionView("priv", "Privat", "PRIV", "#777777", 50),
+)
 
 
 class ExpenseAction(str, Enum):
@@ -162,6 +195,29 @@ class ExpenseAuditService:
         self._pipeline_repo = pipeline_repo
         self._memory_profile_flags: dict[tuple[str, str], str] = {}
 
+    def list_positions(self, *, enabled_only: bool = True) -> list[ExpensePositionView]:
+        if self._pipeline_repo is None:
+            return [item for item in DEFAULT_EXPENSE_POSITIONS if item.enabled or not enabled_only]
+        self._pipeline_repo.ensure_positions(
+            [
+                {
+                    "key": item.key,
+                    "label": item.label,
+                    "initials": item.initials,
+                    "color": item.color,
+                    "sort_order": item.sort_order,
+                    "enabled": item.enabled,
+                }
+                for item in DEFAULT_EXPENSE_POSITIONS
+            ]
+        )
+        return [
+            ExpensePositionView(
+                row.key, row.label, row.initials, row.color, row.sort_order, row.enabled
+            )
+            for row in self._pipeline_repo.list_positions(enabled_only=enabled_only)
+        ]
+
     def describe(self) -> str:
         return (
             "Ausgaben-Check: Belege pruefen und fuer UVA/FIBU vorbereiten "
@@ -207,13 +263,15 @@ class ExpenseAuditService:
             rows = []
 
         links_by_transaction: dict[str, list[BankDocumentLink]] = {}
-        link_scan_complete = True
+        # Cached rows may contain known links, but without a fresh scan we must
+        # not claim that every unlinked row is a genuinely missing receipt.
+        link_scan_complete = refresh
         if refresh:
             try:
                 account = self._bank_provider.find_account()
-                for link in self._bank_provider.resolve_document_links(
-                    start, end, account_id=account.id
-                ):
+                scan = self._bank_provider.resolve_document_links(start, end, account_id=account.id)
+                link_scan_complete = scan.complete
+                for link in scan.links:
                     links_by_transaction.setdefault(link.transaction_external_id, []).append(link)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("sevDesk-Belegscan unvollständig: %s", exc)
@@ -221,6 +279,7 @@ class ExpenseAuditService:
 
         result: list[BankExpenseRow] = []
         rules = self._pipeline_repo.list_rules(profile_key) if self._pipeline_repo and profile_key else []
+        position_rules = self._pipeline_repo.list_position_rules() if self._pipeline_repo else []
         for row in rows:
             projection = project_expense_text(
                 payee_name=row.payee_name,
@@ -259,22 +318,70 @@ class ExpenseAuditService:
             if profile_key:
                 status, source = self._match_profile_rule(row, profile_key, rules)
                 if self._pipeline_repo is not None and snapshot_id:
-                    assignment = self._pipeline_repo.get_assignment(
+                    profile_assignment = self._pipeline_repo.get_assignment(
                         transaction_id=uuid.UUID(snapshot_id), profile_key=profile_key
                     )
-                    if assignment is not None:
-                        status = assignment.status
-                        source = assignment.source
+                    if profile_assignment is not None:
+                        status = profile_assignment.status
+                        source = profile_assignment.source
                 status = status or self._memory_profile_flags.get((profile_key, row.external_id), "")
             document_links = links_by_transaction.get(row.external_id, [])
-            sevdesk_link = ""
-            if document_links:
-                first_link = document_links[0]
-                sevdesk_link = sevdesk_document_url(
-                    self._bank_provider.base_url,
-                    first_link.resource_type,
-                    first_link.external_id,
+            position_key = ""
+            position_source = ""
+            position_rule_label = ""
+            if self._pipeline_repo is not None and snapshot_id:
+                tx_uuid = uuid.UUID(snapshot_id)
+                persisted_links = self._pipeline_repo.list_document_links(tx_uuid)
+                document_links = [
+                    BankDocumentLink(
+                        transaction_external_id=row.external_id,
+                        resource_type=link.resource_type,
+                        external_id=link.external_id,
+                        document_number=link.document_number,
+                    )
+                    for link in persisted_links
+                ]
+                position_assignment = self._pipeline_repo.get_position_assignment(
+                    transaction_id=tx_uuid
                 )
+                matched_position_rule = self._match_position_rule(row, position_rules)
+                if position_assignment is None and matched_position_rule is not None:
+                    position_assignment = self._pipeline_repo.assign_position(
+                        transaction_id=tx_uuid,
+                        position_key=matched_position_rule.position_key,
+                        source="automatic",
+                        matched_rule_id=matched_position_rule.id,
+                    )
+                if position_assignment is not None:
+                    position_key = position_assignment.position_key
+                    position_source = position_assignment.source
+                    if position_assignment.matched_rule_id:
+                        matching = next(
+                            (
+                                item
+                                for item in position_rules
+                                if item.id == position_assignment.matched_rule_id
+                            ),
+                            None,
+                        )
+                        position_rule_label = str(getattr(matching, "label", "") or "")
+            if profile_key == "musikheroes" and position_key == "mh":
+                status = "included"
+                source = position_source or "position"
+            sevdesk_link = ""
+            document_views = tuple(
+                ExpenseDocumentView(
+                    resource_type=link.resource_type,
+                    external_id=link.external_id,
+                    document_number=link.document_number or link.external_id,
+                    url=sevdesk_document_url(
+                        self._bank_provider.base_url, link.resource_type, link.external_id
+                    ),
+                )
+                for link in document_links
+            )
+            if document_views:
+                sevdesk_link = document_views[0].url
             supplier_url = ""
             if self._pipeline_repo is not None:
                 supplier_links = self._pipeline_repo.list_supplier_links(
@@ -309,9 +416,166 @@ class ExpenseAuditService:
                     raw_purpose=row.purpose,
                     display_source=projection.source,
                     display_confidence=projection.confidence,
+                    position_key=position_key,
+                    position_source=position_source,
+                    position_rule_label=position_rule_label,
+                    documents=document_views,
                 )
             )
         return result
+
+    @staticmethod
+    def _match_position_rule(
+        row: BankExpense, rules: Sequence[ExpensePositionRule]
+    ) -> ExpensePositionRule | None:
+        projection = project_expense_text(
+            payee_name=row.payee_name,
+            payment_reference=row.payment_reference,
+            purpose=row.purpose,
+        )
+        payee = row.payee_normalized or projection.merchant_key
+        iban = row.counterparty_iban.replace(" ", "").upper()
+        purpose = normalize_german_text(
+            " ".join(
+                (
+                    row.payee_name,
+                    row.payment_reference,
+                    row.purpose,
+                    projection.purpose,
+                )
+            )
+        )
+        matches: list[ExpensePositionRule] = []
+        for rule in rules:
+            expected_payee = str(getattr(rule, "payee_normalized", "") or "")
+            expected_iban = str(getattr(rule, "counterparty_iban", "") or "").replace(" ", "").upper()
+            expected_purpose = normalize_german_text(
+                str(getattr(rule, "purpose_contains", "") or "")
+            )
+            if expected_payee and expected_payee != payee:
+                continue
+            if expected_iban and expected_iban != iban:
+                continue
+            if expected_purpose and expected_purpose not in purpose:
+                continue
+            if any((expected_payee, expected_iban, expected_purpose)):
+                matches.append(rule)
+        positions = {str(getattr(rule, "position_key", "")) for rule in matches}
+        if len(positions) != 1:
+            return None
+        return matches[0]
+
+    def assign_transaction_position(self, *, transaction_id: str, position_key: str) -> None:
+        if self._pipeline_repo is None:
+            raise RuntimeError("Datenbank für Positionszuordnung nicht verfügbar")
+        valid = {position.key for position in self.list_positions()}
+        if position_key not in valid:
+            raise ValueError(f"Unbekannte Position: {position_key}")
+        self._pipeline_repo.assign_position(
+            transaction_id=uuid.UUID(transaction_id),
+            position_key=position_key,
+            source="manual",
+        )
+
+    def remember_position_rule(
+        self,
+        *,
+        transaction_id: str,
+        position_key: str,
+        payee: str = "",
+        iban: str = "",
+        purpose_contains: str = "",
+        label: str = "",
+    ) -> None:
+        if self._pipeline_repo is None:
+            raise RuntimeError("Datenbank für Positionsregeln nicht verfügbar")
+        normalized_payee = normalize_german_text(payee)
+        normalized_iban = iban.replace(" ", "").upper().strip()
+        rule = self._pipeline_repo.add_position_rule(
+            position_key=position_key,
+            label=label or f"{position_key.upper()} · {payee or purpose_contains}",
+            payee_normalized=normalized_payee,
+            counterparty_iban=normalized_iban,
+            purpose_contains=normalize_german_text(purpose_contains),
+        )
+        self._pipeline_repo.assign_position(
+            transaction_id=uuid.UUID(transaction_id),
+            position_key=position_key,
+            source="manual",
+            matched_rule_id=rule.id,
+        )
+
+    def add_position_rule(
+        self,
+        *,
+        position_key: str,
+        label: str = "",
+        payee: str = "",
+        iban: str = "",
+        purpose_contains: str = "",
+    ) -> None:
+        if self._pipeline_repo is None:
+            raise RuntimeError("Datenbank für Positionsregeln nicht verfügbar")
+        self._pipeline_repo.add_position_rule(
+            position_key=position_key,
+            label=label.strip(),
+            payee_normalized=normalize_german_text(payee),
+            counterparty_iban=iban.replace(" ", "").upper().strip(),
+            purpose_contains=normalize_german_text(purpose_contains),
+        )
+
+    def save_position(
+        self, *, key: str, label: str, initials: str, color: str, enabled: bool = True
+    ) -> None:
+        if self._pipeline_repo is None:
+            raise RuntimeError("Datenbank für Positionen nicht verfügbar")
+        current = self.list_positions(enabled_only=False)
+        existing = next((item for item in current if item.key == key), None)
+        sort_order = existing.sort_order if existing else (max((item.sort_order for item in current), default=0) + 10)
+        self._pipeline_repo.upsert_position(
+            key=key,
+            label=label,
+            initials=initials,
+            color=color,
+            sort_order=sort_order,
+            enabled=enabled,
+        )
+
+    def list_position_rules(self) -> list[ExpensePositionRule]:
+        if self._pipeline_repo is None:
+            return []
+        return self._pipeline_repo.list_position_rules(enabled_only=False)
+
+    def set_position_rule_enabled(self, rule_id: str, enabled: bool) -> bool:
+        if self._pipeline_repo is None:
+            return False
+        return self._pipeline_repo.set_position_rule_enabled(uuid.UUID(rule_id), enabled)
+
+    def list_supplier_links(self) -> list[ExpenseSupplierLink]:
+        if self._pipeline_repo is None:
+            return []
+        return self._pipeline_repo.list_all_supplier_links()
+
+    def set_supplier_link_enabled(self, link_id: str, enabled: bool) -> bool:
+        if self._pipeline_repo is None:
+            return False
+        return self._pipeline_repo.set_supplier_link_enabled(uuid.UUID(link_id), enabled)
+
+    def add_supplier_link(
+        self, *, payee: str, iban: str, label: str, url: str
+    ) -> None:
+        if self._pipeline_repo is None:
+            raise RuntimeError("Datenbank für Lieferantenlinks nicht verfügbar")
+        normalized_url = url.strip()
+        if not normalized_url.startswith("https://"):
+            raise ValueError("Lieferantenlinks müssen mit https:// beginnen")
+        self._pipeline_repo.add_supplier_link(
+            profile_key="",
+            payee_normalized=normalize_german_text(payee),
+            counterparty_iban=iban.replace(" ", "").upper().strip(),
+            label=label.strip() or payee.strip(),
+            url=normalized_url,
+        )
 
     def flag_profile_transaction(
         self,
@@ -361,7 +625,7 @@ class ExpenseAuditService:
     def _match_profile_rule(
         row: BankExpense,
         profile_key: str,
-        rules: list[object],
+        rules: Sequence[object],
     ) -> tuple[str, str]:
         for rule in rules:
             match_field = str(getattr(rule, "match_field", ""))

@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+import logging
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -11,6 +12,7 @@ from xw_office.core.text_normalize import normalize_german_text
 from xw_office.services.http_client import SevdeskConnection
 
 VIENNA = ZoneInfo("Europe/Vienna")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,13 @@ class BankDocumentLink:
     resource_type: str
     external_id: str
     document_number: str
+
+
+@dataclass(frozen=True)
+class DocumentLinkScan:
+    links: tuple[BankDocumentLink, ...]
+    complete: bool
+    error_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -170,30 +179,49 @@ class SevdeskExpenseProvider:
 
     def resolve_document_links(
         self, start: date, end: date, *, account_id: str | None = None
-    ) -> list[BankDocumentLink]:
-        """Resolve concrete sevDesk documents to bank transactions in one scan."""
+    ) -> DocumentLinkScan:
+        """Resolve concrete documents, keeping partial failures explicit.
+
+        sevDesk's document collection date filters are not reliable for this
+        account, so documents are paged once and filtered locally.  A generous
+        ``payDate`` keeps older documents paid in the selected period eligible.
+        """
         links: list[BankDocumentLink] = []
+        errors = 0
         for resource_type, number_key, date_key in (
             ("Invoice", "invoiceNumber", "invoiceDate"),
             ("Voucher", "voucherNumber", "voucherDate"),
             ("CreditNote", "creditNoteNumber", "creditNoteDate"),
         ):
-            documents = self._list(
-                f"/{resource_type}",
-                params={
-                    "startDate": start.isoformat(),
-                    "endDate": end.isoformat(),
-                    "showAll": "true",
-                },
-            )
+            try:
+                documents = self._list(f"/{resource_type}", params={"showAll": "true"})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("sevDesk-%s-Liste konnte nicht geprüft werden: %s", resource_type, exc)
+                errors += 1
+                continue
             for document in documents:
                 document_id = str(document.get("id") or "").strip()
                 document_date = _parse_date(document.get(date_key) or document.get("date"))
-                if not document_id or document_date is None or not start <= document_date <= end:
-                    continue
-                response = self._connection.get(
-                    f"/Resource/{document_id}/getCheckAccountTransactions"
+                pay_date = _parse_date(document.get("payDate"))
+                relevant_date = bool(
+                    (document_date and start <= document_date <= end)
+                    or (pay_date and start <= pay_date <= end)
                 )
+                if not document_id or not relevant_date:
+                    continue
+                try:
+                    response = self._connection.get(
+                        f"/{resource_type}/{document_id}/getCheckAccountTransactions"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "sevDesk-Verknüpfung %s/%s konnte nicht geprüft werden: %s",
+                        resource_type,
+                        document_id,
+                        exc,
+                    )
+                    errors += 1
+                    continue
                 for transaction in _objects(response.json()):
                     transaction_id = str(transaction.get("id") or "").strip()
                     transaction_account = transaction.get("checkAccount")
@@ -215,7 +243,7 @@ class SevdeskExpenseProvider:
                                 ).strip(),
                             )
                         )
-        return links
+        return DocumentLinkScan(tuple(links), complete=errors == 0, error_count=errors)
 
     def _list(self, path: str, *, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []

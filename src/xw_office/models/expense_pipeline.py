@@ -5,7 +5,7 @@ import datetime
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, DateTime, Numeric, String, Text, Uuid, func
+from sqlalchemy import Boolean, Date, DateTime, Index, Numeric, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from xw_office.models.base import Base
@@ -125,6 +125,58 @@ class ExpenseSupplierLink(Base):
     url: Mapped[str] = mapped_column(Text, nullable=False)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ExpensePosition(Base):
+    """User-maintained cost/project position shown in expense review."""
+
+    __tablename__ = "expense_position"
+
+    key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    label: Mapped[str] = mapped_column(String(100), nullable=False)
+    initials: Mapped[str] = mapped_column(String(8), nullable=False)
+    color: Mapped[str] = mapped_column(String(16), nullable=False)
+    sort_order: Mapped[int] = mapped_column(default=100, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ExpensePositionRule(Base):
+    """Composite AND-rule which can assign a future transaction automatically."""
+
+    __tablename__ = "expense_position_rule"
+    __table_args__ = (Index("ix_expense_position_rule_enabled", "enabled", "priority"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    position_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    label: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    payee_normalized: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    counterparty_iban: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    purpose_contains: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    priority: Mapped[int] = mapped_column(default=100, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ExpensePositionAssignment(Base):
+    """Exactly one effective position assignment per bank transaction."""
+
+    __tablename__ = "expense_position_assignment"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    transaction_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False, unique=True)
+    position_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    matched_rule_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    version: Mapped[int] = mapped_column(default=1, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

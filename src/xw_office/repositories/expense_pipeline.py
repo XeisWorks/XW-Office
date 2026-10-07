@@ -13,6 +13,9 @@ from xw_office.core.database import session_scope
 from xw_office.models.expense_pipeline import (
     ExpenseDocumentLink,
     ExpenseMatchRule,
+    ExpensePosition,
+    ExpensePositionAssignment,
+    ExpensePositionRule,
     ExpenseProfileAssignment,
     ExpenseReviewDecision,
     ExpenseSupplierLink,
@@ -75,6 +78,151 @@ class ExpensePipelineRepository:
                 .order_by(ExpenseTransactionSnapshot.value_date, ExpenseTransactionSnapshot.external_id)
             )
             return list(session.scalars(stmt).all())
+
+    def list_positions(self, *, enabled_only: bool = True) -> list[ExpensePosition]:
+        with self._scope() as session:
+            stmt = select(ExpensePosition)
+            if enabled_only:
+                stmt = stmt.where(ExpensePosition.enabled.is_(True))
+            return list(session.scalars(stmt.order_by(ExpensePosition.sort_order, ExpensePosition.key)).all())
+
+    def ensure_positions(self, defaults: list[dict[str, object]]) -> None:
+        """Insert missing defaults without overwriting user-maintained values."""
+        with self._scope() as session:
+            existing = set(session.scalars(select(ExpensePosition.key)).all())
+            for values in defaults:
+                key = str(values["key"])
+                if key in existing:
+                    continue
+                session.add(ExpensePosition(**values))
+            session.flush()
+
+    def upsert_position(
+        self,
+        *,
+        key: str,
+        label: str,
+        initials: str,
+        color: str,
+        sort_order: int = 100,
+        enabled: bool = True,
+    ) -> ExpensePosition:
+        normalized_key = key.strip().lower()
+        if not normalized_key:
+            raise ValueError("Positionsschlüssel fehlt")
+        with self._scope() as session:
+            row = session.get(ExpensePosition, normalized_key)
+            if row is None:
+                row = ExpensePosition(key=normalized_key, label=label, initials=initials, color=color)
+                session.add(row)
+            row.label = label.strip()
+            row.initials = initials.strip().upper()
+            row.color = color.strip()
+            row.sort_order = int(sort_order)
+            row.enabled = bool(enabled)
+            session.flush()
+            session.refresh(row)
+            return row
+
+    def get_position_assignment(
+        self, *, transaction_id: uuid.UUID
+    ) -> ExpensePositionAssignment | None:
+        with self._scope() as session:
+            return session.scalar(
+                select(ExpensePositionAssignment).where(
+                    ExpensePositionAssignment.transaction_id == transaction_id
+                )
+            )
+
+    def assign_position(
+        self,
+        *,
+        transaction_id: uuid.UUID,
+        position_key: str,
+        source: str,
+        matched_rule_id: uuid.UUID | None = None,
+    ) -> ExpensePositionAssignment:
+        with self._scope() as session:
+            row = session.scalar(
+                select(ExpensePositionAssignment).where(
+                    ExpensePositionAssignment.transaction_id == transaction_id
+                )
+            )
+            if row is None:
+                row = ExpensePositionAssignment(
+                    transaction_id=transaction_id,
+                    position_key=position_key,
+                    source=source,
+                    matched_rule_id=matched_rule_id,
+                )
+                session.add(row)
+            else:
+                row.position_key = position_key
+                row.source = source
+                row.matched_rule_id = matched_rule_id
+                row.version += 1
+            session.flush()
+            session.refresh(row)
+            return row
+
+    def add_position_rule(
+        self,
+        *,
+        position_key: str,
+        label: str = "",
+        payee_normalized: str = "",
+        counterparty_iban: str = "",
+        purpose_contains: str = "",
+        source: str = "manual",
+        priority: int = 100,
+    ) -> ExpensePositionRule:
+        if not any((payee_normalized, counterparty_iban, purpose_contains)):
+            raise ValueError("Eine Regel benötigt mindestens ein Kriterium")
+        with self._scope() as session:
+            existing = session.scalar(
+                select(ExpensePositionRule).where(
+                    ExpensePositionRule.position_key == position_key,
+                    ExpensePositionRule.payee_normalized == payee_normalized,
+                    ExpensePositionRule.counterparty_iban == counterparty_iban,
+                    ExpensePositionRule.purpose_contains == purpose_contains,
+                )
+            )
+            if existing is not None:
+                existing.enabled = True
+                if label:
+                    existing.label = label
+                session.flush()
+                session.refresh(existing)
+                return existing
+            row = ExpensePositionRule(
+                position_key=position_key,
+                label=label,
+                payee_normalized=payee_normalized,
+                counterparty_iban=counterparty_iban,
+                purpose_contains=purpose_contains,
+                source=source,
+                priority=priority,
+            )
+            session.add(row)
+            session.flush()
+            session.refresh(row)
+            return row
+
+    def list_position_rules(self, *, enabled_only: bool = True) -> list[ExpensePositionRule]:
+        with self._scope() as session:
+            stmt = select(ExpensePositionRule)
+            if enabled_only:
+                stmt = stmt.where(ExpensePositionRule.enabled.is_(True))
+            return list(session.scalars(stmt.order_by(ExpensePositionRule.priority, ExpensePositionRule.created_at)).all())
+
+    def set_position_rule_enabled(self, rule_id: uuid.UUID, enabled: bool) -> bool:
+        with self._scope() as session:
+            row = session.get(ExpensePositionRule, rule_id)
+            if row is None:
+                return False
+            row.enabled = bool(enabled)
+            session.flush()
+            return True
 
     def add_assignment(
         self,
@@ -275,3 +423,22 @@ class ExpensePipelineRepository:
             if iban:
                 stmt = stmt.where(ExpenseSupplierLink.counterparty_iban.in_(("", iban)))
             return list(session.scalars(stmt.order_by(ExpenseSupplierLink.created_at)).all())
+
+    def list_all_supplier_links(self) -> list[ExpenseSupplierLink]:
+        with self._scope() as session:
+            return list(
+                session.scalars(
+                    select(ExpenseSupplierLink).order_by(
+                        ExpenseSupplierLink.label, ExpenseSupplierLink.created_at
+                    )
+                ).all()
+            )
+
+    def set_supplier_link_enabled(self, link_id: uuid.UUID, enabled: bool) -> bool:
+        with self._scope() as session:
+            row = session.get(ExpenseSupplierLink, link_id)
+            if row is None:
+                return False
+            row.enabled = bool(enabled)
+            session.flush()
+            return True
