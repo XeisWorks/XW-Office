@@ -199,10 +199,9 @@ class CrmSection:
 class ClearingSection:
     """Payment-clearing tuning knobs that used to be literals in the legacy script."""
 
-    # Legacy ``SEPA_LOOKBACK_DAYS`` — SEPA transfers post to sevDesk slower
-    # than card/PSP payments, so invoices/transactions are fetched from
-    # further back than the requested analysis window.
-    sepa_lookback_days: int = 45
+    # SEPA transfers can arrive later than immediate Stripe payments, so
+    # historical sevDesk invoices/transactions use a wider matching window.
+    sepa_lookback_days: int = 90
     # Accepted 2-digit invoice-year prefixes for direct B2B bank-transfer
     # invoice-number matching (see xw_office.services.clearing.b2b_reference).
     b2b_year_prefixes: list[str] = field(default_factory=lambda: ["24", "25", "26", "27"])

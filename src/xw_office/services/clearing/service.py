@@ -187,7 +187,7 @@ class PaymentClearingService:
         wix: WixClearingGateway | None = None,
         sevdesk: SevdeskClearingGateway | None = None,
         history_dir: Path | None = None,
-        sepa_lookback_days: int = 45,
+        sepa_lookback_days: int = 90,
         b2b_year_prefixes: Sequence[str] = ("24", "25", "26", "27"),
     ) -> None:
         self._repo = settings_repo
@@ -294,10 +294,18 @@ class PaymentClearingService:
             if not order_no and "-" not in raw_order:
                 order_no = _order_number(raw_order)
             if not order_no:
-                for ref in (tx.provider_ref, tx.provider_order_id, tx.source_id):
-                    if ref and ref in provider_map:
-                        order_no = provider_map[ref]
-                        break
+                matched_order_numbers = {
+                    provider_map[ref]
+                    for ref in (
+                        tx.provider_ref,
+                        tx.provider_order_id,
+                        tx.source_id,
+                        *tx.provider_reference_ids,
+                    )
+                    if ref and ref in provider_map
+                }
+                if len(matched_order_numbers) == 1:
+                    order_no = next(iter(matched_order_numbers))
             invoice = invoice_by_ref.get(order_no)
             existing = existing_by_duplicate.get(_duplicate_key_for_provider(tx).as_tuple())
             candidate = self._match_provider_transaction(

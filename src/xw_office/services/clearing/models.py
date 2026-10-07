@@ -69,6 +69,7 @@ class ProviderTransaction:
     order_number: str = ""
     provider_order_id: str = ""
     source_id: str = ""
+    provider_reference_ids: tuple[str, ...] = ()
     payout_start: datetime | None = None
     payout_end: datetime | None = None
 

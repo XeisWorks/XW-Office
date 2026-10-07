@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -14,6 +14,7 @@ from xw_office.core.config import AppConfig
 from xw_office.services.clearing.gateways import (
     MollieClearingGateway,
     SevdeskClearingGateway,
+    StripeClearingGateway,
     purpose_provider_ref,
 )
 from xw_office.services.clearing.models import (
@@ -37,20 +38,31 @@ VIENNA = ZoneInfo("Europe/Vienna")
 class _Provider:
     def __init__(self, rows: list[ProviderTransaction]) -> None:
         self.rows = rows
+        self.fetch_ranges: list[tuple[datetime, datetime]] = []
 
     def available(self) -> bool:
         return True
 
     def fetch(self, start: datetime, end: datetime) -> list[ProviderTransaction]:
+        self.fetch_ranges.append((start, end))
         return self.rows
 
 
 class _Wix:
+    def __init__(self) -> None:
+        self.provider_map_ranges: list[tuple[datetime, datetime]] = []
+
     def available(self) -> bool:
         return True
 
     def provider_map(self, start: datetime, end: datetime) -> tuple[dict[str, str], dict]:
-        return {"pi_1": "12345", "ch_1": "12345"}, {}
+        self.provider_map_ranges.append((start, end))
+        return {
+            "pi_1": "12345",
+            "ch_1": "12345",
+            "wix-payment-1": "12345",
+            "wix-payment-conflict": "67890",
+        }, {}
 
 
 class _Sevdesk:
@@ -60,6 +72,7 @@ class _Sevdesk:
         self.booked: list[dict] = []
         self.reset_calls: list[tuple[int, int]] = []
         self.duplicate_lookup_calls = 0
+        self.invoice_queries: list[tuple[datetime, datetime]] = []
         self.transaction_queries: list[tuple[int, datetime, datetime]] = []
         self.existing: SevdeskTransaction | None = None
         self.transactions_by_account: dict[int, list[SevdeskTransaction]] = {}
@@ -69,6 +82,7 @@ class _Sevdesk:
         return {"stripe": 11, "mollie": 12}
 
     def invoices(self, start: datetime, end: datetime) -> list[InvoiceRecord]:
+        self.invoice_queries.append((start, end))
         return [self.invoice]
 
     def transactions(self, account_id: int, start: datetime, end: datetime) -> list:
@@ -317,6 +331,77 @@ def test_analysis_preselects_exact_provider_wix_invoice_match(tmp_path: Path) ->
     assert row.order_number == "12345"
     assert row.invoice_number == "RE-100"
     assert analysis.run_id
+
+
+def test_analysis_matches_stripe_wix_payment_metadata_reference(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    payment = _payment_with_wix_references("wix-payment-1")
+    service = _service(sevdesk, [payment], tmp_path)
+
+    row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
+
+    assert row.status == MatchStatus.READY
+    assert row.order_number == "12345"
+
+
+def test_analysis_does_not_choose_between_conflicting_wix_references(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    payment = _payment_with_wix_references("wix-payment-1", "wix-payment-conflict")
+    service = _service(sevdesk, [payment], tmp_path)
+
+    row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
+
+    assert row.status == MatchStatus.MANUAL
+    assert row.order_number == ""
+    assert row.reason == "Keine eindeutige Wix-Bestellnummer"
+
+
+def _payment_with_wix_references(*reference_ids: str) -> ProviderTransaction:
+    payment = _payment()
+    return ProviderTransaction(
+        provider=payment.provider,
+        provider_ref=payment.provider_ref,
+        provider_order_id=payment.provider_order_id,
+        kind=payment.kind,
+        amount=payment.amount,
+        created_at=payment.created_at,
+        customer=payment.customer,
+        email=payment.email,
+        source_id=payment.source_id,
+        provider_reference_ids=reference_ids,
+    )
+
+
+def test_stripe_gateway_preserves_wix_payment_metadata_references(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = StripeClearingGateway("test-key")
+    charge = {
+        "id": "ch_1",
+        "payment_intent": "pi_1",
+        "paid": True,
+        "status": "succeeded",
+        "currency": "eur",
+        "amount": 2990,
+        "created": int(datetime(2026, 5, 10, tzinfo=VIENNA).timestamp()),
+        "metadata": {
+            "external_transaction_id": "wix-payment-1",
+            "wp_wix_transaction_id": "wix-payment-1",
+        },
+    }
+    monkeypatch.setattr(
+        gateway,
+        "_list",
+        lambda path, params: iter([charge]) if path == "/v1/charges" else iter([]),
+    )
+
+    rows = gateway.fetch(
+        datetime(2026, 5, 1, tzinfo=VIENNA),
+        datetime(2026, 6, 1, tzinfo=VIENNA),
+    )
+
+    assert len(rows) == 1
+    assert rows[0].provider_reference_ids == ("wix-payment-1",)
 
 
 def test_amount_mismatch_requires_manual_review(tmp_path: Path) -> None:
@@ -689,6 +774,37 @@ def test_custom_sepa_lookback_days_changes_fetch_window(tmp_path: Path) -> None:
     assert calls
     start, _end = calls[0]
     assert start.date() == date(2026, 4, 21)
+
+
+def test_default_sepa_lookback_does_not_expand_stripe_or_wix_windows(tmp_path: Path) -> None:
+    sevdesk = _Sevdesk()
+    stripe = _Provider([])
+    mollie = _Provider([])
+    wix = _Wix()
+    service = PaymentClearingService(
+        stripe=stripe,  # type: ignore[arg-type]
+        mollie=mollie,  # type: ignore[arg-type]
+        wix=wix,  # type: ignore[arg-type]
+        sevdesk=sevdesk,  # type: ignore[arg-type]
+        history_dir=tmp_path,
+    )
+    start_date = date(2026, 5, 1)
+    end_date = date(2026, 5, 31)
+    start = datetime(2026, 5, 1, tzinfo=VIENNA)
+    end = datetime(2026, 6, 1, tzinfo=VIENNA)
+
+    service.analyze(start_date, end_date)
+
+    assert stripe.fetch_ranges == [(start, end)]
+    assert mollie.fetch_ranges == [(start, end)]
+    assert wix.provider_map_ranges == [
+        (start - timedelta(days=10), end)
+    ]
+    assert sevdesk.invoice_queries[0][0] == start - timedelta(days=90)
+    assert all(
+        query_start == start - timedelta(days=90)
+        for _account_id, query_start, _query_end in sevdesk.transaction_queries
+    )
 
 
 class _WarningProvider:

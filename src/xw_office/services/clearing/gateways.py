@@ -29,6 +29,7 @@ from xw_office.services.sevdesk.payment_booking import (
 
 VIENNA = ZoneInfo("Europe/Vienna")
 TIMEOUT = httpx.Timeout(45.0, connect=10.0)
+_WIX_PAYMENT_REFERENCE_KEYS = ("external_transaction_id", "wp_wix_transaction_id")
 
 
 def iso_utc(value: datetime) -> str:
@@ -75,6 +76,21 @@ def _objects(payload: object) -> list[dict[str, Any]]:
     return [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
 
 
+def _wix_payment_reference_ids(raw: object) -> tuple[str, ...]:
+    if not isinstance(raw, dict):
+        return ()
+    metadata = raw.get("metadata")
+    if not isinstance(metadata, dict):
+        return ()
+    return tuple(
+        dict.fromkeys(
+            value
+            for key in _WIX_PAYMENT_REFERENCE_KEYS
+            if (value := str(metadata.get(key) or "").strip())
+        )
+    )
+
+
 class StripeClearingGateway:
     def __init__(self, secret_key: str) -> None:
         self._key = secret_key.strip()
@@ -108,12 +124,15 @@ class StripeClearingGateway:
         bounds = {"limit": 100, "created[gte]": int(start.timestamp()), "created[lt]": int(end.timestamp())}
         out: list[ProviderTransaction] = []
         charge_to_intent: dict[str, str] = {}
+        charge_to_wix_refs: dict[str, tuple[str, ...]] = {}
         for raw in self._list("/v1/charges", {**bounds, "expand[]": "data.balance_transaction"}):
             if not raw.get("paid") or raw.get("status") != "succeeded" or raw.get("currency") != "eur":
                 continue
             ref = str(raw.get("id") or "")
             intent = str(raw.get("payment_intent") or "")
             charge_to_intent[ref] = intent
+            wix_refs = _wix_payment_reference_ids(raw)
+            charge_to_wix_refs[ref] = wix_refs
             billing = cast(
                 dict[str, Any],
                 raw.get("billing_details") if isinstance(raw.get("billing_details"), dict) else {},
@@ -134,6 +153,7 @@ class StripeClearingGateway:
                     customer=name or email,
                     email=email,
                     source_id=ref,
+                    provider_reference_ids=wix_refs,
                 )
             )
         for raw in self._list("/v1/refunds", {**bounds, "expand[]": "data.charge"}):
@@ -145,6 +165,10 @@ class StripeClearingGateway:
             charge_id = str(charge.get("id") or "") if isinstance(charge, dict) else str(charge or "")
             intent = str(raw.get("payment_intent") or charge_to_intent.get(charge_id) or "")
             if ref and created:
+                wix_refs = list(_wix_payment_reference_ids(raw))
+                if isinstance(charge, dict):
+                    wix_refs.extend(_wix_payment_reference_ids(charge))
+                wix_refs.extend(charge_to_wix_refs.get(charge_id, ()))
                 out.append(
                     ProviderTransaction(
                         provider="stripe",
@@ -154,6 +178,7 @@ class StripeClearingGateway:
                         amount=-money(Decimal(str(raw.get("amount") or 0)) / 100),
                         created_at=created,
                         source_id=ref,
+                        provider_reference_ids=tuple(dict.fromkeys(wix_refs)),
                     )
                 )
         for raw in self._list("/v1/payouts", bounds):

@@ -152,7 +152,7 @@ crm:
   merge_loser_policy: "delete_if_empty"
 
 clearing:
-  sepa_lookback_days: 45
+  sepa_lookback_days: 90
   b2b_year_prefixes: ["24", "25", "26", "27"]
 
 b2b_credit:
