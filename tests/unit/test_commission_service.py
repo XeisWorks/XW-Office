@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 
 from xw_office.services.commission.service import (
+    CategoryBreakdownRow,
     CommissionPeriod,
     CommissionProfile,
     CommissionRunResult,
@@ -516,7 +517,14 @@ def test_clipboard_summary_matches_legacy_layout_with_german_numbers() -> None:
                 net_amount=202.45,
             ),
         ],
-        category_rows=[],
+        category_rows=[
+            CategoryBreakdownRow(
+                category_name="Mnozil",
+                quantity=54,
+                net_amount=828.15,
+                gross_amount=910.97,
+            )
+        ],
         document_rows=[],
         anomalies=[],
         source_stats={},
@@ -524,16 +532,12 @@ def test_clipboard_summary_matches_legacy_layout_with_german_numbers() -> None:
     assert format_commission_summary(result) == (
         "Kategorie: Mnozil Brass\n"
         "Zeitraum: 01.01.2026 - 30.06.2026\n"
-        "Basisdatum: Rechnungsdatum\n"
-        "SKU-Filter: Filter: sevDesk-Kategorie Mnozil\n"
-        "Gesamtmenge: 154\n"
-        "Netto gesamt: 2.683,04 EUR\n"
+        "Mnozil: 54 Stk., € 910,97 brutto, € 828,15 netto\n"
         "\n"
         "Produkte:\n"
         "SKU\tName\tMenge\tNetto\n"
-        "\n"
-        "XW-4516\tMnoschil\t45 Stk.\t625,70 EUR netto\n"
-        "XW-4556\tFlorentiner Marsch\t9 Stk.\t202,45 EUR netto\n"
+        "XW-4516\tMnoschil\t45 Stk.\t€ 625,70 netto\n"
+        "XW-4556\tFlorentiner Marsch\t9 Stk.\t€ 202,45 netto\n"
         "\n"
         "Rechnungsbetrag (25%): € 670,76"
     )

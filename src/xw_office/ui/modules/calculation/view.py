@@ -38,7 +38,9 @@ from xw_office.core.worker import BackgroundWorker
 from xw_office.services.commission.service import (
     CommissionRunResult,
     CommissionService,
+    format_euro_amount,
     format_commission_summary,
+    format_quantity,
 )
 from xw_office.services.calculation.service import (
     ArticleEntry,
@@ -67,19 +69,8 @@ _ARTICLE_HEADERS = [
     "Provision EUR",
     "Notiz",
 ]
-_PRODUCT_HEADERS = [
-    "SKU",
-    "Name",
-    "Verkauft",
-    "Storno",
-    "Gutschrift",
-    "Netto-Menge",
-    "Netto EUR",
-    "Brutto EUR",
-    "Kategorien",
-    "Warnung",
-]
-_CATEGORY_HEADERS = ["Kategorie", "Menge", "Netto EUR", "Brutto EUR", "Anteil Netto"]
+_PRODUCT_HEADERS = ["Name", "Verkauft", "Netto"]
+_CATEGORY_HEADERS = ["Kategorie", "Menge", "Netto", "Brutto"]
 _DOC_HEADERS = ["Beleg", "Datum", "Typ", "SKU", "Menge", "Netto", "Regel"]
 
 
@@ -299,61 +290,63 @@ class CalculationView(QWidget):
         export_xlsx_btn.setToolTip("Abrechnung als Excel-Datei exportieren")
         export_xlsx_btn.clicked.connect(self._export_commission_xlsx)
         toggles.addWidget(export_xlsx_btn)
-        copy_btn = QPushButton("Copy to 📋")
-        copy_btn.setToolTip("Abrechnungstext in die Zwischenablage kopieren")
-        copy_btn.clicked.connect(self._copy_commission_summary)
-        toggles.addWidget(copy_btn)
         lay.addLayout(toggles)
 
         self._commission_status = QLabel("Noch nicht geladen")
-        lay.addWidget(self._commission_status)
+        self._commission_status.setWordWrap(True)
 
-        kpi = QHBoxLayout()
-        self._kpi_qty = QLabel("Menge: -")
-        self._kpi_net = QLabel("Netto: -")
-        self._kpi_gross = QLabel("Brutto: -")
-        self._kpi_corr = QLabel("Korrekturen: -")
-        self._kpi_docs = QLabel("Belege: -")
-        self._kpi_anomalies = QLabel("Problemfaelle: -")
-        for label in (
-            self._kpi_qty,
-            self._kpi_net,
-            self._kpi_gross,
-            self._kpi_corr,
-            self._kpi_docs,
-            self._kpi_anomalies,
-        ):
-            kpi.addWidget(label)
-        kpi.addStretch()
-        lay.addLayout(kpi)
+        result_splitter = QSplitter(Qt.Orientation.Horizontal)
+        result_splitter.setChildrenCollapsible(False)
 
-        self._product_table = DataTable(_PRODUCT_HEADERS)
-        self._product_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
-        )
-        self._product_table.horizontalHeader().setSectionResizeMode(
-            8, QHeaderView.ResizeMode.Stretch
-        )
-        self._product_table.horizontalHeader().setSectionResizeMode(
-            9, QHeaderView.ResizeMode.Stretch
-        )
-        self._product_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
-        lay.addWidget(self._product_table, stretch=3)
-
+        overview = QWidget()
+        overview_lay = QVBoxLayout(overview)
+        overview_lay.setContentsMargins(0, 0, 0, 0)
+        overview_lay.setSpacing(8)
+        overview_lay.addWidget(self._commission_status)
         self._category_table = DataTable(_CATEGORY_HEADERS)
         self._category_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch
         )
         self._category_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
-        lay.addWidget(self._category_table, stretch=1)
+        overview_lay.addWidget(self._category_table, stretch=1)
+        copy_btn = QPushButton("In Zwischenablage kopieren")
+        copy_btn.setToolTip("Kompakte Abrechnung inklusive Produktliste kopieren")
+        copy_btn.clicked.connect(self._copy_commission_summary)
+        overview_lay.addWidget(copy_btn)
 
+        products = QWidget()
+        products_lay = QVBoxLayout(products)
+        products_lay.setContentsMargins(0, 0, 0, 0)
+        products_lay.setSpacing(8)
+        products_lay.addWidget(QLabel("Produkte"))
+        self._product_table = DataTable(_PRODUCT_HEADERS)
+        self._product_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self._product_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+        products_lay.addWidget(self._product_table, stretch=1)
+
+        result_splitter.addWidget(overview)
+        result_splitter.addWidget(products)
+        result_splitter.setStretchFactor(0, 1)
+        result_splitter.setStretchFactor(1, 2)
+        result_splitter.setSizes([430, 760])
+        lay.addWidget(result_splitter, stretch=4)
+
+        self._documents_group = QGroupBox("Belege")
+        self._documents_group.setCheckable(True)
+        self._documents_group.setChecked(False)
+        documents_lay = QVBoxLayout(self._documents_group)
         self._doc_table = DataTable(_DOC_HEADERS)
         self._doc_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Interactive
         )
         self._doc_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self._doc_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
-        lay.addWidget(self._doc_table, stretch=2)
+        self._doc_table.setVisible(False)
+        self._documents_group.toggled.connect(self._doc_table.setVisible)
+        documents_lay.addWidget(self._doc_table)
+        lay.addWidget(self._documents_group)
 
         self._anomaly_label = QLabel("Problemfaelle:")
         lay.addWidget(self._anomaly_label)
@@ -428,15 +421,9 @@ class CalculationView(QWidget):
 
         period = payload.period
         self._commission_status.setText(
-            f"{payload.profile.label}: {period.start.isoformat()} bis {period.end.isoformat()}"
+            f"Kategorie: {payload.profile.label}\n"
+            f"Zeitraum: {period.start.strftime('%d.%m.%Y')} - {period.end.strftime('%d.%m.%Y')}"
         )
-
-        self._kpi_qty.setText(f"Menge: {payload.summary.total_net_quantity:.2f}")
-        self._kpi_net.setText(f"Netto: {payload.summary.total_net_amount:.2f} EUR")
-        self._kpi_gross.setText(f"Brutto: {payload.summary.total_gross_amount:.2f} EUR")
-        self._kpi_corr.setText(f"Korrekturen: {payload.summary.total_correction_quantity:.2f}")
-        self._kpi_docs.setText(f"Belege: {payload.summary.document_count}")
-        self._kpi_anomalies.setText(f"Problemfaelle: {payload.summary.anomaly_count}")
 
         self._populate_product_table(payload)
         self._populate_category_table(payload)
@@ -678,22 +665,13 @@ class CalculationView(QWidget):
         self._product_table.set_data(
             [
                 {
-                    "SKU": row.sku,
                     "Name": row.name,
-                    "Verkauft": f"{row.sold_quantity:.2f}",
-                    "Storno": f"{row.canceled_quantity:.2f}",
-                    "Gutschrift": f"{row.credited_quantity:.2f}",
-                    "Netto-Menge": f"{row.net_quantity:.2f}",
-                    "Netto EUR": f"{row.net_amount:.2f}",
-                    "Brutto EUR": f"{row.gross_amount:.2f}",
-                    "Kategorien": ", ".join(row.category_names),
-                    "Warnung": row.warning,
+                    "Verkauft": f"{format_quantity(row.net_quantity)} Stk.",
+                    "Netto": format_euro_amount(row.net_amount),
                     "__align__Verkauft": "right",
-                    "__align__Storno": "right",
-                    "__align__Gutschrift": "right",
-                    "__align__Netto-Menge": "right",
-                    "__align__Netto EUR": "right",
-                    "__align__Brutto EUR": "right",
+                    "__align__Netto": "right",
+                    "__sort__Verkauft": row.net_quantity,
+                    "__sort__Netto": row.net_amount,
                 }
                 for row in result.product_rows
             ]
@@ -704,14 +682,15 @@ class CalculationView(QWidget):
             [
                 {
                     "Kategorie": row.category_name,
-                    "Menge": f"{row.quantity:.2f}",
-                    "Netto EUR": f"{row.net_amount:.2f}",
-                    "Brutto EUR": f"{row.gross_amount:.2f}",
-                    "Anteil Netto": f"{row.share_of_net_amount * 100.0:.2f} %",
+                    "Menge": f"{format_quantity(row.quantity)} Stk.",
+                    "Netto": format_euro_amount(row.net_amount),
+                    "Brutto": format_euro_amount(row.gross_amount),
                     "__align__Menge": "right",
-                    "__align__Netto EUR": "right",
-                    "__align__Brutto EUR": "right",
-                    "__align__Anteil Netto": "right",
+                    "__align__Netto": "right",
+                    "__align__Brutto": "right",
+                    "__sort__Menge": row.quantity,
+                    "__sort__Netto": row.net_amount,
+                    "__sort__Brutto": row.gross_amount,
                 }
                 for row in result.category_rows
             ]
@@ -725,11 +704,13 @@ class CalculationView(QWidget):
                     "Datum": item.document_date,
                     "Typ": item.document_type,
                     "SKU": item.sku,
-                    "Menge": f"{item.signed_quantity:.2f}",
-                    "Netto": f"{item.signed_net:.2f}",
+                    "Menge": f"{format_quantity(item.signed_quantity)} Stk.",
+                    "Netto": format_euro_amount(item.signed_net),
                     "Regel": item.rule,
                     "__align__Menge": "right",
                     "__align__Netto": "right",
+                    "__sort__Menge": item.signed_quantity,
+                    "__sort__Netto": item.signed_net,
                 }
                 for item in result.document_rows
             ]

@@ -144,39 +144,24 @@ class CommissionRunResult:
 
 def format_commission_summary(result: CommissionRunResult) -> str:
     """Render a compact, human-readable commission statement for the clipboard."""
-    categories = result.profile.category_names
-    if result.profile.resolve_unreleased_titles:
-        sku_filter = (
-            f"Filter: SKU {', '.join(result.profile.sku_patterns)}; Zuordnung über Titel-Aliase"
-        )
-    elif len(categories) == 1:
-        sku_filter = f"Filter: sevDesk-Kategorie {categories[0]}"
-    else:
-        sku_filter = f"Filter: sevDesk-Kategorien {', '.join(categories)}"
-    basis_label = {
-        "invoice_date": "Rechnungsdatum",
-        "payment_date": "Zahlungsdatum",
-    }.get(result.period.basis, result.period.basis)
-
     lines = [
         f"Kategorie: {result.profile.label}",
         (
             f"Zeitraum: {result.period.start.strftime('%d.%m.%Y')} - "
             f"{result.period.end.strftime('%d.%m.%Y')}"
         ),
-        f"Basisdatum: {basis_label}",
-        f"SKU-Filter: {sku_filter}",
-        f"Gesamtmenge: {_format_de_number(result.summary.total_net_quantity, trim=True)}",
-        f"Netto gesamt: {_format_de_number(result.summary.total_net_amount)} EUR",
-        "",
-        "Produkte:",
-        "SKU\tName\tMenge\tNetto",
-        "",
     ]
     lines.extend(
+        f"{row.category_name}: {format_quantity(row.quantity)} Stk., "
+        f"{format_euro_amount(row.gross_amount)} brutto, "
+        f"{format_euro_amount(row.net_amount)} netto"
+        for row in result.category_rows
+    )
+    lines.extend(["", "Produkte:", "SKU\tName\tMenge\tNetto"])
+    lines.extend(
         (
-            f"{row.sku}\t{row.name}\t{_format_de_number(row.net_quantity, trim=True)} Stk.\t"
-            f"{_format_de_number(row.net_amount)} EUR netto"
+            f"{row.sku}\t{row.name}\t{format_quantity(row.net_quantity)} Stk.\t"
+            f"{format_euro_amount(row.net_amount)} netto"
         )
         for row in result.product_rows
     )
@@ -188,7 +173,7 @@ def format_commission_summary(result: CommissionRunResult) -> str:
             [
                 "",
                 f"Rechnungsbetrag ({_format_de_number(rate, trim=True)}%): "
-                f"€ {_format_de_number(invoice_amount)}",
+                f"{format_euro_amount(invoice_amount)}",
             ]
         )
     return "\n".join(lines)
@@ -1117,6 +1102,16 @@ def _format_de_number(value: float, *, trim: bool = False) -> str:
     if trim:
         formatted = formatted.rstrip("0").rstrip(",")
     return formatted
+
+
+def format_euro_amount(value: float) -> str:
+    """Format a monetary amount in the German euro style used in commission views."""
+    return f"€ {_format_de_number(value)}"
+
+
+def format_quantity(value: float) -> str:
+    """Format commission quantities as whole units."""
+    return f"{value:.0f}"
 
 
 def _pick_date(payload: dict[str, Any], keys: tuple[str, ...]) -> date | None:
