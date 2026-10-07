@@ -53,6 +53,21 @@ if False:  # pragma: no cover
 
 _HEADERS = ["Datum", "Empfänger", "Zweck / Referenz", "Betrag", "Kategorie", "Beleg"]
 _ROOT = Path(__file__).resolve().parents[5]
+_GERMAN_MONTHS = (
+    "Januar",
+    "Februar",
+    "März",
+    "April",
+    "Mai",
+    "Juni",
+    "Juli",
+    "August",
+    "September",
+    "Oktober",
+    "November",
+    "Dezember",
+)
+_CUSTOM_PERIOD = "custom"
 
 
 def _make_labels_copyable(widget: QWidget) -> None:
@@ -505,6 +520,8 @@ class ExpenseReviewView(QWidget):
         self._header_save_timer = QTimer(self)
         self._header_save_timer.setSingleShot(True)
         self._header_save_timer.timeout.connect(self._save_table_header)
+        self._period = QComboBox()
+        self._period_sync = False
         self._start = QDateEdit()
         self._end = QDateEdit()
         self._status = QLabel("Noch nicht geladen")
@@ -528,17 +545,20 @@ class ExpenseReviewView(QWidget):
         root = QVBoxLayout(self)
         controls = QHBoxLayout()
         controls.addWidget(QLabel("Konto: XeisWorks"))
-        controls.addWidget(QLabel("Von:"))
         self._start.setCalendarPopup(True)
         self._end.setCalendarPopup(True)
         today = datetime.now(tz=ZoneInfo("Europe/Vienna")).date()
-        previous_end = today.replace(day=1) - timedelta(days=1)
-        previous_start = previous_end.replace(day=1)
-        self._start.setDate(QDate(previous_start.year, previous_start.month, previous_start.day))
-        self._end.setDate(QDate(previous_end.year, previous_end.month, previous_end.day))
+        self._setup_period_selector(today)
+        controls.addWidget(QLabel("Zeitraum:"))
+        controls.addWidget(self._period)
+        controls.addWidget(QLabel("Von:"))
         controls.addWidget(self._start)
         controls.addWidget(QLabel("Bis:"))
         controls.addWidget(self._end)
+        self._period.currentIndexChanged.connect(self._apply_period_preset)
+        self._start.dateChanged.connect(self._mark_custom_period)
+        self._end.dateChanged.connect(self._mark_custom_period)
+        self._apply_period_preset(self._period.currentIndex())
         reload_button = QPushButton("Neu laden")
         reload_button.clicked.connect(lambda: self._load(refresh=True))
         controls.addWidget(reload_button)
@@ -565,6 +585,39 @@ class ExpenseReviewView(QWidget):
         tabs.addTab(self._build_settings_tab(), "Einstellungen")
         tabs.currentChanged.connect(self._on_main_tab_changed)
         root.addWidget(tabs, stretch=1)
+
+    def _setup_period_selector(self, today: date) -> None:
+        month = today.replace(day=1)
+        for _ in range(6):
+            self._period.addItem(
+                f"{_GERMAN_MONTHS[month.month - 1]} {month.year}",
+                (month.year, month.month),
+            )
+            month = (month - timedelta(days=1)).replace(day=1)
+        self._period.addItem("Benutzerdefiniert", _CUSTOM_PERIOD)
+        self._period.setCurrentIndex(1)
+
+    def _apply_period_preset(self, index: int) -> None:
+        year_month = self._period.itemData(index)
+        if not isinstance(year_month, tuple) or len(year_month) != 2:
+            return
+        year, month = year_month
+        if not isinstance(year, int) or not isinstance(month, int):
+            return
+        start = date(year, month, 1)
+        next_month = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+        end = next_month - timedelta(days=1)
+        self._period_sync = True
+        try:
+            self._start.setDate(QDate(start.year, start.month, start.day))
+            self._end.setDate(QDate(end.year, end.month, end.day))
+        finally:
+            self._period_sync = False
+
+    def _mark_custom_period(self, _: QDate) -> None:
+        if self._period_sync or self._period.currentData() == _CUSTOM_PERIOD:
+            return
+        self._period.setCurrentIndex(self._period.findData(_CUSTOM_PERIOD))
 
     def _configure_expense_table(self, table: DataTable) -> None:
         table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
