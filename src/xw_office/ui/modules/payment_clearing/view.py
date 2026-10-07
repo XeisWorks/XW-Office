@@ -55,7 +55,9 @@ _GERMAN_MONTH_NAMES = (
     "November",
     "Dezember",
 )
-_OPEN_PROBLEM_STATUSES = {MatchStatus.MANUAL, MatchStatus.ERROR, MatchStatus.REFUND_REVIEW}
+_OPEN_PROBLEM_STATUSES = {
+    MatchStatus.MANUAL, MatchStatus.ERROR, MatchStatus.REFUND_REVIEW, MatchStatus.CANCELLED
+}
 
 
 class PaymentClearingView(QWidget):
@@ -253,6 +255,9 @@ class PaymentClearingView(QWidget):
         if worker is not None:
             worker.signals.progress.emit(value, text)
 
+    def _is_cancelled(self) -> bool:
+        return self._worker is not None and self._worker.cancelled
+
     def _analyze(self) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
@@ -269,6 +274,7 @@ class PaymentClearingView(QWidget):
                 start,
                 end,
                 progress=self._emit_worker_progress,
+                cancelled=self._is_cancelled,
             )
 
         self._worker = BackgroundWorker(job)
@@ -291,8 +297,6 @@ class PaymentClearingView(QWidget):
         self._refresh_table(update_summary=True)
 
     def _update_analysis_summary(self) -> None:
-        if not self._candidates:
-            return
         ready_count = sum(row.status == MatchStatus.READY for row in self._candidates)
         open_count = sum(row.status in _OPEN_PROBLEM_STATUSES for row in self._candidates)
         warning = f" | Warnungen: {self._warning_count}" if self._warning_count else ""
@@ -563,9 +567,10 @@ class PaymentClearingView(QWidget):
                 month_start,
                 month_end,
                 progress=self._emit_worker_progress,
+                cancelled=self._is_cancelled,
             )
 
-        self._worker = BackgroundWorker(job)
+        self._worker = BackgroundWorker(job, publish_result_on_cancel=True)
         self._worker.signals.progress.connect(
             lambda value, text: self._summary.setText(f"{text} ({value} %)")
         )
@@ -596,9 +601,10 @@ class PaymentClearingView(QWidget):
             return self._service.book_selected(
                 self._candidates,
                 progress=self._emit_worker_progress,
+                cancelled=self._is_cancelled,
             )
 
-        self._worker = BackgroundWorker(job)
+        self._worker = BackgroundWorker(job, publish_result_on_cancel=True)
         self._worker.signals.progress.connect(
             lambda value, text: self._summary.setText(f"{text} ({value} %)")
         )
@@ -627,14 +633,22 @@ class PaymentClearingView(QWidget):
         ]
         self._refresh_table()
         self._summary.setText(
-            f"Buchung abgeschlossen: {result.success_count} erfolgreich, "
-            f"{result.failure_count} fehlgeschlagen."
+            f"Buchung {'abgebrochen' if result.cancelled else 'abgeschlossen'}: "
+            f"{result.success_count} erfolgreich, {result.failure_count} fehlgeschlagen, "
+            f"{result.cancelled_count} nicht ausgefuehrt."
         )
+        if result.warnings:
+            QMessageBox.warning(self, "Zahlungsclearing", "\n".join(result.warnings))
         QMessageBox.information(self, "Zahlungsclearing", self._summary.text())
 
     def _on_reset_result(self, result: object) -> None:
         if not isinstance(result, ResetBatchResult):
             return
+        if result.cancelled:
+            QMessageBox.information(
+                self, "Zahlungsclearing",
+                f"Reset abgebrochen. {len(result.items)} Vorgange bereits bearbeitet.",
+            )
         failures = [item for item in result.items if not item.success]
         if failures:
             message = "\n".join(f"{item.transaction_id}: {item.message}" for item in failures[:20])

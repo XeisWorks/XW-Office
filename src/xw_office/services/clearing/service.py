@@ -17,6 +17,8 @@ from zoneinfo import ZoneInfo
 
 from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.clearing.b2b_reference import extract_b2b_invoice_numbers
+from xw_office.services.clearing.booking import book_batch
+from xw_office.services.clearing.booking_store import ClearingBookingStore
 from xw_office.services.clearing.gateways import (
     MollieClearingGateway,
     SevdeskClearingGateway,
@@ -67,8 +69,8 @@ def _order_number(value: object) -> str:
     text = str(value or "").strip()
     if text.isdigit() and 3 <= len(text) <= 10:
         return text
-    matches = _ORDER_NUMBER.findall(text)
-    return matches[-1] if matches else ""
+    matches = set(_ORDER_NUMBER.findall(text))
+    return next(iter(matches)) if len(matches) == 1 else ""
 
 
 def _invoice_number(value: object) -> str:
@@ -191,6 +193,7 @@ class PaymentClearingService:
         b2b_year_prefixes: Sequence[str] = ("24", "25", "26", "27"),
     ) -> None:
         self._repo = settings_repo
+        self._booking_store = ClearingBookingStore(settings_repo) if settings_repo is not None else None
         self._stripe = stripe
         self._mollie = mollie
         self._wix = wix
@@ -216,6 +219,7 @@ class PaymentClearingService:
         end_date: date,
         *,
         progress: Callable[[int, str], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> ClearingAnalysis:
         """Build a read-only clearing result. No external write is performed."""
         if self._sevdesk is None:
@@ -226,11 +230,18 @@ class PaymentClearingService:
             raise ValueError("Der Start muss vor dem Ende liegen.")
 
         warnings: list[str] = []
+        if self._repo is None:
+            warnings.append(
+                "Keine PostgreSQL-Persistenz: PC-uebergreifender Buchungsschutz "
+                "und zentrale Clearing-Protokolle sind nicht verfuegbar."
+            )
         started_at = datetime.now(VIENNA)
         run_id = _run_id(started_at)
         provider_rows: list[ProviderTransaction] = []
         providers = (("Stripe", self._stripe), ("Mollie", self._mollie))
         for index, (label, gateway) in enumerate(providers, start=1):
+            if cancelled and cancelled():
+                raise RuntimeError("Clearing-Analyse abgebrochen.")
             if progress:
                 progress(index * 10, f"{label}-Daten laden")
             if gateway is None or not gateway.available():
@@ -246,18 +257,67 @@ class PaymentClearingService:
                 if gateway_warning:
                     warnings.append(gateway_warning)
 
+        if cancelled and cancelled():
+            raise RuntimeError("Clearing-Analyse abgebrochen.")
         if progress:
             progress(35, "Wix-Bestellungen und Zahlungsreferenzen laden")
         provider_map: dict[str, str] = {}
+        blocked_wix_refs: set[str] = set()
+        wix_lookup_complete = True
         if self._wix is not None and self._wix.available():
             try:
                 provider_map, _ = self._wix.provider_map(start - timedelta(days=10), end)
+                wix_lookup_complete = bool(getattr(self._wix, "lookup_complete", True))
+                blocked_wix_refs.update(getattr(self._wix, "blocked_reference_ids", ()))
+                wix_warning = str(getattr(self._wix, "last_warning", "") or "")
+                if wix_warning:
+                    warnings.append(wix_warning)
+                delayed_payments = [
+                    tx for tx in provider_rows
+                    if (tx.provider == "mollie" or tx.kind == TransactionKind.REFUND)
+                    and tx.kind != TransactionKind.PAYOUT
+                    and not tx.order_number
+                    and not any(
+                        ref in provider_map
+                        for ref in (tx.provider_ref, tx.provider_order_id, *tx.provider_reference_ids)
+                    )
+                ]
+                if delayed_payments:
+                    if cancelled and cancelled():
+                        raise RuntimeError("Clearing-Analyse abgebrochen.")
+                    older_map, _ = self._wix.provider_map(
+                        start - timedelta(days=self._sepa_lookback_days),
+                        start - timedelta(days=10),
+                    )
+                    wix_lookup_complete = wix_lookup_complete and bool(
+                        getattr(self._wix, "lookup_complete", True)
+                    )
+                    blocked_wix_refs.update(getattr(self._wix, "blocked_reference_ids", ()))
+                    conflicts = {
+                        ref for ref, number in older_map.items()
+                        if ref in provider_map and provider_map[ref] != number
+                    }
+                    provider_map.update({ref: number for ref, number in older_map.items() if ref not in conflicts})
+                    for ref in conflicts:
+                        provider_map.pop(ref, None)
+                    blocked_wix_refs.update(conflicts)
+                    for ref in blocked_wix_refs:
+                        provider_map.pop(ref, None)
+                    if conflicts:
+                        warnings.append("Widerspruechliche Wix-Zahlungsreferenzen wurden gesperrt.")
+                    older_warning = str(getattr(self._wix, "last_warning", "") or "")
+                    if older_warning:
+                        warnings.append(older_warning)
             except Exception as exc:
+                wix_lookup_complete = False
                 logger.exception("Wix clearing read failed")
                 warnings.append(f"Wix-Daten konnten nicht geladen werden: {exc}")
         else:
+            wix_lookup_complete = False
             warnings.append("Wix ist nicht konfiguriert.")
 
+        if cancelled and cancelled():
+            raise RuntimeError("Clearing-Analyse abgebrochen.")
         if progress:
             progress(50, "sevDesk-Konten und Rechnungen laden")
         accounts = self._sevdesk.account_ids()
@@ -265,6 +325,8 @@ class PaymentClearingService:
         if missing_accounts:
             warnings.append("sevDesk-Onlinekonto fehlt: " + ", ".join(missing_accounts))
         sepa_lookback = timedelta(days=self._sepa_lookback_days)
+        if cancelled and cancelled():
+            raise RuntimeError("Clearing-Analyse abgebrochen.")
         invoices = self._sevdesk.invoices(start - sepa_lookback, end + timedelta(days=5))
         invoice_by_ref, duplicate_refs = self._invoice_index(invoices)
         invoice_by_number = self._invoice_index_by_number(invoices)
@@ -274,6 +336,8 @@ class PaymentClearingService:
         existing_by_duplicate: dict[tuple[str, str, str, str, Decimal], SevdeskTransaction] = {}
         all_existing: list[SevdeskTransaction] = []
         for account_id in accounts.values():
+            if cancelled and cancelled():
+                raise RuntimeError("Clearing-Analyse abgebrochen.")
             rows = self._sevdesk.transactions(account_id, start - sepa_lookback, end + timedelta(days=5))
             all_existing.extend(rows)
             for row in rows:
@@ -283,29 +347,43 @@ class PaymentClearingService:
 
         candidates: list[ClearingCandidate] = []
         seen_invoice_ids: set[int] = set()
+        resolved_orders: dict[str, str] = {}
         for tx in provider_rows:
+            if cancelled and cancelled():
+                raise RuntimeError("Clearing-Analyse abgebrochen.")
             raw_order = tx.order_number.strip()
             order_no = provider_map.get(raw_order, "")
             if not order_no and raw_order and self._wix is not None and "-" in raw_order:
                 try:
-                    order_no = self._wix.resolve_order_number(raw_order)
+                    if raw_order not in resolved_orders:
+                        resolved_orders[raw_order] = self._wix.resolve_order_number(raw_order)
+                    order_no = resolved_orders[raw_order]
                 except Exception as exc:
                     logger.warning("Wix direct order resolve failed for %s: %s", raw_order, exc)
+                    warnings.append(f"Wix-Bestellung konnte nicht direkt aufgeloest werden: {exc}")
             if not order_no and "-" not in raw_order:
                 order_no = _order_number(raw_order)
-            if not order_no:
-                matched_order_numbers = {
-                    provider_map[ref]
-                    for ref in (
-                        tx.provider_ref,
-                        tx.provider_order_id,
-                        tx.source_id,
-                        *tx.provider_reference_ids,
-                    )
-                    if ref and ref in provider_map
-                }
-                if len(matched_order_numbers) == 1:
-                    order_no = next(iter(matched_order_numbers))
+            matched_order_numbers = {
+                provider_map[ref]
+                for ref in (
+                    tx.provider_ref,
+                    tx.provider_order_id,
+                    tx.source_id,
+                    *tx.provider_reference_ids,
+                )
+                if ref and ref in provider_map
+            }
+            if order_no:
+                matched_order_numbers.add(order_no)
+            if len(matched_order_numbers) == 1:
+                order_no = next(iter(matched_order_numbers))
+            elif len(matched_order_numbers) > 1:
+                order_no = ""
+            if any(
+                ref in blocked_wix_refs
+                for ref in (raw_order, tx.provider_ref, tx.provider_order_id, *tx.provider_reference_ids)
+            ):
+                order_no = ""
             invoice = invoice_by_ref.get(order_no)
             existing = existing_by_duplicate.get(_duplicate_key_for_provider(tx).as_tuple())
             candidate = self._match_provider_transaction(
@@ -317,6 +395,11 @@ class PaymentClearingService:
                 account_id=accounts.get(tx.provider),
                 invoice_already_used=bool(invoice and invoice.invoice_id in seen_invoice_ids),
             )
+            if candidate.status == MatchStatus.READY and not wix_lookup_complete:
+                candidate = replace(
+                    candidate, status=MatchStatus.MANUAL, selected=False,
+                    reason="Wix-Abgleich unvollstaendig; Zuordnung vor Buchung pruefen.",
+                )
             if candidate.status == MatchStatus.READY and candidate.invoice_id is not None:
                 seen_invoice_ids.add(candidate.invoice_id)
             candidates.append(candidate)
@@ -327,9 +410,27 @@ class PaymentClearingService:
         for sepa_tx in all_existing:
             if (
                 sepa_tx.status == 400
+                or not start <= sepa_tx.value_date < end
                 or sepa_tx.amount <= Decimal("0")
                 or purpose_provider_ref(sepa_tx.purpose) in provider_refs
             ):
+                continue
+            if len(set(_ORDER_NUMBER.findall(sepa_tx.purpose))) > 1:
+                candidates.append(
+                    ClearingCandidate(
+                        candidate_id=f"sepa-{sepa_tx.transaction_id}",
+                        provider="sepa", kind=TransactionKind.SEPA,
+                        provider_ref=str(sepa_tx.transaction_id), order_number="",
+                        invoice_id=None, invoice_number="", customer="",
+                        amount=sepa_tx.amount, payment_date=sepa_tx.value_date,
+                        status=MatchStatus.MANUAL,
+                        reason="Mehrere moegliche Bestellnummern im Zahlungszweck",
+                        selected=False, account_id=sepa_tx.account_id,
+                        transaction_id=sepa_tx.transaction_id,
+                        stable_key=f"sepa|{sepa_tx.transaction_id}",
+                        skip_reason=ClearingSkipReason.NO_ORDER_REFERENCE,
+                    )
+                )
                 continue
             order_no = _order_number(sepa_tx.purpose)
             invoice = invoice_by_ref.get(order_no) if order_no else None
@@ -388,8 +489,8 @@ class PaymentClearingService:
             warnings=tuple(warnings),
             run_id=run_id,
         )
-        self._write_analysis_history(analysis)
-        return analysis
+        history_warnings = self._write_analysis_history(analysis)
+        return replace(analysis, warnings=analysis.warnings + history_warnings)
 
     @staticmethod
     def _invoice_index(
@@ -533,6 +634,8 @@ class PaymentClearingService:
             raise ValueError(f"Rechnung {invoice_number} wurde nicht gefunden.")
         if invoice.is_paid:
             raise ValueError(f"Rechnung {invoice.invoice_number} ist bereits bezahlt.")
+        if invoice.is_draft:
+            raise ValueError(f"Rechnung {invoice.invoice_number} ist noch ein Entwurf.")
         if invoice.amount != candidate.amount:
             raise ValueError(
                 f"Betrag passt nicht: Zahlung {candidate.amount:.2f}, Rechnung {invoice.amount:.2f}."
@@ -564,6 +667,8 @@ class PaymentClearingService:
             )
         if current_invoice.is_paid:
             return current_invoice
+        if current_invoice.is_draft:
+            raise RuntimeError(f"Rechnung {row.invoice_number} ist noch ein Entwurf.")
         if _is_direct_b2b_match(row, current_invoice):
             if current_invoice.amount != row.amount:
                 raise RuntimeError(
@@ -592,126 +697,18 @@ class PaymentClearingService:
         candidates: list[ClearingCandidate],
         *,
         progress: Callable[[int, str], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> BookingBatchResult:
         """Write selected rows after UI confirmation, rechecking idempotency per row."""
         if self._sevdesk is None:
             raise RuntimeError("sevDesk-Clearing ist nicht konfiguriert.")
-        selected = [row for row in candidates if row.selected and row.is_bookable]
-        results: list[BookingItemResult] = []
-        total = len(selected)
-        # Refresh existing imports once per account instead of querying sevDesk
-        # again for every selected Stripe/Mollie row. The date buffer matches
-        # ``find_transaction_by_duplicate_key`` and preserves idempotency.
-        existing_by_duplicate: dict[tuple[str, str, str, str, Decimal], SevdeskTransaction] = {}
-        rows_by_account: dict[int, list[ClearingCandidate]] = {}
-        for row in selected:
-            if row.account_id is not None and row.kind != TransactionKind.SEPA:
-                rows_by_account.setdefault(row.account_id, []).append(row)
-        for account_id, account_rows in rows_by_account.items():
-            start = min(row.payment_date for row in account_rows) - timedelta(days=2)
-            end = max(row.payment_date for row in account_rows) + timedelta(days=3)
-            for existing_transaction in self._sevdesk.transactions(account_id, start, end):
-                key = transaction_duplicate_key(existing_transaction)
-                if key.provider_ref:
-                    existing_by_duplicate[key.as_tuple()] = existing_transaction
-        for index, row in enumerate(selected, start=1):
-            if progress:
-                progress(int((index - 1) / max(total, 1) * 100), f"{row.provider_ref} buchen")
-            result_transaction_id = row.transaction_id
-            try:
-                transaction_id = row.transaction_id
-                if row.account_id is not None and row.kind != TransactionKind.SEPA:
-                    existing = existing_by_duplicate.get(_duplicate_key_for_candidate(row).as_tuple())
-                    if existing is not None:
-                        transaction_id = existing.transaction_id
-                        if existing.status == 400:
-                            results.append(
-                                BookingItemResult(
-                                    row.candidate_id,
-                                    True,
-                                    MatchStatus.ALREADY_BOOKED,
-                                    "Transaktion war bereits gebucht",
-                                    transaction_id,
-                                )
-                            )
-                            continue
-                current_invoice: InvoiceRecord | None = None
-                if row.kind in {TransactionKind.PAYMENT, TransactionKind.SEPA}:
-                    current_invoice = self._current_invoice_for_booking(row)
-                    if current_invoice.is_paid:
-                        results.append(
-                            BookingItemResult(
-                                row.candidate_id,
-                                True,
-                                MatchStatus.ALREADY_BOOKED,
-                                f"Rechnung {row.invoice_number} war bereits bezahlt",
-                                transaction_id,
-                            )
-                        )
-                        continue
-                if transaction_id is None:
-                    if row.account_id is None:
-                        raise RuntimeError("Kein sevDesk-Konto zugeordnet")
-                    transaction_id = self._sevdesk.create_transaction(
-                        account_id=row.account_id,
-                        amount=row.amount,
-                        value_date=row.payment_date,
-                        payee=row.customer or row.provider.title(),
-                        purpose=self._candidate_purpose(row),
-                    )
-                result_transaction_id = transaction_id
-                if row.kind in {TransactionKind.PAYMENT, TransactionKind.SEPA}:
-                    if current_invoice is None:
-                        raise RuntimeError("Keine eindeutige Rechnung zugeordnet")
-                    if row.account_id is None:
-                        raise RuntimeError("Kein sevDesk-Konto zugeordnet")
-                    book_result = self._sevdesk.book_invoice(
-                        invoice_id=current_invoice.invoice_id,
-                        amount=row.amount,
-                        payment_date=row.payment_date,
-                        account_id=row.account_id,
-                        transaction_id=transaction_id,
-                    )
-                    book_status = ""
-                    if isinstance(book_result, dict):
-                        book_status = str(book_result.get("status") or "").strip().lower()
-                    if book_status and book_status not in {
-                        "booked",
-                        "already_booked",
-                        "invoice_already_paid",
-                    }:
-                        invoice_status = str((book_result or {}).get("invoice_status") or "").strip()
-                        tx_status = str((book_result or {}).get("tx_status") or "").strip()
-                        raise RuntimeError(
-                            "Zahlungsbuchung nicht bestaetigt "
-                            f"(status={book_status}, invoice_status={invoice_status or '-'}, "
-                            f"tx_status={tx_status or '-'})"
-                        )
-                    status = MatchStatus.ALREADY_BOOKED if book_status in {
-                        "already_booked",
-                        "invoice_already_paid",
-                    } else MatchStatus.BOOKED
-                    message = (
-                        f"Rechnung {row.invoice_number} war bereits bezahlt"
-                        if status == MatchStatus.ALREADY_BOOKED
-                        else f"Rechnung {row.invoice_number} gebucht"
-                    )
-                else:
-                    status = MatchStatus.BOOKED
-                    message = f"{row.kind.value} in sevDesk importiert"
-                results.append(
-                    BookingItemResult(row.candidate_id, True, status, message, transaction_id)
-                )
-            except Exception as exc:
-                logger.exception("Clearing row %s failed", row.candidate_id)
-                results.append(
-                    BookingItemResult(row.candidate_id, False, MatchStatus.ERROR, str(exc), result_transaction_id)
-                )
-        if progress:
-            progress(100, "Buchung abgeschlossen")
-        result = BookingBatchResult(tuple(results))
-        self._write_booking_history(candidates, result)
-        return result
+        result = book_batch(
+            candidates, gateway=self._sevdesk, store=self._booking_store,
+            current_invoice=self._current_invoice_for_booking, purpose=self._candidate_purpose,
+            progress=progress, cancelled=cancelled,
+        )
+        history_warnings = self._write_booking_history(candidates, result)
+        return replace(result, warnings=result.warnings + history_warnings)
 
     def reset_transactions_in_range(
         self,
@@ -719,6 +716,7 @@ class PaymentClearingService:
         end_date: date,
         *,
         progress: Callable[[int, str], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> ResetBatchResult:
         if self._sevdesk is None:
             raise RuntimeError("sevDesk-Clearing ist nicht konfiguriert.")
@@ -735,11 +733,21 @@ class PaymentClearingService:
         candidates = [row for row in rows if row.status == 200 and _is_clearing_transaction(row)]
         total = len(candidates)
         results: list[ResetItemResult] = []
+        was_cancelled = False
         for index, row in enumerate(candidates, start=1):
             if progress:
                 progress(int((index - 1) / max(total, 1) * 100), f"{row.transaction_id} auf 100 setzen")
+            if cancelled and cancelled():
+                was_cancelled = True
+                break
             try:
                 before_status = int(row.status)
+                before = self._sevdesk.get_check_account_transaction_by_id(row.transaction_id)
+                current_status = int(str(before.get("status") or 0))
+                if current_status != 200:
+                    raise RuntimeError(
+                        f"Transaktionsstatus hat sich geaendert ({current_status}); kein Reset."
+                    )
                 self._sevdesk.change_check_account_transaction_status(row.transaction_id, 100)
                 refreshed = self._sevdesk.get_check_account_transaction_by_id(row.transaction_id)
                 after_status = int(str(refreshed.get("status") or 0))
@@ -756,6 +764,7 @@ class PaymentClearingService:
                     )
                 )
             except Exception as exc:
+                logger.exception("Clearing reset failed for transaction %s", row.transaction_id)
                 results.append(
                     ResetItemResult(
                         transaction_id=row.transaction_id,
@@ -767,8 +776,8 @@ class PaymentClearingService:
                     )
                 )
         if progress:
-            progress(100, "Ruestand abgeschlossen")
-        return ResetBatchResult(tuple(results))
+            progress(100, "Reset abgebrochen" if was_cancelled else "Reset abgeschlossen")
+        return ResetBatchResult(tuple(results), cancelled=was_cancelled)
 
     @staticmethod
     def _candidate_purpose(row: ClearingCandidate) -> str:
@@ -779,7 +788,7 @@ class PaymentClearingService:
         order = f"order:{row.order_number}" if row.order_number else "UNMATCHED"
         return f"{order} | {prefix} | {kind}"
 
-    def _write_analysis_history(self, analysis: ClearingAnalysis) -> None:
+    def _write_analysis_history(self, analysis: ClearingAnalysis) -> tuple[str, ...]:
         payload: dict[str, object] = {
             "run_id": analysis.run_id,
             "phase": "analysis",
@@ -797,13 +806,13 @@ class PaymentClearingService:
             "warnings": list(analysis.warnings),
             "candidates": [_candidate_to_dict(row) for row in analysis.candidates],
         }
-        self._write_history_file(f"clearing_analysis_{analysis.run_id}.json", payload)
+        return self._write_history_file(f"clearing_analysis_{analysis.run_id}.json", payload)
 
     def _write_booking_history(
         self,
         candidates: list[ClearingCandidate],
         result: BookingBatchResult,
-    ) -> None:
+    ) -> tuple[str, ...]:
         started = min((row.payment_date for row in candidates), default=datetime.now(VIENNA))
         payload: dict[str, object] = {
             "run_id": _run_id(datetime.now(VIENNA)),
@@ -813,21 +822,33 @@ class PaymentClearingService:
                 "selected": len([row for row in candidates if row.selected and row.is_bookable]),
                 "successful": result.success_count,
                 "failed": result.failure_count,
+                "cancelled": result.cancelled_count,
             },
             "range_hint": {
                 "first_payment_date": started.date().isoformat(),
             },
             "items": [_booking_item_to_dict(item) for item in result.items],
+            "cancelled": result.cancelled,
         }
-        self._write_history_file(f"clearing_booking_{payload['run_id']}.json", payload)
+        return self._write_history_file(f"clearing_booking_{payload['run_id']}.json", payload)
 
-    def _write_history_file(self, filename: str, payload: dict[str, object]) -> None:
+    def _write_history_file(self, filename: str, payload: dict[str, object]) -> tuple[str, ...]:
+        content = json.dumps(_json_value(payload), ensure_ascii=False, indent=2)
+        warnings: list[str] = []
+        if self._repo is not None:
+            try:
+                self._repo.set_value_json(f"clearing.history.{filename}", content)
+            except Exception as exc:
+                logger.exception("Central clearing history could not be written")
+                warnings.append(f"Zentrales Clearing-Protokoll konnte nicht gespeichert werden: {exc}")
         try:
             self._history_dir.mkdir(parents=True, exist_ok=True)
             path = self._history_dir / filename
-            path.write_text(json.dumps(_json_value(payload), ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception as exc:
+            path.write_text(content, encoding="utf-8")
+        except OSError as exc:
             logger.warning("Clearing history could not be written: %s", exc)
+            warnings.append(f"Lokales Clearing-Protokoll konnte nicht gespeichert werden: {exc}")
+        return tuple(warnings)
 
     # Compatibility helpers retained for the existing daily-business queue.
     def list_pending(self) -> list[ClearingRow]:

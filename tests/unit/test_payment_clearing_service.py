@@ -76,7 +76,7 @@ class _Sevdesk:
         self.transaction_queries: list[tuple[int, datetime, datetime]] = []
         self.existing: SevdeskTransaction | None = None
         self.transactions_by_account: dict[int, list[SevdeskTransaction]] = {}
-        self.book_result: object = None
+        self.book_result: object = {"status": "booked"}
 
     def account_ids(self) -> dict[str, int]:
         return {"stripe": 11, "mollie": 12}
@@ -290,7 +290,7 @@ def test_sevdesk_gateway_book_invoice_uses_legacy_link_invoice_patch_fallback() 
         if request.method == "GET" and path.endswith("/Tools/bookkeepingSystemVersion"):
             return httpx.Response(200, json={"objects": {"version": "1.0"}})
         if request.method == "PUT" and path.endswith("/CheckAccountTransaction/88/linkInvoice"):
-            return httpx.Response(500, text="legacy put failed")
+            return httpx.Response(405, text="legacy put method not supported")
         if request.method == "PATCH" and path.endswith("/CheckAccountTransaction/88/linkInvoice"):
             payload = json.loads(request.content.decode("utf-8"))
             assert payload == {"amount": 29.9, "date": 1783065600}

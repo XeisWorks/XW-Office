@@ -1,11 +1,11 @@
 """REST gateways used by payment clearing."""
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Iterable, cast
-from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -27,9 +27,17 @@ from xw_office.services.sevdesk.payment_booking import (
     response_payload,
 )
 
-VIENNA = ZoneInfo("Europe/Vienna")
-TIMEOUT = httpx.Timeout(45.0, connect=10.0)
+from xw_office.services.clearing.gateway_utils import (
+    TIMEOUT,
+    VIENNA as VIENNA,
+    parse_datetime,
+)
+from xw_office.services.clearing.mollie_gateway import (
+    MollieClearingGateway as MollieClearingGateway,
+)
+
 _WIX_PAYMENT_REFERENCE_KEYS = ("external_transaction_id", "wp_wix_transaction_id")
+logger = logging.getLogger(__name__)
 
 
 def iso_utc(value: datetime) -> str:
@@ -39,32 +47,6 @@ def iso_utc(value: datetime) -> str:
         .isoformat()
         .replace("+00:00", "Z")
     )
-
-
-def parse_datetime(value: object) -> datetime | None:
-    if isinstance(value, datetime):
-        dt = value
-    elif isinstance(value, (int, float)):
-        raw = int(value)
-        if raw >= 10**12:
-            raw //= 1000
-        dt = datetime.fromtimestamp(raw, tz=timezone.utc)
-    elif isinstance(value, str) and value.isdigit():
-        raw = int(value)
-        if raw >= 10**12:
-            raw //= 1000
-        dt = datetime.fromtimestamp(raw, tz=timezone.utc)
-    else:
-        text = str(value or "").strip()
-        if not text:
-            return None
-        try:
-            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(VIENNA)
 
 
 def _objects(payload: object) -> list[dict[str, Any]]:
@@ -125,7 +107,7 @@ class StripeClearingGateway:
         out: list[ProviderTransaction] = []
         charge_to_intent: dict[str, str] = {}
         charge_to_wix_refs: dict[str, tuple[str, ...]] = {}
-        for raw in self._list("/v1/charges", {**bounds, "expand[]": "data.balance_transaction"}):
+        for raw in self._list("/v1/charges", bounds):
             if not raw.get("paid") or raw.get("status") != "succeeded" or raw.get("currency") != "eur":
                 continue
             ref = str(raw.get("id") or "")
@@ -156,19 +138,34 @@ class StripeClearingGateway:
                     provider_reference_ids=wix_refs,
                 )
             )
-        for raw in self._list("/v1/refunds", {**bounds, "expand[]": "data.charge"}):
+        for raw in self._list(
+            "/v1/refunds",
+            {**bounds, "expand[]": "data.charge.payment_intent"},
+        ):
             if raw.get("currency") != "eur" or raw.get("status") not in {None, "succeeded"}:
                 continue
             created = parse_datetime(raw.get("created"))
             ref = str(raw.get("id") or "")
             charge = raw.get("charge")
             charge_id = str(charge.get("id") or "") if isinstance(charge, dict) else str(charge or "")
-            intent = str(raw.get("payment_intent") or charge_to_intent.get(charge_id) or "")
+            charge_intent_value = (
+                charge.get("payment_intent") if isinstance(charge, dict) else None
+            )
+            charge_intent = (
+                str(charge_intent_value.get("id") or "")
+                if isinstance(charge_intent_value, dict)
+                else str(charge_intent_value or "")
+            )
+            intent = str(
+                raw.get("payment_intent") or charge_intent or charge_to_intent.get(charge_id) or ""
+            )
             if ref and created:
-                wix_refs = list(_wix_payment_reference_ids(raw))
+                refund_wix_refs = list(_wix_payment_reference_ids(raw))
                 if isinstance(charge, dict):
-                    wix_refs.extend(_wix_payment_reference_ids(charge))
-                wix_refs.extend(charge_to_wix_refs.get(charge_id, ()))
+                    refund_wix_refs.extend(_wix_payment_reference_ids(charge))
+                refund_wix_refs.extend(charge_to_wix_refs.get(charge_id, ()))
+                if charge_id:
+                    refund_wix_refs.append(charge_id)
                 out.append(
                     ProviderTransaction(
                         provider="stripe",
@@ -178,7 +175,7 @@ class StripeClearingGateway:
                         amount=-money(Decimal(str(raw.get("amount") or 0)) / 100),
                         created_at=created,
                         source_id=ref,
-                        provider_reference_ids=tuple(dict.fromkeys(wix_refs)),
+                        provider_reference_ids=tuple(dict.fromkeys(refund_wix_refs)),
                     )
                 )
         for raw in self._list("/v1/payouts", bounds):
@@ -202,204 +199,16 @@ class StripeClearingGateway:
         return out
 
 
-class MollieClearingGateway:
-    def __init__(self, access_token: str) -> None:
-        self._token = access_token.strip()
-        self.last_warning: str = ""
-
-    def available(self) -> bool:
-        return bool(self._token)
-
-    def _list(self, path: str, embedded_key: str) -> Iterable[dict[str, Any]]:
-        headers = {"Authorization": f"Bearer {self._token}"}
-        next_url: str | None = path
-        params: dict[str, Any] | None = {"limit": 250}
-        with httpx.Client(base_url="https://api.mollie.com/v2", headers=headers, timeout=TIMEOUT) as client:
-            while next_url:
-                response = client.get(next_url, params=params)
-                response.raise_for_status()
-                payload = response.json()
-                batch = (payload.get("_embedded") or {}).get(embedded_key, [])
-                for item in batch if isinstance(batch, list) else []:
-                    if isinstance(item, dict):
-                        yield item
-                next_url = ((payload.get("_links") or {}).get("next") or {}).get("href")
-                params = None
-
-    @staticmethod
-    def _amount(raw: object) -> Decimal:
-        if not isinstance(raw, dict) or str(raw.get("currency") or "").upper() != "EUR":
-            return Decimal("0.00")
-        return money(raw.get("value"))
-
-    @staticmethod
-    def _link_resource_id(raw: dict[str, Any], key: str) -> str:
-        links = raw.get("_links") if isinstance(raw.get("_links"), dict) else {}
-        link = links.get(key) if isinstance(links, dict) else None
-        href = str(link.get("href") or "").strip() if isinstance(link, dict) else ""
-        return href.rstrip("/").rsplit("/", 1)[-1] if href else ""
-
-    def _refund_order_details(
-        self,
-        client: httpx.Client,
-        raw: dict[str, Any],
-    ) -> tuple[str, str]:
-        order_id = str(raw.get("orderId") or self._link_resource_id(raw, "order") or "").strip()
-        payment_id = str(raw.get("paymentId") or self._link_resource_id(raw, "payment") or "").strip()
-        order_number = str(raw.get("orderNumber") or "").strip()
-        if order_number:
-            return order_number, order_id or payment_id
-        if not order_id and payment_id:
-            try:
-                payment_response = client.get(f"/payments/{payment_id}")
-                if payment_response.status_code == 200:
-                    payment = payment_response.json()
-                    if isinstance(payment, dict):
-                        order_number = str(payment.get("orderNumber") or "").strip()
-                        order_id = str(
-                            payment.get("orderId") or self._link_resource_id(payment, "order") or ""
-                        ).strip()
-                        if order_number:
-                            return order_number, order_id or payment_id
-            except httpx.HTTPError:
-                return "", payment_id
-        if order_id:
-            try:
-                order_response = client.get(f"/orders/{order_id}")
-                if order_response.status_code == 200:
-                    order = order_response.json()
-                    if isinstance(order, dict):
-                        order_number = str(order.get("orderNumber") or "").strip()
-                        if order_number:
-                            return order_number, order_id
-            except httpx.HTTPError:
-                return "", order_id
-        return "", order_id or payment_id
-
-    def fetch(self, start: datetime, end: datetime) -> list[ProviderTransaction]:
-        self.last_warning = ""
-        if not self.available():
-            return []
-        headers = {"Authorization": f"Bearer {self._token}"}
-        out: list[ProviderTransaction] = []
-        seen_payment_ids: set[str] = set()
-        order_cache: dict[str, dict[str, Any]] = {}
-        with httpx.Client(base_url="https://api.mollie.com/v2", headers=headers, timeout=TIMEOUT) as client:
-            for raw in self._list("/payments", "payments"):
-                if str(raw.get("status") or "").lower() != "paid":
-                    continue
-                created = parse_datetime(raw.get("paidAt"))
-                if created is None:
-                    raise ValueError("Bezahltes Mollie-Payment ohne gueltiges paidAt.")
-                if not start <= created < end:
-                    continue
-                raw_amount = raw.get("amount")
-                if not isinstance(raw_amount, dict) or str(raw_amount.get("currency") or "").upper() != "EUR":
-                    continue
-                amount = self._amount(raw_amount)
-                ref = str(raw.get("id") or "").strip()
-                if not ref or amount <= 0:
-                    raise ValueError("Bezahltes Mollie-Payment ohne ID oder positiven Betrag.")
-                if ref in seen_payment_ids:
-                    continue
-                seen_payment_ids.add(ref)
-                order_id = str(raw.get("orderId") or self._link_resource_id(raw, "order") or "").strip()
-                details: dict[str, Any] = {}
-                if order_id:
-                    if order_id not in order_cache:
-                        response = client.get(f"/orders/{order_id}")
-                        response.raise_for_status()
-                        order_cache[order_id] = response.json()
-                    details = order_cache[order_id]
-                billing = cast(
-                    dict[str, Any],
-                    raw.get("billingAddress") or details.get("billingAddress")
-                    if isinstance(raw.get("billingAddress") or details.get("billingAddress"), dict)
-                    else {},
-                )
-                first = str(billing.get("givenName") or "").strip()
-                last = str(billing.get("familyName") or "").strip()
-                customer = " ".join(part for part in (first, last) if part)
-                email = str(raw.get("billingEmail") or billing.get("email") or "").strip()
-                order_number = str(details.get("orderNumber") or raw.get("orderNumber") or "")
-                metadata = raw.get("metadata")
-                wix_ref = str(metadata.get("wix_transaction_id") or "").strip() if isinstance(metadata, dict) else ""
-                out.append(
-                    ProviderTransaction(
-                        provider="mollie",
-                        provider_ref=ref,
-                        provider_order_id=order_id,
-                        order_number=order_number,
-                        kind=TransactionKind.PAYMENT,
-                        amount=amount,
-                        created_at=created,
-                        customer=customer or email,
-                        email=email,
-                        source_id=ref,
-                        provider_reference_ids=(wix_ref,) if wix_ref else (),
-                    )
-                )
-            for raw in self._list("/refunds", "refunds"):
-                created = parse_datetime(raw.get("createdAt"))
-                if (
-                    created is None
-                    or not start <= created < end
-                    or str(raw.get("status") or "").lower() != "refunded"
-                ):
-                    continue
-                ref = str(raw.get("id") or "")
-                if ref:
-                    order_number, provider_order_id = self._refund_order_details(client, raw)
-                    out.append(
-                        ProviderTransaction(
-                            provider="mollie",
-                            provider_ref=ref,
-                            provider_order_id=provider_order_id,
-                            order_number=order_number,
-                            kind=TransactionKind.REFUND,
-                            amount=-self._amount(raw.get("amount")),
-                            created_at=created,
-                            source_id=ref,
-                        )
-                    )
-            try:
-                settlements = list(self._list("/settlements", "settlements"))
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code == 403:
-                    settlements = []
-                    # Mollie payouts/settlements require an OAuth-scoped token;
-                    # a plain API key returns 403 here. Surface this instead of
-                    # silently dropping payouts from the clearing analysis.
-                    self.last_warning = (
-                        "Mollie-Settlements nicht abrufbar (403 - fehlende Berechtigung). "
-                        "Mollie-Payouts benoetigen einen OAuth-Token, ein API-Key allein reicht nicht."
-                    )
-                else:
-                    raise
-            for raw in settlements:
-                created = parse_datetime(raw.get("settledAt") or raw.get("createdAt"))
-                if created is None or not start <= created < end:
-                    continue
-                ref = str(raw.get("reference") or raw.get("id") or "")
-                out.append(
-                    ProviderTransaction(
-                        provider="mollie",
-                        provider_ref=ref,
-                        kind=TransactionKind.PAYOUT,
-                        amount=-self._amount(raw.get("amount")),
-                        created_at=created,
-                        source_id=str(raw.get("id") or ref),
-                        payout_start=parse_datetime(raw.get("createdAt")) or created,
-                        payout_end=created,
-                    )
-                )
-        return out
-
-
 class WixClearingGateway:
     def __init__(self, api_key: str, site_id: str) -> None:
         self._api_key = api_key.strip()
         self._site_id = site_id.strip()
+        self.last_warning = ""
+        self.blocked_reference_ids: set[str] = set()
+        # False when any order's payment lookup was not definitively answered;
+        # payment-derived references of that run are then blocked, not mapped.
+        self.lookup_complete = True
+        self.incomplete_order_ids: set[str] = set()
 
     def available(self) -> bool:
         return bool(self._api_key and self._site_id)
@@ -412,6 +221,7 @@ class WixClearingGateway:
             return []
         orders: list[dict[str, Any]] = []
         cursor = ""
+        seen_cursors: set[str] = set()
         with httpx.Client(base_url="https://www.wixapis.com/ecom/v1", headers=self._headers(), timeout=TIMEOUT) as client:
             while True:
                 paging: dict[str, object] = {"limit": 100}
@@ -432,17 +242,48 @@ class WixClearingGateway:
                 response = client.post("/orders/search", json=body)
                 response.raise_for_status()
                 payload = response.json()
-                batch = payload.get("orders", [])
+                batch = payload.get("orders", []) if isinstance(payload, dict) else None
+                if not isinstance(batch, list):
+                    raise ValueError("Wix lieferte eine ungueltige Order-Suchseite.")
                 orders.extend(item for item in batch if isinstance(item, dict))
-                cursor = str(((payload.get("metadata") or {}).get("cursors") or {}).get("next") or "")
+                metadata = payload.get("metadata")
+                metadata = metadata if isinstance(metadata, dict) else {}
+                paging_metadata = payload.get("pagingMetadata")
+                paging_metadata = paging_metadata if isinstance(paging_metadata, dict) else {}
+                cursors = metadata.get("cursors")
+                cursors = cursors if isinstance(cursors, dict) else {}
+                paging_cursors = paging_metadata.get("cursors")
+                paging_cursors = paging_cursors if isinstance(paging_cursors, dict) else {}
+                cursor = str(
+                    cursors.get("next")
+                    or paging_cursors.get("next")
+                    or paging_metadata.get("nextCursor")
+                    or paging_metadata.get("next")
+                    or ""
+                )
                 if not cursor:
                     return orders
+                if cursor in seen_cursors:
+                    raise RuntimeError("Wix order search returned a repeated paging cursor.")
+                seen_cursors.add(cursor)
 
     def provider_map(self, start: datetime, end: datetime) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
-        provider_to_order: dict[str, str] = {}
+        self.last_warning = ""
+        self.blocked_reference_ids.clear()
+        self.lookup_complete = True
+        self.incomplete_order_ids.clear()
+        provider_references: dict[str, set[str]] = {}
+        payment_references: set[str] = set()
         by_number: dict[str, dict[str, Any]] = {}
         if not self.available():
-            return provider_to_order, by_number
+            return {}, by_number
+
+        def add_reference(reference: str, order_number: str) -> None:
+            ref = reference.strip()
+            if ref and order_number:
+                provider_references.setdefault(ref, set()).add(order_number)
+
+        warnings: list[str] = []
         orders = self.search_orders(start, end)
         order_number_by_id: dict[str, str] = {}
         for order in orders:
@@ -452,31 +293,68 @@ class WixClearingGateway:
                 by_number[order_number] = order
             if order_id and order_number:
                 order_number_by_id[order_id] = order_number
-                provider_to_order[order_id] = order_number
+                add_reference(order_id, order_number)
                 checkout_id = str(order.get("checkoutId") or "")
                 if checkout_id:
-                    provider_to_order[checkout_id] = order_number
+                    add_reference(checkout_id, order_number)
 
         with httpx.Client(base_url="https://www.wixapis.com/ecom/v1", headers=self._headers(), timeout=TIMEOUT) as client:
             order_ids = list(order_number_by_id)
             for offset in range(0, len(order_ids), 100):
                 chunk = order_ids[offset : offset + 100]
                 response = client.post("/payments/list-by-ids", json={"orderIds": chunk})
+                definitive_empty: set[str] = set()
                 if response.status_code == 200:
-                    transactions = response.json().get("orderTransactions") or []
+                    payload = response.json()
+                    raw_transactions = (
+                        payload.get("orderTransactions", [])
+                        if isinstance(payload, dict)
+                        else None
+                    )
+                    if not isinstance(raw_transactions, list):
+                        warnings.append("Wix payment batch lookup returned an invalid payload.")
+                        raw_transactions = []
+                    transactions = raw_transactions
                 else:
+                    warnings.append(
+                        f"Wix payment batch lookup failed with HTTP {response.status_code}; "
+                        f"using individual requests for {len(chunk)} orders."
+                    )
                     transactions = []
                     for order_id in chunk:
                         single = client.get(f"/payments/orders/{order_id}")
                         if single.status_code == 200:
-                            item = single.json().get("orderTransactions") or {}
+                            payload = single.json()
+                            item = (
+                                payload.get("orderTransactions") or {}
+                                if isinstance(payload, dict)
+                                else {}
+                            )
                             if isinstance(item, dict):
+                                item.setdefault("orderId", order_id)
                                 transactions.append(item)
+                            else:
+                                warnings.append(
+                                    f"Wix payment lookup for order {order_id} returned an invalid payload."
+                                )
+                        elif single.status_code == 404:
+                            definitive_empty.add(order_id)
+                            warnings.append(
+                                f"Wix payment lookup returned HTTP 404 (no transactions) for order {order_id}."
+                            )
+                        else:
+                            warnings.append(
+                                f"Wix payment lookup failed for order {order_id} "
+                                f"with HTTP {single.status_code}."
+                            )
+                found_order_ids: set[str] = set()
                 for transaction in transactions:
                     if not isinstance(transaction, dict):
                         continue
                     order_id = str(transaction.get("orderId") or "")
                     order_number = order_number_by_id.get(order_id, "")
+                    if order_id and order_number:
+                        found_order_ids.add(order_id)
                     payments = transaction.get("payments") or []
                     for payment in payments if isinstance(payments, list) else []:
                         if not isinstance(payment, dict):
@@ -488,9 +366,47 @@ class WixClearingGateway:
                             else {},
                         )
                         for key in ("providerTransactionId", "gatewayTransactionId", "paymentOrderId"):
-                            ref = str(regular.get(key) or payment.get(key) or "")
-                            if ref and order_number:
-                                provider_to_order[ref] = order_number
+                            ref = str(regular.get(key) or payment.get(key) or "").strip()
+                            add_reference(ref, order_number)
+                            if ref:
+                                payment_references.add(ref)
+                missing_order_ids = set(chunk) - found_order_ids - definitive_empty
+                if missing_order_ids:
+                    self.incomplete_order_ids.update(missing_order_ids)
+                    warnings.append(
+                        "Wix payment lookup returned no transactions for order(s): "
+                        + ", ".join(sorted(missing_order_ids))
+                        + "."
+                    )
+
+        provider_to_order: dict[str, str] = {}
+        conflicts = sorted(
+            reference
+            for reference, order_numbers in provider_references.items()
+            if len(order_numbers) > 1
+        )
+        for reference, order_numbers in provider_references.items():
+            if len(order_numbers) == 1:
+                provider_to_order[reference] = next(iter(order_numbers))
+        if conflicts:
+            self.blocked_reference_ids.update(conflicts)
+            warnings.append(
+                "Conflicting Wix provider references were removed: " + ", ".join(conflicts) + "."
+            )
+        if self.incomplete_order_ids:
+            # A missing order could carry the same provider ID; uniqueness is unproven.
+            self.lookup_complete = False
+            unverified = sorted(ref for ref in payment_references if ref in provider_to_order)
+            for ref in unverified:
+                del provider_to_order[ref]
+            self.blocked_reference_ids.update(payment_references)
+            warnings.append(
+                "Wix payment lookup incomplete; "
+                f"{len(unverified)} payment reference(s) blocked as unverified."
+            )
+        if warnings:
+            self.last_warning = " ".join(dict.fromkeys(warnings))
+            logger.warning("Wix clearing provider map warning: %s", self.last_warning)
         return provider_to_order, by_number
 
     def resolve_order_number(self, reference: str) -> str:
@@ -504,8 +420,13 @@ class WixClearingGateway:
             timeout=TIMEOUT,
         ) as client:
             response = client.get(f"/orders/{ref}")
-            if response.status_code != 200:
+            if response.status_code == 404:
                 return ""
+            if response.status_code != 200:
+                response.raise_for_status()
+                raise RuntimeError(
+                    f"Wix order lookup returned unexpected HTTP {response.status_code}."
+                )
             payload = response.json()
             order = payload.get("order", payload)
             if not isinstance(order, dict):
@@ -699,6 +620,13 @@ class SevdeskClearingGateway:
                 "transaction_id": int(transaction_id),
                 "invoice_status": str(invoice_before.get("status") or "").strip(),
             }
+        if str(invoice_before.get("status") or "").strip() == "100":
+            return {
+                "status": "invoice_draft",
+                "transaction_id": int(transaction_id),
+                "invoice_status": "100",
+                "warning": "sevDesk-Entwurf kann nicht gebucht werden.",
+            }
 
         tx_before = self.get_check_account_transaction_by_id(int(transaction_id))
         tx_status_before = str(tx_before.get("status") or "").strip()
@@ -708,6 +636,19 @@ class SevdeskClearingGateway:
                 "transaction_id": int(transaction_id),
                 "tx_status": tx_status_before,
             }
+        if "amount" in tx_before and tx_before.get("amount") is not None:
+            transaction_amount = money(tx_before["amount"])
+            requested_amount = money(amount)
+            if transaction_amount != requested_amount:
+                return {
+                    "status": "transaction_amount_mismatch",
+                    "transaction_id": int(transaction_id),
+                    "tx_status": tx_status_before,
+                    "warning": (
+                        "sevDesk-Transaktionsbetrag stimmt nicht mit dem angeforderten "
+                        "Buchungsbetrag ueberein."
+                    ),
+                }
 
         tx_account_id = str((tx_before.get("checkAccount") or {}).get("id") or "").strip()
         if tx_account_id and tx_account_id != str(int(account_id)):
@@ -751,20 +692,28 @@ class SevdeskClearingGateway:
                 "tx_status": tx_status_after,
             }
 
+        warning = ""
         if tx_status_after != "400":
             try:
                 self.change_check_account_transaction_status(int(transaction_id), 400)
                 tx_after = self.get_check_account_transaction_by_id(int(transaction_id))
                 tx_status_after = str(tx_after.get("status") or "").strip()
-            except Exception:
-                pass
+            except Exception as exc:
+                warning = (
+                    "Rechnung wurde in sevDesk als bezahlt bestaetigt, aber der "
+                    f"Transaktionsstatus konnte nicht auf 400 gesetzt werden: {exc}"
+                )
+                logger.warning("sevDesk post-booking transaction status update failed: %s", exc)
 
-        return {
+        result = {
             "status": "booked",
             "transaction_id": int(transaction_id),
             "invoice_status": str(invoice_after.get("status") or "").strip(),
             "tx_status": tx_status_after,
         }
+        if warning:
+            result["warning"] = warning
+        return result
 
     def _legacy_link_invoice(
         self,
@@ -779,35 +728,33 @@ class SevdeskClearingGateway:
             "amount": normalize_booking_amount(amount),
             "date": int(booking_date),
         }
-        last_exc: Exception | None = None
-        for method in ("put", "patch"):
-            try:
-                request = self._conn.put if method == "put" else self._conn.patch
-                response = request(
-                    f"/CheckAccountTransaction/{int(transaction_id)}/linkInvoice",
-                    params=params,
-                    json=body,
-                )
-                payload = response_payload(response)
-                raise_on_error_envelope(payload, "sevDesk linkInvoice Fehler")
-                return payload
-            except Exception as exc:
-                last_exc = exc
-        raise RuntimeError(f"sevDesk linkInvoice Fehler: {last_exc}")
+        endpoint = f"/CheckAccountTransaction/{int(transaction_id)}/linkInvoice"
+        try:
+            response = self._conn.put(endpoint, params=params, json=body)
+        except Exception as exc:
+            error_response = getattr(exc, "response", None)
+            status_code = getattr(exc, "status_code", None) or getattr(
+                error_response, "status_code", None
+            )
+            if status_code not in {405, 501}:
+                raise
+            response = self._conn.patch(endpoint, params=params, json=body)
+        payload = response_payload(response)
+        raise_on_error_envelope(payload, "sevDesk linkInvoice Fehler")
+        return payload
 
     def _bookkeeping_system_version(self) -> str:
         if self._bookkeeping_version:
             return self._bookkeeping_version
-        try:
-            response = self._conn.get("/Tools/bookkeepingSystemVersion")
-            payload = response.json()
-            obj = payload.get("objects", payload) if isinstance(payload, dict) else {}
-            if isinstance(obj, list):
-                obj = obj[0] if obj else {}
-            version = str(obj.get("version") or "") if isinstance(obj, dict) else ""
-        except Exception:
-            version = "1.0"
-        self._bookkeeping_version = version or "1.0"
+        response = self._conn.get("/Tools/bookkeepingSystemVersion")
+        payload = response.json()
+        obj = payload.get("objects", payload) if isinstance(payload, dict) else {}
+        if isinstance(obj, list):
+            obj = obj[0] if obj else {}
+        version = str(obj.get("version") or "").strip() if isinstance(obj, dict) else ""
+        if not version:
+            raise RuntimeError("sevDesk lieferte keine gueltige Buchhaltungssystem-Version.")
+        self._bookkeeping_version = version
         return self._bookkeeping_version
 
 

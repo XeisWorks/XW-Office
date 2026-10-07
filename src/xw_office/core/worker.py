@@ -43,6 +43,7 @@ class BackgroundWorker(QThread):
         self,
         fn: Callable[..., Any],
         *args: Any,
+        publish_result_on_cancel: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__()
@@ -50,6 +51,7 @@ class BackgroundWorker(QThread):
         self._fn = fn
         self._args = args
         self._kwargs = kwargs
+        self._publish_result_on_cancel = publish_result_on_cancel
         self._cancelled = Event()
         self.finished.connect(self.signals.finished.emit)
         self.finished.connect(self._release_running_reference)
@@ -65,11 +67,11 @@ class BackgroundWorker(QThread):
         type(self)._running_workers.discard(self)
 
     def cancel(self) -> None:
-        """Request cancellation and suppress a result that arrives afterwards.
+        """Request cooperative cancellation of the callable.
 
-        Python callables cannot be stopped safely from the outside. Long-running
-        services may additionally inspect :attr:`cancelled`; regardless of that,
-        a cancelled worker never publishes a stale result to the UI.
+        Results are suppressed by default. Write workers can opt into publishing
+        partial outcomes with ``publish_result_on_cancel``. Long-running services
+        can inspect :attr:`cancelled` between operations.
         """
         self._cancelled.set()
         self.requestInterruption()
@@ -83,9 +85,9 @@ class BackgroundWorker(QThread):
         self.signals.started.emit()
         try:
             result = self._fn(*self._args, **self._kwargs)
-            if not self.cancelled:
+            if not self.cancelled or self._publish_result_on_cancel:
                 self.signals.result.emit(result)
         except Exception as exc:
-            if not self.cancelled:
+            if not self.cancelled or self._publish_result_on_cancel:
                 logger.error("Worker error: %s\n%s", exc, traceback.format_exc())
                 self.signals.error.emit(exc)

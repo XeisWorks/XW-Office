@@ -33,6 +33,7 @@ class MatchStatus(str, Enum):
     ALREADY_BOOKED = "already_booked"
     ERROR = "error"
     BOOKED = "booked"
+    CANCELLED = "cancelled"
 
 
 class ClearingSkipReason(str, Enum):
@@ -204,6 +205,8 @@ class BookingItemResult:
 @dataclass(frozen=True)
 class BookingBatchResult:
     items: tuple[BookingItemResult, ...] = field(default_factory=tuple)
+    cancelled: bool = False
+    warnings: tuple[str, ...] = ()
 
     @property
     def success_count(self) -> int:
@@ -211,7 +214,11 @@ class BookingBatchResult:
 
     @property
     def failure_count(self) -> int:
-        return len(self.items) - self.success_count
+        return sum(not item.success and item.status != MatchStatus.CANCELLED for item in self.items)
+
+    @property
+    def cancelled_count(self) -> int:
+        return sum(item.status == MatchStatus.CANCELLED for item in self.items)
 
 
 @dataclass(frozen=True)
@@ -227,6 +234,7 @@ class ResetItemResult:
 @dataclass(frozen=True)
 class ResetBatchResult:
     items: tuple[ResetItemResult, ...] = field(default_factory=tuple)
+    cancelled: bool = False
 
     @property
     def success_count(self) -> int:

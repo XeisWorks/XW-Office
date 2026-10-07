@@ -93,6 +93,36 @@ def test_analysis_summary_shows_visible_count_and_filter(qtbot: object, app_conf
     )
 
 
+def test_empty_analysis_still_shows_warnings(qtbot: object, app_config: object) -> None:
+    container = Container(app_config)  # type: ignore[arg-type]
+    container.register(PaymentClearingService, lambda _c: PaymentClearingService())
+    view = PaymentClearingView(container)
+    qtbot.addWidget(view)
+    analysis = ClearingAnalysis(
+        started_at=datetime(2026, 9, 30, tzinfo=ZoneInfo("Europe/Vienna")),
+        start_date=datetime(2026, 9, 1, tzinfo=ZoneInfo("Europe/Vienna")),
+        end_date=datetime(2026, 10, 1, tzinfo=ZoneInfo("Europe/Vienna")),
+        candidates=(), warnings=("Mollie-Payment ungueltig.",),
+    )
+
+    view._on_analysis(analysis)  # noqa: SLF001
+
+    assert "0 sichtbar" in view._summary.text()  # noqa: SLF001
+    assert "Warnungen: 1" in view._summary.text()  # noqa: SLF001
+    assert "ungueltig" in view._summary.toolTip()  # noqa: SLF001
+
+
+def test_cancelled_rows_remain_visible_in_open_filter(qtbot: object, app_config: object) -> None:
+    container = Container(app_config)  # type: ignore[arg-type]
+    container.register(PaymentClearingService, lambda _c: PaymentClearingService())
+    view = PaymentClearingView(container)
+    qtbot.addWidget(view)
+    view._candidates = [_candidate("stopped", MatchStatus.CANCELLED)]  # noqa: SLF001
+    view._status_filter.setCurrentIndex(view._status_filter.findData("open"))  # noqa: SLF001
+
+    assert [row.candidate_id for row in view._filtered()] == ["stopped"]  # noqa: SLF001
+
+
 def test_problem_row_is_highlighted_and_explains_recheck(qtbot: object, app_config: object) -> None:
     container = Container(app_config)  # type: ignore[arg-type]
     container.register(PaymentClearingService, lambda _c: PaymentClearingService())

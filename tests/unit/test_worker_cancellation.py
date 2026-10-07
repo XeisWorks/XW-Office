@@ -29,6 +29,27 @@ def test_cancelled_worker_suppresses_result(qtbot: object) -> None:
     assert results == []
 
 
+def test_cancelled_write_worker_publishes_completed_results(qtbot: object) -> None:
+    entered = Event()
+    release = Event()
+    results: list[object] = []
+
+    def job() -> str:
+        entered.set()
+        release.wait(timeout=2)
+        return "partial-booking-result"
+
+    worker = BackgroundWorker(job, publish_result_on_cancel=True)
+    worker.signals.result.connect(results.append)
+    worker.start()
+    assert entered.wait(timeout=1)
+    worker.cancel()
+    release.set()
+    qtbot.waitUntil(lambda: not worker.isRunning() and bool(results), timeout=2000)
+
+    assert results == ["partial-booking-result"]
+
+
 def test_worker_finished_signal_emits_after_qthread_stops(qtbot: object) -> None:
     running_states: list[bool] = []
 

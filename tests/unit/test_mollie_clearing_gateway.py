@@ -157,16 +157,30 @@ def test_ineligible_payments_are_excluded(
     "overrides",
     [{"paidAt": None}, {"paidAt": "invalid"}, {"id": ""}, {"amount": {"currency": "EUR", "value": "0.00"}}],
 )
-def test_invalid_paid_payment_fails_explicitly(
+def test_invalid_paid_payment_is_quarantined_with_warning(
     monkeypatch: pytest.MonkeyPatch, overrides: dict[str, Any]
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v2/payments"
-        return httpx.Response(200, json={"_embedded": {"payments": [_payment(**overrides)]}})
+        if request.url.path == "/v2/payments":
+            return httpx.Response(
+                200,
+                json={
+                    "_embedded": {
+                        "payments": [
+                            _payment(**overrides),
+                            _payment(id="tr_valid", metadata={}),
+                        ]
+                    }
+                },
+            )
+        return _empty_resource(request)
 
     _mock_client(monkeypatch, handler)
-    with pytest.raises(ValueError, match="Bezahltes Mollie-Payment"):
-        MollieClearingGateway("token").fetch(START, END)
+    gateway = MollieClearingGateway("token")
+    rows = gateway.fetch(START, END)
+
+    assert [row.provider_ref for row in rows] == ["tr_valid"]
+    assert "ausgelassen" in gateway.last_warning
 
 
 def test_payments_permission_error_is_not_an_empty_success(

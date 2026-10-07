@@ -358,10 +358,13 @@ def register_default_services(container: Container) -> None:
             or secrets.get_secret("STRIPE_API_KEY")
         )
         mollie_token = secrets.get_secret("MOLLIE_OAUTH_TOKEN")
+        settings_repo = (
+            c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None
+        )
         return PaymentClearingService(
-            c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
+            settings_repo,
             stripe=StripeClearingGateway(stripe_key),
-            mollie=MollieClearingGateway(mollie_token),
+            mollie=MollieClearingGateway(mollie_token, settings_repo=settings_repo),
             wix=WixClearingGateway(
                 secrets.get_secret("WIX_API_KEY"),
                 secrets.get_secret("WIX_SITE_ID"),

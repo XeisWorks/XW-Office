@@ -38,14 +38,60 @@ EUR-Payments und dessen `tr_`-ID. Offene/fehlgeschlagene Payments werden nicht
 importiert; identische Payment-IDs werden dedupliziert. Verknuepfte Orders werden
 nur zur Referenz-/Kundenaufloesung gelesen, nicht erneut als Zahlung importiert.
 Die Zuordnung zu Wix erfolgt ueber Payment-ID und `metadata.wix_transaction_id`.
-Ein fehlendes Zahlungsdatum ist ein expliziter Analysefehler, kein Fallback auf
-das Erstellungsdatum. Fuer alte ordergebundene Payments bleibt die bisherige
+Ein fehlendes Zahlungsdatum wird ausdruecklich als Warnung ausgewiesen und der
+defekte Datensatz ausgeschlossen, ohne andere Zahlungen zu verlieren; es gibt
+keinen Fallback auf das Erstellungsdatum. Fuer alte ordergebundene Payments bleibt die bisherige
 Mollie-Ordernummer (gegebenenfalls Wix-Order-UUID) erhalten.
+
+### Haertung 07.10.2026: Buchungsschutz und Performance
+
+- Mehrere unterschiedliche Bestellnummern im Zweck oder widerspruechliche
+  Wix-Providerreferenzen sind keine automatischen Treffer.
+  Ein unvollstaendiger Wix-Abgleich sperrt automatische Zahlungszuordnungen,
+  auch bei einer vorhandenen Mollie-Ordernummer; manuelle Pruefung ist erforderlich.
+- SEPA-Zahlungsdaten bleiben innerhalb des ausgewaehlten Monats. Der Rueckblick
+  von 90 Tagen dient der Rechnungs-/Referenzsuche; fuer nicht aufgeloeste Mollie-
+  Zahlungen und Refunds werden aeltere Wix-Referenzen gezielt nachgeladen.
+  Sofortige Stripe-Zahlungen behalten ihr bisheriges Suchfenster.
+- Entwurfsrechnungen bleiben auch nach ASSIGN/RECHECK und vor dem Schreiben gesperrt.
+- STOP wird zwischen Buchungs-/Resetzeilen geprueft. Eine begonnene Schreibaktion
+  wird fertig geprueft; ihr Ergebnis bleibt trotz STOP sichtbar. Nicht ausgefuehrte
+  Buchungen werden separat angezeigt und muessen neu analysiert/geprueft werden.
+- Pro Batch wird jede Zahlungs-ID nur einmal importiert. Abweichende Daten oder
+  mehrere vorhandene sevDesk-Transaktionen zur gleichen ID blockieren den Import.
+- Mit PostgreSQL werden Zahlungs-ID und Rechnung atomar reserviert. Import-ID und
+  Abschluss werden zentral gespeichert. Unklare Schreibausgaenge (Timeout,
+  Prozessabbruch) bleiben gesperrt, statt automatisch einen neuen POST auszufuehren.
+  Solche Faelle muessen in sevDesk und im zentralen Ledger abgeglichen werden;
+  es gibt bewusst keine automatische Freigabe durch Zeitablauf.
+- Wird eine Rechnung zwischen Import und Buchung anderweitig bezahlt, erscheint
+  dies als Prueffall, nicht als bestaetigte Buchung der importierten Transaktion.
+- Ohne PostgreSQL gibt es keinen PC-uebergreifenden Schutz; die Analyse warnt.
+  Analyse-/Buchungsprotokolle werden mit DB zentral und zusaetzlich lokal gespeichert.
+  Fehler der Protokollierung erscheinen im Ergebnis, ohne bereits erfolgte
+  Buchungen zu verschweigen.
+- Mollie verwendet mit DB einen nach Zugangsdaten isolierten Payment-Cache:
+  initialer/periodischer Vollabruf, inkrementeller Abruf neuer Payments und erneute
+  Abfrage noch nicht abgeschlossener Zahlungen. Alte offene SEPA-Payments bleiben
+  dadurch sichtbar, wenn sie spaeter bezahlt werden.
+- HTTP-Schreibaufrufe werden bei unklarem Ausgang nicht wiederholt. Der Legacy-
+  PATCH-Fallback erfolgt nur bei ausdruecklich nicht unterstuetztem PUT.
+- Netzwerk-Schreibphasen bleiben seriell. Es wird kein riskanter Parallelimport
+  eingefuehrt; der Performancegewinn kommt aus Cache, kleinerer Stripe-Payload
+  und wiederverwendeten Referenz-/Orderaufloesungen.
+
+Lesender Kontrolllauf fuer September 2026: unveraendert 199 Vorgaenge
+(158 Stripe-Zahlungen, 34 Mollie-Zahlungen, 7 Auszahlungen), identische IDs,
+Beträge, Zahlungsdaten, Rechnungszuordnungen und Status in zwei Folgeabrufen.
+Der warme Mollie-Abruf benoetigte 3 statt zuvor 12 API-Aufrufe und las
+250 statt 2241 Payment-Zeilen. Gesamtabgleich: 21 statt 30 API-Aufrufe,
+gemessen 17,62 bis 25,95 Sekunden; die Laufzeit bleibt netzwerkabhaengig.
+Die externen APIs waren bei diesem Test gegen Schreibzugriffe gesperrt.
 
 ### Matching
 
 - Primaer: Provider-ID -> Wix Order -> Wix Bestellnummer -> sevDesk Rechnungsreferenz
-- Betragstoleranz: 0,01 EUR
+- Exakter Betragsvergleich mit Decimal auf Cent normalisiert
 - SEPA: Bestell-/Rechnungsreferenz und Betrag innerhalb eines erweiterten Zeitfensters
 - Bereits bezahlte Rechnungen und doppelte Referenzen werden ausgeschlossen
 - Provider-Transaktionen werden ueber standardisierte Buchungstexte dedupliziert
