@@ -59,6 +59,13 @@ def test_expense_review_uses_positions_and_settings_tab(qtbot: object) -> None:
     assert view._tenant_tabs.expanding()
     assert view._tenant_tabs.minimumHeight() >= 62
     assert "QTabBar#expenseTenantTabs::tab:selected" in view._tenant_tabs.styleSheet()
+    assert view._missing_refresh_button is not None
+    view._set_missing_refresh_pending(True)
+    assert view._missing_refresh_timer.isActive()
+    assert not view._missing_refresh_button.isEnabled()
+    view._set_missing_refresh_pending(False)
+    assert not view._missing_refresh_timer.isActive()
+    assert view._missing_refresh_button.isEnabled()
     view._tenant_tabs.setCurrentIndex(1)
     qtbot.waitUntil(  # type: ignore[attr-defined]
         lambda: "Konto WüdaraMusi" in view._status.text(), timeout=3000

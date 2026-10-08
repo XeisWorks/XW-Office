@@ -20,7 +20,7 @@ from PySide6.QtCore import (
     QUrl,
     Signal,
 )
-from PySide6.QtGui import QColor, QDesktopServices, QIcon, QMouseEvent, QPainter, QPen
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QMouseEvent, QPainter, QPen, QTransform
 from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
@@ -523,6 +523,12 @@ class ExpenseReviewView(QWidget):
         self._worker: BackgroundWorker | None = None
         self._manual_worker: BackgroundWorker | None = None
         self._assignment_workers: list[BackgroundWorker] = []
+        self._missing_refresh_button: QPushButton | None = None
+        self._missing_refresh_icon = QIcon()
+        self._missing_refresh_angle = 0
+        self._missing_refresh_timer = QTimer(self)
+        self._missing_refresh_timer.setInterval(90)
+        self._missing_refresh_timer.timeout.connect(self._advance_missing_refresh_icon)
         self._tenant_key = "xw"
         self._tenant_tabs = QTabBar()
         self._tenant_tabs.setObjectName("expenseTenantTabs")
@@ -737,18 +743,21 @@ class ExpenseReviewView(QWidget):
         layout = QVBoxLayout(page)
         header = QHBoxLayout()
         header.addStretch()
-        refresh = QPushButton()
-        refresh.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
-        refresh.setIconSize(QSize(26, 26))
-        refresh.setFixedSize(38, 38)
-        refresh.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        refresh.setStyleSheet(
+        self._missing_refresh_button = QPushButton()
+        self._missing_refresh_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
+        self._missing_refresh_button.setIcon(self._missing_refresh_icon)
+        self._missing_refresh_button.setIconSize(QSize(26, 26))
+        self._missing_refresh_button.setFixedSize(38, 38)
+        self._missing_refresh_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._missing_refresh_button.setStyleSheet(
             "QPushButton { background: transparent; border: none; }"
             "QPushButton:hover { background: #27324b; border-radius: 6px; }"
         )
-        refresh.setToolTip("Fehlende Belege erneut prüfen")
-        refresh.clicked.connect(self._refresh_missing_receipts)
-        header.addWidget(refresh)
+        self._missing_refresh_button.setToolTip(
+            "Prüft neue oder geänderte sevDesk-Belegverknüpfungen, ohne Kontobewegungen neu zu laden."
+        )
+        self._missing_refresh_button.clicked.connect(self._refresh_missing_receipts)
+        header.addWidget(self._missing_refresh_button)
         layout.addLayout(header)
         self._configure_expense_table(self._missing_table)
         layout.addWidget(self._missing_table, stretch=1)
@@ -823,22 +832,29 @@ class ExpenseReviewView(QWidget):
         self,
         *,
         refresh: bool = True,
+        refresh_document_links: bool = False,
         force_document_refresh: bool = False,
         retry_unlinked_documents: bool = False,
+        load_manual_expenses: bool = True,
     ) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
         self._positions = self.service.list_positions()
-        self._status.setText("Bankbewegungen werden geladen …")
+        self._status.setText(
+            "Belegverknüpfungen werden aktualisiert …"
+            if refresh_document_links
+            else "Bankbewegungen werden geladen …"
+        )
         start = cast(date, self._start.date().toPython())
         end = cast(date, self._end.date().toPython())
         self._load_period = (start, end)
-        self._last_load_was_refresh = refresh
+        self._last_load_was_refresh = refresh or refresh_document_links
         self._worker = BackgroundWorker(
             lambda: self.service.list_bank_expenses(
                 start=start,
                 end=end,
                 refresh=refresh,
+                refresh_document_links=refresh_document_links,
                 force_document_refresh=force_document_refresh,
                 outgoing_only=False,
                 retry_unlinked_documents=retry_unlinked_documents,
@@ -849,7 +865,8 @@ class ExpenseReviewView(QWidget):
         self._tenant_tabs.setEnabled(False)
         self._worker.signals.finished.connect(self._on_load_finished)
         self._worker.start()
-        self._load_manual_expenses()
+        if load_manual_expenses:
+            self._load_manual_expenses()
 
     def _load_manual_expenses(self) -> None:
         if not hasattr(self._container, "config"):
@@ -931,6 +948,7 @@ class ExpenseReviewView(QWidget):
     def _on_load_finished(self) -> None:
         self._worker = None
         self._tenant_tabs.setEnabled(True)
+        self._set_missing_refresh_pending(False)
 
     def _on_loaded(self, payload: object) -> None:
         self._all_rows = [
@@ -1123,7 +1141,32 @@ class ExpenseReviewView(QWidget):
         worker.start()
 
     def _refresh_missing_receipts(self) -> None:
-        self._load(refresh=True, retry_unlinked_documents=True)
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self._set_missing_refresh_pending(True)
+        self._load(refresh=False, refresh_document_links=True, load_manual_expenses=False)
+
+    def _set_missing_refresh_pending(self, pending: bool) -> None:
+        if self._missing_refresh_button is None:
+            return
+        self._missing_refresh_button.setEnabled(not pending)
+        if pending:
+            self._missing_refresh_angle = 0
+            self._missing_refresh_timer.start()
+            return
+        self._missing_refresh_timer.stop()
+        self._missing_refresh_button.setIcon(self._missing_refresh_icon)
+
+    def _advance_missing_refresh_icon(self) -> None:
+        if self._missing_refresh_button is None:
+            return
+        self._missing_refresh_angle = (self._missing_refresh_angle + 45) % 360
+        pixmap = self._missing_refresh_icon.pixmap(QSize(26, 26))
+        if pixmap.isNull():
+            return
+        self._missing_refresh_button.setIcon(
+            QIcon(pixmap.transformed(QTransform().rotate(self._missing_refresh_angle)))
+        )
 
     def _remember_selected_rule(self) -> None:
         selected = self._table.selected_row_data()

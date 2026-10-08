@@ -251,11 +251,14 @@ class _BankProviderStub:
         self.rows = rows
         self.scan = scan or DocumentLinkScan((), True)
         self.account_id = account_id
+        self.fetch_calls = 0
+        self.resolve_calls = 0
 
     def find_account(self) -> SimpleNamespace:
         return SimpleNamespace(id=self.account_id)
 
     def fetch(self, start: date, end: date, *, outgoing_only: bool = True) -> tuple[SimpleNamespace, list[BankExpense]]:
+        self.fetch_calls += 1
         return self.find_account(), self.rows
 
     def resolve_document_links(
@@ -268,6 +271,7 @@ class _BankProviderStub:
         retry_cached_documents: object | None = None,
         force: bool = False,
     ) -> DocumentLinkScan:
+        self.resolve_calls += 1
         return self.scan
 
 
@@ -338,6 +342,43 @@ def test_document_link_is_persisted_and_reused_from_cache(
     assert live.documents[0].document_number == "VB 2026-7"
     assert cached.documents[0].url.endswith("/ex/detail/id/V-7")
     assert cached.document_link_scan_complete is True
+
+
+def test_document_link_refresh_uses_cached_transactions_without_bank_reload(
+    session_factory: sessionmaker[Session],
+) -> None:
+    pipeline = ExpensePipelineRepository(session_factory)
+    provider = _BankProviderStub([_bank_row()])
+    service = ExpenseAuditService(bank_provider=provider, pipeline_repo=pipeline)  # type: ignore[arg-type]
+    start = date(2026, 9, 1)
+    end = date(2026, 9, 30)
+
+    service.list_bank_expenses(start=start, end=end)
+    provider.scan = DocumentLinkScan(
+        (
+            BankDocumentLink(
+                transaction_external_id="TX-1",
+                resource_type="Voucher",
+                external_id="V-8",
+                document_number="VB 2026-8",
+            ),
+        ),
+        True,
+    )
+    provider.fetch_calls = 0
+    provider.resolve_calls = 0
+
+    rows = service.list_bank_expenses(
+        start=start,
+        end=end,
+        refresh=False,
+        refresh_document_links=True,
+        outgoing_only=False,
+    )
+
+    assert provider.fetch_calls == 0
+    assert provider.resolve_calls == 1
+    assert rows[0].documents[0].document_number == "VB 2026-8"
 
 
 def test_bank_expenses_can_include_incoming_transactions_for_receipt_review(

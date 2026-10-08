@@ -278,11 +278,17 @@ class ExpenseAuditService:
         end: datetime.date,
         profile_key: str = "",
         refresh: bool = True,
+        refresh_document_links: bool = False,
         force_document_refresh: bool = False,
         outgoing_only: bool = True,
         retry_unlinked_documents: bool = False,
     ) -> list[BankExpenseRow]:
-        """Load bank transactions and incrementally resolve linked documents."""
+        """Load cached or current bank transactions and resolve linked documents.
+
+        ``refresh_document_links`` intentionally avoids a new bank import. It
+        compares sevDesk document headers with the local scan cache and only
+        resolves newly added or changed documents.
+        """
         if self._bank_provider is None:
             return []
         account: SevdeskBankAccount | None = None
@@ -375,7 +381,7 @@ class ExpenseAuditService:
             # every historical sevDesk document for a range already checked.
             # The UI exposes an explicit force action for a manual re-check.
             link_scan_complete = True
-        elif refresh:
+        elif refresh or refresh_document_links:
             try:
                 account = account or self._bank_provider.find_account()
                 with self._document_scan_lock:
@@ -399,28 +405,33 @@ class ExpenseAuditService:
                             else resource_type.startswith(cache_type_prefix)
                         )
                     }
-                    retry_cached_documents = (
-                        set(cached_fingerprints)
-                        if has_new_transactions
-                        else (
-                            {
-                                (
-                                    resource_type[len(cache_type_prefix) :]
-                                    if self._tenant_key != "xw"
-                                    else resource_type,
-                                    external_id,
-                                )
-                                for resource_type, external_id in self._pipeline_repo.list_unlinked_document_scan_keys()
-                                if (
-                                    ":" not in resource_type
-                                    if self._tenant_key == "xw"
-                                    else resource_type.startswith(cache_type_prefix)
-                                )
-                            }
-                            if self._pipeline_repo is not None and retry_unlinked_documents
-                            else set()
+                    retry_cached_documents = set()
+                    if not refresh_document_links:
+                        retry_cached_documents = (
+                            set(cached_fingerprints)
+                            if has_new_transactions
+                            else (
+                                {
+                                    (
+                                        resource_type[len(cache_type_prefix) :]
+                                        if self._tenant_key != "xw"
+                                        else resource_type,
+                                        external_id,
+                                    )
+                                    for resource_type, external_id in self._pipeline_repo.list_unlinked_document_scan_keys()
+                                    if (
+                                        ":" not in resource_type
+                                        if self._tenant_key == "xw"
+                                        else resource_type.startswith(cache_type_prefix)
+                                    )
+                                }
+                                if self._pipeline_repo is not None and retry_unlinked_documents
+                                else set()
+                            )
                         )
-                    )
+                    # A focused Beleg-Refresh must not re-query every already
+                    # unlinked document. A new assignment changes its header
+                    # fingerprint and is therefore picked up by the scan.
                     scan = self._bank_provider.resolve_document_links(
                         start,
                         end,
