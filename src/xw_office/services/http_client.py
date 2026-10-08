@@ -256,7 +256,10 @@ class SevdeskConnection:
                     session.cache_hits += 1
                     return httpx.Response(
                         cached.status_code,
-                        headers=cached.headers,
+                        headers=[
+                            (name, value) for name, value in cached.headers.multi_items()
+                            if name.lower() not in {"content-encoding", "content-length"}
+                        ],
                         content=cached.content,
                         request=cached.request,
                     )

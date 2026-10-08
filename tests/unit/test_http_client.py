@@ -1,4 +1,5 @@
 """Tests for HTTP helpers."""
+import gzip
 import httpx
 import pytest
 
@@ -160,4 +161,22 @@ def test_read_session_is_not_shared_with_other_workers() -> None:
             assert session.requests == 1
             assert session.cache_hits == 0
             connection.get("/Invoice")
+            assert session.cache_hits == 1
+
+
+def test_read_session_reuses_already_decoded_compressed_response() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=gzip.compress(b'{"objects":[{"id":"1"}]}'),
+            headers={"Content-Encoding": "gzip", "Content-Type": "application/json"},
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler), base_url="https://example.test") as client:
+        connection = SevdeskConnection(client, AppConfig())
+        with connection.read_session() as session:
+            first = connection.get("/InvoicePos")
+            reused = connection.get("/InvoicePos")
+            assert first.json() == reused.json() == {"objects": [{"id": "1"}]}
+            assert "content-encoding" not in reused.headers
+            assert int(reused.headers["content-length"]) == len(reused.content)
             assert session.cache_hits == 1

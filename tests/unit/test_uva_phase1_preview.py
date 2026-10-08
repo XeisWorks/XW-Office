@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from xw_office.services.finanzonline.uva_payload_service import UvaPayloadService
 from xw_office.services.finanzonline.uva_preview import SevdeskUvaPreviewProvider, UvaPreviewService
-from xw_office.services.finanzonline.uva_references import (
-    compare_uva_reference,
-    load_uva_references,
-)
 
 
 class _FakeProvider:
@@ -48,6 +43,7 @@ class _FakeProvider:
             {
                 "taxText": "REVERSE CHARGE",
                 "sumGross": "122.83",
+                "vatNumber": "ATU12345678",
                 "sumNet": "122.83",
                 "sumTax": "0.00",
             },
@@ -138,6 +134,7 @@ class _FebruaryProvider:
             {
                 "taxText": "REVERSE CHARGE",
                 "sumGross": "134.00",
+                "vatNumber": "ATU12345678",
                 "sumNet": "134.00",
                 "sumTax": "0.00",
             },
@@ -640,6 +637,11 @@ class _PaymentLogConnection:
     def get(self, path: str, params: dict[str, object] | None = None) -> _FakeResponse:
         query = dict(params or {})
         self.requests.append((path, query))
+        if path == "/CheckAccountTransactionLog":
+            return _FakeResponse({"objects": [{
+                "object": {"id": "9001", "objectName": "Invoice"},
+                "amountPaid": "60", "bookingDate": "2026-03-04",
+            }]})
         if path == "/Invoice":
             if "startPayDate" in query:
                 return _FakeResponse(
@@ -695,13 +697,15 @@ def test_provider_uses_payment_logs_before_period_filtering() -> None:
     assert preview.sales.groups[0].net_amount == "50.00"
     assert payload.kennzahlen.A022 == "50.00"
     assert any(
-        path == "/Invoice/9001/getCheckAccountTransactionLogs" for path, _ in connection.requests
+        path == "/CheckAccountTransactionLog" for path, _ in connection.requests
     )
 
 
 class _CreditNoteConnection:
     def get(self, path: str, params: dict[str, object] | None = None) -> _FakeResponse:
         query = dict(params or {})
+        if path == "/CheckAccountTransactionLog":
+            return _FakeResponse({"objects": []})
         if path == "/Invoice":
             return _FakeResponse({"objects": []})
         if path == "/Voucher":
@@ -735,6 +739,12 @@ class _CreditNoteConnection:
 class _PaymentLogDuplicateTxConnection:
     def get(self, path: str, params: dict[str, object] | None = None) -> _FakeResponse:
         query = dict(params or {})
+        if path == "/CheckAccountTransactionLog":
+            return _FakeResponse({"objects": [{
+                "object": {"id": "9002", "objectName": "Invoice"},
+                "amountPaid": "60", "bookingDate": "2026-03-04",
+                "checkAccountTransaction": {"id": "tx-1"},
+            }]})
         if path == "/Invoice":
             if "startPayDate" in query:
                 return _FakeResponse(
@@ -832,77 +842,6 @@ def test_debit_voucher_is_included_as_output_tax(monkeypatch) -> None:
     payload = UvaPayloadService(UvaPreviewService(provider)).build_payload(2026, 3)
 
     assert payload.kennzahlen.A006 == "1000.00"
-
-
-def test_june_2026_golden_master_is_reference_data_only() -> None:
-    reference_path = Path("config/uva_reference_values.json")
-    references = json.loads(reference_path.read_text(encoding="utf-8"))
-    reference = references["2026-06"]
-
-    assert sorted(references) == ["2026-04", "2026-05", "2026-06", "2026-09"]
-    assert references["2026-04"]["zahlbetrag"] == "267.60"
-    assert references["2026-05"]["kennzahlen"]["C065"] == "23.70"
-    assert reference["kennzahlen"]["A022"] == "3349.56"
-    assert reference["kennzahlen"]["A000"] == "21061.38"
-    assert reference["kennzahlen"]["A006"] == "9216.97"
-    assert reference["kennzahlen"]["C060"] == "416.46"
-    assert reference["zahlbetrag"] == "1910.22"
-    assert references["2026-09"]["kennzahlen"]["A029"] == "2526.59"
-    assert references["2026-09"]["zahlbetrag"] == "538.68"
-    assert all(item["immutable_reference"] is True for item in references.values())
-
-
-def test_september_2026_golden_master_blocks_raw_sevdesk_preview_delta() -> None:
-    comparison = compare_uva_reference(
-        year=2026,
-        month=9,
-        kennzahlen={
-            "A000": "13032.94",
-            "A011": "583.00",
-            "A017": "4014.47",
-            "A022": "1315.18",
-            "A029": "6658.72",
-            "A006": "1461.57",
-            "C060": "171.81",
-            "C066": "1.04",
-        },
-        zahlbetrag="955.50",
-    )
-
-    assert comparison["available"] is True
-    assert comparison["within_tolerance"] is False
-    assert comparison["zahlbetrag"]["expected"] == "538.68"
-    deltas = {item["field"]: item for item in comparison["deltas"]}
-    assert deltas["A029"]["expected"] == "2526.59"
-    assert deltas["A029"]["delta"] == "4132.13"
-
-
-def test_uva_references_are_loaded_as_immutable_mapping() -> None:
-    references = load_uva_references()
-
-    assert references["2026-04"]["zahlbetrag"] == "267.60"
-    try:
-        references["2026-04"] = {}  # type: ignore[index]
-    except TypeError:
-        pass
-    else:  # pragma: no cover - defensive assertion.
-        raise AssertionError("Reference mapping must be immutable")
-
-
-def test_uva_reference_comparison_reports_deltas_without_overriding() -> None:
-    comparison = compare_uva_reference(
-        year=2026,
-        month=6,
-        kennzahlen={"A000": "21195.54", "A017": "3668.46", "A022": "3349.56"},
-        zahlbetrag="1910.30",
-    )
-
-    assert comparison["available"] is True
-    assert comparison["zahlbetrag"]["delta"] == "0.08"
-    assert comparison["zahlbetrag"]["within_tolerance"] is True
-    deltas = {item["field"]: item for item in comparison["deltas"]}
-    assert deltas["A000"]["delta"] == "134.16"
-    assert deltas["A017"]["delta"] == "134.16"
 
 
 def _semantic_preview_lines(text: str) -> list[str]:

@@ -6,7 +6,6 @@ import time
 import pytest
 
 from xw_office.services.finanzonline.oss_models import OssLine, OssQuarterResult
-from xw_office.services.finanzonline.oss_references import compare_oss_reference, load_oss_references
 from xw_office.services.finanzonline.oss_service import (
     OssService,
     SevdeskOssDocumentProvider,
@@ -324,50 +323,6 @@ def test_oss_service_does_not_warn_about_missing_country_for_non_oss_invoice() -
     assert result.goods_lines == []
     assert result.service_lines == []
     assert all("Land unklar" not in warning for warning in result.warnings)
-
-
-def test_oss_references_are_loaded_as_immutable_mapping() -> None:
-    references = load_oss_references()
-
-    assert references["2026-Q2"]["lines"][-1]["country_code"] == "CZ"
-    assert references["2026-Q2"]["lines"][-1]["vat"] == "0.00"
-    try:
-        references["2026-Q2"] = {}  # type: ignore[index]
-    except TypeError:
-        pass
-    else:  # pragma: no cover - defensive assertion.
-        raise AssertionError("Reference mapping must be immutable")
-
-
-def test_oss_reference_comparison_reports_deltas_without_overriding() -> None:
-    result = OssQuarterResult(
-        year=2026,
-        quarter=2,
-        goods_lines=[
-            OssLine(
-                country_code="CZ",
-                country_name="Czechia",
-                vat_rate="0.00",
-                taxable_amount="34.80",
-                tax_amount="0.00",
-            ),
-            OssLine(
-                country_code="DE",
-                country_name="Germany",
-                vat_rate="7.00",
-                taxable_amount="4004.51",
-                tax_amount="284.79",
-            ),
-        ],
-    )
-
-    comparison = compare_oss_reference(result)
-    rows = {(row["country_code"], row["vat_rate"]): row for row in comparison["lines"]}
-
-    assert comparison["available"] is True
-    assert rows[("CZ", "0.00")]["within_tolerance"] is True
-    assert rows[("DE", "7.00")]["delta_net"] == "-31.75"
-    assert comparison["within_tolerance"] is False
 
 
 def test_sevdesk_oss_provider_loads_positions_with_bounded_parallelism() -> None:

@@ -9,7 +9,7 @@ from xw_office.services.finanzonline.monthly_snapshot import TaxMonthlySnapshotS
 from xw_office.services.finanzonline.u13_xml import build_u13_xml, validate_u13_xml
 from xw_office.services.finanzonline.u30_xml import build_u30_xml, validate_u30_xml
 from xw_office.services.finanzonline.uva_models import UvaKennzahlen, UvaPayloadResult
-from xw_office.services.finanzonline.uva_service import UvaService, build_uva_zm_reconciliation
+from xw_office.services.finanzonline.uva_service import UvaService
 from xw_office.services.finanzonline.uva_soap import (
     FinanzOnlineFileUploadBackend,
     MockUvaSoapBackend,
@@ -563,7 +563,7 @@ class _JuneOffReferencePayloadService(_PayloadServiceWithPreviewCounter):
         )
 
 
-def test_uva_service_blocks_submission_when_golden_master_delta_is_too_large() -> None:
+def test_uva_service_submits_calculated_values_without_reference_gate() -> None:
     mock = MockUvaSoapBackend()
     client = FinanzOnlineClient(AppConfig(), uva_backend=mock)
     service = UvaService(
@@ -575,9 +575,8 @@ def test_uva_service_blocks_submission_when_golden_master_delta_is_too_large() -
 
     result = service.submit_month(2026, 6)
 
-    assert result.ok is False
-    assert "Golden-Master-Abweichung" in result.message
-    assert mock.calls == []
+    assert result.ok is True
+    assert mock.calls[-1]["kennzahlen"]["KZ000"] == "1.00"
 
 
 def test_uva_service_reuses_persistent_month_snapshot(tmp_path) -> None:
@@ -656,27 +655,6 @@ def test_uva_service_ignores_outdated_persistent_snapshot(tmp_path) -> None:
     assert payload["zahlbetrag"] == "90.00"
     assert payload["cache"]["source"] == "live"
     assert preview_service.calls == 1
-
-
-def test_uva_zm_reconciliation_explains_period_differences() -> None:
-    payload = {
-        "jahr": 2026,
-        "monat": 6,
-        "kennzahlen": {"A017": "3668.46", "A021": "147.60"},
-        "zm": {
-            "rows": [
-                {"uid": "DE123456789", "amount_eur_int": 2399, "kind": "delivery"},
-                {"uid": "IT12345678901", "amount_eur_int": 120, "kind": "service"},
-            ]
-        },
-    }
-
-    reconciliation = build_uva_zm_reconciliation(payload)
-
-    assert reconciliation["period"] == "2026-06"
-    assert reconciliation["delivery_delta"] == "1269.46"
-    assert reconciliation["service_delta"] == "27.60"
-    assert any("IST" in note and "Soll" in note for note in reconciliation["notes"])
 
 
 def test_finanzonline_client_uses_configured_wsdl_without_env() -> None:

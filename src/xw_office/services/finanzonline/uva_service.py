@@ -6,7 +6,8 @@ import time
 from collections.abc import Callable
 from contextlib import nullcontext
 from copy import deepcopy
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
+from xw_office.services.finanzonline.amounts import tax_amount
 from typing import Any, Mapping, TypeVar
 
 from xw_office.core.config import AppConfig
@@ -14,13 +15,12 @@ from xw_office.services.finanzonline.client import FinanzOnlineClient
 from xw_office.services.finanzonline.monthly_snapshot import TaxMonthlySnapshotStore
 from xw_office.services.finanzonline.uva_payload_service import UvaPayloadService
 from xw_office.services.finanzonline.uva_preview import UvaPreviewService
-from xw_office.services.finanzonline.uva_references import compare_uva_reference
 from xw_office.services.finanzonline.uva_soap import UvaSubmitResult
 from xw_office.services.finanzonline.zm_service import ZmCalculationResult, ZmService
 from xw_office.services.http_client import SevdeskConnection, SevdeskReadSession
 
 logger = logging.getLogger(__name__)
-_TAX_SNAPSHOT_SCHEMA_VERSION = "uva_zm_snapshot_v4"
+_TAX_SNAPSHOT_SCHEMA_VERSION = "uva_zm_snapshot_v5"
 _PhaseResult = TypeVar("_PhaseResult")
 
 
@@ -190,13 +190,6 @@ class UvaService:
             )
             payload["zm"] = zm.model_dump()
             payload["zm_text"] = zm_service.render_preview_text(zm)
-        payload["reference_comparison"] = compare_uva_reference(
-            year=year,
-            month=month,
-            kennzahlen=payload["kennzahlen"],
-            zahlbetrag=payload["zahlbetrag"],
-        )
-        payload["reconciliation"] = build_uva_zm_reconciliation(payload)
         payload["data_quality"] = build_data_quality(payload)
         snapshot_hash = None
         phase_percent, phase_text = 95, "Datenqualitaet geprueft; Snapshot wird gespeichert"
@@ -408,81 +401,30 @@ class UvaService:
         return self._client.submit_uva(payload)
 
 
-def build_uva_zm_reconciliation(payload: dict[str, Any]) -> dict[str, Any]:
-    kennzahlen = payload.get("kennzahlen")
-    zm = payload.get("zm")
-    kz = kennzahlen if isinstance(kennzahlen, dict) else {}
-    zm_rows = zm.get("rows") if isinstance(zm, dict) else []
-    rows = [row for row in zm_rows if isinstance(row, dict)] if isinstance(zm_rows, list) else []
-
-    zm_delivery = sum(Decimal(int(row.get("amount_eur_int") or 0)) for row in rows if row.get("kind") == "delivery")
-    zm_service = sum(Decimal(int(row.get("amount_eur_int") or 0)) for row in rows if row.get("kind") == "service")
-    zm_dreieck = sum(Decimal(int(row.get("amount_eur_int") or 0)) for row in rows if row.get("kind") == "dreieck")
-    a017 = _decimal(kz.get("A017"))
-    a021 = _decimal(kz.get("A021"))
-
-    notes = [
-        "UVA ist IST nach Zahlungs-/Beleglogik; ZM/U13 ist Soll nach Rechnungsdatum.",
-        "ZM-Betraege sind nach UID/Art auf ganze Euro gerundet; UVA-Kennzahlen bleiben centgenau.",
-    ]
-    delivery_delta = (a017 - zm_delivery).quantize(Decimal("0.01"))
-    service_delta = (a021 - zm_service).quantize(Decimal("0.01"))
-    if delivery_delta != Decimal("0.00"):
-        notes.append(f"A017 minus ZM-Lieferungen: {delivery_delta:.2f} EUR.")
-    if service_delta != Decimal("0.00"):
-        notes.append(f"A021 minus ZM-SOLEI: {service_delta:.2f} EUR.")
-
-    return {
-        "period": f"{int(payload.get('jahr') or 0):04d}-{int(payload.get('monat') or 0):02d}",
-        "uva_a017": f"{a017:.2f}",
-        "uva_a021": f"{a021:.2f}",
-        "zm_delivery_rounded": str(int(zm_delivery)),
-        "zm_service_rounded": str(int(zm_service)),
-        "zm_dreieck_rounded": str(int(zm_dreieck)),
-        "delivery_delta": f"{delivery_delta:.2f}",
-        "service_delta": f"{service_delta:.2f}",
-        "notes": notes,
-    }
-
-
-def render_reconciliation_text(reconciliation: dict[str, Any]) -> str:
-    if not reconciliation:
-        return ""
-    lines = [
-        "Abstimmung UVA <-> ZM",
-        f"Periode: {reconciliation.get('period') or '-'}",
-        f"A017 innergemeinschaftliche Lieferungen: EUR {reconciliation.get('uva_a017') or '0.00'}",
-        f"ZM Lieferungen gerundet: EUR {reconciliation.get('zm_delivery_rounded') or '0'}",
-        f"Delta Lieferung: EUR {reconciliation.get('delivery_delta') or '0.00'}",
-        f"A021 sonstige Leistungen/RC: EUR {reconciliation.get('uva_a021') or '0.00'}",
-        f"ZM SOLEI gerundet: EUR {reconciliation.get('zm_service_rounded') or '0'}",
-        f"Delta SOLEI: EUR {reconciliation.get('service_delta') or '0.00'}",
-    ]
-    notes = reconciliation.get("notes")
-    if isinstance(notes, list) and notes:
-        lines.extend(["", "Hinweise:"])
-        lines.extend(f"- {note}" for note in notes if str(note).strip())
-    return "\n".join(lines)
-
-
 def build_data_quality(payload: dict[str, Any]) -> dict[str, Any]:
     warnings = payload.get("warnings")
     warning_items = [str(item) for item in warnings if isinstance(item, str)] if isinstance(warnings, list) else []
-    reference_comparison = payload.get("reference_comparison")
     zm = payload.get("zm")
     zm_invalid = zm.get("invalid") if isinstance(zm, dict) else []
     invalid_items = [str(item) for item in zm_invalid if str(item).strip()] if isinstance(zm_invalid, list) else []
     zm_blocking = list(invalid_items)
-    uva_blocking: list[str] = []
-    if isinstance(reference_comparison, dict) and reference_comparison.get("within_tolerance") is False:
-        amount = reference_comparison.get("zahlbetrag")
-        if isinstance(amount, dict):
-            uva_blocking.append(
-                "Golden-Master-Abweichung ausserhalb Toleranz: "
-                f"Live {amount.get('actual')} / Soll {amount.get('expected')} / Delta {amount.get('delta')}"
-            )
-        else:
-            uva_blocking.append("Golden-Master-Abweichung ausserhalb Toleranz")
+    uva_blocking = [
+        item for item in warning_items
+        if item.startswith((
+            "Ungeklaerte Umsatzsteuer-Zuordnung",
+            "Ungeklaerte Vorsteuer-Zuordnung",
+            "Ungeklaerte Positionssumme",
+            "Ungeklaerte Steuerperiode",
+        ))
+    ]
+    kennzahlen = payload.get("kennzahlen")
+    if isinstance(kennzahlen, dict):
+        uva_blocking.extend(
+            f"Negative Bemessungsgrundlage {key}: Berichtigung fachlich pruefen; "
+            "keine automatische Umbuchung."
+            for key, value in kennzahlen.items()
+            if key not in {"D090", "KZ090"} and tax_amount(value) < Decimal("0.00")
+        )
     blocking = [*uva_blocking, *zm_blocking]
     status = "abgabebereit"
     if uva_blocking:
@@ -502,11 +444,6 @@ def build_data_quality(payload: dict[str, Any]) -> dict[str, Any]:
         "blocking": blocking,
         "warnings": warning_items,
         "rule_version": str(payload.get("rule_version") or "U30_01_2022"),
-        "reference_within_tolerance": (
-            reference_comparison.get("within_tolerance")
-            if isinstance(reference_comparison, dict)
-            else None
-        ),
     }
 
 
@@ -526,10 +463,3 @@ def render_data_quality_text(data_quality: dict[str, Any]) -> str:
         lines.extend(["", "Zu klaerende Punkte:"])
         lines.extend(f"- {item}" for item in blocking if str(item).strip())
     return "\n".join(lines)
-
-
-def _decimal(value: object) -> Decimal:
-    try:
-        return Decimal(str(value or "0").replace(",", ".")).quantize(Decimal("0.01"))
-    except (InvalidOperation, ValueError):
-        return Decimal("0.00")

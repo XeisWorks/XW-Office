@@ -6,13 +6,15 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Literal, Mapping, Protocol
 
 from pydantic import BaseModel, Field
 from stdnum.eu import vat  # type: ignore[import-untyped]
 
 from xw_office.services.http_client import SevdeskConnection
+from xw_office.services.finanzonline.source_reads import load_tax_resource
+from xw_office.services.finanzonline.amounts import tax_amount
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +98,13 @@ class SevdeskZmInvoiceProvider:
             timestamp_end_key="endDate",
         )
 
+    def load_revenue_vouchers(self, year: int, month: int) -> list[dict[str, Any]]:
+        rows = load_tax_resource(
+            self._connection, "/Voucher",
+            params={"year": str(year), "month": str(month), "showAll": "true"},
+        )
+        return [row for row in rows if str(row.get("creditDebit") or "").upper() == "D"]
+
     def load_credit_notes(self, year: int, month: int) -> list[dict[str, Any]]:
         return self._load_dated_resource(
             "/CreditNote",
@@ -120,32 +129,18 @@ class SevdeskZmInvoiceProvider:
     ) -> list[dict[str, Any]]:
         start, end = _month_bounds(year, month)
         start_ts, end_ts = _month_timestamp_bounds(year, month)
-        documents: list[dict[str, Any]] = []
-        offset = 0
-        page = 0
-        while page < self._max_pages:
-            params = {
+        return load_tax_resource(
+            self._connection, path,
+            params={
                 "embed": "contact",
-                "limit": self._page_size,
-                "offset": offset,
                 date_from_key: start,
                 date_to_key: end,
                 timestamp_start_key: start_ts,
                 timestamp_end_key: end_ts,
                 "showAll": "true",
-            }
-            response = self._connection.get(path, params=params)
-            payload = response.json()
-            objects = payload.get("objects") if isinstance(payload, dict) else None
-            batch = [item for item in objects if isinstance(item, dict)] if isinstance(objects, list) else []
-            if not batch:
-                break
-            documents.extend(batch)
-            if len(batch) < self._page_size:
-                break
-            offset += self._page_size
-            page += 1
-        return documents
+            },
+            page_size=self._page_size, max_pages=self._max_pages,
+        )
 
     def enrich_contact(self, invoice: dict[str, Any]) -> dict[str, Any]:
         contact = invoice.get("contact")
@@ -188,16 +183,13 @@ class SevdeskZmInvoiceProvider:
         elif resource == "CreditNote":
             path = "/CreditNotePos"
             params.update({"creditNote[id]": doc_id, "creditNote[objectName]": "CreditNote"})
+        elif resource == "Voucher":
+            path = "/VoucherPos"
+            params.update({"voucher[id]": doc_id, "voucher[objectName]": "Voucher"})
         else:
             self._position_cache[cache_key] = []
             return []
-        try:
-            payload = self._connection.get(path, params=params).json()
-            objects = payload.get("objects") if isinstance(payload, dict) else []
-            positions = [item for item in objects if isinstance(item, dict)] if isinstance(objects, list) else []
-        except Exception as exc:
-            logger.debug("ZM position lookup failed for %s/%s: %s", resource, doc_id, exc)
-            positions = []
+        positions = load_tax_resource(self._connection, path, params=params)
         self._position_cache[cache_key] = [dict(item) for item in positions]
         return positions
 
@@ -220,7 +212,11 @@ class ZmService:
         invoices = self._provider.load_invoices(year, month)
         load_credit_notes = getattr(self._provider, "load_credit_notes", None)
         credit_notes = load_credit_notes(year, month) if callable(load_credit_notes) else []
-        result = ZmCalculationResult(year=year, month=month, considered=len(invoices) + len(credit_notes))
+        load_vouchers = getattr(self._provider, "load_revenue_vouchers", None)
+        vouchers = load_vouchers(year, month) if callable(load_vouchers) else []
+        result = ZmCalculationResult(
+            year=year, month=month, considered=len(invoices) + len(credit_notes) + len(vouchers)
+        )
         buckets: dict[tuple[str, ZmKind], _Bucket] = {}
 
         def collect_document(
@@ -264,7 +260,8 @@ class ZmService:
                 document = self._provider.enrich_contact(document)
             contact_raw = document.get("contact")
             contact: dict[str, Any] = contact_raw if isinstance(contact_raw, dict) else {}
-            customer = str(contact.get("name") or document.get("contactName") or "").strip()
+            customer = str(contact.get("name") or document.get("contactName")
+                           or document.get("supplierNameAtSave") or "").strip()
             document_number = str(
                 document.get("invoiceNumber")
                 or document.get("creditNoteNumber")
@@ -274,8 +271,12 @@ class ZmService:
             ).strip()
             document_id = _ref_id(document.get("id"))
             document_key = f"{resource}:{document_id or document_number}"
-            uid_raw = str((uid_overrides or {}).get(document_key) or contact.get("vatNumber") or "").strip()
+            uid_raw = str((uid_overrides or {}).get(document_key) or contact.get("vatNumber")
+                          or (document.get("vatNumber") if resource == "Voucher" else "") or "").strip()
             uid = normalize_uid(uid_raw)
+            if uid.startswith("AT") and all(kind == "service" for kind, _ in facts):
+                result.selected -= 1
+                return
             if not uid or not is_valid_uid(uid):
                 label = f"{customer or 'Unbekannter Kunde'}"
                 if document_number:
@@ -320,6 +321,8 @@ class ZmService:
                 date_key="creditNoteDate",
                 amount_sign=Decimal("-1.00"),
             )
+        for voucher in vouchers:
+            collect_document(voucher, resource="Voucher", date_key="voucherDate", amount_sign=Decimal("1.00"))
 
         rows: list[ZmRow] = []
         for (uid, kind), bucket in sorted(buckets.items()):
@@ -384,9 +387,9 @@ def is_valid_uid(uid: str) -> bool:
 
 
 def pick_net(invoice: dict[str, Any]) -> Decimal:
-    for key in ("sumNet", "sumNetAccounting"):
+    for key in ("sumNetAccounting", "sumNet"):
         value = invoice.get(key)
-        if value not in (None, "", 0, "0", "0.0", "0.00"):
+        if value not in (None, ""):
             return _to_decimal(value)
     return Decimal("0.00")
 
@@ -431,9 +434,9 @@ def _positions_match_document_total(document: dict[str, Any], positions: list[di
 
 
 def _pick_position_net(position: dict[str, Any]) -> Decimal:
-    for key in ("sumNet", "sumNetAccounting", "amountNet", "priceNet", "priceNetAccounting", "net"):
+    for key in ("sumNetAccounting", "sumNet", "amountNet", "priceNet", "priceNetAccounting", "net"):
         value = position.get(key)
-        if value not in (None, "", 0, "0", "0.0", "0.00"):
+        if value not in (None, ""):
             return _to_decimal(value)
     quantity = _to_decimal(position.get("quantity") or 1)
     price = _to_decimal(position.get("price") or 0)
@@ -503,14 +506,4 @@ def _parse_date(value: object) -> datetime | None:
 
 
 def _to_decimal(value: object) -> Decimal:
-    if value in (None, ""):
-        return Decimal("0.00")
-    if isinstance(value, Decimal):
-        return value.quantize(_DECIMAL_2, rounding=ROUND_HALF_UP)
-    try:
-        return Decimal(str(value).strip().replace(" ", "").replace(",", ".")).quantize(
-            _DECIMAL_2,
-            rounding=ROUND_HALF_UP,
-        )
-    except (InvalidOperation, ValueError):
-        return Decimal("0.00")
+    return tax_amount(value)

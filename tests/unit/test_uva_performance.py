@@ -28,6 +28,12 @@ class _TaxSource:
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         self.calls[path] += 1
+        if path == "/CheckAccountTransactionLog":
+            return httpx.Response(200, json={"objects": [{
+                "object": {"id": "old", "objectName": "Invoice"},
+                "amountPaid": self.payment, "bookingDate": "2026-09-10",
+                "checkAccountTransaction": {"id": "tx"},
+            }]})
         if path == "/Invoice":
             return httpx.Response(200, json={"objects": [
                 {
@@ -116,7 +122,7 @@ def test_run_reuse_preserves_full_tax_output_and_reduces_reads() -> None:
     assert baseline_calls["/InvoicePos"] == 3
     assert sum(source.calls.values()) < sum(baseline_calls.values())
     assert source.calls["/Contact/domestic"] == 0
-    assert optimized["cache"]["reused_requests"] == 1
+    assert optimized["cache"]["reused_requests"] == 2
     assert optimized["cache"]["source_requests"] == sum(source.calls.values())
     assert set(optimized["cache"]["phase_seconds"]) == {"preview", "kennzahlen", "zm"}
     assert [value for value, _ in progress] == sorted(value for value, _ in progress)
@@ -150,7 +156,7 @@ def test_refresh_reloads_payment_positions_and_contact_caches() -> None:
     assert refreshed["kennzahlen"]["C060"] == "10.00"
     assert source.calls["/InvoicePos"] == 4
     assert source.calls["/Contact/eu-contact"] == 2
-    assert source.calls["/Invoice/old/getCheckAccountTransactionLogs"] == 2
+    assert source.calls["/CheckAccountTransactionLog"] == 2
     assert source.calls["/TaxSet/vat"] == 2
     assert source.calls["/VoucherPos"] == 2
 

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from pydantic import BaseModel, Field
+from xw_office.services.finanzonline.amounts import tax_amount
 
 _DECIMAL_2 = Decimal("0.01")
-_RATIO_QUANT = Decimal("0.0001")
 _EPS = Decimal("0.005")
 _PAID_DATE_KEYS = (
     "xw_payment_date",
@@ -35,6 +35,8 @@ class UvaSelectionStats(BaseModel):
     payment_out_of_period: int = 0
     missing_payment_evidence: int = 0
     future_document_ignored: int = 0
+    accrual_selected: int = 0
+    accrual_out_of_period: int = 0
 
 
 class UvaSelectionResult(BaseModel):
@@ -93,6 +95,48 @@ class UvaDocumentSelector:
             payment_in_period = _is_in_period(payment_date, year, month)
             fallback_in_period = _is_in_period(fallback_date, year, month)
             label = _doc_label(document)
+            if reject_future_documents and _purchase_uses_accrual(document):
+                tax_date = _purchase_tax_date(document, fallback_date)
+                if tax_date is not None:
+                    status = str(document.get("status") or "").strip().lower()
+                    if status in {"draft", "entwurf"} or (status.isdigit() and int(status) < 100):
+                        result.stats.draft_or_open_ignored += 1
+                        result.warnings.append(f"Entwurfs-Eingangsbeleg ignoriert: {label}")
+                        continue
+                    if _is_cancelled(document):
+                        result.stats.cancelled_ignored += 1
+                        continue
+                    if _is_in_period(tax_date, year, month):
+                        selected.append(dict(document))
+                        result.stats.selected += 1
+                        result.stats.accrual_selected += 1
+                        if "REVERSE CHARGE" in str(document.get("taxText") or "").upper() and (
+                            payment_date is not None and payment_date.date() < tax_date.date()
+                            and (payment_date.year, payment_date.month) != (tax_date.year, tax_date.month)
+                        ):
+                            result.warnings.append(
+                                f"Ungeklaerte Steuerperiode: RC-Vorauszahlung gesondert pruefen: {label}"
+                            )
+                    else:
+                        result.stats.accrual_out_of_period += 1
+                    continue
+                if label != "unbekannt":
+                    result.stats.missing_payment_evidence += 1
+                    result.warnings.append(f"Ungeklaerte Steuerperiode: Leistungs-/Belegdatum fehlt: {label}")
+                    continue
+            if reject_future_documents and payment_date is not None and fallback_date is not None:
+                if fallback_date.date() > payment_date.date():
+                    payment_date = fallback_date
+                    payment_in_period = _is_in_period(payment_date, year, month)
+            known_paid = next(
+                (document[key] for key in ("xw_paid_amount", "xw_period_paid_amount")
+                 if document.get(key) not in (None, "")),
+                None,
+            )
+            if known_paid is not None and _to_decimal(known_paid) == Decimal("0.00"):
+                result.stats.payment_out_of_period += 1
+                result.warnings.append(f"Keine steuerwirksame Periodenzahlung: {label}")
+                continue
 
             # sevDesk may expose a payDate that precedes the voucher itself. Such
             # a future-dated purchase cannot belong to an earlier UVA period,
@@ -216,6 +260,37 @@ def _doc_label(document: dict[str, Any]) -> str:
     return "unbekannt"
 
 
+def _purchase_uses_accrual(document: dict[str, Any]) -> bool:
+    text = str(document.get("taxText") or "").upper()
+    tax_rule = document.get("taxRule")
+    rule_id = str(tax_rule.get("id") if isinstance(tax_rule, dict) else tax_rule or "")
+    return (
+        "REVERSE CHARGE" in text
+        or ("INNERGEMEINSCHAFT" in text and "LIEFER" in text)
+        or str(document.get("taxType") or "").lower() == "eu"
+        or rule_id in {"3", "5", "21"}
+    )
+
+
+def _purchase_tax_date(document: dict[str, Any], invoice_date: datetime | None) -> datetime | None:
+    performance_date = _first_date(document, ("deliveryDate",)) or invoice_date
+    if performance_date is None:
+        return None
+    text = str(document.get("taxText") or "").upper()
+    tax_rule = document.get("taxRule")
+    rule_id = str(tax_rule.get("id") if isinstance(tax_rule, dict) else tax_rule or "")
+    if "REVERSE CHARGE" in text or rule_id in {"5", "21"}:
+        return performance_date
+    if invoice_date is None:
+        return None
+    fifteenth = datetime(
+        performance_date.year + performance_date.month // 12,
+        performance_date.month % 12 + 1, 15,
+    )
+    tax_date = max(performance_date.date(), min(invoice_date.date(), fifteenth.date()))
+    return datetime.combine(tax_date, datetime.min.time())
+
+
 def _is_credit_note(document: dict[str, Any]) -> bool:
     return any(
         key in document
@@ -246,7 +321,7 @@ def _is_open_or_draft(document: dict[str, Any]) -> bool:
 
 
 def _scale_document_to_paid_ratio(document: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    gross = _first_decimal(document, "sumGross", "sumGrossAccounting", "sumGrossForeignCurrency")
+    gross = _first_decimal(document, "sumGrossAccounting", "sumGross", "sumGrossForeignCurrency")
     if abs(gross) <= _EPS:
         return dict(document), False
 
@@ -254,8 +329,8 @@ def _scale_document_to_paid_ratio(document: dict[str, Any]) -> tuple[dict[str, A
     if paid_amount <= _EPS or paid_amount >= (abs(gross) - _EPS):
         return dict(document), False
 
-    ratio = (paid_amount / abs(gross)).quantize(_RATIO_QUANT, rounding=ROUND_HALF_UP)
-    if ratio <= Decimal("0.0000") or ratio >= Decimal("0.9999"):
+    ratio = paid_amount / abs(gross)
+    if ratio <= Decimal("0") or ratio >= Decimal("1"):
         return dict(document), False
 
     scaled = dict(document)
@@ -276,7 +351,7 @@ def _scale_document_to_paid_ratio(document: dict[str, Any]) -> tuple[dict[str, A
             _scale_position_to_ratio(position, ratio) if isinstance(position, dict) else position
             for position in positions
         ]
-    scaled["xw_paid_ratio"] = _fmt(ratio)
+    scaled["xw_paid_ratio"] = str(ratio)
     return scaled, True
 
 
@@ -407,15 +482,7 @@ def _first_decimal(document: dict[str, Any], *keys: str) -> Decimal:
 
 
 def _to_decimal(value: object) -> Decimal:
-    if value in (None, ""):
-        return Decimal("0.00")
-    if isinstance(value, Decimal):
-        return value.quantize(_DECIMAL_2, rounding=ROUND_HALF_UP)
-    try:
-        text = str(value).strip().replace(" ", "").replace(",", ".")
-        return Decimal(text).quantize(_DECIMAL_2, rounding=ROUND_HALF_UP)
-    except (InvalidOperation, ValueError):
-        return Decimal("0.00")
+    return tax_amount(value)
 
 
 def _fmt(value: Decimal) -> str:

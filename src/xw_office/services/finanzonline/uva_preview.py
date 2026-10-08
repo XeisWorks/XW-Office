@@ -13,8 +13,19 @@ from pydantic import BaseModel, Field
 from xw_office.services.finanzonline.uva_selection import (
     UvaDocumentSelector,
     UvaSelectionStats,
+    _purchase_tax_date,
+    _purchase_uses_accrual,
 )
 from xw_office.services.http_client import SevdeskConnection
+from xw_office.services.finanzonline.source_reads import load_tax_resource
+from xw_office.services.finanzonline.payment_evidence import SevdeskPaymentEvidence, parse_source_date as _parse_date
+from xw_office.services.finanzonline.amounts import (
+    tax_amount,
+    document_amounts as _extract_amounts,
+    position_amounts as _extract_position_amounts,
+    position_rate as _extract_position_rate,
+)
+from xw_office.services.finanzonline.zm_service import is_valid_uid, normalize_uid
 
 logger = logging.getLogger(__name__)
 
@@ -61,16 +72,6 @@ _PAYMENT_DATE_KEYS = (
 _SALES_DOCUMENT_DATE_KEYS = ("invoiceDate", "date")
 _CREDIT_NOTE_DOCUMENT_DATE_KEYS = ("creditNoteDate", "date")
 _PURCHASE_DOCUMENT_DATE_KEYS = ("voucherDate", "date")
-_PAYMENT_EVENT_DATE_KEYS = ("bookingDate", "valueDate", "entryDate", "date", "created", "create")
-_PAYMENT_EVENT_AMOUNT_KEYS = (
-    "amountPaid",
-    "assignedAmount",
-    "assignedAmountGross",
-    "paymentAmount",
-    "amount",
-    "value",
-    "sum",
-)
 _DOCUMENT_AMOUNT_KEYS = (
     "sumGross",
     "sumGrossAccounting",
@@ -151,6 +152,11 @@ class SevdeskUvaPreviewProvider:
         self._position_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self._tax_set_text_cache: dict[str, str] = {}
         self._voucher_period_cache: dict[tuple[int, int], list[dict[str, Any]]] = {}
+        self._payment_evidence = SevdeskPaymentEvidence(connection)
+
+    @property
+    def payment_warnings(self) -> list[str]:
+        return self._payment_evidence.warnings
 
     def clear_cache(self) -> None:
         """Start a fresh source read without losing reuse within the calculation."""
@@ -158,6 +164,11 @@ class SevdeskUvaPreviewProvider:
         self._position_cache.clear()
         self._tax_set_text_cache.clear()
         self._voucher_period_cache.clear()
+        self._payment_evidence.clear()
+
+    def prepare_payment_logs(self) -> None:
+        """Read complete assignment history once; keep per-document fallback."""
+        self._payment_evidence.prepare()
 
     def load_sales_documents(self, year: int, month: int) -> list[dict[str, Any]]:
         start_ts, end_ts = self._month_bounds(year, month)
@@ -250,10 +261,23 @@ class SevdeskUvaPreviewProvider:
         self._prime_tax_set_text_cache(docs)
         result: list[dict[str, Any]] = []
         for doc in docs:
-            enriched = self._enrich_payment_metadata("Voucher", doc, year, month)
+            credit_debit = str(doc.get("creditDebit") or "").upper().strip()
+            if credit_debit and credit_debit != "C":
+                continue
+            doc = dict(doc)
+            self._apply_tax_text_fallback(doc)
+            accrual = _purchase_uses_accrual(doc)
+            if accrual:
+                enriched = doc
+            else:
+                enriched = self._enrich_payment_metadata("Voucher", doc, year, month)
             payment_in_period = self._is_period_match(enriched, year, month, _PAYMENT_DATE_KEYS)
             document_in_period = self._is_period_match(enriched, year, month, _PURCHASE_DOCUMENT_DATE_KEYS)
-            if not payment_in_period and not document_in_period:
+            tax_date = _purchase_tax_date(
+                enriched, _parse_date(enriched.get("voucherDate") or enriched.get("date"))
+            ) if accrual else None
+            accrual_in_period = tax_date is not None and (tax_date.year, tax_date.month) == (year, month)
+            if not payment_in_period and not document_in_period and not accrual_in_period:
                 continue
             credit_debit = str(enriched.get("creditDebit") or "").upper().strip()
             if credit_debit and credit_debit != "C":
@@ -287,24 +311,10 @@ class SevdeskUvaPreviewProvider:
         return docs
 
     def _load_resource(self, path: str, *, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        result: list[dict[str, Any]] = []
-        offset = 0
-        page_count = 0
-        while page_count < self._max_pages:
-            query = {"limit": self._page_size, "offset": offset}
-            if params:
-                query.update(params)
-            response = self._connection.get(path, params=query)
-            payload = response.json()
-            objects = payload.get("objects")
-            if not isinstance(objects, list) or not objects:
-                break
-            result.extend(obj for obj in objects if isinstance(obj, dict))
-            page_count += 1
-            if len(objects) < self._page_size:
-                break
-            offset += self._page_size
-        return result
+        return load_tax_resource(
+            self._connection, path, params=params,
+            page_size=self._page_size, max_pages=self._max_pages,
+        )
 
     def _prepare_document(self, resource: str, document: dict[str, Any]) -> dict[str, Any]:
         prepared = dict(document)
@@ -394,19 +404,18 @@ class SevdeskUvaPreviewProvider:
         if tax_set_id in self._tax_set_text_cache:
             return self._tax_set_text_cache[tax_set_id]
         text = ""
-        try:
-            payload = self._connection.get(f"/TaxSet/{tax_set_id}").json()
-            obj = payload.get("objects", payload) if isinstance(payload, dict) else payload
-            if isinstance(obj, list):
-                obj = obj[0] if obj else {}
-            if isinstance(obj, dict):
-                for key in ("text", "taxText", "name", "displayName"):
-                    value = str(obj.get(key) or "").strip()
-                    if value:
-                        text = value
-                        break
-        except Exception as exc:
-            logger.debug("TaxSet lookup failed for %s: %s", tax_set_id, exc)
+        payload = self._connection.get(f"/TaxSet/{tax_set_id}").json()
+        obj = payload.get("objects", payload) if isinstance(payload, dict) else payload
+        if isinstance(obj, list):
+            obj = obj[0] if obj else {}
+        if isinstance(obj, dict):
+            for key in ("text", "taxText", "name", "displayName"):
+                value = str(obj.get(key) or "").strip()
+                if value:
+                    text = value
+                    break
+        if not text:
+            raise ValueError(f"UVA: Steuerzuordnung fuer TaxSet {tax_set_id} fehlt.")
         self._tax_set_text_cache[tax_set_id] = text
         return text
 
@@ -428,13 +437,7 @@ class SevdeskUvaPreviewProvider:
         else:
             self._position_cache[cache_key] = []
             return []
-        try:
-            payload = self._connection.get(path, params=params).json()
-            objects = payload.get("objects") if isinstance(payload, dict) else []
-            positions = [item for item in objects if isinstance(item, dict)] if isinstance(objects, list) else []
-        except Exception as exc:
-            logger.debug("Position lookup failed for %s/%s: %s", resource, doc_id, exc)
-            positions = []
+        positions = self._load_resource(path, params=params)
         self._position_cache[cache_key] = positions
         return positions
 
@@ -456,6 +459,10 @@ class SevdeskUvaPreviewProvider:
         start_ts, end_ts = self._month_bounds(year, month)
         period_start = datetime.fromtimestamp(start_ts) - timedelta(days=7)
         period_end = datetime.fromtimestamp(end_ts + 1) + timedelta(days=6)
+        period_end = max(
+            period_end,
+            datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1),
+        )
         base_params: dict[str, Any] = {
             "updateAfter": int(period_start.timestamp()),
             "updateBefore": int(period_end.timestamp()) - 1,
@@ -483,7 +490,7 @@ class SevdeskUvaPreviewProvider:
                     continue
                 doc_id = str(doc.get("id") or "").strip()
                 if not doc_id:
-                    continue
+                    raise ValueError("UVA: Beleg ohne eindeutige ID in den Quelldaten.")
                 base = dict(merged.get(doc_id, {}))
                 for key, value in doc.items():
                     if value not in (None, "", [], {}):
@@ -498,17 +505,42 @@ class SevdeskUvaPreviewProvider:
         year: int,
         month: int,
     ) -> dict[str, Any]:
-        if self._is_period_match(document, year, month, _PAYMENT_DATE_KEYS):
+        expected_paid = next(
+            (abs(_to_decimal(document[key])) for key in (
+                "paidAmount", "sumPaid", "sumPaidAccounting", "paidValue",
+            ) if document.get(key) not in (None, "")),
+            None,
+        )
+        if expected_paid == Decimal("0.00"):
+            expected_paid = None
+        doc_id = document.get("id")
+        bulk_exists = (resource, str(doc_id)) in self._payment_evidence.logs
+        fully_paid = str(document.get("status") or "").lower() in {"300", "1000", "paid", "bezahlt"}
+        if expected_paid is None and fully_paid and bulk_exists:
+            expected_paid = abs(_extract_amounts(document)[0])
+        if (
+            self._is_period_match(document, year, month, _PAYMENT_DATE_KEYS)
+            and expected_paid is None
+            and fully_paid
+            and (not self._payment_evidence.complete or not bulk_exists)
+        ):
             return document
         if not _looks_paid_like(document):
             return document
-        doc_id = document.get("id")
         if doc_id in (None, ""):
             return document
 
         cache_key = (resource, str(doc_id), year, month)
         if cache_key not in self._payment_cache:
-            self._payment_cache[cache_key] = self._load_payment_metadata(resource, str(doc_id), year, month)
+            self._payment_cache[cache_key] = self._load_payment_metadata(
+                resource, str(doc_id), year, month, expected_paid_amount=expected_paid,
+                gross_amount=abs(_extract_amounts(document)[0]),
+                evidence_date=(
+                    _parse_date(document.get("voucherDate") or document.get("date"))
+                    if resource == "Voucher" and str(document.get("creditDebit") or "").upper() == "C"
+                    else None
+                ),
+            )
         payment_date, paid_amount = self._payment_cache[cache_key]
         if payment_date is None and paid_amount is None:
             return document
@@ -520,48 +552,16 @@ class SevdeskUvaPreviewProvider:
             enriched["xw_paid_amount"] = paid_amount
         return enriched
 
-    def _load_payment_metadata(self, resource: str, doc_id: str, year: int, month: int) -> tuple[str | None, str | None]:
-        events: list[dict[str, Any]] = []
-        for suffix in ("getCheckAccountTransactionLogs", "getCheckAccountTransactions"):
-            try:
-                response = self._connection.get(f"/{resource}/{doc_id}/{suffix}")
-                payload = response.json()
-            except Exception as exc:
-                logger.debug("Payment metadata lookup failed for %s/%s via %s: %s", resource, doc_id, suffix, exc)
-                continue
-            objects = payload.get("objects") if isinstance(payload, dict) else None
-            if isinstance(objects, list):
-                events.extend(item for item in objects if isinstance(item, dict))
-
-        if not events:
-            return None, None
-
-        any_payment_date: datetime | None = None
-        period_payment_date: datetime | None = None
-        period_paid_amount = Decimal("0.00")
-        seen_transaction_ids: set[str] = set()
-
-        for event in events:
-            tx_id = _extract_payment_event_tx_id(event)
-            if tx_id is not None:
-                if tx_id in seen_transaction_ids:
-                    continue
-                seen_transaction_ids.add(tx_id)
-            event_date = _extract_payment_event_date(event)
-            if event_date is not None and (any_payment_date is None or event_date > any_payment_date):
-                any_payment_date = event_date
-            if event_date is None or event_date.year != year or event_date.month != month:
-                continue
-            if period_payment_date is None or event_date > period_payment_date:
-                period_payment_date = event_date
-            amount = _extract_payment_event_amount(event)
-            if amount > Decimal("0.00"):
-                period_paid_amount += amount
-
-        payment_date = period_payment_date or any_payment_date
-        payment_date_text = payment_date.isoformat() if payment_date is not None else None
-        paid_amount_text = _format_plain(period_paid_amount) if period_paid_amount > Decimal("0.00") else None
-        return payment_date_text, paid_amount_text
+    def _load_payment_metadata(
+        self, resource: str, doc_id: str, year: int, month: int,
+        *, expected_paid_amount: Decimal | None = None,
+        gross_amount: Decimal | None = None,
+        evidence_date: datetime | None = None,
+    ) -> tuple[str | None, str | None]:
+        return self._payment_evidence.load(
+            resource, doc_id, year, month, expected_paid_amount=expected_paid_amount,
+            gross_amount=gross_amount, evidence_date=evidence_date,
+        )
 
     @staticmethod
     def _is_period_match(
@@ -592,18 +592,24 @@ class UvaPreviewService:
     def build_preview(self, year: int, month: int) -> UvaPreviewResult:
         if isinstance(self._provider, SevdeskUvaPreviewProvider):
             self._provider.clear_cache()
+            self._provider.prepare_payment_logs()
         sales_docs = self._provider.load_sales_documents(year, month) if self._provider is not None else []
         purchase_docs = self._provider.load_purchase_documents(year, month) if self._provider is not None else []
         sales_selection = self._selector.select_sales_documents(year, month, sales_docs)
         purchase_selection = self._selector.select_purchase_documents(year, month, purchase_docs)
+        warnings = [*sales_selection.warnings, *purchase_selection.warnings]
+        if isinstance(self._provider, SevdeskUvaPreviewProvider):
+            warnings.extend(self._provider.payment_warnings)
+        sales = self._build_section(sales_selection.documents, is_purchase=False, warnings=warnings)
+        input_tax = self._build_section(purchase_selection.documents, is_purchase=True, warnings=warnings)
         return UvaPreviewResult(
             year=year,
             month=month,
-            sales=self._build_section(sales_selection.documents, is_purchase=False),
-            input_tax=self._build_section(purchase_selection.documents, is_purchase=True),
+            sales=sales,
+            input_tax=input_tax,
             sales_stats=sales_selection.stats,
             input_tax_stats=purchase_selection.stats,
-            warnings=[*sales_selection.warnings, *purchase_selection.warnings],
+            warnings=warnings,
         )
 
     def render_preview_text(self, preview: UvaPreviewResult) -> str:
@@ -623,14 +629,42 @@ class UvaPreviewService:
             lines.extend(f"- {warning}" for warning in preview.warnings)
         return "\n".join(lines).strip()
 
-    def _build_section(self, documents: list[dict[str, Any]], *, is_purchase: bool) -> UvaPreviewSection:
+    def _build_section(
+        self,
+        documents: list[dict[str, Any]],
+        *,
+        is_purchase: bool,
+        warnings: list[str] | None = None,
+    ) -> UvaPreviewSection:
         groups: OrderedDict[str, dict[str, Decimal]] = OrderedDict()
         total_vat = Decimal("0.00")
         total_gross = Decimal("0.00")
         total_net = Decimal("0.00")
 
         for document in documents:
-            for label, gross_amount, net_amount, vat_amount in _iter_preview_items(document, is_purchase=is_purchase):
+            items = _iter_preview_items(document, is_purchase=is_purchase)
+            if warnings is not None and document.get("xw_positions"):
+                source_gross, source_net, source_vat = _extract_amounts(document)
+                position_gross = sum((item[1] for item in items), Decimal(0))
+                position_net = sum((item[2] for item in items), Decimal(0))
+                position_vat = sum((item[3] for item in items), Decimal(0))
+                tolerance = max(Decimal("0.05"), Decimal("0.01") * len(items))
+                if source_gross != Decimal(0) and any(
+                    abs(source - calculated) > tolerance
+                    for source, calculated in (
+                        (source_net, position_net),
+                        (source_vat, position_vat),
+                    )
+                ):
+                    label = str(document.get("invoiceNumber") or document.get("voucherNumber")
+                                or document.get("creditNoteNumber") or document.get("id") or "-")
+                    warnings.append(
+                        f"Ungeklaerte Positionssumme weicht von Belegsumme ab: {label}"
+                    )
+                elif source_gross != Decimal(0) and abs(source_gross - position_gross) > tolerance:
+                    warnings.append("Belegbrutto enthaelt nicht steuerwirksame Differenz "
+                                    f"(z. B. Trinkgeld): {document.get('id') or '-'}")
+            for label, gross_amount, net_amount, vat_amount in items:
                 bucket = groups.setdefault(
                     label,
                     {"vat": Decimal("0.00"), "gross": Decimal("0.00"), "net": Decimal("0.00")},
@@ -699,46 +733,6 @@ def _looks_paid_like(document: dict[str, Any]) -> bool:
     return False
 
 
-def _extract_payment_event_date(event: dict[str, Any]) -> datetime | None:
-    for node in _payment_event_nodes(event):
-        for key in _PAYMENT_EVENT_DATE_KEYS:
-            dt = _parse_date(node.get(key))
-            if dt is not None:
-                return dt
-    return None
-
-
-def _extract_payment_event_amount(event: dict[str, Any]) -> Decimal:
-    for node in _payment_event_nodes(event):
-        for key in _PAYMENT_EVENT_AMOUNT_KEYS:
-            if key not in node:
-                continue
-            amount = abs(_to_decimal(node.get(key)))
-            if amount > Decimal("0.00"):
-                return amount
-    return Decimal("0.00")
-
-
-def _extract_payment_event_tx_id(event: dict[str, Any]) -> str | None:
-    for node in _payment_event_nodes(event):
-        for key in ("checkAccountTransactionId", "transactionId", "id"):
-            value = node.get(key)
-            if value in (None, ""):
-                continue
-            text = str(value).strip()
-            if text:
-                return text
-    return None
-
-
-def _payment_event_nodes(event: dict[str, Any]) -> list[dict[str, Any]]:
-    nodes = [event]
-    nested = event.get("checkAccountTransaction")
-    if isinstance(nested, dict):
-        nodes.append(nested)
-    return nodes
-
-
 def _with_negative_amounts(payload: dict[str, Any], amount_keys: tuple[str, ...]) -> dict[str, Any]:
     prepared = dict(payload)
     for key in amount_keys:
@@ -751,15 +745,7 @@ def _with_negative_amounts(payload: dict[str, Any], amount_keys: tuple[str, ...]
 
 
 def _to_decimal(value: object) -> Decimal:
-    if value in (None, ""):
-        return Decimal("0.00")
-    if isinstance(value, Decimal):
-        return value.quantize(_DECIMAL_2, rounding=ROUND_HALF_UP)
-    try:
-        text = str(value).strip().replace(" ", "").replace(",", ".")
-        return Decimal(text).quantize(_DECIMAL_2, rounding=ROUND_HALF_UP)
-    except (InvalidOperation, ValueError):
-        return Decimal("0.00")
+    return tax_amount(value)
 
 
 def _format_plain(value: Decimal) -> str:
@@ -770,48 +756,6 @@ def _format_euro_text(value: str) -> str:
     amount = _to_decimal(value)
     formatted = f"{amount:,.2f}"
     return formatted.replace(",", "_").replace(".", ",").replace("_", " ")
-
-
-def _parse_date(value: object) -> datetime | None:
-    if value in (None, ""):
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        return datetime.fromisoformat(text.replace(" ", "T", 1))
-    except ValueError:
-        pass
-    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-        try:
-            return datetime.strptime(text[: len(fmt)], fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def _extract_amounts(document: dict[str, Any]) -> tuple[Decimal, Decimal, Decimal]:
-    gross_amount = _first_decimal(document, "sumGross", "sumGrossAccounting", "sumGrossForeignCurrency")
-    net_amount = _first_decimal(document, "sumNet", "sumNetAccounting")
-    vat_amount = _first_decimal(document, "sumTax", "sumTaxAccounting")
-
-    if net_amount == Decimal("0.00") and gross_amount != Decimal("0.00"):
-        net_amount = gross_amount - vat_amount
-    if vat_amount == Decimal("0.00") and gross_amount != Decimal("0.00") and net_amount != Decimal("0.00"):
-        vat_amount = gross_amount - net_amount
-    return gross_amount, net_amount, vat_amount
-
-
-_ALLOWED_PURCHASE_LABELS = {
-    "MIT 0% MEHRWERTSTEUER",
-    "MIT 10% MEHRWERTSTEUER",
-    "MIT 13% MEHRWERTSTEUER",
-    "MIT 20% MEHRWERTSTEUER",
-    "STEUERFREIE INNERGEMEINSCHAFTL. LIEFERUNG (EU)",
-    "REVERSE CHARGE",
-}
 
 
 def _iter_preview_items(
@@ -837,59 +781,38 @@ def _iter_preview_items(
             )
             if label is None:
                 continue
-            items.append((label, gross_amount, net_amount, vat_amount))
+            items.append((_sales_rc_label(label, document, is_purchase=is_purchase),
+                          gross_amount, net_amount, vat_amount))
         if items:
+            source_gross, source_net, source_vat = _extract_amounts(document)
+            tolerance = max(Decimal("0.05"), Decimal("0.01") * len(items))
+            if (
+                len({item[0] for item in items}) == 1
+                and source_gross != Decimal(0)
+                and abs(source_gross - source_net - source_vat) <= Decimal("0.01")
+                and abs(sum((item[2] for item in items), Decimal(0)) - source_net) <= tolerance
+                and abs(sum((item[3] for item in items), Decimal(0)) - source_vat) <= tolerance
+            ):
+                return [(items[0][0], source_gross, source_net, source_vat)]
             return items
 
     gross_amount, net_amount, vat_amount = _extract_amounts(document)
     label = _normalize_tax_label(document, net_amount=net_amount, vat_amount=vat_amount)
-    if is_purchase and label not in _ALLOWED_PURCHASE_LABELS:
-        return []
-    return [(label, gross_amount, net_amount, vat_amount)]
+    return [(_sales_rc_label(label, document, is_purchase=is_purchase),
+             gross_amount, net_amount, vat_amount)]
 
 
-def _extract_position_amounts(position: dict[str, Any]) -> tuple[Decimal, Decimal, Decimal]:
-    net_amount = _first_position_decimal(
-        position,
-        "sumNetAccounting",
-        "sumNet",
-        "amountNet",
-        "priceNet",
-        "priceNetAccounting",
-        "net",
-    )
-    vat_amount = _first_position_decimal(position, "sumTaxAccounting", "sumTax")
-    if net_amount == Decimal("0.00"):
-        quantity = _to_decimal(position.get("quantity") or 1)
-        price = _to_decimal(position.get("price") or 0)
-        net_amount = quantity * price
-    if vat_amount == Decimal("0.00") and net_amount != Decimal("0.00"):
-        rate = _extract_position_rate(position)
-        if rate > Decimal("0.00"):
-            vat_amount = (net_amount * rate / Decimal("100")).quantize(_DECIMAL_2, rounding=ROUND_HALF_UP)
-    gross_amount = (net_amount + vat_amount).quantize(_DECIMAL_2, rounding=ROUND_HALF_UP)
-    return gross_amount, net_amount, vat_amount
-
-
-def _first_position_decimal(position: dict[str, Any], *keys: str) -> Decimal:
-    for key in keys:
-        if key in position and position.get(key) not in (None, ""):
-            return _to_decimal(position.get(key))
-    return Decimal("0.00")
-
-
-def _extract_position_rate(position: dict[str, Any]) -> Decimal:
-    for key in ("taxRate", "taxRatePercent", "taxRatePercentage", "taxPercent", "taxPercentage"):
-        value = position.get(key)
-        if value not in (None, ""):
-            return _to_decimal(value)
-    tax_node = position.get("tax")
-    if isinstance(tax_node, dict):
-        for key in ("rate", "percentage"):
-            value = tax_node.get(key)
-            if value not in (None, ""):
-                return _to_decimal(value)
-    return Decimal("0.00")
+def _sales_rc_label(label: str, document: dict[str, Any], *, is_purchase: bool) -> str:
+    if is_purchase or label != "REVERSE CHARGE":
+        return label
+    contact = document.get("contact")
+    contact_uid = contact.get("vatNumber") if isinstance(contact, dict) else None
+    uid = normalize_uid(str(contact_uid or document.get("vatNumber") or ""))
+    if uid.startswith("AT"):
+        return label
+    if is_valid_uid(uid):
+        return "REVERSE CHARGE (AUSLAND)"
+    return "REVERSE CHARGE (ZUORDNUNG OFFEN)"
 
 
 def _normalize_position_label(
@@ -903,22 +826,22 @@ def _normalize_position_label(
     merged = dict(document)
     if position.get("taxText") not in (None, ""):
         merged["taxText"] = position.get("taxText")
+    elif (
+        _classify_special_tax_label(document) is None
+        and not any(marker in str(document.get("taxText") or "").upper() for marker in _FOREIGN_MARKERS)
+        and (
+            any(position.get(key) not in (None, "") for key in (
+                "taxRate", "taxRatePercent", "taxRatePercentage", "taxPercent", "taxPercentage",
+            ))
+            or (
+                isinstance(position.get("tax"), dict)
+                and any(position["tax"].get(key) not in (None, "") for key in ("rate", "percentage"))
+            )
+        )
+    ):
+        merged["taxText"] = f"MIT {_extract_position_rate(position)}% MEHRWERTSTEUER"
     label = _normalize_tax_label(merged, net_amount=net_amount, vat_amount=vat_amount)
-    if is_purchase and label not in _ALLOWED_PURCHASE_LABELS:
-        upper = label.upper()
-        if "REVERSE" in upper and "CHARGE" in upper:
-            return "REVERSE CHARGE"
-        if "INNERGEMEINSCHAFT" in upper and "LIEFER" in upper:
-            return "STEUERFREIE INNERGEMEINSCHAFTL. LIEFERUNG (EU)"
-        return None
     return label
-
-
-def _first_decimal(document: dict[str, Any], *keys: str) -> Decimal:
-    for key in keys:
-        if key in document and document.get(key) not in (None, ""):
-            return _to_decimal(document.get(key))
-    return Decimal("0.00")
 
 
 def _normalize_tax_label(document: dict[str, Any], *, net_amount: Decimal, vat_amount: Decimal) -> str:

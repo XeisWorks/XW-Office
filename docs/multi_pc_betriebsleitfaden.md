@@ -62,8 +62,8 @@ Hinweis:
   bisherige Laufzeit. Der Balken zeigt waehrend der Live-Berechnung Aktivitaet
   ohne vorgetaeuschten Prozentanteil; kein automatisches Hochzaehlen bis 90 %.
 - UVA und ZM verwenden identische erfolgreiche sevDesk-Abfragen innerhalb eines
-  Berechnungslaufs gemeinsam. Unterschiedliche Filter bleiben getrennt; IST- und
-  Soll-Auswahl, Zahlungsnachweise und steuerliche Pruefungen bleiben unveraendert.
+  Berechnungslaufs gemeinsam. Unterschiedliche Filter bleiben getrennt; UVA-IST-
+  und ZM-Soll-Auswahl sowie steuerliche Pruefungen bleiben erhalten.
 - Detaildaten werden nur fuer diesen Lauf wiederverwendet. Eine Live-Neuberechnung
   leert auch die internen Zahlungs-, Positions-, TaxSet- und Kontakt-Caches.
   "Neu laden" umgeht weiterhin den fertigen Monatscache und den Monats-Snapshot.
@@ -75,6 +75,88 @@ Hinweis:
 - Die vorhandene Begrenzung auf zwei sevDesk-Anfragen pro Sekunde bleibt bestehen.
   Insbesondere aeltere Rechnungen mit Zahlungen im UVA-Monat werden nicht zugunsten
   kuerzerer Laufzeiten ausgeschlossen.
+- Die Aktualisierungsabfragen fuer vergangene Monate reichen mindestens bis zum
+  heutigen Tag. Spaeter erfasste oder korrigierte Belege werden anschliessend anhand
+  ihrer steuerlich massgeblichen Periode ausgewaehlt, nicht anhand des Aktualisierungsdatums.
+- Der abschliessende Live-Prueflauf fuer September 2026 dauerte 260,820 Sekunden
+  statt der urspruenglich gemeldeten 496,226 Sekunden (rund 47,4 % kuerzer).
+  Er benoetigte 492 Quellabfragen und verwendete 12 identische Abfragen wieder.
+  Die XML-Datei bestand die offizielle Schema-Pruefung; es wurde nichts eingereicht.
+  Laufzeiten bleiben vom API-/Netzwerkzustand und dem Datenumfang abhaengig.
+
+### UVA-Ergebnis und fachliche Grenzen
+
+- Mehrwertsteuer und Vorsteuer erscheinen als kompakte Gruppensummen mit Brutto,
+  Netto und Steuer. Auch auslaendische Steuergruppen bleiben sichtbar; ihre Anzeige
+  bedeutet nicht, dass diese Betraege als oesterreichische Vorsteuer abgezogen werden.
+  Zahllast und Abgabestatus bleiben unmittelbar sichtbar.
+- Hinweise sind zusammengefasst; Datenqualitaet, technische Details
+  und FinanzOnline-Kennzahlen sind bei Bedarf aufklappbar. Fachliche Abgabesperren
+  werden nicht versteckt oder durch das Einklappen aufgehoben.
+- Es gibt keinen Golden-Master-/Referenzwert-Abgleich und keine daraus abgeleitete
+  Abgabesperre mehr. Monats-Snapshots bleiben ein Datenfrische-/Leistungsmechanismus;
+  aeltere Berechnungsversionen werden nicht wiederverwendet. Externe Vergleichsbilder
+  werden weder als Referenz gespeichert noch zur Anpassung von Kennzahlen verwendet.
+- Zahlungszuordnungen und Banktransaktionen sind unterschiedliche Datensaetze:
+  Eine zugeordnete Zahlung wird nicht nochmals ueber ihre Banktransaktion erfasst.
+  Mehrere unterschiedliche Zuordnungen derselben Transaktion bleiben erhalten.
+  Vollstaendige, datierte Zuordnungen ersparen den zweiten Abruf nur, wenn sie mit
+  dem kumulativ bezahlten Belegbetrag uebereinstimmen.
+  Die vollstaendige Zuordnungshistorie wird einmal gebuendelt und seitenweise
+  gelesen, statt fuer jeden Beleg erneut angefordert. Bei nachweislich vollstaendiger
+  Historie bedeutet ein fehlender Beleg, dass keine Zuordnungslogs existieren; ein
+  zusaetzlicher Abruf dieser leeren Liste entfaellt. Ist die Historie unvollstaendig
+  oder nicht verfuegbar, werden die Zahlungsnachweise einzeln geprueft.
+  Ein rohes `paidAmount=0` bei manuell vollstaendig bezahlten Belegen mit Zahlungsdatum
+  bedeutet nicht automatisch Nullumsatz. Dagegen schliesst ein aus Zahlungsnachweisen
+  abgeleiteter Periodenbetrag von null den Beleg fuer diesen Zahlungsmonat aus.
+  Ueberzahlungen werden chronologisch auf den Belegbetrag begrenzt und als Hinweis
+  ausgewiesen; dieselbe Rechnung wird dadurch nicht erneut versteuert.
+- Teilzahlungen werden mit ungerundetem Verhaeltnis aufgeteilt und erst beim
+  Geldbetrag auf Cent gerundet. Rabattbereinigte Accounting-Summen und explizite
+  Nullbetraege (z. B. kostenloser Versand) sind verbindlich. Bei einer Steuergruppe
+  werden passende Belegsummen statt kumulierter Positions-Rundungsdifferenzen benutzt.
+- Fehlende/unlesbare Zahlungsnachweise, unvollstaendige API-Seiten und ungueltige
+  Geldbetraege duerfen nicht als erfolgreiche Nullberechnung durchgehen.
+  Ungeklaerte Steuerzuordnungen und erhebliche Netto-/Steuerdifferenzen verhindern
+  die UVA-Abgabe. Eine reine Bruttodifferenz, z. B. Trinkgeld, wird separat angezeigt.
+- Negative Bemessungsgrundlagen werden nicht still aus der XML-Datei weggelassen:
+  Sie erfordern eine fachliche Berichtigung. Eine ausdruecklich angegebene
+  Umsatzsteuerberichtigung KZ090 wird mit Vorzeichen exportiert. Die Software leitet
+  solche Berichtigungen nicht eigenmaechtig aus negativen Nettosummen ab.
+- Ausgehende B2B-Auslandsleistungen mit auslaendischer Empfaenger-UID (z. B.
+  Werbe-/YouTube-Erloese an einen EU-Unternehmer) sind keine inlaendischen
+  Reverse-Charge-Umsaetze der KZ021. Sie bleiben in der Anzeige sichtbar, werden
+  aber nicht in KZ000/KZ021 aufgenommen. EU-relevante Erloesbelege werden auch
+  dann in der ZM nach Belegdatum erfasst, wenn sie als Einnahmen-Voucher statt
+  als Rechnung angelegt wurden. Ein fehlendes Empfaengerland wird nicht geraten.
+- Eingehender Reverse Charge richtet sich nach dem Leistungsdatum, nicht nach dem
+  Zahlungsmonat; innergemeinschaftliche Erwerbe nach Rechnungsstellung, fruehestens
+  Erwerb und spaetestens dem 15. des Folgemonats. Teilzahlungen kuerzen diese
+  Bemessungsgrundlagen nicht. Fehlt ein separates Leistungsdatum, gilt das Belegdatum
+  entsprechend der bestaetigten Buchungspraxis als Leistungsdatum.
+  Monatsuebergreifende RC-Vorauszahlungen mit ungeklaerter Steuerperiode sperren die Abgabe.
+  Bei normalen inlaendischen Vorauszahlungen wird Vorsteuer erst bei vorliegender
+  Rechnung und Zahlung beruecksichtigt; eine vorherige Zahlung geht nicht verloren.
+- Eine lieferantenseitig steuerfreie EU-Warenlieferung hat weiterhin 0 % Lieferantensteuer.
+  Fuer den oesterreichischen Erwerb wird der hier bestaetigte inlaendische Satz von
+  20 % mit korrespondierendem Vorsteuerabzug angesetzt. Das ist keine nachtraegliche
+  Besteuerung der Lieferantenrechnung, sondern die oesterreichische Erwerbsbesteuerung.
+- Die vereinfachte Zuordnung fuer innergemeinschaftliche Erwerbe und eingehenden
+  Reverse Charge setzt derzeit 20 % und vollen Vorsteuerabzug voraus. Sonderfaelle
+  (einschliesslich abweichender Leistungsortregeln) muessen fachlich geprueft werden; ein
+  fehlerfreier Testlauf ersetzt keine steuerliche Pruefung der Belegklassifikation.
+
+Fachliche Quellen: [BMF-Umsatzsteuervoranmeldung](https://www.bmf.gv.at/themen/steuern/fuer-unternehmen/umsatzsteuer/informationen/umsatzsteuervoranmeldung.html),
+[BMF-Entgeltaenderungen und Berichtigungskennzahlen](https://www.bmf.gv.at/dam/jcr:ca70136e-2995-41e6-8936-ca23e7582b01/Entgeltsaenderungen_in_der_Umsatzsteuervoranmeldung.pdf).
+Fuer Leistungsort, Vorsteuer-Zahlungserfordernis und Steuerperiode siehe
+[UStG 1994, insbesondere Paragraphen 3a, 12 und 19](https://www.ris.bka.gv.at/GeltendeFassung.wxe?Abfrage=Bundesnormen&Gesetzesnummer=10004873),
+[USP/BMF Reverse Charge](https://www.usp.gv.at/themen/steuern-finanzen/umsatzsteuer-ueberblick/weitere-informationen-zur-umsatzsteuer/umsaetze-mit-auslandsbezug/reverse-charge.html)
+und [USP/BMF innergemeinschaftlicher Erwerb](https://www.usp.gv.at/themen/steuern-finanzen/umsatzsteuer-ueberblick/weitere-informationen-zur-umsatzsteuer/umsaetze-mit-auslandsbezug/innergemeinschaftlicher-erwerb.html).
+Der IST-Vorsteuerabzug verwendet den zahlungsabhaengigen Regelfall des Paragraphen 12;
+Ueberrechnungen und die gesetzlichen Ausnahmen (u. a. Vorjahresumsatz ueber
+2 Mio. EUR) sind nicht automatisch aus sevDesk ableitbar und beduerfen gesonderter Pruefung.
+Die XML-Struktur wird gegen das mitgelieferte offizielle U30-Schema validiert.
 
 ## 4) Betrieb auf mehreren PCs
 

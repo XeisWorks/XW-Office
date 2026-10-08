@@ -4,17 +4,11 @@ from xw_office.services.finanzonline.client import FinanzOnlineClient
 from xw_office.services.finanzonline.monthly_snapshot import TaxMonthlySnapshotStore
 from xw_office.services.finanzonline.oss_models import OssLine, OssQuarterResult, OssXmlExport
 from xw_office.services.finanzonline.oss_service import OssService, SevdeskOssDocumentProvider
-from xw_office.services.finanzonline.oss_references import compare_oss_reference, load_oss_references
 from xw_office.services.finanzonline.oss_tax_rules import load_oss_tax_rules
 from xw_office.services.finanzonline.oss_snapshot import OssQuarterSnapshotStore
 from xw_office.services.finanzonline.settings import FinanzOnlineSettings
 from xw_office.services.finanzonline.uva_models import UvaKennzahlen, UvaPayloadResult
 from xw_office.services.finanzonline.uva_payload_service import UvaPayloadService
-from xw_office.services.finanzonline.uva_references import (
-    compare_uva_reference,
-    load_uva_references,
-    render_reference_comparison_text,
-)
 from xw_office.services.finanzonline.uva_selection import (
     UvaDocumentSelector,
     UvaSelectionResult,
@@ -30,7 +24,6 @@ from xw_office.services.finanzonline.uva_preview import (
 from xw_office.services.finanzonline.uva_service import (
     UvaService,
     render_data_quality_text,
-    render_reconciliation_text,
 )
 from xw_office.services.finanzonline.uva_soap import (
     FinanzOnlineFileUploadBackend,
@@ -63,11 +56,7 @@ __all__ = [
     "UvaKennzahlen",
     "UvaPayloadResult",
     "UvaPayloadService",
-    "compare_uva_reference",
-    "load_uva_references",
     "load_oss_tax_rules",
-    "load_oss_references",
-    "compare_oss_reference",
     "UvaSelectionResult",
     "UvaSelectionStats",
     "UvaPreviewGroup",
@@ -76,8 +65,6 @@ __all__ = [
     "UvaPreviewService",
     "UvaService",
     "render_data_quality_text",
-    "render_reference_comparison_text",
-    "render_reconciliation_text",
     "UvaSoapUnavailableError",
     "UvaSubmitResult",
     "ZeepUvaSoapBackend",

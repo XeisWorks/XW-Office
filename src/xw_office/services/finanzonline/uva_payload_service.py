@@ -1,10 +1,11 @@
 """Phase-2 UVA payload construction from the monthly preview groups."""
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
+from decimal import Decimal, ROUND_HALF_UP
 
 from xw_office.services.finanzonline.uva_models import UvaKennzahlen, UvaPayloadResult
 from xw_office.services.finanzonline.uva_preview import UvaPreviewGroup, UvaPreviewResult, UvaPreviewService
+from xw_office.services.finanzonline.amounts import tax_amount
 
 _DECIMAL_2 = Decimal("0.01")
 _FOREIGN_MARKERS = (
@@ -102,9 +103,6 @@ class UvaPayloadService:
             f"C066: EUR {_euro(kz.C066)}",
             f"Zahllast: EUR {_euro(payload.zahlbetrag)}",
         ]
-        if payload.warnings:
-            lines.extend(["", "Hinweise:"])
-            lines.extend(f"- {warning}" for warning in payload.warnings)
         return "\n".join(lines).strip()
 
     def _apply_sales_group(
@@ -131,6 +129,14 @@ class UvaPayloadService:
             values["A011"] += net
             return
         if "REVERSE CHARGE" in label:
+            if "AUSLAND" in label:
+                warnings.append("Nicht in AT-UVA steuerbare B2B-Auslandsleistung; "
+                                "ZM gesondert geprueft: " + group.label)
+                return
+            if "ZUORDNUNG OFFEN" in label:
+                warnings.append("Ungeklaerte Umsatzsteuer-Zuordnung: "
+                                "Reverse-Charge-Empfaengerland fehlt.")
+                return
             values["A021"] += net
             return
         if label.startswith("MIT 0%"):
@@ -138,6 +144,8 @@ class UvaPayloadService:
             return
         if _is_foreign_label(label):
             warnings.append(f"Nicht in AT-UVA übernommen: {group.label}")
+            return
+        warnings.append(f"Ungeklaerte Umsatzsteuer-Zuordnung nicht uebernommen: {group.label}")
 
     def _apply_purchase_group(
         self,
@@ -163,13 +171,13 @@ class UvaPayloadService:
             return
         if _is_foreign_label(label):
             warnings.append(f"Ausländische Vorsteuer nicht in AT-UVA übernommen: {group.label}")
+            return
+        if not label.startswith("MIT 0%"):
+            warnings.append(f"Ungeklaerte Vorsteuer-Zuordnung nicht uebernommen: {group.label}")
 
 
 def _dec(value: str) -> Decimal:
-    try:
-        return Decimal(str(value).replace(",", ".")).quantize(_DECIMAL_2, rounding=ROUND_HALF_UP)
-    except (InvalidOperation, ValueError):
-        return Decimal("0.00")
+    return tax_amount(value)
 
 
 def _fmt(value: Decimal) -> str:

@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, cast
 from xml.etree import ElementTree as ET
+from xw_office.services.finanzonline.amounts import tax_amount
 
 try:
     from lxml import etree
@@ -85,7 +86,7 @@ def build_u30_xml(payload: dict[str, Any], *, fastnr: str, created_at: datetime 
         "KZ011": kennzahlen.get("KZ011") or kennzahlen.get("A011"),
         "KZ017": kennzahlen.get("KZ017") or kennzahlen.get("A017"),
     }
-    if any(_amount(value) > Decimal("0.00") for value in tax_free.values()):
+    if any(_amount(value) != Decimal("0.00") for value in tax_free.values()):
         node = ET.SubElement(sales, "STEUERFREI")
         for tag, value in tax_free.items():
             _add_kz(node, tag, value)
@@ -96,17 +97,17 @@ def build_u30_xml(payload: dict[str, Any], *, fastnr: str, created_at: datetime 
         "KZ006": kennzahlen.get("KZ006") or kennzahlen.get("A006"),
         "KZ057": kennzahlen.get("KZ057") or kennzahlen.get("A057"),
     }
-    if any(_amount(value) > Decimal("0.00") for value in taxed.values()):
+    if any(_amount(value) != Decimal("0.00") for value in taxed.values()):
         node = ET.SubElement(sales, "VERSTEUERT")
         for tag, value in taxed.items():
             _add_kz(node, tag, value)
 
     kz070 = kennzahlen.get("KZ070") or kennzahlen.get("B070")
     kz072 = kennzahlen.get("KZ072") or kennzahlen.get("B072")
-    if _amount(kz070) > Decimal("0.00") or _amount(kz072) > Decimal("0.00"):
+    if _amount(kz070) != Decimal("0.00") or _amount(kz072) != Decimal("0.00"):
         acquisition = ET.SubElement(declaration, "INNERGEMEINSCHAFTLICHE_ERWERBE")
         _add_kz(acquisition, "KZ070", kz070, allow_zero=True)
-        if _amount(kz072) > Decimal("0.00"):
+        if _amount(kz072) != Decimal("0.00"):
             taxed_acquisition = ET.SubElement(acquisition, "VERSTEUERT_IGE")
             _add_kz(taxed_acquisition, "KZ072", kz072)
 
@@ -114,8 +115,9 @@ def build_u30_xml(payload: dict[str, Any], *, fastnr: str, created_at: datetime 
         "KZ060": kennzahlen.get("KZ060") or kennzahlen.get("C060"),
         "KZ065": kennzahlen.get("KZ065") or kennzahlen.get("C065"),
         "KZ066": kennzahlen.get("KZ066") or kennzahlen.get("C066"),
+        "KZ090": kennzahlen.get("KZ090") or kennzahlen.get("D090"),
     }
-    if any(_amount(value) > Decimal("0.00") for value in input_tax.values()):
+    if any(_amount(value) != Decimal("0.00") for value in input_tax.values()):
         node = ET.SubElement(declaration, "VORSTEUER")
         for tag, value in input_tax.items():
             _add_kz(node, tag, value)
@@ -139,9 +141,12 @@ def validate_u30_xml(xml_payload: str, xsd_path: str | Path | None = None) -> No
 
 def _add_kz(parent: ET.Element, tag: str, value: object, *, allow_zero: bool = False) -> None:
     amount = _amount(value)
+    if amount < Decimal("0.00") and tag != "KZ090":
+        raise ValueError(
+            f"{tag}: Negativer Betrag {amount:.2f} ist im U30-Schema nicht zulaessig. "
+            "Berichtigung fachlich klaeren; Betrag wird nicht stillschweigend ausgelassen."
+        )
     if not allow_zero and abs(amount) < Decimal("0.005"):
-        return
-    if allow_zero and amount < Decimal("0.00"):
         return
     node = ET.SubElement(parent, tag)
     node.set("type", "kz")
@@ -149,10 +154,7 @@ def _add_kz(parent: ET.Element, tag: str, value: object, *, allow_zero: bool = F
 
 
 def _amount(value: object) -> Decimal:
-    try:
-        return Decimal(str(value or "0").replace(",", ".")).quantize(_DECIMAL_2, rounding=ROUND_HALF_UP)
-    except (InvalidOperation, ValueError):
-        return Decimal("0.00")
+    return tax_amount(value)
 
 
 def _format_amount(value: Decimal) -> str:

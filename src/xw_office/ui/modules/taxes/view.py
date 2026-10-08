@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -26,6 +25,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTableView,
     QTabWidget,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -42,10 +42,9 @@ from xw_office.services.finanzonline import (
     UvaSubmitResult,
     ZmCalculationResult,
     render_data_quality_text,
-    render_reference_comparison_text,
-    render_reconciliation_text,
 )
 from xw_office.services.finanzonline.zm_service import is_valid_uid, normalize_uid
+from xw_office.ui.modules.taxes.presentation import UvaPresentation, format_euro, validate_preview
 from xw_office.ui.widgets.data_table import DataTable
 from xw_office.ui.widgets.search_bar import SearchBar
 
@@ -111,12 +110,7 @@ def _render_grouped_uva_warnings(warnings: list[str]) -> str:
 
 
 def _format_euro(value: str) -> str:
-    try:
-        amount = Decimal(str(value).replace(",", "."))
-    except (InvalidOperation, ValueError):
-        return value
-    formatted = f"{amount:,.2f}"
-    return formatted.replace(",", "_").replace(".", ",").replace("_", " ")
+    return format_euro(value)
 
 
 class TaxesView(QWidget):
@@ -144,7 +138,8 @@ class TaxesView(QWidget):
         self._uva_submit_button: QPushButton | None = None
         self._zm_submit_button: QPushButton | None = None
         self._uva_amount_label: QLabel | None = None
-        self._uva_output: QPlainTextEdit | None = None
+        self._uva_output: QTextBrowser | None = None
+        self._uva_presentation: UvaPresentation | None = None
         self._zm_output: QPlainTextEdit | None = None
         self._uva_progress_text = ""
         self._uva_progress_timer = QTimer(self)
@@ -215,10 +210,9 @@ class TaxesView(QWidget):
 
         uva_box = QGroupBox("UVA / U30 Auswertung")
         uva_layout = QVBoxLayout(uva_box)
-        self._uva_output = QPlainTextEdit()
-        self._uva_output.setReadOnly(True)
-        self._uva_output.setPlaceholderText("UVA berechnen, um Kennzahlen und Beträge zu sehen.")
-        uva_layout.addWidget(self._uva_output)
+        self._uva_presentation = UvaPresentation()
+        self._uva_output = self._uva_presentation.summary
+        uva_layout.addWidget(self._uva_presentation)
         result_row.addWidget(uva_box, 3)
 
         zm_box = QGroupBox("Zusammenfassende Meldung / U13")
@@ -513,16 +507,31 @@ class TaxesView(QWidget):
         zahlbetrag = str(payload.get("zahlbetrag") or "").strip()
         self._set_uva_amount(zahlbetrag)
 
-        preview_text = str(payload.get("preview_text") or "").strip()
+        preview = validate_preview(payload.get("preview"))
         kennzahlen_text = str(payload.get("kennzahlen_text") or "").strip()
+        # Older snapshots append warnings to the raw KZ text. Show them only once.
+        kennzahlen_body, _, kennzahlen_warnings = kennzahlen_text.partition("\nHinweise:")
+        kennzahlen_text = kennzahlen_body.strip()
         warnings_value = payload.get("warnings")
         warning_lines = [
             str(item)
             for item in warnings_value
             if isinstance(item, str)
         ] if isinstance(warnings_value, list) else []
+        if preview is not None:
+            warning_lines.extend(preview.warnings)
+        warning_lines.extend(
+            line.strip().removeprefix("- ").strip()
+            for line in kennzahlen_warnings.splitlines()
+            if line.strip()
+        )
+        quality_value = payload.get("data_quality")
+        if isinstance(quality_value, dict):
+            quality_warnings = quality_value.get("warnings")
+            if isinstance(quality_warnings, list):
+                warning_lines.extend(item for item in quality_warnings if isinstance(item, str))
+        warning_lines = list(dict.fromkeys(line.strip() for line in warning_lines if line.strip()))
         grouped_warnings_text = _render_grouped_uva_warnings(warning_lines)
-        amount_text = f"ZU ZAHLEN: EUR {_format_euro(zahlbetrag)}" if zahlbetrag else "ZU ZAHLEN: noch nicht ermittelt"
         cache_text = ""
         cache_value = payload.get("cache")
         if isinstance(cache_value, dict):
@@ -542,42 +551,26 @@ class TaxesView(QWidget):
                     cache_text += f"\nsevDesk-Abfragen: {requests}; wiederverwendet: {reused}"
             if snapshot_hash:
                 cache_text = f"{cache_text}\nSnapshot: {snapshot_hash[:12]}" if cache_text else f"Snapshot: {snapshot_hash[:12]}"
-        reconciliation_value = payload.get("reconciliation")
-        reconciliation_text = (
-            render_reconciliation_text(reconciliation_value)
-            if isinstance(reconciliation_value, dict)
-            else ""
-        )
         data_quality_value = payload.get("data_quality")
         data_quality_text = (
             render_data_quality_text(data_quality_value)
             if isinstance(data_quality_value, dict)
             else ""
         )
-        reference_value = payload.get("reference_comparison")
-        reference_text = (
-            render_reference_comparison_text(reference_value)
-            if isinstance(reference_value, dict)
-            else ""
-        )
-        uva_text = "\n\n".join(
-            part
-            for part in [
-                amount_text,
-                cache_text,
-                data_quality_text,
-                reference_text,
-                kennzahlen_text,
-                reconciliation_text,
-                preview_text,
-                grouped_warnings_text,
-            ]
-            if part
-        )
+        presentation = self._uva_presentation
+        if presentation is not None:
+            presentation.set_preview(preview, data_quality_value)
+            presentation.details["warnings"].set_text(
+                grouped_warnings_text, count=len(warning_lines)
+            )
+            presentation.details["data_quality"].set_text(data_quality_text)
+            presentation.details["cache"].set_text(cache_text)
+            presentation.details["kennzahlen"].set_text(kennzahlen_text)
         zm_text = str(payload.get("zm_text") or "").strip()
         if not zm_text:
             zm_text = "Keine ZM-Auswertung vorhanden oder ZM/U13 ist nicht aktiv."
-        self._set_uva_result_text(uva_text or repr(payload), zm_text)
+        if self._zm_output is not None:
+            self._zm_output.setPlainText(zm_text)
 
     def _set_uva_amount(self, value: str) -> None:
         if self._uva_amount_label is None:
