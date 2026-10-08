@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from threading import Event
 from zoneinfo import ZoneInfo
 
 from PySide6.QtCore import QDate, Qt
@@ -32,6 +33,20 @@ class _ContainerStub:
 
     def resolve(self, service_type: object) -> _ExpenseServiceStub:
         return self.service
+
+
+class _DelayedExpenseServiceStub(_ExpenseServiceStub):
+    def __init__(self) -> None:
+        self.block = False
+        self.started = Event()
+        self.release = Event()
+        self.release.set()
+
+    def list_bank_expenses(self, **kwargs: object) -> list[object]:
+        if self.block:
+            self.started.set()
+            self.release.wait(timeout=3)
+        return []
 
 
 def test_expense_review_uses_positions_and_settings_tab(qtbot: object) -> None:
@@ -71,6 +86,20 @@ def test_expense_review_uses_positions_and_settings_tab(qtbot: object) -> None:
         lambda: "Konto WüdaraMusi" in view._status.text(), timeout=3000
     )
     assert view._account_label.text() == "Konto: WüdaraMusi"
+    assert view._period.count() == 4
+    today = datetime.now(tz=ZoneInfo("Europe/Vienna")).date()
+    current_quarter = (today.month - 1) // 3 + 1
+    previous_quarter = current_quarter - 1 or 4
+    previous_year = today.year - 1 if current_quarter == 1 else today.year
+    assert view._period.currentText() == f"Quartal {previous_quarter} / {previous_year}"
+    assert view._start.date().toPython() == date(previous_year, (previous_quarter - 1) * 3 + 1, 1)
+    assert view._end.date().toPython() == date(
+        previous_year + 1 if previous_quarter == 4 else previous_year,
+        1 if previous_quarter == 4 else previous_quarter * 3 + 1,
+        1,
+    ) - timedelta(days=1)
+    view._start.setDate(view._start.date().addDays(1))
+    assert view._period.currentText() == "Benutzerdefiniert"
 
 
 def test_expense_review_period_presets_fill_editable_dates(qtbot: object) -> None:
@@ -96,3 +125,28 @@ def test_expense_review_period_presets_fill_editable_dates(qtbot: object) -> Non
 
     view._start.setDate(QDate(current_start.year, current_start.month, 2))
     assert view._period.currentText() == "Benutzerdefiniert"
+
+
+def test_expense_review_allows_tenant_switch_while_other_tenant_loads(qtbot: object) -> None:
+    container = _ContainerStub()
+    container.service = _DelayedExpenseServiceStub()
+    view = ExpenseReviewView(container)  # type: ignore[arg-type]
+    qtbot.addWidget(view)  # type: ignore[attr-defined]
+    view.show()
+    qtbot.waitUntil(  # type: ignore[attr-defined]
+        lambda: view._status.text().startswith("0 ausgehende Zahlungen"), timeout=3000
+    )
+
+    container.service.block = True
+    container.service.started.clear()
+    container.service.release.clear()
+    view._load(refresh=True)
+    qtbot.waitUntil(container.service.started.is_set, timeout=3000)  # type: ignore[attr-defined]
+
+    assert view._tenant_tabs.isEnabled()
+    view._tenant_tabs.setCurrentIndex(1)
+    assert view._tenant_key == "wuedara"
+    assert view._workers["xw"].isRunning()
+
+    container.service.release.set()
+    qtbot.waitUntil(lambda: "xw" not in view._workers, timeout=3000)  # type: ignore[attr-defined]

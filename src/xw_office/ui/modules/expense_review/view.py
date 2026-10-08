@@ -13,6 +13,7 @@ from PySide6.QtCore import (
     QEvent,
     QRect,
     QRectF,
+    QSignalBlocker,
     QSettings,
     QSize,
     Qt,
@@ -520,9 +521,15 @@ class ExpenseReviewView(QWidget):
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._container = container
-        self._worker: BackgroundWorker | None = None
-        self._manual_worker: BackgroundWorker | None = None
+        self._workers: dict[str, BackgroundWorker] = {}
+        self._manual_workers: dict[str, BackgroundWorker] = {}
         self._assignment_workers: list[BackgroundWorker] = []
+        self._tenant_loads: dict[
+            str, tuple[list[BankExpenseRow], list[ExpensePositionView], tuple[date, date]]
+        ] = {}
+        self._tenant_missing_loaded_periods: dict[str, tuple[date, date]] = {}
+        self._tenant_period_states: dict[str, tuple[date, date]] = {}
+        self._document_refresh_tenants: set[str] = set()
         self._missing_refresh_button: QPushButton | None = None
         self._missing_refresh_icon = QIcon()
         self._missing_refresh_angle = 0
@@ -553,9 +560,6 @@ class ExpenseReviewView(QWidget):
         self._tenant_tabs.addTab("WüdaraMusi")
         self._rows: list[BankExpenseRow] = []
         self._all_rows: list[BankExpenseRow] = []
-        self._missing_loaded_period: tuple[date, date] | None = None
-        self._load_period: tuple[date, date] | None = None
-        self._last_load_was_refresh = False
         self._positions: list[ExpensePositionView] = []
         self._settings = QSettings("XeisWorks", "XW Office")
         self._header_save_timer = QTimer(self)
@@ -648,6 +652,20 @@ class ExpenseReviewView(QWidget):
         root.addWidget(tabs, stretch=1)
 
     def _setup_period_selector(self, today: date) -> None:
+        self._period.clear()
+        if self._tenant_key == "wuedara":
+            year = today.year
+            quarter = (today.month - 1) // 3 + 1
+            for _ in range(3):
+                self._period.addItem(f"Quartal {quarter} / {year}", ("quarter", year, quarter))
+                if quarter == 1:
+                    year -= 1
+                    quarter = 4
+                else:
+                    quarter -= 1
+            self._period.addItem("Benutzerdefiniert", _CUSTOM_PERIOD)
+            self._period.setCurrentIndex(1)
+            return
         month = today.replace(day=1)
         for _ in range(6):
             self._period.addItem(
@@ -659,19 +677,67 @@ class ExpenseReviewView(QWidget):
         self._period.setCurrentIndex(1)
 
     def _apply_period_preset(self, index: int) -> None:
-        year_month = self._period.itemData(index)
-        if not isinstance(year_month, tuple) or len(year_month) != 2:
+        period = self._period_range(self._period.itemData(index))
+        if period is None:
             return
-        year, month = year_month
-        if not isinstance(year, int) or not isinstance(month, int):
-            return
-        start = date(year, month, 1)
-        next_month = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
-        end = next_month - timedelta(days=1)
+        start, end = period
         self._period_sync = True
         try:
             self._start.setDate(QDate(start.year, start.month, start.day))
             self._end.setDate(QDate(end.year, end.month, end.day))
+        finally:
+            self._period_sync = False
+
+    @staticmethod
+    def _period_range(value: object) -> tuple[date, date] | None:
+        if not isinstance(value, tuple):
+            return None
+        if len(value) == 2:
+            year, month = value
+            if not isinstance(year, int) or not isinstance(month, int):
+                return None
+            start = date(year, month, 1)
+            next_month = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+            return start, next_month - timedelta(days=1)
+        if len(value) == 3 and value[0] == "quarter":
+            _, year, quarter = value
+            if not isinstance(year, int) or not isinstance(quarter, int) or not 1 <= quarter <= 4:
+                return None
+            start = date(year, (quarter - 1) * 3 + 1, 1)
+            next_quarter = date(year + 1, 1, 1) if quarter == 4 else date(year, quarter * 3 + 1, 1)
+            return start, next_quarter - timedelta(days=1)
+        return None
+
+    def _save_period_state(self) -> None:
+        self._tenant_period_states[self._tenant_key] = self._selected_period()
+
+    def _selected_period(self) -> tuple[date, date]:
+        return (
+            cast(date, self._start.date().toPython()),
+            cast(date, self._end.date().toPython()),
+        )
+
+    def _restore_period_state(self) -> None:
+        saved = self._tenant_period_states.get(self._tenant_key)
+        self._period_sync = True
+        try:
+            with QSignalBlocker(self._period):
+                self._setup_period_selector(datetime.now(tz=ZoneInfo("Europe/Vienna")).date())
+                if saved is None:
+                    saved = self._period_range(self._period.currentData())
+                if saved is None:
+                    return
+                matching_index = next(
+                    (
+                        index
+                        for index in range(self._period.count())
+                        if self._period_range(self._period.itemData(index)) == saved
+                    ),
+                    self._period.findData(_CUSTOM_PERIOD),
+                )
+                self._period.setCurrentIndex(matching_index)
+            self._start.setDate(QDate(saved[0].year, saved[0].month, saved[0].day))
+            self._end.setDate(QDate(saved[1].year, saved[1].month, saved[1].day))
         finally:
             self._period_sync = False
 
@@ -837,9 +903,13 @@ class ExpenseReviewView(QWidget):
         retry_unlinked_documents: bool = False,
         load_manual_expenses: bool = True,
     ) -> None:
-        if self._worker is not None and self._worker.isRunning():
+        tenant_key = self._tenant_key
+        existing_worker = self._workers.get(tenant_key)
+        if existing_worker is not None and existing_worker.isRunning():
             return
-        self._positions = self.service.list_positions()
+        service = self.service
+        positions = service.list_positions()
+        self._positions = positions
         self._status.setText(
             "Belegverknüpfungen werden aktualisiert …"
             if refresh_document_links
@@ -847,10 +917,9 @@ class ExpenseReviewView(QWidget):
         )
         start = cast(date, self._start.date().toPython())
         end = cast(date, self._end.date().toPython())
-        self._load_period = (start, end)
-        self._last_load_was_refresh = refresh or refresh_document_links
-        self._worker = BackgroundWorker(
-            lambda: self.service.list_bank_expenses(
+        period = (start, end)
+        worker = BackgroundWorker(
+            lambda: service.list_bank_expenses(
                 start=start,
                 end=end,
                 refresh=refresh,
@@ -860,18 +929,25 @@ class ExpenseReviewView(QWidget):
                 retry_unlinked_documents=retry_unlinked_documents,
             )
         )
-        self._worker.signals.result.connect(self._on_loaded)
-        self._worker.signals.error.connect(self._on_error)
-        self._tenant_tabs.setEnabled(False)
-        self._worker.signals.finished.connect(self._on_load_finished)
-        self._worker.start()
+        self._workers[tenant_key] = worker
+        worker.signals.result.connect(
+            lambda payload, key=tenant_key, loaded_positions=positions, loaded_period=period,
+            marked_missing=refresh or refresh_document_links: self._on_loaded(
+                key, payload, loaded_positions, loaded_period, marked_missing
+            )
+        )
+        worker.signals.error.connect(lambda exc, key=tenant_key: self._on_load_error(key, exc))
+        worker.signals.finished.connect(lambda key=tenant_key, target=worker: self._on_load_finished(key, target))
+        worker.start()
         if load_manual_expenses:
             self._load_manual_expenses()
 
     def _load_manual_expenses(self) -> None:
         if not hasattr(self._container, "config"):
             return
-        if self._manual_worker is not None and self._manual_worker.isRunning():
+        tenant_key = self._tenant_key
+        existing_worker = self._manual_workers.get(tenant_key)
+        if existing_worker is not None and existing_worker.isRunning():
             return
         start = cast(date, self._start.date().toPython())
         end = cast(date, self._end.date().toPython())
@@ -880,26 +956,31 @@ class ExpenseReviewView(QWidget):
 
         def fetch_manual() -> list[FlowExpense]:
             try:
-                client.sync_categories(tenant_key=self._tenant_key, positions=category_snapshot)
+                client.sync_categories(tenant_key=tenant_key, positions=category_snapshot)
             except Exception:
                 # Category mirroring is additive; a temporary bridge problem must
                 # not hide already captured expenses.
                 pass
-            return client.fetch(tenant_key=self._tenant_key, start=start, end=end, active_only=False)
+            return client.fetch(tenant_key=tenant_key, start=start, end=end, active_only=False)
 
-        self._manual_worker = BackgroundWorker(
-            fetch_manual
+        worker = BackgroundWorker(fetch_manual)
+        self._manual_workers[tenant_key] = worker
+        worker.signals.result.connect(lambda payload, key=tenant_key: self._on_manual_loaded(key, payload))
+        worker.signals.error.connect(lambda exc, key=tenant_key: self._on_manual_error(key, exc))
+        worker.signals.finished.connect(
+            lambda key=tenant_key, target=worker: self._manual_workers.pop(key, None)
+            if self._manual_workers.get(key) is target
+            else None
         )
-        self._manual_worker.signals.result.connect(self._on_manual_loaded)
-        self._manual_worker.signals.error.connect(self._on_manual_error)
-        self._manual_worker.signals.finished.connect(lambda: setattr(self, "_manual_worker", None))
-        self._manual_worker.start()
+        worker.start()
 
-    def _on_manual_error(self, exc: Exception) -> None:
-        if hasattr(self._container, "config") and self.flow_expense_client.is_configured():
+    def _on_manual_error(self, tenant_key: str, exc: Exception) -> None:
+        if tenant_key == self._tenant_key and hasattr(self._container, "config") and self.flow_expense_client.is_configured():
             self._status.setText(f"Zusätzliche Ausgaben nicht geladen: {exc}")
 
-    def _on_manual_loaded(self, payload: object) -> None:
+    def _on_manual_loaded(self, tenant_key: str, payload: object) -> None:
+        if tenant_key != self._tenant_key:
+            return
         values = [item for item in payload if isinstance(item, FlowExpense)] if isinstance(payload, list) else []
         positions = [position.__dict__ for position in self._positions]
         self._manual_table.set_data(
@@ -942,23 +1023,49 @@ class ExpenseReviewView(QWidget):
             )
         )
         worker.signals.result.connect(self._open_url)
-        worker.signals.error.connect(self._on_manual_error)
+        worker.signals.error.connect(self._on_error)
         worker.start()
 
-    def _on_load_finished(self) -> None:
-        self._worker = None
-        self._tenant_tabs.setEnabled(True)
-        self._set_missing_refresh_pending(False)
+    def _on_load_finished(self, tenant_key: str, worker: BackgroundWorker) -> None:
+        if self._workers.get(tenant_key) is worker:
+            self._workers.pop(tenant_key, None)
+        self._document_refresh_tenants.discard(tenant_key)
+        if tenant_key == self._tenant_key:
+            self._sync_missing_refresh_indicator()
+            cached = self._tenant_loads.get(tenant_key)
+            if cached is None or cached[2] != self._selected_period():
+                self._load(refresh=True)
 
-    def _on_loaded(self, payload: object) -> None:
-        self._all_rows = [
-            row for row in payload if isinstance(row, BankExpenseRow)
-        ] if isinstance(payload, list) else []
-        self._rows = [row for row in self._all_rows if row.amount < 0]
+    def _on_load_error(self, tenant_key: str, exc: Exception) -> None:
+        if tenant_key == self._tenant_key:
+            self._on_error(exc)
+
+    def _on_loaded(
+        self,
+        tenant_key: str,
+        payload: object,
+        positions: list[ExpensePositionView],
+        period: tuple[date, date],
+        marked_missing: bool,
+    ) -> None:
+        all_rows = [row for row in payload if isinstance(row, BankExpenseRow)] if isinstance(payload, list) else []
+        self._tenant_loads[tenant_key] = (all_rows, positions, period)
+        if marked_missing:
+            self._tenant_missing_loaded_periods[tenant_key] = period
+        if tenant_key != self._tenant_key or self._selected_period() != period:
+            return
+        self._apply_tenant_load(all_rows, positions)
+
+    def _apply_tenant_load(
+        self, all_rows: list[BankExpenseRow], positions: list[ExpensePositionView]
+    ) -> None:
+        self._positions = positions
+        self._all_rows = all_rows
+        self._rows = [row for row in all_rows if row.amount < 0]
         self._populate(self._table, self._rows)
-        missing = [row for row in self._all_rows if row.document_link_scan_complete and not row.documents]
+        missing = [row for row in all_rows if row.document_link_scan_complete and not row.documents]
         self._populate(self._missing_table, missing, receipt_mode=True)
-        incomplete = any(not row.document_link_scan_complete for row in self._all_rows)
+        incomplete = any(not row.document_link_scan_complete for row in all_rows)
         open_count = sum(not row.position_key for row in self._rows)
         suffix = " · Belegscan unvollständig" if incomplete else ""
         self._status.setText(
@@ -968,9 +1075,6 @@ class ExpenseReviewView(QWidget):
         self._wizard_button.setVisible(open_count > 0)
         self._refresh_settings()
 
-        if self._last_load_was_refresh:
-            self._missing_loaded_period = self._load_period
-
     def _on_main_tab_changed(self, index: int) -> None:
         if index != 1:
             return
@@ -978,17 +1082,19 @@ class ExpenseReviewView(QWidget):
             cast(date, self._start.date().toPython()),
             cast(date, self._end.date().toPython()),
         )
-        if self._missing_loaded_period != period:
+        if self._tenant_missing_loaded_periods.get(self._tenant_key) != period:
             self._refresh_missing_receipts()
 
     def _on_tenant_changed(self, index: int) -> None:
         tenant_key = "wuedara" if index == 1 else "xw"
         if tenant_key == self._tenant_key:
             return
+        self._save_period_state()
         self._header_save_timer.stop()
         self._save_table_header()
         self._tenant_key = tenant_key
         self._account_label.setText(f"Konto: {self._tenant_label}")
+        self._restore_period_state()
         state_key = f"expense_review/{self._tenant_key}/bank_table_header"
         state = self._settings.value(state_key)
         if state is not None:
@@ -996,13 +1102,24 @@ class ExpenseReviewView(QWidget):
         manual_state = self._settings.value(f"expense_review/{self._tenant_key}/manual_table_header")
         if manual_state is not None:
             self._manual_table.horizontalHeader().restoreState(manual_state)
-        self._rows = []
-        self._all_rows = []
-        self._missing_loaded_period = None
-        self._table.set_data([])
-        self._missing_table.set_data([])
+        cached = self._tenant_loads.get(tenant_key)
+        has_cached_period = cached is not None and cached[2] == self._selected_period()
+        if has_cached_period:
+            self._apply_tenant_load(cached[0], cached[1])
+        else:
+            self._rows = []
+            self._all_rows = []
+            self._positions = self.service.list_positions()
+            self._table.set_data([])
+            self._missing_table.set_data([])
         self._manual_table.set_data([])
-        self._load(refresh=True)
+        self._sync_missing_refresh_indicator()
+        worker = self._workers.get(tenant_key)
+        if not has_cached_period and (worker is None or not worker.isRunning()):
+            self._load(refresh=True)
+        elif not has_cached_period:
+            self._status.setText(f"Konto {self._tenant_label} wird geladen …")
+        self._load_manual_expenses()
 
     def _populate(
         self, table: DataTable, rows: list[BankExpenseRow], *, receipt_mode: bool = False
@@ -1098,6 +1215,11 @@ class ExpenseReviewView(QWidget):
             for row in self._all_rows
         ]
         self._rows = [row for row in self._all_rows if row.amount < 0]
+        self._tenant_loads[self._tenant_key] = (
+            self._all_rows,
+            self._positions,
+            self._selected_period(),
+        )
         self._populate(self._table, self._rows)
         missing = [
             row for row in self._all_rows if row.document_link_scan_complete and not row.documents
@@ -1119,6 +1241,7 @@ class ExpenseReviewView(QWidget):
         worker.start()
 
     def _assign_manual_position(self, expense_id: str, position_key: str) -> None:
+        tenant_key = self._tenant_key
         selected = next(
             (row for row in self._manual_table.source_rows_data() if row.get("__manual_id") == expense_id),
             None,
@@ -1136,15 +1259,22 @@ class ExpenseReviewView(QWidget):
                 category_label=position.label,
             )
         )
-        worker.signals.result.connect(lambda _: self._load_manual_expenses())
-        worker.signals.error.connect(self._on_manual_error)
+        worker.signals.result.connect(
+            lambda _, key=tenant_key: self._load_manual_expenses() if key == self._tenant_key else None
+        )
+        worker.signals.error.connect(lambda exc, key=tenant_key: self._on_manual_error(key, exc))
         worker.start()
 
     def _refresh_missing_receipts(self) -> None:
-        if self._worker is not None and self._worker.isRunning():
+        worker = self._workers.get(self._tenant_key)
+        if worker is not None and worker.isRunning():
             return
+        self._document_refresh_tenants.add(self._tenant_key)
         self._set_missing_refresh_pending(True)
         self._load(refresh=False, refresh_document_links=True, load_manual_expenses=False)
+
+    def _sync_missing_refresh_indicator(self) -> None:
+        self._set_missing_refresh_pending(self._tenant_key in self._document_refresh_tenants)
 
     def _set_missing_refresh_pending(self, pending: bool) -> None:
         if self._missing_refresh_button is None:
@@ -1280,7 +1410,12 @@ class ExpenseReviewView(QWidget):
             enabled=dialog.enabled.isChecked(),
         )
         self._positions = self.service.list_positions()
-        self._on_loaded(self._rows)
+        self._tenant_loads[self._tenant_key] = (
+            self._all_rows,
+            self._positions,
+            self._selected_period(),
+        )
+        self._apply_tenant_load(self._all_rows, self._positions)
 
     def _toggle_selected_rule(self) -> None:
         selected = self._rule_table.selected_row_data()
