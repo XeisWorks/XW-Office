@@ -264,8 +264,12 @@ class TaxesView(QWidget):
             selected_month = month.value()
 
             def job() -> dict[str, object]:
-                self._emit_uva_preview_progress(20, "UVA-Daten werden aus sevDesk geladen...")
-                payload = uva.calculate_month(selected_year, selected_month, refresh=refresh_data)
+                payload = uva.calculate_month(
+                    selected_year,
+                    selected_month,
+                    refresh=refresh_data,
+                    progress=self._emit_uva_preview_progress,
+                )
                 self._emit_uva_preview_progress(100, "UVA-Berechnung abgeschlossen")
                 return payload
 
@@ -532,6 +536,10 @@ class TaxesView(QWidget):
                     cache_text = "Datenstatus: aus Monatscache geladen"
             elif source == "live" and elapsed is not None:
                 cache_text = f"Datenstatus: live geladen in {elapsed} s"
+                requests = cache_value.get("source_requests")
+                reused = cache_value.get("reused_requests")
+                if isinstance(requests, int) and isinstance(reused, int):
+                    cache_text += f"\nsevDesk-Abfragen: {requests}; wiederverwendet: {reused}"
             if snapshot_hash:
                 cache_text = f"{cache_text}\nSnapshot: {snapshot_hash[:12]}" if cache_text else f"Snapshot: {snapshot_hash[:12]}"
         reconciliation_value = payload.get("reconciliation")
@@ -674,6 +682,7 @@ class TaxesView(QWidget):
                     self._uva_progress_timer.start()
             else:
                 self._uva_progress_timer.stop()
+                self._uva_progress_bar.setRange(0, 100)
                 self._uva_progress_bar.setValue(0)
         if not busy and self._uva_progress_label is not None:
             self._uva_progress_label.setText("Bereit")
@@ -681,16 +690,21 @@ class TaxesView(QWidget):
 
     def _set_uva_progress(self, value: int, text: str) -> None:
         percent = max(0, min(100, int(value)))
+        preview_busy = self._uva_preview_worker is not None and percent < 100
         if self._uva_progress_bar is not None:
+            self._uva_progress_bar.setRange(0, 0 if preview_busy else 100)
             self._uva_progress_bar.setValue(percent)
         self._uva_progress_text = text or self._uva_progress_text
+        display_text = text if preview_busy else f"{text} ({percent} %)"
         if self._uva_progress_label is not None and text:
-            self._uva_progress_label.setText(f"{text} ({percent} %)")
+            self._uva_progress_label.setText(display_text)
         if text:
-            self._container.resolve(AppSignals).status_message.emit(f"{text} ({percent} %)", 2500)
+            self._container.resolve(AppSignals).status_message.emit(display_text, 2500)
 
     def _tick_uva_progress(self) -> None:
         if self._uva_progress_bar is None:
+            return
+        if self._uva_preview_worker is not None and self._uva_preview_worker.isRunning():
             return
         running = (
             (self._uva_preview_worker is not None and self._uva_preview_worker.isRunning())

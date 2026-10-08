@@ -56,6 +56,26 @@ Hinweis:
 - Tokens bevorzugt ueber Settings in die verschluesselte DB-Verwaltung pflegen.
 - Keine Secrets ins Repo committen.
 
+### UVA-Berechnung und Datenfrische
+
+- Die Live-Berechnung zeigt Arbeitsphasen, die Anzahl der sevDesk-Abfragen und die
+  bisherige Laufzeit. Der Balken zeigt waehrend der Live-Berechnung Aktivitaet
+  ohne vorgetaeuschten Prozentanteil; kein automatisches Hochzaehlen bis 90 %.
+- UVA und ZM verwenden identische erfolgreiche sevDesk-Abfragen innerhalb eines
+  Berechnungslaufs gemeinsam. Unterschiedliche Filter bleiben getrennt; IST- und
+  Soll-Auswahl, Zahlungsnachweise und steuerliche Pruefungen bleiben unveraendert.
+- Detaildaten werden nur fuer diesen Lauf wiederverwendet. Eine Live-Neuberechnung
+  leert auch die internen Zahlungs-, Positions-, TaxSet- und Kontakt-Caches.
+  "Neu laden" umgeht weiterhin den fertigen Monatscache und den Monats-Snapshot.
+- Kontakt-Details werden fuer die ZM erst geladen, nachdem der Beleg nach Datum,
+  Status und steuerlichen Fakten als ZM-relevant ausgewaehlt wurde.
+- Das Ergebnis nennt Laufzeit und wiederverwendete Abfragen. Phasenlaufzeiten und
+  Abfragezaehler stehen im Anwendungslog, ohne Tokens oder Beleginhalte.
+  Die Zaehler erfassen logische GET-Abfragen, nicht einzelne HTTP-Retry-Versuche.
+- Die vorhandene Begrenzung auf zwei sevDesk-Anfragen pro Sekunde bleibt bestehen.
+  Insbesondere aeltere Rechnungen mit Zahlungen im UVA-Monat werden nicht zugunsten
+  kuerzerer Laufzeiten ausgeschlossen.
+
 ## 4) Betrieb auf mehreren PCs
 
 - Betriebsdaten werden zentral in PostgreSQL synchronisiert.

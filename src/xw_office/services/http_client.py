@@ -4,7 +4,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Protocol
@@ -194,17 +196,75 @@ def sevdesk_get_with_retry(
 
 
 @dataclass
+class SevdeskReadSession:
+    """Reuse identical successful reads only within one thread's calculation."""
+
+    responses: dict[tuple[str, tuple[tuple[str, str], ...]], httpx.Response] = field(
+        default_factory=dict
+    )
+    requests: int = 0
+    cache_hits: int = 0
+    on_request: Callable[[], None] | None = None
+
+
+class _ReadSessionLocal(threading.local):
+    session: SevdeskReadSession | None = None
+
+
+@dataclass
 class SevdeskConnection:
     """Holds one shared httpx client for all sevDesk service clients."""
 
     client: httpx.Client
     config: AppConfig
     rate_limiter: SevdeskRateLimiter | None = None
+    _read_session: _ReadSessionLocal = field(default_factory=_ReadSessionLocal, init=False)
 
-    def get(self, path: str, *, max_retries: int | None = None, **kwargs: object) -> httpx.Response:
+    @contextmanager
+    def read_session(self) -> Generator[SevdeskReadSession, None, None]:
+        """Discard all responses on exit; unrelated workers never share this cache."""
+        previous = self._read_session.session
+        session = SevdeskReadSession()
+        self._read_session.session = session
+        try:
+            yield session
+        finally:
+            self._read_session.session = previous
+            session.responses.clear()
+            session.on_request = None
+
+    def get(
+        self,
+        path: str,
+        *,
+        max_retries: int | None = None,
+        cancel_token: CancellationToken | None = None,
+        **kwargs: object,
+    ) -> httpx.Response:
         """GET *path* with retry policy from config."""
-        cancel_token = kwargs.pop("cancel_token", None)
-        return sevdesk_get_with_retry(
+        session = self._read_session.session
+        cache_key = None
+        params = kwargs.get("params", {})
+        if session is not None and cancel_token is None and not (kwargs.keys() - {"params"}):
+            if isinstance(params, dict) and all(
+                isinstance(key, str) and isinstance(value, (str, int, float, bool))
+                for key, value in params.items()
+            ):
+                cache_key = (path, tuple(sorted(httpx.QueryParams(params).multi_items())))
+                cached = session.responses.get(cache_key)
+                if cached is not None:
+                    session.cache_hits += 1
+                    return httpx.Response(
+                        cached.status_code,
+                        headers=cached.headers,
+                        content=cached.content,
+                        request=cached.request,
+                    )
+        if session is not None:
+            session.requests += 1
+            if session.on_request is not None:
+                session.on_request()
+        response = sevdesk_get_with_retry(
             self.client,
             self.config,
             path,
@@ -213,6 +273,9 @@ class SevdeskConnection:
             rate_limiter=self.rate_limiter,
             **kwargs,
         )
+        if session is not None and cache_key is not None:
+            session.responses[cache_key] = response
+        return response
 
     def _write_request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
         if self.rate_limiter is not None:

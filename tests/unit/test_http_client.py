@@ -5,6 +5,7 @@ import pytest
 from xw_office.core.config import AppConfig
 from xw_office.core.exceptions import SevdeskApiError
 from xw_office.services.http_client import (
+    SevdeskConnection,
     SevdeskRateLimiter,
     build_sevdesk_connection,
     humanize_sevdesk_error,
@@ -89,3 +90,74 @@ def test_rate_limiter_applies_retry_after_cooldown(monkeypatch: pytest.MonkeyPat
     limiter.acquire()
 
     assert sum(sleeps) == pytest.approx(3.0)
+
+
+def test_read_session_reuses_only_identical_queries_and_discards_on_exit() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(200, json={"objects": [{"version": len(calls)}]})
+
+    with httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://example.test"
+    ) as client:
+        connection = SevdeskConnection(client, AppConfig())
+        with connection.read_session() as session:
+            first = connection.get("/InvoicePos", params={"id": "1", "embed": "part"})
+            reused = connection.get("/InvoicePos", params={"embed": "part", "id": "1"})
+            assert reused is not first
+            assert reused.json() == first.json()
+            connection.get("/InvoicePos", params={"id": "2", "embed": "part"})
+            assert (session.requests, session.cache_hits) == (2, 1)
+        assert session.responses == {}
+        with connection.read_session():
+            refreshed = connection.get("/InvoicePos", params={"id": "1", "embed": "part"})
+        assert refreshed.json() != first.json()
+        connection.get("/InvoicePos", params={"id": "1", "embed": "part"})
+    assert len(calls) == 4
+
+
+def test_read_session_does_not_cache_failures_and_cleans_up_after_exception() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(401 if calls == 1 else 200, json={"objects": []})
+
+    with httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://example.test"
+    ) as client:
+        connection = SevdeskConnection(client, AppConfig())
+        with pytest.raises(RuntimeError, match="stop"):
+            with connection.read_session() as session:
+                with pytest.raises(SevdeskApiError):
+                    connection.get("/Invoice")
+                connection.get("/Invoice")
+                assert session.requests == 2
+                assert session.cache_hits == 0
+                raise RuntimeError("stop")
+        assert session.responses == {}
+        connection.get("/Invoice")
+    assert calls == 3
+
+
+def test_read_session_is_not_shared_with_other_workers() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"objects": []})
+
+    with httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://example.test"
+    ) as client:
+        connection = SevdeskConnection(client, AppConfig())
+        with connection.read_session() as session:
+            connection.get("/Invoice")
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                executor.submit(connection.get, "/Invoice").result()
+            assert session.requests == 1
+            assert session.cache_hits == 0
+            connection.get("/Invoice")
+            assert session.cache_hits == 1

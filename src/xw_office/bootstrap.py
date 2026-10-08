@@ -366,6 +366,7 @@ def register_default_services(container: Container) -> None:
             payload_service=c.resolve(UvaPayloadService),
             zm_service=c.resolve(ZmService),
             snapshot_store=c.resolve(TaxMonthlySnapshotStore),
+            source_connection=c.resolve(SevdeskConnection),
         ),
     )
     container.register(

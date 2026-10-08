@@ -81,6 +81,10 @@ class SevdeskZmInvoiceProvider:
         self._contact_cache: dict[str, dict[str, Any]] = {}
         self._position_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
 
+    def clear_cache(self) -> None:
+        self._contact_cache.clear()
+        self._position_cache.clear()
+
     def load_invoices(self, year: int, month: int) -> list[dict[str, Any]]:
         return self._load_dated_resource(
             "/Invoice",
@@ -136,14 +140,14 @@ class SevdeskZmInvoiceProvider:
             batch = [item for item in objects if isinstance(item, dict)] if isinstance(objects, list) else []
             if not batch:
                 break
-            documents.extend(self._with_contact_fallback(item) for item in batch)
+            documents.extend(batch)
             if len(batch) < self._page_size:
                 break
             offset += self._page_size
             page += 1
         return documents
 
-    def _with_contact_fallback(self, invoice: dict[str, Any]) -> dict[str, Any]:
+    def enrich_contact(self, invoice: dict[str, Any]) -> dict[str, Any]:
         contact = invoice.get("contact")
         if isinstance(contact, dict) and (contact.get("vatNumber") or contact.get("name")):
             return invoice
@@ -211,6 +215,8 @@ class ZmService:
         *,
         uid_overrides: Mapping[str, str] | None = None,
     ) -> ZmCalculationResult:
+        if isinstance(self._provider, SevdeskZmInvoiceProvider):
+            self._provider.clear_cache()
         invoices = self._provider.load_invoices(year, month)
         load_credit_notes = getattr(self._provider, "load_credit_notes", None)
         credit_notes = load_credit_notes(year, month) if callable(load_credit_notes) else []
@@ -254,6 +260,8 @@ class ZmService:
                 return
             result.selected += 1
 
+            if isinstance(self._provider, SevdeskZmInvoiceProvider):
+                document = self._provider.enrich_contact(document)
             contact_raw = document.get("contact")
             contact: dict[str, Any] = contact_raw if isinstance(contact_raw, dict) else {}
             customer = str(contact.get("name") or document.get("contactName") or "").strip()

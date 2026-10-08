@@ -152,6 +152,13 @@ class SevdeskUvaPreviewProvider:
         self._tax_set_text_cache: dict[str, str] = {}
         self._voucher_period_cache: dict[tuple[int, int], list[dict[str, Any]]] = {}
 
+    def clear_cache(self) -> None:
+        """Start a fresh source read without losing reuse within the calculation."""
+        self._payment_cache.clear()
+        self._position_cache.clear()
+        self._tax_set_text_cache.clear()
+        self._voucher_period_cache.clear()
+
     def load_sales_documents(self, year: int, month: int) -> list[dict[str, Any]]:
         start_ts, end_ts = self._month_bounds(year, month)
         invoice_docs = self._merge_documents(
@@ -583,6 +590,8 @@ class UvaPreviewService:
         self._selector = selector or UvaDocumentSelector()
 
     def build_preview(self, year: int, month: int) -> UvaPreviewResult:
+        if isinstance(self._provider, SevdeskUvaPreviewProvider):
+            self._provider.clear_cache()
         sales_docs = self._provider.load_sales_documents(year, month) if self._provider is not None else []
         purchase_docs = self._provider.load_purchase_documents(year, month) if self._provider is not None else []
         sales_selection = self._selector.select_sales_documents(year, month, sales_docs)

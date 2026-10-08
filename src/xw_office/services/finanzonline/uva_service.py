@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
+from contextlib import nullcontext
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
-from typing import Any, Mapping
+from typing import Any, Mapping, TypeVar
 
 from xw_office.core.config import AppConfig
 from xw_office.services.finanzonline.client import FinanzOnlineClient
@@ -15,9 +17,11 @@ from xw_office.services.finanzonline.uva_preview import UvaPreviewService
 from xw_office.services.finanzonline.uva_references import compare_uva_reference
 from xw_office.services.finanzonline.uva_soap import UvaSubmitResult
 from xw_office.services.finanzonline.zm_service import ZmCalculationResult, ZmService
+from xw_office.services.http_client import SevdeskConnection, SevdeskReadSession
 
 logger = logging.getLogger(__name__)
 _TAX_SNAPSHOT_SCHEMA_VERSION = "uva_zm_snapshot_v4"
+_PhaseResult = TypeVar("_PhaseResult")
 
 
 class UvaService:
@@ -31,6 +35,7 @@ class UvaService:
         payload_service: UvaPayloadService | None = None,
         zm_service: ZmService | None = None,
         snapshot_store: TaxMonthlySnapshotStore | None = None,
+        source_connection: SevdeskConnection | None = None,
     ) -> None:
         self._config = config
         self._client = client
@@ -38,6 +43,7 @@ class UvaService:
         self._payload_service = payload_service
         self._zm_service = zm_service
         self._snapshot_store = snapshot_store
+        self._source_connection = source_connection
         self._calculation_cache: dict[tuple[int, int], dict[str, Any]] = {}
 
     def describe_capabilities(self) -> str:
@@ -63,7 +69,14 @@ class UvaService:
             f"FinanzOnline-U30-Sendung: {'vollstaendig konfiguriert' if has_submission else 'FASTNR/Hersteller-ID pruefen'}"
         )
 
-    def calculate_month(self, year: int, month: int, *, refresh: bool = False) -> dict[str, Any]:
+    def calculate_month(
+        self,
+        year: int,
+        month: int,
+        *,
+        refresh: bool = False,
+        progress: Callable[[int, str], None] | None = None,
+    ) -> dict[str, Any]:
         """Build the single cash-basis monthly UVA calculation for UI and submission."""
         cache_key = (year, month)
         if not refresh and cache_key in self._calculation_cache:
@@ -92,9 +105,68 @@ class UvaService:
                 "quelle": "xw_office",
                 "hinweis": "Keine IST-Berechnung konfiguriert.",
             }
+        session_context = (
+            self._source_connection.read_session()
+            if self._source_connection is not None
+            else nullcontext(SevdeskReadSession())
+        )
+        with session_context as session:
+            return self._calculate_live_month(year, month, session, progress)
+
+    def _calculate_live_month(
+        self,
+        year: int,
+        month: int,
+        session: SevdeskReadSession,
+        progress: Callable[[int, str], None] | None,
+    ) -> dict[str, Any]:
+        assert self._preview_service is not None
+        assert self._payload_service is not None
+        preview_service = self._preview_service
+        payload_service = self._payload_service
         started = time.perf_counter()
-        preview = self._preview_service.build_preview(year, month)
-        calculated = self._payload_service.build_payload_from_preview(preview)
+        phase_percent = 10
+        phase_text = "UVA-Belege und Zahlungsnachweise werden geladen"
+        phases: dict[str, float] = {}
+
+        def report() -> None:
+            if progress is not None:
+                progress(
+                    phase_percent,
+                    f"{phase_text} | {session.requests} API-Abfragen, "
+                    f"{session.cache_hits} wiederverwendet | "
+                    f"{time.perf_counter() - started:.0f} s",
+                )
+
+        def request_progress() -> None:
+            if session.requests == 1 or session.requests % 10 == 0:
+                report()
+
+        session.on_request = request_progress
+
+        def run_phase(
+            name: str, percent: int, text: str, operation: Callable[[], _PhaseResult]
+        ) -> _PhaseResult:
+            nonlocal phase_percent, phase_text
+            phase_percent, phase_text = percent, text
+            report()
+            phase_started = time.perf_counter()
+            result = operation()
+            phases[name] = round(time.perf_counter() - phase_started, 3)
+            logger.info(
+                "UVA %04d-%02d phase=%s elapsed_seconds=%.3f source_requests=%d reused=%d",
+                year, month, name, phases[name], session.requests, session.cache_hits,
+            )
+            return result
+
+        preview = run_phase(
+            "preview", 10, phase_text,
+            lambda: preview_service.build_preview(year, month),
+        )
+        calculated = run_phase(
+            "kennzahlen", 65, "UVA-Kennzahlen werden berechnet",
+            lambda: payload_service.build_payload_from_preview(preview),
+        )
         payload: dict[str, Any] = {
             "jahr": year,
             "monat": month,
@@ -110,10 +182,14 @@ class UvaService:
             "warnings": list(calculated.warnings),
             "kennzahlen_text": self._payload_service.render_kennzahlen_text(calculated),
         }
-        if self._zm_service is not None:
-            zm = self._zm_service.calculate_month(year, month)
+        zm_service = self._zm_service
+        if zm_service is not None:
+            zm = run_phase(
+                "zm", 75, "ZM-Belege und UID-Pruefungen werden verarbeitet",
+                lambda: zm_service.calculate_month(year, month),
+            )
             payload["zm"] = zm.model_dump()
-            payload["zm_text"] = self._zm_service.render_preview_text(zm)
+            payload["zm_text"] = zm_service.render_preview_text(zm)
         payload["reference_comparison"] = compare_uva_reference(
             year=year,
             month=month,
@@ -123,8 +199,14 @@ class UvaService:
         payload["reconciliation"] = build_uva_zm_reconciliation(payload)
         payload["data_quality"] = build_data_quality(payload)
         snapshot_hash = None
-        if self._snapshot_store is not None:
-            snapshot = self._snapshot_store.put_snapshot(year, month, payload)
+        phase_percent, phase_text = 95, "Datenqualitaet geprueft; Snapshot wird gespeichert"
+        report()
+        snapshot_store = self._snapshot_store
+        if snapshot_store is not None:
+            snapshot = run_phase(
+                "snapshot", 95, phase_text,
+                lambda: snapshot_store.put_snapshot(year, month, payload),
+            )
             if snapshot is not None:
                 snapshot_hash = snapshot.payload_hash
         payload["cache"] = {
@@ -132,8 +214,15 @@ class UvaService:
             "source": "live",
             "elapsed_seconds": round(time.perf_counter() - started, 3),
             "snapshot_hash": snapshot_hash,
+            "source_requests": session.requests,
+            "reused_requests": session.cache_hits,
+            "phase_seconds": phases,
         }
-        self._calculation_cache[cache_key] = deepcopy(payload)
+        self._calculation_cache[(year, month)] = deepcopy(payload)
+        logger.info(
+            "UVA %04d-%02d completed elapsed_seconds=%.3f source_requests=%d reused=%d",
+            year, month, time.perf_counter() - started, session.requests, session.cache_hits,
+        )
         return payload
 
     def build_preview(self, year: int, month: int) -> dict[str, Any]:
