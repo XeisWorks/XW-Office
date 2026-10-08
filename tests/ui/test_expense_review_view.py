@@ -55,6 +55,10 @@ def test_expense_review_uses_positions_and_settings_tab(qtbot: object) -> None:
         "XeisWorks",
         "WüdaraMusi",
     ]
+    assert view._tenant_tabs.objectName() == "expenseTenantTabs"
+    assert view._tenant_tabs.expanding()
+    assert view._tenant_tabs.minimumHeight() >= 62
+    assert "QTabBar#expenseTenantTabs::tab:selected" in view._tenant_tabs.styleSheet()
     view._tenant_tabs.setCurrentIndex(1)
     qtbot.waitUntil(  # type: ignore[attr-defined]
         lambda: "Konto WüdaraMusi" in view._status.text(), timeout=3000

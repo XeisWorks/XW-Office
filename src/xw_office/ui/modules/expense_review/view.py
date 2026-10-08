@@ -525,6 +525,24 @@ class ExpenseReviewView(QWidget):
         self._assignment_workers: list[BackgroundWorker] = []
         self._tenant_key = "xw"
         self._tenant_tabs = QTabBar()
+        self._tenant_tabs.setObjectName("expenseTenantTabs")
+        self._tenant_tabs.setAccessibleName("Mandant für die Ausgabenüberprüfung")
+        self._tenant_tabs.setExpanding(True)
+        self._tenant_tabs.setDrawBase(False)
+        self._tenant_tabs.setMinimumHeight(62)
+        self._tenant_tabs.setStyleSheet(
+            "QTabBar#expenseTenantTabs {"
+            "  background: #101b38; border: 1px solid #36558d; border-radius: 9px; padding: 5px;"
+            "}"
+            "QTabBar#expenseTenantTabs::tab {"
+            "  background: #1b2a4b; border: 1px solid #3e5684; border-radius: 6px;"
+            "  color: #cbd7ef; font-size: 15px; font-weight: 700; margin: 1px; padding: 9px 24px;"
+            "}"
+            "QTabBar#expenseTenantTabs::tab:hover { background: #2a416d; color: #ffffff; }"
+            "QTabBar#expenseTenantTabs::tab:selected {"
+            "  background: #c6922d; border-color: #f0ca73; color: #111827;"
+            "}"
+        )
         self._tenant_tabs.addTab("XeisWorks")
         self._tenant_tabs.addTab("WüdaraMusi")
         self._rows: list[BankExpenseRow] = []
