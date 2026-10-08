@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -779,14 +780,30 @@ class TaxesView(QWidget):
         layout.addWidget(progress)
         preview_box = QTextBrowser()
         preview_box.setObjectName("ossSummary")
-        preview_box.setPlainText("EU-OSS berechnen, um die Quartalssummen zu sehen.")
-        layout.addWidget(preview_box, 1)
+        preview_box.setLineWrapMode(QTextBrowser.LineWrapMode.NoWrap)
+        preview_box.setPlainText("EU-OSS noch nicht berechnet.")
+
+        def fit_summary_width() -> None:
+            document = preview_box.document()
+            document.setTextWidth(-1)
+            margins = preview_box.contentsMargins()
+            preview_box.setFixedWidth(
+                math.ceil(document.idealWidth()) + margins.left() + margins.right()
+                + 24
+            )
+
+        fit_summary_width()
+        result_columns = QHBoxLayout()
+        result_columns.setSpacing(12)
+        result_columns.addWidget(preview_box)
 
         oss_table = DataTable(self._OSS_COLUMNS)
+        oss_table.setObjectName("ossTable")
         oss_table.setMinimumHeight(170)
         oss_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         oss_table.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(oss_table)
+        result_columns.addWidget(oss_table, 1)
+        layout.addLayout(result_columns, 1)
 
         drilldown = CollapsibleDetails("Belege zur ausgewählten Steuergruppe")
         drilldown_box = drilldown.content
@@ -803,7 +820,7 @@ class TaxesView(QWidget):
         preview = QPushButton("EU-OSS berechnen")
         refresh = QPushButton("Neu aus sevDesk laden")
         export = QPushButton("EU-OSS XML speichern")
-        portal = QPushButton("Testportal oeffnen")
+        portal = QPushButton("EU-OSS öffnen")
         buttons.addWidget(preview)
         buttons.addWidget(refresh)
         buttons.addWidget(export)
@@ -842,6 +859,7 @@ class TaxesView(QWidget):
             nonlocal latest_result
             latest_result = res
             preview_box.setHtml(oss_summary_html(res))
+            fit_summary_width()
             status.setText(
                 f"XML-Export blockiert: {len(res.blocking)} fachliche Prüfungen erforderlich."
                 if res.blocking else "Berechnet · keine blockierenden Datenfehler · Portalprüfung vor Abgabe erforderlich."
@@ -997,8 +1015,8 @@ class TaxesView(QWidget):
             technical_detail.set_text("")
 
         def on_portal() -> None:
-            if not QDesktopServices.openUrl(QUrl(oss.portal_url(test_mode=True))):
-                QMessageBox.warning(self, "EU-OSS", "Das Testportal konnte nicht geoeffnet werden.")
+            if not QDesktopServices.openUrl(QUrl(oss.portal_url(test_mode=False))):
+                QMessageBox.warning(self, "EU-OSS", "EU-OSS konnte nicht geöffnet werden.")
 
         preview.clicked.connect(lambda _checked=False: on_preview(refresh_data=False))
         refresh.clicked.connect(lambda _checked=False: on_preview(refresh_data=True))

@@ -582,7 +582,7 @@ class OssService:
     def portal_url(*, test_mode: bool = True) -> str:
         if test_mode:
             return "https://fon-moss.bmf.gv.at/extern/moss/test_fileupload_oss"
-        return "https://www.usp.gv.at/themen/steuern-finanzen/umsatzsteuer-ueberblick/weitere-informationen-zur-umsatzsteuer/umsaetze-mit-auslandsbezug/Umsatzsteuer-One-Stop-Shop/EU-OSS/Erklaerung-und-Zahlung-im-EU-OSS.html"
+        return "https://fon-moss.bmf.gv.at/extern/moss/erklaerung_einreichen_korrigieren_oss?execution=e3s1"
 
 
 def build_oss_xml(result: OssQuarterResult, *, oss_id: str = "", uid_fixed_est: str = "") -> str:

@@ -166,6 +166,10 @@ Die XML-Struktur wird gegen das mitgelieferte offizielle U30-Schema validiert.
   Liste. Standard ist das zuletzt abgeschlossene Quartal. Die Ansicht zeigt Steuer,
   Brutto und Netto je Land, Satz und Waren-/Leistungsart. Hinweise, Beleglisten und
   technische Details sind eingeklappt; Exportblocker bleiben unmittelbar sichtbar.
+- Die Quartalssummen stehen links in einer inhaltsbreiten Spalte; die Land-/Satz-/
+  Art-Tabelle nutzt rechts die restliche Breite. "EU-OSS oeffnen" fuehrt direkt
+  zur Erklaerungsseite des echten Portals. Der hinterlegte `execution`-Parameter
+  kann von der aktuellen Portalsitzung abhaengen; gegebenenfalls erneut anmelden.
 - EU-OSS verwendet das Liefer-/Leistungsquartal, nicht den Zahlungsmonat.
   Wenn ein separates Leistungsdatum fehlt, wird das Rechnungsdatum verwendet.
   Diese Ersatzannahme und die standardmaessige Warenklassifikation muessen fuer
