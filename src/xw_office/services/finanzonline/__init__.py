@@ -1,6 +1,7 @@
 """FinanzOnline / UVA services."""
 
 from xw_office.services.finanzonline.client import FinanzOnlineClient
+from xw_office.services.finanzonline.filing_status import FilingStatus, FilingStatusStore
 from xw_office.services.finanzonline.monthly_snapshot import TaxMonthlySnapshotStore
 from xw_office.services.finanzonline.oss_models import OssLine, OssQuarterResult, OssXmlExport
 from xw_office.services.finanzonline.oss_service import OssService, SevdeskOssDocumentProvider
@@ -40,6 +41,8 @@ from xw_office.services.finanzonline.zm_service import (
 )
 
 __all__ = [
+    "FilingStatus",
+    "FilingStatusStore",
     "FinanzOnlineClient",
     "FinanzOnlineFileUploadBackend",
     "FinanzOnlineSettings",

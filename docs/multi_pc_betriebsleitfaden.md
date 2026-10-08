@@ -202,6 +202,16 @@ Die XML-Struktur wird gegen das mitgelieferte offizielle U30-Schema validiert.
   Nachweis einer erfolgreichen Portalannahme. Nullmeldungen und nicht exportierbare
   0%-Zeilen werden ausdruecklich fuer die manuelle Portalbearbeitung ausgewiesen.
   Vergleichsbilder werden nicht als Referenzkonfiguration gespeichert.
+- UVA-Monats- und EU-OSS-Quartalsberechnungen werden als jeweils letzter lokaler
+  Snapshot im SQLite-Cache gespeichert; eine Neuberechnung ersetzt den Snapshot
+  dieses Zeitraums. Abgabebestaetigungen liegen davon getrennt und sind an einen
+  SHA-256-Fingerabdruck der konkreten Berechnung gebunden. Eine geaenderte Berechnung
+  erbt daher keinen frueheren Abgabestatus.
+- Eine UVA gilt lokal nur dann als abgegeben, wenn FinanzOnline eine erfolgreiche
+  Produktivuebermittlung bestaetigt; Testlaeufe zaehlen nicht. EU-OSS hat keinen
+  automatischen Portal-Upload: erst nach bestaetigter Annahme im Portal darf
+  "Im Portal abgegeben markieren" verwendet werden. XML-Export allein gilt nicht
+  als Abgabe. Dieser Status bestaetigt keine erfolgte Zahlung.
 
 Fachliche Quelle:
 [USP/BMF: Erklaerung und Zahlung im EU-OSS](https://www.usp.gv.at/themen/steuern-finanzen/umsatzsteuer-ueberblick/weitere-informationen-zur-umsatzsteuer/umsaetze-mit-auslandsbezug/Umsatzsteuer-One-Stop-Shop/EU-OSS/Erklaerung-und-Zahlung-im-EU-OSS.html)

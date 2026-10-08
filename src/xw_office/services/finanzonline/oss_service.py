@@ -15,6 +15,11 @@ from xml.etree import ElementTree as ET
 from xw_office.services.http_client import SevdeskConnection
 from xw_office.services.finanzonline.amounts import first_amount, position_amounts, tax_amount
 from xw_office.services.finanzonline.payment_evidence import parse_source_date as _parse_date
+from xw_office.services.finanzonline.filing_status import (
+    FilingStatus,
+    FilingStatusStore,
+    oss_calculation_hash,
+)
 from xw_office.services.finanzonline.source_reads import load_tax_resource
 from xw_office.services.shipping.countries import country_iso2, country_name_en
 
@@ -314,11 +319,39 @@ class OssService:
         *,
         tax_rules: dict[str, OssTaxRule] | None = None,
         snapshot_store: OssQuarterSnapshotStore | None = None,
+        filing_status_store: FilingStatusStore | None = None,
     ) -> None:
         self._provider = provider
         self._tax_rules = tax_rules if tax_rules is not None else load_oss_tax_rules()
         self._known_rates_by_country = known_oss_rates_by_country(self._tax_rules)
         self._snapshot_store = snapshot_store
+        self._filing_status_store = filing_status_store
+
+    def get_filing_status(self, result: OssQuarterResult) -> FilingStatus | None:
+        if self._filing_status_store is None:
+            return None
+        calculation_hash = oss_calculation_hash(
+            result.model_dump(mode="json", exclude={"cache"})
+        )
+        return self._filing_status_store.get_status(
+            "oss", result.year, result.quarter, calculation_hash
+        )
+
+    def mark_portal_submission(self, result: OssQuarterResult) -> FilingStatus:
+        if self._filing_status_store is None:
+            raise RuntimeError("Keine dauerhafte Ablagestatus-Speicherung konfiguriert.")
+        if result.blocking:
+            raise ValueError("Ein EU-OSS-Ergebnis mit Blockern kann nicht als abgegeben markiert werden.")
+        calculation_hash = oss_calculation_hash(
+            result.model_dump(mode="json", exclude={"cache"})
+        )
+        return self._filing_status_store.record_submission(
+            "oss",
+            result.year,
+            result.quarter,
+            calculation_hash,
+            confirmation_source="manual_portal_confirmation",
+        )
 
     def describe_capabilities(self) -> str:
         source = "aktiv" if self._provider is not None else "nicht aktiv"

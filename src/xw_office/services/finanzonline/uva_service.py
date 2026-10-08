@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import time
 from collections.abc import Callable
 from contextlib import nullcontext
@@ -12,6 +13,12 @@ from typing import Any, Mapping, TypeVar
 
 from xw_office.core.config import AppConfig
 from xw_office.services.finanzonline.client import FinanzOnlineClient
+from xw_office.services.finanzonline.filing_status import (
+    FilingStatus,
+    FilingStatusStore,
+    uva_calculation_hash,
+    uva_submission_kennzahlen,
+)
 from xw_office.services.finanzonline.monthly_snapshot import TaxMonthlySnapshotStore
 from xw_office.services.finanzonline.uva_payload_service import UvaPayloadService
 from xw_office.services.finanzonline.uva_preview import UvaPreviewService
@@ -36,6 +43,7 @@ class UvaService:
         zm_service: ZmService | None = None,
         snapshot_store: TaxMonthlySnapshotStore | None = None,
         source_connection: SevdeskConnection | None = None,
+        filing_status_store: FilingStatusStore | None = None,
     ) -> None:
         self._config = config
         self._client = client
@@ -44,6 +52,7 @@ class UvaService:
         self._zm_service = zm_service
         self._snapshot_store = snapshot_store
         self._source_connection = source_connection
+        self._filing_status_store = filing_status_store
         self._calculation_cache: dict[tuple[int, int], dict[str, Any]] = {}
 
     def describe_capabilities(self) -> str:
@@ -57,6 +66,7 @@ class UvaService:
             if self._preview_service is not None and self._payload_service is not None
             else "nicht aktiv"
         )
+
         return (
             "UVA-Modul: eine IST-Monatsberechnung aus sevDesk-Zahlungsdaten; "
             "FinanzOnline nutzt dieselben Kennzahlen.\n"
@@ -67,6 +77,15 @@ class UvaService:
             f"PostgreSQL: {'konfiguriert' if has_url else 'nicht konfiguriert (nur .env)'}\n"
             f"FinanzOnline-Login: {'vorhanden' if has_fon else 'fehlt (Einstellungen > Token/.env)'}\n"
             f"FinanzOnline-U30-Sendung: {'vollstaendig konfiguriert' if has_submission else 'FASTNR/Hersteller-ID pruefen'}"
+        )
+
+    def get_filing_status(
+        self, year: int, month: int, calculation_hash: str
+    ) -> FilingStatus | None:
+        if self._filing_status_store is None:
+            return None
+        return self._filing_status_store.get_status(
+            "uva", year, month, calculation_hash
         )
 
     def calculate_month(
@@ -89,6 +108,7 @@ class UvaService:
             snapshot = self._snapshot_store.get_snapshot(year, month)
             if snapshot is not None and snapshot.payload.get("snapshot_schema_version") == _TAX_SNAPSHOT_SCHEMA_VERSION:
                 cached_payload = deepcopy(snapshot.payload)
+                cached_payload["calculation_hash"] = uva_calculation_hash(cached_payload)
                 cached_payload["cache"] = {
                     "hit": True,
                     "source": "persistent",
@@ -182,6 +202,7 @@ class UvaService:
             "warnings": list(calculated.warnings),
             "kennzahlen_text": self._payload_service.render_kennzahlen_text(calculated),
         }
+        payload["calculation_hash"] = uva_calculation_hash(payload)
         zm_service = self._zm_service
         if zm_service is not None:
             zm = run_phase(
@@ -256,35 +277,32 @@ class UvaService:
             rule_version = calculated.rule_version
             data_quality = {}
             cache_meta = {}
-        submission_kennzahlen = {
-            "KZ000": kennzahlen.get("A000", "0.00"),
-            "KZ011": kennzahlen.get("A011", "0.00"),
-            "KZ017": kennzahlen.get("A017", "0.00"),
-            "KZ021": kennzahlen.get("A021", "0.00"),
-            "KZ022": kennzahlen.get("A022", "0.00"),
-            "KZ029": kennzahlen.get("A029", "0.00"),
-            "KZ006": kennzahlen.get("A006", "0.00"),
-            "KZ057": kennzahlen.get("A057", "0.00"),
-            "KZ070": kennzahlen.get("B070", "0.00"),
-            "KZ072": kennzahlen.get("B072", "0.00"),
-            "KZ060": kennzahlen.get("C060", "0.00"),
-            "KZ065": kennzahlen.get("C065", "0.00"),
-            "KZ066": kennzahlen.get("C066", "0.00"),
-            "KZ090": kennzahlen.get("D090", "0.00"),
-        }
-        return {
+        submission_payload: dict[str, Any] = {
             "meldung": "U30",
             "jahr": year,
             "monat": month,
             "zeitraum": f"{year:04d}-{month:02d}",
             "quelle": "xw_office",
             "rule_version": rule_version,
-            "kennzahlen": submission_kennzahlen,
+            "kennzahlen": uva_submission_kennzahlen(kennzahlen),
             "zahlbetrag": zahlbetrag,
             "warnings": warnings,
             "data_quality": data_quality,
             "snapshot_hash": cache_meta.get("snapshot_hash"),
+            "calculation_hash": str(
+                (cached or {}).get("calculation_hash")
+                or uva_calculation_hash(
+                    {
+                        "jahr": year,
+                        "monat": month,
+                        "kennzahlen": kennzahlen,
+                        "zahlbetrag": zahlbetrag,
+                        "rule_version": rule_version,
+                    }
+                )
+            ),
         }
+        return submission_payload
 
     def submit_month(self, year: int, month: int) -> UvaSubmitResult:
         """Compatibility workflow for callers that still explicitly request both filings."""
@@ -327,6 +345,26 @@ class UvaService:
         uva_payload = self.build_submission_payload(year, month)
         result = self.submit_uva(uva_payload)
         result.uva_payload = uva_payload
+        if result.ok and not result.test_mode:
+            try:
+                if self._filing_status_store is None:
+                    raise RuntimeError("Keine dauerhafte Ablagestatus-Speicherung konfiguriert.")
+                result_status = self._filing_status_store.record_submission(
+                    "uva",
+                    year,
+                    month,
+                    str(uva_payload["calculation_hash"]),
+                    confirmation_source="finanzonline_production_response",
+                    reference=result.reference_id or "",
+                )
+                result.filing_status_recorded = True
+                logger.info(
+                    "UVA %04d-%02d production filing recorded at %.3f",
+                    year, month, result_status.confirmed_at,
+                )
+            except (OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
+                result.filing_status_error = str(exc)
+                logger.exception("UVA %04d-%02d succeeded but filing status could not be stored", year, month)
         return result
 
     def prepare_zm_month(self, year: int, month: int) -> ZmCalculationResult:

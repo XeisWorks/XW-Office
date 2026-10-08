@@ -9,6 +9,7 @@ import pytest
 from xw_office.core.config import AppConfig
 from xw_office.core.exceptions import SevdeskApiError
 from xw_office.services.finanzonline.oss_service import OssService, SevdeskOssDocumentProvider
+from xw_office.services.finanzonline.filing_status import FilingStatusStore
 from xw_office.services.http_client import SevdeskConnection
 
 
@@ -96,6 +97,34 @@ def test_credit_requires_portal_correction_instead_of_silent_current_quarter_net
     assert any("Korrektur" in warning for warning in result.blocking)
     with pytest.raises(ValueError, match="blockiert"):
         service.build_xml_export_from_result(result)
+
+
+def test_oss_portal_confirmation_is_persistent_and_bound_to_calculation(tmp_path) -> None:
+    store = FilingStatusStore(tmp_path / "tax.sqlite")
+    service = OssService(
+        Documents([invoice()]),
+        filing_status_store=store,
+    )
+    result = service.calculate_quarter(2026, 3)
+
+    recorded = service.mark_portal_submission(result)
+
+    assert recorded.confirmation_source == "manual_portal_confirmation"
+    assert service.get_filing_status(result) == recorded
+    changed = result.model_copy(deep=True)
+    changed.goods_lines[0].tax_amount = "7.01"
+    assert service.get_filing_status(changed) is None
+
+
+def test_oss_blockers_prevent_manual_submission_confirmation(tmp_path) -> None:
+    service = OssService(
+        Documents([invoice()]),
+        filing_status_store=FilingStatusStore(tmp_path / "tax.sqlite"),
+    )
+    result = service.calculate_quarter(2026, 3)
+    result.blocking.append("Needs review")
+    with pytest.raises(ValueError, match="Blockern"):
+        service.mark_portal_submission(result)
 
 
 def test_bulk_page_limit_and_malformed_rows_fail_explicitly() -> None:

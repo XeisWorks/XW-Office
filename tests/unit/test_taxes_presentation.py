@@ -7,10 +7,11 @@ from unittest.mock import Mock
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QVBoxLayout
+from PySide6.QtWidgets import QLabel, QVBoxLayout
 from pytestqt.qtbot import QtBot
 
 from xw_office.core.container import Container
+from xw_office.services.finanzonline.filing_status import FilingStatus
 from xw_office.ui.modules.taxes.presentation import UvaPresentation, format_euro, validate_preview
 from xw_office.ui.modules.taxes.view import TaxesView
 
@@ -139,6 +140,33 @@ def test_exact_preview_totals_all_groups_and_no_payload_mutation(
     assert "LEGACY_PREVIEW_SHOULD_NOT_APPEAR" not in text
     assert "REFERENCE_SHOULD_NOT_APPEAR" not in text
     assert "A022" not in text
+
+
+def test_uva_submission_status_is_shown_for_matching_calculation(
+    tax_view: _UvaOnlyTaxesView, payload: dict[str, Any],
+) -> None:
+    status = FilingStatus(
+        filing_type="uva",
+        year=2026,
+        period=9,
+        calculation_hash="a" * 64,
+        confirmed_at=1_800_000_000,
+        confirmation_source="finanzonline_production_response",
+        reference="FON-REF-9",
+    )
+    payload.update({"jahr": 2026, "monat": 9, "calculation_hash": status.calculation_hash})
+    assert tax_view._uva_service is not None
+    tax_view._uva_service.get_filing_status.return_value = status
+
+    tax_view._set_uva_payload(payload)
+
+    label = tax_view.findChild(QLabel, "uvaFilingStatus")
+    assert label is not None
+    assert "produktiv übermittelt am" in label.text()
+    assert "FON-REF-9" in label.text()
+    tax_view._uva_service.get_filing_status.assert_called_once_with(
+        2026, 9, status.calculation_hash,
+    )
 
 
 def test_warnings_and_diagnostics_collapsed_but_blockers_persist(

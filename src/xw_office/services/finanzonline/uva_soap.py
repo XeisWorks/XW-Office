@@ -26,6 +26,8 @@ class UvaSubmitResult(BaseModel):
     message: str = Field(default="")
     test_mode: bool = True
     xml_validated: bool = False
+    filing_status_recorded: bool = False
+    filing_status_error: str = ""
     xml_payload: str = ""
     zm_ok: bool | None = None
     zm_reference_id: str | None = None

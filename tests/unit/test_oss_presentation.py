@@ -11,7 +11,7 @@ from pytestqt.qtbot import QtBot
 
 from xw_office.core.config import AppConfig
 from xw_office.core.container import Container
-from xw_office.services.finanzonline import OssService, UvaService
+from xw_office.services.finanzonline import FilingStatusStore, OssService, UvaService
 from xw_office.services.finanzonline.oss_models import OssLine, OssQuarterResult
 from xw_office.ui.modules.taxes.oss_presentation import oss_summary_html
 from xw_office.ui.modules.taxes.oss_presentation import QuarterComboBox
@@ -112,6 +112,7 @@ def test_period_change_clears_stale_results_and_blocks_export(
     tabs.setCurrentIndex(1)
     preview = next(button for button in view.findChildren(QPushButton) if button.text() == "EU-OSS berechnen")
     export = next(button for button in view.findChildren(QPushButton) if button.text() == "EU-OSS XML speichern")
+    mark = next(button for button in view.findChildren(QPushButton) if button.text() == "Im Portal abgegeben markieren")
     qtbot.mouseClick(preview, Qt.MouseButton.LeftButton)
     qtbot.waitUntil(lambda: view._oss_worker is None)
     summary = view.findChild(QTextBrowser, "ossSummary")
@@ -130,6 +131,7 @@ def test_period_change_clears_stale_results_and_blocks_export(
         assert not detail.toggle.isChecked()
     quarter.setCurrentIndex((quarter.currentIndex() + 1) % 4)
     assert not export.isEnabled()
+    assert not mark.isEnabled()
     assert summary.toPlainText() == ""
 
 
@@ -150,6 +152,41 @@ def test_oss_button_opens_requested_live_portal(
     qtbot.mouseClick(button, Qt.MouseButton.LeftButton)
     assert urls == [expected]
     oss.portal_url.assert_called_once_with(test_mode=False)
+
+
+def test_oss_filing_confirmation_requires_calculation_and_explicit_yes(
+    qtbot: QtBot,
+    tax_view: tuple[TaxesView, Mock],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    from xw_office.ui.modules.taxes import view as view_module
+
+    view, oss = tax_view
+    service = OssService(filing_status_store=FilingStatusStore(tmp_path / "tax.sqlite"))
+    oss.get_filing_status.side_effect = service.get_filing_status
+    oss.mark_portal_submission.side_effect = service.mark_portal_submission
+    tabs = view.findChild(QTabWidget, "taxTabs")
+    assert tabs is not None
+    tabs.setCurrentIndex(1)
+    mark = next(
+        button for button in view.findChildren(QPushButton)
+        if button.text() == "Im Portal abgegeben markieren"
+    )
+    assert not mark.isEnabled()
+    monkeypatch.setattr(
+        view_module.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: view_module.QMessageBox.StandardButton.Yes,
+    )
+    calculate = next(button for button in view.findChildren(QPushButton) if button.text() == "EU-OSS berechnen")
+    qtbot.mouseClick(calculate, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: view._oss_worker is None)
+    assert mark.isEnabled()
+    qtbot.mouseClick(mark, Qt.MouseButton.LeftButton)
+    oss.mark_portal_submission.assert_called_once_with(oss.calculate_quarter.return_value)
+    label = view.findChild(QLabel, "ossFilingStatus")
+    assert label is not None and "im Portal abgegeben am" in label.text()
 
 
 @pytest.mark.parametrize("theme", ["dark_gold", "light_gold"])
@@ -196,3 +233,5 @@ def test_oss_blocker_is_visible_even_with_details_collapsed(
     assert status is not None and "blockiert" in status.text()
     export = next(button for button in view.findChildren(QPushButton) if button.text() == "EU-OSS XML speichern")
     assert not export.isEnabled()
+    mark = next(button for button in view.findChildren(QPushButton) if button.text() == "Im Portal abgegeben markieren")
+    assert not mark.isEnabled()

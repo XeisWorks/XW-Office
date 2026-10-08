@@ -27,6 +27,7 @@ from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.expenses.bank_provider import SevdeskExpenseProvider
 from xw_office.services.expenses.service import ExpenseAuditService
 from xw_office.services.finanzonline import (
+    FilingStatusStore,
     FinanzOnlineClient,
     OssService,
     OssQuarterSnapshotStore,
@@ -358,6 +359,10 @@ def register_default_services(container: Container) -> None:
         lambda c: TaxMonthlySnapshotStore(),
     )
     container.register(
+        FilingStatusStore,
+        lambda c: FilingStatusStore(),
+    )
+    container.register(
         UvaService,
         lambda c: UvaService(
             c.config,
@@ -367,6 +372,7 @@ def register_default_services(container: Container) -> None:
             zm_service=c.resolve(ZmService),
             snapshot_store=c.resolve(TaxMonthlySnapshotStore),
             source_connection=c.resolve(SevdeskConnection),
+            filing_status_store=c.resolve(FilingStatusStore),
         ),
     )
     container.register(
@@ -374,6 +380,7 @@ def register_default_services(container: Container) -> None:
         lambda c: OssService(
             SevdeskOssDocumentProvider(c.resolve(SevdeskConnection)),
             snapshot_store=c.resolve(OssQuarterSnapshotStore),
+            filing_status_store=c.resolve(FilingStatusStore),
         ),
     )
     container.register(

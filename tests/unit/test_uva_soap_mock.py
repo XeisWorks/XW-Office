@@ -5,6 +5,7 @@ import pytest
 
 from xw_office.core.config import AppConfig, FinanzOnlineSection
 from xw_office.services.finanzonline.client import FinanzOnlineClient
+from xw_office.services.finanzonline.filing_status import FilingStatusStore
 from xw_office.services.finanzonline.monthly_snapshot import TaxMonthlySnapshotStore
 from xw_office.services.finanzonline.u13_xml import build_u13_xml, validate_u13_xml
 from xw_office.services.finanzonline.u30_xml import build_u30_xml, validate_u30_xml
@@ -594,6 +595,9 @@ def test_uva_service_reuses_persistent_month_snapshot(tmp_path) -> None:
     )
 
     first = first_service.calculate_month(2026, 3)
+    legacy_snapshot = dict(first)
+    legacy_snapshot.pop("calculation_hash")
+    store.put_snapshot(2026, 3, legacy_snapshot)
 
     second_preview = _PreviewServiceWithCounter()
     second_payload_service = _PayloadServiceWithPreviewCounter()
@@ -609,8 +613,41 @@ def test_uva_service_reuses_persistent_month_snapshot(tmp_path) -> None:
     assert first["cache"]["source"] == "live"
     assert second["cache"]["source"] == "persistent"
     assert second["zahlbetrag"] == "90.00"
+    assert second["calculation_hash"] == first["calculation_hash"]
     assert second_preview.calls == 0
     assert second_payload_service.from_preview_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("ok", "test_mode", "expected_recorded"),
+    [(True, False, True), (True, True, False), (False, False, False)],
+)
+def test_uva_records_only_successful_production_submissions(
+    tmp_path, ok: bool, test_mode: bool, expected_recorded: bool,
+) -> None:
+    store = FilingStatusStore(tmp_path / "tax.sqlite")
+    backend = MockUvaSoapBackend(
+        result=UvaSubmitResult(
+            ok=ok, test_mode=test_mode, reference_id="FON-2026-03",
+        )
+    )
+    service = UvaService(
+        AppConfig(),
+        FinanzOnlineClient(AppConfig(), uva_backend=backend),
+        preview_service=_PreviewServiceWithCounter(),  # type: ignore[arg-type]
+        payload_service=_PayloadServiceWithPreviewCounter(),  # type: ignore[arg-type]
+        filing_status_store=store,
+    )
+
+    result = service.submit_uva_month(2026, 3)
+
+    assert result.ok is ok
+    assert result.filing_status_recorded is expected_recorded
+    fingerprint = str(result.uva_payload["calculation_hash"])
+    status = store.get_status("uva", 2026, 3, fingerprint)
+    assert (status is not None) is expected_recorded
+    if status is not None:
+        assert status.reference == "FON-2026-03"
 
 
 def test_uva_service_refresh_bypasses_persistent_snapshot(tmp_path) -> None:

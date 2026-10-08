@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date
+import sqlite3
+from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -38,6 +39,7 @@ from xw_office.services.finanzonline import (
     OssQuarterResult,
     OssService,
     OssXmlExport,
+    FilingStatus,
     UvaService,
     UvaSubmitResult,
     ZmCalculationResult,
@@ -137,6 +139,8 @@ class TaxesView(QWidget):
         self._uva_submit_button: QPushButton | None = None
         self._zm_submit_button: QPushButton | None = None
         self._uva_amount_label: QLabel | None = None
+        self._uva_filing_status_label: QLabel | None = None
+        self._uva_service: UvaService | None = None
         self._uva_output: QTextBrowser | None = None
         self._uva_presentation: UvaPresentation | None = None
         self._zm_output: QPlainTextEdit | None = None
@@ -170,6 +174,7 @@ class TaxesView(QWidget):
         layout.setSpacing(10)
         info = QPlainTextEdit()
         uva: UvaService = self._container.resolve(UvaService)
+        self._uva_service = uva
         info.setPlainText(uva.describe_capabilities())
         info.setReadOnly(True)
         info.setMaximumHeight(115)
@@ -209,6 +214,12 @@ class TaxesView(QWidget):
         self._uva_amount_label.setStyleSheet("color: #7c2d12; font-size: 24px; font-weight: 800;")
         amount_layout.addWidget(amount_title)
         amount_layout.addWidget(self._uva_amount_label)
+        self._uva_filing_status_label = QLabel(
+            "Abgabestatus: für diese Berechnung nicht bestätigt"
+        )
+        self._uva_filing_status_label.setObjectName("uvaFilingStatus")
+        self._uva_filing_status_label.setWordWrap(True)
+        amount_layout.addWidget(self._uva_filing_status_label)
         layout.addWidget(amount_frame)
 
         result_row = QHBoxLayout()
@@ -512,6 +523,7 @@ class TaxesView(QWidget):
     def _set_uva_payload(self, payload: dict[str, object]) -> None:
         zahlbetrag = str(payload.get("zahlbetrag") or "").strip()
         self._set_uva_amount(zahlbetrag)
+        self._update_uva_filing_status(payload)
 
         preview = validate_preview(payload.get("preview"))
         kennzahlen_text = str(payload.get("kennzahlen_text") or "").strip()
@@ -608,6 +620,14 @@ class TaxesView(QWidget):
                 lines.insert(0, f"Periode: {period}")
             if amount:
                 lines.insert(1, f"UVA-Zahlbetrag: EUR {_format_euro(amount)}")
+            if res.ok and not res.test_mode:
+                lines.append(
+                    "Lokaler Abgabestatus: "
+                    + ("gespeichert" if res.filing_status_recorded else "nicht gespeichert")
+                )
+                if res.filing_status_error:
+                    lines.append(f"Speicherhinweis: {res.filing_status_error}")
+                self._update_uva_filing_status(res.uva_payload)
 
         if res.zm_ok is not None:
             zm_state = "erfolgreich" if res.zm_ok else "fehlgeschlagen"
@@ -640,6 +660,35 @@ class TaxesView(QWidget):
         if detail_parts:
             box.setDetailedText("\n\n".join(detail_parts))
         box.exec()
+
+    def _update_uva_filing_status(self, payload: dict[str, object]) -> None:
+        label = self._uva_filing_status_label
+        if label is None:
+            return
+        year = payload.get("jahr")
+        month = payload.get("monat")
+        calculation_hash = payload.get("calculation_hash")
+        if not isinstance(year, int) or not isinstance(month, int) or not isinstance(calculation_hash, str):
+            label.setText("Abgabestatus: für diese Berechnung nicht bestätigt")
+            return
+        try:
+            status = (
+                self._uva_service.get_filing_status(year, month, calculation_hash)
+                if self._uva_service is not None
+                else None
+            )
+        except (OSError, sqlite3.Error) as exc:
+            logger.exception("Could not load UVA filing status")
+            label.setText(f"Abgabestatus konnte nicht geladen werden: {exc}")
+            return
+        if not isinstance(status, FilingStatus):
+            label.setText("Abgabestatus: für diese Berechnung nicht bestätigt")
+            return
+        submitted_at = datetime.fromtimestamp(status.confirmed_at).strftime("%d.%m.%Y %H:%M")
+        label.setText(
+            f"Abgabestatus: produktiv übermittelt am {submitted_at}"
+            + (f" · Referenz {status.reference}" if status.reference else "")
+        )
 
     def _show_zm_submit_result(self, res: UvaSubmitResult) -> None:
         state = "erfolgreich" if res.ok else "fehlgeschlagen"
@@ -773,6 +822,9 @@ class TaxesView(QWidget):
         status.setWordWrap(True)
         status.setStyleSheet("font-weight: 700;")
         layout.addWidget(status)
+        filing_status = QLabel("Abgabestatus: für diese Berechnung nicht bestätigt")
+        filing_status.setObjectName("ossFilingStatus")
+        layout.addWidget(filing_status)
         progress = QProgressBar()
         progress.setRange(0, 0)
         progress.setTextVisible(False)
@@ -820,10 +872,13 @@ class TaxesView(QWidget):
         preview = QPushButton("EU-OSS berechnen")
         refresh = QPushButton("Neu aus sevDesk laden")
         export = QPushButton("EU-OSS XML speichern")
+        mark_submitted = QPushButton("Im Portal abgegeben markieren")
+        mark_submitted.setEnabled(False)
         portal = QPushButton("EU-OSS öffnen")
         buttons.addWidget(preview)
         buttons.addWidget(refresh)
         buttons.addWidget(export)
+        buttons.addWidget(mark_submitted)
         buttons.addWidget(portal)
         buttons.addStretch()
         layout.addLayout(buttons)
@@ -869,6 +924,24 @@ class TaxesView(QWidget):
             oss_table.set_data(result_rows(res))
             drilldown_box.clear()
             export.setEnabled(not res.blocking)
+            mark_submitted.setEnabled(not res.blocking)
+            update_oss_filing_status(res)
+
+        def update_oss_filing_status(res: OssQuarterResult | None) -> None:
+            if res is None:
+                filing_status.setText("Abgabestatus: für diese Berechnung nicht bestätigt")
+                return
+            try:
+                recorded = oss.get_filing_status(res)
+            except (OSError, sqlite3.Error, ValueError) as exc:
+                logger.exception("Could not load EU-OSS filing status")
+                filing_status.setText(f"Abgabestatus konnte nicht geladen werden: {exc}")
+                return
+            if not isinstance(recorded, FilingStatus):
+                filing_status.setText("Abgabestatus: für diese Berechnung nicht bestätigt")
+                return
+            submitted_at = datetime.fromtimestamp(recorded.confirmed_at).strftime("%d.%m.%Y %H:%M")
+            filing_status.setText(f"Abgabestatus: im Portal abgegeben am {submitted_at}")
 
         def show_selected_drilldown() -> None:
             row = oss_table.selected_row_data()
@@ -895,6 +968,7 @@ class TaxesView(QWidget):
             preview.setEnabled(False)
             refresh.setEnabled(False)
             export.setEnabled(False)
+            mark_submitted.setEnabled(False)
             preview.setText("Berechne..." if not refresh_data else "Lade...")
             year.setEnabled(False)
             quarter.setEnabled(False)
@@ -945,6 +1019,7 @@ class TaxesView(QWidget):
             preview.setEnabled(False)
             refresh.setEnabled(False)
             export.setEnabled(False)
+            mark_submitted.setEnabled(False)
             export.setText("Exportiere...")
             progress.show()
 
@@ -991,6 +1066,27 @@ class TaxesView(QWidget):
             self._oss_worker.signals.finished.connect(on_oss_finished)
             self._oss_worker.start()
 
+        def on_mark_submitted() -> None:
+            if latest_result is None or latest_result.blocking:
+                return
+            if QMessageBox.question(
+                self,
+                "EU-OSS-Abgabe bestätigen",
+                f"Wurde EU-OSS Q{latest_result.quarter}/{latest_result.year} "
+                "im Portal erfolgreich abgegeben?\n\n"
+                "Nur bei bestätigter Annahme im Portal mit Ja fortfahren.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            try:
+                oss.mark_portal_submission(latest_result)
+            except (OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
+                logger.exception("Could not record EU-OSS portal filing confirmation")
+                QMessageBox.warning(self, "EU-OSS", f"Abgabestatus konnte nicht gespeichert werden: {exc}")
+                return
+            update_oss_filing_status(latest_result)
+
         def on_oss_finished() -> None:
             self._oss_worker = None
             progress.hide()
@@ -1000,6 +1096,7 @@ class TaxesView(QWidget):
             refresh.setText("Neu aus sevDesk laden")
             export.setEnabled(latest_result is not None and not latest_result.blocking)
             export.setText("EU-OSS XML speichern")
+            mark_submitted.setEnabled(latest_result is not None and not latest_result.blocking)
             year.setEnabled(True)
             quarter.setEnabled(True)
 
@@ -1013,6 +1110,8 @@ class TaxesView(QWidget):
             drilldown.set_text("")
             warnings_detail.set_text("")
             technical_detail.set_text("")
+            mark_submitted.setEnabled(False)
+            update_oss_filing_status(None)
 
         def on_portal() -> None:
             if not QDesktopServices.openUrl(QUrl(oss.portal_url(test_mode=False))):
@@ -1021,6 +1120,7 @@ class TaxesView(QWidget):
         preview.clicked.connect(lambda _checked=False: on_preview(refresh_data=False))
         refresh.clicked.connect(lambda _checked=False: on_preview(refresh_data=True))
         export.clicked.connect(on_export)
+        mark_submitted.clicked.connect(on_mark_submitted)
         portal.clicked.connect(on_portal)
         oss_table.selectionModel().selectionChanged.connect(lambda *_: show_selected_drilldown())
         year.valueChanged.connect(invalidate_selection)
