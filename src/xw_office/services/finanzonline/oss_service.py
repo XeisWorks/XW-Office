@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from datetime import date, datetime, timedelta
@@ -12,6 +13,9 @@ from typing import Any, Mapping, NamedTuple, Protocol
 from xml.etree import ElementTree as ET
 
 from xw_office.services.http_client import SevdeskConnection
+from xw_office.services.finanzonline.amounts import first_amount, position_amounts, tax_amount
+from xw_office.services.finanzonline.payment_evidence import parse_source_date as _parse_date
+from xw_office.services.finanzonline.source_reads import load_tax_resource
 from xw_office.services.shipping.countries import country_iso2, country_name_en
 
 from xw_office.services.finanzonline.oss_models import OssLine, OssQuarterResult, OssXmlExport
@@ -196,7 +200,7 @@ class OssDocumentProvider(Protocol):
 
 
 class SevdeskOssDocumentProvider:
-    """Best-effort sevDesk provider for EU-OSS quarter calculation."""
+    """Validated sevDesk source reads for EU-OSS quarter calculation."""
 
     def __init__(
         self,
@@ -218,6 +222,8 @@ class SevdeskOssDocumentProvider:
         self._position_cache_lock = RLock()
 
     def load_sales_documents(self, year: int, quarter: int) -> list[dict[str, Any]]:
+        with self._position_cache_lock:
+            self._position_cache.clear()
         start_date, end_date = _quarter_bounds(year, quarter)
         fetch_start = int(datetime.combine(start_date - timedelta(days=self._invoice_lookback_days), datetime.min.time()).timestamp())
         fetch_end = int(datetime.combine(end_date + timedelta(days=self._invoice_lookahead_days), datetime.max.time()).timestamp())
@@ -233,11 +239,19 @@ class SevdeskOssDocumentProvider:
         documents: list[dict[str, Any]] = []
         for resource, rows in (("Invoice", invoices), ("CreditNote", credits)):
             for row in rows:
+                if row.get("id") in (None, ""):
+                    raise ValueError(f"EU-OSS {resource}-Beleg ohne eindeutige ID.")
                 prepared = dict(row)
                 prepared["xw_doc_type"] = "credit" if resource == "CreditNote" else "invoice"
                 prepared["xw_resource"] = resource
                 documents.append(prepared)
-        self._attach_positions(documents)
+        relevant = [
+            document for document in documents
+            if _document_in_quarter(document, year, quarter)
+            and not _document_inactive(document)
+            and _special_exclusion(document) is None
+        ]
+        self._attach_positions(relevant)
         return documents
 
     def _attach_positions(self, documents: list[dict[str, Any]]) -> None:
@@ -263,23 +277,10 @@ class SevdeskOssDocumentProvider:
                 documents[futures[future]]["xw_positions"] = future.result()
 
     def _load_resource(self, path: str, *, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        result: list[dict[str, Any]] = []
-        offset = 0
-        page_count = 0
-        while page_count < self._max_pages:
-            query = {"limit": self._page_size, "offset": offset}
-            if params:
-                query.update(params)
-            payload = self._connection.get(path, params=query).json()
-            objects = payload.get("objects") if isinstance(payload, dict) else None
-            if not isinstance(objects, list) or not objects:
-                break
-            result.extend(item for item in objects if isinstance(item, dict))
-            page_count += 1
-            if len(objects) < self._page_size:
-                break
-            offset += self._page_size
-        return result
+        return load_tax_resource(
+            self._connection, path, params=params,
+            page_size=self._page_size, max_pages=self._max_pages,
+        )
 
     def _load_positions(self, resource: str, doc_id: str) -> list[dict[str, Any]]:
         cache_key = (resource, doc_id)
@@ -298,13 +299,7 @@ class SevdeskOssDocumentProvider:
         else:
             self._position_cache[cache_key] = []
             return []
-        try:
-            payload = self._connection.get(path, params=params).json()
-            objects = payload.get("objects") if isinstance(payload, dict) else None
-            positions = [item for item in objects if isinstance(item, dict)] if isinstance(objects, list) else []
-        except Exception as exc:
-            logger.debug("OSS positions failed for %s/%s: %s", resource, doc_id, exc)
-            positions = []
+        positions = self._load_resource(path, params=params)
         with self._position_cache_lock:
             self._position_cache[cache_key] = positions
         return positions
@@ -335,12 +330,9 @@ class OssService:
         )
 
     def calculate_quarter(self, year: int, quarter: int, *, refresh: bool = False) -> OssQuarterResult:
+        start_date, end_date = _quarter_bounds(year, quarter)
         if self._provider is None:
-            return OssQuarterResult(
-                year=year,
-                quarter=quarter,
-                warnings=["Keine EU-OSS-Datenquelle konfiguriert."],
-            )
+            raise RuntimeError("Keine EU-OSS-Datenquelle konfiguriert.")
         if self._snapshot_store is not None and not refresh:
             snapshot = self._snapshot_store.get_snapshot(year, quarter)
             if snapshot is not None:
@@ -352,8 +344,8 @@ class OssService:
                 }
                 return result
 
+        started = time.perf_counter()
         documents = self._provider.load_sales_documents(year, quarter)
-        start_date, end_date = _quarter_bounds(year, quarter)
         buckets: dict[tuple[str, str, bool], dict[str, Any]] = defaultdict(
             lambda: {
                 "country_name": "",
@@ -365,10 +357,23 @@ class OssService:
         warnings: list[str] = []
         source_count = 0
         excluded_count = 0
+        seen: dict[tuple[str, str], dict[str, Any]] = {}
 
         for document in documents:
             source_count += 1
             doc_type = str(document.get("xw_doc_type") or "invoice")
+            doc_id = str(document.get("id") or "").strip()
+            if doc_id:
+                document_key = (doc_type, doc_id)
+                if document_key in seen:
+                    if seen[document_key] != document:
+                        raise ValueError(f"EU-OSS widerspruechliche Duplikate fuer Beleg {doc_id}.")
+                    excluded_count += 1
+                    continue
+                seen[document_key] = document
+            if _document_inactive(document):
+                excluded_count += 1
+                continue
             doc_label = _doc_label(document)
             doc_date = _document_date(document, doc_type)
             if doc_date is None:
@@ -406,6 +411,11 @@ class OssService:
                 continue
 
             country_code = _document_country_code(document, candidate_items)
+            item_countries = {str(item["country_code"]) for item in candidate_items if item["country_code"]}
+            if len(item_countries) > 1:
+                warnings.append(f"EU-OSS Datenkonflikt: Mehrere Verbrauchslaender in einem Beleg: {doc_label}")
+                excluded_count += 1
+                continue
             if not country_code:
                 warnings.append(f"EU-OSS Land unklar, bitte pruefen: {doc_label}")
                 excluded_count += 1
@@ -434,18 +444,20 @@ class OssService:
                 key = (country_code, _fmt(rate), goods)
                 bucket = buckets[key]
                 bucket["country_name"] = country_name_en(country_code)
-                bucket["taxable_amount"] += item["net"] * sign
-                bucket["tax_amount"] += item["vat"] * sign
+                bucket["taxable_amount"] += (abs(item["net"]) if doc_type == "credit" else item["net"]) * sign
+                bucket["tax_amount"] += (abs(item["vat"]) if doc_type == "credit" else item["vat"]) * sign
                 bucket["source_docs"].append(doc_label)
                 grouped = True
 
             if not grouped:
                 excluded_count += 1
 
-            if doc_type == "credit" and _has_credit_reference(document):
+            if doc_type == "credit":
                 warnings.append(
-                    f"Gutschrift im OSS-Quartal erkannt, Korrektur im Portal pruefen: {doc_label}"
+                    f"EU-OSS Korrektur erforderlich: Gutschrift separat im Portal und Ursprungsquartal pruefen: {doc_label}"
                 )
+            elif grouped and any(item["net"] < Decimal(0) or item["vat"] < Decimal(0) for item in items):
+                warnings.append(f"EU-OSS Korrektur erforderlich: Negative Rechnungsposition gesondert pruefen: {doc_label}")
 
         goods_lines: list[OssLine] = []
         service_lines: list[OssLine] = []
@@ -473,9 +485,12 @@ class OssService:
             goods_lines=goods_lines,
             service_lines=service_lines,
             warnings=_dedupe_strings(warnings),
+            blocking=_blocking_warnings(warnings),
             source_count=source_count,
             excluded_count=excluded_count,
         )
+        if result.blocking:
+            result.warnings = [warning for warning in result.warnings if not warning.startswith("Nullquartal")]
         if self._snapshot_store is not None:
             snapshot = self._snapshot_store.put_snapshot(result)
             if snapshot is not None:
@@ -486,6 +501,7 @@ class OssService:
                 }
             else:
                 result.cache = {"source": "live", "snapshot_hash": "", "age_seconds": 0.0}
+            result.cache["elapsed_seconds"] = round(time.perf_counter() - started, 3)
         else:
             result.cache = {"source": "live", "snapshot_hash": "", "age_seconds": 0.0}
         return result
@@ -535,6 +551,8 @@ class OssService:
         oss_id: str = "",
         uid_fixed_est: str = "",
     ) -> OssXmlExport:
+        if result.blocking:
+            raise ValueError("EU-OSS XML-Export blockiert: " + "; ".join(result.blocking))
         if not result.goods_lines and not result.service_lines:
             raise ValueError("Kein EU-OSS-Umsatz im Quartal. Nullmeldung bitte direkt im Portal einreichen.")
         xml_payload = build_oss_xml(result, oss_id=oss_id, uid_fixed_est=uid_fixed_est)
@@ -568,6 +586,9 @@ class OssService:
 
 
 def build_oss_xml(result: OssQuarterResult, *, oss_id: str = "", uid_fixed_est: str = "") -> str:
+    blocking = _dedupe_strings([*result.blocking, *_blocking_warnings(result.warnings)])
+    if blocking:
+        raise ValueError("EU-OSS XML-Export blockiert: " + "; ".join(blocking))
     root = ET.Element("Erklaerungen")
     for line in _xml_export_lines(result):
         declaration = ET.SubElement(root, "Erklaerung")
@@ -580,7 +601,7 @@ def build_oss_xml(result: OssQuarterResult, *, oss_id: str = "", uid_fixed_est: 
     if not list(root):
         raise ValueError("Kein portalfaehiger EU-OSS-Umsatz im Quartal; 0%-Zeilen sind im BMF-Portal-XML nicht erlaubt.")
 
-    return ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+    return str(ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8"))
 
 
 def validate_oss_xml(xml_payload: str) -> None:
@@ -601,6 +622,8 @@ def validate_oss_xml(xml_payload: str) -> None:
         country = str(country_node.text or "").strip()
         vat_rate = str(vat_rate_node.text or "").strip()
         goods = str(goods_node.text if goods_node is not None else "true")
+        if country not in _EU_COUNTRY_CODES or country == "AT":
+            raise ValueError(f"OSS-XML enthaelt kein zulaessiges EU-Verbrauchsland: {country}.")
         key = (country, vat_rate, goods)
         if key in seen:
             raise ValueError(f"OSS-XML enthaelt doppelte Zeile fuer {country} / {vat_rate} / {goods}.")
@@ -610,8 +633,8 @@ def validate_oss_xml(xml_payload: str) -> None:
 def _validate_oss_xml_schema(xml_payload: str) -> None:
     try:
         from lxml import etree
-    except ImportError:
-        return
+    except ImportError as exc:
+        raise RuntimeError("EU-OSS XML-Pruefung benoetigt lxml.") from exc
     schema_doc = etree.XML(_OSS_XML_XSD.encode("utf-8"))
     schema = etree.XMLSchema(schema_doc)
     doc = etree.fromstring(xml_payload.encode("utf-8"))
@@ -652,9 +675,16 @@ def _document_items(
     if isinstance(positions, list) and positions:
         for position in positions:
             if not isinstance(position, dict):
-                continue
+                raise ValueError(f"EU-OSS ungueltige Position: {_doc_label(document)}.")
             net, vat = _extract_position_amounts(position)
             tax_text = position.get("taxText") or document.get("taxText")
+            if not position.get("taxText") and any(
+                position.get(key) not in (None, "") for key in ("taxRate", "taxRatePercent", "taxRatePercentage")
+            ):
+                rate = _extract_position_rate(position)
+                match = _PERCENT_RE.search(str(tax_text or ""))
+                if match is not None and _to_decimal(match.group(1)) != rate:
+                    tax_text = _PERCENT_RE.sub(f"{format(rate.normalize(), 'f')}%", str(tax_text or ""))
             items.append(_build_item(
                 document,
                 tax_text,
@@ -674,15 +704,27 @@ def _document_items(
         )
         fallback_reason = _document_fallback_reason(items, header_item)
         if fallback_reason:
-            return [
-                _document_header_item(
-                    document,
-                    tax_rules=tax_rules,
-                    known_rates_by_country=known_rates_by_country,
-                    fallback_reason=fallback_reason,
-                )
-            ]
+            header_item["fallback_reason"] = fallback_reason
+            if any(item["net"] != Decimal(0) or item["vat"] != Decimal(0) for item in items):
+                net_difference = abs(sum((item["net"] for item in items), Decimal(0)) - header_item["net"])
+                vat_difference = abs(sum((item["vat"] for item in items), Decimal(0)) - header_item["vat"])
+                if net_difference > Decimal("0.05") or vat_difference > Decimal("0.05"):
+                    header_item["warning"] = (
+                        f"EU-OSS Datenkonflikt: Positionssumme weicht vom Belegkopf ab "
+                        f"(Netto {_fmt(net_difference)}, Steuer {_fmt(vat_difference)} EUR)"
+                    )
+            return [header_item]
         if items:
+            if any(item["oss_candidate"] for item in items) and any(
+                document.get(key) not in (None, "") for key in ("sumNet", "sumNetAccounting")
+            ):
+                net_difference = abs(sum((item["net"] for item in items), Decimal(0)) - header_item["net"])
+                vat_difference = abs(sum((item["vat"] for item in items), Decimal(0)) - header_item["vat"])
+                if net_difference > Decimal("0.05") or vat_difference > Decimal("0.05"):
+                    items[0]["warning"] = (
+                        f"EU-OSS Datenkonflikt: Positionssumme weicht vom Belegkopf ab "
+                        f"(Netto {_fmt(net_difference)}, Steuer {_fmt(vat_difference)} EUR)"
+                    )
             return items
 
     return [
@@ -702,8 +744,8 @@ def _document_header_item(
     known_rates_by_country: Mapping[str, frozenset[Decimal]],
     fallback_reason: str,
 ) -> dict[str, Any]:
-    net = _first_decimal(document, "sumNet", "sumNetAccounting")
-    vat = _first_decimal(document, "sumTax", "sumTaxAccounting")
+    net = _first_decimal(document, "sumNetAccounting", "sumNet")
+    vat = _first_decimal(document, "sumTaxAccounting", "sumTax")
     tax_text = document.get("taxText")
     return _build_item(
         document,
@@ -760,7 +802,7 @@ def _document_fallback_reason(items: list[dict[str, Any]], header_item: dict[str
         return ""
     position_candidates = [
         item for item in items
-        if not item["excluded"] and item["oss_candidate"] and item["rate"] == header_item["rate"]
+        if not item["excluded"] and item["oss_candidate"]
     ]
     if not position_candidates:
         return "Dokumentkopf genutzt, weil Positionen keine passende OSS-Regel liefern"
@@ -770,7 +812,7 @@ def _document_fallback_reason(items: list[dict[str, Any]], header_item: dict[str
         return ""
     pos_net = sum((item["net"] for item in position_candidates), Decimal("0.00"))
     pos_vat = sum((item["vat"] for item in position_candidates), Decimal("0.00"))
-    if abs(pos_net - header_item["net"]) > _DECIMAL_2 or abs(pos_vat - header_item["vat"]) > _DECIMAL_2:
+    if pos_net != header_item["net"] or pos_vat != header_item["vat"]:
         return "Dokumentkopf genutzt, weil Positionssumme nicht zum Belegkopf passt"
     return ""
 
@@ -778,6 +820,8 @@ def _document_fallback_reason(items: list[dict[str, Any]], header_item: dict[str
 def _item_warnings(items: list[dict[str, Any]], doc_label: str) -> list[str]:
     warnings: list[str] = []
     for item in items:
+        if item["net"] == Decimal("0.00") and item["vat"] == Decimal("0.00"):
+            continue
         warning = str(item.get("warning") or "").strip()
         if warning:
             warnings.append(f"{warning}: {doc_label}")
@@ -805,6 +849,16 @@ def _classify_tax_rule(
     if rule is not None:
         if not rule.oss_eligible:
             return _RuleDecision(False, True, rule.vat_rate, rule.country_code, rule.label, "tax_rule", "")
+        destination = next(
+            (country_iso2(document[key]) for key in _COUNTRY_KEYS
+             if country_iso2(document.get(key))),
+            "",
+        )
+        if destination and destination != rule.country_code:
+            return _RuleDecision(
+                False, False, rule.vat_rate, rule.country_code, rule.label, "tax_rule",
+                f"EU-OSS Datenkonflikt: Lieferland {destination} und Steuerland {rule.country_code} unterscheiden sich",
+            )
         if rule.vat_rate == Decimal("0.00") and vat_amount != Decimal("0.00"):
             return _RuleDecision(
                 False,
@@ -815,10 +869,27 @@ def _classify_tax_rule(
                 "tax_rule",
                 f"EU-OSS Datenkonflikt: {rule.label} hat 0 %, aber Steuerbetrag {_fmt(vat_amount)} EUR",
             )
+        expected_vat = (net_amount * rule.vat_rate / Decimal("100")).quantize(_DECIMAL_2, rounding=ROUND_HALF_UP)
+        if abs(vat_amount - expected_vat) > Decimal("0.05"):
+            return _RuleDecision(
+                False, False, rule.vat_rate, rule.country_code, rule.label, "tax_rule",
+                f"EU-OSS Datenkonflikt: Steuerbetrag {_fmt(vat_amount)} passt nicht zu "
+                f"{_fmt(net_amount)} EUR Netto und {_fmt(rule.vat_rate)} %",
+            )
         return _RuleDecision(True, False, rule.vat_rate, rule.country_code, rule.label, "tax_rule", "")
 
     rate = _resolve_rate(tax_text, net_amount, vat_amount, rate_source)
     country_code = _document_country_code(document)
+    if (
+        country_code in known_rates_by_country
+        and rate in known_rates_by_country[country_code]
+        and rate is not None
+        and abs(vat_amount - (net_amount * rate / Decimal("100"))) > Decimal("0.05")
+    ):
+        return _RuleDecision(
+            False, False, rate, country_code, raw_text, "country_rate_fallback",
+            "EU-OSS Datenkonflikt: Steuerbetrag passt nicht zu Land/Satz-Zuordnung",
+        )
     if not raw_text or raw_text == "0":
         if country_code and country_code in known_rates_by_country and rate in known_rates_by_country[country_code]:
             return _RuleDecision(
@@ -855,25 +926,10 @@ def _classify_tax_rule(
 
 
 def _extract_position_amounts(position: dict[str, Any]) -> tuple[Decimal, Decimal]:
-    net_amount = _first_decimal(
-        position,
-        "sumNetAccounting",
-        "sumNet",
-        "amountNet",
-        "priceNet",
-        "priceNetAccounting",
-        "net",
-    )
-    vat_amount = _first_decimal(position, "sumTaxAccounting", "sumTax")
-    if net_amount == Decimal("0.00"):
-        quantity = _to_decimal(position.get("quantity") or 1)
-        price = _to_decimal(position.get("price") or 0)
-        net_amount = (quantity * price).quantize(_DECIMAL_2, rounding=ROUND_HALF_UP)
-    if vat_amount == Decimal("0.00") and net_amount != Decimal("0.00"):
-        rate = _extract_position_rate(position)
-        if rate > Decimal("0.00"):
-            vat_amount = (net_amount * rate / Decimal("100")).quantize(_DECIMAL_2, rounding=ROUND_HALF_UP)
-    return net_amount, vat_amount
+    _, net, vat = position_amounts(position)
+    if any(position.get(key) not in (None, "") for key in ("sumTaxAccounting", "sumTax")):
+        vat = first_amount(position, "sumTaxAccounting", "sumTax")
+    return net, vat
 
 
 def _document_date(document: dict[str, Any], doc_type: str) -> date | None:
@@ -995,13 +1051,6 @@ def _reference_id(value: object) -> str:
     return str(value or "").strip()
 
 
-def _has_credit_reference(document: dict[str, Any]) -> bool:
-    for key in ("refSrcInvoice", "refSrcInvoiceId", "refInvoice", "refInvoiceId", "invoiceId"):
-        if _reference_id(document.get(key)):
-            return True
-    return False
-
-
 def _doc_label(document: dict[str, Any]) -> str:
     for key in ("invoiceNumber", "creditNoteNumber", "number", "reference", "id"):
         value = document.get(key)
@@ -1010,43 +1059,35 @@ def _doc_label(document: dict[str, Any]) -> str:
     return "unbekannt"
 
 
-def _parse_date(value: object) -> datetime | None:
-    if value in (None, ""):
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        return datetime.fromisoformat(text.replace(" ", "T", 1))
-    except ValueError:
-        pass
-    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-        try:
-            return datetime.strptime(text[: len(fmt)], fmt)
-        except ValueError:
-            continue
-    return None
-
-
 def _first_decimal(document: dict[str, Any], *keys: str) -> Decimal:
-    for key in keys:
-        if key in document and document.get(key) not in (None, ""):
-            return _to_decimal(document.get(key))
-    return Decimal("0.00")
+    return first_amount(document, *keys)
 
 
 def _to_decimal(value: object) -> Decimal:
-    if value in (None, ""):
-        return Decimal("0.00")
-    if isinstance(value, Decimal):
-        return value.quantize(_DECIMAL_2, rounding=ROUND_HALF_UP)
-    try:
-        text = str(value).strip().replace(" ", "").replace(",", ".")
-        return Decimal(text).quantize(_DECIMAL_2, rounding=ROUND_HALF_UP)
-    except (InvalidOperation, ValueError):
-        return Decimal("0.00")
+    return tax_amount(value)
+
+
+def _document_in_quarter(document: dict[str, Any], year: int, quarter: int) -> bool:
+    start, end = _quarter_bounds(year, quarter)
+    value = _document_date(document, str(document.get("xw_doc_type") or "invoice"))
+    return value is not None and start <= value <= end
+
+
+def _document_inactive(document: dict[str, Any]) -> bool:
+    status = str(document.get("status") or "").strip().lower()
+    return (
+        status in {"draft", "entwurf", "cancelled", "canceled", "storno", "void"}
+        or bool(document.get("cancelled"))
+        or (status.isdigit() and int(status) <= 100)
+    )
+
+
+def _blocking_warnings(warnings: list[str]) -> list[str]:
+    markers = (
+        "ohne Leistungsdatum", "ohne belastbare", "Land unklar", "Steuersatz unklar",
+        "Datenkonflikt", "unbekannte sevDesk", "Korrektur erforderlich",
+    )
+    return _dedupe_strings([warning for warning in warnings if any(marker in warning for marker in markers)])
 
 
 def _fmt(value: Decimal) -> str:

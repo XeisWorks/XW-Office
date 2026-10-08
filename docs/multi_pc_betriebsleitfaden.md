@@ -158,6 +158,51 @@ Ueberrechnungen und die gesetzlichen Ausnahmen (u. a. Vorjahresumsatz ueber
 2 Mio. EUR) sind nicht automatisch aus sevDesk ableitbar und beduerfen gesonderter Pruefung.
 Die XML-Struktur wird gegen das mitgelieferte offizielle U30-Schema validiert.
 
+### EU-OSS: Quartale, Anzeige und Export
+
+- Im Untermenue Steuern stehen nur UVA und EU-OSS als hervorgehobene obere Tabs.
+  Der fruehere Ausgaben-Tab ist entfernt; die eigenstaendige Ausgabenpruefung bleibt erhalten.
+- Die Quartalsauswahl zeigt Q1 bis Q4 mit Monatsnamen in einer ausreichend breiten
+  Liste. Standard ist das zuletzt abgeschlossene Quartal. Die Ansicht zeigt Steuer,
+  Brutto und Netto je Land, Satz und Waren-/Leistungsart. Hinweise, Beleglisten und
+  technische Details sind eingeklappt; Exportblocker bleiben unmittelbar sichtbar.
+- EU-OSS verwendet das Liefer-/Leistungsquartal, nicht den Zahlungsmonat.
+  Wenn ein separates Leistungsdatum fehlt, wird das Rechnungsdatum verwendet.
+  Diese Ersatzannahme und die standardmaessige Warenklassifikation muessen fuer
+  abweichende Buchungsfaelle geprueft werden. Plattform-Sonderregeln sind nicht automatisch
+  umgesetzt. Der sevDesk-Abruf umfasst zusaetzlich 45 Tage vor und 10 Tage nach dem
+  Quartal; Rechnungen weit ausserhalb dieses Fensters mit abweichendem Leistungsdatum
+  benoetigen eine gesonderte Vollstaendigkeitspruefung.
+- Live-Neuberechnungen leeren Positions-Caches. Alte Berechnungs-Snapshots werden
+  nach der Versionsaenderung nicht wiederverwendet. Beleg-/Positionslisten werden
+  vollstaendig paginiert; Seitenbegrenzung, unlesbare Betraege und fehlgeschlagene
+  API-Abrufe duerfen keine scheinbar erfolgreiche Nullberechnung erzeugen.
+- Rabattbereinigte Accounting-Betraege und explizite Nullbetraege sind verbindlich.
+  Gemischte Steuersaetze werden nach Positionen getrennt, auch wenn der Rechnungskopf
+  nur einen Satz nennt. Land-/Steuerkonflikte, unbekannte Auslandsregeln und erhebliche
+  Netto-/Steuerdifferenzen sperren den XML-Export statt Umsaetze still wegzulassen.
+- Positionsdetails fuer Belege ausserhalb des Lieferquartals, Entwuerfe und eindeutig
+  ausgeschlossene Reverse-Charge-/IG-/Export-Belege werden nicht unnoetig geladen.
+  Die bestehende API-Ratenbegrenzung bleibt erhalten.
+- Der Q3/2026-Live-Prueflauf sank von 357,165 auf 193,403 Sekunden (rund 45,9 %).
+  711 Belege wurden geladen und nach Lieferquartal geprueft; der abschliessende Lauf
+  benoetigte 386 GET-Abrufe. Die portalbezogene XML-Strukturpruefung und ein Replay
+  derselben Quellen bestaetigten die Berechnung. Es wurde keine Meldung abgegeben
+  und beim Prueflauf kein Quartals-Snapshot ersetzt.
+- Gutschriften werden sichtbar gemacht und sperren den vereinfachten XML-Export
+  bis zur fachlichen Pruefung. Berichtigungen bereits gemeldeter Zeitraeume gehoeren
+  im Portal in den Bereich "Korrektur frueherer Zeitraeume", nicht ungeprueft als
+  negativer aktueller Umsatz in eine gewoehnliche Steuerzeile.
+- Das XML ist fuer den manuellen Upload im EU-OSS-Portal bestimmt, nicht fuer einen
+  automatischen FinanzOnline-Webservice. Die lokale Strukturpruefung ist kein
+  Nachweis einer erfolgreichen Portalannahme. Nullmeldungen und nicht exportierbare
+  0%-Zeilen werden ausdruecklich fuer die manuelle Portalbearbeitung ausgewiesen.
+  Vergleichsbilder werden nicht als Referenzkonfiguration gespeichert.
+
+Fachliche Quelle:
+[USP/BMF: Erklaerung und Zahlung im EU-OSS](https://www.usp.gv.at/themen/steuern-finanzen/umsatzsteuer-ueberblick/weitere-informationen-zur-umsatzsteuer/umsaetze-mit-auslandsbezug/Umsatzsteuer-One-Stop-Shop/EU-OSS/Erklaerung-und-Zahlung-im-EU-OSS.html)
+(Quartalsabgrenzung, Vorauszahlungen und Korrekturen frueherer Zeitraeume).
+
 ## 4) Betrieb auf mehreren PCs
 
 - Betriebsdaten werden zentral in PostgreSQL synchronisiert.

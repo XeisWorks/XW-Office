@@ -24,6 +24,7 @@ class OssQuarterResult(BaseModel):
     goods_lines: list[OssLine] = Field(default_factory=list)
     service_lines: list[OssLine] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    blocking: list[str] = Field(default_factory=list)
     source_count: int = 0
     excluded_count: int = 0
     cache: dict[str, object] = Field(default_factory=dict)

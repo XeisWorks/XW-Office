@@ -17,7 +17,7 @@ from xw_office.services.finanzonline.oss_models import OssQuarterResult
 
 logger = logging.getLogger(__name__)
 
-OSS_SNAPSHOT_SCHEMA_VERSION = 1
+OSS_SNAPSHOT_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)

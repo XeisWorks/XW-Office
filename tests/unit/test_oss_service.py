@@ -200,7 +200,10 @@ class _ParallelPositionProvider(SevdeskOssDocumentProvider):
 
     def _load_resource(self, path: str, *, params: dict[str, object] | None = None) -> list[dict[str, object]]:
         if path == "/Invoice":
-            return [{"id": str(index), "invoiceNumber": f"RE-{index}"} for index in range(6)]
+            return [
+                {"id": str(index), "invoiceNumber": f"RE-{index}", "invoiceDate": "2026-02-04"}
+                for index in range(6)
+            ]
         return []
 
 

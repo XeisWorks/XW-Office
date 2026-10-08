@@ -1,4 +1,4 @@
-"""Steuern module — UVA, Clearing, Ausgaben with non-blocking actions."""
+"""Steuern module — UVA and EU-OSS with non-blocking actions."""
 from __future__ import annotations
 
 import logging
@@ -33,7 +33,6 @@ from PySide6.QtWidgets import (
 from xw_office.core.signals import AppSignals
 from xw_office.core.worker import BackgroundWorker
 from xw_office.services.clearing.service import ClearingRow, PaymentClearingService
-from xw_office.services.expenses.service import ExpenseAuditService, ExpenseRow
 from xw_office.services.finanzonline import (
     OssQuarterResult,
     OssService,
@@ -44,7 +43,9 @@ from xw_office.services.finanzonline import (
     render_data_quality_text,
 )
 from xw_office.services.finanzonline.zm_service import is_valid_uid, normalize_uid
-from xw_office.ui.modules.taxes.presentation import UvaPresentation, format_euro, validate_preview
+from xw_office.services.finanzonline.amounts import tax_amount
+from xw_office.ui.modules.taxes.presentation import CollapsibleDetails, UvaPresentation, format_euro, validate_preview
+from xw_office.ui.modules.taxes.oss_presentation import QuarterComboBox, oss_summary_html
 from xw_office.ui.widgets.data_table import DataTable
 from xw_office.ui.widgets.search_bar import SearchBar
 
@@ -114,11 +115,10 @@ def _format_euro(value: str) -> str:
 
 
 class TaxesView(QWidget):
-    """UVA | Clearing | Ausgaben — calls services off the UI thread."""
+    """UVA | EU-OSS — calls services off the UI thread."""
 
     _CLEARING_COLUMNS = ["Ref", "Kunde", "Betrag", "Status", "Hinweis"]
-    _EXPENSE_COLUMNS = ["Ref", "Lieferant", "Brutto", "Kategorie", "Status", "Hinweis"]
-    _OSS_COLUMNS = ["Land", "Satz", "Art", "Netto", "Steuer", "Belege"]
+    _OSS_COLUMNS = ["Land", "Satz", "Art", "Brutto", "Netto", "Steuer", "Belege"]
 
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -128,10 +128,8 @@ class TaxesView(QWidget):
         self._zm_prepare_worker: BackgroundWorker | None = None
         self._oss_worker: BackgroundWorker | None = None
         self._clearing_worker: BackgroundWorker | None = None
-        self._expenses_worker: BackgroundWorker | None = None
         self._export_worker: BackgroundWorker | None = None
         self._clearing_rows: list[ClearingRow] = []
-        self._expenses_rows: list[ExpenseRow] = []
         self._uva_progress_bar: QProgressBar | None = None
         self._uva_progress_label: QLabel | None = None
         self._uva_preview_button: QPushButton | None = None
@@ -152,10 +150,17 @@ class TaxesView(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
         tabs = QTabWidget()
+        tabs.setObjectName("taxTabs")
+        tabs.setDocumentMode(True)
+        tabs.setTabPosition(QTabWidget.TabPosition.North)
+        tabs.tabBar().setExpanding(True)
+        tabs.setStyleSheet(
+            "QTabBar::tab { min-width: 150px; padding: 12px 28px; font-size: 16px; font-weight: 600; }"
+            "QTabBar::tab:selected { border-bottom: 3px solid #b58c3a; font-weight: 800; }"
+        )
 
         tabs.addTab(self._build_uva_tab(), "UVA")
         tabs.addTab(self._build_oss_tab(), "EU-OSS")
-        tabs.addTab(self._build_expenses_tab(), "Ausgaben")
         outer.addWidget(tabs)
 
     def _build_uva_tab(self) -> QWidget:
@@ -730,23 +735,20 @@ class TaxesView(QWidget):
         layout = QVBoxLayout(page)
         oss: OssService = self._container.resolve(OssService)
 
-        info = QPlainTextEdit()
-        info.setReadOnly(True)
-        info.setPlainText(oss.describe_capabilities())
-        layout.addWidget(info)
+        info = CollapsibleDetails("EU-OSS: Verfahren und Datenquelle")
+        info.set_text(oss.describe_capabilities())
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Jahr:"))
         year = QSpinBox()
         year.setRange(2021, 2100)
-        year.setValue(2026)
+        today = date.today()
+        current_quarter = (today.month - 1) // 3 + 1
+        year.setValue(today.year if current_quarter > 1 else today.year - 1)
         row.addWidget(year)
         row.addWidget(QLabel("Quartal:"))
-        quarter = QComboBox()
-        quarter.addItem("Q1", 1)
-        quarter.addItem("Q2", 2)
-        quarter.addItem("Q3", 3)
-        quarter.addItem("Q4", 4)
+        quarter = QuarterComboBox()
+        quarter.setCurrentIndex(current_quarter - 2 if current_quarter > 1 else 3)
         row.addWidget(quarter)
         row.addStretch()
         layout.addLayout(row)
@@ -765,9 +767,20 @@ class TaxesView(QWidget):
         form.addWidget(uid_fixed_est)
         layout.addLayout(form)
 
-        preview_box = QPlainTextEdit()
-        preview_box.setReadOnly(True)
-        layout.addWidget(preview_box)
+        status = QLabel("EU-OSS noch nicht berechnet")
+        status.setObjectName("ossStatus")
+        status.setWordWrap(True)
+        status.setStyleSheet("font-weight: 700;")
+        layout.addWidget(status)
+        progress = QProgressBar()
+        progress.setRange(0, 0)
+        progress.setTextVisible(False)
+        progress.hide()
+        layout.addWidget(progress)
+        preview_box = QTextBrowser()
+        preview_box.setObjectName("ossSummary")
+        preview_box.setPlainText("EU-OSS berechnen, um die Quartalssummen zu sehen.")
+        layout.addWidget(preview_box, 1)
 
         oss_table = DataTable(self._OSS_COLUMNS)
         oss_table.setMinimumHeight(170)
@@ -775,11 +788,16 @@ class TaxesView(QWidget):
         oss_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(oss_table)
 
-        drilldown_box = QPlainTextEdit()
-        drilldown_box.setReadOnly(True)
+        drilldown = CollapsibleDetails("Belege zur ausgewählten Steuergruppe")
+        drilldown_box = drilldown.content
         drilldown_box.setPlaceholderText("Zeile auswaehlen, um die Belege zu sehen.")
         drilldown_box.setMaximumHeight(140)
-        layout.addWidget(drilldown_box)
+        warnings_detail = CollapsibleDetails("Hinweise")
+        technical_detail = CollapsibleDetails("Technische Details / XML")
+        layout.addWidget(warnings_detail)
+        layout.addWidget(drilldown)
+        layout.addWidget(technical_detail)
+        layout.addWidget(info)
 
         buttons = QHBoxLayout()
         preview = QPushButton("EU-OSS berechnen")
@@ -807,11 +825,13 @@ class TaxesView(QWidget):
                         "Land": f"{line.country_code} {line.country_name}",
                         "Satz": f"{line.vat_rate} %",
                         "Art": "Waren" if line.goods else "Leistungen",
+                        "Brutto": _format_euro(str(tax_amount(line.taxable_amount) + tax_amount(line.tax_amount))),
                         "Netto": _format_euro(line.taxable_amount),
                         "Steuer": _format_euro(line.tax_amount),
                         "Belege": str(len(line.source_docs)),
                         "__docs": list(line.source_docs),
                         "__sort__Netto": float(str(line.taxable_amount).replace(",", ".")),
+                        "__sort__Brutto": float(tax_amount(line.taxable_amount) + tax_amount(line.tax_amount)),
                         "__sort__Steuer": float(str(line.tax_amount).replace(",", ".")),
                         "__sort__Belege": len(line.source_docs),
                     }
@@ -821,9 +841,16 @@ class TaxesView(QWidget):
         def apply_result(res: OssQuarterResult) -> None:
             nonlocal latest_result
             latest_result = res
-            preview_box.setPlainText(oss.render_preview_text(res))
+            preview_box.setHtml(oss_summary_html(res))
+            status.setText(
+                f"XML-Export blockiert: {len(res.blocking)} fachliche Prüfungen erforderlich."
+                if res.blocking else "Berechnet · keine blockierenden Datenfehler · Portalprüfung vor Abgabe erforderlich."
+            )
+            warnings_detail.set_text("\n".join([*res.blocking, *res.warnings]), count=len(res.warnings))
+            technical_detail.set_text(oss.render_preview_text(res))
             oss_table.set_data(result_rows(res))
             drilldown_box.clear()
+            export.setEnabled(not res.blocking)
 
         def show_selected_drilldown() -> None:
             row = oss_table.selected_row_data()
@@ -851,19 +878,13 @@ class TaxesView(QWidget):
             refresh.setEnabled(False)
             export.setEnabled(False)
             preview.setText("Berechne..." if not refresh_data else "Lade...")
+            year.setEnabled(False)
+            quarter.setEnabled(False)
+            status.setText("EU-OSS wird berechnet …")
+            progress.show()
 
             def job() -> OssQuarterResult:
-                try:
-                    return oss.calculate_quarter(
-                        selected_year,
-                        selected_quarter_value,
-                        refresh=refresh_data,
-                    )
-                except TypeError as exc:
-                    if "unexpected keyword argument 'refresh'" not in str(exc):
-                        raise
-                    logger.warning("EU-OSS service without refresh support loaded; falling back: %s", exc)
-                    return oss.calculate_quarter(selected_year, selected_quarter_value)
+                return oss.calculate_quarter(selected_year, selected_quarter_value, refresh=refresh_data)
 
             self._oss_worker = BackgroundWorker(job)
 
@@ -873,9 +894,15 @@ class TaxesView(QWidget):
                 apply_result(res)
 
             self._oss_worker.signals.result.connect(on_result)
-            self._oss_worker.signals.error.connect(
-                lambda exc: QMessageBox.information(self, "EU-OSS", f"Fehler: {exc}")
-            )
+            def on_error(exc: object) -> None:
+                nonlocal latest_result
+                latest_result = None
+                status.setText("Berechnung fehlgeschlagen. Keine aktuelle Auswertung verfügbar.")
+                preview_box.clear()
+                oss_table.set_data([])
+                QMessageBox.warning(self, "EU-OSS", f"Fehler: {exc}")
+
+            self._oss_worker.signals.error.connect(on_error)
             self._oss_worker.signals.finished.connect(on_oss_finished)
             self._oss_worker.start()
 
@@ -895,10 +922,13 @@ class TaxesView(QWidget):
             selected_year = year.value()
             selected_quarter_value = selected_quarter()
             selected_uid = uid_fixed_est.text().strip()
+            year.setEnabled(False)
+            quarter.setEnabled(False)
             preview.setEnabled(False)
             refresh.setEnabled(False)
             export.setEnabled(False)
             export.setText("Exportiere...")
+            progress.show()
 
             def job() -> tuple[OssXmlExport, str]:
                 if (
@@ -929,7 +959,7 @@ class TaxesView(QWidget):
                 res, saved_path = payload
                 if not isinstance(res, OssXmlExport):
                     return
-                preview_box.setPlainText(res.xml_payload)
+                technical_detail.set_text(res.xml_payload)
                 QMessageBox.information(
                     self,
                     "EU-OSS",
@@ -945,12 +975,26 @@ class TaxesView(QWidget):
 
         def on_oss_finished() -> None:
             self._oss_worker = None
+            progress.hide()
             preview.setEnabled(True)
             preview.setText("EU-OSS berechnen")
             refresh.setEnabled(True)
             refresh.setText("Neu aus sevDesk laden")
-            export.setEnabled(True)
+            export.setEnabled(latest_result is not None and not latest_result.blocking)
             export.setText("EU-OSS XML speichern")
+            year.setEnabled(True)
+            quarter.setEnabled(True)
+
+        def invalidate_selection() -> None:
+            nonlocal latest_result
+            latest_result = None
+            status.setText("Zeitraum geändert. Bitte EU-OSS neu berechnen.")
+            preview_box.clear()
+            oss_table.set_data([])
+            export.setEnabled(False)
+            drilldown.set_text("")
+            warnings_detail.set_text("")
+            technical_detail.set_text("")
 
         def on_portal() -> None:
             if not QDesktopServices.openUrl(QUrl(oss.portal_url(test_mode=True))):
@@ -961,6 +1005,9 @@ class TaxesView(QWidget):
         export.clicked.connect(on_export)
         portal.clicked.connect(on_portal)
         oss_table.selectionModel().selectionChanged.connect(lambda *_: show_selected_drilldown())
+        year.valueChanged.connect(invalidate_selection)
+        quarter.currentIndexChanged.connect(invalidate_selection)
+        export.setEnabled(False)
         return page
 
     def _build_clearing_tab(self) -> QWidget:
@@ -1000,46 +1047,6 @@ class TaxesView(QWidget):
         layout.addWidget(box)
         layout.addStretch()
         self._load_clearing_rows()
-        return page
-
-    def _build_expenses_tab(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        svc: ExpenseAuditService = self._container.resolve(ExpenseAuditService)
-        box = QGroupBox("Ausgaben")
-        bl = QVBoxLayout(box)
-        bl.addWidget(QLabel(svc.describe()))
-
-        filters = QHBoxLayout()
-        self._expenses_search = SearchBar("Suchen (mind. 3 Zeichen)…")
-        self._expenses_search.setPlaceholderText("Suchen (Ref, Lieferant, Kategorie, Hinweis)")
-        self._expenses_search.search_changed.connect(lambda _t: self._apply_expenses_filter())
-        self._expenses_search.set_suggestion_provider(self._expenses_search_suggestions)
-        filters.addWidget(self._expenses_search)
-        self._expenses_status_filter = QComboBox()
-        self._expenses_status_filter.addItems(["", "offen", "in_pruefung", "gebucht", "done"])
-        self._expenses_status_filter.currentTextChanged.connect(lambda _t: self._apply_expenses_filter())
-        filters.addWidget(self._expenses_status_filter)
-        refresh = QPushButton("Neu laden")
-        refresh.clicked.connect(self._load_expense_rows)
-        filters.addWidget(refresh)
-        export = QPushButton("CSV exportieren")
-        export.clicked.connect(self._export_expenses_csv)
-        filters.addWidget(export)
-        bl.addLayout(filters)
-
-        self._expenses_table = DataTable(self._EXPENSE_COLUMNS)
-        self._expenses_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self._expenses_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        self._expenses_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
-        bl.addWidget(self._expenses_table)
-
-        self._expenses_status = QLabel("Noch nicht geladen.")
-        bl.addWidget(self._expenses_status)
-
-        layout.addWidget(box)
-        layout.addStretch()
-        self._load_expense_rows()
         return page
 
     def _load_clearing_rows(self) -> None:
@@ -1114,29 +1121,6 @@ class TaxesView(QWidget):
         self._export_worker.signals.finished.connect(lambda: setattr(self, "_export_worker", None))
         self._export_worker.start()
 
-    def _load_expense_rows(self) -> None:
-        if self._expenses_worker is not None and self._expenses_worker.isRunning():
-            return
-        svc: ExpenseAuditService = self._container.resolve(ExpenseAuditService)
-        self._expenses_status.setText("Lade Ausgaben...")
-
-        def job() -> list[ExpenseRow]:
-            return svc.list_open()
-
-        self._expenses_worker = BackgroundWorker(job)
-        self._expenses_worker.signals.result.connect(self._on_expenses_loaded)
-        self._expenses_worker.signals.error.connect(
-            lambda exc: QMessageBox.warning(self, "Ausgaben", str(exc))
-        )
-        self._expenses_worker.start()
-
-    def _on_expenses_loaded(self, rows: object) -> None:
-        if not isinstance(rows, list):
-            return
-        self._expenses_rows = [row for row in rows if isinstance(row, ExpenseRow)]
-        self._expenses_search.refresh_suggestions()
-        self._apply_expenses_filter()
-
     def _clearing_search_suggestions(self, query: str) -> list[str]:
         q = query.lower().strip()
         if len(q) < 3:
@@ -1147,64 +1131,3 @@ class TaxesView(QWidget):
             if q in hay:
                 out.append(f"{row.ref} - {row.customer}")
         return out
-
-    def _expenses_search_suggestions(self, query: str) -> list[str]:
-        q = query.lower().strip()
-        if len(q) < 3:
-            return []
-        out: list[str] = []
-        for row in self._expenses_rows:
-            hay = f"{row.ref} {row.supplier} {row.category} {row.status} {row.note}".lower()
-            if q in hay:
-                out.append(f"{row.ref} - {row.supplier}")
-        return out
-
-    def _apply_expenses_filter(self) -> None:
-        svc: ExpenseAuditService = self._container.resolve(ExpenseAuditService)
-        filtered = svc.filter_rows(
-            self._expenses_rows,
-            needle=self._expenses_search.text(),
-            status=self._expenses_status_filter.currentText(),
-        )
-        self._populate_expenses_table(filtered)
-        self._expenses_status.setText(f"{len(filtered)} von {len(self._expenses_rows)} Eintraegen")
-
-    def _populate_expenses_table(self, rows: list[ExpenseRow]) -> None:
-        payload = [
-            {
-                "Ref": row.ref,
-                "Lieferant": row.supplier,
-                "Brutto": row.gross_amount,
-                "Kategorie": row.category,
-                "Status": row.status,
-                "Hinweis": row.note,
-                "__align__Brutto": "right",
-            }
-            for row in rows
-        ]
-        self._expenses_table.set_data(payload)
-
-    def _export_expenses_csv(self) -> None:
-        if self._export_worker is not None and self._export_worker.isRunning():
-            return
-        svc: ExpenseAuditService = self._container.resolve(ExpenseAuditService)
-        rows = svc.filter_rows(
-            self._expenses_rows,
-            needle=self._expenses_search.text(),
-            status=self._expenses_status_filter.currentText(),
-        )
-        payload = svc.export_csv(rows)
-        path, _ = QFileDialog.getSaveFileName(self, "Ausgaben CSV speichern", "expenses.csv", "CSV (*.csv)")
-        if not path:
-            return
-
-        def job() -> str:
-            with open(path, "w", encoding="utf-8", newline="") as fh:
-                fh.write(payload)
-            return path
-
-        self._export_worker = BackgroundWorker(job)
-        self._export_worker.signals.result.connect(lambda saved_path: QMessageBox.information(self, "Ausgaben", f"CSV exportiert:\n{saved_path}"))
-        self._export_worker.signals.error.connect(lambda exc: QMessageBox.warning(self, "Ausgaben", f"CSV-Export fehlgeschlagen: {exc}"))
-        self._export_worker.signals.finished.connect(lambda: setattr(self, "_export_worker", None))
-        self._export_worker.start()
