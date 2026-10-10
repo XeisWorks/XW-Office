@@ -54,6 +54,7 @@ from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerA
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.sendungen.service import OffeneSendungenService
+from xw_office.services.drucke.service import OffeneDruckeService
 from xw_office.ui.modules.rechnungen.customer_aftercare_review_dialog import (
     CustomerAftercareReviewDialog,
     ReviewDialogOutcome,
@@ -335,6 +336,7 @@ class TagesgeschaeftView(QWidget):
         self._start_selected_only = False
         self._start_buyer_note_actions: dict[str, tuple[BuyerNoteCase, BuyerNoteReviewSelection]] = {}
         self._sendungen_count = 0
+        self._drucke_count = 0
         self._digital_licenses_count = 0
         self._transfer_count = 0
         self._mollie_count = 0
@@ -349,6 +351,7 @@ class TagesgeschaeftView(QWidget):
         self._lieferkorrektur_popup_fetch_worker: BackgroundWorker | None = None
         self._lieferkorrektur_popup_apply_worker: BackgroundWorker | None = None
         self._sendungen_live_refresh_ts = 0.0
+        self._drucke_live_refresh_ts = 0.0
         self._pending_start_preflight: StartPreflight | None = None
         self._start_product_preflight_started_at = 0.0
         self._start_abort_requested = False
@@ -570,6 +573,11 @@ class TagesgeschaeftView(QWidget):
         self._btn_sendungen_alert.hide()
         alerts_lay.addWidget(self._btn_sendungen_alert)
 
+        self._btn_drucke_alert = self._build_alert_button("OPEN PRINTS")
+        self._btn_drucke_alert.clicked.connect(self._on_drucke_alert_clicked)
+        self._btn_drucke_alert.hide()
+        alerts_lay.addWidget(self._btn_drucke_alert)
+
         self._btn_digital_licenses_alert = self._build_alert_button("DIGITALE LIEFERUNG OFFEN")
         self._btn_digital_licenses_alert.clicked.connect(self._on_digital_licenses_alert_clicked)
         self._btn_digital_licenses_alert.hide()
@@ -698,6 +706,7 @@ class TagesgeschaeftView(QWidget):
             service: DailyBusinessService = self._container.resolve(DailyBusinessService)
             counts = service.load_counts(open_invoice_count=open_count)
             sendungen_service: OffeneSendungenService = self._container.resolve(OffeneSendungenService)
+            drucke_service: OffeneDruckeService = self._container.resolve(OffeneDruckeService)
             now = time.monotonic()
             if now - self._sendungen_live_refresh_ts >= 300.0:
                 counts["sendungen"] = max(
@@ -707,6 +716,11 @@ class TagesgeschaeftView(QWidget):
                 self._sendungen_live_refresh_ts = now
             else:
                 counts["sendungen"] = max(0, int(sendungen_service.open_count()))
+            if now - self._drucke_live_refresh_ts >= 300.0:
+                counts["drucke"] = max(0, int(drucke_service.refresh_count_from_graph_silent()))
+                self._drucke_live_refresh_ts = now
+            else:
+                counts["drucke"] = max(0, int(drucke_service.open_count()))
             digital_licenses: DigitalLicenseService = self._container.resolve(DigitalLicenseService)
             counts["digital_licenses"] = max(0, int(digital_licenses.open_count(limit=30, use_cache=True)))
             if not self._container.config.transfers.alarm_enabled:
@@ -771,16 +785,19 @@ class TagesgeschaeftView(QWidget):
         mollie_count = max(0, int(counts.get("mollie", 0)))
         gutscheine_count = max(0, int(counts.get("gutscheine", 0)))
         sendungen_count = max(0, int(counts.get("sendungen", 0)))
+        drucke_count = max(0, int(counts.get("drucke", 0)))
         digital_licenses_count = max(0, int(counts.get("digital_licenses", 0)))
         transfer_count = max(0, int(counts.get("transfer", counts.get("refunds", 0))))
         transfer_login_required = bool(counts.get("transfer_login_required"))
         self._b2b_credit_count = max(0, int(counts.get("b2b_credit", 0)))
 
         self._sendungen_count = sendungen_count
+        self._drucke_count = drucke_count
         self._digital_licenses_count = digital_licenses_count
         self._transfer_count = transfer_count
         self._mollie_count = mollie_count
         self._update_alert_button(self._btn_sendungen_alert, "OFFENE SENDUNGEN", sendungen_count)
+        self._update_alert_button(self._btn_drucke_alert, "OPEN PRINTS", drucke_count)
         self._update_alert_button(
             self._btn_digital_licenses_alert,
             "DIGITALE LIEFERUNG OFFEN",
@@ -834,6 +851,13 @@ class TagesgeschaeftView(QWidget):
         count = self._rechnungen_view.open_sendungen_dialog()
         self._sendungen_count = max(0, int(count))
         self._update_alert_button(self._btn_sendungen_alert, "OFFENE SENDUNGEN", self._sendungen_count)
+
+    def _on_drucke_alert_clicked(self) -> None:
+        if self._rechnungen_view is None:
+            return
+        count = self._rechnungen_view.open_drucke_dialog()
+        self._drucke_count = max(0, int(count))
+        self._update_alert_button(self._btn_drucke_alert, "OPEN PRINTS", self._drucke_count)
 
     def _on_digital_licenses_alert_clicked(self) -> None:
         if self._rechnungen_view is None:

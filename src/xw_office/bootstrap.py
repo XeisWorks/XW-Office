@@ -57,10 +57,12 @@ from xw_office.services.product_hub.sevdesk_inventory_reconciliation import (
 )
 from xw_office.services.flow_api import FlowAnalyticsClient
 from xw_office.services.sendungen.xw_flow_client import XwFlowShipmentClient
+from xw_office.services.drucke.xw_flow_client import XwFlowPrintClient
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.services.b2b_credit import B2bCreditService
 from xw_office.services.draft_invoice.service import DraftInvoiceService
 from xw_office.services.sendungen.service import OffeneSendungenService
+from xw_office.services.drucke.service import OffeneDruckeService
 from xw_office.services.sendungen.delivery_note import DeliveryNoteService
 from xw_office.services.special_orders import SpecialOrderService
 from xw_office.services.transfers.service import OffeneUeberweisungenService
@@ -278,6 +280,18 @@ def register_default_services(container: Container) -> None:
     container.register(
         XwFlowShipmentClient,
         lambda c: XwFlowShipmentClient(c.config, c.resolve(SecretService)),
+    )
+    container.register(
+        XwFlowPrintClient,
+        lambda c: XwFlowPrintClient(c.config, c.resolve(SecretService)),
+    )
+    container.register(
+        OffeneDruckeService,
+        lambda c: OffeneDruckeService(
+            c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
+            c.resolve(SecretService),
+            c.resolve(XwFlowPrintClient),
+        ),
     )
     container.register(
         CustomerAftercareInboxService,

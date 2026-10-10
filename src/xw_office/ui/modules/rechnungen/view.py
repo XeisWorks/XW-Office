@@ -91,6 +91,7 @@ from xw_office.services.products.print_decision import (
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sendungen.service import OffeneSendungenService
+from xw_office.services.drucke.service import OffeneDruckeService
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 from xw_office.services.sevdesk.part_client import PartClient
 from xw_office.ui.modules.rechnungen.offene_ueberweisungen_dialog import OffeneUeberweisungenDialog
@@ -101,6 +102,7 @@ from xw_office.ui.modules.rechnungen.customer_aftercare_manager_dialog import (
 )
 from xw_office.ui.modules.rechnungen.digital_licenses_dialog import DigitalLicensesDialog
 from xw_office.ui.modules.rechnungen.offene_sendungen_dialog import OffeneSendungenDialog
+from xw_office.ui.modules.rechnungen.offene_drucke_dialog import OffeneDruckeDialog
 from xw_office.ui.modules.rechnungen.special_order_dialog import SpecialOrderDialog
 from xw_office.ui.modules.rechnungen.open_invoice_overview import (
     BuyerNote,
@@ -1112,6 +1114,7 @@ class RechnungenView(QWidget):
         self._pending_draft_order_number = ""
         self._mollie_alert_count = 0
         self._sendungen_alert_count = 0
+        self._drucke_alert_count = 0
         self._digital_licenses_alert_count = 0
         self._search_index: list[dict[str, str]] = []
         self._loaded_rows: list[dict[str, Any]] = []
@@ -1279,6 +1282,17 @@ class RechnungenView(QWidget):
         )
         self._btn_sendungen_alert.clicked.connect(self._on_sendungen_alert_clicked)
         self._btn_sendungen_alert.hide()
+        self._btn_drucke_alert = self._toolbar.add_button(
+            "drucke_alert",
+            "🖨 OPEN PRINTS",
+            tooltip="Offene Druckaufträge anzeigen",
+        )
+        self._btn_drucke_alert.setStyleSheet(
+            "QPushButton {background-color: #5b5fc7; color: white; border-radius: 6px; font-weight: bold; padding: 0 14px;}"
+            "QPushButton:hover { background-color: #4f52b2; }"
+        )
+        self._btn_drucke_alert.clicked.connect(self._on_drucke_alert_clicked)
+        self._btn_drucke_alert.hide()
         self._btn_digital_licenses_alert = self._toolbar.add_button(
             "digital_licenses_alert",
             "EXTERNE BESTELLUNG",
@@ -2002,6 +2016,13 @@ class RechnungenView(QWidget):
         self.update_sendungen_alert_count(count)
         return count
 
+    def open_drucke_dialog(self) -> int:
+        dlg = OffeneDruckeDialog(self._container, self)
+        dlg.exec()
+        count = dlg.open_count()
+        self.update_drucke_alert_count(count)
+        return count
+
     def open_digital_licenses_dialog(self) -> int:
         dlg = DigitalLicensesDialog(self._container, self)
         dlg.exec()
@@ -2478,10 +2499,12 @@ class RechnungenView(QWidget):
             service: DailyBusinessService = self._container.resolve(DailyBusinessService)
             counts = service.load_counts(open_invoice_count=0)
             sendungen_service: OffeneSendungenService = self._container.resolve(OffeneSendungenService)
+            drucke_service: OffeneDruckeService = self._container.resolve(OffeneDruckeService)
             digital_licenses: DigitalLicenseService = self._container.resolve(DigitalLicenseService)
             return {
                 "mollie": max(0, int(counts.get("mollie", 0))),
                 "sendungen": max(0, int(sendungen_service.refresh_count_from_graph_silent())),
+                "drucke": max(0, int(drucke_service.refresh_count_from_graph_silent())),
                 "digital_licenses": max(0, int(digital_licenses.open_count(limit=30, use_cache=True))),
             }
 
@@ -2494,13 +2517,16 @@ class RechnungenView(QWidget):
         if isinstance(result, dict):
             mollie = max(0, int(result.get("mollie") or 0))
             sendungen = max(0, int(result.get("sendungen") or 0))
+            drucke = max(0, int(result.get("drucke") or 0))
             digital_licenses = max(0, int(result.get("digital_licenses") or 0))
         else:
             mollie = max(0, int(result)) if isinstance(result, int) else 0
             sendungen = 0
+            drucke = 0
             digital_licenses = 0
         self.update_mollie_alert_count(mollie)
         self.update_sendungen_alert_count(sendungen)
+        self.update_drucke_alert_count(drucke)
         self.update_digital_licenses_alert_count(digital_licenses)
 
     def update_mollie_alert_count(self, count: int) -> None:
@@ -2518,6 +2544,14 @@ class RechnungenView(QWidget):
             self._btn_sendungen_alert.show()
             return
         self._btn_sendungen_alert.hide()
+
+    def update_drucke_alert_count(self, count: int) -> None:
+        self._drucke_alert_count = max(0, int(count))
+        if self._drucke_alert_count > 0:
+            self._btn_drucke_alert.setText(f"🖨 OPEN PRINTS ({self._drucke_alert_count})")
+            self._btn_drucke_alert.show()
+            return
+        self._btn_drucke_alert.hide()
 
     def update_digital_licenses_alert_count(self, count: int) -> None:
         self._digital_licenses_alert_count = max(0, int(count))
@@ -2537,6 +2571,11 @@ class RechnungenView(QWidget):
         dlg = OffeneSendungenDialog(self._container, self)
         dlg.exec()
         self.update_sendungen_alert_count(dlg.open_count())
+
+    def _on_drucke_alert_clicked(self) -> None:
+        dlg = OffeneDruckeDialog(self._container, self)
+        dlg.exec()
+        self.update_drucke_alert_count(dlg.open_count())
 
     def _on_digital_licenses_alert_clicked(self) -> None:
         dlg = DigitalLicensesDialog(self._container, self)

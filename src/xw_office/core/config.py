@@ -73,7 +73,7 @@ class FlowApiSection:
 
 @dataclass(frozen=True)
 class FlowShippingApiSection:
-    """XW-Flow bridge used by the desktop shipment queue."""
+    """XW-Flow bridge used by desktop shipment and print queues."""
 
     base_url: str = ""
     timeout_seconds: float = 10.0

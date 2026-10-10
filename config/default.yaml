@@ -30,7 +30,7 @@ flow_api:
   timeout_seconds: 10
 
 flow_shipping_api:
-  # XW-Flow's delivery-share bridge. Secret: XW_OFFICE_BRIDGE_SECRET.
+  # XW-Flow's delivery/print bridge. Secret: XW_OFFICE_BRIDGE_SECRET.
   base_url: ""
   timeout_seconds: 10
 
