@@ -7,6 +7,7 @@ import json
 import logging
 import uuid
 from typing import Any
+from pathlib import Path
 
 from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.drucke.xw_flow_client import FlowPrintEmailCase, XwFlowPrintClient
@@ -31,11 +32,21 @@ class PrintCase:
     source_id: str
 
 
+@dataclass(frozen=True)
+class PrintAttachment:
+    id: str
+    name: str
+    content_type: str
+    size_bytes: int
+    source_type: str = _SOURCE_GRAPH
+
+
 class OffeneDruckeService:
     def __init__(self, settings_repo: SettingKvRepository | None, secrets: SecretService, flow_prints: XwFlowPrintClient | None = None) -> None:
         self._repo = settings_repo
         self._secrets = secrets
         self._flow_prints = flow_prints
+        self._last_flow_sync_error = ""
 
     def open_count(self) -> int:
         return len(self.load_open_cases())
@@ -43,6 +54,55 @@ class OffeneDruckeService:
     def load_open_cases(self) -> list[PrintCase]:
         done = self._load_done()
         return [case for case in self._load_cases() if case.id not in done]
+
+    def last_flow_sync_error(self) -> str:
+        """A safe, value-free diagnostic for the OPEN PRINTS dialog."""
+        return self._last_flow_sync_error
+
+    def list_attachments(self, case_id: str) -> list[PrintAttachment]:
+        case = self._find_case(case_id)
+        if case is None:
+            return []
+        if case.source_type == _SOURCE_FLOW:
+            remote = self._flow_case(case.source_id)
+            return [PrintAttachment(id=str(item.get("id") or ""), name=str(item.get("filename") or "Anhang"), content_type=str(item.get("mime_type") or "application/octet-stream"), size_bytes=int(item.get("size_bytes") or 0), source_type=_SOURCE_FLOW) for item in (remote.attachments if remote else []) if str(item.get("id") or "")]
+        if case.source_type != _SOURCE_GRAPH:
+            return []
+        client = self._graph_client()
+        if client is None:
+            return []
+        values = client.list_attachments(case.source_id)
+        return [
+            PrintAttachment(
+                id=str(item.get("id") or "").strip(),
+                name=str(item.get("name") or "Anhang").strip(),
+                content_type=str(item.get("contentType") or "application/octet-stream").strip(),
+                size_bytes=int(item.get("size") or 0),
+                source_type=_SOURCE_GRAPH,
+            )
+            for item in values
+            if str(item.get("id") or "").strip()
+        ]
+
+    def download_attachment_to_cache(self, case_id: str, attachment_id: str, filename: str) -> Path:
+        case = self._find_case(case_id)
+        if case is None:
+            raise ValueError("Dieser Druckauftrag hat keinen Mail-Anhang")
+        if case.source_type == _SOURCE_FLOW:
+            if self._flow_prints is None:
+                raise RuntimeError("XW-Flow Druck-Bridge ist nicht konfiguriert")
+            data = self._flow_prints.download_attachment_bytes(case.source_id, attachment_id)
+        else:
+            client = self._graph_client()
+            if client is None:
+                raise RuntimeError("MS Graph ist nicht konfiguriert")
+            data = client.download_attachment_bytes(case.source_id, attachment_id)
+        safe_name = "".join(char if char.isalnum() or char in " ._-()" else "_" for char in filename).strip(" .") or "Anhang"
+        target_dir = Path(__file__).resolve().parents[4] / "state" / "open_prints" / case.source_id
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / safe_name
+        target.write_bytes(data)
+        return target
 
     def refresh_count_from_graph_silent(self, *, lookback_days: int = 30, max_items: int = 150) -> int:
         try:
@@ -125,10 +185,24 @@ class OffeneDruckeService:
             logger.warning("XW-Flow print refresh failed: %s", exc); return previous
         return [PrintCase(id=f"flow:{item.id}", title=item.title, detail=item.body_text or item.source_url, received_at=item.created_at, source_type=_SOURCE_FLOW, source_id=item.id) for item in remote]
 
+    def _flow_case(self, source_id: str):
+        if self._flow_prints is None or not self._flow_prints.is_configured():
+            return None
+        return next((item for item in self._flow_prints.fetch_open_cases() if item.id == source_id), None)
+
     def _sync_email_snapshot(self, cases: list[PrintCase]) -> None:
-        if self._flow_prints is None or not self._flow_prints.is_configured(): return
-        try: self._flow_prints.sync_print_email_cases([FlowPrintEmailCase(external_id=case.source_id, title=case.title, received_at=case.received_at) for case in cases if case.source_type == _SOURCE_GRAPH])
-        except Exception as exc: logger.warning("XW-Flow print-mail snapshot failed: %s", exc)
+        if self._flow_prints is None or not self._flow_prints.is_configured():
+            self._last_flow_sync_error = "XW-Flow-Bridge ist in XW-Office nicht konfiguriert."
+            return
+        try:
+            self._flow_prints.sync_print_email_cases([FlowPrintEmailCase(external_id=case.source_id, title=case.title, received_at=case.received_at) for case in cases if case.source_type == _SOURCE_GRAPH])
+            self._last_flow_sync_error = ""
+        except Exception as exc:
+            logger.warning("XW-Flow print-mail snapshot failed: %s", exc)
+            self._last_flow_sync_error = "XW-Flow konnte den Druckauftrag noch nicht übernehmen. Erneut aktualisieren."
+
+    def _find_case(self, case_id: str) -> PrintCase | None:
+        return next((case for case in self._load_cases() if case.id == case_id), None)
 
     @staticmethod
     def _email_request_id(external_id: str) -> uuid.UUID:

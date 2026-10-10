@@ -31,7 +31,7 @@ class _Flow:
         return True
 
     def fetch_open_cases(self) -> list[FlowPrintCase]:
-        return [FlowPrintCase(id="flow-print", title="Partitur", body_text="A4 doppelseitig", source_url="", created_at="2026-10-10T10:00:00Z")]
+        return [FlowPrintCase(id="flow-print", title="Partitur", body_text="A4 doppelseitig", source_url="", created_at="2026-10-10T10:00:00Z", attachments=[])]
 
     def set_status(self, case_id: str, *, completed: bool) -> None:
         self.status_updates.append((case_id, completed))

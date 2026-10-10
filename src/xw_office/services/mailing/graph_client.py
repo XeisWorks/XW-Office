@@ -270,7 +270,7 @@ class GraphMailClient:
             return html_to_text(content)
         return content
 
-    def list_pdf_attachments(self, message_id: str) -> list[dict[str, Any]]:
+    def list_attachments(self, message_id: str) -> list[dict[str, Any]]:
         message_id = str(message_id or "").strip()
         if not message_id:
             return []
@@ -280,15 +280,16 @@ class GraphMailClient:
         self._raise_for_status(response)
         payload = response.json() if response.content else {}
         values = payload.get("value", []) if isinstance(payload, dict) else []
-        out: list[dict[str, Any]] = []
-        for item in values:
-            if not isinstance(item, dict):
-                continue
-            content_type = str(item.get("contentType") or "").lower()
-            name = str(item.get("name") or "")
-            if content_type == "application/pdf" or name.lower().endswith(".pdf"):
-                out.append(item)
-        return out
+        return [item for item in values if isinstance(item, dict)]
+
+    def list_pdf_attachments(self, message_id: str) -> list[dict[str, Any]]:
+        """Compatibility helper for callers that deliberately need PDFs only."""
+        return [
+            item
+            for item in self.list_attachments(message_id)
+            if str(item.get("contentType") or "").lower() == "application/pdf"
+            or str(item.get("name") or "").lower().endswith(".pdf")
+        ]
 
     def download_attachment_bytes(self, message_id: str, attachment_id: str) -> bytes:
         message_id = str(message_id or "").strip()

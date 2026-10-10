@@ -15,6 +15,7 @@ class FlowPrintCase:
     body_text: str
     source_url: str
     created_at: str
+    attachments: list[dict]
 
 
 @dataclass(frozen=True)
@@ -49,7 +50,23 @@ class XwFlowPrintClient:
             response.raise_for_status()
             payload = response.json()
         values = payload.get("cases") if isinstance(payload, dict) else []
-        return [FlowPrintCase(id=str(item.get("id") or ""), title=str(item.get("title") or "Neuer Druckauftrag"), body_text=str(item.get("body_text") or ""), source_url=str(item.get("source_url") or ""), created_at=str(item.get("created_at") or "")) for item in values if isinstance(item, dict) and str(item.get("id") or "").strip()]
+        return [FlowPrintCase(id=str(item.get("id") or ""), title=str(item.get("title") or "Neuer Druckauftrag"), body_text=str(item.get("body_text") or ""), source_url=str(item.get("source_url") or ""), created_at=str(item.get("created_at") or ""), attachments=list(item.get("attachments") or [])) for item in values if isinstance(item, dict) and str(item.get("id") or "").strip()]
+
+    def download_attachment_bytes(self, case_id: str, attachment_id: str) -> bytes:
+        connection = self._connection()
+        if connection is None:
+            raise RuntimeError("XW-Flow Druck-Bridge ist nicht konfiguriert")
+        base_url, headers, timeout = connection
+        with httpx.Client(base_url=base_url, headers=headers, timeout=timeout, follow_redirects=True) as client:
+            response = client.get(f"/api/v1/office-bridge/print-cases/{case_id}/attachments/{attachment_id}/view-url")
+            response.raise_for_status()
+            payload = response.json()
+            view_url = str(payload.get("view_url") or "") if isinstance(payload, dict) else ""
+            if not view_url:
+                raise RuntimeError("XW-Flow lieferte keine Anhang-URL")
+            downloaded = client.get(view_url)
+            downloaded.raise_for_status()
+            return bytes(downloaded.content)
 
     def set_status(self, case_id: str, *, completed: bool) -> None:
         connection = self._connection()
