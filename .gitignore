@@ -14,6 +14,7 @@ build/
 src/xw_studio/data/
 state/
 *.log
+*.log.*
 resources/resources_rc.py
 node_modules/
 .railway/
