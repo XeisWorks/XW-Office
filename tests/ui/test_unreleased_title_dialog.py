@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from xw_office.services.products.catalog import ProductCatalogService
 from xw_office.ui.dialogs.unreleased_title_dialog import (
+    UnreleasedCatalogDialog,
+    UnreleasedProductEditDialog,
     UnreleasedTitleDialog,
     UnreleasedTitleSplitDialog,
 )
@@ -33,3 +35,29 @@ def test_title_split_dialog_requires_one_line_per_ordered_piece(qtbot: object) -
     dialog._titles.setPlainText("Titel A\nTitel B")  # noqa: SLF001
     dialog._validate_and_accept()  # noqa: SLF001
     assert dialog.result() == dialog.DialogCode.Accepted
+
+
+def test_unreleased_product_edit_dialog_prefills_and_accepts(qtbot: object) -> None:
+    catalog = ProductCatalogService()
+    dialog = UnreleasedProductEditDialog(
+        catalog,
+        canonical_name="Gabriellas Song XXL",
+        owner="Albert",
+        aliases=["Gabriellas Song (XXL Version)"],
+        title="Unreleased-Produkt erfassen (Gabriellas Song (XXL Version))",
+    )
+    qtbot.addWidget(dialog)
+
+    assert dialog.windowTitle() == "Unreleased-Produkt erfassen (Gabriellas Song (XXL Version))"
+    assert dialog._name_input.text() == "Gabriellas Song XXL"  # noqa: SLF001
+    assert dialog._owner_combo.currentText() == "Albert"  # noqa: SLF001
+    assert "Gabriellas Song (XXL Version)" in dialog._aliases_input.toPlainText()  # noqa: SLF001
+
+    dialog._validate_and_accept()  # noqa: SLF001
+    assert dialog.result() == dialog.DialogCode.Accepted
+
+    name, owner, aliases = dialog.get_data()
+    assert name == "Gabriellas Song XXL"
+    assert owner == "Albert"
+    assert aliases == ["Gabriellas Song (XXL Version)"]
+

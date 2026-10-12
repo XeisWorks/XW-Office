@@ -82,7 +82,11 @@ from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.inventory import InventoryService
 from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.printer_status.service import PrinterStatusService
-from xw_office.services.products.catalog import ProductCatalogService, normalize_legacy_title
+from xw_office.services.products.catalog import (
+    ProductCatalogService,
+    clean_unreleased_match_title,
+    normalize_legacy_title,
+)
 from xw_office.services.products.print_decision import (
     PieceBlock,
     PrintDecisionEngine,
@@ -1445,18 +1449,6 @@ class RechnungenView(QWidget):
         unreleased_layout = QVBoxLayout(self._gb_unreleased)
         unreleased_layout.setContentsMargins(10, 8, 10, 10)
         unreleased_layout.setSpacing(5)
-
-        unreleased_header = QHBoxLayout()
-        unreleased_header.setContentsMargins(0, 0, 0, 0)
-        unreleased_header.addStretch(1)
-        self._btn_add_unreleased = QPushButton("+")
-        self._btn_add_unreleased.setToolTip(
-            "Neues Unreleased-Produkt (XW-010) anlegen oder Aliase pflegen"
-        )
-        self._btn_add_unreleased.setFixedSize(24, 24)
-        self._btn_add_unreleased.clicked.connect(self._on_add_unreleased_clicked)
-        unreleased_header.addWidget(self._btn_add_unreleased, alignment=Qt.AlignmentFlag.AlignRight)
-        unreleased_layout.addLayout(unreleased_header)
 
         self._unreleased_spinner = QProgressBar()
         self._unreleased_spinner.setRange(0, 0)
@@ -3976,11 +3968,29 @@ class RechnungenView(QWidget):
         text_col = QVBoxLayout()
         text_col.setContentsMargins(0, 0, 0, 0)
         text_col.setSpacing(1)
-        title = QLabel(str(item.title or item.sku or "Unbenanntes Produkt"))
+
+        sku_clean = str(item.sku or "").strip().upper()
+        raw_title = str(item.title or item.sku or "Unbenanntes Produkt")
+        resolved_title = raw_title
+        if sku_clean == "XW-010":
+            try:
+                catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
+                res = catalog.resolve_unreleased_title(raw_title)
+                if res.is_resolved and res.canonical_name:
+                    resolved_title = res.canonical_name
+            except Exception:
+                pass
+
+        title = QLabel(resolved_title)
         title.setWordWrap(True)
         title.setStyleSheet("color: #ffffff; font-weight: 700;")
-        description_text = self._open_product_description(item)
         text_col.addWidget(title)
+        if resolved_title != raw_title:
+            sub = QLabel(f"Kundenangabe: {raw_title}")
+            sub.setWordWrap(True)
+            sub.setStyleSheet("color: #94a3b8; font-size: 11px; font-style: italic;")
+            text_col.addWidget(sub)
+        description_text = self._open_product_description(item)
         if description_text:
             description = QLabel(description_text)
             description.setWordWrap(True)
@@ -3988,10 +3998,37 @@ class RechnungenView(QWidget):
             text_col.addWidget(description)
         layout.addLayout(text_col, stretch=1)
 
-        sku_label = QLabel(str(item.sku or "-"))
+        sku_label = QLabel(sku_clean or "-")
         sku_label.setStyleSheet("color: #93c5fd; font-size: 10px;")
         sku_label.setMinimumWidth(60)
         layout.addWidget(sku_label)
+
+        if sku_clean == "XW-010":
+            add_unreleased_btn = QPushButton("+")
+            add_unreleased_btn.setFixedSize(22, 22)
+            add_unreleased_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            add_unreleased_btn.setToolTip("Unreleased-Produkt erfassen & Druckplan festlegen")
+            add_unreleased_btn.setStyleSheet(
+                "QPushButton {"
+                "  background-color: #16a34a;"
+                "  color: #ffffff;"
+                "  border: none;"
+                "  border-radius: 11px;"
+                "  font-size: 15px;"
+                "  font-weight: 700;"
+                "  padding: 0 0 2px 0;"
+                "}"
+                "QPushButton:hover {"
+                "  background-color: #22c55e;"
+                "}"
+                "QPushButton:pressed {"
+                "  background-color: #15803d;"
+                "}"
+            )
+            add_unreleased_btn.clicked.connect(
+                lambda _checked=False, aggregate=item: self._on_add_unreleased_from_item(aggregate)
+            )
+            layout.addWidget(add_unreleased_btn)
 
         action = QToolButton()
         action.setFixedSize(28, 26)
@@ -6551,15 +6588,72 @@ class RechnungenView(QWidget):
         )
         piece.name = decision.canonical_name
 
-    def _on_add_unreleased_clicked(self) -> None:
+    def _on_add_unreleased_from_item(self, item: PrintProductAggregate) -> None:
         catalog = self._container.resolve(ProductCatalogService)
-        dialog = UnreleasedProductEditDialog(catalog, parent=self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            name, owner, aliases = dialog.get_data()
-            catalog.add_or_update_unreleased_product(name, owner=owner, aliases=aliases)
-            # Re-run resolution if open overview is present
-            if self._latest_open_overview is not None:
-                self._load_open_invoices_data()
+        raw_input = str(item.title or "").strip()
+        lines = [line.strip() for line in raw_input.splitlines() if line.strip()]
+        first_line = lines[0] if lines else raw_input
+
+        # Check if already resolved or if candidates exist
+        resolution = catalog.resolve_unreleased_title(first_line)
+        if resolution.is_resolved and resolution.canonical_name:
+            initial_canonical = resolution.canonical_name
+            initial_owner = resolution.owner
+            existing = next(
+                (
+                    p
+                    for p in catalog.list_unreleased_products()
+                    if p.canonical_name.casefold() == initial_canonical.casefold()
+                ),
+                None,
+            )
+            existing_aliases = list(existing.aliases) if existing else []
+            initial_aliases = list(dict.fromkeys([*existing_aliases, *lines, raw_input]))
+        else:
+            cleaned = clean_unreleased_match_title(first_line) or first_line
+            initial_canonical = cleaned
+            initial_owner = ""
+            initial_aliases = list(dict.fromkeys([*lines, raw_input])) if raw_input else []
+
+        dialog = UnreleasedProductEditDialog(
+            catalog,
+            canonical_name=initial_canonical,
+            owner=initial_owner,
+            aliases=initial_aliases,
+            title=f"Unreleased-Produkt erfassen ({first_line})" if first_line else "",
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        canonical_name, owner, aliases = dialog.get_data()
+        catalog.add_or_update_unreleased_product(
+            canonical_name,
+            owner=owner,
+            aliases=aliases,
+        )
+
+        signals: AppSignals = self._container.resolve(AppSignals)
+        signals.status_message.emit(
+            f"Unreleased-Produkt '{canonical_name}' gespeichert.",
+            5000,
+        )
+
+        # Immediately open the print configuration popup for this product
+        from xw_office.ui.modules.rechnungen.print_dialog import _configure_missing_piece_print
+
+        piece_block = PieceBlock(
+            sku="XW-010",
+            name=canonical_name,
+            qty_needed=max(1, int(self._open_product_quantity(item) or 1)),
+            note=str(item.description or "").strip(),
+            is_unreleased=True,
+            stock_status=None,
+        )
+        _configure_missing_piece_print(self, self._container, piece_block)
+
+        # Refresh overview to reflect the new unreleased product and print settings
+        self._refresh_open_invoice_overview()
 
     def _split_unreleased_piece(
         self,

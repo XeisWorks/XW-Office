@@ -194,13 +194,17 @@ class UnreleasedProductEditDialog(QDialog):
         canonical_name: str = "",
         owner: str = "",
         aliases: list[str] | tuple[str, ...] = (),
+        title: str = "",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._catalog = catalog
-        self.setWindowTitle(
-            "Unreleased-Produkt bearbeiten" if canonical_name else "Neues Unreleased-Produkt anlegen"
-        )
+        if title:
+            self.setWindowTitle(title)
+        else:
+            self.setWindowTitle(
+                "Unreleased-Produkt bearbeiten" if canonical_name else "Neues Unreleased-Produkt anlegen"
+            )
         self.setMinimumWidth(540)
 
         layout = QVBoxLayout(self)
@@ -208,6 +212,7 @@ class UnreleasedProductEditDialog(QDialog):
         form = QFormLayout()
         self._name_input = QLineEdit(canonical_name)
         self._name_input.setPlaceholderText("z.B. Gabriellas Song XXL")
+        self._name_input.textChanged.connect(self._on_name_changed)
         form.addRow("Produktname (Kanonisch):", self._name_input)
 
         self._owner_combo = QComboBox()
@@ -219,7 +224,8 @@ class UnreleasedProductEditDialog(QDialog):
 
         self._aliases_input = QPlainTextEdit()
         self._aliases_input.setPlaceholderText("Ein Alias pro Zeile, z.B.:\nGabriellas Song (XXL Version)\nGabriellas Song XXL")
-        self._aliases_input.setPlainText("\n".join(aliases))
+        cleaned_aliases = [str(a or "").strip() for a in aliases if str(a or "").strip()]
+        self._aliases_input.setPlainText("\n".join(cleaned_aliases))
         self._aliases_input.setMaximumHeight(120)
         form.addRow("Aliase (ein Alias pro Zeile):", self._aliases_input)
 
@@ -235,6 +241,16 @@ class UnreleasedProductEditDialog(QDialog):
         buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _on_name_changed(self, text: str) -> None:
+        trimmed = text.strip().casefold()
+        if not trimmed:
+            return
+        for product in self._catalog.list_unreleased_products():
+            if product.canonical_name.casefold() == trimmed:
+                if product.owners:
+                    self._owner_combo.setCurrentText(product.owners[0])
+                break
 
     def _validate_and_accept(self) -> None:
         name = self._name_input.text().strip()
