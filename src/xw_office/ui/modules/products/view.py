@@ -54,6 +54,7 @@ from xw_office.services.product_hub.sevdesk_inventory_reconciliation import (
 )
 from xw_office.services.sevdesk.part_client import PartClient, SevdeskPart
 from xw_office.services.wix.client import WixProduct, WixProductsClient
+from xw_office.ui.dialogs.unreleased_title_dialog import UnreleasedCatalogDialog
 from xw_office.ui.modules.products.bulk_field_dialog import BulkFieldEditorDialog
 from xw_office.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 from xw_office.ui.modules.rechnungen.print_dialog import (
@@ -759,6 +760,12 @@ class ProductsView(QWidget):
         self._sync_apply_btn.clicked.connect(self._apply_wix_to_local)
         self._sync_apply_btn.setEnabled(False)
         bar.addWidget(self._sync_apply_btn)
+        self._unreleased_catalog_btn = QPushButton("Unreleased-Katalog (XW-010)")
+        self._unreleased_catalog_btn.setToolTip(
+            "Unveröffentlichte Noten (SKU XW-010), Aliase und Gattungen/Owner pflegen"
+        )
+        self._unreleased_catalog_btn.clicked.connect(self._open_unreleased_catalog)
+        bar.addWidget(self._unreleased_catalog_btn)
         lay.addLayout(bar)
 
         self._sync_sevdesk_cache_lbl = QLabel("sevDesk-Cache: noch nicht aktualisiert")
@@ -1288,6 +1295,11 @@ class ProductsView(QWidget):
     def _on_stock_correction_finished(self) -> None:
         self._stock_correction_worker = None
         self._sync_correction_btn.setEnabled(bool(self._sync_rows))
+
+    def _open_unreleased_catalog(self) -> None:
+        catalog = self._container.resolve(ProductCatalogService)
+        dialog = UnreleasedCatalogDialog(catalog, parent=self)
+        dialog.exec()
 
     def _print_selected_product(self) -> None:
         skus = self._selected_product_skus()

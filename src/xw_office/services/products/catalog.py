@@ -30,18 +30,16 @@ logger = logging.getLogger(__name__)
 _UNRELEASED_DYNAMIC_SKUS = {"XW-010"}
 _TITLE_GENERIC_SUFFIXES = {
     "a4",
-    "bh",
     "boarischer",
     "gesamt",
     "marsch",
     "march",
     "polka",
     "song",
-    "version",
     "walzer",
     "wm",
-    "xxl",
 }
+_TITLE_VERSION_MARKERS = {"bh", "xxl"}
 _UNRELEASED_MATCH_THRESHOLD = 0.85
 _UNRELEASED_MATCH_MARGIN = 0.05
 _UNRELEASED_OWNER_MATCH_THRESHOLD = 0.92
@@ -119,7 +117,16 @@ def clean_unreleased_match_title(value: str) -> str:
     lowered = raw.casefold()
     if " - " in raw and ("blechhauf" in lowered or "blechhaufn" in lowered):
         raw = raw.split(" - ", 1)[1].strip()
-    raw = re.sub(r"\(.*?(besetzung|version|blechhauf).*?\)", "", raw, flags=re.IGNORECASE).strip()
+
+    def _preserve_version_paren(match: re.Match[str]) -> str:
+        text = match.group(0).casefold()
+        if "xxl" in text:
+            return " XXL "
+        if "bh" in text or "blechhauf" in text:
+            return " BH "
+        return ""
+
+    raw = re.sub(r"\(.*?(besetzung|version|blechhauf).*?\)", _preserve_version_paren, raw, flags=re.IGNORECASE).strip()
     raw = re.sub(r",?\s*arr\.?\s*:?.*$", "", raw, flags=re.IGNORECASE).strip()
     raw = re.sub(r"^\s*[-*]\s*", "", raw)
     raw = re.sub(r"^\s*\d+[\).\s-]+", "", raw)
@@ -152,6 +159,16 @@ def split_unreleased_titles(values: list[str], quantity: int) -> list[str]:
     return pieces
 
 
+def _extract_version_markers(normalized: str) -> set[str]:
+    tokens = set(normalized.split())
+    return tokens & _TITLE_VERSION_MARKERS
+
+
+def _strip_version_markers(normalized: str) -> str:
+    tokens = [t for t in normalized.split() if t not in _TITLE_VERSION_MARKERS]
+    return " ".join(tokens)
+
+
 def _title_match_variants(value: str) -> set[str]:
     normalized = normalize_legacy_title(value)
     if not normalized:
@@ -166,9 +183,28 @@ def _title_match_variants(value: str) -> set[str]:
 
 
 def _title_match_score(left: str, right: str) -> float:
+    norm_left = normalize_legacy_title(left)
+    norm_right = normalize_legacy_title(right)
+    left_markers = _extract_version_markers(norm_left)
+    right_markers = _extract_version_markers(norm_right)
+
+    if left_markers and right_markers and left_markers != right_markers:
+        return 0.0
+
     left_variants = _title_match_variants(left)
     right_variants = _title_match_variants(right)
-    return max(
+
+    has_asymmetric_marker = bool(
+        (left_markers and not right_markers) or (right_markers and not left_markers)
+    )
+
+    if has_asymmetric_marker:
+        stripped_left = _strip_version_markers(norm_left)
+        stripped_right = _strip_version_markers(norm_right)
+        left_variants.update(_title_match_variants(stripped_left))
+        right_variants.update(_title_match_variants(stripped_right))
+
+    best = max(
         (
             max(fuzzy_ratio(a, b), fuzz.WRatio(a, b) / 100.0)
             for a in left_variants
@@ -176,6 +212,10 @@ def _title_match_score(left: str, right: str) -> float:
         ),
         default=0.0,
     )
+
+    if has_asymmetric_marker:
+        return min(best, 0.88)
+    return best
 
 
 @dataclass
@@ -584,6 +624,103 @@ class ProductCatalogService:
                 or normalize_legacy_title(str(row.get("alias") or "")) != alias_key
             ]
             rows.append(entry)
+            return json.dumps(rows, ensure_ascii=False, indent=2)
+
+        if self._settings_repo is not None:
+            mutator = getattr(self._settings_repo, "mutate_value_json", None)
+            if callable(mutator):
+                mutator(_UNRELEASED_TITLE_OVERRIDES_KEY, mutate)
+            else:
+                current = self._settings_repo.get_value_json(_UNRELEASED_TITLE_OVERRIDES_KEY)
+                self._settings_repo.set_value_json(_UNRELEASED_TITLE_OVERRIDES_KEY, mutate(current))
+        self._unreleased_products = None
+        self._legacy_unreleased_names = None
+
+    def add_or_update_unreleased_product(
+        self,
+        canonical_name: str,
+        *,
+        owner: str,
+        aliases: list[str] | tuple[str, ...] = (),
+    ) -> None:
+        """Create or update an unreleased product with its owner and aliases."""
+        canonical = str(canonical_name or "").strip()
+        resolved_owner = str(owner or "").strip()
+        if not canonical or not resolved_owner:
+            raise ValueError("Produktname und Gattung sind erforderlich.")
+
+        clean_aliases: list[str] = []
+        for a in aliases:
+            cleaned = str(a or "").strip()
+            if cleaned and cleaned != canonical and cleaned not in clean_aliases:
+                clean_aliases.append(cleaned)
+
+        canonical_key = normalize_legacy_title(canonical)
+        entries_to_add: list[dict[str, str]] = []
+        # Main entry
+        entries_to_add.append({"alias": canonical, "canonical_name": canonical, "owner": resolved_owner})
+        for alias in clean_aliases:
+            entries_to_add.append({"alias": alias, "canonical_name": canonical, "owner": resolved_owner})
+
+        # Update in-memory overrides
+        self._local_unreleased_overrides = [
+            row
+            for row in self._local_unreleased_overrides
+            if normalize_legacy_title(str(row.get("canonical_name") or "")) != canonical_key
+        ]
+        self._local_unreleased_overrides.extend(entries_to_add)
+
+        def mutate(current: str | None) -> str:
+            try:
+                rows = json.loads(current or "[]")
+            except Exception:
+                rows = []
+            if not isinstance(rows, list):
+                rows = []
+            rows = [
+                row
+                for row in rows
+                if not isinstance(row, dict)
+                or normalize_legacy_title(str(row.get("canonical_name") or "")) != canonical_key
+            ]
+            rows.extend(entries_to_add)
+            return json.dumps(rows, ensure_ascii=False, indent=2)
+
+        if self._settings_repo is not None:
+            mutator = getattr(self._settings_repo, "mutate_value_json", None)
+            if callable(mutator):
+                mutator(_UNRELEASED_TITLE_OVERRIDES_KEY, mutate)
+            else:
+                current = self._settings_repo.get_value_json(_UNRELEASED_TITLE_OVERRIDES_KEY)
+                self._settings_repo.set_value_json(_UNRELEASED_TITLE_OVERRIDES_KEY, mutate(current))
+        self._unreleased_products = None
+        self._legacy_unreleased_names = None
+
+    def delete_unreleased_product(self, canonical_name: str) -> None:
+        """Remove an unreleased product and all its overrides from settings."""
+        canonical = str(canonical_name or "").strip()
+        if not canonical:
+            return
+        canonical_key = normalize_legacy_title(canonical)
+        self._local_unreleased_overrides = [
+            row
+            for row in self._local_unreleased_overrides
+            if normalize_legacy_title(str(row.get("canonical_name") or "")) != canonical_key
+        ]
+
+        def mutate(current: str | None) -> str:
+            try:
+                rows = json.loads(current or "[]")
+            except Exception:
+                rows = []
+            if not isinstance(rows, list):
+                rows = []
+            rows = [
+                row
+                for row in rows
+                if not isinstance(row, dict)
+                or normalize_legacy_title(str(row.get("canonical_name") or "")) != canonical_key
+            ]
             return json.dumps(rows, ensure_ascii=False, indent=2)
 
         if self._settings_repo is not None:

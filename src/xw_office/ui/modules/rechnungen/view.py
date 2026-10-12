@@ -124,6 +124,8 @@ from xw_office.ui.modules.rechnungen.plc_statistics_dialog import PlcStatisticsD
 from xw_office.services.plc.statistics import PlcStatisticsService
 from xw_office.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 from xw_office.ui.dialogs.unreleased_title_dialog import (
+    UnreleasedCatalogDialog,
+    UnreleasedProductEditDialog,
     UnreleasedTitleDialog,
     UnreleasedTitleSplitDialog,
 )
@@ -1443,6 +1445,19 @@ class RechnungenView(QWidget):
         unreleased_layout = QVBoxLayout(self._gb_unreleased)
         unreleased_layout.setContentsMargins(10, 8, 10, 10)
         unreleased_layout.setSpacing(5)
+
+        unreleased_header = QHBoxLayout()
+        unreleased_header.setContentsMargins(0, 0, 0, 0)
+        unreleased_header.addStretch(1)
+        self._btn_add_unreleased = QPushButton("+")
+        self._btn_add_unreleased.setToolTip(
+            "Neues Unreleased-Produkt (XW-010) anlegen oder Aliase pflegen"
+        )
+        self._btn_add_unreleased.setFixedSize(24, 24)
+        self._btn_add_unreleased.clicked.connect(self._on_add_unreleased_clicked)
+        unreleased_header.addWidget(self._btn_add_unreleased, alignment=Qt.AlignmentFlag.AlignRight)
+        unreleased_layout.addLayout(unreleased_header)
+
         self._unreleased_spinner = QProgressBar()
         self._unreleased_spinner.setRange(0, 0)
         self._unreleased_spinner.setFixedHeight(4)
@@ -6535,6 +6550,16 @@ class RechnungenView(QWidget):
             owner=decision.owner,
         )
         piece.name = decision.canonical_name
+
+    def _on_add_unreleased_clicked(self) -> None:
+        catalog = self._container.resolve(ProductCatalogService)
+        dialog = UnreleasedProductEditDialog(catalog, parent=self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            name, owner, aliases = dialog.get_data()
+            catalog.add_or_update_unreleased_product(name, owner=owner, aliases=aliases)
+            # Re-run resolution if open overview is present
+            if self._latest_open_overview is not None:
+                self._load_open_invoices_data()
 
     def _split_unreleased_piece(
         self,
