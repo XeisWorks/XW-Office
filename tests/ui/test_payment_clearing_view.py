@@ -1,6 +1,7 @@
 """Payment-clearing UI behavior tests."""
 from __future__ import annotations
 
+import calendar
 from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -149,15 +150,24 @@ def test_month_preset_updates_date_range(qtbot: object, app_config: object) -> N
     view = PaymentClearingView(container)
     qtbot.addWidget(view)
 
-    view._month_preset.setCurrentIndex(1)  # noqa: SLF001
-    expected_start = PaymentClearingView._recent_month_starts(date.today())[1]  # noqa: SLF001
+    current_month, previous_month, *_ = PaymentClearingView._recent_month_starts(date.today())  # noqa: SLF001
     selected_start = view._start.date().toPython()  # noqa: SLF001
     selected_end = view._end.date().toPython()  # noqa: SLF001
 
-    assert view._month_preset.count() == PaymentClearingView.MONTH_PRESET_COUNT  # noqa: SLF001
-    assert selected_start == expected_start
-    assert selected_end.year == expected_start.year
-    assert selected_end.month == expected_start.month
+    assert view._month_preset.count() == PaymentClearingView.MONTH_PRESET_COUNT + 1  # noqa: SLF001
+    assert view._month_preset.currentIndex() == PaymentClearingView.DEFAULT_MONTH_PRESET_INDEX  # noqa: SLF001
+    assert selected_start == previous_month
+    assert selected_end.year == previous_month.year
+    assert selected_end.month == previous_month.month
+
+    view._month_preset.setCurrentIndex(0)  # noqa: SLF001
+
+    assert view._start.date().toPython() == current_month  # noqa: SLF001
+    assert view._end.date().toPython() == date(
+        current_month.year,
+        current_month.month,
+        calendar.monthrange(current_month.year, current_month.month)[1],
+    )  # noqa: SLF001
 
 
 def test_main_window_can_open_payment_clearing(qtbot: object, app_config: object) -> None:

@@ -75,6 +75,7 @@ class PaymentClearingView(QWidget):
     COL_STATUS = 9
     COL_REASON = 10
     MONTH_PRESET_COUNT = 5
+    DEFAULT_MONTH_PRESET_INDEX = 1
 
     _TABLE_COLUMNS = [
         "",
@@ -115,7 +116,9 @@ class PaymentClearingView(QWidget):
 
         controls.addWidget(QLabel("Monat:"))
         self._month_preset = QComboBox()
-        self._month_preset.setToolTip("Einen der letzten fuenf abgeschlossenen Monate direkt auswaehlen.")
+        self._month_preset.setToolTip(
+            "Den laufenden Monat oder einen der letzten fuenf abgeschlossenen Monate direkt auswaehlen."
+        )
         for month_start in self._recent_month_starts(today):
             self._month_preset.addItem(self._month_label(month_start), month_start.isoformat())
         self._month_preset.currentIndexChanged.connect(self._apply_month_preset)
@@ -131,6 +134,7 @@ class PaymentClearingView(QWidget):
         controls.addWidget(self._end)
         self._start.setDate(QDate(previous_start.year, previous_start.month, previous_start.day))
         self._end.setDate(QDate(previous_end.year, previous_end.month, previous_end.day))
+        self._month_preset.setCurrentIndex(self.DEFAULT_MONTH_PRESET_INDEX)
 
         self._analyze_btn = QPushButton("START: Analyse")
         self._analyze_btn.setToolTip("Zahlungen im gewaehlten Zeitraum mit Wix und sevDesk abgleichen.")
@@ -211,7 +215,10 @@ class PaymentClearingView(QWidget):
     @classmethod
     def _recent_month_starts(cls, today: date) -> list[date]:
         first_this_month = today.replace(day=1)
-        return [cls._shift_month(first_this_month, -offset) for offset in range(1, cls.MONTH_PRESET_COUNT + 1)]
+        return [
+            cls._shift_month(first_this_month, -offset)
+            for offset in range(cls.MONTH_PRESET_COUNT + 1)
+        ]
 
     @staticmethod
     def _shift_month(month_start: date, offset: int) -> date:
