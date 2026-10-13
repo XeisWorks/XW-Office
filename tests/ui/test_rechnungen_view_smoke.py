@@ -487,7 +487,7 @@ def test_actions_delegate_exposes_customs_and_mail_actions() -> None:
     assert _ActionsDelegate.action_at_x(mail_x + mail_size / 2, width=120, height=28) == mail_key
 
 
-def test_customer_mail_action_opens_mailto_url(qtbot: object, monkeypatch) -> None:
+def test_customer_mail_action_opens_outlook_web_compose_url(qtbot: object, monkeypatch) -> None:
     container, invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
     qtbot.addWidget(view)
@@ -506,8 +506,19 @@ def test_customer_mail_action_opens_mailto_url(qtbot: object, monkeypatch) -> No
     view._open_customer_mail_url("customer-20844@example.test", view._customer_mail_subject(summary))  # noqa: SLF001
 
     assert opened
-    assert opened[0].startswith("mailto:customer-20844@example.test?")
-    assert "subject=Best.-Nr.%2020844%20%7C%20RE-DRAFT" in opened[0]
+    assert opened[0].startswith("https://outlook.office.com/mail/deeplink/compose?")
+    assert "to=customer-20844@example.test" in opened[0]
+    assert "subject=Wix-Order-Nr.%2020844%20%7C%20sevDesk-Rechnungsnr.%20RE-DRAFT" in opened[0]
+
+
+def test_customer_mail_subject_contains_wix_order_and_sevdesk_invoice_numbers(qtbot: object) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+
+    subject = view._customer_mail_subject(invoice_service._draft)  # noqa: SLF001
+
+    assert subject == "Wix-Order-Nr. 20844 | sevDesk-Rechnungsnr. RE-DRAFT"
 
 
 def test_customer_mail_row_action_dispatches(qtbot: object, monkeypatch) -> None:

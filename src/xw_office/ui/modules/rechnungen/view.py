@@ -5518,9 +5518,15 @@ class RechnungenView(QWidget):
         if not clean_email:
             QMessageBox.information(self, "Kunden-Mail", "Keine gültige Kunden-E-Mail-Adresse vorhanden.")
             return
-        url = f"mailto:{quote(clean_email, safe='@._+-')}?subject={quote(subject, safe='')}"
+        # The Classic composer runs in a bounded subprocess. If it is not
+        # available, open a prefilled Outlook Web compose window instead of
+        # delegating the fallback to an arbitrary default mail client.
+        url = (
+            "https://outlook.office.com/mail/deeplink/compose"
+            f"?to={quote(clean_email, safe='@._+-')}&subject={quote(subject, safe='')}"
+        )
         if not QDesktopServices.openUrl(QUrl(url)):
-            QMessageBox.warning(self, "Kunden-Mail", "Das Standard-Mailprogramm konnte nicht geöffnet werden.")
+            QMessageBox.warning(self, "Kunden-Mail", "Outlook Web konnte nicht geöffnet werden.")
 
     def _open_customer_mail_outlook(self, email: str, subject: str) -> bool:
         sender_email = self._outlook_sender_email()
@@ -5555,10 +5561,8 @@ class RechnungenView(QWidget):
         if completed.returncode == 0:
             return True
         logger.warning(
-            "Outlook compose subprocess failed rc=%s stderr=%s stdout=%s",
+            "Outlook customer mail composer failed (rc=%s); using Outlook Web fallback",
             completed.returncode,
-            (completed.stderr or "").strip()[:500],
-            (completed.stdout or "").strip()[:500],
         )
         return False
 
@@ -5574,7 +5578,7 @@ class RechnungenView(QWidget):
     def _customer_mail_subject(summary: InvoiceSummary) -> str:
         order_ref = str(summary.order_reference or "").strip() or "—"
         invoice_no = str(summary.invoice_number or "").strip() or str(summary.id or "").strip() or "—"
-        return f"Best.-Nr. {order_ref} | {invoice_no}"
+        return f"Wix-Order-Nr. {order_ref} | sevDesk-Rechnungsnr. {invoice_no}"
 
     def _customer_email_from_loaded_context(self, summary: InvoiceSummary) -> str:
         selected = self._selected_summary()
