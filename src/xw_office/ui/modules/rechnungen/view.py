@@ -405,11 +405,12 @@ class _SevdeskDraftActionDelegate(QStyledItemDelegate):
 
 
 class _ActionsDelegate(QStyledItemDelegate):
-    """Paint action icons (Post/PLC + Wix + customer mail) in one column."""
+    """Paint per-invoice actions (PLC, customs, Wix and customer mail)."""
 
-    _ACTION_KEYS = ("post", "wix", "mail")
+    _ACTION_KEYS = ("post", "customs", "wix", "mail")
     _ICON_FILES = {
         "post": "post.png",
+        "customs": "zollerklärung.png",
         "wix": "wix.png",
         "mail": "mail_sent.png",
     }
@@ -1368,7 +1369,7 @@ class RechnungenView(QWidget):
         self._table.horizontalHeader().setSectionsClickable(False)
         self._table.horizontalHeader().resizeSection(status_col, 48)
         self._table.horizontalHeader().resizeSection(hint_col, 150)
-        self._table.horizontalHeader().resizeSection(actions_col, 120)
+        self._table.horizontalHeader().resizeSection(actions_col, 145)
         self._table.horizontalHeader().resizeSection(fulfillment_col, 170)
         self._table.setColumnHidden(_TABLE_COLUMNS.index("ID"), True)
         left_layout.addWidget(self._table, stretch=1)
@@ -4829,6 +4830,42 @@ class RechnungenView(QWidget):
             None,
         )
 
+    def _print_archived_customs_declaration(self, summary: InvoiceSummary) -> None:
+        """Queue only the already generated CN23 for the selected invoice.
+
+        PLC returns the customs declaration together with a label submission;
+        it has no separate customs-only API endpoint.  Keeping and printing the
+        archived original means this action never submits or prints a PLC label.
+        """
+        customs_path = self._resolve_plc_customs_archive_path_for_summary(summary)
+        if not customs_path:
+            QMessageBox.information(
+                self,
+                "Zollerklärung drucken",
+                "Für diese Bestellung ist keine archivierte PLC-Zollerklärung vorhanden.\n\n"
+                "Die Zollerklärung wird beim erstmaligen Erstellen eines PLC-Labels für "
+                "Drittländer erzeugt und danach hier ohne PLC-Marke nachgedruckt.",
+            )
+            return
+
+        reference = str(summary.order_reference or summary.invoice_number or summary.id or "").strip()
+        try:
+            job_id = queue_archived_plc_customs(self._container, customs_path, reference)
+        except Exception as exc:  # noqa: BLE001 - the source archive remains available for recovery.
+            QMessageBox.warning(
+                self,
+                "Zollerklärung drucken",
+                "Der Druckauftrag für die Zollerklärung konnte nicht eingereiht werden.\n\n"
+                f"{exc}",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Zollerklärung drucken",
+            f"Zollerklärung ohne PLC-Marke zum Druck eingereiht: {job_id[:8]}…",
+        )
+
     def _on_print_music_clicked(self) -> None:
         if not self._print_allowed:
             return
@@ -5142,6 +5179,9 @@ class RechnungenView(QWidget):
     def _run_row_action(self, summary: InvoiceSummary, action: str) -> None:
         if action == "post":
             self._open_plc_post_popup(summary)
+            return
+        if action == "customs":
+            self._print_archived_customs_declaration(summary)
             return
         if action == "wix":
             self._open_wix_download_links(summary)

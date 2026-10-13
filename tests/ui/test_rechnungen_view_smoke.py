@@ -477,9 +477,11 @@ def test_transfer_alert_shows_login_when_graph_auth_required(qtbot: object) -> N
     assert not view._btn_transfer_alert.isHidden()  # noqa: SLF001
 
 
-def test_actions_delegate_exposes_mail_action() -> None:
+def test_actions_delegate_exposes_customs_and_mail_actions() -> None:
     layout = _ActionsDelegate._layout(width=120, height=28)  # noqa: SLF001
-    assert [key for key, _x, _size in layout] == ["post", "wix", "mail"]
+    assert [key for key, _x, _size in layout] == ["post", "customs", "wix", "mail"]
+    customs_key, customs_x, customs_size = layout[1]
+    assert _ActionsDelegate.action_at_x(customs_x + customs_size / 2, width=120, height=28) == customs_key
     mail_key, mail_x, mail_size = layout[-1]
     assert _ActionsDelegate.action_at_x(mail_x + mail_size / 2, width=120, height=28) == mail_key
 
@@ -521,6 +523,49 @@ def test_customer_mail_row_action_dispatches(qtbot: object, monkeypatch) -> None
     view._run_row_action(invoice_service._draft, "mail")  # noqa: SLF001
 
     assert called == ["draft-1"]
+
+
+def test_customs_row_action_dispatches_without_opening_plc_label_dialog(qtbot: object, monkeypatch) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    called: list[str] = []
+
+    monkeypatch.setattr(
+        view,
+        "_print_archived_customs_declaration",
+        lambda summary: called.append(summary.id),
+    )
+
+    view._run_row_action(invoice_service._draft, "customs")  # noqa: SLF001
+
+    assert called == ["draft-1"]
+
+
+def test_customs_action_queues_only_archived_cn23(qtbot: object, monkeypatch, tmp_path: Path) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    customs_pdf = tmp_path / "customs.pdf"
+    customs_pdf.write_bytes(b"%PDF-1.4 CN23")
+    queued: list[tuple[object, str, str]] = []
+    messages: list[str] = []
+
+    monkeypatch.setattr(view, "_resolve_plc_customs_archive_path_for_summary", lambda _summary: str(customs_pdf))
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.queue_archived_plc_customs",
+        lambda passed_container, path, reference: queued.append((passed_container, path, reference)) or "customs-job-1",
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda _parent, _title, text, *_args: messages.append(text),
+    )
+
+    view._print_archived_customs_declaration(invoice_service._draft)  # noqa: SLF001
+
+    assert queued == [(container, str(customs_pdf), "20844")]
+    assert messages == ["Zollerklärung ohne PLC-Marke zum Druck eingereiht: customs-…"]
 
 
 def test_customer_mail_outlook_runs_in_subprocess(qtbot: object, monkeypatch) -> None:
