@@ -189,6 +189,44 @@ def test_customs_result_archives_both_pdfs_before_first_print_job(
     assert queue_order == ["label", "customs"]
 
 
+def test_customs_only_result_creates_and_prints_cn23_without_queuing_label(
+    qtbot: object,
+    tmp_path: Path,
+) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None, customs_only=True)
+    qtbot.addWidget(dialog)
+    dialog._label_archive = PlcLabelArchive(tmp_path)  # noqa: SLF001
+    shipment = _customs_shipment()
+    queued: list[str] = []
+    shown: list[str] = []
+
+    def unexpected_label_queue(_path: object, _reference: str) -> str:
+        raise AssertionError("Eine Zollerklärung darf keine PLC-Marke einreihen")
+
+    dialog._queue_webservice_label = unexpected_label_queue  # type: ignore[method-assign]  # noqa: SLF001
+    dialog._queue_customs_document = lambda _path, _reference: queued.append("customs") or "customs-job"  # type: ignore[method-assign]  # noqa: SLF001
+    dialog._show_success_overlay = shown.append  # type: ignore[method-assign]  # noqa: SLF001
+
+    dialog._on_send_result(  # noqa: SLF001
+        shipment,
+        _PlcSendResult(
+            transport="webservice",
+            reference=shipment.reference,
+            webservice_result=PlcWebserviceResult(
+                pdf_bytes=b"%PDF-1.7\nPLC label that must not print",
+                tracking_codes=(),
+                shipment_documents=CUSTOMS_SAMPLE.read_bytes(),
+            ),
+        ),
+    )
+
+    assert dialog.windowTitle() == "Zollerklärung erstellen"
+    assert dialog._label_archive.find(shipment) is None  # noqa: SLF001
+    assert dialog._label_archive.find_customs_document(shipment) is not None  # noqa: SLF001
+    assert queued == ["customs"]
+    assert shown == ["Zollerklärung erstellt"]
+
+
 def test_customs_result_keeps_both_archives_when_first_print_queue_fails(
     qtbot: object,
     monkeypatch: object,

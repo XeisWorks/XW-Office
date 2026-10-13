@@ -526,7 +526,7 @@ def test_customer_mail_row_action_dispatches(qtbot: object, monkeypatch) -> None
     assert called == ["draft-1"]
 
 
-def test_customs_row_action_dispatches_without_opening_plc_label_dialog(qtbot: object, monkeypatch) -> None:
+def test_customs_row_action_opens_customs_only_dialog(qtbot: object, monkeypatch) -> None:
     container, invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
     qtbot.addWidget(view)
@@ -534,7 +534,7 @@ def test_customs_row_action_dispatches_without_opening_plc_label_dialog(qtbot: o
 
     monkeypatch.setattr(
         view,
-        "_print_archived_customs_declaration",
+        "_open_customs_declaration_dialog",
         lambda summary: called.append(summary.id),
     )
 
@@ -543,30 +543,31 @@ def test_customs_row_action_dispatches_without_opening_plc_label_dialog(qtbot: o
     assert called == ["draft-1"]
 
 
-def test_customs_action_queues_only_archived_cn23(qtbot: object, monkeypatch, tmp_path: Path) -> None:
+def test_customs_action_passes_selected_order_to_customs_only_dialog(qtbot: object, monkeypatch) -> None:
     container, invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
     qtbot.addWidget(view)
-    customs_pdf = tmp_path / "customs.pdf"
-    customs_pdf.write_bytes(b"%PDF-1.4 CN23")
-    queued: list[tuple[object, str, str]] = []
-    messages: list[str] = []
+    summary = invoice_service._draft  # noqa: SLF001
+    created: list[dict[str, object]] = []
 
-    monkeypatch.setattr(view, "_resolve_plc_customs_archive_path_for_summary", lambda _summary: str(customs_pdf))
+    class CustomsDialogStub:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            created.append({"args": args, **kwargs})
+
+        def exec(self) -> int:
+            return 0
+
     monkeypatch.setattr(
         "xw_office.ui.modules.rechnungen.view.queue_archived_plc_customs",
-        lambda passed_container, path, reference: queued.append((passed_container, path, reference)) or "customs-job-1",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("Kein Archivnachdruck")),
     )
-    monkeypatch.setattr(
-        QMessageBox,
-        "information",
-        lambda _parent, _title, text, *_args: messages.append(text),
-    )
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.view.PlcLabelPrintDialog", CustomsDialogStub)
 
-    view._print_archived_customs_declaration(invoice_service._draft)  # noqa: SLF001
+    view._open_customs_declaration_dialog(summary)  # noqa: SLF001
 
-    assert queued == [(container, str(customs_pdf), "20844")]
-    assert messages == ["Zollerklärung ohne PLC-Marke zum Druck eingereiht: customs-…"]
+    assert len(created) == 1
+    assert created[0]["args"][:3] == (container, summary, view)
+    assert created[0]["customs_only"] is True
 
 
 def test_archived_packing_lists_appear_in_view_and_print_menus(

@@ -4845,41 +4845,23 @@ class RechnungenView(QWidget):
         # selected.  Refresh its document-menu state immediately on return.
         self._update_plc_controls()
 
-    def _print_archived_customs_declaration(self, summary: InvoiceSummary) -> None:
-        """Queue only the already generated CN23 for the selected invoice.
-
-        PLC returns the customs declaration together with a label submission;
-        it has no separate customs-only API endpoint.  Keeping and printing the
-        archived original means this action never submits or prints a PLC label.
-        """
-        customs_path = self._resolve_plc_customs_archive_path_for_summary(summary)
-        if not customs_path:
-            QMessageBox.information(
-                self,
-                "Zollerklärung drucken",
-                "Für diese Bestellung ist keine archivierte PLC-Zollerklärung vorhanden.\n\n"
-                "Die Zollerklärung wird beim erstmaligen Erstellen eines PLC-Labels für "
-                "Drittländer erzeugt und danach hier ohne PLC-Marke nachgedruckt.",
-            )
-            return
-
-        reference = str(summary.order_reference or summary.invoice_number or summary.id or "").strip()
-        try:
-            job_id = queue_archived_plc_customs(self._container, customs_path, reference)
-        except Exception as exc:  # noqa: BLE001 - the source archive remains available for recovery.
-            QMessageBox.warning(
-                self,
-                "Zollerklärung drucken",
-                "Der Druckauftrag für die Zollerklärung konnte nicht eingereiht werden.\n\n"
-                f"{exc}",
-            )
-            return
-
-        QMessageBox.information(
+    def _open_customs_declaration_dialog(self, summary: InvoiceSummary) -> None:
+        """Create a new CN23 from the selected Wix order without label printing."""
+        selected = self._selected_summary()
+        if selected is not None and selected.id == summary.id:
+            address_lines = self._current_shipping_lines()
+        else:
+            address_lines = list(self._shipping_address_overrides.get(summary.id, []))
+        dlg = PlcLabelPrintDialog(
+            self._container,
+            summary,
             self,
-            "Zollerklärung drucken",
-            f"Zollerklärung ohne PLC-Marke zum Druck eingereiht: {job_id[:8]}…",
+            address_override_lines=address_lines,
+            recipient_email=self._cached_customer_email_for_summary(summary),
+            customs_only=True,
         )
+        dlg.exec()
+        self._update_plc_controls()
 
     def _on_print_music_clicked(self) -> None:
         if not self._print_allowed:
@@ -5196,7 +5178,7 @@ class RechnungenView(QWidget):
             self._open_plc_post_popup(summary)
             return
         if action == "customs":
-            self._print_archived_customs_declaration(summary)
+            self._open_customs_declaration_dialog(summary)
             return
         if action == "wix":
             self._open_wix_download_links(summary)

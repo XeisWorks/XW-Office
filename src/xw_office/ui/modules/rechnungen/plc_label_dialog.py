@@ -228,9 +228,11 @@ class PlcLabelPrintDialog(QDialog):
         *,
         address_override_lines: list[str] | None = None,
         recipient_email: str = "",
+        customs_only: bool = False,
     ) -> None:
         super().__init__(parent)
         self._container = container
+        self._customs_only = customs_only
         self._manual_entry = summary is None
         self._summary = summary or InvoiceSummary(id="")
         self._load_worker: BackgroundWorker | None = None
@@ -261,10 +263,15 @@ class PlcLabelPrintDialog(QDialog):
         self._weight_user_set = False
         self._success_overlay: QFrame | None = None
 
-        self.setWindowTitle("PLC Label Print")
+        self.setWindowTitle("Zollerklärung erstellen" if customs_only else "PLC Label Print")
         self.setMinimumWidth(960)
         self.resize(1180, 680)
         self._build_ui()
+        if self._customs_only:
+            # PLC returns the official CN23 only from the direct webservice
+            # response.  The import path cannot return that document.
+            self._transport_combo.setCurrentIndex(0)
+            self._transport_combo.setEnabled(False)
         self._primary_order_number.blockSignals(True)
         self._primary_order_number.setText(self._summary.wix_order_number())
         self._primary_order_number.blockSignals(False)
@@ -1282,9 +1289,14 @@ class PlcLabelPrintDialog(QDialog):
     def _update_customs_visibility(self) -> None:
         needs_customs = self._current_country_group() == "NON_EU"
         self._customs_group.setVisible(needs_customs)
-        self._send_btn.setText(
-            "PLC-Marke + Zollformular drucken" if needs_customs else "PLC-Marke drucken"
-        )
+        if self._customs_only:
+            self._send_btn.setText("Zollerklärung erstellen")
+            self._send_btn.setEnabled(needs_customs)
+            self._send_btn.setToolTip("Erstellt und druckt nur das CN23; die PLC-Marke wird nicht gedruckt.")
+        else:
+            self._send_btn.setText(
+                "PLC-Marke + Zollformular drucken" if needs_customs else "PLC-Marke drucken"
+            )
         if needs_customs and not self._customs_edit.toPlainText().strip():
             self._customs_edit.setPlainText(_CUSTOMS_DESCRIPTION)
         if needs_customs and self._manual_entry and self._customs_table.rowCount() == 0:
@@ -1802,6 +1814,13 @@ class PlcLabelPrintDialog(QDialog):
         )
         if address_group == "EU" and product_id != _EU_PRODUCT_ID:
             product_id = _EU_PRODUCT_ID
+        if self._customs_only and address_group != "NON_EU":
+            QMessageBox.information(
+                self,
+                "Zollerklärung",
+                "Für dieses Zielland wird keine Zollerklärung benötigt.",
+            )
+            return
         if not product_id:
             QMessageBox.warning(self, "PLC", "Versandprodukt ist nicht konfiguriert.")
             return
@@ -1823,7 +1842,9 @@ class PlcLabelPrintDialog(QDialog):
         except ValueError as exc:
             QMessageBox.warning(self, "PLC", str(exc))
             return
-        if not self._confirm_allocation_warnings(action="PLC-Marke drucken"):
+        if not self._confirm_allocation_warnings(
+            action="Zollerklärung erstellen" if self._customs_only else "PLC-Marke drucken"
+        ):
             return
         invoice_id = self._summary.id or ref
         invoice_number = self._summary.invoice_number or self._summary.id or ref
@@ -1856,8 +1877,11 @@ class PlcLabelPrintDialog(QDialog):
             return
 
         transport = str(self._transport_combo.currentData() or "webservice")
-        self._pending_packing_contexts = packing_contexts
-        self._pending_fulfillment_order, self._pending_fulfillment_quantities = self._capture_pending_fulfillment()
+        self._pending_packing_contexts = () if self._customs_only else packing_contexts
+        if self._customs_only:
+            self._pending_fulfillment_order, self._pending_fulfillment_quantities = "", {}
+        else:
+            self._pending_fulfillment_order, self._pending_fulfillment_quantities = self._capture_pending_fulfillment()
         self._start_send(shipment, transport)
 
     def _start_send(self, shipment: PlcShipmentDraft, transport: str) -> None:
@@ -1892,16 +1916,30 @@ class PlcLabelPrintDialog(QDialog):
             self._on_send_error(shipment, RuntimeError("PLC lieferte ein ungültiges Ergebnis"))
             return
         if result.transport == "polling":
+            if self._customs_only:
+                self._on_send_error(
+                    shipment,
+                    RuntimeError("Eine Zollerklärung kann nur über den PLC-Webservice erstellt werden."),
+                )
+                return
             self._status.setText(f"Importdatei abgelegt: {result.polling_path}")
             self._show_success_overlay("Importdatei erstellt")
             return
 
         if result.webservice_result is None:
-            self._on_send_error(shipment, RuntimeError("PLC-Webservice lieferte kein Label"))
+            self._on_send_error(
+                shipment,
+                RuntimeError(
+                    "PLC-Webservice lieferte keine Zollerklärung"
+                    if self._customs_only
+                    else "PLC-Webservice lieferte kein Label"
+                ),
+            )
             return
-        # PLC accepted the shipment and returned a label. From this point on,
-        # the dispatched base quantities must no longer be offered as open.
-        self._record_pending_fulfillment()
+        # A customs-only run uses the same PLC CN23 response, but must not
+        # mark stock as dispatched or queue its accompanying label PDF.
+        if not self._customs_only:
+            self._record_pending_fulfillment()
         archive_path = None
         customs_path = None
         customs_print_path = None
@@ -1920,14 +1958,15 @@ class PlcLabelPrintDialog(QDialog):
             # Both remote responses must be safe locally before either print
             # job starts. Printer/profile errors can then be retried without
             # creating another PLC shipment.
-            archive_path = self._label_archive.save(shipment, result.webservice_result.pdf_bytes)
             if shipment.country_group == "NON_EU":
                 customs_path = self._label_archive.save_customs_document(shipment, customs_pdf)
                 customs_print_path = self._label_archive.ensure_customs_print_document(shipment)
 
-            job_id = self._queue_webservice_label(archive_path, shipment.reference)
-            service: PlcShipmentService = self._container.resolve(PlcShipmentService)
-            service.mark_print_queued(shipment, job_id)
+            if not self._customs_only:
+                archive_path = self._label_archive.save(shipment, result.webservice_result.pdf_bytes)
+                job_id = self._queue_webservice_label(archive_path, shipment.reference)
+                service: PlcShipmentService = self._container.resolve(PlcShipmentService)
+                service.mark_print_queued(shipment, job_id)
             if customs_print_path is not None:
                 customs_job_id = self._queue_customs_document(customs_print_path, shipment.reference)
             if self._pending_packing_contexts:
@@ -1941,7 +1980,11 @@ class PlcLabelPrintDialog(QDialog):
                     shipment.reference,
                 )
         except Exception as exc:  # noqa: BLE001 - shipment was created; preserve the recovery message.
-            self._status.setText("PLC-Sendung erstellt, Druckauftrag fehlgeschlagen")
+            self._status.setText(
+                "Zollerklärung erstellt, Druckauftrag fehlgeschlagen"
+                if self._customs_only
+                else "PLC-Sendung erstellt, Druckauftrag fehlgeschlagen"
+            )
             archived = "\n".join(
                 f"- {path}"
                 for path in (archive_path, customs_path, customs_print_path, packing_list_path)
@@ -1952,17 +1995,23 @@ class PlcLabelPrintDialog(QDialog):
                 if archived
                 else "\n\nDie gelieferten PDFs konnten nicht vollständig lokal archiviert werden."
             )
+            failure_message = (
+                "Die Zollerklärung wurde von PLC erstellt, aber ihr Druckauftrag konnte nicht eingereiht werden."
+                if self._customs_only
+                else "Die Sendung wurde von PLC erstellt, aber mindestens ein lokaler Druckauftrag "
+                "konnte nicht eingereiht werden."
+            )
             QMessageBox.warning(
                 self,
-                "PLC-Label erstellt",
-                "Die Sendung wurde von PLC erstellt, aber mindestens ein lokaler Druckauftrag "
-                "konnte nicht eingereiht werden."
-                f"{archive_note}\n\nDetails: {exc}",
+                "Zollerklärung erstellt" if self._customs_only else "PLC-Label erstellt",
+                f"{failure_message}{archive_note}\n\nDetails: {exc}",
             )
             return
 
         tracking = ", ".join(result.webservice_result.tracking_codes) or "ohne Trackingcode"
-        if customs_job_id:
+        if self._customs_only and customs_job_id:
+            self._status.setText(f"Zollerklärung erstellt; Druckauftrag {customs_job_id[:8]}…")
+        elif customs_job_id:
             self._status.setText(
                 f"PLC-Label und Zollformular archiviert; Druckaufträge {job_id[:8]}… / {customs_job_id[:8]}…"
             )
@@ -1974,7 +2023,7 @@ class PlcLabelPrintDialog(QDialog):
         else:
             self._status.setText(f"PLC-Label archiviert; Druckauftrag {job_id[:8]}…")
         logger.info(
-            "PLC label created reference=%s tracking=%s archive=%s print_job=%s "
+            "PLC label/customs created reference=%s tracking=%s archive=%s print_job=%s "
             "customs_archive=%s customs_print_archive=%s customs_job=%s packing_list=%s packing_job=%s",
             shipment.reference,
             tracking,
@@ -1987,7 +2036,9 @@ class PlcLabelPrintDialog(QDialog):
             packing_list_job_id,
         )
         self._show_success_overlay(
-            "PLC-Label + Zollformular erstellt"
+            "Zollerklärung erstellt"
+            if self._customs_only
+            else "PLC-Label + Zollformular erstellt"
             if customs_job_id
             else f"PLC-Label + {len(self._pending_packing_contexts)} Packlisten erstellt"
             if packing_list_job_id
@@ -2051,16 +2102,22 @@ class PlcLabelPrintDialog(QDialog):
     def _on_send_error(self, shipment: PlcShipmentDraft, exc: Exception) -> None:
         if isinstance(exc, PlcDuplicateShipmentError):
             archive_path = self._label_archive.find(shipment)
-            if archive_path is not None:
+            customs_path = self._label_archive.find_customs_document(shipment)
+            if archive_path is not None or (self._customs_only and customs_path is not None):
                 self._handle_duplicate_archived_label(shipment, archive_path)
                 return
 
             self._status.setText("PLC-Sendung besteht bereits; kein lokales Archiv-PDF vorhanden")
             QMessageBox.warning(
                 self,
-                "PLC-Label bereits erstellt",
-                "PLC sperrt eine zweite Erstellung dieser Sendung. Ein lokales Archiv-PDF wurde noch nicht gefunden, "
-                "daher kann XW-Office keinen sicheren Nachdruck ausführen.",
+                "Zollerklärung bereits erstellt" if self._customs_only else "PLC-Label bereits erstellt",
+                (
+                    "PLC sperrt eine zweite Erstellung dieser Zollerklärung. Ein lokales Archiv-PDF wurde noch nicht "
+                    "gefunden, daher kann XW-Office keinen sicheren Nachdruck ausführen."
+                    if self._customs_only
+                    else "PLC sperrt eine zweite Erstellung dieser Sendung. Ein lokales Archiv-PDF wurde noch nicht gefunden, "
+                    "daher kann XW-Office keinen sicheren Nachdruck ausführen."
+                ),
             )
             return
 
@@ -2071,7 +2128,7 @@ class PlcLabelPrintDialog(QDialog):
     def _handle_duplicate_archived_label(
         self,
         shipment: PlcShipmentDraft,
-        archive_path: object,
+        archive_path: object | None,
     ) -> None:
         box = QMessageBox(self)
         customs_path = self._label_archive.find_customs_document(shipment)
@@ -2081,10 +2138,14 @@ class PlcLabelPrintDialog(QDialog):
                 customs_print_path = self._label_archive.ensure_customs_print_document(shipment)
             except Exception as exc:  # noqa: BLE001 - the PLC original remains available.
                 logger.warning("Archived customs A5 preparation failed path=%s: %s", customs_path, exc)
-        box.setWindowTitle("PLC-Sendung bereits erstellt")
+        box.setWindowTitle("Zollerklärung bereits erstellt" if self._customs_only else "PLC-Sendung bereits erstellt")
         box.setIcon(QMessageBox.Icon.Question)
-        box.setText("Für diese Sendung existieren bereits lokale PLC-Dokumente.")
-        archive_lines = [f"Label: {archive_path}"]
+        box.setText(
+            "Für diese Bestellung existiert bereits eine lokale Zollerklärung."
+            if self._customs_only
+            else "Für diese Sendung existieren bereits lokale PLC-Dokumente."
+        )
+        archive_lines = [] if self._customs_only else [f"Label: {archive_path}"]
         if customs_path is not None:
             archive_lines.append(f"Zollformular (PLC-Original): {customs_path}")
         if customs_print_path is not None:
@@ -2093,39 +2154,66 @@ class PlcLabelPrintDialog(QDialog):
             "Die archivierten PDFs können ohne neue PLC-Sendung erneut gedruckt werden.\n\n"
             + "\n".join(archive_lines)
         )
-        reprint_label = "Beide PDFs erneut drucken" if customs_path is not None else "Label erneut drucken"
+        reprint_label = (
+            "Zollerklärung erneut drucken"
+            if self._customs_only
+            else "Beide PDFs erneut drucken"
+            if customs_path is not None
+            else "Label erneut drucken"
+        )
         reprint_btn = box.addButton(reprint_label, QMessageBox.ButtonRole.AcceptRole)
-        open_btn = box.addButton("Label-PDF öffnen", QMessageBox.ButtonRole.ActionRole)
+        open_btn = (
+            box.addButton("Label-PDF öffnen", QMessageBox.ButtonRole.ActionRole)
+            if not self._customs_only and archive_path is not None
+            else None
+        )
         customs_open_btn = None
         customs_print_open_btn = None
         if customs_path is not None:
             customs_open_btn = box.addButton("Zoll-Original öffnen", QMessageBox.ButtonRole.ActionRole)
         if customs_print_path is not None:
             customs_print_open_btn = box.addButton("Zoll-A5 öffnen", QMessageBox.ButtonRole.ActionRole)
-        additional_btn = box.addButton("Neues Label erstellen", QMessageBox.ButtonRole.ActionRole)
+        additional_btn = box.addButton(
+            "Neue Zollerklärung erstellen" if self._customs_only else "Neues Label erstellen",
+            QMessageBox.ButtonRole.ActionRole,
+        )
         box.addButton("Abbrechen", QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(reprint_btn)
         box.exec()
         clicked = box.clickedButton()
         if clicked is reprint_btn:
             try:
-                label_job_id = self._queue_webservice_label(archive_path, shipment.reference)
                 customs_job_id = ""
-                if customs_path is not None:
+                if self._customs_only:
+                    if customs_path is None:
+                        raise RuntimeError("Keine archivierte Zollerklärung verfügbar.")
                     customs_job_id = self._queue_customs_document(
                         customs_print_path or customs_path,
                         shipment.reference,
                     )
+                else:
+                    if archive_path is None:
+                        raise RuntimeError("Kein archiviertes PLC-Label verfügbar.")
+                    label_job_id = self._queue_webservice_label(archive_path, shipment.reference)
+                    if customs_path is not None:
+                        customs_job_id = self._queue_customs_document(
+                            customs_print_path or customs_path,
+                            shipment.reference,
+                        )
             except Exception as exc:  # noqa: BLE001 - keep the archived recovery path visible.
                 QMessageBox.warning(self, "PLC-Nachdruck", f"Nachdruck konnte nicht eingereiht werden:\n\n{exc}")
                 return
-            jobs = label_job_id[:8] + "…"
-            if customs_job_id:
-                jobs += " / " + customs_job_id[:8] + "…"
-            self._status.setText(f"Archivierter PLC-Nachdruck eingereiht: {jobs}")
-            self._show_success_overlay("PLC-Dokumente erneut eingereiht")
+            if self._customs_only:
+                self._status.setText(f"Archivierte Zollerklärung eingereiht: {customs_job_id[:8]}…")
+                self._show_success_overlay("Zollerklärung erneut eingereiht")
+            else:
+                jobs = label_job_id[:8] + "…"
+                if customs_job_id:
+                    jobs += " / " + customs_job_id[:8] + "…"
+                self._status.setText(f"Archivierter PLC-Nachdruck eingereiht: {jobs}")
+                self._show_success_overlay("PLC-Dokumente erneut eingereiht")
             return
-        if clicked is open_btn:
+        if open_btn is not None and clicked is open_btn:
             QDesktopServices.openUrl(QUrl.fromLocalFile(os.fspath(archive_path)))
             self._status.setText("Archiviertes PLC-Label geöffnet")
             return
@@ -2143,10 +2231,12 @@ class PlcLabelPrintDialog(QDialog):
             return
         if clicked is additional_btn:
             next_shipment = self._next_additional_shipment(shipment)
-            self._status.setText(
-                "Erzeuge weiteres PLC-Label mit Referenz "
-                f"{next_shipment.reference} / {next_shipment.invoice_number}"
+            prefix = (
+                "Erzeuge neue Zollerklärung mit Referenz "
+                if self._customs_only
+                else "Erzeuge weiteres PLC-Label mit Referenz "
             )
+            self._status.setText(f"{prefix}{next_shipment.reference} / {next_shipment.invoice_number}")
             self._start_send(next_shipment, "webservice")
 
     def _next_additional_shipment(self, shipment: PlcShipmentDraft) -> PlcShipmentDraft:
