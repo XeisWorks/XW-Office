@@ -159,6 +159,38 @@ class PlcLabelArchive:
         candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
         return candidates[0]
 
+    def find_packing_lists_for_invoice(
+        self,
+        *,
+        order_reference: str,
+        invoice_number: str,
+    ) -> list[Path]:
+        """Return every archived packing-list version for one order/invoice.
+
+        Packlists are intentionally versioned: a later manual correction must
+        not erase the original package allocation.  Older files from the first
+        naming scheme are included where their order reference matches.
+        """
+        order = _safe_filename_part(order_reference, fallback="")
+        invoice = _safe_filename_part(invoice_number, fallback="")
+        if not order or not invoice:
+            return []
+        root = self._root / "packlists"
+        if not root.is_dir():
+            return []
+
+        current_prefix = f"{order} - {invoice} - Packlisten - "
+        matches = [path for path in root.glob(f"{current_prefix}*.pdf") if path.is_file()]
+
+        # Prior to the invoice-aware archive names, packlists were stored as
+        # ``packlisten_<order>_<timestamp>.pdf``.  Retain discoverability for
+        # those documents instead of treating the migration as data loss.
+        legacy_order = re.sub(r"[^\w.-]+", "_", str(order_reference or "").strip(), flags=re.UNICODE).strip("._")
+        if legacy_order:
+            matches.extend(path for path in root.glob(f"packlisten_{legacy_order}_*.pdf") if path.is_file())
+
+        return sorted(dict.fromkeys(matches), key=_archive_recency_key, reverse=True)
+
     @property
     def index_ready(self) -> bool:
         with self._index_lock:

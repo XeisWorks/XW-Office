@@ -306,6 +306,7 @@ class PlcLabelPrintDialog(QDialog):
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self._plc_form = form
 
         customer_type_row = QHBoxLayout()
         self._customer_type_b2b = QRadioButton("B2B")
@@ -524,6 +525,7 @@ class PlcLabelPrintDialog(QDialog):
         self._send_btn.clicked.connect(self._send_to_plc)
         cancel_button.clicked.connect(self.reject)
         root.addLayout(self._print_actions)
+        self._set_multi_parcel_tools_visible(False)
 
     def _load_context(self) -> None:
         def job() -> _PlcDialogContext:
@@ -679,6 +681,15 @@ class PlcLabelPrintDialog(QDialog):
     def _on_package_count_changed(self, _value: int) -> None:
         state = self._snapshot_parcel_state()
         self._rebuild_parcel_controls(state=self._resize_parcel_state(state, self._package_count.value()))
+
+    def _set_multi_parcel_tools_visible(self, visible: bool) -> None:
+        """Keep multi-parcel controls out of the single-parcel workflow."""
+        self._parcel_group.setVisible(visible)
+        self._auto_distribute_btn.setVisible(visible)
+        label = self._plc_form.labelForField(self._auto_distribute_btn)
+        if label is not None:
+            label.setVisible(visible)
+        self._packing_print_btn.setVisible(visible)
 
     def _snapshot_parcel_state(self) -> tuple[list[list[str]], list[str]] | None:
         """Return current parcel quantities/weights without the controls row."""
@@ -867,7 +878,7 @@ class PlcLabelPrintDialog(QDialog):
     def _rebuild_parcel_controls(self, *, state: tuple[list[list[str]], list[str]] | None = None) -> None:
         package_count = int(self._package_count.value())
         is_multiple = package_count > 1
-        self._parcel_group.setVisible(is_multiple)
+        self._set_multi_parcel_tools_visible(is_multiple)
         self._weight_label.setText("Gesamtgewicht (kg):" if is_multiple else "Gewicht (kg):")
         self._weight_edit.setReadOnly(is_multiple)
         self._weight_edit.setToolTip(

@@ -19,6 +19,7 @@ from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.draft_invoice.service import DraftInvoiceService
 from xw_office.services.inventory.service import StartMode, StartPreflight
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.products.catalog import Product
 from xw_office.services.products.print_decision import PieceBlock, PrintDecisionEngine
 from xw_office.services.secrets.service import SecretService
@@ -568,6 +569,44 @@ def test_customs_action_queues_only_archived_cn23(qtbot: object, monkeypatch, tm
     assert messages == ["Zollerklärung ohne PLC-Marke zum Druck eingereiht: customs-…"]
 
 
+def test_archived_packing_lists_appear_in_view_and_print_menus(
+    qtbot: object,
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = invoice_service._draft  # noqa: SLF001
+    archive = PlcLabelArchive(tmp_path)
+    packlists_dir = tmp_path / "packlists"
+    packlists_dir.mkdir()
+    packlist = packlists_dir / "20844 - RE-DRAFT - Packlisten - 20261013_090000.pdf"
+    packlist.write_bytes(b"%PDF-1.7\npacking list")
+    view._plc_label_archive = archive  # noqa: SLF001
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    view._table.select_source_row(0)  # noqa: SLF001
+    view._update_plc_controls()  # noqa: SLF001
+    queued: list[tuple[object, str, str]] = []
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.queue_packing_lists",
+        lambda passed_container, path, reference: queued.append((passed_container, path, reference)) or "packing-job-1",
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *_args: None)
+
+    view._populate_packing_list_menus()  # noqa: SLF001
+
+    assert view._view_packing_lists_menu.isEnabled()  # noqa: SLF001
+    assert view._print_packing_lists_menu.isEnabled()  # noqa: SLF001
+    assert view._view_packing_lists_menu.actions()[0].text().startswith("Packliste 1 – erstellt ")  # noqa: SLF001
+    assert view._print_packing_lists_menu.actions()[0].text().startswith("Packliste 1 – erstellt ")  # noqa: SLF001
+
+    view._print_packing_lists_menu.actions()[0].trigger()  # noqa: SLF001
+
+    assert queued == [(container, str(packlist), "20844")]
+
+
 def test_customer_mail_outlook_runs_in_subprocess(qtbot: object, monkeypatch) -> None:
     container, invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
@@ -653,12 +692,14 @@ def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
         "Rechnung",
         "Versandlabel",
         "PLC-Label",
+        "Archivierte Packlisten",
         "Noten / Produkte",
     ]
     assert [action.text() for action in view._view_menu.actions()] == [  # noqa: SLF001
         "Rechnungs-PDF",
         "PLC-Label",
         "Zolldokument",
+        "Archivierte Packlisten",
     ]
     assert not view._btn_print.icon().isNull()  # noqa: SLF001
     assert not view._btn_view.icon().isNull()  # noqa: SLF001

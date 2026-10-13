@@ -320,6 +320,26 @@ def test_multiple_parcels_split_physical_items_and_prepare_two_packing_lists(qtb
     assert all("Download" not in item.name for packing_list in packing_lists for item in packing_list.items)
 
 
+def test_multi_parcel_controls_only_appear_from_two_packages(qtbot: object) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+
+    assert dialog._auto_distribute_btn.isHidden()  # noqa: SLF001
+    assert dialog._packing_print_btn.isHidden()  # noqa: SLF001
+    assert dialog._parcel_group.isHidden()  # noqa: SLF001
+
+    dialog._package_count.setValue(2)  # noqa: SLF001
+
+    assert not dialog._auto_distribute_btn.isHidden()  # noqa: SLF001
+    assert not dialog._packing_print_btn.isHidden()  # noqa: SLF001
+    assert not dialog._parcel_group.isHidden()  # noqa: SLF001
+
+    dialog._package_count.setValue(1)  # noqa: SLF001
+
+    assert dialog._auto_distribute_btn.isHidden()  # noqa: SLF001
+    assert dialog._packing_print_btn.isHidden()  # noqa: SLF001
+
+
 def test_multiple_parcel_weights_are_used_instead_of_total_weight(qtbot: object) -> None:
     dialog = PlcLabelPrintDialog(_container(), None)
     qtbot.addWidget(dialog)

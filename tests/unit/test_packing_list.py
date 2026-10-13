@@ -29,6 +29,8 @@ def test_two_portrait_a6_packing_lists_share_one_landscape_a5_page(tmp_path) -> 
 
     pdf_path = PackingListService().generate_pdf(contexts, output_dir=tmp_path)
 
+    assert pdf_path.name.startswith("21104 - RE-21104 - Packlisten - ")
+
     document = fitz.open(pdf_path)
     assert len(document) == 1
     assert document[0].rect.width == fitz.paper_size("a5")[1]

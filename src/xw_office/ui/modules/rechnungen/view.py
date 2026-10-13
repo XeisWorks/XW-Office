@@ -123,6 +123,7 @@ from xw_office.ui.modules.rechnungen.plc_label_dialog import (
     PlcLabelPrintDialog,
     queue_archived_plc_customs,
     queue_archived_plc_label,
+    queue_packing_lists,
 )
 from xw_office.ui.modules.rechnungen.plc_statistics_dialog import PlcStatisticsDialog
 from xw_office.services.plc.statistics import PlcStatisticsService
@@ -1218,6 +1219,7 @@ class RechnungenView(QWidget):
         self._pending_plc_archive_popup: InvoiceSummary | None = None
         self._selected_plc_label_path = ""
         self._selected_plc_customs_path = ""
+        self._selected_packing_list_paths: list[str] = []
         self._plc_archive_lookup_cache: dict[tuple[str, str], str] = {}
         self._invoice_preview_tempdir = TemporaryDirectory(prefix="xw-office-invoice-preview-")
         self._printer_status_initialized = False
@@ -1653,6 +1655,9 @@ class RechnungenView(QWidget):
         self._print_plc_action = QAction("PLC-Label", self)
         self._print_plc_action.setToolTip("PLC-Label drucken")
         self._print_plc_action.triggered.connect(self._on_print_plc_selected)
+        self._print_packing_lists_menu = QMenu("Archivierte Packlisten", self)
+        self._print_packing_lists_menu.setToolTip("Archivierte Packlisten erneut drucken")
+        self._print_packing_lists_menu.aboutToShow.connect(self._populate_packing_list_menus)
         self._print_music_action = QAction("Noten / Produkte", self)
         self._print_music_action.setToolTip("Noten und Produkt-PDFs drucken")
         self._print_music_action.triggered.connect(self._on_print_music_clicked)
@@ -1662,6 +1667,7 @@ class RechnungenView(QWidget):
             self._print_label_action,
             self._print_plc_action,
         ))
+        self._print_menu.addMenu(self._print_packing_lists_menu)
         self._print_menu.addSeparator()
         self._print_menu.addAction(self._print_music_action)
         for action in (
@@ -1693,18 +1699,24 @@ class RechnungenView(QWidget):
         self._view_customs_action = QAction("Zolldokument", self)
         self._view_customs_action.setToolTip("Archiviertes PLC-Zolldokument ansehen")
         self._view_customs_action.triggered.connect(self._on_open_plc_customs_clicked)
+        self._view_packing_lists_menu = QMenu("Archivierte Packlisten", self)
+        self._view_packing_lists_menu.setToolTip("Inhalte historischer Pakete ansehen")
+        self._view_packing_lists_menu.aboutToShow.connect(self._populate_packing_list_menus)
         self._view_menu = QMenu(self)
         self._view_menu.addActions((
             self._view_invoice_action,
             self._view_plc_action,
             self._view_customs_action,
         ))
+        self._view_menu.addMenu(self._view_packing_lists_menu)
         for action in (
             self._view_invoice_action,
             self._view_plc_action,
             self._view_customs_action,
         ):
             action.setEnabled(False)
+        self._print_packing_lists_menu.setEnabled(False)
+        self._view_packing_lists_menu.setEnabled(False)
 
         self._btn_view = QToolButton()
         self._btn_view.setText("Ansehen")
@@ -4829,6 +4841,9 @@ class RechnungenView(QWidget):
             ),
             None,
         )
+        # The dialog can create a versioned packlist while this invoice stays
+        # selected.  Refresh its document-menu state immediately on return.
+        self._update_plc_controls()
 
     def _print_archived_customs_declaration(self, summary: InvoiceSummary) -> None:
         """Queue only the already generated CN23 for the selected invoice.
@@ -5274,6 +5289,67 @@ class RechnungenView(QWidget):
             refresh=False,
         )
         return os.fspath(path) if path is not None else ""
+
+    def _resolve_packing_list_archive_paths_for_summary(self, summary: InvoiceSummary) -> list[str]:
+        order_ref = str(summary.order_reference or "").strip()
+        invoice_no = str(summary.invoice_number or summary.id or "").strip()
+        if not order_ref or not invoice_no:
+            return []
+        return [
+            os.fspath(path)
+            for path in self._plc_label_archive.find_packing_lists_for_invoice(
+                order_reference=order_ref,
+                invoice_number=invoice_no,
+            )
+        ]
+
+    @staticmethod
+    def _packing_list_menu_label(path: str, position: int) -> str:
+        try:
+            created = datetime.fromtimestamp(Path(path).stat().st_mtime).strftime("%d.%m.%Y %H:%M")
+        except OSError:
+            created = "unbekanntes Datum"
+        return f"Packliste {position} – erstellt {created}"
+
+    def _populate_packing_list_menus(self) -> None:
+        """Show each saved package allocation in both document menus."""
+        selected = self._selected_summary()
+        reference = str(
+            selected.order_reference or selected.invoice_number or selected.id or ""
+        ).strip() if selected is not None else ""
+        paths = list(self._selected_packing_list_paths)
+        for menu, callback in (
+            (self._view_packing_lists_menu, self._open_archived_packing_list),
+            (self._print_packing_lists_menu, self._reprint_archived_packing_list),
+        ):
+            menu.clear()
+            for position, path in enumerate(paths, start=1):
+                action = menu.addAction(self._packing_list_menu_label(path, position))
+                action.triggered.connect(
+                    lambda _checked=False, selected_path=path, selected_reference=reference, handler=callback:
+                    handler(selected_path, selected_reference)
+                )
+
+    def _open_archived_packing_list(self, path: str, _reference: str = "") -> None:
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+            QMessageBox.warning(self, "Packliste öffnen", "Die archivierte Packliste konnte nicht geöffnet werden.")
+
+    def _reprint_archived_packing_list(self, path: str, reference: str) -> None:
+        try:
+            job_id = queue_packing_lists(self._container, path, reference)
+        except Exception as exc:  # noqa: BLE001 - archive remains available for manual recovery.
+            QMessageBox.warning(
+                self,
+                "Packliste drucken",
+                "Der Nachdruck der archivierten Packliste konnte nicht eingereiht werden.\n\n"
+                f"{exc}",
+            )
+            return
+        QMessageBox.information(
+            self,
+            "Packliste drucken",
+            f"Archivierte Packliste zum Druck eingereiht: {job_id[:8]}…",
+        )
 
     def _prime_plc_archive_index(self) -> None:
         if self._plc_archive_index_ready:
@@ -6269,13 +6345,18 @@ class RechnungenView(QWidget):
 
         self._selected_plc_label_path = ""
         self._selected_plc_customs_path = ""
+        self._selected_packing_list_paths = []
         if selected is not None:
             self._selected_plc_label_path = self._resolve_plc_archive_path_for_summary(selected)
             self._selected_plc_customs_path = self._resolve_plc_customs_archive_path_for_summary(selected)
+            self._selected_packing_list_paths = self._resolve_packing_list_archive_paths_for_summary(selected)
         has_archived_plc = bool(self._selected_plc_label_path)
         has_archived_customs = bool(self._selected_plc_customs_path)
+        has_archived_packing_lists = bool(self._selected_packing_list_paths)
         self._view_plc_action.setEnabled(has_archived_plc)
         self._view_customs_action.setEnabled(has_archived_customs)
+        self._view_packing_lists_menu.setEnabled(has_archived_packing_lists)
+        self._print_packing_lists_menu.setEnabled(has_archived_packing_lists)
         if selected is not None and selected.status_code == _DRAFT_STATUS:
             self._btn_open_sevdesk_invoice.setText("Rechnung bearbeiten")
             self._btn_open_sevdesk_invoice.setToolTip("Rechnungsentwurf in sevDesk bearbeiten")

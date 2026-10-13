@@ -122,6 +122,23 @@ def test_background_index_serves_suffixed_label_and_customs_lookups_without_resc
     ) == customs
 
 
+def test_packing_list_archive_keeps_all_versions_and_finds_legacy_files(tmp_path) -> None:
+    archive = PlcLabelArchive(tmp_path)
+    packlists = tmp_path / "packlists"
+    packlists.mkdir()
+    current = packlists / "20868 - RE-261952 - Packlisten - 20261013_090000.pdf"
+    legacy = packlists / "packlisten_20868_20261012_090000.pdf"
+    current.write_bytes(b"%PDF-1.7\ncurrent")
+    legacy.write_bytes(b"%PDF-1.7\nlegacy")
+
+    found = archive.find_packing_lists_for_invoice(
+        order_reference="20868",
+        invoice_number="RE-261952",
+    )
+
+    assert set(found) == {current, legacy}
+
+
 def test_additional_plc_label_uses_suffix_for_order_and_invoice(tmp_path) -> None:
     dialog = PlcLabelPrintDialog.__new__(PlcLabelPrintDialog)
     dialog._label_archive = PlcLabelArchive(tmp_path)  # noqa: SLF001

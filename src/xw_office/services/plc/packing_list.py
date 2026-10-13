@@ -42,8 +42,14 @@ class PackingListService:
             raise RuntimeError("PyMuPDF für Packlisten-PDF nicht verfügbar") from exc
 
         output_dir.mkdir(parents=True, exist_ok=True)
-        reference = self._safe_part(contexts[0].reference, "bestellung")
-        target = output_dir / f"packlisten_{reference}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        reference = self._safe_part(contexts[0].reference, "unbekannte-bestellung")
+        invoice = self._safe_part(contexts[0].invoice_number, "unbekannte-rechnung")
+        # Keep every version beside the PLC archives.  The stable order and
+        # invoice prefix lets the invoice view find it years later, while the
+        # timestamp keeps a deliberate reprint from overwriting its history.
+        target = output_dir / (
+            f"{reference} - {invoice} - Packlisten - {datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        )
         root = Path(__file__).resolve().parents[4]
         logo_path = root / "icons" / "logo NEU.png"
 
@@ -181,5 +187,7 @@ class PackingListService:
 
     @staticmethod
     def _safe_part(value: object, fallback: str) -> str:
-        cleaned = re.sub(r"[^\w.-]+", "_", str(value or "").strip(), flags=re.UNICODE).strip("._")
-        return (cleaned or fallback)[:80]
+        text = str(value or "").strip()
+        text = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "-", text)
+        text = re.sub(r"\s+", " ", text).strip(" .-")
+        return (text or fallback)[:80]
