@@ -135,7 +135,15 @@ def clean_unreleased_match_title(value: str) -> str:
 
 
 def split_unreleased_titles(values: list[str], quantity: int) -> list[str]:
-    """Apply the legacy separators and discard obvious arranger-only lines."""
+    """Apply legacy separators and discard non-title lines from Wix fields.
+
+    The unreleased product field is occasionally used to record the ensemble
+    between two requested works (for example ``Blechhaufn:``).  That is
+    fulfilment context, not an additional XW-010 product.  Filter those
+    standalone labels before callers compare the title count to the ordered
+    quantity; otherwise one label prevents title-specific print profiles from
+    being selected for the actual works.
+    """
     pieces: list[str] = []
     for value in values:
         for line in re.split(r"[\r\n]+", str(value or "")):
@@ -143,6 +151,8 @@ def split_unreleased_titles(values: list[str], quantity: int) -> list[str]:
             if not line:
                 continue
             if re.match(r"^(arrangement|arr\.?|arrangiert)\b", line, re.IGNORECASE):
+                continue
+            if re.match(r"^blechhauf(?:['’]?n)?\s*:?$", line, re.IGNORECASE):
                 continue
             numbered = re.split(r"(?:^|\s)\d+\s*[\).]\s*", line)
             numbered = [part.strip() for part in numbered if part.strip()]

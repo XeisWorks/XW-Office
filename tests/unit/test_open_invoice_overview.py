@@ -76,11 +76,11 @@ def test_open_invoice_overview_reads_persistent_wix_cache_for_notes_and_products
             return [
                 types.SimpleNamespace(
                     sku="XW-010",
-                    name="Marsch Eins\nPolka Zwei",
+                    name="Marsch Eins\nBlechhaufn:\nPolka Zwei",
                     qty=2,
                     note="Produktbeschreibung",
                     is_unreleased=True,
-                    custom_piece_titles=["Marsch Eins", "Polka Zwei"],
+                    custom_piece_titles=["Marsch Eins", "Blechhaufn:", "Polka Zwei"],
                 )
             ]
 

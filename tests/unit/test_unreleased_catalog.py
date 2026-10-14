@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from xw_office.services.products.catalog import ProductCatalogService, _title_match_score
+from xw_office.services.products.catalog import (
+    ProductCatalogService,
+    _title_match_score,
+    split_unreleased_titles,
+)
 
 
 def test_unreleased_title_distinct_versions_do_not_collide() -> None:
@@ -26,6 +30,12 @@ def test_unreleased_title_distinct_versions_do_not_collide() -> None:
 
     # Verify that searching for XXL does not match BH due to version marker conflict
     assert _title_match_score("Gabriellas Song BH", "Gabriellas Song XXL") == 0.0
+
+
+def test_split_unreleased_titles_discards_standalone_blechhaufn_label() -> None:
+    assert split_unreleased_titles(
+        ["Chandelier", "Blechhaufn:", "Ich hab dich lieb"], quantity=2
+    ) == ["Chandelier", "Ich hab dich lieb"]
 
 
 def test_add_and_delete_unreleased_product() -> None:

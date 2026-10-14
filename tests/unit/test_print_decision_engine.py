@@ -349,6 +349,55 @@ def test_xw_010_expands_slash_separated_titles_like_legacy(tmp_path) -> None:
     ]
 
 
+def test_xw_010_ignores_blechhaufn_label_and_keeps_title_specific_profiles(tmp_path) -> None:
+    chandelier_pdf = tmp_path / "chandelier.pdf"
+    lieb_pdf = tmp_path / "ich-hab-dich-lieb.pdf"
+    chandelier_pdf.write_bytes(b"%PDF-1.4 chandelier")
+    lieb_pdf.write_bytes(b"%PDF-1.4 lieb")
+    repo = _RepoStub(
+        {
+            "inventory.products": json.dumps(
+                [
+                    {
+                        "sku": "XW-010",
+                        "name": "Diverse Noten unveroeffentlicht",
+                        "title_print_configs": {
+                            "Chandelier": {
+                                "path": str(chandelier_pdf),
+                                "profile_id": "noten_simplex",
+                            },
+                            "Ich hab dich lieb": {
+                                "path": str(lieb_pdf),
+                                "profile_id": "noten_duplex",
+                            },
+                        },
+                    }
+                ]
+            )
+        }
+    )
+
+    blocks = PrintDecisionEngine(ProductCatalogService(repo), _PartClientStub()).get_piece_blocks(
+        [
+            WixOrderItem(
+                sku="XW-010",
+                name="Chandelier\nBlechhaufn:\nIch hab dich lieb",
+                qty=2,
+                is_unreleased=True,
+                custom_piece_titles=["Chandelier", "Blechhaufn:", "Ich hab dich lieb"],
+            )
+        ]
+    )
+
+    assert [
+        (block.name, block.qty_needed, block.print_file_path, block.print_profile_id)
+        for block in blocks
+    ] == [
+        ("Chandelier", 1, chandelier_pdf, "noten_simplex"),
+        ("Ich hab dich lieb", 1, lieb_pdf, "noten_duplex"),
+    ]
+
+
 def test_xw_010_unknown_title_does_not_fall_back_to_unrelated_default_pdf(tmp_path) -> None:
     default_pdf = tmp_path / "Gabriellas Song BH.pdf"
     default_pdf.write_bytes(b"%PDF-1.4 default")

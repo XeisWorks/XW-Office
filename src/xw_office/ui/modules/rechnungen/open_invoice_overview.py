@@ -519,15 +519,19 @@ class _UnreleasedAccumulator:
             if not bool(getattr(item, "is_unreleased", False)):
                 continue
             custom_titles = getattr(item, "custom_piece_titles", None)
-            titles = (
-                [str(title or "").strip() for title in custom_titles]
+            try:
+                quantity = max(1, int(getattr(item, "qty", 1) or 1))
+            except (TypeError, ValueError):
+                quantity = 1
+            titles = split_unreleased_titles(
+                [str(title or "") for title in custom_titles]
                 if isinstance(custom_titles, list)
-                else []
+                else [],
+                quantity,
             )
-            titles = [title for title in titles if title]
             if not titles:
                 raw_title = str(getattr(item, "name", "") or "").strip()
-                titles = [line.strip() for line in raw_title.splitlines() if line.strip()]
+                titles = split_unreleased_titles([raw_title], quantity)
             if not titles:
                 titles = ["Titel und sonstige Bemerkungen nicht verfügbar"]
             for title in titles:
