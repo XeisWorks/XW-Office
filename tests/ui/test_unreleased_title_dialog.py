@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from xw_office.services.products.catalog import ProductCatalogService
 from xw_office.ui.dialogs.unreleased_title_dialog import (
-    UnreleasedCatalogDialog,
     UnreleasedProductEditDialog,
     UnreleasedTitleDecision,
     UnreleasedTitleDialog,
@@ -24,6 +23,7 @@ def test_unreleased_title_dialog_preselects_alias_target_and_owner(qtbot: object
     assert dialog._title.isReadOnly()  # noqa: SLF001
     assert dialog._canonical.currentText() == "Kanonischer Titel"  # noqa: SLF001
     assert dialog._owner.currentText() == "Krickl"  # noqa: SLF001
+    assert dialog._submit_button.text() == "NEXT"  # noqa: SLF001
 
 
 def test_unreleased_title_dialog_can_request_new_product_creation(qtbot: object, monkeypatch: object) -> None:

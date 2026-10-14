@@ -136,7 +136,6 @@ from xw_office.ui.modules.rechnungen.plc_statistics_dialog import PlcStatisticsD
 from xw_office.services.plc.statistics import PlcStatisticsService
 from xw_office.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 from xw_office.ui.dialogs.unreleased_title_dialog import (
-    UnreleasedCatalogDialog,
     UnreleasedProductEditDialog,
     UnreleasedTitleDialog,
     UnreleasedTitleSplitDialog,
@@ -1204,6 +1203,7 @@ class RechnungenView(QWidget):
         self._pending_wix_reference = ""
         self._pending_stuecke_reference = ""
         self._wix_context_cache: dict[str, dict[str, object]] = {}
+        self._active_unreleased_clarifications: dict[str, list[PieceBlock]] = {}
         self._shipping_address_overrides: dict[str, list[str]] = {}
         self._shipping_source_lines: list[str] = []
         self._wix_context_seq = 0
@@ -5926,11 +5926,17 @@ class RechnungenView(QWidget):
             return
         self._prefill_detail_from_invoice_cache(summary)
         if summary.order_reference:
-            has_cached_wix_context = self._apply_cached_wix_context(summary.order_reference)
-            self._load_wix_context(
-                summary.order_reference,
-                show_loading=not has_cached_wix_context,
-            )
+            has_memory_context = self._get_cached_wix_context(summary.order_reference) is not None
+            if has_memory_context:
+                self._load_wix_context(summary.order_reference, show_loading=False)
+            else:
+                has_persistent_context = self._apply_cached_wix_context(summary.order_reference)
+                has_complete_context = self._get_cached_wix_context(summary.order_reference) is not None
+                if not has_complete_context:
+                    self._load_wix_context(
+                        summary.order_reference,
+                        show_loading=not has_persistent_context,
+                    )
         else:
             self._reset_wix_meta("Keine Wix-Order-Referenz")
             self._reset_stuecke()
@@ -6827,30 +6833,46 @@ class RechnungenView(QWidget):
         if resolution.is_resolved:
             piece.name = resolution.canonical_name
             return
-        dialog = UnreleasedTitleDialog(
-            catalog,
-            raw_title=piece.name,
-            context=f"Wix-Bestellung: {order_reference or 'unbekannt'} · SKU: {piece.sku}",
-            parent=self,
-        )
-        decision = dialog.decision()
-        if decision is None:
+        clarification_key = str(piece.name or "").strip().casefold()
+        active_pieces = self._active_unreleased_clarifications.get(clarification_key)
+        if active_pieces is not None:
+            active_pieces.append(piece)
             return
-        if decision.create_product:
-            canonical_name = self._create_unreleased_product_from_alias(
-                raw_title=decision.raw_title,
-                quantity=max(1, int(piece.qty_needed or 1)),
-                note=str(piece.note or "").strip(),
+
+        waiting_pieces = [piece]
+        self._active_unreleased_clarifications[clarification_key] = waiting_pieces
+        canonical_name = ""
+        try:
+            dialog = UnreleasedTitleDialog(
+                catalog,
+                raw_title=piece.name,
+                context=f"Wix-Bestellung: {order_reference or 'unbekannt'} · SKU: {piece.sku}",
+                parent=self,
+            )
+            decision = dialog.decision()
+            if decision is None:
+                return
+            if decision.create_product:
+                canonical_name = self._create_unreleased_product_from_alias(
+                    raw_title=decision.raw_title,
+                    quantity=max(1, int(piece.qty_needed or 1)),
+                    note=str(piece.note or "").strip(),
+                ) or ""
+            else:
+                catalog.save_unreleased_resolution(
+                    decision.raw_title,
+                    canonical_name=decision.canonical_name,
+                    owner=decision.owner,
+                )
+                canonical_name = decision.canonical_name
+        finally:
+            pending_pieces = self._active_unreleased_clarifications.pop(
+                clarification_key,
+                waiting_pieces,
             )
             if canonical_name:
-                piece.name = canonical_name
-            return
-        catalog.save_unreleased_resolution(
-            decision.raw_title,
-            canonical_name=decision.canonical_name,
-            owner=decision.owner,
-        )
-        piece.name = decision.canonical_name
+                for pending_piece in pending_pieces:
+                    pending_piece.name = canonical_name
 
     def _create_unreleased_product_from_alias(
         self,
@@ -6952,13 +6974,13 @@ class RechnungenView(QWidget):
             catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
         except KeyError:
             return
-        seen: set[tuple[str, str]] = set()
+        seen: set[str] = set()
         for issue in issues:
             raw_title = str(getattr(issue, "raw_title", "") or "").strip()
             order_reference = str(getattr(issue, "wix_order_number", "") or "").strip()
             if not raw_title:
                 continue
-            key = (order_reference, raw_title.casefold())
+            key = raw_title.casefold()
             if key in seen:
                 continue
             seen.add(key)

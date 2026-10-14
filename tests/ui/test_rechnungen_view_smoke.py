@@ -135,6 +135,69 @@ def test_unknown_unreleased_title_offers_shared_product_creation_flow(qtbot: obj
     assert piece.name == "Neues Werk"
 
 
+def test_reentrant_unreleased_clarification_opens_only_one_dialog(qtbot: object, monkeypatch: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    catalog = container.resolve(ProductCatalogService)
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    first_piece = PieceBlock(sku="XW-010", name="Gemeinsamer Wix-Alias", qty_needed=1, is_unreleased=True)
+    reentrant_piece = PieceBlock(sku="XW-010", name="Gemeinsamer Wix-Alias", qty_needed=1, is_unreleased=True)
+    dialog_calls = 0
+
+    def decide(_dialog: object) -> UnreleasedTitleDecision:
+        nonlocal dialog_calls
+        dialog_calls += 1
+        view._clarify_unreleased_piece(reentrant_piece, catalog, "21549")  # noqa: SLF001
+        return UnreleasedTitleDecision(
+            raw_title="Gemeinsamer Wix-Alias",
+            canonical_name="Gemeinsames Werk",
+            owner="Albert",
+        )
+
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.view.UnreleasedTitleDialog.decision", decide)
+
+    view._clarify_unreleased_piece(first_piece, catalog, "21549")  # noqa: SLF001
+
+    assert dialog_calls == 1
+    assert first_piece.name == "Gemeinsames Werk"
+    assert reentrant_piece.name == "Gemeinsames Werk"
+    assert view._active_unreleased_clarifications == {}  # noqa: SLF001
+
+
+def test_start_clarifies_same_unreleased_alias_only_once_across_invoices(
+    qtbot: object,
+    monkeypatch: object,
+) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    clarified: list[tuple[str, str]] = []
+    issues = [
+        types.SimpleNamespace(
+            raw_title="Gleicher Wix-Alias",
+            wix_order_number="21549",
+            quantity=1,
+            wix_description="",
+        ),
+        types.SimpleNamespace(
+            raw_title="Gleicher Wix-Alias",
+            wix_order_number="21550",
+            quantity=1,
+            wix_description="",
+        ),
+    ]
+
+    monkeypatch.setattr(
+        view,
+        "_clarify_unreleased_piece",
+        lambda piece, _catalog, order_reference: clarified.append((piece.name, order_reference)),
+    )
+
+    view.clarify_unreleased_start_issues(issues)
+
+    assert clarified == [("Gleicher Wix-Alias", "21549")]
+
+
 def test_draft_preview_is_non_blocking(qtbot: object) -> None:
     container = _build_container()
     entered = Event()
@@ -2088,7 +2151,7 @@ def test_rechnungen_applies_persistent_wix_cache_before_background_load(
     assert not view._piece_list.isHidden()  # noqa: SLF001
     assert not view._gb_stuecke.isHidden()  # noqa: SLF001
     assert view._get_cached_wix_context("20899") is not None  # noqa: SLF001
-    assert load_calls == [("20899", False)]
+    assert load_calls == []
 
 
 def test_shipping_editor_keeps_complete_panel_address_over_name_only_wix() -> None:
