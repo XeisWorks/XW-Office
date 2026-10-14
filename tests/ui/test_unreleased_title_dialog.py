@@ -26,12 +26,13 @@ def test_unreleased_title_dialog_preselects_alias_target_and_owner(qtbot: object
     assert dialog._owner.currentText() == "Krickl"  # noqa: SLF001
 
 
-def test_unreleased_title_dialog_can_request_new_product_creation(qtbot: object) -> None:
+def test_unreleased_title_dialog_can_request_new_product_creation(qtbot: object, monkeypatch: object) -> None:
     dialog = UnreleasedTitleDialog(ProductCatalogService(), raw_title="Neuer Wix-Alias")
     qtbot.addWidget(dialog)
 
     dialog._request_create_product()  # noqa: SLF001
     assert dialog.result() == dialog.DialogCode.Accepted
+    monkeypatch.setattr(dialog, "exec", lambda: dialog.DialogCode.Accepted)
 
     decision = dialog.decision()
     assert decision == UnreleasedTitleDecision(

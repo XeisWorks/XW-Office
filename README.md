@@ -84,6 +84,14 @@ Alternativ kann die venv ohne Aktivierung direkt verwendet werden:
 .\.venv\Scripts\python.exe -m pytest
 ```
 
+Qt-UI-Tests ohne sichtbare Fenster (z. B. in einer automatisierten Session) laufen
+mit dem Offscreen-Backend ebenfalls aus derselben `.venv`:
+
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+.\.venv\Scripts\python.exe -m pytest tests/ui -q
+```
+
 Für Eingabeaufforderung (`cmd.exe`) lautet die Aktivierung
 `.venv\Scripts\activate.bat`. Die Startskripte `run_xw_office.cmd` und
 `run_xw_office_debug.cmd` wählen `.venv\Scripts\python.exe` automatisch, sofern die
