@@ -20,7 +20,7 @@ from xw_office.services.draft_invoice.service import DraftInvoiceService
 from xw_office.services.inventory.service import StartMode, StartPreflight
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.services.plc.label_archive import PlcLabelArchive
-from xw_office.services.products.catalog import Product
+from xw_office.services.products.catalog import Product, ProductCatalogService
 from xw_office.services.products.print_decision import PieceBlock, PrintDecisionEngine
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sendungen.service import OffeneSendungenService
@@ -44,6 +44,7 @@ from xw_office.ui.modules.rechnungen.view import (
     _ActionsDelegate,
     _DraftInvoiceDialog,
 )
+from xw_office.ui.dialogs.unreleased_title_dialog import UnreleasedTitleDecision
 
 
 def _build_container() -> Container:
@@ -93,6 +94,44 @@ def test_cached_invoice_piece_is_hydrated_before_product_panel_render(
     assert view._current_piece_blocks == [cached_piece]  # noqa: SLF001
     assert cached_piece.print_file_path == pdf_path
     assert cached_piece.has_direct_print_config is True
+
+
+def test_unknown_unreleased_title_offers_shared_product_creation_flow(qtbot: object, monkeypatch: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.UnreleasedTitleDialog.decision",
+        lambda _dialog: UnreleasedTitleDecision(
+            raw_title="Alias aus der Rechnung",
+            canonical_name="",
+            owner="",
+            create_product=True,
+        ),
+    )
+    monkeypatch.setattr(
+        view,
+        "_create_unreleased_product_from_alias",
+        lambda **kwargs: captured.update(kwargs) or "Neues Werk",
+    )
+
+    piece = PieceBlock(
+        sku="XW-010",
+        name="Alias aus der Rechnung",
+        qty_needed=2,
+        note="Besetzung: Flöte",
+        is_unreleased=True,
+    )
+    view._clarify_unreleased_piece(piece, container.resolve(ProductCatalogService), "21549")  # noqa: SLF001
+
+    assert captured == {
+        "raw_title": "Alias aus der Rechnung",
+        "quantity": 2,
+        "note": "Besetzung: Flöte",
+    }
+    assert piece.name == "Neues Werk"
 
 
 def test_draft_preview_is_non_blocking(qtbot: object) -> None:

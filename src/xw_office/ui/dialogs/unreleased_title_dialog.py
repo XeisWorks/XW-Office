@@ -32,6 +32,7 @@ class UnreleasedTitleDecision:
     raw_title: str
     canonical_name: str
     owner: str
+    create_product: bool = False
 
 
 class UnreleasedTitleDialog(QDialog):
@@ -91,6 +92,14 @@ class UnreleasedTitleDialog(QDialog):
         self._error.setStyleSheet("color: #dc2626;")
         layout.addWidget(self._error)
 
+        self._create_product_requested = False
+        create_product = QPushButton("Neues Produkt anlegen...")
+        create_product.setToolTip(
+            "Neues Unreleased-Produkt mit dem Titel aus der Rechnung als Alias anlegen"
+        )
+        create_product.clicked.connect(self._request_create_product)
+        layout.addWidget(create_product, alignment=Qt.AlignmentFlag.AlignLeft)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
@@ -117,6 +126,14 @@ class UnreleasedTitleDialog(QDialog):
             return
         self.accept()
 
+    def _request_create_product(self) -> None:
+        """Continue with the shared product creation flow in the calling view."""
+        if not self._title.text().strip():
+            self._error.setText("Der gefundene Titel darf nicht leer sein.")
+            return
+        self._create_product_requested = True
+        self.accept()
+
     def decision(self) -> UnreleasedTitleDecision | None:
         if self.exec() != QDialog.DialogCode.Accepted:
             return None
@@ -124,6 +141,7 @@ class UnreleasedTitleDialog(QDialog):
             raw_title=self._title.text().strip(),
             canonical_name=self._canonical.currentText().strip(),
             owner=self._owner.currentText().strip(),
+            create_product=self._create_product_requested,
         )
 
 

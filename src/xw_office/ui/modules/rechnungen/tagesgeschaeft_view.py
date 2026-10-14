@@ -1320,6 +1320,11 @@ class TagesgeschaeftView(QWidget):
             (time.perf_counter() - self._start_product_preflight_started_at) * 1000
         ) if self._start_product_preflight_started_at else 0
         self._start_product_preflight_started_at = 0.0
+        # XW-010 uses the Wix line title as the actual work name.  Resolve an
+        # unknown alias before any product/invoice action, just as selection
+        # in the Rechnungen panel does.
+        if self._rechnungen_view is not None and plan.unreleased_titles:
+            self._rechnungen_view.clarify_unreleased_start_issues(plan.unreleased_titles)
         dialog_started = time.perf_counter()
         decisions = self._run_product_preflight_dialogs(plan)
         logger.info(

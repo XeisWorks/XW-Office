@@ -195,6 +195,27 @@ def test_missing_product_dialog_defaults_to_ten_percent_tax() -> None:
     assert plan.issues[0].draft.tax_rate == 10.0
 
 
+def test_missing_product_plan_includes_unreleased_wix_titles_for_start_clarification() -> None:
+    service, _connection, _parts, _invoices = _service()
+    wix = service._wix_orders  # noqa: SLF001
+    wix.order["lineItems"] = [  # type: ignore[attr-defined]
+        {
+            "id": "LI-UNRELEASED",
+            "productName": {"translated": "Werk aus der Rechnung"},
+            "quantity": 2,
+            "descriptionLines": [{"plainText": {"translated": "Besetzung: Flöte"}}],
+            "physicalProperties": {"sku": "XW-010", "shippable": True},
+        }
+    ]
+
+    plan = service.build_missing_product_plan(["20519"])
+
+    assert len(plan.unreleased_titles) == 1
+    assert plan.unreleased_titles[0].raw_title == "Werk aus der Rechnung"
+    assert plan.unreleased_titles[0].wix_order_number == "20519"
+    assert plan.unreleased_titles[0].quantity == 2
+
+
 def test_create_draft_keeps_unmapped_position_when_part_missing() -> None:
     service, connection, parts, _invoices = _service()
 

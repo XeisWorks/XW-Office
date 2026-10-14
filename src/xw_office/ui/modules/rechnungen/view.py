@@ -6875,6 +6875,15 @@ class RechnungenView(QWidget):
         decision = dialog.decision()
         if decision is None:
             return
+        if decision.create_product:
+            canonical_name = self._create_unreleased_product_from_alias(
+                raw_title=decision.raw_title,
+                quantity=max(1, int(piece.qty_needed or 1)),
+                note=str(piece.note or "").strip(),
+            )
+            if canonical_name:
+                piece.name = canonical_name
+            return
         catalog.save_unreleased_resolution(
             decision.raw_title,
             canonical_name=decision.canonical_name,
@@ -6882,9 +6891,20 @@ class RechnungenView(QWidget):
         )
         piece.name = decision.canonical_name
 
-    def _on_add_unreleased_from_item(self, item: PrintProductAggregate) -> None:
+    def _create_unreleased_product_from_alias(
+        self,
+        *,
+        raw_title: str,
+        quantity: int = 1,
+        note: str = "",
+    ) -> str | None:
+        """Create an XW-010 work from a Wix alias, then collect its print plan.
+
+        This is shared by the PRINT PRODUKTE '+' button and the unknown-title
+        clarification popup, so both entry points retain the invoice alias.
+        """
         catalog = self._container.resolve(ProductCatalogService)
-        raw_input = str(item.title or "").strip()
+        raw_input = str(raw_title or "").strip()
         lines = [line.strip() for line in raw_input.splitlines() if line.strip()]
         first_line = lines[0] if lines else raw_input
 
@@ -6918,7 +6938,7 @@ class RechnungenView(QWidget):
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
+            return None
 
         canonical_name, owner, aliases = dialog.get_data()
         catalog.add_or_update_unreleased_product(
@@ -6939,8 +6959,8 @@ class RechnungenView(QWidget):
         piece_block = PieceBlock(
             sku="XW-010",
             name=canonical_name,
-            qty_needed=max(1, int(self._open_product_quantity(item) or 1)),
-            note=str(item.description or "").strip(),
+            qty_needed=max(1, int(quantity or 1)),
+            note=str(note or "").strip(),
             is_unreleased=True,
             stock_status=None,
         )
@@ -6948,6 +6968,42 @@ class RechnungenView(QWidget):
 
         # Refresh overview to reflect the new unreleased product and print settings
         self._refresh_open_invoice_overview()
+        return canonical_name
+
+    def _on_add_unreleased_from_item(self, item: PrintProductAggregate) -> None:
+        self._create_unreleased_product_from_alias(
+            raw_title=str(item.title or "").strip(),
+            quantity=max(1, int(self._open_product_quantity(item) or 1)),
+            note=str(item.description or "").strip(),
+        )
+
+    def clarify_unreleased_start_issues(self, issues: object) -> None:
+        """Show the same alias clarification while START is still preflighting."""
+        if not isinstance(issues, (list, tuple)):
+            return
+        try:
+            catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
+        except KeyError:
+            return
+        seen: set[tuple[str, str]] = set()
+        for issue in issues:
+            raw_title = str(getattr(issue, "raw_title", "") or "").strip()
+            order_reference = str(getattr(issue, "wix_order_number", "") or "").strip()
+            if not raw_title:
+                continue
+            key = (order_reference, raw_title.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            piece = PieceBlock(
+                sku="XW-010",
+                name=raw_title,
+                qty_needed=max(1, int(getattr(issue, "quantity", 1) or 1)),
+                note=str(getattr(issue, "wix_description", "") or "").strip(),
+                is_unreleased=True,
+            )
+            for split_piece in self._split_unreleased_piece(piece, catalog, order_reference):
+                self._clarify_unreleased_piece(split_piece, catalog, order_reference)
 
     def _split_unreleased_piece(
         self,

@@ -56,9 +56,20 @@ class ProductIssueDecision:
 
 
 @dataclass(frozen=True)
+class UnreleasedTitleIssue:
+    """One XW-010 Wix title that must be resolved before START continues."""
+
+    raw_title: str
+    wix_order_number: str
+    quantity: int = 1
+    wix_description: str = ""
+
+
+@dataclass(frozen=True)
 class ProductPreflightPlan:
     issues: list[ProductIssue]
     part_categories: list[dict[str, str]]
+    unreleased_titles: tuple[UnreleasedTitleIssue, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -228,6 +239,8 @@ class DraftInvoiceService:
             return ProductPreflightPlan(issues=[], part_categories=self._parts.list_part_categories())
 
         issues_by_sku: dict[str, ProductIssue] = {}
+        unreleased_titles: list[UnreleasedTitleIssue] = []
+        unreleased_seen: set[tuple[str, str]] = set()
         part_categories = self._parts.list_part_categories()
         existing_parts = self._parts_by_sku()
 
@@ -245,6 +258,19 @@ class DraftInvoiceService:
                 sku = str(item.sku or "").strip().upper()
                 if not sku:
                     continue
+                if sku == "XW-010":
+                    raw_title = str(item.name or "").strip()
+                    key = (order_number, raw_title.casefold())
+                    if raw_title and key not in unreleased_seen:
+                        unreleased_seen.add(key)
+                        unreleased_titles.append(
+                            UnreleasedTitleIssue(
+                                raw_title=raw_title,
+                                wix_order_number=order_number,
+                                quantity=max(1, int(item.qty or 1)),
+                                wix_description=str(item.note or "").strip(),
+                            )
+                        )
                 if sku in existing_parts:
                     continue
                 issue = issues_by_sku.get(sku)
@@ -267,7 +293,11 @@ class DraftInvoiceService:
                 self._merge_targets(issue.targets, targets)
 
         issues = sorted(issues_by_sku.values(), key=lambda issue: issue.sku)
-        return ProductPreflightPlan(issues=issues, part_categories=part_categories)
+        return ProductPreflightPlan(
+            issues=issues,
+            part_categories=part_categories,
+            unreleased_titles=tuple(unreleased_titles),
+        )
 
     def apply_missing_product_plan(
         self,
