@@ -2113,6 +2113,16 @@ class InvoiceProcessingService:
     def _run_aftercare_delivery_note_step(
         self, summary: InvoiceSummary, flags: FulfillmentFlags
     ) -> FulfillmentFlags:
+        try:
+            return self._run_aftercare_delivery_note_step_impl(summary, flags)
+        except Exception:
+            if self._customer_aftercare is not None:
+                self._customer_aftercare.release_invoice_claim_for_invoice(str(summary.id or ""))
+            raise
+
+    def _run_aftercare_delivery_note_step_impl(
+        self, summary: InvoiceSummary, flags: FulfillmentFlags
+    ) -> FulfillmentFlags:
         """Claim matching redeliveries and print one bundled note before the invoice."""
         service = self._customer_aftercare
         if service is None:

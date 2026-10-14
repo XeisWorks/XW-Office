@@ -352,6 +352,7 @@ class OffeneSendungenService:
                 products=list(products or []),
                 manual_text=str(note or "").strip(),
             )
+        self._sync_shipping_email_snapshot(self.load_open_cases())
         return case
 
     def refresh_count_from_graph_silent(

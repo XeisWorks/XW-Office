@@ -17,6 +17,12 @@ from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerA
 
 #: Statuses that still represent an "open" case, per spec §13's state diagram.
 ACTIVE_STATUSES = ("PENDING_REVIEW", "WAITING", "TRIGGERED")
+REDELIVERY_CASE_TYPES = (
+    "MANUAL_REDELIVERY",
+    "B2B_WRONG_DELIVERY",
+    "B2B_MISSING_ITEMS",
+    "B2C_WRONG_DELIVERY",
+)
 
 
 @dataclass(frozen=True)
@@ -162,6 +168,7 @@ class CustomerAftercareRepository:
         invoice_id: str,
         invoice_number: str,
         order_number: str = "",
+        wix_order_id: str = "",
         customer_name: str = "",
         customer_email: str = "",
         sevdesk_contact_id: str = "",
@@ -187,6 +194,7 @@ class CustomerAftercareRepository:
             customer_name=customer_name,
             wix_contact_id=wix_contact_id,
             source_wix_order_number=order_number,
+            source_wix_order_id=wix_order_id,
             source_invoice_id=invoice_id,
             source_invoice_number=invoice_number,
             sevdesk_contact_id=sevdesk_contact_id,
@@ -270,7 +278,7 @@ class CustomerAftercareRepository:
             candidates = session.scalars(
                 select(CustomerAftercareCase)
                 .where(CustomerAftercareCase.status.in_(("WAITING", "TRIGGERED")))
-                .where(CustomerAftercareCase.case_type == "MANUAL_REDELIVERY")
+                .where(CustomerAftercareCase.case_type.in_(REDELIVERY_CASE_TYPES))
                 .where(CustomerAftercareCase.delivery_note_printed_at.is_(None))
                 .order_by(CustomerAftercareCase.created_at)
             ).all()
@@ -303,7 +311,7 @@ class CustomerAftercareRepository:
             candidates = session.scalars(
                 select(CustomerAftercareCase)
                 .where(CustomerAftercareCase.status.in_(("WAITING", "TRIGGERED")))
-                .where(CustomerAftercareCase.case_type == "MANUAL_REDELIVERY")
+                .where(CustomerAftercareCase.case_type.in_(REDELIVERY_CASE_TYPES))
                 .where(CustomerAftercareCase.delivery_note_printed_at.is_(None))
                 .order_by(CustomerAftercareCase.created_at)
             ).all()
@@ -317,14 +325,12 @@ class CustomerAftercareRepository:
                 or (wix and row.wix_contact_id == wix)
                 or (email and str(row.customer_email or "").strip().casefold() == email)
             ]
-            target_invoice = str(invoice_id or "").strip()
             matched = [
                 row
                 for row in matched
                 if not (
-                    row.dispatch_status == "ATTACHED"
+                    row.dispatch_status in {"ATTACHED", "PRINTING"}
                     and row.trigger_invoice_id
-                    and row.trigger_invoice_id != target_invoice
                 )
             ]
             for row in matched:
@@ -335,9 +341,41 @@ class CustomerAftercareRepository:
                 row.trigger_invoice_number = str(invoice_number or "").strip()
                 row.trigger_wix_order_id = str(wix_order_id or "").strip()
                 row.trigger_wix_order_number = str(wix_order_number or "").strip()
-                row.dispatch_status = "ATTACHED"
+                row.dispatch_status = "PRINTING"
             session.flush()
             return list(matched)
+
+    def mark_claim_printing(self, case_ids: Sequence[uuid.UUID]) -> None:
+        with self._scope() as session:
+            for case_id in case_ids:
+                row = session.get(CustomerAftercareCase, case_id)
+                if row is not None and row.dispatch_status == "ATTACHED":
+                    row.dispatch_status = "PRINTING"
+            session.flush()
+
+    def release_invoice_claim(self, case_ids: Sequence[uuid.UUID]) -> None:
+        """Make a failed physical print retryable without reopening a done case."""
+        with self._scope() as session:
+            for case_id in case_ids:
+                row = session.get(CustomerAftercareCase, case_id)
+                if row is not None and row.delivery_note_printed_at is None:
+                    row.dispatch_status = "RETRYABLE"
+            session.flush()
+
+    def release_invoice_claim_for_invoice(self, invoice_id: str) -> None:
+        target = str(invoice_id or "").strip()
+        if not target:
+            return
+        with self._scope() as session:
+            rows = session.scalars(
+                select(CustomerAftercareCase)
+                .where(CustomerAftercareCase.trigger_invoice_id == target)
+                .where(CustomerAftercareCase.dispatch_status == "PRINTING")
+                .where(CustomerAftercareCase.delivery_note_printed_at.is_(None))
+            ).all()
+            for row in rows:
+                row.dispatch_status = "RETRYABLE"
+            session.flush()
 
     def mark_delivery_note_printed(
         self, case_ids: Sequence[uuid.UUID], *, path: str = ""

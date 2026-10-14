@@ -159,7 +159,7 @@ class CustomerAftercareInboxService:
         if reservation.state != "created":
             return False
 
-        items = [
+        items = list(context["invoice_items"] or []) or [
             CustomerAftercareItemInput(
                 role="WRONG_DELIVERED",
                 name=item.name,
@@ -167,7 +167,7 @@ class CustomerAftercareInboxService:
                 quantity=_as_quantity(item.quantity),
             )
             for item in classification.wrong_items
-        ] + [
+        ] + ([] if context["invoice_items"] else [
             CustomerAftercareItemInput(
                 role="MISSING_TO_SEND",
                 name=item.name,
@@ -175,7 +175,7 @@ class CustomerAftercareInboxService:
                 quantity=_as_quantity(item.quantity),
             )
             for item in classification.missing_items
-        ]
+        ])
         if items:
             self._repo.add_items(reservation.case.id, items)
         return True
@@ -193,6 +193,7 @@ class CustomerAftercareInboxService:
         customer_name = ""
         address_lines: list[str] = []
         address_source = ""
+        invoice_items: list[CustomerAftercareItemInput] = []
         if invoice_number and self._invoices is not None:
             try:
                 matches, _days = self._invoices.search_invoice_summaries(invoice_number)
@@ -208,6 +209,7 @@ class CustomerAftercareInboxService:
                     customer_name = str(contact.get("name") or detail.get("customerName") or "").strip()
                     address_lines = self._invoice_address_lines(detail)
                     address_source = "sevdesk" if address_lines else ""
+                    invoice_items = self._invoice_items(invoice_id, invoice_number)
                     order_number = order_number or str(selected.order_reference or "").strip()
             except Exception as exc:  # noqa: BLE001 - mail remains reviewable without enrichment
                 logger.info("sevDesk-Nachlieferungskontext nicht auflösbar: %s", exc)
@@ -243,8 +245,43 @@ class CustomerAftercareInboxService:
             "customer_name": customer_name,
             "address_lines": address_lines,
             "address_source": address_source,
+            "invoice_items": invoice_items,
             "prompt_suffix": refs,
         }
+
+    def _invoice_items(self, invoice_id: str, invoice_number: str) -> list[CustomerAftercareItemInput]:
+        if self._invoices is None or not invoice_id:
+            return []
+        try:
+            positions = self._invoices.fetch_invoice_positions(invoice_id)
+        except Exception:
+            return []
+        rows: list[CustomerAftercareItemInput] = []
+        for index, position in enumerate(positions):
+            if not isinstance(position, dict):
+                continue
+            part = position.get("part") if isinstance(position.get("part"), dict) else {}
+            name = str(position.get("name") or position.get("text") or part.get("name") or "").strip()
+            sku = str(position.get("sku") or part.get("sku") or "").strip()
+            if not name and not sku:
+                continue
+            try:
+                quantity = max(1, int(float(position.get("quantity") or position.get("qty") or 1)))
+            except (TypeError, ValueError):
+                quantity = 1
+            rows.append(
+                CustomerAftercareItemInput(
+                    role="MISSING_TO_SEND",
+                    name=name or sku,
+                    sku=sku,
+                    quantity=quantity,
+                    sevdesk_part_id=str(part.get("id") or "").strip(),
+                    source_kind="sevdesk_invoice_position",
+                    source_item_id=str(position.get("id") or index),
+                    origin_invoice_number=invoice_number,
+                )
+            )
+        return rows
 
     @staticmethod
     def _invoice_address_lines(invoice: dict[str, Any]) -> list[str]:

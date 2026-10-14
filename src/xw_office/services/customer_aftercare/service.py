@@ -117,6 +117,18 @@ class CustomerAftercareService:
         if self._repo is not None:
             self._repo.mark_delivery_note_printed(case_ids, path=path)
 
+    def mark_claim_printing(self, case_ids: list[uuid.UUID]) -> None:
+        if self._repo is not None:
+            self._repo.mark_claim_printing(case_ids)
+
+    def release_invoice_claim(self, case_ids: list[uuid.UUID]) -> None:
+        if self._repo is not None:
+            self._repo.release_invoice_claim(case_ids)
+
+    def release_invoice_claim_for_invoice(self, invoice_id: str) -> None:
+        if self._repo is not None:
+            self._repo.release_invoice_claim_for_invoice(invoice_id)
+
     # -- inbox polling ------------------------------------------------------
 
     def poll_inbox(self, *, allow_interactive_auth: bool = True) -> InboxPollResult:

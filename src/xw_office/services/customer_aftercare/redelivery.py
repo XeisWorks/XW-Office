@@ -127,6 +127,7 @@ class CustomerAftercareRedeliveryService:
             invoice_id=invoice_id,
             invoice_number=invoice_number,
             order_number=order_number,
+            wix_order_id=wix_order_id,
             customer_name=str(summary.contact_name or "").strip(),
             customer_email=customer_email,
             sevdesk_contact_id=sevdesk_contact_id,
