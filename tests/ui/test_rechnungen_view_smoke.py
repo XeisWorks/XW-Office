@@ -14,6 +14,7 @@ from xw_office.core.config import AppConfig
 from xw_office.core.container import Container
 from xw_office.core.signals import AppSignals
 from xw_office.core.types import ModuleKey
+from xw_office.core.worker import BackgroundWorker
 from xw_office.services.daily_business.service import DailyBusinessService
 from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.draft_invoice.service import DraftInvoiceService
@@ -380,6 +381,19 @@ def test_rechnungen_shutdown_suppresses_wix_warmup_restart(qtbot: object) -> Non
     assert view._wix_warm_queue == []  # noqa: SLF001
     assert view._wix_warm_worker is None  # noqa: SLF001
     assert view._wix_warm_handle is None  # noqa: SLF001
+
+
+def test_rechnungen_shutdown_tracks_redelivery_workers(qtbot: object) -> None:
+    view = RechnungenView(_build_container())
+    qtbot.addWidget(view)
+    prepare_worker = BackgroundWorker(lambda: None)
+    apply_worker = BackgroundWorker(lambda: None)
+
+    view._redelivery_prepare_worker = prepare_worker  # noqa: SLF001
+    view._redelivery_apply_worker = apply_worker  # noqa: SLF001
+
+    assert prepare_worker in view._shutdown_workers()  # noqa: SLF001
+    assert apply_worker in view._shutdown_workers()  # noqa: SLF001
 
 
 def test_tagesgeschaeft_contains_rechnungen_view(qtbot: object) -> None:
@@ -2437,6 +2451,12 @@ def test_main_window_rechnungen_warms_drafts_but_defers_open_invoice_contexts(
     )
     assert "Teststrasse 1" in view._shipping_editor.toPlainText()  # noqa: SLF001
     assert invoice_service.load_calls == [("status:100", 50, 0), ("recent", 50, 0)]
+
+    # MainWindow drains background work asynchronously before it accepts a
+    # close.  Let that contract complete instead of letting pytest-qt delete a
+    # live QThread during fixture teardown.
+    window.close()
+    qtbot.waitUntil(lambda: window._shutdown_finished, timeout=5000)  # noqa: SLF001
 
 
 def test_rechnungen_detail_panel_click_does_not_clear_selection(qtbot: object) -> None:

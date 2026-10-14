@@ -2034,6 +2034,8 @@ class RechnungenView(QWidget):
                 self._delete_draft_worker,
                 self._open_overview_worker,
                 self._product_print_worker,
+                self._redelivery_prepare_worker,
+                self._redelivery_apply_worker,
             )
             if worker is not None
         )
