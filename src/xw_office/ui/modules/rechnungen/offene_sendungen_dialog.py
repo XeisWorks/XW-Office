@@ -510,17 +510,7 @@ class OffeneSendungenDialog(QDialog):
         if case is None:
             return
         is_flow_share = case.source_type == "xw_flow_share"
-        metadata = [
-            f"Von: {case.sender}",
-            f"Empfangen: {case.received_at}",
-        ]
-        if not is_flow_share:
-            metadata[1:1] = [
-                f"Betreff: {case.subject}",
-                f"Wix-Order-Nr: {case.order_number or 'nicht erkannt'}",
-                f"Conversation: {case.thread_id or '-'}",
-            ]
-        self._meta.setText("\n".join(metadata))
+        self._set_case_metadata(case)
         original_text = case.thread_text or case.body or case.snippet
         self._thread.setPlainText(
             original_text if is_flow_share else self._compact_thread_text(original_text)
@@ -576,6 +566,7 @@ class OffeneSendungenDialog(QDialog):
         if case is None or case.id != case_id or not isinstance(extraction, SendungExtraction):
             return
         self._summary.setText(extraction.summary)
+        self._set_case_metadata(case, extraction)
         if extraction.thread_text and case.source_type != "xw_flow_share":
             self._thread.setPlainText(self._compact_thread_text(extraction.thread_text))
         address = extraction.address_lines
@@ -617,6 +608,27 @@ class OffeneSendungenDialog(QDialog):
         self._detail_status.setText(f"Quelle: {extraction.source}{suffix}")
         self._set_actions_enabled(True)
         self._schedule_silent_refresh_after_detail()
+
+    def _set_case_metadata(
+        self,
+        case: SendungCase,
+        extraction: SendungExtraction | None = None,
+    ) -> None:
+        metadata = [f"Von: {case.sender}", f"Empfangen: {case.received_at}"]
+        if case.source_type != "xw_flow_share":
+            order_number = extraction.order_number if extraction is not None else case.order_number
+            invoice_number = (
+                extraction.invoice_number if extraction is not None else case.invoice_number
+            )
+            customer_name = extraction.customer_name if extraction is not None else ""
+            metadata[1:1] = [
+                f"Betreff: {case.subject}",
+                f"Kunde: {customer_name or 'noch nicht zugeordnet'}",
+                f"sevDesk-Rechnung: {invoice_number or 'nicht erkannt'}",
+                f"Wix-Order-Nr: {order_number or 'nicht erkannt'}",
+                f"Conversation: {case.thread_id or '-'}",
+            ]
+        self._meta.setText("\n".join(metadata))
 
     def _on_detail_error(self, seq: int, exc: Exception) -> None:
         if not isValid(self):

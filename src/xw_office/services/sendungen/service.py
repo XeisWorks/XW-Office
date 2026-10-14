@@ -1,4 +1,5 @@
 """Offene Sendungen: Graph-backed queue, AI extraction, labels and delivery notes."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,7 +10,7 @@ from pathlib import Path
 import re
 from threading import RLock
 import time
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -19,6 +20,8 @@ from xw_office.services.mailing.graph_client import GraphMailClient, html_to_tex
 from xw_office.services.printing.invoice_printer import InvoicePrinter
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.secrets.service import SecretService
+from xw_office.services.sevdesk.invoice_client import InvoiceClient, InvoiceSummary
+from xw_office.services.shipping.countries import country_label_for_address
 from xw_office.services.wix.client import WixOrdersClient
 from xw_office.services.sendungen.xw_flow_client import FlowShippingEmailCase, XwFlowShipmentClient
 
@@ -28,9 +31,9 @@ _OPEN_CASES_KEY = "daily_business.offene_sendungen.cases"
 _DONE_CASES_KEY = "daily_business.offene_sendungen.done"
 _EXTRACTIONS_KEY = "daily_business.offene_sendungen.extractions"
 _MANUAL_KEY = "daily_business.offene_sendungen.manual"
-_WIX_ADDRESS_KEY = "daily_business.offene_sendungen.wix_addresses"
 _SOURCE_MAILBOX_KEY = "daily_business.offene_sendungen.source_mailbox"
 _DEFAULT_MODEL = "gpt-4.1-mini"
+_EXTRACTION_SCHEMA_VERSION = 2
 _MEMORY_CACHE_SECONDS = 120.0
 _DEFAULT_SHIPPING_MAILBOX = "shipping@xeisworks.at"
 #: Sentinel ``SendungCase.sender`` for cases injected via create_manual_case
@@ -60,6 +63,7 @@ class SendungCase:
     body: str
     thread_id: str
     order_number: str
+    invoice_number: str = ""
     thread_text: str = ""
     sender_name: str = ""
     source_type: str = _SOURCE_GRAPH
@@ -83,10 +87,26 @@ class SendungExtraction:
     address_lines: list[str]
     products: list[SendungProductLine]
     order_number: str = ""
+    invoice_number: str = ""
+    customer_name: str = ""
+    case_type: str = "other"
     confidence_notes: list[str] | None = None
     source: str = "fallback"
     updated_at: str = ""
     thread_text: str = ""
+
+
+@dataclass(frozen=True)
+class _SendungBusinessContext:
+    """Authoritative customer/order data resolved before the AI analysis."""
+
+    invoice_number: str = ""
+    order_number: str = ""
+    customer_name: str = ""
+    address_lines: tuple[str, ...] = ()
+    products: tuple[SendungProductLine, ...] = ()
+    source: str = ""
+    confidence_notes: tuple[str, ...] = ()
 
 
 class OffeneSendungenService:
@@ -98,11 +118,13 @@ class OffeneSendungenService:
         secrets: SecretService,
         wix_orders: WixOrdersClient | None = None,
         flow_shipments: XwFlowShipmentClient | None = None,
+        invoice_client: InvoiceClient | None = None,
     ) -> None:
         self._repo = settings_repo
         self._secrets = secrets
         self._wix_orders = wix_orders
         self._flow_shipments = flow_shipments
+        self._invoice_client = invoice_client
         self._cache_lock = RLock()
         self._open_cases_cache: list[SendungCase] | None = None
         self._open_cases_cache_at = 0.0
@@ -235,6 +257,7 @@ class OffeneSendungenService:
                 body=remote.body_text,
                 thread_id="",
                 order_number=self._extract_order_number(f"{remote.title}\n{remote.body_text}"),
+                invoice_number=self._extract_invoice_number(f"{remote.title}\n{remote.body_text}"),
                 thread_text=remote.body_text,
                 sender_name="XW-Flow",
                 source_type=_SOURCE_FLOW,
@@ -267,6 +290,7 @@ class OffeneSendungenService:
         if existing is not None:
             return existing
 
+        reference_text = f"{subject}\n{note}"
         case = SendungCase(
             id=cid,
             received_at=self._utc_now_iso(),
@@ -275,7 +299,8 @@ class OffeneSendungenService:
             snippet=str(note or "").strip(),
             body=str(note or "").strip(),
             thread_id="",
-            order_number="",
+            order_number=self._extract_order_number(reference_text),
+            invoice_number=self._extract_invoice_number(reference_text),
             source_type=_SOURCE_MANUAL,
             source_id=cid,
         )
@@ -291,7 +316,9 @@ class OffeneSendungenService:
             )
         return case
 
-    def refresh_count_from_graph_silent(self, *, lookback_days: int = 20, max_items: int = 120) -> int:
+    def refresh_count_from_graph_silent(
+        self, *, lookback_days: int = 20, max_items: int = 120
+    ) -> int:
         """Refresh mail and XW-Flow cases without starting interactive MS auth."""
         return len(
             self.refresh_from_graph(
@@ -308,9 +335,13 @@ class OffeneSendungenService:
         case = self._find_case(cid)
         source_type = case.source_type if case is not None else _SOURCE_GRAPH
         if source_type == _SOURCE_FLOW:
+            if case is None:
+                raise RuntimeError("XW-Flow Sendungsfall nicht gefunden")
             if self._flow_shipments is None:
                 raise RuntimeError("XW-Flow Versand-Bridge ist nicht konfiguriert")
-            self._flow_shipments.set_status(case.source_id or cid.removeprefix("flow:"), completed=done)
+            self._flow_shipments.set_status(
+                case.source_id or cid.removeprefix("flow:"), completed=done
+            )
         elif source_type == _SOURCE_GRAPH and done:
             client = self._graph_client(write=True)
             if client is None:
@@ -358,20 +389,28 @@ class OffeneSendungenService:
         if not force:
             cached = self._load_saved_extraction(cid)
             if cached is not None:
-                return self._with_wix_shipping_address(case, cached)
+                return cached
+
+        thread_text = self._full_case_text(case)
+        context = self._resolve_business_context(case, thread_text)
 
         api_key = self._secrets.get_secret("OPENAI_API_KEY")
         if api_key:
             try:
-                extraction = self._openai_extract(case, api_key)
-                extraction = self._with_wix_shipping_address(case, extraction, refresh=force)
+                extraction = self._openai_extract(
+                    case,
+                    api_key,
+                    thread_text=thread_text,
+                    context=context,
+                )
+                extraction = self._apply_business_context(case, extraction, context)
                 self._save_extraction(cid, extraction)
                 return extraction
             except Exception as exc:  # noqa: BLE001
                 logger.warning("OpenAI sendung extraction failed for %s: %s", cid, exc)
 
-        extraction = self._fallback_extract(case)
-        extraction = self._with_wix_shipping_address(case, extraction, refresh=force)
+        extraction = self._fallback_extract(case, thread_text=thread_text)
+        extraction = self._apply_business_context(case, extraction, context)
         self._save_extraction(cid, extraction)
         return extraction
 
@@ -464,7 +503,9 @@ class OffeneSendungenService:
         path = Path(pdf_path)
         if not path.exists():
             raise RuntimeError("Lieferschein-PDF nicht gefunden")
-        InvoicePrinter(printing, print_queue=print_queue).print_pdf_bytes(path.read_bytes(), wait=wait)
+        InvoicePrinter(printing, print_queue=print_queue).print_pdf_bytes(
+            path.read_bytes(), wait=wait
+        )
 
     def _fallback_summary(self, case: SendungCase) -> str:
         text = (case.thread_text or case.body or case.snippet or "").strip()
@@ -548,12 +589,16 @@ class OffeneSendungenService:
 
     @staticmethod
     def _normalize_graph_message(msg: dict[str, Any]) -> dict[str, Any]:
-        body_obj = msg.get("body") if isinstance(msg.get("body"), dict) else {}
+        body_obj = (
+            cast(dict[str, Any], msg.get("body")) if isinstance(msg.get("body"), dict) else {}
+        )
         content = str(body_obj.get("content") or "").strip()
         content_type = str(body_obj.get("contentType") or "").strip()
         normalized = dict(msg)
         normalized["body"] = {
-            "content": html_to_text(content) if content and content_type.lower() == "html" else content,
+            "content": html_to_text(content)
+            if content and content_type.lower() == "html"
+            else content,
             "contentType": "text",
         }
         return normalized
@@ -563,21 +608,33 @@ class OffeneSendungenService:
         """Accept every unresolved mail in the dedicated shipping mailbox."""
         if not str(msg.get("id") or "").strip():
             return False
-        flag_obj = msg.get("flag") if isinstance(msg.get("flag"), dict) else {}
+        flag_obj = (
+            cast(dict[str, Any], msg.get("flag")) if isinstance(msg.get("flag"), dict) else {}
+        )
         flag_status = str(flag_obj.get("flagStatus") or "").strip().lower()
         return flag_status != "complete"
 
     def _to_case(self, msg: dict[str, Any]) -> SendungCase:
-        from_obj = msg.get("from") if isinstance(msg.get("from"), dict) else {}
-        email_obj = from_obj.get("emailAddress") if isinstance(from_obj.get("emailAddress"), dict) else {}
+        from_obj = (
+            cast(dict[str, Any], msg.get("from")) if isinstance(msg.get("from"), dict) else {}
+        )
+        email_obj = (
+            cast(dict[str, Any], from_obj.get("emailAddress"))
+            if isinstance(from_obj.get("emailAddress"), dict)
+            else {}
+        )
         sender = str(email_obj.get("address") or email_obj.get("name") or "").strip()
         sender_name = str(email_obj.get("name") or "").strip()
 
-        body_obj = msg.get("body") if isinstance(msg.get("body"), dict) else {}
+        body_obj = (
+            cast(dict[str, Any], msg.get("body")) if isinstance(msg.get("body"), dict) else {}
+        )
         body = str(body_obj.get("content") or "").strip()
         snippet = str(msg.get("bodyPreview") or "").strip()
         subject = str(msg.get("subject") or "").strip()
-        order_number = self._extract_order_number(f"{subject}\n{snippet}\n{body}")
+        reference_text = f"{subject}\n{snippet}\n{body}"
+        order_number = self._extract_order_number(reference_text)
+        invoice_number = self._extract_invoice_number(reference_text)
 
         return SendungCase(
             id=str(msg.get("id") or "").strip(),
@@ -588,6 +645,7 @@ class OffeneSendungenService:
             body=body,
             thread_id=str(msg.get("conversationId") or "").strip(),
             order_number=order_number,
+            invoice_number=invoice_number,
             thread_text=str(msg.get("threadText") or "").strip(),
             sender_name=sender_name,
             source_type=_SOURCE_GRAPH,
@@ -623,41 +681,51 @@ class OffeneSendungenService:
             logger.debug("Sendung body fetch failed for %s: %s", case.id, exc)
         return str(base or "").strip()
 
-    def _openai_extract(self, case: SendungCase, api_key: str) -> SendungExtraction:
-        thread_text = self._full_case_text(case)
+    def _openai_extract(
+        self,
+        case: SendungCase,
+        api_key: str,
+        *,
+        thread_text: str | None = None,
+        context: _SendungBusinessContext | None = None,
+    ) -> SendungExtraction:
+        thread_text = str(thread_text if thread_text is not None else self._full_case_text(case))
+        context = context or _SendungBusinessContext()
         prompt = (
-            "Du analysierst den vollstaendigen Mailverlauf einer Shop-Sendung. "
-            "Klaere zuerst die aktuell offene Absicht: 'shipment' fuer einen echten Versandauftrag, "
-            "'complaint' fuer Reklamation, fehlende, falsche oder beschaedigte Ware mit Nachsendung, "
-            "'address_change', 'information_request' oder 'other'. "
-            "Eine Reklamation, Nachfrage oder Erwaehnung eines frueher bestellten Produkts ist niemals "
-            "eine neue Bestellung. Erfinde keine Bestellung. Bei einer Reklamation darf die Kurznotiz "
-            "nicht behaupten, jemand bestelle oder kaufe etwas: Sie beginnt mit 'Reklamation:' und nennt "
-            "den fehlenden/falschen/beschaedigten Teil sowie die verlangte Abhilfe (z. B. Nachsendung). "
-            "Extrahiere die aktuell gueltige Lieferadresse und alle physischen Produkte, "
-            "die in der aktuellen Aktion tatsaechlich verschickt werden muessen. Bei einer Reklamation "
-            "nur den konkret nachzusendenden Teil, nicht das urspruenglich gekaufte Gesamtprodukt. "
-            "Ignoriere digitale Downloads, "
-            "Signaturen, alte ueberholte Adressen und reine Rueckfragen. "
-            "Wenn im Verlauf eine Adresse korrigiert wurde, verwende die zuletzt gueltige. "
-            "Uebernimm Strasse, Hausnummer und alle Adresszusaetze (z. B. Top, Stiege, Tuer, "
-            "Apartment) vollstaendig und wortgetreu; Hausnummer oder Zusatz niemals weglassen. "
-            "Antworte ausschliesslich als JSON.\n\n"
-            "JSON-Schema:\n"
-            "{\n"
-            '  "case_type": "shipment|complaint|address_change|information_request|other",\n'
-            '  "summary": "kurze deutsche Zusammenfassung",\n'
-            '  "order_number": "Bestellnummer oder leer",\n'
-            '  "address_lines": ["Name", "Strasse", "PLZ Ort", "Land"],\n'
-            '  "products": [{"quantity": "1", "name": "Produktname", "sku": "optional", "note": "optional"}],\n'
-            '  "confidence_notes": ["kurze Hinweise bei Unsicherheit"]\n'
-            "}\n\n"
+            "Analysiere den vollstaendigen Mailverlauf fuer die Versandbearbeitung.\n"
+            "Ermittle zuerst die aktuelle Absicht: shipment, complaint, address_change, "
+            "information_request oder other. Eine Reklamation oder Erwaehnung einer frueheren "
+            "Bestellung ist keine neue Bestellung.\n\n"
+            "DATENPRIORITAETEN:\n"
+            "1. Eine in der Mail ausdruecklich neu genannte oder korrigierte Lieferadresse hat Vorrang.\n"
+            "2. Fehlt eine vollstaendige Mail-Lieferadresse, uebernimm die bereitgestellte "
+            "System-Lieferadresse wortgetreu. Erfinde niemals eine Adresse.\n"
+            "3. Bei eindeutig zugeordneten Rechnungspositionen verwende deren exakte Bezeichnung und "
+            "SKU. Setze source_product_index auf die 1-basierte Nummer der passenden Position.\n"
+            "4. Bei Reklamationen waehle nur konkret nachzusendende Positionen, niemals pauschal alle "
+            "Positionen der urspruenglichen Rechnung. Versandkosten und digitale Downloads sind keine "
+            "Versandprodukte.\n"
+            "5. Die Kurznotiz nennt Kunde, Bezug (Rechnung/Wix), konkrete Versandaktion und Produkt; "
+            "sie behauptet nichts, was nicht aus Mail oder Systemdaten folgt.\n\n"
+            f"AUTORITATIVE SYSTEMDATEN:\n{self._business_context_prompt(context)}\n\n"
             f"Betreff: {case.subject}\n"
             f"Absender: {case.sender}\n"
             f"Mailverlauf:\n{thread_text}"
         )
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        body = {"model": _DEFAULT_MODEL, "input": prompt, "max_output_tokens": 900}
+        body = {
+            "model": _DEFAULT_MODEL,
+            "input": [
+                {
+                    "role": "system",
+                    "content": "Du extrahierst Versandfaelle faktengetreu und antwortest im vorgegebenen Schema.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "text": {"format": self._openai_extraction_schema()},
+            "max_output_tokens": 1200,
+            "store": False,
+        }
         with httpx.Client(timeout=45.0) as client:
             resp = client.post("https://api.openai.com/v1/responses", headers=headers, json=body)
             resp.raise_for_status()
@@ -674,9 +742,22 @@ class OffeneSendungenService:
                 thread_text,
             ),
             address_lines=address_lines,
-            products=self._normalize_products(data.get("products")),
-            order_number=str(data.get("order_number") or case.order_number or "").strip(),
-            confidence_notes=[str(item).strip() for item in data.get("confidence_notes") or [] if str(item).strip()]
+            products=self._normalize_products(
+                data.get("products"), authoritative_products=context.products
+            ),
+            order_number=str(
+                context.order_number or data.get("order_number") or case.order_number or ""
+            ).strip(),
+            invoice_number=str(
+                context.invoice_number or data.get("invoice_number") or case.invoice_number or ""
+            ).strip(),
+            customer_name=str(context.customer_name or data.get("customer_name") or "").strip(),
+            case_type=str(data.get("case_type") or "other").strip(),
+            confidence_notes=[
+                str(item).strip()
+                for item in data.get("confidence_notes") or []
+                if str(item).strip()
+            ]
             if isinstance(data.get("confidence_notes"), list)
             else [],
             source="openai",
@@ -684,18 +765,90 @@ class OffeneSendungenService:
             thread_text=thread_text,
         )
         if not extraction.products:
-            fallback = self._fallback_extract(case)
+            fallback = self._fallback_extract(case, thread_text=thread_text)
             extraction = SendungExtraction(
                 summary=extraction.summary,
                 address_lines=extraction.address_lines or fallback.address_lines,
                 products=fallback.products,
                 order_number=extraction.order_number or fallback.order_number,
+                invoice_number=extraction.invoice_number or fallback.invoice_number,
+                customer_name=extraction.customer_name or fallback.customer_name,
+                case_type=extraction.case_type or fallback.case_type,
                 confidence_notes=extraction.confidence_notes or fallback.confidence_notes,
                 source="openai+fallback",
                 updated_at=extraction.updated_at,
                 thread_text=thread_text,
             )
         return extraction
+
+    @staticmethod
+    def _openai_extraction_schema() -> dict[str, object]:
+        product_schema = {
+            "type": "object",
+            "properties": {
+                "quantity": {"type": "string"},
+                "name": {"type": "string"},
+                "sku": {"type": "string"},
+                "note": {"type": "string"},
+                "source_product_index": {"type": "integer"},
+            },
+            "required": ["quantity", "name", "sku", "note", "source_product_index"],
+            "additionalProperties": False,
+        }
+        schema = {
+            "type": "object",
+            "properties": {
+                "case_type": {
+                    "type": "string",
+                    "enum": [
+                        "shipment",
+                        "complaint",
+                        "address_change",
+                        "information_request",
+                        "other",
+                    ],
+                },
+                "summary": {"type": "string"},
+                "customer_name": {"type": "string"},
+                "invoice_number": {"type": "string"},
+                "order_number": {"type": "string"},
+                "address_lines": {"type": "array", "items": {"type": "string"}},
+                "products": {"type": "array", "items": product_schema},
+                "confidence_notes": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": [
+                "case_type",
+                "summary",
+                "customer_name",
+                "invoice_number",
+                "order_number",
+                "address_lines",
+                "products",
+                "confidence_notes",
+            ],
+            "additionalProperties": False,
+        }
+        return {"type": "json_schema", "name": "shipping_case", "strict": True, "schema": schema}
+
+    @staticmethod
+    def _business_context_prompt(context: _SendungBusinessContext) -> str:
+        products = [
+            f"{index}. {item.quantity} x {item.name}"
+            f"{f' | SKU {item.sku}' if item.sku else ''}"
+            f"{f' | {item.note}' if item.note else ''}"
+            for index, item in enumerate(context.products, start=1)
+        ]
+        return "\n".join(
+            [
+                f"Kunde: {context.customer_name or '-'}",
+                f"sevDesk-Rechnung: {context.invoice_number or '-'}",
+                f"Wix-Order: {context.order_number or '-'}",
+                "System-Lieferadresse:",
+                *(context.address_lines or ("-",)),
+                "Rechnungs-/Bestellpositionen:",
+                *(products or ["-"]),
+            ]
+        )
 
     @staticmethod
     def _normalize_case_summary(summary: str, case_type: str, thread_text: str) -> str:
@@ -723,106 +876,444 @@ class OffeneSendungenService:
         )
         if not text or not is_complaint:
             return text
-        corrected = re.sub(r"\b(bestellt|bestellung|kauft|gekauft)\b", "reklamiert", text, flags=re.IGNORECASE)
+        # Replace misleading purchase verbs only.  The noun "Bestellung" is a
+        # valid historical reference ("bei der letzten Bestellung") and must
+        # not turn into ungrammatical text such as "bei der letzten reklamiert".
+        corrected = re.sub(r"\b(bestellt|kauft|gekauft)\b", "reklamiert", text, flags=re.IGNORECASE)
         if not corrected.casefold().startswith("reklamation"):
             corrected = f"Reklamation: {corrected}"
         return corrected
 
-    def _fallback_extract(self, case: SendungCase) -> SendungExtraction:
-        text = self._full_case_text(case) or case.body or case.snippet
+    def _fallback_extract(
+        self,
+        case: SendungCase,
+        *,
+        thread_text: str | None = None,
+    ) -> SendungExtraction:
+        text = str(thread_text if thread_text is not None else self._full_case_text(case))
+        text = text or case.body or case.snippet
         address = self._extract_address_block(text) or self.create_label_lines(case)
         products = self._extract_product_lines(text)
         return SendungExtraction(
             summary=self._fallback_summary(case),
             address_lines=self._normalize_address_lines(address),
             products=products,
-            order_number=case.order_number,
+            order_number=self._extract_order_number(f"{case.subject}\n{text}") or case.order_number,
+            invoice_number=self._extract_invoice_number(f"{case.subject}\n{text}")
+            or case.invoice_number,
+            case_type=self._infer_case_type(text),
             confidence_notes=["Fallback-Heuristik verwendet; bitte Adresse und Produkte pruefen."],
             source="fallback",
             updated_at=self._utc_now_iso(),
             thread_text=text,
         )
 
-    def _with_wix_shipping_address(
+    def _resolve_business_context(
+        self,
+        case: SendungCase,
+        thread_text: str,
+    ) -> _SendungBusinessContext:
+        """Resolve typed references against sevDesk first and Wix second."""
+        reference_text = f"{case.subject}\n{case.snippet}\n{thread_text}"
+        invoice_number = self._extract_invoice_number(reference_text) or case.invoice_number
+        order_number = self._extract_order_number(reference_text) or case.order_number
+        customer_name = ""
+        address_lines: list[str] = []
+        products: list[SendungProductLine] = []
+        sources: list[str] = []
+        notes: list[str] = []
+
+        invoice_summary: InvoiceSummary | None = None
+        if self._invoice_client is not None and (invoice_number or order_number):
+            try:
+                invoice_summary = self._find_invoice_summary(
+                    invoice_number=invoice_number,
+                    order_number=order_number,
+                )
+            except Exception as exc:  # noqa: BLE001 - enrichment remains best effort.
+                logger.warning("sevDesk lookup failed for sendung %s: %s", case.id, exc)
+                notes.append("sevDesk-Zuordnung konnte nicht geladen werden.")
+
+        if invoice_summary is not None and self._invoice_client is not None:
+            invoice_number = str(invoice_summary.invoice_number or invoice_number).strip()
+            order_number = str(invoice_summary.order_reference or order_number).strip()
+            customer_name = str(invoice_summary.contact_name or "").strip()
+            try:
+                invoice = self._invoice_client.fetch_invoice_by_id(invoice_summary.id)
+                positions = self._invoice_client.fetch_invoice_positions(invoice_summary.id)
+                address_lines = self._invoice_address_lines(invoice, invoice_summary)
+                products = self._invoice_product_lines(positions)
+                sources.append("sevdesk-invoice")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "sevDesk details failed for sendung %s invoice=%s: %s",
+                    case.id,
+                    invoice_number,
+                    exc,
+                )
+                notes.append("sevDesk-Rechnungsdetails konnten nicht vollstaendig geladen werden.")
+
+        wix = self._wix_orders
+        if wix is not None and order_number:
+            try:
+                resolver = getattr(wix, "resolve_latest_shipping_address", None)
+                result = resolver(reference=order_number) if callable(resolver) else {}
+                wix_lines = (
+                    self._normalize_address_lines(result.get("address_lines"))
+                    if isinstance(result, dict)
+                    else []
+                )
+                if wix_lines:
+                    address_lines = wix_lines
+                    order_number = str(result.get("order_number") or order_number).strip()
+                    sources.append(str(result.get("source") or "wix-order").strip())
+
+                summary_resolver = getattr(wix, "resolve_order_summary", None)
+                wix_summary = summary_resolver(order_number) if callable(summary_resolver) else {}
+                if isinstance(wix_summary, dict) and not customer_name:
+                    customer_name = str(wix_summary.get("wix_customer_name") or "").strip()
+
+                if not products:
+                    item_loader = getattr(wix, "fetch_order_line_items", None)
+                    wix_items = item_loader(order_number) if callable(item_loader) else []
+                    for item in wix_items or []:
+                        if bool(getattr(item, "is_digital", False)):
+                            continue
+                        name = str(getattr(item, "name", "") or "").strip()
+                        if not name or self._is_non_product_position(name):
+                            continue
+                        products.append(
+                            SendungProductLine(
+                                quantity=str(getattr(item, "qty", 1) or 1),
+                                name=name,
+                                sku=str(getattr(item, "sku", "") or "").strip(),
+                                note=str(getattr(item, "note", "") or "").strip(),
+                            )
+                        )
+                    if products:
+                        sources.append("wix-products")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Wix order lookup failed for sendung %s: %s", case.id, exc)
+                notes.append("Wix-Bestelldaten konnten nicht vollstaendig geladen werden.")
+
+        return _SendungBusinessContext(
+            invoice_number=invoice_number,
+            order_number=order_number,
+            customer_name=customer_name,
+            address_lines=tuple(address_lines),
+            products=tuple(products),
+            source="+".join(dict.fromkeys(source for source in sources if source)),
+            confidence_notes=tuple(notes),
+        )
+
+    def _find_invoice_summary(
+        self,
+        *,
+        invoice_number: str,
+        order_number: str,
+    ) -> InvoiceSummary | None:
+        client = self._invoice_client
+        if client is None:
+            return None
+        query = str(invoice_number or order_number or "").strip()
+        if not query:
+            return None
+        matches, _searched_days = client.search_invoice_summaries(query)
+        normalized_invoice = self._normalize_invoice_reference(invoice_number)
+        normalized_order = str(order_number or "").strip()
+        exact = [
+            summary
+            for summary in matches
+            if (
+                normalized_invoice
+                and self._normalize_invoice_reference(summary.invoice_number) == normalized_invoice
+            )
+            or (normalized_order and str(summary.order_reference or "").strip() == normalized_order)
+        ]
+        return exact[0] if exact else None
+
+    @classmethod
+    def _invoice_address_lines(
+        cls,
+        invoice: dict[str, Any],
+        summary: InvoiceSummary,
+    ) -> list[str]:
+        contact = (
+            cast(dict[str, Any], invoice.get("contact"))
+            if isinstance(invoice.get("contact"), dict)
+            else {}
+        )
+        name = str(
+            invoice.get("deliveryName")
+            or invoice.get("shippingName")
+            or invoice.get("name")
+            or contact.get("name")
+            or summary.contact_name
+            or ""
+        ).strip()
+        street = str(
+            invoice.get("deliveryStreet")
+            or invoice.get("shippingStreet")
+            or invoice.get("street")
+            or ""
+        ).strip()
+        zip_code = str(
+            invoice.get("deliveryZip") or invoice.get("shippingZip") or invoice.get("zip") or ""
+        ).strip()
+        city = str(
+            invoice.get("deliveryCity") or invoice.get("shippingCity") or invoice.get("city") or ""
+        ).strip()
+        country = country_label_for_address(
+            invoice.get("deliveryAddressCountry")
+            or invoice.get("shippingCountry")
+            or invoice.get("addressCountry")
+            or summary.display_country
+            or ""
+        )
+        structured = [
+            part
+            for part in (name, street, " ".join(p for p in (zip_code, city) if p), country)
+            if part
+        ]
+        if cls._is_usable_address(structured):
+            return structured
+
+        for key in ("deliveryAddress", "shippingAddress", "address"):
+            raw = invoice.get(key)
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            text = re.sub(r"(?i)<br\s*/?>", "\n", raw)
+            lines = [line.strip(" ,") for line in text.splitlines() if line.strip(" ,")]
+            lines = [line for line in lines if line.casefold() not in {"herrn", "frau", "firma"}]
+            if country and country.casefold() not in {line.casefold() for line in lines}:
+                lines.append(country)
+            if cls._is_usable_address(lines):
+                return lines[:8]
+        return structured[:8]
+
+    @classmethod
+    def _invoice_product_lines(cls, positions: list[dict[str, Any]]) -> list[SendungProductLine]:
+        products: list[SendungProductLine] = []
+        for position in positions:
+            name = str(position.get("name") or position.get("text") or "").strip()
+            if not name or cls._is_non_product_position(name):
+                continue
+            part = (
+                cast(dict[str, Any], position.get("part"))
+                if isinstance(position.get("part"), dict)
+                else {}
+            )
+            note = str(position.get("text") or "").strip()
+            if note.casefold() == name.casefold():
+                note = ""
+            products.append(
+                SendungProductLine(
+                    quantity=cls._format_quantity(position.get("quantity")),
+                    name=name,
+                    sku=str(part.get("partNumber") or position.get("partNumber") or "").strip(),
+                    note=note,
+                )
+            )
+        return products
+
+    @staticmethod
+    def _format_quantity(value: object) -> str:
+        text = str(value if value not in (None, "") else "1").strip().replace(",", ".")
+        try:
+            number = float(text)
+        except ValueError:
+            return text or "1"
+        return str(int(number)) if number.is_integer() else f"{number:g}"
+
+    @staticmethod
+    def _is_non_product_position(name: str) -> bool:
+        normalized = re.sub(r"[^a-z0-9]+", " ", str(name or "").casefold())
+        return any(
+            marker in f" {normalized} "
+            for marker in (
+                " versand ",
+                " versandkosten ",
+                " express versand ",
+                " porto ",
+                " shipping ",
+                " rabatt ",
+                " gutschrift ",
+            )
+        )
+
+    def _apply_business_context(
         self,
         case: SendungCase,
         extraction: SendungExtraction,
-        *,
-        refresh: bool = False,
+        context: _SendungBusinessContext,
     ) -> SendungExtraction:
-        """Prefer the newest strict Wix shipping address and cache it per case.
+        address_lines = list(extraction.address_lines)
+        address_from_system = False
+        mail_address_is_supported = self._is_usable_address(
+            address_lines
+        ) and self._address_supported_by_text(address_lines, extraction.thread_text)
+        if not mail_address_is_supported and context.address_lines:
+            address_lines = list(context.address_lines)
+            address_from_system = True
 
-        A direct order-number lookup wins.  If no order number is available,
-        Wix is searched by the sender email and then by the extracted recipient
-        name.  Billing addresses are deliberately never used here.
-        """
-        wix = self._wix_orders
-        if wix is None:
-            return extraction
-        cache = self._load_json_map(_WIX_ADDRESS_KEY)
-        cached = cache.get(case.id)
-        if not refresh and isinstance(cached, dict):
-            lines = self._normalize_address_lines(cached.get("address_lines"))
-            if lines:
-                address_source = str(cached.get("source") or "wix-cache").strip()
-                combined_source = extraction.source
-                if address_source not in combined_source.split("+"):
-                    combined_source = f"{combined_source}+{address_source}"
-                return SendungExtraction(
-                    summary=extraction.summary,
-                    address_lines=lines,
-                    products=extraction.products,
-                    order_number=str(cached.get("order_number") or extraction.order_number).strip(),
-                    confidence_notes=extraction.confidence_notes,
-                    source=combined_source,
-                    updated_at=extraction.updated_at,
-                    thread_text=extraction.thread_text,
-                )
-            if cached.get("not_found") is True:
-                return extraction
+        products = list(extraction.products)
+        if not products and extraction.case_type == "shipment" and context.products:
+            products = list(context.products)
 
-        recipient_name = extraction.address_lines[0] if extraction.address_lines else ""
-        sender_email = (
-            case.sender
-            if "@" in case.sender and not case.sender.casefold().endswith("@xeisworks.at")
-            else ""
+        invoice_number = (
+            context.invoice_number
+            or extraction.invoice_number
+            or case.invoice_number
+            or self._extract_invoice_number(extraction.thread_text)
         )
-        try:
-            result = wix.resolve_latest_shipping_address(
-                reference=extraction.order_number or case.order_number,
-                customer_name=recipient_name,
-                email=sender_email,
+        order_number = (
+            context.order_number
+            or extraction.order_number
+            or case.order_number
+            or self._extract_order_number(extraction.thread_text)
+        )
+        customer_name = (
+            context.customer_name
+            or extraction.customer_name
+            or (address_lines[0] if address_lines else "")
+            or case.sender_name
+        )
+        source_parts = [part for part in extraction.source.split("+") if part]
+        source_parts.extend(part for part in context.source.split("+") if part)
+        if address_from_system:
+            source_parts.append("address-fallback")
+        source = "+".join(dict.fromkeys(source_parts))
+        confidence_notes = list(extraction.confidence_notes or [])
+        confidence_notes.extend(context.confidence_notes)
+        if context.invoice_number and not context.products:
+            confidence_notes.append(
+                "Rechnung zugeordnet, aber keine versandfaehige Position gefunden."
             )
-        except Exception as exc:  # noqa: BLE001 - address enrichment must not block the workflow.
-            logger.warning("Wix shipping-address lookup failed for sendung %s: %s", case.id, exc)
-            return extraction
-        lines = self._normalize_address_lines(result.get("address_lines")) if isinstance(result, dict) else []
-        if not lines:
-            cache[case.id] = {"not_found": True, "updated_at": self._utc_now_iso()}
-            self._save_json_map(_WIX_ADDRESS_KEY, cache)
-            return extraction
-        order_number = str(result.get("order_number") or extraction.order_number or case.order_number).strip()
-        source = str(result.get("source") or "wix").strip()
-        cache[case.id] = {
-            "address_lines": lines,
-            "order_number": order_number,
-            "source": source,
-            "updated_at": self._utc_now_iso(),
-        }
-        self._save_json_map(_WIX_ADDRESS_KEY, cache)
-        combined_source = extraction.source
-        if source not in combined_source.split("+"):
-            combined_source = f"{combined_source}+{source}"
+
         return SendungExtraction(
-            summary=extraction.summary,
-            address_lines=lines,
-            products=extraction.products,
+            summary=self._clear_case_summary(
+                extraction.summary,
+                customer_name=customer_name,
+                invoice_number=invoice_number,
+                order_number=order_number,
+                products=products,
+                address_lines=address_lines,
+            ),
+            address_lines=address_lines,
+            products=products,
             order_number=order_number,
-            confidence_notes=extraction.confidence_notes,
-            source=combined_source,
-            updated_at=extraction.updated_at,
+            invoice_number=invoice_number,
+            customer_name=customer_name,
+            case_type=extraction.case_type,
+            confidence_notes=list(dict.fromkeys(note for note in confidence_notes if note)),
+            source=source or extraction.source,
+            updated_at=extraction.updated_at or self._utc_now_iso(),
             thread_text=extraction.thread_text,
         )
+
+    @staticmethod
+    def _clear_case_summary(
+        action_summary: str,
+        *,
+        customer_name: str,
+        invoice_number: str,
+        order_number: str,
+        products: list[SendungProductLine],
+        address_lines: list[str],
+    ) -> str:
+        references = " / ".join(
+            part
+            for part in (
+                invoice_number,
+                f"Wix {order_number}" if order_number else "",
+            )
+            if part
+        )
+        product_text = "; ".join(
+            f"{product.quantity or '1'} x {product.name}" for product in products[:4]
+        )
+        if len(products) > 4:
+            product_text += f"; +{len(products) - 4} weitere"
+        address_text = ", ".join(address_lines[:4])
+        lines = [
+            " | ".join(
+                part
+                for part in (
+                    f"Kunde: {customer_name}" if customer_name else "",
+                    f"Bezug: {references}" if references else "",
+                )
+                if part
+            ),
+            str(action_summary or "").strip(),
+            f"Produkte: {product_text}" if product_text else "Produkte: nicht eindeutig erkannt",
+            f"Lieferanschrift: {address_text}"
+            if address_text
+            else "Lieferanschrift: nicht erkannt",
+        ]
+        return "\n".join(line for line in lines if line)
+
+    @staticmethod
+    def _is_usable_address(lines: list[str] | tuple[str, ...]) -> bool:
+        normalized = [str(line or "").strip() for line in lines if str(line or "").strip()]
+        if len(normalized) < 3:
+            return False
+        has_postal_city = any(
+            re.search(r"\b\d{4,6}\b", line) and re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", line)
+            for line in normalized
+        )
+        has_street = any(
+            re.search(r"\d", line) and not re.match(r"^\s*\d{4,6}\b", line) for line in normalized
+        )
+        return bool(has_postal_city and has_street)
+
+    @staticmethod
+    def _address_supported_by_text(
+        lines: list[str] | tuple[str, ...],
+        source_text: str,
+    ) -> bool:
+        """Require the extracted street and postal code to occur in the mail."""
+        source = re.sub(r"[^a-z0-9]+", " ", str(source_text or "").casefold())
+        source = " ".join(source.split())
+        if not source:
+            return False
+        postal_codes = [
+            match.group(0)
+            for line in lines
+            for match in re.finditer(r"\b\d{4,6}\b", str(line or ""))
+        ]
+        street_candidates = [
+            re.sub(r"[^a-z0-9]+", " ", str(line or "").casefold()).strip()
+            for line in lines
+            if re.search(r"\d", str(line or "")) and not re.match(r"^\s*\d{4,6}\b", str(line or ""))
+        ]
+        has_postal = any(code in source for code in postal_codes)
+        has_street = any(street and street in source for street in street_candidates)
+        return bool(has_postal and has_street)
+
+    @staticmethod
+    def _infer_case_type(text: str) -> str:
+        normalized = str(text or "").casefold()
+        if any(
+            marker in normalized
+            for marker in (
+                "reklam",
+                "fehlte",
+                "fehlten",
+                "fehlt",
+                "nicht erhalten",
+                "falsch geliefert",
+                "beschädigt",
+                "beschaedigt",
+            )
+        ):
+            return "complaint"
+        if any(marker in normalized for marker in ("adressänder", "adressaender", "neue adresse")):
+            return "address_change"
+        if any(
+            marker in normalized for marker in ("versenden", "verschicken", "sendung", "lieferung")
+        ):
+            return "shipment"
+        return "other"
 
     @staticmethod
     def _response_text(payload: dict[str, Any]) -> str:
@@ -901,17 +1392,40 @@ class OffeneSendungenService:
             break
         return result
 
-    def _normalize_products(self, value: object) -> list[SendungProductLine]:
+    def _normalize_products(
+        self,
+        value: object,
+        *,
+        authoritative_products: tuple[SendungProductLine, ...] = (),
+    ) -> list[SendungProductLine]:
         if not isinstance(value, list):
             return []
         products: list[SendungProductLine] = []
         for item in value:
             if isinstance(item, dict):
+                authoritative: SendungProductLine | None = None
+                try:
+                    source_index = int(item.get("source_product_index") or 0)
+                except (TypeError, ValueError):
+                    source_index = 0
+                if 1 <= source_index <= len(authoritative_products):
+                    authoritative = authoritative_products[source_index - 1]
                 product = SendungProductLine(
                     quantity=str(item.get("quantity") or "1").strip() or "1",
-                    name=str(item.get("name") or "").strip(),
-                    sku=str(item.get("sku") or "").strip(),
-                    note=str(item.get("note") or "").strip(),
+                    name=(
+                        authoritative.name
+                        if authoritative is not None
+                        else str(item.get("name") or "").strip()
+                    ),
+                    sku=(
+                        authoritative.sku
+                        if authoritative is not None
+                        else str(item.get("sku") or "").strip()
+                    ),
+                    note=str(
+                        item.get("note")
+                        or (authoritative.note if authoritative is not None else "")
+                    ).strip(),
                     free_delivery=self._as_bool(item.get("free_delivery"), default=True),
                     delivery_price=str(item.get("delivery_price") or "5,90").strip() or "5,90",
                     no_return_required=self._as_bool(item.get("no_return_required"), default=True),
@@ -933,7 +1447,14 @@ class OffeneSendungenService:
     @staticmethod
     def _extract_address_block(text: str) -> list[str]:
         lines = [line.strip(" \t|") for line in str(text or "").splitlines()]
-        labels = ("versandadresse", "lieferadresse", "shipping address", "ship to", "empfaenger", "empfänger")
+        labels = (
+            "versandadresse",
+            "lieferadresse",
+            "shipping address",
+            "ship to",
+            "empfaenger",
+            "empfänger",
+        )
         stops = (
             "rechnungsadresse",
             "billing",
@@ -981,14 +1502,18 @@ class OffeneSendungenService:
             qty = "1"
             name = ""
             sku = ""
-            match = re.match(r"(?:(\d+)\s*(?:x|stk\.?|stueck|stück)\s+)(.+)", line, flags=re.IGNORECASE)
+            match = re.match(
+                r"(?:(\d+)\s*(?:x|stk\.?|stueck|stück)\s+)(.+)", line, flags=re.IGNORECASE
+            )
             if match:
                 qty, name = match.group(1), match.group(2).strip()
             elif re.search(r"\b(sku|artikel|produkt|buch|noten|cd|pdf)\b", low):
                 name = line
             if not name:
                 continue
-            sku_match = re.search(r"\b(?:sku|artikelnummer|art\.?-?nr\.?)[:\s]+([A-Z0-9._-]{2,})", name, re.IGNORECASE)
+            sku_match = re.search(
+                r"\b(?:sku|artikelnummer|art\.?-?nr\.?)[:\s]+([A-Z0-9._-]{2,})", name, re.IGNORECASE
+            )
             if sku_match:
                 sku = sku_match.group(1).strip()
             key = f"{qty}|{name}".casefold()
@@ -1010,13 +1535,23 @@ class OffeneSendungenService:
         summary: str,
     ) -> Path:
         try:
-            import fitz
+            import fitz  # type: ignore[import-untyped]
         except Exception as exc:  # pragma: no cover
             raise RuntimeError("PyMuPDF fuer Lieferschein-PDF nicht verfuegbar") from exc
 
         out_dir = self._repo_root() / "state" / "generated" / "lieferscheine"
         out_dir.mkdir(parents=True, exist_ok=True)
-        stem = self._safe_filename_part(case.order_number or case.subject or case.id, fallback="sendung")
+        extraction = self._load_saved_extraction(case.id)
+        order_number = (
+            extraction.order_number if extraction is not None else ""
+        ) or case.order_number
+        invoice_number = (
+            extraction.invoice_number if extraction is not None else ""
+        ) or case.invoice_number
+        stem = self._safe_filename_part(
+            order_number or invoice_number or case.subject or case.id,
+            fallback="sendung",
+        )
         out_path = out_dir / f"lieferschein_{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
 
         doc = fitz.open()
@@ -1024,18 +1559,33 @@ class OffeneSendungenService:
         margin = 50
         logo_path = self._repo_root() / "icons" / "logo NEU.png"
         if logo_path.exists():
-            page.insert_image(fitz.Rect(margin, 46, margin + 150, 104), filename=str(logo_path), keep_proportion=True)
-        page.insert_text((margin, 132), "LIEFERSCHEIN", fontsize=28, fontname="helv", color=(0.08, 0.08, 0.08))
+            page.insert_image(
+                fitz.Rect(margin, 46, margin + 150, 104),
+                filename=str(logo_path),
+                keep_proportion=True,
+            )
+        page.insert_text(
+            (margin, 132), "LIEFERSCHEIN", fontsize=28, fontname="helv", color=(0.08, 0.08, 0.08)
+        )
         page.draw_line((margin, 146), (545, 146), color=(0.84, 0.09, 0.09), width=2.2)
         meta = [
             f"Datum: {datetime.now().strftime('%d.%m.%Y')}",
-            f"Bestellung: {case.order_number or '-'}",
+            f"Wix-Bestellung: {order_number or '-'}",
+            f"sevDesk-Rechnung: {invoice_number or '-'}",
             f"Betreff: {case.subject or '-'}",
         ]
-        page.insert_textbox(fitz.Rect(350, 86, 545, 140), "\n".join(meta), fontsize=9.5, align=2, color=(0.25, 0.25, 0.25))
+        page.insert_textbox(
+            fitz.Rect(330, 76, 545, 142),
+            "\n".join(meta),
+            fontsize=9.0,
+            align=2,
+            color=(0.25, 0.25, 0.25),
+        )
 
         y = 176
-        page.insert_text((margin, y), "Lieferadresse", fontsize=13, fontname="helv", color=(0.84, 0.09, 0.09))
+        page.insert_text(
+            (margin, y), "Lieferadresse", fontsize=13, fontname="helv", color=(0.84, 0.09, 0.09)
+        )
         page.insert_textbox(
             fitz.Rect(margin, y + 12, 280, y + 104),
             "\n".join(address_lines) or "Adresse bitte ergaenzen",
@@ -1043,28 +1593,51 @@ class OffeneSendungenService:
             color=(0.05, 0.05, 0.05),
         )
         if summary:
-            page.insert_text((320, y), "Kurznotiz", fontsize=13, fontname="helv", color=(0.84, 0.09, 0.09))
-            page.insert_textbox(fitz.Rect(320, y + 12, 545, y + 104), summary[:420], fontsize=9.5, color=(0.18, 0.18, 0.18))
+            page.insert_text(
+                (320, y), "Kurznotiz", fontsize=13, fontname="helv", color=(0.84, 0.09, 0.09)
+            )
+            page.insert_textbox(
+                fitz.Rect(320, y + 12, 545, y + 104),
+                summary[:420],
+                fontsize=9.5,
+                color=(0.18, 0.18, 0.18),
+            )
 
         y = 318
         table_x = margin
         table_w = 495
         row_h = 36
-        page.draw_rect(fitz.Rect(table_x, y, table_x + table_w, y + row_h), color=(0.84, 0.09, 0.09), fill=(0.84, 0.09, 0.09))
+        page.draw_rect(
+            fitz.Rect(table_x, y, table_x + table_w, y + row_h),
+            color=(0.84, 0.09, 0.09),
+            fill=(0.84, 0.09, 0.09),
+        )
         page.insert_text((table_x + 10, y + 18), "Menge", fontsize=10, color=(1, 1, 1))
         page.insert_text((table_x + 72, y + 18), "Produkt", fontsize=10, color=(1, 1, 1))
-        page.insert_text((table_x + 360, y + 18), "Versand / Rücksendung", fontsize=9.5, color=(1, 1, 1))
+        page.insert_text(
+            (table_x + 360, y + 18), "Versand / Rücksendung", fontsize=9.5, color=(1, 1, 1)
+        )
         y += row_h
         rows = products or [SendungProductLine(quantity="", name="Produkte bitte ergaenzen")]
         for idx, product in enumerate(rows[:8]):
             fill = (0.97, 0.97, 0.97) if idx % 2 else (1, 1, 1)
-            page.draw_rect(fitz.Rect(table_x, y, table_x + table_w, y + row_h), color=(0.88, 0.88, 0.88), fill=fill)
-            page.insert_textbox(fitz.Rect(table_x + 10, y + 7, table_x + 60, y + row_h), product.quantity, fontsize=10)
+            page.draw_rect(
+                fitz.Rect(table_x, y, table_x + table_w, y + row_h),
+                color=(0.88, 0.88, 0.88),
+                fill=fill,
+            )
+            page.insert_textbox(
+                fitz.Rect(table_x + 10, y + 7, table_x + 60, y + row_h),
+                product.quantity,
+                fontsize=10,
+            )
             product_text = product.name
             sku_note = " | ".join(part for part in (product.sku, product.note) if part)
             if sku_note:
                 product_text = f"{product_text}\n{sku_note}"
-            page.insert_textbox(fitz.Rect(table_x + 72, y + 6, table_x + 350, y + row_h), product_text, fontsize=9.5)
+            page.insert_textbox(
+                fitz.Rect(table_x + 72, y + 6, table_x + 350, y + row_h), product_text, fontsize=9.5
+            )
             delivery_text = (
                 "Kostenlose Lieferung"
                 if product.free_delivery
@@ -1084,19 +1657,41 @@ class OffeneSendungenService:
 
         if manual_text.strip():
             y += 24
-            page.insert_text((margin, y), "Hinweis", fontsize=13, fontname="helv", color=(0.84, 0.09, 0.09))
-            page.insert_textbox(fitz.Rect(margin, y + 14, 545, min(y + 110, 720)), manual_text.strip(), fontsize=10.5)
+            page.insert_text(
+                (margin, y), "Hinweis", fontsize=13, fontname="helv", color=(0.84, 0.09, 0.09)
+            )
+            page.insert_textbox(
+                fitz.Rect(margin, y + 14, 545, min(y + 110, 720)),
+                manual_text.strip(),
+                fontsize=10.5,
+            )
 
         footer_y = 742
-        page.draw_line((margin, footer_y - 16), (545, footer_y - 16), color=(0.72, 0.72, 0.72), width=0.8)
-        page.insert_textbox(fitz.Rect(margin, footer_y, 545, 820), "\n".join(_FOOTER_LINES), fontsize=9, align=1, color=(0.22, 0.22, 0.22))
+        page.draw_line(
+            (margin, footer_y - 16), (545, footer_y - 16), color=(0.72, 0.72, 0.72), width=0.8
+        )
+        page.insert_textbox(
+            fitz.Rect(margin, footer_y, 545, 820),
+            "\n".join(_FOOTER_LINES),
+            fontsize=9,
+            align=1,
+            color=(0.22, 0.22, 0.22),
+        )
         doc.save(str(out_path))
         doc.close()
         return out_path
 
     def _load_saved_extraction(self, case_id: str) -> SendungExtraction | None:
         value = self._load_json_map(_EXTRACTIONS_KEY).get(str(case_id or "").strip())
-        return self._extraction_from_dict(value) if isinstance(value, dict) else None
+        if not isinstance(value, dict):
+            return None
+        try:
+            schema_version = int(value.get("schema_version") or 0)
+        except (TypeError, ValueError):
+            schema_version = 0
+        if schema_version < _EXTRACTION_SCHEMA_VERSION:
+            return None
+        return self._extraction_from_dict(value)
 
     def _save_extraction(self, case_id: str, extraction: SendungExtraction) -> None:
         data = self._load_json_map(_EXTRACTIONS_KEY)
@@ -1127,11 +1722,16 @@ class OffeneSendungenService:
                     body=str(item.get("body") or "").strip(),
                     thread_id=str(item.get("thread_id") or "").strip(),
                     order_number=str(item.get("order_number") or "").strip(),
+                    invoice_number=str(item.get("invoice_number") or "").strip(),
                     thread_text=str(item.get("thread_text") or "").strip(),
                     sender_name=str(item.get("sender_name") or "").strip(),
                     source_type=str(
                         item.get("source_type")
-                        or (_SOURCE_MANUAL if str(item.get("sender") or "").strip() == _MANUAL_CASE_SENDER else _SOURCE_GRAPH)
+                        or (
+                            _SOURCE_MANUAL
+                            if str(item.get("sender") or "").strip() == _MANUAL_CASE_SENDER
+                            else _SOURCE_GRAPH
+                        )
                     ).strip(),
                     source_id=str(item.get("source_id") or item.get("id") or "").strip(),
                 )
@@ -1152,6 +1752,7 @@ class OffeneSendungenService:
                 "body": c.body,
                 "thread_id": c.thread_id,
                 "order_number": c.order_number,
+                "invoice_number": c.invoice_number,
                 "thread_text": c.thread_text,
                 "sender_name": c.sender_name,
                 "source_type": c.source_type,
@@ -1191,7 +1792,11 @@ class OffeneSendungenService:
     def _load_cached_raw_messages(self) -> list[dict[str, Any]]:
         if not self._has_current_mailbox_cache():
             return []
-        raw = self._repo.get_value_json(f"{_OPEN_CASES_KEY}.raw_graph") if self._repo is not None else None
+        raw = (
+            self._repo.get_value_json(f"{_OPEN_CASES_KEY}.raw_graph")
+            if self._repo is not None
+            else None
+        )
         if not raw:
             return []
         try:
@@ -1202,8 +1807,12 @@ class OffeneSendungenService:
 
     def _save_raw_messages(self, messages: list[dict[str, Any]]) -> None:
         if self._repo is not None:
-            self._repo.set_value_json(f"{_OPEN_CASES_KEY}.raw_graph", json.dumps(messages, ensure_ascii=False))
-            self._repo.set_value_json(_SOURCE_MAILBOX_KEY, json.dumps(self._shipping_mailbox().lower()))
+            self._repo.set_value_json(
+                f"{_OPEN_CASES_KEY}.raw_graph", json.dumps(messages, ensure_ascii=False)
+            )
+            self._repo.set_value_json(
+                _SOURCE_MAILBOX_KEY, json.dumps(self._shipping_mailbox().lower())
+            )
 
     def _load_json_map(self, key: str) -> dict[str, Any]:
         raw = self._repo.get_value_json(key) if self._repo is not None else None
@@ -1228,7 +1837,14 @@ class OffeneSendungenService:
             address_lines=self._normalize_address_lines(data.get("address_lines")),
             products=self._normalize_products(data.get("products")),
             order_number=str(data.get("order_number") or "").strip(),
-            confidence_notes=[str(item).strip() for item in data.get("confidence_notes") or [] if str(item).strip()]
+            invoice_number=str(data.get("invoice_number") or "").strip(),
+            customer_name=str(data.get("customer_name") or "").strip(),
+            case_type=str(data.get("case_type") or "other").strip(),
+            confidence_notes=[
+                str(item).strip()
+                for item in data.get("confidence_notes") or []
+                if str(item).strip()
+            ]
             if isinstance(data.get("confidence_notes"), list)
             else [],
             source=str(data.get("source") or "cached").strip(),
@@ -1238,10 +1854,14 @@ class OffeneSendungenService:
 
     def _extraction_to_dict(self, extraction: SendungExtraction) -> dict[str, Any]:
         return {
+            "schema_version": _EXTRACTION_SCHEMA_VERSION,
             "summary": extraction.summary,
             "address_lines": extraction.address_lines,
             "products": [self._product_to_dict(product) for product in extraction.products],
             "order_number": extraction.order_number,
+            "invoice_number": extraction.invoice_number,
+            "customer_name": extraction.customer_name,
+            "case_type": extraction.case_type,
             "confidence_notes": extraction.confidence_notes or [],
             "source": extraction.source,
             "updated_at": extraction.updated_at or self._utc_now_iso(),
@@ -1262,8 +1882,52 @@ class OffeneSendungenService:
 
     @staticmethod
     def _extract_order_number(text: str) -> str:
-        match = re.search(r"\b\d{4,12}\b", text)
-        return match.group(0) if match else ""
+        value = str(text or "")
+        contextual_patterns = (
+            r"(?i)\b(?:wix\s*[- ]?\s*)?order(?:\s*[- ]?\s*(?:nummer|nr\.?|#))?"
+            r"\s*[:#-]?\s*(\d{5})\b",
+            r"(?i)\b(?:bestellung|bestellnummer|bestell[- ]?nr\.?|auftragsnummer|auftrag[- ]?nr\.?)"
+            r"\s*[:#-]?\s*(\d{5})\b",
+        )
+        for pattern in contextual_patterns:
+            match = re.search(pattern, value)
+            if match:
+                return match.group(1)
+
+        candidates: list[str] = []
+        lines = value.splitlines()
+        for line_index, raw_line in enumerate(lines):
+            line = raw_line.strip()
+            for match in re.finditer(r"(?<!\d)(\d{5})(?!\d)", line):
+                candidate = match.group(1)
+                # Five-digit postal codes are common in German addresses.  A
+                # number followed by a town/name is therefore not an order ref.
+                tail = line[match.end() :].strip(" ,;:-")
+                if tail and re.match(r"[A-Za-zÀ-ÖØ-öø-ÿ]", tail):
+                    continue
+                if re.search(r"(?i)\b(?:plz|postleitzahl)\s*[:#-]?\s*$", line[: match.start()]):
+                    continue
+                if line == candidate:
+                    previous_line = lines[line_index - 1].strip() if line_index else ""
+                    next_line = lines[line_index + 1].strip() if line_index + 1 < len(lines) else ""
+                    if (
+                        re.search(r"\d", previous_line)
+                        and re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", previous_line)
+                    ) or re.match(r"[A-Za-zÀ-ÖØ-öø-ÿ]", next_line):
+                        continue
+                if candidate not in candidates:
+                    candidates.append(candidate)
+        return candidates[0] if len(candidates) == 1 else ""
+
+    @staticmethod
+    def _extract_invoice_number(text: str) -> str:
+        match = re.search(r"(?i)(?<![A-Z0-9])RE\s*[-–—]?\s*(\d{6})(?!\d)", str(text or ""))
+        return f"RE-{match.group(1)}" if match else ""
+
+    @staticmethod
+    def _normalize_invoice_reference(value: object) -> str:
+        match = re.search(r"(?i)RE\s*[-–—]?\s*(\d{6})", str(value or ""))
+        return f"RE-{match.group(1)}" if match else ""
 
     @staticmethod
     def _utc_now_iso() -> str:
