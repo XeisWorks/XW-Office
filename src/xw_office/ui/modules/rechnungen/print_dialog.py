@@ -176,7 +176,10 @@ class _PrintProfileDelegate(QStyledItemDelegate):
 class ProductPrintConfigDialog(QDialog):
     def __init__(self, parent: QWidget | None, container: Container, piece: PieceBlock) -> None:
         super().__init__(parent)
-        self.setWindowTitle(f"Druck konfigurieren - {piece.sku}")
+        dialog_title = f"Druck konfigurieren - {piece.sku}"
+        if piece.is_unreleased and str(piece.name or "").strip():
+            dialog_title = f"Druck konfigurieren – Schritt 2 von 2: {piece.name}"
+        self.setWindowTitle(dialog_title)
         self._container = container
         self._piece = piece
         self._page_count: int | None = None
@@ -595,13 +598,26 @@ def _configure_missing_piece_print(parent: QWidget, container: Container, piece:
         signals = None
 
     try:
-        inv.save_product_print_config(
-            sku=piece.sku,
-            name=piece.name,
-            print_file_path=path,
-            print_profile_id=profile_id,
-            print_plan=plan,
-        )
+        # XW-010 is a generic container SKU. Its print plan belongs to the
+        # individual canonical title; overwriting the SKU default would make
+        # the last configured work look like the default for every work.
+        if piece.is_unreleased and str(piece.name or "").strip():
+            inv.save_product_print_config(
+                sku=piece.sku,
+                name=piece.name,
+                print_file_path=path,
+                print_profile_id=profile_id,
+                print_plan=plan,
+                title_specific_only=True,
+            )
+        else:
+            inv.save_product_print_config(
+                sku=piece.sku,
+                name=piece.name,
+                print_file_path=path,
+                print_profile_id=profile_id,
+                print_plan=plan,
+            )
         catalog = container.resolve(ProductCatalogService)
         catalog.reload_from_settings()
         resolve_piece_print_config(catalog, piece)

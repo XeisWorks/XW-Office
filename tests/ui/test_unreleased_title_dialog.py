@@ -78,3 +78,23 @@ def test_unreleased_product_edit_dialog_prefills_and_accepts(qtbot: object) -> N
     assert owner == "Albert"
     assert aliases == ["Gabriellas Song (XXL Version)"]
 
+
+def test_unreleased_product_creation_uses_next_and_preserves_invoice_alias(qtbot: object) -> None:
+    dialog = UnreleasedProductEditDialog(
+        ProductCatalogService(),
+        canonical_name="Neues Werk",
+        owner="Albert",
+        aliases=[],
+        source_aliases=["Wix-Alias aus der Rechnung"],
+        continue_label="NEXT",
+    )
+    qtbot.addWidget(dialog)
+
+    dialog._aliases_input.clear()  # noqa: SLF001
+    name, owner, aliases = dialog.get_data()
+
+    assert dialog._submit_button.text() == "NEXT"  # noqa: SLF001
+    assert name == "Neues Werk"
+    assert owner == "Albert"
+    assert aliases == ["Wix-Alias aus der Rechnung"]
+

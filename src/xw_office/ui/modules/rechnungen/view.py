@@ -6934,7 +6934,13 @@ class RechnungenView(QWidget):
             canonical_name=initial_canonical,
             owner=initial_owner,
             aliases=initial_aliases,
-            title=f"Unreleased-Produkt erfassen ({first_line})" if first_line else "",
+            source_aliases=[raw_input] if raw_input else [],
+            continue_label="NEXT",
+            title=(
+                f"Unreleased-Produkt anlegen – Schritt 1 von 2 ({first_line})"
+                if first_line
+                else "Unreleased-Produkt anlegen – Schritt 1 von 2"
+            ),
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:

@@ -212,11 +212,18 @@ class UnreleasedProductEditDialog(QDialog):
         canonical_name: str = "",
         owner: str = "",
         aliases: list[str] | tuple[str, ...] = (),
+        source_aliases: list[str] | tuple[str, ...] = (),
+        continue_label: str = "",
         title: str = "",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._catalog = catalog
+        self._source_aliases = [
+            str(alias or "").strip()
+            for alias in source_aliases
+            if str(alias or "").strip()
+        ]
         if title:
             self.setWindowTitle(title)
         else:
@@ -231,21 +238,33 @@ class UnreleasedProductEditDialog(QDialog):
         self._name_input = QLineEdit(canonical_name)
         self._name_input.setPlaceholderText("z.B. Gabriellas Song XXL")
         self._name_input.textChanged.connect(self._on_name_changed)
-        form.addRow("Produktname (Kanonisch):", self._name_input)
+        form.addRow("Titel (kanonisch):", self._name_input)
 
         self._owner_combo = QComboBox()
         self._owner_combo.setEditable(True)
         self._owner_combo.addItems(catalog.unreleased_owners())
         if owner:
             self._owner_combo.setCurrentText(owner)
-        form.addRow("Gattung / Owner:", self._owner_combo)
+        form.addRow("Kategorie / Gattung:", self._owner_combo)
 
         self._aliases_input = QPlainTextEdit()
         self._aliases_input.setPlaceholderText("Ein Alias pro Zeile, z.B.:\nGabriellas Song (XXL Version)\nGabriellas Song XXL")
-        cleaned_aliases = [str(a or "").strip() for a in aliases if str(a or "").strip()]
+        cleaned_aliases = list(
+            dict.fromkeys(
+                [
+                    *self._source_aliases,
+                    *(str(alias or "").strip() for alias in aliases if str(alias or "").strip()),
+                ]
+            )
+        )
         self._aliases_input.setPlainText("\n".join(cleaned_aliases))
         self._aliases_input.setMaximumHeight(120)
-        form.addRow("Aliase (ein Alias pro Zeile):", self._aliases_input)
+        alias_label = (
+            "Rechnungsalias (wird übernommen):"
+            if self._source_aliases
+            else "Aliase (ein Alias pro Zeile):"
+        )
+        form.addRow(alias_label, self._aliases_input)
 
         layout.addLayout(form)
 
@@ -253,10 +272,12 @@ class UnreleasedProductEditDialog(QDialog):
         self._error.setStyleSheet("color: #dc2626;")
         layout.addWidget(self._error)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        self._submit_button = buttons.addButton(
+            continue_label or "SAVE",
+            QDialogButtonBox.ButtonRole.AcceptRole,
         )
-        buttons.accepted.connect(self._validate_and_accept)
+        self._submit_button.clicked.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
@@ -286,7 +307,7 @@ class UnreleasedProductEditDialog(QDialog):
         return (
             self._name_input.text().strip(),
             self._owner_combo.currentText().strip(),
-            raw_aliases,
+            list(dict.fromkeys([*self._source_aliases, *raw_aliases])),
         )
 
 

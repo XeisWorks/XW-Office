@@ -878,8 +878,9 @@ class InventoryService:
         print_file_path: str,
         print_profile_id: str,
         print_plan: list[dict[str, str]] | None = None,
+        title_specific_only: bool = False,
     ) -> ProductRow:
-        """Persist a default and title-specific print config for one SKU."""
+        """Persist a print config, optionally only for one title of a shared SKU."""
         clean_sku = str(sku or "").strip().upper()
         if not clean_sku:
             raise RuntimeError("SKU fehlt")
@@ -892,6 +893,8 @@ class InventoryService:
             raise RuntimeError("Druckplan oder Profil fehlt")
 
         title = str(name or "").strip()
+        if title_specific_only and not title:
+            raise RuntimeError("Titel für die titelspezifische Druckkonfiguration fehlt")
         title_config = {
             "path": clean_path,
             "profile_id": clean_profile,
@@ -937,11 +940,13 @@ class InventoryService:
             if resolved_title:
                 title_configs[resolved_title] = title_config
 
-            # Merge only this SKU's print fields while holding the repository's
-            # advisory lock. Unrelated edits from another PC remain untouched.
-            product["print_file_path"] = clean_path
-            product["print_profile_id"] = clean_profile
-            product["print_plan"] = list(clean_plan)
+            # A generic XW-010 SKU represents several works. Preserve its
+            # default when saving a specific work so another title can never
+            # inherit the last selected PDF or printer.
+            if not title_specific_only:
+                product["print_file_path"] = clean_path
+                product["print_profile_id"] = clean_profile
+                product["print_plan"] = list(clean_plan)
             product["title_print_configs"] = title_configs
             saved_payload.clear()
             saved_payload.update(product)

@@ -112,6 +112,41 @@ def test_save_product_print_config_persists_title_and_default_when_missing() -> 
     }
 
 
+def test_save_product_print_config_keeps_shared_sku_default_for_title_only_config() -> None:
+    repo = _RepoStub()
+    repo.data["inventory.products"] = json.dumps(
+        [
+            {
+                "sku": "XW-010",
+                "name": "Diverse Noten unveröffentlicht",
+                "print_file_path": "C:/scores/default.pdf",
+                "print_profile_id": "noten_duplex",
+                "print_plan": [{"range": "Alle Seiten", "profile_id": "noten_duplex"}],
+                "title_print_configs": {},
+            }
+        ]
+    )
+    svc = InventoryService(AppConfig(), repo)
+
+    svc.save_product_print_config(
+        sku="XW-010",
+        name="Neues Werk",
+        print_file_path="C:/scores/neues-werk.pdf",
+        print_profile_id="brochure_mono",
+        print_plan=[{"range": "1-4", "profile_id": "brochure_mono"}],
+        title_specific_only=True,
+    )
+
+    row = svc.list_products()[0]
+    assert row.print_file_path == "C:/scores/default.pdf"
+    assert row.print_profile_id == "noten_duplex"
+    assert row.title_print_configs["Neues Werk"] == {
+        "path": "C:/scores/neues-werk.pdf",
+        "profile_id": "brochure_mono",
+        "print_plan": [{"range": "1-4", "profile_id": "brochure_mono"}],
+    }
+
+
 def test_save_product_print_config_replaces_existing_multi_printer_plan() -> None:
     repo = _RepoStub()
     repo.data["inventory.products"] = json.dumps(
