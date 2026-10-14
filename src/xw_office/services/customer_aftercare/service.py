@@ -192,15 +192,20 @@ class CustomerAftercareService:
         existing = self._repo.get_case(case_id)
         if existing is None:
             return None
-        if immediate:
-            try:
-                address = json.loads(existing.address_lines_json or "[]")
-            except (TypeError, ValueError):
-                address = []
-            if not isinstance(address, list) or not any(str(line).strip() for line in address):
+        try:
+            address = json.loads(existing.address_lines_json or "[]")
+        except (TypeError, ValueError):
+            address = []
+        has_address = isinstance(address, list) and any(str(line).strip() for line in address)
+        if not has_address:
+            if immediate:
                 raise ValueError("Sofortversand ist ohne zustellfähige Lieferadresse nicht möglich")
-            if not self._repo.get_items(case_id):
+            # Keep an editable draft in review until the address is supplied.
+            return existing
+        if not self._repo.get_items(case_id):
+            if immediate:
                 raise ValueError("Für die Nachlieferung muss mindestens eine Position ausgewählt werden")
+            return existing
         created_at = existing.created_at
         if created_at is not None and created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=datetime.timezone.utc)

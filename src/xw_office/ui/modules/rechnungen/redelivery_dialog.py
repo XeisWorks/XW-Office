@@ -104,6 +104,10 @@ class RedeliveryDialog(QDialog):
         add_button.clicked.connect(self._add_manual_item)
         root.addWidget(add_button)
 
+        remove_button = QPushButton("Ausgewählte Position entfernen")
+        remove_button.clicked.connect(self._remove_selected_items)
+        root.addWidget(remove_button)
+
         preview_button = QPushButton("Lieferschein-Vorschau")
         preview_button.clicked.connect(self._preview)
         root.addWidget(preview_button)
@@ -137,6 +141,14 @@ class RedeliveryDialog(QDialog):
             + ("\n".join(products) if products else "(keine Position ausgewählt)")
             + f"\n\n{note}",
         )
+
+    def _remove_selected_items(self) -> None:
+        rows = sorted(
+            {index.row() for index in self._table.selectionModel().selectedRows()},
+            reverse=True,
+        )
+        for row in rows:
+            self._table.removeRow(row)
 
     @staticmethod
     def _decode_address(case: CustomerAftercareCase) -> str:
