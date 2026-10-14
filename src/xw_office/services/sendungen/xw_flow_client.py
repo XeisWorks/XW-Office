@@ -23,6 +23,7 @@ class FlowShippingEmailCase:
     external_id: str
     title: str
     received_at: str
+    details: dict[str, object] | None = None
 
 
 class XwFlowShipmentClient:
@@ -93,6 +94,7 @@ class XwFlowShipmentClient:
                     "external_id": case.external_id,
                     "title": case.title[:300],
                     "received_at": case.received_at or None,
+                    "details": case.details,
                 }
                 for case in cases
             ]

@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import json
 import logging
-from pathlib import Path
 import re
-from threading import RLock
 import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from threading import RLock
 from typing import Any, cast
 
 import httpx
@@ -20,10 +20,10 @@ from xw_office.services.mailing.graph_client import GraphMailClient, html_to_tex
 from xw_office.services.printing.invoice_printer import InvoicePrinter
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.secrets.service import SecretService
+from xw_office.services.sendungen.xw_flow_client import FlowShippingEmailCase, XwFlowShipmentClient
 from xw_office.services.sevdesk.invoice_client import InvoiceClient, InvoiceSummary
 from xw_office.services.shipping.countries import country_label_for_address
 from xw_office.services.wix.client import WixOrdersClient
-from xw_office.services.sendungen.xw_flow_client import FlowShippingEmailCase, XwFlowShipmentClient
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +229,7 @@ class OffeneSendungenService:
                             external_id=case.source_id or case.id,
                             title=case.subject,
                             received_at=case.received_at,
+                            details=self._flow_shipping_details(case),
                         )
                         for case in cases
                         if case.source_type == _SOURCE_GRAPH
@@ -236,6 +237,40 @@ class OffeneSendungenService:
                 )
             except Exception as exc:  # noqa: BLE001 - dashboard mirror must not block Office
                 logger.warning("XW-Flow shipping-mail snapshot failed: %s", exc)
+
+    def _flow_shipping_details(self, case: SendungCase) -> dict[str, object] | None:
+        """Return editable, derived shipping facts without sending mail content to Flow."""
+        extraction = self._load_saved_extraction(case.id)
+        manual = self.load_manual_fields(case.id)
+        if extraction is None and not manual:
+            return None
+
+        address_lines = list(extraction.address_lines) if extraction is not None else []
+        products = list(extraction.products) if extraction is not None else []
+        summary = extraction.summary if extraction is not None else ""
+        if manual:
+            manual_address = manual.get("address_lines")
+            if isinstance(manual_address, list):
+                address_lines = [str(line).strip() for line in manual_address if str(line).strip()]
+            manual_products = manual.get("products")
+            if isinstance(manual_products, list):
+                products = self._normalize_products(manual_products)
+            manual_text = str(manual.get("manual_text") or "").strip()
+            if manual_text:
+                summary = manual_text
+
+        return {
+            "summary": summary,
+            "customer_name": extraction.customer_name if extraction is not None else case.sender_name,
+            "invoice_number": extraction.invoice_number if extraction is not None else case.invoice_number,
+            "order_number": extraction.order_number if extraction is not None else case.order_number,
+            "case_type": extraction.case_type if extraction is not None else "other",
+            "address_lines": address_lines,
+            "products": [self._product_to_dict(product) for product in products],
+            "confidence_notes": extraction.confidence_notes if extraction is not None else [],
+            "source": extraction.source if extraction is not None else "manual",
+            "updated_at": extraction.updated_at if extraction is not None else str(manual.get("updated_at") or ""),
+        }
 
     def _refresh_flow_cases(self, existing: list[SendungCase]) -> list[SendungCase]:
         """Fetch a full successful Flow snapshot, preserving its cache on error."""
@@ -380,6 +415,9 @@ class OffeneSendungenService:
             "updated_at": self._utc_now_iso(),
         }
         self._save_json_map(_MANUAL_KEY, data)
+        case = self._find_case(cid)
+        if case is not None and case.source_type == _SOURCE_GRAPH:
+            self._sync_shipping_email_snapshot(self.load_open_cases())
 
     def extract_case_details(self, case_id: str, *, force: bool = False) -> SendungExtraction:
         cid = str(case_id or "").strip()
@@ -405,6 +443,7 @@ class OffeneSendungenService:
                 )
                 extraction = self._apply_business_context(case, extraction, context)
                 self._save_extraction(cid, extraction)
+                self._sync_shipping_email_snapshot(self.load_open_cases())
                 return extraction
             except Exception as exc:  # noqa: BLE001
                 logger.warning("OpenAI sendung extraction failed for %s: %s", cid, exc)
@@ -412,6 +451,7 @@ class OffeneSendungenService:
         extraction = self._fallback_extract(case, thread_text=thread_text)
         extraction = self._apply_business_context(case, extraction, context)
         self._save_extraction(cid, extraction)
+        self._sync_shipping_email_snapshot(self.load_open_cases())
         return extraction
 
     def summarize_case(self, case: SendungCase) -> str:
