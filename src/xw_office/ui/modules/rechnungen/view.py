@@ -425,11 +425,47 @@ class _ActionsDelegate(QStyledItemDelegate):
         "mail": "mail_sent.png",
         "redelivery": "nachlieferung.png",
     }
+    # The default application palette is dark.  The source redelivery asset
+    # is monochrome black, so tint it to the same high-contrast yellow used by
+    # the PLC/post action when it is rendered in the compact action column.
+    _ICON_TINTS = {
+        "redelivery": QColor("#ffd400"),
+    }
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._icons_dir = Path(__file__).resolve().parents[5] / "icons"
         self._cache: dict[str, QPixmap] = {}
+        self._rendered_cache: dict[str, QPixmap] = {}
+
+    @staticmethod
+    def _trim_transparent_padding(pix: QPixmap) -> QPixmap:
+        """Crop transparent export margins while preserving the artwork."""
+        image = pix.toImage()
+        if image.isNull() or not image.hasAlphaChannel():
+            return pix
+        image = image.convertToFormat(QImage.Format.Format_ARGB32)
+        left, top = image.width(), image.height()
+        right = bottom = -1
+        # ``Format_ARGB32`` stores four bytes per pixel.  Reading the alpha
+        # byte directly avoids a costly QColor allocation for every pixel of
+        # the (occasionally large) source PNG.
+        bits = image.constBits()
+        stride = image.bytesPerLine()
+        alpha_offset = 3 if sys.byteorder == "little" else 0
+        for y in range(image.height()):
+            row_offset = y * stride
+            for x in range(image.width()):
+                if bits[row_offset + x * 4 + alpha_offset] <= 0:
+                    continue
+                left = min(left, x)
+                top = min(top, y)
+                right = max(right, x)
+                bottom = max(bottom, y)
+        if right < left or bottom < top:
+            return pix
+        cropped = image.copy(QRect(left, top, right - left + 1, bottom - top + 1))
+        return QPixmap.fromImage(cropped)
 
     def _icon_for_key(self, key: str) -> QPixmap | None:
         if key in self._cache:
@@ -440,8 +476,41 @@ class _ActionsDelegate(QStyledItemDelegate):
             self._cache[key] = QPixmap()
             return None
         pix = QPixmap(str(self._icons_dir / file_name))
+        if key in {"post", "redelivery"} and not pix.isNull():
+            pix = self._trim_transparent_padding(pix)
         self._cache[key] = pix
         return pix if not pix.isNull() else None
+
+    def _rendered_icon_for_key(self, key: str, size: int) -> QPixmap | None:
+        """Scale and, where required, tint an action icon for the table."""
+        cache_key = f"{key}:{size}"
+        if cache_key in self._rendered_cache:
+            pix = self._rendered_cache[cache_key]
+            return pix if not pix.isNull() else None
+        source = self._icon_for_key(key)
+        if source is None:
+            self._rendered_cache[cache_key] = QPixmap()
+            return None
+        scaled = source.scaled(
+            size,
+            size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        tint = self._ICON_TINTS.get(key)
+        if tint is None:
+            rendered = scaled
+        else:
+            image = QImage(scaled.size(), QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(Qt.GlobalColor.transparent)
+            icon_painter = QPainter(image)
+            icon_painter.drawPixmap(0, 0, scaled)
+            icon_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+            icon_painter.fillRect(image.rect(), tint)
+            icon_painter.end()
+            rendered = QPixmap.fromImage(image)
+        self._rendered_cache[cache_key] = rendered
+        return rendered if not rendered.isNull() else None
 
     @staticmethod
     def _layout(width: int, height: int) -> list[tuple[str, int, int]]:
@@ -491,7 +560,7 @@ class _ActionsDelegate(QStyledItemDelegate):
         painter.save()
         y = option.rect.y() + max(2, (option.rect.height() - min(18, max(14, option.rect.height() - 6))) // 2)
         for key, x_local, size in self._visible_layout(option.rect.width(), option.rect.height()):
-            pix = self._icon_for_key(key)
+            pix = self._rendered_icon_for_key(key, size)
             if pix is None:
                 continue
             painter.setOpacity(1.0)

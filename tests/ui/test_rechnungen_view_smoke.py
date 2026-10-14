@@ -487,6 +487,30 @@ def test_actions_delegate_exposes_customs_and_mail_actions() -> None:
     assert _ActionsDelegate.action_at_x(mail_x + mail_size / 2, width=120, height=28) == mail_key
 
 
+def test_actions_delegate_keeps_dark_theme_icons_visible(qtbot: object) -> None:
+    delegate = _ActionsDelegate()
+    redelivery = delegate._rendered_icon_for_key("redelivery", 18)  # noqa: SLF001
+    post = delegate._rendered_icon_for_key("post", 18)  # noqa: SLF001
+
+    assert redelivery is not None and not redelivery.isNull()
+    redelivery_image = redelivery.toImage()
+    visible_pixels = [
+        redelivery_image.pixelColor(x, y)
+        for y in range(redelivery_image.height())
+        for x in range(redelivery_image.width())
+        if redelivery_image.pixelColor(x, y).alpha() > 0
+    ]
+    assert visible_pixels
+    assert max(color.red() for color in visible_pixels) >= 220
+    assert max(color.green() for color in visible_pixels) >= 150
+
+    # The PLC/post mark is a wide asset with transparent vertical export
+    # margins; the delegate trims those margins before scaling it for the row.
+    assert post is not None and not post.isNull()
+    assert post.width() == 18
+    assert post.height() < 18
+
+
 def test_customer_mail_action_opens_outlook_web_compose_url(qtbot: object, monkeypatch) -> None:
     container, invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
