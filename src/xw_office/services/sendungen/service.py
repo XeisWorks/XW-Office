@@ -119,12 +119,14 @@ class OffeneSendungenService:
         wix_orders: WixOrdersClient | None = None,
         flow_shipments: XwFlowShipmentClient | None = None,
         invoice_client: InvoiceClient | None = None,
+        aftercare_repo: object | None = None,
     ) -> None:
         self._repo = settings_repo
         self._secrets = secrets
         self._wix_orders = wix_orders
         self._flow_shipments = flow_shipments
         self._invoice_client = invoice_client
+        self._aftercare_repo = aftercare_repo
         self._cache_lock = RLock()
         self._open_cases_cache: list[SendungCase] | None = None
         self._open_cases_cache_at = 0.0
@@ -232,7 +234,7 @@ class OffeneSendungenService:
                             details=self._flow_shipping_details(case),
                         )
                         for case in cases
-                        if case.source_type == _SOURCE_GRAPH
+                        if case.source_type in {_SOURCE_GRAPH, _SOURCE_MANUAL}
                     ]
                 )
             except Exception as exc:  # noqa: BLE001 - dashboard mirror must not block Office
@@ -267,6 +269,7 @@ class OffeneSendungenService:
             "case_type": extraction.case_type if extraction is not None else "other",
             "address_lines": address_lines,
             "products": [self._product_to_dict(product) for product in products],
+            "redelivery": case.id.startswith("nachlieferung-"),
             "confidence_notes": extraction.confidence_notes if extraction is not None else [],
             "source": extraction.source if extraction is not None else "manual",
             "updated_at": extraction.updated_at if extraction is not None else str(manual.get("updated_at") or ""),
@@ -388,6 +391,12 @@ class OffeneSendungenService:
         else:
             ids.discard(cid)
         self._save_done_ids(ids)
+        if cid.startswith("nachlieferung-") and self._aftercare_repo is not None:
+            try:
+                if done and hasattr(self._aftercare_repo, "mark_dispatch_completed"):
+                    self._aftercare_repo.mark_dispatch_completed(cid)
+            except (TypeError, ValueError, AttributeError):
+                logger.warning("Nachlieferungsstatus konnte nicht synchronisiert werden: %s", cid)
         if source_type == _SOURCE_GRAPH:
             self._sync_shipping_email_snapshot(self.load_open_cases())
 

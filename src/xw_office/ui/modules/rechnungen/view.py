@@ -93,6 +93,11 @@ from xw_office.services.products.print_decision import (
     resolve_piece_print_config,
 )
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
+from xw_office.services.customer_aftercare.redelivery import (
+    CustomerAftercareRedeliveryService,
+    RedeliveryContext,
+)
+from xw_office.repositories.customer_aftercare import CustomerAftercareRepository
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sendungen.service import OffeneSendungenService
 from xw_office.services.drucke.service import OffeneDruckeService
@@ -106,6 +111,7 @@ from xw_office.ui.modules.rechnungen.customer_aftercare_manager_dialog import (
 )
 from xw_office.ui.modules.rechnungen.digital_licenses_dialog import DigitalLicensesDialog
 from xw_office.ui.modules.rechnungen.offene_sendungen_dialog import OffeneSendungenDialog
+from xw_office.ui.modules.rechnungen.redelivery_dialog import RedeliveryDialog, RedeliveryDialogOutcome
 from xw_office.ui.modules.rechnungen.offene_drucke_dialog import OffeneDruckeDialog
 from xw_office.ui.modules.rechnungen.special_order_dialog import SpecialOrderDialog
 from xw_office.ui.modules.rechnungen.open_invoice_overview import (
@@ -406,14 +412,18 @@ class _SevdeskDraftActionDelegate(QStyledItemDelegate):
 
 
 class _ActionsDelegate(QStyledItemDelegate):
-    """Paint per-invoice actions (PLC, customs, Wix and customer mail)."""
+    """Paint per-invoice actions (PLC, customs and redelivery)."""
 
+    # Keep the legacy tuple as a compatibility surface for plugins/tests.
+    # Only _VISIBLE_ACTION_KEYS are painted and hit-tested in the table.
     _ACTION_KEYS = ("post", "customs", "wix", "mail")
+    _VISIBLE_ACTION_KEYS = ("post", "customs", "redelivery")
     _ICON_FILES = {
         "post": "post.png",
         "customs": "zollerklärung.png",
         "wix": "wix.png",
         "mail": "mail_sent.png",
+        "redelivery": "post.png",
     }
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -447,10 +457,30 @@ class _ActionsDelegate(QStyledItemDelegate):
 
     @staticmethod
     def action_at_x(local_x: float, width: int, height: int) -> str:
+        # Legacy coordinate contract retained for callers outside the table.
         for key, x, size in _ActionsDelegate._layout(width, height):
             if x <= int(local_x) <= x + size:
                 return key
         return ""
+
+    @staticmethod
+    def visible_action_at_x(local_x: float, width: int, height: int) -> str:
+        for key, x, size in _ActionsDelegate._visible_layout(width, height):
+            if x <= int(local_x) <= x + size:
+                return key
+        return ""
+
+    @staticmethod
+    def _visible_layout(width: int, height: int) -> list[tuple[str, int, int]]:
+        size = min(18, max(14, height - 6))
+        gap = 6
+        total_width = len(_ActionsDelegate._VISIBLE_ACTION_KEYS) * size + max(0, len(_ActionsDelegate._VISIBLE_ACTION_KEYS) - 1) * gap
+        x = max(4, (width - total_width) // 2)
+        out: list[tuple[str, int, int]] = []
+        for key in _ActionsDelegate._VISIBLE_ACTION_KEYS:
+            out.append((key, x, size))
+            x += size + gap
+        return out
 
     def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
         row_data = index.data(Qt.ItemDataRole.UserRole)
@@ -460,7 +490,7 @@ class _ActionsDelegate(QStyledItemDelegate):
 
         painter.save()
         y = option.rect.y() + max(2, (option.rect.height() - min(18, max(14, option.rect.height() - 6))) // 2)
-        for key, x_local, size in self._layout(option.rect.width(), option.rect.height()):
+        for key, x_local, size in self._visible_layout(option.rect.width(), option.rect.height()):
             pix = self._icon_for_key(key)
             if pix is None:
                 continue
@@ -1105,6 +1135,8 @@ class RechnungenView(QWidget):
         self._wix_meta_worker: BackgroundWorker | None = None
         self._wix_context_worker: BackgroundWorker | None = None
         self._customer_mail_worker: BackgroundWorker | None = None
+        self._redelivery_prepare_worker: BackgroundWorker | None = None
+        self._redelivery_apply_worker: BackgroundWorker | None = None
         self._wix_warm_worker: BackgroundWorker | None = None
         self._wix_context_handle: JobHandle | None = None
         self._wix_warm_handle: JobHandle | None = None
@@ -5052,7 +5084,7 @@ class RechnungenView(QWidget):
                                 self._table.viewport().unsetCursor()
                         elif int(index.column()) == actions_col:
                             rect = self._table.visualRect(index)
-                            action = self._actions_delegate.action_at_x(
+                            action = self._actions_delegate.visible_action_at_x(
                                 local_x=event.position().x() - rect.x(),
                                 width=rect.width(),
                                 height=rect.height(),
@@ -5098,7 +5130,7 @@ class RechnungenView(QWidget):
                                 self._run_fulfillment_chip_action(self._summaries[row], chip, flags)
                     if int(index.column()) == actions_col:
                         rect = self._table.visualRect(index)
-                        action = self._actions_delegate.action_at_x(
+                        action = self._actions_delegate.visible_action_at_x(
                             local_x=event.position().x() - rect.x(),
                             width=rect.width(),
                             height=rect.height(),
@@ -5180,12 +5212,98 @@ class RechnungenView(QWidget):
         if action == "customs":
             self._open_customs_declaration_dialog(summary)
             return
+        if action == "redelivery":
+            self._open_redelivery_popup(summary)
+            return
+        # Kept for programmatic callers and the detail-panel buttons. These
+        # actions are intentionally no longer painted in the table column.
         if action == "wix":
             self._open_wix_download_links(summary)
             return
         if action == "mail":
             self._open_customer_mail(summary)
             return
+
+    def _open_redelivery_popup(self, summary: InvoiceSummary) -> None:
+        if self._redelivery_prepare_worker is not None and self._redelivery_prepare_worker.isRunning():
+            return
+        self._set_detail_actions_busy("Nachlieferung wird vorbereitet...")
+
+        def job() -> RedeliveryContext:
+            service: CustomerAftercareRedeliveryService = self._container.resolve(
+                CustomerAftercareRedeliveryService
+            )
+            return service.prepare_from_invoice(summary)
+
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(self._show_redelivery_dialog)
+        worker.signals.error.connect(self._on_redelivery_prepare_error)
+        worker.signals.finished.connect(lambda: setattr(self, "_redelivery_prepare_worker", None))
+        self._redelivery_prepare_worker = worker
+        worker.start()
+
+    def _show_redelivery_dialog(self, payload: object) -> None:
+        self._clear_detail_actions_busy()
+        if not isinstance(payload, RedeliveryContext):
+            return
+        dialog = RedeliveryDialog(
+            payload.case,
+            list(payload.items),
+            address_lines=payload.address_lines,
+            address_source=payload.address_source,
+            parent=self,
+        )
+        dialog.exec()
+        outcome = dialog.outcome()
+        if outcome is not None and outcome.action == "save":
+            self._apply_redelivery_outcome(payload, outcome)
+
+    def _on_redelivery_prepare_error(self, exc: Exception) -> None:
+        self._clear_detail_actions_busy()
+        QMessageBox.warning(self, "Nachlieferung", f"Rechnungskontext konnte nicht geladen werden:\n\n{exc}")
+
+    def _apply_redelivery_outcome(
+        self, context: RedeliveryContext, outcome: RedeliveryDialogOutcome
+    ) -> None:
+        if self._redelivery_apply_worker is not None and self._redelivery_apply_worker.isRunning():
+            return
+        self._set_detail_actions_busy("Nachlieferung wird gespeichert...")
+
+        def job() -> object:
+            repo: CustomerAftercareRepository = self._container.resolve(CustomerAftercareRepository)
+            repo.replace_items(context.case.id, outcome.items)
+            repo.update_case_details(
+                context.case.id,
+                note=outcome.note,
+                address_lines=outcome.address_lines,
+                address_source="manual" if outcome.address_lines != context.address_lines else context.address_source,
+                shipping_mode=outcome.shipping_mode,
+            )
+            service: CustomerAftercareService = self._container.resolve(CustomerAftercareService)
+            return service.confirm_manual_redelivery(
+                context.case.id,
+                shipping_mode=outcome.shipping_mode,
+                note=outcome.note,
+            )
+
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(lambda _payload: self._on_redelivery_applied())
+        worker.signals.error.connect(self._on_redelivery_apply_error)
+        worker.signals.finished.connect(lambda: setattr(self, "_redelivery_apply_worker", None))
+        self._redelivery_apply_worker = worker
+        worker.start()
+
+    def _on_redelivery_applied(self) -> None:
+        self._clear_detail_actions_busy()
+        QMessageBox.information(
+            self,
+            "Nachlieferung gespeichert",
+            "Die Nachlieferung wurde angelegt und wartet auf den gewählten Versandmodus.",
+        )
+
+    def _on_redelivery_apply_error(self, exc: Exception) -> None:
+        self._clear_detail_actions_busy()
+        QMessageBox.warning(self, "Nachlieferung", f"Speichern fehlgeschlagen:\n\n{exc}")
 
     def _run_selected_row_action(self, action: str) -> None:
         summary = self._require_selected_invoice()

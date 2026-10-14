@@ -22,6 +22,7 @@ from xw_office.services.invoice_processing.buyer_notes import (
     BuyerNoteSource,
     normalized_lines,
 )
+from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.mailing.service import MailAttachment, MailDeliveryService
 from xw_office.services.printing.invoice_printer import InvoicePrinter
 from xw_office.services.printing.label_printer import LabelPrinter
@@ -29,6 +30,7 @@ from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.sevdesk.invoice_client import InvoiceClient, InvoiceSummary
 from xw_office.services.sevdesk.invoice_client import DEFAULT_SENSITIVE_COUNTRY_CODES
 from xw_office.services.sendungen.delivery_note import DeliveryNoteContext, DeliveryNoteService
+from xw_office.services.sendungen.service import OffeneSendungenService
 from xw_office.services.shipping.countries import country_label_for_address
 from xw_office.services.wix.client import WixOrdersClient
 
@@ -244,6 +246,8 @@ class InvoiceProcessingService:
         print_queue: PrintQueueService | None = None,
         inventory_service: InventoryService | None = None,
         delivery_note_service: DeliveryNoteService | None = None,
+        customer_aftercare: CustomerAftercareService | None = None,
+        offene_sendungen: OffeneSendungenService | None = None,
     ) -> None:
         self._invoices = invoice_client
         self._settings_repo = settings_repo
@@ -267,6 +271,8 @@ class InvoiceProcessingService:
         self._drafts = draft_invoice_service
         self._inventory = inventory_service
         self._delivery_notes = delivery_note_service or DeliveryNoteService()
+        self._customer_aftercare = customer_aftercare
+        self._offene_sendungen = offene_sendungen
 
     def load_invoice_table_rows(
         self,
@@ -608,6 +614,10 @@ class InvoiceProcessingService:
                 flags = run_phase("payment", lambda: self._run_payment_step(summary, flags))
                 if full_mode:
                     if not digital_only:
+                        flags = run_phase(
+                            "aftercare_delivery_note",
+                            lambda: self._run_aftercare_delivery_note_step(summary, flags),
+                        )
                         flags = run_phase("invoice_print", lambda: self._run_invoice_print_step(summary, flags))
                         if progress_callback is not None:
                             progress_callback(f"START: Label fuer {label} wird gedruckt...")
@@ -745,6 +755,14 @@ class InvoiceProcessingService:
                 flags = persist(
                     summary,
                     run_phase(summary, "payment", lambda: self._run_payment_step(summary, flags)),
+                )
+                flags = persist(
+                    summary,
+                    run_phase(
+                        summary,
+                        "aftercare_delivery_note",
+                        lambda: self._run_aftercare_delivery_note_step(summary, flags),
+                    ),
                 )
                 if note_action is not None and note_action[1].action == "delivery_note":
                     case, selection = note_action
@@ -2091,6 +2109,105 @@ class InvoiceProcessingService:
             if "already" in message or "bereits" in message:
                 return self._next_flags(stamped, payment_applicable=True, payment_booked=True)
             return self._next_flags(stamped, payment_applicable=True, payment_booked=False, last_warning=str(exc))
+
+    def _run_aftercare_delivery_note_step(
+        self, summary: InvoiceSummary, flags: FulfillmentFlags
+    ) -> FulfillmentFlags:
+        """Claim matching redeliveries and print one bundled note before the invoice."""
+        service = self._customer_aftercare
+        if service is None:
+            return flags
+        invoice = self._fetch_invoice_detail(summary.id)
+        contact = invoice.get("contact") if isinstance(invoice.get("contact"), dict) else {}
+        sevdesk_contact_id = str(contact.get("id") or invoice.get("contactId") or "").strip()
+        order_number = str(summary.order_reference or "").strip()
+        wix_order: dict[str, Any] = {}
+        if self._wix_orders is not None and order_number:
+            try:
+                resolved = self._wix_orders.resolve_order(order_number)
+                wix_order = resolved if isinstance(resolved, dict) else {}
+            except Exception as exc:  # noqa: BLE001 - matching remains retryable
+                logger.warning("Wix redelivery context resolve failed ref=%s: %s", order_number, exc)
+        buyer = wix_order.get("buyerInfo") if isinstance(wix_order.get("buyerInfo"), dict) else {}
+        wix_contact_id = str(buyer.get("contactId") or "").strip()
+        customer_email = str(buyer.get("email") or contact.get("email") or invoice.get("email") or "").strip()
+        cases = service.claim_for_invoice(
+            invoice_id=str(summary.id or ""),
+            invoice_number=str(summary.invoice_number or ""),
+            sevdesk_contact_id=sevdesk_contact_id,
+            wix_contact_id=wix_contact_id,
+            customer_email=customer_email,
+            wix_order_id=str(wix_order.get("id") or "").strip(),
+            wix_order_number=order_number,
+        )
+        if not cases:
+            return flags
+
+        address_lines: tuple[str, ...] = ()
+        for case in cases:
+            try:
+                raw_address = json.loads(case.address_lines_json or "[]")
+            except (TypeError, ValueError):
+                raw_address = []
+            if isinstance(raw_address, list) and raw_address:
+                address_lines = tuple(str(line).strip() for line in raw_address if str(line).strip())
+                if address_lines:
+                    break
+        if not address_lines:
+            address_lines = tuple(self._shipping_lines_from_invoice(invoice, summary))
+        if not address_lines:
+            raise RuntimeError("Nachlieferungs-Lieferschein kann ohne Lieferadresse nicht gedruckt werden")
+
+        products: list[BuyerNoteProduct] = []
+        origin_refs: list[str] = []
+        case_ids = []
+        dispatch_ids: list[str] = []
+        for case in cases:
+            case_ids.append(case.id)
+            if case.dispatch_id:
+                dispatch_ids.append(case.dispatch_id)
+            ref = " / ".join(
+                value
+                for value in (
+                    str(case.source_invoice_number or "").strip(),
+                    f"Wix {case.source_wix_order_number}" if case.source_wix_order_number else "",
+                )
+                if value
+            )
+            if ref:
+                origin_refs.append(ref)
+            for item in service.get_items(case.id):
+                products.append(
+                    BuyerNoteProduct(
+                        quantity=str(max(1, int(item.quantity or 1))),
+                        name=item.name or item.sku,
+                        sku=item.sku,
+                        note=item.note or "Nachlieferung – nicht verrechnen",
+                    )
+                )
+        if not products:
+            raise RuntimeError("Für die Nachlieferung sind keine Produktzeilen hinterlegt")
+        manual_note = "Ursprungsreferenzen: " + ", ".join(dict.fromkeys(origin_refs))
+        delivery_note = self._delivery_notes.generate_pdf(
+            DeliveryNoteContext(
+                invoice_number=str(summary.invoice_number or "").strip(),
+                order_reference=order_number,
+                customer_name=str(summary.contact_name or "").strip(),
+                address_lines=address_lines,
+                products=tuple(products),
+                buyer_note="Kostenlose Nachlieferung – nicht verrechnen.",
+                manual_note=manual_note,
+            )
+        )
+        self._invoice_printer.print_pdf_bytes(delivery_note.read_bytes(), wait=True)
+        service.mark_delivery_note_printed(case_ids, path=str(delivery_note))
+        if self._offene_sendungen is not None:
+            for dispatch_id in dispatch_ids:
+                try:
+                    self._offene_sendungen.mark_done(dispatch_id, done=True)
+                except Exception as exc:  # noqa: BLE001 - physical print already succeeded
+                    logger.warning("Nachlieferungs-Dispatch konnte nicht geschlossen werden: %s", exc)
+        return flags
 
     def _run_invoice_print_step(self, summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
         pdf_bytes = self._get_invoice_pdf_bytes(

@@ -71,21 +71,38 @@ class CustomerAftercareInboxService:
     ) -> InboxPollResult:
         if self._repo is None:
             return InboxPollResult(scanned=0, new_cases=0)
+        sources: list[tuple[GraphMailClient, bool]] = []
         client = self._graph_client()
-        if client is None:
+        if client is not None:
+            sources.append((client, False))
+        dedicated_mailbox = str(self._secrets.get_secret("MS_GRAPH_AFTERCARE_MAILBOX") or "").strip()
+        primary_mailbox = str(self._secrets.get_secret("MS_GRAPH_MAILBOX") or "").strip()
+        if dedicated_mailbox and dedicated_mailbox.lower() != primary_mailbox.lower():
+            dedicated = self._graph_client(mailbox=dedicated_mailbox)
+            if dedicated is not None:
+                sources.append((dedicated, True))
+        if not sources:
             return InboxPollResult(scanned=0, new_cases=0)
-        if not allow_interactive_auth and not client.has_silent_token():
-            logger.info("MS Graph silent token missing; skipping Lieferkorrektur poll")
-            return InboxPollResult(scanned=0, new_cases=0)
-        try:
-            messages = client.list_inbox_messages(
-                days=max(1, lookback_days), top=max(1, min(max_items, 200))
-            )
-        except Exception as exc:  # noqa: BLE001 - inbox polling must never crash the badge/background job.
-            logger.warning("Lieferkorrektur-Posteingang konnte nicht gelesen werden: %s", exc)
-            return InboxPollResult(scanned=0, new_cases=0)
-
-        candidates = [self._normalize_message(msg) for msg in messages if self._is_candidate(msg)]
+        candidates: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for source_client, dedicated in sources:
+            if not allow_interactive_auth and not source_client.has_silent_token():
+                continue
+            try:
+                messages = source_client.list_inbox_messages(
+                    days=max(1, lookback_days), top=max(1, min(max_items, 200))
+                )
+            except Exception as exc:  # noqa: BLE001 - badge polling must remain non-blocking.
+                logger.warning("Lieferkorrektur-Posteingang konnte nicht gelesen werden: %s", exc)
+                continue
+            for msg in messages:
+                message_id = str(msg.get("id") or "").strip() if isinstance(msg, dict) else ""
+                if message_id and message_id in seen_ids:
+                    continue
+                if message_id:
+                    seen_ids.add(message_id)
+                if dedicated or self._is_candidate(msg):
+                    candidates.append(self._normalize_message(msg))
         api_key = self._secrets.get_secret("OPENAI_API_KEY") or None
         new_cases = sum(1 for msg in candidates if self._process_message(msg, api_key))
         return InboxPollResult(scanned=len(candidates), new_cases=new_cases)
@@ -142,10 +159,12 @@ class CustomerAftercareInboxService:
             self._repo.add_items(reservation.case.id, items)
         return True
 
-    def _graph_client(self, *, write: bool = False) -> GraphMailClient | None:
+    def _graph_client(
+        self, *, write: bool = False, mailbox: str | None = None
+    ) -> GraphMailClient | None:
         tenant_id = self._secrets.get_secret("MS_GRAPH_TENANT_ID")
         client_id = self._secrets.get_secret("MS_GRAPH_CLIENT_ID")
-        mailbox = self._secrets.get_secret("MS_GRAPH_MAILBOX")
+        mailbox = mailbox or self._secrets.get_secret("MS_GRAPH_MAILBOX")
         if not tenant_id or not client_id:
             return None
         scopes = ["Mail.Read", "Mail.Read.Shared"]

@@ -759,6 +759,10 @@ class TagesgeschaeftView(QWidget):
                 poll_result = aftercare_service.poll_inbox(allow_interactive_auth=False)
                 new_review_cases = poll_result.new_cases
                 self._lieferkorrektur_inbox_poll_ts = aftercare_now
+            # Due/immediate aftercare cases may have created an OFFENE-
+            # SENDUNGEN dispatch above; refresh the badge from the canonical
+            # local queue before returning the counts.
+            counts["sendungen"] = max(0, int(sendungen_service.open_count()))
             counts["lieferkorrektur_review"] = max(0, int(aftercare_service.count_pending_review()))
             counts["lieferkorrektur_due"] = max(0, int(aftercare_service.count_due()))
             counts["lieferkorrektur_new_review_cases"] = new_review_cases

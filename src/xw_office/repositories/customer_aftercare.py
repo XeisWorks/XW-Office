@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 import datetime
+import json
 from decimal import Decimal
 import uuid
 from collections.abc import Generator, Sequence
@@ -34,6 +35,13 @@ class CustomerAftercareItemInput:
     source_unit_price: Decimal | None = None
     source_tax_rate: Decimal | None = None
     source_discount_percent: Decimal | None = None
+    source_kind: str = ""
+    source_item_id: str = ""
+    parent_sku: str = ""
+    component_id: str = ""
+    origin_invoice_number: str = ""
+    origin_order_number: str = ""
+    note: str = ""
 
 
 class CustomerAftercareRepository:
@@ -75,6 +83,12 @@ class CustomerAftercareRepository:
         source_wix_order_id: str = "",
         source_wix_order_number: str = "",
         source_order_created_at: datetime.datetime | None = None,
+        source_invoice_id: str = "",
+        source_invoice_number: str = "",
+        sevdesk_contact_id: str = "",
+        address_lines: Sequence[str] = (),
+        address_source: str = "",
+        shipping_mode: str = "WAIT_NEXT_ORDER_OR_DEADLINE",
     ) -> CustomerAftercareReservation:
         """Create a PENDING_REVIEW case for *source_message_id*, or return the existing one."""
         with self._scope() as session:
@@ -101,6 +115,12 @@ class CustomerAftercareRepository:
                 source_wix_order_id=source_wix_order_id,
                 source_wix_order_number=source_wix_order_number,
                 source_order_created_at=source_order_created_at,
+                source_invoice_id=str(source_invoice_id or "").strip(),
+                source_invoice_number=str(source_invoice_number or "").strip(),
+                sevdesk_contact_id=str(sevdesk_contact_id or "").strip(),
+                address_lines_json=json.dumps([str(item).strip() for item in address_lines if str(item).strip()], ensure_ascii=False),
+                address_source=str(address_source or "").strip(),
+                shipping_mode=str(shipping_mode or "WAIT_NEXT_ORDER_OR_DEADLINE").strip(),
                 status="PENDING_REVIEW",
             )
             session.add(row)
@@ -122,12 +142,250 @@ class CustomerAftercareRepository:
                     source_unit_price=item.source_unit_price,
                     source_tax_rate=item.source_tax_rate,
                     source_discount_percent=item.source_discount_percent,
+                    source_kind=item.source_kind,
+                    source_item_id=item.source_item_id,
+                    parent_sku=item.parent_sku,
+                    component_id=item.component_id,
+                    origin_invoice_number=item.origin_invoice_number,
+                    origin_order_number=item.origin_order_number,
+                    note=item.note,
                 )
                 for item in items
             ]
             session.add_all(rows)
             session.flush()
             return rows
+
+    def create_invoice_case(
+        self,
+        *,
+        invoice_id: str,
+        invoice_number: str,
+        order_number: str = "",
+        customer_name: str = "",
+        customer_email: str = "",
+        sevdesk_contact_id: str = "",
+        wix_contact_id: str = "",
+        address_lines: Sequence[str] = (),
+        address_source: str = "",
+        items: Sequence[CustomerAftercareItemInput] = (),
+        note: str = "",
+        shipping_mode: str = "WAIT_NEXT_ORDER_OR_DEADLINE",
+    ) -> CustomerAftercareReservation:
+        """Create an idempotent case directly from one sevDesk invoice."""
+        invoice_key = str(invoice_id or invoice_number or "").strip()
+        if not invoice_key:
+            raise ValueError("invoice_id oder invoice_number fehlt")
+        source_message_id = f"invoice-redelivery:{invoice_key}"
+        reservation = self.reserve_case_by_message_id(
+            source_message_id=source_message_id,
+            source_subject=f"Nachlieferung zu {invoice_number or invoice_key}",
+            ai_suggested_type="MANUAL_REDELIVERY",
+            ai_payload_json=json.dumps({"source": "invoice_action"}, ensure_ascii=False),
+            customer_email=customer_email,
+            customer_name=customer_name,
+            wix_contact_id=wix_contact_id,
+            source_wix_order_number=order_number,
+            source_invoice_id=invoice_id,
+            source_invoice_number=invoice_number,
+            sevdesk_contact_id=sevdesk_contact_id,
+            address_lines=address_lines,
+            address_source=address_source,
+            shipping_mode=shipping_mode,
+        )
+        if reservation.state == "created":
+            self.replace_items(reservation.case.id, items)
+            self.update_case_details(reservation.case.id, note=note, shipping_mode=shipping_mode)
+        return reservation
+
+    def replace_items(
+        self, case_id: uuid.UUID, items: Sequence[CustomerAftercareItemInput]
+    ) -> list[CustomerAftercareItem]:
+        with self._scope() as session:
+            session.query(CustomerAftercareItem).filter(CustomerAftercareItem.case_id == case_id).delete(
+                synchronize_session=False
+            )
+            rows = [
+                CustomerAftercareItem(
+                    case_id=case_id,
+                    role=item.role,
+                    sku=item.sku,
+                    name=item.name,
+                    quantity=item.quantity,
+                    sevdesk_part_id=item.sevdesk_part_id,
+                    source_unit_price=item.source_unit_price,
+                    source_tax_rate=item.source_tax_rate,
+                    source_discount_percent=item.source_discount_percent,
+                    source_kind=item.source_kind,
+                    source_item_id=item.source_item_id,
+                    parent_sku=item.parent_sku,
+                    component_id=item.component_id,
+                    origin_invoice_number=item.origin_invoice_number,
+                    origin_order_number=item.origin_order_number,
+                    note=item.note,
+                )
+                for item in items
+            ]
+            session.add_all(rows)
+            session.flush()
+            return rows
+
+    def update_case_details(
+        self,
+        case_id: uuid.UUID,
+        *,
+        note: str | None = None,
+        address_lines: Sequence[str] | None = None,
+        address_source: str | None = None,
+        shipping_mode: str | None = None,
+    ) -> CustomerAftercareCase | None:
+        with self._scope() as session:
+            row = session.get(CustomerAftercareCase, case_id)
+            if row is None:
+                return None
+            if note is not None:
+                row.note = str(note or "").strip()
+            if address_lines is not None:
+                row.address_lines_json = json.dumps(
+                    [str(item).strip() for item in address_lines if str(item).strip()],
+                    ensure_ascii=False,
+                )
+            if address_source is not None:
+                row.address_source = str(address_source or "").strip()
+            if shipping_mode is not None:
+                row.shipping_mode = str(shipping_mode or "").strip()
+            session.flush()
+            return row
+
+    def list_matching_cases(
+        self,
+        *,
+        sevdesk_contact_id: str = "",
+        wix_contact_id: str = "",
+        customer_email: str = "",
+    ) -> list[CustomerAftercareCase]:
+        """Return unprinted cases matching stable customer identifiers."""
+        with self._scope() as session:
+            candidates = session.scalars(
+                select(CustomerAftercareCase)
+                .where(CustomerAftercareCase.status.in_(("WAITING", "TRIGGERED")))
+                .where(CustomerAftercareCase.case_type == "MANUAL_REDELIVERY")
+                .where(CustomerAftercareCase.delivery_note_printed_at.is_(None))
+                .order_by(CustomerAftercareCase.created_at)
+            ).all()
+            sevdesk = str(sevdesk_contact_id or "").strip()
+            wix = str(wix_contact_id or "").strip()
+            email = str(customer_email or "").strip().casefold()
+            return [
+                row
+                for row in candidates
+                if (sevdesk and row.sevdesk_contact_id == sevdesk)
+                or (wix and row.wix_contact_id == wix)
+                or (email and str(row.customer_email or "").strip().casefold() == email)
+            ]
+
+    def claim_for_invoice(
+        self,
+        *,
+        invoice_id: str,
+        invoice_number: str,
+        sevdesk_contact_id: str = "",
+        wix_contact_id: str = "",
+        customer_email: str = "",
+        wix_order_id: str = "",
+        wix_order_number: str = "",
+    ) -> list[CustomerAftercareCase]:
+        """Atomically bind all matching, not-yet-printed cases to a new invoice."""
+        key = f"aftercare-claim:{sevdesk_contact_id}:{wix_contact_id}:{customer_email}"
+        with self._scope() as session:
+            self._advisory_lock(session, key)
+            candidates = session.scalars(
+                select(CustomerAftercareCase)
+                .where(CustomerAftercareCase.status.in_(("WAITING", "TRIGGERED")))
+                .where(CustomerAftercareCase.case_type == "MANUAL_REDELIVERY")
+                .where(CustomerAftercareCase.delivery_note_printed_at.is_(None))
+                .order_by(CustomerAftercareCase.created_at)
+            ).all()
+            sevdesk = str(sevdesk_contact_id or "").strip()
+            wix = str(wix_contact_id or "").strip()
+            email = str(customer_email or "").strip().casefold()
+            matched = [
+                row
+                for row in candidates
+                if (sevdesk and row.sevdesk_contact_id == sevdesk)
+                or (wix and row.wix_contact_id == wix)
+                or (email and str(row.customer_email or "").strip().casefold() == email)
+            ]
+            target_invoice = str(invoice_id or "").strip()
+            matched = [
+                row
+                for row in matched
+                if not (
+                    row.dispatch_status == "ATTACHED"
+                    and row.trigger_invoice_id
+                    and row.trigger_invoice_id != target_invoice
+                )
+            ]
+            for row in matched:
+                row.status = "TRIGGERED"
+                row.trigger_reason = row.trigger_reason or "NEW_ORDER"
+                row.triggered_at = func.now()
+                row.trigger_invoice_id = str(invoice_id or "").strip()
+                row.trigger_invoice_number = str(invoice_number or "").strip()
+                row.trigger_wix_order_id = str(wix_order_id or "").strip()
+                row.trigger_wix_order_number = str(wix_order_number or "").strip()
+                row.dispatch_status = "ATTACHED"
+            session.flush()
+            return list(matched)
+
+    def mark_delivery_note_printed(
+        self, case_ids: Sequence[uuid.UUID], *, path: str = ""
+    ) -> None:
+        with self._scope() as session:
+            now = func.now()
+            for case_id in case_ids:
+                row = session.get(CustomerAftercareCase, case_id)
+                if row is None:
+                    continue
+                row.delivery_note_printed_at = now
+                row.delivery_note_path = str(path or "").strip()
+                row.dispatch_status = "PRINTED"
+                row.status = "RESOLVED"
+                row.resolved_at = now
+            session.flush()
+
+    def set_dispatch(
+        self,
+        case_id: uuid.UUID,
+        *,
+        dispatch_id: str,
+        dispatch_status: str,
+    ) -> CustomerAftercareCase | None:
+        with self._scope() as session:
+            row = session.get(CustomerAftercareCase, case_id)
+            if row is None:
+                return None
+            row.dispatch_id = str(dispatch_id or "").strip()
+            row.dispatch_status = str(dispatch_status or "").strip()
+            session.flush()
+            return row
+
+    def mark_dispatch_completed(self, dispatch_id: str) -> CustomerAftercareCase | None:
+        """Close a redelivery when its generated OFFENE-SENDUNGEN case is completed."""
+        dispatch = str(dispatch_id or "").strip()
+        if not dispatch:
+            return None
+        with self._scope() as session:
+            row = session.scalar(
+                select(CustomerAftercareCase).where(CustomerAftercareCase.dispatch_id == dispatch)
+            )
+            if row is None:
+                return None
+            row.dispatch_status = "DONE"
+            row.status = "RESOLVED"
+            row.resolved_at = func.now()
+            session.flush()
+            return row
 
     # -- reads --------------------------------------------------------------
 
@@ -231,6 +489,7 @@ class CustomerAftercareRepository:
         trigger_reason: str = "",
         invoice_required: bool = False,
         note: str = "",
+        shipping_mode: str | None = None,
     ) -> CustomerAftercareCase | None:
         """Apply the user's confirmed/edited type from the review popup (spec §4)."""
         with self._scope() as session:
@@ -244,6 +503,8 @@ class CustomerAftercareRepository:
             row.due_at = due_at
             row.invoice_required = invoice_required
             row.note = note
+            if shipping_mode is not None:
+                row.shipping_mode = str(shipping_mode or "").strip()
             row.classification_confirmed_at = func.now()
             if trigger_now:
                 row.status = "TRIGGERED"

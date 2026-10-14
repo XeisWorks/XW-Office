@@ -20,7 +20,7 @@ class CustomerAftercareCase(Base):
 
     case_type: Mapped[str] = mapped_column(String(40), default="", nullable=False)
     status: Mapped[str] = mapped_column(
-        String(20), default="PENDING_REVIEW", nullable=False, index=True
+        String(32), default="PENDING_REVIEW", nullable=False, index=True
     )
 
     source_message_id: Mapped[str] = mapped_column(
@@ -40,16 +40,24 @@ class CustomerAftercareCase(Base):
     wix_contact_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     customer_email: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     customer_name: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    sevdesk_contact_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
 
     source_wix_order_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     source_wix_order_number: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     source_order_created_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    source_invoice_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    source_invoice_number: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    address_lines_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    address_source: Mapped[str] = mapped_column(String(32), default="", nullable=False)
 
     courtesy: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     wait_for_next_order: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    shipping_mode: Mapped[str] = mapped_column(
+        String(32), default="WAIT_NEXT_ORDER_OR_DEADLINE", nullable=False
+    )
     due_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), index=True, nullable=True
     )
@@ -59,6 +67,15 @@ class CustomerAftercareCase(Base):
     trigger_reason: Mapped[str] = mapped_column(String(40), default="", nullable=False)
     trigger_wix_order_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     trigger_wix_order_number: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    trigger_invoice_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    trigger_invoice_number: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+
+    dispatch_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    dispatch_status: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    delivery_note_path: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    delivery_note_printed_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     invoice_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     invoice_status: Mapped[str] = mapped_column(String(20), default="", nullable=False)
@@ -100,6 +117,13 @@ class CustomerAftercareItem(Base):
     source_unit_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     source_tax_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
     source_discount_percent: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+    source_kind: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    source_item_id: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    parent_sku: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    component_id: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    origin_invoice_number: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    origin_order_number: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    note: Mapped[str] = mapped_column(Text, default="", nullable=False)
 
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

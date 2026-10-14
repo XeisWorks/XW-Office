@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import datetime
+import json
 import uuid
 
 from xw_office.core.config import AppConfig
@@ -16,6 +17,7 @@ from xw_office.services.customer_aftercare.trigger_service import (
     CustomerAftercareTriggerService,
     TriggerRunResult,
 )
+from xw_office.services.sendungen.service import OffeneSendungenService, SendungProductLine
 
 #: Manager-dialog filters (spec §7): Zu prüfen / Fällig / Wartet / Erledigt / Alle.
 MANAGER_FILTERS = ("zu_pruefen", "faellig", "wartet", "erledigt", "alle")
@@ -47,6 +49,7 @@ _POLICIES: dict[str, CaseTypePolicy] = {
     "B2B_MISSING_ITEMS": CaseTypePolicy("B2B", wait_for_next_order=True, invoice_required=False),
     "B2C_WRONG_DELIVERY": CaseTypePolicy("B2C", wait_for_next_order=False, invoice_required=False),
     "B2B_CUSTOMER_ORDER_ERROR": CaseTypePolicy("B2B", wait_for_next_order=False, invoice_required=True),
+    "MANUAL_REDELIVERY": CaseTypePolicy("", wait_for_next_order=True, invoice_required=False),
     "UNKNOWN": CaseTypePolicy("", wait_for_next_order=False, invoice_required=False),
 }
 
@@ -64,11 +67,13 @@ class CustomerAftercareService:
         inbox: CustomerAftercareInboxService,
         trigger: CustomerAftercareTriggerService,
         config: AppConfig,
+        sendungen: OffeneSendungenService | None = None,
     ) -> None:
         self._repo = repo
         self._inbox = inbox
         self._trigger = trigger
         self._config = config
+        self._sendungen = sendungen
 
     # -- badges ---------------------------------------------------------------
 
@@ -92,6 +97,15 @@ class CustomerAftercareService:
     def get_items(self, case_id: uuid.UUID) -> list[CustomerAftercareItem]:
         return self._repo.get_items(case_id) if self._repo is not None else []
 
+    def claim_for_invoice(self, **kwargs: object) -> list[CustomerAftercareCase]:
+        if self._repo is None:
+            return []
+        return self._repo.claim_for_invoice(**kwargs)  # type: ignore[arg-type]
+
+    def mark_delivery_note_printed(self, case_ids: list[uuid.UUID], *, path: str = "") -> None:
+        if self._repo is not None:
+            self._repo.mark_delivery_note_printed(case_ids, path=path)
+
     # -- inbox polling ------------------------------------------------------
 
     def poll_inbox(self, *, allow_interactive_auth: bool = True) -> InboxPollResult:
@@ -102,7 +116,9 @@ class CustomerAftercareService:
     # -- trigger polling (Phase 10 wires the actual QTimer cadence) -----------
 
     def check_due_cases(self) -> TriggerRunResult:
-        return self._trigger.check_due_cases()
+        result = self._trigger.check_due_cases()
+        self.ensure_asap_dispatches()
+        return result
 
     def check_new_orders_for_waiting_cases(self) -> TriggerRunResult:
         return self._trigger.check_new_orders_for_waiting_cases()
@@ -128,8 +144,12 @@ class CustomerAftercareService:
         else:
             wait_for_next_order = policy.wait_for_next_order
             trigger_now = not wait_for_next_order
+            existing = self._repo.get_case(case_id)
+            created_at = existing.created_at if existing is not None else None
+            if created_at is not None and created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=datetime.timezone.utc)
             due_at = (
-                datetime.datetime.now(datetime.timezone.utc)
+                (created_at or datetime.datetime.now(datetime.timezone.utc))
                 + datetime.timedelta(days=self._config.customer_aftercare.b2b.max_wait_days)
                 if wait_for_next_order
                 else None
@@ -146,6 +166,110 @@ class CustomerAftercareService:
             invoice_required=policy.invoice_required,
             note=note,
         )
+
+    def confirm_manual_redelivery(
+        self,
+        case_id: uuid.UUID,
+        *,
+        shipping_mode: str,
+        note: str = "",
+    ) -> CustomerAftercareCase | None:
+        """Activate a case created from the invoice action."""
+        if self._repo is None:
+            return None
+        immediate = str(shipping_mode or "").strip().upper() == "IMMEDIATE"
+        existing = self._repo.get_case(case_id)
+        if existing is None:
+            return None
+        if immediate:
+            try:
+                address = json.loads(existing.address_lines_json or "[]")
+            except (TypeError, ValueError):
+                address = []
+            if not isinstance(address, list) or not any(str(line).strip() for line in address):
+                raise ValueError("Sofortversand ist ohne zustellfähige Lieferadresse nicht möglich")
+            if not self._repo.get_items(case_id):
+                raise ValueError("Für die Nachlieferung muss mindestens eine Position ausgewählt werden")
+        created_at = existing.created_at
+        if created_at is not None and created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=datetime.timezone.utc)
+        due_at = None if immediate else (
+            (created_at or datetime.datetime.now(datetime.timezone.utc))
+            + datetime.timedelta(days=self._config.customer_aftercare.b2b.max_wait_days)
+        )
+        result = self._repo.confirm_classification(
+            case_id,
+            case_type="MANUAL_REDELIVERY",
+            courtesy=True,
+            customer_type="",
+            wait_for_next_order=not immediate,
+            due_at=due_at,
+            trigger_now=immediate,
+            trigger_reason="IMMEDIATE" if immediate else "",
+            invoice_required=False,
+            note=note,
+            shipping_mode="IMMEDIATE" if immediate else "WAIT_NEXT_ORDER_OR_DEADLINE",
+        )
+        if result is not None and immediate:
+            self._ensure_dispatch_for_case(result)
+        return result
+
+    def ensure_asap_dispatches(self) -> int:
+        """Expose due/immediate cases in OFFENE SENDUNGEN exactly once."""
+        if self._repo is None or self._sendungen is None:
+            return 0
+        cases = [
+            case
+            for case in self._repo.list_by_statuses(("TRIGGERED",))
+            if case.trigger_reason in {"MAX_WAIT_EXPIRED", "IMMEDIATE"}
+        ]
+        created = 0
+        for case in cases:
+            if self._ensure_dispatch_for_case(case):
+                created += 1
+        return created
+
+    def _ensure_dispatch_for_case(self, case: CustomerAftercareCase) -> bool:
+        if self._repo is None or self._sendungen is None:
+            return False
+        dispatch_id = f"nachlieferung-{case.id}"
+        if case.dispatch_id and case.dispatch_status not in {"CANCELLED", "FAILED"}:
+            return False
+        items = self._repo.get_items(case.id)
+        products = [
+            SendungProductLine(
+                quantity=str(max(1, int(item.quantity or 1))),
+                name=item.name or item.sku,
+                sku=item.sku,
+                note=item.note or "Nachlieferung – nicht verrechnen",
+                free_delivery=True,
+                no_return_required=True,
+            )
+            for item in items
+            if item.role in {"MISSING_TO_SEND", "CORRECTED_ORDER_ITEM"}
+        ]
+        if not products:
+            return False
+        try:
+            address = json.loads(case.address_lines_json or "[]")
+        except (TypeError, ValueError):
+            address = []
+        address_lines = [str(line).strip() for line in address if str(line).strip()] if isinstance(address, list) else []
+        subject = "Nachlieferung"
+        if case.source_invoice_number:
+            subject += f" {case.source_invoice_number}"
+        if case.source_wix_order_number:
+            subject += f" / Wix {case.source_wix_order_number}"
+        note = case.note or "Kostenlose Nachlieferung – nicht verrechnen."
+        self._sendungen.create_manual_case(
+            case_id=dispatch_id,
+            subject=subject,
+            note=note,
+            address_lines=address_lines,
+            products=products,
+        )
+        self._repo.set_dispatch(case.id, dispatch_id=dispatch_id, dispatch_status="ASAP")
+        return True
 
     def ignore_case(self, case_id: uuid.UUID) -> CustomerAftercareCase | None:
         return self._repo.mark_ignored(case_id) if self._repo is not None else None

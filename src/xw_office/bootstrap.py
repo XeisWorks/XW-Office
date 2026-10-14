@@ -19,6 +19,7 @@ from xw_office.services.crm.service import CrmService
 from xw_office.services.customer_aftercare.inbox_service import CustomerAftercareInboxService
 from xw_office.services.customer_aftercare.invoice_service import CustomerAftercareInvoiceService
 from xw_office.services.customer_aftercare.pricing_policy import CustomerAftercarePricingPolicy
+from xw_office.services.customer_aftercare.redelivery import CustomerAftercareRedeliveryService
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.customer_aftercare.trigger_service import CustomerAftercareTriggerService
 from xw_office.services.sevdesk.tax_policy import CustomerAftercareTaxPolicy
@@ -258,6 +259,12 @@ def register_default_services(container: Container) -> None:
             c.resolve(PrintQueueService),
             c.resolve(InventoryService),
             c.resolve(DeliveryNoteService),
+            customer_aftercare=(
+                c.resolve(CustomerAftercareService)
+                if (c.config.database_url or "").strip()
+                else None
+            ),
+            offene_sendungen=c.resolve(OffeneSendungenService),
         ),
     )
     container.register(
@@ -276,6 +283,11 @@ def register_default_services(container: Container) -> None:
             c.resolve(WixOrdersClient),
             c.resolve(XwFlowShipmentClient),
             invoice_client=c.resolve(InvoiceClient),
+            aftercare_repo=(
+                c.resolve(CustomerAftercareRepository)
+                if (c.config.database_url or "").strip()
+                else None
+            ),
         ),
     )
     container.register(
@@ -315,6 +327,15 @@ def register_default_services(container: Container) -> None:
             c.resolve(CustomerAftercareInboxService),
             c.resolve(CustomerAftercareTriggerService),
             c.config,
+            c.resolve(OffeneSendungenService),
+        ),
+    )
+    container.register(
+        CustomerAftercareRedeliveryService,
+        lambda c: CustomerAftercareRedeliveryService(
+            c.resolve(CustomerAftercareRepository) if (c.config.database_url or "").strip() else None,
+            c.resolve(InvoiceClient),
+            c.resolve(WixOrdersClient),
         ),
     )
     container.register(
