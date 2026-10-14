@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+import json
 from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QTimer, Qt
@@ -25,18 +26,20 @@ from PySide6.QtWidgets import (
 
 from xw_office.core.worker import BackgroundWorker
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
-from xw_office.services.customer_aftercare import fulfillment as aftercare_fulfillment
 from xw_office.services.customer_aftercare.service import MANAGER_FILTERS, CustomerAftercareService
+from xw_office.repositories.customer_aftercare import CustomerAftercareRepository
+from xw_office.services.customer_aftercare import fulfillment as aftercare_fulfillment
 from xw_office.services.sendungen.service import OffeneSendungenService
 from xw_office.ui.modules.rechnungen.customer_aftercare_invoice_dialog import (
     CustomerAftercareInvoiceDialog,
 )
-from xw_office.ui.modules.rechnungen.offene_sendungen_dialog import OffeneSendungenDialog
 from xw_office.ui.modules.rechnungen.customer_aftercare_review_dialog import (
     CASE_TYPE_LABELS,
     CustomerAftercareReviewDialog,
     ReviewDialogOutcome,
 )
+from xw_office.ui.modules.rechnungen.redelivery_dialog import RedeliveryDialog
+from xw_office.ui.modules.rechnungen.offene_sendungen_dialog import OffeneSendungenDialog
 
 if TYPE_CHECKING:
     from xw_office.core.container import Container
@@ -309,28 +312,77 @@ class CustomerAftercareManagerDialog(QDialog):
         case = self._selected_case
         if case is None:
             return
-        missing_lines = aftercare_fulfillment.missing_items_as_product_lines(self._selected_items)
-        if not missing_lines:
-            self._status.setText("Kein fehlender Artikel fuer diesen Fall hinterlegt.")
+        if not self._selected_items:
+            self._status.setText("Keine Produktposition fuer diesen Fall hinterlegt.")
             return
         if self._action_worker is not None and self._action_worker.isRunning():
             return
 
-        sendungen: OffeneSendungenService = self._container.resolve(OffeneSendungenService)
-        note = aftercare_fulfillment.replacement_shipment_note(case)
-        manual_case_id = aftercare_fulfillment.manual_case_id(case)
+        try:
+            repo: CustomerAftercareRepository = self._container.resolve(CustomerAftercareRepository)
+        except Exception:
+            # Compatibility fallback for installations without the relational
+            # aftercare store (and legacy manager-only cases).
+            missing_lines = aftercare_fulfillment.missing_items_as_product_lines(self._selected_items)
+            if not missing_lines:
+                self._status.setText("Kein fehlender Artikel fuer diesen Fall hinterlegt.")
+                return
+            sendungen: OffeneSendungenService = self._container.resolve(OffeneSendungenService)
+            note = aftercare_fulfillment.replacement_shipment_note(case)
+            manual_case_id = aftercare_fulfillment.manual_case_id(case)
 
-        def job() -> None:
-            sendungen.create_manual_case(
-                case_id=manual_case_id,
-                subject=f"Lieferkorrektur {case.source_wix_order_number or case.customer_name}".strip(),
-                note=note,
-                products=missing_lines,
+            def legacy_job() -> None:
+                sendungen.create_manual_case(
+                    case_id=manual_case_id,
+                    subject=f"Lieferkorrektur {case.source_wix_order_number or case.customer_name}".strip(),
+                    note=note,
+                    products=missing_lines,
+                )
+
+            def legacy_result(_result: object) -> None:
+                dlg = OffeneSendungenDialog(self._container, self)
+                dlg.exec()
+
+            worker = BackgroundWorker(legacy_job)
+            worker.signals.result.connect(legacy_result)
+            worker.signals.error.connect(lambda exc: self._status.setText(f"Nachsendung konnte nicht vorbereitet werden: {exc}"))
+            worker.signals.finished.connect(lambda: setattr(self, "_action_worker", None))
+            self._action_worker = worker
+            worker.start()
+            return
+
+        try:
+            raw_address = json.loads(case.address_lines_json or "[]")
+        except (TypeError, ValueError):
+            raw_address = []
+        address = [str(line).strip() for line in raw_address if str(line).strip()] if isinstance(raw_address, list) else []
+        dialog = RedeliveryDialog(
+            case,
+            self._selected_items,
+            address_lines=address,
+            address_source=case.address_source,
+            parent=self,
+        )
+        dialog.exec()
+        outcome = dialog.outcome()
+        if outcome is None or outcome.action != "save":
+            return
+
+        def job() -> object:
+            repo.replace_items(case.id, outcome.items)
+            repo.update_case_details(
+                case.id,
+                note=outcome.note,
+                address_lines=outcome.address_lines,
+                address_source="manual" if tuple(outcome.address_lines) != tuple(address) else case.address_source,
+                shipping_mode=outcome.shipping_mode,
+            )
+            return self._service.confirm_manual_redelivery(
+                case.id, shipping_mode=outcome.shipping_mode, note=outcome.note
             )
 
         def on_result(_result: object) -> None:
-            dlg = OffeneSendungenDialog(self._container, self)
-            dlg.exec()
+            self._load_cases()
 
         def on_error(exc: Exception) -> None:
             self._status.setText(f"Nachsendung konnte nicht vorbereitet werden: {exc}")

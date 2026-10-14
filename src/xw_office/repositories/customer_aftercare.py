@@ -171,6 +171,7 @@ class CustomerAftercareRepository:
         items: Sequence[CustomerAftercareItemInput] = (),
         note: str = "",
         shipping_mode: str = "WAIT_NEXT_ORDER_OR_DEADLINE",
+        ai_payload_json: str = "",
     ) -> CustomerAftercareReservation:
         """Create an idempotent case directly from one sevDesk invoice."""
         invoice_key = str(invoice_id or invoice_number or "").strip()
@@ -181,7 +182,7 @@ class CustomerAftercareRepository:
             source_message_id=source_message_id,
             source_subject=f"Nachlieferung zu {invoice_number or invoice_key}",
             ai_suggested_type="MANUAL_REDELIVERY",
-            ai_payload_json=json.dumps({"source": "invoice_action"}, ensure_ascii=False),
+            ai_payload_json=ai_payload_json or json.dumps({"source": "invoice_action"}, ensure_ascii=False),
             customer_email=customer_email,
             customer_name=customer_name,
             wix_contact_id=wix_contact_id,

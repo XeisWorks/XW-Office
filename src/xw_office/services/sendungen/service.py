@@ -366,7 +366,7 @@ class OffeneSendungenService:
             )
         )
 
-    def mark_done(self, case_id: str, *, done: bool) -> None:
+    def mark_done(self, case_id: str, *, done: bool, resolve_aftercare: bool = True) -> None:
         cid = str(case_id or "").strip()
         if not cid:
             return
@@ -391,13 +391,13 @@ class OffeneSendungenService:
         else:
             ids.discard(cid)
         self._save_done_ids(ids)
-        if cid.startswith("nachlieferung-") and self._aftercare_repo is not None:
+        if resolve_aftercare and cid.startswith("nachlieferung-") and self._aftercare_repo is not None:
             try:
                 if done and hasattr(self._aftercare_repo, "mark_dispatch_completed"):
                     self._aftercare_repo.mark_dispatch_completed(cid)
             except (TypeError, ValueError, AttributeError):
                 logger.warning("Nachlieferungsstatus konnte nicht synchronisiert werden: %s", cid)
-        if source_type == _SOURCE_GRAPH:
+        if source_type in {_SOURCE_GRAPH, _SOURCE_MANUAL}:
             self._sync_shipping_email_snapshot(self.load_open_cases())
 
     def load_manual_fields(self, case_id: str) -> dict[str, Any]:

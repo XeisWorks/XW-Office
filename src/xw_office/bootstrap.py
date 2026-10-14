@@ -311,6 +311,8 @@ def register_default_services(container: Container) -> None:
         lambda c: CustomerAftercareInboxService(
             c.resolve(CustomerAftercareRepository) if (c.config.database_url or "").strip() else None,
             c.resolve(SecretService),
+            c.resolve(InvoiceClient),
+            c.resolve(WixOrdersClient),
         ),
     )
     container.register(
@@ -337,6 +339,7 @@ def register_default_services(container: Container) -> None:
             c.resolve(InvoiceClient),
             c.resolve(WixOrdersClient),
             c.resolve(SecretService),
+            c.resolve(ProductCatalogService),
         ),
     )
     container.register(

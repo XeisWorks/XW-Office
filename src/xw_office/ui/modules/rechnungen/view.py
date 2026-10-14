@@ -423,7 +423,7 @@ class _ActionsDelegate(QStyledItemDelegate):
         "customs": "zollerklärung.png",
         "wix": "wix.png",
         "mail": "mail_sent.png",
-        "redelivery": "post.png",
+        "redelivery": "nachlieferung.png",
     }
 
     def __init__(self, parent: QWidget | None = None) -> None:

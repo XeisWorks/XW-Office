@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QTableWidget,
@@ -103,6 +104,10 @@ class RedeliveryDialog(QDialog):
         add_button.clicked.connect(self._add_manual_item)
         root.addWidget(add_button)
 
+        preview_button = QPushButton("Lieferschein-Vorschau")
+        preview_button.clicked.connect(self._preview)
+        root.addWidget(preview_button)
+
         buttons = QDialogButtonBox()
         save = QPushButton("Nachlieferung speichern")
         cancel = QPushButton("Abbrechen")
@@ -111,6 +116,27 @@ class RedeliveryDialog(QDialog):
         save.clicked.connect(self._save)
         cancel.clicked.connect(self.reject)
         root.addWidget(buttons)
+
+    def _preview(self) -> None:
+        products: list[str] = []
+        for row in range(self._table.rowCount()):
+            check = self._table.item(row, 0)
+            if check is None or check.checkState() != Qt.CheckState.Checked:
+                continue
+            name = (self._table.item(row, 1).text() if self._table.item(row, 1) else "Position").strip()
+            sku = (self._table.item(row, 2).text() if self._table.item(row, 2) else "").strip()
+            qty = (self._table.item(row, 3).text() if self._table.item(row, 3) else "1").strip()
+            products.append(f"{qty}x {name}" + (f" ({sku})" if sku else ""))
+        address = self._address.toPlainText().strip() or "(Lieferadresse fehlt)"
+        note = self._note.toPlainText().strip() or "Kostenlose Nachlieferung – nicht verrechnen."
+        QMessageBox.information(
+            self,
+            "Lieferschein-Vorschau",
+            "NACHLIEFERUNG\n\n"
+            f"{address}\n\n"
+            + ("\n".join(products) if products else "(keine Position ausgewählt)")
+            + f"\n\n{note}",
+        )
 
     @staticmethod
     def _decode_address(case: CustomerAftercareCase) -> str:
@@ -171,6 +197,8 @@ class RedeliveryDialog(QDialog):
                 quantity = max(1, int((self._table.item(row, 3).text() if self._table.item(row, 3) else "1").strip()))
             except ValueError:
                 quantity = 1
+            if isinstance(original, CustomerAftercareItem) and str(original.source_kind or "") != "manual":
+                quantity = min(quantity, max(1, int(original.quantity or 1)))
             selected.append(
                 CustomerAftercareItemInput(
                     role="MISSING_TO_SEND",

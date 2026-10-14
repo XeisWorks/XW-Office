@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import re
 from typing import Any
 
 from xw_office.repositories.customer_aftercare import (
@@ -21,8 +22,12 @@ from xw_office.repositories.customer_aftercare import (
 from xw_office.services.customer_aftercare.ai_classifier import classify_mail
 from xw_office.services.mailing.graph_client import GraphMailClient, html_to_text
 from xw_office.services.secrets.service import SecretService
+from xw_office.services.sevdesk.invoice_client import InvoiceClient
+from xw_office.services.wix.client import WixOrdersClient
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_AFTERCARE_MAILBOX = "nachlieferung@xeisworks.at"
 
 _EXCLUDED_WIX_SENDER = "no-reply@mystore.wix.com"
 _EXCLUDED_OWN_SENDERS = {"office@xeisworks.at", "shop@xeisworks.at"}
@@ -58,9 +63,13 @@ class CustomerAftercareInboxService:
         self,
         repo: CustomerAftercareRepository | None,
         secrets: SecretService,
+        invoices: InvoiceClient | None = None,
+        wix_orders: WixOrdersClient | None = None,
     ) -> None:
         self._repo = repo
         self._secrets = secrets
+        self._invoices = invoices
+        self._wix_orders = wix_orders
 
     def poll_inbox(
         self,
@@ -75,8 +84,9 @@ class CustomerAftercareInboxService:
         client = self._graph_client()
         if client is not None:
             sources.append((client, False))
-        dedicated_mailbox = str(self._secrets.get_secret("MS_GRAPH_AFTERCARE_MAILBOX") or "").strip()
         primary_mailbox = str(self._secrets.get_secret("MS_GRAPH_MAILBOX") or "").strip()
+        configured_aftercare = str(self._secrets.get_secret("MS_GRAPH_AFTERCARE_MAILBOX") or "").strip()
+        dedicated_mailbox = configured_aftercare or (_DEFAULT_AFTERCARE_MAILBOX if primary_mailbox else "")
         if dedicated_mailbox and dedicated_mailbox.lower() != primary_mailbox.lower():
             dedicated = self._graph_client(mailbox=dedicated_mailbox)
             if dedicated is not None:
@@ -119,9 +129,13 @@ class CustomerAftercareInboxService:
         sender = self._sender_address(msg)
         body_text = self._body_text(msg)
         thread_id = str(msg.get("conversationId") or "").strip()
+        context = self._resolve_business_context(subject, body_text)
 
         classification = classify_mail(
-            subject=subject, sender=sender, body_text=body_text, api_key=api_key
+            subject=subject,
+            sender=sender,
+            body_text=body_text + context["prompt_suffix"],
+            api_key=api_key,
         )
 
         reservation = self._repo.reserve_case_by_message_id(
@@ -131,9 +145,16 @@ class CustomerAftercareInboxService:
             ai_suggested_type=classification.case_type,
             ai_confidence=classification.confidence,
             ai_payload_json=classification.to_payload_json(),
-            customer_email=classification.customer_email or sender,
-            customer_name=classification.customer_name,
-            source_wix_order_number=classification.wix_order_number,
+            customer_email=context["customer_email"] or classification.customer_email or sender,
+            customer_name=context["customer_name"] or classification.customer_name,
+            source_wix_order_id=context["wix_order_id"],
+            source_wix_order_number=context["wix_order_number"] or classification.wix_order_number,
+            source_invoice_id=context["invoice_id"],
+            source_invoice_number=context["invoice_number"],
+            sevdesk_contact_id=context["sevdesk_contact_id"],
+            wix_contact_id=context["wix_contact_id"],
+            address_lines=context["address_lines"],
+            address_source=context["address_source"],
         )
         if reservation.state != "created":
             return False
@@ -158,6 +179,87 @@ class CustomerAftercareInboxService:
         if items:
             self._repo.add_items(reservation.case.id, items)
         return True
+
+    def _resolve_business_context(self, subject: str, body_text: str) -> dict[str, Any]:
+        """Resolve stable references before AI sees the message; AI never supplies authority."""
+        haystack = f"{subject}\n{body_text}"
+        invoice_match = re.search(r"\bRE[- ]?\d{4,}\b", haystack, re.IGNORECASE)
+        order_match = re.search(r"(?<!\d)\d{5}(?!\d)", haystack)
+        invoice_number = invoice_match.group(0) if invoice_match else ""
+        order_number = order_match.group(0) if order_match else ""
+        invoice_id = ""
+        sevdesk_contact_id = ""
+        customer_email = ""
+        customer_name = ""
+        address_lines: list[str] = []
+        address_source = ""
+        if invoice_number and self._invoices is not None:
+            try:
+                matches, _days = self._invoices.search_invoice_summaries(invoice_number)
+                exact = next((row for row in matches if row.invoice_number.casefold() == invoice_number.casefold()), None)
+                selected = exact or (matches[0] if matches else None)
+                if selected is not None:
+                    invoice_id = str(selected.id or "").strip()
+                    invoice_number = str(selected.invoice_number or invoice_number).strip()
+                    detail = self._invoices.fetch_invoice_by_id(invoice_id)
+                    contact = detail.get("contact") if isinstance(detail.get("contact"), dict) else {}
+                    sevdesk_contact_id = str(contact.get("id") or detail.get("contactId") or "").strip()
+                    customer_email = str(detail.get("email") or contact.get("email") or "").strip()
+                    customer_name = str(contact.get("name") or detail.get("customerName") or "").strip()
+                    address_lines = self._invoice_address_lines(detail)
+                    address_source = "sevdesk" if address_lines else ""
+                    order_number = order_number or str(selected.order_reference or "").strip()
+            except Exception as exc:  # noqa: BLE001 - mail remains reviewable without enrichment
+                logger.info("sevDesk-Nachlieferungskontext nicht auflösbar: %s", exc)
+        wix_contact_id = ""
+        wix_order_id = ""
+        if order_number and self._wix_orders is not None:
+            try:
+                order = self._wix_orders.resolve_order(order_number)
+                if isinstance(order, dict):
+                    wix_order_id = str(order.get("id") or "").strip()
+                    buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
+                    wix_contact_id = str(buyer.get("contactId") or "").strip()
+                    customer_email = customer_email or str(buyer.get("email") or "").strip()
+                    customer_name = customer_name or str(buyer.get("firstName") or "").strip()
+                    wix_address = self._wix_orders.best_address_lines_from_order(order)
+                    if wix_address:
+                        address_lines, address_source = wix_address, "wix"
+            except Exception as exc:  # noqa: BLE001
+                logger.info("Wix-Nachlieferungskontext nicht auflösbar: %s", exc)
+        refs = (
+            f"\nDeterministisch aufgelöster Kontext: Rechnung {invoice_number or 'unbekannt'}, "
+            f"Wix-Bestellung {order_number or 'unbekannt'}, Kunde-ID {sevdesk_contact_id or wix_contact_id or 'unbekannt'}, "
+            f"Adresse {' | '.join(address_lines) if address_lines else 'unbekannt'}."
+        )
+        return {
+            "invoice_id": invoice_id,
+            "invoice_number": invoice_number,
+            "wix_order_id": wix_order_id,
+            "wix_order_number": order_number,
+            "sevdesk_contact_id": sevdesk_contact_id,
+            "wix_contact_id": wix_contact_id,
+            "customer_email": customer_email,
+            "customer_name": customer_name,
+            "address_lines": address_lines,
+            "address_source": address_source,
+            "prompt_suffix": refs,
+        }
+
+    @staticmethod
+    def _invoice_address_lines(invoice: dict[str, Any]) -> list[str]:
+        contact = invoice.get("contact") if isinstance(invoice.get("contact"), dict) else {}
+        values = [
+            invoice.get("deliveryName") or invoice.get("shippingName") or contact.get("name"),
+            invoice.get("deliveryStreet") or invoice.get("shippingStreet") or invoice.get("addressStreet"),
+            invoice.get("deliveryAddress") or invoice.get("shippingAddress"),
+            " ".join(str(value).strip() for value in (
+                invoice.get("deliveryZip") or invoice.get("shippingZip") or invoice.get("addressZip"),
+                invoice.get("deliveryCity") or invoice.get("shippingCity") or invoice.get("addressCity"),
+            ) if str(value or "").strip()),
+            invoice.get("deliveryCountry") or invoice.get("shippingCountry") or invoice.get("addressCountry"),
+        ]
+        return [str(value).strip() for value in values if str(value or "").strip()]
 
     def _graph_client(
         self, *, write: bool = False, mailbox: str | None = None

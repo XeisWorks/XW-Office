@@ -7,6 +7,7 @@ source of truth for customer, address, SKU or quantity.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import re
 from typing import Any, Sequence
 
@@ -19,6 +20,7 @@ from xw_office.repositories.customer_aftercare import (
 from xw_office.services.customer_aftercare.ai_classifier import classify_mail
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sevdesk.invoice_client import InvoiceClient, InvoiceSummary
+from xw_office.services.products.catalog import ProductCatalogService
 from xw_office.services.wix.client import WixOrdersClient
 
 
@@ -43,11 +45,13 @@ class CustomerAftercareRedeliveryService:
         invoices: InvoiceClient | None,
         wix_orders: WixOrdersClient | None,
         secrets: SecretService | None = None,
+        product_catalog: ProductCatalogService | None = None,
     ) -> None:
         self._repo = repo
         self._invoices = invoices
         self._wix_orders = wix_orders
         self._secrets = secrets
+        self._product_catalog = product_catalog
 
     def prepare_from_invoice(self, summary: InvoiceSummary) -> RedeliveryContext:
         if self._repo is None:
@@ -104,6 +108,7 @@ class CustomerAftercareRedeliveryService:
             f"Nachlieferung zu {invoice_number or invoice_id}"
             + (f" / Wix {order_number}" if order_number else "")
         )
+        ai_payload_json = ""
         api_key = self._secrets.get_secret("OPENAI_API_KEY") if self._secrets is not None else ""
         if api_key:
             ai = classify_mail(
@@ -117,6 +122,7 @@ class CustomerAftercareRedeliveryService:
             )
             if ai.source == "openai" and ai.note:
                 note = ai.note
+                ai_payload_json = ai.to_payload_json()
         reservation = self._repo.create_invoice_case(
             invoice_id=invoice_id,
             invoice_number=invoice_number,
@@ -129,6 +135,7 @@ class CustomerAftercareRedeliveryService:
             address_source=address_source,
             items=items,
             note=note,
+            ai_payload_json=ai_payload_json,
         )
         case = self._repo.get_case(reservation.case.id) or reservation.case
         stored_items = tuple(self._repo.get_items(case.id))
@@ -172,6 +179,8 @@ class CustomerAftercareRedeliveryService:
             except (TypeError, ValueError):
                 quantity = 1
             components = position.get("components")
+            if not components and self._product_catalog is not None and sku:
+                components = self._product_catalog.resolve_components(sku)
             if isinstance(components, list) and components:
                 for component_index, component in enumerate(components):
                     if not isinstance(component, dict):

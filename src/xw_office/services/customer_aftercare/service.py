@@ -100,7 +100,18 @@ class CustomerAftercareService:
     def claim_for_invoice(self, **kwargs: object) -> list[CustomerAftercareCase]:
         if self._repo is None:
             return []
-        return self._repo.claim_for_invoice(**kwargs)  # type: ignore[arg-type]
+        cases = self._repo.claim_for_invoice(**kwargs)  # type: ignore[arg-type]
+        # A previously visible ASAP dispatch is now attached to the target
+        # invoice. Remove it from the open queue immediately; the relational
+        # case remains retryable until the delivery note is physically printed.
+        if self._sendungen is not None:
+            for case in cases:
+                if case.dispatch_id:
+                    try:
+                        self._sendungen.mark_done(case.dispatch_id, done=True, resolve_aftercare=False)
+                    except Exception:
+                        pass
+        return cases
 
     def mark_delivery_note_printed(self, case_ids: list[uuid.UUID], *, path: str = "") -> None:
         if self._repo is not None:
