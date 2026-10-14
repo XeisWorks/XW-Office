@@ -336,6 +336,7 @@ def register_default_services(container: Container) -> None:
             c.resolve(CustomerAftercareRepository) if (c.config.database_url or "").strip() else None,
             c.resolve(InvoiceClient),
             c.resolve(WixOrdersClient),
+            c.resolve(SecretService),
         ),
     )
     container.register(

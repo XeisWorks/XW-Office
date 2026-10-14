@@ -16,6 +16,8 @@ from xw_office.repositories.customer_aftercare import (
     CustomerAftercareRepository,
     CustomerAftercareReservation,
 )
+from xw_office.services.customer_aftercare.ai_classifier import classify_mail
+from xw_office.services.secrets.service import SecretService
 from xw_office.services.sevdesk.invoice_client import InvoiceClient, InvoiceSummary
 from xw_office.services.wix.client import WixOrdersClient
 
@@ -40,10 +42,12 @@ class CustomerAftercareRedeliveryService:
         repo: CustomerAftercareRepository | None,
         invoices: InvoiceClient | None,
         wix_orders: WixOrdersClient | None,
+        secrets: SecretService | None = None,
     ) -> None:
         self._repo = repo
         self._invoices = invoices
         self._wix_orders = wix_orders
+        self._secrets = secrets
 
     def prepare_from_invoice(self, summary: InvoiceSummary) -> RedeliveryContext:
         if self._repo is None:
@@ -96,6 +100,23 @@ class CustomerAftercareRedeliveryService:
 
         wix_order_id = str(order.get("id") or "").strip()
         items = self._invoice_items(invoice_id, invoice_number, order_number)
+        note = (
+            f"Nachlieferung zu {invoice_number or invoice_id}"
+            + (f" / Wix {order_number}" if order_number else "")
+        )
+        api_key = self._secrets.get_secret("OPENAI_API_KEY") if self._secrets is not None else ""
+        if api_key:
+            ai = classify_mail(
+                subject=f"Nachlieferung zu {invoice_number or invoice_id}",
+                sender=customer_email,
+                body_text=(
+                    f"Kunde: {summary.contact_name}\nAdresse: {' | '.join(address_lines)}\n"
+                    f"Produkte: {', '.join(f'{item.quantity}x {item.name or item.sku}' for item in items)}"
+                ),
+                api_key=api_key,
+            )
+            if ai.source == "openai" and ai.note:
+                note = ai.note
         reservation = self._repo.create_invoice_case(
             invoice_id=invoice_id,
             invoice_number=invoice_number,
@@ -107,10 +128,7 @@ class CustomerAftercareRedeliveryService:
             address_lines=address_lines,
             address_source=address_source,
             items=items,
-            note=(
-                f"Nachlieferung zu {invoice_number or invoice_id}"
-                + (f" / Wix {order_number}" if order_number else "")
-            ),
+            note=note,
         )
         case = self._repo.get_case(reservation.case.id) or reservation.case
         stored_items = tuple(self._repo.get_items(case.id))
