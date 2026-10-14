@@ -29,6 +29,7 @@ from PySide6.QtGui import (
     QImage,
     QMouseEvent,
     QPainter,
+    QPen,
     QPixmap,
     QResizeEvent,
     QShowEvent,
@@ -418,99 +419,57 @@ class _ActionsDelegate(QStyledItemDelegate):
     # Only _VISIBLE_ACTION_KEYS are painted and hit-tested in the table.
     _ACTION_KEYS = ("post", "customs", "wix", "mail")
     _VISIBLE_ACTION_KEYS = ("post", "customs", "redelivery")
-    _ICON_FILES = {
-        "post": "post.png",
-        "customs": "zollerklärung.png",
-        "wix": "wix.png",
-        "mail": "mail_sent.png",
-        "redelivery": "nachlieferung.png",
-    }
-    # The default application palette is dark.  The source redelivery asset
-    # is monochrome black, so tint it to the same high-contrast yellow used by
-    # the PLC/post action when it is rendered in the compact action column.
-    _ICON_TINTS = {
-        "redelivery": QColor("#ffd400"),
+    _ACTION_COLORS = {
+        "post": QColor("#facc15"),
+        "customs": QColor("#38bdf8"),
+        "redelivery": QColor("#c084fc"),
     }
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._icons_dir = Path(__file__).resolve().parents[5] / "icons"
-        self._cache: dict[str, QPixmap] = {}
         self._rendered_cache: dict[str, QPixmap] = {}
 
-    @staticmethod
-    def _trim_transparent_padding(pix: QPixmap) -> QPixmap:
-        """Crop transparent export margins while preserving the artwork."""
-        image = pix.toImage()
-        if image.isNull() or not image.hasAlphaChannel():
-            return pix
-        image = image.convertToFormat(QImage.Format.Format_ARGB32)
-        left, top = image.width(), image.height()
-        right = bottom = -1
-        # ``Format_ARGB32`` stores four bytes per pixel.  Reading the alpha
-        # byte directly avoids a costly QColor allocation for every pixel of
-        # the (occasionally large) source PNG.
-        bits = image.constBits()
-        stride = image.bytesPerLine()
-        alpha_offset = 3 if sys.byteorder == "little" else 0
-        for y in range(image.height()):
-            row_offset = y * stride
-            for x in range(image.width()):
-                if bits[row_offset + x * 4 + alpha_offset] <= 0:
-                    continue
-                left = min(left, x)
-                top = min(top, y)
-                right = max(right, x)
-                bottom = max(bottom, y)
-        if right < left or bottom < top:
-            return pix
-        cropped = image.copy(QRect(left, top, right - left + 1, bottom - top + 1))
-        return QPixmap.fromImage(cropped)
-
-    def _icon_for_key(self, key: str) -> QPixmap | None:
-        if key in self._cache:
-            pix = self._cache[key]
-            return pix if not pix.isNull() else None
-        file_name = self._ICON_FILES.get(key)
-        if not file_name:
-            self._cache[key] = QPixmap()
-            return None
-        pix = QPixmap(str(self._icons_dir / file_name))
-        if key in {"post", "redelivery"} and not pix.isNull():
-            pix = self._trim_transparent_padding(pix)
-        self._cache[key] = pix
-        return pix if not pix.isNull() else None
-
     def _rendered_icon_for_key(self, key: str, size: int) -> QPixmap | None:
-        """Scale and, where required, tint an action icon for the table."""
+        """Render crisp vector symbols that remain legible at table size."""
         cache_key = f"{key}:{size}"
         if cache_key in self._rendered_cache:
             pix = self._rendered_cache[cache_key]
             return pix if not pix.isNull() else None
-        source = self._icon_for_key(key)
-        if source is None:
+        color = self._ACTION_COLORS.get(key)
+        if color is None or size < 1:
             self._rendered_cache[cache_key] = QPixmap()
             return None
-        scaled = source.scaled(
-            size,
-            size,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        tint = self._ICON_TINTS.get(key)
-        if tint is None:
-            rendered = scaled
+
+        rendered = QPixmap(size, size)
+        rendered.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(rendered)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pen = QPen(color)
+        pen.setWidthF(max(1.5, size / 9))
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        if key == "post":
+            box = QRect(2, 4, max(1, size - 4), max(1, size - 6))
+            painter.drawRoundedRect(box, 1.5, 1.5)
+            painter.drawLine(box.left(), box.top() + 4, box.right(), box.top() + 4)
+            painter.drawLine(size // 2, box.top(), size // 2, box.bottom())
+        elif key == "customs":
+            page = QRect(4, 2, max(1, size - 7), max(1, size - 4))
+            painter.drawRoundedRect(page, 1.5, 1.5)
+            painter.drawLine(page.left() + 3, page.top() + 5, page.right() - 2, page.top() + 5)
+            painter.drawLine(page.left() + 3, page.top() + 9, page.right() - 2, page.top() + 9)
         else:
-            image = QImage(scaled.size(), QImage.Format.Format_ARGB32_Premultiplied)
-            image.fill(Qt.GlobalColor.transparent)
-            icon_painter = QPainter(image)
-            icon_painter.drawPixmap(0, 0, scaled)
-            icon_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-            icon_painter.fillRect(image.rect(), tint)
-            icon_painter.end()
-            rendered = QPixmap.fromImage(image)
+            arc = QRect(2, 2, max(1, size - 4), max(1, size - 4))
+            painter.drawArc(arc, 40 * 16, 285 * 16)
+            arrow_x = arc.right() - 1
+            arrow_y = arc.top() + 3
+            painter.drawLine(arrow_x, arrow_y, arrow_x - 5, arrow_y)
+            painter.drawLine(arrow_x, arrow_y, arrow_x - 1, arrow_y + 4)
+        painter.end()
         self._rendered_cache[cache_key] = rendered
-        return rendered if not rendered.isNull() else None
+        return rendered
 
     @staticmethod
     def _layout(width: int, height: int) -> list[tuple[str, int, int]]:

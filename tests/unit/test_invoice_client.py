@@ -137,6 +137,42 @@ def test_recent_invoice_list_can_use_short_single_attempt_request() -> None:
 
     assert inv.list_recent_non_draft_summaries(request_timeout=12, max_retries=0) == []
     assert len(seen) == 1
+    assert "startDate" in seen[0].url.params
+
+
+def test_recent_invoice_list_excludes_historic_invoices_resurfaced_by_an_update() -> None:
+    today = date.today()
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "objects": [
+                    {
+                        "id": "legacy-update",
+                        "invoiceNumber": "RE-LEGACY",
+                        "invoiceDate": (today - timedelta(days=730)).isoformat(),
+                        "status": 1000,
+                    },
+                    {
+                        "id": "current",
+                        "invoiceNumber": "RE-CURRENT",
+                        "invoiceDate": today.isoformat(),
+                        "status": 1000,
+                    },
+                ]
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://example.test/api/v1")
+    inv = InvoiceClient(SevdeskConnection(client=client, config=AppConfig()))
+
+    rows = inv.list_recent_non_draft_summaries()
+
+    assert [row.id for row in rows] == ["current"]
+    assert "startDate" in seen[0].url.params
 
 
 def test_invoice_client_fetch_invoice_positions_uses_invoice_filter_params() -> None:

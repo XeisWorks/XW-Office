@@ -4,7 +4,7 @@ from __future__ import annotations
 import base64
 import logging
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import unicodedata
 from typing import Any
 
@@ -66,6 +66,20 @@ def _format_date_de_short(raw: str | None) -> str:
         return dt.strftime("%d.%m.%y")
     except (ValueError, TypeError):
         return raw
+
+
+def _is_on_or_after_invoice_date(raw: str | None, cutoff: date) -> bool:
+    """Return whether an invoice belongs to the current work-list window."""
+    value = str(raw or "").strip()
+    if not value:
+        return False
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date() >= cutoff
+    except ValueError:
+        try:
+            return date.fromisoformat(value[:10]) >= cutoff
+        except ValueError:
+            return False
 
 DEFAULT_SENSITIVE_COUNTRY_CODES: set[str] = {
     "AF",
@@ -461,6 +475,7 @@ class InvoiceClient:
         offset: int = 0,
         embed_contact: bool = True,
         status: int | None = None,
+        start_date: date | None = None,
         request_timeout: float | None = None,
         max_retries: int | None = None,
     ) -> list[InvoiceSummary]:
@@ -474,6 +489,8 @@ class InvoiceClient:
             params["embed"] = "contact"
         if status is not None:
             params["status"] = status
+        if start_date is not None:
+            params["startDate"] = start_date.isoformat()
 
         request_kwargs: dict[str, object] = {"params": params}
         if request_timeout is not None:
@@ -543,8 +560,15 @@ class InvoiceClient:
         request_timeout: float | None = None,
         max_retries: int | None = None,
     ) -> list[InvoiceSummary]:
-        """Return newest invoices excluding drafts, with offset in filtered space."""
+        """Return current working invoices, excluding historic record updates.
+
+        sevDesk can surface a years-old invoice at the top of an unfiltered
+        response when a third-party action updates its source order.  The
+        Rechnungen work list must follow the invoice date instead, while older
+        records remain reachable through search.
+        """
         excluded = set(excluded_statuses or {100})
+        recent_since = date.today() - timedelta(days=180)
         target_skip = max(0, int(offset))
         target_limit = max(1, int(limit))
         raw_offset = 0
@@ -558,6 +582,7 @@ class InvoiceClient:
                 offset=raw_offset,
                 embed_contact=embed_contact,
                 status=None,
+                start_date=recent_since,
                 request_timeout=request_timeout,
                 max_retries=max_retries,
             )
@@ -566,6 +591,8 @@ class InvoiceClient:
             raw_offset += len(batch)
 
             for summary in batch:
+                if not _is_on_or_after_invoice_date(summary.invoice_date, recent_since):
+                    continue
                 if summary.status_code in excluded:
                     continue
                 if skipped < target_skip:

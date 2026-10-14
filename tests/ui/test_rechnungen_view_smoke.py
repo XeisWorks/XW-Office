@@ -551,17 +551,20 @@ def test_actions_delegate_keeps_dark_theme_icons_visible(qtbot: object) -> None:
         redelivery_image.pixelColor(x, y)
         for y in range(redelivery_image.height())
         for x in range(redelivery_image.width())
-        if redelivery_image.pixelColor(x, y).alpha() > 0
+        if redelivery_image.pixelColor(x, y).alpha() >= 220
     ]
     assert visible_pixels
-    assert max(color.red() for color in visible_pixels) >= 220
-    assert max(color.green() for color in visible_pixels) >= 150
+    # Redelivery deliberately uses violet: it remains distinct from the
+    # yellow PLC and blue customs symbols in the same compact cell.
+    assert max(color.red() for color in visible_pixels) >= 180
+    assert max(color.blue() for color in visible_pixels) >= 240
+    assert max(color.green() for color in visible_pixels) < 180
 
-    # The PLC/post mark is a wide asset with transparent vertical export
-    # margins; the delegate trims those margins before scaling it for the row.
+    # All symbols are generated as square vector artwork, so source-image
+    # margins and downscaling cannot distort them.
     assert post is not None and not post.isNull()
     assert post.width() == 18
-    assert post.height() < 18
+    assert post.height() == 18
 
 
 def test_customer_mail_action_opens_outlook_web_compose_url(qtbot: object, monkeypatch) -> None:
