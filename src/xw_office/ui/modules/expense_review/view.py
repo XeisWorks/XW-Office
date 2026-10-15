@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStyle,
+    QStyleOptionFrame,
     QStyledItemDelegate,
     QTabBar,
     QTabWidget,
@@ -394,6 +395,7 @@ class _PurposeRuleDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Verwendungszweck bereinigen")
         layout = QFormLayout(self)
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.label = QLineEdit(label)
         self.payee = QLineEdit(payee)
         self.remove_text = QLineEdit(remove_text)
@@ -413,6 +415,53 @@ class _PurposeRuleDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
         _make_labels_copyable(self)
+        self._sample = sample
+        for line_edit in (self.label, self.payee, self.remove_text):
+            line_edit.setCursorPosition(0)
+            line_edit.textChanged.connect(self._fit_fields_to_contents)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        self._fit_fields_to_contents()
+
+    def _fit_fields_to_contents(self) -> None:
+        layout = cast(QFormLayout, self.layout())
+        margins = layout.contentsMargins()
+        label_width = max(
+            (
+                widget.sizeHint().width()
+                for line_edit in (self.label, self.payee, self.remove_text)
+                if (widget := layout.labelForField(line_edit)) is not None
+            ),
+            default=0,
+        )
+        spacing = max(
+            layout.horizontalSpacing(),
+            self.style().pixelMetric(QStyle.PixelMetric.PM_LayoutHorizontalSpacing),
+        )
+        max_dialog_width = self.screen().availableGeometry().width() - 80
+        overhead = margins.left() + margins.right() + label_width + spacing
+        required_width = 0
+        for line_edit in (self.label, self.payee, self.remove_text):
+            metrics = line_edit.fontMetrics()
+            text_width = max(
+                metrics.horizontalAdvance(line_edit.text() or line_edit.placeholderText()),
+                metrics.horizontalAdvance(self._sample),
+            )
+            option = QStyleOptionFrame()
+            line_edit.initStyleOption(option)
+            width = line_edit.style().sizeFromContents(
+                QStyle.ContentsType.CT_LineEdit, option,
+                QSize(text_width + 24, metrics.height()), line_edit,
+            ).width()
+            required_width = max(required_width, width)
+        field_width = min(required_width, max(1, max_dialog_width - overhead))
+        for line_edit in (self.label, self.payee, self.remove_text):
+            line_edit.setMinimumWidth(field_width)
+        self.resize(
+            min(max(self.width(), self.sizeHint().width()), max_dialog_width),
+            self.sizeHint().height(),
+        )
 
     def _accept_if_valid(self) -> None:
         if not self.payee.text().strip() or not self.remove_text.text().strip():
@@ -722,9 +771,6 @@ class ExpenseReviewView(QWidget):
         toolbar.addSpacing(12)
         toolbar.addWidget(self._status)
         toolbar.addStretch()
-        layout.addLayout(toolbar)
-        actions = QHBoxLayout()
-        actions.addStretch()
         self._add_button = QPushButton()
         self._add_button.setIcon(QIcon(str(_ROOT / "icons" / "expense_add.svg")))
         self._add_button.setToolTip("Neue zusätzliche Ausgabe")
@@ -749,8 +795,8 @@ class ExpenseReviewView(QWidget):
                 "QPushButton:hover, QPushButton:focus { background: #27324b; border-radius: 6px; }"
                 "QPushButton:disabled { background: transparent; }"
             )
-            actions.addWidget(button)
-        layout.addLayout(actions)
+            toolbar.addWidget(button)
+        layout.addLayout(toolbar)
         self._configure_expense_table(self._table)
         self._table.doubleClicked.connect(self._on_bank_double_clicked)
         layout.addWidget(self._table, stretch=1)

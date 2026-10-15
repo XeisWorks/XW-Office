@@ -313,6 +313,11 @@ def test_bank_toolbar_and_settings_dialog(
         assert "border: none" in button.styleSheet()
         assert "padding: 0px" in button.styleSheet()
         assert button.geometry().bottom() < view._table.geometry().top()
+        assert abs(button.geometry().center().y() - view._missing_only.geometry().center().y()) <= 1
+        if tenant_index == 0:
+            assert abs(
+                button.geometry().center().y() - view._category_filter.geometry().center().y()
+            ) <= 1
     assert buttons[0].x() < buttons[1].x() < buttons[2].x()
     assert buttons[2].geometry().right() == view._table.geometry().right()
 
@@ -330,6 +335,49 @@ def test_bank_toolbar_and_settings_dialog(
     assert view._tenant_label in view._settings_dialog.windowTitle()
     assert view._settings_dialog.result() == QDialog.DialogCode.Rejected
     application.setStyleSheet(original_stylesheet)
+
+
+@pytest.mark.parametrize("theme", ["dark_gold", "light_gold"])
+def test_purpose_dialog_fields_fit_contents_and_grow_when_edited(
+    qtbot: QtBot, theme: str
+) -> None:
+    application = QApplication.instance()
+    assert isinstance(application, QApplication)
+    original_stylesheet = application.styleSheet()
+    try:
+        apply_app_theme(application, theme)
+        label = "Wiederkehrende Zahlung fuer Musikproduktion und Musikvertrieb"
+        payee = "WuedaraMusi Musikproduktion und Veranstaltungsservice GmbH"
+        remove_text = "Wiederkehrende Zahlung laut vereinbartem SEPA-Lastschriftmandat"
+        dialog = _PurposeRuleDialog(
+            label=label, payee=payee, remove_text=remove_text,
+            sample="Referenz Musikproduktion 2026",
+        )
+        qtbot.addWidget(dialog)
+        dialog.show()
+        qtbot.wait(20)
+        for field in (dialog.label, dialog.payee, dialog.remove_text):
+            assert field.contentsRect().width() >= field.fontMetrics().horizontalAdvance(field.text()) + 20
+        initial_width = dialog.width()
+        dialog.remove_text.setFocus()
+        dialog.remove_text.setCursorPosition(len(dialog.remove_text.text()))
+        QTest.keyClicks(dialog.remove_text, " fuer Musikproduktion")
+        qtbot.wait(20)
+        assert dialog.width() > initial_width
+        assert dialog.remove_text.width() >= dialog.remove_text.fontMetrics().horizontalAdvance(
+            dialog.remove_text.text()
+        ) + 20
+    finally:
+        application.setStyleSheet(original_stylesheet)
+
+
+def test_purpose_dialog_long_contents_stay_within_screen(qtbot: QtBot) -> None:
+    dialog = _PurposeRuleDialog(label="Empfaenger " * 80, sample="Verwendungszweck " * 100)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.wait(20)
+    assert dialog.width() <= dialog.screen().availableGeometry().width() - 40
+    assert dialog.label.cursorPosition() == 0
 
 
 def test_missing_filter_is_refreshed_after_an_inflight_cached_load(

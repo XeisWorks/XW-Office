@@ -49,12 +49,15 @@ beruecksichtigt. Aenderungen an den Kategorien erfolgen ausschliesslich in XeisW
 sevDesk-Links, Lieferantenportale und manuelle Anhaenge oeffnen weiterhin die Originalbelege.
 Ausgaben werden in der zusaetzlichen Tabelle als positive Ausgabenbetraege dargestellt.
 
-Rechts ueber der Tabelle stehen drei rahmenlose Aktionen: **Plus** fuer eine zusaetzliche
+Rechtsbuendig in derselben Zeile wie Filter und Checkboxen stehen drei rahmenlose Aktionen:
+**Plus** fuer eine zusaetzliche
 Ausgabe, **Aktualisieren** fuer Kontobewegungen, Belegverknuepfungen und zusaetzliche Ausgaben sowie das
 **Zahnrad** fuer Lieferantenportale und Zweckbereinigung des aktuellen Mandanten sowie
 in XeisWorks fuer Kategorien und Zuordnungsregeln. **Neu laden** und das Aktualisierungsicon stossen dieselbe
 inkrementelle Pruefung an; ein separater Vollscan-Textbutton ist nicht mehr vorhanden.
 Ein Doppelklick auf **Zweck / Referenz** oeffnet die empfaengerbezogene Zweckbereinigung.
+Die Felder im Dialog passen ihre Breite an vorhandenen und eingegebenen Text an;
+die verfuegbare Bildschirmbreite begrenzt die Vergroesserung.
 Die Tabelle fuer zusaetzliche Ausgaben zeigt maximal zwei Zeilen; weitere Eintraege sind
 per Scrollbar erreichbar. Der restliche Platz gehoert der Haupttabelle.
 
