@@ -31,6 +31,11 @@ class _ExpenseServiceStub:
     def list_bank_expenses(self, **kwargs: object) -> list[BankExpenseRow]:
         return []
 
+    def list_wuedara_shared_bank_expenses(
+        self, *, start: date, end: date
+    ) -> list[BankExpenseRow]:
+        return []
+
     def synchronize_bank_expenses(
         self, *, start: date, end: date, force: bool = False
     ) -> BankExpenseLoad:
@@ -235,7 +240,7 @@ def _visible_ids(view: ExpenseReviewView) -> set[str]:
     return {str(row["__transaction_id"]) for row in view._table.source_rows_data()}
 
 
-@pytest.mark.parametrize("tenant_index", [0, 1])
+@pytest.mark.parametrize("tenant_index", [0])
 def test_bank_filters_combine_category_website_and_missing_document(
     qtbot: QtBot, tenant_index: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -313,9 +318,13 @@ def test_bank_toolbar_and_settings_dialog(
 
     settings_tabs = view._settings_dialog.findChild(QTabWidget)
     assert settings_tabs is not None
-    assert [settings_tabs.tabText(i) for i in range(settings_tabs.count())] == [
-        "Kategorien", "Zuordnungsregeln", "Lieferantenportale", "Verwendungszwecke",
-    ]
+    assert [
+        settings_tabs.tabText(i) for i in range(settings_tabs.count())
+        if settings_tabs.isTabVisible(i)
+    ] == (
+        ["Kategorien", "Zuordnungsregeln", "Lieferantenportale", "Verwendungszwecke"]
+        if tenant_index == 0 else ["Lieferantenportale", "Verwendungszwecke"]
+    )
     QTimer.singleShot(0, view._settings_dialog.reject)
     QTest.mouseClick(view._settings_button, Qt.MouseButton.LeftButton)
     assert view._tenant_label in view._settings_dialog.windowTitle()
@@ -381,7 +390,7 @@ def test_add_icon_still_opens_manual_expense_action(
     assert opened == ["xw", "wuedara"]
 
 
-@pytest.mark.parametrize("tenant_index", [0, 1])
+@pytest.mark.parametrize("tenant_index", [0])
 def test_unassigned_filter_combines_and_updates_after_assignment(
     qtbot: QtBot, tenant_index: int
 ) -> None:
@@ -576,8 +585,8 @@ def test_period_change_discards_stale_manual_expenses_and_reloads_current_period
         def sync_categories(self, **kwargs: object) -> None:
             pass
 
-        def fetch(
-            self, *, tenant_key: str, start: date, end: date, active_only: bool
+        def fetch_for_review(
+            self, *, tenant_key: str, start: date, end: date
         ) -> list[object]:
             fetched.append((start, end))
             if len(fetched) == 1:

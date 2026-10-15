@@ -3,15 +3,19 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLineEdit, QMessageBox
+from PySide6.QtWidgets import (
+    QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLineEdit, QMessageBox, QWidget,
+)
 
 from xw_office.services.expenses.xw_flow_expense_client import XwFlowExpenseClient
-from xw_office.services.expenses.service import ExpensePositionView
+from xw_office.services.expenses.service import ExpensePositionView, WUEDARA_EXPENSE_POSITION
 
 
 class ManualExpenseDialog(QDialog):
-    def __init__(self, client: XwFlowExpenseClient, tenant_key: str, positions: list[ExpensePositionView], parent=None) -> None:
+    def __init__(
+        self, client: XwFlowExpenseClient, tenant_key: str,
+        positions: list[ExpensePositionView], parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._client = client
         self._tenant_key = tenant_key
@@ -40,7 +44,10 @@ class ManualExpenseDialog(QDialog):
         ):
             self.payment.addItem(label, key)
         self.note = QLineEdit()
-        layout.addRow("Kategorie", self.category)
+        if tenant_key == "xw":
+            layout.addRow("Kategorie", self.category)
+        else:
+            self.category.hide()
         layout.addRow("Brutto EUR", self.amount)
         layout.addRow("Datum", self.expense_date)
         layout.addRow("Empfänger", self.recipient)
@@ -52,8 +59,6 @@ class ManualExpenseDialog(QDialog):
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
-        for label in self.findChildren(QLineEdit):
-            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse | Qt.TextInteractionFlag.TextEditable)
 
     def _save(self) -> None:
         try:
@@ -67,7 +72,10 @@ class ManualExpenseDialog(QDialog):
         if amount <= 0 or not (recipient or purpose):
             QMessageBox.warning(self, "Ausgabe", "Betrag sowie Empfänger oder Zweck sind erforderlich.")
             return
-        position = self.category.currentData()
+        position = (
+            WUEDARA_EXPENSE_POSITION if self._tenant_key == "wuedara"
+            else self.category.currentData()
+        )
         if not isinstance(position, ExpensePositionView):
             QMessageBox.warning(self, "Ausgabe", "Bitte eine Kategorie wählen.")
             return
@@ -88,4 +96,3 @@ class ManualExpenseDialog(QDialog):
             QMessageBox.warning(self, "Ausgabe konnte nicht gespeichert werden", str(exc))
             return
         self.accept()
-

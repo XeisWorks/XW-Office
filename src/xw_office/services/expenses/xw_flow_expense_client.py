@@ -134,6 +134,22 @@ class XwFlowExpenseClient:
             response.raise_for_status()
         return self._parse(response.json())
 
+    def fetch_for_review(
+        self, *, tenant_key: str, start: date, end: date
+    ) -> list[FlowExpense]:
+        expenses = self.fetch(tenant_key=tenant_key, start=start, end=end, active_only=False)
+        own_expenses = [item for item in expenses if item.tenant_key == tenant_key]
+        if tenant_key != "wuedara":
+            return own_expenses
+        shared = self.fetch(tenant_key="xw", start=start, end=end, active_only=False)
+        return own_expenses + [
+            item for item in shared
+            if item.tenant_key == "xw"
+            and item.category_key == "wm"
+            and item.expense_date is not None
+            and start <= date.fromisoformat(item.expense_date) <= end
+        ]
+
     def update_category(self, *, expense_id: str, version: int, category_key: str, category_label: str) -> FlowExpense:
         connection = self._connection()
         if connection is None:

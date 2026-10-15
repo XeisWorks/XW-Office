@@ -20,19 +20,39 @@ PySide6 desktop application for XeisWorks music publishing business management.
 ### Ausgabenpruefung
 
 Fuer XeisWorks und WuedaraMusi sind Kontobewegungen und Belegpruefung in einer gemeinsamen
-Ansicht integriert. Der Kategoriefilter bietet alle konfigurierten Kategorien sowie **Ohne Kategorie**.
+Ansicht integriert. Im Bereich **XeisWorks** bietet der Kategoriefilter alle konfigurierten
+Kategorien sowie **Ohne Kategorie**.
 **Nur fehlende Belege anzeigen** zeigt ausschliesslich gepruefte Kontobewegungen mit
 Lieferantenportal (Website-Icon), aber ohne verknuepften sevDesk-Beleg; wie in der bisherigen
 Belegansicht werden dabei auch Eingaenge beruecksichtigt. Ohne diesen Filter bleiben die
 ausgehenden Zahlungen sichtbar. **Nur offene Zuordnungen anzeigen** blendet bereits
-kategorisierte Kontobewegungen aus und ist mit beiden anderen Filtern kombinierbar.
+kategorisierte Kontobewegungen in XeisWorks aus und ist mit beiden anderen Filtern kombinierbar.
 Rechts neben den Checkboxen steht die Gesamtzahl der ausgehenden Zahlungen im Zeitraum.
 Unvollstaendige Belegscans werden im Status ausgewiesen.
 
+Im Bereich **WuedaraMusi** gibt es keine Kategorie-Spalten, keinen Kategoriefilter und
+keine Checkbox fuer offene Zuordnungen. Auch die Kategorie-Einstellungen und die
+Kategorieauswahl beim Erfassen einer zusaetzlichen Ausgabe entfallen dort.
+Vorhandene Kategorien werden nicht geloescht; die Ausgaben-Bridge erhaelt fuer neue
+WuedaraMusi-Ausgaben intern die feste WM-Zuordnung, ohne Auswahl durch den Benutzer.
+XeisWorks behaelt seine Kategorien und Filter beim Mandantenwechsel.
+
+Unter **WuedaraMusi > Zusaetzliche Ausgaben** erscheinen neben den dort erfassten Ausgaben
+auch die in XeisWorks mit **WM** kategorisierten ausgehenden Kontobewegungen und manuellen
+Ausgaben des gewaehlten WuedaraMusi-Zeitraums. Die Spalte **Herkunft** unterscheidet
+XeisWorks-Konto, XeisWorks-manuell und WuedaraMusi-manuell. Die Darstellung liest die
+Originaldaten, ohne neue Ausgaben oder Kopien in einem anderen Mandanten anzulegen.
+Die Bankausgaben stammen aus dem gemeinsamen PostgreSQL-Cache, manuelle Ausgaben aus
+der XW-Flow-Bridge. Bankausgaben bleiben auch ohne konfigurierte manuelle Bridge sichtbar.
+Ein anderer Zeitraum oder eine geaenderte WM-Zuordnung wird beim naechsten Laden/Cache-Abgleich
+beruecksichtigt. Aenderungen an den Kategorien erfolgen ausschliesslich in XeisWorks;
+sevDesk-Links, Lieferantenportale und manuelle Anhaenge oeffnen weiterhin die Originalbelege.
+Ausgaben werden in der zusaetzlichen Tabelle als positive Ausgabenbetraege dargestellt.
+
 Rechts ueber der Tabelle stehen drei rahmenlose Aktionen: **Plus** fuer eine zusaetzliche
 Ausgabe, **Aktualisieren** fuer Kontobewegungen, Belegverknuepfungen und zusaetzliche Ausgaben sowie das
-**Zahnrad** fuer Kategorien, Zuordnungsregeln, Lieferantenportale und Zweckbereinigung
-des aktuellen Mandanten. **Neu laden** und das Aktualisierungsicon stossen dieselbe
+**Zahnrad** fuer Lieferantenportale und Zweckbereinigung des aktuellen Mandanten sowie
+in XeisWorks fuer Kategorien und Zuordnungsregeln. **Neu laden** und das Aktualisierungsicon stossen dieselbe
 inkrementelle Pruefung an; ein separater Vollscan-Textbutton ist nicht mehr vorhanden.
 Ein Doppelklick auf **Zweck / Referenz** oeffnet die empfaengerbezogene Zweckbereinigung.
 Die Tabelle fuer zusaetzliche Ausgaben zeigt maximal zwei Zeilen; weitere Eintraege sind

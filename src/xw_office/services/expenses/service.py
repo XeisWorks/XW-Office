@@ -135,6 +135,7 @@ DEFAULT_EXPENSE_POSITIONS: tuple[ExpensePositionView, ...] = (
     ExpensePositionView("bh", "Blechhaufn", "BH", "#2878b5", 40),
     ExpensePositionView("priv", "Privat", "PRIV", "#777777", 50),
 )
+WUEDARA_EXPENSE_POSITION = next(item for item in DEFAULT_EXPENSE_POSITIONS if item.key == "wm")
 
 
 class ExpenseAction(str, Enum):
@@ -285,6 +286,19 @@ class ExpenseAuditService:
             "Ausgaben-Check: Belege pruefen und fuer UVA/FIBU vorbereiten "
             "(DB-Liste + Filter + CSV-Export, mit Ignore-Regeln und Perioden-Verschiebung)."
         )
+
+    def list_wuedara_shared_bank_expenses(
+        self, *, start: datetime.date, end: datetime.date
+    ) -> list[BankExpenseRow]:
+        """Read XeisWorks-funded WM expenses from the shared cache, without copying them."""
+        if start > end:
+            raise ValueError("Das Startdatum muss vor dem Enddatum liegen.")
+        return [
+            row for row in self.for_tenant("xw").list_bank_expenses(
+                start=start, end=end, refresh=False, outgoing_only=True
+            )
+            if row.position_key == "wm" and row.amount < 0
+        ]
 
     def list_bank_expenses(
         self,

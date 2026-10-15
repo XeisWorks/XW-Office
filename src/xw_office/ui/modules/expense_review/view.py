@@ -1,13 +1,14 @@
 """FINANZEN > Ausgabenprüfung."""
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
+import httpx
 from PySide6.QtCore import (
     QDate,
     QEvent,
@@ -56,9 +57,15 @@ from xw_office.services.expenses.service import (
     BankExpenseRow,
     ExpenseAuditService,
     ExpensePositionView,
+    WUEDARA_EXPENSE_POSITION,
 )
 from xw_office.services.expenses.xw_flow_expense_client import FlowExpense, XwFlowExpenseClient
 from xw_office.services.secrets.service import SecretService
+from xw_office.ui.modules.expense_review.additional_expenses import (
+    ADDITIONAL_EXPENSE_HEADERS,
+    manual_expense_rows,
+    shared_bank_expense_rows,
+)
 from xw_office.ui.modules.expense_review.manual_expense_dialog import ManualExpenseDialog
 from xw_office.ui.widgets.data_table import DataTable
 
@@ -83,12 +90,14 @@ _GERMAN_MONTHS = (
     "Dezember",
 )
 _CUSTOM_PERIOD = "custom"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class _ReviewLoad:
     bank: BankExpenseLoad
     positions: list[ExpensePositionView]
+    shared_bank: list[BankExpenseRow] = field(default_factory=list)
 
 
 def _make_labels_copyable(widget: QWidget) -> None:
@@ -206,11 +215,10 @@ class _DocumentDelegate(QStyledItemDelegate):
         supplier_url = str(row.get("__supplier_url") or "")
         if supplier_url:
             result.append((QRect(left, top, 22, 22), "website", supplier_url))
-        else:
+        elif not row.get("__manual_id") and not row.get("__read_only"):
             result.append((QRect(left, top, 22, 22), "add_supplier", ""))
-        for _attachment_id in row.get("__manual_attachment_ids") or []:
-            result.append((QRect(left + 27, top, 22, 22), "attachment", ""))
-            left += 27
+        if row.get("__manual_attachment_ids"):
+            result.append((QRect(left, top, 22, 22), "attachment", ""))
         return result
 
     @staticmethod
@@ -498,6 +506,9 @@ class ExpenseReviewView(QWidget):
         self._rows: list[BankExpenseRow] = []
         self._all_rows: list[BankExpenseRow] = []
         self._positions: list[ExpensePositionView] = []
+        self._manual_expenses: list[FlowExpense] = []
+        self._shared_bank_expenses: list[BankExpenseRow] = []
+        self._source_reload_pending = False
         self._settings = QSettings("XeisWorks", "XW Office")
         self._header_save_timer = QTimer(self)
         self._header_save_timer.setSingleShot(True)
@@ -511,14 +522,14 @@ class ExpenseReviewView(QWidget):
         self._sync_status = QLabel()
         self._sync_status.setWordWrap(True)
         self._category_filter = QComboBox()
+        self._category_label = QLabel("Kategorie:")
         self._category_filter.addItem("Alle Kategorien", None)
         self._category_filter.addItem("Ohne Kategorie", "")
         self._missing_only = QCheckBox("Nur fehlende Belege anzeigen")
         self._unassigned_only = QCheckBox("Nur offene Zuordnungen anzeigen")
         self._table = DataTable(_HEADERS)
-        self._manual_table = DataTable(
-            ["Datum", "Empfänger", "Zweck", "Betrag", "USt.", "Zahlungsart", "Kategorie", "Beleg", "Prüfung", "Rückzahlung"]
-        )
+        self._manual_table = DataTable(ADDITIONAL_EXPENSE_HEADERS)
+        self._manual_heading = QLabel("Zusätzliche Ausgaben – bar oder privat bezahlt")
         self._position_table = DataTable(["Kürzel", "Kategorie", "Farbe", "Aktiv"])
         self._rule_table = DataTable(["Kategorie", "Bezeichnung", "Empfänger", "IBAN", "Zweck", "Aktiv"])
         self._supplier_table = DataTable(["Bezeichnung", "Empfänger", "IBAN", "Website", "Aktiv"])
@@ -582,6 +593,7 @@ class ExpenseReviewView(QWidget):
         close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         close.rejected.connect(self._settings_dialog.reject)
         settings_layout.addWidget(close)
+        self._apply_tenant_controls()
 
     def _setup_period_selector(self, today: date) -> None:
         self._period.clear()
@@ -696,7 +708,7 @@ class ExpenseReviewView(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
         toolbar = QHBoxLayout()
-        toolbar.addWidget(QLabel("Kategorie:"))
+        toolbar.addWidget(self._category_label)
         self._category_filter.setAccessibleName("Kontobewegungen nach Kategorie filtern")
         self._category_filter.currentIndexChanged.connect(self._apply_bank_filters)
         toolbar.addWidget(self._category_filter)
@@ -743,7 +755,7 @@ class ExpenseReviewView(QWidget):
         self._table.doubleClicked.connect(self._on_bank_double_clicked)
         layout.addWidget(self._table, stretch=1)
         manual_header = QHBoxLayout()
-        manual_header.addWidget(QLabel("Zusätzliche Ausgaben – bar oder privat bezahlt"))
+        manual_header.addWidget(self._manual_heading)
         manual_header.addStretch()
         layout.addLayout(manual_header)
         self._configure_manual_table()
@@ -759,6 +771,7 @@ class ExpenseReviewView(QWidget):
         header.setStretchLastSection(False)
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self._manual_table.setItemDelegateForColumn(6, self._position_delegate)
+        self._manual_table.setItemDelegateForColumn(7, self._document_delegate)
         state = self._settings.value(f"expense_review/{self._tenant_key}/manual_table_header")
         if state is not None:
             header.restoreState(state)
@@ -795,6 +808,7 @@ class ExpenseReviewView(QWidget):
 
     def _build_settings_tab(self) -> QWidget:
         tabs = QTabWidget()
+        self._settings_tabs = tabs
         positions = QWidget()
         position_layout = QVBoxLayout(positions)
         position_layout.addWidget(self._position_table)
@@ -892,7 +906,12 @@ class ExpenseReviewView(QWidget):
                 bank = BankExpenseLoad(
                     rows, document_scan_complete=all(row.document_link_scan_complete for row in rows)
                 )
-            return _ReviewLoad(bank, service.list_positions(enabled_only=False))
+            shared_bank = (
+                service.list_wuedara_shared_bank_expenses(start=start, end=end)
+                if tenant_key == "wuedara" else []
+            )
+            positions = service.list_positions(enabled_only=False) if tenant_key == "xw" else []
+            return _ReviewLoad(bank, positions, shared_bank)
 
         succeeded = False
 
@@ -934,6 +953,8 @@ class ExpenseReviewView(QWidget):
             return
         cached = self._tenant_loads.get(self._tenant_key)
         if cached is not None and cached[2] != self._selected_period():
+            self._manual_expenses = []
+            self._shared_bank_expenses = []
             self._manual_table.set_data([])
         self._load(refresh=False, sync_after=True)
 
@@ -959,14 +980,18 @@ class ExpenseReviewView(QWidget):
         service = self.service
 
         def fetch_manual() -> list[FlowExpense]:
-            category_snapshot = [position.__dict__ for position in service.list_positions(enabled_only=False)]
+            positions = (
+                service.list_positions(enabled_only=False) if tenant_key == "xw"
+                else [WUEDARA_EXPENSE_POSITION]
+            )
+            category_snapshot = [position.__dict__ for position in positions]
             try:
                 client.sync_categories(tenant_key=tenant_key, positions=category_snapshot)
-            except Exception:
+            except httpx.HTTPError as exc:
                 # Category mirroring is additive; a temporary bridge problem must
                 # not hide already captured expenses.
-                pass
-            return client.fetch(tenant_key=tenant_key, start=start, end=end, active_only=False)
+                logger.warning("Ausgabenkategorien für %s nicht synchronisiert: %s", tenant_key, exc)
+            return client.fetch_for_review(tenant_key=tenant_key, start=start, end=end)
 
         worker = BackgroundWorker(fetch_manual)
         self._manual_workers[tenant_key] = worker
@@ -991,42 +1016,28 @@ class ExpenseReviewView(QWidget):
         self._manual_workers.pop(tenant_key)
         if isValid(self) and tenant_key == self._tenant_key and period != self._selected_period():
             self._load_manual_expenses()
+        self._reload_shared_sources_if_ready()
 
     def _on_manual_error(self, tenant_key: str, exc: Exception) -> None:
-        if isValid(self) and tenant_key == self._tenant_key and hasattr(self._container, "config") and self.flow_expense_client.is_configured():
+        if isValid(self) and tenant_key == self._tenant_key:
             self._sync_status.setText(f"Zusätzliche Ausgaben nicht geladen: {exc}")
 
     def _on_manual_loaded(self, tenant_key: str, payload: object) -> None:
         if not isValid(self) or tenant_key != self._tenant_key:
             return
-        values = [item for item in payload if isinstance(item, FlowExpense)] if isinstance(payload, list) else []
-        positions = [position.__dict__ for position in self._positions]
-        self._manual_table.set_data(
-            [
-                {
-                    "Datum": item.expense_date or "offen",
-                    "Empfänger": item.recipient,
-                    "Zweck": item.purpose,
-                    "Betrag": format_euro_amount(item.gross_amount or Decimal("0")),
-                    "USt.": f"{item.tax_rate_bps / 100:g} %" if item.tax_rate_bps is not None else "unbekannt",
-                    "Zahlungsart": item.payment_source,
-                    "Kategorie": "",
-                    "Beleg": "vorhanden" if item.receipt_state == "attached" else "fehlt",
-                    "Prüfung": item.accounting_status,
-                    "Rückzahlung": item.reimbursement_status,
-                    "__transaction_id": f"manual:{item.id}",
-                    "__manual_id": item.id,
-                    "__manual_version": item.version,
-                    "__manual_attachment_ids": list(item.attachment_ids),
-                    "__positions": positions,
-                    "__position_key": item.category_key,
-                    "__align__Betrag": "right",
-                    "__align__Kategorie": "center",
-                    "__fg__Betrag": "#ff9c9c",
-                }
-                for item in values
-            ]
+        self._manual_expenses = (
+            [item for item in payload if isinstance(item, FlowExpense)]
+            if isinstance(payload, list) else []
         )
+        self._render_additional_expenses()
+
+    def _render_additional_expenses(self) -> None:
+        rows = manual_expense_rows(
+            self._manual_expenses, self._positions, tenant_key=self._tenant_key
+        )
+        if self._tenant_key == "wuedara":
+            rows.extend(shared_bank_expense_rows(self._shared_bank_expenses))
+        self._manual_table.set_data(rows)
         self._manual_table.resizeColumnsToContents()
 
     def _open_manual_attachment(self, row: object) -> None:
@@ -1064,6 +1075,7 @@ class ExpenseReviewView(QWidget):
                 self._load_cached_then_sync()
             elif sync_after:
                 self._load(refresh=True, automatic=True, load_manual_expenses=False)
+        self._reload_shared_sources_if_ready()
 
     def _on_load_error(self, tenant_key: str, exc: Exception) -> None:
         if isValid(self) and tenant_key == self._tenant_key:
@@ -1082,6 +1094,7 @@ class ExpenseReviewView(QWidget):
         self._tenant_loads[tenant_key] = (all_rows, positions, period)
         if tenant_key != self._tenant_key or self._selected_period() != period:
             return
+        self._shared_bank_expenses = payload.shared_bank
         self._apply_tenant_load(all_rows, positions)
         if not refresh:
             self._sync_status.setText("Gespeicherter Stand")
@@ -1102,15 +1115,20 @@ class ExpenseReviewView(QWidget):
         self._status.setText(f"{len(self._rows)} ausgehende Zahlungen")
         self._status.setToolTip(f"Konto {self._tenant_label}")
         self._refresh_category_filter(positions)
+        self._render_additional_expenses()
 
     def _apply_bank_filters(self) -> None:
-        category = self._category_filter.currentData()
+        categories_enabled = self._tenant_key == "xw"
+        category = self._category_filter.currentData() if categories_enabled else None
         missing_only = self._missing_only.isChecked()
         rows = self._all_rows if missing_only else self._rows
         filtered = [
             row for row in rows
             if (category is None or row.position_key == category)
-            and (not self._unassigned_only.isChecked() or not row.position_key)
+            and (
+                not categories_enabled or not self._unassigned_only.isChecked()
+                or not row.position_key
+            )
             and (
                 not missing_only
                 or (row.supplier_url and row.document_link_scan_complete and not row.documents)
@@ -1126,6 +1144,7 @@ class ExpenseReviewView(QWidget):
         self._header_save_timer.stop()
         self._save_table_header()
         self._tenant_key = tenant_key
+        self._source_reload_pending = False
         self._account_label.setText(f"Konto: {self._tenant_label}")
         self._restore_period_state()
         self._period_reload_timer.stop()
@@ -1136,6 +1155,9 @@ class ExpenseReviewView(QWidget):
         manual_state = self._settings.value(f"expense_review/{self._tenant_key}/manual_table_header")
         if manual_state is not None:
             self._manual_table.horizontalHeader().restoreState(manual_state)
+        self._apply_tenant_controls()
+        self._manual_expenses = []
+        self._shared_bank_expenses = []
         cached = self._tenant_loads.get(tenant_key)
         has_cached_period = cached is not None and cached[2] == self._selected_period()
         if cached is not None and has_cached_period:
@@ -1153,6 +1175,22 @@ class ExpenseReviewView(QWidget):
         else:
             self._sync_status.setText(f"Konto {self._tenant_label} wird geladen …")
         self._load_manual_expenses()
+
+    def _apply_tenant_controls(self) -> None:
+        categories_enabled = self._tenant_key == "xw"
+        self._category_label.setVisible(categories_enabled)
+        self._category_filter.setVisible(categories_enabled)
+        self._unassigned_only.setVisible(categories_enabled)
+        self._table.setColumnHidden(4, not categories_enabled)
+        self._manual_table.setColumnHidden(6, not categories_enabled)
+        self._settings_tabs.setTabVisible(0, categories_enabled)
+        self._settings_tabs.setTabVisible(1, categories_enabled)
+        if not categories_enabled and self._settings_tabs.currentIndex() < 2:
+            self._settings_tabs.setCurrentIndex(2)
+        self._manual_heading.setText(
+            "Zusätzliche Ausgaben – bar, privat oder über XeisWorks bezahlt"
+            if not categories_enabled else "Zusätzliche Ausgaben – bar oder privat bezahlt"
+        )
 
     def _populate(
         self, table: DataTable, rows: list[BankExpenseRow], *, receipt_mode: bool = False
@@ -1238,6 +1276,11 @@ class ExpenseReviewView(QWidget):
         return f"{row.position_source or 'zugeordnet'}{suffix}"
 
     def _assign_position(self, transaction_id: str, position_key: str) -> None:
+        if self._tenant_key != "xw":
+            _show_copyable_message(
+                self, "Kategorie", "Kategorien werden nur im Bereich XeisWorks zugeordnet."
+            )
+            return
         if transaction_id.startswith("manual:"):
             self._assign_manual_position(transaction_id.removeprefix("manual:"), position_key)
             return
@@ -1257,18 +1300,19 @@ class ExpenseReviewView(QWidget):
         self._table.clearSelection()
         QTimer.singleShot(0, self._table.clearSelection)
 
+        service = self.service
         worker = BackgroundWorker(
-            lambda: self.service.assign_transaction_position(
+            lambda: service.assign_transaction_position(
                 transaction_id=transaction_id, position_key=position_key
             )
         )
         worker.signals.error.connect(self._on_error)
+        worker.signals.result.connect(lambda _: self._on_assignment_saved(manual=False))
         worker.signals.finished.connect(lambda: self._assignment_workers.remove(worker))
         self._assignment_workers.append(worker)
         worker.start()
 
     def _assign_manual_position(self, expense_id: str, position_key: str) -> None:
-        tenant_key = self._tenant_key
         selected = next(
             (row for row in self._manual_table.source_rows_data() if row.get("__manual_id") == expense_id),
             None,
@@ -1278,19 +1322,38 @@ class ExpenseReviewView(QWidget):
         position = next((item for item in self._positions if item.key == position_key), None)
         if position is None:
             return
+        client = self.flow_expense_client
         worker = BackgroundWorker(
-            lambda: self.flow_expense_client.update_category(
+            lambda: client.update_category(
                 expense_id=expense_id,
                 version=int(selected.get("__manual_version") or 1),
                 category_key=position_key,
                 category_label=position.label,
             )
         )
-        worker.signals.result.connect(
-            lambda _, key=tenant_key: self._load_manual_expenses() if key == self._tenant_key else None
-        )
-        worker.signals.error.connect(lambda exc, key=tenant_key: self._on_manual_error(key, exc))
+        worker.signals.result.connect(lambda _: self._on_assignment_saved(manual=True))
+        worker.signals.error.connect(lambda exc: self._on_manual_error("xw", exc))
+        worker.signals.finished.connect(lambda: self._assignment_workers.remove(worker))
+        self._assignment_workers.append(worker)
         worker.start()
+
+    def _on_assignment_saved(self, *, manual: bool) -> None:
+        if not isValid(self):
+            return
+        if self._tenant_key == "wuedara":
+            self._source_reload_pending = True
+            self._reload_shared_sources_if_ready()
+        elif manual:
+            self._load_manual_expenses()
+
+    def _reload_shared_sources_if_ready(self) -> None:
+        if (
+            isValid(self) and self._tenant_key == "wuedara" and self._source_reload_pending
+            and self._tenant_key not in self._workers
+            and self._tenant_key not in self._manual_workers
+        ):
+            self._source_reload_pending = False
+            self._load_cached_then_sync()
 
     def _refresh_missing_receipts(self) -> None:
         worker = self._workers.get(self._tenant_key)
@@ -1347,6 +1410,9 @@ class ExpenseReviewView(QWidget):
         self._load(refresh=False)
 
     def _refresh_category_filter(self, positions: list[ExpensePositionView]) -> None:
+        if self._tenant_key != "xw":
+            self._apply_bank_filters()
+            return
         category = self._category_filter.currentData()
         with QSignalBlocker(self._category_filter):
             self._category_filter.clear()
@@ -1362,7 +1428,9 @@ class ExpenseReviewView(QWidget):
         self._apply_bank_filters()
 
     def _refresh_settings(self) -> None:
-        positions = self.service.list_positions(enabled_only=False)
+        positions = (
+            self.service.list_positions(enabled_only=False) if self._tenant_key == "xw" else []
+        )
         self._refresh_category_filter(positions)
         self._position_table.set_data(
             [
@@ -1388,7 +1456,9 @@ class ExpenseReviewView(QWidget):
                     "__id": str(getattr(item, "id", "")),
                     "__enabled": bool(getattr(item, "enabled", False)),
                 }
-                for item in self.service.list_position_rules()
+                for item in (
+                    self.service.list_position_rules() if self._tenant_key == "xw" else []
+                )
             ]
         )
         self._supplier_table.set_data(
