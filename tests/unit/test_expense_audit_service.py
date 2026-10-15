@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import json
+import datetime
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import create_engine
@@ -14,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from xw_office.models.base import Base
 from xw_office.repositories.expense_check import ExpenseCheckRepository
 from xw_office.repositories.expense_pipeline import ExpensePipelineRepository
+from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.expenses.bank_provider import (
     BankDocumentLink,
     BankExpense,
@@ -21,6 +26,7 @@ from xw_office.services.expenses.bank_provider import (
     SevdeskExpenseProvider,
 )
 from xw_office.services.expenses.service import ExpenseAction, ExpenseAuditService, ExpenseRow
+from xw_office.services.expenses import service as expense_service_module
 
 
 class _SettingsRepoStub:
@@ -342,6 +348,224 @@ def test_document_link_is_persisted_and_reused_from_cache(
     assert live.documents[0].document_number == "VB 2026-7"
     assert cached.documents[0].url.endswith("/ex/detail/id/V-7")
     assert cached.document_link_scan_complete is True
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_shared_sync_reuses_fresh_cache_across_service_instances(
+    session_factory: sessionmaker[Session], empty: bool
+) -> None:
+    pipeline = ExpensePipelineRepository(session_factory)
+    settings = SettingKvRepository(session_factory)
+    provider = _BankProviderStub([] if empty else [_bank_row()])
+    first_pc = ExpenseAuditService(
+        settings, bank_provider=provider, pipeline_repo=pipeline  # type: ignore[arg-type]
+    )
+    second_pc = ExpenseAuditService(
+        SettingKvRepository(session_factory),
+        bank_provider=provider, pipeline_repo=ExpensePipelineRepository(session_factory),  # type: ignore[arg-type]
+    )
+    period = {"start": date(2026, 9, 1), "end": date(2026, 9, 30)}
+    first = first_pc.synchronize_bank_expenses(**period)
+    second = second_pc.synchronize_bank_expenses(**period)
+    assert provider.fetch_calls == 1
+    assert provider.resolve_calls == 1
+    assert first.refreshed and not second.refreshed
+    assert first.synced_at == second.synced_at
+    assert first.document_scan_complete and second.document_scan_complete
+    assert [row.transaction_id for row in first.rows] == [row.transaction_id for row in second.rows]
+
+
+def test_shared_sync_expires_and_manual_refresh_bypasses_freshness(
+    session_factory: sessionmaker[Session],
+) -> None:
+    settings = SettingKvRepository(session_factory)
+    provider = _BankProviderStub([_bank_row()])
+    service = ExpenseAuditService(
+        settings, bank_provider=provider, pipeline_repo=ExpensePipelineRepository(session_factory),  # type: ignore[arg-type]
+    )
+    period = {"start": date(2026, 9, 1), "end": date(2026, 9, 30)}
+    service.synchronize_bank_expenses(**period)
+    manual = service.synchronize_bank_expenses(**period, force=True)
+    assert manual.refreshed
+    assert provider.fetch_calls == provider.resolve_calls == 2
+    old = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=6)
+    settings.set_value_json(
+        "expenses.sync.xw", json.dumps({"periods": {"2026-09-01/2026-09-30": old.isoformat()}})
+    )
+    service.synchronize_bank_expenses(**period)
+    assert provider.fetch_calls == provider.resolve_calls == 3
+
+
+@pytest.mark.parametrize("age_seconds, refreshed", [(299, False), (300, True), (-1, True)])
+def test_shared_cache_freshness_boundary_is_exactly_five_minutes(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch,
+    age_seconds: int, refreshed: bool,
+) -> None:
+    settings = SettingKvRepository(session_factory)
+    provider = _BankProviderStub([_bank_row()])
+    service = ExpenseAuditService(
+        settings, bank_provider=provider, pipeline_repo=ExpensePipelineRepository(session_factory),  # type: ignore[arg-type]
+    )
+    period = {"start": date(2026, 9, 1), "end": date(2026, 9, 30)}
+    service.list_bank_expenses(**period)
+    now = datetime.datetime(2026, 10, 15, 18, 0, tzinfo=datetime.UTC)
+    cached_at = now - datetime.timedelta(seconds=age_seconds)
+    settings.set_value_json(
+        "expenses.sync.xw",
+        json.dumps({"periods": {"2026-09-01/2026-09-30": cached_at.isoformat()}}),
+    )
+    monkeypatch.setattr(
+        expense_service_module, "datetime",
+        SimpleNamespace(
+            datetime=SimpleNamespace(now=lambda tz: now),
+            timedelta=datetime.timedelta, UTC=datetime.UTC,
+        ),
+    )
+    result = service.synchronize_bank_expenses(**period)
+    assert result.refreshed is refreshed
+    assert provider.fetch_calls == provider.resolve_calls == (2 if refreshed else 1)
+
+
+def test_shared_sync_is_scoped_by_tenant_and_period(
+    session_factory: sessionmaker[Session],
+) -> None:
+    settings = SettingKvRepository(session_factory)
+    providers = {
+        "xw": _BankProviderStub([_bank_row()]),
+        "wuedara": _BankProviderStub([_bank_row()], account_id="WUEDARA"),
+    }
+    service = ExpenseAuditService(
+        settings, pipeline_repo=ExpensePipelineRepository(session_factory),
+        tenant_providers=providers,  # type: ignore[arg-type]
+    )
+    service.synchronize_bank_expenses(start=date(2026, 9, 1), end=date(2026, 9, 30))
+    service.for_tenant("wuedara").synchronize_bank_expenses(
+        start=date(2026, 9, 1), end=date(2026, 9, 30)
+    )
+    service.synchronize_bank_expenses(start=date(2026, 8, 1), end=date(2026, 8, 31))
+    assert providers["xw"].fetch_calls == providers["xw"].resolve_calls == 2
+    assert providers["wuedara"].fetch_calls == providers["wuedara"].resolve_calls == 1
+    assert settings.get_value_json("expenses.sync.xw") is not None
+    assert settings.get_value_json("expenses.sync.wuedara") is not None
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_partial_sync_never_marks_period_fresh(
+    session_factory: sessionmaker[Session], empty: bool
+) -> None:
+    provider = _BankProviderStub([] if empty else [_bank_row()], DocumentLinkScan((), False, 1))
+    service = ExpenseAuditService(
+        SettingKvRepository(session_factory), bank_provider=provider,  # type: ignore[arg-type]
+        pipeline_repo=ExpensePipelineRepository(session_factory),
+    )
+    period = {"start": date(2026, 9, 1), "end": date(2026, 9, 30)}
+    partial = service.synchronize_bank_expenses(**period)
+    assert not partial.document_scan_complete
+    assert partial.synced_at is None
+    provider.scan = DocumentLinkScan((), True)
+    complete = service.synchronize_bank_expenses(**period)
+    assert complete.refreshed and complete.document_scan_complete
+    assert complete.synced_at is not None
+    assert provider.fetch_calls == provider.resolve_calls == 2
+
+
+def test_failed_sync_preserves_cache_and_does_not_store_freshness(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider = _BankProviderStub([_bank_row()])
+    settings = SettingKvRepository(session_factory)
+    service = ExpenseAuditService(
+        settings, bank_provider=provider, pipeline_repo=ExpensePipelineRepository(session_factory),  # type: ignore[arg-type]
+    )
+    period = {"start": date(2026, 9, 1), "end": date(2026, 9, 30)}
+    service.list_bank_expenses(**period)
+
+    def fail_fetch(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("sevDesk unavailable")
+
+    monkeypatch.setattr(provider, "fetch", fail_fetch)
+    with pytest.raises(RuntimeError, match="sevDesk unavailable"):
+        service.synchronize_bank_expenses(**period)
+    assert settings.get_value_json("expenses.sync.xw") is None
+    assert len(service.list_bank_expenses(**period, refresh=False)) == 1
+
+
+def test_waiting_manual_sync_reuses_scan_completed_by_other_pc(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = SettingKvRepository(session_factory)
+    provider = _BankProviderStub([_bank_row()])
+    service = ExpenseAuditService(
+        settings, bank_provider=provider, pipeline_repo=ExpensePipelineRepository(session_factory),  # type: ignore[arg-type]
+    )
+    service.list_bank_expenses(start=date(2026, 9, 1), end=date(2026, 9, 30))
+
+    def after_waiting_for_lock(key: str, mutator: Callable[[str | None], str]) -> str:
+        # Simulate the other PC committing its successful scan before releasing the lock.
+        finished = datetime.datetime.now(datetime.UTC)
+        return mutator(json.dumps({"periods": {"2026-09-01/2026-09-30": finished.isoformat()}}))
+
+    monkeypatch.setattr(settings, "mutate_value_json", after_waiting_for_lock)
+    result = service.synchronize_bank_expenses(
+        start=date(2026, 9, 1), end=date(2026, 9, 30), force=True
+    )
+    assert not result.refreshed
+    assert provider.fetch_calls == provider.resolve_calls == 1
+
+
+def test_shared_sync_holds_postgres_tenant_lock_across_scan(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = SettingKvRepository(session_factory)
+    connection = MagicMock(spec=Session)
+    connection.get_bind.return_value.dialect.name = "postgresql"
+    connection.get.return_value = None
+    order: list[str] = []
+    connection.execute.side_effect = lambda *args: order.append("locked")
+
+    @contextmanager
+    def scope() -> Generator[Session, None, None]:
+        try:
+            yield connection
+        finally:
+            order.append("released")
+
+    monkeypatch.setattr(settings, "_scope", scope)
+    provider = _BankProviderStub([_bank_row()])
+    original_fetch = provider.fetch
+
+    def fetch(start: date, end: date, *, outgoing_only: bool = True) -> tuple[SimpleNamespace, list[BankExpense]]:
+        order.append("fetch")
+        return original_fetch(start, end, outgoing_only=outgoing_only)
+
+    monkeypatch.setattr(provider, "fetch", fetch)
+    service = ExpenseAuditService(
+        settings, bank_provider=provider, pipeline_repo=ExpensePipelineRepository(session_factory),  # type: ignore[arg-type]
+    )
+    service.synchronize_bank_expenses(start=date(2026, 9, 1), end=date(2026, 9, 30))
+    assert order == ["locked", "fetch", "released"]
+    statement, parameters = connection.execute.call_args.args
+    assert "pg_advisory_xact_lock" in str(statement)
+    assert parameters == {"key": "expenses.sync.xw"}
+
+
+def test_failed_rescan_invalidates_previously_fresh_period(
+    session_factory: sessionmaker[Session],
+) -> None:
+    provider = _BankProviderStub([_bank_row()])
+    service = ExpenseAuditService(
+        SettingKvRepository(session_factory), bank_provider=provider,  # type: ignore[arg-type]
+        pipeline_repo=ExpensePipelineRepository(session_factory),
+    )
+    period = {"start": date(2026, 9, 1), "end": date(2026, 9, 30)}
+    service.synchronize_bank_expenses(**period)
+    provider.scan = DocumentLinkScan((), False, 1)
+    partial = service.synchronize_bank_expenses(**period, force=True)
+    assert partial.synced_at is None
+    provider.scan = DocumentLinkScan((), True)
+    retried = service.synchronize_bank_expenses(**period)
+    assert retried.refreshed and retried.document_scan_complete
+    assert provider.resolve_calls == 3
 
 
 def test_document_link_refresh_uses_cached_transactions_without_bank_reload(

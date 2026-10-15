@@ -23,6 +23,8 @@ from enum import Enum
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
+from pydantic import AwareDatetime, BaseModel, Field
+
 from xw_office.core.fuzzy_match import fuzzy_ratio
 from xw_office.core.text_normalize import clean_bank_purpose, normalize_german_text
 from xw_office.models.expense_pipeline import (
@@ -53,6 +55,11 @@ _PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 # Legacy Ausgaben-Check default: SequenceMatcher ratio >= 0.68 recognizes a
 # recurring transaction whose purpose text varies slightly month to month.
 DEFAULT_IGNORE_THRESHOLD = 0.68
+EXPENSE_CACHE_MAX_AGE = datetime.timedelta(minutes=5)
+
+
+class _ExpenseSyncState(BaseModel):
+    periods: dict[str, AwareDatetime] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -93,6 +100,14 @@ class BankExpenseRow:
     position_source: str = ""
     position_rule_label: str = ""
     documents: tuple["ExpenseDocumentView", ...] = ()
+
+
+@dataclass(frozen=True)
+class BankExpenseLoad:
+    rows: list[BankExpenseRow]
+    document_scan_complete: bool
+    refreshed: bool = False
+    synced_at: datetime.datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -283,6 +298,79 @@ class ExpenseAuditService:
         outgoing_only: bool = True,
         retry_unlinked_documents: bool = False,
     ) -> list[BankExpenseRow]:
+        return self._load_bank_expenses(
+            start=start,
+            end=end,
+            profile_key=profile_key,
+            refresh=refresh,
+            refresh_document_links=refresh_document_links,
+            force_document_refresh=force_document_refresh,
+            outgoing_only=outgoing_only,
+            retry_unlinked_documents=retry_unlinked_documents,
+        ).rows
+
+    def synchronize_bank_expenses(
+        self, *, start: datetime.date, end: datetime.date, force: bool = False
+    ) -> BankExpenseLoad:
+        """Serialize tenant syncs across PCs and reuse recently refreshed periods."""
+        if start > end:
+            raise ValueError("Das Startdatum muss vor dem Enddatum liegen.")
+        if self._bank_provider is None:
+            raise RuntimeError("Für diesen Mandanten ist kein sevDesk-Konto konfiguriert.")
+        requested_at = datetime.datetime.now(datetime.UTC)
+        period_key = f"{start.isoformat()}/{end.isoformat()}"
+        result: BankExpenseLoad | None = None
+
+        def synchronize(current: str | None) -> str:
+            nonlocal result
+            state = _ExpenseSyncState.model_validate_json(current) if current else _ExpenseSyncState()
+            synced_at = state.periods.get(period_key)
+            now = datetime.datetime.now(datetime.UTC)
+            fresh = (
+                synced_at is not None
+                and datetime.timedelta(0) <= now - synced_at < EXPENSE_CACHE_MAX_AGE
+                and (not force or synced_at >= requested_at)
+            )
+            loaded = self._load_bank_expenses(
+                start=start,
+                end=end,
+                refresh=not fresh,
+                refresh_document_links=not fresh,
+                outgoing_only=False,
+            )
+            if fresh:
+                loaded = replace(loaded, document_scan_complete=True)
+            if not fresh and loaded.document_scan_complete:
+                synced_at = datetime.datetime.now(datetime.UTC)
+                state.periods[period_key] = synced_at
+            elif not fresh:
+                state.periods.pop(period_key, None)
+                synced_at = None
+            result = replace(loaded, refreshed=not fresh, synced_at=synced_at)
+            return state.model_dump_json()
+
+        if self._repo is not None and self._pipeline_repo is not None:
+            # The existing PostgreSQL advisory lock spans the freshness check,
+            # API scan and cache writes, including scans of overlapping periods.
+            self._repo.mutate_value_json(f"expenses.sync.{self._tenant_key}", synchronize)
+        else:
+            synchronize(None)
+        if result is None:
+            raise RuntimeError("Die Ausgaben-Synchronisierung lieferte kein Ergebnis.")
+        return result
+
+    def _load_bank_expenses(
+        self,
+        *,
+        start: datetime.date,
+        end: datetime.date,
+        profile_key: str = "",
+        refresh: bool = True,
+        refresh_document_links: bool = False,
+        force_document_refresh: bool = False,
+        outgoing_only: bool = True,
+        retry_unlinked_documents: bool = False,
+    ) -> BankExpenseLoad:
         """Load cached or current bank transactions and resolve linked documents.
 
         ``refresh_document_links`` intentionally avoids a new bank import. It
@@ -290,7 +378,7 @@ class ExpenseAuditService:
         resolves newly added or changed documents.
         """
         if self._bank_provider is None:
-            return []
+            return BankExpenseLoad([], document_scan_complete=False)
         account: SevdeskBankAccount | None = None
         if refresh:
             account, rows = self._bank_provider.fetch(start, end, outgoing_only=outgoing_only)
@@ -376,7 +464,12 @@ class ExpenseAuditService:
                 period_end=end,
             )
         )
-        if refresh and completed_scan_exists and not force_document_refresh and not retry_unlinked_documents:
+        if (
+            refresh and completed_scan_exists
+            and not refresh_document_links
+            and not force_document_refresh
+            and not retry_unlinked_documents
+        ):
             # A refresh still obtains current bank movements, but avoids paging
             # every historical sevDesk document for a range already checked.
             # The UI exposes an explicit force action for a manual re-check.
@@ -660,7 +753,7 @@ class ExpenseAuditService:
                     documents=document_views,
                 )
             )
-        return result
+        return BankExpenseLoad(result, document_scan_complete=link_scan_complete)
 
     @staticmethod
     def _matching_supplier_link(

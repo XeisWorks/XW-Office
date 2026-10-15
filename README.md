@@ -19,18 +19,43 @@ PySide6 desktop application for XeisWorks music publishing business management.
 
 ### Ausgabenpruefung
 
-Fuer XeisWorks und WuedaraMusi ist die Belegpruefung direkt im Tab **Kontobewegungen**
-integriert. Der Kategoriefilter bietet alle konfigurierten Kategorien sowie **Ohne Kategorie**.
+Fuer XeisWorks und WuedaraMusi sind Kontobewegungen und Belegpruefung in einer gemeinsamen
+Ansicht integriert. Der Kategoriefilter bietet alle konfigurierten Kategorien sowie **Ohne Kategorie**.
 **Nur fehlende Belege anzeigen** zeigt ausschliesslich gepruefte Kontobewegungen mit
 Lieferantenportal (Website-Icon), aber ohne verknuepften sevDesk-Beleg; wie in der bisherigen
 Belegansicht werden dabei auch Eingaenge beruecksichtigt. Ohne diesen Filter bleiben die
-ausgehenden Zahlungen sichtbar. Unvollstaendige Belegscans werden im Status ausgewiesen.
+ausgehenden Zahlungen sichtbar. **Nur offene Zuordnungen anzeigen** blendet bereits
+kategorisierte Kontobewegungen aus und ist mit beiden anderen Filtern kombinierbar.
+Rechts neben den Checkboxen steht die Gesamtzahl der ausgehenden Zahlungen im Zeitraum.
+Unvollstaendige Belegscans werden im Status ausgewiesen.
 
 Rechts ueber der Tabelle stehen drei rahmenlose Aktionen: **Plus** fuer eine zusaetzliche
-Ausgabe, **Aktualisieren** fuer Belegverknuepfungen und zusaetzliche Ausgaben sowie das
+Ausgabe, **Aktualisieren** fuer Kontobewegungen, Belegverknuepfungen und zusaetzliche Ausgaben sowie das
 **Zahnrad** fuer Kategorien, Zuordnungsregeln, Lieferantenportale und Zweckbereinigung
-des aktuellen Mandanten. **Neu laden** und **Belege neu pruefen** bleiben fuer einen
-vollstaendigen Datenabruf bzw. einen erzwungenen Belegscan verfuegbar.
+des aktuellen Mandanten. **Neu laden** und das Aktualisierungsicon stossen dieselbe
+inkrementelle Pruefung an; ein separater Vollscan-Textbutton ist nicht mehr vorhanden.
+Ein Doppelklick auf **Zweck / Referenz** oeffnet die empfaengerbezogene Zweckbereinigung.
+Die Tabelle fuer zusaetzliche Ausgaben zeigt maximal zwei Zeilen; weitere Eintraege sind
+per Scrollbar erreichbar. Der restliche Platz gehoert der Haupttabelle.
+
+Beim Oeffnen sowie nach einem Mandanten- oder Zeitraumwechsel werden zuerst die gespeicherten
+Kontobewegungen und Belegverknuepfungen angezeigt. Danach wird im Hintergrund synchronisiert,
+ohne die sichtbare Tabelle zu leeren. Solange die Ansicht sichtbar ist, wird der gemeinsame
+Cache jede Minute erneut gelesen. Erfolgreich synchronisierte Zeitraeume gelten fuenf Minuten
+als frisch; manuelles Aktualisieren umgeht diese Frischefrist.
+
+Snapshots, Verknuepfungen, Beleg-Fingerprints und Frischezeitpunkte liegen in PostgreSQL und
+sind damit auf allen PCs mit derselben Datenbank verfuegbar, getrennt nach Mandant.
+Die vorhandene PostgreSQL-Advisory-Sperre serialisiert Synchronisierungen pro Mandant,
+auch bei ueberlappenden Zeitraeumen. Wartende PCs pruefen nach Freigabe erneut die Frische;
+ein inzwischen abgeschlossener identischer Scan wird nicht wiederholt. Fehler oder Teilscans
+setzen keinen neuen Frischezeitpunkt; vorhandene Daten bleiben bei Fehlern sichtbar.
+
+Der Abgleich liest weiterhin die sevDesk-Beleglisten, da deren Datumsfilter bisher nicht
+zuverlaessig waren. Nur neue oder geaenderte relevante Belege benoetigen anschliessend
+Einzelabfragen ihrer Bankverknuepfungen. Bei neu importierten Bankbewegungen werden auch
+bereits bekannte relevante Belege erneut zugeordnet. Es handelt sich um einen gemeinsamen
+Datenbank-Cache, nicht um einen lokalen Offline-Cache.
 
 ## Content Studio Web (Phase 1)
 
