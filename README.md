@@ -17,6 +17,21 @@ PySide6 desktop application for XeisWorks music publishing business management.
 - **Marketing:** Content planning, social media (scaffold)
 - **Notensatz:** Music notation tools (scaffold)
 
+### Ausgabenpruefung
+
+Fuer XeisWorks und WuedaraMusi ist die Belegpruefung direkt im Tab **Kontobewegungen**
+integriert. Der Kategoriefilter bietet alle konfigurierten Kategorien sowie **Ohne Kategorie**.
+**Nur fehlende Belege anzeigen** zeigt ausschliesslich gepruefte Kontobewegungen mit
+Lieferantenportal (Website-Icon), aber ohne verknuepften sevDesk-Beleg; wie in der bisherigen
+Belegansicht werden dabei auch Eingaenge beruecksichtigt. Ohne diesen Filter bleiben die
+ausgehenden Zahlungen sichtbar. Unvollstaendige Belegscans werden im Status ausgewiesen.
+
+Rechts ueber der Tabelle stehen drei rahmenlose Aktionen: **Plus** fuer eine zusaetzliche
+Ausgabe, **Aktualisieren** fuer Belegverknuepfungen und zusaetzliche Ausgaben sowie das
+**Zahnrad** fuer Kategorien, Zuordnungsregeln, Lieferantenportale und Zweckbereinigung
+des aktuellen Mandanten. **Neu laden** und **Belege neu pruefen** bleiben fuer einen
+vollstaendigen Datenabruf bzw. einen erzwungenen Belegscan verfuegbar.
+
 ## Content Studio Web (Phase 1)
 
 The repository also contains the separately deployable web foundation for the future mobile

@@ -571,9 +571,12 @@ class ExpenseReviewView(QWidget):
         self._end = QDateEdit()
         self._account_label = QLabel()
         self._status = QLabel("Noch nicht geladen")
+        self._category_filter = QComboBox()
+        self._category_filter.addItem("Alle Kategorien", None)
+        self._category_filter.addItem("Ohne Kategorie", "")
+        self._missing_only = QCheckBox("Nur fehlende Belege anzeigen")
         self._wizard_button = QPushButton("Offene Zuordnungen prüfen")
         self._table = DataTable(_HEADERS)
-        self._missing_table = DataTable(_HEADERS)
         self._manual_table = DataTable(
             ["Datum", "Empfänger", "Zweck", "Betrag", "USt.", "Zahlungsart", "Kategorie", "Beleg", "Prüfung", "Rückzahlung"]
         )
@@ -646,10 +649,14 @@ class ExpenseReviewView(QWidget):
 
         tabs = QTabWidget()
         tabs.addTab(self._build_bank_tab(), "Kontobewegungen")
-        tabs.addTab(self._build_missing_tab(), "Fehlende Belege")
-        tabs.addTab(self._build_settings_tab(), "Einstellungen")
-        tabs.currentChanged.connect(self._on_main_tab_changed)
         root.addWidget(tabs, stretch=1)
+        self._settings_dialog = QDialog(self)
+        self._settings_dialog.resize(1000, 650)
+        settings_layout = QVBoxLayout(self._settings_dialog)
+        settings_layout.addWidget(self._build_settings_tab())
+        close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close.rejected.connect(self._settings_dialog.reject)
+        settings_layout.addWidget(close)
 
     def _setup_period_selector(self, today: date) -> None:
         self._period.clear()
@@ -762,22 +769,48 @@ class ExpenseReviewView(QWidget):
     def _build_bank_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(QLabel("Kategorie:"))
+        self._category_filter.setAccessibleName("Kontobewegungen nach Kategorie filtern")
+        self._category_filter.currentIndexChanged.connect(self._apply_bank_filters)
+        toolbar.addWidget(self._category_filter)
+        self._missing_only.setToolTip(
+            "Nur geprüfte Kontobewegungen mit Lieferantenportal, aber ohne sevDesk-Beleg."
+        )
+        self._missing_only.toggled.connect(self._on_missing_filter_changed)
+        toolbar.addWidget(self._missing_only)
+        toolbar.addStretch()
+        self._add_button = QPushButton()
+        self._add_button.setIcon(QIcon(str(_ROOT / "icons" / "expense_add.svg")))
+        self._add_button.setToolTip("Neue zusätzliche Ausgabe")
+        self._add_button.clicked.connect(self._add_manual_expense)
+        self._missing_refresh_button = QPushButton()
+        self._missing_refresh_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
+        self._missing_refresh_button.setIcon(self._missing_refresh_icon)
+        self._missing_refresh_button.setToolTip(
+            "sevDesk-Belegverknüpfungen und zusätzliche Ausgaben aktualisieren"
+        )
+        self._missing_refresh_button.clicked.connect(self._refresh_receipts_and_manual_expenses)
+        self._settings_button = QPushButton()
+        self._settings_button.setIcon(QIcon(str(_ROOT / "icons" / "expense_settings.svg")))
+        self._settings_button.setToolTip("Einstellungen zur Ausgabenprüfung")
+        self._settings_button.clicked.connect(self._open_settings)
+        for button in (self._add_button, self._missing_refresh_button, self._settings_button):
+            button.setIconSize(QSize(32, 32))
+            button.setFixedSize(46, 46)
+            button.setAccessibleName(button.toolTip())
+            button.setStyleSheet(
+                "QPushButton { background: transparent; border: none; padding: 0px; }"
+                "QPushButton:hover, QPushButton:focus { background: #27324b; border-radius: 6px; }"
+                "QPushButton:disabled { background: transparent; }"
+            )
+            toolbar.addWidget(button)
+        layout.addLayout(toolbar)
         self._configure_expense_table(self._table)
         layout.addWidget(self._table, stretch=1)
         manual_header = QHBoxLayout()
         manual_header.addWidget(QLabel("Zusätzliche Ausgaben – bar oder privat bezahlt"))
         manual_header.addStretch()
-        add_manual = QPushButton("+")
-        add_manual.setToolTip("Neue zusätzliche Ausgabe")
-        add_manual.setFixedSize(38, 32)
-        add_manual.clicked.connect(self._add_manual_expense)
-        manual_header.addWidget(add_manual)
-        manual_refresh = QPushButton()
-        manual_refresh.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
-        manual_refresh.setToolTip("Zusätzliche Ausgaben aktualisieren")
-        manual_refresh.setFixedSize(38, 32)
-        manual_refresh.clicked.connect(self._load_manual_expenses)
-        manual_header.addWidget(manual_refresh)
         layout.addLayout(manual_header)
         self._configure_manual_table()
         layout.addWidget(self._manual_table, stretch=1)
@@ -804,30 +837,14 @@ class ExpenseReviewView(QWidget):
         header.sectionResized.connect(lambda *_args: self._schedule_table_header_save())
         header.sectionMoved.connect(lambda *_args: self._schedule_table_header_save())
 
-    def _build_missing_tab(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        header = QHBoxLayout()
-        header.addStretch()
-        self._missing_refresh_button = QPushButton()
-        self._missing_refresh_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload)
-        self._missing_refresh_button.setIcon(self._missing_refresh_icon)
-        self._missing_refresh_button.setIconSize(QSize(26, 26))
-        self._missing_refresh_button.setFixedSize(38, 38)
-        self._missing_refresh_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._missing_refresh_button.setStyleSheet(
-            "QPushButton { background: transparent; border: none; }"
-            "QPushButton:hover { background: #27324b; border-radius: 6px; }"
-        )
-        self._missing_refresh_button.setToolTip(
-            "Prüft neue oder geänderte sevDesk-Belegverknüpfungen, ohne Kontobewegungen neu zu laden."
-        )
-        self._missing_refresh_button.clicked.connect(self._refresh_missing_receipts)
-        header.addWidget(self._missing_refresh_button)
-        layout.addLayout(header)
-        self._configure_expense_table(self._missing_table)
-        layout.addWidget(self._missing_table, stretch=1)
-        return page
+    def _open_settings(self) -> None:
+        self._settings_dialog.setWindowTitle(f"Ausgabenprüfung – {self._tenant_label} – Einstellungen")
+        self._refresh_settings()
+        self._settings_dialog.exec()
+
+    def _refresh_receipts_and_manual_expenses(self) -> None:
+        self._refresh_missing_receipts()
+        self._load_manual_expenses()
 
     def _build_settings_tab(self) -> QWidget:
         tabs = QTabWidget()
@@ -1029,12 +1046,19 @@ class ExpenseReviewView(QWidget):
     def _on_load_finished(self, tenant_key: str, worker: BackgroundWorker) -> None:
         if self._workers.get(tenant_key) is worker:
             self._workers.pop(tenant_key, None)
+        was_document_refresh = tenant_key in self._document_refresh_tenants
         self._document_refresh_tenants.discard(tenant_key)
         if tenant_key == self._tenant_key:
             self._sync_missing_refresh_indicator()
             cached = self._tenant_loads.get(tenant_key)
             if cached is None or cached[2] != self._selected_period():
                 self._load(refresh=True)
+            elif (
+                not was_document_refresh
+                and self._missing_only.isChecked()
+                and self._tenant_missing_loaded_periods.get(tenant_key) != self._selected_period()
+            ):
+                self._refresh_missing_receipts()
 
     def _on_load_error(self, tenant_key: str, exc: Exception) -> None:
         if tenant_key == self._tenant_key:
@@ -1062,9 +1086,6 @@ class ExpenseReviewView(QWidget):
         self._positions = positions
         self._all_rows = all_rows
         self._rows = [row for row in all_rows if row.amount < 0]
-        self._populate(self._table, self._rows)
-        missing = [row for row in all_rows if row.document_link_scan_complete and not row.documents]
-        self._populate(self._missing_table, missing, receipt_mode=True)
         incomplete = any(not row.document_link_scan_complete for row in all_rows)
         open_count = sum(not row.position_key for row in self._rows)
         suffix = " · Belegscan unvollständig" if incomplete else ""
@@ -1075,8 +1096,23 @@ class ExpenseReviewView(QWidget):
         self._wizard_button.setVisible(open_count > 0)
         self._refresh_settings()
 
-    def _on_main_tab_changed(self, index: int) -> None:
-        if index != 1:
+    def _apply_bank_filters(self) -> None:
+        category = self._category_filter.currentData()
+        missing_only = self._missing_only.isChecked()
+        rows = self._all_rows if missing_only else self._rows
+        filtered = [
+            row for row in rows
+            if (category is None or row.position_key == category)
+            and (
+                not missing_only
+                or (row.supplier_url and row.document_link_scan_complete and not row.documents)
+            )
+        ]
+        self._populate(self._table, filtered, receipt_mode=missing_only)
+
+    def _on_missing_filter_changed(self, checked: bool) -> None:
+        self._apply_bank_filters()
+        if not checked:
             return
         period = (
             cast(date, self._start.date().toPython()),
@@ -1104,14 +1140,13 @@ class ExpenseReviewView(QWidget):
             self._manual_table.horizontalHeader().restoreState(manual_state)
         cached = self._tenant_loads.get(tenant_key)
         has_cached_period = cached is not None and cached[2] == self._selected_period()
-        if has_cached_period:
+        if cached is not None and has_cached_period:
             self._apply_tenant_load(cached[0], cached[1])
         else:
             self._rows = []
             self._all_rows = []
             self._positions = self.service.list_positions()
             self._table.set_data([])
-            self._missing_table.set_data([])
         self._manual_table.set_data([])
         self._sync_missing_refresh_indicator()
         worker = self._workers.get(tenant_key)
@@ -1120,6 +1155,7 @@ class ExpenseReviewView(QWidget):
         elif not has_cached_period:
             self._status.setText(f"Konto {self._tenant_label} wird geladen …")
         self._load_manual_expenses()
+        self._on_missing_filter_changed(self._missing_only.isChecked())
 
     def _populate(
         self, table: DataTable, rows: list[BankExpenseRow], *, receipt_mode: bool = False
@@ -1220,15 +1256,9 @@ class ExpenseReviewView(QWidget):
             self._positions,
             self._selected_period(),
         )
-        self._populate(self._table, self._rows)
-        missing = [
-            row for row in self._all_rows if row.document_link_scan_complete and not row.documents
-        ]
-        self._populate(self._missing_table, missing, receipt_mode=True)
+        self._apply_bank_filters()
         self._table.clearSelection()
-        self._missing_table.clearSelection()
         QTimer.singleShot(0, self._table.clearSelection)
-        QTimer.singleShot(0, self._missing_table.clearSelection)
 
         worker = BackgroundWorker(
             lambda: self.service.assign_transaction_position(
@@ -1291,7 +1321,7 @@ class ExpenseReviewView(QWidget):
         if self._missing_refresh_button is None:
             return
         self._missing_refresh_angle = (self._missing_refresh_angle + 45) % 360
-        pixmap = self._missing_refresh_icon.pixmap(QSize(26, 26))
+        pixmap = self._missing_refresh_icon.pixmap(QSize(32, 32))
         if pixmap.isNull():
             return
         self._missing_refresh_button.setIcon(
@@ -1329,6 +1359,19 @@ class ExpenseReviewView(QWidget):
 
     def _refresh_settings(self) -> None:
         positions = self.service.list_positions(enabled_only=False)
+        category = self._category_filter.currentData()
+        with QSignalBlocker(self._category_filter):
+            self._category_filter.clear()
+            self._category_filter.addItem("Alle Kategorien", None)
+            self._category_filter.addItem("Ohne Kategorie", "")
+            for position in positions:
+                self._category_filter.addItem(
+                    f"{position.initials} · {position.label}", position.key
+                )
+            self._category_filter.setCurrentIndex(
+                max(0, self._category_filter.findData(category))
+            )
+        self._apply_bank_filters()
         self._position_table.set_data(
             [
                 {
