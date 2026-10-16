@@ -4,6 +4,8 @@ import threading
 import types
 from unittest.mock import MagicMock
 
+import pytest
+
 from xw_office.services.printing import pdf_backends, print_queue
 from xw_office.services.printing.print_jobs import BrotherLbxLabelJob, PdfPrintJob, PrintJobResult
 
@@ -107,7 +109,9 @@ def test_idle_print_queue_thread_stops_cleanly() -> None:
     assert worker.isRunning() is False
 
 
-def test_print_queue_continues_after_failed_job(monkeypatch, qapp) -> None:
+def test_print_queue_continues_after_failed_job(
+    monkeypatch: pytest.MonkeyPatch, qapp: object,
+) -> None:
     service = print_queue.PrintQueueService()
     attempts: list[str] = []
 

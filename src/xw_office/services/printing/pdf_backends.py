@@ -408,7 +408,7 @@ class _WindowsSpoolerWatcher:
         """Reject paused/offline/error queues without deleting or resending jobs."""
         try:
             info = self._win32print.GetPrinter(self._printer_handle, 2)
-        except Exception as exc:  # noqa: BLE001 - Windows driver errors are user-facing.
+        except Exception as exc:
             raise RuntimeError(
                 f"Windows-Druckerstatus fuer '{self._printer_name}' konnte nicht gelesen werden: {exc}"
             ) from exc

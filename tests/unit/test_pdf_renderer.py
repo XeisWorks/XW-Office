@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import types
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import fitz
@@ -11,7 +12,7 @@ from xw_office.services.printing import pdf_renderer
 
 
 @pytest.fixture(autouse=True)
-def available_printer(monkeypatch):
+def available_printer(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     info = MagicMock()
     info.isNull.return_value = False
     monkeypatch.setattr(pdf_renderer, "QPrinterInfo", types.SimpleNamespace(printerInfo=lambda _: info))
@@ -20,7 +21,10 @@ def available_printer(monkeypatch):
 
 @pytest.mark.parametrize("failure", ["begin", "new_page", "end", "missing", "empty"])
 def test_pdf_print_failure_is_not_reported_as_dispatched(
-    monkeypatch, tmp_path, available_printer, failure: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    available_printer: MagicMock,
+    failure: str,
 ) -> None:
     pdf_path = tmp_path / "invoice.pdf"
     with fitz.open() as doc:

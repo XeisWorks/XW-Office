@@ -217,6 +217,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\update_xw_office.ps1
 Logs liegen unabhaengig vom gewaehlten Start immer unter `logs\` im Repo
 (`xw_office.log`, `xw_office_crash.log`, `xw_office_bootstrap.log`, `xw_office_update.log`).
 
+### Rechnungs- und Labeldruck nach einem Ausfall
+
+Rechnungs- und Labelauftraege gelten unter Windows erst nach Spooler-Bestaetigung als
+gesendet. Angehaltene/offline/fehlerhafte Warteschlangen und fehlgeschlagene Druckstarts
+werden als Fehler gemeldet, nicht als erledigter Rechnungs- oder Labeldruck gespeichert.
+Die Bestaetigung belegt die Uebergabe an Windows, nicht die physische Papierausgabe.
+
+Nach Strom-/Verbindungsausfall Drucker einschalten, die jeweilige Windows-Druckwarteschlange
+auf Offline-/Pause-Status und vorhandene Auftraege pruefen und die Druckernamen der
+Rechnungs-/Labelprofile in den Einstellungen kontrollieren. Erst danach gezielt erneut drucken;
+vorhandene Auftraege koennen nach Wiederherstellung noch ausgedruckt werden.
+Die Anwendung loescht keine Windows-Auftraege und wiederholt fehlgeschlagene Drucke nicht automatisch.
+Fuer die Diagnose der letzten App-Laeufe `xw_office.log` samt rotierten Dateien
+(`xw_office.log.1` usw.) und Zeitpunkt des Druckversuchs vom betroffenen PC bereitstellen;
+GitHub-CI-Protokolle enthalten diese lokalen Druckversuche nicht.
+
 ## Eigenstaendiges Druckcenter
 
 ```powershell
