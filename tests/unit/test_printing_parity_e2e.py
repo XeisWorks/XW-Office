@@ -1,10 +1,12 @@
 """End-to-end test for invoice printing + mail flow parity."""
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import datetime, timezone
-import json
 from unittest.mock import patch
+
+import pytest
 
 from xw_office.core.config import AppConfig
 from xw_office.services.invoice_processing.service import (
@@ -770,10 +772,35 @@ def test_print_label_for_invoice_uses_override_lines_and_persists_flag() -> None
             override_lines=["John Doe", "Edited Street 9", "6020 Innsbruck", "AT"],
         )
 
-    mock_label_print.assert_called_once_with(["John Doe", "Edited Street 9", "6020 Innsbruck", "AT"])
+    mock_label_print.assert_called_once_with(
+        ["John Doe", "Edited Street 9", "6020 Innsbruck", "AT"], wait=True,
+    )
     assert result.label_printed is True
     stored = repo.get_value_json("rechnungen.fulfillment_status") or ""
     assert "label_printed" in stored
+
+
+@pytest.mark.parametrize(
+    ("action", "printer_method", "flag"),
+    [
+        ("print_label_for_invoice", "_label_printer", "label_printed"),
+        ("print_invoice_for_invoice", "_invoice_printer", "invoice_printed"),
+    ],
+)
+def test_direct_print_failure_does_not_persist_success_and_can_be_retried(
+    action: str, printer_method: str, flag: str,
+) -> None:
+    repo = _SettingsRepoE2E()
+    service = InvoiceProcessingService(AppConfig(), _InvoiceClientE2E(), repo, None)
+    printer = getattr(service, printer_method)
+    method = "print_address" if flag == "label_printed" else "print_pdf_bytes"
+    with patch.object(printer, method, side_effect=[RuntimeError("Drucker offline"), None]) as dispatch:
+        with pytest.raises(RuntimeError, match="offline"):
+            getattr(service, action)("INV-001")
+        assert getattr(service.read_fulfillment_flags("INV-001"), flag) is False
+        assert getattr(getattr(service, action)("INV-001"), flag) is True
+    assert dispatch.call_count == 2
+    assert all(call.kwargs["wait"] is True for call in dispatch.call_args_list)
 
 
 def test_fulfillment_flags_persist_across_batch() -> None:

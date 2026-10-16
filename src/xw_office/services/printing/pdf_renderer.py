@@ -10,7 +10,7 @@ from typing import Literal, cast
 import fitz  # PyMuPDF
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtGui import QImage, QPageLayout, QPageSize, QPainter
-from PySide6.QtPrintSupport import QPrinter
+from PySide6.QtPrintSupport import QPrinter, QPrinterInfo
 
 logger = logging.getLogger(__name__)
 
@@ -430,13 +430,17 @@ def print_pdf_with_qprinter(
     effective_color_mode = _render_color_mode(render_color_mode, job_kind=job_kind)
     effective_black_enhancement = _black_enhancement(black_enhancement, job_kind=job_kind)
     full_page = effective_placement_mode in {"paper_origin", "calibrated"}
+    if not printer_name.strip() or QPrinterInfo.printerInfo(printer_name).isNull():
+        raise RuntimeError(
+            f"Drucker '{printer_name}' ist nicht verfuegbar. "
+            "Bitte Windows-Drucker und Druckprofil in den Einstellungen pruefen."
+        )
     doc = fitz.open(pdf_path)
     try:
         page_count = len(doc)
         page_indices = list(range(page_count)) if pages is None else [p for p in pages if 0 <= p < page_count]
         if not page_indices:
-            logger.warning("No pages to print for %s", pdf_path)
-            return
+            raise RuntimeError("Das PDF enthaelt keine druckbaren Seiten fuer die Auswahl.")
         analysis_cache: dict[int, PagePrintAnalysis] = {}
 
         for copy_index in range(effective_copies):
@@ -465,12 +469,14 @@ def print_pdf_with_qprinter(
 
             painter = QPainter()
             if not painter.begin(printer):
-                logger.error("QPainter.begin(printer) failed for %s", printer_name)
-                return
+                raise RuntimeError(
+                    f"Rechnungs-/PDF-Druck auf '{printer_name}' konnte nicht gestartet werden. "
+                    "Bitte Drucker, Windows-Druckwarteschlange und Druckprofil pruefen."
+                )
             try:
                 for page_offset, page_num in enumerate(page_indices):
-                    if page_offset > 0:
-                        printer.newPage()
+                    if page_offset > 0 and not printer.newPage():
+                        raise RuntimeError(f"Seitenwechsel beim Druck auf '{printer_name}' fehlgeschlagen.")
                     page = doc[page_num]
                     analysis = None
                     if (
@@ -535,8 +541,13 @@ def print_pdf_with_qprinter(
                         black_threshold=black_threshold,
                     )
                     painter.drawImage(draw_target, image)
-            finally:
+            except Exception:
+                printer.abort()
                 painter.end()
+                raise
+            else:
+                if not painter.end():
+                    raise RuntimeError(f"Druckabschluss auf '{printer_name}' fehlgeschlagen.")
             logger.info(
                 "PDF print copy dispatched: printer='%s' file='%s' copy=%s/%s dpi=%s pages=%s",
                 printer_name,

@@ -4,8 +4,7 @@ import threading
 import types
 from unittest.mock import MagicMock
 
-from xw_office.services.printing import print_queue
-from xw_office.services.printing import pdf_backends
+from xw_office.services.printing import pdf_backends, print_queue
 from xw_office.services.printing.print_jobs import BrotherLbxLabelJob, PdfPrintJob, PrintJobResult
 
 
@@ -22,6 +21,9 @@ def test_print_queue_worker_executes_jobs_sequentially(monkeypatch) -> None:
 
     monkeypatch.setattr(pdf_backends, "print_pdf_with_qprinter", fake_pdf)
     monkeypatch.setattr(print_queue, "_execute_brother_lbx_job", fake_lbx)
+    spooler = MagicMock()
+    spooler.__enter__.return_value = spooler
+    monkeypatch.setattr(pdf_backends, "_WindowsSpoolerWatcher", lambda _: spooler)
 
     print_queue._PrintQueueWorker._execute(PdfPrintJob(pdf_path="a.pdf", printer_name="P"))
     print_queue._PrintQueueWorker._execute(
@@ -103,3 +105,23 @@ def test_idle_print_queue_thread_stops_cleanly() -> None:
     assert worker.isRunning()
     assert service.shutdown(1000) is True
     assert worker.isRunning() is False
+
+
+def test_print_queue_continues_after_failed_job(monkeypatch, qapp) -> None:
+    service = print_queue.PrintQueueService()
+    attempts: list[str] = []
+
+    def execute(job: PdfPrintJob) -> None:
+        attempts.append(job.id)
+        if len(attempts) == 1:
+            raise RuntimeError("Drucker offline")
+
+    monkeypatch.setattr(print_queue._PrintQueueWorker, "_execute", staticmethod(execute))
+    first = PdfPrintJob(pdf_path="a.pdf", printer_name="Printer")
+    retry = PdfPrintJob(pdf_path="a.pdf", printer_name="Printer")
+    try:
+        assert service.enqueue_and_wait(first, timeout_seconds=2).success is False
+        assert service.enqueue_and_wait(retry, timeout_seconds=2).success is True
+        assert attempts == [first.id, retry.id]
+    finally:
+        assert service.shutdown(1000)

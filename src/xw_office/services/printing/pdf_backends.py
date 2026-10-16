@@ -1,13 +1,16 @@
 """Pluggable PDF print backends used by the sequential print queue."""
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 import logging
 import os
-from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import threading
+from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 from xw_office.services.printing.pdf_renderer import print_pdf_with_qprinter
@@ -28,6 +31,10 @@ class QtRasterBackend(PdfPrintBackend):
     """Existing robust PyMuPDF/QPrinter raster backend."""
 
     def print(self, job: PdfPrintJob) -> None:
+        with confirm_windows_spooler_dispatch(job.printer_name):
+            self._print(job)
+
+    def _print(self, job: PdfPrintJob) -> None:
         print_pdf_with_qprinter(
             job.pdf_path,
             job.printer_name,
@@ -48,6 +55,25 @@ class QtRasterBackend(PdfPrintBackend):
             black_enhancement=job.effective_black_enhancement,
             black_threshold=job.black_threshold,
         )
+
+
+@contextmanager
+def confirm_windows_spooler_dispatch(printer_name: str) -> Iterator[None]:
+    """Do not treat a successful driver call as a confirmed Windows print job."""
+    if sys.platform != "win32":
+        yield
+        return
+    with _WindowsSpoolerWatcher(printer_name) as spooler:
+        spooler.check_ready()
+        yield
+        if not spooler.wait(timeout_seconds=10.0):
+            raise RuntimeError(
+                f"Kein Druckauftrag fuer '{printer_name}' vom Windows-Spooler bestaetigt. "
+                "Bitte Drucker und Windows-Druckwarteschlange pruefen. "
+                "Vor einem erneuten Druckversuch dort nach einem bereits vorhandenen Auftrag suchen."
+            )
+        spooler.check_ready()
+        logger.info("Print confirmed by Windows spooler: printer='%s'", printer_name)
 
 
 class NativePdfCliBackend(PdfPrintBackend):
@@ -346,9 +372,10 @@ class _WindowsSpoolerWatcher:
         self._printer_handle: Any = None
         self._notification_handle: Any = None
         try:
-            import win32print  # type: ignore[import-untyped]
             import ctypes
             from ctypes import wintypes
+
+            import win32print  # type: ignore[import-untyped]
 
             self._win32print = win32print
             self._printer_handle = win32print.OpenPrinter(self._printer_name)
@@ -376,6 +403,25 @@ class _WindowsSpoolerWatcher:
 
     def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
         self.close()
+
+    def check_ready(self) -> None:
+        """Reject paused/offline/error queues without deleting or resending jobs."""
+        try:
+            info = self._win32print.GetPrinter(self._printer_handle, 2)
+        except Exception as exc:  # noqa: BLE001 - Windows driver errors are user-facing.
+            raise RuntimeError(
+                f"Windows-Druckerstatus fuer '{self._printer_name}' konnte nicht gelesen werden: {exc}"
+            ) from exc
+        status = int(info.get("Status", 0))
+        attributes = int(info.get("Attributes", 0))
+        # PRINTER_STATUS_PAUSED / ERROR / OFFLINE; PRINTER_ATTRIBUTE_WORK_OFFLINE.
+        if status & 0x00000083 or attributes & 0x00000400:
+            raise RuntimeError(
+                f"Drucker '{self._printer_name}' ist angehalten, offline oder meldet einen Fehler "
+                f"(Status=0x{status:08x}, Attribute=0x{attributes:08x}). "
+                "Bitte Drucker einschalten und die Windows-Druckwarteschlange pruefen; "
+                "vorhandene Auftraege nicht nochmals absenden."
+            )
 
     def wait(self, *, timeout_seconds: float) -> bool:
         try:

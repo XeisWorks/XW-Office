@@ -13,7 +13,10 @@ from typing import TypeAlias
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from xw_office.services.printing.pdf_backends import backend_for_job
+from xw_office.services.printing.pdf_backends import (
+    backend_for_job,
+    confirm_windows_spooler_dispatch,
+)
 from xw_office.services.printing.print_jobs import BrotherLbxLabelJob, PdfPrintJob, PrintJobResult
 
 logger = logging.getLogger(__name__)
@@ -180,7 +183,8 @@ class _PrintQueueWorker(QThread):
             )
             backend_for_job(job).print(job)
             return
-        _execute_brother_lbx_job(job)
+        with confirm_windows_spooler_dispatch(job.printer_name):
+            _execute_brother_lbx_job(job)
 
 
 class PrintQueueService(QObject):

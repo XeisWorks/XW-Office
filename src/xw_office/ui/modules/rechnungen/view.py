@@ -782,7 +782,7 @@ class _CustomLabelDialog(QDialog):
             LabelPrinter(
                 self._container.config.printing,
                 print_queue=self._container.resolve(PrintQueueService),
-            ).print_address(lines)
+            ).print_address(lines, wait=True)
 
         self._worker = BackgroundWorker(job)
         self._worker.signals.result.connect(self._on_print_result)

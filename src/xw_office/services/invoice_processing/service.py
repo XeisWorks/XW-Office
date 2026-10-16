@@ -1291,7 +1291,7 @@ class InvoiceProcessingService:
             lines = self._shipping_lines_from_invoice(full, summary)
         if not lines:
             raise RuntimeError("Keine Lieferadresse für Labeldruck")
-        self._label_printer.print_address(lines)
+        self._label_printer.print_address(lines, wait=True)
         next_flags = self._next_flags(flags, label_printed=True)
         self.write_fulfillment_flags(summary.id, next_flags)
         return next_flags

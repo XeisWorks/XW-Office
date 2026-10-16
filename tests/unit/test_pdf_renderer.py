@@ -4,9 +4,53 @@ import types
 from unittest.mock import MagicMock
 
 import fitz
+import pytest
 from PySide6.QtCore import QPointF, QRect, QRectF
 
 from xw_office.services.printing import pdf_renderer
+
+
+@pytest.fixture(autouse=True)
+def available_printer(monkeypatch):
+    info = MagicMock()
+    info.isNull.return_value = False
+    monkeypatch.setattr(pdf_renderer, "QPrinterInfo", types.SimpleNamespace(printerInfo=lambda _: info))
+    return info
+
+
+@pytest.mark.parametrize("failure", ["begin", "new_page", "end", "missing", "empty"])
+def test_pdf_print_failure_is_not_reported_as_dispatched(
+    monkeypatch, tmp_path, available_printer, failure: str,
+) -> None:
+    pdf_path = tmp_path / "invoice.pdf"
+    with fitz.open() as doc:
+        doc.new_page()
+        doc.new_page()
+        doc.save(pdf_path)
+    printer = MagicMock()
+    printer.resolution.return_value = 72
+    printer.newPage.return_value = failure != "new_page"
+    painter = MagicMock()
+    painter.begin.return_value = failure != "begin"
+    painter.end.return_value = failure != "end"
+    factory = MagicMock(return_value=printer)
+    monkeypatch.setattr(pdf_renderer, "QPrinter", factory)
+    monkeypatch.setattr(pdf_renderer, "QPainter", lambda: painter)
+    monkeypatch.setattr(pdf_renderer, "_log_page_metrics", lambda **_: None)
+    if failure == "missing":
+        available_printer.isNull.return_value = True
+
+    with pytest.raises(RuntimeError):
+        pdf_renderer.print_pdf_with_qprinter(
+            str(pdf_path), "Invoice", pages=[] if failure == "empty" else None,
+        )
+    if failure in {"missing", "empty"}:
+        factory.assert_not_called()
+    elif failure == "begin":
+        painter.drawImage.assert_not_called()
+    elif failure == "new_page":
+        printer.abort.assert_called_once()
+        painter.end.assert_called_once()
 
 
 def test_print_pdf_with_qprinter_draws_image_without_scaling(monkeypatch, tmp_path) -> None:
@@ -63,8 +107,9 @@ def test_print_pdf_with_qprinter_draws_image_without_scaling(monkeypatch, tmp_pa
         def pageLayout(self) -> object:
             return object()
 
-        def newPage(self) -> None:
+        def newPage(self) -> bool:
             calls["new_page"] = True
+            return True
 
     class PainterStub:
         def begin(self, printer: object) -> bool:
@@ -76,8 +121,9 @@ def test_print_pdf_with_qprinter_draws_image_without_scaling(monkeypatch, tmp_pa
             calls["draw_pos"] = pos
             calls["draw_image"] = image
 
-        def end(self) -> None:
+        def end(self) -> bool:
             calls["ended"] = True
+            return True
 
     monkeypatch.setattr(pdf_renderer, "QPrinter", PrinterStub)
     monkeypatch.setattr(pdf_renderer, "QPainter", PainterStub)
@@ -142,8 +188,9 @@ def test_print_pdf_with_qprinter_uses_queue_resolution_without_overriding(monkey
         def pageLayout(self) -> object:
             return object()
 
-        def newPage(self) -> None:
+        def newPage(self) -> bool:
             calls["new_page"] = True
+            return True
 
     class PainterStub:
         def begin(self, printer: object) -> bool:
@@ -155,8 +202,9 @@ def test_print_pdf_with_qprinter_uses_queue_resolution_without_overriding(monkey
             calls["draw_pos"] = pos
             calls["draw_image"] = image
 
-        def end(self) -> None:
+        def end(self) -> bool:
             calls["ended"] = True
+            return True
 
     monkeypatch.setattr(pdf_renderer, "QPrinter", PrinterStub)
     monkeypatch.setattr(pdf_renderer, "QPainter", PainterStub)
@@ -223,8 +271,9 @@ def test_print_pdf_with_qprinter_printable_origin_sets_full_page_false(monkeypat
         def pageLayout(self) -> object:
             return object()
 
-        def newPage(self) -> None:
+        def newPage(self) -> bool:
             calls["new_page"] = True
+            return True
 
     class PainterStub:
         def begin(self, printer: object) -> bool:
@@ -236,8 +285,9 @@ def test_print_pdf_with_qprinter_printable_origin_sets_full_page_false(monkeypat
             calls["draw_pos"] = pos
             calls["draw_image"] = image
 
-        def end(self) -> None:
+        def end(self) -> bool:
             calls["ended"] = True
+            return True
 
     monkeypatch.setattr(pdf_renderer, "QPrinter", PrinterStub)
     monkeypatch.setattr(pdf_renderer, "QPainter", PainterStub)
@@ -290,8 +340,8 @@ def test_print_pdf_with_qprinter_configures_only_invoice_page_options(monkeypatc
         def drawImage(self, _pos: object, _image: object) -> None:
             return None
 
-        def end(self) -> None:
-            return None
+        def end(self) -> bool:
+            return True
 
     monkeypatch.setattr(pdf_renderer, "QPrinter", PrinterFactory)
     monkeypatch.setattr(pdf_renderer, "QPainter", PainterStub)
@@ -378,8 +428,9 @@ def test_print_pdf_with_qprinter_sets_fallback_resolution_when_driver_dpi_invali
             calls["draw_pos"] = pos
             calls["draw_image"] = image
 
-        def end(self) -> None:
+        def end(self) -> bool:
             calls["ended"] = True
+            return True
 
     monkeypatch.setattr(pdf_renderer, "QPrinter", PrinterStub)
     monkeypatch.setattr(pdf_renderer, "QPainter", PainterStub)
@@ -436,8 +487,8 @@ def test_print_pdf_with_qprinter_logs_print_metrics(monkeypatch, tmp_path, caplo
         def pageLayout(self) -> object:
             return object()
 
-        def newPage(self) -> None:
-            return None
+        def newPage(self) -> bool:
+            return True
 
     class PainterStub:
         def begin(self, _printer: object) -> bool:
@@ -446,8 +497,8 @@ def test_print_pdf_with_qprinter_logs_print_metrics(monkeypatch, tmp_path, caplo
         def drawImage(self, _pos: QPointF, _image: object) -> None:
             return None
 
-        def end(self) -> None:
-            return None
+        def end(self) -> bool:
+            return True
 
     monkeypatch.setattr(pdf_renderer, "QPrinter", PrinterStub)
     monkeypatch.setattr(pdf_renderer, "QPainter", PainterStub)
@@ -540,8 +591,8 @@ def test_print_pdf_with_qprinter_respects_explicit_grayscale_enhancement(monkeyp
         def pageLayout(self) -> object:
             return object()
 
-        def newPage(self) -> None:
-            return None
+        def newPage(self) -> bool:
+            return True
 
     class PainterStub:
         def begin(self, _printer: object) -> bool:
@@ -551,8 +602,8 @@ def test_print_pdf_with_qprinter_respects_explicit_grayscale_enhancement(monkeyp
             calls["draw_pos"] = pos
             calls["draw_image"] = image
 
-        def end(self) -> None:
-            return None
+        def end(self) -> bool:
+            return True
 
     monkeypatch.setattr(pdf_renderer, "QPrinter", PrinterStub)
     monkeypatch.setattr(pdf_renderer, "QPainter", PainterStub)
@@ -806,8 +857,8 @@ def test_auto_page_analysis_is_cached_across_copies(monkeypatch) -> None:
         def pageLayout(self) -> object:
             return object()
 
-        def newPage(self) -> None:
-            return None
+        def newPage(self) -> bool:
+            return True
 
     class PainterStub:
         def begin(self, _printer: object) -> bool:
@@ -816,8 +867,8 @@ def test_auto_page_analysis_is_cached_across_copies(monkeypatch) -> None:
         def drawImage(self, _pos: QPointF, _image: object) -> None:
             calls["draws"] = int(calls["draws"]) + 1
 
-        def end(self) -> None:
-            return None
+        def end(self) -> bool:
+            return True
 
     def fake_analysis(_page: object, *, sample_dpi: int = 72) -> pdf_renderer.PagePrintAnalysis:
         assert sample_dpi == 72

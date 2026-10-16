@@ -762,7 +762,7 @@ class OffeneSendungenDialog(QDialog):
                 self._container.config.printing,
                 print_queue=self._container.resolve(PrintQueueService),
             )
-            printer.print_address(lines)
+            printer.print_address(lines, wait=True)
             return True
 
         self._start_action(
