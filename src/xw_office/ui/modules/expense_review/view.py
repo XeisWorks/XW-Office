@@ -752,6 +752,7 @@ class ExpenseReviewView(QWidget):
                 header.restoreState(state)
             header.sectionResized.connect(lambda *_args: self._schedule_table_header_save())
             header.sectionMoved.connect(lambda *_args: self._schedule_table_header_save())
+        table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
 
     def _build_bank_tab(self) -> QWidget:
         page = QWidget()
@@ -821,6 +822,7 @@ class ExpenseReviewView(QWidget):
         state = self._settings.value(f"expense_review/{self._tenant_key}/manual_table_header")
         if state is not None:
             header.restoreState(state)
+        self._manual_table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         header.sectionResized.connect(lambda *_args: self._schedule_table_header_save())
         header.sectionMoved.connect(lambda *_args: self._schedule_table_header_save())
         header.geometriesChanged.connect(self._resize_manual_table)
@@ -1201,6 +1203,8 @@ class ExpenseReviewView(QWidget):
         manual_state = self._settings.value(f"expense_review/{self._tenant_key}/manual_table_header")
         if manual_state is not None:
             self._manual_table.horizontalHeader().restoreState(manual_state)
+        for table in (self._table, self._manual_table):
+            table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
         self._apply_tenant_controls()
         self._manual_expenses = []
         self._shared_bank_expenses = []
@@ -1246,6 +1250,7 @@ class ExpenseReviewView(QWidget):
             [
                 {
                     "Datum": row.value_date.strftime("%d.%m.%Y"),
+                    "__sort__Datum": row.value_date.isoformat(),
                     "Empfänger": row.payee,
                     "Zweck / Referenz": row.purpose,
                     "Betrag": self._amount_text(row, receipt_mode=receipt_mode),

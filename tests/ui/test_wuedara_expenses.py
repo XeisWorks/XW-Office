@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from threading import Event
 from unittest.mock import MagicMock
 
 import pytest
-from PySide6.QtCore import QDate, QRect, Qt
+from PySide6.QtCore import QDate, QRect, QSettings, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QDialog, QLabel
 from pytestqt.qtbot import QtBot
@@ -23,6 +24,78 @@ from xw_office.services.expenses.xw_flow_expense_client import FlowExpense, XwFl
 from xw_office.services.secrets.service import SecretService
 from xw_office.ui.modules.expense_review.manual_expense_dialog import ManualExpenseDialog
 from xw_office.ui.modules.expense_review.view import ExpenseReviewView, _DocumentDelegate
+from xw_office.ui.widgets.data_table import DataTable
+
+
+def test_expense_tables_start_in_date_order_despite_saved_sort(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings = QSettings(str(tmp_path / "expense-sort.ini"), QSettings.Format.IniFormat)
+    monkeypatch.setattr(
+        "xw_office.ui.modules.expense_review.view.QSettings", lambda *args: settings
+    )
+    for suffix, column_count in (("bank_table_header", 6), ("manual_table_header", 11)):
+        table = DataTable([str(index) for index in range(column_count)])
+        qtbot.addWidget(table)
+        table.sortByColumn(2, Qt.SortOrder.DescendingOrder)
+        state = table.horizontalHeader().saveState()
+        settings.setValue(f"expense_review/{suffix}", state)
+        for tenant in ("xw", "wuedara"):
+            settings.setValue(f"expense_review/{tenant}/{suffix}", state)
+
+    view, service, expenses = _shared_view(qtbot, monkeypatch)
+    service.rows = [
+        replace(service.rows[0], transaction_id=f"day-{day}", value_date=date(2026, 9, day))
+        for day in (30, 1, 10)
+    ]
+    expenses[:] = [
+        replace(expenses[1], id=f"{tenant}-{day}", tenant_key=tenant,
+                expense_date=f"2026-09-{day:02d}")
+        for tenant in ("xw", "wuedara") for day in (30, 1, 10)
+    ]
+
+    for tenant_index in (0, 1, 0):
+        if tenant_index == 1:
+            _switch_to_wuedara(qtbot, view)
+        elif view._tenant_key != "xw":
+            view._tenant_tabs.setCurrentIndex(0)
+        view._load_cached_then_sync()
+        qtbot.waitUntil(lambda: not view._workers and not view._manual_workers)
+        for table in (view._table, view._manual_table):
+            header = table.horizontalHeader()
+            assert header.sortIndicatorSection() == 0
+            assert header.sortIndicatorOrder() == Qt.SortOrder.AscendingOrder
+            dates = [
+                str(table.model().index(row, 0).data())
+                for row in range(table.model().rowCount())
+            ]
+            assert len(dates) >= 3
+            assert dates == sorted(dates)
+            table.sortByColumn(0, Qt.SortOrder.DescendingOrder)
+        view._refresh_receipts_and_manual_expenses()
+        qtbot.waitUntil(lambda: not view._workers and not view._manual_workers)
+        for table in (view._table, view._manual_table):
+            assert table.horizontalHeader().sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+
+
+def test_bank_date_sort_is_chronological_across_months_and_years(qtbot: QtBot) -> None:
+    container = _ContainerStub()
+    service = _BankRowsServiceStub()
+    container.service = service
+    service.rows = [
+        replace(service.rows[0], transaction_id=str(index), value_date=value_date)
+        for index, value_date in enumerate(
+            (date(2027, 1, 1), date(2026, 12, 31), date(2026, 11, 30), date(2026, 12, 1))
+        )
+    ]
+    view = ExpenseReviewView(container)  # type: ignore[arg-type]
+    qtbot.addWidget(view)
+    view.show()
+    qtbot.waitUntil(lambda: bool(view._tenant_loads) and not view._workers)
+    view._table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+    assert [
+        view._table.model().index(row, 0).data() for row in range(4)
+    ] == ["30.11.2026", "01.12.2026", "31.12.2026", "01.01.2027"]
 
 
 class _SharedService(_BankRowsServiceStub):

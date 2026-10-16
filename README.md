@@ -29,6 +29,9 @@ ausgehenden Zahlungen sichtbar. **Nur offene Zuordnungen anzeigen** blendet bere
 kategorisierte Kontobewegungen in XeisWorks aus und ist mit beiden anderen Filtern kombinierbar.
 Rechts neben den Checkboxen steht die Gesamtzahl der ausgehenden Zahlungen im Zeitraum.
 Unvollstaendige Belegscans werden im Status ausgewiesen.
+Kontobewegungen und zusaetzliche Ausgaben starten in beiden Mandanten nach Datum aufsteigend
+(aelteste Buchung zuerst), auch nach einem Mandantenwechsel und unabhaengig von gespeicherten
+Sortierungen. Eine anschliessend manuell gewaehlte Sortierung bleibt beim Aktualisieren erhalten.
 
 Im Bereich **WuedaraMusi** gibt es keine Kategorie-Spalten, keinen Kategoriefilter und
 keine Checkbox fuer offene Zuordnungen. Auch die Kategorie-Einstellungen und die
