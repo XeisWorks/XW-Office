@@ -316,6 +316,87 @@ def test_fullflow_invoice_and_label_steps() -> None:
     assert len(mailer.calls) == 0
 
 
+def test_optional_aftercare_failure_does_not_block_invoice_or_label_print() -> None:
+    invoice_client = _InvoiceClientE2E()
+    repo = _SettingsRepoE2E()
+    service = InvoiceProcessingService(
+        AppConfig(),
+        invoice_client,
+        repo,
+        _WixOrdersPhysicalStub(),
+        _MailServiceStub(),
+    )
+    invoice_client.list_invoice_summaries = lambda **_: [
+        InvoiceSummary(
+            id="INV-AFTERCARE",
+            invoice_number="R-AFTERCARE",
+            contact_name="John Doe",
+            order_reference="WIX-INV-001",
+            address_country_code="AT",
+        )
+    ]
+
+    with patch.object(
+        service,
+        "_run_aftercare_delivery_note_step",
+        side_effect=RuntimeError("customer_aftercare_case.sevdesk_contact_id missing"),
+    ), patch.object(
+        service,
+        "_run_finalize_step",
+        side_effect=lambda _summary, flags, **_kwargs: flags,
+    ), patch.object(
+        service,
+        "_run_payment_step",
+        side_effect=lambda _summary, flags: flags,
+    ), patch.object(
+        service,
+        "_run_invoice_print_step",
+        side_effect=lambda _summary, flags: replace(flags, invoice_printed=True),
+    ) as invoice_print, patch.object(
+        service,
+        "_run_label_print_step",
+        side_effect=lambda _summary, flags: replace(flags, label_printed=True),
+    ) as label_print, patch.object(
+        service,
+        "_run_product_step",
+        side_effect=lambda _summary, flags: replace(flags, wix_fulfilled=True),
+    ), patch.object(
+        service,
+        "_run_mail_step",
+        side_effect=lambda _summary, flags, **_kwargs: replace(flags, mail_sent=True),
+    ):
+        result = service.run_start_fullflow(full_mode=True)
+
+    assert result["failures"] == 0
+    assert result["successful"] == 1
+    assert result["invoice_print_ids"] == ["INV-AFTERCARE"]
+    assert result["label_print_ids"] == ["INV-AFTERCARE"]
+    invoice_print.assert_called_once()
+    label_print.assert_called_once()
+
+
+def test_print_run_documents_continues_after_one_label_failure() -> None:
+    service = InvoiceProcessingService(
+        AppConfig(),
+        _InvoiceClientE2E(),
+        _SettingsRepoE2E(),
+        None,
+        _MailServiceStub(),
+    )
+
+    with patch.object(
+        service,
+        "print_label_for_invoice",
+        side_effect=[FulfillmentFlags(label_printed=True), RuntimeError("label offline")],
+    ) as print_label:
+        result = service.print_run_documents(["INV-1", "INV-2", "INV-1"], labels=True)
+
+    assert result["requested"] == 2
+    assert result["printed"] == 1
+    assert result["failures"] == [{"invoice_id": "INV-2", "error": "label offline"}]
+    assert [call.kwargs for call in print_label.call_args_list] == [{"wait": True}, {"wait": True}]
+
+
 def test_fullflow_prints_all_physical_output_before_fulfillment_and_mail() -> None:
     config = AppConfig()
     invoice_client = _InvoiceClientE2E()

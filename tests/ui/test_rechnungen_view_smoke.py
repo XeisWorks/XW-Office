@@ -255,6 +255,7 @@ class _FakeInvoiceProcessingService:
     def __init__(self) -> None:
         self.load_calls: list[tuple[str, int, int]] = []
         self.last_start_overview: dict[str, object] = {}
+        self.run_print_calls: list[tuple[list[str], bool]] = []
         self._draft = InvoiceSummary.model_validate(
             {
                 "id": "draft-1",
@@ -331,6 +332,15 @@ class _FakeInvoiceProcessingService:
 
     def write_last_start_overview(self, payload: dict[str, object]) -> None:
         self.last_start_overview = dict(payload)
+
+    def print_run_documents(self, invoice_ids: list[str], *, labels: bool) -> dict[str, object]:
+        self.run_print_calls.append((list(invoice_ids), labels))
+        return {
+            "kind": "labels" if labels else "invoices",
+            "requested": len(invoice_ids),
+            "printed": len(invoice_ids),
+            "failures": [],
+        }
 
 
 class _FakeWixOrdersClient:
@@ -1370,12 +1380,21 @@ def test_last_run_print_and_unreleased_panels_restore_after_restart(qtbot: objec
         )
     )
 
-    view.mark_print_products_last_run()
+    view.mark_print_products_last_run(
+        invoice_print_ids=["invoice-1"],
+        label_print_ids=["invoice-1"],
+    )
 
     assert invoice_service.last_start_overview["saved_at"]
+    persisted_run = invoice_service.last_start_overview["runs"][0]
+    assert persisted_run["invoice_print_ids"] == ["invoice-1"]
+    assert persisted_run["label_print_ids"] == ["invoice-1"]
     restarted = RechnungenView(container)
     qtbot.addWidget(restarted)
     restarted._restore_last_start_overview()  # noqa: SLF001
+
+    assert restarted._active_run_output_ids(labels=False) == ["invoice-1"]  # noqa: SLF001
+    assert restarted._active_run_output_ids(labels=True) == ["invoice-1"]  # noqa: SLF001
 
     assert restarted._gb_open_products.title() == "PRINT PRODUKTE (last run)"  # noqa: SLF001
     assert restarted._gb_buyer_notes.title() == "KÄUFER-NOTIZEN (last run)"  # noqa: SLF001
@@ -1383,6 +1402,38 @@ def test_last_run_print_and_unreleased_panels_restore_after_restart(qtbot: objec
     assert "Unreleased-Produkt" in restarted._open_products_text.toPlainText()  # noqa: SLF001
     assert "Bitte sauber verpacken." in restarted._buyer_notes_text.toPlainText()  # noqa: SLF001
     assert "Marsch für Anna -> Anna Versand [20910]" in restarted._unreleased_text.toPlainText()  # noqa: SLF001
+
+
+def test_run_output_buttons_print_all_persisted_targets(qtbot: object, monkeypatch: object) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    view._print_allowed = True  # noqa: SLF001
+    view.mark_print_products_last_run(
+        invoice_print_ids=["invoice-1", "invoice-2"],
+        label_print_ids=["invoice-1", "invoice-2"],
+    )
+
+    assert view._btn_print_run_invoices.isEnabled()  # noqa: SLF001
+    assert view._btn_print_run_labels.isEnabled()  # noqa: SLF001
+    view._btn_print_run_invoices.click()  # noqa: SLF001
+    qtbot.waitUntil(
+        lambda: invoice_service.run_print_calls == [(["invoice-1", "invoice-2"], False)]
+    )
+    qtbot.waitUntil(lambda: view._run_output_worker is None)  # noqa: SLF001
+
+    view._btn_print_run_labels.click()  # noqa: SLF001
+    qtbot.waitUntil(
+        lambda: invoice_service.run_print_calls
+        == [(["invoice-1", "invoice-2"], False), (["invoice-1", "invoice-2"], True)]
+    )
+    qtbot.waitUntil(lambda: view._run_output_worker is None)  # noqa: SLF001
 
 
 def test_unreleased_assignments_are_grouped_by_buyer(qtbot: object) -> None:

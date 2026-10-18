@@ -550,6 +550,8 @@ class InvoiceProcessingService:
         skipped = 0
         aborted = False
         pending_manual_license_ids: list[str] = []
+        invoice_print_ids: list[str] = []
+        label_print_ids: list[str] = []
         for summary in summaries:
             if should_abort is not None and should_abort():
                 aborted = True
@@ -599,6 +601,9 @@ class InvoiceProcessingService:
                     successful += 1
                     updates[summary.id] = flags
                     continue
+                if not digital_only:
+                    invoice_print_ids.append(str(summary.id))
+                    label_print_ids.append(str(summary.id))
                 run_phase("product_mapping", lambda: self._repair_draft_products(summary))
                 if progress_callback is not None and not digital_only and full_mode:
                     progress_callback(f"START: {label} wird gedruckt...")
@@ -614,10 +619,7 @@ class InvoiceProcessingService:
                 flags = run_phase("payment", lambda: self._run_payment_step(summary, flags))
                 if full_mode:
                     if not digital_only:
-                        flags = run_phase(
-                            "aftercare_delivery_note",
-                            lambda: self._run_aftercare_delivery_note_step(summary, flags),
-                        )
+                        flags = self._run_optional_aftercare_delivery_note_step(summary, flags)
                         flags = run_phase("invoice_print", lambda: self._run_invoice_print_step(summary, flags))
                         if progress_callback is not None:
                             progress_callback(f"START: Label fuer {label} wird gedruckt...")
@@ -656,6 +658,8 @@ class InvoiceProcessingService:
             "print_products": bool(print_products),
             "aborted": aborted,
             "pending_digital_license_case_ids": pending_manual_license_ids,
+            "invoice_print_ids": invoice_print_ids,
+            "label_print_ids": label_print_ids,
         }
 
     def _run_start_fullflow_print_first(
@@ -677,6 +681,8 @@ class InvoiceProcessingService:
         successful_ids: set[str] = set()
         skipped_ids: set[str] = set()
         pending_manual_license_ids: list[str] = []
+        invoice_print_ids: list[str] = []
+        label_print_ids: list[str] = []
         aborted = False
 
         def persist(summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
@@ -733,6 +739,9 @@ class InvoiceProcessingService:
                     )
                     continue
 
+                invoice_print_ids.append(str(summary.id))
+                label_print_ids.append(str(summary.id))
+
                 if progress_callback is not None:
                     progress_callback(f"START: {label} wird vorbereitet...")
                 run_phase(summary, "product_mapping", lambda: self._repair_draft_products(summary))
@@ -758,11 +767,7 @@ class InvoiceProcessingService:
                 )
                 flags = persist(
                     summary,
-                    run_phase(
-                        summary,
-                        "aftercare_delivery_note",
-                        lambda: self._run_aftercare_delivery_note_step(summary, flags),
-                    ),
+                    self._run_optional_aftercare_delivery_note_step(summary, flags),
                 )
                 if note_action is not None and note_action[1].action == "delivery_note":
                     case, selection = note_action
@@ -921,6 +926,8 @@ class InvoiceProcessingService:
             "print_products": bool(print_products),
             "aborted": aborted,
             "pending_digital_license_case_ids": pending_manual_license_ids,
+            "invoice_print_ids": invoice_print_ids,
+            "label_print_ids": label_print_ids,
         }
 
     def _run_product_step_compat(
@@ -1273,6 +1280,7 @@ class InvoiceProcessingService:
         invoice_id: str,
         *,
         override_lines: list[str] | None = None,
+        wait: bool = False,
     ) -> FulfillmentFlags:
         """Print one shipping label for *invoice_id* and persist ``label_printed``.
 
@@ -1291,10 +1299,52 @@ class InvoiceProcessingService:
             lines = self._shipping_lines_from_invoice(full, summary)
         if not lines:
             raise RuntimeError("Keine Lieferadresse für Labeldruck")
-        self._label_printer.print_address(lines)
+        if wait:
+            self._label_printer.print_address(lines, wait=True)
+        else:
+            self._label_printer.print_address(lines)
         next_flags = self._next_flags(flags, label_printed=True)
         self.write_fulfillment_flags(summary.id, next_flags)
         return next_flags
+
+    def print_run_documents(
+        self,
+        invoice_ids: list[str],
+        *,
+        labels: bool,
+    ) -> dict[str, object]:
+        """Print every persisted invoice or label target from one START run."""
+        normalized_ids = list(
+            dict.fromkeys(
+                str(invoice_id or "").strip()
+                for invoice_id in invoice_ids
+                if str(invoice_id or "").strip()
+            )
+        )
+        printed_ids: list[str] = []
+        failures: list[dict[str, str]] = []
+        for invoice_id in normalized_ids:
+            try:
+                if labels:
+                    self.print_label_for_invoice(invoice_id, wait=True)
+                else:
+                    self.print_invoice_for_invoice(invoice_id)
+                printed_ids.append(invoice_id)
+            except Exception as exc:  # noqa: BLE001 - continue the requested batch.
+                logger.warning(
+                    "START run batch %s failed invoice=%s: %s",
+                    "label print" if labels else "invoice print",
+                    invoice_id,
+                    exc,
+                )
+                failures.append({"invoice_id": invoice_id, "error": str(exc)})
+        return {
+            "kind": "labels" if labels else "invoices",
+            "requested": len(normalized_ids),
+            "printed": len(printed_ids),
+            "printed_ids": printed_ids,
+            "failures": failures,
+        }
 
     def print_invoice_for_invoice(self, invoice_id: str) -> FulfillmentFlags:
         """Print one invoice through the configured invoice printer and persist state."""
@@ -2119,6 +2169,21 @@ class InvoiceProcessingService:
             if self._customer_aftercare is not None:
                 self._customer_aftercare.release_invoice_claim_for_invoice(str(summary.id or ""))
             raise
+
+    def _run_optional_aftercare_delivery_note_step(
+        self, summary: InvoiceSummary, flags: FulfillmentFlags
+    ) -> FulfillmentFlags:
+        """Keep optional redelivery handling from blocking core START output."""
+        try:
+            return self._run_aftercare_delivery_note_step(summary, flags)
+        except Exception as exc:  # noqa: BLE001 - invoice and label printing must continue.
+            logger.warning(
+                "START optional aftercare delivery note skipped invoice=%s: %s",
+                summary.id,
+                exc,
+                exc_info=True,
+            )
+            return flags
 
     def _run_aftercare_delivery_note_step_impl(
         self, summary: InvoiceSummary, flags: FulfillmentFlags

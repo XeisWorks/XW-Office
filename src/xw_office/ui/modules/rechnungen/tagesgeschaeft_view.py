@@ -1563,6 +1563,16 @@ class TagesgeschaeftView(QWidget):
                     failures=failures,
                     selected_only=self._start_selected_only,
                     mode_label=mode_label,
+                    invoice_print_ids=[
+                        str(item).strip()
+                        for item in (batch.get("invoice_print_ids") or [])
+                        if str(item).strip()
+                    ],
+                    label_print_ids=[
+                        str(item).strip()
+                        for item in (batch.get("label_print_ids") or [])
+                        if str(item).strip()
+                    ],
                 )
             self._rechnungen_view._reload_first_page(preserve_print_tab=True)
         self._refresh_badges()

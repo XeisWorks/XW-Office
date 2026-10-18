@@ -157,6 +157,8 @@ class _PrintRunSnapshot:
     buyer_notes: list[BuyerNote]
     unreleased_assignments: list[UnreleasedAssignment]
     saved_at: str
+    invoice_print_ids: list[str]
+    label_print_ids: list[str]
     mode_label: str = "START"
     processed: int = 0
     failures: int = 0
@@ -1169,6 +1171,7 @@ class RechnungenView(QWidget):
         self._wix_warm_handle: JobHandle | None = None
         self._hint_worker: BackgroundWorker | None = None
         self._fulfillment_step_worker: BackgroundWorker | None = None
+        self._run_output_worker: BackgroundWorker | None = None
         self._invoice_mail_worker: BackgroundWorker | None = None
         self._invoice_pdf_preview_worker: BackgroundWorker | None = None
         self._delete_draft_worker: BackgroundWorker | None = None
@@ -1488,6 +1491,22 @@ class RechnungenView(QWidget):
         )
         self._btn_print_all_products.setFixedHeight(26)
         self._btn_print_all_products.clicked.connect(self._on_print_all_open_products_clicked)
+        self._btn_print_run_invoices = QPushButton("PRINT INVOICES")
+        self._btn_print_run_invoices.setToolTip(
+            "Alle Rechnungen des angezeigten START-Laufs gesammelt drucken"
+        )
+        self._btn_print_run_invoices.setFixedHeight(26)
+        self._btn_print_run_invoices.setEnabled(False)
+        self._btn_print_run_invoices.clicked.connect(self._on_print_run_invoices_clicked)
+        self._btn_print_run_labels = QPushButton("PRINT LABELS")
+        self._btn_print_run_labels.setToolTip(
+            "Alle Versandetiketten des angezeigten START-Laufs gesammelt drucken"
+        )
+        self._btn_print_run_labels.setFixedHeight(26)
+        self._btn_print_run_labels.setEnabled(False)
+        self._btn_print_run_labels.clicked.connect(self._on_print_run_labels_clicked)
+        open_products_header.addWidget(self._btn_print_run_invoices)
+        open_products_header.addWidget(self._btn_print_run_labels)
         open_products_header.addWidget(self._btn_print_all_products, alignment=Qt.AlignmentFlag.AlignRight)
         open_products_layout.addLayout(open_products_header)
         self._open_products_spinner = QProgressBar()
@@ -1988,6 +2007,7 @@ class RechnungenView(QWidget):
                 self._wix_warm_worker,
                 self._hint_worker,
                 self._fulfillment_step_worker,
+                self._run_output_worker,
                 self._invoice_mail_worker,
                 self._invoice_pdf_preview_worker,
                 self._delete_draft_worker,
@@ -2184,6 +2204,7 @@ class RechnungenView(QWidget):
         self._print_allowed = printing_allowed
         self._set_piece_print_controls_enabled(printing_allowed)
         self._update_print_all_products_button()
+        self._update_print_run_output_buttons()
         self._update_plc_controls()
 
     def _initialize_printer_status(self) -> None:
@@ -3129,6 +3150,8 @@ class RechnungenView(QWidget):
         failures: int = 0,
         selected_only: bool = False,
         mode_label: str = "START",
+        invoice_print_ids: list[str] | None = None,
+        label_print_ids: list[str] | None = None,
     ) -> None:
         """Freeze, rotate and persist the PRINT/UNRELEASED dashboard after START."""
         snapshot = _PrintRunSnapshot(
@@ -3136,6 +3159,8 @@ class RechnungenView(QWidget):
             buyer_notes=list(self._session_buyer_notes),
             unreleased_assignments=list(self._session_unreleased),
             saved_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+            invoice_print_ids=list(dict.fromkeys(invoice_print_ids or [])),
+            label_print_ids=list(dict.fromkeys(label_print_ids or [])),
             mode_label=mode_label,
             processed=max(0, int(processed or 0)),
             failures=max(0, int(failures or 0)),
@@ -3248,6 +3273,7 @@ class RechnungenView(QWidget):
         self._render_open_print_products(overview)
         self._render_buyer_notes(overview)
         self._render_unreleased_assignments(overview)
+        self._update_print_run_output_buttons()
 
     def _merge_session_print_products(self, products: list[PrintProductAggregate]) -> None:
         """Append new products and retain the largest quantity seen this session."""
@@ -3341,6 +3367,8 @@ class RechnungenView(QWidget):
             "processed": snapshot.processed,
             "failures": snapshot.failures,
             "selected_only": snapshot.selected_only,
+            "invoice_print_ids": list(snapshot.invoice_print_ids),
+            "label_print_ids": list(snapshot.label_print_ids),
             "print_products": [
                 {
                     "sku": item.sku,
@@ -3492,6 +3520,16 @@ class RechnungenView(QWidget):
                 buyer_notes=buyer_notes,
                 unreleased_assignments=assignments,
                 saved_at=str(raw.get("saved_at") or ""),
+                invoice_print_ids=[
+                    str(item).strip()
+                    for item in (raw.get("invoice_print_ids") if isinstance(raw.get("invoice_print_ids"), list) else [])
+                    if str(item).strip()
+                ],
+                label_print_ids=[
+                    str(item).strip()
+                    for item in (raw.get("label_print_ids") if isinstance(raw.get("label_print_ids"), list) else [])
+                    if str(item).strip()
+                ],
                 mode_label=str(raw.get("mode_label") or "START"),
                 processed=processed,
                 failures=failures,
@@ -3882,6 +3920,93 @@ class RechnungenView(QWidget):
         self._btn_print_all_products.setEnabled(
             bool(self._print_allowed and self._selected_displayed_print_products() and not running)
         )
+
+    def _active_run_output_ids(self, *, labels: bool) -> list[str]:
+        index = self._active_print_history_index
+        if index is None or not 0 <= index < len(self._print_run_history):
+            return []
+        snapshot = self._print_run_history[index]
+        values = snapshot.label_print_ids if labels else snapshot.invoice_print_ids
+        return list(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
+
+    def _update_print_run_output_buttons(self) -> None:
+        if not hasattr(self, "_btn_print_run_invoices"):
+            return
+        running = self._run_output_worker is not None and self._run_output_worker.isRunning()
+        self._btn_print_run_invoices.setEnabled(
+            bool(self._print_allowed and self._active_run_output_ids(labels=False) and not running)
+        )
+        self._btn_print_run_labels.setEnabled(
+            bool(self._print_allowed and self._active_run_output_ids(labels=True) and not running)
+        )
+
+    def _on_print_run_invoices_clicked(self) -> None:
+        self._start_run_output_print(labels=False)
+
+    def _on_print_run_labels_clicked(self) -> None:
+        self._start_run_output_print(labels=True)
+
+    def _start_run_output_print(self, *, labels: bool) -> None:
+        if not self._print_allowed:
+            return
+        if self._run_output_worker is not None and self._run_output_worker.isRunning():
+            return
+        invoice_ids = self._active_run_output_ids(labels=labels)
+        if not invoice_ids:
+            return
+        output_label = "Versandetiketten" if labels else "Rechnungen"
+        answer = QMessageBox.question(
+            self,
+            f"PRINT {'LABELS' if labels else 'INVOICES'}",
+            f"{len(invoice_ids)} {output_label} dieses START-Laufs gesammelt drucken?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        def job() -> dict[str, object]:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            return service.print_run_documents(invoice_ids, labels=labels)
+
+        self._run_output_worker = BackgroundWorker(job)
+        self._run_output_worker.signals.result.connect(self._on_print_run_output_result)
+        self._run_output_worker.signals.error.connect(self._on_print_run_output_error)
+        self._run_output_worker.signals.finished.connect(self._on_print_run_output_finished)
+        self._update_print_run_output_buttons()
+        self._run_output_worker.start()
+
+    def _on_print_run_output_result(self, payload: object) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        requested = max(0, int(data.get("requested") or 0))
+        printed = max(0, int(data.get("printed") or 0))
+        labels = str(data.get("kind") or "") == "labels"
+        failures = data.get("failures") if isinstance(data.get("failures"), list) else []
+        output_label = "Versandetiketten" if labels else "Rechnungen"
+        message = f"{printed}/{requested} {output_label} wurden gedruckt."
+        self._container.resolve(AppSignals).status_message.emit(message, 8000)
+        if failures:
+            details = "\n".join(
+                f"- {str(item.get('invoice_id') or 'unbekannt')}: {str(item.get('error') or 'Fehler')}"
+                for item in failures
+                if isinstance(item, dict)
+            )
+            QMessageBox.warning(
+                self,
+                f"PRINT {'LABELS' if labels else 'INVOICES'}",
+                f"{message}\n\nFehlgeschlagen:\n{details}",
+            )
+
+    def _on_print_run_output_error(self, exc: Exception) -> None:
+        QMessageBox.warning(
+            self,
+            "Sammeldruck",
+            f"Sammeldruck konnte nicht ausgefuehrt werden:\n\n{exc}",
+        )
+
+    def _on_print_run_output_finished(self) -> None:
+        self._run_output_worker = None
+        self._update_print_run_output_buttons()
 
     @staticmethod
     def _print_all_products_key(products: list[PrintProductAggregate]) -> tuple[tuple[str, str, str, int], ...]:
