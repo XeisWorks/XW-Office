@@ -1436,6 +1436,49 @@ def test_run_output_buttons_print_all_persisted_targets(qtbot: object, monkeypat
     qtbot.waitUntil(lambda: view._run_output_worker is None)  # noqa: SLF001
 
 
+def test_run_output_labels_queue_while_invoice_print_is_running(qtbot: object, monkeypatch: object) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
+    )
+    invoice_started = Event()
+    release_invoice = Event()
+    original_print = invoice_service.print_run_documents
+
+    def delayed_print(invoice_ids: list[str], *, labels: bool) -> dict[str, object]:
+        if not labels:
+            invoice_started.set()
+            assert release_invoice.wait(timeout=2)
+        return original_print(invoice_ids, labels=labels)
+
+    monkeypatch.setattr(invoice_service, "print_run_documents", delayed_print)
+    view._print_allowed = True  # noqa: SLF001
+    view.mark_print_products_last_run(
+        invoice_print_ids=["invoice-1", "invoice-2"],
+        label_print_ids=["invoice-1", "invoice-2"],
+    )
+
+    view._btn_print_run_invoices.click()  # noqa: SLF001
+    qtbot.waitUntil(invoice_started.is_set)
+    assert not view._btn_print_run_invoices.isEnabled()  # noqa: SLF001
+    assert view._btn_print_run_labels.isEnabled()  # noqa: SLF001
+
+    view._btn_print_run_labels.click()  # noqa: SLF001
+    assert not view._btn_print_run_labels.isEnabled()  # noqa: SLF001
+    assert invoice_service.run_print_calls == []
+
+    release_invoice.set()
+    qtbot.waitUntil(
+        lambda: invoice_service.run_print_calls
+        == [(["invoice-1", "invoice-2"], False), (["invoice-1", "invoice-2"], True)]
+    )
+    qtbot.waitUntil(lambda: view._run_output_worker is None)  # noqa: SLF001
+
+
 def test_unreleased_assignments_are_grouped_by_buyer(qtbot: object) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)

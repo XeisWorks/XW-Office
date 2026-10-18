@@ -165,6 +165,12 @@ class _PrintRunSnapshot:
     selected_only: bool = False
 
 
+@dataclass(frozen=True)
+class _RunOutputPrintRequest:
+    invoice_ids: tuple[str, ...]
+    labels: bool
+
+
 _TABLE_COLUMNS = [
     "sevDesk",
     "WIX",
@@ -1172,6 +1178,8 @@ class RechnungenView(QWidget):
         self._hint_worker: BackgroundWorker | None = None
         self._fulfillment_step_worker: BackgroundWorker | None = None
         self._run_output_worker: BackgroundWorker | None = None
+        self._run_output_active_request: _RunOutputPrintRequest | None = None
+        self._run_output_pending_requests: list[_RunOutputPrintRequest] = []
         self._invoice_mail_worker: BackgroundWorker | None = None
         self._invoice_pdf_preview_worker: BackgroundWorker | None = None
         self._delete_draft_worker: BackgroundWorker | None = None
@@ -3932,12 +3940,17 @@ class RechnungenView(QWidget):
     def _update_print_run_output_buttons(self) -> None:
         if not hasattr(self, "_btn_print_run_invoices"):
             return
-        running = self._run_output_worker is not None and self._run_output_worker.isRunning()
+        queued_labels = {
+            request.labels
+            for request in self._run_output_pending_requests
+        }
+        if self._run_output_active_request is not None:
+            queued_labels.add(self._run_output_active_request.labels)
         self._btn_print_run_invoices.setEnabled(
-            bool(self._print_allowed and self._active_run_output_ids(labels=False) and not running)
+            bool(self._print_allowed and self._active_run_output_ids(labels=False) and False not in queued_labels)
         )
         self._btn_print_run_labels.setEnabled(
-            bool(self._print_allowed and self._active_run_output_ids(labels=True) and not running)
+            bool(self._print_allowed and self._active_run_output_ids(labels=True) and True not in queued_labels)
         )
 
     def _on_print_run_invoices_clicked(self) -> None:
@@ -3949,7 +3962,9 @@ class RechnungenView(QWidget):
     def _start_run_output_print(self, *, labels: bool) -> None:
         if not self._print_allowed:
             return
-        if self._run_output_worker is not None and self._run_output_worker.isRunning():
+        if any(request.labels == labels for request in self._run_output_pending_requests):
+            return
+        if self._run_output_active_request is not None and self._run_output_active_request.labels == labels:
             return
         invoice_ids = self._active_run_output_ids(labels=labels)
         if not invoice_ids:
@@ -3965,9 +3980,32 @@ class RechnungenView(QWidget):
         if answer != QMessageBox.StandardButton.Yes:
             return
 
+        request = _RunOutputPrintRequest(invoice_ids=tuple(invoice_ids), labels=labels)
+        runs_before = len(self._run_output_pending_requests) + int(self._run_output_active_request is not None)
+        self._run_output_pending_requests.append(request)
+        self._update_print_run_output_buttons()
+        output_label = "Versandetiketten" if labels else "Rechnungen"
+        if runs_before:
+            self._container.resolve(AppSignals).status_message.emit(
+                f"{output_label} wurden hinter dem laufenden Sammeldruck eingereiht.",
+                5000,
+            )
+        self._start_next_run_output_print()
+
+    def _start_next_run_output_print(self) -> None:
+        if self._run_output_worker is not None and self._run_output_worker.isRunning():
+            return
+        if not self._run_output_pending_requests:
+            self._run_output_active_request = None
+            self._update_print_run_output_buttons()
+            return
+
+        request = self._run_output_pending_requests.pop(0)
+        self._run_output_active_request = request
+
         def job() -> dict[str, object]:
             service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-            return service.print_run_documents(invoice_ids, labels=labels)
+            return service.print_run_documents(list(request.invoice_ids), labels=request.labels)
 
         self._run_output_worker = BackgroundWorker(job)
         self._run_output_worker.signals.result.connect(self._on_print_run_output_result)
@@ -4006,7 +4044,8 @@ class RechnungenView(QWidget):
 
     def _on_print_run_output_finished(self) -> None:
         self._run_output_worker = None
-        self._update_print_run_output_buttons()
+        self._run_output_active_request = None
+        self._start_next_run_output_print()
 
     @staticmethod
     def _print_all_products_key(products: list[PrintProductAggregate]) -> tuple[tuple[str, str, str, int], ...]:
