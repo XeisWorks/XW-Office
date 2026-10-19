@@ -1,4 +1,5 @@
 """Tests for the Lieferkorrektur inbox poller (spec §3) — never invoices/labels, always idempotent."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -10,6 +11,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from xw_office.models.base import Base
 from xw_office.repositories.customer_aftercare import CustomerAftercareRepository
 from xw_office.services.customer_aftercare.inbox_service import CustomerAftercareInboxService
+from xw_office.repositories.customer_aftercare import CustomerAftercareItemInput
+from xw_office.services.customer_aftercare.ai_classifier import AiExtractedItem
 
 
 class _Secrets:
@@ -32,7 +35,9 @@ def session_factory() -> sessionmaker[Session]:
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
 
 
-def _message(msg_id: str, subject: str, body: str, *, sender: str = "haendler@example.test") -> dict[str, Any]:
+def _message(
+    msg_id: str, subject: str, body: str, *, sender: str = "haendler@example.test"
+) -> dict[str, Any]:
     return {
         "id": msg_id,
         "subject": subject,
@@ -55,7 +60,11 @@ def test_poll_inbox_creates_pending_review_case_without_invoice_or_label(
 
         def list_inbox_messages(self, *, days: int, top: int) -> list[dict[str, Any]]:
             return [
-                _message("msg-1", "Falsche Lieferung zu Bestellung 21842", "Wir haben Artikel A statt B erhalten.")
+                _message(
+                    "msg-1",
+                    "Falsche Lieferung zu Bestellung 21842",
+                    "Wir haben Artikel A statt B erhalten.",
+                )
             ]
 
     monkeypatch.setattr(
@@ -134,3 +143,34 @@ def test_poll_inbox_is_idempotent_across_repeated_polls(
     assert first.new_cases == 1
     assert second.new_cases == 0  # IDEMP-01: same Graph message id -> no second case
     assert repo.count_pending_review() == 1
+
+
+def test_ai_can_only_select_authoritative_invoice_candidates() -> None:
+    candidates = [
+        CustomerAftercareItemInput(
+            role="ORIGINAL_CANDIDATE",
+            name="Tenor Stimme",
+            sku="TEN-1",
+            quantity=10,
+            parent_sku="CHOR-1",
+            component_id="tenor",
+        ),
+        CustomerAftercareItemInput(
+            role="ORIGINAL_CANDIDATE",
+            name="Bass Stimme",
+            sku="BASS-1",
+            quantity=10,
+            parent_sku="CHOR-1",
+            component_id="bass",
+        ),
+    ]
+
+    selected = CustomerAftercareInboxService._select_ai_suggestions(  # noqa: SLF001
+        candidates,
+        [AiExtractedItem(name="Tenorstimme", quantity="3"), AiExtractedItem(name="Erfunden")],
+    )
+
+    assert selected[0].role == "MISSING_TO_SEND"
+    assert selected[0].quantity == 3
+    assert selected[1].role == "ORIGINAL_CANDIDATE"
+    assert {item.sku for item in selected} == {"TEN-1", "BASS-1"}

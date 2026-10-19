@@ -58,7 +58,9 @@ class CustomerAftercareTriggerService:
             if not case.wix_contact_id and not case.customer_email:
                 continue  # MATCH-01: name alone never auto-triggers
             checked += 1
-            since = case.source_order_created_at or case.created_at
+            # "Next order" is relative to the redelivery case, not to the
+            # original order. Otherwise an older reorder could trigger it.
+            since = case.created_at
             try:
                 orders = self._wix_orders.find_recent_orders_by_contact_or_email(
                     contact_id=case.wix_contact_id,

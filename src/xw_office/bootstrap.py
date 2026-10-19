@@ -313,6 +313,7 @@ def register_default_services(container: Container) -> None:
             c.resolve(SecretService),
             c.resolve(InvoiceClient),
             c.resolve(WixOrdersClient),
+            c.resolve(ProductCatalogService),
         ),
     )
     container.register(

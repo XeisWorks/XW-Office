@@ -316,7 +316,7 @@ def test_fullflow_invoice_and_label_steps() -> None:
     assert len(mailer.calls) == 0
 
 
-def test_optional_aftercare_failure_does_not_block_invoice_or_label_print() -> None:
+def test_aftercare_failure_blocks_invoice_and_label_print() -> None:
     invoice_client = _InvoiceClientE2E()
     repo = _SettingsRepoE2E()
     service = InvoiceProcessingService(
@@ -367,12 +367,12 @@ def test_optional_aftercare_failure_does_not_block_invoice_or_label_print() -> N
     ):
         result = service.run_start_fullflow(full_mode=True)
 
-    assert result["failures"] == 0
-    assert result["successful"] == 1
+    assert result["failures"] == 1
+    assert result["successful"] == 0
     assert result["invoice_print_ids"] == ["INV-AFTERCARE"]
     assert result["label_print_ids"] == ["INV-AFTERCARE"]
-    invoice_print.assert_called_once()
-    label_print.assert_called_once()
+    invoice_print.assert_not_called()
+    label_print.assert_not_called()
 
 
 def test_print_run_documents_continues_after_one_label_failure() -> None:

@@ -7,9 +7,8 @@ source of truth for customer, address, SKU or quantity.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 import re
-from typing import Any, Sequence
+from typing import Any
 
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
 from xw_office.repositories.customer_aftercare import (
@@ -126,6 +125,7 @@ class CustomerAftercareRedeliveryService:
         reservation = self._repo.create_invoice_case(
             invoice_id=invoice_id,
             invoice_number=invoice_number,
+            invoice_date=str(summary.invoice_date or "").strip(),
             order_number=order_number,
             wix_order_id=wix_order_id,
             customer_name=str(summary.contact_name or "").strip(),

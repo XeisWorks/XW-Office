@@ -261,7 +261,7 @@ class OffeneSendungenService:
             if manual_text:
                 summary = manual_text
 
-        return {
+        details: dict[str, object] = {
             "summary": summary,
             "customer_name": extraction.customer_name if extraction is not None else case.sender_name,
             "invoice_number": extraction.invoice_number if extraction is not None else case.invoice_number,
@@ -274,6 +274,41 @@ class OffeneSendungenService:
             "source": extraction.source if extraction is not None else "manual",
             "updated_at": extraction.updated_at if extraction is not None else str(manual.get("updated_at") or ""),
         }
+        if case.id.startswith("nachlieferung-") and self._aftercare_repo is not None:
+            try:
+                loader = getattr(self._aftercare_repo, "get_case_by_dispatch_id", None)
+                item_loader = getattr(self._aftercare_repo, "get_items", None)
+                aftercare = loader(case.id) if callable(loader) else None
+                if aftercare is not None:
+                    items = item_loader(aftercare.id) if callable(item_loader) else []
+                    details.update({
+                        "aftercare_case_id": str(aftercare.id),
+                        "aftercare_status": aftercare.status,
+                        "source_invoice_date": aftercare.source_invoice_date,
+                        "created_at": aftercare.created_at.isoformat() if aftercare.created_at else "",
+                        "due_at": aftercare.due_at.isoformat() if aftercare.due_at else "",
+                        "snooze_mode": aftercare.snooze_mode,
+                        "snoozed_until": (
+                            aftercare.snoozed_until.isoformat() if aftercare.snoozed_until else ""
+                        ),
+                        "snooze_reason": aftercare.snooze_reason,
+                        "source_subject": aftercare.source_subject,
+                        "positions": [
+                            {
+                                "name": item.name,
+                                "sku": item.sku,
+                                "quantity": item.quantity,
+                                "parent_sku": item.parent_sku,
+                                "component_id": item.component_id,
+                            }
+                            for item in items
+                            if item.role in {"MISSING_TO_SEND", "CORRECTED_ORDER_ITEM"}
+                        ],
+                        "position_editing": "xw_office",
+                    })
+            except Exception as exc:  # noqa: BLE001 - Flow mirroring stays optional
+                logger.warning("Nachlieferungsdetails fuer XW-Flow nicht lesbar: %s", exc)
+        return details
 
     def _refresh_flow_cases(self, existing: list[SendungCase]) -> list[SendungCase]:
         """Fetch a full successful Flow snapshot, preserving its cache on error."""

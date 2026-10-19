@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from xw_office.core.config import AppConfig
 from xw_office.models.base import Base
 from xw_office.repositories.customer_aftercare import CustomerAftercareRepository
+from xw_office.repositories.customer_aftercare import CustomerAftercareItemInput
 from xw_office.services.customer_aftercare.inbox_service import CustomerAftercareInboxService
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.customer_aftercare.trigger_service import CustomerAftercareTriggerService
@@ -92,3 +93,39 @@ def test_manager_dialog_filters_map_to_expected_statuses(service: CustomerAfterc
     assert [c.id for c in service.list_cases_for_filter("faellig")] == [due_case.id]
     assert service.count_pending_review() == 1
     assert service.count_due() == 1
+
+
+def test_confirm_keeps_unselected_invoice_candidates_for_later_editing(
+    service: CustomerAftercareService,
+) -> None:
+    case = _new_case(service, "m-selection")
+    repo = service._repo  # noqa: SLF001
+    assert repo is not None
+    repo.add_items(
+        case.id,
+        [
+            CustomerAftercareItemInput(
+                role="ORIGINAL_CANDIDATE", name="Tenor", sku="TEN", source_item_id="1"
+            ),
+            CustomerAftercareItemInput(
+                role="ORIGINAL_CANDIDATE", name="Bass", sku="BASS", source_item_id="2"
+            ),
+        ],
+    )
+
+    service.confirm_case(
+        case.id,
+        case_type="B2B_MISSING_ITEMS",
+        courtesy=True,
+        selected_items=(
+            CustomerAftercareItemInput(
+                role="MISSING_TO_SEND", name="Tenor", sku="TEN", source_item_id="1"
+            ),
+        ),
+    )
+
+    items = repo.get_items(case.id)
+    assert {(item.sku, item.role) for item in items} == {
+        ("TEN", "MISSING_TO_SEND"),
+        ("BASS", "ORIGINAL_CANDIDATE"),
+    }

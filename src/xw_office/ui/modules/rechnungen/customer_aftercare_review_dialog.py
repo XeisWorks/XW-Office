@@ -11,6 +11,7 @@ handled later from the Lieferkorrekturen-Manager instead of opening an
 inline item editor here; the popup stays intentionally compact per spec §4
 ("kompakter Bestätigungsdialog").
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -25,14 +26,19 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtCore import Qt
 
 from xw_office.core.config import AppConfig
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
+from xw_office.repositories.customer_aftercare import CustomerAftercareItemInput
 from xw_office.services.customer_aftercare.service import resolve_case_policy
 
 #: Dropdown options, in spec §4 order (last entry = "Sonstiges / manuell prüfen").
@@ -49,7 +55,11 @@ _COURTESY_TOOLTIP = (
     "Deaktiviert: normale Wix-B2B-Rabatte und normale Versandkosten."
 )
 
-_ERROR_PARTY_LABELS = {"xeisworks": "XeisWorks", "customer": "Kunde/Händler", "unknown": "unbekannt"}
+_ERROR_PARTY_LABELS = {
+    "xeisworks": "XeisWorks",
+    "customer": "Kunde/Händler",
+    "unknown": "unbekannt",
+}
 
 
 @dataclass(frozen=True)
@@ -58,10 +68,11 @@ class ReviewDialogOutcome:
     case_type: str
     courtesy: bool
     note: str
+    selected_items: tuple[CustomerAftercareItemInput, ...] = ()
 
 
 class CustomerAftercareReviewDialog(QDialog):
-    """"Lieferkorrektur erkannt" — spec §4."""
+    """ "Lieferkorrektur erkannt" — spec §4."""
 
     def __init__(
         self,
@@ -98,7 +109,9 @@ class CustomerAftercareReviewDialog(QDialog):
             self._type_combo.addItem(label, case_type)
         initial_type = self._case.case_type or self._case.ai_suggested_type or "UNKNOWN"
         index = self._type_combo.findData(initial_type)
-        self._type_combo.setCurrentIndex(index if index >= 0 else self._type_combo.findData("UNKNOWN"))
+        self._type_combo.setCurrentIndex(
+            index if index >= 0 else self._type_combo.findData("UNKNOWN")
+        )
         self._type_combo.currentIndexChanged.connect(self._refresh_trigger_preview)
         form.addRow("Falltyp:", self._type_combo)
 
@@ -126,6 +139,44 @@ class CustomerAftercareReviewDialog(QDialog):
         form.addRow("Notiz:", self._note_edit)
 
         layout.addLayout(form)
+
+        layout.addWidget(QLabel("Nachzuliefernde Rechnungspositionen / Stimmen bestätigen:"))
+        self._items_table = QTableWidget(0, 4)
+        self._items_table.setHorizontalHeaderLabels(["", "Position", "SKU / Komponente", "Menge"])
+        self._items_table.setMaximumHeight(190)
+        for item in self._items:
+            if item.role == "WRONG_DELIVERED":
+                continue
+            row = self._items_table.rowCount()
+            self._items_table.insertRow(row)
+            check = QTableWidgetItem()
+            check.setFlags(check.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            check.setCheckState(
+                Qt.CheckState.Unchecked
+                if item.role == "ORIGINAL_CANDIDATE"
+                else Qt.CheckState.Checked
+            )
+            check.setData(Qt.ItemDataRole.UserRole, item)
+            self._items_table.setItem(row, 0, check)
+            name = item.name or item.sku
+            if item.parent_sku:
+                name = f"{name} (Stimme aus {item.parent_sku})"
+            self._items_table.setItem(row, 1, QTableWidgetItem(name))
+            self._items_table.setItem(
+                row, 2, QTableWidgetItem(" / ".join(filter(None, (item.sku, item.component_id))))
+            )
+            self._items_table.setItem(
+                row, 3, QTableWidgetItem(str(max(1, int(item.quantity or 1))))
+            )
+        layout.addWidget(self._items_table)
+
+        if self._case.source_mail_body:
+            mail = QPlainTextEdit()
+            mail.setReadOnly(True)
+            mail.setMaximumHeight(110)
+            mail.setPlainText(self._case.source_mail_body)
+            layout.addWidget(QLabel("Mailtext:"))
+            layout.addWidget(mail)
 
         button_row = QDialogButtonBox()
         self._btn_apply = QPushButton("Übernehmen")
@@ -169,22 +220,67 @@ class CustomerAftercareReviewDialog(QDialog):
         if policy.wait_for_next_order:
             max_days = self._config.customer_aftercare.b2b.max_wait_days
             due = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=max_days)
-            self._trigger_label.setText(f"Wartet auf neue Bestellung, spätestens nach {max_days} Tagen")
+            self._trigger_label.setText(
+                f"Wartet auf neue Bestellung, spätestens nach {max_days} Tagen"
+            )
             self._due_label.setText(due.strftime("%d.%m.%Y"))
         else:
             self._trigger_label.setText("Sofort fällig")
             self._due_label.setText("—")
 
-    def _current_outcome(self, action: Literal["confirm", "defer", "ignore"]) -> ReviewDialogOutcome:
+    def _current_outcome(
+        self, action: Literal["confirm", "defer", "ignore"]
+    ) -> ReviewDialogOutcome:
+        selected: list[CustomerAftercareItemInput] = []
+        for row in range(self._items_table.rowCount()):
+            check = self._items_table.item(row, 0)
+            if check is None or check.checkState() != Qt.CheckState.Checked:
+                continue
+            original = check.data(Qt.ItemDataRole.UserRole)
+            if not isinstance(original, CustomerAftercareItem):
+                continue
+            try:
+                quantity = max(1, int(self._items_table.item(row, 3).text()))
+            except (AttributeError, ValueError):
+                quantity = 1
+            quantity = min(quantity, max(1, int(original.quantity or 1)))
+            selected.append(
+                CustomerAftercareItemInput(
+                    role="MISSING_TO_SEND",
+                    sku=original.sku,
+                    name=original.name,
+                    quantity=quantity,
+                    sevdesk_part_id=original.sevdesk_part_id,
+                    source_unit_price=original.source_unit_price,
+                    source_tax_rate=original.source_tax_rate,
+                    source_discount_percent=original.source_discount_percent,
+                    source_kind=original.source_kind,
+                    source_item_id=original.source_item_id,
+                    parent_sku=original.parent_sku,
+                    component_id=original.component_id,
+                    origin_invoice_number=original.origin_invoice_number,
+                    origin_order_number=original.origin_order_number,
+                    note=original.note or "Nachlieferung – nicht verrechnen",
+                )
+            )
         return ReviewDialogOutcome(
             action=action,
             case_type=str(self._type_combo.currentData()),
             courtesy=self._courtesy_checkbox.isChecked(),
             note=self._note_edit.toPlainText().strip(),
+            selected_items=tuple(selected),
         )
 
     def _on_apply(self) -> None:
-        self._outcome = self._current_outcome("confirm")
+        outcome = self._current_outcome("confirm")
+        if self._items_table.rowCount() and not outcome.selected_items:
+            QMessageBox.warning(
+                self,
+                "Nachlieferposition fehlt",
+                "Bitte mindestens eine Rechnungsposition oder Stimme auswählen.",
+            )
+            return
+        self._outcome = outcome
         self.accept()
 
     def _on_defer(self) -> None:

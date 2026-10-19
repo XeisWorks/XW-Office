@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QScrollArea,
     QTableView,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -40,6 +41,7 @@ from xw_office.services.sendungen.service import (
     SendungExtraction,
     SendungProductLine,
 )
+from xw_office.ui.modules.rechnungen.customer_aftercare_tab import CustomerAftercareTab
 
 
 class _SendungProductsModel(QAbstractTableModel):
@@ -219,7 +221,10 @@ class OffeneSendungenDialog(QDialog):
         self.setMinimumSize(1100, 700)
         self.resize(1500, 920)
 
-        root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        tabs = QTabWidget()
+        sendungen_tab = QWidget()
+        root = QVBoxLayout(sendungen_tab)
         top = QHBoxLayout()
         self._status = QLabel("-")
         top.addWidget(self._status, stretch=1)
@@ -368,6 +373,17 @@ class OffeneSendungenDialog(QDialog):
         splitter.setStretchFactor(1, 3)
         splitter.setSizes([340, 1160])
         root.addWidget(splitter)
+        tabs.addTab(sendungen_tab, "SENDUNGEN")
+        try:
+            aftercare_tab: QWidget = CustomerAftercareTab(self._container, tabs)
+        except KeyError:
+            aftercare_tab = QWidget()
+            fallback_layout = QVBoxLayout(aftercare_tab)
+            fallback_layout.addWidget(
+                QLabel("Nachlieferungen benötigen eine konfigurierte Datenbank.")
+            )
+        tabs.addTab(aftercare_tab, "NACHLIEFERUNGEN")
+        outer.addWidget(tabs)
 
     def open_count(self) -> int:
         return self._service.open_count()
@@ -491,7 +507,8 @@ class OffeneSendungenDialog(QDialog):
             or str(case.sender or "").strip()
             or "Unbekannt"
         )
-        return f"{short_date} {display_name}"
+        badge = "[NACHLIEFERUNG] " if case.id.startswith("nachlieferung-") else ""
+        return f"{badge}{short_date} {display_name}"
 
     def _on_cases_load_error(self, exc: Exception) -> None:
         self._list.setEnabled(True)
@@ -615,6 +632,8 @@ class OffeneSendungenDialog(QDialog):
         extraction: SendungExtraction | None = None,
     ) -> None:
         metadata = [f"Von: {case.sender}", f"Empfangen: {case.received_at}"]
+        if case.id.startswith("nachlieferung-"):
+            metadata.insert(0, "Typ: NACHLIEFERUNG")
         if case.source_type != "xw_flow_share":
             order_number = extraction.order_number if extraction is not None else case.order_number
             invoice_number = (

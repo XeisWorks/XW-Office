@@ -8,6 +8,7 @@ review popup (spec §4) before anything becomes an active case. A failed or
 unavailable AI call always falls back to a manual-review classification
 rather than blocking case creation.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -58,6 +59,7 @@ class AiClassification:
     missing_items: list[AiExtractedItem] = field(default_factory=list)
     courtesy_suggested: bool = True
     note: str = ""
+    evidence_quote: str = ""
     source: str = "fallback"
 
     def to_payload_json(self) -> str:
@@ -74,6 +76,7 @@ class AiClassification:
                 "missing_items": [item.__dict__ for item in self.missing_items],
                 "courtesy_suggested": self.courtesy_suggested,
                 "note": self.note,
+                "evidence_quote": self.evidence_quote,
                 "source": self.source,
             },
             ensure_ascii=False,
@@ -90,13 +93,19 @@ def classify_mail(
     """Classify a Lieferkorrektur mail. Never raises — falls back to UNKNOWN on any failure."""
     if api_key:
         try:
-            return _openai_classify(subject=subject, sender=sender, body_text=body_text, api_key=api_key)
+            return _openai_classify(
+                subject=subject, sender=sender, body_text=body_text, api_key=api_key
+            )
         except Exception as exc:  # noqa: BLE001 - AI failure must never block PENDING_REVIEW creation.
-            logger.warning("Lieferkorrektur-KI-Klassifikation fehlgeschlagen, nutze Fallback: %s", exc)
+            logger.warning(
+                "Lieferkorrektur-KI-Klassifikation fehlgeschlagen, nutze Fallback: %s", exc
+            )
     return _fallback_classify(subject=subject, sender=sender, body_text=body_text)
 
 
-def _openai_classify(*, subject: str, sender: str, body_text: str, api_key: str) -> AiClassification:
+def _openai_classify(
+    *, subject: str, sender: str, body_text: str, api_key: str
+) -> AiClassification:
     prompt = (
         "Du analysierst eine Mail an den XeisWorks-Shop, die vermutlich eine "
         "Lieferkorrektur betrifft (falsch gelieferte oder fehlende Artikel). "
@@ -122,6 +131,7 @@ def _openai_classify(*, subject: str, sender: str, body_text: str, api_key: str)
         '  "missing_items": [{"name": "Produktname", "sku": "optional", "quantity": "1"}],\n'
         '  "courtesy_suggested": true,\n'
         '  "note": "kurze deutsche Zusammenfassung fuer den Benutzer"\n'
+        '  "evidence_quote": "kurze woertliche Belegstelle aus der Mail"\n'
         "}\n\n"
         f"Betreff: {subject}\n"
         f"Absender: {sender}\n"
@@ -154,6 +164,7 @@ def _openai_classify(*, subject: str, sender: str, body_text: str, api_key: str)
         missing_items=_normalize_items(data.get("missing_items")),
         courtesy_suggested=_as_bool(data.get("courtesy_suggested"), default=True),
         note=str(data.get("note") or "").strip(),
+        evidence_quote=str(data.get("evidence_quote") or "").strip()[:500],
         source="openai",
     )
 

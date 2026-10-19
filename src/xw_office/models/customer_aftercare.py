@@ -1,4 +1,5 @@
 """Lieferkorrekturen ("customer aftercare") case and line-item persistence."""
+
 from __future__ import annotations
 
 import datetime
@@ -49,6 +50,9 @@ class CustomerAftercareCase(Base):
     )
     source_invoice_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     source_invoice_number: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    source_invoice_date: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    source_mail_sender: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    source_mail_body: Mapped[str] = mapped_column(Text, default="", nullable=False)
     address_lines_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     address_source: Mapped[str] = mapped_column(String(32), default="", nullable=False)
 
@@ -74,6 +78,15 @@ class CustomerAftercareCase(Base):
     dispatch_status: Mapped[str] = mapped_column(String(32), default="", nullable=False)
     delivery_note_path: Mapped[str] = mapped_column(Text, default="", nullable=False)
     delivery_note_printed_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    snooze_mode: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    snoozed_until: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    snooze_reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    snoozed_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

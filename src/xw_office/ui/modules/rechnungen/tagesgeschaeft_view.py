@@ -1000,8 +1000,15 @@ class TagesgeschaeftView(QWidget):
             if outcome is None or outcome.action == "defer":
                 return
             if outcome.action == "confirm":
+                confirm_kwargs: dict[str, object] = {}
+                if outcome.selected_items:
+                    confirm_kwargs["selected_items"] = outcome.selected_items
                 aftercare_service.confirm_case(
-                    case.id, case_type=outcome.case_type, courtesy=outcome.courtesy, note=outcome.note
+                    case.id,
+                    case_type=outcome.case_type,
+                    courtesy=outcome.courtesy,
+                    note=outcome.note,
+                    **confirm_kwargs,
                 )
             elif outcome.action == "ignore":
                 aftercare_service.ignore_case(case.id)

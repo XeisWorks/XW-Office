@@ -34,7 +34,12 @@ class _FakeWixOrders:
         exclude_order_id: str = "",
         limit: int = 20,
     ) -> list[dict[str, Any]]:
-        self.calls.append({"contact_id": contact_id, "email": email, "exclude_order_id": exclude_order_id})
+        self.calls.append({
+            "contact_id": contact_id,
+            "email": email,
+            "exclude_order_id": exclude_order_id,
+            "since": since,
+        })
         key = contact_id or email
         return self._orders_by_key.get(key, [])
 
@@ -152,3 +157,29 @@ def test_check_new_orders_excludes_source_order_via_wix_client_param(
     trigger.check_new_orders_for_waiting_cases()
 
     assert wix.calls[0]["exclude_order_id"] == "source-order-id"
+
+
+def test_new_order_search_starts_at_case_creation_not_original_order(
+    session_factory: sessionmaker[Session],
+) -> None:
+    repo = CustomerAftercareRepository(session_factory)
+    old_order_date = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=100)
+    reservation = repo.reserve_case_by_message_id(
+        source_message_id="m-created-cutoff",
+        customer_email="mueller@example.com",
+        source_order_created_at=old_order_date,
+    )
+    repo.confirm_classification(
+        reservation.case.id,
+        case_type="B2B_MISSING_ITEMS",
+        courtesy=True,
+        customer_type="B2B",
+        wait_for_next_order=True,
+        due_at=datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=20),
+        trigger_now=False,
+    )
+    wix = _FakeWixOrders({"mueller@example.com": []})
+
+    CustomerAftercareTriggerService(repo, wix).check_new_orders_for_waiting_cases()  # type: ignore[arg-type]
+
+    assert wix.calls[0]["since"] == repo.get_case(reservation.case.id).created_at

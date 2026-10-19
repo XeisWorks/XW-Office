@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 import uuid
+import json
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -13,7 +14,6 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QInputDialog,
     QLabel,
-    QLineEdit,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -69,6 +69,22 @@ class RedeliveryDialog(QDialog):
                 f"Kunde: {self._case.customer_name or self._case.customer_email or '-'}"
             )
         )
+        if self._case.source_mail_body:
+            source = QPlainTextEdit()
+            source.setReadOnly(True)
+            source.setMaximumHeight(130)
+            source.setPlainText(self._case.source_mail_body)
+            root.addWidget(QLabel("Mail an nachlieferung@ / shop@:"))
+            root.addWidget(source)
+            try:
+                ai_payload = json.loads(self._case.ai_payload_json or "{}")
+            except (TypeError, ValueError):
+                ai_payload = {}
+            evidence = str(ai_payload.get("evidence_quote") or "").strip()
+            if evidence:
+                hint = QLabel(f"OpenAI-Belegstelle: „{evidence}“")
+                hint.setWordWrap(True)
+                root.addWidget(hint)
 
         form = QFormLayout()
         self._mode = QComboBox()
@@ -92,13 +108,15 @@ class RedeliveryDialog(QDialog):
         root.addLayout(form)
 
         root.addWidget(QLabel("Nachzuliefernde Produkte / Product-Hub-Komponenten:"))
-        self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(["", "Produkt", "SKU / Komponente", "Menge"])
+        self._table = QTableWidget(0, 5)
+        self._table.setHorizontalHeaderLabels(
+            ["", "Produkt / Stimme", "SKU / Komponente", "Menge", "Quelle"]
+        )
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.horizontalHeader().setStretchLastSection(True)
         root.addWidget(self._table, stretch=1)
         for item in self._items:
-            self._add_item_row(item, checked=True)
+            self._add_item_row(item, checked=item.role != "ORIGINAL_CANDIDATE")
 
         add_button = QPushButton("Manuelle Position hinzufügen")
         add_button.clicked.connect(self._add_manual_item)
@@ -171,6 +189,12 @@ class RedeliveryDialog(QDialog):
         self._table.setItem(row, 1, QTableWidgetItem(item.name or item.sku or "Position"))
         self._table.setItem(row, 2, QTableWidgetItem(" / ".join(part for part in (item.sku, item.component_id) if part)))
         self._table.setItem(row, 3, QTableWidgetItem(str(max(1, int(item.quantity or 1)))))
+        source = "Manuell"
+        if item.source_kind == "product_hub_component":
+            source = f"Stimme aus {item.parent_sku or 'Product Hub'}"
+        elif item.source_kind == "sevdesk_invoice_position":
+            source = "Originalrechnung"
+        self._table.setItem(row, 4, QTableWidgetItem(source))
 
     def _add_manual_item(self) -> None:
         name, ok = QInputDialog.getText(self, "Manuelle Position", "Produktbezeichnung:")
@@ -196,10 +220,12 @@ class RedeliveryDialog(QDialog):
 
     def _save(self) -> None:
         selected: list[CustomerAftercareItemInput] = []
+        selected_count = 0
         for row in range(self._table.rowCount()):
             check = self._table.item(row, 0)
-            if check is None or check.checkState() != Qt.CheckState.Checked:
+            if check is None:
                 continue
+            is_selected = check.checkState() == Qt.CheckState.Checked
             original = check.data(Qt.ItemDataRole.UserRole)
             original = original if isinstance(original, CustomerAftercareItem) else None
             name = (self._table.item(row, 1).text() if self._table.item(row, 1) else "").strip()
@@ -211,9 +237,11 @@ class RedeliveryDialog(QDialog):
                 quantity = 1
             if isinstance(original, CustomerAftercareItem) and str(original.source_kind or "") != "manual":
                 quantity = min(quantity, max(1, int(original.quantity or 1)))
+            if is_selected:
+                selected_count += 1
             selected.append(
                 CustomerAftercareItemInput(
-                    role="MISSING_TO_SEND",
+                    role="MISSING_TO_SEND" if is_selected else "ORIGINAL_CANDIDATE",
                     name=name,
                     sku=sku,
                     quantity=quantity,
@@ -230,7 +258,7 @@ class RedeliveryDialog(QDialog):
                     note=str(getattr(original, "note", "") or "Nachlieferung – nicht verrechnen"),
                 )
             )
-        if not selected:
+        if not selected_count:
             self._table.setFocus()
             return
         address = tuple(line.strip() for line in self._address.toPlainText().splitlines() if line.strip())

@@ -1,4 +1,5 @@
 """Persistence access for Lieferkorrekturen ("customer aftercare") cases."""
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -16,7 +17,7 @@ from xw_office.core.database import session_scope
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
 
 #: Statuses that still represent an "open" case, per spec §13's state diagram.
-ACTIVE_STATUSES = ("PENDING_REVIEW", "WAITING", "TRIGGERED")
+ACTIVE_STATUSES = ("PENDING_REVIEW", "WAITING", "TRIGGERED", "SNOOZED")
 REDELIVERY_CASE_TYPES = (
     "MANUAL_REDELIVERY",
     "B2B_WRONG_DELIVERY",
@@ -91,6 +92,9 @@ class CustomerAftercareRepository:
         source_order_created_at: datetime.datetime | None = None,
         source_invoice_id: str = "",
         source_invoice_number: str = "",
+        source_invoice_date: str = "",
+        source_mail_sender: str = "",
+        source_mail_body: str = "",
         sevdesk_contact_id: str = "",
         address_lines: Sequence[str] = (),
         address_source: str = "",
@@ -123,8 +127,14 @@ class CustomerAftercareRepository:
                 source_order_created_at=source_order_created_at,
                 source_invoice_id=str(source_invoice_id or "").strip(),
                 source_invoice_number=str(source_invoice_number or "").strip(),
+                source_invoice_date=str(source_invoice_date or "").strip(),
+                source_mail_sender=str(source_mail_sender or "").strip(),
+                source_mail_body=str(source_mail_body or "").strip(),
                 sevdesk_contact_id=str(sevdesk_contact_id or "").strip(),
-                address_lines_json=json.dumps([str(item).strip() for item in address_lines if str(item).strip()], ensure_ascii=False),
+                address_lines_json=json.dumps(
+                    [str(item).strip() for item in address_lines if str(item).strip()],
+                    ensure_ascii=False,
+                ),
                 address_source=str(address_source or "").strip(),
                 shipping_mode=str(shipping_mode or "WAIT_NEXT_ORDER_OR_DEADLINE").strip(),
                 status="PENDING_REVIEW",
@@ -167,6 +177,7 @@ class CustomerAftercareRepository:
         *,
         invoice_id: str,
         invoice_number: str,
+        invoice_date: str = "",
         order_number: str = "",
         wix_order_id: str = "",
         customer_name: str = "",
@@ -184,12 +195,19 @@ class CustomerAftercareRepository:
         invoice_key = str(invoice_id or invoice_number or "").strip()
         if not invoice_key:
             raise ValueError("invoice_id oder invoice_number fehlt")
-        source_message_id = f"invoice-redelivery:{invoice_key}"
+        base_source_id = f"invoice-redelivery:{invoice_key}"
+        existing = self.get_case_by_message_id(base_source_id)
+        if existing is not None and existing.status in ACTIVE_STATUSES:
+            return CustomerAftercareReservation("already_exists", existing)
+        source_message_id = (
+            base_source_id if existing is None else f"{base_source_id}:{uuid.uuid4()}"
+        )
         reservation = self.reserve_case_by_message_id(
             source_message_id=source_message_id,
             source_subject=f"Nachlieferung zu {invoice_number or invoice_key}",
             ai_suggested_type="MANUAL_REDELIVERY",
-            ai_payload_json=ai_payload_json or json.dumps({"source": "invoice_action"}, ensure_ascii=False),
+            ai_payload_json=ai_payload_json
+            or json.dumps({"source": "invoice_action"}, ensure_ascii=False),
             customer_email=customer_email,
             customer_name=customer_name,
             wix_contact_id=wix_contact_id,
@@ -197,6 +215,7 @@ class CustomerAftercareRepository:
             source_wix_order_id=wix_order_id,
             source_invoice_id=invoice_id,
             source_invoice_number=invoice_number,
+            source_invoice_date=invoice_date,
             sevdesk_contact_id=sevdesk_contact_id,
             address_lines=address_lines,
             address_source=address_source,
@@ -211,9 +230,9 @@ class CustomerAftercareRepository:
         self, case_id: uuid.UUID, items: Sequence[CustomerAftercareItemInput]
     ) -> list[CustomerAftercareItem]:
         with self._scope() as session:
-            session.query(CustomerAftercareItem).filter(CustomerAftercareItem.case_id == case_id).delete(
-                synchronize_session=False
-            )
+            session.query(CustomerAftercareItem).filter(
+                CustomerAftercareItem.case_id == case_id
+            ).delete(synchronize_session=False)
             rows = [
                 CustomerAftercareItem(
                     case_id=case_id,
@@ -288,9 +307,9 @@ class CustomerAftercareRepository:
             return [
                 row
                 for row in candidates
-                if (sevdesk and row.sevdesk_contact_id == sevdesk)
-                or (wix and row.wix_contact_id == wix)
-                or (email and str(row.customer_email or "").strip().casefold() == email)
+                if self._customer_matches(
+                    row, sevdesk_contact_id=sevdesk, wix_contact_id=wix, customer_email=email
+                )
             ]
 
     def claim_for_invoice(
@@ -303,6 +322,7 @@ class CustomerAftercareRepository:
         customer_email: str = "",
         wix_order_id: str = "",
         wix_order_number: str = "",
+        invoice_date: str = "",
     ) -> list[CustomerAftercareCase]:
         """Atomically bind all matching, not-yet-printed cases to a new invoice."""
         key = f"aftercare-claim:{sevdesk_contact_id}:{wix_contact_id}:{customer_email}"
@@ -321,17 +341,21 @@ class CustomerAftercareRepository:
             matched = [
                 row
                 for row in candidates
-                if (sevdesk and row.sevdesk_contact_id == sevdesk)
-                or (wix and row.wix_contact_id == wix)
-                or (email and str(row.customer_email or "").strip().casefold() == email)
+                if self._customer_matches(
+                    row, sevdesk_contact_id=sevdesk, wix_contact_id=wix, customer_email=email
+                )
             ]
+            target_date = self._date_only(invoice_date)
+            if target_date is not None:
+                matched = [
+                    row
+                    for row in matched
+                    if row.created_at is None or row.created_at.date() <= target_date
+                ]
             matched = [
                 row
                 for row in matched
-                if not (
-                    row.dispatch_status in {"ATTACHED", "PRINTING"}
-                    and row.trigger_invoice_id
-                )
+                if not (row.dispatch_status in {"ATTACHED", "PRINTING"} and row.trigger_invoice_id)
             ]
             for row in matched:
                 row.status = "TRIGGERED"
@@ -342,6 +366,9 @@ class CustomerAftercareRepository:
                 row.trigger_wix_order_id = str(wix_order_id or "").strip()
                 row.trigger_wix_order_number = str(wix_order_number or "").strip()
                 row.dispatch_status = "PRINTING"
+                row.snooze_mode = ""
+                row.snoozed_until = None
+                row.snooze_reason = ""
             session.flush()
             return list(matched)
 
@@ -362,10 +389,10 @@ class CustomerAftercareRepository:
                     row.dispatch_status = "RETRYABLE"
             session.flush()
 
-    def release_invoice_claim_for_invoice(self, invoice_id: str) -> None:
+    def release_invoice_claim_for_invoice(self, invoice_id: str) -> list[CustomerAftercareCase]:
         target = str(invoice_id or "").strip()
         if not target:
-            return
+            return []
         with self._scope() as session:
             rows = session.scalars(
                 select(CustomerAftercareCase)
@@ -376,10 +403,111 @@ class CustomerAftercareRepository:
             for row in rows:
                 row.dispatch_status = "RETRYABLE"
             session.flush()
+            return list(rows)
 
-    def mark_delivery_note_printed(
-        self, case_ids: Sequence[uuid.UUID], *, path: str = ""
-    ) -> None:
+    def snooze_case(
+        self,
+        case_id: uuid.UUID,
+        *,
+        mode: str,
+        until: datetime.datetime | None = None,
+        reason: str = "",
+    ) -> CustomerAftercareCase | None:
+        normalized = str(mode or "").strip().upper()
+        if normalized not in {"NEXT_START", "UNTIL_DATE", "NEXT_ORDER"}:
+            raise ValueError("Unbekannter Snooze-Modus")
+        if normalized == "UNTIL_DATE" and until is None:
+            raise ValueError("Snooze-Datum fehlt")
+        with self._scope() as session:
+            row = session.get(CustomerAftercareCase, case_id)
+            if row is None or row.status not in {"WAITING", "TRIGGERED", "SNOOZED"}:
+                return None
+            row.snooze_mode = normalized
+            row.snoozed_until = until if normalized == "UNTIL_DATE" else None
+            row.snooze_reason = str(reason or "").strip()
+            row.snoozed_at = func.now()
+            row.status = "WAITING" if normalized == "NEXT_ORDER" else "SNOOZED"
+            if normalized == "NEXT_ORDER":
+                row.due_at = None
+            row.dispatch_status = "SNOOZED" if row.dispatch_id else row.dispatch_status
+            session.flush()
+            return row
+
+    def trigger_immediate(self, case_id: uuid.UUID) -> CustomerAftercareCase | None:
+        with self._scope() as session:
+            row = session.get(CustomerAftercareCase, case_id)
+            if row is None or row.status in {"RESOLVED", "CANCELLED", "IGNORED"}:
+                return None
+            row.status = "TRIGGERED"
+            row.wait_for_next_order = False
+            row.shipping_mode = "IMMEDIATE"
+            row.due_at = None
+            row.triggered_at = func.now()
+            row.trigger_reason = "IMMEDIATE"
+            row.snooze_mode = ""
+            row.snoozed_until = None
+            row.snooze_reason = ""
+            if row.dispatch_id:
+                row.dispatch_status = "ASAP"
+            session.flush()
+            return row
+
+    def release_snoozes(
+        self,
+        *,
+        mode: str | None = None,
+        now: datetime.datetime | None = None,
+    ) -> list[CustomerAftercareCase]:
+        now = now or datetime.datetime.now(datetime.timezone.utc)
+        with self._scope() as session:
+            query = select(CustomerAftercareCase).where(CustomerAftercareCase.status == "SNOOZED")
+            if mode:
+                query = query.where(CustomerAftercareCase.snooze_mode == mode)
+            else:
+                query = query.where(CustomerAftercareCase.snooze_mode == "UNTIL_DATE").where(
+                    CustomerAftercareCase.snoozed_until <= now
+                )
+            rows = list(session.scalars(query).all())
+            for row in rows:
+                row.status = "TRIGGERED"
+                row.trigger_reason = "SNOOZE_EXPIRED"
+                row.snooze_mode = ""
+                row.snoozed_until = None
+                row.dispatch_status = "ASAP" if row.dispatch_id else row.dispatch_status
+            session.flush()
+            return rows
+
+    @staticmethod
+    def _customer_matches(
+        row: CustomerAftercareCase,
+        *,
+        sevdesk_contact_id: str,
+        wix_contact_id: str,
+        customer_email: str,
+    ) -> bool:
+        row_sevdesk = str(row.sevdesk_contact_id or "").strip()
+        if sevdesk_contact_id and row_sevdesk:
+            return row_sevdesk == sevdesk_contact_id
+        row_wix = str(row.wix_contact_id or "").strip()
+        if wix_contact_id and row_wix:
+            return row_wix == wix_contact_id
+        row_email = str(row.customer_email or "").strip().casefold()
+        return bool(customer_email and row_email and row_email == customer_email)
+
+    @staticmethod
+    def _date_only(value: str) -> datetime.date | None:
+        text_value = str(value or "").strip()
+        if not text_value:
+            return None
+        try:
+            return datetime.datetime.fromisoformat(text_value.replace("Z", "+00:00")).date()
+        except ValueError:
+            try:
+                return datetime.date.fromisoformat(text_value[:10])
+            except ValueError:
+                return None
+
+    def mark_delivery_note_printed(self, case_ids: Sequence[uuid.UUID], *, path: str = "") -> None:
         with self._scope() as session:
             now = func.now()
             for case_id in case_ids:
@@ -437,6 +565,14 @@ class CustomerAftercareRepository:
             return session.scalar(
                 select(CustomerAftercareCase).where(
                     CustomerAftercareCase.source_message_id == source_message_id
+                )
+            )
+
+    def get_case_by_dispatch_id(self, dispatch_id: str) -> CustomerAftercareCase | None:
+        with self._scope() as session:
+            return session.scalar(
+                select(CustomerAftercareCase).where(
+                    CustomerAftercareCase.dispatch_id == str(dispatch_id or "").strip()
                 )
             )
 
@@ -573,6 +709,9 @@ class CustomerAftercareRepository:
             row.trigger_reason = reason
             row.trigger_wix_order_id = trigger_wix_order_id
             row.trigger_wix_order_number = trigger_wix_order_number
+            row.snooze_mode = ""
+            row.snoozed_until = None
+            row.snooze_reason = ""
             session.flush()
             return row
 

@@ -398,9 +398,16 @@ class CustomerAftercareManagerDialog(QDialog):
         if outcome.action == "defer":
             return  # stays PENDING_REVIEW — no service call needed
         if outcome.action == "confirm":
+            confirm_kwargs: dict[str, object] = {}
+            if outcome.selected_items:
+                confirm_kwargs["selected_items"] = outcome.selected_items
             self._run_action(
                 lambda: self._service.confirm_case(
-                    case_id, case_type=outcome.case_type, courtesy=outcome.courtesy, note=outcome.note
+                    case_id,
+                    case_type=outcome.case_type,
+                    courtesy=outcome.courtesy,
+                    note=outcome.note,
+                    **confirm_kwargs,
                 )
             )
         elif outcome.action == "ignore":

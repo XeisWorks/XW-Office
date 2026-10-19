@@ -504,6 +504,9 @@ class InvoiceProcessingService:
     ) -> dict[str, object]:
         """Execute invoice processing flow for all open drafts (status=100)."""
         started = time.perf_counter()
+        if full_mode and self._customer_aftercare is not None:
+            # NEXT_START becomes eligible exactly when the following START begins.
+            self._customer_aftercare.release_next_start_snoozes()
         if progress_callback is not None:
             progress_callback("START: Entwuerfe werden geladen...")
         summaries = self._load_start_target_summaries(invoice_ids=invoice_ids)
@@ -619,7 +622,7 @@ class InvoiceProcessingService:
                 flags = run_phase("payment", lambda: self._run_payment_step(summary, flags))
                 if full_mode:
                     if not digital_only:
-                        flags = self._run_optional_aftercare_delivery_note_step(summary, flags)
+                        flags = self._run_aftercare_delivery_note_step(summary, flags)
                         flags = run_phase("invoice_print", lambda: self._run_invoice_print_step(summary, flags))
                         if progress_callback is not None:
                             progress_callback(f"START: Label fuer {label} wird gedruckt...")
@@ -767,7 +770,11 @@ class InvoiceProcessingService:
                 )
                 flags = persist(
                     summary,
-                    self._run_optional_aftercare_delivery_note_step(summary, flags),
+                    run_phase(
+                        summary,
+                        "aftercare_delivery_note",
+                        lambda: self._run_aftercare_delivery_note_step(summary, flags),
+                    ),
                 )
                 if note_action is not None and note_action[1].action == "delivery_note":
                     case, selection = note_action
@@ -2214,6 +2221,7 @@ class InvoiceProcessingService:
             customer_email=customer_email,
             wix_order_id=str(wix_order.get("id") or "").strip(),
             wix_order_number=order_number,
+            invoice_date=str(summary.invoice_date or ""),
         )
         if not cases:
             return flags
@@ -2252,6 +2260,8 @@ class InvoiceProcessingService:
             if ref:
                 origin_refs.append(ref)
             for item in service.get_items(case.id):
+                if item.role not in {"MISSING_TO_SEND", "CORRECTED_ORDER_ITEM"}:
+                    continue
                 products.append(
                     BuyerNoteProduct(
                         quantity=str(max(1, int(item.quantity or 1))),
@@ -2262,6 +2272,31 @@ class InvoiceProcessingService:
                 )
         if not products:
             raise RuntimeError("Für die Nachlieferung sind keine Produktzeilen hinterlegt")
+        merged_products: list[BuyerNoteProduct] = []
+        merged_index: dict[tuple[str, str, str], int] = {}
+        for product in products:
+            key = (
+                str(product.sku or "").strip().casefold(),
+                str(product.name or "").strip().casefold(),
+                str(product.note or "").strip().casefold(),
+            )
+            if key not in merged_index:
+                merged_index[key] = len(merged_products)
+                merged_products.append(product)
+                continue
+            index = merged_index[key]
+            current = merged_products[index]
+            try:
+                quantity = int(current.quantity or "0") + int(product.quantity or "0")
+            except ValueError:
+                merged_products.append(product)
+            else:
+                merged_products[index] = BuyerNoteProduct(
+                    quantity=str(quantity),
+                    name=current.name,
+                    sku=current.sku,
+                    note=current.note,
+                )
         manual_note = "Ursprungsreferenzen: " + ", ".join(dict.fromkeys(origin_refs))
         delivery_note = self._delivery_notes.generate_pdf(
             DeliveryNoteContext(
@@ -2269,7 +2304,7 @@ class InvoiceProcessingService:
                 order_reference=order_number,
                 customer_name=str(summary.contact_name or "").strip(),
                 address_lines=address_lines,
-                products=tuple(products),
+                products=tuple(merged_products),
                 buyer_note="Kostenlose Nachlieferung – nicht verrechnen.",
                 manual_note=manual_note,
             )
