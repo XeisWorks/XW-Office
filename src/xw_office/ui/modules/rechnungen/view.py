@@ -1323,6 +1323,12 @@ class RechnungenView(QWidget):
             tooltip="Neuen sevDesk-Rechnungsentwurf aus Wix-Order-Nr erstellen",
         )
         self._btn_draft.clicked.connect(self._on_create_draft_clicked)
+        self._btn_shipping = self._toolbar.add_button(
+            "shipping",
+            "VERSAND",
+            tooltip="Offene Sendungen und Nachlieferungen bearbeiten",
+        )
+        self._btn_shipping.clicked.connect(self.open_sendungen_dialog)
         self._btn_custom_label = self._toolbar.add_button(
             "label",
             "CUSTOM-LABEL",
@@ -2679,9 +2685,7 @@ class RechnungenView(QWidget):
         signals.navigate_to_module.emit(ModuleKey.MOLLIE.value)
 
     def _on_sendungen_alert_clicked(self) -> None:
-        dlg = OffeneSendungenDialog(self._container, self)
-        dlg.exec()
-        self.update_sendungen_alert_count(dlg.open_count())
+        self.open_sendungen_dialog()
 
     def _on_drucke_alert_clicked(self) -> None:
         dlg = OffeneDruckeDialog(self._container, self)

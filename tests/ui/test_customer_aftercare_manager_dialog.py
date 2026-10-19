@@ -9,6 +9,7 @@ from xw_office.services.sendungen.service import OffeneSendungenService
 from xw_office.ui.modules.rechnungen.customer_aftercare_manager_dialog import (
     CustomerAftercareManagerDialog,
 )
+from xw_office.ui.modules.rechnungen.customer_aftercare_tab import CustomerAftercareTab
 from xw_office.ui.modules.rechnungen.customer_aftercare_review_dialog import ReviewDialogOutcome
 
 
@@ -198,3 +199,25 @@ def test_prepare_nachsendung_creates_manual_case_from_missing_items(qtbot: objec
     product_names = [product.name for product in call["products"]]
     assert product_names == ["Notenheft B"]
     assert "nicht verrechnen" in call["note"]
+
+
+def test_redelivery_tab_print_request_uses_confirmed_items_and_address(qtbot: object) -> None:
+    service = _FakeService()
+    service.case.status = "TRIGGERED"
+    service.case.dispatch_id = f"nachlieferung-{service.case_id}"
+    service.case.address_lines_json = '["Musikhaus Mueller", "Hauptstrasse 1", "1010 Wien"]'
+    service.case.note = "Kostenlose Nachlieferung"
+    tab = CustomerAftercareTab(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(tab)
+
+    request = tab._dispatch_print_request()  # noqa: SLF001
+
+    assert request is not None
+    dispatch_id, address, products, note = request
+    assert dispatch_id == service.case.dispatch_id
+    assert address == ["Musikhaus Mueller", "Hauptstrasse 1", "1010 Wien"]
+    assert [product.name for product in products] == ["Notenheft B"]
+    assert all(product.free_delivery for product in products)
+    assert note == "Kostenlose Nachlieferung"
+    assert tab._btn_delivery_print.isEnabled()  # noqa: SLF001
+    assert tab._btn_label_print.isEnabled()  # noqa: SLF001

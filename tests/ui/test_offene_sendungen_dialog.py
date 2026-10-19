@@ -5,7 +5,7 @@ from pathlib import Path
 from time import sleep
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog
+from PySide6.QtWidgets import QDialog, QTabWidget
 
 from xw_office.core.config import AppConfig, PrintingSection
 from xw_office.services.printing.print_queue import PrintQueueService
@@ -119,6 +119,19 @@ def test_dialog_constructor_does_not_refresh_graph_synchronously(qtbot: object) 
     qtbot.addWidget(dialog)
 
     assert service.refresh_called == 0
+
+
+def test_dialog_has_separate_open_shipments_and_redelivery_tabs(qtbot: object) -> None:
+    dialog = OffeneSendungenDialog(_FakeContainer(_FakeSendungenService()))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+
+    tabs = dialog.findChild(QTabWidget)
+
+    assert tabs is not None
+    assert [tabs.tabText(index) for index in range(tabs.count())] == [
+        "OFFENE SENDUNGEN",
+        "NACHLIEFERUNGEN",
+    ]
 
 
 def test_dialog_loads_cases_and_prefills_shipping_fields(qtbot: object) -> None:

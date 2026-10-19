@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import datetime
 import json
 from pathlib import Path
@@ -28,7 +29,10 @@ from PySide6.QtWidgets import (
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
 from xw_office.repositories.customer_aftercare import CustomerAftercareRepository
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
+from xw_office.services.printing.label_printer import LabelPrinter
+from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.sevdesk.invoice_client import InvoiceClient
+from xw_office.services.sendungen.service import OffeneSendungenService, SendungProductLine
 from xw_office.core.worker import BackgroundWorker
 from xw_office.ui.modules.rechnungen.redelivery_dialog import RedeliveryDialog
 
@@ -54,6 +58,7 @@ class CustomerAftercareTab(QWidget):
         self._cases: list[CustomerAftercareCase] = []
         self._items: list[CustomerAftercareItem] = []
         self._invoice_worker: BackgroundWorker | None = None
+        self._dispatch_worker: BackgroundWorker | None = None
         self._build_ui()
         self.refresh()
 
@@ -97,14 +102,38 @@ class CustomerAftercareTab(QWidget):
             ("Originalrechnung anzeigen", self._show_invoice),
             ("Snoozen…", self._snooze),
             ("Sofort versenden", self._immediate),
-            ("Erledigt", self._resolve),
-            ("Stornieren", self._cancel),
         ):
             button = QPushButton(label)
             button.clicked.connect(callback)
             actions.addWidget(button)
         actions.addStretch(1)
         detail_lay.addLayout(actions)
+
+        dispatch_actions = QHBoxLayout()
+        self._btn_delivery_show = QPushButton("Lieferschein zeigen")
+        self._btn_delivery_show.setToolTip(
+            "Erstellt den Lieferschein im selben Layout wie OFFENE SENDUNGEN"
+        )
+        self._btn_delivery_show.clicked.connect(self._show_delivery_note)
+        dispatch_actions.addWidget(self._btn_delivery_show)
+        self._btn_delivery_print = QPushButton("Lieferschein drucken")
+        self._btn_delivery_print.setToolTip(
+            "Druckt den Lieferschein über den Rechnungsdrucker"
+        )
+        self._btn_delivery_print.clicked.connect(self._print_delivery_note)
+        dispatch_actions.addWidget(self._btn_delivery_print)
+        self._btn_label_print = QPushButton("Label drucken")
+        self._btn_label_print.setToolTip("Druckt ein Versandlabel mit der bestätigten Lieferadresse")
+        self._btn_label_print.clicked.connect(self._print_label)
+        dispatch_actions.addWidget(self._btn_label_print)
+        dispatch_actions.addStretch(1)
+        self._btn_resolve = QPushButton("Erledigt")
+        self._btn_resolve.clicked.connect(self._resolve)
+        dispatch_actions.addWidget(self._btn_resolve)
+        self._btn_cancel = QPushButton("Stornieren")
+        self._btn_cancel.clicked.connect(self._cancel)
+        dispatch_actions.addWidget(self._btn_cancel)
+        detail_lay.addLayout(dispatch_actions)
         splitter.addWidget(detail)
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 5)
@@ -148,6 +177,7 @@ class CustomerAftercareTab(QWidget):
             self._positions.clear()
             self._mail.clear()
             self._ai.clear()
+            self._update_dispatch_actions(None)
             return
         self._items = self._service.get_items(case.id)
         snooze = case.snooze_mode or "—"
@@ -161,11 +191,14 @@ class CustomerAftercareTab(QWidget):
                     "%d.%m.%Y %H:%M"
                 )
             )
+        created_at = (
+            case.created_at.strftime("%d.%m.%Y %H:%M") if case.created_at is not None else "—"
+        )
         self._meta.setText(
             f"Kunde: {case.customer_name or case.customer_email or '—'}\n"
             f"Originalrechnung: {case.source_invoice_number or '—'} vom {case.source_invoice_date or '—'}\n"
             f"Wix-Bestellung: {case.source_wix_order_number or '—'}\n"
-            f"Nachlieferung erstellt: {case.created_at:%d.%m.%Y %H:%M}\n"
+            f"Nachlieferung erstellt: {created_at}\n"
             f"Fällig: {case.due_at.strftime('%d.%m.%Y %H:%M') if case.due_at else '—'}\n"
             f"Status: {_STATUS_LABELS.get(case.status, case.status)} | Snooze: {snooze}\n"
             f"Grund/Notiz: {case.snooze_reason or case.note or '—'}"
@@ -190,6 +223,204 @@ class CustomerAftercareTab(QWidget):
         self._ai.setText(
             f"OpenAI-Vorschlag: {confidence if confidence is not None else '—'}"
             + (f" · Belegstelle: „{evidence}“" if evidence else "")
+        )
+        self._update_dispatch_actions(case)
+
+    def _update_dispatch_actions(self, case: CustomerAftercareCase | None) -> None:
+        """Keep dispatch prints available only for a confirmed, active shipment."""
+        enabled = bool(
+            case is not None
+            and case.status == "TRIGGERED"
+            and str(case.dispatch_id or "").strip()
+            and self._dispatch_worker is None
+        )
+        for button in (
+            self._btn_delivery_show,
+            self._btn_delivery_print,
+            self._btn_label_print,
+        ):
+            button.setEnabled(enabled)
+        if case is None:
+            tip = "Bitte zuerst eine Nachlieferung auswählen."
+        elif case.status != "TRIGGERED" or not case.dispatch_id:
+            tip = (
+                "Zum Drucken die Positionen bestätigen und „Sofort versenden“ wählen "
+                "bzw. die fällige Nachlieferung auslösen."
+            )
+        else:
+            tip = ""
+        for button in (
+            self._btn_delivery_show,
+            self._btn_delivery_print,
+            self._btn_label_print,
+        ):
+            if tip:
+                button.setToolTip(tip)
+        if not tip:
+            self._btn_delivery_show.setToolTip(
+                "Erstellt den Lieferschein im selben Layout wie OFFENE SENDUNGEN"
+            )
+            self._btn_delivery_print.setToolTip(
+                "Druckt den Lieferschein über den Rechnungsdrucker"
+            )
+            self._btn_label_print.setToolTip(
+                "Druckt ein Versandlabel mit der bestätigten Lieferadresse"
+            )
+
+    def _dispatch_print_request(
+        self,
+    ) -> tuple[str, list[str], list[SendungProductLine], str] | None:
+        """Build the current print payload from the confirmed aftercare case.
+
+        The manual fields of the generated shipment are updated immediately
+        before PDF/label generation.  Thus a later edit of the positions,
+        address or note is reflected in the exact same print pipeline used by
+        the OFFENE-SENDUNGEN tab.
+        """
+        case = self._current()
+        if case is None or case.status != "TRIGGERED" or not case.dispatch_id:
+            QMessageBox.information(
+                self,
+                "Nachlieferung drucken",
+                "Bitte die Nachlieferung zuerst aktivieren (Sofort versenden oder Fälligkeit).",
+            )
+            return None
+        try:
+            raw_address = json.loads(case.address_lines_json or "[]")
+        except (TypeError, ValueError):
+            raw_address = []
+        address = (
+            [str(line).strip() for line in raw_address if str(line).strip()]
+            if isinstance(raw_address, list)
+            else []
+        )
+        if not address:
+            QMessageBox.information(
+                self, "Nachlieferung drucken", "Keine zustellfähige Lieferadresse vorhanden."
+            )
+            return None
+        products = [
+            SendungProductLine(
+                quantity=str(max(1, int(item.quantity or 1))),
+                name=item.name or item.sku or "Nachlieferposition",
+                sku=item.sku,
+                note=item.note or "Nachlieferung – nicht verrechnen",
+                free_delivery=True,
+                no_return_required=True,
+            )
+            for item in self._items
+            if item.role in {"MISSING_TO_SEND", "CORRECTED_ORDER_ITEM"}
+        ]
+        if not products:
+            QMessageBox.information(
+                self,
+                "Nachlieferung drucken",
+                "Bitte in „Bearbeiten…“ mindestens eine nachzuliefernde Position auswählen.",
+            )
+            return None
+        return str(case.dispatch_id), address, products, case.note or ""
+
+    def _run_dispatch_action(
+        self,
+        button: QPushButton,
+        running_text: str,
+        job: Callable[[], object],
+        on_result: Callable[[object], None],
+    ) -> None:
+        if self._dispatch_worker is not None and self._dispatch_worker.isRunning():
+            return
+        original_text = button.text()
+        for action in (
+            self._btn_delivery_show,
+            self._btn_delivery_print,
+            self._btn_label_print,
+        ):
+            action.setEnabled(False)
+        button.setText(running_text)
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(on_result)
+        worker.signals.error.connect(
+            lambda exc: QMessageBox.warning(
+                self, "Nachlieferung drucken", f"Druck konnte nicht vorbereitet werden:\n\n{exc}"
+            )
+        )
+
+        def finished() -> None:
+            button.setText(original_text)
+            self._dispatch_worker = None
+            self._update_dispatch_actions(self._current())
+
+        worker.signals.finished.connect(finished)
+        self._dispatch_worker = worker
+        worker.start()
+
+    def _show_delivery_note(self) -> None:
+        request = self._dispatch_print_request()
+        if request is None:
+            return
+        dispatch_id, address, products, note = request
+        sendungen: OffeneSendungenService = self._container.resolve(OffeneSendungenService)  # type: ignore[attr-defined]
+        self._run_dispatch_action(
+            self._btn_delivery_show,
+            "Erstelle…",
+            lambda: sendungen.generate_delivery_note_pdf(
+                dispatch_id, address_lines=address, products=products, short_note=note
+            ),
+            lambda path: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))),
+        )
+
+    def _print_delivery_note(self) -> None:
+        request = self._dispatch_print_request()
+        if request is None:
+            return
+        dispatch_id, address, products, note = request
+        sendungen: OffeneSendungenService = self._container.resolve(OffeneSendungenService)  # type: ignore[attr-defined]
+
+        def job() -> Path:
+            path = sendungen.generate_delivery_note_pdf(
+                dispatch_id, address_lines=address, products=products, short_note=note
+            )
+            sendungen.print_delivery_note(
+                path,
+                printing=self._container.config.printing,  # type: ignore[attr-defined]
+                print_queue=self._container.resolve(PrintQueueService),  # type: ignore[attr-defined]
+            )
+            return path
+
+        self._run_dispatch_action(
+            self._btn_delivery_print,
+            "Drucke…",
+            job,
+            lambda _path: QMessageBox.information(
+                self, "Lieferschein", "Lieferschein erfolgreich an Rechnungen gesendet."
+            ),
+        )
+
+    def _print_label(self) -> None:
+        request = self._dispatch_print_request()
+        if request is None:
+            return
+        dispatch_id, address, products, note = request
+        sendungen: OffeneSendungenService = self._container.resolve(OffeneSendungenService)  # type: ignore[attr-defined]
+
+        def job() -> bool:
+            sendungen.save_manual_fields(
+                dispatch_id, address_lines=address, products=products, manual_text=note
+            )
+            printer = LabelPrinter(
+                self._container.config.printing,  # type: ignore[attr-defined]
+                print_queue=self._container.resolve(PrintQueueService),  # type: ignore[attr-defined]
+            )
+            printer.print_address(address)
+            return True
+
+        self._run_dispatch_action(
+            self._btn_label_print,
+            "Drucke…",
+            job,
+            lambda _payload: QMessageBox.information(
+                self, "Label", "Label erfolgreich an Drucker gesendet."
+            ),
         )
 
     def _edit(self) -> None:

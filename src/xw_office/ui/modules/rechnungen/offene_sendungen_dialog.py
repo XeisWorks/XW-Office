@@ -373,7 +373,7 @@ class OffeneSendungenDialog(QDialog):
         splitter.setStretchFactor(1, 3)
         splitter.setSizes([340, 1160])
         root.addWidget(splitter)
-        tabs.addTab(sendungen_tab, "SENDUNGEN")
+        tabs.addTab(sendungen_tab, "OFFENE SENDUNGEN")
         try:
             aftercare_tab: QWidget = CustomerAftercareTab(self._container, tabs)
         except KeyError:
