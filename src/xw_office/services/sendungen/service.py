@@ -20,7 +20,11 @@ from xw_office.services.mailing.graph_client import GraphMailClient, html_to_tex
 from xw_office.services.printing.invoice_printer import InvoicePrinter
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.secrets.service import SecretService
-from xw_office.services.sendungen.xw_flow_client import FlowShippingEmailCase, XwFlowShipmentClient
+from xw_office.services.sendungen.xw_flow_client import (
+    FlowAftercareCase,
+    FlowShippingEmailCase,
+    XwFlowShipmentClient,
+)
 from xw_office.services.sevdesk.invoice_client import InvoiceClient, InvoiceSummary
 from xw_office.services.shipping.countries import country_label_for_address
 from xw_office.services.wix.client import WixOrdersClient
@@ -220,6 +224,7 @@ class OffeneSendungenService:
         )
         open_cases = self.load_open_cases()
         self._sync_shipping_email_snapshot(open_cases)
+        self.sync_aftercare_cases()
         return open_cases
 
     def _sync_shipping_email_snapshot(self, cases: list[SendungCase]) -> None:
@@ -235,10 +240,106 @@ class OffeneSendungenService:
                         )
                         for case in cases
                         if case.source_type in {_SOURCE_GRAPH, _SOURCE_MANUAL}
+                        and not case.id.startswith("nachlieferung-")
                     ]
                 )
             except Exception as exc:  # noqa: BLE001 - dashboard mirror must not block Office
                 logger.warning("XW-Flow shipping-mail snapshot failed: %s", exc)
+
+    def sync_aftercare_cases(self) -> None:
+        """Mirror reviewable Nachlieferungen into XW-Flow's separate tab."""
+        if (
+            self._flow_shipments is None
+            or not self._flow_shipments.is_configured()
+            or self._aftercare_repo is None
+        ):
+            return
+        list_cases = getattr(self._aftercare_repo, "list_by_statuses", None)
+        item_loader = getattr(self._aftercare_repo, "get_items", None)
+        if not callable(list_cases) or not callable(item_loader):
+            return
+        try:
+            cases = list_cases(("PENDING_REVIEW", "WAITING", "TRIGGERED", "SNOOZED"))
+            snapshots: list[FlowAftercareCase] = []
+            for case in cases:
+                items = item_loader(case.id)
+                positions = [
+                    {
+                        "name": item.name,
+                        "sku": item.sku,
+                        "quantity": item.quantity,
+                        "role": item.role,
+                        "parent_sku": item.parent_sku,
+                        "component_id": item.component_id,
+                        "note": item.note,
+                    }
+                    for item in items
+                    if item.role != "WRONG_DELIVERED"
+                ]
+                products = [
+                    {
+                        "quantity": str(max(1, int(item["quantity"] or 1))),
+                        "name": str(item["name"] or item["sku"] or "Position"),
+                        "sku": str(item["sku"] or ""),
+                        "note": str(item["note"] or "Nachlieferung – nicht verrechnen"),
+                        "free_delivery": True,
+                        "delivery_price": "0",
+                        "no_return_required": True,
+                    }
+                    for item in positions
+                ]
+                try:
+                    address = json.loads(case.address_lines_json or "[]")
+                except (TypeError, ValueError):
+                    address = []
+                address_lines = (
+                    [str(line).strip() for line in address if str(line).strip()]
+                    if isinstance(address, list)
+                    else []
+                )
+                snapshots.append(
+                    FlowAftercareCase(
+                        external_id=f"aftercare:{case.id}",
+                        title=(
+                            f"Nachlieferung prüfen – {case.source_invoice_number}"
+                            if case.source_invoice_number
+                            else "Nachlieferung prüfen"
+                        ),
+                        received_at=case.created_at.isoformat() if case.created_at else "",
+                        details={
+                            "summary": case.note or "Nachlieferung aus Mail prüfen",
+                            "customer_name": case.customer_name,
+                            "invoice_number": case.source_invoice_number,
+                            "order_number": case.source_wix_order_number,
+                            "case_type": case.case_type or "aftercare",
+                            "address_lines": address_lines,
+                            "products": products,
+                            "positions": positions,
+                            "redelivery": True,
+                            "aftercare_case_id": str(case.id),
+                            "aftercare_status": case.status,
+                            "source_invoice_date": case.source_invoice_date,
+                            "source_subject": case.source_subject,
+                            "source_mail_sender": case.source_mail_sender,
+                            "created_at": case.created_at.isoformat() if case.created_at else "",
+                            "due_at": case.due_at.isoformat() if case.due_at else "",
+                            "snooze_mode": case.snooze_mode,
+                            "snoozed_until": (
+                                case.snoozed_until.isoformat() if case.snoozed_until else ""
+                            ),
+                            "snooze_reason": case.snooze_reason,
+                            "position_editing": "xw_office",
+                            "source": "nachlieferung@",
+                            "confidence_notes": [],
+                            "updated_at": case.updated_at.isoformat() if case.updated_at else "",
+                        },
+                    )
+                )
+            sync = getattr(self._flow_shipments, "sync_aftercare_cases", None)
+            if callable(sync):
+                sync(snapshots)
+        except Exception as exc:  # noqa: BLE001 - Flow mirroring stays optional
+            logger.warning("XW-Flow Nachlieferungssnapshot fehlgeschlagen: %s", exc)
 
     def _flow_shipping_details(self, case: SendungCase) -> dict[str, object] | None:
         """Return editable, derived shipping facts without sending mail content to Flow."""

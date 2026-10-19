@@ -26,6 +26,14 @@ class FlowShippingEmailCase:
     details: dict[str, object] | None = None
 
 
+@dataclass(frozen=True)
+class FlowAftercareCase:
+    external_id: str
+    title: str
+    received_at: str
+    details: dict[str, object] | None = None
+
+
 class XwFlowShipmentClient:
     def __init__(self, config: AppConfig, secrets: SecretService) -> None:
         self._config = config
@@ -101,4 +109,27 @@ class XwFlowShipmentClient:
         }
         with httpx.Client(base_url=base_url, headers=headers, timeout=timeout) as client:
             response = client.put("/api/v1/office-bridge/shipment-cases/shipping-email-snapshot", json=payload)
+            response.raise_for_status()
+
+    def sync_aftercare_cases(self, cases: list[FlowAftercareCase]) -> None:
+        """Mirror the reviewable Nachlieferungs queue into its Flow tab."""
+        connection = self._connection()
+        if connection is None:
+            return
+        base_url, headers, timeout = connection
+        payload = {
+            "cases": [
+                {
+                    "external_id": case.external_id,
+                    "title": case.title[:300],
+                    "received_at": case.received_at or None,
+                    "details": case.details,
+                }
+                for case in cases
+            ]
+        }
+        with httpx.Client(base_url=base_url, headers=headers, timeout=timeout) as client:
+            response = client.put(
+                "/api/v1/office-bridge/shipment-cases/aftercare-snapshot", json=payload
+            )
             response.raise_for_status()

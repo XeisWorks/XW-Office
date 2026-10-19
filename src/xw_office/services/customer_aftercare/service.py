@@ -168,6 +168,7 @@ class CustomerAftercareService:
         case = self._repo.snooze_case(case_id, mode=mode, until=until, reason=reason)
         if case is not None and case.dispatch_id and self._sendungen is not None:
             self._sendungen.mark_done(case.dispatch_id, done=True, resolve_aftercare=False)
+        self._sync_flow_aftercare()
         return case
 
     def make_immediate(self, case_id: uuid.UUID) -> CustomerAftercareCase | None:
@@ -179,11 +180,13 @@ class CustomerAftercareService:
                 self._sendungen.mark_done(case.dispatch_id, done=False, resolve_aftercare=False)
             else:
                 self._ensure_dispatch_for_case(case)
+        self._sync_flow_aftercare()
         return case
 
     def release_next_start_snoozes(self) -> int:
         released = self._release_snoozes(mode="NEXT_START")
         self.ensure_asap_dispatches()
+        self._sync_flow_aftercare()
         return released
 
     def _release_snoozes(self, *, mode: str | None = None) -> int:
@@ -199,9 +202,11 @@ class CustomerAftercareService:
     # -- inbox polling ------------------------------------------------------
 
     def poll_inbox(self, *, allow_interactive_auth: bool = True) -> InboxPollResult:
-        return self._inbox.poll_inbox(
+        result = self._inbox.poll_inbox(
             lookback_days=14, max_items=60, allow_interactive_auth=allow_interactive_auth
         )
+        self._sync_flow_aftercare()
+        return result
 
     # -- trigger polling (Phase 10 wires the actual QTimer cadence) -----------
 
@@ -209,10 +214,13 @@ class CustomerAftercareService:
         self._release_snoozes()
         result = self._trigger.check_due_cases()
         self.ensure_asap_dispatches()
+        self._sync_flow_aftercare()
         return result
 
     def check_new_orders_for_waiting_cases(self) -> TriggerRunResult:
-        return self._trigger.check_new_orders_for_waiting_cases()
+        result = self._trigger.check_new_orders_for_waiting_cases()
+        self._sync_flow_aftercare()
+        return result
 
     # -- review popup (spec §4) ------------------------------------------------
 
@@ -308,6 +316,7 @@ class CustomerAftercareService:
         )
         if result is not None and trigger_now:
             self._ensure_dispatch_for_case(result)
+        self._sync_flow_aftercare()
         return result
 
     def confirm_manual_redelivery(
@@ -384,7 +393,18 @@ class CustomerAftercareService:
                 self._sendungen.mark_done(result.dispatch_id, done=False, resolve_aftercare=False)
             else:
                 self._ensure_dispatch_for_case(result)
+        self._sync_flow_aftercare()
         return result
+
+    def _sync_flow_aftercare(self) -> None:
+        if self._sendungen is None:
+            return
+        sync = getattr(self._sendungen, "sync_aftercare_cases", None)
+        if callable(sync):
+            try:
+                sync()
+            except Exception:  # noqa: BLE001 - Flow mirroring must not block Office
+                return
 
     def ensure_asap_dispatches(self) -> int:
         """Expose due/immediate cases in OFFENE SENDUNGEN exactly once."""
@@ -448,7 +468,9 @@ class CustomerAftercareService:
         return True
 
     def ignore_case(self, case_id: uuid.UUID) -> CustomerAftercareCase | None:
-        return self._repo.mark_ignored(case_id) if self._repo is not None else None
+        result = self._repo.mark_ignored(case_id) if self._repo is not None else None
+        self._sync_flow_aftercare()
+        return result
 
     # -- manual manager-dialog actions -----------------------------------------
 
@@ -458,7 +480,9 @@ class CustomerAftercareService:
         existing = self._repo.get_case(case_id)
         if existing is not None and existing.dispatch_id and self._sendungen is not None:
             self._sendungen.mark_done(existing.dispatch_id, done=True, resolve_aftercare=False)
-        return self._repo.mark_resolved(case_id)
+        result = self._repo.mark_resolved(case_id)
+        self._sync_flow_aftercare()
+        return result
 
     def mark_cancelled(self, case_id: uuid.UUID) -> CustomerAftercareCase | None:
         if self._repo is None:
@@ -466,7 +490,11 @@ class CustomerAftercareService:
         existing = self._repo.get_case(case_id)
         if existing is not None and existing.dispatch_id and self._sendungen is not None:
             self._sendungen.mark_done(existing.dispatch_id, done=True, resolve_aftercare=False)
-        return self._repo.mark_cancelled(case_id)
+        result = self._repo.mark_cancelled(case_id)
+        self._sync_flow_aftercare()
+        return result
 
     def mark_invoice_skipped(self, case_id: uuid.UUID) -> CustomerAftercareCase | None:
-        return self._repo.mark_invoice_skipped(case_id) if self._repo is not None else None
+        result = self._repo.mark_invoice_skipped(case_id) if self._repo is not None else None
+        self._sync_flow_aftercare()
+        return result
