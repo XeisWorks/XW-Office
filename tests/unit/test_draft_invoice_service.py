@@ -41,6 +41,15 @@ class _WixOrdersStub:
             "id": "ORDER-1",
             "number": "20519",
             "buyerInfo": {"email": "max@example.test", "firstName": "Max", "lastName": "Mustermann"},
+            "billingInfo": {
+                "contactDetails": {"firstName": "Max", "lastName": "Mustermann"},
+                "address": {"addressLine1": "Rechnungsweg 7", "postalCode": "5020", "city": "Salzburg", "countryCode": "AT"},
+            },
+            "shippingInfo": {
+                "shippingDestination": {
+                    "address": {"addressLine1": "Lieferweg 9", "postalCode": "1010", "city": "Wien", "countryCode": "AT"},
+                }
+            },
             "lineItems": [
                 {
                     "id": "LI-1",
@@ -75,7 +84,11 @@ class _WixOrdersStub:
 
     @staticmethod
     def best_address_lines_from_order(order: dict) -> list[str]:
-        return ["Max Mustermann", "Teststrasse 1", "1010 Wien", "Oesterreich"]
+        return ["Max Mustermann", "Lieferweg 9", "1010 Wien", "Oesterreich"]
+
+    @staticmethod
+    def billing_address_lines_from_order(order: dict) -> list[str]:
+        return ["Max Mustermann", "Rechnungsweg 7", "5020 Salzburg", "Oesterreich"]
 
 
 class _PartClientStub:
@@ -229,6 +242,7 @@ def test_create_draft_keeps_unmapped_position_when_part_missing() -> None:
     assert first_pos["name"] == "Produkt Eins"
     assert first_pos["price"] == 12.5
     assert first_pos["taxRate"] == 0
+    assert save_invoice["invoice"]["address"] == "Max Mustermann\nRechnungsweg 7\n5020 Salzburg\nOesterreich"
 
 
 def test_apply_missing_product_plan_creates_part_and_patches_existing_draft() -> None:

@@ -236,6 +236,37 @@ def test_best_address_lines_prefers_shipping_then_billing() -> None:
     assert "AUSTRIA" in lines2
 
 
+def test_billing_address_lines_always_use_billing_address_when_shipping_differs() -> None:
+    order = {
+        "shippingInfo": {
+            "shippingDestination": {
+                "address": {
+                    "addressLine1": "Lieferweg 9",
+                    "postalCode": "1010",
+                    "city": "Wien",
+                    "countryCode": "AT",
+                }
+            }
+        },
+        "billingInfo": {
+            "contactDetails": {"firstName": "Lennart", "lastName": "Graf"},
+            "address": {
+                "addressLine1": "Rechnungsweg 7",
+                "postalCode": "5020",
+                "city": "Salzburg",
+                "countryCode": "AT",
+            },
+        },
+    }
+
+    assert WixOrdersClient.billing_address_lines_from_order(order) == [
+        "Lennart Graf",
+        "Rechnungsweg 7",
+        "5020 Salzburg",
+        "AUSTRIA",
+    ]
+
+
 def test_order_summary_preserves_billing_company_and_contact_for_licensing() -> None:
     order = {
         "number": "20999",
