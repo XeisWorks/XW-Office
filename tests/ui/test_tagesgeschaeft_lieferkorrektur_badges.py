@@ -35,6 +35,23 @@ def test_badges_result_updates_lieferkorrektur_buttons(qtbot: object) -> None:
     assert not view._btn_lieferkorrektur_due_alert.isHidden()  # noqa: SLF001
 
 
+def test_today_open_shipments_badge_includes_unreviewed_aftercare(qtbot: object) -> None:
+    container = _build_container()
+    view = TagesgeschaeftView(container)
+    qtbot.addWidget(view)
+
+    view._on_badges_result(  # noqa: SLF001
+        {
+            "sendungen": 4,
+            "lieferkorrektur_review": 2,
+            "lieferkorrektur_due": 0,
+            "lieferkorrektur_new_review_cases": 0,
+        }
+    )
+
+    assert view._btn_sendungen_alert.text() == "OFFENE SENDUNGEN (6)"  # noqa: SLF001
+
+
 def test_badges_result_hides_buttons_at_zero(qtbot: object) -> None:
     container = _build_container()
     view = TagesgeschaeftView(container)

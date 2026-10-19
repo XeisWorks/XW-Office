@@ -759,12 +759,12 @@ class TagesgeschaeftView(QWidget):
                 poll_result = aftercare_service.poll_inbox(allow_interactive_auth=False)
                 new_review_cases = poll_result.new_cases
                 self._lieferkorrektur_inbox_poll_ts = aftercare_now
-            # Due/immediate aftercare cases may have created an OFFENE-
-            # SENDUNGEN dispatch above; refresh the badge from the canonical
-            # local queue before returning the counts.
-            counts["sendungen"] = max(0, int(sendungen_service.open_count()))
             counts["lieferkorrektur_review"] = max(0, int(aftercare_service.count_pending_review()))
             counts["lieferkorrektur_due"] = max(0, int(aftercare_service.count_due()))
+            # Keep the canonical regular-sendungen count here.  TODAY merges
+            # it with the review count when rendering the badge below; the
+            # OFFENE-SENDUNGEN dialog itself keeps Nachlieferungen in its own tab.
+            counts["sendungen"] = max(0, int(sendungen_service.open_count()))
             counts["lieferkorrektur_new_review_cases"] = new_review_cases
             try:
                 b2b_service: B2bCreditService = self._container.resolve(B2bCreditService)
@@ -788,7 +788,9 @@ class TagesgeschaeftView(QWidget):
         open_count = max(0, int(counts.get("rechnungen", 0)))
         mollie_count = max(0, int(counts.get("mollie", 0)))
         gutscheine_count = max(0, int(counts.get("gutscheine", 0)))
-        sendungen_count = max(0, int(counts.get("sendungen", 0)))
+        sendungen_count = max(0, int(counts.get("sendungen", 0))) + max(
+            0, int(counts.get("lieferkorrektur_review", 0))
+        )
         drucke_count = max(0, int(counts.get("drucke", 0)))
         digital_licenses_count = max(0, int(counts.get("digital_licenses", 0)))
         transfer_count = max(0, int(counts.get("transfer", counts.get("refunds", 0))))
@@ -853,6 +855,13 @@ class TagesgeschaeftView(QWidget):
         if self._rechnungen_view is None:
             return
         count = self._rechnungen_view.open_sendungen_dialog()
+        try:
+            aftercare_service: CustomerAftercareService = self._container.resolve(
+                CustomerAftercareService
+            )
+            count += aftercare_service.count_pending_review()
+        except Exception:  # noqa: BLE001 - regular shipments remain usable without aftercare
+            pass
         self._sendungen_count = max(0, int(count))
         self._update_alert_button(self._btn_sendungen_alert, "OFFENE SENDUNGEN", self._sendungen_count)
 
