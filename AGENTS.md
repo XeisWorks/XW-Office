@@ -20,3 +20,12 @@
 - Eine beabsichtigte Aenderung des Archivs erfordert eine ausdrueckliche Benutzeranweisung und
   eine bewusste Aktualisierung der zugehoerigen SHA-256-Pruefung.
 
+# Figma und LLMs
+
+- Die versionskontrollierte MCP-Konfiguration liegt in `.vscode/mcp.json`; Details und der
+  verbindliche Workflow stehen in `docs/FIGMA.md`.
+- Bei Aufgaben mit Figma-Link, Design-to-Code, Design-System oder expliziter Figma-Aenderung
+  diese Integration verwenden. Bei reinen Backend- oder fachlichen Aufgaben nicht unnötig laden.
+- Keine Figma-PATs, OAuth-Daten oder exportierte Sitzungsdaten in Dateien, Logs oder Commits
+  aufnehmen. Code-Connect-Veröffentlichungen bleiben ein bewusst ausgelöster Schritt.
+

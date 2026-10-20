@@ -13,6 +13,8 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
+    "types": ["@figma/code-connect/figma-types"],
+
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
