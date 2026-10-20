@@ -1,4 +1,4 @@
-"""Read-only adapter for both existing Office product catalogues."""
+"""Adapter for the shared Office catalogue and its central print configuration."""
 
 from __future__ import annotations
 
@@ -27,17 +27,19 @@ class LegacyProduct(BaseModel):
 
 
 class OfficialCatalogue:
-    """Deliberately exposes only a list operation; PostgreSQL reads are read-only."""
+    """Read the catalogue consistently; writes are handled by ``InventoryService``."""
 
     def __init__(
         self,
         sessions: sessionmaker[Session],
         *,
         prefer_hub: bool = False,
+        include_unreleased: bool = False,
         cache: CatalogueCache | None = None,
     ) -> None:
         self._sessions = sessions
         self._prefer_hub = prefer_hub
+        self._include_unreleased = include_unreleased
         self._cache = cache
         self._snapshot = cache.read() if cache else None
         self._last_resolution = (
@@ -59,9 +61,13 @@ class OfficialCatalogue:
         if session.get_bind().dialect.name == "postgresql":
             # All changes, including deletions and unchanged timestamps, affect the
             # token. Only the small digest crosses the network on a cache hit.
+            setting_keys = ["inventory.products"]
+            if self._include_unreleased:
+                setting_keys.append("products.unreleased_title_overrides")
             parts = [
                 "coalesce((SELECT value_json FROM public.setting_kv "
-                "WHERE key='inventory.products'), '[]')"
+                f"WHERE key='{key}'), '[]')"
+                for key in setting_keys
             ]
             for name, _table in tables:
                 parts.append(
@@ -75,6 +81,12 @@ class OfficialCatalogue:
                     select(SettingKV.value_json).where(SettingKV.key == "inventory.products")
                 )
             ]
+            if self._include_unreleased:
+                rows.append(session.scalar(
+                    select(SettingKV.value_json).where(
+                        SettingKV.key == "products.unreleased_title_overrides"
+                    )
+                ))
             for _name, table in tables:
                 rows.append(
                     [
@@ -85,7 +97,7 @@ class OfficialCatalogue:
             digest = hashlib.sha256(
                 json.dumps(rows, default=str, sort_keys=True).encode()
             ).hexdigest()
-        return f"v1:{self._prefer_hub}:{digest}"
+        return f"v2:{self._prefer_hub}:{self._include_unreleased}:{digest}"
 
     def list_articles(self, *, force_refresh: bool = False) -> list[PrintArticle]:
         with self._sessions() as session:
@@ -121,6 +133,8 @@ class OfficialCatalogue:
             if row.is_digital or not row.sku.strip():
                 continue
             sku = row.sku.strip().upper()
+            if self._include_unreleased and sku in _UNRELEASED_DYNAMIC_SKUS:
+                continue
             for title in ("", *row.title_print_configs):
                 config = catalog.resolve_print_config(sku, title=title or row.name or sku)
                 article_id = f"office:{sku}:{title}"
@@ -129,6 +143,23 @@ class OfficialCatalogue:
                     source="official",
                     sku=sku,
                     name=str(config.get("resolved_title") or title or row.name or sku),
+                    pdf_path=str(config.get("path") or ""),
+                    profile_id=str(config.get("profile_id") or ""),
+                    print_plan=TypeAdapter(tuple[PrintStep, ...]).validate_python(
+                        config.get("print_plan") or []
+                    ),
+                )
+        # The same canonical unreleased catalogue shown by PRODUKTE / UNRELEASED.
+        # Each work deliberately persists a title-specific XW-010 configuration.
+        if self._include_unreleased:
+            for product in catalog.list_unreleased_products():
+                title = product.canonical_name
+                config = catalog.resolve_print_config("XW-010", title=title)
+                articles[f"unreleased:XW-010:{title}"] = PrintArticle(
+                    id=f"unreleased:XW-010:{title}",
+                    source="unreleased",
+                    sku="XW-010",
+                    name=title,
                     pdf_path=str(config.get("path") or ""),
                     profile_id=str(config.get("profile_id") or ""),
                     print_plan=TypeAdapter(tuple[PrintStep, ...]).validate_python(
@@ -171,15 +202,28 @@ class OfficialCatalogue:
                 (a for a in matching_assets if a.variant_id == variant.id),
                 matching_assets[0] if matching_assets else None,
             )
+            central_config = catalog.resolve_print_config(
+                sku, title=variant.name or product.name or sku
+            )
+            central_plan = central_config.get("print_plan") or []
+            use_central = bool(
+                central_config.get("path") or central_config.get("profile_id") or central_plan
+            )
             articles[article_id] = PrintArticle(
                 id=article_id,
                 source="official",
                 sku=sku,
                 name=variant.name or product.name,
-                pdf_path=resolve_shared_path(asset.uri if asset else ""),
-                profile_id=rule.print_profile_id or "" if rule else "",
+                pdf_path=(
+                    str(central_config.get("path") or "")
+                    if use_central else resolve_shared_path(asset.uri if asset else "")
+                ),
+                profile_id=(
+                    str(central_config.get("profile_id") or "")
+                    if use_central else (rule.print_profile_id or "" if rule else "")
+                ),
                 print_plan=TypeAdapter(tuple[PrintStep, ...]).validate_python(
-                    rule.print_plan or [] if rule else []
+                    central_plan if use_central else (rule.print_plan or [] if rule else [])
                 ),
             )
         return sorted(articles.values(), key=lambda article: (article.name.casefold(), article.id))

@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-import fitz  # type: ignore[import-untyped]
+import fitz
 
 from xw_office.core.config import PrintingSection
 from xw_office.core.shared_paths import resolve_shared_path
@@ -18,17 +18,20 @@ from xw_office.services.printing.planned_pdf_printer import (
     resolve_plan_targets,
 )
 from xw_office.services.printing.print_queue import PrintQueueService
+from xw_office.services.inventory.service import InventoryService
 
 
 class PrintCenterService:
     def __init__(
         self, official: OfficialCatalogue, own: OwnArticleRepository,
         printing: Callable[[], PrintingSection], queue: PrintQueueService,
+        inventory: InventoryService | None = None,
     ) -> None:
         self._official = official
         self._own = own
         self._printing = printing
         self._queue = queue
+        self._inventory = inventory
 
     def cached_articles(self) -> list[PrintArticle]:
         return self._official.cached_articles()
@@ -47,6 +50,36 @@ class PrintCenterService:
     ) -> PrintArticle:
         # Validate profiles/ranges before storing, but allow temporarily unavailable
         # shared PDFs so an article can be maintained from a non-print workstation.
+        self._validate_input(data)
+        return self._own.save(data, article_id=article_id, version=version)
+
+    def save_product_print_config(
+        self, article: PrintArticle, data: ArticleInput,
+    ) -> PrintArticle:
+        """Persist through the exact central pipeline used by XW-Office."""
+        if article.source not in {"official", "unreleased"}:
+            raise ValueError("Nur zentrale Produkte koennen hier gespeichert werden.")
+        if self._inventory is None:
+            raise RuntimeError(
+                "Das Druckcenter hat keine Schreibverbindung zur zentralen Produktkonfiguration."
+            )
+        self._validate_input(data)
+        plan = [step.model_dump() for step in data.print_plan]
+        self._inventory.save_product_print_config(
+            sku=article.sku,
+            name=article.name,
+            print_file_path=data.pdf_path,
+            print_profile_id=plan[0]["profile_id"] if plan else "",
+            print_plan=plan,
+            title_specific_only=article.source == "unreleased",
+        )
+        refreshed = self._official.list_articles(force_refresh=True)
+        return next((item for item in refreshed if item.id == article.id), article.model_copy(
+            update={"pdf_path": data.pdf_path, "print_plan": data.print_plan,
+                    "profile_id": plan[0]["profile_id"] if plan else ""}
+        ))
+
+    def _validate_input(self, data: ArticleInput) -> None:
         targets = resolve_plan_targets(
             self._printing(), print_plan=[step.model_dump() for step in data.print_plan]
         )
@@ -56,7 +89,6 @@ class PrintCenterService:
             with fitz.open(path) as document:
                 for target in targets:
                     page_indices_from_range_text(target.range_text, page_count=len(document))
-        return self._own.save(data, article_id=article_id, version=version)
 
     def delete_own(self, article_id: str, *, version: int) -> None:
         self._own.delete(article_id, version=version)
@@ -76,7 +108,7 @@ class PrintCenterService:
     def print_article(self, selection: PrintArticle, copies: int) -> PrintReceipt:
         if not 1 <= copies <= 999:
             raise ValueError("Die Druckmenge muss zwischen 1 und 999 liegen.")
-        if selection.source == "official":
+        if selection.source in {"official", "unreleased"}:
             article = next(
                 (item for item in self._official.list_articles() if item.id == selection.id), None
             )

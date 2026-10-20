@@ -1,4 +1,4 @@
-"""Readonly PDF path and complete print-profile details for either catalogue."""
+"""Detailed print-profile summary with a route into the shared editor."""
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -28,7 +28,7 @@ _SETTING_LABELS = {
 def describe_print_settings(article: PrintArticle, printing: PrintingSection) -> str:
     lines = [
         article.name,
-        "Offizielles Produkt (readonly)" if article.source == "official" else "Eigener Druckartikel",
+        "Zentrales Produkt" if article.source in {"official", "unreleased"} else "Eigener Druckartikel",
         f"\nDruckpfad:\n{article.pdf_path or '(nicht zugeordnet)'}",
     ]
     resolved = resolve_shared_path(article.pdf_path)
@@ -70,17 +70,14 @@ class PrintDetailsDialog(QDialog):
         self.edit_requested = False
         root = QVBoxLayout(self)
         root.addWidget(QLabel(
-            "Offizielle Produkte und Druckprofile werden nur in XW-Office gepflegt."
-            if article.source == "official" else
-            "Die Artikelzuordnung ist bearbeitbar; zentrale Druckprofile bleiben readonly."
+            "Druckpfad und Druckplan sind bearbeitbar; die Druckprofile selbst bleiben zentral."
         ))
         self.settings_text = QPlainTextEdit(describe_print_settings(article, printing))
         self.settings_text.setReadOnly(True)
         root.addWidget(self.settings_text)
-        if article.source == "own":
-            self.edit_button = QPushButton("Artikel / Druckzuordnung bearbeiten")
-            self.edit_button.clicked.connect(self._edit)
-            root.addWidget(self.edit_button)
+        self.edit_button = QPushButton("Druckpfad / Einstellungen bearbeiten")
+        self.edit_button.clicked.connect(self._edit)
+        root.addWidget(self.edit_button)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)

@@ -58,7 +58,7 @@ class ArticleInput(BaseModel):
 class PrintArticle(BaseModel):
     model_config = ConfigDict(frozen=True)
     id: str
-    source: Literal["official", "own"]
+    source: Literal["official", "unreleased", "own"]
     name: str
     sku: str = ""
     pdf_path: str = ""

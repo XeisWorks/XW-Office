@@ -2,21 +2,23 @@
 from __future__ import annotations
 
 import logging
+import json
+import re
+import time
 from collections.abc import Callable
 from pathlib import Path, PureWindowsPath
 
 from PySide6.QtCore import QEvent, QObject, QSettings, QSize, QTimer, QUrl, Qt
-from PySide6.QtGui import QCloseEvent, QDesktopServices
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QPushButton, QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem,
+    QGroupBox, QMessageBox, QPushButton, QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem,
     QToolButton, QStyle, QVBoxLayout, QWidget,
 )
 
 from xw_office.core.shared_paths import resolve_shared_path
 from xw_office.core.worker import BackgroundWorker
 from xw_office.print_center.article_dialog import ArticleDialog
-from xw_office.print_center.details_dialog import PrintDetailsDialog
 from xw_office.print_center.icons import printer_icon
 from xw_office.print_center.models import PrintArticle, PrintReceipt
 from xw_office.print_center.service import PrintCenterService
@@ -32,6 +34,7 @@ class PrintCenterWindow(QMainWindow):
         self._worker: BackgroundWorker | None = None
         self._articles: list[PrintArticle] = []
         self._visible: list[PrintArticle] = []
+        self._preferred: PrintArticle | None = None
         self._control_rows: set[int] = set()
         self._copy_counts: dict[str, int] = {}
         self._settings = QSettings("XeisWorks", "Druckcenter")
@@ -40,6 +43,15 @@ class PrintCenterWindow(QMainWindow):
             {str(value) for value in saved_favorites}
             if isinstance(saved_favorites, list) else set()
         )
+        stored_activity_raw = self._settings.value("article_activity", "", type=str)
+        stored_activity = stored_activity_raw if isinstance(stored_activity_raw, str) else ""
+        try:
+            parsed_activity = json.loads(stored_activity) if stored_activity else {}
+        except (TypeError, ValueError):
+            parsed_activity = {}
+        self._activity: dict[str, int] = {
+            str(key): int(value) for key, value in parsed_activity.items()
+        } if isinstance(parsed_activity, dict) else {}
         self.setWindowTitle("XeisWorks Druckcenter")
         self.resize(1200, 720)
         central = QWidget()
@@ -47,7 +59,8 @@ class PrintCenterWindow(QMainWindow):
         root = QVBoxLayout(central)
         root.addWidget(QLabel("Drucken nach Bedarf - ohne Bestellung und ohne Bestandsbuchung"))
         self.tabs = QTabWidget()
-        self.tabs.addTab(QWidget(), "Offizielle Produkte (readonly)")
+        self.tabs.addTab(QWidget(), "Offizielle Produkte")
+        self.tabs.addTab(QWidget(), "Unreleased-Produkte")
         self.tabs.addTab(QWidget(), "Eigene Druckartikel")
         self.tabs.currentChanged.connect(self._render)
         root.addWidget(self.tabs)
@@ -63,6 +76,15 @@ class PrintCenterWindow(QMainWindow):
         self.refresh_button.clicked.connect(lambda: self.reload(force_refresh=True))
         search_row.addWidget(self.refresh_button)
         root.addLayout(search_row)
+        self.preferred_box = QGroupBox("Bevorzugtes Ergebnis")
+        self._preferred_layout = QVBoxLayout(self.preferred_box)
+        self._preferred_reason = QLabel("")
+        self._preferred_reason.setWordWrap(True)
+        self._preferred_layout.addWidget(self._preferred_reason)
+        self._preferred_widget: QWidget | None = None
+        root.addWidget(self.preferred_box)
+        self.other_results_label = QLabel("Weitere Ergebnisse")
+        root.addWidget(self.other_results_label)
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["★", "Name", "SKU", "PDF", "Aktionen"])
         favorite_header = QTableWidgetItem("★")
@@ -173,21 +195,26 @@ class PrintCenterWindow(QMainWindow):
             self._render()
         self.status.setText(
             f"{sum(a.source == 'official' for a in self._articles)} offizielle Produkte, "
+            f"{sum(a.source == 'unreleased' for a in self._articles)} Unreleased-Produkte, "
             f"{sum(a.source == 'own' for a in self._articles)} eigene Druckartikel."
         )
 
     def _render(self) -> None:
-        source = "official" if self.tabs.currentIndex() == 0 else "own"
+        source = ("official", "unreleased", "own")[self.tabs.currentIndex()]
         self.table.setColumnHidden(2, source == "own")
         self.search.setPlaceholderText(
-            "Name oder SKU suchen" if source == "official" else "Eigene Druckartikel suchen"
+            "Eigene Druckartikel suchen" if source == "own" else "Name oder SKU suchen"
         )
         query = self.search.text().strip().casefold()
-        self._visible = [
+        matches = [
             a for a in self._articles if a.source == source
             and (not query or query in f"{a.name} {a.sku}".casefold())
             and (not self.favorite_only.isChecked() or a.id in self._favorites)
         ]
+        matches.sort(key=lambda article: self._result_sort_key(article, query))
+        self._preferred = matches[0] if matches else None
+        self._visible = matches[1:]
+        self._render_preferred(self._preferred, query)
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(0)
         self._control_rows.clear()
@@ -205,6 +232,64 @@ class PrintCenterWindow(QMainWindow):
             self.table.setUpdatesEnabled(True)
         self.table.clearSelection()
         self._selection_changed()
+
+    def _result_sort_key(self, article: PrintArticle, query: str) -> tuple[object, ...]:
+        name = article.name.casefold()
+        sku = article.sku.casefold()
+        relevance = 0
+        if query:
+            if query == sku:
+                relevance = 600
+            elif query == name:
+                relevance = 550
+            elif sku.startswith(query):
+                relevance = 500
+            elif name.startswith(query):
+                relevance = 450
+            elif all(token in f"{name} {sku}" for token in query.split()):
+                relevance = 350
+            else:
+                relevance = 250
+        assigned = bool(article.pdf_path)
+        configured = bool(article.profile_id or article.print_plan)
+        natural = tuple(
+            (0, int(part)) if part.isdigit() else (1, part)
+            for part in re.split(r"(\d+)", f"{name}\0{sku}")
+        )
+        # Missing PDF assignments are always last. Within the useful results,
+        # exact textual relevance wins, followed by readiness and recent use.
+        return (
+            not assigned, -relevance, not configured,
+            -self._activity.get(article.id, 0), article.id not in self._favorites, natural,
+        )
+
+    def _render_preferred(self, article: PrintArticle | None, query: str) -> None:
+        if self._preferred_widget is not None:
+            self._preferred_layout.removeWidget(self._preferred_widget)
+            self._preferred_widget.deleteLater()
+            self._preferred_widget = None
+        self.preferred_box.setVisible(article is not None)
+        self.other_results_label.setVisible(bool(self._visible))
+        self.table.setVisible(bool(self._visible))
+        if article is None:
+            return
+        reasons = ["beste Suchuebereinstimmung" if query else "zuletzt/bestens verwendbar"]
+        reasons.append("druckbereit" if article.pdf_path and (article.profile_id or article.print_plan)
+                       else "noch nicht vollstaendig zugeordnet")
+        self._preferred_reason.setText(" · ".join(reasons))
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.addWidget(self._favorite_control(article))
+        name = QLabel(f"{article.name}\n{article.sku}" if article.sku else article.name)
+        name.setWordWrap(True)
+        layout.addWidget(name, stretch=2)
+        pdf = QLabel(PureWindowsPath(article.pdf_path).name if article.pdf_path else "(nicht zugeordnet)")
+        pdf.setWordWrap(True)
+        layout.addWidget(pdf, stretch=2)
+        layout.addWidget(self._row_actions(article))
+        self._preferred_layout.addWidget(widget)
+        self._preferred_widget = widget
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self.table.viewport() and event.type() == QEvent.Type.Resize:
@@ -248,7 +333,12 @@ class PrintCenterWindow(QMainWindow):
         layout.setSpacing(5)
         preview = QToolButton()
         preview.setObjectName("article_pdf")
-        preview.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
+        eye_icon = QIcon(str(Path(__file__).resolve().parents[3] / "icons" / "eye.svg"))
+        preview.setIcon(eye_icon if not eye_icon.isNull() else self.style().standardIcon(
+            QStyle.StandardPixmap.SP_DialogOpenButton
+        ))
+        preview.setText("PDF")
+        preview.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         preview.setIconSize(QSize(20, 20))
         preview.setToolTip("PDF oeffnen")
         preview.setAccessibleName(preview.toolTip())
@@ -259,7 +349,7 @@ class PrintCenterWindow(QMainWindow):
         details.setObjectName("article_details")
         details.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
         details.setIconSize(QSize(20, 20))
-        details.setToolTip("Druckpfad und Druckeinstellungen anzeigen")
+        details.setToolTip("Druckpfad und Druckeinstellungen bearbeiten")
         details.setAccessibleName(details.toolTip())
         details.clicked.connect(lambda: self._show_print_details(article))
         layout.addWidget(details)
@@ -286,19 +376,17 @@ class PrintCenterWindow(QMainWindow):
         return widget
 
     def _show_print_details(self, article: PrintArticle) -> None:
-        dialog = PrintDetailsDialog(article, self._service.printing_settings(), self)
-        dialog.exec()
-        if dialog.edit_requested:
-            self._edit_article(new=False, article=article)
+        self._touch(article)
+        self._edit_article(new=False, article=article)
 
     def _selected(self) -> PrintArticle | None:
         selection = self.table.selectionModel().selectedRows()
         row = selection[0].row() if selection else -1
-        return self._visible[row] if 0 <= row < len(self._visible) else None
+        return self._visible[row] if 0 <= row < len(self._visible) else self._preferred
 
     def _selection_changed(self) -> None:
         article = self._selected()
-        own_tab = self.tabs.currentIndex() == 1
+        own_tab = self.tabs.currentIndex() == 2
         self.new_button.setVisible(own_tab)
         self.edit_button.setVisible(own_tab)
         self.delete_button.setVisible(own_tab)
@@ -312,26 +400,32 @@ class PrintCenterWindow(QMainWindow):
             )
             return
         article = None if new else article or self._selected()
-        if not new and (article is None or article.source != "own"):
+        if not new and article is None:
             return
         dialog = ArticleDialog(self._service.printing_settings(), article, self)
         if dialog.exec() != QDialog.DialogCode.Accepted or dialog.data is None:
             return
         data = dialog.data
-        self._run(
-            lambda: self._service.save_own(
+        operation = (
+            (lambda: self._service.save_own(
                 data, article_id=article.id if article else None,
                 version=article.row_version if article else 1,
-            ),
-            self._saved, "Artikel wird gespeichert ...",
+            ))
+            if article is None or article.source == "own"
+            else (lambda: self._service.save_product_print_config(article, data))
         )
+        self._run(operation, self._saved, "Druckkonfiguration wird zentral gespeichert ...")
 
     def _saved(self, result: object) -> None:
         if not isinstance(result, PrintArticle):
             raise TypeError("Ungueltige Artikelantwort.")
         self._articles = [a for a in self._articles if a.id != result.id] + [result]
+        self._touch(result, render=False)
         self._render()
-        self.status.setText("Eigener Artikel gespeichert. Keine externe Synchronisation.")
+        self.status.setText(
+            "Druckpfad und Druckplan wurden in der zentralen Druck-Pipeline gespeichert."
+            if result.source != "own" else "Eigener Druckartikel gespeichert."
+        )
 
     def _delete_article(self) -> None:
         if self._worker is not None:
@@ -363,6 +457,14 @@ class PrintCenterWindow(QMainWindow):
         path = resolve_shared_path(article.pdf_path)
         if not Path(path).is_file() or not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
             QMessageBox.warning(self, "PDF oeffnen", "Die PDF konnte nicht geoeffnet werden.")
+            return
+        self._touch(article)
+
+    def _touch(self, article: PrintArticle, *, render: bool = True) -> None:
+        self._activity[article.id] = max(int(time.time() * 1000), max(self._activity.values(), default=0) + 1)
+        self._settings.setValue("article_activity", json.dumps(self._activity, sort_keys=True))
+        if render:
+            self._render()
 
     def _store_favorites(self) -> None:
         self._settings.setValue("favorites", sorted(self._favorites))
@@ -386,6 +488,7 @@ class PrintCenterWindow(QMainWindow):
             "Es erfolgt keine Bestandsbuchung."
         ) != QMessageBox.StandardButton.Yes:
             return
+        self._touch(article)
         self._run(
             lambda: self._service.print_article(article, copies),
             self._printed, "Druck laeuft - warte auf Windows-Spooler-Bestaetigung ...",

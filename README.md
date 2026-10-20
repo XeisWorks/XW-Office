@@ -234,11 +234,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_windows_shortc
 ```
 
 Das Druckcenter startet ohne Office-Navigation, Bestandsbuchung oder Wix/sevDesk-Abgleich.
+Nach Updates der Druckcenter-Berechtigungen den Provisionierungsbefehl erneut ausfuehren;
+er ist idempotent und aktualisiert auch bestehende Konten.
 Es nutzt dieselbe `.env`/`DATABASE_URL`-Verbindung und dieselben Office-Druckprofile aus der
-Konfiguration. Offizielle Produkte aus dem Office-Katalog und Product Hub sind readonly;
-PDF-/Profilzuordnungen werden nur dort gepflegt. Titelbezogene Druckzuordnungen erscheinen als
-eigene Auswahlzeilen. Bei aktivem Hub-Lesemodus haben Hub-Zuordnungen fuer die SKU Vorrang,
-sonst die bestehenden Office-Zuordnungen.
+Konfiguration. Offizielle und Unreleased-Produkte verwenden dieselbe zentrale
+`inventory.products`-Druckkonfiguration wie XW-Office; Druckpfad und Druckplan sind im
+Druckcenter bearbeitbar. Product-Hub-Stammdaten bleiben readonly;
+die eigentlichen Druckprofile werden weiterhin nur in XW-Office gepflegt. Titelbezogene
+Druckzuordnungen erscheinen als eigene Auswahlzeilen. Bei aktivem Hub-Lesemodus koennen
+Hub-Name und -Stammdaten fuer die SKU Vorrang haben; Druckpfad und Druckplan stammen weiterhin
+aus der gemeinsamen zentralen Druckkonfiguration.
 
 Eigene Artikel werden ausschliesslich in `print_center.article` gespeichert, mit technischer
 UUID, aber ohne SKU, Fremdschluessel zum Office-Katalog oder Sync-Outbox. Name, PDF-Pfad,
@@ -249,8 +254,8 @@ Die Migration veraendert keine offiziellen Produktdaten.
 
 Favoriten werden direkt ueber den Stern in der Tabelle umgeschaltet; die PDF-Spalte zeigt
 nur den Dateinamen. Jede Zeile hat Aktionen fuer PDF-Oeffnen, Druckpfad/Einstellungen
-und Anzahl + Drucken. Der Detaildialog zeigt den vollstaendigen Pfad und die Profilwerte
-readonly; bei eigenen Artikeln fuehrt eine Bearbeiten-Aktion zur editierbaren Zuordnung.
+und Anzahl + Drucken. Der Konfigurationsdialog zeigt oben den vollstaendigen Druckpfad und
+darunter den bearbeitbaren Druckplan; eigene Artikel verwenden eine separate Zuordnung.
 Desktop, Fenster und Taskleiste verwenden das eigene Drucker-Icon.
 
 Der offizielle Katalog wird lokal im Windows-Benutzer-Cache zwischengespeichert und
@@ -269,8 +274,10 @@ Ein veralteter Cache kann somit weder geaenderte Druckeinstellungen umgehen noch
 Druck bei fehlender Datenbankverbindung freigeben. Verbindungsfehler werden sichtbar gemeldet;
 eine vorhandene Cache-Anzeige bleibt lesbar, ist aber keine bestaetigte Druckfreigabe.
 
-Offizielle Lesevorgaenge laufen auf PostgreSQL in einer readonly-Transaktion; eigene
-Schreibvorgaenge sind auf das separate Schema beschraenkt. Die Provisionierung erzeugt
+Katalog-Lesevorgaenge laufen auf PostgreSQL in einer readonly-Transaktion; zentrale
+Druckkonfigurationen werden atomar ueber dieselbe Pipeline wie XW-Office gespeichert. Eigene
+Artikel bleiben auf das separate Schema beschraenkt; die zentrale Konfiguration wird ueber eine
+auf `inventory.products` begrenzte Datenbankfunktion geschrieben. Die Provisionierung erzeugt
 zusaetzlich den eingeschraenkten DB-Login `xw_print_center`: nur SELECT auf den benoetigten
 Office-Tabellen, SELECT/INSERT/UPDATE/DELETE auf eigenen Artikeln. Die geheime URL wird
 ausschliesslich in der lokalen `.env` unter `XW_PRINT_CENTER_DATABASE_URL` gespeichert,

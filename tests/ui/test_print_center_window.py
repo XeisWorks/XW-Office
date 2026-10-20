@@ -19,7 +19,7 @@ from xw_office.print_center.service import PrintCenterService
 from xw_office.print_center.window import PrintCenterWindow
 
 
-def test_official_readonly_and_own_editor_visibility(qtbot: QtBot) -> None:
+def test_official_preferred_result_and_own_editor_visibility(qtbot: QtBot) -> None:
     service = MagicMock(spec=PrintCenterService)
     service.printing_settings.return_value = PrintingSection()
     service.list_articles.return_value = [
@@ -31,23 +31,22 @@ def test_official_readonly_and_own_editor_visibility(qtbot: QtBot) -> None:
     qtbot.addWidget(window)
     window.show()
     qtbot.waitUntil(lambda: window._worker is None)
-    assert window.table.rowCount() == 1
-    window.table.selectRow(0)
+    assert window._preferred.name == "Offiziell"
+    assert window.table.rowCount() == 0
     assert not window.new_button.isVisible()
     assert not window.edit_button.isVisible()
     assert not window.delete_button.isVisible()
-    assert not window.table.cellWidget(0, 4).findChild(QToolButton, "article_print").isEnabled()
+    assert not window._preferred_widget.findChild(QToolButton, "article_print").isEnabled()
     assert not hasattr(window, "print_button")
     assert not hasattr(window, "preview_button")
     assert not hasattr(window, "favorite_button")
     assert not hasattr(window, "copies")
-    window.tabs.setCurrentIndex(1)
-    window.table.selectRow(0)
+    window.tabs.setCurrentIndex(2)
     assert window.table.isColumnHidden(2)
     assert window.new_button.isVisible()
     assert window.edit_button.isEnabled()
     assert window.delete_button.isEnabled()
-    assert window.table.item(0, 2).text() == ""
+    assert window._preferred.name == "Privat"
     window.search.setText("not found")
     assert window.table.rowCount() == 0
     assert not window.edit_button.isEnabled()
@@ -82,14 +81,14 @@ def test_row_actions_target_their_article_without_selection(
     qtbot.waitUntil(lambda: window._worker is None)
     assert window.table.horizontalHeaderItem(0).text() == "★"
     assert window.table.horizontalHeaderItem(4).text() == "Aktionen"
-    assert window.table.item(1, 3).text() == "Zweiter Titel.pdf"
-    assert window.table.cellWidget(1, 0).text() == "☆"
-    window.table.selectRow(0)
+    assert window._preferred.id == first.id
+    assert window.table.item(0, 3).text() == "Zweiter Titel.pdf"
+    assert window.table.cellWidget(0, 0).text() == "☆"
     preview = MagicMock()
     details = MagicMock()
     monkeypatch.setattr(window, "_preview", preview)
     monkeypatch.setattr(window, "_show_print_details", details)
-    actions = window.table.cellWidget(1, 4)
+    actions = window.table.cellWidget(0, 4)
     actions.findChild(QToolButton, "article_pdf").click()
     preview.assert_called_once_with(second)
     actions.findChild(QToolButton, "article_details").click()
@@ -99,13 +98,45 @@ def test_row_actions_target_their_article_without_selection(
     actions.findChild(QToolButton, "article_print").click()
     qtbot.waitUntil(lambda: window._worker is None)
     service.print_article.assert_called_once_with(second, 7)
-    window.table.cellWidget(1, 0).click()
-    assert window.table.cellWidget(1, 0).text() == "★"
+    assert window._preferred.id == second.id
+    window._preferred_widget.findChild(QToolButton, "article_favorite").click()
+    assert window._preferred_widget.findChild(QToolButton, "article_favorite").text() == "★"
     window.favorite_only.setChecked(True)
-    assert window.table.rowCount() == 1
-    assert window.table.item(0, 1).text() == "B"
-    window.table.cellWidget(0, 0).click()
+    assert window._preferred.name == "B"
     assert window.table.rowCount() == 0
+    window._preferred_widget.findChild(QToolButton, "article_favorite").click()
+    assert window.table.rowCount() == 0
+    assert window._preferred is None
+
+
+def test_results_rank_assigned_and_recent_before_unassigned(
+    qtbot: QtBot, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "xw_office.print_center.window.QSettings",
+        lambda *args: QSettings(str(tmp_path / "ranking.ini"), QSettings.Format.IniFormat),
+    )
+    service = MagicMock(spec=PrintCenterService)
+    service.list_articles.return_value = [
+        PrintArticle(id="missing", source="official", name="Blondinen Walzer", sku="XW-4016.2"),
+        PrintArticle(id="older", source="official", name="Blondinen Walzer", sku="XW-4016",
+                     pdf_path="older.pdf", profile_id="score"),
+        PrintArticle(id="recent", source="official", name="Blondinen Walzer", sku="XW-416",
+                     pdf_path="recent.pdf", profile_id="score"),
+    ]
+    service.shutdown.return_value = True
+    window = PrintCenterWindow(service)
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitUntil(lambda: window._worker is None)
+    recent = next(item for item in window._articles if item.id == "recent")
+    window._touch(recent)
+    window.search.setText("Blondinen Walzer")
+    assert window._preferred.id == "recent"
+    assert [window.table.item(row, 1).text() for row in range(window.table.rowCount())] == [
+        "Blondinen Walzer", "Blondinen Walzer",
+    ]
+    assert window._visible[-1].id == "missing"
 
 
 def test_details_show_full_path_plan_and_profile_settings(qtbot: QtBot) -> None:
@@ -123,7 +154,7 @@ def test_details_show_full_path_plan_and_profile_settings(qtbot: QtBot) -> None:
     dialog = PrintDetailsDialog(article, printing)
     qtbot.addWidget(dialog)
     assert dialog.settings_text.isReadOnly()
-    assert not hasattr(dialog, "edit_button")
+    assert hasattr(dialog, "edit_button")
     text = dialog.settings_text.toPlainText()
     for expected in (
         article.pdf_path, "1-3", "Canon", "pdf_xchange", "A4", "portrait",
@@ -139,11 +170,13 @@ def test_details_show_full_path_plan_and_profile_settings(qtbot: QtBot) -> None:
     assert not printer_icon().isNull()
 
 
-def test_editor_rejects_official_article(qtbot: QtBot) -> None:
-    with pytest.raises(ValueError, match="Offizielle"):
-        ArticleDialog(
-            PrintingSection(), PrintArticle(id="office:X:", name="X", source="official")
-        )
+def test_editor_accepts_official_article_with_locked_identity(qtbot: QtBot) -> None:
+    dialog = ArticleDialog(
+        PrintingSection(), PrintArticle(id="office:X:", name="X", source="official", sku="X")
+    )
+    qtbot.addWidget(dialog)
+    assert dialog.name_edit.isReadOnly()
+    assert dialog.windowTitle() == "Druck konfigurieren - X"
 
 
 def test_profile_names_match_office_without_duplicate_labels(qtbot: QtBot) -> None:
@@ -176,13 +209,13 @@ def test_large_catalogue_builds_only_visible_controls_and_scroll_keeps_counts(qt
     started = perf_counter()
     window._render()
     assert perf_counter() - started < 1.0
-    assert window.table.rowCount() == 1000
+    assert window.table.rowCount() == 999
     assert len(window._control_rows) < 25
-    assert window.table.cellWidget(999, 4) is None
+    assert window.table.cellWidget(998, 4) is None
     copies = window.table.cellWidget(0, 4).findChild(QSpinBox, "article_copies")
     copies.setValue(9)
     window.table.scrollToBottom()
-    qtbot.waitUntil(lambda: window.table.cellWidget(999, 4) is not None)
+    qtbot.waitUntil(lambda: window.table.cellWidget(998, 4) is not None)
     assert len(window._control_rows) < 25
     window.table.scrollToTop()
     qtbot.waitUntil(lambda: window.table.cellWidget(0, 4) is not None)
@@ -192,7 +225,7 @@ def test_large_catalogue_builds_only_visible_controls_and_scroll_keeps_counts(qt
     window.tabs.setCurrentIndex(0)
     window.search.setText("Product 99")
     assert service.list_articles.call_count == initial_calls
-    assert window.table.rowCount() == 11
+    assert window.table.rowCount() == 10
 
 
 def test_background_refresh_skips_unchanged_table_and_force_reload(qtbot: QtBot) -> None:
@@ -204,13 +237,14 @@ def test_background_refresh_skips_unchanged_table_and_force_reload(qtbot: QtBot)
     window = PrintCenterWindow(service)
     qtbot.addWidget(window)
     window.show()
-    assert window.table.rowCount() == 1
+    assert window._preferred.name == "Snapshot"
+    assert window.table.rowCount() == 0
     assert window.centralWidget().isEnabled()
     qtbot.waitUntil(lambda: window._worker is None)
-    controls = window.table.cellWidget(0, 4)
+    controls = window._preferred_widget
     window.reload()
     qtbot.waitUntil(lambda: window._worker is None)
-    assert window.table.cellWidget(0, 4) is controls
+    assert window._preferred_widget is controls
     assert window._refresh_timer.interval() == 60_000
     window.refresh_button.click()
     qtbot.waitUntil(lambda: window._worker is None)

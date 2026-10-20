@@ -19,11 +19,14 @@ from xw_office.core.database import create_session_factory
 from xw_office.core.logging_setup import install_qt_message_handler, setup_logging
 from xw_office.print_center.official import OfficialCatalogue
 from xw_office.print_center.cache import CatalogueCache
+from xw_office.print_center.central_settings import PrintCenterSettingsRepository
 from xw_office.print_center.icons import printer_icon
 from xw_office.print_center.repository import OwnArticleRepository
 from xw_office.print_center.service import PrintCenterService
 from xw_office.print_center.window import PrintCenterWindow
 from xw_office.services.printing.print_queue import PrintQueueService
+from xw_office.repositories.settings_kv import SettingKvRepository
+from xw_office.services.inventory.service import InventoryService
 from xw_office.ui.theme import apply_app_theme
 
 logger = logging.getLogger(__name__)
@@ -55,16 +58,23 @@ def create_print_center_application() -> QApplication:
         OfficialCatalogue,
         lambda _: OfficialCatalogue(
             sessions, prefer_hub=config.product_hub.catalog_read_enabled,
+            include_unreleased=True,
             cache=CatalogueCache(cache_path),
         ),
     )
     container.register(OwnArticleRepository, lambda _: OwnArticleRepository(sessions))
+    container.register(SettingKvRepository, lambda _: PrintCenterSettingsRepository(sessions))
     container.register(PrintQueueService, lambda _: PrintQueueService())
+    container.register(
+        InventoryService,
+        lambda c: InventoryService(config, c.resolve(SettingKvRepository), c.resolve(PrintQueueService)),
+    )
     container.register(
         PrintCenterService,
         lambda c: PrintCenterService(
             c.resolve(OfficialCatalogue), c.resolve(OwnArticleRepository),
             lambda: load_config().printing, c.resolve(PrintQueueService),
+            c.resolve(InventoryService),
         ),
     )
     window = PrintCenterWindow(container.resolve(PrintCenterService))

@@ -32,7 +32,9 @@ class CatalogueCache:
         except (OSError, ValidationError) as exc:
             logger.warning("Druckcenter-Cache konnte nicht gelesen werden: %s", exc)
             return None
-        if snapshot.version != 1 or any(a.source != "official" for a in snapshot.articles):
+        if snapshot.version != 1 or any(
+            a.source not in {"official", "unreleased"} for a in snapshot.articles
+        ):
             logger.warning("Druckcenter-Cache ist inkompatibel; wird neu geladen.")
             return None
         return snapshot

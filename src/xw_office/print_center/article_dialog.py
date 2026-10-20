@@ -1,6 +1,8 @@
-"""Editor for own articles only; central print profiles cannot be edited."""
+"""Shared print-path/plan editor for central products and own articles."""
 from __future__ import annotations
 
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget, QVBoxLayout, QWidget,
@@ -8,6 +10,7 @@ from PySide6.QtWidgets import (
 from pydantic import ValidationError
 
 from xw_office.core.config import PrintingSection
+from xw_office.core.shared_paths import resolve_shared_path
 from xw_office.print_center.models import ArticleInput, PrintArticle, PrintStep
 
 
@@ -17,15 +20,19 @@ class ArticleDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        if article is not None and article.source != "own":
-            raise ValueError("Offizielle Produkte koennen hier nicht bearbeitet werden.")
-        self.setWindowTitle("Eigener Druckartikel")
+        central = article is not None and article.source in {"official", "unreleased"}
+        central_identity = article.sku or article.name if article is not None else ""
+        self.setWindowTitle(
+            f"Druck konfigurieren - {central_identity}"
+            if central else "Eigener Druckartikel"
+        )
         self.resize(680, 440)
         self.data: ArticleInput | None = None
         self._profiles = [p for p in printing.all_profiles() if p.backend == "pdf_xchange"]
         root = QVBoxLayout(self)
         form = QFormLayout()
         self.name_edit = QLineEdit(article.name if article else "")
+        self.name_edit.setReadOnly(central)
         self.path_edit = QLineEdit(article.pdf_path if article else "")
         self.notes_edit = QLineEdit(article.notes if article else "")
         form.addRow("Name:", self.name_edit)
@@ -34,13 +41,20 @@ class ArticleDialog(QDialog):
         browse = QPushButton("PDF waehlen")
         browse.clicked.connect(self._browse)
         path_row.addWidget(browse)
+        open_pdf = QPushButton("PDF oeffnen")
+        open_pdf.setToolTip("Zugeordnete PDF im Standardprogramm ansehen")
+        open_pdf.clicked.connect(self._open_pdf)
+        path_row.addWidget(open_pdf)
         form.addRow("PDF:", path_row)
-        form.addRow("Notiz:", self.notes_edit)
+        if not central:
+            form.addRow("Notiz:", self.notes_edit)
         root.addLayout(form)
         hint = QLabel(
-            "Ohne SKU, ohne Wix/sevDesk-Synchronisation und ohne Bestandsbuchung.\n"
-            "Profile werden in XW-Office gepflegt. Hier wird nur die Zuordnung gespeichert.\n"
-            "Die PDF muss zum Drucken auf diesem PC erreichbar sein."
+            ("Speichert Druckpfad und Druckplan sofort in derselben zentralen "
+             "Druck-Pipeline wie XW-Office.\n"
+             if central else
+             "Ohne SKU, ohne Wix/sevDesk-Synchronisation und ohne Bestandsbuchung.\n")
+            + "Druckprofile selbst werden zentral in XW-Office gepflegt."
         )
         hint.setWordWrap(True)
         root.addWidget(hint)
@@ -72,6 +86,11 @@ class ArticleDialog(QDialog):
         path, _filter = QFileDialog.getOpenFileName(self, "Produkt-PDF", "", "PDF (*.pdf)")
         if path:
             self.path_edit.setText(path)
+
+    def _open_pdf(self) -> None:
+        path = resolve_shared_path(self.path_edit.text().strip())
+        if not path or not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+            QMessageBox.warning(self, "PDF oeffnen", "Die PDF konnte nicht geoeffnet werden.")
 
     def _add_step(self, step: PrintStep | None = None) -> None:
         row = self.plan_table.rowCount()

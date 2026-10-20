@@ -13,7 +13,7 @@ from sqlalchemy import create_engine, func, inspect, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from xw_office.core.config import PrintingSection
+from xw_office.core.config import AppConfig, PrintingSection
 from xw_office.models import Base
 from xw_office.models.product_hub import Product, ProductAsset, ProductVariant, PrintRule
 from xw_office.models.settings_kv import SettingKV
@@ -22,12 +22,15 @@ from xw_office.print_center.models import (
 )
 from xw_office.print_center.official import OfficialCatalogue
 from xw_office.print_center.cache import CatalogueCache
+from xw_office.print_center.central_settings import PrintCenterSettingsRepository
 from xw_office.print_center.repository import OwnArticleRepository, provision_storage
 from xw_office.print_center.service import PrintCenterService
 from xw_office.services.printing.print_jobs import PdfPrintJob, PrintJobResult
 from xw_office.services.printing.planned_pdf_printer import PrintPlanPartialFailure
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.products.catalog import ProductCatalogService
+from xw_office.services.inventory.service import InventoryService
+from xw_office.repositories.settings_kv import SettingKvRepository
 
 
 @pytest.fixture
@@ -123,6 +126,16 @@ def test_storage_is_additive_and_idempotent(sessions: sessionmaker[Session]) -> 
     assert not OwnArticle.__table__.foreign_keys
 
 
+def test_print_center_settings_writer_is_limited_to_product_print_config(
+    sessions: sessionmaker[Session],
+) -> None:
+    repository = PrintCenterSettingsRepository(sessions)
+    repository.mutate_value_json("inventory.products", lambda _current: '[{"sku":"X"}]')
+    assert repository.get_value_json("inventory.products") == '[{"sku":"X"}]'
+    with pytest.raises(PermissionError, match="nicht aendern"):
+        repository.mutate_value_json("unrelated.setting", lambda _current: "changed")
+
+
 def seed_official(sessions: sessionmaker[Session], pdf: str) -> None:
     with sessions.begin() as session:
         session.get(SettingKV, "inventory.products").value_json = json.dumps([{
@@ -158,6 +171,68 @@ def test_official_legacy_titles_and_hub_precedence(
     assert {a.name for a in hub} == {"Hub Titel", "Spezial"}
     with sessions() as session:
         assert session.get(SettingKV, "inventory.products").value_json == before
+
+
+def test_central_product_config_uses_inventory_pipeline(
+    sessions: sessionmaker[Session], printing: PrintingSection, pdf: str,
+) -> None:
+    seed_official(sessions, pdf)
+    catalogue = OfficialCatalogue(sessions)
+    center = PrintCenterService(
+        catalogue,
+        OwnArticleRepository(sessions),
+        lambda: printing,
+        queue_mock(),
+        InventoryService(AppConfig(printing=printing), SettingKvRepository(sessions)),
+    )
+    article = next(item for item in center.list_articles() if item.id == "office:SCORE:")
+    saved = center.save_product_print_config(
+        article,
+        ArticleInput(
+            name=article.name,
+            pdf_path=pdf,
+            print_plan=(PrintStep(range="2", profile_id="score"),),
+        ),
+    )
+    assert saved.print_plan == (PrintStep(range="2", profile_id="score"),)
+    with sessions() as session:
+        payload = json.loads(session.get(SettingKV, "inventory.products").value_json)
+    row = next(item for item in payload if item["sku"] == "SCORE")
+    assert row["print_file_path"] == pdf
+    assert row["print_plan"] == [{"range": "2", "profile_id": "score"}]
+
+
+def test_unreleased_catalog_and_config_are_title_specific(
+    sessions: sessionmaker[Session], printing: PrintingSection, pdf: str,
+) -> None:
+    with sessions.begin() as session:
+        session.get(SettingKV, "inventory.products").value_json = json.dumps([{
+            "sku": "XW-010", "name": "Unreleased", "print_file_path": "generic.pdf",
+            "print_profile_id": "score", "print_plan": [],
+        }])
+    catalogue = OfficialCatalogue(sessions, include_unreleased=True)
+    center = PrintCenterService(
+        catalogue,
+        OwnArticleRepository(sessions),
+        lambda: printing,
+        queue_mock(),
+        InventoryService(AppConfig(printing=printing), SettingKvRepository(sessions)),
+    )
+    article = next(item for item in center.list_articles() if item.source == "unreleased")
+    saved = center.save_product_print_config(
+        article,
+        ArticleInput(
+            name=article.name,
+            pdf_path=pdf,
+            print_plan=(PrintStep(profile_id="score"),),
+        ),
+    )
+    assert saved.source == "unreleased"
+    assert saved.pdf_path == pdf
+    with sessions() as session:
+        row = json.loads(session.get(SettingKV, "inventory.products").value_json)[0]
+    assert row["print_file_path"] == "generic.pdf"
+    assert row["title_print_configs"][article.name]["path"] == pdf
 
 
 def test_invalid_catalogue_fails_explicitly(sessions: sessionmaker[Session]) -> None:
@@ -222,7 +297,9 @@ def test_catalogue_cache_hits_updates_deletions_and_force_reload(
     with sessions.begin() as session:
         session.delete(session.scalar(select(PrintRule)))
     deleted_rule = catalog.list_articles()
-    assert next(a for a in deleted_rule if a.id == "office:SCORE:").profile_id == ""
+    # The shared inventory.products config remains authoritative even when a
+    # Product-Hub shadow rule disappears.
+    assert next(a for a in deleted_rule if a.id == "office:SCORE:").profile_id == "score"
     assert loader.call_count == 3
     catalog.list_articles(force_refresh=True)
     assert loader.call_count == 4

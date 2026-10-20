@@ -61,6 +61,28 @@ def provision_access(env_path: Path) -> None:
             connection.execute(text(f"GRANT USAGE ON SCHEMA public, print_center TO {ROLE}"))
             for table in OFFICIAL_TABLES:
                 connection.execute(text(f"GRANT SELECT ON TABLE public.{table} TO {ROLE}"))
+            connection.execute(text(f"REVOKE INSERT, UPDATE, DELETE ON public.setting_kv FROM {ROLE}"))
+            # SECURITY DEFINER constrains the standalone account to the one
+            # settings key consumed by the central product-print pipeline.
+            connection.execute(text("""
+                CREATE OR REPLACE FUNCTION public.xw_print_center_set_inventory_products(payload text)
+                RETURNS void
+                LANGUAGE sql
+                SECURITY DEFINER
+                SET search_path = pg_catalog, public
+                AS $function$
+                    INSERT INTO public.setting_kv (key, value_json)
+                    VALUES ('inventory.products', payload)
+                    ON CONFLICT (key) DO UPDATE
+                    SET value_json = EXCLUDED.value_json, updated_at = CURRENT_TIMESTAMP
+                $function$
+            """))
+            connection.execute(text(
+                "REVOKE ALL ON FUNCTION public.xw_print_center_set_inventory_products(text) FROM PUBLIC"
+            ))
+            connection.execute(text(
+                f"GRANT EXECUTE ON FUNCTION public.xw_print_center_set_inventory_products(text) TO {ROLE}"
+            ))
             connection.execute(text(
                 f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE print_center.article TO {ROLE}"
             ))
@@ -75,6 +97,11 @@ def provision_access(env_path: Path) -> None:
                     ), {"table": f"public.{table}"})
                     if writable:
                         raise ValueError(f"Das Druckcenter-Konto hat Schreibrechte auf {table}.")
+                if not connection.scalar(text(
+                    "SELECT has_function_privilege(current_user, "
+                    "'public.xw_print_center_set_inventory_products(text)', 'EXECUTE')"
+                )):
+                    raise ValueError("Schreibrecht fuer zentrale Druckkonfigurationen fehlt.")
                 for permission in ("SELECT", "INSERT", "UPDATE", "DELETE"):
                     if not connection.scalar(text(
                         "SELECT has_table_privilege(current_user, 'print_center.article', :permission)"
@@ -84,7 +111,8 @@ def provision_access(env_path: Path) -> None:
             restricted.dispose()
         set_key(str(env_path), VARIABLE, url.render_as_string(hide_password=False))
         logger.info(
-            "Druckcenter-Konto %s; offizielle Tabellen readonly, eigene Artikel read/write. "
+            "Druckcenter-Konto %s; Druckkonfigurationen und eigene Artikel read/write, "
+            "uebrige offizielle Tabellen readonly. "
             "Verbindungsdaten wurden nur in der lokalen .env gespeichert.",
             "angelegt" if created else "geprueft",
         )
