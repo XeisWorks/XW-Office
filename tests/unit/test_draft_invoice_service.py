@@ -90,6 +90,10 @@ class _WixOrdersStub:
     def billing_address_lines_from_order(order: dict) -> list[str]:
         return ["Max Mustermann", "Rechnungsweg 7", "5020 Salzburg", "Oesterreich"]
 
+    @staticmethod
+    def invoice_address_lines_from_order(order: dict) -> list[str]:
+        return ["Max Mustermann", "Rechnungsweg 7", "5020 Salzburg", "Oesterreich"]
+
 
 class _PartClientStub:
     def __init__(self) -> None:

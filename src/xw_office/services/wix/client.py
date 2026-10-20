@@ -1489,6 +1489,13 @@ class WixOrdersClient:
         postal_or_city = str(parts.get("postal_code") or parts.get("city") or "").strip()
         return bool(street or postal_or_city)
 
+    @staticmethod
+    def _has_complete_address_location(parts: dict[str, str]) -> bool:
+        return all(
+            str(parts.get(field) or "").strip()
+            for field in ("street1", "postal_code", "city", "country")
+        )
+
     @classmethod
     def _shipping_address_is_name_only(cls, order: dict[str, Any]) -> bool:
         shipping = order.get("shippingInfo") if isinstance(order, dict) else {}
@@ -2096,6 +2103,50 @@ class WixOrdersClient:
         city_line = " ".join(part for part in (postal_code, city) if part)
 
         return [line for line in (name, street, street2, city_line, country) if line]
+
+    @classmethod
+    def _same_address_recipient(
+        cls, billing_parts: dict[str, str], shipping_parts: dict[str, str]
+    ) -> bool:
+        billing_company = cls._customer_match_text(billing_parts.get("company"))
+        shipping_company = cls._customer_match_text(shipping_parts.get("company"))
+        billing_person = cls._customer_match_text(billing_parts.get("person_name"))
+        shipping_person = cls._customer_match_text(shipping_parts.get("person_name"))
+        if not billing_company and not billing_person:
+            return False
+        if billing_company and billing_company != shipping_company:
+            return False
+        if billing_person and billing_person != shipping_person:
+            return False
+        return True
+
+    @classmethod
+    def invoice_address_lines_from_order(cls, order: dict[str, Any]) -> list[str]:
+        """Return a safe invoice address, with a narrow current-order fallback."""
+        billing_parts = cls._billing_address_parts_from_order(order)
+        if cls._has_complete_address_location(billing_parts):
+            return cls.billing_address_lines_from_order(order)
+
+        shipping_parts = cls._shipping_address_parts_from_order(order)
+        billing_country = cls._customer_match_text(billing_parts.get("country"))
+        shipping_country = cls._customer_match_text(shipping_parts.get("country"))
+        can_use_shipping_location = (
+            cls._has_complete_address_location(shipping_parts)
+            and cls._same_address_recipient(billing_parts, shipping_parts)
+            and bool(billing_country)
+            and billing_country == shipping_country
+        )
+        if not can_use_shipping_location:
+            return cls.billing_address_lines_from_order(order)
+
+        name = billing_parts.get("name") or shipping_parts.get("name", "")
+        street1 = shipping_parts.get("street1", "")
+        street2 = shipping_parts.get("street2", "")
+        postal_code = shipping_parts.get("postal_code", "")
+        city = shipping_parts.get("city", "")
+        country = country_label_for_address(shipping_parts.get("country", ""))
+        city_line = " ".join(part for part in (postal_code, city) if part)
+        return [line for line in (name, street1, street2, city_line, country) if line]
 
     @classmethod
     def best_address_lines_from_order(cls, order: dict[str, Any]) -> list[str]:

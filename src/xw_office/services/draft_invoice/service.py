@@ -774,13 +774,7 @@ class DraftInvoiceService:
         return ""
 
     def _build_address_text(self, order: dict[str, Any]) -> str:
-        # Invoice recipients must receive the billing address.  The generic
-        # ``best_address_lines_from_order`` helper intentionally prefers the
-        # shipping address for labels and fulfillment, which is wrong here.
-        billing_lines = self._wix_orders.billing_address_lines_from_order(order)
-        if len(billing_lines) >= 3:
-            return "\n".join(billing_lines)
-        return "\n".join(self._wix_orders.best_address_lines_from_order(order))
+        return "\n".join(self._wix_orders.invoice_address_lines_from_order(order))
 
     @staticmethod
     def _extract_first_object(payload: object) -> dict[str, Any]:

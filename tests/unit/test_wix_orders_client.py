@@ -267,6 +267,99 @@ def test_billing_address_lines_always_use_billing_address_when_shipping_differs(
     ]
 
 
+def test_invoice_address_uses_matching_current_shipping_location_when_billing_is_incomplete() -> None:
+    order = {
+        "billingInfo": {
+            "contactDetails": {"firstName": "Lennart", "lastName": "Graf"},
+            "address": {"country": "DE", "countryFullname": "Deutschland"},
+        },
+        "shippingInfo": {
+            "logistics": {
+                "shippingDestination": {
+                    "contactDetails": {"firstName": "Lennart", "lastName": "Graf"},
+                    "address": {
+                        "streetAddress": {"name": "Auerdorfl", "number": "16"},
+                        "postalCode": "20038",
+                        "city": "Berchtesgaden",
+                        "country": "DE",
+                    },
+                }
+            }
+        },
+    }
+
+    assert WixOrdersClient.invoice_address_lines_from_order(order) == [
+        "Lennart Graf",
+        "Auerdorfl 16",
+        "20038 Berchtesgaden",
+        "GERMANY",
+    ]
+
+
+def test_invoice_address_does_not_use_shipping_for_a_different_recipient() -> None:
+    order = {
+        "billingInfo": {
+            "contactDetails": {"firstName": "Max", "lastName": "Kaufmann"},
+            "address": {"country": "AT"},
+        },
+        "shippingInfo": {
+            "shippingDestination": {
+                "contactDetails": {"firstName": "Eva", "lastName": "Empfang"},
+                "address": {
+                    "addressLine1": "Lieferweg 9",
+                    "postalCode": "1010",
+                    "city": "Wien",
+                    "country": "AT",
+                },
+            }
+        },
+    }
+
+    assert WixOrdersClient.invoice_address_lines_from_order(order) == [
+        "Max Kaufmann",
+        "AUSTRIA",
+    ]
+
+
+def test_invoice_address_does_not_use_shipping_from_a_different_country() -> None:
+    order = {
+        "billingInfo": {
+            "contactDetails": {"firstName": "Max", "lastName": "Kaufmann"},
+            "address": {"country": "DE"},
+        },
+        "shippingInfo": {
+            "shippingDestination": {
+                "contactDetails": {"firstName": "Max", "lastName": "Kaufmann"},
+                "address": {
+                    "addressLine1": "Lieferweg 9",
+                    "postalCode": "1010",
+                    "city": "Wien",
+                    "country": "AT",
+                },
+            }
+        },
+    }
+
+    assert WixOrdersClient.invoice_address_lines_from_order(order) == [
+        "Max Kaufmann",
+        "GERMANY",
+    ]
+
+
+def test_invoice_address_does_not_invent_location_for_digital_order() -> None:
+    order = {
+        "billingInfo": {
+            "contactDetails": {"firstName": "Digital", "lastName": "Buyer"},
+            "address": {"country": "DE"},
+        }
+    }
+
+    assert WixOrdersClient.invoice_address_lines_from_order(order) == [
+        "Digital Buyer",
+        "GERMANY",
+    ]
+
+
 def test_order_summary_preserves_billing_company_and_contact_for_licensing() -> None:
     order = {
         "number": "20999",
