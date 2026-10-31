@@ -7,7 +7,7 @@ import types
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt
-from PySide6.QtWidgets import QCheckBox, QMessageBox, QSpinBox, QToolButton
+from PySide6.QtWidgets import QCheckBox, QDialog, QLabel, QMessageBox, QSpinBox, QToolButton
 
 from xw_office.bootstrap import register_default_services
 from xw_office.core.config import AppConfig
@@ -133,6 +133,61 @@ def test_unknown_unreleased_title_offers_shared_product_creation_flow(qtbot: obj
         "note": "Besetzung: Flöte",
     }
     assert piece.name == "Neues Werk"
+
+
+def test_add_unreleased_product_updates_the_analysis_row_before_print_configuration(
+    qtbot: object,
+    monkeypatch: object,
+) -> None:
+    """Saving an XW-010 title must be visible while its print dialog is open."""
+    container, _invoice_service = _build_rechnungen_test_container()
+    catalog = container.resolve(ProductCatalogService)
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    item = PrintProductAggregate(
+        sku="XW-010",
+        title="Kundenangabe aus Wix",
+        description="Besetzung: Flöte",
+        quantity=1,
+    )
+    view._apply_open_invoice_overview(  # noqa: SLF001
+        OpenInvoiceOverview(
+            key="unreleased-title-refresh",
+            total=1,
+            with_ref=1,
+            physical=1,
+            digital=0,
+            unknown=0,
+            with_note=0,
+            plc=0,
+            complete=True,
+            print_products=[item],
+        )
+    )
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.UnreleasedProductEditDialog.exec",
+        lambda _dialog: QDialog.DialogCode.Accepted,
+    )
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.UnreleasedProductEditDialog.get_data",
+        lambda _dialog: ("Kanonischer Titel", "Blasmusik", ["Kundenangabe aus Wix"]),
+    )
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.print_dialog._configure_missing_piece_print",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(view, "_refresh_open_invoice_overview", lambda: None)
+
+    assert view._create_unreleased_product_from_alias(  # noqa: SLF001
+        raw_title=item.title,
+        quantity=item.quantity,
+        note=item.description,
+    ) == "Kanonischer Titel"
+
+    assert catalog.resolve_unreleased_title(item.title).canonical_name == "Kanonischer Titel"
+    visible_labels = [label.text() for label in view._gb_open_products.findChildren(QLabel)]  # noqa: SLF001
+    assert "Kanonischer Titel" in visible_labels
+    assert "Kundenangabe: Kundenangabe aus Wix" in visible_labels
 
 
 def test_reentrant_unreleased_clarification_opens_only_one_dialog(qtbot: object, monkeypatch: object) -> None:

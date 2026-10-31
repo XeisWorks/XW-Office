@@ -7110,6 +7110,12 @@ class RechnungenView(QWidget):
             5000,
         )
 
+        # A print-plan dialog follows immediately.  Redraw now, rather than
+        # waiting for that dialog to close, so the product row already shows
+        # the canonical title the user has just saved.  The original invoice
+        # title remains visible as the customer-provided subtitle.
+        self._render_active_print_tab()
+
         # Immediately open the print configuration popup for this product
         from xw_office.ui.modules.rechnungen.print_dialog import _configure_missing_piece_print
 
