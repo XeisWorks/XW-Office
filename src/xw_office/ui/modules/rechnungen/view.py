@@ -143,6 +143,7 @@ from xw_office.ui.dialogs.unreleased_title_dialog import (
 from xw_office.ui.modules.rechnungen.refund_dialog import RefundDialog
 from xw_office.ui.widgets.data_table import DataTable
 from xw_office.ui.widgets.progress_overlay import ProgressOverlay
+from xw_office.ui.widgets.busy_spinner import SearchStatusBanner
 from xw_office.ui.widgets.search_bar import SearchBar
 from xw_office.ui.widgets.toolbar import Toolbar
 
@@ -1161,6 +1162,8 @@ class RechnungenView(QWidget):
         self._background_jobs = container.resolve(BackgroundJobManager)
         self._worker: BackgroundWorker | None = None
         self._search_worker: BackgroundWorker | None = None
+        self._index_sync_worker: BackgroundWorker | None = None
+        self._index_sync_started = False
         self._refund_worker: BackgroundWorker | None = None
         self._draft_worker: BackgroundWorker | None = None
         self._draft_product_worker: BackgroundWorker | None = None
@@ -1412,6 +1415,9 @@ class RechnungenView(QWidget):
         self._search = SearchBar("Suchen…", debounce_ms=220, min_chars=2, max_suggestions=12)
         self._search.set_suggestion_provider(self._invoice_search_suggestions)
         layout.addWidget(self._search)
+        self._search_banner = SearchStatusBanner()
+        self._search_banner.reset_requested.connect(self._reset_search)
+        layout.addWidget(self._search_banner)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         left_panel = QWidget()
@@ -1928,6 +1934,7 @@ class RechnungenView(QWidget):
             self._did_initial_load = True
             if self._has_sevdesk_token():
                 self._reload_first_page()
+                QTimer.singleShot(4000, self._start_search_index_sync)
         if self._deferred_load_payload is not None:
             rows, summaries, has_more, status_filter, append = self._deferred_load_payload
             self._deferred_load_payload = None
@@ -2009,6 +2016,7 @@ class RechnungenView(QWidget):
             for worker in (
                 self._worker,
                 self._search_worker,
+                self._index_sync_worker,
                 self._refund_worker,
                 self._draft_worker,
                 self._draft_product_worker,
@@ -2190,11 +2198,39 @@ class RechnungenView(QWidget):
         if self._overlay.isVisible():
             self._overlay.setGeometry(self.rect())
 
+    def _start_search_index_sync(self) -> None:
+        """Fill the shared invoice search index in the background (once per session)."""
+        if self._index_sync_started or self._shutting_down:
+            return
+        service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+        sync = getattr(service, "sync_search_index", None)
+        if not callable(sync):
+            return
+        self._index_sync_started = True
+
+        def job() -> str:
+            worker = self._index_sync_worker
+            return str(sync(should_abort=lambda: worker is not None and worker.cancelled))
+
+        self._index_sync_worker = BackgroundWorker(job)
+        self._index_sync_worker.signals.error.connect(
+            lambda exc: logger.warning("Invoice search index sync failed: %s", exc)
+        )
+        self._index_sync_worker.signals.finished.connect(
+            lambda: setattr(self, "_index_sync_worker", None)
+        )
+        self._index_sync_worker.start()
+
+    def _reset_search(self) -> None:
+        self._search.clear()
+        self._on_search("")
+
     def _on_search(self, text: str) -> None:
         query = str(text or "").strip()
         if not query:
             self._search_active = False
             self._search_seq += 1
+            self._search_banner.hide()
             self._restore_loaded_invoice_list()
             return
         self._search_active = True
@@ -2202,6 +2238,7 @@ class RechnungenView(QWidget):
         seq = self._search_seq
         signals: AppSignals = self._container.resolve(AppSignals)
         signals.status_message.emit("Suche in sevDesk läuft…", 2500)
+        self._search_banner.show_busy(f"Suche nach „{query}“ in sevDesk … (ältere Rechnungen können länger dauern)")
 
         def job() -> tuple[list[dict[str, str]], list[InvoiceSummary], int, str, int]:
             service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
@@ -2840,11 +2877,18 @@ class RechnungenView(QWidget):
         self._restart_hint_prefetch()
         signals: AppSignals = self._container.resolve(AppSignals)
         if summaries:
+            self._search_banner.show_result(
+                f"Suchergebnisse für „{query}“: {len(summaries)} Treffer "
+                f"(letzte {searched_days} Tage) – nicht die komplette Rechnungsliste"
+            )
             signals.status_message.emit(
                 f"{len(summaries)} Treffer für '{query}' in den letzten {searched_days} Tagen",
                 5000,
             )
         else:
+            self._search_banner.show_result(
+                f"Keine Treffer für „{query}“ (Suche über {searched_days} Tage)"
+            )
             signals.status_message.emit(
                 f"Keine Treffer für '{query}' nach Suche über {searched_days} Tage",
                 5000,
@@ -2852,6 +2896,7 @@ class RechnungenView(QWidget):
 
     def _on_search_error(self, exc: Exception) -> None:
         logger.error("Invoice search failed: %s", exc)
+        self._search_banner.show_result("Suche fehlgeschlagen")
         QMessageBox.warning(
             self,
             "Suche",

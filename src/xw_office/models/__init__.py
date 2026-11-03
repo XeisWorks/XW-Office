@@ -19,6 +19,7 @@ from xw_office.models.expense_pipeline import (
     ExpenseSupplierLink,
     ExpenseTransactionSnapshot,
 )
+from xw_office.models.invoice_search_index import InvoiceSearchIndex
 from xw_office.models.pc_registry import PcRegistry
 from xw_office.models.plc_shipment import PlcShipment
 from xw_office.models.product_hub import (
@@ -119,6 +120,7 @@ __all__ = [
     "InventoryLocation",
     "InventoryMovement",
     "InventoryStock",
+    "InvoiceSearchIndex",
     "OutboxEvent",
     "ProductAssetJob",
     "PcRegistry",

@@ -4,6 +4,10 @@ from __future__ import annotations
 import base64
 import logging
 import re
+import threading
+import time
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 import unicodedata
 from typing import Any
@@ -21,6 +25,25 @@ from xw_office.services.sevdesk.payment_booking import (
 
 logger = logging.getLogger(__name__)
 
+_SEARCH_PAGE_TTL_SECONDS = 300.0
+_PARALLEL_PAGE_WORKERS = 4
+
+
+def normalize_search_text(value: str) -> str:
+    """Casefold, transliterate umlauts and reduce to space-separated ``[a-z0-9]`` tokens."""
+    text = str(value or "").strip().casefold()
+    text = (
+        text.replace("ä", "ae")
+        .replace("ö", "oe")
+        .replace("ü", "ue")
+        .replace("ß", "ss")
+    )
+    text = "".join(
+        ch for ch in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(ch)
+    )
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return " ".join(text.split())
 
 def _format_date_de(raw: str | None) -> str:
     """Parse ISO date string from sevDesk and return DD.MM.YYYY."""
@@ -454,6 +477,13 @@ class InvoiceClient:
     def __init__(self, connection: SevdeskConnection) -> None:
         self._conn = connection
         self._bookkeeping_version: str | None = None
+        self._page_cache: dict[tuple[int, int], tuple[float, list[InvoiceSummary]]] = {}
+        self._page_cache_lock = threading.Lock()
+        self._summary_observers: list[Callable[[list[InvoiceSummary]], None]] = []
+
+    def add_summary_observer(self, observer: Callable[[list[InvoiceSummary]], None]) -> None:
+        """Register a callback that receives every freshly listed invoice page."""
+        self._summary_observers.append(observer)
 
     def list_invoice_summaries(
         self,
@@ -464,17 +494,28 @@ class InvoiceClient:
         status: int | None = None,
         request_timeout: float | None = None,
         max_retries: int | None = None,
+        invoice_number: str | None = None,
+        start_timestamp: int | None = None,
+        end_timestamp: int | None = None,
     ) -> list[InvoiceSummary]:
         """Return invoice rows (newest first by API default).
 
         If *status* is set, it is passed to the API as ``status`` (sevDesk may support
-        filtering). If the API ignores it, filter client-side.
+        filtering). If the API ignores it, filter client-side. ``invoice_number``,
+        ``start_timestamp`` and ``end_timestamp`` are server-side filters; callers must
+        verify the result client-side because a silently ignored filter returns everything.
         """
         params: dict[str, str | int] = {"limit": limit, "offset": offset}
         if embed_contact:
             params["embed"] = "contact"
         if status is not None:
             params["status"] = status
+        if invoice_number:
+            params["invoiceNumber"] = invoice_number
+        if start_timestamp is not None:
+            params["startDate"] = int(start_timestamp)
+        if end_timestamp is not None:
+            params["endDate"] = int(end_timestamp)
         request_kwargs: dict[str, object] = {"params": params}
         if request_timeout is not None:
             request_kwargs["timeout"] = max(0.1, float(request_timeout))
@@ -506,7 +547,61 @@ class InvoiceClient:
                 "Status filter %s yielded no rows after parse; API may ignore query param.",
                 status,
             )
+        self._notify_summary_observers(result)
         return result
+
+    def _notify_summary_observers(self, summaries: list[InvoiceSummary]) -> None:
+        if not summaries:
+            return
+        for observer in self._summary_observers:
+            try:
+                observer(list(summaries))
+            except Exception:  # an observer (e.g. the search index) must never break listing
+                logger.warning("Invoice summary observer failed", exc_info=True)
+
+    def fetch_pages_parallel(
+        self,
+        offsets: Sequence[int],
+        *,
+        limit: int,
+        max_workers: int = _PARALLEL_PAGE_WORKERS,
+        **filters: Any,
+    ) -> list[list[InvoiceSummary]]:
+        """Fetch several invoice pages concurrently; results keep the order of *offsets*.
+
+        Requests share the connection's rate limiter, so concurrency cannot exceed the
+        configured sevDesk request budget.
+        """
+        if not offsets:
+            return []
+        if len(offsets) == 1:
+            return [self.list_invoice_summaries(limit=limit, offset=offsets[0], **filters)]
+        with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(offsets)))) as pool:
+            return list(
+                pool.map(
+                    lambda page_offset: self.list_invoice_summaries(
+                        limit=limit, offset=page_offset, **filters
+                    ),
+                    offsets,
+                )
+            )
+
+    def search_by_invoice_number(self, query: str, *, limit: int = 50) -> list[InvoiceSummary]:
+        """Look up invoices through sevDesk's server-side ``invoiceNumber`` filter.
+
+        The result is verified client-side, so an API that ignores the filter cannot
+        produce false matches.
+        """
+        text = str(query or "").strip()
+        needle = normalize_search_text(text)
+        if not needle or len(text) < 3 or any(ch.isspace() for ch in text):
+            return []
+        batch = self.list_invoice_summaries(limit=limit, offset=0, invoice_number=text)
+        return [
+            summary
+            for summary in batch
+            if needle in normalize_search_text(summary.invoice_number)
+        ]
 
     def list_invoice_summaries_for_contact(
         self,
@@ -604,19 +699,23 @@ class InvoiceClient:
         fetched: list[InvoiceSummary] = []
         offset = 0
         reached_end = False
+        wave_size = 1
 
         while searched_days <= max(1, int(initial_window_days)) + max(0, int(window_step_days)) * max(0, int(max_windows) - 1):
             oldest_age = self._oldest_fetched_age_days(fetched, today) if fetched else 0
             cutoff_reached = oldest_age >= searched_days if fetched else False
             while not reached_end and not cutoff_reached:
-                batch = self.list_invoice_summaries(limit=limit_per_page, offset=offset, status=None)
-                if not batch:
-                    reached_end = True
-                    break
-                fetched.extend(batch)
-                offset += len(batch)
-                if len(batch) < limit_per_page:
-                    reached_end = True
+                offsets = [offset + index * limit_per_page for index in range(wave_size)]
+                for batch in self._search_pages(offsets, limit_per_page):
+                    if not batch:
+                        reached_end = True
+                        break
+                    fetched.extend(batch)
+                    offset += len(batch)
+                    if len(batch) < limit_per_page:
+                        reached_end = True
+                        break
+                wave_size = min(_PARALLEL_PAGE_WORKERS, wave_size * 2)
                 oldest_age = self._oldest_fetched_age_days(fetched, today)
                 cutoff_reached = oldest_age >= searched_days
 
@@ -636,21 +735,34 @@ class InvoiceClient:
 
         return [], searched_days
 
+    def _search_pages(self, offsets: Sequence[int], limit: int) -> list[list[InvoiceSummary]]:
+        """Fetch search pages concurrently; older pages are reused briefly across searches.
+
+        Page 0 (newest invoices) is never cached so fresh invoices stay searchable.
+        """
+        now = time.monotonic()
+        pages: dict[int, list[InvoiceSummary]] = {}
+        missing: list[int] = []
+        for page_offset in offsets:
+            hit = None
+            if page_offset > 0:
+                with self._page_cache_lock:
+                    hit = self._page_cache.get((limit, page_offset))
+            if hit is not None and (now - hit[0]) <= _SEARCH_PAGE_TTL_SECONDS:
+                pages[page_offset] = list(hit[1])
+            else:
+                missing.append(page_offset)
+        fetched = self.fetch_pages_parallel(missing, limit=limit, status=None)
+        for page_offset, batch in zip(missing, fetched):
+            pages[page_offset] = batch
+            if page_offset > 0:
+                with self._page_cache_lock:
+                    self._page_cache[(limit, page_offset)] = (now, list(batch))
+        return [pages[page_offset] for page_offset in offsets]
+
     @staticmethod
     def _normalize_search_text(value: str) -> str:
-        text = str(value or "").strip().casefold()
-        text = (
-            text.replace("ä", "ae")
-            .replace("ö", "oe")
-            .replace("ü", "ue")
-            .replace("ß", "ss")
-        )
-        text = "".join(
-            ch for ch in unicodedata.normalize("NFKD", text)
-            if not unicodedata.combining(ch)
-        )
-        text = re.sub(r"[^a-z0-9]+", " ", text)
-        return " ".join(text.split())
+        return normalize_search_text(value)
 
     @classmethod
     def _matches_search_query(cls, summary: InvoiceSummary, needle: str) -> bool:

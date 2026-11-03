@@ -29,6 +29,7 @@ from xw_office.services.printing.label_printer import LabelPrinter
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.sevdesk.invoice_client import InvoiceClient, InvoiceSummary
 from xw_office.services.sevdesk.invoice_client import DEFAULT_SENSITIVE_COUNTRY_CODES
+from xw_office.services.sevdesk.invoice_search_index import InvoiceSearchIndexService
 from xw_office.services.sendungen.delivery_note import DeliveryNoteContext, DeliveryNoteService
 from xw_office.services.sendungen.service import OffeneSendungenService
 from xw_office.services.shipping.countries import country_label_for_address
@@ -248,8 +249,10 @@ class InvoiceProcessingService:
         delivery_note_service: DeliveryNoteService | None = None,
         customer_aftercare: CustomerAftercareService | None = None,
         offene_sendungen: OffeneSendungenService | None = None,
+        search_index: InvoiceSearchIndexService | None = None,
     ) -> None:
         self._invoices = invoice_client
+        self._search_index = search_index
         self._settings_repo = settings_repo
         self._wix_orders = wix_orders
         self._invoice_printer = InvoicePrinter(config.printing, print_queue=print_queue)
@@ -386,16 +389,26 @@ class InvoiceProcessingService:
         initial_window_days: int = 100,
         window_step_days: int = 100,
     ) -> tuple[list[dict[str, str]], list[InvoiceSummary], int]:
-        """Search invoices via sevDesk with widening date windows."""
-        summaries, searched_days = self._invoices.search_invoice_summaries(
-            query,
-            initial_window_days=initial_window_days,
-            window_step_days=window_step_days,
-        )
+        """Search invoices via the shared index, else sevDesk with widening date windows."""
+        indexed = self._search_index.search(query) if self._search_index is not None else None
+        if indexed is not None:
+            summaries, searched_days = indexed
+        else:
+            summaries, searched_days = self._invoices.search_invoice_summaries(
+                query,
+                initial_window_days=initial_window_days,
+                window_step_days=window_step_days,
+            )
         self._apply_sensitive_country_flags(summaries)
         self._apply_unreleased_sku_flags(summaries)
         rows = [summary.as_table_row() for summary in summaries]
         return self._rows_with_fulfillment(summaries, rows), summaries, searched_days
+
+    def sync_search_index(self, should_abort: Callable[[], bool] | None = None) -> str:
+        """Fill or refresh the shared invoice search index (blocking; run in a worker)."""
+        if self._search_index is None:
+            return "disabled"
+        return self._search_index.sync(should_abort=should_abort)
 
     def delete_draft_invoice(self, invoice_id: str) -> None:
         """Delete one sevDesk draft invoice after basic guard checks."""
@@ -405,6 +418,8 @@ class InvoiceProcessingService:
         if str(summary.invoice_number or "").strip():
             raise RuntimeError("Entwurf hat bereits eine Rechnungsnummer und wird nicht gelöscht.")
         self._invoices.delete_draft_invoice(summary.id)
+        if self._search_index is not None:
+            self._search_index.forget(summary.id)
         invoice_key = str(summary.id or "").strip()
         if invoice_key:
             self._invoice_pdf_cache.pop(invoice_key, None)

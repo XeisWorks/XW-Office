@@ -40,6 +40,7 @@ def test_ensure_core_tables_creates_missing_tables() -> None:
             "expense_shift_entry",
             "expense_supplier_link",
             "expense_transaction_snapshot",
+            "invoice_search_index",
             "pc_registry",
             "plc_shipment",
             "setting_kv",

@@ -82,6 +82,8 @@ from xw_office.services.printer_status.service import PrinterStatusService
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sevdesk.contact_client import ContactClient
 from xw_office.services.sevdesk.invoice_client import InvoiceClient
+from xw_office.services.sevdesk.invoice_search_index import InvoiceSearchIndexService
+from xw_office.repositories.invoice_search_index import InvoiceSearchIndexRepository
 from xw_office.services.sevdesk.part_client import PartClient
 from xw_office.services.sevdesk.tax_set_client import TaxSetClient
 from xw_office.services.sevdesk.refund_client import SevDeskRefundClient
@@ -265,6 +267,11 @@ def register_default_services(container: Container) -> None:
                 else None
             ),
             offene_sendungen=c.resolve(OffeneSendungenService),
+            search_index=(
+                c.resolve(InvoiceSearchIndexService)
+                if (c.config.database_url or "").strip()
+                else None
+            ),
         ),
     )
     container.register(
@@ -636,6 +643,18 @@ def register_default_services(container: Container) -> None:
         container.register(
             SettingKvRepository,
             lambda c: SettingKvRepository(c.resolve(SessionMaker)),
+        )
+        container.register(
+            InvoiceSearchIndexRepository,
+            lambda c: InvoiceSearchIndexRepository(c.resolve(SessionMaker)),
+        )
+        container.register(
+            InvoiceSearchIndexService,
+            lambda c: InvoiceSearchIndexService(
+                c.resolve(InvoiceClient),
+                c.resolve(InvoiceSearchIndexRepository),
+                c.resolve(SettingKvRepository),
+            ),
         )
         container.register(
             ApiSecretRepository,
