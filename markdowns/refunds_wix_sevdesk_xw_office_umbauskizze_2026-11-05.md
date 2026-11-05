@@ -141,3 +141,14 @@ Die Refund-Markierung gehört in eine durchsuchbare Belegreferenz/Notiz, sofern 
 - Der Schreibpfad ist mit `REFUND_DOCUMENT_WRITE_ENABLED=false` standardmäßig aus und muss für einen kontrollierten Produktiv-Rollout explizit aktiviert werden. Der Read-API-Endpunkt `/api/v1/refunds` ist für XW-Office authentifiziert vorgesehen.
 - XW-Office besitzt ein eigenes Untermenü `Stornos & Gutschriften` mit Statusanzeige, Gutschrift-PDF und bestätigungspflichtigem Kundenversand. Der Versand verwendet denselben `MailDeliveryService`/Microsoft-Graph-Pfad, die bestehende Template-/Signaturquelle und die vorhandenen `MS_GRAPH_*`-/MSAL-Cache-Einstellungen wie der Rechnungsversand.
 - Die beiden Oktober-Fälle wurden nicht automatisch in sevDesk geschrieben. Vor dem Rollout sind sie per Dry-Run nochmals lesend zu prüfen; insbesondere Fall 21666 muss auf die erstattete 17,90-EUR-CD-Position mit 20 % USt begrenzt werden.
+
+## Nachtrag: produktiver Oktober-Abgleich am 05.11.2026
+
+Die beiden ausdrücklich freigegebenen Fälle wurden anschließend kontrolliert in sevDesk angelegt, geprüft und mit den bereits importierten Provider-Refund-Transaktionen verknüpft:
+
+- Bestellung **21126**, Wix-Refund `79ed17f3-c8be-4275-bf2c-6e80f3520047`, Mollie `re_DKTDzTiYz3zEQ8ciGqpXJ`: Gutschrift **GU-2603**, sevDesk-ID `3080738`, **174,30 EUR**, Ursprungsrechnung `RE-262185`/`132819007`, Status **1000 (bezahlt)**.
+- Bestellung **21666**, Wix-Refund `4b0d75ee-68dc-4128-bb4f-f28203af2134`, Stripe `re_3UVXOYFVOhfzx9BP2Gfy3ZR8`: Teilgutschrift **GU-2604**, sevDesk-ID `3080740`, **17,90 EUR**, nur die erstattete CD-Position mit **20 % USt**, Ursprungsrechnung `RE-262624`/`137740945`, Status **1000 (bezahlt)**.
+
+Für beide Buchungen musste der signed Refund-Betrag (negative CheckAccountTransaction) an `CreditNote/{id}/bookAmount` übergeben werden. Der positive Betrag verknüpft die Transaktion zwar, lässt sevDesk aber in **750 (teilbezahlt)** stehen. Nach `resetToOpen` und erneuter Buchung mit negativem Betrag meldet sevDesk `fromStatus: 200`, `toStatus: 1000` und den korrekten Buchungsbetrag. Die Provider-IDs, Beträge, Währung, Konten und Wertstellungsdaten wurden vor der Buchung unabhängig verifiziert.
+
+Der alte Satz „nicht automatisch geschrieben“ beschreibt damit nur den Stand vor diesem Nachtrag. Der kontrollierte Backfill ist abgeschlossen; weitere automatische Auszahlungsbuchungen bleiben bis zu einer separaten Freigabe auf eindeutige Provider-/sevDesk-Transaktionsmatches begrenzt.
