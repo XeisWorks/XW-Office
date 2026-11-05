@@ -60,7 +60,7 @@ class RefundsDialog(QDialog):
         for row_index, row in enumerate(self._rows):
             values = [
                 row.get("wix_refund_id", ""),
-                row.get("wix_order_id", ""),
+                row.get("wix_order_number") or row.get("wix_order_id", ""),
                 f"{float(row.get('amount') or 0):.2f} {row.get('currency') or ''}".strip(),
                 row.get("wix_refund_status", ""),
                 row.get("sevdesk_action", ""),
