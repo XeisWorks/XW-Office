@@ -1,0 +1,24 @@
+# Refund-Flow: technischer Audit vom 05.11.2026
+
+## Ergebnis
+
+Die beiden Oktober-Refunds sind bereits als GU-2603 und GU-2604 in sevDesk mit den negativen Mollie- bzw. Stripe-Transaktionen gebucht (Status 1000). Diese Belege dürfen nicht erneut erzeugt werden. Der allgemeine automatische Prozess ist **noch nicht produktiv freigeschaltet**: In Railway fehlt `REFUND_DOCUMENT_WRITE_ENABLED=true`. Ebenso fehlt dort `WIX_WEBHOOK_PUBLIC_KEY`; der native signierte Wix-Refund-Webhook kann damit noch nicht angenommen werden. Ob die Ereignisse im Wix-App-Dashboard abonniert sind, ist aus den Repositories nicht nachweisbar. Ein bestehender vertrauenswürdiger Gateway kann JSON nur mit dem separaten Webhook-Secret einliefern.
+
+## Im Audit behobene Risiken
+
+- Veröffentlichten Rechnungen zugehörige Refunds werden nun durch den Zahlungsstatus-Webhook und durch einen aktualisierten Wix-Suchfeed erkannt. Der Suchfeed speichert einen Cursor mit Überlappung und schließt stornierte Wix-Bestellungen nicht aus. Ein bestätigter Refund für eine lokal unbekannte Bestellung kommt bei genau einer konfigurierten Wix-Site zunächst in die manuelle Prüfung.
+- Der Betrag stammt aus den erfolgreich abgeschlossenen Wix-Refund-Transaktionen. Abweichungen zum angeforderten Betrag, externe Refunds und gemischte Erfolgszustände bleiben in manueller Prüfung. Eine spätere Status- oder Betragsänderung nach einem Belegversuch überschreibt keinen abgeschlossenen Vorgang.
+- Der sevDesk-Schreibpfad beansprucht einen Refund atomar. Mehrere Refunds zur selben Ursprungsrechnung, mehrfach passende Teilpositionen, unverbundene vorhandene Gutschriften, Währungs- und Betragskonflikte stoppen vor einem neuen Beleg. Entwurf und finalisierter Betrag werden centgenau geprüft. Nach einem unsicheren sevDesk-POST wird nicht blind erneut geschrieben.
+- `XW-Office` erzeugt keinen Refund und keinen Gegenbeleg mehr über die alte Rechnungsaktion. PDF und Mail sind nur bei abgeschlossenen Gutschriften zugänglich. Der Kundenversand nutzt die vorhandene Rechnungsvorlage, Signatur und Microsoft Graph; die angezeigte Empfängeradresse muss im Popup bestätigt werden.
+
+## Noch offene Betriebsgrenzen
+
+1. Für unmittelbare Ereignisverarbeitung in Wix `Order Transactions Refund Completed` und `Order Transactions Details Updated` auf `/webhook/wix/refund` abonnieren und den Wix Public Key sicher als `WIX_WEBHOOK_PUBLIC_KEY` hinterlegen. Der Wix-Webhook kann verzögert kommen; der stündliche Suchfeed ist der Rückfallweg. Bei mehreren Sites braucht ein unbekannter Order-Event eine explizite `instanceId`-zu-Site-Zuordnung.
+2. `REFUND_DOCUMENT_WRITE_ENABLED=true` zuerst zusammen mit `REFUND_DOCUMENT_ALLOWLIST=<neue Wix-Refund-ID>` für eine kontrollierte Live-Probe aktivieren; danach erst die Allowlist entfernen. Die bisherigen zwei Oktoberfälle beweisen die sevDesk- und Bankbuchung, testen aber nicht den automatischen Ereignis-zu-Beleg-Pfad. Ohne das Flag bleibt der Worker lesend.
+3. Automatische Stripe-/Mollie-Auszahlungsbuchung ist nicht implementiert. Eine Gutschrift wird vom Worker auf 200 (offen) finalisiert. Für 1000 (bezahlt) muss zunächst eine eindeutige negative sevDesk-Kontotransaktion zum Provider-Refund vorhanden sein und `bookAmount` mit negativem Betrag erfolgen. Die Oktoberfälle wurden einzeln geprüft und gebucht.
+4. Teilrefunds ohne eindeutige Zuordnung zu Rechnungspositionen bleiben bewusst `manual_review`; insbesondere identische Artikelpreise können aus dem Refundbetrag allein nicht auseinandergehalten werden. Ebenso ist bei sevDesk-Timeout nach einem Schreibversuch eine Sichtprüfung nötig. Das ist ein Sicherheitsstopp, kein automatischer Selbstheilungspfad.
+5. Die Mailaktion hat eine Bestätigungsabfrage, aber keinen dauerhaften Versand-Checkpoint. Nach einem Microsoft-Graph-Timeout kann ein erneuter Klick dieselbe Mail nochmals senden. Vor Wiederholung das Gesendet-Postfach prüfen.
+
+## Fachliche Entscheidung
+
+Pro Refund genau **ein** Gegenbeleg: Vollstorno einer unbezahlten offenen/fälligen Rechnung; bei bezahlter oder teilweise bezahlter Rechnung bzw. einem Teilrefund eine Gutschrift. sevDesk verlangt für eine Gutschrift zuerst Entwurf 100, danach Finalisierung auf 200; die Auszahlung wird separat auf 1000 gebucht. Quellen: [sevDesk Stornorechnung](https://hilfe.sevdesk.de/de/articles/9154465-stornorechnung-erstellen), [sevDesk Gutschrift](https://hilfe.sevdesk.de/de/articles/15190963-gutschrift-erstellen), [sevDesk API](https://api.sevdesk.de/), [Wix Refund Completed](https://dev.wix.com/docs/api-reference/business-solutions/e-commerce/orders/order-transactions/order-transactions-refund-completed), [Wix Webhooks](https://dev.wix.com/docs/build-apps/develop-your-app/develop-a-self-managed-app/webhooks/handle-events-with-webhooks-for-self-hosting-without-the-java-script-sdk).

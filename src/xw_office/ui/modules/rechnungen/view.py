@@ -105,7 +105,6 @@ from xw_office.services.drucke.service import OffeneDruckeService
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 from xw_office.services.sevdesk.part_client import PartClient
 from xw_office.ui.modules.rechnungen.offene_ueberweisungen_dialog import OffeneUeberweisungenDialog
-from xw_office.services.sevdesk.refund_client import SevDeskRefundClient
 from xw_office.services.wix.client import WixOrdersClient
 from xw_office.ui.modules.rechnungen.customer_aftercare_manager_dialog import (
     CustomerAftercareManagerDialog,
@@ -140,7 +139,6 @@ from xw_office.ui.dialogs.unreleased_title_dialog import (
     UnreleasedTitleDialog,
     UnreleasedTitleSplitDialog,
 )
-from xw_office.ui.modules.rechnungen.refund_dialog import RefundDialog
 from xw_office.ui.modules.rechnungen.refunds_dialog import RefundsDialog
 from xw_office.ui.widgets.data_table import DataTable
 from xw_office.ui.widgets.progress_overlay import ProgressOverlay
@@ -1165,7 +1163,6 @@ class RechnungenView(QWidget):
         self._search_worker: BackgroundWorker | None = None
         self._index_sync_worker: BackgroundWorker | None = None
         self._index_sync_started = False
-        self._refund_worker: BackgroundWorker | None = None
         self._draft_worker: BackgroundWorker | None = None
         self._draft_product_worker: BackgroundWorker | None = None
         self._draft_preview_worker: BackgroundWorker | None = None
@@ -2024,7 +2021,6 @@ class RechnungenView(QWidget):
                 self._worker,
                 self._search_worker,
                 self._index_sync_worker,
-                self._refund_worker,
                 self._draft_worker,
                 self._draft_product_worker,
                 self._draft_preview_worker,
@@ -6000,90 +5996,11 @@ class RechnungenView(QWidget):
         QMessageBox.information(
             self,
             "Refund in Wix erstellen",
-            "Refunds werden ausschließlich in Wix erstellt. Danach verarbeitet die API den sevDesk-Beleg automatisch.\n\nÖffne dafür ‚Stornos & Gutschriften‘.",
+            "Refunds werden ausschließlich in Wix erstellt. Den aktuellen Beleg- und Prüfstatus findest du unter ‚Stornos & Gutschriften‘.",
         )
-        return
-
-        # Legacy write path intentionally disabled; Wix is the source of truth.
-        dlg = RefundDialog(summary, self)
-        if dlg.exec() != 1:
-            return
-
-        send_mail = dlg.send_customer_mail
-        self._overlay.show_with_message("Rückerstattung wird ausgeführt…")
-        self._overlay.setGeometry(self.rect())
-        self._overlay.raise_()
-
-        def job() -> dict[str, Any]:
-            sevdesk_refund: SevDeskRefundClient = self._container.resolve(SevDeskRefundClient)
-            wix_orders: WixOrdersClient = self._container.resolve(WixOrdersClient)
-
-            cancel_payload = sevdesk_refund.cancel_invoice(summary.id)
-            wix_payload: dict[str, Any] = {}
-            wix_ok = False
-            if summary.order_reference.strip():
-                wix_payload = wix_orders.refund_full_order(
-                    summary.order_reference,
-                    send_customer_email=send_mail,
-                    customer_reason=f"Storno {summary.invoice_number or summary.id}",
-                )
-                wix_ok = bool(wix_payload)
-            return {
-                "invoice": summary.invoice_number or summary.id,
-                "cancel": cancel_payload,
-                "wix": wix_payload,
-                "wix_ok": wix_ok,
-                "had_order_ref": bool(summary.order_reference.strip()),
-            }
-
-        self._refund_worker = BackgroundWorker(job)
-        self._refund_worker.signals.result.connect(self._on_refund_result)
-        self._refund_worker.signals.error.connect(self._on_refund_error)
-        self._refund_worker.signals.finished.connect(self._on_refund_finished)
-        self._refund_worker.start()
 
     def _open_refunds_dialog(self) -> None:
         RefundsDialog(self._container, self).exec()
-
-    def _on_refund_result(self, payload: object) -> None:
-        data = payload if isinstance(payload, dict) else {}
-        invoice = str(data.get("invoice") or "—")
-        had_order_ref = bool(data.get("had_order_ref"))
-        wix_ok = bool(data.get("wix_ok"))
-
-        if not had_order_ref:
-            QMessageBox.information(
-                self,
-                "Rückerstattung durchgeführt",
-                f"Rechnung {invoice}: sevDesk-Stornorechnung wurde erstellt.\n"
-                "Keine Wix-Order-Referenz vorhanden, daher kein Zahlungsrefund in Wix.",
-            )
-            self._reload_first_page()
-            return
-
-        if wix_ok:
-            QMessageBox.information(
-                self,
-                "Rückerstattung durchgeführt",
-                f"Rechnung {invoice}: sevDesk-Storno + Wix-Zahlungsrefund erfolgreich.",
-            )
-        else:
-            QMessageBox.warning(
-                self,
-                "Teilweise abgeschlossen",
-                f"Rechnung {invoice}: sevDesk-Storno erstellt, aber Wix-Zahlungsrefund konnte nicht bestätigt werden.",
-            )
-        self._reload_first_page()
-
-    def _on_refund_error(self, exc: Exception) -> None:
-        QMessageBox.warning(
-            self,
-            "Rückerstattung fehlgeschlagen",
-            f"Die Rückerstattung konnte nicht ausgeführt werden:\n\n{exc}",
-        )
-
-    def _on_refund_finished(self) -> None:
-        self._overlay.hide()
 
     def _refresh_detail_for_selection(self) -> None:
         selection_started_at = time.perf_counter()

@@ -27,6 +27,7 @@ from xw_office.services.invoice_processing.service import InvoiceProcessingServi
 from xw_office.services.mailing.service import MailAttachment, MailDeliveryService
 from xw_office.services.sevdesk.invoice_client import InvoiceClient
 from xw_office.services.sevdesk.refund_client import SevDeskRefundClient
+from xw_office.services.wix.client import WixOrdersClient
 
 
 class RefundsDialog(QDialog):
@@ -37,7 +38,7 @@ class RefundsDialog(QDialog):
         self.setWindowTitle("Stornos & Gutschriften")
         self.resize(980, 520)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Refunds werden ausschließlich in Wix erstellt. SevDesk-Dokumente werden vom API-Worker sofort verarbeitet."))
+        layout.addWidget(QLabel("Refunds werden ausschließlich in Wix erstellt. Hier siehst du den Beleg- und Prüfstatus der API."))
         self._table = QTableWidget(0, 8, self)
         self._table.setHorizontalHeaderLabels(["Refund", "Order", "Betrag", "Wix", "Aktion", "Status", "sevDesk", "Aktionen"])
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -76,14 +77,18 @@ class RefundsDialog(QDialog):
             pdf.clicked.connect(lambda _checked=False, index=row_index: self._open_pdf(index))
             mail = QPushButton("Mail")
             mail.clicked.connect(lambda _checked=False, index=row_index: self._send_mail(index))
-            pdf.setEnabled(bool(row.get("sevdesk_credit_note_id")))
-            mail.setEnabled(bool(row.get("sevdesk_credit_note_id")))
+            finalized = row.get("process_status") in {"done_creditnote", "done_creditnote_partial"}
+            pdf.setEnabled(finalized and bool(row.get("sevdesk_credit_note_id")))
+            mail.setEnabled(finalized and bool(row.get("sevdesk_credit_note_id")))
             action_layout.addWidget(pdf)
             action_layout.addWidget(mail)
             self._table.setCellWidget(row_index, 7, actions)
 
     def _credit_note_id(self, index: int) -> str:
-        return str(self._rows[index].get("sevdesk_credit_note_id") or "").strip()
+        row = self._rows[index]
+        if row.get("process_status") not in {"done_creditnote", "done_creditnote_partial"}:
+            return ""
+        return str(row.get("sevdesk_credit_note_id") or "").strip()
 
     def _open_pdf(self, index: int) -> None:
         credit_note_id = self._credit_note_id(index)
@@ -111,12 +116,20 @@ class RefundsDialog(QDialog):
             number = str(note.get("creditNumber") or note.get("invoiceNumber") or credit_note_id)
             invoice_id = str(row.get("sevdesk_invoice_id") or "")
             invoice = self._container.resolve(InvoiceClient).fetch_invoice_by_id(invoice_id) if invoice_id else {}
-            email = _find_email(invoice)
+            wix_summary: dict[str, Any] = {}
+            order_reference = str(row.get("wix_order_number") or "").strip()
+            if order_reference:
+                try:
+                    wix_summary = self._container.resolve(WixOrdersClient).resolve_order_summary(order_reference)
+                except Exception:  # noqa: BLE001 - explicit recipient prompt remains available.
+                    pass
+            email = str(wix_summary.get("wix_customer_email") or "").strip() or _find_email(invoice)
             if not email:
                 email, accepted = QInputDialog.getText(self, "Gutschrift senden", "E-Mail-Adresse:")
                 if not accepted or not email.strip():
                     return
-            subject, body = self._container.resolve(InvoiceProcessingService).build_credit_note_mail_content(number)
+            customer_name = str(wix_summary.get("wix_customer_name") or invoice.get("name") or "Kunde").strip()
+            subject, body = self._container.resolve(InvoiceProcessingService).build_credit_note_mail_content(number, customer_name=customer_name)
             answer = QMessageBox.question(self, "Gutschrift senden", f"Gutschrift {number} an {email.strip()} senden?")
             if answer != QMessageBox.StandardButton.Yes:
                 return
@@ -134,16 +147,11 @@ class RefundsDialog(QDialog):
 
 
 def _find_email(value: Any) -> str:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if "mail" in str(key).lower() and isinstance(item, str) and "@" in item:
-                return item.strip()
-            found = _find_email(item)
-            if found:
-                return found
-    elif isinstance(value, list):
-        for item in value:
-            found = _find_email(item)
-            if found:
-                return found
+    if not isinstance(value, dict):
+        return ""
+    for source in (value, value.get("contact") if isinstance(value.get("contact"), dict) else {}):
+        for key in ("email", "toEmail", "contactEmail", "emailAddress"):
+            candidate = str(source.get(key) or "").strip()
+            if "@" in candidate:
+                return candidate
     return ""
