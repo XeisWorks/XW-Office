@@ -141,6 +141,7 @@ from xw_office.ui.dialogs.unreleased_title_dialog import (
     UnreleasedTitleSplitDialog,
 )
 from xw_office.ui.modules.rechnungen.refund_dialog import RefundDialog
+from xw_office.ui.modules.rechnungen.refunds_dialog import RefundsDialog
 from xw_office.ui.widgets.data_table import DataTable
 from xw_office.ui.widgets.progress_overlay import ProgressOverlay
 from xw_office.ui.widgets.busy_spinner import SearchStatusBanner
@@ -1864,6 +1865,12 @@ class RechnungenView(QWidget):
         self._btn_send_invoice.clicked.connect(self._on_send_invoice_clicked)
         self._btn_send_invoice.setEnabled(False)
         actions_layout.addWidget(self._btn_send_invoice, 1, 2)
+
+        self._btn_refunds = QPushButton("Stornos & Gutschriften")
+        self._btn_refunds.setToolTip("Refunds aus Wix und die zugehörigen sevDesk-Dokumente öffnen")
+        self._btn_refunds.setStyleSheet(action_button_style)
+        self._btn_refunds.clicked.connect(self._open_refunds_dialog)
+        actions_layout.addWidget(self._btn_refunds, 2, 0, 1, 3)
 
         self._gb_actions.hide()
         detail_main.addWidget(self._gb_actions)
@@ -5990,6 +5997,14 @@ class RechnungenView(QWidget):
         QDesktopServices.openUrl(QUrl(url))
 
     def _open_refund_dialog(self, summary: InvoiceSummary) -> None:
+        QMessageBox.information(
+            self,
+            "Refund in Wix erstellen",
+            "Refunds werden ausschließlich in Wix erstellt. Danach verarbeitet die API den sevDesk-Beleg automatisch.\n\nÖffne dafür ‚Stornos & Gutschriften‘.",
+        )
+        return
+
+        # Legacy write path intentionally disabled; Wix is the source of truth.
         dlg = RefundDialog(summary, self)
         if dlg.exec() != 1:
             return
@@ -6026,6 +6041,9 @@ class RechnungenView(QWidget):
         self._refund_worker.signals.error.connect(self._on_refund_error)
         self._refund_worker.signals.finished.connect(self._on_refund_finished)
         self._refund_worker.start()
+
+    def _open_refunds_dialog(self) -> None:
+        RefundsDialog(self._container, self).exec()
 
     def _on_refund_result(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}

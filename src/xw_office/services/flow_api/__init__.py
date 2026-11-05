@@ -1,5 +1,6 @@
 """Clients for the read-only XW-Flow integration API."""
 
 from xw_office.services.flow_api.analytics import FlowAnalyticsClient
+from xw_office.services.flow_api.refunds import FlowRefundsClient
 
-__all__ = ["FlowAnalyticsClient"]
+__all__ = ["FlowAnalyticsClient", "FlowRefundsClient"]

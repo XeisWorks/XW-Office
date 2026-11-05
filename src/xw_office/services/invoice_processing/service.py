@@ -1393,6 +1393,7 @@ class InvoiceProcessingService:
             self.write_fulfillment_flags(summary.id, next_flags)
             logger.info("Invoice %s: email skipped (already sent)", summary.id)
             return next_flags, to_email, subject
+
         if not to_email:
             raise RuntimeError("Keine E-Mail-Adresse fuer Rechnungsversand")
         html_body = self._build_mail_html(text_body)
@@ -1469,6 +1470,20 @@ class InvoiceProcessingService:
             return next_flags, to_email, subject
 
         raise RuntimeError(f"sevDesk-Mail fehlgeschlagen ({sevdesk_error}); Graph-Mail nicht konfiguriert")
+
+    def build_credit_note_mail_content(
+        self,
+        credit_note_number: str,
+        *,
+        customer_name: str = "Kunde",
+    ) -> tuple[str, str]:
+        """Build a Gutschrift mail with the configured invoice template/signature."""
+        number = str(credit_note_number or "").strip() or "Gutschrift"
+        summary = InvoiceSummary(id="credit-note", invoiceNumber=number, contact_name=customer_name)
+        subject, body = self._build_mail_content(summary, {"invoiceNumber": number, "name": customer_name})
+        subject = subject.replace("Rechnung", "Gutschrift")
+        body = body.replace("Rechnung", "Gutschrift")
+        return subject, body
 
     def get_invoice_detail_context(self, summary: InvoiceSummary) -> dict[str, object]:
         """Return sevDesk-backed customer/shipping fallback data for the detail panel."""

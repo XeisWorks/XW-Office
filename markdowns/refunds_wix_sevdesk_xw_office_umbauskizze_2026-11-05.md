@@ -134,3 +134,10 @@ Die Refund-Markierung gehört in eine durchsuchbare Belegreferenz/Notiz, sofern 
 5. **Auszahlung:** Empfehlung: vorerst manuell buchen; später Providerbeleg und sevDesk-Transaktion automatisch zuordnen.
 
 **Erst nach Bestätigung dieser konkreten Punkte produktive sevDesk-Belege erzeugen.** Die zwei Oktober-Fälle sind fachlich vorbereitet, aber noch nicht als Test übertragen. Auch `cancelInvoice`, `createFromInvoice`, `sendBy` und `bookAmount` sind produktive Schreibaktionen.
+
+## Implementierungsstand 2026-11-05
+
+- `wix-sevdesk-api`: Refunds werden weiterhin ausschließlich aus Wix gelesen; der Worker verarbeitet `SUCCEEDED`-Refunds ohne den Rechnungs-`START`. Unbezahlte Vollrefunds erzeugen ein sevDesk-Storno, bezahlte/teilbezahlte Fälle eine Gutschrift. Teilgutschriften werden nur bei einem centgenauen Positions-Match finalisiert; unklare Fälle bleiben `manual_review`.
+- Der Schreibpfad ist mit `REFUND_DOCUMENT_WRITE_ENABLED=false` standardmäßig aus und muss für einen kontrollierten Produktiv-Rollout explizit aktiviert werden. Der Read-API-Endpunkt `/api/v1/refunds` ist für XW-Office authentifiziert vorgesehen.
+- XW-Office besitzt ein eigenes Untermenü `Stornos & Gutschriften` mit Statusanzeige, Gutschrift-PDF und bestätigungspflichtigem Kundenversand. Der Versand verwendet denselben `MailDeliveryService`/Microsoft-Graph-Pfad, die bestehende Template-/Signaturquelle und die vorhandenen `MS_GRAPH_*`-/MSAL-Cache-Einstellungen wie der Rechnungsversand.
+- Die beiden Oktober-Fälle wurden nicht automatisch in sevDesk geschrieben. Vor dem Rollout sind sie per Dry-Run nochmals lesend zu prüfen; insbesondere Fall 21666 muss auf die erstattete 17,90-EUR-CD-Position mit 20 % USt begrenzt werden.

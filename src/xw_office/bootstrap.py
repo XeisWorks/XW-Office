@@ -56,7 +56,7 @@ from xw_office.services.product_hub.inventory import LegacyInventoryShadowBridge
 from xw_office.services.product_hub.sevdesk_inventory_reconciliation import (
     SevdeskInventoryReconciliationService,
 )
-from xw_office.services.flow_api import FlowAnalyticsClient
+from xw_office.services.flow_api import FlowAnalyticsClient, FlowRefundsClient
 from xw_office.services.sendungen.xw_flow_client import XwFlowShipmentClient
 from xw_office.services.drucke.xw_flow_client import XwFlowPrintClient
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
@@ -470,6 +470,10 @@ def register_default_services(container: Container) -> None:
     container.register(
         FlowAnalyticsClient,
         lambda c: FlowAnalyticsClient(c.config, c.resolve(SecretService)),
+    )
+    container.register(
+        FlowRefundsClient,
+        lambda c: FlowRefundsClient(c.config, c.resolve(SecretService)),
     )
     container.register(
         WixProductsClient,

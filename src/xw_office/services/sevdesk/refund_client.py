@@ -12,6 +12,7 @@ Provides two operations used by the refund dialog:
 """
 from __future__ import annotations
 
+import base64
 import logging
 from typing import Any
 
@@ -63,3 +64,49 @@ class SevDeskRefundClient:
             "SevDeskRefundClient: credit note created from invoice %s", invoice_id
         )
         return objects if isinstance(objects, dict) else payload
+
+    def fetch_credit_note(self, credit_note_id: str) -> dict[str, Any]:
+        response = self._conn.get(f"/CreditNote/{str(credit_note_id).strip()}")
+        payload = response.json() if response.content else {}
+        objects = payload.get("objects") if isinstance(payload, dict) else payload
+        if isinstance(objects, list):
+            return next((item for item in objects if isinstance(item, dict)), {})
+        return objects if isinstance(objects, dict) else payload if isinstance(payload, dict) else {}
+
+    def get_credit_note_pdf(self, credit_note_id: str) -> bytes:
+        response = self._conn.get(f"/CreditNote/{str(credit_note_id).strip()}/getPdf", params={"download": "true", "preventSendBy": "true"})
+        if response.content.startswith(b"%PDF"):
+            return response.content
+        payload = response.json() if response.content else {}
+        return self._pdf_from_payload(payload)
+
+    def render_credit_note_pdf(self, credit_note_id: str) -> bytes:
+        response = self._conn.post(f"/CreditNote/{str(credit_note_id).strip()}/render", params={"getAsPdf": "true"})
+        if response.content.startswith(b"%PDF"):
+            return response.content
+        return self._pdf_from_payload(response.json() if response.content else {})
+
+    @staticmethod
+    def _pdf_from_payload(payload: Any) -> bytes:
+        candidates = [payload]
+        if isinstance(payload, dict):
+            candidates.extend([payload.get("objects"), payload.get("data"), payload.get("pdf")])
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                for key in ("content", "base64", "pdf", "file"):
+                    value = candidate.get(key)
+                    if isinstance(value, str):
+                        try:
+                            decoded = base64.b64decode(value)
+                        except Exception:
+                            continue
+                        if decoded.startswith(b"%PDF"):
+                            return decoded
+            elif isinstance(candidate, str):
+                try:
+                    decoded = base64.b64decode(candidate)
+                except Exception:
+                    continue
+                if decoded.startswith(b"%PDF"):
+                    return decoded
+        raise RuntimeError("sevDesk hat kein gültiges Gutschrift-PDF geliefert.")
