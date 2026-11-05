@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import csv
 import logging
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
@@ -34,6 +37,8 @@ from PySide6.QtWidgets import (
 )
 from openpyxl import Workbook
 
+from xw_office.core.signals import AppSignals
+from xw_office.core.types import ModuleKey
 from xw_office.core.worker import BackgroundWorker
 from xw_office.services.commission.service import (
     CommissionRunResult,
@@ -89,6 +94,7 @@ class CalculationView(QWidget):
         self._embedded_expense_worker: BackgroundWorker | None = None
         self._export_worker: BackgroundWorker | None = None
         self._last_commission_result: CommissionRunResult | None = None
+        self._embedded_expense_period: tuple[date, date] | None = None
         self._active_profile_key: str = ""
         self._rerun_commission_after_clarification = False
         self._dismissed_unreleased_issues: set[tuple[str, str, str]] = set()
@@ -305,61 +311,84 @@ class CalculationView(QWidget):
         overview_lay = QVBoxLayout(overview)
         overview_lay.setContentsMargins(0, 0, 0, 0)
         overview_lay.setSpacing(8)
+        overview_heading = QLabel("ÜBERSICHT")
+        overview_heading.setStyleSheet("font-weight: 700; letter-spacing: 0.5px;")
+        overview_lay.addWidget(overview_heading)
         overview_lay.addWidget(self._commission_status)
         self._category_table = DataTable(_CATEGORY_HEADERS)
+        self._category_table.setSortingEnabled(False)
+        self._category_table.horizontalHeader().setStretchLastSection(False)
         self._category_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch
         )
+        for column in range(1, len(_CATEGORY_HEADERS)):
+            self._category_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
         self._category_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+        self._category_table.setToolTip(
+            "Wert anklicken, um ihn ohne Einheit direkt in die Zwischenablage zu kopieren."
+        )
+        self._category_table.clicked.connect(self._copy_overview_cell)
         overview_lay.addWidget(self._category_table, stretch=1)
-        copy_btn = QPushButton("In Zwischenablage kopieren")
-        copy_btn.setToolTip("Kompakte Abrechnung inklusive Produktliste kopieren")
-        copy_btn.clicked.connect(self._copy_commission_summary)
-        overview_lay.addWidget(copy_btn)
 
         products = QWidget()
         products_lay = QVBoxLayout(products)
         products_lay.setContentsMargins(0, 0, 0, 0)
         products_lay.setSpacing(8)
-        products_lay.addWidget(QLabel("Produkte"))
+        products_heading = QLabel("PRODUKTLISTE")
+        products_heading.setStyleSheet("font-weight: 700; letter-spacing: 0.5px;")
+        products_lay.addWidget(products_heading)
         self._product_table = DataTable(_PRODUCT_HEADERS)
+        self._product_table.horizontalHeader().setStretchLastSection(False)
         self._product_table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.ResizeToContents
         )
         self._product_table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch
         )
+        for column in (2, 3):
+            self._product_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
         self._product_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         products_lay.addWidget(self._product_table, stretch=1)
+        copy_btn = QPushButton("IN ZWISCHENABLAGE KOPIEREN")
+        copy_btn.setToolTip("Kompakte Abrechnung inklusive Produktliste kopieren")
+        copy_btn.clicked.connect(self._copy_commission_summary)
+        products_lay.addWidget(copy_btn)
 
         result_splitter.addWidget(overview)
         result_splitter.addWidget(products)
-        result_splitter.setStretchFactor(0, 1)
+        result_splitter.setStretchFactor(0, 3)
         result_splitter.setStretchFactor(1, 2)
-        result_splitter.setSizes([430, 760])
-        lay.addWidget(result_splitter, stretch=4)
+        result_splitter.setSizes([660, 440])
+        lay.addWidget(result_splitter, stretch=10)
 
         self._embedded_expenses_group = QGroupBox("Ausgaben MusikHeroes")
         self._embedded_expenses_group.setCheckable(True)
         self._embedded_expenses_group.setChecked(True)
+        self._embedded_expenses_group.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
+        self._embedded_expenses_group.setMaximumHeight(230)
         expenses_layout = QVBoxLayout(self._embedded_expenses_group)
         self._embedded_expenses_status = QLabel("Noch nicht geladen")
         expenses_layout.addWidget(self._embedded_expenses_status)
         self._embedded_expenses_table = DataTable(
-            ["Datum", "Empfänger", "Zweck / Referenz", "Betrag", "Flag", "Beleg"]
+            ["Datum", "Empfänger", "Zweck / Referenz", "Betrag", "Kategorie", "Beleg"]
         )
         self._embedded_expenses_table.horizontalHeader().setSectionResizeMode(
             2, QHeaderView.ResizeMode.Stretch
         )
+        self._embedded_expenses_table.setMaximumHeight(120)
         expenses_layout.addWidget(self._embedded_expenses_table)
         expense_actions = QHBoxLayout()
-        include_expense = QPushButton("MusikHeroes einschließen")
-        include_expense.clicked.connect(lambda: self._flag_embedded_expense(True))
-        exclude_expense = QPushButton("MusikHeroes ausschließen")
-        exclude_expense.clicked.connect(lambda: self._flag_embedded_expense(False))
-        expense_actions.addWidget(include_expense)
-        expense_actions.addWidget(exclude_expense)
         expense_actions.addStretch()
+        check_expenses_btn = QPushButton("AUSGABEN KONTROLLIEREN")
+        check_expenses_btn.setToolTip("Ausgabenübersicht mit der MH-Kategorie öffnen")
+        check_expenses_btn.clicked.connect(self._open_expense_review)
+        expense_actions.addWidget(check_expenses_btn)
         expenses_layout.addLayout(expense_actions)
         lay.addWidget(self._embedded_expenses_group)
 
@@ -469,13 +498,20 @@ class CalculationView(QWidget):
         except KeyError:
             self._embedded_expenses_status.setText("Ausgabenpipeline nicht konfiguriert")
             return
-        period = result.period
-        self._embedded_expenses_status.setText("Ausgaben werden geladen …")
+        today = datetime.now(tz=ZoneInfo("Europe/Vienna")).date()
+        month_start = today.replace(day=1)
+        next_month = (
+            date(today.year + 1, 1, 1)
+            if today.month == 12
+            else date(today.year, today.month + 1, 1)
+        )
+        month_end = next_month - timedelta(days=1)
+        self._embedded_expense_period = (month_start, month_end)
+        self._embedded_expenses_status.setText("MH-Ausgaben dieses Monats werden geladen …")
         self._embedded_expense_worker = BackgroundWorker(
             lambda: service.list_bank_expenses(
-                start=period.start,
-                end=period.end,
-                profile_key=result.profile.key,
+                start=month_start,
+                end=month_end,
                 refresh=True,
             )
         )
@@ -489,7 +525,18 @@ class CalculationView(QWidget):
         self._embedded_expense_worker.start()
 
     def _on_embedded_expenses_loaded(self, payload: object) -> None:
-        rows = [row for row in payload if isinstance(row, BankExpenseRow)] if isinstance(payload, list) else []
+        period = self._embedded_expense_period
+        rows = (
+            [
+                row
+                for row in payload
+                if isinstance(row, BankExpenseRow)
+                and row.position_key.casefold() == "mh"
+                and (period is None or period[0] <= row.value_date <= period[1])
+            ]
+            if isinstance(payload, list)
+            else []
+        )
         self._embedded_expenses_table.set_data(
             [
                 {
@@ -497,7 +544,7 @@ class CalculationView(QWidget):
                     "Empfänger": row.payee,
                     "Zweck / Referenz": row.purpose,
                     "Betrag": format_euro_amount(row.amount),
-                    "Flag": row.profile_status or "—",
+                    "Kategorie": "MH",
                     "Beleg": "sevDesk" if row.sevdesk_url else ("Lieferantenportal" if row.supplier_url else "fehlt"),
                     "__transaction_id": row.transaction_id,
                     "__iban": row.iban,
@@ -521,9 +568,13 @@ class CalculationView(QWidget):
                 for row in rows
             ]
         )
+        period_text = period[0].strftime("%m.%Y") if period else "diesem Monat"
         self._embedded_expenses_status.setText(
-            f"{len(rows)} ausgehende Zahlungen · informativ, nicht provisionswirksam"
+            f"{len(rows)} MH-Ausgaben im {period_text} · zentrale Zuordnung in der Ausgabenübersicht"
         )
+
+    def _open_expense_review(self) -> None:
+        self._container.resolve(AppSignals).navigate_to_module.emit(ModuleKey.EXPENSE_REVIEW.value)
 
     def _flag_embedded_expense(self, include: bool) -> None:
         selected = self._embedded_expenses_table.selected_row_data()
@@ -762,6 +813,25 @@ class CalculationView(QWidget):
         clipboard.setText(format_commission_summary(result))
         QMessageBox.information(self, "Provisionen", "Abrechnung in die Zwischenablage kopiert.")
 
+    def _copy_overview_cell(self, index: object) -> None:
+        """Copy a single overview value in spreadsheet-friendly form."""
+        data = getattr(index, "data", lambda *_args: None)(Qt.ItemDataRole.UserRole)
+        column = getattr(index, "column", lambda: -1)()
+        if not isinstance(data, dict) or not isinstance(column, int):
+            return
+        if not 0 <= column < len(_CATEGORY_HEADERS):
+            return
+        header = _CATEGORY_HEADERS[column]
+        value = data.get(f"__clipboard__{header}", data.get(header, ""))
+        QApplication.clipboard().setText(str(value))
+
+    @staticmethod
+    def _clipboard_number(value: float) -> str:
+        """Return a German decimal without unit or thousands separator."""
+        decimal_value = Decimal(str(value))
+        rendered = format(decimal_value, "f").rstrip("0").rstrip(".")
+        return (rendered or "0").replace(".", ",")
+
     def _populate_product_table(self, result: CommissionRunResult) -> None:
         self._product_table.set_data(
             [
@@ -781,6 +851,14 @@ class CalculationView(QWidget):
         )
 
     def _populate_category_table(self, result: CommissionRunResult) -> None:
+        category_order = {
+            category_name: position
+            for position, category_name in enumerate(result.profile.category_names)
+        }
+        category_rows = sorted(
+            result.category_rows,
+            key=lambda row: (category_order.get(row.category_name, len(category_order)), row.category_name.casefold()),
+        )
         self._category_table.set_data(
             [
                 {
@@ -794,8 +872,12 @@ class CalculationView(QWidget):
                     "__sort__Menge": row.quantity,
                     "__sort__Netto": row.net_amount,
                     "__sort__Brutto": row.gross_amount,
+                    "__clipboard__Kategorie": row.category_name,
+                    "__clipboard__Menge": self._clipboard_number(row.quantity),
+                    "__clipboard__Netto": self._clipboard_number(row.net_amount),
+                    "__clipboard__Brutto": self._clipboard_number(row.gross_amount),
                 }
-                for row in result.category_rows
+                for row in category_rows
             ]
         )
 
