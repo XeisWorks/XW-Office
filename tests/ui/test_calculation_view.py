@@ -66,6 +66,9 @@ def test_commission_view_uses_compact_tables_and_collapsed_documents(qtbot: obje
     ]
     assert not view._documents_group.isChecked()  # noqa: SLF001
     assert view._doc_table.isHidden()  # noqa: SLF001
+    assert view._embedded_expenses_table.height() == view._table_height_for_rows(  # noqa: SLF001
+        view._embedded_expenses_table, row_count=5  # noqa: SLF001
+    )
 
 
 def test_commission_overview_uses_profile_category_order_and_plain_clipboard_numbers(
@@ -108,7 +111,8 @@ def test_commission_overview_uses_profile_category_order_and_plain_clipboard_num
     view._copy_overview_cell(view._category_table.model().index(0, 2))  # noqa: SLF001
 
     assert QApplication.clipboard().text() == "1234,5"
-    assert view._copy_toast is not None  # noqa: SLF001
+    assert view._copy_notice is not None  # noqa: SLF001
+    assert "background" in view._copy_notice.styleSheet()  # noqa: SLF001
 
 
 def test_embedded_expenses_only_show_mh_category_for_current_month(qtbot: object) -> None:

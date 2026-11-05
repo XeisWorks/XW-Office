@@ -58,7 +58,6 @@ from xw_office.ui.dialogs.unreleased_title_dialog import (
     UnreleasedTitleDialog,
     UnreleasedTitleSplitDialog,
 )
-from xw_office.ui.toast import Toast
 from xw_office.ui.widgets.data_table import DataTable
 
 if TYPE_CHECKING:
@@ -95,7 +94,7 @@ class CalculationView(QWidget):
         self._export_worker: BackgroundWorker | None = None
         self._last_commission_result: CommissionRunResult | None = None
         self._embedded_expense_period: tuple[date, date] | None = None
-        self._copy_toast: Toast | None = None
+        self._copy_notice: QLabel | None = None
         self._active_profile_key: str = ""
         self._rerun_commission_after_clarification = False
         self._dismissed_unreleased_issues: set[tuple[str, str, str]] = set()
@@ -366,14 +365,22 @@ class CalculationView(QWidget):
         result_splitter.setSizes([660, 440])
         lay.addWidget(result_splitter, stretch=10)
 
-        self._embedded_expenses_group = QGroupBox("Ausgaben MusikHeroes")
-        self._embedded_expenses_group.setCheckable(True)
-        self._embedded_expenses_group.setChecked(True)
+        self._embedded_expenses_group = QGroupBox()
         self._embedded_expenses_group.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
         )
-        self._embedded_expenses_group.setMaximumHeight(230)
+        self._embedded_expenses_group.setMaximumHeight(290)
         expenses_layout = QVBoxLayout(self._embedded_expenses_group)
+        expenses_header = QHBoxLayout()
+        expenses_title = QLabel("AUSGABEN MUSIKHEROES")
+        expenses_title.setStyleSheet("font-weight: 700; letter-spacing: 0.5px;")
+        expenses_header.addWidget(expenses_title)
+        expenses_header.addStretch()
+        check_expenses_btn = QPushButton("AUSGABEN KONTROLLIEREN")
+        check_expenses_btn.setToolTip("Ausgabenübersicht mit der MH-Kategorie öffnen")
+        check_expenses_btn.clicked.connect(self._open_expense_review)
+        expenses_header.addWidget(check_expenses_btn)
+        expenses_layout.addLayout(expenses_header)
         self._embedded_expenses_status = QLabel("Noch nicht geladen")
         expenses_layout.addWidget(self._embedded_expenses_status)
         self._embedded_expenses_table = DataTable(
@@ -382,15 +389,10 @@ class CalculationView(QWidget):
         self._embedded_expenses_table.horizontalHeader().setSectionResizeMode(
             2, QHeaderView.ResizeMode.Stretch
         )
-        self._embedded_expenses_table.setMaximumHeight(120)
+        self._embedded_expenses_table.setFixedHeight(
+            self._table_height_for_rows(self._embedded_expenses_table, row_count=5)
+        )
         expenses_layout.addWidget(self._embedded_expenses_table)
-        expense_actions = QHBoxLayout()
-        expense_actions.addStretch()
-        check_expenses_btn = QPushButton("AUSGABEN KONTROLLIEREN")
-        check_expenses_btn.setToolTip("Ausgabenübersicht mit der MH-Kategorie öffnen")
-        check_expenses_btn.clicked.connect(self._open_expense_review)
-        expense_actions.addWidget(check_expenses_btn)
-        expenses_layout.addLayout(expense_actions)
         lay.addWidget(self._embedded_expenses_group)
 
         self._documents_group = QGroupBox("Belege")
@@ -817,15 +819,40 @@ class CalculationView(QWidget):
         header = _CATEGORY_HEADERS[column]
         value = data.get(f"__clipboard__{header}", data.get(header, ""))
         QApplication.clipboard().setText(str(value))
-        if self._copy_toast is not None:
-            self._copy_toast.close()
-        self._copy_toast = Toast(
-            "Kopiert",
+        self._show_copy_notice(
+            index,
             "Zahl kopiert" if header != "Kategorie" else "Text kopiert",
-            duration_ms=1000,
-            parent=self.window(),
         )
-        self._copy_toast.show_at_top_right(self.window())
+
+    def _show_copy_notice(self, index: object, text: str) -> None:
+        """Show a brief, highly visible confirmation directly above a table cell."""
+        if self._copy_notice is not None:
+            self._copy_notice.hide()
+        notice = QLabel(text, self)
+        notice.setWindowFlags(Qt.WindowType.ToolTip | Qt.WindowType.FramelessWindowHint)
+        notice.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        notice.setStyleSheet(
+            "QLabel { background: #f0ca73; color: #111827; border: 2px solid #8f6818; "
+            "border-radius: 5px; padding: 5px 9px; font-weight: 700; }"
+        )
+        notice.adjustSize()
+        rect = self._category_table.visualRect(index)  # type: ignore[arg-type]
+        top_left = self._category_table.viewport().mapToGlobal(rect.topLeft())
+        x = top_left.x() + max(0, (rect.width() - notice.width()) // 2)
+        y = top_left.y() - notice.height() - 6
+        notice.move(x, y)
+        notice.show()
+        self._copy_notice = notice
+        QTimer.singleShot(1000, notice.hide)
+
+    @staticmethod
+    def _table_height_for_rows(table: QTableView, *, row_count: int) -> int:
+        """Return the exact height needed for a table header and ``row_count`` rows."""
+        return (
+            table.horizontalHeader().sizeHint().height()
+            + table.verticalHeader().defaultSectionSize() * row_count
+            + table.frameWidth() * 2
+        )
 
     @staticmethod
     def _clipboard_number(value: float) -> str:
