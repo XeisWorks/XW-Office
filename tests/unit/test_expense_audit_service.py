@@ -683,12 +683,22 @@ def test_wuedara_tenant_keeps_positions_rules_and_links_separate(
         label="Wüdara Portal",
         url="https://example.test/wuedara",
     )
+    wuedara.add_supplier_link(
+        payee="Hosting GmbH",
+        iban="AT001234",
+        label="Wüdara Belege",
+        url="https://example.test/wuedara/receipts",
+    )
 
     wuedara_rows = wuedara.list_bank_expenses(start=date(2026, 9, 1), end=date(2026, 9, 30))
     xw_rows = service.list_bank_expenses(start=date(2026, 9, 1), end=date(2026, 9, 30))
 
     assert wuedara_rows[0].position_key == "wm"
-    assert wuedara_rows[0].supplier_url == "https://example.test/wuedara"
+    assert wuedara_rows[0].supplier_url in wuedara_rows[0].supplier_urls
+    assert set(wuedara_rows[0].supplier_urls) == {
+        "https://example.test/wuedara",
+        "https://example.test/wuedara/receipts",
+    }
     assert xw_rows[0].position_key == ""
     assert service.list_purpose_rules() == []
     assert len(wuedara.list_purpose_rules()) == 1

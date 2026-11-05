@@ -7,7 +7,7 @@ from threading import Event
 from zoneinfo import ZoneInfo
 
 import pytest
-from PySide6.QtCore import QDate, QSize, Qt, QTimer
+from PySide6.QtCore import QDate, QRect, QSize, Qt, QTimer
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QPushButton, QTabWidget
 from pytestqt.qtbot import QtBot
@@ -20,7 +20,12 @@ from xw_office.services.expenses.service import (
     ExpenseDocumentView,
     ExpensePositionView,
 )
-from xw_office.ui.modules.expense_review.view import ExpenseReviewView, _PurposeRuleDialog
+from xw_office.ui.modules.expense_review.view import (
+    ExpenseReviewView,
+    _DocumentDelegate,
+    _PurposeRuleDialog,
+    _SupplierDialog,
+)
 from xw_office.ui.theme import apply_app_theme
 
 
@@ -378,6 +383,35 @@ def test_purpose_dialog_long_contents_stay_within_screen(qtbot: QtBot) -> None:
     qtbot.wait(20)
     assert dialog.width() <= dialog.screen().availableGeometry().width() - 40
     assert dialog.label.cursorPosition() == 0
+
+
+def test_supplier_dialog_is_wide_and_accepts_multiple_urls(qtbot: QtBot) -> None:
+    dialog = _SupplierDialog()
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    assert dialog.minimumWidth() >= 1_100
+    assert dialog.url.minimumWidth() >= 820
+    QTest.mouseClick(dialog._add_url_button, Qt.MouseButton.LeftButton)
+    assert len(dialog._url_fields) == 2
+    dialog._url_fields[0].setText("https://portal.example.test/invoices")
+    dialog._url_fields[1].setText("https://portal.example.test/receipts")
+    assert dialog.urls() == [
+        "https://portal.example.test/invoices",
+        "https://portal.example.test/receipts",
+    ]
+
+
+def test_document_delegate_makes_each_supplier_url_selectable() -> None:
+    icons = _DocumentDelegate._icon_rects(
+        QRect(0, 0, 180, 28),
+        {"__supplier_urls": ("https://portal.example.test/one", "https://portal.example.test/two")},
+    )
+
+    assert [(kind, url) for _rect, kind, url in icons] == [
+        ("website", "https://portal.example.test/one"),
+        ("website", "https://portal.example.test/two"),
+    ]
 
 
 def test_missing_filter_is_refreshed_after_an_inflight_cached_load(

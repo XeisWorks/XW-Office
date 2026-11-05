@@ -100,6 +100,7 @@ class BankExpenseRow:
     position_source: str = ""
     position_rule_label: str = ""
     documents: tuple["ExpenseDocumentView", ...] = ()
+    supplier_urls: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -733,15 +734,14 @@ class ExpenseAuditService:
             )
             if document_views:
                 sevdesk_link = document_views[0].url
-            supplier_url = ""
+            supplier_urls: tuple[str, ...] = ()
             if self._pipeline_repo is not None:
-                match = self._matching_supplier_link(
+                matches = self._matching_supplier_links(
                     supplier_links, row.payee_normalized, row.counterparty_iban
-                ) or self._matching_supplier_link(
+                ) or self._matching_supplier_links(
                     supplier_links, projection.merchant_key, row.counterparty_iban
                 )
-                if match is not None:
-                    supplier_url = match.url
+                supplier_urls = tuple(dict.fromkeys(link.url for link in matches))
             result.append(
                 BankExpenseRow(
                     transaction_id=snapshot_id or row.external_id,
@@ -752,7 +752,8 @@ class ExpenseAuditService:
                     amount=row.amount,
                     currency=row.currency,
                     sevdesk_url=sevdesk_link,
-                    supplier_url=supplier_url,
+                    supplier_url=supplier_urls[0] if supplier_urls else "",
+                    supplier_urls=supplier_urls,
                     profile_status=status,
                     rule_source=source,
                     document_link_scan_complete=link_scan_complete,
@@ -774,13 +775,22 @@ class ExpenseAuditService:
         links: Sequence[ExpenseSupplierLink], payee_normalized: str, iban: str
     ) -> ExpenseSupplierLink | None:
         """Mirror repository supplier matching without opening a session per row."""
+        matches = ExpenseAuditService._matching_supplier_links(links, payee_normalized, iban)
+        return matches[0] if matches else None
+
+    @staticmethod
+    def _matching_supplier_links(
+        links: Sequence[ExpenseSupplierLink], payee_normalized: str, iban: str
+    ) -> list[ExpenseSupplierLink]:
+        """Return every matching supplier portal in its persisted order."""
+        matches: list[ExpenseSupplierLink] = []
         for link in links:
             if link.payee_normalized != payee_normalized:
                 continue
             if iban and link.counterparty_iban not in ("", iban):
                 continue
-            return link
-        return None
+            matches.append(link)
+        return matches
 
     @staticmethod
     def _apply_purpose_rules(

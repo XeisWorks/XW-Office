@@ -69,6 +69,7 @@ def shared_bank_expense_rows(expenses: list[BankExpenseRow]) -> list[dict[str, A
             "__source_tenant": "xw",
             "__documents": [document.__dict__ for document in row.documents],
             "__supplier_url": row.supplier_url,
+            "__supplier_urls": row.supplier_urls,
             "__read_only": True,
             "__align__Betrag": "right",
             "__fg__Betrag": "#ff9c9c",

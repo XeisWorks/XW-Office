@@ -577,6 +577,7 @@ class CalculationView(QWidget):
                     "__position_key": "mh",
                     "__documents": [document.__dict__ for document in row.documents],
                     "__supplier_url": row.supplier_url,
+                    "__supplier_urls": row.supplier_urls,
                     "__tooltip__Empfänger": format_expense_original_details(
                         raw_payee=row.raw_payee,
                         raw_payment_reference=row.raw_payment_reference,
@@ -613,18 +614,20 @@ class CalculationView(QWidget):
 
     @staticmethod
     def _embedded_document_text(row: BankExpenseRow) -> str:
+        supplier_urls = row.supplier_urls or ((row.supplier_url,) if row.supplier_url else ())
         if row.documents:
-            return "     " * len(row.documents) + ("  " if row.supplier_url else "")
-        if row.supplier_url:
-            return "      "
+            return "     " * (len(row.documents) + len(supplier_urls))
+        if supplier_urls:
+            return "      " * len(supplier_urls)
         return "nicht geprüft" if not row.document_link_scan_complete else "      "
 
     @staticmethod
     def _embedded_document_tooltip(row: BankExpenseRow) -> str:
         parts = [f"sevDesk: {document.document_number}" for document in row.documents]
-        parts.append(
-            "Lieferantenportal öffnen" if row.supplier_url else "Lieferantenportal-Link anlegen"
-        )
+        supplier_urls = row.supplier_urls or ((row.supplier_url,) if row.supplier_url else ())
+        parts.extend("Lieferantenportal öffnen" for _url in supplier_urls)
+        if not supplier_urls:
+            parts.append("Lieferantenportal-Link anlegen")
         return "\n".join(parts) or (
             "Belegscan unvollständig" if not row.document_link_scan_complete else "Kein Link hinterlegt"
         )

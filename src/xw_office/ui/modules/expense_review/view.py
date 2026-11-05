@@ -213,10 +213,14 @@ class _DocumentDelegate(QStyledItemDelegate):
         for document in row.get("__documents") or []:
             result.append((QRect(left, top, 22, 22), "sevdesk", str(document.get("url") or "")))
             left += 27
-        supplier_url = str(row.get("__supplier_url") or "")
-        if supplier_url:
+        supplier_urls = tuple(row.get("__supplier_urls") or ())
+        if not supplier_urls:
+            supplier_urls = (str(row.get("__supplier_url") or ""),)
+        supplier_urls = tuple(url for url in supplier_urls if url)
+        for supplier_url in supplier_urls:
             result.append((QRect(left, top, 22, 22), "website", supplier_url))
-        elif not row.get("__manual_id") and not row.get("__read_only"):
+            left += 27
+        if not supplier_urls and not row.get("__manual_id") and not row.get("__read_only"):
             result.append((QRect(left, top, 22, 22), "add_supplier", ""))
         if row.get("__manual_attachment_ids"):
             result.append((QRect(left, top, 22, 22), "attachment", ""))
@@ -365,21 +369,51 @@ class _SupplierDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Lieferantenportal bearbeiten" if url else "Lieferantenportal anlegen")
         layout = QFormLayout(self)
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.label = QLineEdit(label)
         self.payee = QLineEdit(payee)
         self.iban = QLineEdit(iban)
         self.url = QLineEdit(url or "https://")
+        self.url.setMinimumWidth(820)
+        self._url_fields = [self.url]
+        self._url_layout = QVBoxLayout()
+        self._url_layout.setContentsMargins(0, 0, 0, 0)
+        self._url_layout.setSpacing(6)
+        self._url_layout.addWidget(self.url)
+        self._add_url_button = QPushButton("+")
+        self._add_url_button.setAccessibleName("Weiteren Lieferantenportal-Link hinzufügen")
+        self._add_url_button.setToolTip("Weiteren Lieferantenportal-Link hinzufügen")
+        self._add_url_button.setFixedWidth(32)
+        self._add_url_button.clicked.connect(self._add_url_field)
+        self._url_layout.addWidget(self._add_url_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        url_widget = QWidget()
+        url_widget.setLayout(self._url_layout)
         layout.addRow("Bezeichnung", self.label)
         layout.addRow("Empfänger exakt", self.payee)
         layout.addRow("IBAN optional", self.iban)
-        layout.addRow("Website", self.url)
+        layout.addRow("Website", url_widget)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
+        self.setMinimumWidth(1_100)
         _make_labels_copyable(self)
+
+    def _add_url_field(self) -> None:
+        field = QLineEdit("https://")
+        field.setMinimumWidth(820)
+        self._url_fields.append(field)
+        self._url_layout.insertWidget(self._url_layout.count() - 1, field)
+        field.setFocus()
+
+    def urls(self) -> list[str]:
+        return [
+            field.text().strip()
+            for field in self._url_fields
+            if field.text().strip() and field.text().strip() != "https://"
+        ]
 
 
 class _PurposeRuleDialog(QDialog):
@@ -516,6 +550,7 @@ class ExpenseReviewView(QWidget):
         ] = {}
         self._tenant_period_states: dict[str, tuple[date, date]] = {}
         self._document_refresh_tenants: set[str] = set()
+        self._supplier_link_reload_tenants: set[str] = set()
         self._missing_refresh_button: QPushButton | None = None
         self._missing_refresh_icon = QIcon()
         self._missing_refresh_angle = 0
@@ -1121,6 +1156,9 @@ class ExpenseReviewView(QWidget):
             self._sync_missing_refresh_indicator()
             if period != self._selected_period():
                 self._load_cached_then_sync()
+            elif tenant_key in self._supplier_link_reload_tenants:
+                self._supplier_link_reload_tenants.discard(tenant_key)
+                self._load(refresh=False)
             elif sync_after:
                 self._load(refresh=True, automatic=True, load_manual_expenses=False)
         self._reload_shared_sources_if_ready()
@@ -1265,6 +1303,7 @@ class ExpenseReviewView(QWidget):
                     "__position_key": row.position_key,
                     "__documents": [document.__dict__ for document in row.documents],
                     "__supplier_url": row.supplier_url,
+                    "__supplier_urls": row.supplier_urls,
                     "__tooltip__Empfänger": format_expense_original_details(
                         raw_payee=row.raw_payee,
                         raw_payment_reference=row.raw_payment_reference,
@@ -1302,17 +1341,19 @@ class ExpenseReviewView(QWidget):
 
     @staticmethod
     def _document_text(row: BankExpenseRow) -> str:
+        supplier_urls = row.supplier_urls or ((row.supplier_url,) if row.supplier_url else ())
         if row.documents:
-            return "     " * len(row.documents) + ("  " if row.supplier_url else "")
-        if row.supplier_url:
-            return "      "
+            return "     " * (len(row.documents) + len(supplier_urls))
+        if supplier_urls:
+            return "      " * len(supplier_urls)
         return "nicht geprüft" if not row.document_link_scan_complete else "      "
 
     @staticmethod
     def _document_tooltip(row: BankExpenseRow) -> str:
         parts = [f"sevDesk: {doc.document_number}" for doc in row.documents]
-        if row.supplier_url:
-            parts.append("Lieferantenportal öffnen")
+        supplier_urls = row.supplier_urls or ((row.supplier_url,) if row.supplier_url else ())
+        if supplier_urls:
+            parts.extend("Lieferantenportal öffnen" for _url in supplier_urls)
         else:
             parts.append("Lieferantenportal-Link anlegen")
         return "\n".join(parts) or (
@@ -1598,12 +1639,7 @@ class ExpenseReviewView(QWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
-            self.service.add_supplier_link(
-                payee=dialog.payee.text(),
-                iban=dialog.iban.text(),
-                label=dialog.label.text(),
-                url=dialog.url.text(),
-            )
+            self._save_new_supplier_links(dialog)
         except ValueError as exc:
             _show_copyable_message(self, "Lieferantenportal", str(exc), QMessageBox.Icon.Warning)
             return
@@ -1616,16 +1652,11 @@ class ExpenseReviewView(QWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
-            self.service.add_supplier_link(
-                payee=dialog.payee.text(),
-                iban=str(data.get("__iban") or ""),
-                label=dialog.label.text(),
-                url=dialog.url.text(),
-            )
+            self._save_new_supplier_links(dialog, iban=str(data.get("__iban") or ""))
         except ValueError as exc:
             _show_copyable_message(self, "Lieferantenportal", str(exc), QMessageBox.Icon.Warning)
             return
-        self._load(refresh=False)
+        self._refresh_supplier_links_in_table()
 
     def _edit_selected_supplier(self) -> None:
         selected = self._supplier_table.selected_row_data()
@@ -1647,17 +1678,52 @@ class ExpenseReviewView(QWidget):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
+            urls = self._supplier_urls_from_dialog(dialog)
             self.service.update_supplier_link(
                 link_id=str(supplier.id),
                 payee=dialog.payee.text(),
                 iban=dialog.iban.text(),
                 label=dialog.label.text(),
-                url=dialog.url.text(),
+                url=urls[0],
             )
+            for url in urls[1:]:
+                self.service.add_supplier_link(
+                    payee=dialog.payee.text(),
+                    iban=dialog.iban.text(),
+                    label=dialog.label.text(),
+                    url=url,
+                )
         except ValueError as exc:
             _show_copyable_message(self, "Lieferantenportal", str(exc), QMessageBox.Icon.Warning)
             return
-        self._load(refresh=False)
+        self._refresh_supplier_links_in_table()
+
+    def _save_new_supplier_links(self, dialog: _SupplierDialog, *, iban: str | None = None) -> None:
+        urls = self._supplier_urls_from_dialog(dialog)
+        for url in urls:
+            self.service.add_supplier_link(
+                payee=dialog.payee.text(),
+                iban=dialog.iban.text() if iban is None else iban,
+                label=dialog.label.text(),
+                url=url,
+            )
+
+    @staticmethod
+    def _supplier_urls_from_dialog(dialog: _SupplierDialog) -> list[str]:
+        urls = dialog.urls()
+        if not urls:
+            raise ValueError("Bitte mindestens einen Lieferantenlink eingeben")
+        if any(not url.startswith("https://") for url in urls):
+            raise ValueError("Lieferantenlinks müssen mit https:// beginnen")
+        return urls
+
+    def _refresh_supplier_links_in_table(self) -> None:
+        """Immediately make newly saved portals available in the Beleg column."""
+        self._refresh_settings()
+        self._supplier_link_reload_tenants.add(self._tenant_key)
+        if self._tenant_key not in self._workers:
+            self._supplier_link_reload_tenants.discard(self._tenant_key)
+            self._load(refresh=False)
 
     def _toggle_selected_supplier(self) -> None:
         selected = self._supplier_table.selected_row_data()
