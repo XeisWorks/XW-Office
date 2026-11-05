@@ -9,7 +9,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -47,7 +48,11 @@ from xw_office.services.commission.service import (
     format_quantity,
 )
 from xw_office.services.expenses.reference_parser import format_expense_original_details
-from xw_office.services.expenses.service import BankExpenseRow, ExpenseAuditService
+from xw_office.services.expenses.service import (
+    DEFAULT_EXPENSE_POSITIONS,
+    BankExpenseRow,
+    ExpenseAuditService,
+)
 from xw_office.services.calculation.service import (
     ArticleEntry,
     CalculationService,
@@ -58,6 +63,7 @@ from xw_office.ui.dialogs.unreleased_title_dialog import (
     UnreleasedTitleDialog,
     UnreleasedTitleSplitDialog,
 )
+from xw_office.ui.modules.expense_review.view import _DocumentDelegate, _PositionDelegate
 from xw_office.ui.widgets.data_table import DataTable
 
 if TYPE_CHECKING:
@@ -95,6 +101,11 @@ class CalculationView(QWidget):
         self._last_commission_result: CommissionRunResult | None = None
         self._embedded_expense_period: tuple[date, date] | None = None
         self._copy_notice: QLabel | None = None
+        self._embedded_position_delegate = _PositionDelegate(self)
+        self._embedded_document_delegate = _DocumentDelegate(self)
+        self._embedded_mh_position = next(
+            position.__dict__ for position in DEFAULT_EXPENSE_POSITIONS if position.key == "mh"
+        )
         self._active_profile_key: str = ""
         self._rerun_commission_after_clarification = False
         self._dismissed_unreleased_issues: set[tuple[str, str, str]] = set()
@@ -305,6 +316,7 @@ class CalculationView(QWidget):
         self._commission_status.setWordWrap(True)
 
         result_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._result_splitter = result_splitter
         result_splitter.setChildrenCollapsible(False)
 
         overview = QWidget()
@@ -360,9 +372,9 @@ class CalculationView(QWidget):
 
         result_splitter.addWidget(overview)
         result_splitter.addWidget(products)
-        result_splitter.setStretchFactor(0, 3)
-        result_splitter.setStretchFactor(1, 2)
-        result_splitter.setSizes([660, 440])
+        result_splitter.setStretchFactor(0, 1)
+        result_splitter.setStretchFactor(1, 1)
+        result_splitter.setSizes([550, 550])
         lay.addWidget(result_splitter, stretch=10)
 
         self._embedded_expenses_group = QGroupBox()
@@ -388,6 +400,23 @@ class CalculationView(QWidget):
         )
         self._embedded_expenses_table.horizontalHeader().setSectionResizeMode(
             2, QHeaderView.ResizeMode.Stretch
+        )
+        self._embedded_expenses_table.horizontalHeader().setStretchLastSection(False)
+        self._embedded_expenses_table.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self._embedded_expenses_table.horizontalHeader().setSectionResizeMode(
+            5, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self._embedded_expenses_table.setItemDelegateForColumn(
+            4, self._embedded_position_delegate
+        )
+        self._embedded_expenses_table.setItemDelegateForColumn(
+            5, self._embedded_document_delegate
+        )
+        self._embedded_document_delegate.url_clicked.connect(self._open_expense_url)
+        self._embedded_document_delegate.supplier_link_requested.connect(
+            lambda _row: self._open_expense_review()
         )
         self._embedded_expenses_table.setFixedHeight(
             self._table_height_for_rows(self._embedded_expenses_table, row_count=5)
@@ -539,11 +568,15 @@ class CalculationView(QWidget):
                     "Empfänger": row.payee,
                     "Zweck / Referenz": row.purpose,
                     "Betrag": format_euro_amount(row.amount),
-                    "Kategorie": "MH",
-                    "Beleg": "sevDesk" if row.sevdesk_url else ("Lieferantenportal" if row.supplier_url else "fehlt"),
+                    "Kategorie": "",
+                    "Beleg": self._embedded_document_text(row),
                     "__transaction_id": row.transaction_id,
                     "__iban": row.iban,
                     "__payee": row.payee,
+                    "__positions": [self._embedded_mh_position],
+                    "__position_key": "mh",
+                    "__documents": [document.__dict__ for document in row.documents],
+                    "__supplier_url": row.supplier_url,
                     "__tooltip__Empfänger": format_expense_original_details(
                         raw_payee=row.raw_payee,
                         raw_payment_reference=row.raw_payment_reference,
@@ -558,6 +591,8 @@ class CalculationView(QWidget):
                         source=row.display_source,
                         confidence=row.display_confidence,
                     ),
+                    "__tooltip__Kategorie": "MusikHeroes (MH)",
+                    "__tooltip__Beleg": self._embedded_document_tooltip(row),
                     "__align__Betrag": "right",
                 }
                 for row in rows
@@ -570,6 +605,29 @@ class CalculationView(QWidget):
 
     def _open_expense_review(self) -> None:
         self._container.resolve(AppSignals).navigate_to_module.emit(ModuleKey.EXPENSE_REVIEW.value)
+
+    @staticmethod
+    def _open_expense_url(url: str) -> None:
+        if url.startswith("https://"):
+            QDesktopServices.openUrl(QUrl(url))
+
+    @staticmethod
+    def _embedded_document_text(row: BankExpenseRow) -> str:
+        if row.documents:
+            return "     " * len(row.documents) + ("  " if row.supplier_url else "")
+        if row.supplier_url:
+            return "      "
+        return "nicht geprüft" if not row.document_link_scan_complete else "      "
+
+    @staticmethod
+    def _embedded_document_tooltip(row: BankExpenseRow) -> str:
+        parts = [f"sevDesk: {document.document_number}" for document in row.documents]
+        parts.append(
+            "Lieferantenportal öffnen" if row.supplier_url else "Lieferantenportal-Link anlegen"
+        )
+        return "\n".join(parts) or (
+            "Belegscan unvollständig" if not row.document_link_scan_complete else "Kein Link hinterlegt"
+        )
 
     def _flag_embedded_expense(self, include: bool) -> None:
         selected = self._embedded_expenses_table.selected_row_data()

@@ -56,6 +56,8 @@ class _ContainerStub:
 def test_commission_view_uses_compact_tables_and_collapsed_documents(qtbot: object) -> None:
     view = CalculationView(_ContainerStub())  # type: ignore[arg-type]
     qtbot.addWidget(view)
+    view.resize(1400, 900)
+    view.show()
 
     assert view._product_table._model._columns == ["SKU", "Name", "Verkauft", "Netto"]  # noqa: SLF001
     assert view._category_table._model._columns == [  # noqa: SLF001
@@ -69,6 +71,10 @@ def test_commission_view_uses_compact_tables_and_collapsed_documents(qtbot: obje
     assert view._embedded_expenses_table.height() == view._table_height_for_rows(  # noqa: SLF001
         view._embedded_expenses_table, row_count=5  # noqa: SLF001
     )
+    assert view._embedded_expenses_table.itemDelegateForColumn(4) is view._embedded_position_delegate  # noqa: SLF001
+    assert view._embedded_expenses_table.itemDelegateForColumn(5) is view._embedded_document_delegate  # noqa: SLF001
+    overview_width, product_width = view._result_splitter.sizes()  # noqa: SLF001
+    assert abs(overview_width - product_width) <= 2
 
 
 def test_commission_overview_uses_profile_category_order_and_plain_clipboard_numbers(
@@ -141,4 +147,6 @@ def test_embedded_expenses_only_show_mh_category_for_current_month(qtbot: object
 
     rows = view._embedded_expenses_table.source_rows_data()  # noqa: SLF001
     assert [row["__transaction_id"] for row in rows] == ["mh"]
+    assert rows[0]["__position_key"] == "mh"
+    assert rows[0]["__positions"][0]["initials"] == "MH"
     assert "1 MH-Ausgaben im 11.2026" in view._embedded_expenses_status.text()  # noqa: SLF001
