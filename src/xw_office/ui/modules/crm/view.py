@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 from xw_office.core.worker import BackgroundWorker
 from xw_office.services.crm import ContactRecord, CrmService, MergeResult
 from xw_office.services.crm.types import DuplicateCandidate
+from xw_office.services.finanzonline.zm_service import is_valid_uid, normalize_uid
 from xw_office.ui.widgets.data_table import DataTable
 from xw_office.ui.widgets.search_bar import SearchBar
 
@@ -101,6 +103,7 @@ class CrmView(QWidget):
         self._contacts: list[ContactRecord] = []
         self._dup_candidates: list[DuplicateCandidate] = []
         self._worker: BackgroundWorker | None = None
+        self._uid_edit_worker: BackgroundWorker | None = None
         self._pending_merge_pair: tuple[ContactRecord, ContactRecord] | None = None
 
         root = QVBoxLayout(self)
@@ -121,6 +124,10 @@ class CrmView(QWidget):
         self._sync_btn = QPushButton("Kontakte laden")
         self._sync_btn.clicked.connect(self._load_contacts)
         bar.addWidget(self._sync_btn)
+        self._edit_uid_btn = QPushButton("EU-UID bearbeiten")
+        self._edit_uid_btn.setToolTip("EU-UID des ausgewaehlten sevDesk-Kontakts dauerhaft speichern")
+        self._edit_uid_btn.clicked.connect(self._edit_selected_vat_number)
+        bar.addWidget(self._edit_uid_btn)
         root.addLayout(bar)
 
         # --- search bar ---
@@ -144,7 +151,7 @@ class CrmView(QWidget):
         contact_lbl.setObjectName("sectionLabel")
         root.addWidget(contact_lbl)
 
-        self._contacts_table = DataTable(["ID", "Name", "E-Mail", "Telefon"])
+        self._contacts_table = DataTable(["ID", "Name", "E-Mail", "Telefon", "EU-UID"])
         self._contacts_table.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -213,6 +220,7 @@ class CrmView(QWidget):
                     "Name": rec.name,
                     "E-Mail": rec.email or "",
                     "Telefon": rec.phone or "",
+                    "EU-UID": rec.vat_number or "",
                     "__record__": rec,
                 }
                 for rec in rows
@@ -225,6 +233,7 @@ class CrmView(QWidget):
             r for r in self._contacts
             if needle in (r.name or "").lower()
             or needle in (r.email or "").lower()
+            or needle in (r.vat_number or "").lower()
         ]
         self._populate_contacts_table(filtered)
 
@@ -234,10 +243,73 @@ class CrmView(QWidget):
             return []
         out: list[str] = []
         for row in self._contacts:
-            hay = f"{row.name} {row.email or ''} {row.phone or ''}".lower()
+            hay = f"{row.name} {row.email or ''} {row.phone or ''} {row.vat_number or ''}".lower()
             if q in hay:
                 out.append(f"{row.name} ({row.email or 'keine E-Mail'})")
         return out
+
+    def _edit_selected_vat_number(self) -> None:
+        if self._uid_edit_worker is not None and self._uid_edit_worker.isRunning():
+            return
+        row = self._contacts_table.selected_row_data() or {}
+        contact = row.get("__record__")
+        if not isinstance(contact, ContactRecord):
+            QMessageBox.information(self, "EU-UID", "Bitte zuerst einen Kontakt auswaehlen.")
+            return
+        crm: CrmService = self._container.resolve(CrmService)
+        if not crm.has_live_connection():
+            QMessageBox.warning(
+                self,
+                "EU-UID",
+                "Ohne sevDesk-Verbindung kann keine UID dauerhaft gespeichert werden.",
+            )
+            return
+
+        while True:
+            value, accepted = QInputDialog.getText(
+                self,
+                "EU-UID im sevDesk-Kundenstamm",
+                f"Kunde: {contact.name or contact.id}\n\nEU-UID:",
+                text=contact.vat_number or "",
+            )
+            if not accepted:
+                return
+            normalized = normalize_uid(value)
+            if is_valid_uid(normalized):
+                break
+            QMessageBox.warning(
+                self,
+                "EU-UID ungueltig",
+                "Bitte eine gueltige EU-UID eingeben. Oesterreichische UIDs sind keine U13-Kunden-UIDs.",
+            )
+
+        self._edit_uid_btn.setEnabled(False)
+        self._status_lbl.setText(f"EU-UID fuer {contact.name or contact.id} wird in sevDesk gespeichert...")
+
+        def job() -> ContactRecord:
+            return crm.update_vat_number(contact, normalized)
+
+        self._uid_edit_worker = BackgroundWorker(job)
+        self._uid_edit_worker.signals.result.connect(self._on_vat_number_saved)
+        self._uid_edit_worker.signals.error.connect(self._on_vat_number_save_error)
+        self._uid_edit_worker.signals.finished.connect(
+            lambda: setattr(self, "_uid_edit_worker", None)
+        )
+        self._uid_edit_worker.start()
+
+    def _on_vat_number_saved(self, updated: object) -> None:
+        if not isinstance(updated, ContactRecord):
+            return
+        self._contacts = [updated if item.id == updated.id else item for item in self._contacts]
+        self._populate_contacts_table(self._contacts)
+        self._edit_uid_btn.setEnabled(True)
+        self._status_lbl.setText(f"EU-UID fuer {updated.name or updated.id} in sevDesk gespeichert")
+
+    def _on_vat_number_save_error(self, exc: BaseException) -> None:
+        self._edit_uid_btn.setEnabled(True)
+        self._status_lbl.setText(f"EU-UID konnte nicht gespeichert werden: {exc}")
+        logger.exception("CRM EU-UID update failed: %s", exc)
+        QMessageBox.warning(self, "EU-UID", f"Speichern in sevDesk fehlgeschlagen:\n{exc}")
 
     # ------------------------------------------------------------------
     # Duplicate scan

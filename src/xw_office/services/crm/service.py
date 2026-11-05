@@ -76,6 +76,16 @@ class CrmService:
         logger.info("CRM duplicate scan: %s candidates from %s contacts", len(dups), len(rows))
         return dups
 
+    def update_vat_number(self, contact: ContactRecord, vat_number: str) -> ContactRecord:
+        """Persist a customer's verified EU VAT ID in its sevDesk master record."""
+        if self._contact_client is None:
+            raise RuntimeError("Kein sevDesk-Token konfiguriert.")
+        value = str(vat_number or "").strip()
+        if not value:
+            raise ValueError("EU-UID darf nicht leer sein.")
+        self._contact_client.update_vat_number(contact.id, value)
+        return contact.model_copy(update={"vat_number": value})
+
     # ------------------------------------------------------------------ #
     # Merge preflight (dry-run) and live merge                            #
     # ------------------------------------------------------------------ #
@@ -122,6 +132,7 @@ class CrmService:
             email=(master.email or "").strip() or (duplicate.email or "").strip() or None,
             phone=(master.phone or "").strip() or (duplicate.phone or "").strip() or None,
             city=(master.city or "").strip() or (duplicate.city or "").strip() or None,
+            vat_number=(master.vat_number or "").strip() or (duplicate.vat_number or "").strip() or None,
         )
 
         report: MergePreflightReport | None = None

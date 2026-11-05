@@ -40,7 +40,15 @@ def _parse_contact_record(raw: dict[str, Any]) -> ContactRecord:
         if isinstance(addr, dict) and addr.get("city"):
             city = str(addr["city"]).strip() or None
             break
-    return ContactRecord(id=cid, name=name, email=email, phone=phone, city=city)
+    vat_number = str(raw.get("vatNumber") or "").strip() or None
+    return ContactRecord(
+        id=cid,
+        name=name,
+        email=email,
+        phone=phone,
+        city=city,
+        vat_number=vat_number,
+    )
 
 
 class ContactClient:
@@ -114,6 +122,12 @@ class ContactClient:
         response = self._conn.client.put(f"/Contact/{contact_id}", json=payload)
         raise_for_sevdesk(response)
 
+    def update_vat_number(self, contact_id: str, vat_number: str) -> None:
+        """Persist one customer's EU VAT ID without replacing unrelated fields."""
+        if not str(contact_id).strip():
+            raise ValueError("sevDesk-Kontakt-ID fehlt.")
+        self.update_contact(str(contact_id), {"vatNumber": str(vat_number).strip()})
+
     def delete_contact(self, contact_id: str) -> None:
         """Delete sevDesk contact by id."""
         response = self._conn.client.delete(f"/Contact/{contact_id}")
@@ -128,6 +142,8 @@ class ContactClient:
             payload["phones"] = [{"value": record.phone, "type": "work"}]
         if record.city:
             payload["addresses"] = [{"city": record.city}]
+        if record.vat_number:
+            payload["vatNumber"] = record.vat_number
 
         # Try rich payload first; on API-schema mismatch, fallback to minimal update.
         try:

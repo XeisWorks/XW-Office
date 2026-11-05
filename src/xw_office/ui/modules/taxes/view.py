@@ -47,6 +47,7 @@ from xw_office.services.finanzonline import (
 )
 from xw_office.services.finanzonline.zm_service import is_valid_uid, normalize_uid
 from xw_office.services.finanzonline.amounts import tax_amount
+from xw_office.services.sevdesk.contact_client import ContactClient
 from xw_office.ui.modules.taxes.presentation import CollapsibleDetails, UvaPresentation, format_euro, validate_preview
 from xw_office.ui.modules.taxes.oss_presentation import QuarterComboBox, oss_summary_html
 from xw_office.ui.widgets.data_table import DataTable
@@ -441,7 +442,7 @@ class TaxesView(QWidget):
         return page
 
     def _ask_zm_uid_corrections(self, result: ZmCalculationResult) -> dict[str, str] | None:
-        """Request valid UIDs before a U13 upload; corrections stay in this filing only."""
+        """Collect verified UIDs that will be saved to the sevDesk customer master."""
         if not result.invalid:
             return {}
         if not result.invalid_uid_details:
@@ -455,6 +456,14 @@ class TaxesView(QWidget):
 
         corrections: dict[str, str] = {}
         for detail in result.invalid_uid_details:
+            if not detail.contact_id:
+                QMessageBox.warning(
+                    self,
+                    "Zusammenfassende Meldung",
+                    "Der betroffene Beleg ist keinem sevDesk-Kontakt zugeordnet. "
+                    "Bitte den Kunden beim Beleg in sevDesk korrigieren und die ZM neu laden.",
+                )
+                return None
             context = detail.customer or "Unbekannter Kunde"
             if detail.document_number:
                 context += f"\nRechnung/Gutschrift: {detail.document_number}"
@@ -462,9 +471,9 @@ class TaxesView(QWidget):
             while True:
                 value, accepted = QInputDialog.getText(
                     self,
-                    "UID fuer Zusammenfassende Meldung",
+                    "EU-UID im sevDesk-Kundenstamm",
                     f"Ungültige oder fehlende UID ({original}) fuer:\n{context}\n\n"
-                    "Bitte korrekte EU-UID eingeben:",
+                    "Bitte korrekte EU-UID eingeben. Sie wird dauerhaft bei diesem Kunden gespeichert:",
                     text=detail.uid_raw,
                 )
                 if not accepted:
@@ -489,15 +498,24 @@ class TaxesView(QWidget):
         corrections: dict[str, str],
     ) -> None:
         self._set_uva_busy(True)
-        self._set_uva_progress(45, "Zusammenfassende Meldung wird an FinanzOnline gesendet...")
+        self._set_uva_progress(45, "EU-UIDs werden in sevDesk gespeichert...")
 
         def job() -> UvaSubmitResult:
-            result = uva.submit_zm_month(
-                year,
-                month,
-                uid_overrides=corrections or None,
-                prepared=prepared if not corrections else None,
-            )
+            uid_updates: dict[str, str] = {}
+            for detail in prepared.invalid_uid_details:
+                uid = corrections.get(detail.document_key)
+                if not uid:
+                    continue
+                existing = uid_updates.setdefault(detail.contact_id, uid)
+                if existing != uid:
+                    raise ValueError(
+                        "Fuer denselben sevDesk-Kontakt wurden unterschiedliche EU-UIDs eingegeben."
+                    )
+            contact_client = self._container.resolve(ContactClient)
+            for contact_id, uid in uid_updates.items():
+                contact_client.update_vat_number(contact_id, uid)
+            self._emit_uva_submit_progress(70, "Zusammenfassende Meldung wird aus sevDesk neu berechnet...")
+            result = uva.submit_zm_month(year, month, force_refresh=True)
             self._emit_uva_submit_progress(100, "ZS-Sendevorgang abgeschlossen")
             return result
 

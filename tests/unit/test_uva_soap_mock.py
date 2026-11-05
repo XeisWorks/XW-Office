@@ -502,6 +502,26 @@ def test_uva_service_reuses_cached_zm_for_submit_after_preview() -> None:
     assert zm_service.calls == 1
 
 
+def test_submit_zm_force_refresh_reloads_sevdesk_data_after_customer_update() -> None:
+    mock = MockUvaSoapBackend()
+    client = FinanzOnlineClient(AppConfig(), uva_backend=mock)
+    zm_service = _ZmServiceWithCounter()
+    service = UvaService(AppConfig(), client, zm_service=zm_service)  # type: ignore[arg-type]
+    service._calculation_cache[(2026, 3)] = {
+        "zm": ZmCalculationResult(
+            year=2026,
+            month=3,
+            invalid=["ungueltige/fehlende UID: alter Snapshot"],
+        ).model_dump()
+    }
+
+    result = service.submit_zm_month(2026, 3, force_refresh=True)
+
+    assert result.ok is True
+    assert zm_service.calls == 1
+    assert [call["meldung"] for call in mock.calls] == ["U13"]
+
+
 def test_uva_service_blocks_submission_when_data_quality_blocks() -> None:
     mock = MockUvaSoapBackend()
     client = FinanzOnlineClient(AppConfig(), uva_backend=mock)

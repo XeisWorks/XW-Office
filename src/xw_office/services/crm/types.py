@@ -16,6 +16,7 @@ class ContactRecord(BaseModel):
     email: str | None = None
     phone: str | None = None
     city: str | None = None
+    vat_number: str | None = None
 
 
 class MatchReason(str, Enum):

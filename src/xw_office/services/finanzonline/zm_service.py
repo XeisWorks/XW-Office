@@ -34,6 +34,7 @@ class ZmInvalidUid(BaseModel):
     """A ZM document whose customer UID needs an explicit operator decision."""
 
     document_key: str
+    contact_id: str = ""
     document_number: str = ""
     customer: str = ""
     uid_raw: str = ""
@@ -260,6 +261,7 @@ class ZmService:
                 document = self._provider.enrich_contact(document)
             contact_raw = document.get("contact")
             contact: dict[str, Any] = contact_raw if isinstance(contact_raw, dict) else {}
+            contact_id = _ref_id(contact_raw)
             customer = str(contact.get("name") or document.get("contactName")
                            or document.get("supplierNameAtSave") or "").strip()
             document_number = str(
@@ -285,6 +287,7 @@ class ZmService:
                 result.invalid_uid_details.append(
                     ZmInvalidUid(
                         document_key=document_key,
+                        contact_id=contact_id,
                         document_number=document_number,
                         customer=customer,
                         uid_raw=uid_raw,

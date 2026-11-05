@@ -482,24 +482,19 @@ def test_incoming_rc_draft_is_not_taxable() -> None:
     assert result.stats.draft_or_open_ignored == 1
 
 
-def test_rc_advance_in_different_month_blocks_tax_submission() -> None:
-    from xw_office.services.finanzonline.client import FinanzOnlineClient
-    from xw_office.services.finanzonline.uva_service import UvaService, build_data_quality
-    from xw_office.services.finanzonline.uva_soap import MockUvaSoapBackend
+def test_rc_prepayment_does_not_block_the_performance_month_tax_submission() -> None:
+    from xw_office.services.finanzonline.uva_service import build_data_quality
 
     selected = UvaDocumentSelector().select_purchase_documents(2026, 9, [{
         "id": "advance", "status": "1000", "voucherDate": "2026-09-04",
         "deliveryDate": "2026-09-04", "paidDate": "2026-08-04",
         "sumNet": "100", "sumGross": "100", "taxText": "REVERSE CHARGE",
     }])
+    assert selected.documents
+    assert selected.warnings == []
     quality = build_data_quality({"warnings": selected.warnings})
-    backend = MockUvaSoapBackend()
-    service = UvaService(AppConfig(), FinanzOnlineClient(AppConfig(), uva_backend=backend))
-    service._calculation_cache[(2026, 9)] = {"data_quality": quality}
-    result = service.submit_uva_month(2026, 9)
-    assert not result.ok
-    assert "Steuerperiode" in result.message
-    assert backend.calls == []
+    assert quality["uva_blocking"] == []
+    assert quality["status"] == "abgabebereit"
 
 
 def test_malformed_bulk_history_cannot_claim_complete_payment_evidence() -> None:

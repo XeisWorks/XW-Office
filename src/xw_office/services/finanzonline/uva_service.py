@@ -388,11 +388,14 @@ class UvaService:
         *,
         uid_overrides: Mapping[str, str] | None = None,
         prepared: ZmCalculationResult | None = None,
+        force_refresh: bool = False,
     ) -> UvaSubmitResult:
-        """Submit U13 only, applying operator-confirmed UID corrections in-memory."""
+        """Submit U13, optionally rebuilding it from current sevDesk source data."""
         if self._zm_service is None:
             return UvaSubmitResult(ok=False, zm_ok=False, message="ZM/U13 ist nicht konfiguriert.")
-        if uid_overrides:
+        if force_refresh:
+            zm = self._zm_service.calculate_month(year, month)
+        elif uid_overrides:
             zm = self._zm_service.calculate_month(year, month, uid_overrides=uid_overrides)
         elif prepared is not None:
             zm = prepared

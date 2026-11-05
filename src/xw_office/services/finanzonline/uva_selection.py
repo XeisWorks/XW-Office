@@ -110,13 +110,9 @@ class UvaDocumentSelector:
                         selected.append(dict(document))
                         result.stats.selected += 1
                         result.stats.accrual_selected += 1
-                        if "REVERSE CHARGE" in str(document.get("taxText") or "").upper() and (
-                            payment_date is not None and payment_date.date() < tax_date.date()
-                            and (payment_date.year, payment_date.month) != (tax_date.year, tax_date.month)
-                        ):
-                            result.warnings.append(
-                                f"Ungeklaerte Steuerperiode: RC-Vorauszahlung gesondert pruefen: {label}"
-                            )
+                        # Reverse-charge transactions are accounted for at their tax point,
+                        # not at the payment date.  A prepayment therefore must neither move
+                        # the transaction to another UVA period nor block the filing.
                     else:
                         result.stats.accrual_out_of_period += 1
                     continue

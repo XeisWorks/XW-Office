@@ -22,12 +22,16 @@ def _invoice(*, status_code: int = 100) -> InvoiceSummary:
 @dataclass
 class _ContactClientStub:
     update_calls: list[ContactRecord] = field(default_factory=list)
+    vat_number_calls: list[tuple[str, str]] = field(default_factory=list)
     delete_calls: list[str] = field(default_factory=list)
     archive_calls: list[tuple[str, str]] = field(default_factory=list)
     raise_on_delete: bool = False
 
     def update_contact_fields(self, record: ContactRecord) -> None:
         self.update_calls.append(record)
+
+    def update_vat_number(self, contact_id: str, vat_number: str) -> None:
+        self.vat_number_calls.append((contact_id, vat_number))
 
     def delete_contact(self, contact_id: str) -> None:
         if self.raise_on_delete:
@@ -72,6 +76,16 @@ def test_merge_prefers_master_non_empty_fields() -> None:
     assert result.merged.phone == "+43-1-1000"
     assert result.merged.city == "Wien"
     assert result.loser_outcome == "not_written"
+
+
+def test_update_vat_number_persists_only_the_selected_contact() -> None:
+    contacts = _ContactClientStub()
+    service = CrmService(_config(), contact_client=contacts)  # type: ignore[arg-type]
+
+    updated = service.update_vat_number(ContactRecord(id="100", name="EU Kunde"), "DE136695976")
+
+    assert contacts.vat_number_calls == [("100", "DE136695976")]
+    assert updated.vat_number == "DE136695976"
 
 
 def test_merge_fills_missing_master_fields_from_duplicate() -> None:
