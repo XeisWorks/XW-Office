@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+from PySide6.QtWidgets import QApplication
+
 from xw_office.services.calculation.service import CalculationService
 from xw_office.services.commission.service import (
     CategoryBreakdownRow,
@@ -97,6 +99,16 @@ def test_commission_overview_uses_profile_category_order_and_plain_clipboard_num
     assert [row["Kategorie"] for row in rows] == ["MusikHeroes", "MusikHeroes_Noten digital"]
     assert rows[0]["__clipboard__Netto"] == "1234,5"
     assert view._clipboard_number(Decimal("10.00")) == "10"  # noqa: SLF001
+    displayed_rows = [
+        view._category_table.model().index(row, 0).data()  # noqa: SLF001
+        for row in range(view._category_table.model().rowCount())  # noqa: SLF001
+    ]
+    assert displayed_rows == ["MusikHeroes", "MusikHeroes_Noten digital"]
+
+    view._copy_overview_cell(view._category_table.model().index(0, 2))  # noqa: SLF001
+
+    assert QApplication.clipboard().text() == "1234,5"
+    assert view._copy_toast is not None  # noqa: SLF001
 
 
 def test_embedded_expenses_only_show_mh_category_for_current_month(qtbot: object) -> None:

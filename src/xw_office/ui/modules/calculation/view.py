@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import csv
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
-from zoneinfo import ZoneInfo
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
@@ -59,6 +58,7 @@ from xw_office.ui.dialogs.unreleased_title_dialog import (
     UnreleasedTitleDialog,
     UnreleasedTitleSplitDialog,
 )
+from xw_office.ui.toast import Toast
 from xw_office.ui.widgets.data_table import DataTable
 
 if TYPE_CHECKING:
@@ -95,6 +95,7 @@ class CalculationView(QWidget):
         self._export_worker: BackgroundWorker | None = None
         self._last_commission_result: CommissionRunResult | None = None
         self._embedded_expense_period: tuple[date, date] | None = None
+        self._copy_toast: Toast | None = None
         self._active_profile_key: str = ""
         self._rerun_commission_after_clarification = False
         self._dismissed_unreleased_issues: set[tuple[str, str, str]] = set()
@@ -498,20 +499,12 @@ class CalculationView(QWidget):
         except KeyError:
             self._embedded_expenses_status.setText("Ausgabenpipeline nicht konfiguriert")
             return
-        today = datetime.now(tz=ZoneInfo("Europe/Vienna")).date()
-        month_start = today.replace(day=1)
-        next_month = (
-            date(today.year + 1, 1, 1)
-            if today.month == 12
-            else date(today.year, today.month + 1, 1)
-        )
-        month_end = next_month - timedelta(days=1)
-        self._embedded_expense_period = (month_start, month_end)
-        self._embedded_expenses_status.setText("MH-Ausgaben dieses Monats werden geladen …")
+        self._embedded_expense_period = (result.period.start, result.period.end)
+        self._embedded_expenses_status.setText("MH-Ausgaben für den Abrechnungszeitraum werden geladen …")
         self._embedded_expense_worker = BackgroundWorker(
             lambda: service.list_bank_expenses(
-                start=month_start,
-                end=month_end,
+                start=result.period.start,
+                end=result.period.end,
                 refresh=True,
             )
         )
@@ -824,6 +817,15 @@ class CalculationView(QWidget):
         header = _CATEGORY_HEADERS[column]
         value = data.get(f"__clipboard__{header}", data.get(header, ""))
         QApplication.clipboard().setText(str(value))
+        if self._copy_toast is not None:
+            self._copy_toast.close()
+        self._copy_toast = Toast(
+            "Kopiert",
+            "Zahl kopiert" if header != "Kategorie" else "Text kopiert",
+            duration_ms=1000,
+            parent=self.window(),
+        )
+        self._copy_toast.show_at_top_right(self.window())
 
     @staticmethod
     def _clipboard_number(value: float) -> str:
@@ -880,6 +882,9 @@ class CalculationView(QWidget):
                 for row in category_rows
             ]
         )
+        # ``DataTable`` enables a proxy sort by default. Reset it explicitly so the
+        # configured profile order always wins, even after an earlier header click.
+        self._category_table.model().sort(-1)
 
     def _populate_doc_table(self, result: CommissionRunResult) -> None:
         self._doc_table.set_data(
