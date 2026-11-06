@@ -28,9 +28,11 @@ Push mit der vollständigen Testmatrix verifiziert:
 - [x] Gesamtsuite ausgeführt: 1.871 Tests grün; zwei bereits vorhandene,
   reihenfolgeabhängige `wix_media_upload`-Fehler treten nur im Suite-Verbund
   auf und laufen isoliert grün (nicht durch diesen Umbau verursacht).
-- [ ] Verbleibend vor dem produktiven Abschluss: geschütztes Archiv prüfen,
-  Diff kontrollieren, Commit und Push nach `origin/main`; anschließend
-  kontrollierter sevDesk-Testbeleg mit echtem Label-/PLC-/Mail-/START-Lauf.
+- [x] Geschütztes Archiv geprüft, Diff kontrolliert und getestete Änderungen
+  in `main` nach `origin/main` gepusht.
+- [ ] Offener Betriebsnachweis: kontrollierter sevDesk-Testbeleg mit echtem
+  Label-/PLC-/Mail-/START-Lauf; dafür werden gültige sevDesk-Zugangsdaten,
+  konfigurierte Drucker und ein geeigneter Testentwurf benötigt.
 
 ## 1. Zielentscheidung
 
