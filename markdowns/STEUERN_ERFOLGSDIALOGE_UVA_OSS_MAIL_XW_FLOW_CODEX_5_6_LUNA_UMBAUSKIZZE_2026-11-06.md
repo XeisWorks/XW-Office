@@ -1103,3 +1103,8 @@ Noch manuell beziehungsweise nicht sicher automatisierbar:
 - Railway-Prüfung: Der Dienstname `XW-Office` ist im Projekt ein PostgreSQL-Service. Der laufende
   Webdienst wird als `XW-Product-Hub` aus `XeisWorks/XW-Office` deployed; ein Redeploy des
   PostgreSQL-Service wurde aus Sicherheitsgründen nicht ausgelöst.
+- Die strukturierte Transfer-Mail verwendet einen expliziten `[XW-PAYMENT]`-Betreffmarker. Dadurch
+  bleibt der normale transfer@-Rechnungseingang body-frei und schnell, wÃ¤hrend SteuerauftrÃ¤ge
+  deterministisch aus dem Mailtext dedupliziert und in den PaymentCase Ã¼bernommen werden.
+- Die projektlokale XW-Flow-Testumgebung wurde aus den gehashten Produktions-/Dev-Lockdateien
+  vervollstÃ¤ndigt; der komplette Backendlauf ist mit 1.204 Tests, 3 Skips und ohne Fehler grÃ¼n.

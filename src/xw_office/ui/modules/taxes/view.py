@@ -742,7 +742,7 @@ class TaxesView(QWidget):
                     filing_kind="uva", period=period, calculation_hash=calculation_hash,
                     recipient_kind="xw_flow_transfer",
                     send=lambda: mail_service.send_mail(
-                        to_email=XW_FLOW_TRANSFER, subject=f"Zahlung UVA {period}",
+                    to_email=XW_FLOW_TRANSFER, subject=f"[XW-PAYMENT] Zahlung UVA {period}",
                         text_body=build_transfer_body(payment, reference=res.reference_id or ""),
                         sender_mailbox=TAX_MAIL_SENDER, require_exact_sender=True,
                     ),
@@ -1216,7 +1216,7 @@ class TaxesView(QWidget):
                     recipient_kind="xw_flow_transfer",
                     send=lambda: mail_service.send_mail(
                         to_email=XW_FLOW_TRANSFER,
-                        subject=f"Zahlung EU-OSS Q{export_snapshot.quarter}/{export_snapshot.year}",
+                        subject=f"[XW-PAYMENT] Zahlung EU-OSS Q{export_snapshot.quarter}/{export_snapshot.year}",
                         text_body=build_transfer_body(payment),
                         sender_mailbox=TAX_MAIL_SENDER,
                         require_exact_sender=True,
