@@ -1112,3 +1112,5 @@ Noch manuell beziehungsweise nicht sicher automatisierbar:
   `sendMail`-URL, Allowlist-Empfänger und PDF-Anhang werden ohne echte Zugangsdaten geprüft.
 - Nach der Datenbank-Testvertragsanpassung ist die komplette XW-Office-Unit-Suite mit 1.635 Tests
   erfolgreich durchgelaufen.
+- Statuskorrektur: Die zuvor genannten Contract-Manifest-Hashabweichungen sind inzwischen
+  aktualisiert; `python scripts/check_markdowns.py` meldet `Documentation OK`.
