@@ -685,14 +685,14 @@ class TaxesView(QWidget):
         if res.zm_xml_payload:
             detail_parts.append("Gesendetes U13/ZM-XML:\n" + res.zm_xml_payload)
 
-        box = QMessageBox(self)
-        box.setWindowTitle("UVA Abgabe")
-        box.setIcon(QMessageBox.Icon.Information if res.ok and (res.zm_ok is not False) else QMessageBox.Icon.Warning)
-        box.setText("Sendevorgang abgeschlossen." if res.ok else "Sendevorgang mit Fehler.")
-        box.setInformativeText("\n".join(lines))
-        if detail_parts:
-            box.setDetailedText("\n\n".join(detail_parts))
-        box.exec()
+        tone = "success" if res.ok and not res.test_mode else "neutral" if res.ok else "error"
+        period = str(res.uva_payload.get("zeitraum") or "") if res.uva_payload else ""
+        summary = "UVA erfolgreich übermittelt" if res.ok and not res.test_mode else "UVA-Test erfolgreich" if res.ok else "Meldung konnte nicht gesendet werden"
+        context = " · ".join(item for item in (period, f"Zahlbetrag {_format_euro(str(res.uva_payload.get('zahlbetrag') or '0.00'))} EUR" if res.uva_payload else "") if item)
+        if res.filing_status_error:
+            context = (context + " · Lokaler Status nicht gespeichert").strip(" ·")
+        OperationResultDialog(self, tone=tone, title="UVA-Abgabe", summary=summary, context=context,
+            details="\n".join(lines) + ("\n\n" + "\n\n".join(detail_parts) if detail_parts else "")).exec()
 
     def _update_uva_filing_status(self, payload: dict[str, object]) -> None:
         label = self._uva_filing_status_label
@@ -724,28 +724,15 @@ class TaxesView(QWidget):
         )
 
     def _show_zm_submit_result(self, res: UvaSubmitResult) -> None:
-        state = "erfolgreich" if res.ok else "fehlgeschlagen"
-        lines = [
-            f"U13/Zusammenfassende Meldung: {state}",
-            f"Antwort: {res.message or '-'}",
-            f"Referenz: {res.reference_id or '-'}",
-            f"ZM-Zeilen: {res.zm_rows}",
-            f"Modus: {'Testuebermittlung' if res.test_mode else 'Produktivuebermittlung'}",
-            f"XML validiert: {'ja' if res.xml_validated else 'nein'}",
-        ]
-        box = QMessageBox(self)
-        box.setWindowTitle("Zusammenfassende Meldung Abgabe")
-        box.setIcon(QMessageBox.Icon.Information if res.ok else QMessageBox.Icon.Warning)
-        box.setText("Sendevorgang abgeschlossen." if res.ok else "Sendevorgang mit Fehler.")
-        box.setInformativeText("\n".join(lines))
-        details: list[str] = []
-        if res.zm_payload:
-            details.append("Gesendeter U13/ZM-Payload:\n" + repr(res.zm_payload))
-        if res.xml_payload:
-            details.append("Gesendetes U13/ZM-XML:\n" + res.xml_payload)
-        if details:
-            box.setDetailedText("\n\n".join(details))
-        box.exec()
+        state = "ZM erfolgreich übermittelt" if res.ok and not res.test_mode else "ZM-Test erfolgreich" if res.ok else "ZM konnte nicht gesendet werden"
+        details = "\n".join([
+            f"Antwort: {res.message or '-'}", f"Referenz: {res.reference_id or '-'}",
+            f"ZM-Zeilen: {res.zm_rows}", f"XML validiert: {'ja' if res.xml_validated else 'nein'}",
+            "Gesendeter Payload: " + repr(res.zm_payload) if res.zm_payload else "",
+            "Gesendetes XML: " + res.xml_payload if res.xml_payload else "",
+        ])
+        OperationResultDialog(self, tone="success" if res.ok and not res.test_mode else "neutral" if res.ok else "error",
+            title="Zusammenfassende Meldung", summary=state, context=f"{res.zm_rows} UID-Zeilen", details=details).exec()
 
     def _set_uva_busy(self, busy: bool) -> None:
         for button in (
