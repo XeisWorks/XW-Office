@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import types
+import sys
 from pathlib import Path
 
 from xw_office.services.mailing import outlook_compose
@@ -40,70 +41,79 @@ def test_open_classic_outlook_draft_uses_interactive_classic_cli(
     assert result["pid"] == "4711"
     assert result["sender"] == "office@xeisworks.at"
     command = calls[0]["command"]
-    assert command[:4] == [str(executable), "/c", "ipm.note", "/m"]  # type: ignore[index]
-    assert command[4] == (  # type: ignore[index]
-        "kunde@example.test?subject="
-        "Wix-Order-Nr.%2020844%20%7C%20sevDesk-Rechnungsnr.%20RE-DRAFT"
-    )
+    assert command == [str(executable)]
     assert calls[0]["stdin"] is outlook_compose.subprocess.DEVNULL
     assert "creationflags" not in calls[0]
     assert helper_calls
-    assert '"operation": "select_sender"' in str(helper_calls[0]["input"])
+    assert '"operation": "compose"' in str(helper_calls[0]["input"])
+    assert '"attach_only": true' in str(helper_calls[0]["input"])
     assert '"sender": "office@xeisworks.at"' in str(helper_calls[0]["input"])
 
 
-def test_apply_sender_to_matching_draft_selects_requested_account() -> None:
+def test_wait_for_running_outlook_never_dispatches_hidden_instance(monkeypatch: object) -> None:
+    outlook = object()
+    win32 = types.SimpleNamespace(GetActiveObject=lambda _name: outlook)
+
+    assert outlook_compose._wait_for_running_outlook(win32, wait_seconds=1) is outlook  # noqa: SLF001
+
+
+def test_attached_com_draft_sets_requested_sender_before_and_after_display(
+    monkeypatch: object,
+) -> None:
+    events: list[str] = []
     account = types.SimpleNamespace(
         SmtpAddress="office@xeisworks.at",
         DisplayName="XeisWorks Office",
         UserName="office@xeisworks.at",
     )
+    inspector = types.SimpleNamespace(WindowState=1, Activate=lambda: events.append("activate"))
 
     class _Mail:
-        Subject = "Wix-Order-Nr. 20844 | sevDesk-Rechnungsnr. RE-DRAFT"
-        To = "kunde@example.test"
         EntryID = "draft-1"
-        SendUsingAccount = None
-        _oleobj_ = None
+        Parent = types.SimpleNamespace(StoreID="store-1")
+        GetInspector = inspector
 
-        def __init__(self) -> None:
-            self.saved = False
+        def __setattr__(self, name: str, value: object) -> None:
+            if name == "SendUsingAccount":
+                events.append("sender")
+            object.__setattr__(self, name, value)
+
+        def Display(self, _modal: bool) -> None:  # noqa: N802
+            events.append("display")
 
         def Save(self) -> None:  # noqa: N802
-            self.saved = True
+            events.append("save")
 
     mail = _Mail()
-
-    class _Inspector:
-        CurrentItem = mail
-        WindowState = 1
-
-        def __init__(self) -> None:
-            self.activated = False
-
-        def Activate(self) -> None:  # noqa: N802
-            self.activated = True
-
-    inspector = _Inspector()
-    inspectors = types.SimpleNamespace(Count=1, Item=lambda _idx: inspector)
-    outlook = types.SimpleNamespace(
-        Session=types.SimpleNamespace(Accounts=[account]),
-        Inspectors=inspectors,
-        ActiveInspector=lambda: inspector,
+    items = types.SimpleNamespace(Add=lambda _message_class: mail)
+    account.DeliveryStore = types.SimpleNamespace(
+        GetDefaultFolder=lambda _folder_id: types.SimpleNamespace(Items=items)
     )
+    outlook = types.SimpleNamespace(Session=types.SimpleNamespace(Accounts=[account]))
 
-    result = outlook_compose._apply_sender_to_matching_draft(  # noqa: SLF001
-        outlook,
-        sender_smtp="office@xeisworks.at",
+    pythoncom = types.ModuleType("pythoncom")
+    pythoncom.CoInitialize = lambda: None  # type: ignore[attr-defined]
+    pythoncom.CoUninitialize = lambda: None  # type: ignore[attr-defined]
+    win32_client = types.ModuleType("win32com.client")
+    win32_client.GetActiveObject = lambda _name: outlook  # type: ignore[attr-defined]
+    win32 = types.ModuleType("win32com")
+    win32.client = win32_client  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "pythoncom", pythoncom)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "win32com", win32)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "win32com.client", win32_client)  # type: ignore[attr-defined]
+
+    result = outlook_compose.compose_outlook_mail(
         to_email="kunde@example.test",
-        subject=mail.Subject,
+        subject="Kundenmail",
+        sender_smtp="office@xeisworks.at",
+        attach_only=True,
+        wait_seconds=1,
     )
 
-    assert result == {"sender": "office@xeisworks.at", "entry_id": "draft-1"}
+    assert result == {"entry_id": "draft-1", "store_id": "store-1"}
     assert mail.SendUsingAccount is account
-    assert mail.saved is True
+    assert events == ["sender", "display", "sender", "save", "activate"]
     assert inspector.WindowState == 2
-    assert inspector.activated is True
 
 
 def test_create_mail_item_prefers_target_account_drafts_folder() -> None:

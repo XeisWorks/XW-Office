@@ -14,7 +14,6 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 
 _OL_MAIL_ITEM = 0
@@ -30,19 +29,21 @@ def open_classic_outlook_draft(
     *,
     to_email: str,
     subject: str,
-    sender_smtp: str = "",
+    sender_smtp: str,
     outlook_executable: str | Path | None = None,
 ) -> dict[str, str]:
-    """Open a prefilled Outlook Classic draft and select its sender account.
+    """Start Outlook Classic normally, then create a draft for one account.
 
-    The supported ``/c ipm.note /m`` switches first create the interactive
-    Classic mail window. If *sender_smtp* is provided, a bounded helper then
-    attaches only to that already-running Outlook instance and applies
-    ``SendUsingAccount``. It never starts Outlook through COM.
+    Outlook is started as an interactive application before the bounded COM
+    helper attaches. This avoids both the hidden ``-Embedding`` startup and a
+    CLI-created draft that would be stuck on Outlook's default account.
     """
     recipient = str(to_email or "").strip()
     if not recipient:
         raise OutlookComposeError("Empfaenger fehlt")
+    sender = str(sender_smtp or "").strip()
+    if not sender:
+        raise OutlookComposeError("OUTLOOK_SENDER_EMAIL fehlt")
 
     executable = (
         Path(outlook_executable).expanduser()
@@ -52,15 +53,11 @@ def open_classic_outlook_draft(
     if not executable.is_file():
         raise OutlookComposeError(f"Outlook Classic nicht gefunden: {executable}")
 
-    message_target = quote(recipient, safe="@._+-")
     clean_subject = str(subject or "").strip()
-    if clean_subject:
-        message_target = f"{message_target}?subject={quote(clean_subject, safe='')}"
 
-    launched_at_epoch = time.time()
     try:
         process = subprocess.Popen(  # noqa: S603 - resolved executable is validated above
-            [str(executable), "/c", "ipm.note", "/m", message_target],
+            [str(executable)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -70,34 +67,28 @@ def open_classic_outlook_draft(
         raise OutlookComposeError(f"Outlook Classic konnte nicht gestartet werden: {exc}") from exc
 
     result = {"pid": str(process.pid), "executable": str(executable)}
-    sender = str(sender_smtp or "").strip()
-    if not sender:
-        return result
-
-    sender_result = _apply_sender_in_helper(
+    compose_result = _compose_in_running_outlook_helper(
         to_email=recipient,
         subject=clean_subject,
         sender_smtp=sender,
-        not_before_epoch=launched_at_epoch - 2.0,
     )
-    return {**result, **sender_result}
+    return {**result, **compose_result}
 
 
-def _apply_sender_in_helper(
+def _compose_in_running_outlook_helper(
     *,
     to_email: str,
     subject: str,
     sender_smtp: str,
-    not_before_epoch: float,
 ) -> dict[str, str]:
     payload = json.dumps(
         {
-            "operation": "select_sender",
+            "operation": "compose",
             "to": to_email,
             "subject": subject,
             "sender": sender_smtp,
-            "wait_seconds": 25,
-            "not_before_epoch": not_before_epoch,
+            "attach_only": True,
+            "wait_seconds": 30,
         },
         ensure_ascii=False,
     )
@@ -113,14 +104,15 @@ def _apply_sender_in_helper(
             input=payload,
             text=True,
             capture_output=True,
-            timeout=30,
+            timeout=35,
             env=env,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
         raise OutlookComposeError(
-            f"Absenderkonto konnte nicht rechtzeitig gesetzt werden: {sender_smtp}"
+            "Outlook Classic reagiert nicht auf die Kontoauswahl. Bitte Outlook einmal "
+            "vollständig schließen, normal starten und erneut versuchen."
         ) from exc
 
     try:
@@ -129,7 +121,7 @@ def _apply_sender_in_helper(
         decoded = {}
     if completed.returncode != 0 or not decoded.get("ok"):
         error = str(decoded.get("error") or completed.stderr or completed.stdout or "").strip()
-        raise OutlookComposeError(error or f"Absenderkonto konnte nicht gesetzt werden: {sender_smtp}")
+        raise OutlookComposeError(error or f"Outlook-Entwurf konnte nicht erstellt werden: {sender_smtp}")
     return {
         "sender": str(decoded.get("sender") or sender_smtp).strip(),
         "entry_id": str(decoded.get("entry_id") or "").strip(),
@@ -200,6 +192,8 @@ def compose_outlook_mail(
     body: str = "",
     html_body: str = "",
     attachments: list[str] | None = None,
+    attach_only: bool = False,
+    wait_seconds: float = 30,
 ) -> dict[str, str]:
     """Open an editable Outlook mail draft from *sender_smtp*."""
     sender = str(sender_smtp or "").strip()
@@ -214,7 +208,11 @@ def compose_outlook_mail(
 
     pythoncom.CoInitialize()
     try:
-        outlook = win32.Dispatch("Outlook.Application")
+        outlook = (
+            _wait_for_running_outlook(win32, wait_seconds=wait_seconds)
+            if attach_only
+            else win32.Dispatch("Outlook.Application")
+        )
         account = _find_account(outlook.Session.Accounts, sender)
         if account is None:
             raise OutlookComposeError(f"Outlook-Konto nicht gefunden: {sender}")
@@ -233,12 +231,33 @@ def compose_outlook_mail(
         save = getattr(mail, "Save", None)
         if callable(save):
             save()
+        inspector = mail.GetInspector
+        try:
+            inspector.WindowState = 2  # olNormalWindow
+        except Exception:
+            pass
+        activate = getattr(inspector, "Activate", None)
+        if callable(activate):
+            activate()
         return {
             "entry_id": str(getattr(mail, "EntryID", "") or "").strip(),
             "store_id": str(getattr(getattr(mail, "Parent", None), "StoreID", "") or "").strip(),
         }
     finally:
         pythoncom.CoUninitialize()
+
+
+def _wait_for_running_outlook(win32: Any, *, wait_seconds: float) -> Any:
+    deadline = time.monotonic() + max(1.0, float(wait_seconds))
+    while time.monotonic() < deadline:
+        try:
+            return win32.GetActiveObject("Outlook.Application")
+        except Exception:
+            time.sleep(0.2)
+    raise OutlookComposeError(
+        "Outlook Classic wurde nicht vollständig gestartet. Bitte Outlook einmal "
+        "vollständig schließen, normal starten und erneut versuchen."
+    )
 
 
 def reopen_outlook_mail(*, entry_id: str, store_id: str = "") -> None:
@@ -256,157 +275,6 @@ def reopen_outlook_mail(*, entry_id: str, store_id: str = "") -> None:
         item.Display(False)
     finally:
         pythoncom.CoUninitialize()
-
-
-def select_outlook_draft_sender(
-    *,
-    sender_smtp: str,
-    to_email: str,
-    subject: str,
-    wait_seconds: float = 25,
-    not_before_epoch: float = 0,
-) -> dict[str, str]:
-    """Apply a sender account to a draft opened by the Classic CLI.
-
-    ``GetActiveObject`` is intentional: unlike ``Dispatch``, it cannot launch
-    Outlook as a hidden ``-Embedding`` server while the interactive client is
-    still starting.
-    """
-    sender = str(sender_smtp or "").strip()
-    if not sender:
-        raise OutlookComposeError("OUTLOOK_SENDER_EMAIL fehlt")
-
-    import pythoncom
-    import win32com.client as win32
-
-    deadline = time.monotonic() + max(1.0, float(wait_seconds))
-    pythoncom.CoInitialize()
-    try:
-        while time.monotonic() < deadline:
-            try:
-                outlook = win32.GetActiveObject("Outlook.Application")
-                result = _apply_sender_to_matching_draft(
-                    outlook,
-                    sender_smtp=sender,
-                    to_email=to_email,
-                    subject=subject,
-                    not_before_epoch=not_before_epoch,
-                )
-                if result is not None:
-                    return result
-            except OutlookComposeError:
-                raise
-            except Exception:
-                # Outlook may be registered before its profile and Inspectors
-                # collection are ready. Retry without creating another instance.
-                pass
-            pump = getattr(pythoncom, "PumpWaitingMessages", None)
-            if callable(pump):
-                pump()
-            time.sleep(0.2)
-    finally:
-        pythoncom.CoUninitialize()
-
-    raise OutlookComposeError(
-        "Der Outlook-Entwurf oder das Absenderkonto wurde nicht gefunden: "
-        f"{sender}"
-    )
-
-
-def _apply_sender_to_matching_draft(
-    outlook: Any,
-    *,
-    sender_smtp: str,
-    to_email: str,
-    subject: str,
-    not_before_epoch: float = 0,
-) -> dict[str, str] | None:
-    account = _find_account(outlook.Session.Accounts, sender_smtp)
-    if account is None:
-        return None
-
-    for inspector in _outlook_inspectors(outlook):
-        try:
-            mail = inspector.CurrentItem
-            if not _draft_matches(
-                mail,
-                to_email=to_email,
-                subject=subject,
-                not_before_epoch=not_before_epoch,
-            ):
-                continue
-            _apply_sender(mail, account)
-            selected_account = getattr(mail, "SendUsingAccount", None)
-            if not _account_matches(selected_account, sender_smtp.casefold()):
-                raise OutlookComposeError(
-                    f"Outlook hat das Absenderkonto nicht übernommen: {sender_smtp}"
-                )
-            save = getattr(mail, "Save", None)
-            if callable(save):
-                save()
-            try:
-                inspector.WindowState = 2  # olNormalWindow
-            except Exception:
-                pass
-            activate = getattr(inspector, "Activate", None)
-            if callable(activate):
-                activate()
-            return {
-                "sender": str(getattr(account, "SmtpAddress", sender_smtp) or sender_smtp),
-                "entry_id": str(getattr(mail, "EntryID", "") or "").strip(),
-            }
-        except OutlookComposeError:
-            raise
-        except Exception:
-            continue
-    return None
-
-
-def _outlook_inspectors(outlook: Any) -> list[Any]:
-    inspectors: list[Any] = []
-    try:
-        active = outlook.ActiveInspector()
-        if active is not None:
-            inspectors.append(active)
-    except Exception:
-        pass
-
-    try:
-        collection = outlook.Inspectors
-        count = int(getattr(collection, "Count", 0) or 0)
-    except Exception:
-        return inspectors
-    for idx in range(count, 0, -1):
-        try:
-            inspector = collection.Item(idx)
-        except Exception:
-            continue
-        if inspector is not None:
-            inspectors.append(inspector)
-    return inspectors
-
-
-def _draft_matches(
-    mail: Any,
-    *,
-    to_email: str,
-    subject: str,
-    not_before_epoch: float = 0,
-) -> bool:
-    if not_before_epoch:
-        try:
-            created_epoch = float(mail.CreationTime.timestamp())
-        except Exception:
-            return False
-        if created_epoch < not_before_epoch:
-            return False
-    wanted_subject = str(subject or "").strip()
-    actual_subject = str(getattr(mail, "Subject", "") or "").strip()
-    if wanted_subject:
-        return actual_subject == wanted_subject
-    wanted_recipient = str(to_email or "").strip().casefold()
-    actual_recipient = str(getattr(mail, "To", "") or "").strip().casefold()
-    return bool(wanted_recipient and wanted_recipient in actual_recipient)
 
 
 def _find_account(accounts: Any, sender_smtp: str) -> Any | None:
@@ -501,16 +369,6 @@ def main() -> int:
             )
             print(json.dumps({"ok": True}))
             return 0
-        if operation == "select_sender":
-            result = select_outlook_draft_sender(
-                sender_smtp=str(payload.get("sender") or ""),
-                to_email=str(payload.get("to") or ""),
-                subject=str(payload.get("subject") or ""),
-                wait_seconds=float(payload.get("wait_seconds") or 25),
-                not_before_epoch=float(payload.get("not_before_epoch") or 0),
-            )
-            print(json.dumps({"ok": True, **result}))
-            return 0
         result = compose_outlook_mail(
             to_email=str(payload.get("to") or ""),
             subject=str(payload.get("subject") or ""),
@@ -522,6 +380,8 @@ def main() -> int:
                 for item in (payload.get("attachments") or [])
                 if str(item or "").strip()
             ],
+            attach_only=bool(payload.get("attach_only")),
+            wait_seconds=float(payload.get("wait_seconds") or 30),
         )
         print(json.dumps({"ok": True, **result}))
         return 0
