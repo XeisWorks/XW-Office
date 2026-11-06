@@ -1,7 +1,6 @@
 """Tests for database helpers."""
-from sqlalchemy import create_engine, inspect
-
 import pytest
+from sqlalchemy import create_engine, inspect
 
 from xw_office.core.config import AppConfig
 from xw_office.core.database import create_engine_from_config, ensure_core_tables
@@ -44,6 +43,7 @@ def test_ensure_core_tables_creates_missing_tables() -> None:
             "pc_registry",
             "plc_shipment",
             "setting_kv",
+            "tax_followup_dispatches",
         }
         assert set(created_tables) == expected
         assert expected.issubset(
