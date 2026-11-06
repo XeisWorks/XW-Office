@@ -44,7 +44,11 @@ class OperationResultDialog(QDialog):
             layout.addWidget(detail)
         for label, callback in actions or []:
             action = QPushButton(label)
-            action.clicked.connect(callback)
+            def trigger(_checked: bool = False, *, button: QPushButton = action, handler: Callable[[], None] = callback, button_label: str = label) -> None:
+                button.setEnabled(False)
+                button.setText(f"{button_label} …")
+                handler()
+            action.clicked.connect(trigger)
             layout.addWidget(action)
         close = QPushButton("✓  Schließen")
         close.setAccessibleName("Schließen")
