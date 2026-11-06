@@ -609,6 +609,8 @@ class OssService:
             xml_payload=xml_payload,
             line_count=len(xml_lines),
             warnings=_dedupe_strings(warnings),
+            total_tax_amount=_fmt(sum((tax_amount(line.tax_amount) for line in [*result.goods_lines, *result.service_lines]), Decimal("0.00"))),
+            calculation_hash=oss_calculation_hash(result.model_dump(mode="json", exclude={"cache"})),
         )
 
     @staticmethod

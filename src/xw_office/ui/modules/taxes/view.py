@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
@@ -36,20 +37,33 @@ from xw_office.core.signals import AppSignals
 from xw_office.core.worker import BackgroundWorker
 from xw_office.services.clearing.service import ClearingRow, PaymentClearingService
 from xw_office.services.finanzonline import (
+    FilingStatus,
     OssQuarterResult,
     OssService,
     OssXmlExport,
-    FilingStatus,
     UvaService,
     UvaSubmitResult,
     ZmCalculationResult,
     render_data_quality_text,
 )
-from xw_office.services.finanzonline.zm_service import is_valid_uid, normalize_uid
 from xw_office.services.finanzonline.amounts import tax_amount
+from xw_office.services.finanzonline.tax_followup_models import (
+    TAX_MAIL_SENDER,
+    XW_FLOW_TRANSFER,
+    TaxPayment,
+    build_transfer_body,
+)
+from xw_office.services.finanzonline.zm_service import is_valid_uid, normalize_uid
+from xw_office.services.mailing.service import MailDeliveryService
 from xw_office.services.sevdesk.contact_client import ContactClient
-from xw_office.ui.modules.taxes.presentation import CollapsibleDetails, UvaPresentation, format_euro, validate_preview
 from xw_office.ui.modules.taxes.oss_presentation import QuarterComboBox, oss_summary_html
+from xw_office.ui.modules.taxes.presentation import (
+    CollapsibleDetails,
+    UvaPresentation,
+    format_euro,
+    validate_preview,
+)
+from xw_office.ui.modules.taxes.result_dialog import OperationResultDialog
 from xw_office.ui.widgets.data_table import DataTable
 from xw_office.ui.widgets.search_bar import SearchBar
 
@@ -133,6 +147,7 @@ class TaxesView(QWidget):
         self._oss_worker: BackgroundWorker | None = None
         self._clearing_worker: BackgroundWorker | None = None
         self._export_worker: BackgroundWorker | None = None
+        self._oss_payment_worker: BackgroundWorker | None = None
         self._clearing_rows: list[ClearingRow] = []
         self._uva_progress_bar: QProgressBar | None = None
         self._uva_progress_label: QLabel | None = None
@@ -890,18 +905,23 @@ class TaxesView(QWidget):
         preview = QPushButton("EU-OSS berechnen")
         refresh = QPushButton("Neu aus sevDesk laden")
         export = QPushButton("EU-OSS XML speichern")
+        payment_button = QPushButton("Zahlungsauftrag an XW-Flow senden")
+        payment_button.setToolTip("Erzeugt nur einen prüfbaren Zahlungsfall; keine Überweisung")
+        payment_button.setEnabled(False)
         mark_submitted = QPushButton("Im Portal abgegeben markieren")
         mark_submitted.setEnabled(False)
         portal = QPushButton("EU-OSS öffnen")
         buttons.addWidget(preview)
         buttons.addWidget(refresh)
         buttons.addWidget(export)
+        buttons.addWidget(payment_button)
         buttons.addWidget(mark_submitted)
         buttons.addWidget(portal)
         buttons.addStretch()
         layout.addLayout(buttons)
 
         latest_result: OssQuarterResult | None = None
+        latest_export: OssXmlExport | None = None
 
         def selected_quarter() -> int:
             value = quarter.currentData()
@@ -1065,17 +1085,18 @@ class TaxesView(QWidget):
             self._oss_worker = BackgroundWorker(job)
 
             def on_result(payload: object) -> None:
+                nonlocal latest_export
                 if not isinstance(payload, tuple) or len(payload) != 2:
                     return
                 res, saved_path = payload
                 if not isinstance(res, OssXmlExport):
                     return
+                latest_export = res
+                payment_button.setEnabled(tax_amount(res.total_tax_amount) > 0)
                 technical_detail.set_text(res.xml_payload)
-                QMessageBox.information(
-                    self,
-                    "EU-OSS",
-                    f"XML gespeichert:\n{saved_path}\n\nDanach im EU-OSS-Portal hochladen und pruefen.",
-                )
+                OperationResultDialog(self, tone="success", title="EU-OSS-XML gespeichert",
+                    summary="EU-OSS-XML gespeichert", context=f"Q{res.quarter}/{res.year} · Steuerbetrag {res.total_tax_amount} EUR",
+                    details=f"Datei: {saved_path}\nBerechnungsschlüssel: {res.calculation_hash}\n\nPortalabgabe muss separat bestätigt werden.").exec()
 
             self._oss_worker.signals.result.connect(on_result)
             self._oss_worker.signals.error.connect(
@@ -1083,6 +1104,36 @@ class TaxesView(QWidget):
             )
             self._oss_worker.signals.finished.connect(on_oss_finished)
             self._oss_worker.start()
+
+        def on_send_payment() -> None:
+            if latest_export is None:
+                return
+            recipient = os.getenv("XW_OSS_PAYMENT_RECIPIENT", "").strip()
+            iban = os.getenv("XW_OSS_PAYMENT_IBAN", "").strip()
+            bic = os.getenv("XW_OSS_PAYMENT_BIC", "").strip()
+            reference = os.getenv("XW_OSS_PAYMENT_REFERENCE", "").strip()
+            due_date = os.getenv("XW_OSS_PAYMENT_DUE_DATE", "").strip()
+            if not all((recipient, iban, reference, due_date)):
+                OperationResultDialog(self, tone="warning", title="Zahlungsdaten fehlen",
+                    summary="Zahlungsdaten sind noch unvollständig",
+                    context="OSS-Empfänger, IBAN, Portalreferenz und Fälligkeit müssen ausdrücklich konfiguriert sein.").exec()
+                return
+            export_snapshot = latest_export
+            payment = TaxPayment("eu_oss", f"{export_snapshot.year}-Q{export_snapshot.quarter}", export_snapshot.calculation_hash,
+                recipient, iban, bic, tax_amount(export_snapshot.total_tax_amount), reference, due_date)
+            payment_button.setEnabled(False)
+            mail_service = self._container.resolve(MailDeliveryService)
+            def job() -> None:
+                mail_service.send_mail(to_email=XW_FLOW_TRANSFER, subject=f"Zahlung EU-OSS Q{export_snapshot.quarter}/{export_snapshot.year}",
+                    text_body=build_transfer_body(payment), sender_mailbox=TAX_MAIL_SENDER, require_exact_sender=True)
+            worker = BackgroundWorker(job)
+            self._oss_payment_worker = worker
+            worker.signals.result.connect(lambda _value: OperationResultDialog(self, tone="success", title="Weitergabe abgeschlossen",
+                summary="Zahlungsauftrag an XW-Flow gesendet", context="XW-Flow prüft und dedupliziert den Zahlungsfall.").exec())
+            worker.signals.error.connect(lambda exc: OperationResultDialog(self, tone="error", title="Nachricht konnte nicht gesendet werden",
+                summary="Zahlungsauftrag konnte nicht gesendet werden", context="Mail-Einstellungen und Zahlungsprofil prüfen.", details=str(exc)).exec())
+            worker.signals.finished.connect(lambda: (setattr(self, "_oss_payment_worker", None), payment_button.setEnabled(True)))
+            worker.start()
 
         def on_mark_submitted() -> None:
             if latest_result is None or latest_result.blocking:
@@ -1119,12 +1170,14 @@ class TaxesView(QWidget):
             quarter.setEnabled(True)
 
         def invalidate_selection() -> None:
-            nonlocal latest_result
+            nonlocal latest_result, latest_export
             latest_result = None
+            latest_export = None
             status.setText("Zeitraum geändert. Bitte EU-OSS neu berechnen.")
             preview_box.clear()
             oss_table.set_data([])
             export.setEnabled(False)
+            payment_button.setEnabled(False)
             drilldown.set_text("")
             warnings_detail.set_text("")
             technical_detail.set_text("")
@@ -1138,6 +1191,7 @@ class TaxesView(QWidget):
         preview.clicked.connect(lambda _checked=False: on_preview(refresh_data=False))
         refresh.clicked.connect(lambda _checked=False: on_preview(refresh_data=True))
         export.clicked.connect(on_export)
+        payment_button.clicked.connect(on_send_payment)
         mark_submitted.clicked.connect(on_mark_submitted)
         portal.clicked.connect(on_portal)
         oss_table.selectionModel().selectionChanged.connect(lambda *_: show_selected_drilldown())

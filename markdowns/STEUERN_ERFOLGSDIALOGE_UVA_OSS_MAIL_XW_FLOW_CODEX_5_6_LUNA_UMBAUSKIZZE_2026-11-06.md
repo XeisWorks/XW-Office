@@ -1061,3 +1061,32 @@ bestätigt werden:
 
 Bis diese Punkte geklärt sind, dürfen Dialog- und Berichtspakete umgesetzt werden; die produktiven
 Mailbuttons bleiben jedoch deaktiviert beziehungsweise als **nicht konfiguriert** gekennzeichnet.
+
+---
+
+## Codex-Fortschritt 2026-11-06
+
+Umgesetzt und lokal geprüft:
+
+- Reine Steuer-Follow-up-Modelle mit Decimal-Beträgen, Berechnungsschlüsseln und stabilem
+  XW-Payment-Vertrag.
+- EU-OSS-Export um Gesamtsteuerbetrag und Berechnungshash ergänzt.
+- Deterministischer U30-PDF-Renderer aus dem tatsächlich übermittelten Payload.
+- Kompakter, zugänglicher Ergebnisdialog mit sichtbarem Häkchen, Detailschalter und Fehler-Ton.
+- Graph-Mailversand kann für Steueraktionen fail-closed auf `office@xeisworks.at` und die
+  freigegebenen Empfänger beschränkt werden.
+- Nach erfolgreichem EU-OSS-XML-Export existiert ausdrücklich ein Button **Zahlungsauftrag an
+  XW-Flow senden**. Er versendet nur bei vollständig gesetztem, lokal konfiguriertem OSS-Profil;
+  XML-Export und Portalabgabe werden nicht gleichgesetzt. Es wird keine Banküberweisung ausgelöst.
+- XW-Flow erkennt Empfänger, Vertragsversion und `XW-Payment-Key` deterministisch, prüft den
+  Maschinenabsender und dedupliziert strukturierte Steueraufträge über neue Graph-Mail-IDs hinweg.
+
+Noch manuell beziehungsweise nicht sicher automatisierbar:
+
+- aktuelle U30- und EU-OSS-Bankdaten, Portalreferenz und Fälligkeit müssen aus offiziellen
+  Nachweisen als `XW_OSS_PAYMENT_*` beziehungsweise dem vorgesehenen Profil konfiguriert werden;
+  keine IBAN wurde geraten oder hartcodiert.
+- echte Exchange-Send-As-/Graph-Berechtigung, sevDesk-Autobox-Zustellung, Portalabgabe und
+  Banking-QR-Scan benötigen einen kontrollierten Betreiber-/Provider-Test.
+- vorhandene Contract-Manifest-Hashabweichungen in XW-Flow wurden nicht verändert; sie bestanden
+  bereits vor diesem Umbau.

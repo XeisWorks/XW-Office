@@ -39,3 +39,5 @@ class OssXmlExport(BaseModel):
     xml_payload: str
     line_count: int
     warnings: list[str] = Field(default_factory=list)
+    total_tax_amount: str = "0.00"
+    calculation_hash: str = ""

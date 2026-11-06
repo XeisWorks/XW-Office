@@ -1,13 +1,14 @@
 """Microsoft Graph-backed mail delivery for invoice/customer messages."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import html
 import os
-from pathlib import Path
 import re
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from xw_office.services.finanzonline.tax_followup_models import validate_tax_recipient
 from xw_office.services.mailing.graph_client import GraphMailClient, default_graph_cache_path
 
 if TYPE_CHECKING:
@@ -36,7 +37,7 @@ class GraphMailConfig:
 class MailDeliveryService:
     """Render and send customer mails via Microsoft Graph only."""
 
-    def __init__(self, *, secret_service: "SecretService | None" = None) -> None:
+    def __init__(self, *, secret_service: SecretService | None = None) -> None:
         self._secrets = secret_service
         self._client: GraphMailClient | None = None
         self._client_key: tuple[str, str, str, str] | None = None
@@ -48,7 +49,7 @@ class MailDeliveryService:
             return False
         return True
 
-    def load_graph_config(self) -> GraphMailConfig:
+    def load_graph_config(self, *, required_mailbox: str | None = None) -> GraphMailConfig:
         tenant_id = self._secret_or_env("MS_GRAPH_TENANT_ID")
         client_id = self._secret_or_env("MS_GRAPH_CLIENT_ID")
         mailbox_user = self._secret_or_env("MS_GRAPH_MAILBOX")
@@ -67,6 +68,8 @@ class MailDeliveryService:
         ]
         if missing:
             raise RuntimeError(f"MS-Graph-Konfiguration fehlt: {', '.join(missing)}")
+        if required_mailbox and mailbox_user.lower() != required_mailbox.lower():
+            raise RuntimeError(f"MS-Graph-Mailbox muss exakt {required_mailbox} sein.")
 
         cache_path = default_graph_cache_path()
         if cache_override:
@@ -88,8 +91,12 @@ class MailDeliveryService:
         text_body: str,
         html_body: str = "",
         attachments: list[MailAttachment] | None = None,
+        sender_mailbox: str | None = None,
+        require_exact_sender: bool = False,
     ) -> None:
-        config = self.load_graph_config()
+        config = self.load_graph_config(required_mailbox=sender_mailbox if require_exact_sender else None)
+        if require_exact_sender:
+            validate_tax_recipient(to_email)
         client = self._client_for_config(config)
         client.send_mail(
             to_email=to_email,
