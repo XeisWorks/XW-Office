@@ -5,6 +5,9 @@ import hashlib
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
+import stdnum.bic
+import stdnum.iban
+
 TAX_MAIL_SENDER = "office@xeisworks.at"
 SEVDESK_AUTBOX = "autobox@sevdesk.email"
 XW_FLOW_TRANSFER = "transfer@xeisworks.at"
@@ -40,6 +43,12 @@ class TaxPayment:
             raise ValueError("Zahlbetrag muss positiv und in EUR sein.")
         if not self.recipient.strip() or not self.iban.strip() or not self.remittance.strip():
             raise ValueError("Zahlungsempfänger, IBAN und Verwendungszweck sind erforderlich.")
+        if len(self.recipient) > 140 or len(self.remittance) > 140:
+            raise ValueError("Zahlungsempfänger und Verwendungszweck dürfen höchstens 140 Zeichen enthalten.")
+        if not stdnum.iban.is_valid(self.iban.replace(" ", "").upper()):
+            raise ValueError("IBAN ist ungültig.")
+        if self.bic and not stdnum.bic.is_valid(self.bic.replace(" ", "").upper()):
+            raise ValueError("BIC ist ungültig.")
 
 
 def uva_payment(*, period: str, calculation_hash_value: str, recipient: str, iban: str,
