@@ -1,8 +1,10 @@
 """Pure tax follow-up models and deterministic mail contracts."""
 from __future__ import annotations
 
+import calendar
 import hashlib
 from dataclasses import dataclass
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 import stdnum.bic
@@ -83,3 +85,45 @@ def validate_tax_recipient(recipient: str) -> str:
     if value not in {SEVDESK_AUTBOX, XW_FLOW_TRANSFER}:
         raise ValueError("Steuermail-Empfänger ist nicht freigegeben.")
     return value
+
+
+def _tax_number(value: str) -> str:
+    digits = "".join(char for char in str(value or "") if char.isdigit())
+    return digits if len(digits) == 9 else ""
+
+
+def build_uva_payment_reference(year: int, month: int, tax_number: str) -> str:
+    """Build the historic Finanzamt reference shape for a monthly UVA."""
+    number = _tax_number(tax_number)
+    if not number or not 1 <= int(month) <= 12 or not 2000 <= int(year) <= 2099:
+        return ""
+    return f"{int(year) % 100:02d}{int(month):02d}+{number}U"
+
+
+def build_oss_payment_reference(year: int, quarter: int, tax_number: str) -> str:
+    """Build the historic Finanzamt reference shape for an EU-OSS quarter."""
+    number = _tax_number(tax_number)
+    if not number or not 1 <= int(quarter) <= 4 or not 2000 <= int(year) <= 2099:
+        return ""
+    start_month = (int(quarter) - 1) * 3 + 1
+    return f"{int(year) % 100:02d}{start_month:02d}/{start_month + 2:02d}+{number}UU"
+
+
+def build_uva_payment_due_date(year: int, month: int) -> str:
+    """Return the standard Austrian UVA payment date (15th of month + 2)."""
+    if not 1 <= int(month) <= 12 or not 2000 <= int(year) <= 2099:
+        return ""
+    due_month = int(month) + 2
+    due_year = int(year) + (due_month - 1) // 12
+    due_month = (due_month - 1) % 12 + 1
+    return date(due_year, due_month, 15).isoformat()
+
+
+def build_oss_payment_due_date(year: int, quarter: int) -> str:
+    """Return the EU-OSS due date, one month after the quarter end."""
+    if not 1 <= int(quarter) <= 4 or not 2000 <= int(year) <= 2099:
+        return ""
+    due_month = int(quarter) * 3 + 1
+    due_year = int(year) + (due_month - 1) // 12
+    due_month = (due_month - 1) % 12 + 1
+    return date(due_year, due_month, calendar.monthrange(due_year, due_month)[1]).isoformat()

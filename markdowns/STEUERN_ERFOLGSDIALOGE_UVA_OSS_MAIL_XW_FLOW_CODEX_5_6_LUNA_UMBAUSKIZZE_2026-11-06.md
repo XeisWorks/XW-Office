@@ -1116,3 +1116,11 @@ Noch manuell beziehungsweise nicht sicher automatisierbar:
   aktualisiert; `python scripts/check_markdowns.py` meldet `Documentation OK`.
 - Der Steuer-Mailversand nutzt jetzt die eigene Konfiguration `MS_GRAPH_TAX_MAILBOX`; damit bleibt
   die allgemeine Inbox-Mailbox (z. B. `shop@...`) getrennt und es gibt keinen Sender-Fallback.
+- Die produktiv vorhandenen `.env`-Schluessel `TAX_IBAN_UVA`, `TAX_IBAN_EUOSS`, `TAX_NR_UVA`
+  und `TAX_NR_EUOSS` werden nun direkt verwendet. Daraus entstehen deterministische Referenzen
+  im historischen Format `YYMM+SteuernummerU` fuer UVA sowie `YYMM/MM+SteuernummerUU` fuer
+  EU-OSS. Explizite `XW_*_PAYMENT_REFERENCE`-Werte bleiben vorrangig; die amtliche
+  FinanzOnline-Referenz hat immer Vorrang vor einer berechneten Referenz.
+- UVA- und EU-OSS-Faelligkeiten werden standardmaessig aus dem Zeitraum berechnet und koennen
+  weiterhin ueber `XW_*_PAYMENT_DUE_DATE` ueberschrieben werden. Die vorhandenen Steuerdaten
+  reichen damit fuer den sichtbaren OSS-Zahlungsbutton und den strukturierten Transferauftrag aus.

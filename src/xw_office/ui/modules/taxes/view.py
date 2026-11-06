@@ -51,7 +51,11 @@ from xw_office.services.finanzonline.tax_followup_models import (
     TAX_MAIL_SENDER,
     XW_FLOW_TRANSFER,
     TaxPayment,
+    build_oss_payment_due_date,
+    build_oss_payment_reference,
     build_transfer_body,
+    build_uva_payment_due_date,
+    build_uva_payment_reference,
 )
 from xw_office.services.finanzonline.tax_followup_service import TaxFollowupService
 from xw_office.services.finanzonline.tax_report_pdf import render_u13_report, render_uva_report
@@ -717,11 +721,18 @@ class TaxesView(QWidget):
         followup = self._container.resolve(TaxFollowupService)
         report_recipient = "autobox@sevdesk.email"
         amount = tax_amount(str(payload.get("zahlbetrag") or "0.00"))
-        recipient = os.getenv("XW_UVA_PAYMENT_RECIPIENT", "").strip()
-        iban = os.getenv("XW_UVA_PAYMENT_IBAN", "").strip()
-        bic = os.getenv("XW_UVA_PAYMENT_BIC", "").strip()
-        reference = os.getenv("XW_UVA_PAYMENT_REFERENCE", "").strip()
-        due_date = os.getenv("XW_UVA_PAYMENT_DUE_DATE", "").strip()
+        recipient = (os.getenv("XW_UVA_PAYMENT_RECIPIENT", "").strip()
+                     or os.getenv("TAX_PAYMENT_RECIPIENT", "").strip()
+                     or "Finanzamt Österreich")
+        iban = (os.getenv("XW_UVA_PAYMENT_IBAN", "").strip()
+                or os.getenv("TAX_IBAN_UVA", "").strip())
+        bic = (os.getenv("XW_UVA_PAYMENT_BIC", "").strip()
+               or os.getenv("TAX_BIC_UVA", "").strip()
+               or "BUNDATWW")
+        reference = (os.getenv("XW_UVA_PAYMENT_REFERENCE", "").strip()
+                     or build_uva_payment_reference(year, month, os.getenv("TAX_NR_UVA", "")))
+        due_date = (os.getenv("XW_UVA_PAYMENT_DUE_DATE", "").strip()
+                    or build_uva_payment_due_date(year, month))
         payment = None
         if amount > 0 and all((recipient, iban, reference, due_date)):
             payment = TaxPayment("uva", period, calculation_hash, recipient, iban, bic, amount, reference, due_date)
@@ -1192,17 +1203,25 @@ class TaxesView(QWidget):
         def on_send_payment() -> None:
             if latest_export is None:
                 return
-            recipient = os.getenv("XW_OSS_PAYMENT_RECIPIENT", "").strip()
-            iban = os.getenv("XW_OSS_PAYMENT_IBAN", "").strip()
-            bic = os.getenv("XW_OSS_PAYMENT_BIC", "").strip()
-            reference = os.getenv("XW_OSS_PAYMENT_REFERENCE", "").strip()
-            due_date = os.getenv("XW_OSS_PAYMENT_DUE_DATE", "").strip()
+            export_snapshot = latest_export
+            recipient = (os.getenv("XW_OSS_PAYMENT_RECIPIENT", "").strip()
+                         or os.getenv("TAX_PAYMENT_RECIPIENT", "").strip()
+                         or "Finanzamt Österreich")
+            iban = (os.getenv("XW_OSS_PAYMENT_IBAN", "").strip()
+                    or os.getenv("TAX_IBAN_EUOSS", "").strip())
+            bic = (os.getenv("XW_OSS_PAYMENT_BIC", "").strip()
+                   or os.getenv("TAX_BIC_EUOSS", "").strip()
+                   or "BUNDATWW")
+            reference = (os.getenv("XW_OSS_PAYMENT_REFERENCE", "").strip()
+                         or build_oss_payment_reference(export_snapshot.year, export_snapshot.quarter,
+                                                        os.getenv("TAX_NR_EUOSS", "")))
+            due_date = (os.getenv("XW_OSS_PAYMENT_DUE_DATE", "").strip()
+                        or build_oss_payment_due_date(export_snapshot.year, export_snapshot.quarter))
             if not all((recipient, iban, reference, due_date)):
                 OperationResultDialog(self, tone="warning", title="Zahlungsdaten fehlen",
                     summary="Zahlungsdaten sind noch unvollständig",
                     context="OSS-Empfänger, IBAN, Portalreferenz und Fälligkeit müssen ausdrücklich konfiguriert sein.").exec()
                 return
-            export_snapshot = latest_export
             payment = TaxPayment("eu_oss", f"{export_snapshot.year}-Q{export_snapshot.quarter}", export_snapshot.calculation_hash,
                 recipient, iban, bic, tax_amount(export_snapshot.total_tax_amount), reference, due_date)
             payment_button.setEnabled(False)
