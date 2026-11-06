@@ -1086,6 +1086,8 @@ Umgesetzt und lokal geprüft:
   Zahlungsauftrag.
 - U13/ZM besitzt einen getrennten PDF-Renderer und eine eigene sevDesk-Folgeaktion ohne
   Zahlungsbutton; der U30-Bericht wird nicht wiederverwendet.
+- Zahlungsprofile werden vor dem Versand fail-closed auf gültige IBAN/BIC, EUR, positiven Betrag
+  sowie Empfänger-/Verwendungszweck-Limits geprüft.
 
 Noch manuell beziehungsweise nicht sicher automatisierbar:
 
