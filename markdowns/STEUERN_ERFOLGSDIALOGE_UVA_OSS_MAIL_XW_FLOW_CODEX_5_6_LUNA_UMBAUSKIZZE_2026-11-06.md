@@ -1110,3 +1110,5 @@ Noch manuell beziehungsweise nicht sicher automatisierbar:
   vervollstÃ¤ndigt; der komplette Backendlauf ist mit 1.204 Tests, 3 Skips und ohne Fehler grÃ¼n.
 - Der absenderfeste Graph-Pfad ist zusätzlich synthetisch abgedeckt: Mailbox, `from`,
   `sendMail`-URL, Allowlist-Empfänger und PDF-Anhang werden ohne echte Zugangsdaten geprüft.
+- Nach der Datenbank-Testvertragsanpassung ist die komplette XW-Office-Unit-Suite mit 1.635 Tests
+  erfolgreich durchgelaufen.
