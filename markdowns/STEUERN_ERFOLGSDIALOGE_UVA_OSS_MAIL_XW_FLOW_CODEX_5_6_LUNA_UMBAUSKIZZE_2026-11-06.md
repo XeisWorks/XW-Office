@@ -1098,3 +1098,8 @@ Noch manuell beziehungsweise nicht sicher automatisierbar:
   Banking-QR-Scan benötigen einen kontrollierten Betreiber-/Provider-Test.
 - vorhandene Contract-Manifest-Hashabweichungen in XW-Flow wurden nicht verändert; sie bestanden
   bereits vor diesem Umbau.
+- XW-Flow zeigt Vertragsversion und Payment-Key jetzt auch im Zahlungsfall-Dialog an; Frontend-Build
+  und die betroffenen Zahlungsfalltests sind erfolgreich.
+- Railway-Prüfung: Der Dienstname `XW-Office` ist im Projekt ein PostgreSQL-Service. Der laufende
+  Webdienst wird als `XW-Product-Hub` aus `XeisWorks/XW-Office` deployed; ein Redeploy des
+  PostgreSQL-Service wurde aus Sicherheitsgründen nicht ausgelöst.
