@@ -1080,6 +1080,10 @@ Umgesetzt und lokal geprüft:
   XML-Export und Portalabgabe werden nicht gleichgesetzt. Es wird keine Banküberweisung ausgelöst.
 - XW-Flow erkennt Empfänger, Vertragsversion und `XW-Payment-Key` deterministisch, prüft den
   Maschinenabsender und dedupliziert strukturierte Steueraufträge über neue Graph-Mail-IDs hinweg.
+- U30-Folgeaktion aus dem tatsächlichen Übermittlungssnapshot ergänzt: deterministischer PDF-Bericht
+  und optionaler positiver Zahlungsauftrag werden je Empfänger separat, persistent und retryfähig
+  über `tax_followup_dispatches` versendet. Nullbetrag, Gutschrift und Testmodus erzeugen keinen
+  Zahlungsauftrag.
 
 Noch manuell beziehungsweise nicht sicher automatisierbar:
 

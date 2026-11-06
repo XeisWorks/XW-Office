@@ -1,6 +1,8 @@
 """Small, accessible result dialog shared by tax operations."""
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
@@ -12,7 +14,8 @@ from PySide6.QtWidgets import (
 
 
 class OperationResultDialog(QDialog):
-    def __init__(self, parent, *, tone: str, title: str, summary: str, context: str = "", details: str = "") -> None:
+    def __init__(self, parent, *, tone: str, title: str, summary: str, context: str = "", details: str = "",
+                 actions: list[tuple[str, Callable[[], None]]] | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setModal(True)
@@ -39,6 +42,10 @@ class OperationResultDialog(QDialog):
             toggle.toggled.connect(lambda checked: (detail.setVisible(checked), toggle.setText("Technische Details ausblenden" if checked else "Technische Details anzeigen")))
             layout.addWidget(toggle)
             layout.addWidget(detail)
+        for label, callback in actions or []:
+            action = QPushButton(label)
+            action.clicked.connect(callback)
+            layout.addWidget(action)
         close = QPushButton("✓  Schließen")
         close.setAccessibleName("Schließen")
         close.setToolTip("Ergebnisdialog schließen")

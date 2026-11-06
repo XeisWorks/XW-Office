@@ -5,9 +5,21 @@ from sqlalchemy.orm import sessionmaker as SessionMaker
 
 from xw_office.core.container import Container
 from xw_office.core.database import create_session_factory
+from xw_office.repositories import (
+    ApiSecretRepository,
+    CustomerAftercareRepository,
+    DigitalLicenseFulfillmentRepository,
+    ExpenseCheckRepository,
+    ExpensePipelineRepository,
+    PcRegistryRepository,
+    PlcShipmentRepository,
+    SettingKvRepository,
+    TaxFollowupDispatchRepository,
+)
+from xw_office.repositories.invoice_search_index import InvoiceSearchIndexRepository
+from xw_office.services.b2b_credit import B2bCreditService
 from xw_office.services.background_jobs.service import BackgroundJobManager
 from xw_office.services.calculation.service import CalculationService
-from xw_office.services.commission.service import CommissionService, SevdeskCommissionProvider
 from xw_office.services.clearing.gateways import (
     MollieClearingGateway,
     SevdeskClearingGateway,
@@ -15,6 +27,8 @@ from xw_office.services.clearing.gateways import (
     WixClearingGateway,
 )
 from xw_office.services.clearing.service import PaymentClearingService
+from xw_office.services.clickup.client import ClickUpClient
+from xw_office.services.commission.service import CommissionService, SevdeskCommissionProvider
 from xw_office.services.crm.service import CrmService
 from xw_office.services.customer_aftercare.inbox_service import CustomerAftercareInboxService
 from xw_office.services.customer_aftercare.invoice_service import CustomerAftercareInvoiceService
@@ -22,26 +36,33 @@ from xw_office.services.customer_aftercare.pricing_policy import CustomerAfterca
 from xw_office.services.customer_aftercare.redelivery import CustomerAftercareRedeliveryService
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.customer_aftercare.trigger_service import CustomerAftercareTriggerService
-from xw_office.services.sevdesk.tax_policy import CustomerAftercareTaxPolicy
 from xw_office.services.daily_business.service import DailyBusinessService
 from xw_office.services.digital_licenses import DigitalLicenseService
+from xw_office.services.draft_invoice.service import DraftInvoiceService
+from xw_office.services.drucke.service import OffeneDruckeService
+from xw_office.services.drucke.xw_flow_client import XwFlowPrintClient
 from xw_office.services.expenses.bank_provider import SevdeskExpenseProvider
 from xw_office.services.expenses.service import ExpenseAuditService
+from xw_office.services.filename_generator.mh_tracks_cms_import import MhTracksCmsImportService
+from xw_office.services.filename_generator.service import FilenameGeneratorService
+from xw_office.services.filename_generator.wix_media_upload import WixMediaUploadService
 from xw_office.services.finanzonline import (
     FilingStatusStore,
     FinanzOnlineClient,
-    OssService,
     OssQuarterSnapshotStore,
+    OssService,
     SevdeskOssDocumentProvider,
     SevdeskUvaPreviewProvider,
+    SevdeskZmInvoiceProvider,
     TaxMonthlySnapshotStore,
     UvaDocumentSelector,
     UvaPayloadService,
     UvaPreviewService,
     UvaService,
-    SevdeskZmInvoiceProvider,
     ZmService,
 )
+from xw_office.services.finanzonline.tax_followup_service import TaxFollowupService
+from xw_office.services.flow_api import FlowAnalyticsClient, FlowRefundsClient
 from xw_office.services.http_client import SevdeskConnection, build_sevdesk_connection
 from xw_office.services.ideas.stores import (
     MARKETING_IDEAS_KEY,
@@ -52,67 +73,47 @@ from xw_office.services.ideas.stores import (
     default_notation_ideas_path,
 )
 from xw_office.services.inventory.service import InventoryService
-from xw_office.services.product_hub.inventory import LegacyInventoryShadowBridge
-from xw_office.services.product_hub.sevdesk_inventory_reconciliation import (
-    SevdeskInventoryReconciliationService,
-)
-from xw_office.services.flow_api import FlowAnalyticsClient, FlowRefundsClient
-from xw_office.services.sendungen.xw_flow_client import XwFlowShipmentClient
-from xw_office.services.drucke.xw_flow_client import XwFlowPrintClient
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
-from xw_office.services.b2b_credit import B2bCreditService
-from xw_office.services.draft_invoice.service import DraftInvoiceService
-from xw_office.services.sendungen.service import OffeneSendungenService
-from xw_office.services.drucke.service import OffeneDruckeService
-from xw_office.services.sendungen.delivery_note import DeliveryNoteService
-from xw_office.services.special_orders import SpecialOrderService
-from xw_office.services.transfers.service import OffeneUeberweisungenService
-from xw_office.services.layout.service import LayoutToolsService
 from xw_office.services.layout.sample_pages_service import SamplePageExportService
-from xw_office.services.filename_generator.mh_tracks_cms_import import MhTracksCmsImportService
-from xw_office.services.filename_generator.service import FilenameGeneratorService
-from xw_office.services.filename_generator.wix_media_upload import WixMediaUploadService
-from xw_office.services.qr_codes.service import QrCodeService
+from xw_office.services.layout.service import LayoutToolsService
 from xw_office.services.mailing.service import MailDeliveryService
-from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.plc.service import PlcShipmentService
 from xw_office.services.plc.statistics import PlcStatisticsService
 from xw_office.services.plc.webservice import PlcWebserviceClient
 from xw_office.services.printer_status.service import PrinterStatusService
+from xw_office.services.printing.print_queue import PrintQueueService
+from xw_office.services.product_hub.desktop_client import ProductHubDesktopClient
+from xw_office.services.product_hub.inventory import LegacyInventoryShadowBridge
+from xw_office.services.product_hub.sevdesk_inventory_reconciliation import (
+    SevdeskInventoryReconciliationService,
+)
+from xw_office.services.products.brand_service import ProductBrandService
+from xw_office.services.products.catalog import ProductCatalogService
+from xw_office.services.products.field_bulk_service import ProductFieldBulkService
+from xw_office.services.products.print_decision import PrintDecisionEngine
+from xw_office.services.qr_codes.service import QrCodeService
 from xw_office.services.secrets.service import SecretService
+from xw_office.services.sendungen.delivery_note import DeliveryNoteService
+from xw_office.services.sendungen.service import OffeneSendungenService
+from xw_office.services.sendungen.xw_flow_client import XwFlowShipmentClient
 from xw_office.services.sevdesk.contact_client import ContactClient
 from xw_office.services.sevdesk.invoice_client import InvoiceClient
 from xw_office.services.sevdesk.invoice_search_index import InvoiceSearchIndexService
-from xw_office.repositories.invoice_search_index import InvoiceSearchIndexRepository
 from xw_office.services.sevdesk.part_client import PartClient
-from xw_office.services.sevdesk.tax_set_client import TaxSetClient
 from xw_office.services.sevdesk.refund_client import SevDeskRefundClient
+from xw_office.services.sevdesk.tax_policy import CustomerAftercareTaxPolicy
+from xw_office.services.sevdesk.tax_set_client import TaxSetClient
+from xw_office.services.special_orders import SpecialOrderService
 from xw_office.services.statistics.service import StatisticsService
-from xw_office.services.products.catalog import ProductCatalogService
-from xw_office.services.product_hub.desktop_client import ProductHubDesktopClient
-from xw_office.services.products.brand_service import ProductBrandService
-from xw_office.services.products.field_bulk_service import ProductFieldBulkService
-from xw_office.services.products.print_decision import PrintDecisionEngine
-from xw_office.services.wix.client import WixProductsClient
-from xw_office.services.wix.client import WixOrdersClient
+from xw_office.services.transfers.service import OffeneUeberweisungenService
+from xw_office.services.wix.client import WixOrdersClient, WixProductsClient
 from xw_office.services.wix.data_client import WixDataClient
 from xw_office.services.wix.order_cache import WixOrderCache
 from xw_office.services.wix.product_details_client import WixProductDetailsClient
-from xw_office.services.clickup.client import ClickUpClient
 from xw_office.services.xw_copilot.dry_run import XWCopilotDryRunService
 from xw_office.services.xw_copilot.ingress import XWCopilotIngress
 from xw_office.services.xw_copilot.live_dispatch import XWCopilotLiveDispatcher
 from xw_office.services.xw_copilot.service import XWCopilotService
-from xw_office.repositories import (
-    ApiSecretRepository,
-    CustomerAftercareRepository,
-    DigitalLicenseFulfillmentRepository,
-    ExpenseCheckRepository,
-    ExpensePipelineRepository,
-    PcRegistryRepository,
-    PlcShipmentRepository,
-    SettingKvRepository,
-)
 
 
 def _build_expense_audit_service(container: Container) -> ExpenseAuditService:
@@ -676,4 +677,12 @@ def register_default_services(container: Container) -> None:
         container.register(
             CustomerAftercareRepository,
             lambda c: CustomerAftercareRepository(c.resolve(SessionMaker)),
+        )
+        container.register(
+            TaxFollowupDispatchRepository,
+            lambda c: TaxFollowupDispatchRepository(c.resolve(SessionMaker)),
+        )
+        container.register(
+            TaxFollowupService,
+            lambda c: TaxFollowupService(c.resolve(TaxFollowupDispatchRepository)),
         )

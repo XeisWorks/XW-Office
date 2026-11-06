@@ -33,6 +33,7 @@ from xw_office.models import (
     PcRegistry,
     PlcShipment,
     SettingKV,
+    TaxFollowupDispatch,
 )
 
 _CORE_TABLES = (
@@ -57,6 +58,7 @@ _CORE_TABLES = (
     PcRegistry.__table__,
     PlcShipment.__table__,
     SettingKV.__table__,
+    TaxFollowupDispatch.__table__,
 )
 
 

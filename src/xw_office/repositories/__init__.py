@@ -10,6 +10,7 @@ from xw_office.repositories.plc_shipment import PlcShipmentRepository
 from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_import import ProductHubImportRepository
 from xw_office.repositories.settings_kv import SettingKvRepository
+from xw_office.repositories.tax_followup_dispatch import TaxFollowupDispatchRepository
 
 __all__ = [
     "ApiSecretRepository",
@@ -22,4 +23,5 @@ __all__ = [
     "ProductHubImportRepository",
     "ProductHubRepository",
     "SettingKvRepository",
+    "TaxFollowupDispatchRepository",
 ]

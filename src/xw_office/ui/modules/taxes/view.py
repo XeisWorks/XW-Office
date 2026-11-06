@@ -53,8 +53,10 @@ from xw_office.services.finanzonline.tax_followup_models import (
     TaxPayment,
     build_transfer_body,
 )
+from xw_office.services.finanzonline.tax_followup_service import TaxFollowupService
+from xw_office.services.finanzonline.tax_report_pdf import render_uva_report
 from xw_office.services.finanzonline.zm_service import is_valid_uid, normalize_uid
-from xw_office.services.mailing.service import MailDeliveryService
+from xw_office.services.mailing.service import MailAttachment, MailDeliveryService
 from xw_office.services.sevdesk.contact_client import ContactClient
 from xw_office.ui.modules.taxes.oss_presentation import QuarterComboBox, oss_summary_html
 from xw_office.ui.modules.taxes.presentation import (
@@ -148,6 +150,7 @@ class TaxesView(QWidget):
         self._clearing_worker: BackgroundWorker | None = None
         self._export_worker: BackgroundWorker | None = None
         self._oss_payment_worker: BackgroundWorker | None = None
+        self._tax_followup_worker: BackgroundWorker | None = None
         self._clearing_rows: list[ClearingRow] = []
         self._uva_progress_bar: QProgressBar | None = None
         self._uva_progress_label: QLabel | None = None
@@ -691,8 +694,68 @@ class TaxesView(QWidget):
         context = " · ".join(item for item in (period, f"Zahlbetrag {_format_euro(str(res.uva_payload.get('zahlbetrag') or '0.00'))} EUR" if res.uva_payload else "") if item)
         if res.filing_status_error:
             context = (context + " · Lokaler Status nicht gespeichert").strip(" ·")
+        actions: list[tuple[str, object]] = []
+        if res.ok and not res.test_mode and res.uva_payload:
+            amount = tax_amount(str(res.uva_payload.get("zahlbetrag") or "0.00"))
+            actions.append(("Bericht + Zahlung weitergeben" if amount > 0 else "Bericht an sevDesk senden", lambda: self._dispatch_uva_followup(res)))
         OperationResultDialog(self, tone=tone, title="UVA-Abgabe", summary=summary, context=context,
-            details="\n".join(lines) + ("\n\n" + "\n\n".join(detail_parts) if detail_parts else "")).exec()
+            details="\n".join(lines) + ("\n\n" + "\n\n".join(detail_parts) if detail_parts else ""),
+            actions=actions).exec()
+
+    def _dispatch_uva_followup(self, res: UvaSubmitResult) -> None:
+        """Send report and optional positive-payment transfer independently."""
+        payload = dict(res.uva_payload)
+        year = int(payload.get("jahr") or 0)
+        month = int(payload.get("monat") or 0)
+        period = f"{month:02d}/{year}"
+        calculation_hash = str(payload.get("calculation_hash") or "")
+        if not calculation_hash:
+            OperationResultDialog(self, tone="error", title="Weitergabe nicht möglich", summary="Berechnungsschlüssel fehlt").exec()
+            return
+        report = render_uva_report(payload, reference=res.reference_id or "", test_mode=False)
+        mail_service = self._container.resolve(MailDeliveryService)
+        followup = self._container.resolve(TaxFollowupService)
+        report_recipient = "autobox@sevdesk.email"
+        amount = tax_amount(str(payload.get("zahlbetrag") or "0.00"))
+        recipient = os.getenv("XW_UVA_PAYMENT_RECIPIENT", "").strip()
+        iban = os.getenv("XW_UVA_PAYMENT_IBAN", "").strip()
+        bic = os.getenv("XW_UVA_PAYMENT_BIC", "").strip()
+        reference = os.getenv("XW_UVA_PAYMENT_REFERENCE", "").strip()
+        due_date = os.getenv("XW_UVA_PAYMENT_DUE_DATE", "").strip()
+        payment = None
+        if amount > 0 and all((recipient, iban, reference, due_date)):
+            payment = TaxPayment("uva", period, calculation_hash, recipient, iban, bic, amount, reference, due_date)
+
+        def job() -> None:
+            followup.send_once(
+                filing_kind="uva", period=period, calculation_hash=calculation_hash,
+                recipient_kind="sevdesk_autobox", attachment=report,
+                send=lambda: mail_service.send_mail(
+                    to_email=report_recipient, subject=f"UVA U30 {period} – erfolgreich übermittelt",
+                    text_body=f"UVA-Bericht für {period}.\nFinanzOnline-Übermittlung erfolgreich.\nReferenz: {res.reference_id or '-'}",
+                    attachments=[MailAttachment(filename=f"UVA_U30_{year}-{month:02d}.pdf", content=report)],
+                    sender_mailbox=TAX_MAIL_SENDER, require_exact_sender=True,
+                ),
+            )
+            if payment is not None:
+                followup.send_once(
+                    filing_kind="uva", period=period, calculation_hash=calculation_hash,
+                    recipient_kind="xw_flow_transfer",
+                    send=lambda: mail_service.send_mail(
+                        to_email=XW_FLOW_TRANSFER, subject=f"Zahlung UVA {period}",
+                        text_body=build_transfer_body(payment, reference=res.reference_id or ""),
+                        sender_mailbox=TAX_MAIL_SENDER, require_exact_sender=True,
+                    ),
+                )
+        worker = BackgroundWorker(job)
+        self._tax_followup_worker = worker
+        worker.signals.result.connect(lambda _value: OperationResultDialog(self, tone="success", title="Weitergabe abgeschlossen",
+            summary="Bericht und Zahlungsauftrag weitergegeben" if payment else "Bericht an sevDesk weitergegeben",
+            context="Zahlungsauftrag wegen unvollständigem Profil nicht versendet." if amount > 0 and payment is None else "").exec())
+        worker.signals.error.connect(lambda exc: OperationResultDialog(self, tone="error", title="Weitergabe teilweise oder nicht abgeschlossen",
+            summary="Weitergabe konnte nicht vollständig abgeschlossen werden", context="Bereits erfolgreiche Empfänger werden beim nächsten Versuch nicht erneut versendet.", details=str(exc)).exec())
+        worker.signals.finished.connect(lambda: setattr(self, "_tax_followup_worker", None))
+        worker.start()
 
     def _update_uva_filing_status(self, payload: dict[str, object]) -> None:
         label = self._uva_filing_status_label
@@ -1110,9 +1173,21 @@ class TaxesView(QWidget):
                 recipient, iban, bic, tax_amount(export_snapshot.total_tax_amount), reference, due_date)
             payment_button.setEnabled(False)
             mail_service = self._container.resolve(MailDeliveryService)
+            followup_service = self._container.resolve(TaxFollowupService)
             def job() -> None:
-                mail_service.send_mail(to_email=XW_FLOW_TRANSFER, subject=f"Zahlung EU-OSS Q{export_snapshot.quarter}/{export_snapshot.year}",
-                    text_body=build_transfer_body(payment), sender_mailbox=TAX_MAIL_SENDER, require_exact_sender=True)
+                followup_service.send_once(
+                    filing_kind="eu_oss",
+                    period=f"{export_snapshot.year}-Q{export_snapshot.quarter}",
+                    calculation_hash=export_snapshot.calculation_hash,
+                    recipient_kind="xw_flow_transfer",
+                    send=lambda: mail_service.send_mail(
+                        to_email=XW_FLOW_TRANSFER,
+                        subject=f"Zahlung EU-OSS Q{export_snapshot.quarter}/{export_snapshot.year}",
+                        text_body=build_transfer_body(payment),
+                        sender_mailbox=TAX_MAIL_SENDER,
+                        require_exact_sender=True,
+                    ),
+                )
             worker = BackgroundWorker(job)
             self._oss_payment_worker = worker
             worker.signals.result.connect(lambda _value: OperationResultDialog(self, tone="success", title="Weitergabe abgeschlossen",

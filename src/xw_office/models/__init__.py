@@ -2,6 +2,7 @@
 
 from xw_office.models.api_secret import ApiSecret
 from xw_office.models.base import Base
+from xw_office.models.tax_followup_dispatch import TaxFollowupDispatch
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
 from xw_office.models.digital_license_fulfillment import DigitalLicenseFulfillment
 from xw_office.models.expense_check import ExpenseIgnoreRule, ExpenseShiftEntry
