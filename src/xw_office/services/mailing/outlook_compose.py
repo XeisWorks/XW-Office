@@ -7,9 +7,13 @@ responsive and lets callers enforce a timeout.
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 
 _OL_MAIL_ITEM = 0
@@ -19,6 +23,105 @@ _DISPID_SEND_USING_ACCOUNT = 64209
 
 class OutlookComposeError(RuntimeError):
     """Raised when Outlook cannot prepare the requested draft."""
+
+
+def open_classic_outlook_draft(
+    *,
+    to_email: str,
+    subject: str,
+    outlook_executable: str | Path | None = None,
+) -> dict[str, str]:
+    """Open a prefilled draft through Outlook Classic's supported CLI.
+
+    This path deliberately avoids COM activation. When Outlook is not already
+    running, COM starts ``OUTLOOK.EXE -Embedding`` as a hidden OLE server;
+    profile initialization can then block before an Inspector window exists.
+    The ``/c ipm.note /m`` switches create an interactive Classic mail window.
+    """
+    recipient = str(to_email or "").strip()
+    if not recipient:
+        raise OutlookComposeError("Empfaenger fehlt")
+
+    executable = (
+        Path(outlook_executable).expanduser()
+        if outlook_executable is not None
+        else _find_classic_outlook_executable()
+    )
+    if not executable.is_file():
+        raise OutlookComposeError(f"Outlook Classic nicht gefunden: {executable}")
+
+    message_target = quote(recipient, safe="@._+-")
+    clean_subject = str(subject or "").strip()
+    if clean_subject:
+        message_target = f"{message_target}?subject={quote(clean_subject, safe='')}"
+
+    try:
+        process = subprocess.Popen(  # noqa: S603 - resolved executable is validated above
+            [str(executable), "/c", "ipm.note", "/m", message_target],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+    except OSError as exc:
+        raise OutlookComposeError(f"Outlook Classic konnte nicht gestartet werden: {exc}") from exc
+    return {"pid": str(process.pid), "executable": str(executable)}
+
+
+def _find_classic_outlook_executable() -> Path:
+    """Resolve the registered Outlook Classic executable without launching it."""
+    candidates = _registered_outlook_executables()
+
+    on_path = shutil.which("OUTLOOK.EXE") or shutil.which("outlook.exe")
+    if on_path:
+        candidates.append(Path(on_path))
+
+    for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+        root = str(os.environ.get(env_name) or "").strip()
+        if not root:
+            continue
+        for office_version in ("Office16", "Office15", "Office14"):
+            candidates.append(
+                Path(root) / "Microsoft Office" / "root" / office_version / "OUTLOOK.EXE"
+            )
+            candidates.append(Path(root) / "Microsoft Office" / office_version / "OUTLOOK.EXE")
+
+    for candidate in candidates:
+        try:
+            resolved = candidate.expanduser()
+            if resolved.is_file() and resolved.name.casefold() == "outlook.exe":
+                return resolved
+        except OSError:
+            continue
+    raise OutlookComposeError(
+        "Outlook Classic wurde nicht gefunden. Bitte Outlook Classic installieren oder reparieren."
+    )
+
+
+def _registered_outlook_executables() -> list[Path]:
+    if sys.platform != "win32":
+        return []
+    try:
+        import winreg
+    except ImportError:
+        return []
+
+    key_path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\OUTLOOK.EXE"
+    candidates: list[Path] = []
+    views = (
+        getattr(winreg, "KEY_WOW64_64KEY", 0),
+        getattr(winreg, "KEY_WOW64_32KEY", 0),
+    )
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for view in dict.fromkeys(views):
+            try:
+                with winreg.OpenKey(hive, key_path, 0, winreg.KEY_READ | view) as key:
+                    value = str(winreg.QueryValue(key, None) or "").strip().strip('"')
+            except OSError:
+                continue
+            if value:
+                candidates.append(Path(value))
+    return candidates
 
 
 def compose_outlook_mail(
@@ -75,8 +178,8 @@ def reopen_outlook_mail(*, entry_id: str, store_id: str = "") -> None:
     wanted_entry = str(entry_id or "").strip()
     if not wanted_entry:
         raise OutlookComposeError("Outlook-Entwurf-ID fehlt")
-    import pythoncom  # type: ignore[import-untyped]
-    import win32com.client as win32  # type: ignore[import-untyped]
+    import pythoncom
+    import win32com.client as win32
 
     pythoncom.CoInitialize()
     try:

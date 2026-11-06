@@ -4,12 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import datetime
 import html
-import json
 import logging
 import os
 import re
-import subprocess
-import sys
 import time
 from tempfile import TemporaryDirectory
 from pathlib import Path
@@ -81,6 +78,7 @@ from xw_office.services.draft_invoice.service import (
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.inventory import InventoryService
+from xw_office.services.mailing.outlook_compose import open_classic_outlook_draft
 from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.printer_status.service import PrinterStatusService
 from xw_office.services.products.catalog import (
@@ -5839,16 +5837,19 @@ class RechnungenView(QWidget):
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Customer mail Wix lookup failed for invoice %s: %s", summary.id, exc)
             outlook_opened = False
+            outlook_error = ""
             if resolved_email:
                 try:
                     outlook_opened = self._open_customer_mail_outlook(resolved_email, subject)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Outlook customer mail compose failed: %s", exc)
+                    outlook_error = str(exc).strip() or type(exc).__name__
             return {
                 "invoice_id": str(summary.id or "").strip(),
                 "email": resolved_email,
                 "subject": subject,
                 "outlook_opened": "1" if outlook_opened else "",
+                "outlook_error": outlook_error,
             }
 
         self._customer_mail_worker = BackgroundWorker(job)
@@ -5871,72 +5872,21 @@ class RechnungenView(QWidget):
             signals: AppSignals = self._container.resolve(AppSignals)
             signals.status_message.emit("Kunden-Mail in Outlook geöffnet.", 3000)
             return
-        subject = str(data.get("subject") or "").strip() or self._customer_mail_subject(summary)
-        self._open_customer_mail_url(email, subject)
+        error = str(data.get("outlook_error") or "").strip()
+        detail = f"\n\nDetails: {error}" if error else ""
+        QMessageBox.warning(
+            self,
+            "Kunden-Mail",
+            "Der Mail-Entwurf konnte nicht in Outlook Classic geöffnet werden."
+            f"{detail}",
+        )
 
     def _on_customer_mail_error(self, exc: Exception) -> None:
         QMessageBox.warning(self, "Kunden-Mail", f"Mail konnte nicht vorbereitet werden:\n\n{exc}")
 
-    def _open_customer_mail_url(self, email: str, subject: str) -> None:
-        clean_email = self._clean_email_value(email)
-        if not clean_email:
-            QMessageBox.information(self, "Kunden-Mail", "Keine gültige Kunden-E-Mail-Adresse vorhanden.")
-            return
-        # The Classic composer runs in a bounded subprocess. If it is not
-        # available, open a prefilled Outlook Web compose window instead of
-        # delegating the fallback to an arbitrary default mail client.
-        url = (
-            "https://outlook.office.com/mail/deeplink/compose"
-            f"?to={quote(clean_email, safe='@._+-')}&subject={quote(subject, safe='')}"
-        )
-        if not QDesktopServices.openUrl(QUrl(url)):
-            QMessageBox.warning(self, "Kunden-Mail", "Outlook Web konnte nicht geöffnet werden.")
-
     def _open_customer_mail_outlook(self, email: str, subject: str) -> bool:
-        sender_email = self._outlook_sender_email()
-        if not sender_email:
-            return False
-        payload = json.dumps(
-            {"to": email, "subject": subject, "sender": sender_email},
-            ensure_ascii=False,
-        )
-        env = dict(os.environ)
-        src_path = str(Path(__file__).resolve().parents[4])
-        existing_pythonpath = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = (
-            f"{src_path}{os.pathsep}{existing_pythonpath}"
-            if existing_pythonpath
-            else src_path
-        )
-        try:
-            completed = subprocess.run(
-                [sys.executable, "-m", "xw_office.services.mailing.outlook_compose"],
-                input=payload,
-                text=True,
-                capture_output=True,
-                timeout=20,
-                env=env,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning("Outlook compose timed out; falling back to mailto")
-            return False
-        if completed.returncode == 0:
-            return True
-        logger.warning(
-            "Outlook customer mail composer failed (rc=%s); using Outlook Web fallback",
-            completed.returncode,
-        )
-        return False
-
-    def _outlook_sender_email(self) -> str:
-        try:
-            secrets: SecretService = self._container.resolve(SecretService)
-            return self._clean_email_value(secrets.get_secret("OUTLOOK_SENDER_EMAIL"))
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("OUTLOOK_SENDER_EMAIL resolve failed: %s", exc)
-            return ""
+        open_classic_outlook_draft(to_email=email, subject=subject)
+        return True
 
     @staticmethod
     def _customer_mail_subject(summary: InvoiceSummary) -> str:

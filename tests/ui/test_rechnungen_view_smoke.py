@@ -1,7 +1,6 @@
 """Smoke tests for the Rechnungen daily-business view."""
 from __future__ import annotations
 
-import subprocess
 from threading import Event
 import types
 from pathlib import Path
@@ -695,28 +694,33 @@ def test_actions_delegate_keeps_dark_theme_icons_visible(qtbot: object) -> None:
     assert post.height() == 18
 
 
-def test_customer_mail_action_opens_outlook_web_compose_url(qtbot: object, monkeypatch) -> None:
+def test_customer_mail_action_opens_classic_outlook_draft(qtbot: object, monkeypatch) -> None:
     container, invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
     qtbot.addWidget(view)
-    opened: list[str] = []
+    opened: list[dict[str, str]] = []
 
-    def fake_open_url(url: object) -> bool:
-        opened.append(bytes(url.toEncoded()).decode("utf-8"))  # type: ignore[attr-defined]
-        return True
+    def fake_open_classic_outlook_draft(*, to_email: str, subject: str) -> dict[str, str]:
+        opened.append({"to": to_email, "subject": subject})
+        return {"pid": "123"}
 
     monkeypatch.setattr(
-        "xw_office.ui.modules.rechnungen.view.QDesktopServices.openUrl",
-        fake_open_url,
+        "xw_office.ui.modules.rechnungen.view.open_classic_outlook_draft",
+        fake_open_classic_outlook_draft,
     )
 
     summary = invoice_service._draft  # noqa: SLF001
-    view._open_customer_mail_url("customer-20844@example.test", view._customer_mail_subject(summary))  # noqa: SLF001
+    assert view._open_customer_mail_outlook(  # noqa: SLF001
+        "customer-20844@example.test",
+        view._customer_mail_subject(summary),
+    )
 
-    assert opened
-    assert opened[0].startswith("https://outlook.office.com/mail/deeplink/compose?")
-    assert "to=customer-20844@example.test" in opened[0]
-    assert "subject=Wix-Order-Nr.%2020844%20%7C%20sevDesk-Rechnungsnr.%20RE-DRAFT" in opened[0]
+    assert opened == [
+        {
+            "to": "customer-20844@example.test",
+            "subject": "Wix-Order-Nr. 20844 | sevDesk-Rechnungsnr. RE-DRAFT",
+        }
+    ]
 
 
 def test_customer_mail_subject_contains_wix_order_and_sevdesk_invoice_numbers(qtbot: object) -> None:
@@ -825,41 +829,6 @@ def test_archived_packing_lists_appear_in_view_and_print_menus(
     view._print_packing_lists_menu.actions()[0].trigger()  # noqa: SLF001
 
     assert queued == [(container, str(packlist), "20844")]
-
-
-def test_customer_mail_outlook_runs_in_subprocess(qtbot: object, monkeypatch) -> None:
-    container, invoice_service = _build_rechnungen_test_container()
-    view = RechnungenView(container)
-    qtbot.addWidget(view)
-    calls: list[dict[str, object]] = []
-
-    def fake_run(*args: object, **kwargs: object) -> object:
-        calls.append({"args": args[0], **dict(kwargs)})
-        return types.SimpleNamespace(returncode=0, stdout='{"ok": true}', stderr="")
-
-    summary = invoice_service._draft  # noqa: SLF001
-    monkeypatch.setattr("xw_office.ui.modules.rechnungen.view.subprocess.run", fake_run)
-
-    assert view._open_customer_mail_outlook("kunde@example.test", view._customer_mail_subject(summary)) is True  # noqa: SLF001
-    assert calls
-    assert calls[0]["timeout"] == 20
-    assert "outlook_compose" in " ".join(calls[0]["args"])  # type: ignore[arg-type]
-    assert "kunde@example.test" in str(calls[0]["input"])
-    assert "office@xeisworks.at" in str(calls[0]["input"])
-
-
-def test_customer_mail_outlook_timeout_falls_back(qtbot: object, monkeypatch) -> None:
-    container, invoice_service = _build_rechnungen_test_container()
-    view = RechnungenView(container)
-    qtbot.addWidget(view)
-
-    def fake_run(*_args: object, **_kwargs: object) -> object:
-        raise subprocess.TimeoutExpired(cmd="outlook", timeout=20)
-
-    summary = invoice_service._draft  # noqa: SLF001
-    monkeypatch.setattr("xw_office.ui.modules.rechnungen.view.subprocess.run", fake_run)
-
-    assert view._open_customer_mail_outlook("kunde@example.test", view._customer_mail_subject(summary)) is False  # noqa: SLF001
 
 
 def test_start_dialog_keeps_full_mode_when_print_plan_missing(qtbot: object) -> None:
