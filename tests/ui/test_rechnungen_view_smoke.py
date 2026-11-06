@@ -700,8 +700,13 @@ def test_customer_mail_action_opens_classic_outlook_draft(qtbot: object, monkeyp
     qtbot.addWidget(view)
     opened: list[dict[str, str]] = []
 
-    def fake_open_classic_outlook_draft(*, to_email: str, subject: str) -> dict[str, str]:
-        opened.append({"to": to_email, "subject": subject})
+    def fake_open_classic_outlook_draft(
+        *,
+        to_email: str,
+        subject: str,
+        sender_smtp: str,
+    ) -> dict[str, str]:
+        opened.append({"to": to_email, "subject": subject, "sender": sender_smtp})
         return {"pid": "123"}
 
     monkeypatch.setattr(
@@ -719,6 +724,7 @@ def test_customer_mail_action_opens_classic_outlook_draft(qtbot: object, monkeyp
         {
             "to": "customer-20844@example.test",
             "subject": "Wix-Order-Nr. 20844 | sevDesk-Rechnungsnr. RE-DRAFT",
+            "sender": "office@xeisworks.at",
         }
     ]
 

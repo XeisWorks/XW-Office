@@ -5885,8 +5885,23 @@ class RechnungenView(QWidget):
         QMessageBox.warning(self, "Kunden-Mail", f"Mail konnte nicht vorbereitet werden:\n\n{exc}")
 
     def _open_customer_mail_outlook(self, email: str, subject: str) -> bool:
-        open_classic_outlook_draft(to_email=email, subject=subject)
+        sender_email = self._outlook_sender_email()
+        if not sender_email:
+            raise RuntimeError("OUTLOOK_SENDER_EMAIL fehlt")
+        open_classic_outlook_draft(
+            to_email=email,
+            subject=subject,
+            sender_smtp=sender_email,
+        )
         return True
+
+    def _outlook_sender_email(self) -> str:
+        try:
+            secrets: SecretService = self._container.resolve(SecretService)
+            return self._clean_email_value(secrets.get_secret("OUTLOOK_SENDER_EMAIL"))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("OUTLOOK_SENDER_EMAIL resolve failed: %s", exc)
+            return ""
 
     @staticmethod
     def _customer_mail_subject(summary: InvoiceSummary) -> str:
