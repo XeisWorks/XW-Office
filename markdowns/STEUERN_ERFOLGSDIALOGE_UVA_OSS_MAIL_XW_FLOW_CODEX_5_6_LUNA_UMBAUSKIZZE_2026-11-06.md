@@ -1084,6 +1084,8 @@ Umgesetzt und lokal geprüft:
   und optionaler positiver Zahlungsauftrag werden je Empfänger separat, persistent und retryfähig
   über `tax_followup_dispatches` versendet. Nullbetrag, Gutschrift und Testmodus erzeugen keinen
   Zahlungsauftrag.
+- U13/ZM besitzt einen getrennten PDF-Renderer und eine eigene sevDesk-Folgeaktion ohne
+  Zahlungsbutton; der U30-Bericht wird nicht wiederverwendet.
 
 Noch manuell beziehungsweise nicht sicher automatisierbar:
 

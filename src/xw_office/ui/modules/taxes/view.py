@@ -5,9 +5,9 @@ import logging
 import math
 import os
 import sqlite3
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from PySide6.QtCore import QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -54,7 +54,7 @@ from xw_office.services.finanzonline.tax_followup_models import (
     build_transfer_body,
 )
 from xw_office.services.finanzonline.tax_followup_service import TaxFollowupService
-from xw_office.services.finanzonline.tax_report_pdf import render_uva_report
+from xw_office.services.finanzonline.tax_report_pdf import render_u13_report, render_uva_report
 from xw_office.services.finanzonline.zm_service import is_valid_uid, normalize_uid
 from xw_office.services.mailing.service import MailAttachment, MailDeliveryService
 from xw_office.services.sevdesk.contact_client import ContactClient
@@ -137,8 +137,8 @@ def _format_euro(value: str) -> str:
 class TaxesView(QWidget):
     """UVA | EU-OSS — calls services off the UI thread."""
 
-    _CLEARING_COLUMNS = ["Ref", "Kunde", "Betrag", "Status", "Hinweis"]
-    _OSS_COLUMNS = ["Land", "Satz", "Art", "Brutto", "Netto", "Steuer", "Belege"]
+    _CLEARING_COLUMNS: ClassVar[list[str]] = ["Ref", "Kunde", "Betrag", "Status", "Hinweis"]
+    _OSS_COLUMNS: ClassVar[list[str]] = ["Land", "Satz", "Art", "Brutto", "Netto", "Steuer", "Belege"]
 
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -208,7 +208,7 @@ class TaxesView(QWidget):
         month = QSpinBox()
         month.setRange(1, 12)
         row.addWidget(month)
-        today = date.today()
+        today = datetime.now().astimezone().date()
         previous_year = today.year if today.month > 1 else today.year - 1
         previous_month = today.month - 1 if today.month > 1 else 12
         year.setValue(previous_year)
@@ -780,7 +780,7 @@ class TaxesView(QWidget):
         if not isinstance(status, FilingStatus):
             label.setText("Abgabestatus: für diese Berechnung nicht bestätigt")
             return
-        submitted_at = datetime.fromtimestamp(status.confirmed_at).strftime("%d.%m.%Y %H:%M")
+        submitted_at = datetime.fromtimestamp(status.confirmed_at).astimezone().strftime("%d.%m.%Y %H:%M")
         label.setText(
             f"Abgabestatus: produktiv übermittelt am {submitted_at}"
             + (f" · Referenz {status.reference}" if status.reference else "")
@@ -794,8 +794,42 @@ class TaxesView(QWidget):
             "Gesendeter Payload: " + repr(res.zm_payload) if res.zm_payload else "",
             "Gesendetes XML: " + res.xml_payload if res.xml_payload else "",
         ])
+        actions = [("U13-Bericht an sevDesk senden", lambda: self._dispatch_zm_followup(res))] if res.ok and not res.test_mode and res.zm_rows else []
         OperationResultDialog(self, tone="success" if res.ok and not res.test_mode else "neutral" if res.ok else "error",
-            title="Zusammenfassende Meldung", summary=state, context=f"{res.zm_rows} UID-Zeilen", details=details).exec()
+            title="Zusammenfassende Meldung", summary=state, context=f"{res.zm_rows} UID-Zeilen", details=details, actions=actions).exec()
+
+    def _dispatch_zm_followup(self, res: UvaSubmitResult) -> None:
+        payload = dict(res.zm_payload)
+        year = int(payload.get("jahr") or 0)
+        month = int(payload.get("monat") or 0)
+        period = f"{month:02d}/{year}"
+        calculation_hash = str(payload.get("calculation_hash") or "")
+        if not calculation_hash:
+            from xw_office.services.finanzonline.filing_status import uva_calculation_hash
+            calculation_hash = uva_calculation_hash({"jahr": year, "monat": month, "kennzahlen": {}, "zahlbetrag": "0.00", "rule_version": "U13"})
+        report = render_u13_report(payload, reference=res.reference_id or "", test_mode=False)
+        mail_service = self._container.resolve(MailDeliveryService)
+        followup = self._container.resolve(TaxFollowupService)
+
+        def job() -> None:
+            followup.send_once(
+                filing_kind="u13", period=period, calculation_hash=calculation_hash,
+                recipient_kind="sevdesk_autobox", attachment=report,
+                send=lambda: mail_service.send_mail(
+                    to_email="autobox@sevdesk.email", subject=f"U13/ZM {period} – erfolgreich übermittelt",
+                    text_body=f"U13-/ZM-Bericht für {period}.\nFinanzOnline-Übermittlung erfolgreich.\nReferenz: {res.reference_id or '-'}",
+                    attachments=[MailAttachment(filename=f"U13_ZM_{year}-{month:02d}.pdf", content=report)],
+                    sender_mailbox=TAX_MAIL_SENDER, require_exact_sender=True,
+                ),
+            )
+        worker = BackgroundWorker(job)
+        self._tax_followup_worker = worker
+        worker.signals.result.connect(lambda _value: OperationResultDialog(self, tone="success", title="Weitergabe abgeschlossen",
+            summary="U13-/ZM-Bericht an sevDesk weitergegeben").exec())
+        worker.signals.error.connect(lambda exc: OperationResultDialog(self, tone="error", title="Bericht konnte nicht gesendet werden",
+            summary="U13-/ZM-Bericht konnte nicht gesendet werden", details=str(exc)).exec())
+        worker.signals.finished.connect(lambda: setattr(self, "_tax_followup_worker", None))
+        worker.start()
 
     def _set_uva_busy(self, busy: bool) -> None:
         for button in (
@@ -875,7 +909,7 @@ class TaxesView(QWidget):
         row.addWidget(QLabel("Jahr:"))
         year = QSpinBox()
         year.setRange(2021, 2100)
-        today = date.today()
+        today = datetime.now().astimezone().date()
         current_quarter = (today.month - 1) // 3 + 1
         year.setValue(today.year if current_quarter > 1 else today.year - 1)
         row.addWidget(year)
@@ -1028,7 +1062,7 @@ class TaxesView(QWidget):
             if not isinstance(recorded, FilingStatus):
                 filing_status.setText("Abgabestatus: für diese Berechnung nicht bestätigt")
                 return
-            submitted_at = datetime.fromtimestamp(recorded.confirmed_at).strftime("%d.%m.%Y %H:%M")
+            submitted_at = datetime.fromtimestamp(recorded.confirmed_at).astimezone().strftime("%d.%m.%Y %H:%M")
             filing_status.setText(f"Abgabestatus: im Portal abgegeben am {submitted_at}")
 
         def show_selected_drilldown() -> None:

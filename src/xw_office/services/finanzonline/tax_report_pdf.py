@@ -26,3 +26,26 @@ def render_uva_report(payload: dict[str, Any], *, reference: str = "", test_mode
     output = doc.tobytes()
     doc.close()
     return output
+
+
+def render_u13_report(payload: dict[str, Any], *, reference: str = "", test_mode: bool = False) -> bytes:
+    year = int(payload.get("jahr") or payload.get("year"))
+    month = int(payload.get("monat") or payload.get("month"))
+    rows = payload.get("rows") or []
+    lines = [
+        "Zusammenfassende Meldung U13",
+        f"Periode: {month:02d}/{year}",
+        f"Status: {'TEST – keine produktive Abgabe' if test_mode else 'Produktiv übermittelt'}",
+        f"FinanzOnline-Referenz: {reference or 'nicht vorhanden'}",
+        f"UID-Zeilen: {len(rows)}", "", "Meldungen:",
+    ]
+    for row in rows:
+        if isinstance(row, dict):
+            lines.append(f"{row.get('uid') or row.get('uidnr') or '-'} · {row.get('art') or '-'} · {row.get('betrag') or '0.00'} EUR")
+    lines.append("Erzeuger: XW-Office")
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_textbox(fitz.Rect(54, 48, 540, 780), "\n".join(lines), fontsize=10, lineheight=1.35)
+    output = doc.tobytes()
+    doc.close()
+    return output
