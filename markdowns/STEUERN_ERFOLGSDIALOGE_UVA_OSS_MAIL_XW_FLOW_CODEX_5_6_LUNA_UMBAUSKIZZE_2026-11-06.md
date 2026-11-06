@@ -1108,3 +1108,5 @@ Noch manuell beziehungsweise nicht sicher automatisierbar:
   deterministisch aus dem Mailtext dedupliziert und in den PaymentCase Ã¼bernommen werden.
 - Die projektlokale XW-Flow-Testumgebung wurde aus den gehashten Produktions-/Dev-Lockdateien
   vervollstÃ¤ndigt; der komplette Backendlauf ist mit 1.204 Tests, 3 Skips und ohne Fehler grÃ¼n.
+- Der absenderfeste Graph-Pfad ist zusätzlich synthetisch abgedeckt: Mailbox, `from`,
+  `sendMail`-URL, Allowlist-Empfänger und PDF-Anhang werden ohne echte Zugangsdaten geprüft.
