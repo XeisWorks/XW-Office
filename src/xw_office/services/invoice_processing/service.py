@@ -22,6 +22,14 @@ from xw_office.services.invoice_processing.buyer_notes import (
     BuyerNoteSource,
     normalized_lines,
 )
+from xw_office.services.invoice_processing.context import (
+    InvoiceCapabilities,
+    InvoiceOrigin,
+    InvoiceWorkContext,
+    address_lines_from_invoice,
+    build_capabilities,
+    normalize_invoice_positions,
+)
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.mailing.service import MailAttachment, MailDeliveryService
 from xw_office.services.printing.invoice_printer import InvoicePrinter
@@ -140,6 +148,9 @@ class FulfillmentFlags:
     last_run_iso: str = ""
     last_error: str = ""
     last_warning: str = ""
+    product_applicable: bool = False
+    wix_applicable: bool = False
+    mail_applicable: bool = False
 
     def as_row_payload(self) -> dict[str, object]:
         return {
@@ -154,6 +165,9 @@ class FulfillmentFlags:
             "last_run_iso": self.last_run_iso,
             "last_error": self.last_error,
             "last_warning": self.last_warning,
+            "product_applicable": self.product_applicable,
+            "wix_applicable": self.wix_applicable,
+            "mail_applicable": self.mail_applicable,
         }
 
     @classmethod
@@ -172,6 +186,9 @@ class FulfillmentFlags:
             last_run_iso=str(payload.get("last_run_iso") or ""),
             last_error=str(payload.get("last_error") or ""),
             last_warning=str(payload.get("last_warning") or ""),
+            product_applicable=bool(payload.get("product_applicable", payload.get("product_ready", False))),
+            wix_applicable=bool(payload.get("wix_applicable", payload.get("wix_fulfilled", False))),
+            mail_applicable=bool(payload.get("mail_applicable", True)),
         )
 
 
@@ -250,6 +267,7 @@ class InvoiceProcessingService:
         customer_aftercare: CustomerAftercareService | None = None,
         offene_sendungen: OffeneSendungenService | None = None,
         search_index: InvoiceSearchIndexService | None = None,
+        print_decision: Any | None = None,
     ) -> None:
         self._invoices = invoice_client
         self._search_index = search_index
@@ -276,6 +294,8 @@ class InvoiceProcessingService:
         self._delivery_notes = delivery_note_service or DeliveryNoteService()
         self._customer_aftercare = customer_aftercare
         self._offene_sendungen = offene_sendungen
+        self._print_decision = print_decision
+        self._invoice_work_context_cache: dict[str, InvoiceWorkContext] = {}
 
     def load_invoice_table_rows(
         self,
@@ -424,6 +444,7 @@ class InvoiceProcessingService:
         if invoice_key:
             self._invoice_pdf_cache.pop(invoice_key, None)
             self._invoice_detail_cache.pop(invoice_key, None)
+            self._invoice_work_context_cache.pop(invoice_key, None)
         self._batch_cache.clear()
 
     def read_fulfillment_flags(self, invoice_id: str) -> FulfillmentFlags:
@@ -995,18 +1016,21 @@ class InvoiceProcessingService:
         *,
         invoice_ids: list[str] | None = None,
     ) -> dict[str, int]:
-        """Aggregate Wix line-item quantities for the exact START invoice set."""
-        if self._wix_orders is None or not self._wix_orders.has_credentials():
-            return {}
+        """Aggregate physical product quantities for the exact START scope.
+
+        Wix-backed drafts continue to use their order line items.  Drafts
+        created directly in sevDesk have no external order reference, so their
+        normalized sevDesk positions are included without contacting Wix.
+        """
         summaries = self._load_start_target_summaries(invoice_ids=invoice_ids)
+        requirements: dict[str, int] = {}
+        wix_available = self._wix_orders is not None and self._wix_orders.has_credentials()
         references = sorted(
             {summary.order_reference.strip() for summary in summaries if summary.order_reference.strip()}
         )
-        if not references:
-            return {}
-
-        requirements: dict[str, int] = {}
         for reference in references:
+            if not wix_available:
+                continue
             # Custom paid digital-license orders are fulfilled manually in the
             # Digital License wizard.  They must never reserve or decrement
             # physical stock during START's print pre-flight.
@@ -1037,6 +1061,18 @@ class InvoiceProcessingService:
                     qty = 0
                 if qty:
                     requirements[sku] = requirements.get(sku, 0) + qty
+        for summary in summaries:
+            if str(summary.order_reference or "").strip():
+                continue
+            try:
+                context = self.load_invoice_work_context(summary, load_positions=True)
+            except Exception as exc:  # noqa: BLE001 - one malformed draft must not hide others
+                logger.warning("sevDesk-Inventar-Preflight fehlgeschlagen invoice=%s: %s", summary.id, exc)
+                continue
+            for position in context.positions:
+                if position.kind != "product" or not position.sku or position.quantity <= 0:
+                    continue
+                requirements[position.sku] = requirements.get(position.sku, 0) + position.quantity_int
         return requirements
 
     def is_manual_licensed_delivery(self, summary: InvoiceSummary) -> bool:
@@ -1230,7 +1266,9 @@ class InvoiceProcessingService:
         current = self._resolve_current_start_summary(summary)
         if int(current.status_code or 0) == 100:
             self._invoices.send_invoice_document(current.id, send_type="VPDF", send_draft=False)
-            self._invoice_detail_cache.pop(str(current.id or "").strip(), None)
+            invoice_key = str(current.id or "").strip()
+            self._invoice_detail_cache.pop(invoice_key, None)
+            self._invoice_work_context_cache.pop(invoice_key, None)
             current = self._resolve_current_start_summary(current)
         return current
 
@@ -1442,6 +1480,7 @@ class InvoiceProcessingService:
         else:
             if isinstance(refreshed, dict):
                 self._invoice_detail_cache[str(summary.id)] = refreshed
+                self._invoice_work_context_cache.pop(str(summary.id), None)
                 if self._sevdesk_mail_sent(refreshed):
                     next_flags = self._next_flags(flags, mail_sent=True)
                     self.write_fulfillment_flags(summary.id, next_flags)
@@ -1487,26 +1526,166 @@ class InvoiceProcessingService:
 
     def get_invoice_detail_context(self, summary: InvoiceSummary) -> dict[str, object]:
         """Return sevDesk-backed customer/shipping fallback data for the detail panel."""
-
-        invoice = self._fetch_invoice_detail(summary.id)
-        return self._invoice_detail_context_from_data(summary, invoice)
+        context = self.load_invoice_work_context(summary)
+        return {
+            "customer_name": context.customer_name,
+            "customer_email": context.customer_email,
+            "shipping_lines": list(context.shipping_address_lines),
+            "billing_lines": list(context.billing_address_lines),
+            "shipping_source": context.shipping_address_source,
+            "origin": context.origin,
+            "wix_order_number": context.wix_order_number,
+            "positions": [position.__dict__.copy() for position in context.positions],
+            "capabilities": context.capabilities.__dict__.copy(),
+            "warnings": list(context.warnings),
+        }
 
     def get_cached_invoice_detail_context(self, summary: InvoiceSummary) -> dict[str, object] | None:
         """Return cached sevDesk detail context without triggering an API call."""
-        cached = self._invoice_detail_cache.get(str(summary.id))
-        if cached is None:
+        context = self.get_cached_invoice_work_context(summary)
+        if context is None:
             return None
-        return self._invoice_detail_context_from_data(summary, cached)
+        return {
+            "customer_name": context.customer_name,
+            "customer_email": context.customer_email,
+            "shipping_lines": list(context.shipping_address_lines),
+            "billing_lines": list(context.billing_address_lines),
+            "shipping_source": context.shipping_address_source,
+            "origin": context.origin,
+            "wix_order_number": context.wix_order_number,
+            "positions": [position.__dict__.copy() for position in context.positions],
+            "capabilities": context.capabilities.__dict__.copy(),
+            "warnings": list(context.warnings),
+        }
+
+    def load_invoice_work_context(
+        self,
+        summary: InvoiceSummary,
+        *,
+        force: bool = False,
+        load_positions: bool = True,
+    ) -> InvoiceWorkContext:
+        """Load a complete sevDesk-first work context for one invoice.
+
+        The method is intentionally safe for manually-created drafts: Wix is
+        consulted only for an already cached candidate and is never required
+        to render sevDesk customer, address or position data.
+        """
+        invoice_id = str(summary.id or "").strip()
+        cached = self._invoice_work_context_cache.get(invoice_id)
+        if not force and cached is not None and self._context_is_current(cached, summary):
+            return cached
+
+        invoice = self._fetch_invoice_detail(invoice_id, force=force)
+        positions: tuple[Any, ...] = ()
+        if load_positions and invoice_id:
+            try:
+                raw_positions = self._invoices.fetch_invoice_positions(invoice_id)
+                positions = normalize_invoice_positions(raw_positions)
+            except Exception as exc:  # noqa: BLE001 - invoice header remains useful.
+                logger.warning("Invoice positions could not be loaded for %s: %s", invoice_id, exc)
+                positions = ()
+
+        billing, shipping, shipping_source = address_lines_from_invoice(invoice, summary)
+        customer_name = self._resolve_customer_name(summary, invoice)
+        customer_email = self._contact_email_from_invoice(invoice)
+        candidate = str(summary.order_reference or "").strip()
+        origin: InvoiceOrigin = "sevdesk_only"
+        confirmed = ""
+        if candidate:
+            origin = "wix_candidate"
+            if self._wix_orders is not None:
+                try:
+                    cached_order = self._wix_orders.get_cached_order_summary(candidate)
+                except Exception:  # noqa: BLE001 - a cache failure cannot block sevDesk.
+                    cached_order = None
+                if cached_order:
+                    origin = "wix_confirmed"
+                    confirmed = candidate
+                    customer_name = str(cached_order.get("wix_customer_name") or customer_name).strip()
+                    customer_email = str(cached_order.get("wix_customer_email") or customer_email).strip()
+
+        capabilities = build_capabilities(
+            customer_email=customer_email,
+            shipping_lines=tuple(shipping),
+            positions=tuple(positions),
+            has_wix_order=origin == "wix_confirmed",
+        )
+        context = InvoiceWorkContext(
+            summary=summary,
+            origin=origin,
+            wix_order_number_candidate=candidate,
+            confirmed_wix_order_number=confirmed,
+            customer_name=customer_name,
+            customer_email=customer_email,
+            billing_address_lines=tuple(billing),
+            shipping_address_lines=tuple(shipping),
+            shipping_address_source=shipping_source,
+            positions=tuple(positions),
+            capabilities=capabilities,
+            warnings=tuple(
+                warning
+                for position in positions
+                for warning in position.warnings
+            ),
+            source_updated_at=str(summary.source_updated_at or invoice.get("update") or "").strip(),
+        )
+        self._invoice_work_context_cache[invoice_id] = context
+        return context
+
+    def get_cached_invoice_work_context(self, summary: InvoiceSummary) -> InvoiceWorkContext | None:
+        context = self._invoice_work_context_cache.get(str(summary.id or "").strip())
+        if context is not None and self._context_is_current(context, summary):
+            return context
+        return None
+
+    @staticmethod
+    def _context_is_current(context: InvoiceWorkContext, summary: InvoiceSummary) -> bool:
+        expected = str(summary.source_updated_at or "").strip()
+        return not expected or not context.source_updated_at or context.source_updated_at == expected
+
+    def load_invoice_piece_blocks(
+        self,
+        summary: InvoiceSummary,
+        *,
+        force: bool = False,
+    ) -> list[Any]:
+        """Return sevDesk-backed printable product blocks for one invoice."""
+        context = self.load_invoice_work_context(summary, force=force, load_positions=True)
+        printable_positions = [position for position in context.positions if position.kind == "product"]
+        if self._print_decision is not None:
+            builder = getattr(self._print_decision, "get_piece_blocks_from_invoice_positions", None)
+            if callable(builder):
+                return list(builder(printable_positions, context.invoice_reference))
+        # Lightweight fallback for tests/adapters that do not wire the print
+        # engine.  The UI still shows the row and can explain the missing
+        # catalog/stock enrichment instead of dropping the position.
+        from xw_office.services.products.print_decision import PieceBlock
+
+        return [
+            PieceBlock(
+                sku=position.sku,
+                name=position.name,
+                qty_needed=position.quantity_int,
+                note=position.description,
+                is_unreleased=False,
+            )
+            for position in printable_positions
+            if position.quantity_int > 0
+        ]
 
     def _invoice_detail_context_from_data(
         self,
         summary: InvoiceSummary,
         invoice: dict[str, Any],
     ) -> dict[str, object]:
+        _billing, shipping, shipping_source = address_lines_from_invoice(invoice, summary)
         return {
             "customer_name": self._resolve_customer_name(summary, invoice),
             "customer_email": self._contact_email_from_invoice(invoice),
-            "shipping_lines": self._shipping_lines_from_invoice_data(invoice, summary),
+            "shipping_lines": list(shipping),
+            "billing_lines": list(_billing),
+            "shipping_source": shipping_source,
         }
 
     def _load_all_open_drafts(self, *, limit_per_page: int, max_pages: int) -> list[InvoiceSummary]:
@@ -1737,6 +1916,9 @@ class InvoiceProcessingService:
             last_run_iso=datetime.now(timezone.utc).isoformat(timespec="seconds"),
             last_error=flags.last_error,
             last_warning=flags.last_warning,
+            product_applicable=flags.product_applicable,
+            wix_applicable=flags.wix_applicable,
+            mail_applicable=flags.mail_applicable,
         )
 
     def _next_flags(self, flags: FulfillmentFlags, **overrides: object) -> FulfillmentFlags:
@@ -1753,6 +1935,9 @@ class InvoiceProcessingService:
             "last_run_iso": stamped.last_run_iso,
             "last_error": "",
             "last_warning": "",
+            "product_applicable": stamped.product_applicable,
+            "wix_applicable": stamped.wix_applicable,
+            "mail_applicable": stamped.mail_applicable,
         }
         data.update(overrides)
         if overrides.get("payment_applicable") is False:
@@ -1778,6 +1963,9 @@ class InvoiceProcessingService:
             last_run_iso=stamped.last_run_iso,
             last_error=str(exc),
             last_warning=stamped.last_warning,
+            product_applicable=stamped.product_applicable,
+            wix_applicable=stamped.wix_applicable,
+            mail_applicable=stamped.mail_applicable,
         )
 
     def _with_warning(self, flags: FulfillmentFlags, message: str) -> FulfillmentFlags:
@@ -1794,6 +1982,9 @@ class InvoiceProcessingService:
             last_run_iso=stamped.last_run_iso,
             last_error="",
             last_warning=str(message or "").strip(),
+            product_applicable=stamped.product_applicable,
+            wix_applicable=stamped.wix_applicable,
+            mail_applicable=stamped.mail_applicable,
         )
 
     def _run_finalize_step(
@@ -1821,7 +2012,9 @@ class InvoiceProcessingService:
         # Finalization can assign the definitive invoice number. Do not let a
         # draft-era detail response (often containing only header="Rechnung")
         # leak into the subsequent mail subject/template rendering.
-        self._invoice_detail_cache.pop(str(summary.id or "").strip(), None)
+        invoice_key = str(summary.id or "").strip()
+        self._invoice_detail_cache.pop(invoice_key, None)
+        self._invoice_work_context_cache.pop(invoice_key, None)
         return self._next_flags(
             flags,
             payment_applicable=(self._stamp(flags).payment_applicable or bool(summary.order_reference.strip())),
@@ -2563,6 +2756,9 @@ class InvoiceProcessingService:
             last_run_iso=next_flags.last_run_iso,
             last_error=next_flags.last_error,
             last_warning=next_flags.last_warning,
+            product_applicable=flags.product_applicable,
+            wix_applicable=flags.wix_applicable,
+            mail_applicable=True,
         )
 
     def _shipping_lines_from_invoice(self, invoice: dict[str, Any], summary: InvoiceSummary) -> list[str]:
@@ -2608,40 +2804,15 @@ class InvoiceProcessingService:
 
     def _shipping_lines_from_invoice_data(self, invoice: dict[str, Any], summary: InvoiceSummary) -> list[str]:
         """Build shipping lines from sevDesk invoice/contact data only."""
-
-        contact = invoice.get("contact") if isinstance(invoice.get("contact"), dict) else {}
-        delivery_name = str(invoice.get("deliveryName") or "").strip()
-        name = delivery_name or str(invoice.get("name") or contact.get("name") or summary.contact_name or "").strip()
-
-        street = str(
-            invoice.get("deliveryStreet")
-            or invoice.get("shippingStreet")
-            or invoice.get("street")
-            or ""
-        ).strip()
-        zip_code = str(
-            invoice.get("deliveryZip")
-            or invoice.get("shippingZip")
-            or invoice.get("zip")
-            or ""
-        ).strip()
-        city = str(
-            invoice.get("deliveryCity")
-            or invoice.get("shippingCity")
-            or invoice.get("city")
-            or ""
-        ).strip()
-        country = country_label_for_address(
-            invoice.get("deliveryAddressCountry")
-            or invoice.get("shippingCountry")
-            or invoice.get("addressCountryCode")
-            or summary.display_country
-            or ""
-        )
-
-        city_line = " ".join(part for part in (zip_code, city) if part)
-        lines = [line for line in (name, street, city_line, country) if str(line).strip()]
-        return lines
+        _billing, shipping, _source = address_lines_from_invoice(invoice, summary)
+        if shipping:
+            # Keep country presentation consistent with the existing shipping
+            # label path while preserving the exact sevDesk address snapshot.
+            lines = list(shipping)
+            if lines:
+                lines[-1] = country_label_for_address(lines[-1]) or lines[-1]
+            return lines
+        return []
 
     @staticmethod
     def _invoice_number(summary: InvoiceSummary, invoice: dict[str, Any]) -> str:
@@ -2813,13 +2984,14 @@ class InvoiceProcessingService:
         )
         return MailAttachment(filename=f"{invoice_number}.pdf", content=pdf_bytes, mime_type="application/pdf")
 
-    def _fetch_invoice_detail(self, invoice_id: str) -> dict[str, Any]:
-        cached = self._invoice_detail_cache.get(str(invoice_id))
+    def _fetch_invoice_detail(self, invoice_id: str, *, force: bool = False) -> dict[str, Any]:
+        invoice_key = str(invoice_id).strip()
+        cached = None if force else self._invoice_detail_cache.get(invoice_key)
         if cached is not None:
             return cached
         invoice = self._invoices.fetch_invoice_by_id(invoice_id)
         normalized = invoice if isinstance(invoice, dict) else {}
-        self._invoice_detail_cache[str(invoice_id)] = normalized
+        self._invoice_detail_cache[invoice_key] = normalized
         return normalized
 
     def _get_invoice_pdf_bytes(
@@ -2929,10 +3101,19 @@ class InvoiceProcessingService:
                 flags = FulfillmentFlags(
                     product_ready=bool(summary.order_reference.strip()),
                     payment_applicable=bool(summary.order_reference.strip()),
+                    product_applicable=bool(summary.order_reference.strip()),
+                    wix_applicable=bool(summary.order_reference.strip()),
+                    mail_applicable=True,
                 )
             row["FULFILLMENT"] = ""
             row["__fulfillment__"] = flags.as_row_payload()
             tooltip = "Label | Rechnung | Produkt | Mail | Wix | Zahlung"
+            if not flags.product_applicable:
+                tooltip += "\nProdukt: nicht anwendbar"
+            if not flags.wix_applicable:
+                tooltip += "\nWix: nicht anwendbar"
+            if not flags.payment_applicable:
+                tooltip += "\nZahlung: nicht anwendbar"
             if flags.payment_warning.strip() and not flags.payment_booked:
                 tooltip += f"\n\nZahlung: {flags.payment_warning.strip()}"
             row["__tooltip__FULFILLMENT"] = tooltip

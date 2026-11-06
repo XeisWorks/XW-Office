@@ -272,6 +272,7 @@ def register_default_services(container: Container) -> None:
                 if (c.config.database_url or "").strip()
                 else None
             ),
+            print_decision=c.resolve(PrintDecisionEngine),
         ),
     )
     container.register(

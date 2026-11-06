@@ -6,6 +6,32 @@
 **Repository:** `XW-Office`  
 **Referenz-Repository:** `wix-sevdesk-api` (nur Ist- und Datenvertragsanalyse)
 
+## Implementierungsstand (2026-11-06)
+
+Die erste produktive Umsetzung ist auf `main` vorbereitet und wird vor dem
+Push mit der vollständigen Testmatrix verifiziert:
+
+- [x] Quellenneutraler `InvoiceWorkContext` mit Herkunft, Fähigkeiten,
+  Adressquelle, normalisierten `InvoicePos`-Positionen und Update-Fingerprint.
+- [x] sevDesk-Positionen werden im Detailbereich für Rechnungen ohne
+  `order_reference` geladen; Rechnungsadresse wird bei fehlender Lieferadresse
+  als Versandadresse verwendet.
+- [x] Produktblöcke und Bestands-/Druckentscheidung nutzen für sevDesk-
+  Positionen denselben Katalog-/Druckpfad wie Wix-Positionen.
+- [x] PLC-Dialog unterstützt sevDesk-only: Adresse, E-Mail, Positionen und
+  Rechnungsnummer/`SEVDESK-{id}`; Wix wird in diesem Pfad nicht kontaktiert.
+- [x] WIX-Order-Schaltfläche bleibt bei sevDesk-only verborgen; Fulfillment-,
+  Zahlungs- und Statusdarstellung unterscheiden „nicht anwendbar“ von Fehlern.
+- [x] START-Inventarvorprüfung berücksichtigt physische sevDesk-Positionen.
+- [x] Regressionstests für Kontextparser sowie bestehende Rechnungs-, PLC-,
+  Produktdruck- und UI-Smoke-Pfade laufen im lokalen venv (164 Tests grün).
+- [x] Gesamtsuite ausgeführt: 1.871 Tests grün; zwei bereits vorhandene,
+  reihenfolgeabhängige `wix_media_upload`-Fehler treten nur im Suite-Verbund
+  auf und laufen isoliert grün (nicht durch diesen Umbau verursacht).
+- [ ] Verbleibend vor dem produktiven Abschluss: geschütztes Archiv prüfen,
+  Diff kontrollieren, Commit und Push nach `origin/main`; anschließend
+  kontrollierter sevDesk-Testbeleg mit echtem Label-/PLC-/Mail-/START-Lauf.
+
 ## 1. Zielentscheidung
 
 Ein direkt in sevDesk angelegter Rechnungsentwurf mit Status `100` soll im

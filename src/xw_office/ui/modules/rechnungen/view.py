@@ -76,6 +76,7 @@ from xw_office.services.draft_invoice.service import (
     ProductPreflightPlan,
 )
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.services.invoice_processing.context import InvoiceWorkContext
 from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.inventory import InventoryService
 from xw_office.services.mailing.outlook_compose import open_classic_outlook_draft
@@ -603,7 +604,13 @@ class _FulfillmentDelegate(QStyledItemDelegate):
         has_run = bool(payload.get("last_run_iso"))
         for key, file_name, x_local, size in self._layout(option.rect.width(), option.rect.height()):
             state = payload.get(key)
-            if key == "payment_booked" and not bool(payload.get("payment_applicable")):
+            applicable_key = {
+                "product_ready": "product_applicable",
+                "wix_fulfilled": "wix_applicable",
+                "payment_booked": "payment_applicable",
+                "mail_sent": "mail_applicable",
+            }.get(key)
+            if applicable_key and not bool(payload.get(applicable_key, True)):
                 opacity = 0.2
                 bg = "#e2e8f0"
             elif not has_run:
@@ -1166,6 +1173,7 @@ class RechnungenView(QWidget):
         self._draft_preview_worker: BackgroundWorker | None = None
         self._mollie_badge_worker: BackgroundWorker | None = None
         self._stuecke_worker: BackgroundWorker | None = None
+        self._sevdesk_context_seq = 0
         self._wix_meta_worker: BackgroundWorker | None = None
         self._wix_context_worker: BackgroundWorker | None = None
         self._customer_mail_worker: BackgroundWorker | None = None
@@ -1995,6 +2003,7 @@ class RechnungenView(QWidget):
         self._hint_seq += 1
         self._wix_context_seq += 1
         self._detail_context_seq += 1
+        self._sevdesk_context_seq += 1
         self._mollie_timer.stop()
         self._wix_warm_timer.stop()
         self._wix_warm_queue.clear()
@@ -4894,6 +4903,14 @@ class RechnungenView(QWidget):
     @staticmethod
     def _fulfillment_tooltip(flags: dict[str, object]) -> str:
         tooltip = "Label | Rechnung | Produkt | Mail | Wix | Zahlung"
+        if not bool(flags.get("product_applicable", flags.get("product_ready", False))):
+            tooltip += "\nProdukt: nicht anwendbar"
+        if not bool(flags.get("wix_applicable", flags.get("wix_fulfilled", False))):
+            tooltip += "\nWix: nicht anwendbar"
+        if not bool(flags.get("mail_applicable", True)):
+            tooltip += "\nMail: nicht anwendbar"
+        if not bool(flags.get("payment_applicable")):
+            tooltip += "\nZahlung: nicht anwendbar"
         payment_warning = str(flags.get("payment_warning") or "").strip()
         if payment_warning and not bool(flags.get("payment_booked")):
             tooltip += f"\n\nZahlung: {payment_warning}"
@@ -5395,6 +5412,16 @@ class RechnungenView(QWidget):
         flags: object,
     ) -> None:
         if self._fulfillment_step_worker is not None and self._fulfillment_step_worker.isRunning():
+            return
+
+        payload = flags if isinstance(flags, dict) else {}
+        applicable_key = {
+            "product_ready": "product_applicable",
+            "wix_fulfilled": "wix_applicable",
+            "mail_sent": "mail_applicable",
+            "payment_booked": "payment_applicable",
+        }.get(chip)
+        if applicable_key and not bool(payload.get(applicable_key, True)):
             return
 
         labels = {
@@ -5907,6 +5934,8 @@ class RechnungenView(QWidget):
     def _customer_mail_subject(summary: InvoiceSummary) -> str:
         order_ref = str(summary.order_reference or "").strip() or "—"
         invoice_no = str(summary.invoice_number or "").strip() or str(summary.id or "").strip() or "—"
+        if not str(summary.order_reference or "").strip():
+            return f"sevDesk-Rechnung {invoice_no}"
         return f"Wix-Order-Nr. {order_ref} | sevDesk-Rechnungsnr. {invoice_no}"
 
     def _customer_email_from_loaded_context(self, summary: InvoiceSummary) -> str:
@@ -5978,6 +6007,7 @@ class RechnungenView(QWidget):
             return
         self._last_detail_selection_key = selection_key
         self._detail_context_seq += 1
+        self._sevdesk_context_seq += 1
         seq = self._detail_context_seq
         if summary is None:
             self._reset_detail()
@@ -6052,8 +6082,65 @@ class RechnungenView(QWidget):
                     )
         else:
             self._reset_wix_meta("Keine Wix-Order-Referenz")
-            self._reset_stuecke()
+            self._load_sevdesk_context(summary, seq)
         self._start_next_wix_warm_batch()
+
+    def _load_sevdesk_context(self, summary: InvoiceSummary, detail_seq: int) -> None:
+        """Load positions for a manual sevDesk invoice without touching Wix."""
+        context_seq = self._sevdesk_context_seq
+        if self._stuecke_worker is not None and self._stuecke_worker.isRunning():
+            self._stuecke_worker.cancel()
+        self._reset_stuecke()
+        self._stuecke_hint.setText("sevDesk-Positionen werden geladen…")
+        self._stuecke_hint.show()
+        self._gb_stuecke.show()
+
+        def job() -> dict[str, object]:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            context = service.load_invoice_work_context(summary, load_positions=True)
+            pieces = service.load_invoice_piece_blocks(summary)
+            return {
+                "detail_seq": detail_seq,
+                "context_seq": context_seq,
+                "invoice_id": summary.id,
+                "context": context,
+                "items": pieces,
+            }
+
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(self._on_sevdesk_context_loaded)
+        worker.signals.error.connect(self._on_sevdesk_context_error)
+        worker.signals.finished.connect(lambda: setattr(self, "_stuecke_worker", None))
+        self._stuecke_worker = worker
+        worker.start()
+
+    def _on_sevdesk_context_loaded(self, payload: object) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        if int(data.get("context_seq") or 0) != self._sevdesk_context_seq:
+            return
+        selected = self._selected_summary()
+        if selected is None or str(selected.id or "") != str(data.get("invoice_id") or ""):
+            return
+        context = data.get("context")
+        if isinstance(context, InvoiceWorkContext):
+            self._wix_customer.setText(context.customer_name or selected.contact_name or "—")
+            self._wix_customer_email.setText(context.customer_email or "—")
+            self._shipping_source_lines = list(context.shipping_address_lines)
+            override_lines = list(self._shipping_address_overrides.get(selected.id, []))
+            self._set_shipping_editor_lines(override_lines or list(context.shipping_address_lines))
+            self._shipping_status.setText(
+                "Adresse aus Rechnungsadresse übernommen"
+                if context.shipping_address_source == "billing_fallback"
+                else "Adresse aus sevDesk"
+            )
+            self._dl_order_ref.setText("Keine externe Bestellung")
+        self._on_stuecke_loaded({"__requested_ref": "", "items": data.get("items") or []})
+        self._update_plc_controls()
+
+    def _on_sevdesk_context_error(self, exc: Exception) -> None:
+        self._stuecke_hint.setText(f"sevDesk-Positionen konnten nicht geladen werden: {exc}")
+        self._stuecke_hint.show()
+        self._gb_stuecke.show()
 
     def _reset_detail(self) -> None:
         self._gb_open.show()
@@ -6592,7 +6679,17 @@ class RechnungenView(QWidget):
         self._btn_view.setEnabled(has_selection)
         self._view_invoice_action.setEnabled(has_selection)
         self._btn_open_sevdesk_invoice.setEnabled(has_selection)
-        self._btn_open_wix_order.setEnabled(selected is not None)
+        has_wix = bool(selected is not None and str(selected.order_reference or "").strip())
+        if selected is not None:
+            try:
+                service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+                cached_context = getattr(service, "get_cached_invoice_work_context", lambda _summary: None)(selected)
+                if cached_context is not None:
+                    has_wix = bool(getattr(cached_context, "confirmed_wix_order_number", ""))
+            except Exception:  # noqa: BLE001 - button state must never break selection.
+                pass
+        self._btn_open_wix_order.setVisible(has_wix)
+        self._btn_open_wix_order.setEnabled(has_wix)
         self._btn_customer_mail.setEnabled(selected is not None)
         self._btn_send_invoice.setEnabled(selected is not None)
 

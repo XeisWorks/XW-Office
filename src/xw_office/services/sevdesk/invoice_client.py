@@ -157,6 +157,7 @@ class InvoiceSummary(BaseModel):
     has_unreleased_sku: bool = False
     order_reference: str = ""
     sevdesk_reference: str = ""
+    source_updated_at: str = Field(default="", alias="sourceUpdatedAt")
 
     @field_validator("status_code", mode="before")
     @classmethod
@@ -181,6 +182,7 @@ class InvoiceSummary(BaseModel):
         "delivery_country_code",
         "order_reference",
         "sevdesk_reference",
+        "source_updated_at",
         mode="before",
     )
     @classmethod
@@ -284,6 +286,7 @@ class InvoiceSummary(BaseModel):
             "is_sensitive_country": country_code.upper() in DEFAULT_SENSITIVE_COUNTRY_CODES,
             "order_reference": order_reference,
             "sevdesk_reference": sevdesk_reference,
+            "sourceUpdatedAt": str(raw.get("update") or raw.get("updatedAt") or raw.get("updated") or "").strip(),
         }
         return cls.model_validate(payload)
 
@@ -1110,13 +1113,24 @@ class InvoiceClient:
             "invoice[id]": str(invoice_id).strip(),
             "invoice[objectName]": "Invoice",
             "embed": "part",
+            "limit": 1000,
+            "offset": 0,
         }
         response = self._conn.get("/InvoicePos", params=params)
         payload = response.json()
         objects = payload.get("objects") if isinstance(payload, dict) else []
         if not isinstance(objects, list):
             return []
-        return [item for item in objects if isinstance(item, dict)]
+        result = [item for item in objects if isinstance(item, dict)]
+        result.sort(
+            key=lambda item: (
+                int(item.get("positionNumber"))
+                if str(item.get("positionNumber") or "").strip().lstrip("-").isdigit()
+                else 0,
+                str(item.get("id") or ""),
+            )
+        )
+        return result
 
     def update_invoice_draft(
         self,

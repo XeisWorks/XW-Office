@@ -65,6 +65,8 @@ from xw_office.services.printing.print_jobs import PdfPrintJob
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.services.invoice_processing.context import InvoiceWorkContext
+from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.services.shipping.countries import (
     country_name_en,
     country_names_en,
@@ -273,7 +275,15 @@ class PlcLabelPrintDialog(QDialog):
             self._transport_combo.setCurrentIndex(0)
             self._transport_combo.setEnabled(False)
         self._primary_order_number.blockSignals(True)
-        self._primary_order_number.setText(self._summary.wix_order_number())
+        initial_reference = self._summary.wix_order_number()
+        if not initial_reference and not self._summary.order_reference.strip() and not self._manual_entry:
+            initial_reference = (
+                self._summary.invoice_number.strip()
+                or f"SEVDESK-{self._summary.id.strip()}"
+            )
+            self._primary_order_label.setText("sevDesk-Referenz / Rechnungs-Nr.:")
+            self._primary_order_number.setPlaceholderText("z. B. RE-2026-001 oder SEVDESK-123")
+        self._primary_order_number.setText(initial_reference)
         self._primary_order_number.blockSignals(False)
         if self._manual_entry:
             # Header "PLC-Label" button: no invoice/customer context, so the
@@ -359,7 +369,8 @@ class PlcLabelPrintDialog(QDialog):
         self._primary_order_number = QLineEdit()
         self._primary_order_number.setPlaceholderText("z. B. 21104")
         self._primary_order_number.textChanged.connect(self._on_order_number_edit)
-        form.addRow("Wix-Order-Nr.:", self._primary_order_number)
+        self._primary_order_label = QLabel("Wix-Order-Nr.:")
+        form.addRow(self._primary_order_label, self._primary_order_number)
 
         self._secondary_order_number = QLineEdit()
         self._secondary_order_number.setPlaceholderText("optional, z. B. 21105")
@@ -580,7 +591,43 @@ class PlcLabelPrintDialog(QDialog):
                 else:
                     source = "none"
             else:
-                source = "none"
+                # Manual sevDesk invoices have no Wix reference.  Load their
+                # normalized work context directly and never probe Wix here.
+                source = "sevdesk"
+                try:
+                    service = self._container.resolve(InvoiceProcessingService)
+                except (KeyError, TypeError):
+                    service = None
+                if service is not None:
+                    loader = getattr(service, "load_invoice_work_context", None)
+                    work_context = loader(self._summary, load_positions=True) if callable(loader) else None
+                    if isinstance(work_context, InvoiceWorkContext):
+                        order_number = (
+                            self._summary.invoice_number.strip()
+                            or f"SEVDESK-{self._summary.id.strip()}"
+                        )
+                        address_lines = list(work_context.shipping_address_lines)
+                        email = work_context.customer_email.strip()
+                        for position in work_context.positions:
+                            if position.kind != "product" or position.quantity <= 0:
+                                continue
+                            items.append(
+                                WixOrderItem(
+                                    line_item_id=position.source_id,
+                                    sku=position.sku,
+                                    name=position.name or position.description,
+                                    qty=position.quantity_int,
+                                    note=position.description,
+                                    unit_price_gross=float(position.unit_value or 0),
+                                    currency=position.currency or "EUR",
+                                    unit_weight_kg=float(position.unit_weight_kg or 0),
+                                    is_digital=False,
+                                )
+                            )
+                        weight = sum(
+                            max(1, int(item.qty or 1)) * float(item.unit_weight_kg or 0)
+                            for item in items
+                        )
             return _PlcDialogContext(
                 order_number=order_number,
                 address_lines=address_lines,
@@ -623,7 +670,14 @@ class PlcLabelPrintDialog(QDialog):
         self._sync_product_options()
         self._update_customs_visibility()
         physical_count = sum(max(1, int(item.qty or 1)) for item in result.items if not item.is_digital)
-        source_label = "Wix-Cache" if result.source == "cache" else "Wix"
+        source_label = {
+            "cache": "Wix-Cache",
+            "wix": "Wix",
+            "sevdesk": "sevDesk",
+        }.get(result.source, "Quelle unbekannt")
+        if result.source == "sevdesk":
+            self._primary_order_label.setText("sevDesk-Referenz / Rechnungs-Nr.:")
+            self._primary_order_number.setPlaceholderText("z. B. RE-2026-001 oder SEVDESK-123")
         self._status.setText(
             f"Bereit ({source_label}) – {physical_count} physische Notenhefte; Paketgewicht/Verpackung prüfen"
             if physical_count

@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Iterable
 
 from xw_office.services.products.catalog import Product, StockStatus
 
@@ -202,6 +202,47 @@ class PrintDecisionEngine:
         )
         return blocks
 
+    def get_piece_blocks_from_invoice_positions(
+        self,
+        positions: Iterable[object],
+        invoice_ref: str = "",
+    ) -> list[PieceBlock]:
+        """Build the same printable blocks from sevDesk InvoicePos rows.
+
+        The invoice adapter deliberately accepts the normalized context model
+        as well as simple test doubles.  Non-product positions are skipped by
+        the caller; unresolved product rows remain visible as unknown blocks
+        instead of being silently turned into stock operations.
+        """
+        blocks: list[PieceBlock] = []
+        for position in positions:
+            kind = str(getattr(position, "kind", "product") or "product").strip().lower()
+            if kind not in {"product", "unknown"}:
+                continue
+            sku = str(getattr(position, "sku", "") or "").strip()
+            name = str(getattr(position, "name", "") or getattr(position, "description", "") or sku).strip()
+            try:
+                quantity = int(getattr(position, "quantity_int", 0) or 0)
+            except (TypeError, ValueError):
+                quantity = 0
+            if quantity <= 0:
+                continue
+            blocks.append(
+                self._build_block_from_values(
+                    sku=sku,
+                    name=name,
+                    qty=quantity,
+                    note=str(getattr(position, "description", "") or "").strip(),
+                    is_unreleased=False,
+                )
+            )
+        logger.debug(
+            "PrintDecisionEngine: %d sevDesk invoice piece blocks for %r",
+            len(blocks),
+            invoice_ref,
+        )
+        return blocks
+
     def _expand_multi_title_items(self, wix_items: list[WixOrderItem]) -> list[WixOrderItem]:
         """Split XW-010 into one print item per requested title when safe.
 
@@ -274,23 +315,42 @@ class PrintDecisionEngine:
     # ------------------------------------------------------------------ #
 
     def _build_block(self, item: WixOrderItem) -> PieceBlock:
-        product = self._catalog.resolve_sku(item.sku)
+        return self._build_block_from_values(
+            sku=item.sku,
+            name=item.name,
+            qty=item.qty,
+            note=item.note,
+            is_unreleased=item.is_unreleased,
+        )
+
+    def _build_block_from_values(
+        self,
+        *,
+        sku: str,
+        name: str,
+        qty: int,
+        note: str = "",
+        is_unreleased: bool = False,
+    ) -> PieceBlock:
+        sku = str(sku or "").strip().upper()
+        name = str(name or sku or "Unbekanntes Produkt").strip()
+        product = self._catalog.resolve_sku(sku) if sku else None
         stock_status: StockStatus | None = None
-        direct_cfg = self._catalog.resolve_print_config(item.sku, title=item.name)
+        direct_cfg = self._catalog.resolve_print_config(sku, title=name) if sku else {}
         resolved_name = (
             str(direct_cfg.get("resolved_title") or "").strip()
-            or self._catalog.resolve_product_title(item.sku, item.name)
+            or (self._catalog.resolve_product_title(sku, name) if sku else name)
         )
 
         if product is None:
-            fallback_part = self._cached_part_by_sku(item.sku)
+            fallback_part = self._cached_part_by_sku(sku) if sku else None
             if fallback_part is not None:
                 product = self._catalog.upsert_from_sevdesk(fallback_part)
             elif str(direct_cfg.get("path") or "").strip():
                 product = Product(
-                    id=f"settings::{item.sku.strip().upper()}",
-                    sku=item.sku.strip().upper(),
-                    name=item.name,
+                    id=f"settings::{sku}",
+                    sku=sku,
+                    name=name,
                     print_file_path=str(direct_cfg.get("path") or "").strip(),
                 )
 
@@ -322,14 +382,14 @@ class PrintDecisionEngine:
             )
         else:
             # Product not in catalog yet — try sevDesk direct SKU lookup
-            stock_status = self._fetch_stock_by_sku_safe(item.sku)
+            stock_status = self._fetch_stock_by_sku_safe(sku)
 
         return PieceBlock(
-            sku=item.sku,
-            name=resolved_name or item.name,
-            qty_needed=item.qty,
-            note=item.note,
-            is_unreleased=item.is_unreleased,
+            sku=sku,
+            name=resolved_name or name,
+            qty_needed=max(1, int(qty or 1)),
+            note=note,
+            is_unreleased=is_unreleased,
             print_profile_id=str(direct_cfg.get("profile_id") or "").strip(),
             print_plan=[
                 entry for entry in (direct_cfg.get("print_plan") or [])
