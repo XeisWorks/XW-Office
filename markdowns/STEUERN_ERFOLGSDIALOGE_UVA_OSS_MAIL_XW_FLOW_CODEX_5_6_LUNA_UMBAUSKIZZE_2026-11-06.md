@@ -1114,3 +1114,5 @@ Noch manuell beziehungsweise nicht sicher automatisierbar:
   erfolgreich durchgelaufen.
 - Statuskorrektur: Die zuvor genannten Contract-Manifest-Hashabweichungen sind inzwischen
   aktualisiert; `python scripts/check_markdowns.py` meldet `Documentation OK`.
+- Der Steuer-Mailversand nutzt jetzt die eigene Konfiguration `MS_GRAPH_TAX_MAILBOX`; damit bleibt
+  die allgemeine Inbox-Mailbox (z. B. `shop@...`) getrennt und es gibt keinen Sender-Fallback.

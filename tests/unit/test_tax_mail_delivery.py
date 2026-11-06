@@ -9,7 +9,7 @@ from xw_office.services.mailing.service import MailAttachment, MailDeliveryServi
 def test_tax_mail_delivery_requires_exact_office_mailbox(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MS_GRAPH_TENANT_ID", "tenant-test")
     monkeypatch.setenv("MS_GRAPH_CLIENT_ID", "client-test")
-    monkeypatch.setenv("MS_GRAPH_MAILBOX", "shop@xeisworks.at")
+    monkeypatch.setenv("MS_GRAPH_TAX_MAILBOX", "shop@xeisworks.at")
 
     with pytest.raises(RuntimeError, match="exakt office@xeisworks.at"):
         MailDeliveryService().send_mail(
@@ -19,6 +19,17 @@ def test_tax_mail_delivery_requires_exact_office_mailbox(monkeypatch: pytest.Mon
             sender_mailbox="office@xeisworks.at",
             require_exact_sender=True,
         )
+
+
+def test_tax_mail_delivery_uses_dedicated_sender_mailbox(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MS_GRAPH_TENANT_ID", "tenant-test")
+    monkeypatch.setenv("MS_GRAPH_CLIENT_ID", "client-test")
+    monkeypatch.setenv("MS_GRAPH_MAILBOX", "shop@xeisworks.at")
+    monkeypatch.setenv("MS_GRAPH_TAX_MAILBOX", "office@xeisworks.at")
+
+    config = MailDeliveryService().load_graph_config(required_mailbox="office@xeisworks.at")
+
+    assert config.mailbox_user == "office@xeisworks.at"
 
 
 def test_graph_send_payload_contains_exact_sender_and_allowlisted_recipient(

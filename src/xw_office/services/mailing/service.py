@@ -52,7 +52,8 @@ class MailDeliveryService:
     def load_graph_config(self, *, required_mailbox: str | None = None) -> GraphMailConfig:
         tenant_id = self._secret_or_env("MS_GRAPH_TENANT_ID")
         client_id = self._secret_or_env("MS_GRAPH_CLIENT_ID")
-        mailbox_user = self._secret_or_env("MS_GRAPH_MAILBOX")
+        mailbox_key = "MS_GRAPH_TAX_MAILBOX" if required_mailbox else "MS_GRAPH_MAILBOX"
+        mailbox_user = self._secret_or_env(mailbox_key)
         cache_override = self._secret_or_env("XW_OFFICE_MSAL_CACHE_PATH") or self._secret_or_env(
             "SEVDESK_MSAL_CACHE_PATH"
         )
@@ -62,7 +63,7 @@ class MailDeliveryService:
             for name, value in (
                 ("MS_GRAPH_TENANT_ID", tenant_id),
                 ("MS_GRAPH_CLIENT_ID", client_id),
-                ("MS_GRAPH_MAILBOX", mailbox_user),
+                (mailbox_key, mailbox_user),
             )
             if not value
         ]
