@@ -1,0 +1,173 @@
+# Verbindliche Implementierungs-Queue für Codex. Erst nach Tests abhaken.
+version: 1
+plan_id: "xw-office-expense-invoice-collector-2026-11"
+state: "planned"
+repo: "XeisWorks/XW-Office"
+target_branch: "main"
+entry_point: "Finanzen > Ausgabenprüfung"
+strategy: "desktop_first_email_api_then_playwright"
+max_required_extra_subscriptions: 0
+human_intervention_only:
+  - "initial_portal_login_or_2fa"
+  - "onedrive_folder_selection"
+  - "microsoft_entra_consent"
+  - "enter_new_read_only_api_credential_in_local_secure_ui"
+coding_rules:
+  - "Read AGENTS.md and existing code before changing any implementation."
+  - "Preserve all existing Ausgabenprüfung, sevDesk, XW-Flow and Graph-Mail features."
+  - "Do not assume live invoice portals, URLs or DOM locators without testing."
+  - "Never claim a manual-only provider is automated."
+  - "Do not request passwords, OTP or recovery codes in chat."
+  - "Add no Railway deployment requirement for local Playwright MVP."
+  - "Commit/push tested progress per AGENTS.md; protect clean working tree."
+tasks:
+  - id: "T00"
+    title: "Ist-Zustand prüfen und Tests erfassen"
+    priority: 0
+    status: "todo"
+    deliverables:
+      - "Short architecture diff to current repo and affected files"
+      - "Baseline unit/Qt tests, no feature changes yet"
+    acceptance:
+      - "Existing two tenants and expense logic understood"
+      - "Identify all current Graph token cache and SecretService behavior"
+  - id: "T01"
+    title: "Sensitive Daten sicher isolieren"
+    priority: 1
+    depends_on: ["T00"]
+    status: "todo"
+    deliverables:
+      - "Add .gitignore rules for .env.*, Playwright .auth and invoice_collection profiles/tmp"
+      - "OS-keyring abstraction, separate credential names by provider/account"
+      - "Protected LOCALAPPDATA session directory; no OneDrive/Git session sync"
+      - "MSAL encrypted token cache for new Graph collector, no CLI-only device flow"
+      - "Credential and cookie redaction in log/error handling"
+    acceptance:
+      - "No secrets, real PDFs, OAuth token caches or browser profiles tracked by Git"
+      - "Existing SecretService and GraphMailClient tests still pass"
+      - "Credential store and log redaction tested"
+  - id: "T02"
+    title: "Datentypen, Registry, Inkrementalstatus"
+    priority: 2
+    depends_on: ["T01"]
+    status: "todo"
+    deliverables:
+      - "Typed InvoiceDocument, ProviderCapabilities, AuthStatus, FetchResult"
+      - "Provider registry schema validation, account alias and tenant mapping"
+      - "Local metadata journal with last-run, hash, external invoice ID and retries"
+    acceptance:
+      - "Registry contains no credentials"
+      - "Provider activation explicit, defaults disabled"
+      - "Separate xw and wuedara paths and states"
+  - id: "T03"
+    title: "OneDrive-Zielordner + sichere PDF-Pipeline"
+    priority: 3
+    depends_on: ["T02"]
+    status: "todo"
+    deliverables:
+      - "QFileDialog chooses OneDrive for Business sync destination"
+      - "PDF signature + parser + size + SHA256 verification"
+      - "Sanitized path, deterministic filename, atomic save, no overwrite"
+      - "Idempotence journal and retry queue"
+      - "LOCAL_SAVED/SYNC_PENDING vs CLOUD_VERIFIED statuses"
+    acceptance:
+      - "Repeated fetch produces no duplicate files"
+      - "Offline/unwritable/missing path emits actionable, lossless status"
+      - "Cloud verified never emitted solely because file exists locally"
+  - id: "T04"
+    title: "Dialog einbauen, Hintergrundworker und einfache Ersteinrichtung"
+    priority: 4
+    depends_on: ["T02", "T03"]
+    status: "todo"
+    deliverables:
+      - "Extra text button in existing ExpenseReviewView toolbar"
+      - "InvoiceCollectorDialog with one-click fetch, folder selector, period and provider status"
+      - "Per-provider login/retry/manual import actions"
+      - "QThread/BackgroundWorker progress and cooperative cancellation"
+    acceptance:
+      - "Existing expense refresh, filters, tenant tabs and settings unaffected"
+      - "UI never freezes on download or waiting for login"
+      - "One provider failure does not abort others"
+  - id: "T05"
+    title: "Microsoft-Graph-E-Mail-PDF-Sammler"
+    priority: 5
+    depends_on: ["T01", "T03", "T04"]
+    status: "todo"
+    deliverables:
+      - "Delegated MSAL sign-in visible in UI, Mail.Read only where sufficient"
+      - "Read attachments by Graph, pagination, sender and MIME checks"
+      - "Receipt vs invoice types and account/tenant rules"
+    acceptance:
+      - "Fake mails with PDF and non-PDF attachments tested"
+      - "Plain notification email without real PDF not reported as invoice"
+      - "No console-only hidden 2FA dialog; cached MSAL tokens secure"
+  - id: "T06"
+    title: "Mollie nur-lesende Gebührenrechnungs-API"
+    priority: 6
+    depends_on: ["T01", "T03", "T04"]
+    status: "todo"
+    deliverables:
+      - "Dedicated advanced access token with invoices.read, never payment token assumption"
+      - "List invoices pagination, get invoice, follow actual PDF URL"
+      - "429 handling, timeouts, bounded retries, PDF validation"
+      - "Prefer email-PDF if properly configured and tested"
+    acceptance:
+      - "Mock API handles multiple pages, invalid token, duplicate and real PDF bytes"
+      - "Fees documents never conflated with customer invoices"
+  - id: "T07"
+    title: "Playwright Engine und Login-Nachholen"
+    priority: 7
+    depends_on: ["T01", "T03", "T04"]
+    status: "todo"
+    deliverables:
+      - "Desktop Playwright dependency only; install Chromium via documented command"
+      - "UserDataDir per account, single-use browser lock"
+      - "Headful 'Anmelden/Anmeldung erneuern', explicit 2FA, protected-page probe"
+      - "expect_download/save_as, pause/resume one provider, manual fallback"
+      - "One mock portal integration end-to-end before real adapters"
+    acceptance:
+      - "Expired session displays NEEDS_LOGIN and does not request password in app"
+      - "Manual login resumes only waiting adapter"
+      - "No CAPTCHA bypass, stealth browser, or hidden unsupported web APIs"
+  - id: "T08"
+    title: "Reale Portale konservativ aktivieren"
+    priority: 8
+    depends_on: ["T05", "T06", "T07"]
+    status: "todo"
+    deliverables:
+      - "BrowserStack/Mollie/Anthropic/Google Cloud email configuration verification"
+      - "Stripe own fee invoice, Railway, OpenAI ChatGPT and API pilot adapters"
+      - "Perplexity, GitHub, Microsoft 365, Google AI and YouTube explicitly reviewed"
+      - "Amazon Business API entitlement and Marketplace completeness assessed"
+    acceptance:
+      - "Each provider marked verified only after real PDF + repeated fetch"
+      - "Provider that blocks automation remains MANUAL_ACTION"
+      - "AdSense/YouTube income statements never listed as expense invoices"
+      - "Keep existing invoice-fetcher until Amazon parity proven"
+  - id: "T09"
+    title: "Security-/Regressionsreview und Abschluss"
+    priority: 9
+    depends_on: ["T08"]
+    status: "todo"
+    deliverables:
+      - "pytest unit, UI, integration and local fake browser server"
+      - "ruff and git diff --check, secrets scan"
+      - "Beginner setup/checklist and provider coverage/status report"
+      - "Commit and push integrated tested changes to origin/main"
+    acceptance:
+      - "No secrets in Git/CI artifacts or logs"
+      - "Partial failures, missing OneDrive, offline, invalid PDFs, duplicates covered"
+      - "All unverified live portals clearly disclosed"
+      - "No main-branch force push, clean tree at finish"
+quality_gates:
+  before_live_login:
+    - "T01 security checks passed"
+    - "Explicit user confirmation for individual portal authorization"
+  before_verifying_provider:
+    - "Real invoice document type confirmed"
+    - "Download and idempotent rerun confirmed"
+    - "No unauthorized login automation"
+  release:
+    - "All automated acceptance tests green or blockers documented"
+    - "Existing expense review regression green"
+    - "No claims of cloud upload without remote proof"

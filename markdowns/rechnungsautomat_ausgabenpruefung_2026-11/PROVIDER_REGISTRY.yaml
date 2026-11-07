@@ -1,0 +1,176 @@
+# Konservative Start-Registry: KONFIGURATION, keine bereits funktionierenden Adapter.
+# Alle Portale vor Aktivierung mit einem echten Konto/Beleg prüfen.
+version: 1
+feature: "xw_office.expense_review.invoice_collection"
+default_enabled: false
+supported_tenants:
+  - "xw"
+  - "wuedara"
+document_types:
+  - "fee_invoice"
+  - "expense_invoice"
+  - "receipt"
+  - "credit_note"
+  - "payout_statement"
+  - "income_statement"
+preferred_methods:
+  - "mail_pdf"
+  - "official_api"
+  - "playwright"
+  - "manual_import"
+security:
+  browser_profiles: "user_local_appdata_only"
+  session_state_in_git: false
+  password_store: "os_keyring_if_explicitly_needed"
+  totp_seed_storage: false
+  captcha_or_mfa_bypass: false
+  google_automated_signin: false
+output:
+  default_backend: "onedrive_local_sync_folder"
+  require_user_selected_folder: true
+  cloud_verification: "explicit_only"
+  deduplicate_by:
+    - "sha256"
+    - "provider_and_account_and_external_id"
+providers:
+  - id: "mollie_fees"
+    label: "Mollie – eigene Gebührenrechnungen"
+    invoice_kind: "fee_invoice"
+    recommended: ["mail_pdf", "official_api", "manual_import"]
+    api_scope: "invoices.read"
+    api_credential_type: "advanced_access_token"
+    guidance: "PDF-Anhang in Rechnungsbenachrichtigung aktivieren; alternativ GET /v2/invoices inkl. Pagination und PDF-Link, nicht Zahlungs-API-Schlüssel wiederverwenden."
+    live_adapter: "not_verified"
+    portal_domain: "mollie.com"
+    official_docs:
+      - "https://help.mollie.com/hc/en-us/articles/213179885-Where-can-I-find-my-invoice"
+      - "https://docs.mollie.com/reference/list-invoices"
+      - "https://docs.mollie.com/reference/get-invoice"
+  - id: "browserstack"
+    label: "BrowserStack – Abonnement"
+    invoice_kind: "expense_invoice"
+    recommended: ["mail_pdf", "playwright", "manual_import"]
+    guidance: "Anbieter versendet Rechnungen per Mail; PDF-Anhang im eigenen Konto erst nach Eingang prüfen."
+    live_adapter: "not_verified"
+    portal_domain: "browserstack.com"
+    official_docs:
+      - "https://www.browserstack.com/support/faq/plans-pricing/billing/can-i-get-invoices-for-my-payments"
+  - id: "google_cloud"
+    label: "Google Cloud / API-Abrechnung"
+    invoice_kind: "expense_invoice"
+    recommended: ["mail_pdf", "manual_import"]
+    guidance: "Cloud-Billing-Rechnungs-PDF per Mail nur bei geeigneter Billing-Konfiguration. Keine fiktive Cloud-Billing-PDF-API."
+    live_adapter: "not_verified"
+    portal_domain: "cloud.google.com"
+    official_docs:
+      - "https://docs.cloud.google.com/billing/docs/how-to/get-invoice"
+  - id: "anthropic_api"
+    label: "Anthropic Console / API"
+    invoice_kind: "receipt"
+    recommended: ["mail_pdf", "playwright", "manual_import"]
+    guidance: "Automatische Rechnungs-/Receipt-Mail nach API-Belastung dokumentiert; Anhang tatsächlich prüfen."
+    live_adapter: "not_verified"
+    portal_domain: "claude.com"
+    official_docs:
+      - "https://support.claude.com/de/articles/16608069-ihre-claude-api-rechnungen-verstehen"
+  - id: "anthropic_subscription"
+    label: "Claude / Claude Code Abo"
+    invoice_kind: "expense_invoice"
+    recommended: ["mail_pdf", "playwright", "manual_import"]
+    guidance: "Claude-Privatabo und Console/API getrennte Billing-Strecken; keine Gleichsetzung mit API-Mails."
+    live_adapter: "not_verified"
+    portal_domain: "claude.ai"
+    official_docs: []
+  - id: "stripe_fees"
+    label: "Stripe – Stripe-eigene Gebühren-/Steuerrechnungen"
+    invoice_kind: "fee_invoice"
+    recommended: ["playwright", "manual_import"]
+    guidance: "Nur Stripe-Gebühren-PDFs im Dashboard; Stripe Invoices API für eigene Kundenrechnungen ist NICHT die gesuchte API."
+    live_adapter: "not_verified"
+    portal_domain: "dashboard.stripe.com"
+    official_docs: []
+  - id: "railway"
+    label: "Railway – Hosting-Abrechnungen"
+    invoice_kind: "expense_invoice"
+    recommended: ["playwright", "manual_import"]
+    guidance: "Billing History im Workspace; echte PDF-Download-Seite erst live prüfen."
+    live_adapter: "not_verified"
+    portal_domain: "railway.com"
+    official_docs: []
+  - id: "github"
+    label: "GitHub – Copilot, Abos, verbrauchsabhängige Kosten"
+    invoice_kind: "expense_invoice"
+    recommended: ["mail_pdf", "playwright", "manual_import"]
+    guidance: "GitHub Billing Usage API ist keine allgemeine Rechnungs-PDF-API; persönliche Abrechnung und Enterprise unterscheiden."
+    live_adapter: "not_verified"
+    portal_domain: "github.com"
+    official_docs:
+      - "https://docs.github.com/en/enterprise-cloud@latest/billing/how-tos/set-up-payment/manage-enterprise-invoice"
+  - id: "perplexity"
+    label: "Perplexity.ai – Abo"
+    invoice_kind: "expense_invoice"
+    recommended: ["mail_pdf", "playwright", "manual_import"]
+    guidance: "Mail-PDF nicht für alle Kontotypen offiziell bestätigt; verifizieren, ggf. Portal."
+    live_adapter: "not_verified"
+    portal_domain: "perplexity.ai"
+    official_docs: []
+  - id: "openai_chatgpt"
+    label: "OpenAI ChatGPT-Abo"
+    invoice_kind: "expense_invoice"
+    recommended: ["mail_pdf", "playwright", "manual_import"]
+    guidance: "Quittung/Rechnung und Portal-Billing nach Plan prüfen; ChatGPT und API sind getrennte Billing-Konten."
+    live_adapter: "not_verified"
+    portal_domain: "chatgpt.com"
+    official_docs:
+      - "https://help.openai.com/en/articles/8156167-invoice-dates-for-chatgpt-and-api-billing"
+  - id: "openai_api"
+    label: "OpenAI Platform – API-Credits/Verbrauch"
+    invoice_kind: "receipt"
+    recommended: ["mail_pdf", "playwright", "manual_import"]
+    guidance: "Prepaid-Credit-Receipt von echter Monatsrechnung unterscheiden; keine allgemeine öffentlich bestätigte Invoice-PDF-API."
+    live_adapter: "not_verified"
+    portal_domain: "platform.openai.com"
+    official_docs:
+      - "https://help.openai.com/en/articles/8156167-invoice-dates-for-chatgpt-and-api-billing"
+  - id: "google_ai_subscription"
+    label: "Google AI / Gemini / Google One"
+    invoice_kind: "expense_invoice"
+    recommended: ["mail_pdf", "manual_import"]
+    guidance: "Google Payments/Abokonto; Automationsbrowser-Login wegen Google-Anti-Automation ausdrücklich nicht erzwingen."
+    live_adapter: "not_verified"
+    portal_domain: "payments.google.com"
+    official_docs:
+      - "https://support.google.com/accounts/answer/7675428"
+  - id: "adsense_youtube"
+    label: "Google AdSense / YouTube-Einnahmen"
+    invoice_kind: "income_statement"
+    recommended: ["official_api", "manual_import"]
+    guidance: "Einnahme-/Zahlungsnachweise, KEINE Ausgabenrechnung; AdSense Payment/Reporting-Daten nicht als PDF-Rechnungen ausgeben."
+    live_adapter: "not_verified"
+    portal_domain: "adsense.google.com"
+    official_docs:
+      - "https://support.google.com/adsense/answer/12496700"
+  - id: "microsoft365"
+    label: "Microsoft 365 – Abo"
+    invoice_kind: "expense_invoice"
+    recommended: ["mail_pdf", "playwright", "manual_import"]
+    guidance: "Microsoft 365 Admin Center und Azure-Billing-API sind NICHT dieselbe Abrechnung; Vertrag prüfen, nur passende offizielle API verwenden."
+    live_adapter: "not_verified"
+    portal_domain: "admin.microsoft.com"
+    official_docs: []
+  - id: "amazon_business"
+    label: "Amazon Business – Käufe inkl. Marketplace"
+    invoice_kind: "expense_invoice"
+    recommended: ["official_api", "playwright", "manual_import"]
+    guidance: "Amazon Business Invoices API nur bei tatsächlich gewährtem Zugang; Käufer- und Marketplace-Dokumente einzeln verifizieren. invoice-fetcher erst nach nachgewiesen vollständigem Ersatz kündigen."
+    live_adapter: "not_verified"
+    portal_domain: "amazon.de"
+    official_docs:
+      - "https://docs.business.amazon.com/docs/invoices-api-reference"
+optional_collectors:
+  - id: "getmyinvoices"
+    enabled: false
+    role: "only_for_verified_coverage_gaps"
+  - id: "tailride"
+    enabled: false
+    role: "only_if_needed_after_diy_and_single_aggregator"
