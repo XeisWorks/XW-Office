@@ -1,4 +1,6 @@
 .env
+.env.*
+!.env.example
 .venv/
 venv/
 __pycache__/
@@ -13,6 +15,13 @@ build/
 .tmp/
 src/xw_studio/data/
 state/
+playwright/.auth/
+**/invoice_collection/profiles/
+**/invoice_collection/storage_state*
+**/invoice_collection/tmp/
+**/invoice_collection/quarantine/
+**/invoice_collection/*.sqlite3
+**/invoice_collection/*.sqlite3-*
 *.log
 *.log.*
 resources/resources_rc.py

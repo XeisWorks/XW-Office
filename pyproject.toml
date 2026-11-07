@@ -55,6 +55,11 @@ dev = [
     "ruff>=0.3",
     "types-PyYAML>=6.0",
 ]
+invoice-collection = [
+    "keyring>=25.0",
+    "msal-extensions>=1.2",
+    "playwright>=1.45",
+]
 
 [project.scripts]
 xw-office = "xw_office.__main__:main"

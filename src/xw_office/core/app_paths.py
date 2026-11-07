@@ -7,6 +7,7 @@ test runner.
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 from pathlib import Path
 
@@ -50,6 +51,29 @@ def update_log_file_path() -> Path:
 
 def state_dir() -> Path:
     return find_repo_root() / "state"
+
+
+def local_app_data_dir() -> Path:
+    """Return the per-user data root for machine-local application state.
+
+    Invoice collection state contains browser profiles, OAuth caches, temporary files and
+    a local journal.  Those artifacts must never live below the repository or a OneDrive
+    folder.  ``LOCALAPPDATA`` is the Windows source of truth; the non-Windows fallback keeps
+    unit tests and development environments portable without changing the Windows layout.
+    """
+    configured = str(os.getenv("LOCALAPPDATA") or "").strip()
+    if configured:
+        return Path(os.path.expandvars(os.path.expanduser(configured))) / "XeisWorks" / "XW-Office"
+    if sys.platform == "win32":
+        profile = str(os.getenv("USERPROFILE") or "").strip()
+        if profile:
+            return Path(profile) / "AppData" / "Local" / "XeisWorks" / "XW-Office"
+    return Path.home() / ".local" / "share" / "XeisWorks" / "XW-Office"
+
+
+def invoice_collection_dir() -> Path:
+    """Return the local, non-synchronised invoice-collection data root."""
+    return local_app_data_dir() / "invoice_collection"
 
 
 def resources_dir() -> Path:

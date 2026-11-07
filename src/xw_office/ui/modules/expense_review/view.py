@@ -68,6 +68,7 @@ from xw_office.ui.modules.expense_review.additional_expenses import (
     shared_bank_expense_rows,
 )
 from xw_office.ui.modules.expense_review.manual_expense_dialog import ManualExpenseDialog
+from xw_office.ui.modules.expense_review.invoice_collector_dialog import InvoiceCollectorDialog
 from xw_office.ui.widgets.data_table import DataTable
 
 if TYPE_CHECKING:
@@ -552,6 +553,7 @@ class ExpenseReviewView(QWidget):
         self._document_refresh_tenants: set[str] = set()
         self._supplier_link_reload_tenants: set[str] = set()
         self._missing_refresh_button: QPushButton | None = None
+        self._invoice_button: QPushButton | None = None
         self._missing_refresh_icon = QIcon()
         self._missing_refresh_angle = 0
         self._missing_refresh_timer = QTimer(self)
@@ -818,6 +820,9 @@ class ExpenseReviewView(QWidget):
             "Kontobewegungen, neue/geänderte sevDesk-Belege und zusätzliche Ausgaben aktualisieren"
         )
         self._missing_refresh_button.clicked.connect(self._refresh_receipts_and_manual_expenses)
+        self._invoice_button = QPushButton("Rechnungen abrufen")
+        self._invoice_button.setToolTip("Rechnungen aus aktiven Verbindungen sammeln")
+        self._invoice_button.clicked.connect(self._open_invoice_collector)
         self._settings_button = QPushButton()
         self._settings_button.setIcon(QIcon(str(_ROOT / "icons" / "expense_settings.svg")))
         self._settings_button.setToolTip("Einstellungen zur Ausgabenprüfung")
@@ -832,6 +837,7 @@ class ExpenseReviewView(QWidget):
                 "QPushButton:disabled { background: transparent; }"
             )
             toolbar.addWidget(button)
+        toolbar.insertWidget(toolbar.count() - 1, self._invoice_button)
         layout.addLayout(toolbar)
         self._configure_expense_table(self._table)
         self._table.doubleClicked.connect(self._on_bank_double_clicked)
@@ -847,6 +853,10 @@ class ExpenseReviewView(QWidget):
         self._document_delegate.supplier_link_requested.connect(self._add_supplier_link_from_row)
         self._document_delegate.attachment_requested.connect(self._open_manual_attachment)
         return page
+
+    def _open_invoice_collector(self) -> None:
+        dialog = InvoiceCollectorDialog(tenant_id=self._tenant_key, parent=self)
+        dialog.exec()
 
     def _configure_manual_table(self) -> None:
         header = self._manual_table.horizontalHeader()
