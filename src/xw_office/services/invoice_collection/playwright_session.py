@@ -124,6 +124,11 @@ class PlaywrightPersistentSession:
                 InvoiceErrorCode.POLICY_BLOCKED,
                 "Alle normalen Google-Chrome-Fenster mÃ¼ssen vor der ProfilÃ¼bernahme geschlossen werden",
             )
+        if self.browser_mode == "system_chrome_existing_profile" and _chrome_process_running():
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.POLICY_BLOCKED,
+                "Normale Google-Chrome-Prozesse laufen noch; ProfilÃ¼bernahme wurde nicht gestartet",
+            )
         port = _free_local_port()
         command = [
             str(executable),
@@ -265,3 +270,16 @@ def _find_system_chrome() -> Path | None:
         Path(shutil.which("chrome.exe") or ""),
     )
     return next((candidate for candidate in candidates if candidate.is_file()), None)
+
+
+def _chrome_process_running() -> bool:
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq chrome.exe", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return "chrome.exe" in result.stdout.casefold()

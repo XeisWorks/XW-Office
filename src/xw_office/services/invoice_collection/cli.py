@@ -15,6 +15,7 @@ from xw_office.core.app_paths import (
     find_repo_root,
 )
 from xw_office.services.invoice_collection.domain import TenantId
+from xw_office.services.invoice_collection.errors import InvoiceCollectionError
 from xw_office.services.invoice_collection.playwright_session import PlaywrightPersistentSession
 from xw_office.services.invoice_collection.registry import ProviderCatalog, ProviderManifest, RouteManifest
 from xw_office.services.invoice_collection.security import ensure_invoice_collection_dirs
@@ -165,6 +166,22 @@ def command_login_all(args: argparse.Namespace) -> int:
         except Exception as exc:  # noqa: BLE001 - continue independently per portal
             status = f"setup_error:{type(exc).__name__}"
             print(f"[{index}/{len(providers)}] {provider.provider_id}: {status}", file=sys.stderr)
+            if (
+                args.browser_mode == "system_chrome_existing_profile"
+                and isinstance(exc, InvoiceCollectionError)
+                and exc.code.name == "POLICY_BLOCKED"
+            ):
+                entries.append(
+                    {
+                        "provider_id": provider.provider_id,
+                        "connector": route.connector,
+                        "status": status,
+                        "recorded_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                _write_login_progress(entries)
+                print("Login queue stopped: close all normal Chrome windows and retry.", file=sys.stderr)
+                break
         finally:
             session.close()
         entries.append(
