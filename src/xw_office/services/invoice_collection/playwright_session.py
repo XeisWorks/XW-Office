@@ -205,7 +205,12 @@ class PlaywrightPersistentSession:
         finally:
             try:
                 if browser is not None:
-                    browser.close()
+                    try:
+                        browser.close()
+                    except Exception:
+                        # The owned Chrome process may already have exited after
+                        # the user closed its visible window.
+                        pass
             finally:
                 try:
                     if self._chrome_process is not None:
@@ -218,7 +223,10 @@ class PlaywrightPersistentSession:
                     self._chrome_process = None
                 try:
                     if playwright is not None:
-                        playwright.stop()
+                        try:
+                            playwright.stop()
+                        except Exception:
+                            pass
                 finally:
                     if profile_lock is not None:
                         lock_path = self.profile_dir.with_name(f"{self.profile_dir.name}.lock")
