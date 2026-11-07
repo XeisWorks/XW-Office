@@ -20,13 +20,21 @@ from PySide6.QtWidgets import (
 )
 
 from xw_office.core.app_paths import find_repo_root
+from xw_office.core.worker import BackgroundWorker
 from xw_office.services.invoice_collection.connectors.manual_import import ManualImportConnector
 from xw_office.services.invoice_collection.connections import ConnectionRepository
-from xw_office.services.invoice_collection.domain import DocumentType, ProviderConnection, TenantId
+from xw_office.services.invoice_collection.domain import (
+    DocumentType,
+    ProviderConnection,
+    RouteSettings,
+    TenantId,
+)
 from xw_office.services.invoice_collection.journal import InvoiceJournal
+from xw_office.services.invoice_collection.factories import ConnectorFactoryRegistry
 from xw_office.services.invoice_collection.pipeline import DocumentPipeline
 from xw_office.services.invoice_collection.registry import ProviderCatalog
 from xw_office.services.invoice_collection.security import ensure_invoice_collection_dirs
+from xw_office.services.invoice_collection.service import InvoiceCollectionService, CollectionRun
 from xw_office.services.invoice_collection.sinks.onedrive_local import OneDriveLocalSink
 
 
@@ -39,12 +47,15 @@ class InvoiceCollectorDialog(QDialog):
         tenant_id: str,
         parent: object | None = None,
         connection_repository: ConnectionRepository | None = None,
+        collection_service: InvoiceCollectionService | None = None,
     ) -> None:
         super().__init__(parent)  # type: ignore[arg-type]
         self.setWindowTitle("Rechnungen abrufen")
         self.resize(900, 560)
         self._settings = QSettings("XeisWorks", "XW Office")
         self._connection_repository = connection_repository or ConnectionRepository()
+        self._collection_service = collection_service
+        self._fetch_worker: BackgroundWorker | None = None
         self._folder = QLineEdit()
         self._folder.setReadOnly(True)
         self._folder.setAccessibleName("OneDrive-Zielordner")
@@ -57,6 +68,7 @@ class InvoiceCollectorDialog(QDialog):
         if index >= 0:
             self._tenant.setCurrentIndex(index)
         self._provider = QComboBox()
+        self._route = QComboBox()
         self._account_alias = QLineEdit("default")
         self._account_alias.setAccessibleName("Kontoalias")
         self._document_type = QComboBox()
@@ -66,6 +78,8 @@ class InvoiceCollectorDialog(QDialog):
         self._table.setHorizontalHeaderLabels(["Provider", "Mandant", "Datei", "Ergebnis"])
         self._table.horizontalHeader().setStretchLastSection(True)
         self._load_catalog()
+        self._provider.currentIndexChanged.connect(self._provider_changed)
+        self._provider_changed()
         self._build_ui()
         saved = str(self._settings.value("invoice_collection/target_folder") or "").strip()
         if saved:
@@ -85,6 +99,23 @@ class InvoiceCollectorDialog(QDialog):
             return
         for provider in catalog.providers:
             self._provider.addItem(provider.label, provider.provider_id)
+        self._catalog = catalog
+
+    def _provider_changed(self) -> None:
+        self._route.clear()
+        catalog = getattr(self, "_catalog", None)
+        if catalog is None:
+            return
+        provider_id = str(self._provider.currentData() or "")
+        provider = next(
+            (item for item in catalog.providers if item.provider_id == provider_id), None
+        )
+        if provider is None:
+            return
+        for route in provider.routes:
+            self._route.addItem(
+                f"{route.route_key} ({route.method}, {route.maturity})", route
+            )
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -97,6 +128,7 @@ class InvoiceCollectorDialog(QDialog):
         form = QFormLayout()
         form.addRow("Mandant", self._tenant)
         form.addRow("Provider", self._provider)
+        form.addRow("Abrufroute", self._route)
         form.addRow("Kontoalias", self._account_alias)
         form.addRow("Dokumenttyp", self._document_type)
         root.addLayout(form)
@@ -139,10 +171,37 @@ class InvoiceCollectorDialog(QDialog):
                 "Nutzen Sie zunächst „PDF manuell hinzufügen“."
             )
             return
+        service = self._collection_service
+        if service is None:
+            service = InvoiceCollectionService(
+                connections=self._connection_repository,
+                factories=ConnectorFactoryRegistry(),
+                target_root=Path(self._folder.text()),
+                journal=InvoiceJournal(),
+            )
+        if self._fetch_worker is not None and self._fetch_worker.isRunning():
+            return
+        self._fetch_button.setEnabled(False)
+        self._status.setText(f"{len(connections)} aktive Verbindung(en) werden abgerufen …")
+        worker = BackgroundWorker(service.collect_active)
+        self._fetch_worker = worker
+        worker.signals.result.connect(self._on_collection_finished)
+        worker.signals.error.connect(self._on_collection_error)
+        worker.signals.finished.connect(lambda: self._fetch_button.setEnabled(True))
+        worker.start()
+
+    def _on_collection_finished(self, result: object) -> None:
+        if not isinstance(result, CollectionRun):
+            self._status.setText("Abruf lieferte ein ungültiges Ergebnis.")
+            return
+        issue_count = len(result.issues)
         self._status.setText(
-            f"{len(connections)} aktive Verbindung(en) gefunden; konkrete Abrufroute wird im "
-            "nächsten Schritt ausgeführt."
+            f"Abruf beendet: {result.summary.new_count} neu, "
+            f"{result.summary.existing_count} bereits vorhanden, {issue_count} Route(n) offen."
         )
+
+    def _on_collection_error(self, error: Exception) -> None:
+        self._status.setText(f"Abruf fehlgeschlagen: {error}")
 
     def _save_connection(self) -> None:
         provider_id = str(self._provider.currentData() or "").strip()
@@ -154,6 +213,14 @@ class InvoiceCollectorDialog(QDialog):
             provider_id=provider_id,
             tenant_id=TenantId(str(self._tenant.currentData())),
             account_alias=account_alias,
+            route_settings=(
+                RouteSettings(
+                    route_key=str(self._route.currentData().route_key),
+                    options={"connector": str(self._route.currentData().connector)},
+                ),
+            )
+            if self._route.currentData() is not None
+            else (),
         )
         self._connection_repository.save(connection)
         self._status.setText("Verbindung lokal gespeichert; Secretwerte werden separat hinterlegt.")

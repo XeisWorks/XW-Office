@@ -16,6 +16,7 @@ from xw_office.services.invoice_collection.domain import (
     DocumentType,
     DownloadedArtifact,
     ProviderConnection,
+    RouteSettings,
     TenantId,
 )
 from xw_office.services.invoice_collection.errors import (
@@ -31,6 +32,7 @@ from xw_office.services.invoice_collection.registry import ProviderCatalog
 from xw_office.services.invoice_collection.security import redact_sensitive_text
 from xw_office.services.invoice_collection.sinks.onedrive_local import OneDriveLocalSink
 from xw_office.services.invoice_collection.orchestrator import CollectionOrchestrator
+from xw_office.services.invoice_collection.service import InvoiceCollectionService
 from xw_office.core.logging_setup import _SecretRedactionFilter
 
 
@@ -261,3 +263,32 @@ def test_connector_factory_registry_never_loads_yaml_import_paths() -> None:
             provider_id="fixture", tenant_id=TenantId.XW, account_alias="a"
         ), object())  # type: ignore[arg-type]
     assert error.value.code == InvoiceErrorCode.CONFIGURATION_ERROR
+
+
+def test_collection_service_wires_saved_routes_to_factory_and_orchestrator(tmp_path: Path) -> None:
+    source = _pdf(tmp_path / "saved-route.pdf")
+    repository = ConnectionRepository(tmp_path / "connections.sqlite3")
+    connection = ProviderConnection.create(
+        provider_id="fixture",
+        tenant_id=TenantId.XW,
+        account_alias="billing",
+        route_settings=(
+            RouteSettings(route_key="fixture", options={"connector": "fixture"}),
+        ),
+    )
+    repository.save(connection)
+    factories = ConnectorFactoryRegistry()
+    factories.register(
+        "fixture",
+        lambda saved, settings: ManualImportConnector(connection=saved, files=[source]),
+    )
+    target = tmp_path / "onedrive"
+    target.mkdir()
+    run = InvoiceCollectionService(
+        connections=repository,
+        factories=factories,
+        target_root=target,
+        journal=InvoiceJournal(tmp_path / "journal.sqlite3"),
+    ).collect_active()
+    assert run.issues == ()
+    assert run.summary.new_count == 1
