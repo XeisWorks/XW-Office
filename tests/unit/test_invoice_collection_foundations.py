@@ -75,6 +75,42 @@ def test_registry_parses_secret_free_catalog() -> None:
     )
 
 
+def test_registry_rejects_secret_values_and_unknown_tenant(tmp_path: Path) -> None:
+    secret_catalog = tmp_path / "secret.yaml"
+    secret_catalog.write_text(
+        """
+schema_version: 2
+supported_tenants: [xw]
+allowed_document_types: [unknown]
+allowed_route_methods: [manual_import]
+allowed_provider_categories: [expense]
+providers:
+  - id: fixture
+    label: Fixture
+    category: expense
+    supported_tenants: [xw]
+    document_types: [unknown]
+    api_token: should-not-be-here
+    routes: []
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(InvoiceCollectionError) as secret_error:
+        ProviderCatalog.from_yaml(secret_catalog)
+    assert secret_error.value.code == InvoiceErrorCode.CONFIGURATION_ERROR
+
+    tenant_catalog = tmp_path / "tenant.yaml"
+    tenant_catalog.write_text(
+        secret_catalog.read_text(encoding="utf-8").replace(
+            "    api_token: should-not-be-here\n", "    supported_tenants: [other]\n"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(InvoiceCollectionError) as tenant_error:
+        ProviderCatalog.from_yaml(tenant_catalog)
+    assert tenant_error.value.code == InvoiceErrorCode.CONFIGURATION_ERROR
+
+
 def test_redaction_never_returns_secret_value() -> None:
     message = redact_sensitive_text("Authorization: Bearer abc123 api_token=secret-value")
     assert "abc123" not in message
