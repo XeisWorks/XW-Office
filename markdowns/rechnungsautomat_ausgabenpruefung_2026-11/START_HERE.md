@@ -1,6 +1,6 @@
 # Rechnungsautomat für XW-Office – START HERE
 
-**Stand: 07.11.2026 | überarbeitete Umsetzungsgrundlage, noch keine implementierte Funktion.**
+**Stand: 07.11.2026 | Architektur und Foundation-MVP implementiert; keine live verifizierten Portalrouten.**
 
 ## Ziel
 
@@ -72,6 +72,11 @@ Contract-Tests – keine Änderung an Dialog, Orchestrator, PDF-Pipeline oder On
   `verified` werden.
 
 ## Echtes Repository: Einhängepunkte
+
+Der aktuelle Stand enthält bereits den manuellen vertikalen Slice, den providerunabhängigen
+Dialog/Orchestrator sowie getestete Graph-Mail-, Mollie- und Playwright-Adaptergrenzen. Reale
+Providerkonten, Portal-DOMs und Cloud-Remoteprüfung bleiben bewusst ungeprüft, bis die jeweilige
+Verbindung lokal autorisiert und mit einem echten Dokument wiederholt getestet wurde.
 
 - `src/xw_office/ui/modules/expense_review/view.py`: zusätzlicher Button; bestehende zwei
   Mandanten, Tabellen, Aktualisierung, Lieferantenportale und Einstellungen bleiben erhalten.

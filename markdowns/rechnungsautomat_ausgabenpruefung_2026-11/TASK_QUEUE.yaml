@@ -1,12 +1,20 @@
 # Verbindliche Implementierungs-Queue. Status nur mit `evidence` auf done setzen.
 schema_version: 2
 plan_id: "xw-office-expense-invoice-collector-2026-11"
-state: "planned"
+state: "in_progress"
 repo: "XeisWorks/XW-Office"
 target_branch: "main"
 entry_point: "Finanzen > Ausgabenprüfung"
 strategy: "ports_and_adapters_manual_vertical_slice_then_mail_api_browser"
 max_required_extra_subscriptions: 0
+current_status:
+  implemented:
+    - "manual import through PDF pipeline and OneDriveLocalSink"
+    - "provider-independent dialog, connection metadata and bounded orchestrator"
+    - "Graph mail, Mollie API and Playwright adapter contracts with local fakes"
+  not_live_verified:
+    - "all real provider accounts and portal DOMs"
+    - "remote OneDrive cloud confirmation"
 
 mvp_scope:
   required:
