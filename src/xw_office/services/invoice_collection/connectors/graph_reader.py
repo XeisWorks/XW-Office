@@ -95,6 +95,9 @@ class GraphMailAttachmentReader:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(payload)
 
+    def close(self) -> None:
+        self.client.close()
+
     def _request(self, method: str, url: str) -> httpx.Response:
         parsed = urlparse(url)
         if parsed.scheme != "https" or parsed.netloc.casefold() != "graph.microsoft.com":

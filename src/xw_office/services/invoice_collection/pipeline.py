@@ -22,6 +22,7 @@ from xw_office.services.invoice_collection.journal import InvoiceJournal
 from xw_office.services.invoice_collection.naming import build_relative_path
 from xw_office.services.invoice_collection.pdf_validation import inspect_pdf
 from xw_office.services.invoice_collection.ports import DocumentSink
+from xw_office.services.invoice_collection.security import ensure_invoice_collection_dirs
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,7 @@ class DocumentPipeline:
     ) -> None:
         self.sink = sink
         self.journal = journal
-        self.quarantine_root = quarantine_root
+        self.quarantine_root = quarantine_root or ensure_invoice_collection_dirs()["quarantine"]
 
     def process(self, artifact: DownloadedArtifact) -> PipelineResult:
         try:

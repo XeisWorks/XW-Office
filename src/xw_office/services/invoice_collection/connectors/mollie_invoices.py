@@ -133,6 +133,9 @@ class MollieInvoicesHttpClient:
             url = str(next_url) if next_url else None
         return invoices
 
+    def close(self) -> None:
+        self._client.close()
+
     def download_invoice_pdf(self, invoice: dict[str, Any], destination: Path) -> None:
         pdf_url = _pdf_url(invoice)
         if not pdf_url:
