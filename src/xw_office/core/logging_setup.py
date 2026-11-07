@@ -16,8 +16,11 @@ logger = logging.getLogger(__name__)
 # Kept alive for the process lifetime so faulthandler can keep writing to it.
 _crash_file: object | None = None
 
+_BEARER_PATTERN = re.compile(
+    r"(?i)\b(authorization\s*:\s*bearer\s+|bearer\s+)([^\s,;\"']{3,})"
+)
 _SECRET_PATTERN = re.compile(
-    r"(?i)\b(authorization|api[_-]?token|api[_-]?key|password|secret|pin|bearer)\b"
+    r"(?i)\b(authorization|api[_-]?token|api[_-]?key|password|secret|pin)\b"
     r"(\s*[:=]\s*)([^\s,;\"']{3,})"
 )
 
@@ -27,7 +30,8 @@ class _SecretRedactionFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
-        redacted = _SECRET_PATTERN.sub(r"\1\2***redacted***", message)
+        redacted = _BEARER_PATTERN.sub(r"\1***redacted***", message)
+        redacted = _SECRET_PATTERN.sub(r"\1\2***redacted***", redacted)
         if redacted != message:
             record.msg = redacted
             record.args = ()

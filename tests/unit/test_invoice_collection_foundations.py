@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+import logging
 
 import fitz
 import pytest
@@ -28,6 +29,7 @@ from xw_office.services.invoice_collection.registry import ProviderCatalog
 from xw_office.services.invoice_collection.security import redact_sensitive_text
 from xw_office.services.invoice_collection.sinks.onedrive_local import OneDriveLocalSink
 from xw_office.services.invoice_collection.orchestrator import CollectionOrchestrator
+from xw_office.core.logging_setup import _SecretRedactionFilter
 
 
 def _pdf(path: Path, text: str = "invoice") -> Path:
@@ -65,6 +67,13 @@ def test_redaction_never_returns_secret_value() -> None:
     assert "abc123" not in message
     assert "secret-value" not in message
     assert "redacted" in message
+
+
+def test_global_log_filter_redacts_bearer_token() -> None:
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, "Authorization: Bearer %s", ("abc123",), None)
+    _SecretRedactionFilter().filter(record)
+    assert "abc123" not in record.getMessage()
+    assert "redacted" in record.getMessage()
 
 
 def test_pdf_inspection_rejects_html_with_pdf_extension(tmp_path: Path) -> None:
