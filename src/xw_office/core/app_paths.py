@@ -87,6 +87,13 @@ def default_invoice_target_dir() -> Path:
     return root / "OneDrive - XeisWorks" / "00 Finanzmanagement" / "02 Belege"
 
 
+def chrome_user_data_dir() -> Path:
+    """Return the current user's normal Google Chrome profile root."""
+    configured = str(os.getenv("LOCALAPPDATA") or "").strip()
+    root = Path(configured) if configured else local_app_data_dir().parent.parent.parent
+    return root / "Google" / "Chrome" / "User Data"
+
+
 def resources_dir() -> Path:
     return find_repo_root() / "resources"
 

@@ -90,7 +90,7 @@ class PlaywrightPersistentSession:
                 self._playwright = sync_playwright().start()
             else:
                 self._playwright = self._playwright_factory().start()
-            if self.browser_mode == "system_chrome_cdp":
+            if self.browser_mode in {"system_chrome_cdp", "system_chrome_existing_profile"}:
                 self._context = self._connect_system_chrome()
             elif self.browser_mode == "playwright_chromium":
                 try:
@@ -117,17 +117,27 @@ class PlaywrightPersistentSession:
                 InvoiceErrorCode.CONFIGURATION_ERROR,
                 "Installiertes Google Chrome wurde nicht gefunden",
             )
+        if self.browser_mode == "system_chrome_existing_profile" and (
+            self.profile_dir / "SingletonLock"
+        ).exists():
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.POLICY_BLOCKED,
+                "Alle normalen Google-Chrome-Fenster mÃ¼ssen vor der ProfilÃ¼bernahme geschlossen werden",
+            )
         port = _free_local_port()
+        command = [
+            str(executable),
+            "--remote-debugging-address=127.0.0.1",
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={self.profile_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+        ]
+        if self.browser_mode == "system_chrome_existing_profile":
+            command.append("--profile-directory=Default")
+        command.append(self.login_url)
         self._chrome_process = subprocess.Popen(
-            [
-                str(executable),
-                "--remote-debugging-address=127.0.0.1",
-                f"--remote-debugging-port={port}",
-                f"--user-data-dir={self.profile_dir}",
-                "--no-first-run",
-                "--no-default-browser-check",
-                self.login_url,
-            ],
+            command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -200,7 +210,7 @@ class PlaywrightPersistentSession:
         self._playwright = None
         self._profile_lock = None
         try:
-            if context is not None and self.browser_mode != "system_chrome_cdp":
+            if context is not None and self.browser_mode not in {"system_chrome_cdp", "system_chrome_existing_profile"}:
                 context.close()
         finally:
             try:

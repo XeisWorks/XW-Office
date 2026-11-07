@@ -9,6 +9,7 @@ from xw_office.services.invoice_collection.cli import (
     load_catalog,
     profile_path,
 )
+from xw_office.core.app_paths import chrome_user_data_dir
 
 
 def test_cli_catalog_contains_all_browser_routes() -> None:
@@ -49,3 +50,8 @@ def test_cli_login_queue_starts_with_railway_and_contains_all_browser_providers(
     assert len(_DEFAULT_PROVIDER_ORDER) == 11
     args = build_parser().parse_args(["login-all"])
     assert args.providers is None
+
+
+def test_existing_chrome_profile_resolves_below_local_app_data(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+    assert chrome_user_data_dir() == tmp_path / "localappdata" / "Google" / "Chrome" / "User Data"

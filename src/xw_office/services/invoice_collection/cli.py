@@ -9,7 +9,11 @@ import re
 import sys
 from urllib.parse import urlparse
 
-from xw_office.core.app_paths import default_invoice_target_dir, find_repo_root
+from xw_office.core.app_paths import (
+    chrome_user_data_dir,
+    default_invoice_target_dir,
+    find_repo_root,
+)
 from xw_office.services.invoice_collection.domain import TenantId
 from xw_office.services.invoice_collection.playwright_session import PlaywrightPersistentSession
 from xw_office.services.invoice_collection.registry import ProviderCatalog, ProviderManifest, RouteManifest
@@ -55,6 +59,12 @@ def profile_path(provider_id: str, tenant: str, account_alias: str) -> Path:
     return ensure_invoice_collection_dirs()["profiles"].joinpath(*parts)
 
 
+def login_profile(args: argparse.Namespace, provider_id: str) -> Path:
+    if args.browser_mode == "system_chrome_existing_profile":
+        return chrome_user_data_dir()
+    return profile_path(provider_id, args.tenant, args.account_alias)
+
+
 def command_doctor(_: argparse.Namespace) -> int:
     catalog = load_catalog()
     browser_count = sum(1 for provider in catalog.providers for route in provider.routes if route.method == "browser")
@@ -86,7 +96,7 @@ def command_login(args: argparse.Namespace) -> int:
     provider, route = browser_route(catalog, args.provider)
     if args.tenant not in {tenant.value for tenant in TenantId}:
         raise ValueError(f"Unbekannter Mandant: {args.tenant}")
-    profile = profile_path(provider.provider_id, args.tenant, args.account_alias)
+    profile = login_profile(args, provider.provider_id)
     host = route.allowed_hosts[0]
     login_url = f"https://{host}/"
     session = PlaywrightPersistentSession(
@@ -124,7 +134,7 @@ def command_login_all(args: argparse.Namespace) -> int:
     entries: list[dict[str, str]] = []
     for index, provider_id in enumerate(providers, start=1):
         provider, route = browser_route(catalog, provider_id)
-        profile = profile_path(provider.provider_id, args.tenant, args.account_alias)
+        profile = login_profile(args, provider.provider_id)
         host = route.allowed_hosts[0]
         login_url = f"https://{host}/"
         session = PlaywrightPersistentSession(
@@ -224,19 +234,19 @@ def build_parser() -> argparse.ArgumentParser:
     login.add_argument("--provider", required=True)
     login.add_argument("--tenant", default=TenantId.XW.value, choices=[tenant.value for tenant in TenantId])
     login.add_argument("--account-alias", default="primary")
-    login.add_argument("--browser-mode", choices=["system_chrome_cdp", "playwright_chromium"], default="system_chrome_cdp")
+    login.add_argument("--browser-mode", choices=["system_chrome_cdp", "system_chrome_existing_profile", "playwright_chromium"], default="system_chrome_cdp")
     login.set_defaults(handler=command_login)
     login_all = subparsers.add_parser("login-all", help="open all visible logins sequentially")
     login_all.add_argument("--tenant", default=TenantId.XW.value, choices=[tenant.value for tenant in TenantId])
     login_all.add_argument("--account-alias", default="primary")
-    login_all.add_argument("--browser-mode", choices=["system_chrome_cdp", "playwright_chromium"], default="system_chrome_cdp")
+    login_all.add_argument("--browser-mode", choices=["system_chrome_cdp", "system_chrome_existing_profile", "playwright_chromium"], default="system_chrome_cdp")
     login_all.add_argument("--providers", nargs="*", help="optional provider order override")
     login_all.set_defaults(handler=command_login_all)
     probe = subparsers.add_parser("probe", help="inspect one portal without sensitive page text")
     probe.add_argument("--provider", required=True)
     probe.add_argument("--tenant", default=TenantId.XW.value, choices=[tenant.value for tenant in TenantId])
     probe.add_argument("--account-alias", default="primary")
-    probe.add_argument("--browser-mode", choices=["system_chrome_cdp", "playwright_chromium"], default="system_chrome_cdp")
+    probe.add_argument("--browser-mode", choices=["system_chrome_cdp", "system_chrome_existing_profile", "playwright_chromium"], default="system_chrome_cdp")
     probe.set_defaults(handler=command_probe)
     return parser
 
