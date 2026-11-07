@@ -124,7 +124,11 @@ class MollieInvoicesHttpClient:
             page = embedded.get("invoices") if isinstance(embedded, dict) else []
             if isinstance(page, list):
                 invoices.extend(item for item in page if isinstance(item, dict))
-            next_link = ((payload.get("_links") or {}).get("next") or {}) if isinstance(payload, dict) else {}
+            next_link = (
+                ((payload.get("_links") or {}).get("next") or {})
+                if isinstance(payload, dict)
+                else {}
+            )
             next_url = next_link.get("href") if isinstance(next_link, dict) else None
             url = str(next_url) if next_url else None
         return invoices
@@ -138,21 +142,31 @@ class MollieInvoicesHttpClient:
             "api.mollie.com",
             urlparse(self._base_url).netloc.casefold(),
         }:
-            raise InvoiceCollectionError(InvoiceErrorCode.POLICY_BLOCKED, "Mollie-PDF-Link ist nicht erlaubt")
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.POLICY_BLOCKED, "Mollie-PDF-Link ist nicht erlaubt"
+            )
         response = self._request("GET", pdf_url)
         destination.write_bytes(response.content)
 
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         parsed = urlparse(url)
         base_host = urlparse(self._base_url).netloc.casefold()
-        if parsed.scheme != "https" or parsed.netloc.casefold() not in {"api.mollie.com", base_host}:
-            raise InvoiceCollectionError(InvoiceErrorCode.POLICY_BLOCKED, "Mollie-URL ist nicht erlaubt")
+        if parsed.scheme != "https" or parsed.netloc.casefold() not in {
+            "api.mollie.com",
+            base_host,
+        }:
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.POLICY_BLOCKED, "Mollie-URL ist nicht erlaubt"
+            )
         for attempt in range(self._max_retries + 1):
             try:
                 response = self._client.request(
                     method,
                     url,
-                    headers={"Authorization": f"Bearer {self._token}", "Accept": "application/json"},
+                    headers={
+                        "Authorization": f"Bearer {self._token}",
+                        "Accept": "application/json",
+                    },
                     **kwargs,
                 )
             except httpx.TimeoutException as exc:
@@ -163,7 +177,9 @@ class MollieInvoicesHttpClient:
                     InvoiceErrorCode.TRANSIENT_NETWORK, "Mollie-Zeitüberschreitung"
                 ) from exc
             if response.status_code in {401, 403}:
-                raise InvoiceCollectionError(InvoiceErrorCode.AUTH_REQUIRED, "Mollie-Zugang wurde abgelehnt")
+                raise InvoiceCollectionError(
+                    InvoiceErrorCode.AUTH_REQUIRED, "Mollie-Zugang wurde abgelehnt"
+                )
             if response.status_code in {429, 500, 502, 503, 504}:
                 if attempt < self._max_retries:
                     retry_after = response.headers.get("Retry-After", "")
@@ -173,11 +189,17 @@ class MollieInvoicesHttpClient:
                         delay = min(2**attempt, 8)
                     self._sleeper(delay)
                     continue
-                code = InvoiceErrorCode.RATE_LIMITED if response.status_code == 429 else InvoiceErrorCode.TRANSIENT_NETWORK
+                code = (
+                    InvoiceErrorCode.RATE_LIMITED
+                    if response.status_code == 429
+                    else InvoiceErrorCode.TRANSIENT_NETWORK
+                )
                 raise InvoiceCollectionError(code, "Mollie-Abruf konnte nicht abgeschlossen werden")
             response.raise_for_status()
             return response
-        raise InvoiceCollectionError(InvoiceErrorCode.INTERNAL_ERROR, "Mollie-Retry wurde unerwartet beendet")
+        raise InvoiceCollectionError(
+            InvoiceErrorCode.INTERNAL_ERROR, "Mollie-Retry wurde unerwartet beendet"
+        )
 
 
 def _pdf_url(invoice: dict[str, Any]) -> str:

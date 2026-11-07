@@ -81,7 +81,8 @@ class ConnectionRepository:
     def list_enabled(self) -> list[ProviderConnection]:
         with self._lock, self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM provider_connections WHERE enabled=1 ORDER BY provider_id, account_alias"
+                "SELECT * FROM provider_connections "
+                "WHERE enabled=1 ORDER BY provider_id, account_alias"
             ).fetchall()
         return [_from_row(row) for row in rows]
 

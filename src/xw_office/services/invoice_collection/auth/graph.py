@@ -24,7 +24,9 @@ class CallbackGraphTokenProvider:
     def get_access_token(self) -> str:
         token = str(self._acquire() or "").strip()
         if not token:
-            raise InvoiceCollectionError(InvoiceErrorCode.AUTH_REQUIRED, "Microsoft-Graph-Anmeldung erforderlich")
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.AUTH_REQUIRED, "Microsoft-Graph-Anmeldung erforderlich"
+            )
         return token
 
 
@@ -76,7 +78,11 @@ class MsalInteractiveGraphTokenProvider:
     def _application(self) -> Any:
         if self._app is not None:
             return self._app
-        cache = self._cache_factory(self.cache_path) if self._cache_factory else _dpapi_cache(self.cache_path)
+        cache = (
+            self._cache_factory(self.cache_path)
+            if self._cache_factory
+            else _dpapi_cache(self.cache_path)
+        )
         factory = self._app_factory
         if factory is None:
             try:

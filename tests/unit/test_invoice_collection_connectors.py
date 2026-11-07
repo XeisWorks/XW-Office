@@ -12,7 +12,9 @@ from xw_office.services.invoice_collection.connectors.graph_mail import (
     MailMatchPolicy,
 )
 from xw_office.services.invoice_collection.connectors.graph_reader import GraphMailAttachmentReader
-from xw_office.services.invoice_collection.connectors.mollie_invoices import MollieInvoicesHttpClient
+from xw_office.services.invoice_collection.connectors.mollie_invoices import (
+    MollieInvoicesHttpClient,
+)
 from xw_office.services.invoice_collection.domain import (
     DocumentCandidate,
     DocumentType,
@@ -108,7 +110,9 @@ def test_graph_reader_paginates_and_downloads_attachment_bytes(tmp_path: Path) -
         if request.url.path.endswith("/next"):
             return httpx.Response(200, json={"value": []})
         if request.url.path.endswith("/attachments/attachment-1"):
-            return httpx.Response(200, content=pdf_bytes, headers={"content-type": "application/pdf"})
+            return httpx.Response(
+                200, content=pdf_bytes, headers={"content-type": "application/pdf"}
+            )
         return httpx.Response(404)
 
     reader = GraphMailAttachmentReader(
@@ -123,9 +127,19 @@ def test_graph_reader_paginates_and_downloads_attachment_bytes(tmp_path: Path) -
     assert destination.read_bytes() == pdf_bytes
 
 
-def test_msal_provider_uses_silent_token_before_visible_interactive_login(monkeypatch, tmp_path: Path) -> None:
+def test_msal_provider_uses_silent_token_before_visible_interactive_login(
+    monkeypatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
-    cache_path = tmp_path / "local" / "XeisWorks" / "XW-Office" / "invoice_collection" / "auth" / "graph.cache"
+    cache_path = (
+        tmp_path
+        / "local"
+        / "XeisWorks"
+        / "XW-Office"
+        / "invoice_collection"
+        / "auth"
+        / "graph.cache"
+    )
     calls: list[str] = []
 
     class FakeApp:
@@ -175,7 +189,10 @@ def test_mollie_http_client_paginates_and_rejects_untrusted_pdf_host() -> None:
     )
     invoices = client.list_invoices()
     assert [item["id"] for item in invoices] == ["inv-1", "inv-2"]
-    assert requests == ["https://api.mollie.com/v2/invoices?limit=100", "https://api.mollie.com/page-2"]
+    assert requests == [
+        "https://api.mollie.com/v2/invoices?limit=100",
+        "https://api.mollie.com/page-2",
+    ]
 
 
 def test_mollie_http_client_retries_rate_limit_with_bounded_backoff() -> None:
@@ -235,7 +252,9 @@ def test_browser_connector_keeps_login_and_download_injected(tmp_path: Path) -> 
     assert connector.download(candidate, tmp_path / "workspace").path.exists()
 
 
-def test_playwright_session_rejects_profile_outside_local_app_data(monkeypatch, tmp_path: Path) -> None:
+def test_playwright_session_rejects_profile_outside_local_app_data(
+    monkeypatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     session_path = tmp_path / "outside" / "profile"
     with pytest.raises(ValueError):
@@ -252,7 +271,15 @@ def test_playwright_session_rejects_profile_outside_local_app_data(monkeypatch, 
 
 def test_playwright_session_rejects_unallowlisted_login_host(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
-    profile = tmp_path / "local" / "XeisWorks" / "XW-Office" / "invoice_collection" / "profiles" / "fixture"
+    profile = (
+        tmp_path
+        / "local"
+        / "XeisWorks"
+        / "XW-Office"
+        / "invoice_collection"
+        / "profiles"
+        / "fixture"
+    )
     session = PlaywrightPersistentSession(
         profile_dir=profile,
         login_url="https://evil.example.test/login",
@@ -271,7 +298,15 @@ def test_playwright_session_uses_visible_fake_runtime_and_releases_profile_lock(
     monkeypatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
-    profile = tmp_path / "local" / "XeisWorks" / "XW-Office" / "invoice_collection" / "profiles" / "fixture"
+    profile = (
+        tmp_path
+        / "local"
+        / "XeisWorks"
+        / "XW-Office"
+        / "invoice_collection"
+        / "profiles"
+        / "fixture"
+    )
     calls: list[dict[str, object]] = []
 
     class FakePage:

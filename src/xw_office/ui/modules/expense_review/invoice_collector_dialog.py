@@ -72,7 +72,12 @@ class InvoiceCollectorDialog(QDialog):
             self._set_folder(Path(saved))
 
     def _load_catalog(self) -> None:
-        path = find_repo_root() / "markdowns" / "rechnungsautomat_ausgabenpruefung_2026-11" / "PROVIDER_REGISTRY.yaml"
+        path = (
+            find_repo_root()
+            / "markdowns"
+            / "rechnungsautomat_ausgabenpruefung_2026-11"
+            / "PROVIDER_REGISTRY.yaml"
+        )
         try:
             catalog = ProviderCatalog.from_yaml(path)
         except Exception as exc:  # noqa: BLE001 - surface safe setup error in the dialog
@@ -130,11 +135,13 @@ class InvoiceCollectorDialog(QDialog):
         connections = self._connection_repository.list_enabled()
         if not connections:
             self._status.setText(
-                "Keine aktiven Provider-Verbindungen eingerichtet. Nutzen Sie zunächst „PDF manuell hinzufügen“."
+                "Keine aktiven Provider-Verbindungen eingerichtet. "
+                "Nutzen Sie zunächst „PDF manuell hinzufügen“."
             )
             return
         self._status.setText(
-            f"{len(connections)} aktive Verbindung(en) gefunden; konkrete Abrufroute wird im nächsten Schritt ausgeführt."
+            f"{len(connections)} aktive Verbindung(en) gefunden; konkrete Abrufroute wird im "
+            "nächsten Schritt ausgeführt."
         )
 
     def _save_connection(self) -> None:
@@ -155,7 +162,9 @@ class InvoiceCollectorDialog(QDialog):
         if not self._folder.text().strip():
             self._status.setText("Bitte zuerst einen Zielordner auswählen.")
             return
-        files, _ = QFileDialog.getOpenFileNames(self, "PDF-Belege auswählen", filter="PDF-Dateien (*.pdf)")
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "PDF-Belege auswählen", filter="PDF-Dateien (*.pdf)"
+        )
         if not files:
             return
         try:
@@ -182,7 +191,9 @@ class InvoiceCollectorDialog(QDialog):
                 for child in workspace.glob("*"):
                     child.unlink(missing_ok=True)
                 workspace.rmdir()
-            self._status.setText("Import abgeschlossen; lokale Dateien sind als SYNC_PENDING markiert.")
+            self._status.setText(
+                "Import abgeschlossen; lokale Dateien sind als SYNC_PENDING markiert."
+            )
         except Exception as exc:  # noqa: BLE001 - show safe local setup/import error
             self._status.setText(f"Import fehlgeschlagen: {exc}")
 

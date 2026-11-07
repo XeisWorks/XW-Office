@@ -56,4 +56,6 @@ class ManualImportConnector:
         workspace.mkdir(parents=True, exist_ok=True)
         destination = workspace / source.name
         shutil.copy2(source, destination)
-        return DownloadedArtifact(candidate=candidate, path=destination, content_type="application/pdf")
+        return DownloadedArtifact(
+            candidate=candidate, path=destination, content_type="application/pdf"
+        )

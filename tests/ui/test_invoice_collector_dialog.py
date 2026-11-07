@@ -6,7 +6,9 @@ from xw_office.services.invoice_collection.connections import ConnectionReposito
 from xw_office.ui.modules.expense_review.invoice_collector_dialog import InvoiceCollectorDialog
 
 
-def test_invoice_collector_dialog_loads_catalog_and_requires_active_connections(qtbot: object, tmp_path: Path) -> None:
+def test_invoice_collector_dialog_loads_catalog_and_requires_active_connections(
+    qtbot: object, tmp_path: Path
+) -> None:
     dialog = InvoiceCollectorDialog(
         tenant_id="xw",
         connection_repository=ConnectionRepository(tmp_path / "connections.sqlite3"),

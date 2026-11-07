@@ -9,6 +9,7 @@ import fitz
 import pytest
 
 from xw_office.services.invoice_collection.connectors.manual_import import ManualImportConnector
+from xw_office.services.invoice_collection.auth.secrets import KeyringSecretStore
 from xw_office.services.invoice_collection.connections import ConnectionRepository
 from xw_office.services.invoice_collection.domain import (
     DocumentCandidate,
@@ -41,7 +42,12 @@ def _pdf(path: Path, text: str = "invoice") -> Path:
     return path
 
 
-def _candidate(connection: ProviderConnection, *, source_id: str, external_id: str | None = None) -> DocumentCandidate:
+def _candidate(
+    connection: ProviderConnection,
+    *,
+    source_id: str,
+    external_id: str | None = None,
+) -> DocumentCandidate:
     return DocumentCandidate(
         connection=connection,
         route_key="manual_import",
@@ -60,7 +66,11 @@ def test_registry_parses_secret_free_catalog() -> None:
     )
     assert len(catalog.providers) == 15
     assert sum(len(provider.routes) for provider in catalog.providers) == 24
-    assert all(route.maturity == "planned" for provider in catalog.providers for route in provider.routes)
+    assert all(
+        route.maturity == "planned"
+        for provider in catalog.providers
+        for route in provider.routes
+    )
 
 
 def test_redaction_never_returns_secret_value() -> None:
@@ -71,10 +81,32 @@ def test_redaction_never_returns_secret_value() -> None:
 
 
 def test_global_log_filter_redacts_bearer_token() -> None:
-    record = logging.LogRecord("test", logging.INFO, __file__, 1, "Authorization: Bearer %s", ("abc123",), None)
+    record = logging.LogRecord(
+        "test", logging.INFO, __file__, 1, "Authorization: Bearer %s", ("abc123",), None
+    )
     _SecretRedactionFilter().filter(record)
     assert "abc123" not in record.getMessage()
     assert "redacted" in record.getMessage()
+
+
+def test_keyring_secret_store_uses_secret_ref_without_plaintext_file() -> None:
+    class FakeKeyring:
+        values: dict[tuple[str, str], str] = {}
+
+        @classmethod
+        def get_password(cls, service: str, key: str) -> str | None:
+            return cls.values.get((service, key))
+
+        @classmethod
+        def set_password(cls, service: str, key: str, value: str) -> None:
+            cls.values[(service, key)] = value
+
+    store = KeyringSecretStore(keyring_module=FakeKeyring)
+    store.set("provider/connection/token", "secret-value")
+    assert store.get("provider/connection/token") == "secret-value"
+    assert FakeKeyring.values == {
+        ("xw-office/invoice-collection", "provider/connection/token"): "secret-value"
+    }
 
 
 def test_pdf_inspection_rejects_html_with_pdf_extension(tmp_path: Path) -> None:
@@ -82,6 +114,24 @@ def test_pdf_inspection_rejects_html_with_pdf_extension(tmp_path: Path) -> None:
     path.write_text("<html>not a pdf</html>", encoding="utf-8")
     with pytest.raises(DocumentValidationError):
         inspect_pdf(path)
+
+
+def test_pipeline_quarantines_invalid_artifact(tmp_path: Path) -> None:
+    source = tmp_path / "broken.pdf"
+    source.write_text("not a PDF", encoding="utf-8")
+    pipeline = DocumentPipeline(
+        sink=OneDriveLocalSink(tmp_path / "onedrive"),
+        quarantine_root=tmp_path / "quarantine",
+    )
+    connection = ProviderConnection.create(
+        provider_id="fixture", tenant_id=TenantId.XW, account_alias="a"
+    )
+    with pytest.raises(DocumentValidationError):
+        pipeline.process(
+            DownloadedArtifact(_candidate(connection, source_id="broken"), source)
+        )
+    assert not source.exists()
+    assert list((tmp_path / "quarantine").glob("broken.pdf"))
 
 
 def test_manual_import_uses_pipeline_and_is_idempotent(tmp_path: Path) -> None:
@@ -139,7 +189,9 @@ def test_external_id_with_different_hash_is_a_conflict(tmp_path: Path) -> None:
     journal = InvoiceJournal(tmp_path / "journal.sqlite3")
     pipeline = DocumentPipeline(sink=OneDriveLocalSink(destination), journal=journal)
     pipeline.process(
-        DownloadedArtifact(_candidate(connection, source_id="one", external_id="invoice-1"), first_source)
+        DownloadedArtifact(
+            _candidate(connection, source_id="one", external_id="invoice-1"), first_source
+        )
     )
     with pytest.raises(InvoiceCollectionError) as error:
         pipeline.process(
@@ -182,7 +234,9 @@ def test_connector_factory_registry_never_loads_yaml_import_paths() -> None:
     registry.register("fixture", lambda connection, settings: object())  # type: ignore[arg-type]
     assert registry.keys() == ("fixture",)
     with pytest.raises(ValueError):
-        registry.register("package.module", lambda connection, settings: object())  # type: ignore[arg-type]
+        registry.register(
+            "package.module", lambda connection, settings: object()
+        )  # type: ignore[arg-type]
     with pytest.raises(InvoiceCollectionError) as error:
         registry.create("unknown", ProviderConnection.create(
             provider_id="fixture", tenant_id=TenantId.XW, account_alias="a"

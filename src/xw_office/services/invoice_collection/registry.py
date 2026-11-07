@@ -112,7 +112,9 @@ def _parse_routes(
             raise _configuration_error("Connector-Namen dürfen keine Importsyntax enthalten")
         hosts = tuple(str(value).strip().lower() for value in raw.get("allowed_hosts") or ())
         if method in {"official_api", "browser"} and not hosts and maturity != "planned":
-            raise _configuration_error(f"Route {provider_id}/{route_key} besitzt keine Host-Allowlist")
+            raise _configuration_error(
+                f"Route {provider_id}/{route_key} besitzt keine Host-Allowlist"
+            )
         result.append(
             RouteManifest(
                 route_key=route_key,

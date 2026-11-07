@@ -43,4 +43,6 @@ def assert_local_path(path: Path) -> None:
     try:
         resolved.relative_to(local_root)
     except ValueError as exc:
-        raise ValueError("invoice collection sensitive state must stay under local app data") from exc
+        raise ValueError(
+            "invoice collection sensitive state must stay under local app data"
+        ) from exc

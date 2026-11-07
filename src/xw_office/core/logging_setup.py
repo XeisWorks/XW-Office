@@ -81,7 +81,11 @@ def setup_logging(level: int | None = None, log_dir: Path | None = None) -> None
     if root.handlers:
         return
 
-    resolved_level = level if level is not None else _resolve_level("XW_OFFICE_LOG_LEVEL", logging.INFO)
+    resolved_level = (
+        level
+        if level is not None
+        else _resolve_level("XW_OFFICE_LOG_LEVEL", logging.INFO)
+    )
     root.setLevel(resolved_level)
 
     _configure_noisy_dependency_loggers()
@@ -162,7 +166,8 @@ def log_startup_info(start_mode: str, app_version: str) -> None:
         commit = "unknown"
 
     logger.info(
-        "Startup info: version=%s mode=%s pid=%s computer=%s interpreter=%s repo=%s commit=%s log=%s",
+        "Startup info: version=%s mode=%s pid=%s computer=%s interpreter=%s "
+        "repo=%s commit=%s log=%s",
         app_version,
         start_mode,
         os.getpid(),

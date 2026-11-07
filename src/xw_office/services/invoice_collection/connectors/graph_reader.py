@@ -82,19 +82,25 @@ class GraphMailAttachmentReader:
         if response.headers.get("content-type", "").casefold().startswith("application/json"):
             content = response.json().get("contentBytes")
             if not content:
-                raise InvoiceCollectionError(InvoiceErrorCode.INVALID_DOCUMENT, "Graph-Anhang enthält keine Bytes")
+                raise InvoiceCollectionError(
+                    InvoiceErrorCode.INVALID_DOCUMENT, "Graph-Anhang enthält keine Bytes"
+                )
             payload = base64.b64decode(content)
         else:
             payload = response.content
         if not payload or len(payload) > self.max_attachment_bytes:
-            raise InvoiceCollectionError(InvoiceErrorCode.INVALID_DOCUMENT, "Graph-Anhang hat eine ungültige Größe")
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.INVALID_DOCUMENT, "Graph-Anhang hat eine ungültige Größe"
+            )
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(payload)
 
     def _request(self, method: str, url: str) -> httpx.Response:
         parsed = urlparse(url)
         if parsed.scheme != "https" or parsed.netloc.casefold() != "graph.microsoft.com":
-            raise InvoiceCollectionError(InvoiceErrorCode.POLICY_BLOCKED, "Graph-URL ist nicht erlaubt")
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.POLICY_BLOCKED, "Graph-URL ist nicht erlaubt"
+            )
         token = self.token_provider.get_access_token()
         response = self.client.request(
             method,
@@ -102,11 +108,18 @@ class GraphMailAttachmentReader:
             headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
         )
         if response.status_code in {401, 403}:
-            raise InvoiceCollectionError(InvoiceErrorCode.AUTH_REQUIRED, "Microsoft-Graph-Zugriff wurde abgelehnt")
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.AUTH_REQUIRED, "Microsoft-Graph-Zugriff wurde abgelehnt"
+            )
         if response.status_code == 429:
-            raise InvoiceCollectionError(InvoiceErrorCode.RATE_LIMITED, "Microsoft Graph hat den Abruf begrenzt")
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.RATE_LIMITED, "Microsoft Graph hat den Abruf begrenzt"
+            )
         if response.status_code >= 500:
-            raise InvoiceCollectionError(InvoiceErrorCode.TRANSIENT_NETWORK, "Microsoft Graph ist vorübergehend nicht erreichbar")
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.TRANSIENT_NETWORK,
+                "Microsoft Graph ist vorübergehend nicht erreichbar",
+            )
         response.raise_for_status()
         return response
 

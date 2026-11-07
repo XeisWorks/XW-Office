@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date
 import hashlib
 from pathlib import Path
+import shutil
 
 from xw_office.services.invoice_collection.domain import (
     DownloadedArtifact,
@@ -13,6 +14,7 @@ from xw_office.services.invoice_collection.domain import (
     utc_now,
 )
 from xw_office.services.invoice_collection.errors import (
+    DocumentValidationError,
     InvoiceCollectionError,
     InvoiceErrorCode,
 )
@@ -31,12 +33,23 @@ class PipelineResult:
 class DocumentPipeline:
     """Apply identical document handling to mail, API, browser and manual routes."""
 
-    def __init__(self, *, sink: DocumentSink, journal: InvoiceJournal | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        sink: DocumentSink,
+        journal: InvoiceJournal | None = None,
+        quarantine_root: Path | None = None,
+    ) -> None:
         self.sink = sink
         self.journal = journal
+        self.quarantine_root = quarantine_root
 
     def process(self, artifact: DownloadedArtifact) -> PipelineResult:
-        inspection = inspect_pdf(artifact.path)
+        try:
+            inspection = inspect_pdf(artifact.path)
+        except DocumentValidationError:
+            self._quarantine(artifact.path)
+            raise
         digest = _sha256(artifact.path)
         candidate = artifact.candidate
         if self.journal is not None and candidate.external_id:
@@ -61,8 +74,22 @@ class DocumentPipeline:
         )
         receipt = self.sink.publish(document, artifact.path)
         if self.journal is not None:
-            self.journal.record_document(document=document, sink_id=self.sink.sink_id, receipt=receipt)
+            self.journal.record_document(
+                document=document, sink_id=self.sink.sink_id, receipt=receipt
+            )
         return PipelineResult(document=document, receipt=receipt)
+
+    def _quarantine(self, source_path: Path) -> None:
+        if self.quarantine_root is None or not source_path.exists():
+            return
+        self.quarantine_root.mkdir(parents=True, exist_ok=True)
+        name = source_path.name.replace("/", "_").replace("\\", "_")
+        target = self.quarantine_root / name
+        if target.exists():
+            target = self.quarantine_root / (
+                f"{source_path.stem}-{utc_now():%Y%m%d%H%M%S%f}{source_path.suffix}"
+            )
+        shutil.move(str(source_path), str(target))
 
 
 def _sha256(path: Path) -> str:

@@ -10,7 +10,14 @@ from xw_office.services.invoice_collection.domain import DocumentCandidate, Vali
 
 
 _INVALID = re.compile(r"[^A-Za-z0-9._-]+")
-_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+_RESERVED = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
 
 
 def safe_component(value: str, *, fallback: str = "unknown", limit: int = 80) -> str:
