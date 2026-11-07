@@ -1,176 +1,492 @@
-# Konservative Start-Registry: KONFIGURATION, keine bereits funktionierenden Adapter.
-# Alle Portale vor Aktivierung mit einem echten Konto/Beleg prüfen.
-version: 1
+# Secretfreier, versionierter Provider-Katalog. Keine lokale Connection-Konfiguration.
+# `maturity: verified` ist erst nach echtem Dokument + idempotentem Wiederholungstest erlaubt.
+schema_version: 2
+catalog_id: "xw-office-invoice-providers"
 feature: "xw_office.expense_review.invoice_collection"
-default_enabled: false
+
+defaults:
+  connection_enabled: false
+  route_enabled: false
+  route_maturity: "planned"
+  manual_import_supported: true
+  archive_sink: "onedrive_local_sync"
+  cloud_verification: "explicit_only"
+
 supported_tenants:
   - "xw"
   - "wuedara"
-document_types:
+
+allowed_document_types:
   - "fee_invoice"
   - "expense_invoice"
   - "receipt"
   - "credit_note"
   - "payout_statement"
   - "income_statement"
-preferred_methods:
-  - "mail_pdf"
+  - "unknown"
+
+allowed_route_methods:
+  - "mail"
   - "official_api"
-  - "playwright"
+  - "browser"
   - "manual_import"
-security:
+
+allowed_provider_categories:
+  - "expense"
+  - "income_evidence"
+
+allowed_fallback_conditions:
+  - "NO_DOCUMENTS"
+  - "UNSUPPORTED_ACCOUNT"
+
+security_policy:
+  secret_values_in_catalog: false
+  connector_import_paths_in_catalog: false
   browser_profiles: "user_local_appdata_only"
-  session_state_in_git: false
-  password_store: "os_keyring_if_explicitly_needed"
+  password_store: "os_keyring_only_if_required"
   totp_seed_storage: false
   captcha_or_mfa_bypass: false
-  google_automated_signin: false
-output:
-  default_backend: "onedrive_local_sync_folder"
-  require_user_selected_folder: true
-  cloud_verification: "explicit_only"
-  deduplicate_by:
-    - "sha256"
-    - "provider_and_account_and_external_id"
+  require_https: true
+  require_host_allowlist: true
+  signed_urls_in_logs: false
+
+connector_policies:
+  graph_mail_attachment:
+    allowed_hosts: ["graph.microsoft.com", "login.microsoftonline.com"]
+    links_from_messages: "never_follow"
+  manual_import:
+    network_access: false
+
+deduplication:
+  scope: "tenant_and_sink"
+  primary_key: "sha256"
+  secondary_key: "connection_route_external_id"
+  same_external_id_different_hash: "content_conflict"
+  cross_route_provenance_merge: true
+
+verification_requirements: &verification_requirements
+  - "real_document_type_confirmed"
+  - "real_download_confirmed"
+  - "idempotent_repeat_confirmed"
+  - "auth_expiry_or_invalid_credential_confirmed"
+  - "sensitive_log_review_passed"
+
 providers:
   - id: "mollie_fees"
+    manifest_version: 1
     label: "Mollie – eigene Gebührenrechnungen"
-    invoice_kind: "fee_invoice"
-    recommended: ["mail_pdf", "official_api", "manual_import"]
-    api_scope: "invoices.read"
-    api_credential_type: "advanced_access_token"
-    guidance: "PDF-Anhang in Rechnungsbenachrichtigung aktivieren; alternativ GET /v2/invoices inkl. Pagination und PDF-Link, nicht Zahlungs-API-Schlüssel wiederverwenden."
-    live_adapter: "not_verified"
-    portal_domain: "mollie.com"
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["fee_invoice", "credit_note"]
+    portal_hosts: ["mollie.com", "my.mollie.com"]
+    manual_import_supported: true
+    guidance: >-
+      Eigene Mollie-Gebührenbelege, nicht Kundenrechnungen oder Zahlungsobjekte. E-Mail-PDF
+      bevorzugen, wenn für das konkrete Konto vollständig verifiziert.
+    routes:
+      - id: "mail_pdf"
+        method: "mail"
+        connector: "graph_mail_attachment"
+        priority: 10
+        maturity: "planned"
+        auth: "microsoft_graph_mail"
+        matching_policy: "requires_verified_sender_and_attachment_fixture"
+        fallback_on: ["NO_DOCUMENTS", "UNSUPPORTED_ACCOUNT"]
+        verification: *verification_requirements
+      - id: "invoices_api"
+        method: "official_api"
+        connector: "mollie_invoices_v2"
+        priority: 20
+        maturity: "planned"
+        auth: "api_token"
+        required_scope: "invoices.read"
+        credential_purpose: "invoice_read"
+        allowed_hosts: ["api.mollie.com"]
+        fallback_on: ["UNSUPPORTED_ACCOUNT"]
+        verification: *verification_requirements
     official_docs:
       - "https://help.mollie.com/hc/en-us/articles/213179885-Where-can-I-find-my-invoice"
       - "https://docs.mollie.com/reference/list-invoices"
       - "https://docs.mollie.com/reference/get-invoice"
+
   - id: "browserstack"
+    manifest_version: 1
     label: "BrowserStack – Abonnement"
-    invoice_kind: "expense_invoice"
-    recommended: ["mail_pdf", "playwright", "manual_import"]
-    guidance: "Anbieter versendet Rechnungen per Mail; PDF-Anhang im eigenen Konto erst nach Eingang prüfen."
-    live_adapter: "not_verified"
-    portal_domain: "browserstack.com"
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["expense_invoice", "receipt", "credit_note"]
+    portal_hosts: ["browserstack.com"]
+    manual_import_supported: true
+    guidance: "E-Mail-Anhang zuerst mit echtem Konto prüfen; Browserroute nur bei nachgewiesener Lücke."
+    routes:
+      - id: "mail_pdf"
+        method: "mail"
+        connector: "graph_mail_attachment"
+        priority: 10
+        maturity: "planned"
+        auth: "microsoft_graph_mail"
+        matching_policy: "requires_verified_sender_and_attachment_fixture"
+        fallback_on: ["NO_DOCUMENTS", "UNSUPPORTED_ACCOUNT"]
+        verification: *verification_requirements
+      - id: "billing_portal"
+        method: "browser"
+        connector: "browserstack_billing_playwright"
+        priority: 30
+        maturity: "planned"
+        auth: "browser_session"
+        allowed_hosts: ["browserstack.com"]
+        fallback_on: []
+        verification: *verification_requirements
     official_docs:
       - "https://www.browserstack.com/support/faq/plans-pricing/billing/can-i-get-invoices-for-my-payments"
+
   - id: "google_cloud"
+    manifest_version: 1
     label: "Google Cloud / API-Abrechnung"
-    invoice_kind: "expense_invoice"
-    recommended: ["mail_pdf", "manual_import"]
-    guidance: "Cloud-Billing-Rechnungs-PDF per Mail nur bei geeigneter Billing-Konfiguration. Keine fiktive Cloud-Billing-PDF-API."
-    live_adapter: "not_verified"
-    portal_domain: "cloud.google.com"
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["expense_invoice", "credit_note"]
+    portal_hosts: ["cloud.google.com", "console.cloud.google.com", "payments.google.com"]
+    manual_import_supported: true
+    guidance: >-
+      Mail/Export nur bei passender Billing-Konfiguration. Keine fiktive PDF-API und keinen
+      automatisierten Google-Login voraussetzen.
+    routes:
+      - id: "mail_pdf"
+        method: "mail"
+        connector: "graph_mail_attachment"
+        priority: 10
+        maturity: "planned"
+        auth: "microsoft_graph_mail"
+        matching_policy: "requires_verified_sender_and_attachment_fixture"
+        fallback_on: ["NO_DOCUMENTS", "UNSUPPORTED_ACCOUNT"]
+        verification: *verification_requirements
     official_docs:
       - "https://docs.cloud.google.com/billing/docs/how-to/get-invoice"
+
   - id: "anthropic_api"
+    manifest_version: 1
     label: "Anthropic Console / API"
-    invoice_kind: "receipt"
-    recommended: ["mail_pdf", "playwright", "manual_import"]
-    guidance: "Automatische Rechnungs-/Receipt-Mail nach API-Belastung dokumentiert; Anhang tatsächlich prüfen."
-    live_adapter: "not_verified"
-    portal_domain: "claude.com"
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["receipt", "expense_invoice", "credit_note"]
+    portal_hosts: ["console.anthropic.com", "claude.com"]
+    manual_import_supported: true
+    guidance: "API-Billing und Privatabo getrennt behandeln; Mailanhang vor Aktivierung prüfen."
+    routes:
+      - id: "mail_pdf"
+        method: "mail"
+        connector: "graph_mail_attachment"
+        priority: 10
+        maturity: "planned"
+        auth: "microsoft_graph_mail"
+        matching_policy: "requires_verified_sender_and_attachment_fixture"
+        fallback_on: ["NO_DOCUMENTS", "UNSUPPORTED_ACCOUNT"]
+        verification: *verification_requirements
+      - id: "billing_portal"
+        method: "browser"
+        connector: "anthropic_api_billing_playwright"
+        priority: 30
+        maturity: "planned"
+        auth: "browser_session"
+        allowed_hosts: ["console.anthropic.com", "claude.com"]
+        fallback_on: []
+        verification: *verification_requirements
     official_docs:
       - "https://support.claude.com/de/articles/16608069-ihre-claude-api-rechnungen-verstehen"
+
   - id: "anthropic_subscription"
+    manifest_version: 1
     label: "Claude / Claude Code Abo"
-    invoice_kind: "expense_invoice"
-    recommended: ["mail_pdf", "playwright", "manual_import"]
-    guidance: "Claude-Privatabo und Console/API getrennte Billing-Strecken; keine Gleichsetzung mit API-Mails."
-    live_adapter: "not_verified"
-    portal_domain: "claude.ai"
-    official_docs: []
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["expense_invoice", "receipt", "credit_note"]
+    portal_hosts: ["claude.ai", "claude.com"]
+    manual_import_supported: true
+    guidance: "Privat-/Teamabo nicht mit Anthropic-API-Billing vermischen."
+    routes:
+      - id: "mail_pdf"
+        method: "mail"
+        connector: "graph_mail_attachment"
+        priority: 10
+        maturity: "planned"
+        auth: "microsoft_graph_mail"
+        matching_policy: "requires_verified_sender_and_attachment_fixture"
+        fallback_on: ["NO_DOCUMENTS", "UNSUPPORTED_ACCOUNT"]
+        verification: *verification_requirements
+      - id: "billing_portal"
+        method: "browser"
+        connector: "anthropic_subscription_playwright"
+        priority: 30
+        maturity: "planned"
+        auth: "browser_session"
+        allowed_hosts: ["claude.ai", "claude.com"]
+        fallback_on: []
+        verification: *verification_requirements
+
   - id: "stripe_fees"
+    manifest_version: 1
     label: "Stripe – Stripe-eigene Gebühren-/Steuerrechnungen"
-    invoice_kind: "fee_invoice"
-    recommended: ["playwright", "manual_import"]
-    guidance: "Nur Stripe-Gebühren-PDFs im Dashboard; Stripe Invoices API für eigene Kundenrechnungen ist NICHT die gesuchte API."
-    live_adapter: "not_verified"
-    portal_domain: "dashboard.stripe.com"
-    official_docs: []
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["fee_invoice", "credit_note"]
+    portal_hosts: ["dashboard.stripe.com"]
+    manual_import_supported: true
+    guidance: "Nur Stripe-eigene Gebührenbelege; nicht mit Kundenrechnungen der Invoices API verwechseln."
+    routes:
+      - id: "billing_portal"
+        method: "browser"
+        connector: "stripe_fees_playwright"
+        priority: 30
+        maturity: "planned"
+        auth: "browser_session"
+        allowed_hosts: ["dashboard.stripe.com"]
+        fallback_on: []
+        verification: *verification_requirements
+
   - id: "railway"
+    manifest_version: 1
     label: "Railway – Hosting-Abrechnungen"
-    invoice_kind: "expense_invoice"
-    recommended: ["playwright", "manual_import"]
-    guidance: "Billing History im Workspace; echte PDF-Download-Seite erst live prüfen."
-    live_adapter: "not_verified"
-    portal_domain: "railway.com"
-    official_docs: []
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["expense_invoice", "receipt", "credit_note"]
+    portal_hosts: ["railway.com"]
+    manual_import_supported: true
+    guidance: "Workspace-Billing und echten PDF-Download erst live verifizieren."
+    routes:
+      - id: "billing_portal"
+        method: "browser"
+        connector: "railway_billing_playwright"
+        priority: 30
+        maturity: "planned"
+        auth: "browser_session"
+        allowed_hosts: ["railway.com"]
+        fallback_on: []
+        verification: *verification_requirements
+
   - id: "github"
-    label: "GitHub – Copilot, Abos, verbrauchsabhängige Kosten"
-    invoice_kind: "expense_invoice"
-    recommended: ["mail_pdf", "playwright", "manual_import"]
-    guidance: "GitHub Billing Usage API ist keine allgemeine Rechnungs-PDF-API; persönliche Abrechnung und Enterprise unterscheiden."
-    live_adapter: "not_verified"
-    portal_domain: "github.com"
+    manifest_version: 1
+    label: "GitHub – Copilot, Abos und verbrauchsabhängige Kosten"
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["expense_invoice", "receipt", "credit_note"]
+    portal_hosts: ["github.com"]
+    manual_import_supported: true
+    guidance: "Persönliche, Organization- und Enterprise-Abrechnung getrennt prüfen; Usage API ist keine PDF-API."
+    routes:
+      - id: "mail_pdf"
+        method: "mail"
+        connector: "graph_mail_attachment"
+        priority: 10
+        maturity: "planned"
+        auth: "microsoft_graph_mail"
+        matching_policy: "requires_verified_sender_and_attachment_fixture"
+        fallback_on: ["NO_DOCUMENTS", "UNSUPPORTED_ACCOUNT"]
+        verification: *verification_requirements
+      - id: "billing_portal"
+        method: "browser"
+        connector: "github_billing_playwright"
+        priority: 30
+        maturity: "planned"
+        auth: "browser_session"
+        allowed_hosts: ["github.com"]
+        fallback_on: []
+        verification: *verification_requirements
     official_docs:
       - "https://docs.github.com/en/enterprise-cloud@latest/billing/how-tos/set-up-payment/manage-enterprise-invoice"
+
   - id: "perplexity"
+    manifest_version: 1
     label: "Perplexity.ai – Abo"
-    invoice_kind: "expense_invoice"
-    recommended: ["mail_pdf", "playwright", "manual_import"]
-    guidance: "Mail-PDF nicht für alle Kontotypen offiziell bestätigt; verifizieren, ggf. Portal."
-    live_adapter: "not_verified"
-    portal_domain: "perplexity.ai"
-    official_docs: []
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["expense_invoice", "receipt", "credit_note"]
+    portal_hosts: ["perplexity.ai"]
+    manual_import_supported: true
+    guidance: "Mail-PDF und Portal je Kontotyp verifizieren."
+    routes:
+      - id: "mail_pdf"
+        method: "mail"
+        connector: "graph_mail_attachment"
+        priority: 10
+        maturity: "planned"
+        auth: "microsoft_graph_mail"
+        matching_policy: "requires_verified_sender_and_attachment_fixture"
+        fallback_on: ["NO_DOCUMENTS", "UNSUPPORTED_ACCOUNT"]
+        verification: *verification_requirements
+      - id: "billing_portal"
+        method: "browser"
+        connector: "perplexity_billing_playwright"
+        priority: 30
+        maturity: "planned"
+        auth: "browser_session"
+        allowed_hosts: ["perplexity.ai"]
+        fallback_on: []
+        verification: *verification_requirements
+
   - id: "openai_chatgpt"
+    manifest_version: 1
     label: "OpenAI ChatGPT-Abo"
-    invoice_kind: "expense_invoice"
-    recommended: ["mail_pdf", "playwright", "manual_import"]
-    guidance: "Quittung/Rechnung und Portal-Billing nach Plan prüfen; ChatGPT und API sind getrennte Billing-Konten."
-    live_adapter: "not_verified"
-    portal_domain: "chatgpt.com"
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["expense_invoice", "receipt", "credit_note"]
+    portal_hosts: ["chatgpt.com"]
+    manual_import_supported: true
+    guidance: "ChatGPT- und API-Billing sind getrennte Konten und Providerverbindungen."
+    routes:
+      - id: "mail_pdf"
+        method: "mail"
+        connector: "graph_mail_attachment"
+        priority: 10
+        maturity: "planned"
+        auth: "microsoft_graph_mail"
+        matching_policy: "requires_verified_sender_and_attachment_fixture"
+        fallback_on: ["NO_DOCUMENTS", "UNSUPPORTED_ACCOUNT"]
+        verification: *verification_requirements
+      - id: "billing_portal"
+        method: "browser"
+        connector: "openai_chatgpt_billing_playwright"
+        priority: 30
+        maturity: "planned"
+        auth: "browser_session"
+        allowed_hosts: ["chatgpt.com"]
+        fallback_on: []
+        verification: *verification_requirements
     official_docs:
       - "https://help.openai.com/en/articles/8156167-invoice-dates-for-chatgpt-and-api-billing"
+
   - id: "openai_api"
+    manifest_version: 1
     label: "OpenAI Platform – API-Credits/Verbrauch"
-    invoice_kind: "receipt"
-    recommended: ["mail_pdf", "playwright", "manual_import"]
-    guidance: "Prepaid-Credit-Receipt von echter Monatsrechnung unterscheiden; keine allgemeine öffentlich bestätigte Invoice-PDF-API."
-    live_adapter: "not_verified"
-    portal_domain: "platform.openai.com"
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["receipt", "expense_invoice", "credit_note"]
+    portal_hosts: ["platform.openai.com"]
+    manual_import_supported: true
+    guidance: "Prepaid-Credit-Receipt und Monatsrechnung unterscheiden; keine unbestätigte PDF-API annehmen."
+    routes:
+      - id: "mail_pdf"
+        method: "mail"
+        connector: "graph_mail_attachment"
+        priority: 10
+        maturity: "planned"
+        auth: "microsoft_graph_mail"
+        matching_policy: "requires_verified_sender_and_attachment_fixture"
+        fallback_on: ["NO_DOCUMENTS", "UNSUPPORTED_ACCOUNT"]
+        verification: *verification_requirements
+      - id: "billing_portal"
+        method: "browser"
+        connector: "openai_api_billing_playwright"
+        priority: 30
+        maturity: "planned"
+        auth: "browser_session"
+        allowed_hosts: ["platform.openai.com"]
+        fallback_on: []
+        verification: *verification_requirements
     official_docs:
       - "https://help.openai.com/en/articles/8156167-invoice-dates-for-chatgpt-and-api-billing"
+
   - id: "google_ai_subscription"
+    manifest_version: 1
     label: "Google AI / Gemini / Google One"
-    invoice_kind: "expense_invoice"
-    recommended: ["mail_pdf", "manual_import"]
-    guidance: "Google Payments/Abokonto; Automationsbrowser-Login wegen Google-Anti-Automation ausdrücklich nicht erzwingen."
-    live_adapter: "not_verified"
-    portal_domain: "payments.google.com"
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["expense_invoice", "receipt", "credit_note"]
+    portal_hosts: ["payments.google.com", "one.google.com"]
+    manual_import_supported: true
+    guidance: "Offiziellen Mail-/Export-/Payments-Weg bevorzugen; keinen Playwright-Google-Login erzwingen."
+    routes:
+      - id: "mail_pdf"
+        method: "mail"
+        connector: "graph_mail_attachment"
+        priority: 10
+        maturity: "planned"
+        auth: "microsoft_graph_mail"
+        matching_policy: "requires_verified_sender_and_attachment_fixture"
+        fallback_on: ["NO_DOCUMENTS", "UNSUPPORTED_ACCOUNT"]
+        verification: *verification_requirements
     official_docs:
       - "https://support.google.com/accounts/answer/7675428"
+
   - id: "adsense_youtube"
+    manifest_version: 1
     label: "Google AdSense / YouTube-Einnahmen"
-    invoice_kind: "income_statement"
-    recommended: ["official_api", "manual_import"]
-    guidance: "Einnahme-/Zahlungsnachweise, KEINE Ausgabenrechnung; AdSense Payment/Reporting-Daten nicht als PDF-Rechnungen ausgeben."
-    live_adapter: "not_verified"
-    portal_domain: "adsense.google.com"
+    category: "income_evidence"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["income_statement", "payout_statement"]
+    portal_hosts: ["adsense.google.com"]
+    manual_import_supported: true
+    guidance: "Einnahmen-/Auszahlungsnachweise; nie als Ausgabenrechnung klassifizieren."
+    routes: []
     official_docs:
       - "https://support.google.com/adsense/answer/12496700"
+
   - id: "microsoft365"
+    manifest_version: 1
     label: "Microsoft 365 – Abo"
-    invoice_kind: "expense_invoice"
-    recommended: ["mail_pdf", "playwright", "manual_import"]
-    guidance: "Microsoft 365 Admin Center und Azure-Billing-API sind NICHT dieselbe Abrechnung; Vertrag prüfen, nur passende offizielle API verwenden."
-    live_adapter: "not_verified"
-    portal_domain: "admin.microsoft.com"
-    official_docs: []
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["expense_invoice", "receipt", "credit_note"]
+    portal_hosts: ["admin.microsoft.com", "microsoft365.com"]
+    manual_import_supported: true
+    guidance: "Microsoft-365-Admin-Center und Azure Billing nicht gleichsetzen; Vertrag und Kontoart prüfen."
+    routes:
+      - id: "mail_pdf"
+        method: "mail"
+        connector: "graph_mail_attachment"
+        priority: 10
+        maturity: "planned"
+        auth: "microsoft_graph_mail"
+        matching_policy: "requires_verified_sender_and_attachment_fixture"
+        fallback_on: ["NO_DOCUMENTS", "UNSUPPORTED_ACCOUNT"]
+        verification: *verification_requirements
+      - id: "billing_portal"
+        method: "browser"
+        connector: "microsoft365_billing_playwright"
+        priority: 30
+        maturity: "planned"
+        auth: "browser_session"
+        allowed_hosts: ["admin.microsoft.com", "microsoft365.com"]
+        fallback_on: []
+        verification: *verification_requirements
+
   - id: "amazon_business"
-    label: "Amazon Business – Käufe inkl. Marketplace"
-    invoice_kind: "expense_invoice"
-    recommended: ["official_api", "playwright", "manual_import"]
-    guidance: "Amazon Business Invoices API nur bei tatsächlich gewährtem Zugang; Käufer- und Marketplace-Dokumente einzeln verifizieren. invoice-fetcher erst nach nachgewiesen vollständigem Ersatz kündigen."
-    live_adapter: "not_verified"
-    portal_domain: "amazon.de"
+    manifest_version: 1
+    label: "Amazon Business – Käufe einschließlich Marketplace"
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["expense_invoice", "receipt", "credit_note"]
+    portal_hosts: ["amazon.de", "business.amazon.de"]
+    manual_import_supported: true
+    guidance: >-
+      Invoices API nur mit tatsächlich gewährtem Zugang. Käufer-, Marketplace- und
+      Gutschriftdokumente einzeln prüfen; bestehenden invoice-fetcher bis zum Paritätsnachweis behalten.
+    routes:
+      - id: "invoices_api"
+        method: "official_api"
+        connector: "amazon_business_invoices_api"
+        priority: 20
+        maturity: "planned"
+        auth: "amazon_business_api"
+        allowed_hosts: ["api.business.amazon.com"]
+        fallback_on: ["UNSUPPORTED_ACCOUNT"]
+        verification: *verification_requirements
+      - id: "billing_portal"
+        method: "browser"
+        connector: "amazon_business_invoices_playwright"
+        priority: 30
+        maturity: "planned"
+        auth: "browser_session"
+        allowed_hosts: ["amazon.de", "business.amazon.de"]
+        fallback_on: []
+        verification: *verification_requirements
     official_docs:
       - "https://docs.business.amazon.com/docs/invoices-api-reference"
-optional_collectors:
+
+optional_aggregators:
   - id: "getmyinvoices"
     enabled: false
-    role: "only_for_verified_coverage_gaps"
+    role: "only_after_measured_coverage_gap"
   - id: "tailride"
     enabled: false
-    role: "only_if_needed_after_diy_and_single_aggregator"
+    role: "only_after_measured_coverage_gap"

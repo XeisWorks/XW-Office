@@ -1,76 +1,401 @@
-# XW-Office Ausgabenprüfung: Rechnungsautomat – Architektur und Abnahmekriterien
-**Stand 07.11.2026. Spezifikation – keine bereits produktiv geprüften Portaladapter.**
+# XW-Office Ausgabenprüfung: Rechnungsautomat – Zielarchitektur und Abnahmekriterien
 
-## 1. Unveränderte Basis
-Vor Codeänderungen `AGENTS.md`, `src/xw_office/ui/modules/expense_review/view.py`, `src/xw_office/services/expenses/`, `src/xw_office/core/worker.py`, `src/xw_office/ui/async_action.py`, `src/xw_office/services/mailing/graph_client.py`, `src/xw_office/services/secrets/service.py`, `src/xw_office/core/shared_paths.py`, Tests und Konfiguration lesen. Live-Version erneut gegen Plan vergleichen.
-`ExpenseReviewView` hat einen `QTabBar` für XeisWorks (`xw`) und WüdaraMusi (`wuedara`) und bestehende Bank-/Ausgaben-/Lieferantenportal-Logik. **Keine** bestehende Schaltfläche überschreiben; eigener Textbutton „Rechnungen abrufen“ + separater `InvoiceCollectorDialog`, damit `view.py` nicht weiter anwächst. Bestehende Lieferantenportale sind **URL-Zuordnungen**, keine automatisch authentifizierten Provider. Die neue Sammlung ist ein Eingangskorb und **keine automatische sevDesk-Buchung**; vorhandene XW-Flow-Bridge nicht doppeln.
+**Stand 07.11.2026. Verbindliche Spezifikation; noch kein live verifizierter Portaladapter.**
 
-## 2. Fertige Oberfläche
-Dialog (Deutsch, mit Tastatur und klaren Fehlermeldungen):
-- Kopf: „Alle aktiven Portale abrufen“ (primär), „Ordner wählen“, „Ordner öffnen“, Monat (Vormonat) / letzte 90 Tage / Zeitraum.
-- Pfad und Status: „OneDrive-Ordner erkannt“, „Lokale Datei gespeichert; Sync noch nicht bestätigt“, „Ordner nicht beschreibbar“. Ein einfacher Initial-Wizard fordert nur tatsächlich fehlende Einstellungen an.
-- Tabelle: **Portal, Mandant, Methode, Anmeldung, letzter Abruf, neue Belege, vorhandene Belege, Ergebnis, Aktion**. Pro Portal „Anmelden“, „Anmeldung erneuern“, „Jetzt abrufen“, „Portal öffnen“, „PDF manuell hinzufügen“.
-- Fortschritt und Fehler pro Portal; Zustände `NOT_CONFIGURED`, `READY`, `NEEDS_LOGIN`, `NEEDS_2FA`, `BLOCKED`, `MANUAL_ACTION`, `ERROR` und Ergebnisse `NEW`, `ALREADY_PRESENT`, `NO_NEW_DOCUMENTS`. Login-Probleme anderer Portale dürfen Sammelabruf nicht stoppen.
-- Zuordnung zu `xw` oder `wuedara` **explizit**, kein Übernehmen fremder Mandantendaten. Periodenauswahl entspricht Dokumentzeitraum, nicht zwingend Zahlungsdatum.
+## 1. Ausgangslage und empfohlene Korrektur
 
-## 3. Servicelayer / Adapter-Vertrag
+Die vorhandene Planung trifft die Sicherheits- und Produktentscheidungen grundsätzlich gut.
+Für langfristige Erweiterbarkeit muss der zunächst vorgesehene Vertrag
+`provider.fetch(..., sink, ...)` jedoch aufgeteilt werden: Ein Provider darf weder das
+Ablageziel kennen noch selbst Deduplizierung, Dateinamen oder OneDrive-Status verwalten.
+Auch Mail, API und Browser sind keine Provider, sondern alternative **Abrufrouten** einer
+lokalen Provider-Verbindung.
+
+Verbindliche Abhängigkeitsrichtung:
+
+```text
+PySide6-Dialog
+    -> InvoiceCollectionService / RunOrchestrator
+        -> ConnectionRepository + Journal
+        -> Connector-Port -> Mail-/API-/Browser-/Import-Adapter
+        -> DocumentPipeline -> Validator -> Deduplicator -> DocumentSink-Port
+                                                      -> OneDriveLocalSink
+```
+
+Provider-Code hängt nur von stabilen Domain-Typen und Ports ab. UI, Orchestrator,
+Dokumentpipeline und Sink enthalten keine `if provider_id == ...`-Verzweigungen.
+
+## 2. Bestehende Funktionen und Repository-Grenzen
+
+Vor Implementierung `AGENTS.md`, den aktuellen Code und die Tests erneut lesen. Insbesondere:
+
+- `ExpenseReviewView` besitzt zwei Mandanten (`xw`, `wuedara`) sowie bestehende Bank-,
+  Ausgaben- und Lieferantenportal-Funktionen. Ein eigener Textbutton und ein separater
+  `InvoiceCollectorDialog` ergänzen die View, ohne bestehende Aktionen zu ersetzen.
+- Lieferantenportale in der aktuellen Ausgabenprüfung sind URL-Zuordnungen, keine
+  authentifizierten Invoice-Provider. Die beiden Konzepte bleiben getrennt.
+- `BackgroundWorker`/`UiAsyncAction` werden für UI-Lifecycle und Signale wiederverwendet.
+  Mehrere Providerjobs benötigen darüber einen begrenzten Orchestrator und dürfen Widgets
+  niemals aus einem Workerthread ändern.
+- `app_paths.state_dir()` und Logpfade zeigen derzeit ins Repository. Neue vertrauliche oder
+  maschinenspezifische Daten müssen über einen neuen `local_app_data_dir()`-Pfad unter
+  `%LOCALAPPDATA%/XeisWorks/XW-Office/` laufen.
+- Der existierende `GraphMailClient` hat breite Standardscopes, Konsolen-Device-Flow und
+  unverschlüsselten serialisierten Token-Cache. Bestehende Nutzungen nicht brechen, aber für
+  den Rechnungscollector erst nach einer sicheren Auth-/Cache-Abstraktion wiederverwenden.
+- Die zentrale SQLAlchemy/PostgreSQL-Datenbank ist nicht der Ort für lokale Browserprofile,
+  OAuth-Caches oder Maschinen-Checkpoints. Dafür eine eigene lokale SQLite-Datenbank nutzen.
+- Der Product-Hub-OneDrive-Client bleibt auf Product-Hub-Assets beschränkt.
+- Die Sammlung ist ein Eingangskorb. Keine automatische sevDesk-Buchung und keine
+  automatische USt-Entscheidung hinzufügen.
+
+## 3. Zielstruktur
+
 ```text
 src/xw_office/services/invoice_collection/
-  models.py                 # InvoiceDocument, ProviderStatus, FetchResult
-  provider_base.py          # ABC/Protocol: capabilities, probe_auth, fetch, open_login
-  registry.py               # Konfiguration + Validierung, keine Zugangsdaten
-  orchestrator.py           # Queue, Restart einzelner Provider, Signal-Progress
-  state_repository.py       # lokale SQLite/geeignete DB nur Metadaten
-  security.py               # keyring, Profilpfade, Maskierung/ACL
-  playwright_runner.py      # headful Login, persistent_context, PDF-Download
-  mail_collector.py         # Graph Mail.Read / PDF-Attachments
-  mollie_invoices.py        # offizielle invoices.read API
-  onedrive_sink.py          # synchronisierter Windows-Ordner, später Graph optional
-  pdf_validation.py         # PDF-Inhalt, SHA256, Deduplikation
-  providers/                # nur schrittweise verifizierte Adapter
+  domain.py                 # Enums und immutable Domain-Modelle
+  ports.py                  # Connector, DocumentSink, SecretStore, Journal, Clock
+  errors.py                 # typisierte, redigierbare Fehlercodes
+  registry.py               # ProviderManifest laden/validieren, keine Secrets
+  connections.py            # lokale Connection-Konfiguration und Migrationen
+  journal.py                # SQLite-Läufe, Checkpoints, Dokumente, Konflikte
+  orchestrator.py           # Queue, Account-Locks, bounded concurrency, resume/cancel
+  pipeline.py               # validate -> normalize -> hash -> dedupe -> publish -> journal
+  pdf_validation.py         # Limits, MIME/Magic, Parser, Metadaten
+  naming.py                 # sichere, deterministische Archivpfade
+  security.py               # LOCALAPPDATA, ACL, Redaction, Host-Allowlist
+  auth/
+    graph.py                # UI-fähiges MSAL, minimaler Scope, verschlüsselter Cache
+    browser_profiles.py     # Profilpfad und exklusiver Account-Lock
+    secrets.py              # SecretRef -> keyring/zugelassener Store
+  connectors/
+    graph_mail.py           # generischer Mail-Connector, providerbezogene Match-Regeln
+    mollie_invoices.py      # erster offizieller API-Connector
+    playwright_base.py      # Engine; keine providerbezogenen Selektoren
+    providers/              # kleine, explizit registrierte Provideradapter
+    manual_import.py        # eingebaute Route durch dieselbe Pipeline
+  sinks/
+    onedrive_local.py       # MVP: lokal synchronisierter Ordner
+    graph_drive.py          # spätere optionale Erweiterung, nicht Teil des ersten Slice
 src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py
-tests/unit/test_invoice_collection_*.py
-tests/ui/test_invoice_collection_*.py
-tests/integration/test_invoice_collection_*.py
+tests/unit/invoice_collection/
+tests/ui/test_invoice_collector_dialog.py
+tests/integration/invoice_collection/
 ```
-Provider-Interface: `capabilities` (mail/api/browser/manual), `probe_auth(account) -> AuthStatus`, `fetch(period, account, sink, progress, cancel_event) -> FetchResult`, optional `open_login(account)`. Datenschema je PDF: provider_id, Mandant, account_alias, Dokumenttyp, externe ID, Rechnungsnr., Dokumentdatum, Leistungszeitraum, Betrag/Währung (optional), Quelle, SHA256, relativer Archivpfad, Syncstatus und Prüfstatus. `document_type` strikt getrennt in `fee_invoice`, `expense_invoice`, `receipt`, `credit_note`, `payout_statement`, `income_statement`. Kein automatisches Buchen aufgrund „Rechnung“ im Dateinamen.
 
-### Worker, Browser und echte PDF-Dateien
-- Bereits vorhandenen `BackgroundWorker` bzw. `UiAsyncAction` benutzen. Qt-Widgets nur über Qt-Signale im Hauptthread aktualisieren. Kooperativer Abbruch, Zeitlimits, begrenzte Wiederholungen, keine doppelten Starts. Abgebrochene Download-Transaktionen beim nächsten Lauf sicher wiederaufnehmen.
-- Je Account ein **eigenes persistentes Chromium-UserDataDir**, nur ein laufender Context pro Verzeichnis, lokal außerhalb des Repos. Playwright-Sessions können ablaufen. Beim Sammelabruf zunächst geschützte Rechnungsseite prüfen; wenn Redirect/Unberechtigt `NEEDS_LOGIN` setzen. Beim Klick „Anmeldung erneuern“ sichtbaren Browser im selben separaten Profil öffnen; Nutzer authentifiziert sich und bestätigt 2FA selbst, danach geschützten Abruf nachprüfen und betroffenen Provider fortsetzen.
-- Kein automatisiertes Erraten von Passwörtern, kein erzwungenes TOTP-Seed, kein CAPTCHA- oder Anti-Bot-Bypass, keine selbst gescripteten WebAuthn-Zugriffe. Browser-Profile, Cookies, LocalStorage können einen Account übernehmen: niemals im Repo, Log oder OneDrive speichern.
-- Downloads über Playwright `with page.expect_download(): ...; download.save_as(temp_file)` **nach echtem DOM-Test**, nicht über erfundene CSS-Selektoren, veraltete URL-Routen oder `requests` mit zusammengebastelten Cookie-Headern. Bei PDF im neuen Tab dokumentiert sichere Alternative entwickeln. Nur registrierte offizielle Hostnames. Retry bei transienten Fehlern, kein aggressives Scraping.
-- Bei Google können automatisierte Browser-Anmeldungen ausdrücklich blockiert werden: Google-Payments/AdSense über offizielle Konten, E-Mail, Exporte und nötigenfalls **manuellen Import** lösen. Nie behaupten, Google-Login mit Playwright sei zuverlässig.
-- Für einfache Fälle **Mail vor Browser**: vorhandener `GraphMailClient` kann Anhänge abrufen; sein bisheriger MSAL-Device-Code-Flow schreibt aber Aufforderungen an die Konsole und verwendet einen JSON-Cache unter `state/`. Keine versteckte Konsole/Blockade in neuer UI und keine unverschlüsselte neue MSAL-Tokenablage: entweder sicher UI-tauglich erweitern und regressionsprüfen oder eigenen Graph-Collector mit MSAL + `msal-extensions` (Windows DPAPI) implementieren. Ein reiner Read-Adapter benötigt `Mail.Read` (für Shared Mailbox Rechte prüfen).
-- PDF-Mailfilter nicht allein nach Absenderanzeige/Betreff, sondern Senderdomain, Message-ID, Attachment-ID, MIME/PDF-Inhalt und Alias prüfen. Rechnungslinks aus Mails nicht unkontrolliert ausführen (Phishing-Risiko). Graph Pagination und mehrmonatige Rücksuche beachten.
+Playwright und Browser-Binary als klar dokumentierte optionale Desktop-Abhängigkeit führen.
+Core-, Mail-, API- und manuelle Routen müssen ohne installierten Browser importierbar bleiben.
 
-## 4. OneDrive for Business: minimaler Aufwand, echte Statuswerte
-**Standard:** `QFileDialog.getExistingDirectory` wählt beschreibbaren **lokal synchronisierten OneDrive-Business-Ordner**. `OneDriveCommercial` kann Default vorschlagen; immer Auswahl/Bestätigung durch Nutzer. Nutzerpfad pro PC persistieren, keine Festverdrahtung an fremde Benutzerprofile. Test-Datei/Schreibrecht prüfen, niemals still in `C:\\Users\\...\\Downloads` ausweichen. Optional manuelle Kontrolle durch Explorer und Graph-Fernprüfung.
+## 4. Stabile Domain- und Port-Verträge
 
-Beispielstruktur: `<gewählter Ordner>/XeisWorks/2026/11/Stripe/` bzw. `.../WuedaraMusi/2026/11/Mollie/`; unklare Rechnungsmonate: `Ungeprueft/`. Dateiname `YYYY-MM__anbieter__kontoalias__dokumenttyp__belegnr-oder-hash8.pdf` (sanitisiert, eindeutige Kollisionbehandlung). Ein Download landet erst in lokalem temporären Verzeichnis, PDF-Header/Parse und maximale Größe prüfen, SHA256 bilden und **atomar** in Ziel verschieben. In SQLite Dateiidentität + Provider + Konto + externe ID/Belegnummer sichern; existierendes gleiches Dokument niemals überschreiben. Mehrfachabruf muss idempotent sein. Metadaten erst nach erfolgreichem Save als „gespeichert“ schreiben.
+### 4.1 Provider-Katalog und lokale Verbindung
 
-**Wichtig:** Lokales Ablegen im OneDrive-Verzeichnis = `SYNC_PENDING`, **nicht** `CLOUD_VERIFIED`. Optional bei vorhandenen Graph-Rechten Remote-Präsenz/Hash prüfen; nie vorab „hochgeladen“ melden. Für rechnerunabhängigen Upload später **eigene** Graph-Integration mit delegiertem `Files.ReadWrite` und `PUT /drives/{drive-id}/items/{parent-id}:/{filename}:/content` (bis 250 MB), vorher gewählten Drive/Ordner verifizieren; auf Konflikte nicht überschreiben. Der vorhandene `OneDriveAssetClient` dient ausschließlich Product-Hub-Assets und darf nicht um Rechnungs-Schreibrechte erweitert werden. Bei offline OneDrive: in dauerhafter Retry-Queue behalten.
+`ProviderManifest` ist versionskontrolliert und secretfrei:
 
-## 5. Sicherheit und Konfiguration
-- Lokale Portal-Passwörter nach Möglichkeit **überhaupt nicht speichern**; sichtbarer Login plus Browser-Sitzung ist die normale UX. Falls explizit notwendig: **Windows Credential Manager** per Python `keyring`, getrennte Credential-Namen pro Provider/Account. Keine Passwort-Prompts in Chat/CI.
-- `.env` ist Klartext und nur für optionale Entwicklungs-Tokens, nicht Standard; existierendes `SecretService` kann bereits bestimmte Tokens Fernet-verschlüsselt in DB verwalten, sollte aber nicht automatisch für persönliche Browser-Logins genutzt werden. Für neue Nur-Lesen-Mollie-Rechnungsrechte ein separates **Advanced Access Token `invoices.read`** verwenden; nicht blind `MOLLIE_ACCESS_TOKEN` mit Zahlungsrechten wiederverwenden.
-- `GitHub Secrets` sind für GitHub Actions, `Railway Variables` für auf Railway laufende Prozesse – nicht als lokaler Credentialspeicher. Kein Playwright-Railway-Deploy als Voraussetzung (Railway-Deployment aktuell instabil).
-- Browserprofile unter `%LOCALAPPDATA%/XeisWorks/XW-Office/invoice_collection/profiles/<provider>/<konto-hash>/` mit Windows-Benutzer-ACL, nicht in Git/OneDrive. MSAL-Cache durch DPAPI/`msal-extensions`. Logs maskieren Tokens, Cookies, E-Mail-Inhalte, Download-URLs mit Signatur, sensitive Pfade. `.gitignore` vor Live-Login um `.env.*` (Ausnahme `!.env.example`), `playwright/.auth/`, `**/invoice_collection/profiles/`, `**/invoice_collection/storage_state*`, `**/invoice_collection/tmp/` erweitern.
-- Dokumente vor Prüf-/Buchhaltungsfreigabe nie automatisch als SevDesk-Beleg ausgeben; Belegtypen/USt-Klassifikation fachlich trennen.
+```python
+@dataclass(frozen=True)
+class ProviderManifest:
+    provider_id: str
+    label: str
+    manifest_version: int
+    supported_tenants: frozenset[TenantId]
+    document_types: frozenset[DocumentType]
+    routes: tuple[RouteManifest, ...]
+```
 
-## 6. Release-Gates
-1. UI bleibt responsive, vorhandene Ausgabenprüfung funktioniert weiterhin, pro Mandant keine Datenvermischung.
-2. Mock-Mail-PDF, Mock-Mollie-Rechnung, lokaler Mock-Playwright-Download funktionieren End-to-End ohne reale Credentials.
-3. Session abgelaufen -> `NEEDS_LOGIN`; sichtbarer Login/2FA und Wiederaufnahme einzelner Jobs getestet. Login kann auch auf `MANUAL_ACTION` enden, wenn Anbieter Automationsbrowser blockiert.
-4. Beschädigte HTML-`.pdf`, Leerdatei, Duplikat, Downloads über Monatsgrenzen, Ausfall OneDrive-Sync, Crash/Retry, Fehler eines einzigen Providers und Kontotrennung getestet.
-5. Kein stilles Überschreiben, keine Secrets im Commit oder Log. `ruff`, `pytest`, Qt-Regression und `git diff --check` laufen. Live-Portaladapter **erst nach echten Tests auf `verified` setzen**.
-6. Getestete Fortschritte committen, nach Repo-Regel `AGENTS.md` in `origin/main` integrieren, keine Railway-Deploy-Abhängigkeit.
+`ProviderConnection` ist lokale Benutzereinstellung:
 
-## Offizielle Referenzen
+```python
+@dataclass(frozen=True)
+class ProviderConnection:
+    connection_id: UUID
+    provider_id: str
+    tenant_id: TenantId
+    account_alias: str
+    enabled: bool
+    route_settings: tuple[RouteSettings, ...]
+```
+
+`RouteSettings` enthält Reihenfolge, Aktivierung, nicht geheime Optionen und optional eine
+`SecretRef`. Ein Secretwert darf weder im YAML-Katalog noch in QSettings/SQLite liegen.
+Provider-ID und Connection-ID sind stabil; Anzeigenamen dürfen sich ändern. Unbekannte
+Manifestversionen führen zu verständlichem `CONFIGURATION_ERROR`, nicht zu stiller Ignorierung.
+
+Der statische YAML-Katalog darf **keine Python-Importpfade** ausführen. Connector-Factories
+werden explizit im Code registriert. Externe, dynamisch geladene Plugins sind kein MVP-Ziel;
+damit wird Registry-Manipulation nicht zur Codeausführung.
+
+Eine geplante Route darf bereits als Produktausblick im Katalog stehen, obwohl ihre Factory
+noch nicht implementiert ist; sie wird dann als „nicht verfügbar“ angezeigt und kann nicht
+aktiviert werden. Für `experimental` oder `verified` sowie für jede aktivierte Route ist eine
+registrierte Factory zwingend. So erzwingt der Katalog keine leeren Adapter-Stubs.
+
+### 4.2 Connector-Port
+
+Discovery und Download sind getrennt, damit Pagination, Checkpoints und Wiederholungen sauber
+funktionieren:
+
+```python
+class InvoiceConnector(Protocol):
+    route_key: str
+
+    def capabilities(self) -> ConnectorCapabilities: ...
+    def probe(self, context: FetchContext) -> RouteHealth: ...
+    def discover(
+        self, context: FetchContext, checkpoint: Checkpoint | None
+    ) -> Iterable[DocumentReference]: ...
+    def download(
+        self, reference: DocumentReference, workspace: Path, cancel: CancelToken
+    ) -> DownloadedArtifact: ...
+    def begin_auth(self, context: AuthContext) -> AuthChallenge: ...
+```
+
+- Der Connector liefert nur Referenzen und ein Artefakt im isolierten temporären Workspace.
+- Er kennt keinen Archivpfad und keinen Sink.
+- `begin_auth` ist nur verfügbar, wenn die Capability dies ausweist. API-Token-Eingabe,
+  Microsoft-OAuth und Browserlogin sind unterschiedliche Auth-Challenges.
+- Connectoren liefern stabile externe IDs, wenn der Anbieter sie bereitstellt, und markieren
+  deren Scope. Sie erfinden keine IDs aus einem Dateinamen.
+- Ein Checkpoint wird erst nach erfolgreicher Pipeline-Verarbeitung aller davor liegenden
+  Kandidaten fortgeschrieben. Fehlgeschlagene Kandidaten bleiben wiederholbar.
+
+### 4.3 Dokumentpipeline und Sink-Port
+
+```python
+class DocumentSink(Protocol):
+    sink_id: str
+
+    def preflight(self, context: SinkContext) -> SinkHealth: ...
+    def publish(
+        self, document: ValidatedDocument, source_path: Path
+    ) -> SinkReceipt: ...
+    def verify(self, receipt: SinkReceipt) -> SyncStatus: ...
+```
+
+Pipeline-Reihenfolge:
+
+1. Download in einen laufbezogenen `%LOCALAPPDATA%`-Workspace mit Größenlimit.
+2. Dateisignatur, MIME, PDF-Parser, Seitenzahl und Verschlüsselungsstatus prüfen.
+3. Metadaten normalisieren, aber unsichere Extraktionen als `unverified` kennzeichnen.
+4. SHA-256 berechnen und gegen Journal plus vorhandene Zieldatei prüfen.
+5. Deterministischen relativen Pfad erzeugen und ohne Überschreiben atomar publizieren.
+6. Sink-Receipt und Dokumentjournal in einer nachvollziehbaren Reihenfolge schreiben.
+7. Workspace bereinigen; bei Crash sichere Wiederaufnahme oder Quarantäne.
+
+Der Sink entscheidet nicht über Dokumenttyp oder Mandant. Die Pipeline kennt keine
+providerbezogenen APIs. `OneDriveLocalSink` meldet nach lokaler Publikation höchstens
+`SYNC_PENDING`; `CLOUD_VERIFIED` darf nur ein tatsächlicher Remote-Nachweis liefern.
+
+## 5. Datenmodell und Provenienz
+
+Je Dokument mindestens:
+
+- `document_id`, `run_id`, `connection_id`, `provider_id`, `route_key`, `tenant_id`
+- `account_alias`, `document_type`, `external_id` plus dessen Scope
+- Rechnungs-/Belegnummer, Dokumentdatum, optional Leistungszeitraum
+- optional Betrag als `Decimal` und ISO-4217-Währung; niemals `float`
+- Originaldateiname, deklarierter MIME-Typ, erkannter MIME-Typ, Größe, Seitenzahl
+- SHA-256, relativer Archivpfad, Erfassungszeitpunkt in UTC
+- `metadata_confidence`, `review_status`, `document_outcome`, `sync_status`
+- redigierte Provenienz: Mail-/Attachment-ID, API-Ressourcen-ID oder Portalreferenz; keine
+  signierte Download-URL, kein Cookie und kein Mailinhalt im Log
+
+Dokumenttypen bleiben fachlich getrennt:
+
+`fee_invoice`, `expense_invoice`, `receipt`, `credit_note`, `payout_statement`,
+`income_statement`, `unknown`.
+
+`unknown` ist zulässig und erzwingt manuelle Prüfung. Ein Dateiname mit „invoice“ ist kein
+ausreichender Klassifikationsnachweis.
+
+### Deduplizierung und Konflikte
+
+- SHA-256 ist die maßgebliche Inhaltsidentität **innerhalb eines Mandanten und Ablageziels**.
+  Ein Treffer in einem anderen Mandanten darf dessen Ablage nicht unterdrücken.
+- `(connection_id, route_key, external_id)` ist eine zusätzliche Identität. Gleiche externe ID
+  mit anderem Hash ist ein `CONTENT_CONFLICT` und wird nicht überschrieben.
+- Gleicher Hash über Mail und API wird einmal publiziert, aber beide Provenienzen dürfen im
+  Journal auf dasselbe Dokument zeigen.
+- Der deterministische Dateiname enthält mindestens Provider, Kontoalias, Dokumenttyp,
+  fachliches Datum und `hash8`. Bei bestehendem Ziel immer Inhalt prüfen; nie still ersetzen.
+- Mehrere PCs können denselben OneDrive-Ordner sehen. Deshalb darf Deduplizierung nicht nur auf
+  der lokalen SQLite-Datei beruhen. Der Sink prüft den deterministischen Zielpfad und behandelt
+  eine konkurrierend entstandene identische Datei als Duplikat, abweichenden Inhalt als
+  Konflikt. Gleichzeitiger produktiver Abruf auf mehreren PCs bleibt bis zu einem späteren
+  verteilten Lease ausdrücklich nicht unterstützt.
+
+## 6. Drei getrennte Zustandsautomaten
+
+Ein einzelnes `status`-Feld wäre mehrdeutig. UI und Journal führen getrennt:
+
+- **Konfiguration:** `DISABLED`, `NOT_CONFIGURED`, `READY`, `CONFIGURATION_ERROR`
+- **Authentifizierung:** `UNKNOWN`, `AUTHENTICATED`, `CONSENT_REQUIRED`, `NEEDS_LOGIN`,
+  `NEEDS_2FA`, `CREDENTIAL_INVALID`, `POLICY_BLOCKED`
+- **Lauf:** `IDLE`, `QUEUED`, `RUNNING`, `WAITING_FOR_USER`, `PARTIAL`, `SUCCEEDED`,
+  `FAILED`, `CANCELLED`
+
+Dokumentergebnisse: `NEW`, `ALREADY_PRESENT`, `REJECTED`, `QUARANTINED`,
+`CONTENT_CONFLICT`. Syncstatus: `LOCAL_SAVED`, `SYNC_PENDING`, `CLOUD_VERIFIED`,
+`SYNC_FAILED`.
+
+Fehler besitzen maschinenlesbare Codes: `AUTH_REQUIRED`, `RATE_LIMITED`,
+`TRANSIENT_NETWORK`, `PROVIDER_CHANGED`, `UNSUPPORTED_ACCOUNT`, `INVALID_DOCUMENT`,
+`DESTINATION_UNAVAILABLE`, `POLICY_BLOCKED`, `INTERNAL_ERROR`. Nur transiente Fehler und
+Rate-Limits werden mit begrenztem Backoff automatisch wiederholt. Auth-, Policy-,
+Konfigurations- und Provider-Changed-Fehler warten auf eine explizite Aktion.
+
+## 7. Orchestrierung, Fallback und Abbruch
+
+- Ein `CollectionRun` speichert immutable Zeitraum, gewählte Connection-IDs, Ziel und
+  Registry-Version. Dadurch bleibt ein Lauf reproduzierbar.
+- Global kleine, konfigurierbare Parallelität; pro Connection/Account genau ein aktiver Job.
+  Browserprofile besitzen zusätzlich einen exklusiven Prozess-/Dateilock.
+- Standardreihenfolge Mail > API > Browser > manueller Import. Fallback ist keine pauschale
+  Exception-Behandlung: Beispielsweise darf `AUTH_REQUIRED` auf API nicht automatisch einen
+  Browserlogin starten. Die Registry definiert erlaubte Übergänge je Fehlercode.
+- Wenn eine priorisierte Route echte Dokumente geliefert hat, dürfen nachrangige Routen nur
+  laufen, wenn die Connection dies zur Vollständigkeitsprüfung ausdrücklich vorsieht.
+- Abbruch ist kooperativ. Bereits erfolgreich publizierte Dokumente bleiben journalisiert;
+  unfertige Kandidaten werden nicht als erledigt markiert.
+- Ein Fehler einer Connection stoppt keine andere. Das Gesamtergebnis kann `PARTIAL` sein.
+- Login-Wiederaufnahme referenziert `run_id`, `connection_id` und `route_key` und setzt nur
+  diesen Job fort.
+
+## 8. Mail, API, Browser und manueller Import
+
+### Mail
+
+Der Graph-Mail-Connector ist generisch. Providerbezogene Regeln beschreiben zugelassene
+Absenderdomains, optionale Empfängeraliase, Attachment-Muster und Dokumenttypen. Filter nie nur
+auf Anzeigenamen oder Betreff stützen. Message-ID, Attachment-ID, tatsächlicher MIME/PDF-Inhalt,
+Pagination und Zeitraum berücksichtigen. Links aus Mails werden nicht automatisch geöffnet.
+
+Für den Collector minimalen delegierten Scope verwenden (`Mail.Read`, Shared-Mailbox-Rechte nur
+bei tatsächlichem Bedarf). Interaktiver Systembrowser/PKCE oder verständlicher Device-Code in
+der UI; Token-Cache mit Windows-DPAPI/`msal-extensions`. Keine Konsolenausgabe als einzige
+Anmeldeoberfläche.
+
+### Offizielle API
+
+Je API eigener kleiner Connector auf gemeinsamer HTTP-Basis: explizite Timeouts,
+Host-Allowlist, sichere Redirect-Policy, Pagination, `Retry-After`, begrenzte Retries und
+redigierte Fehler. Nur dokumentierte Read-Scopes verwenden. Mollie-`invoices.read` ist der
+erste Kandidat; nicht mit Zahlungs- oder Kundenrechnungs-APIs verwechseln.
+
+### Browser
+
+Je Connection ein persistentes Chromium-UserDataDir unter `%LOCALAPPDATA%`, niemals im Repo,
+OneDrive oder Log. Geschützte Seite vor Abruf prüfen; bei Redirect/Unberechtigt `NEEDS_LOGIN`.
+Login und 2FA sichtbar durch den Benutzer. Downloads mit `expect_download()` und
+`save_as()` nach echten Live-/Fixture-Tests. Keine erfundenen Selektoren, privaten Endpunkte,
+Cookie-Header-Nachbauten, Stealth-Modi oder CAPTCHA-/WebAuthn-Umgehung. Blockierte Anbieter
+bleiben `MANUAL_ACTION`/`POLICY_BLOCKED`.
+
+### Manueller Import
+
+Manueller Import ist ein eingebauter Connector und kein Notbehelf außerhalb des Systems. Der
+Benutzer wählt eine oder mehrere Dateien und bestätigt Provider, Connection, Mandant und
+Dokumenttyp. Danach läuft exakt dieselbe Validierungs-, Deduplizierungs- und Sink-Pipeline.
+
+## 9. OneDrive-Ziel und lokales Journal
+
+`QFileDialog.getExistingDirectory` wählt den Zielordner. `OneDriveCommercial` darf nur einen
+Vorschlag liefern. Preflight prüft Existenz, Schreibbarkeit, freien Platz und eine sichere
+Testpublikation; kein stiller Fallback nach `Downloads`.
+
+Beispiel:
+
+```text
+<Ziel>/XeisWorks/2026/11/Mollie/
+<Ziel>/WuedaraMusi/2026/11/BrowserStack/
+<Ziel>/XeisWorks/Ungeprueft/OpenAI/
+```
+
+Das lokale SQLite-Journal liegt unter `%LOCALAPPDATA%`, besitzt Schema-Version/Migrationen,
+Foreign Keys und transaktionale Schreibvorgänge. Es enthält Provider-/Connection-Konfiguration,
+Läufe, Routenstatus, Checkpoints, Dokumentidentitäten, Provenienzen, Sink-Receipts und
+Konflikte – aber keine Secretwerte, PDFs, Cookies oder vollständigen Mailinhalte.
+
+Ein späterer `GraphDriveSink` ist ein eigener Adapter mit eigener delegierter Berechtigung und
+Remote-Ordneridentität. Er erweitert nicht den Product-Hub-Client und verändert keine
+Connectoren.
+
+## 10. Provider-unabhängige UI
+
+Dialogkopf: **„Alle aktiven Verbindungen abrufen“**, **„Ordner wählen“**, **„Ordner öffnen“**,
+Zeitraum, Abbrechen. Tabelle mindestens: Provider, Konto, Mandant, aktive Route,
+Konfiguration, Anmeldung, letzter Lauf, neue/vorhandene/abgelehnte Dokumente, Ergebnis,
+Aktionen.
+
+Aktionen werden aus Capabilities erzeugt: Verbinden, Anmeldung erneuern, Token hinterlegen,
+jetzt abrufen, Portal öffnen, manuell importieren. Keine providerbezogenen Button-Abfragen.
+Fehlermeldungen zeigen sicheren Klartext plus Fehlercode, nie Rohantwort, Token, signierte URL
+oder Cookie. Der initiale Wizard fragt nur fehlende Einstellungen ab.
+
+## 11. Erweiterungsrezept für ein weiteres Portal
+
+Ein neuer Provider gilt als sauber integriert, wenn folgende Änderungen genügen:
+
+1. secretfreies Manifest mit stabiler ID, Dokumenttypen, Host-Allowlist und Routen ergänzen;
+2. vorhandenen generischen Mail-/Import-Connector konfigurieren **oder** einen kleinen neuen
+   API-/Browser-Connector samt expliziter Factory registrieren;
+3. gemeinsame Connector-Contract-Suite und providerbezogene Fixturetests bestehen;
+4. UI-Snapshot/Smoke-Test beweist, dass keine UI-Änderung nötig ist;
+5. mit echtem Konto und Dokument testen und nur die konkrete Route auf `verified` setzen.
+
+Falls dafür Orchestrator, Pipeline oder Sink providerbezogen geändert werden müssten, ist zuerst
+zu prüfen, ob eine generische Capability im Port fehlt. Keine schnelle Sonderverzweigung.
+
+## 12. Teststrategie und Release-Gates
+
+### Automatische Tests
+
+- Registry-Schema, eindeutige IDs, bekannte Factory-Keys, Host-Allowlist und Migrationen.
+- Contract-Suite für **jeden** Connector: Probe, Pagination/Checkpoint, Download, Abbruch,
+  redigierte Fehler, kein Archivzugriff.
+- Contract-Suite für **jeden** Sink: Preflight, no-clobber, identischer Concurrent-Winner,
+  Konflikt, Statuswahrheit.
+- Pipeline: leere/HTML-/beschädigte/verschlüsselte/zu große PDF, Hash, Metadaten,
+  Cross-Route-Duplikat, Cross-Tenant-Isolation, Crash zwischen Publish und Journal.
+- Orchestrator: Partial Failure, Rate-Limit, kein falscher Fallback, Account-Lock,
+  Login-Wiederaufnahme nur einer Route, kooperativer Abbruch.
+- Graph-Fixtures mit Pagination und PDF-/Nicht-PDF-Anhängen; keine echten Maildaten.
+- Mollie-Mock mit mehreren Seiten, 401, 429, Timeout, Duplikat und echter PDF-Bytefolge.
+- lokaler Fake-Portalserver für Sessionablauf, sichtbaren Login und Download.
+- UI-Regressions- und Lifecycle-Tests für beide Mandanten und zerstörte Views.
+
+### Verbindliche Gates
+
+1. Bestehende Ausgabenprüfung, sevDesk, XW-Flow, Graph-Mail und Product Hub bleiben grün.
+2. Vor erstem Live-Login: LOCALAPPDATA-Pfade, `.gitignore`, verschlüsselter OAuth-Cache,
+   SecretStore und Redaction getestet.
+3. Kein stilles Überschreiben, keine tenantübergreifende Deduplizierung, keine falsche
+   Cloudbestätigung.
+4. Kein Secret, echtes PDF, Browserprofil oder Token-Cache in Git/Logs/Testartefakten.
+5. `ruff`, relevante `pytest`-Suites, Qt-Regression, `git diff --check`, YAML-Validierung und
+   Secret-Scan laufen.
+6. Eine Route wird erst `verified`, wenn echtes Dokument, Dokumenttyp, Wiederholungsabruf und
+   Sessionablauf bzw. Tokenfehler dokumentiert getestet wurden.
+7. Fertige getestete Änderungen gemäß `AGENTS.md` auf `main` committen und zu
+   `origin/main` pushen; kein Force-Push.
+
+## 13. Bewusst nicht im ersten Release
+
+- automatische sevDesk-Buchung oder Steuerklassifikation
+- unbeaufsichtigter Scheduler/Windows-Dienst
+- gleichzeitige Sammlung auf mehreren PCs in dasselbe Ziel
+- dynamisch installierbare Drittanbieter-Providerpakete
+- Graph-Drive-Upload und echte Remote-Syncbestätigung
+- OCR als Voraussetzung für Annahme eines gültigen PDFs
+
+Diese Punkte bleiben durch Ports und Journal nachrüstbar, ohne den ersten sicheren Desktop-Slice
+unnötig zu vergrößern.
+
+## Offizielle technische Referenzen
+
 - https://playwright.dev/python/docs/auth
 - https://playwright.dev/python/docs/api/class-browsertype#browser-type-launch-persistent-context
 - https://playwright.dev/python/docs/downloads
-- https://support.google.com/accounts/answer/7675428
 - https://learn.microsoft.com/en-us/entra/msal/python/getting-started/acquiring-tokens
 - https://pypi.org/project/msal-extensions/
 - https://learn.microsoft.com/en-us/graph/api/attachment-get?view=graph-rest-1.0

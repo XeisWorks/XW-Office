@@ -1,173 +1,273 @@
-# Verbindliche Implementierungs-Queue für Codex. Erst nach Tests abhaken.
-version: 1
+# Verbindliche Implementierungs-Queue. Status nur mit `evidence` auf done setzen.
+schema_version: 2
 plan_id: "xw-office-expense-invoice-collector-2026-11"
 state: "planned"
 repo: "XeisWorks/XW-Office"
 target_branch: "main"
 entry_point: "Finanzen > Ausgabenprüfung"
-strategy: "desktop_first_email_api_then_playwright"
+strategy: "ports_and_adapters_manual_vertical_slice_then_mail_api_browser"
 max_required_extra_subscriptions: 0
+
+mvp_scope:
+  required:
+    - "provider-independent domain, registry and local connections"
+    - "secure LOCALAPPDATA state and secret references"
+    - "PDF pipeline, journal and OneDrive local-sync sink"
+    - "manual import vertical slice"
+    - "provider-independent dialog and bounded orchestrator"
+    - "Graph mail attachment connector with secure UI auth"
+    - "Mollie invoices.read connector with mocks"
+    - "Playwright engine with local fake portal, login/resume and download"
+  explicitly_not_required_for_mvp:
+    - "all listed live providers automated"
+    - "Graph Drive upload"
+    - "multi-PC concurrent collection"
+    - "scheduler or Windows service"
+    - "automatic sevDesk booking"
+
 human_intervention_only:
   - "initial_portal_login_or_2fa"
   - "onedrive_folder_selection"
   - "microsoft_entra_consent"
-  - "enter_new_read_only_api_credential_in_local_secure_ui"
+  - "enter_minimal_read_credential_in_local_secure_ui"
+
 coding_rules:
-  - "Read AGENTS.md and existing code before changing any implementation."
-  - "Preserve all existing Ausgabenprüfung, sevDesk, XW-Flow and Graph-Mail features."
-  - "Do not assume live invoice portals, URLs or DOM locators without testing."
-  - "Never claim a manual-only provider is automated."
-  - "Do not request passwords, OTP or recovery codes in chat."
-  - "Add no Railway deployment requirement for local Playwright MVP."
-  - "Commit/push tested progress per AGENTS.md; protect clean working tree."
+  - "Read AGENTS.md and current code/tests before each implementation phase."
+  - "Preserve existing expense review, sevDesk, XW-Flow, Graph mail and Product Hub behavior."
+  - "Keep UI, orchestrator, pipeline and sinks free of provider-id conditionals."
+  - "Connectors return candidates/artifacts and never write to the archive sink."
+  - "Registry contains no secrets and no executable Python import paths."
+  - "Do not assume live URLs, DOM locators, sender rules or APIs without tests."
+  - "Do not request passwords, OTPs, recovery codes or API secrets in chat."
+  - "Never mark an unverified route as automated or cloud-verified."
+  - "Commit and push tested progress according to AGENTS.md; never force-push main."
+
+status_policy:
+  allowed: ["todo", "in_progress", "blocked_external", "done"]
+  done_requires:
+    - "all acceptance items satisfied"
+    - "tests listed in evidence"
+    - "no unresolved security finding in task scope"
+  blocked_external_requires:
+    - "exact missing user/external action documented without secret value"
+
 tasks:
   - id: "T00"
-    title: "Ist-Zustand prüfen und Tests erfassen"
+    title: "Ist-Zustand und Baseline festhalten"
     priority: 0
     status: "todo"
+    depends_on: []
+    evidence: []
     deliverables:
-      - "Short architecture diff to current repo and affected files"
-      - "Baseline unit/Qt tests, no feature changes yet"
+      - "Architecture diff against current repo and affected-file map"
+      - "Baseline results for expense, worker, secret and Graph mail tests"
+      - "Document current repo-local state/log paths and Graph cache/scopes"
     acceptance:
-      - "Existing two tenants and expense logic understood"
-      - "Identify all current Graph token cache and SecretService behavior"
+      - "Both tenants and current expense-review lifecycle are covered"
+      - "Existing Graph token cache and SecretService behavior are evidenced"
+      - "No feature code changed before baseline is captured"
+
   - id: "T01"
-    title: "Sensitive Daten sicher isolieren"
+    title: "Domain, Ports und Registry-Schema"
     priority: 1
+    status: "todo"
     depends_on: ["T00"]
-    status: "todo"
+    evidence: []
     deliverables:
-      - "Add .gitignore rules for .env.*, Playwright .auth and invoice_collection profiles/tmp"
-      - "OS-keyring abstraction, separate credential names by provider/account"
-      - "Protected LOCALAPPDATA session directory; no OneDrive/Git session sync"
-      - "MSAL encrypted token cache for new Graph collector, no CLI-only device flow"
-      - "Credential and cookie redaction in log/error handling"
+      - "Immutable domain types and separate configuration/auth/run/document/sync states"
+      - "Connector, DocumentSink, SecretStore, Journal, Clock and CancelToken protocols"
+      - "Provider catalog v2 parser/validator and explicit connector factory registry"
+      - "ProviderConnection model separated from provider manifests"
     acceptance:
-      - "No secrets, real PDFs, OAuth token caches or browser profiles tracked by Git"
-      - "Existing SecretService and GraphMailClient tests still pass"
-      - "Credential store and log redaction tested"
+      - "Unknown schema/tenant/document type fails with actionable configuration error"
+      - "A planned route may remain unavailable; enabling it requires a registered connector factory"
+      - "Catalog accepts no secret values or executable import paths"
+      - "No provider-specific branch exists in UI/orchestrator/pipeline/sink"
+      - "Registry YAML parses and all provider/route IDs are unique"
+
   - id: "T02"
-    title: "Datentypen, Registry, Inkrementalstatus"
+    title: "Lokale Sicherheits- und Zustandsbasis"
     priority: 2
+    status: "todo"
     depends_on: ["T01"]
-    status: "todo"
+    evidence: []
     deliverables:
-      - "Typed InvoiceDocument, ProviderCapabilities, AuthStatus, FetchResult"
-      - "Provider registry schema validation, account alias and tenant mapping"
-      - "Local metadata journal with last-run, hash, external invoice ID and retries"
+      - "Tested LOCALAPPDATA path helper for profiles, auth, journal, tmp and quarantine"
+      - "Gitignore hardening as defense in depth"
+      - "SecretRef plus Windows keyring adapter and redaction-safe errors"
+      - "Versioned local SQLite journal with migrations and crash-safe transactions"
+      - "Account/profile lock abstraction and Windows user ACL handling"
     acceptance:
-      - "Registry contains no credentials"
-      - "Provider activation explicit, defaults disabled"
-      - "Separate xw and wuedara paths and states"
+      - "No new state, profile, token cache or PDF is created below repo/state"
+      - "Database contains secret references only"
+      - "Logs and repr never expose test tokens, cookies, signed URLs or full user paths"
+      - "Existing SecretService tests remain green"
+
   - id: "T03"
-    title: "OneDrive-Zielordner + sichere PDF-Pipeline"
+    title: "PDF-Pipeline, OneDrive-Sink und manueller vertikaler Slice"
     priority: 3
+    status: "todo"
     depends_on: ["T02"]
-    status: "todo"
+    evidence: []
     deliverables:
-      - "QFileDialog chooses OneDrive for Business sync destination"
-      - "PDF signature + parser + size + SHA256 verification"
-      - "Sanitized path, deterministic filename, atomic save, no overwrite"
-      - "Idempotence journal and retry queue"
-      - "LOCAL_SAVED/SYNC_PENDING vs CLOUD_VERIFIED statuses"
+      - "PDF size/signature/MIME/parser/encryption validation"
+      - "SHA-256, deterministic safe naming and tenant-scoped deduplication"
+      - "OneDriveLocalSink with preflight, no-clobber publish and truthful sync state"
+      - "ManualImportConnector through the same pipeline and journal"
+      - "Conflict/quarantine handling and workspace cleanup/recovery"
     acceptance:
-      - "Repeated fetch produces no duplicate files"
-      - "Offline/unwritable/missing path emits actionable, lossless status"
-      - "Cloud verified never emitted solely because file exists locally"
+      - "Repeated import creates no duplicate"
+      - "Same external ID with different hash becomes CONTENT_CONFLICT"
+      - "Same hash in another tenant is not silently suppressed"
+      - "HTML/empty/corrupt/encrypted/oversized PDF cases are tested"
+      - "Local save never emits CLOUD_VERIFIED"
+      - "Concurrent identical target and divergent target cases are tested"
+
   - id: "T04"
-    title: "Dialog einbauen, Hintergrundworker und einfache Ersteinrichtung"
+    title: "Provider-unabhängiger Dialog und Orchestrator"
     priority: 4
-    depends_on: ["T02", "T03"]
     status: "todo"
+    depends_on: ["T03"]
+    evidence: []
     deliverables:
-      - "Extra text button in existing ExpenseReviewView toolbar"
-      - "InvoiceCollectorDialog with one-click fetch, folder selector, period and provider status"
-      - "Per-provider login/retry/manual import actions"
-      - "QThread/BackgroundWorker progress and cooperative cancellation"
+      - "Additional text button in ExpenseReviewView"
+      - "InvoiceCollectorDialog generated from manifests, connections, capabilities and states"
+      - "Connection setup for provider, tenant, account alias, routes and target"
+      - "Bounded run queue, per-account lock, progress, partial result and cooperative cancel"
+      - "Capability-driven auth/import/open/retry actions"
     acceptance:
-      - "Existing expense refresh, filters, tenant tabs and settings unaffected"
-      - "UI never freezes on download or waiting for login"
-      - "One provider failure does not abort others"
+      - "Existing refresh, filters, tenant tabs, settings and supplier URLs remain unaffected"
+      - "One failed connection does not abort others"
+      - "View destruction and cancellation do not leak QThreads or apply stale results"
+      - "Adding a fixture provider requires no dialog/orchestrator code change"
+      - "Manual import works end-to-end from UI to sink"
+
   - id: "T05"
-    title: "Microsoft-Graph-E-Mail-PDF-Sammler"
+    title: "Microsoft-Graph-Mailroute"
     priority: 5
-    depends_on: ["T01", "T03", "T04"]
     status: "todo"
+    depends_on: ["T02", "T03", "T04"]
+    parallelizable_with: ["T06", "T07"]
+    evidence: []
     deliverables:
-      - "Delegated MSAL sign-in visible in UI, Mail.Read only where sufficient"
-      - "Read attachments by Graph, pagination, sender and MIME checks"
-      - "Receipt vs invoice types and account/tenant rules"
+      - "UI-visible delegated sign-in with minimal required mail scopes"
+      - "DPAPI-protected MSAL cache outside repo and migration/reauth decision"
+      - "Generic Graph attachment discovery/download with pagination and checkpoints"
+      - "Validated provider matcher config for sender domain, alias and attachment"
     acceptance:
-      - "Fake mails with PDF and non-PDF attachments tested"
-      - "Plain notification email without real PDF not reported as invoice"
-      - "No console-only hidden 2FA dialog; cached MSAL tokens secure"
+      - "Mock messages cover pagination, shared-mailbox option, PDF and non-PDF attachment"
+      - "Notification mail without PDF does not become a document"
+      - "Mail links are not followed"
+      - "Checkpoint advances only after successful pipeline processing"
+      - "Existing GraphMailClient behavior/tests remain compatible"
+
   - id: "T06"
-    title: "Mollie nur-lesende Gebührenrechnungs-API"
+    title: "Mollie-Invoices-API-Route"
     priority: 6
-    depends_on: ["T01", "T03", "T04"]
     status: "todo"
+    depends_on: ["T02", "T03", "T04"]
+    parallelizable_with: ["T05", "T07"]
+    evidence: []
     deliverables:
-      - "Dedicated advanced access token with invoices.read, never payment token assumption"
-      - "List invoices pagination, get invoice, follow actual PDF URL"
-      - "429 handling, timeouts, bounded retries, PDF validation"
-      - "Prefer email-PDF if properly configured and tested"
+      - "Dedicated SecretRef for minimal invoices.read credential"
+      - "Paginated list/get/download connector with host/redirect policy"
+      - "Timeout, Retry-After, bounded retry and typed/redacted errors"
+      - "Fee-document metadata distinct from customer invoices"
     acceptance:
-      - "Mock API handles multiple pages, invalid token, duplicate and real PDF bytes"
-      - "Fees documents never conflated with customer invoices"
+      - "Mock API covers multiple pages, 401, 403, 429, timeout, redirect and invalid PDF"
+      - "Connector never receives a sink or archive path"
+      - "Duplicate via API and mail merges provenance without second file"
+      - "No payment-capable token is assumed or requested"
+
   - id: "T07"
-    title: "Playwright Engine und Login-Nachholen"
+    title: "Playwright-Engine und Fake-Portal"
     priority: 7
-    depends_on: ["T01", "T03", "T04"]
     status: "todo"
+    depends_on: ["T02", "T03", "T04"]
+    parallelizable_with: ["T05", "T06"]
+    evidence: []
     deliverables:
-      - "Desktop Playwright dependency only; install Chromium via documented command"
-      - "UserDataDir per account, single-use browser lock"
-      - "Headful 'Anmelden/Anmeldung erneuern', explicit 2FA, protected-page probe"
-      - "expect_download/save_as, pause/resume one provider, manual fallback"
-      - "One mock portal integration end-to-end before real adapters"
+      - "Optional Playwright dependency and documented Chromium installation"
+      - "Persistent profile per connection plus exclusive process lock"
+      - "Headful login/renew, protected-page probe and route-specific resume token"
+      - "expect_download/save_as implementation"
+      - "Local fake portal for expired session, login, 2FA wait simulation and PDF download"
     acceptance:
-      - "Expired session displays NEEDS_LOGIN and does not request password in app"
-      - "Manual login resumes only waiting adapter"
-      - "No CAPTCHA bypass, stealth browser, or hidden unsupported web APIs"
+      - "Core/manual/mail/API modules import without Playwright installed"
+      - "Expired session yields NEEDS_LOGIN without password prompt"
+      - "Successful login resumes only the waiting connection/route"
+      - "Cancellation, timeout and provider DOM change produce typed results"
+      - "No stealth, CAPTCHA bypass, private API or cookie-header reconstruction"
+
   - id: "T08"
-    title: "Reale Portale konservativ aktivieren"
+    title: "Erste reale Routen kontrolliert verifizieren"
     priority: 8
+    status: "todo"
     depends_on: ["T05", "T06", "T07"]
-    status: "todo"
+    evidence: []
     deliverables:
-      - "BrowserStack/Mollie/Anthropic/Google Cloud email configuration verification"
-      - "Stripe own fee invoice, Railway, OpenAI ChatGPT and API pilot adapters"
-      - "Perplexity, GitHub, Microsoft 365, Google AI and YouTube explicitly reviewed"
-      - "Amazon Business API entitlement and Marketplace completeness assessed"
+      - "Verification report per tested route and account type"
+      - "At least one real mail route assessed"
+      - "Mollie invoices.read assessed if entitlement/token is available"
+      - "At most one real browser pilot before broader rollout"
+      - "Unverified routes remain planned/manual"
     acceptance:
-      - "Each provider marked verified only after real PDF + repeated fetch"
-      - "Provider that blocks automation remains MANUAL_ACTION"
-      - "AdSense/YouTube income statements never listed as expense invoices"
-      - "Keep existing invoice-fetcher until Amazon parity proven"
+      - "Each verified route has real document type, download and idempotent rerun evidence"
+      - "Auth expiry/invalid credential behavior is evidenced"
+      - "Blocked automation becomes POLICY_BLOCKED or manual, not a bypass attempt"
+      - "No personal evidence, PDF or credential is committed"
+    external_blockers_allowed:
+      - "missing real invoice in selected period"
+      - "missing API entitlement"
+      - "user login, 2FA or Entra consent not yet completed"
+
   - id: "T09"
-    title: "Security-/Regressionsreview und Abschluss"
+    title: "MVP-Sicherheits-, Regressions- und Releaseprüfung"
     priority: 9
-    depends_on: ["T08"]
     status: "todo"
+    depends_on: ["T05", "T06", "T07"]
+    evidence: []
     deliverables:
-      - "pytest unit, UI, integration and local fake browser server"
-      - "ruff and git diff --check, secrets scan"
-      - "Beginner setup/checklist and provider coverage/status report"
-      - "Commit and push integrated tested changes to origin/main"
+      - "Unit, contract, UI and integration test report"
+      - "Ruff, git diff --check, YAML validation and secret scan"
+      - "Beginner setup, provider coverage matrix and known limitations"
+      - "Clean main commit pushed to origin/main"
     acceptance:
-      - "No secrets in Git/CI artifacts or logs"
-      - "Partial failures, missing OneDrive, offline, invalid PDFs, duplicates covered"
-      - "All unverified live portals clearly disclosed"
-      - "No main-branch force push, clean tree at finish"
+      - "MVP required scope is complete or an exact blocker is documented"
+      - "Existing expense review regression is green for both tenants"
+      - "No secrets, PDFs, profiles, OAuth caches or sensitive logs in Git/artifacts"
+      - "Partial failures, offline/unwritable target, invalid PDF and duplicates are covered"
+      - "All live-unverified routes are still planned/experimental, never verified"
+      - "Working tree is clean and main was not force-pushed"
+
+  - id: "T10"
+    title: "Weitere Provider in unabhängigen Verifikationswellen"
+    priority: 10
+    status: "todo"
+    depends_on: ["T09"]
+    evidence: []
+    deliverables:
+      - "One small provider/route batch per change set"
+      - "Coverage report for BrowserStack, Anthropic, Google Cloud, Stripe, Railway, GitHub, Perplexity, OpenAI, Google AI, Microsoft 365 and Amazon Business"
+      - "Income-evidence review for AdSense/YouTube isolated from expenses"
+      - "Amazon invoice-fetcher parity report before any cancellation"
+    acceptance:
+      - "Shared ports/contract tests are reused for every new connector"
+      - "UI/orchestrator/pipeline/sink stay provider-independent"
+      - "Every maturity change has route-specific evidence"
+      - "Provider batches can ship independently; one blocked portal does not block others"
+
 quality_gates:
   before_live_login:
-    - "T01 security checks passed"
-    - "Explicit user confirmation for individual portal authorization"
-  before_verifying_provider:
-    - "Real invoice document type confirmed"
-    - "Download and idempotent rerun confirmed"
+    - "T02 acceptance passed"
+    - "Host allowlist and redaction tests passed for the route"
+    - "Explicit user action requested only in the local UI"
+  before_route_verified:
+    - "All registry verification_requirements evidenced"
     - "No unauthorized login automation"
+    - "Document type and tenant mapping manually confirmed"
   release:
-    - "All automated acceptance tests green or blockers documented"
-    - "Existing expense review regression green"
-    - "No claims of cloud upload without remote proof"
+    - "Automated acceptance tests green or exact blockers documented"
+    - "No cloud-success claim without remote proof"
+    - "No provider-specific branch outside connector/manifest"
+    - "Repository rules from AGENTS.md satisfied"
