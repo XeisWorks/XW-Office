@@ -36,6 +36,7 @@ class PlaywrightPersistentSession:
         discover_callback: PageCallback,
         download_callback: Callable[[Any, DocumentCandidate, Path], None],
         timeout_ms: int = 30_000,
+        playwright_factory: Callable[[], Any] | None = None,
     ) -> None:
         assert_local_path(profile_dir)
         self.profile_dir = profile_dir
@@ -46,6 +47,7 @@ class PlaywrightPersistentSession:
         self.discover_callback = discover_callback
         self.download_callback = download_callback
         self.timeout_ms = timeout_ms
+        self._playwright_factory = playwright_factory
         self._playwright: Any = None
         self._context: Any = None
         self._profile_lock: Any = None
@@ -66,15 +68,18 @@ class PlaywrightPersistentSession:
                     InvoiceErrorCode.POLICY_BLOCKED,
                     "Browserprofil wird bereits von einem anderen Abruf verwendet",
                 ) from exc
-            try:
-                from playwright.sync_api import sync_playwright
-            except ImportError as exc:
-                self.close()
-                raise InvoiceCollectionError(
-                    InvoiceErrorCode.CONFIGURATION_ERROR,
-                    "Playwright ist für diese Browserroute nicht installiert",
-                ) from exc
-            self._playwright = sync_playwright().start()
+            if self._playwright_factory is None:
+                try:
+                    from playwright.sync_api import sync_playwright
+                except ImportError as exc:
+                    self.close()
+                    raise InvoiceCollectionError(
+                        InvoiceErrorCode.CONFIGURATION_ERROR,
+                        "Playwright ist für diese Browserroute nicht installiert",
+                    ) from exc
+                self._playwright = sync_playwright().start()
+            else:
+                self._playwright = self._playwright_factory().start()
             try:
                 self._context = self._playwright.chromium.launch_persistent_context(
                     user_data_dir=str(self.profile_dir),

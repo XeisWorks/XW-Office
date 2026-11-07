@@ -265,3 +265,52 @@ def test_playwright_session_rejects_unallowlisted_login_host(monkeypatch, tmp_pa
     with pytest.raises(InvoiceCollectionError) as error:
         session.probe()
     assert error.value.code == InvoiceErrorCode.POLICY_BLOCKED
+
+
+def test_playwright_session_uses_visible_fake_runtime_and_releases_profile_lock(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    profile = tmp_path / "local" / "XeisWorks" / "XW-Office" / "invoice_collection" / "profiles" / "fixture"
+    calls: list[dict[str, object]] = []
+
+    class FakePage:
+        def goto(self, url, **kwargs):
+            calls.append({"url": url, **kwargs})
+
+    class FakeContext:
+        def __init__(self):
+            self.pages = [FakePage()]
+
+        def close(self):
+            calls.append({"closed": True})
+
+    class FakeChromium:
+        def launch_persistent_context(self, **kwargs):
+            calls.append(kwargs)
+            return FakeContext()
+
+    class FakeRuntime:
+        chromium = FakeChromium()
+
+        def start(self):
+            return self
+
+        def stop(self):
+            calls.append({"stopped": True})
+
+    session = PlaywrightPersistentSession(
+        profile_dir=profile,
+        login_url="https://portal.example.test/login",
+        probe_url="https://portal.example.test/invoices",
+        allowed_hosts=frozenset({"portal.example.test"}),
+        probe_callback=lambda page: True,
+        discover_callback=lambda page: [],
+        download_callback=lambda page, candidate, destination: None,
+        playwright_factory=lambda: FakeRuntime(),
+    )
+    assert session.probe() is True
+    assert calls[0]["headless"] is False
+    assert calls[0]["user_data_dir"] == str(profile)
+    session.close()
+    assert not profile.with_name("fixture.lock").exists()
