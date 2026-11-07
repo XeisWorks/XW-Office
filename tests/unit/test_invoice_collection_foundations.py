@@ -22,6 +22,7 @@ from xw_office.services.invoice_collection.errors import (
     InvoiceCollectionError,
     InvoiceErrorCode,
 )
+from xw_office.services.invoice_collection.factories import ConnectorFactoryRegistry
 from xw_office.services.invoice_collection.journal import InvoiceJournal
 from xw_office.services.invoice_collection.pipeline import DocumentPipeline
 from xw_office.services.invoice_collection.pdf_validation import inspect_pdf
@@ -174,3 +175,16 @@ def test_connection_repository_round_trips_metadata_without_secret_values(tmp_pa
     repository.save(value)
     loaded = repository.list_enabled()
     assert loaded == [value]
+
+
+def test_connector_factory_registry_never_loads_yaml_import_paths() -> None:
+    registry = ConnectorFactoryRegistry()
+    registry.register("fixture", lambda connection, settings: object())  # type: ignore[arg-type]
+    assert registry.keys() == ("fixture",)
+    with pytest.raises(ValueError):
+        registry.register("package.module", lambda connection, settings: object())  # type: ignore[arg-type]
+    with pytest.raises(InvoiceCollectionError) as error:
+        registry.create("unknown", ProviderConnection.create(
+            provider_id="fixture", tenant_id=TenantId.XW, account_alias="a"
+        ), object())  # type: ignore[arg-type]
+    assert error.value.code == InvoiceErrorCode.CONFIGURATION_ERROR

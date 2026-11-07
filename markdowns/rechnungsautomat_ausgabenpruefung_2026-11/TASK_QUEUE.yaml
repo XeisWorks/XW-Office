@@ -70,9 +70,14 @@ tasks:
   - id: "T01"
     title: "Domain, Ports und Registry-Schema"
     priority: 1
-    status: "todo"
+    status: "in_progress"
     depends_on: ["T00"]
-    evidence: []
+    evidence:
+      - "src/xw_office/services/invoice_collection/domain.py"
+      - "src/xw_office/services/invoice_collection/ports.py"
+      - "src/xw_office/services/invoice_collection/registry.py"
+      - "src/xw_office/services/invoice_collection/factories.py"
+      - "tests/unit/test_invoice_collection_foundations.py"
     deliverables:
       - "Immutable domain types and separate configuration/auth/run/document/sync states"
       - "Connector, DocumentSink, SecretStore, Journal, Clock and CancelToken protocols"
@@ -88,9 +93,14 @@ tasks:
   - id: "T02"
     title: "Lokale Sicherheits- und Zustandsbasis"
     priority: 2
-    status: "todo"
+    status: "in_progress"
     depends_on: ["T01"]
-    evidence: []
+    evidence:
+      - "src/xw_office/core/app_paths.py::local_app_data_dir"
+      - "src/xw_office/services/invoice_collection/security.py"
+      - "src/xw_office/services/invoice_collection/journal.py"
+      - ".gitignore"
+      - "tests/unit/test_invoice_collection_foundations.py"
     deliverables:
       - "Tested LOCALAPPDATA path helper for profiles, auth, journal, tmp and quarantine"
       - "Gitignore hardening as defense in depth"
@@ -106,9 +116,14 @@ tasks:
   - id: "T03"
     title: "PDF-Pipeline, OneDrive-Sink und manueller vertikaler Slice"
     priority: 3
-    status: "todo"
+    status: "in_progress"
     depends_on: ["T02"]
-    evidence: []
+    evidence:
+      - "src/xw_office/services/invoice_collection/pdf_validation.py"
+      - "src/xw_office/services/invoice_collection/pipeline.py"
+      - "src/xw_office/services/invoice_collection/sinks/onedrive_local.py"
+      - "src/xw_office/services/invoice_collection/connectors/manual_import.py"
+      - "tests/unit/test_invoice_collection_foundations.py"
     deliverables:
       - "PDF size/signature/MIME/parser/encryption validation"
       - "SHA-256, deterministic safe naming and tenant-scoped deduplication"
@@ -126,9 +141,13 @@ tasks:
   - id: "T04"
     title: "Provider-unabhängiger Dialog und Orchestrator"
     priority: 4
-    status: "todo"
+    status: "in_progress"
     depends_on: ["T03"]
-    evidence: []
+    evidence:
+      - "src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py"
+      - "src/xw_office/services/invoice_collection/orchestrator.py"
+      - "tests/ui/test_invoice_collector_dialog.py"
+      - "tests/ui/test_expense_review_view.py"
     deliverables:
       - "Additional text button in ExpenseReviewView"
       - "InvoiceCollectorDialog generated from manifests, connections, capabilities and states"
@@ -145,10 +164,14 @@ tasks:
   - id: "T05"
     title: "Microsoft-Graph-Mailroute"
     priority: 5
-    status: "todo"
+    status: "in_progress"
     depends_on: ["T02", "T03", "T04"]
     parallelizable_with: ["T06", "T07"]
-    evidence: []
+    evidence:
+      - "src/xw_office/services/invoice_collection/auth/graph.py"
+      - "src/xw_office/services/invoice_collection/connectors/graph_reader.py"
+      - "src/xw_office/services/invoice_collection/connectors/graph_mail.py"
+      - "tests/unit/test_invoice_collection_connectors.py"
     deliverables:
       - "UI-visible delegated sign-in with minimal required mail scopes"
       - "DPAPI-protected MSAL cache outside repo and migration/reauth decision"
@@ -164,10 +187,12 @@ tasks:
   - id: "T06"
     title: "Mollie-Invoices-API-Route"
     priority: 6
-    status: "todo"
+    status: "in_progress"
     depends_on: ["T02", "T03", "T04"]
     parallelizable_with: ["T05", "T07"]
-    evidence: []
+    evidence:
+      - "src/xw_office/services/invoice_collection/connectors/mollie_invoices.py"
+      - "tests/unit/test_invoice_collection_connectors.py"
     deliverables:
       - "Dedicated SecretRef for minimal invoices.read credential"
       - "Paginated list/get/download connector with host/redirect policy"
@@ -182,10 +207,13 @@ tasks:
   - id: "T07"
     title: "Playwright-Engine und Fake-Portal"
     priority: 7
-    status: "todo"
+    status: "in_progress"
     depends_on: ["T02", "T03", "T04"]
     parallelizable_with: ["T05", "T06"]
-    evidence: []
+    evidence:
+      - "src/xw_office/services/invoice_collection/playwright_session.py"
+      - "src/xw_office/services/invoice_collection/connectors/browser.py"
+      - "tests/unit/test_invoice_collection_connectors.py"
     deliverables:
       - "Optional Playwright dependency and documented Chromium installation"
       - "Persistent profile per connection plus exclusive process lock"
