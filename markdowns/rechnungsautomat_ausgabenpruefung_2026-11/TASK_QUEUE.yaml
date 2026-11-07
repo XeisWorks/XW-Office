@@ -155,6 +155,7 @@ tasks:
       - "src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py"
       - "src/xw_office/services/invoice_collection/orchestrator.py"
       - "tests/ui/test_invoice_collector_dialog.py"
+      - "tests/unit/test_invoice_collection_foundations.py::test_orchestrator_honors_cooperative_cancellation_before_start"
       - "tests/ui/test_expense_review_view.py"
     deliverables:
       - "Additional text button in ExpenseReviewView"

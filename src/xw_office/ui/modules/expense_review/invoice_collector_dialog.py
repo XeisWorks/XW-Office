@@ -56,6 +56,7 @@ class InvoiceCollectorDialog(QDialog):
         self._connection_repository = connection_repository or ConnectionRepository()
         self._collection_service = collection_service
         self._fetch_worker: BackgroundWorker | None = None
+        self._fetch_generation = 0
         self._folder = QLineEdit()
         self._folder.setReadOnly(True)
         self._folder.setAccessibleName("OneDrive-Zielordner")
@@ -136,6 +137,10 @@ class InvoiceCollectorDialog(QDialog):
         self._fetch_button = QPushButton("Alle aktiven Verbindungen abrufen")
         self._fetch_button.clicked.connect(self._fetch_active)
         actions.addWidget(self._fetch_button)
+        self._cancel_button = QPushButton("Abruf abbrechen")
+        self._cancel_button.setEnabled(False)
+        self._cancel_button.clicked.connect(self._cancel_fetch)
+        actions.addWidget(self._cancel_button)
         save = QPushButton("Verbindung speichern")
         save.clicked.connect(self._save_connection)
         actions.addWidget(save)
@@ -181,16 +186,38 @@ class InvoiceCollectorDialog(QDialog):
             )
         if self._fetch_worker is not None and self._fetch_worker.isRunning():
             return
+        self._fetch_generation += 1
+        generation = self._fetch_generation
         self._fetch_button.setEnabled(False)
+        self._cancel_button.setEnabled(True)
         self._status.setText(f"{len(connections)} aktive Verbindung(en) werden abgerufen …")
-        worker = BackgroundWorker(service.collect_active)
+        # The closure is evaluated only after the worker has started, so the
+        # worker itself can serve as the cooperative CancelToken.
+        worker: BackgroundWorker
+        worker = BackgroundWorker(lambda: service.collect_active(cancel=worker))
         self._fetch_worker = worker
-        worker.signals.result.connect(self._on_collection_finished)
-        worker.signals.error.connect(self._on_collection_error)
-        worker.signals.finished.connect(lambda: self._fetch_button.setEnabled(True))
+        worker.signals.result.connect(
+            lambda result, token=generation: self._on_collection_finished(token, result)
+        )
+        worker.signals.error.connect(
+            lambda error, token=generation: self._on_collection_error(token, error)
+        )
+        worker.signals.finished.connect(
+            lambda token=generation, current=worker: self._on_fetch_finished(token, current)
+        )
         worker.start()
 
-    def _on_collection_finished(self, result: object) -> None:
+    def _cancel_fetch(self) -> None:
+        worker = self._fetch_worker
+        if worker is not None and worker.isRunning():
+            self._fetch_generation += 1
+            worker.cancel()
+            self._status.setText("Abruf wird abgebrochen â€¦")
+            self._cancel_button.setEnabled(False)
+
+    def _on_collection_finished(self, generation: int, result: object) -> None:
+        if generation != self._fetch_generation:
+            return
         if not isinstance(result, CollectionRun):
             self._status.setText("Abruf lieferte ein ungültiges Ergebnis.")
             return
@@ -200,8 +227,24 @@ class InvoiceCollectorDialog(QDialog):
             f"{result.summary.existing_count} bereits vorhanden, {issue_count} Route(n) offen."
         )
 
-    def _on_collection_error(self, error: Exception) -> None:
+    def _on_collection_error(self, generation: int, error: Exception) -> None:
+        if generation != self._fetch_generation:
+            return
         self._status.setText(f"Abruf fehlgeschlagen: {error}")
+
+    def _on_fetch_finished(self, generation: int, worker: BackgroundWorker) -> None:
+        if self._fetch_worker is worker:
+            self._fetch_worker = None
+        if generation != self._fetch_generation:
+            return
+        self._fetch_button.setEnabled(True)
+        self._cancel_button.setEnabled(False)
+        if worker.cancelled:
+            self._status.setText("Abruf abgebrochen; bereits gespeicherte Dokumente bleiben erhalten.")
+
+    def closeEvent(self, event: object) -> None:
+        self._cancel_fetch()
+        super().closeEvent(event)  # type: ignore[arg-type]
 
     def _save_connection(self) -> None:
         provider_id = str(self._provider.currentData() or "").strip()

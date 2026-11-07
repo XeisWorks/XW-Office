@@ -12,11 +12,14 @@ from xw_office.services.invoice_collection.connectors.manual_import import Manua
 from xw_office.services.invoice_collection.auth.secrets import KeyringSecretStore
 from xw_office.services.invoice_collection.connections import ConnectionRepository
 from xw_office.services.invoice_collection.domain import (
+    AuthStatus,
+    ConfigurationStatus,
     DocumentCandidate,
     DocumentType,
     DownloadedArtifact,
     ProviderConnection,
     RouteSettings,
+    RunStatus,
     TenantId,
 )
 from xw_office.services.invoice_collection.errors import (
@@ -109,6 +112,12 @@ providers:
     with pytest.raises(InvoiceCollectionError) as tenant_error:
         ProviderCatalog.from_yaml(tenant_catalog)
     assert tenant_error.value.code == InvoiceErrorCode.CONFIGURATION_ERROR
+
+
+def test_domain_exposes_independent_connection_auth_run_document_and_sync_states() -> None:
+    assert ConfigurationStatus.READY.value == "READY"
+    assert AuthStatus.NEEDS_LOGIN.value == "NEEDS_LOGIN"
+    assert RunStatus.WAITING_FOR_USER.value == "WAITING_FOR_USER"
 
 
 def test_redaction_never_returns_secret_value() -> None:
@@ -272,6 +281,24 @@ def test_orchestrator_limits_parallel_connector_workers(tmp_path: Path) -> None:
         pipeline, workspace_root=tmp_path, max_workers=2
     ).collect(connectors)
     assert summary.new_count == 2
+
+
+def test_orchestrator_honors_cooperative_cancellation_before_start(tmp_path: Path) -> None:
+    source = _pdf(tmp_path / "cancelled.pdf")
+    connection = ProviderConnection.create(
+        provider_id="fixture", tenant_id=TenantId.XW, account_alias="a"
+    )
+    connector = ManualImportConnector(connection=connection, files=[source])
+    sink_root = tmp_path / "onedrive"
+    sink_root.mkdir()
+    pipeline = DocumentPipeline(sink=OneDriveLocalSink(sink_root))
+
+    class Cancelled:
+        cancelled = True
+
+    summary = CollectionOrchestrator(pipeline).collect([connector], cancel=Cancelled())
+    assert summary.cancelled is True
+    assert summary.items == ()
 
 
 def test_connection_repository_round_trips_metadata_without_secret_values(tmp_path: Path) -> None:

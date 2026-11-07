@@ -1,6 +1,7 @@
 """Ports used to keep connectors, persistence and UI orchestration independent."""
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -15,6 +16,10 @@ from xw_office.services.invoice_collection.domain import (
 class CancelToken(Protocol):
     @property
     def cancelled(self) -> bool: ...
+
+
+class Clock(Protocol):
+    def now(self) -> datetime: ...
 
 
 class InvoiceConnector(Protocol):
