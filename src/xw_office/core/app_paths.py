@@ -61,14 +61,19 @@ def local_app_data_dir() -> Path:
     folder.  ``LOCALAPPDATA`` is the Windows source of truth; the non-Windows fallback keeps
     unit tests and development environments portable without changing the Windows layout.
     """
+    return local_app_data_root() / "XeisWorks" / "XW-Office"
+
+
+def local_app_data_root() -> Path:
+    """Return the machine-local Windows app-data root without an app subfolder."""
     configured = str(os.getenv("LOCALAPPDATA") or "").strip()
     if configured:
-        return Path(os.path.expandvars(os.path.expanduser(configured))) / "XeisWorks" / "XW-Office"
+        return Path(os.path.expandvars(os.path.expanduser(configured)))
     if sys.platform == "win32":
         profile = str(os.getenv("USERPROFILE") or "").strip()
         if profile:
-            return Path(profile) / "AppData" / "Local" / "XeisWorks" / "XW-Office"
-    return Path.home() / ".local" / "share" / "XeisWorks" / "XW-Office"
+            return Path(profile) / "AppData" / "Local"
+    return Path.home() / ".local" / "share"
 
 
 def invoice_collection_dir() -> Path:
@@ -89,9 +94,7 @@ def default_invoice_target_dir() -> Path:
 
 def chrome_user_data_dir() -> Path:
     """Return the current user's normal Google Chrome profile root."""
-    configured = str(os.getenv("LOCALAPPDATA") or "").strip()
-    root = Path(configured) if configured else local_app_data_dir().parent.parent.parent
-    return root / "Google" / "Chrome" / "User Data"
+    return local_app_data_root() / "Google" / "Chrome" / "User Data"
 
 
 def resources_dir() -> Path:

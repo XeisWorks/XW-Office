@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from xw_office.core.app_paths import invoice_collection_dir, local_app_data_dir
+from xw_office.core.app_paths import invoice_collection_dir, local_app_data_root
 
 
 def ensure_invoice_collection_dirs() -> dict[str, Path]:
@@ -39,7 +39,7 @@ def redact_sensitive_text(value: str) -> str:
 def assert_local_path(path: Path) -> None:
     """Reject repository or OneDrive paths for machine-local sensitive state."""
     resolved = path.expanduser().resolve(strict=False)
-    local_root = local_app_data_dir().resolve(strict=False)
+    local_root = local_app_data_root().resolve(strict=False)
     try:
         resolved.relative_to(local_root)
     except ValueError as exc:
