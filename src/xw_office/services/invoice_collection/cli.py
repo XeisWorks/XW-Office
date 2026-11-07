@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import re
 import sys
+from urllib.parse import urlparse
 
 from xw_office.core.app_paths import default_invoice_target_dir, find_repo_root
 from xw_office.services.invoice_collection.domain import TenantId
@@ -93,6 +94,7 @@ def command_login(args: argparse.Namespace) -> int:
         login_url=login_url,
         probe_url=login_url,
         allowed_hosts=frozenset(route.allowed_hosts),
+        browser_mode=args.browser_mode,
         probe_callback=lambda page: True,
         discover_callback=lambda page: [],
         download_callback=lambda page, candidate, destination: None,
@@ -130,6 +132,7 @@ def command_login_all(args: argparse.Namespace) -> int:
             login_url=login_url,
             probe_url=login_url,
             allowed_hosts=frozenset(route.allowed_hosts),
+            browser_mode=args.browser_mode,
             probe_callback=lambda page: True,
             discover_callback=lambda page: [],
             download_callback=lambda page, candidate, destination: None,
@@ -169,6 +172,47 @@ def command_login_all(args: argparse.Namespace) -> int:
     return 0
 
 
+def _redacted_probe(page: object) -> bool:
+    current_url = str(page.url)  # type: ignore[attr-defined]
+    title = str(page.title())  # type: ignore[attr-defined]
+    links = page.locator("a").evaluate_all(  # type: ignore[attr-defined]
+        """els => els.map(e => ({text:(e.innerText || '').trim().toLowerCase(), href:e.href}))
+        .filter(x => /log in|sign in|dashboard|project|account|billing/.test(x.text + ' ' + x.href.toLowerCase()))
+        .slice(0, 20)"""
+    )
+    paths = sorted(
+        {
+            urlparse(str(item.get("href") or "")).path
+            for item in links
+            if isinstance(item, dict) and urlparse(str(item.get("href") or "")).path
+        }
+    )
+    print(f"host={urlparse(current_url).hostname} title={title[:120]!r} paths={paths}")
+    return True
+
+
+def command_probe(args: argparse.Namespace) -> int:
+    catalog = load_catalog()
+    provider, route = browser_route(catalog, args.provider)
+    profile = profile_path(provider.provider_id, args.tenant, args.account_alias)
+    host = route.allowed_hosts[0]
+    session = PlaywrightPersistentSession(
+        profile_dir=profile,
+        login_url=f"https://{host}/",
+        probe_url=f"https://{host}/",
+        allowed_hosts=frozenset(route.allowed_hosts),
+        browser_mode=args.browser_mode,
+        probe_callback=_redacted_probe,
+        discover_callback=lambda page: [],
+        download_callback=lambda page, candidate, destination: None,
+    )
+    try:
+        session.probe()
+    finally:
+        session.close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="xw-invoice-collection")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -180,12 +224,20 @@ def build_parser() -> argparse.ArgumentParser:
     login.add_argument("--provider", required=True)
     login.add_argument("--tenant", default=TenantId.XW.value, choices=[tenant.value for tenant in TenantId])
     login.add_argument("--account-alias", default="primary")
+    login.add_argument("--browser-mode", choices=["system_chrome_cdp", "playwright_chromium"], default="system_chrome_cdp")
     login.set_defaults(handler=command_login)
     login_all = subparsers.add_parser("login-all", help="open all visible logins sequentially")
     login_all.add_argument("--tenant", default=TenantId.XW.value, choices=[tenant.value for tenant in TenantId])
     login_all.add_argument("--account-alias", default="primary")
+    login_all.add_argument("--browser-mode", choices=["system_chrome_cdp", "playwright_chromium"], default="system_chrome_cdp")
     login_all.add_argument("--providers", nargs="*", help="optional provider order override")
     login_all.set_defaults(handler=command_login_all)
+    probe = subparsers.add_parser("probe", help="inspect one portal without sensitive page text")
+    probe.add_argument("--provider", required=True)
+    probe.add_argument("--tenant", default=TenantId.XW.value, choices=[tenant.value for tenant in TenantId])
+    probe.add_argument("--account-alias", default="primary")
+    probe.add_argument("--browser-mode", choices=["system_chrome_cdp", "playwright_chromium"], default="system_chrome_cdp")
+    probe.set_defaults(handler=command_probe)
     return parser
 
 
