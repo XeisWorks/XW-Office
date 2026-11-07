@@ -13,6 +13,7 @@ from xw_office.services.invoice_collection.connectors.graph_mail import (
 )
 from xw_office.services.invoice_collection.connectors.graph_reader import GraphMailAttachmentReader
 from xw_office.services.invoice_collection.connectors.mollie_invoices import (
+    MollieInvoicesConnector,
     MollieInvoicesHttpClient,
 )
 from xw_office.services.invoice_collection.domain import (
@@ -27,6 +28,8 @@ from xw_office.services.invoice_collection.auth.graph import (
     MsalInteractiveGraphTokenProvider,
 )
 from xw_office.services.invoice_collection.playwright_session import PlaywrightPersistentSession
+from xw_office.services.invoice_collection.pipeline import DocumentPipeline
+from xw_office.services.invoice_collection.sinks.onedrive_local import OneDriveLocalSink
 
 
 def _pdf(path: Path) -> None:
@@ -214,6 +217,25 @@ def test_mollie_http_client_retries_rate_limit_with_bounded_backoff() -> None:
     assert client.list_invoices() == []
     assert attempts == 2
     assert delays == [0.0]
+
+
+def test_mollie_connector_sends_fee_invoice_through_common_pipeline(tmp_path: Path) -> None:
+    class FakeApi:
+        def list_invoices(self):
+            return [{"id": "inv-1", "date": "2026-11-05", "currency": "EUR"}]
+
+        def download_invoice_pdf(self, invoice, destination: Path) -> None:
+            _pdf(destination)
+
+    connector = MollieInvoicesConnector(connection=_connection("mollie_fees"), api=FakeApi())
+    candidates = connector.discover()
+    assert candidates[0].document_type is DocumentType.FEE_INVOICE
+    artifact = connector.download(candidates[0], tmp_path / "workspace")
+    destination = tmp_path / "onedrive"
+    destination.mkdir()
+    result = DocumentPipeline(sink=OneDriveLocalSink(destination)).process(artifact)
+    assert result.receipt.outcome.value == "NEW"
+    assert result.receipt.target_path.exists()
 
 
 class _BrowserSession:
