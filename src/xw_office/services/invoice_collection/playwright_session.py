@@ -6,7 +6,6 @@ tested page callbacks; no selectors or private endpoints are invented here.
 from __future__ import annotations
 
 from pathlib import Path
-import os
 from threading import Lock
 from typing import Any, Callable
 from urllib.parse import urlparse

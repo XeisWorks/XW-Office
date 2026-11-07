@@ -6,7 +6,7 @@ import re
 import unicodedata
 from pathlib import Path
 
-from xw_office.services.invoice_collection.domain import DocumentCandidate, ValidatedDocument
+from xw_office.services.invoice_collection.domain import DocumentCandidate
 
 
 _INVALID = re.compile(r"[^A-Za-z0-9._-]+")

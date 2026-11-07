@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
 
 from xw_office.services.invoice_collection.domain import ProviderConnection, RouteSettings
 from xw_office.services.invoice_collection.errors import (
