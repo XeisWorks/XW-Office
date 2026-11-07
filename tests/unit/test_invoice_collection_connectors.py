@@ -308,6 +308,50 @@ def test_browser_connector_resumes_only_after_route_probe_succeeds(tmp_path: Pat
     assert connector.resume_after_login() == [candidate]
 
 
+def test_browser_connector_filters_candidates_to_requested_period(tmp_path: Path) -> None:
+    from datetime import date
+
+    connection = _connection("fixture_browser_period")
+    in_period = DocumentCandidate(
+        connection=connection,
+        route_key="billing_portal",
+        source_id="in-period",
+        external_id="in-period",
+        document_type=DocumentType.EXPENSE_INVOICE,
+        original_filename="november.pdf",
+        document_date=date(2026, 11, 1),
+    )
+    before_period = DocumentCandidate(
+        connection=connection,
+        route_key="billing_portal",
+        source_id="before-period",
+        external_id="before-period",
+        document_type=DocumentType.EXPENSE_INVOICE,
+        original_filename="october.pdf",
+        document_date=date(2026, 10, 31),
+    )
+
+    class Session:
+        def probe(self) -> bool:
+            return True
+
+        def open_login(self) -> None:
+            return None
+
+        def discover(self) -> list[DocumentCandidate]:
+            return [before_period, in_period]
+
+        def download(self, candidate, destination: Path) -> None:
+            _pdf(destination)
+
+    connector = BrowserInvoiceConnector(
+        connection=connection,
+        session=Session(),
+        start=date(2026, 11, 1),
+    )
+    assert [candidate.source_id for candidate in connector.discover()] == ["in-period"]
+
+
 def test_playwright_session_rejects_profile_outside_local_app_data(
     monkeypatch, tmp_path: Path
 ) -> None:
