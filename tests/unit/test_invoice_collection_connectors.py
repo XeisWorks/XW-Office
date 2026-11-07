@@ -405,3 +405,29 @@ def test_playwright_session_uses_visible_fake_runtime_and_releases_profile_lock(
     assert calls[0]["user_data_dir"] == str(profile)
     session.close()
     assert not profile.with_name("fixture.lock").exists()
+
+
+def test_playwright_download_helper_uses_expect_download_and_save_as(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class Download:
+        def save_as(self, destination: str) -> None:
+            calls.append(destination)
+
+    class DownloadInfo:
+        value = Download()
+
+    class Page:
+        def expect_download(self):
+            class Context:
+                def __enter__(self):
+                    return DownloadInfo()
+
+                def __exit__(self, exc_type, exc, traceback):
+                    return False
+
+            return Context()
+
+    destination = tmp_path / "invoice.pdf"
+    PlaywrightPersistentSession.save_download(Page(), lambda: calls.append("trigger"), destination)
+    assert calls == ["trigger", str(destination)]

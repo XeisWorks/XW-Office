@@ -114,6 +114,13 @@ class PlaywrightPersistentSession:
         page = context.pages[0] if context.pages else context.new_page()
         self.download_callback(page, candidate, destination)
 
+    @staticmethod
+    def save_download(page: Any, trigger: Callable[[], None], destination: Path) -> None:
+        """Persist a real Playwright download without reconstructing cookie headers."""
+        with page.expect_download() as download_info:
+            trigger()
+        download_info.value.save_as(str(destination))
+
     def close(self) -> None:
         context, playwright, profile_lock = self._context, self._playwright, self._profile_lock
         self._context = None
