@@ -252,6 +252,40 @@ def test_browser_connector_keeps_login_and_download_injected(tmp_path: Path) -> 
     assert connector.download(candidate, tmp_path / "workspace").path.exists()
 
 
+def test_browser_connector_resumes_only_after_route_probe_succeeds(tmp_path: Path) -> None:
+    candidate = DocumentCandidate(
+        connection=_connection("fixture_browser_resume"),
+        route_key="billing_portal",
+        source_id="portal-1",
+        external_id="portal-1",
+        document_type=DocumentType.EXPENSE_INVOICE,
+        original_filename="invoice.pdf",
+    )
+
+    class Session:
+        authenticated = False
+
+        def probe(self) -> bool:
+            return self.authenticated
+
+        def open_login(self) -> None:
+            self.authenticated = True
+
+        def discover(self) -> list[DocumentCandidate]:
+            return [candidate]
+
+        def download(self, candidate, destination: Path) -> None:
+            _pdf(destination)
+
+    session = Session()
+    connector = BrowserInvoiceConnector(connection=candidate.connection, session=session)
+    with pytest.raises(InvoiceCollectionError) as error:
+        connector.resume_after_login()
+    assert error.value.code == InvoiceErrorCode.AUTH_REQUIRED
+    connector.open_login()
+    assert connector.resume_after_login() == [candidate]
+
+
 def test_playwright_session_rejects_profile_outside_local_app_data(
     monkeypatch, tmp_path: Path
 ) -> None:

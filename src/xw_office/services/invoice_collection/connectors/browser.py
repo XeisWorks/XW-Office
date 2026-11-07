@@ -9,6 +9,10 @@ from xw_office.services.invoice_collection.domain import (
     DownloadedArtifact,
     ProviderConnection,
 )
+from xw_office.services.invoice_collection.errors import (
+    InvoiceCollectionError,
+    InvoiceErrorCode,
+)
 from xw_office.services.invoice_collection.ports import CancelToken
 
 
@@ -36,6 +40,15 @@ class BrowserInvoiceConnector:
 
     def open_login(self) -> None:
         self.session.open_login()
+
+    def resume_after_login(self) -> list[DocumentCandidate]:
+        """Probe the same account and resume only this route after visible login."""
+        if not self.probe():
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.AUTH_REQUIRED,
+                "Browserroute bleibt nach Anmeldung geschützt",
+            )
+        return self.discover()
 
     def discover(self) -> list[DocumentCandidate]:
         return list(self.session.discover())
