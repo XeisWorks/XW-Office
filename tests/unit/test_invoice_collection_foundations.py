@@ -8,6 +8,7 @@ import fitz
 import pytest
 
 from xw_office.services.invoice_collection.connectors.manual_import import ManualImportConnector
+from xw_office.services.invoice_collection.connections import ConnectionRepository
 from xw_office.services.invoice_collection.domain import (
     DocumentCandidate,
     DocumentType,
@@ -152,3 +153,15 @@ def test_orchestrator_continues_after_one_connector_failure(tmp_path: Path) -> N
     assert len(summary.items) == 2
     assert summary.items[0].error
     assert summary.items[1].outcome.value == "NEW"
+
+
+def test_connection_repository_round_trips_metadata_without_secret_values(tmp_path: Path) -> None:
+    repository = ConnectionRepository(tmp_path / "connections.sqlite3")
+    value = ProviderConnection.create(
+        provider_id="fixture",
+        tenant_id=TenantId.WUEDARA,
+        account_alias="billing",
+    )
+    repository.save(value)
+    loaded = repository.list_enabled()
+    assert loaded == [value]

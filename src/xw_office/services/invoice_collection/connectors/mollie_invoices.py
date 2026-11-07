@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from pathlib import Path
+import time
 from typing import Any, Iterable, Protocol
 from urllib.parse import urlparse
 
@@ -100,12 +101,16 @@ class MollieInvoicesHttpClient:
         *,
         client: httpx.Client | None = None,
         base_url: str = "https://api.mollie.com",
+        max_retries: int = 2,
+        sleeper: Any = time.sleep,
     ) -> None:
         if not access_token.strip():
             raise InvoiceCollectionError(InvoiceErrorCode.AUTH_REQUIRED, "Mollie-Token fehlt")
         self._token = access_token
         self._client = client or httpx.Client(timeout=httpx.Timeout(30.0))
         self._base_url = base_url.rstrip("/")
+        self._max_retries = max(0, int(max_retries))
+        self._sleeper = sleeper
 
     def list_invoices(self) -> list[dict[str, Any]]:
         invoices: list[dict[str, Any]] = []
@@ -142,20 +147,37 @@ class MollieInvoicesHttpClient:
         base_host = urlparse(self._base_url).netloc.casefold()
         if parsed.scheme != "https" or parsed.netloc.casefold() not in {"api.mollie.com", base_host}:
             raise InvoiceCollectionError(InvoiceErrorCode.POLICY_BLOCKED, "Mollie-URL ist nicht erlaubt")
-        response = self._client.request(
-            method,
-            url,
-            headers={"Authorization": f"Bearer {self._token}", "Accept": "application/json"},
-            **kwargs,
-        )
-        if response.status_code in {401, 403}:
-            raise InvoiceCollectionError(InvoiceErrorCode.AUTH_REQUIRED, "Mollie-Zugang wurde abgelehnt")
-        if response.status_code == 429:
-            raise InvoiceCollectionError(InvoiceErrorCode.RATE_LIMITED, "Mollie hat den Abruf begrenzt")
-        if response.status_code >= 500:
-            raise InvoiceCollectionError(InvoiceErrorCode.TRANSIENT_NETWORK, "Mollie ist vorübergehend nicht erreichbar")
-        response.raise_for_status()
-        return response
+        for attempt in range(self._max_retries + 1):
+            try:
+                response = self._client.request(
+                    method,
+                    url,
+                    headers={"Authorization": f"Bearer {self._token}", "Accept": "application/json"},
+                    **kwargs,
+                )
+            except httpx.TimeoutException as exc:
+                if attempt < self._max_retries:
+                    self._sleeper(min(2**attempt, 8))
+                    continue
+                raise InvoiceCollectionError(
+                    InvoiceErrorCode.TRANSIENT_NETWORK, "Mollie-Zeitüberschreitung"
+                ) from exc
+            if response.status_code in {401, 403}:
+                raise InvoiceCollectionError(InvoiceErrorCode.AUTH_REQUIRED, "Mollie-Zugang wurde abgelehnt")
+            if response.status_code in {429, 500, 502, 503, 504}:
+                if attempt < self._max_retries:
+                    retry_after = response.headers.get("Retry-After", "")
+                    try:
+                        delay = min(max(float(retry_after), 0.0), 30.0)
+                    except ValueError:
+                        delay = min(2**attempt, 8)
+                    self._sleeper(delay)
+                    continue
+                code = InvoiceErrorCode.RATE_LIMITED if response.status_code == 429 else InvoiceErrorCode.TRANSIENT_NETWORK
+                raise InvoiceCollectionError(code, "Mollie-Abruf konnte nicht abgeschlossen werden")
+            response.raise_for_status()
+            return response
+        raise InvoiceCollectionError(InvoiceErrorCode.INTERNAL_ERROR, "Mollie-Retry wurde unerwartet beendet")
 
 
 def _pdf_url(invoice: dict[str, Any]) -> str:

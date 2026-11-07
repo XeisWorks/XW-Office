@@ -20,7 +20,10 @@ from xw_office.services.invoice_collection.domain import (
     TenantId,
 )
 from xw_office.services.invoice_collection.errors import InvoiceCollectionError, InvoiceErrorCode
-from xw_office.services.invoice_collection.auth.graph import CallbackGraphTokenProvider
+from xw_office.services.invoice_collection.auth.graph import (
+    CallbackGraphTokenProvider,
+    MsalInteractiveGraphTokenProvider,
+)
 from xw_office.services.invoice_collection.playwright_session import PlaywrightPersistentSession
 
 
@@ -120,6 +123,35 @@ def test_graph_reader_paginates_and_downloads_attachment_bytes(tmp_path: Path) -
     assert destination.read_bytes() == pdf_bytes
 
 
+def test_msal_provider_uses_silent_token_before_visible_interactive_login(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    cache_path = tmp_path / "local" / "XeisWorks" / "XW-Office" / "invoice_collection" / "auth" / "graph.cache"
+    calls: list[str] = []
+
+    class FakeApp:
+        def get_accounts(self):
+            return [{"username": "user@example.test"}]
+
+        def acquire_token_silent(self, scopes, account):
+            calls.append("silent")
+            return {"access_token": "silent-token"}
+
+        def acquire_token_interactive(self, scopes):
+            calls.append("interactive")
+            return {"access_token": "interactive-token"}
+
+    provider = MsalInteractiveGraphTokenProvider(
+        client_id="client-id",
+        authority="https://login.microsoftonline.com/common",
+        scopes=("Mail.Read",),
+        cache_path=cache_path,
+        app_factory=lambda *args, **kwargs: FakeApp(),
+        cache_factory=lambda path: object(),
+    )
+    assert provider.get_access_token() == "silent-token"
+    assert calls == ["silent"]
+
+
 def test_mollie_http_client_paginates_and_rejects_untrusted_pdf_host() -> None:
     requests: list[str] = []
 
@@ -144,6 +176,27 @@ def test_mollie_http_client_paginates_and_rejects_untrusted_pdf_host() -> None:
     invoices = client.list_invoices()
     assert [item["id"] for item in invoices] == ["inv-1", "inv-2"]
     assert requests == ["https://api.mollie.com/v2/invoices?limit=100", "https://api.mollie.com/page-2"]
+
+
+def test_mollie_http_client_retries_rate_limit_with_bounded_backoff() -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        return httpx.Response(200, json={"_embedded": {"invoices": []}})
+
+    client = MollieInvoicesHttpClient(
+        "read-only-token",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        sleeper=delays.append,
+    )
+    assert client.list_invoices() == []
+    assert attempts == 2
+    assert delays == [0.0]
 
 
 class _BrowserSession:

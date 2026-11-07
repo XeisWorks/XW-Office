@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from xw_office.core.app_paths import find_repo_root
 from xw_office.services.invoice_collection.connectors.manual_import import ManualImportConnector
+from xw_office.services.invoice_collection.connections import ConnectionRepository
 from xw_office.services.invoice_collection.domain import DocumentType, ProviderConnection, TenantId
 from xw_office.services.invoice_collection.journal import InvoiceJournal
 from xw_office.services.invoice_collection.pipeline import DocumentPipeline
@@ -32,11 +33,18 @@ from xw_office.services.invoice_collection.sinks.onedrive_local import OneDriveL
 class InvoiceCollectorDialog(QDialog):
     """Small first-slice dialog; provider-specific actions come from capabilities later."""
 
-    def __init__(self, *, tenant_id: str, parent: object | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        tenant_id: str,
+        parent: object | None = None,
+        connection_repository: ConnectionRepository | None = None,
+    ) -> None:
         super().__init__(parent)  # type: ignore[arg-type]
         self.setWindowTitle("Rechnungen abrufen")
         self.resize(900, 560)
         self._settings = QSettings("XeisWorks", "XW Office")
+        self._connection_repository = connection_repository or ConnectionRepository()
         self._folder = QLineEdit()
         self._folder.setReadOnly(True)
         self._folder.setAccessibleName("OneDrive-Zielordner")
@@ -49,6 +57,8 @@ class InvoiceCollectorDialog(QDialog):
         if index >= 0:
             self._tenant.setCurrentIndex(index)
         self._provider = QComboBox()
+        self._account_alias = QLineEdit("default")
+        self._account_alias.setAccessibleName("Kontoalias")
         self._document_type = QComboBox()
         for item in DocumentType:
             self._document_type.addItem(item.value, item)
@@ -82,12 +92,16 @@ class InvoiceCollectorDialog(QDialog):
         form = QFormLayout()
         form.addRow("Mandant", self._tenant)
         form.addRow("Provider", self._provider)
+        form.addRow("Kontoalias", self._account_alias)
         form.addRow("Dokumenttyp", self._document_type)
         root.addLayout(form)
         actions = QHBoxLayout()
         self._fetch_button = QPushButton("Alle aktiven Verbindungen abrufen")
         self._fetch_button.clicked.connect(self._fetch_active)
         actions.addWidget(self._fetch_button)
+        save = QPushButton("Verbindung speichern")
+        save.clicked.connect(self._save_connection)
+        actions.addWidget(save)
         manual = QPushButton("PDF manuell hinzufügen")
         manual.clicked.connect(self._manual_import)
         actions.addWidget(manual)
@@ -113,9 +127,29 @@ class InvoiceCollectorDialog(QDialog):
         if not self._folder.text().strip():
             self._status.setText("Bitte zuerst einen Zielordner auswählen.")
             return
+        connections = self._connection_repository.list_enabled()
+        if not connections:
+            self._status.setText(
+                "Keine aktiven Provider-Verbindungen eingerichtet. Nutzen Sie zunächst „PDF manuell hinzufügen“."
+            )
+            return
         self._status.setText(
-            "Keine aktiven Provider-Verbindungen eingerichtet. Nutzen Sie zunächst „PDF manuell hinzufügen“."
+            f"{len(connections)} aktive Verbindung(en) gefunden; konkrete Abrufroute wird im nächsten Schritt ausgeführt."
         )
+
+    def _save_connection(self) -> None:
+        provider_id = str(self._provider.currentData() or "").strip()
+        account_alias = self._account_alias.text().strip()
+        if not provider_id or not account_alias:
+            self._status.setText("Provider und Kontoalias müssen ausgefüllt sein.")
+            return
+        connection = ProviderConnection.create(
+            provider_id=provider_id,
+            tenant_id=TenantId(str(self._tenant.currentData())),
+            account_alias=account_alias,
+        )
+        self._connection_repository.save(connection)
+        self._status.setText("Verbindung lokal gespeichert; Secretwerte werden separat hinterlegt.")
 
     def _manual_import(self) -> None:
         if not self._folder.text().strip():
