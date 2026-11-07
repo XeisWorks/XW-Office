@@ -214,12 +214,13 @@ class PlaywrightPersistentSession:
         self._browser = None
         self._playwright = None
         self._profile_lock = None
+        chrome_alive = self._chrome_process is not None and self._chrome_process.poll() is None
         try:
             if context is not None and self.browser_mode not in {"system_chrome_cdp", "system_chrome_existing_profile"}:
                 context.close()
         finally:
             try:
-                if browser is not None:
+                if browser is not None and chrome_alive:
                     try:
                         browser.close()
                     except Exception:
@@ -237,7 +238,7 @@ class PlaywrightPersistentSession:
                 finally:
                     self._chrome_process = None
                 try:
-                    if playwright is not None:
+                    if playwright is not None and (chrome_alive or self.browser_mode == "playwright_chromium"):
                         try:
                             playwright.stop()
                         except Exception:
