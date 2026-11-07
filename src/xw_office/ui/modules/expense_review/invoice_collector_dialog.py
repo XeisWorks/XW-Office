@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from xw_office.core.app_paths import find_repo_root
+from xw_office.core.app_paths import default_invoice_target_dir, find_repo_root
 from xw_office.core.worker import BackgroundWorker
 from xw_office.services.invoice_collection.connectors.manual_import import ManualImportConnector
 from xw_office.services.invoice_collection.connections import ConnectionRepository
@@ -85,6 +85,12 @@ class InvoiceCollectorDialog(QDialog):
         saved = str(self._settings.value("invoice_collection/target_folder") or "").strip()
         if saved:
             self._set_folder(Path(saved))
+        else:
+            default_target = default_invoice_target_dir()
+            if default_target.is_dir() and _is_writable_directory(default_target):
+                self._set_folder(default_target)
+            else:
+                self._folder.setText(str(default_target))
 
     def _load_catalog(self) -> None:
         path = (
@@ -318,3 +324,11 @@ class InvoiceCollectorDialog(QDialog):
         ]
         for column, value in enumerate(values):
             self._table.setItem(row, column, QTableWidgetItem(value))
+
+
+def _is_writable_directory(path: Path) -> bool:
+    """Check the selected target without creating probe files in OneDrive."""
+    try:
+        return path.is_dir() and bool(path.stat().st_mode & 0o200)
+    except OSError:
+        return False

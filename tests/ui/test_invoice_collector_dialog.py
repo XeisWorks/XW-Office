@@ -2,8 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from xw_office.core.app_paths import default_invoice_target_dir
 from xw_office.services.invoice_collection.connections import ConnectionRepository
 from xw_office.ui.modules.expense_review.invoice_collector_dialog import InvoiceCollectorDialog
+
+
+def test_default_invoice_target_uses_current_windows_profile(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "Bernhard Holl"))
+    assert default_invoice_target_dir() == (
+        tmp_path / "Bernhard Holl" / "OneDrive - XeisWorks" / "00 Finanzmanagement" / "02 Belege"
+    )
 
 
 def test_invoice_collector_dialog_loads_catalog_and_requires_active_connections(

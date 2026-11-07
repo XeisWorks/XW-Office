@@ -76,6 +76,17 @@ def invoice_collection_dir() -> Path:
     return local_app_data_dir() / "invoice_collection"
 
 
+def default_invoice_target_dir() -> Path:
+    """Return the conventional local OneDrive Business invoice target.
+
+    The Windows profile name is deliberately resolved from the current user rather
+    than embedded in the path, because the same repository is used on multiple PCs.
+    """
+    profile = str(os.getenv("USERPROFILE") or "").strip()
+    root = Path(profile) if profile else Path.home()
+    return root / "OneDrive - XeisWorks" / "00 Finanzmanagement" / "02 Belege"
+
+
 def resources_dir() -> Path:
     return find_repo_root() / "resources"
 

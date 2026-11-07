@@ -65,6 +65,7 @@ invoice-collection = [
 xw-office = "xw_office.__main__:main"
 xw-print-center = "xw_office.print_center.__main__:main"
 xw-content-web = "xw_office.web.__main__:main"
+xw-invoice-collection = "xw_office.services.invoice_collection.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
