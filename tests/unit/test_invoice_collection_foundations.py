@@ -213,8 +213,27 @@ def test_orchestrator_continues_after_one_connector_failure(tmp_path: Path) -> N
     (tmp_path / "onedrive").mkdir()
     summary = CollectionOrchestrator(pipeline, workspace_root=tmp_path).collect([bad, good])
     assert len(summary.items) == 2
-    assert summary.items[0].error
-    assert summary.items[1].outcome.value == "NEW"
+    assert any(item.error for item in summary.items)
+    assert any(item.outcome is not None and item.outcome.value == "NEW" for item in summary.items)
+
+
+def test_orchestrator_limits_parallel_connector_workers(tmp_path: Path) -> None:
+    source_one = _pdf(tmp_path / "one.pdf", "one")
+    source_two = _pdf(tmp_path / "two.pdf", "two")
+    connection = ProviderConnection.create(
+        provider_id="fixture", tenant_id=TenantId.XW, account_alias="a"
+    )
+    sink_root = tmp_path / "onedrive"
+    sink_root.mkdir()
+    pipeline = DocumentPipeline(sink=OneDriveLocalSink(sink_root))
+    connectors = [
+        ManualImportConnector(connection=connection, files=[source_one]),
+        ManualImportConnector(connection=connection, files=[source_two]),
+    ]
+    summary = CollectionOrchestrator(
+        pipeline, workspace_root=tmp_path, max_workers=2
+    ).collect(connectors)
+    assert summary.new_count == 2
 
 
 def test_connection_repository_round_trips_metadata_without_secret_values(tmp_path: Path) -> None:
