@@ -192,8 +192,12 @@ packages:
 
   - id: P07
     title: Alarm-Popup und manuell ausgelöste Graph-Task
-    status: planned
+    status: partially_integrated
     depends_on: [P05]
+    implementation_notes:
+      - InventoryAlertTaskService persistiert eine Aufgabe pro Alarm, erzeugt die Mail mit SKU, Titel, Ist-/Alarmbestand, Datenfenster und Absatzfeldern und schützt Wiederholungen.
+      - RECHNUNGEN zeigt bei offenen Product-Hub-Alarmen einen LAGERALARME-Button mit Popup, Schwellenänderung und Task-erzeugen-Aktion.
+      - Absatzwerte werden bis zur SevDesk-Historienverdrahtung als optionale Eingabefelder übergeben; Fehler-/Retry-Dashboard bleibt offen.
     scope:
       - RECHNUNGEN-Alarm-Button mit Zahl betroffener Varianten und Popup bauen.
       - Ist-Bestand, Schwelle, Modus, Monatsmittel, Datenfenster, Prognose und Produktlink zeigen.

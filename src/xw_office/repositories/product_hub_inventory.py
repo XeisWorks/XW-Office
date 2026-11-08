@@ -59,6 +59,10 @@ class InventoryRepository:
         with self._scope() as session:
             return session.scalar(select(InventoryLocation).where(InventoryLocation.code == code))
 
+    def get_location_by_id(self, location_id: uuid.UUID) -> InventoryLocation | None:
+        with self._scope() as session:
+            return session.get(InventoryLocation, location_id)
+
     def list_locations(self) -> list[InventoryLocation]:
         with self._scope() as session:
             return list(session.scalars(select(InventoryLocation)).all())

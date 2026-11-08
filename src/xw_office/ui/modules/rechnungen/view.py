@@ -79,6 +79,7 @@ from xw_office.services.invoice_processing.service import InvoiceProcessingServi
 from xw_office.services.invoice_processing.context import InvoiceWorkContext
 from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.inventory import InventoryService
+from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.mailing.outlook_compose import open_classic_outlook_draft
 from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.printer_status.service import PrinterStatusService
@@ -139,6 +140,7 @@ from xw_office.ui.dialogs.unreleased_title_dialog import (
     UnreleasedTitleSplitDialog,
 )
 from xw_office.ui.modules.rechnungen.refunds_dialog import RefundsDialog
+from xw_office.ui.modules.rechnungen.inventory_alerts_dialog import InventoryAlertsDialog
 from xw_office.ui.widgets.data_table import DataTable
 from xw_office.ui.widgets.progress_overlay import ProgressOverlay
 from xw_office.ui.widgets.busy_spinner import SearchStatusBanner
@@ -1201,6 +1203,9 @@ class RechnungenView(QWidget):
         self._sendungen_alert_count = 0
         self._drucke_alert_count = 0
         self._digital_licenses_alert_count = 0
+        self._inventory_alert_timer = QTimer(self)
+        self._inventory_alert_timer.setInterval(60000)
+        self._inventory_alert_timer.timeout.connect(self._refresh_inventory_alert_count)
         self._search_index: list[dict[str, str]] = []
         self._loaded_rows: list[dict[str, Any]] = []
         self._loaded_summaries: list[InvoiceSummary] = []
@@ -1414,6 +1419,19 @@ class RechnungenView(QWidget):
         )
         self._btn_mollie_alert.clicked.connect(self._on_mollie_alert_clicked)
         self._btn_mollie_alert.hide()
+        self._btn_inventory_alert = self._toolbar.add_button(
+            "inventory_alert",
+            "LAGERALARME",
+            tooltip="Aktive Lageralarme, Alarmbestand und Tasks anzeigen",
+        )
+        self._btn_inventory_alert.setStyleSheet(
+            "QPushButton {background-color: #b91c1c; color: white; border-radius: 6px; font-weight: bold; padding: 0 14px;}"
+            "QPushButton:hover { background-color: #991b1b; }"
+        )
+        self._btn_inventory_alert.clicked.connect(self._on_inventory_alert_clicked)
+        self._btn_inventory_alert.hide()
+        self._refresh_inventory_alert_count()
+        self._inventory_alert_timer.start()
         layout.addWidget(self._toolbar)
 
         self._search = SearchBar("Suchen…", debounce_ms=220, min_chars=2, max_suggestions=12)
@@ -2743,6 +2761,27 @@ class RechnungenView(QWidget):
         dlg = DigitalLicensesDialog(self._container, self)
         dlg.exec()
         self.update_digital_licenses_alert_count(dlg.open_count())
+
+    def _refresh_inventory_alert_count(self) -> None:
+        try:
+            service = self._container.resolve(InventoryV2Service)
+            count = len(service.list_open_alert_details())
+        except Exception:
+            count = 0
+        if count:
+            self._btn_inventory_alert.setText(f"LAGERALARME ({count})")
+            self._btn_inventory_alert.show()
+        else:
+            self._btn_inventory_alert.hide()
+
+    def _on_inventory_alert_clicked(self) -> None:
+        try:
+            dlg = InventoryAlertsDialog(self._container, self)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Lageralarme", str(exc))
+            return
+        dlg.exec()
+        self._refresh_inventory_alert_count()
 
     def _on_special_order_clicked(self) -> None:
         dlg = SpecialOrderDialog(self._container, self)

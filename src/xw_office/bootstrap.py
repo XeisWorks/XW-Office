@@ -83,7 +83,9 @@ from xw_office.services.plc.webservice import PlcWebserviceClient
 from xw_office.services.printer_status.service import PrinterStatusService
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.product_hub.desktop_client import ProductHubDesktopClient
-from xw_office.services.product_hub.inventory import LegacyInventoryShadowBridge
+from xw_office.services.product_hub.inventory import InventoryV2Service, LegacyInventoryShadowBridge
+from xw_office.services.product_hub.inventory_alert_tasks import InventoryAlertTaskService
+from xw_office.services.product_hub.inventory_count import InventoryCountService
 from xw_office.services.product_hub.sevdesk_inventory_reconciliation import (
     SevdeskInventoryReconciliationService,
 )
@@ -642,6 +644,9 @@ def register_default_services(container: Container) -> None:
     # This keeps local dev/test environments (no DB) working without needing env vars.
     if (container.config.database_url or "").strip():
         container.register(SessionMaker, lambda c: create_session_factory(c.config))
+        container.register(InventoryV2Service, lambda c: InventoryV2Service(c.resolve(SessionMaker)))
+        container.register(InventoryCountService, lambda c: InventoryCountService(c.resolve(SessionMaker)))
+        container.register(InventoryAlertTaskService, lambda c: InventoryAlertTaskService(c.resolve(SessionMaker)))
         container.register(
             InvoiceInventoryBookingService,
             lambda c: InvoiceInventoryBookingService(c.resolve(SessionMaker)),

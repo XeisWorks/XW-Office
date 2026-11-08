@@ -33,6 +33,7 @@
 from __future__ import annotations
 
 import datetime
+from dataclasses import dataclass
 import hashlib
 import json
 import uuid
@@ -71,6 +72,16 @@ class InventorySummary:
         self.open_reprint_alerts = open_reprint_alerts
         self.sync_errors = sync_errors
         self.updated_at = updated_at
+
+
+@dataclass(frozen=True)
+class InventoryAlertDetail:
+    alert: InventoryAlert
+    sku: str
+    title: str
+    location_code: str
+    on_hand: int
+    reorder_point: int
 
 
 class MovementResult:
@@ -376,6 +387,28 @@ class InventoryV2Service:
         )
         stock = self._inventory.get_stock(variant_id, location.id)
         return stock.on_hand if stock is not None else 0
+
+    def list_open_alert_details(self) -> list[InventoryAlertDetail]:
+        """Return open alerts enriched for the RECHNUNGEN popup."""
+        details: list[InventoryAlertDetail] = []
+        for alert in self._inventory.list_open_alerts():
+            variant = self._products.get_variant(alert.variant_id)
+            if variant is None:
+                continue
+            product = self._products.get_product(variant.product_id)
+            location = self._inventory.get_location_by_id(alert.location_id)
+            stock = self._inventory.get_stock(alert.variant_id, alert.location_id)
+            details.append(
+                InventoryAlertDetail(
+                    alert=alert,
+                    sku=variant.sku,
+                    title=str(variant.name or (product.name if product is not None else variant.sku)),
+                    location_code=location.code if location is not None else DEFAULT_LOCATION_CODE,
+                    on_hand=int(stock.on_hand if stock is not None else alert.observed_stock or 0),
+                    reorder_point=int(stock.reorder_point if stock is not None else alert.threshold or 0),
+                )
+            )
+        return details
 
     def reconcile_variant_stock(
         self, variant_id: uuid.UUID, *, sevdesk_on_hand: int, location_code: str = DEFAULT_LOCATION_CODE

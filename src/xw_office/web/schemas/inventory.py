@@ -179,3 +179,19 @@ class InventoryCountOut(BaseModel):
 
 class InventoryCountConfirmRequest(BaseModel):
     actor: str = ""
+
+
+class InventoryAlertTaskRequest(BaseModel):
+    sales_average_monthly: float | None = None
+    three_month_demand: int | None = None
+    data_window: str = "bis zu 60 vollständige Monate"
+    explicit_resend: bool = False
+
+
+class InventoryAlertTaskOut(BaseModel):
+    alert_id: uuid.UUID
+    task_id: uuid.UUID
+    status: str
+    recipient: str
+    subject: str
+    error: str = ""
