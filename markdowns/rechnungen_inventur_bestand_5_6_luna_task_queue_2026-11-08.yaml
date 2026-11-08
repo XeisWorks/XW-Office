@@ -89,8 +89,11 @@ packages:
 
   - id: P01
     title: Artikelart, Policy und sichere Ledger-Transaktion
-    status: foundation_ready
+    status: partially_integrated
     depends_on: [P00]
+    implementation_notes:
+      - InventoryRepository.record_movement sperrt Lagerort/Bestandszeile innerhalb eines Savepoints, revalidiert Idempotenz nach dem Lock und schützt damit parallele Schreiber vor verlorenen Updates.
+      - Artikelart-/POD-Policy und additive Forecastfelder sind umgesetzt; der vollständige Legacy-Cutover bleibt offen.
     scope:
       - Additive Migration für external_print, pod, digital sowie Forecast- und Alarmmodus auto/fixed pro Variante und Lagerort.
       - Numerischen Ist-Bestand getrennt von POD-Druckkapazität modellieren; Legacy-∞-Darstellung korrigieren.

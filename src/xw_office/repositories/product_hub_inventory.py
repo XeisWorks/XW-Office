@@ -14,6 +14,7 @@ import uuid
 from collections.abc import Generator
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
@@ -142,39 +143,74 @@ class InventoryRepository:
             )
             if existing is not None:
                 return existing
+            try:
+                # Keep the stock update and ledger insert in one savepoint.  On
+                # PostgreSQL the row lock serializes concurrent writers; the
+                # second idempotent caller re-checks after waiting and returns
+                # the already committed movement without applying the delta twice.
+                with session.begin_nested():
+                    session.execute(
+                        select(InventoryLocation)
+                        .where(InventoryLocation.id == location_id)
+                        .with_for_update()
+                    ).scalar_one_or_none()
+                    existing = session.scalar(
+                        select(InventoryMovement).where(
+                            InventoryMovement.idempotency_key == idempotency_key
+                        )
+                    )
+                    if existing is not None:
+                        return existing
+                    stock = session.execute(
+                        select(InventoryStock)
+                        .where(
+                            InventoryStock.variant_id == variant_id,
+                            InventoryStock.location_id == location_id,
+                        )
+                        .with_for_update()
+                    ).scalar_one_or_none()
+                    if stock is None:
+                        stock = InventoryStock(variant_id=variant_id, location_id=location_id, on_hand=0)
+                        session.add(stock)
+                        session.flush()
 
-            stock = session.get(InventoryStock, (variant_id, location_id))
-            if stock is None:
-                stock = InventoryStock(variant_id=variant_id, location_id=location_id, on_hand=0)
-                session.add(stock)
-                session.flush()
+                    on_hand_after = stock.on_hand + delta
+                    if on_hand_after < 0:
+                        raise NegativeStockError(
+                            f"Movement would drive on_hand to {on_hand_after} "
+                            f"(variant={variant_id}, location={location_id}, delta={delta})"
+                        )
+                    stock.on_hand = on_hand_after
+                    stock.version += 1
 
-            on_hand_after = stock.on_hand + delta
-            if on_hand_after < 0:
-                raise NegativeStockError(
-                    f"Movement would drive on_hand to {on_hand_after} "
-                    f"(variant={variant_id}, location={location_id}, delta={delta})"
+                    movement = InventoryMovement(
+                        id=uuid.uuid4(),
+                        variant_id=variant_id,
+                        location_id=location_id,
+                        delta=delta,
+                        reason=reason,
+                        source=source,
+                        external_reference=external_reference or None,
+                        idempotency_key=idempotency_key,
+                        note=note or None,
+                        on_hand_after=on_hand_after,
+                        actor=actor or None,
+                        occurred_at=occurred_at or datetime.datetime.now(datetime.timezone.utc),
+                    )
+                    session.add(movement)
+                    session.flush()
+                    return movement
+            except IntegrityError:
+                # A concurrent writer may have won the idempotency race.  The
+                # unique key is authoritative; do not hide unrelated conflicts.
+                existing = session.scalar(
+                    select(InventoryMovement).where(
+                        InventoryMovement.idempotency_key == idempotency_key
+                    )
                 )
-            stock.on_hand = on_hand_after
-            stock.version += 1
-
-            movement = InventoryMovement(
-                id=uuid.uuid4(),
-                variant_id=variant_id,
-                location_id=location_id,
-                delta=delta,
-                reason=reason,
-                source=source,
-                external_reference=external_reference or None,
-                idempotency_key=idempotency_key,
-                note=note or None,
-                on_hand_after=on_hand_after,
-                actor=actor or None,
-                occurred_at=occurred_at or datetime.datetime.now(datetime.timezone.utc),
-            )
-            session.add(movement)
-            session.flush()
-            return movement
+                if existing is not None:
+                    return existing
+                raise
 
     def list_movements(
         self, variant_id: uuid.UUID, location_id: uuid.UUID, *, limit: int = 100
