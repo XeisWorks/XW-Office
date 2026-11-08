@@ -79,6 +79,13 @@ class InvoiceInventoryBookingService:
         """Resolve all physical product positions before an external finalization."""
         self._resolve_invoice_lines(positions)
 
+    def resolve_physical_sku(self, sku: str):
+        """Expose exact SKU resolution to conservative external feed adapters."""
+        resolved = self._products.resolve_sku(sku)
+        if resolved is None or not resolved.variant.active or not resolved.variant.stock_enabled:
+            return None
+        return resolved
+
     def _resolve_invoice_lines(self, positions):
         unresolved: list[str] = []
         resolved_lines = []

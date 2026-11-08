@@ -15,6 +15,7 @@
 - Für P07 gibt es jetzt einen persistierten `InventoryAlertTaskService` mit Duplikatschutz und Graph-Mail-Inhalt sowie ein RECHNUNGEN-LAGERALARME-Popup. Dort lassen sich Ist-/Alarmbestand prüfen, die Schwelle speichern und per „Task erzeugen“ an `todo@xeisworks.at` senden; die automatische Absatzdatenübergabe aus SevDesk ist noch offen.
 - Ein read-only `sevdesk_history_audit` prüft finale sevDesk-Rechnungen und Gutschriften über 60 vollständige Monate, ignoriert Entwürfe und meldet fehlende SKU sowie unvollständige Abdeckung. Die Live-Ausführung gegen sevDesk bleibt als Betriebsjob vor dem Cutover offen.
 - Der Rechnungs-Freigabepfad prüft physische Product-Hub-SKUs jetzt vor dem sevDesk-Freigabeschritt; erst nach erfolgreicher Freigabe wird die idempotente Bestandsbewegung angewandt. Damit werden unauflösbare Positionen nicht mehr erst nach einer externen Freigabe sichtbar.
+- Für Gegenbelege steht ein konservativer `SevdeskCreditNoteInventoryService` bereit: automatische Rückbuchung erfolgt nur bei expliziter Ursprungsrechnung und Ursprungsposition; unklare Geld-/Positionsbelege werden als `needs_review` gemeldet.
 
 - **P00 – Live-Datenvertrag und Bestandsquellen:** begonnen und erster lesender Audit-Baustein umgesetzt in `services/product_hub/inventory_audit.py`; keine Bestands- oder sevDesk-Schreibzugriffe.
 - Der Audit meldet doppelte SKU, fehlende physische sevDesk-Part-Mappings, negative oder fehlende Quellbestände, Legacy-/Hub-Drift und fehlendes Verkaufsstartdatum. Drei Unit-Tests laufen grün.

@@ -149,6 +149,7 @@ packages:
       - InvoiceInventoryBookingService.apply_credit_line verarbeitet eindeutig referenzierte Gegenbelegpositionen idempotent.
       - Persistierte Ursprungsreferenzen begrenzen die Summe mehrerer Teilgutschriften auf die gebuchte Verkaufsmenge.
       - SevDesk-Gegenbeleg-Feed, needs_review-Fallliste und bestehende Refund-Prozess-Verdrahtung sind noch offen.
+      - SevdeskCreditNoteInventoryService verarbeitet einen Provider-Jahresfeed konservativ: nur explizite Ursprungsrechnung/-position werden gebucht, alle anderen Fälle landen in needs_review.
     scope:
       - Finale sevDesk-Stornos und Gutschriften mit Ursprungsrechnung und Positionsmengen verknüpfen.
       - Voll- und Teilmengen automatisch idempotent als eigene Gegenbewegung buchen.
