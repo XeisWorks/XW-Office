@@ -115,7 +115,7 @@ packages:
 
   - id: P03
     title: Idempotenter sevDesk-Rechnungsabgang je Position
-    status: planned
+    status: foundation_ready
     depends_on: [P02]
     scope:
       - Einen gemeinsamen Buchungsdienst für Desktop-Freigabe und externen sevDesk-Poller bauen.
