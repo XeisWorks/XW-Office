@@ -4,7 +4,7 @@ title: Inventur, Rechnungsabgang, Lagerwarnung und POD-Druck
 owner_model: Codex 5.6 Luna
 repository: XeisWorks/XW-Office
 baseline_analyzed: 2684773
-status: ready_for_incremental_implementation
+status: in_progress
 specification: markdowns/rechnungen_inventur_bestand_5_6_luna_umbauspezifikation_2026-11-08.md
 
 instructions:
@@ -71,6 +71,7 @@ source_paths:
 packages:
   - id: P00
     title: Live-Datenvertrag und Bestandsquellen lesen
+    status: in_progress
     depends_on: []
     scope:
       - Read-only Bericht über aktive physische Varianten, SKU- und sevDesk-Part-Mappings, fehlende/mehrdeutige Zuordnungen.
@@ -85,6 +86,7 @@ packages:
 
   - id: P01
     title: Artikelart, Policy und sichere Ledger-Transaktion
+    status: planned
     depends_on: [P00]
     scope:
       - Additive Migration für external_print, pod, digital sowie Forecast- und Alarmmodus auto/fixed pro Variante und Lagerort.
@@ -98,6 +100,7 @@ packages:
 
   - id: P02
     title: Geführte Inventur und Stichtag
+    status: planned
     depends_on: [P01]
     scope:
       - Zählliste für aktive external_print- und pod-Varianten mit SKU, Titel, Lagerort und vorhandener Menge.
@@ -112,6 +115,7 @@ packages:
 
   - id: P03
     title: Idempotenter sevDesk-Rechnungsabgang je Position
+    status: planned
     depends_on: [P02]
     scope:
       - Einen gemeinsamen Buchungsdienst für Desktop-Freigabe und externen sevDesk-Poller bauen.
@@ -129,6 +133,7 @@ packages:
 
   - id: P04
     title: Storno- und Gutschrift-Rückbuchung
+    status: planned
     depends_on: [P03]
     scope:
       - Finale sevDesk-Stornos und Gutschriften mit Ursprungsrechnung und Positionsmengen verknüpfen.
@@ -144,6 +149,7 @@ packages:
 
   - id: P05
     title: Absatzprognose und zustandsbasierte Lagerwarnung
+    status: planned
     depends_on: [P03, P04]
     scope:
       - 60 volle Kalendermonate aus finalen sevDesk-Positionen und eindeutigen Gegenmengen aggregieren.
@@ -159,6 +165,7 @@ packages:
 
   - id: P06
     title: Lagerbereinigter POD- und Druckerei-Plan in RECHNUNGEN
+    status: planned
     depends_on: [P01, P03, P05]
     scope:
       - PRINT PRODUKTE OFFEN um bestellt, Lager, anderweitig eingeplant, aus Lager und neu drucken ergänzen.
@@ -174,6 +181,7 @@ packages:
 
   - id: P07
     title: Alarm-Popup und manuell ausgelöste Graph-Task
+    status: planned
     depends_on: [P05]
     scope:
       - RECHNUNGEN-Alarm-Button mit Zahl betroffener Varianten und Popup bauen.
@@ -189,6 +197,7 @@ packages:
 
   - id: P08
     title: Shadow-Abnahme und Product-Hub-Bestands-Cutover
+    status: planned
     depends_on: [P02, P03, P04, P05, P06, P07]
     scope:
       - Gezählt/Legacy/Hub/sevDesk je Variante abgleichen und offene Konflikte bereinigen.

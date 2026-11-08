@@ -6,6 +6,12 @@
 - **Status:** fachliche Entscheidungen bestätigt; Umsetzung und Produktionsdatenprüfung offen
 - **Arbeitsplan:** [rechnungen_inventur_bestand_5_6_luna_task_queue_2026-11-08.yaml](rechnungen_inventur_bestand_5_6_luna_task_queue_2026-11-08.yaml)
 
+## Implementierungsfortschritt
+
+- **P00 – Live-Datenvertrag und Bestandsquellen:** begonnen und erster lesender Audit-Baustein umgesetzt in `services/product_hub/inventory_audit.py`; keine Bestands- oder sevDesk-Schreibzugriffe.
+- Der Audit meldet doppelte SKU, fehlende physische sevDesk-Part-Mappings, negative oder fehlende Quellbestände, Legacy-/Hub-Drift und fehlendes Verkaufsstartdatum. Drei Unit-Tests laufen grün.
+- **Noch offen:** tatsächliche Live-/sevDesk-Snapshot-Anbindung, historische Positionsprüfung und die Pakete P01–P08.
+
 ## 1. Verbindliche Fachentscheidungen
 
 1. Der gezählte Bestand gedruckter Noten wird bei einer bevorstehenden Inventur je eindeutiger SKU/Variante festgelegt. Der Product Hub (PostgreSQL) bleibt der geplante, endgültige Bestands-Master. Während der Übergangsphase bleibt `inventory.stock_levels` operative Quelle und wird in den Hub gespiegelt; sevDesk dient dem Abgleich. Nach dem Cutover gibt es keine zweite unabhängige Bestandswahrheit.
