@@ -247,6 +247,65 @@ class InventoryV2Service:
             self._emit_flow_task_intent(alert_opened, variant_id)
         return MovementResult(movement=movement, alert_opened=alert_opened)
 
+    def update_thresholds(
+        self,
+        *,
+        variant_id: uuid.UUID,
+        location_code: str = DEFAULT_LOCATION_CODE,
+        reorder_point: int | None = None,
+        target_stock: int | None = None,
+        default_reprint_qty: int | None = None,
+    ) -> object:
+        """Update policy values and immediately reconcile the current alert state.
+
+        A threshold change is itself a state transition: an already-low stock must
+        open an alert immediately, while lowering the threshold below current stock
+        resolves it.  No movement is invented for this policy-only change.
+        """
+        if reorder_point is not None and reorder_point < 0:
+            raise ValueError("reorder_point darf nicht negativ sein")
+        if target_stock is not None and target_stock < 0:
+            raise ValueError("target_stock darf nicht negativ sein")
+        if default_reprint_qty is not None and default_reprint_qty < 0:
+            raise ValueError("default_reprint_qty darf nicht negativ sein")
+        location = self._inventory.get_or_create_location(
+            code=location_code, name=DEFAULT_LOCATION_NAME
+        )
+        stock = self._inventory.set_stock_thresholds(
+            variant_id,
+            location.id,
+            reorder_point=reorder_point,
+            target_stock=target_stock,
+            default_reprint_qty=default_reprint_qty,
+        )
+        alert_opened = self._refresh_alert_state(variant_id, location.id, stock.on_hand)
+        if alert_opened is not None:
+            self._emit_flow_task_intent(alert_opened, variant_id)
+        return stock
+
+    def _refresh_alert_state(
+        self, variant_id: uuid.UUID, location_id: uuid.UUID, observed_stock: int
+    ) -> InventoryAlert | None:
+        """Reconcile warnings against the current value after a policy change."""
+        stock = self._inventory.get_stock(variant_id, location_id)
+        threshold = stock.reorder_point if stock is not None else 0
+        if observed_stock <= threshold:
+            alert_type = "out_of_stock" if observed_stock <= 0 else "low_stock"
+            existing = self._inventory.get_open_alert(variant_id, location_id, alert_type)
+            alert = self._inventory.open_or_update_alert(
+                variant_id=variant_id,
+                location_id=location_id,
+                alert_type=alert_type,
+                threshold=threshold,
+                observed_stock=observed_stock,
+            )
+            return None if existing is not None else alert
+        for alert_type in ("low_stock", "out_of_stock"):
+            existing = self._inventory.get_open_alert(variant_id, location_id, alert_type)
+            if existing is not None:
+                self._inventory.resolve_alert(existing.id)
+        return None
+
     def _apply_alert_crossing(
         self, variant_id: uuid.UUID, location_id: uuid.UUID, before: int, after: int
     ) -> InventoryAlert | None:

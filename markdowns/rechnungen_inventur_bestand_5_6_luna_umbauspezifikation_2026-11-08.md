@@ -13,6 +13,7 @@
 - Als gemeinsame Grundlage für P05 ist `services/product_hub/inventory_forecast.py` ergänzt: vollständige Kalendermonate, 60-Monats-Fenster, Nettoverkauf minus Gutschriften, Startwert 50 bis sechs volle Verkaufsmonate und manueller Fixwert sind deterministisch testbar.
 - Als gemeinsame Grundlage für P01/P06 ist `services/product_hub/inventory_policy.py` ergänzt: digitale Artikel bewegen keinen Bestand, Druckerei-Noten melden Fehlmengen als Nachbestellung und POD druckt fehlende Mengen in Dreierchargen nach Lagerverbrauch.
 - Der Legacy-/Hub-Katalog kann die Artikelart `external_print`, `pod` oder `digital` nun explizit mitführen; unbekannte Werte fallen kontrolliert auf `external_print` zurück. Die bestehende Drucklogik ist damit rückwärtskompatibel vorbereitet, aber noch nicht vollständig auf den neuen Plan verdrahtet.
+- Der Hub-Schwellenpfad bewertet den aktuellen Bestand jetzt sofort nach einer Schwellenänderung und öffnet bzw. löst Warnungen ohne erfundene Bewegungsbuchung auf. API- und Servicetests decken die Erhöhung und Senkung der Schwelle ab.
 - **Noch offen:** tatsächliche Live-/sevDesk-Snapshot-Anbindung, historische Positionsprüfung und die Pakete P01–P08.
 
 ## 1. Verbindliche Fachentscheidungen

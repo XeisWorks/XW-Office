@@ -198,6 +198,27 @@ def test_record_movement_crossing_below_threshold_opens_low_stock_alert(
     assert result.alert_opened.type == "low_stock"
 
 
+def test_threshold_update_reconciles_existing_stock_without_movement(
+    service: InventoryV2Service, inventory_repo: InventoryRepository, variant_id: uuid.UUID
+) -> None:
+    service.record_movement(
+        variant_id=variant_id,
+        delta=4,
+        reason="import_baseline",
+        source="test",
+        idempotency_key="threshold-refresh-baseline",
+    )
+
+    updated = service.update_thresholds(variant_id=variant_id, reorder_point=5)
+    assert updated.reorder_point == 5
+    alerts = inventory_repo.list_open_alerts()
+    assert len(alerts) == 1
+    assert alerts[0].type == "low_stock"
+
+    service.update_thresholds(variant_id=variant_id, reorder_point=3)
+    assert inventory_repo.list_open_alerts() == []
+
+
 def test_record_movement_crossing_to_zero_opens_out_of_stock_alert(
     service: InventoryV2Service, inventory_repo: InventoryRepository, variant_id: uuid.UUID
 ) -> None:

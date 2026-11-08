@@ -188,16 +188,18 @@ def build_inventory_router(
     def set_thresholds(
         variant_id: uuid.UUID,
         body: ThresholdUpdateRequest,
-        repo: InventoryRepository = Depends(get_repo),
+        service: InventoryV2Service = Depends(get_service),
     ) -> StockOut:
-        location = repo.get_or_create_location(code=body.location_code, name="Hauptlager")
-        stock = repo.set_stock_thresholds(
-            variant_id,
-            location.id,
-            reorder_point=body.reorder_point,
-            target_stock=body.target_stock,
-            default_reprint_qty=body.default_reprint_qty,
-        )
+        try:
+            stock = service.update_thresholds(
+                variant_id=variant_id,
+                location_code=body.location_code,
+                reorder_point=body.reorder_point,
+                target_stock=body.target_stock,
+                default_reprint_qty=body.default_reprint_qty,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         return StockOut.model_validate(stock)
 
     @write_router.post("/reconcile", response_model=ReconcileResponse)
