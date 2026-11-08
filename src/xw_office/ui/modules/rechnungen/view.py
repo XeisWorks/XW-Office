@@ -85,6 +85,7 @@ from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.printer_status.service import PrinterStatusService
 from xw_office.services.products.catalog import (
     ProductCatalogService,
+    StockStatus,
     clean_unreleased_match_title,
     normalize_legacy_title,
 )
@@ -4198,7 +4199,9 @@ class RechnungenView(QWidget):
         prepared_jobs: list[tuple[PieceBlock, int, Callable[[], None]]] = []
         for item in products:
             block = self._piece_block_from_open_product(item)
-            qty = max(0, int(item.quantity or 0))
+            qty = block.print_qty
+            if qty <= 0:
+                continue
             if not self._open_print_product_ready(item) and not _configure_missing_piece_print(
                 self,
                 self._container,
@@ -4333,6 +4336,12 @@ class RechnungenView(QWidget):
             description.setWordWrap(True)
             description.setStyleSheet("color: #cbd5e1; font-size: 11px;")
             text_col.addWidget(description)
+        policy_block = self._piece_block_from_open_product(item)
+        if policy_block.stock_status is not None:
+            stock_hint = QLabel(policy_block.stock_label)
+            stock_hint.setWordWrap(True)
+            stock_hint.setStyleSheet("color: #fbbf24; font-size: 11px;")
+            text_col.addWidget(stock_hint)
         layout.addLayout(text_col, stretch=1)
 
         sku_label = QLabel(sku_clean or "-")
@@ -4369,7 +4378,7 @@ class RechnungenView(QWidget):
 
         action = QToolButton()
         action.setFixedSize(28, 26)
-        action.setEnabled(self._print_allowed)
+        action.setEnabled(self._print_allowed and policy_block.print_qty > 0)
         action.setStyleSheet(
             "QToolButton { background-color: #334155; border: 1px solid #64748b; border-radius: 4px; }"
             "QToolButton:hover { background-color: #475569; border-color: #94a3b8; }"
@@ -4472,7 +4481,22 @@ class RechnungenView(QWidget):
         )
         try:
             catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
-            return resolve_piece_print_config(catalog, block)
+            block = resolve_piece_print_config(catalog, block)
+            if block.product is not None and not block.product.is_digital:
+                part_id = str(block.product.sevdesk_part_id or "").strip()
+                if part_id:
+                    parts: PartClient = self._container.resolve(PartClient)
+                    cached_stock = parts.get_cached_part_stock(part_id)
+                    if cached_stock is not None:
+                        block.stock_status = StockStatus(
+                            sku=block.sku,
+                            product_name=block.product.name,
+                            is_digital=False,
+                            on_hand=int(cached_stock),
+                            min_stock_target=block.product.print_rule.min_stock_target,
+                            reprint_batch_qty=block.product.print_rule.reprint_batch_qty,
+                        )
+            return block
         except Exception as exc:  # noqa: BLE001 - dialog can still create config.
             logger.debug("Open print product catalog lookup failed sku=%s: %s", sku, exc)
         return block
@@ -4508,7 +4532,9 @@ class RechnungenView(QWidget):
         item: PrintProductAggregate,
         button: QToolButton | None = None,
     ) -> None:
-        quantity = self._open_product_quantity(item)
+        requested_quantity = self._open_product_quantity(item)
+        block = self._piece_block_from_open_product(item)
+        quantity = block.print_qty if requested_quantity > 0 else 0
         if quantity <= 0:
             self._container.resolve(AppSignals).status_message.emit(
                 f"{item.sku}: Menge ist 0 – kein Druckauftrag gestartet.",
@@ -4516,7 +4542,7 @@ class RechnungenView(QWidget):
             )
             return
         self._on_product_print_clicked(
-            self._piece_block_from_open_product(item),
+            block,
             quantity,
             on_accepted=(lambda: self._show_toolbutton_print_confirmation(button)) if button is not None else None,
         )
