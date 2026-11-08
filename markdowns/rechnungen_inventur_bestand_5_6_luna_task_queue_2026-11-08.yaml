@@ -1,0 +1,202 @@
+schema_version: 1
+plan_id: xw_office_inventory_invoice_release_2026_11_08
+title: Inventur, Rechnungsabgang, Lagerwarnung und POD-Druck
+owner_model: Codex 5.6 Luna
+repository: XeisWorks/XW-Office
+baseline_analyzed: 2684773
+status: ready_for_incremental_implementation
+specification: markdowns/rechnungen_inventur_bestand_5_6_luna_umbauspezifikation_2026-11-08.md
+
+instructions:
+  before_each_package:
+    - AGENTS.md lesen; sauberes main und git pull --ff-only origin main.
+    - Aktuelle Codepfade, Tests, Alembic-Head und docs/product_hub/PROGRESS.md erneut prüfen.
+    - Nur ein Paket pro Arbeitslauf; keine fremden lokalen Änderungen überschreiben.
+  after_each_package:
+    - Gezielte Unit-, Integrations- und nötige UI-Tests ausführen.
+    - Fortschritt und offene Risiken dokumentieren.
+    - Fertige und getestete Änderungen nach main integrieren und origin/main ohne Force-Push aktualisieren.
+  cutover_guard:
+    - Hub-Master-Flag erst nach Inventur, Shadow-Abgleich, Projektionstests und Rollback-Probe aktivieren.
+    - Historische Rechnungen nur für Prognose lesen; nicht rückwirkend vom gezählten Anfangsbestand abziehen.
+
+confirmed_policy:
+  inventory_master_final: product_hub_postgresql
+  legacy_inventory_during_transition: operational_source_mirrored_into_hub
+  event_identity_shared_across_shadow_and_cutover: true
+  location_default: MAIN
+  sale_event: final_sevdesk_invoice_release
+  draft_status_100_creates_stock_movement: false
+  repeated_invoice_read_or_start_creates_stock_movement: false
+  external_sevdesk_invoice_releases_in_scope: true
+  cancellation_reversal: automatic_for_unambiguous_units
+  credit_note_reversal: automatic_for_unambiguous_units
+  partial_credit_reversal: only_matched_units
+  ambiguous_value_only_credit: needs_review_no_guessed_units
+  sales_history_source: final_sevdesk_invoice_positions
+  sales_history_window_full_months: 60
+  forecast_horizon_months: 3
+  new_external_print_reorder_point: 50
+  minimum_history_full_sellable_months: 6
+  dynamic_reorder_point_formula: ceil(max(0, net_sold_units) / full_sellable_months * 3)
+  fixed_reorder_point_override: per_variant_location
+  alert_condition: on_hand_less_than_or_equal_to_active_reorder_point
+  alert_resolve_condition: on_hand_greater_than_active_reorder_point
+  pod_default_print_batch: 3
+  pod_print_formula: 3 * ceil(max(0, open_demand_minus_available_on_hand) / 3)
+  pod_infinity_meaning: manufacturing_capacity_only
+  task_mail:
+    trigger: manual_button_click
+    transport: existing_ms_graph_mail_service
+    recipient: todo@xeisworks.at
+    send_only_once_per_alert_without_explicit_resend: true
+
+source_paths:
+  inventory_legacy: src/xw_office/services/inventory/service.py
+  inventory_hub_service: src/xw_office/services/product_hub/inventory.py
+  inventory_hub_repository: src/xw_office/repositories/product_hub_inventory.py
+  inventory_hub_models: src/xw_office/models/product_hub_inventory.py
+  inventory_api: src/xw_office/web/routers/inventory.py
+  invoice_service: src/xw_office/services/invoice_processing/service.py
+  invoice_client: src/xw_office/services/sevdesk/invoice_client.py
+  invoice_start_ui: src/xw_office/ui/modules/rechnungen/tagesgeschaeft_view.py
+  invoice_view: src/xw_office/ui/modules/rechnungen/view.py
+  invoice_open_products: src/xw_office/ui/modules/rechnungen/open_invoice_overview.py
+  product_catalog: src/xw_office/services/products/catalog.py
+  print_decision: src/xw_office/services/products/print_decision.py
+  product_ui: src/xw_office/ui/modules/products/view.py
+  graph_mail: src/xw_office/services/mailing/service.py
+  existing_progress: docs/product_hub/PROGRESS.md
+
+packages:
+  - id: P00
+    title: Live-Datenvertrag und Bestandsquellen lesen
+    depends_on: []
+    scope:
+      - Read-only Bericht über aktive physische Varianten, SKU- und sevDesk-Part-Mappings, fehlende/mehrdeutige Zuordnungen.
+      - sevDesk-Rechnungs- und Gegenbelegdaten lesend auf Status, Positionen, Stückzahlen und historische Abdeckung prüfen.
+      - Prüfen, ob die aktuelle sevDesk-Konfiguration bei Rechnungsfreigabe selbst Part-Bestände verändert; doppelte Kanalbuchung ausschließen.
+      - Bestehende Legacy-, Hub- und sevDesk-Bestände je Variante vergleichen; Shadow-Flag und Cutover-Gates ausweisen.
+      - Status-/Positionsfelder gegen den aktuellen sevDesk-Client prüfen; keine API-Verträge raten.
+    acceptance:
+      - Kein externer oder lokaler Bestands-Schreibzugriff.
+      - Bericht weist 60-Monats-Abdeckung, Datenlücken, Mehrfachzuordnungen und fehlende verkaufsfähige Startdaten aus.
+      - Migrations- und Cutover-Blocker sind vor P01 sichtbar.
+
+  - id: P01
+    title: Artikelart, Policy und sichere Ledger-Transaktion
+    depends_on: [P00]
+    scope:
+      - Additive Migration für external_print, pod, digital sowie Forecast- und Alarmmodus auto/fixed pro Variante und Lagerort.
+      - Numerischen Ist-Bestand getrennt von POD-Druckkapazität modellieren; Legacy-∞-Darstellung korrigieren.
+      - Ledger-Buchung bei parallelen Schreibern gegen verlorene Updates absichern.
+      - Bewegungsursache, Quelle, Referenz, Bearbeiter und Idempotenzschlüssel beibehalten.
+    acceptance:
+      - Digital erhält keine physische Bewegung; POD hat endlichen on_hand und separate unbegrenzte Nachdruckbarkeit.
+      - Gleichzeitige Buchungen verlieren keine Stücke und erzeugen bei gleichem Schlüssel keine Duplikate.
+      - Bestehende Produkt-/Druckpfade laufen regressionsfrei.
+
+  - id: P02
+    title: Geführte Inventur und Stichtag
+    depends_on: [P01]
+    scope:
+      - Zählliste für aktive external_print- und pod-Varianten mit SKU, Titel, Lagerort und vorhandener Menge.
+      - Zwischenstand, Referenz, Prüfung, Differenzvorschau und bestätigter Abschluss je Variante.
+      - Bestätigte Differenz als idempotente recount-Bewegung; vorhandene Shadow-Baseline abgleichen.
+      - Dauerhaften Stichtag und Start-Wasserstand für spätere Rechnungsbuchungen speichern.
+    acceptance:
+      - 20 erwartet, 17 gezählt ergibt genau eine Bewegung -3; Wiederholung ergibt keine zweite.
+      - POD-Vordrucke werden gezählt; ∞ wird nie als Menge importiert.
+      - Unbekannte, doppelte und inaktive SKUs können den Abschluss nicht stillschweigend verfälschen.
+      - Vor dem Stichtag freigegebene Rechnungen verändern die neue Baseline nicht.
+
+  - id: P03
+    title: Idempotenter sevDesk-Rechnungsabgang je Position
+    depends_on: [P02]
+    scope:
+      - Einen gemeinsamen Buchungsdienst für Desktop-Freigabe und externen sevDesk-Poller bauen.
+      - Finalen Belegstatus und endgültige Positionen nach Freigabe erneut lesen.
+      - Eindeutige Rechnungs-/Positionsidentität, gebuchte Menge, Quellrevision und Verarbeitungsergebnis dauerhaft speichern.
+      - Im Shadow-Modus denselben Beleg einmal operativ im Legacy-Bestand und nachvollziehbar im Hub buchen; Spiegelungsfehler als Drift/Retry ausweisen.
+      - START-Batchverbrauch durch pro Rechnung gesicherten Übergang ersetzen; Wix-Fulfillment bucht danach nicht erneut.
+      - Externe Unterdeckung als sichtbaren offenen Konflikt mit Fehlmenge behandeln; Desktop-Freigabe vorab prüfen.
+    acceptance:
+      - Wix-Rechnung und manuelle sevDesk-Rechnung buchen je physischer Position genau einmal.
+      - Erneuter START, Polling-Überlappung, Mailversand und Wix-Fulfillment buchen nicht noch einmal.
+      - Zwei erfolgreiche plus eine fehlgeschlagene Rechnung lassen die zwei erfolgreichen Bestandsabgänge bestehen.
+      - Legacy und Hub bleiben im Shadow-Abgleich je erfolgreich gebuchter Rechnung konsistent.
+      - Unklare SKU und Unterdeckung sind sichtbar; kein stilles Kappen auf Null.
+
+  - id: P04
+    title: Storno- und Gutschrift-Rückbuchung
+    depends_on: [P03]
+    scope:
+      - Finale sevDesk-Stornos und Gutschriften mit Ursprungsrechnung und Positionsmengen verknüpfen.
+      - Voll- und Teilmengen automatisch idempotent als eigene Gegenbewegung buchen.
+      - Auch Gegenbelege zu vor dem Inventur-Stichtag verkauften Rechnungen behandeln.
+      - Wertgutschriften ohne eindeutige Stückzahl als Klärfall ausweisen.
+      - Begründete damage- oder manual_adjustment-Buchung für Ware ohne physische Rückkehr ermöglichen.
+    acceptance:
+      - Vollstorno erstattet die eindeutige ursprüngliche Stückzahl einmal.
+      - Mehrere Teilgutschriften überschreiten insgesamt nie die ursprüngliche Menge.
+      - Ein unklarer reiner Geldbetrag erzeugt keine erfundene Stückbewegung.
+      - Bestehender Refund-Prozess erzeugt keinen zweiten Gegenbeleg durch dieses Paket.
+
+  - id: P05
+    title: Absatzprognose und zustandsbasierte Lagerwarnung
+    depends_on: [P03, P04]
+    scope:
+      - 60 volle Kalendermonate aus finalen sevDesk-Positionen und eindeutigen Gegenmengen aggregieren.
+      - Volle Monate seit Verkaufbarkeit einschließlich Nullmonaten ermitteln; vor sechs Monaten Startwert 50 verwenden.
+      - Drei-Monats-Wert aufrunden, Fixwert pro Variante/Lagerort unterstützen und Datenqualität anzeigen.
+      - Warnung nach Bewegung, Inventur, Schwellenänderung, Prognose-Refresh und Worker-Start neu bewerten.
+      - low_stock und out_of_stock als genau einen aktiven Fall je Variante/Lagerort führen.
+    acceptance:
+      - Fünf volle Monate nutzen 50; sechs volle Monate nutzen die aktuelle Formel.
+      - Fixwert bleibt aktiv, während der automatische Vorschlag weiter berechnet wird.
+      - Schwelle 5 bei Bestand 4 alarmiert; Schwelle 3 löst auf; Schwelle 6 alarmiert wieder.
+      - 0 Stück erzeugen out_of_stock ohne zweite parallele Warnung.
+
+  - id: P06
+    title: Lagerbereinigter POD- und Druckerei-Plan in RECHNUNGEN
+    depends_on: [P01, P03, P05]
+    scope:
+      - PRINT PRODUKTE OFFEN um bestellt, Lager, anderweitig eingeplant, aus Lager und neu drucken ergänzen.
+      - Bedarf je exakter Variante über alle offenen Rechnungen aggregieren; keine Doppelzuteilung von Lagerstücken.
+      - POD-Fehlmenge in Dreierchargen planen; external_print-Fehlmenge als Nachbestellfall zeigen.
+      - Einzel- und Sammeldruck auf denselben Plan umstellen; nur bestätigte Produktion als print_run buchen.
+      - Freitext-/XW-010-Titel nur bei eindeutiger Variantenauflösung bestandswirksam planen.
+    acceptance:
+      - POD 0 plus Bedarf 1 druckt 3 und lässt nach Freigabe 2; zwei spätere Einzelverkäufe drucken 0.
+      - POD 2 plus gleichzeitiger Bedarf 3 druckt 3; Bestand wird nicht zweimal zugeteilt.
+      - Druckerei-Note mit ausreichendem Bestand zeigt aus Lager und druckt 0.
+      - Historische Drucklauf-Ansicht bucht oder druckt ohne neue Aktion nichts.
+
+  - id: P07
+    title: Alarm-Popup und manuell ausgelöste Graph-Task
+    depends_on: [P05]
+    scope:
+      - RECHNUNGEN-Alarm-Button mit Zahl betroffener Varianten und Popup bauen.
+      - Ist-Bestand, Schwelle, Modus, Monatsmittel, Datenfenster, Prognose und Produktlink zeigen.
+      - Fixwert setzen bzw. auf Automatik zurückstellen und Alarm sofort neu bewerten.
+      - Task erzeugen über vorhandenen MailDeliveryService an todo@xeisworks.at; Versandzustand und Duplikatschutz persistieren.
+      - Bestehenden XW-Flow-Outbox-Intent auf doppelte Aufgabenerzeugung prüfen und eindeutig koordinieren.
+    acceptance:
+      - Button erscheint auch ohne offene Rechnungen bei aktiver Warnung.
+      - Schwellenänderung aktualisiert Popup und Button sofort mit korrekter Richtung.
+      - Mail enthält SKU, Titel, Ist, Schwelle, Mittelwert, Dreimonatsbedarf, Zielmenge, Alarm-ID und Link.
+      - Doppelklick und unsicherer Graph-Timeout erzeugen keine unbemerkte zweite Task.
+
+  - id: P08
+    title: Shadow-Abnahme und Product-Hub-Bestands-Cutover
+    depends_on: [P02, P03, P04, P05, P06, P07]
+    scope:
+      - Gezählt/Legacy/Hub/sevDesk je Variante abgleichen und offene Konflikte bereinigen.
+      - Alle produktiven Bestands-Schreibpfade, sevDesk-/Wix-Projektionen und Rollback praktisch testen.
+      - Cutover-Readiness und manuelle Betriebsnachweise dokumentieren.
+      - Erst nach erfüllten Gates Product Hub zum Master machen; unabhängige Legacy-Schreibpfade kontrolliert entfernen.
+    acceptance:
+      - Kein ungeklärter Bestands- oder Sync-Konflikt am Cutover-Stichtag.
+      - Jeder Verkauf, Gegenbeleg, Druck und Recount hat genau eine nachvollziehbare Ledger-Bewegung.
+      - Projektionen reproduzieren Hub-Bestand; externe direkte Änderungen werden als Drift sichtbar.
+      - Rollback-Probe dokumentiert und keine historische Rechnung doppelt gebucht.
