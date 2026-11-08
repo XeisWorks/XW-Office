@@ -64,9 +64,17 @@ class InventoryAlertTaskService:
             on_hand = int(stock.on_hand if stock is not None else alert.observed_stock or 0)
             threshold = int(alert.threshold if alert.threshold is not None else 0)
             if sales_average_monthly is None and stock is not None:
-                sales_average_monthly = max(0, int(stock.automatic_reorder_point or 0)) / 3
+                full_months = max(0, int(stock.forecast_full_sellable_months or 0))
+                sales_average_monthly = (
+                    max(0, int(stock.forecast_net_sold_units or 0)) / full_months
+                    if full_months
+                    else max(0, int(stock.automatic_reorder_point or 0)) / 3
+                )
             if three_month_demand is None and stock is not None:
                 three_month_demand = int(stock.automatic_reorder_point or 0)
+            if data_window == "bis zu 60 vollständige Monate" and stock is not None:
+                if stock.forecast_window_start and stock.forecast_window_end:
+                    data_window = f"{stock.forecast_window_start} bis {stock.forecast_window_end} ({stock.forecast_data_quality})"
             average_text = "unbekannt" if sales_average_monthly is None else f"{sales_average_monthly:.2f} Stk/Monat"
             demand_text = "unbekannt" if three_month_demand is None else f"{three_month_demand} Stk"
             subject = f"Lageralarm: {sku} – {title}"

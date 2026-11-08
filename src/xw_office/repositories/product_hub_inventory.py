@@ -84,6 +84,12 @@ class InventoryRepository:
         default_reprint_qty: int | None = None,
         automatic_reorder_point: int | None = None,
         reorder_mode: str | None = None,
+        forecast_net_sold_units: int | None = None,
+        forecast_full_sellable_months: int | None = None,
+        forecast_window_start: datetime.date | None = None,
+        forecast_window_end: datetime.date | None = None,
+        forecast_data_quality: str | None = None,
+        forecast_refreshed_at: datetime.datetime | None = None,
     ) -> InventoryStock:
         with self._scope() as session:
             stock = session.get(InventoryStock, (variant_id, location_id))
@@ -102,6 +108,18 @@ class InventoryRepository:
                 if reorder_mode not in {"auto", "fixed"}:
                     raise ValueError("reorder_mode muss auto oder fixed sein")
                 stock.reorder_mode = reorder_mode
+            if forecast_net_sold_units is not None:
+                stock.forecast_net_sold_units = max(0, int(forecast_net_sold_units))
+            if forecast_full_sellable_months is not None:
+                stock.forecast_full_sellable_months = max(0, int(forecast_full_sellable_months))
+            if forecast_window_start is not None:
+                stock.forecast_window_start = forecast_window_start
+            if forecast_window_end is not None:
+                stock.forecast_window_end = forecast_window_end
+            if forecast_data_quality is not None:
+                stock.forecast_data_quality = str(forecast_data_quality).strip()[:40] or "unknown"
+            if forecast_refreshed_at is not None:
+                stock.forecast_refreshed_at = forecast_refreshed_at
             session.flush()
             return stock
 

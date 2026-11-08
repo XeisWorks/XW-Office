@@ -50,6 +50,12 @@ class StockOut(BaseModel):
     reorder_point: int
     automatic_reorder_point: int = 0
     reorder_mode: str = "auto"
+    forecast_net_sold_units: int = 0
+    forecast_full_sellable_months: int = 0
+    forecast_window_start: datetime.date | None = None
+    forecast_window_end: datetime.date | None = None
+    forecast_data_quality: str = "unknown"
+    forecast_refreshed_at: datetime.datetime | None = None
     target_stock: int
     default_reprint_qty: int
     version: int

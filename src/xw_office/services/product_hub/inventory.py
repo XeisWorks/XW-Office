@@ -94,6 +94,8 @@ class InventoryAlertDetail:
     average_monthly_sales: float = 0.0
     three_month_demand: int = 0
     forecast_window: str = "bis zu 60 vollständige Monate"
+    forecast_data_quality: str = "unknown"
+    forecast_refreshed_at: datetime.datetime | None = None
 
 
 class MovementResult:
@@ -280,6 +282,12 @@ class InventoryV2Service:
         default_reprint_qty: int | None = None,
         automatic_reorder_point: int | None = None,
         reorder_mode: str | None = None,
+        forecast_net_sold_units: int | None = None,
+        forecast_full_sellable_months: int | None = None,
+        forecast_window_start: datetime.date | None = None,
+        forecast_window_end: datetime.date | None = None,
+        forecast_data_quality: str | None = None,
+        forecast_refreshed_at: datetime.datetime | None = None,
     ) -> object:
         """Update policy values and immediately reconcile the current alert state.
 
@@ -306,6 +314,12 @@ class InventoryV2Service:
             default_reprint_qty=default_reprint_qty,
             automatic_reorder_point=automatic_reorder_point,
             reorder_mode=reorder_mode,
+            forecast_net_sold_units=forecast_net_sold_units,
+            forecast_full_sellable_months=forecast_full_sellable_months,
+            forecast_window_start=forecast_window_start,
+            forecast_window_end=forecast_window_end,
+            forecast_data_quality=forecast_data_quality,
+            forecast_refreshed_at=forecast_refreshed_at,
         )
         alert_opened = self._refresh_alert_state(variant_id, location.id, stock.on_hand)
         if alert_opened is not None:
@@ -340,6 +354,12 @@ class InventoryV2Service:
             # Keep the automatic proposal visible even when a fixed override is active.
             automatic_reorder_point=result.automatic_reorder_point,
             reorder_mode="fixed" if fixed_reorder_point is not None else "auto",
+            forecast_net_sold_units=result.net_sold_units,
+            forecast_full_sellable_months=result.full_sellable_months,
+            forecast_window_start=result.window_start,
+            forecast_window_end=result.window_end,
+            forecast_data_quality=result.data_quality,
+            forecast_refreshed_at=datetime.datetime.now(datetime.timezone.utc),
         )
         return result
 
@@ -462,11 +482,23 @@ class InventoryV2Service:
                     automatic_reorder_point=int(stock.automatic_reorder_point if stock is not None else alert.threshold or 0),
                     reorder_mode=str(stock.reorder_mode if stock is not None else "auto"),
                     average_monthly_sales=(
-                        max(0, int(stock.automatic_reorder_point if stock is not None else alert.threshold or 0)) / 3
+                        (
+                            max(0, int(stock.forecast_net_sold_units))
+                            / max(1, int(stock.forecast_full_sellable_months))
+                        )
+                        if stock is not None and int(stock.forecast_full_sellable_months or 0) > 0
+                        else max(0, int(stock.automatic_reorder_point if stock is not None else alert.threshold or 0)) / 3
                     ),
                     three_month_demand=max(
                         0, int(stock.automatic_reorder_point if stock is not None else alert.threshold or 0)
                     ),
+                    forecast_window=(
+                        f"{stock.forecast_window_start} bis {stock.forecast_window_end}"
+                        if stock is not None and stock.forecast_window_start and stock.forecast_window_end
+                        else "bis zu 60 vollständige Monate"
+                    ),
+                    forecast_data_quality=str(stock.forecast_data_quality if stock is not None else "unknown"),
+                    forecast_refreshed_at=stock.forecast_refreshed_at if stock is not None else None,
                 )
             )
         return details

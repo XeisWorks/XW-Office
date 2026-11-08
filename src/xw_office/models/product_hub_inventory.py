@@ -12,6 +12,7 @@ import uuid
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -68,6 +69,12 @@ class InventoryStock(Base):
     reorder_point: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     automatic_reorder_point: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     reorder_mode: Mapped[str] = mapped_column(String(12), default="auto", nullable=False)
+    forecast_net_sold_units: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    forecast_full_sellable_months: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    forecast_window_start: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    forecast_window_end: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    forecast_data_quality: Mapped[str] = mapped_column(String(40), default="unknown", nullable=False)
+    forecast_refreshed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     target_stock: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     default_reprint_qty: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)

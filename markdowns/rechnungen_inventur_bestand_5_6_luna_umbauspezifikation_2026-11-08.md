@@ -28,9 +28,10 @@
 - Der bestehende Monatsfeed ist jetzt über `SevdeskHistoryProviderAdapter` als Produktionsquelle für Forecast und externen Abgleich nutzbar; `xw-inventory-sync` bucht finale externe Rechnungen/Gutschriften idempotent und beendet sich bei Klärfällen bewusst mit Fehlerstatus.
 - `InventoryV2Service.refresh_reorder_point` kann den Drei-Monats-Forecast bzw. den SKU-Fixwert persistieren und die Warnung sofort neu bewerten; der regelmäßige Historien-Worker ist als `xw-inventory-worker` vorhanden und die Alarmanzeige zeigt Forecast-Mittelwert/Fenster.
 - Der Lagerbestand speichert neben dem aktiven Alarmbestand jetzt auch den automatischen Forecast und den Modus `auto`/`fixed`, damit ein Fixwert den Vorschlag nicht verdeckt.
+- Die Forecast-Provenienz (Nettoabsatz, volle Verkaufsmonate, Datenfenster, Datenqualität und letzter Refresh) wird in `inventory_stock` persistiert und im Alarm-Popup sowie in der Task-Mail verwendet.
 - Die Hub-Ledgerbuchung sperrt Lagerort und Bestandszeile transaktional, revalidiert den Idempotenzschlüssel nach dem Lock und rollt bei einem konkurrierenden Unique-Key-Sieg die Zwischenänderung zurück.
 - Die Cutover-Readiness nimmt nun den read-only Bestandsquellen-Audit und direkte Legacy-/Hub-Mengenabweichungen als eigene Gates auf; der Master bleibt bis zu den manuellen Betriebsnachweisen absichtlich deaktiviert.
-- Gesamtprüfung am 8. November 2026: `python -m pytest -q` → **1.962 bestanden**; `python -m alembic heads/current` → `034_inventory_forecast_fields` (Head). `main` ist sauber zu `origin/main` gepusht.
+- Gesamtprüfung am 8. November 2026: `python -m pytest -q` → **1.964 bestanden**; `python -m alembic heads/current` → `035_inventory_forecast_metadata` (Head). `main` ist sauber zu `origin/main` gepusht.
 
 - **P00 – Live-Datenvertrag und Bestandsquellen:** begonnen und erster lesender Audit-Baustein umgesetzt in `services/product_hub/inventory_audit.py`; keine Bestands- oder sevDesk-Schreibzugriffe.
 - Der Audit meldet doppelte SKU, fehlende physische sevDesk-Part-Mappings, negative oder fehlende Quellbestände, Legacy-/Hub-Drift und fehlendes Verkaufsstartdatum. Der Live-DB-Snapshot ist jetzt als read-only `InventoryV2Service.audit_inventory_sources()` und `GET /api/v1/inventory/audit` verfügbar; vier Audit-Tests laufen grün.
