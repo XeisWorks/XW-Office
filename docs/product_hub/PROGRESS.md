@@ -1420,3 +1420,9 @@ sevDesk. It rejects a Part already owned by another Hub entity and, when explici
 moving this product's old parent-level mapping, migrates that one row to the selected
 variant instead of retaining two competing mappings. Variant mappings can also be
 removed there.
+
+## Rechnungen-/Inventur-Umbau (2026-11-08)
+
+Der eigenständige Umbau gemäß `markdowns/rechnungen_inventur_bestand_5_6_luna_umbauspezifikation_2026-11-08.md` ist fachlich und technisch integriert: Rechnungsfreigabe, externe sevDesk-Poller, begrenzte Gutschrift-Rückbuchungen, geführte Inventur, Forecast-/Alarmzustand, POD-Dreierchargen, lagerbereinigte offene Druckplanung und Graph-Task-Popup sind idempotent verdrahtet. Der wiederholbare `xw-inventory-worker` führt Forecast und sevDesk-Abgleich aus; die externe Railway-Service-Aktivierung bleibt ein Betriebs-Gate.
+
+Die veralteten PR15-Hinweise oben beschreiben den damaligen Zwischenstand und bleiben als historische Cutover-Begründung bestehen. Für den aktuellen Bestand gelten zusätzlich der read-only Quellen-Audit (`GET /api/v1/inventory/audit`), der externe Legacy-Mirror und die Cutover-Readiness-Gates. Der Product-Hub-Master bleibt bewusst deaktiviert, bis Produktionsinventur, repräsentativer Shadow-Lauf, Backup und Rollback-Probe nachgewiesen sind. Gesamtprüfung am 8. November 2026: `python -m pytest -q` → **1.967 bestanden**; Alembic `036_inventory_external_mirror` ist der aktuelle Head.
