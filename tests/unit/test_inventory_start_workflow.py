@@ -255,6 +255,28 @@ def test_start_workflow_mirrors_print_and_sale_as_separate_ledger_reasons(tmp_pa
     ]
 
 
+def test_start_workflow_can_skip_sale_shadow_when_invoice_booking_is_authoritative(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "score.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    repo = _RepoStub(
+        {
+            "daily_business.pending_requirements": json.dumps({"XW-6-003": 2}),
+            "inventory.stock_levels": json.dumps({"XW-6-003": 3}),
+            "inventory.products": _product_payload(pdf_path),
+        }
+    )
+    mirror = _ShadowMirrorStub()
+    service = InventoryService(AppConfig(printing=_printing_config()), repo, shadow_mirror=mirror)
+    preflight = service.build_start_preflight(open_invoice_count=1)
+    service.execute_start_workflow(
+        preflight,
+        StartMode.INVOICES_AND_PRINT,
+        print_products=False,
+        mirror_sales_to_hub=False,
+    )
+    assert mirror.calls == []
+
+
 def test_print_only_then_consumption_does_not_print_twice(tmp_path: Path) -> None:
     pdf_path = tmp_path / "score.pdf"
     pdf_path.write_bytes(b"%PDF-1.4\n")

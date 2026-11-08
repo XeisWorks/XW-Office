@@ -299,6 +299,11 @@ class InvoiceProcessingService:
         self._invoice_inventory = invoice_inventory
         self._invoice_work_context_cache: dict[str, InvoiceWorkContext] = {}
 
+    @property
+    def invoice_inventory_enabled(self) -> bool:
+        """Whether finalized physical invoice lines are booked by the Hub core."""
+        return self._invoice_inventory is not None
+
     def load_invoice_table_rows(
         self,
         *,

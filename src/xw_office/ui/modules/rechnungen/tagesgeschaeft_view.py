@@ -1458,6 +1458,7 @@ class TagesgeschaeftView(QWidget):
                         preflight,
                         mode,
                         print_products=False,
+                        mirror_sales_to_hub=not invoice_service.invoice_inventory_enabled,
                     )
                     if print_report is not None:
                         inventory_report = StartExecutionReport(

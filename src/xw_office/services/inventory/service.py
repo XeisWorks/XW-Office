@@ -371,6 +371,7 @@ class InventoryService:
         mode: StartMode,
         *,
         print_products: bool = True,
+        mirror_sales_to_hub: bool = True,
     ) -> StartExecutionReport:
         """Execute START side effects for the selected *mode*.
 
@@ -423,7 +424,8 @@ class InventoryService:
                 shadow_movements.append((decision.sku, produced, "print_run"))
             if consumed > 0:
                 consumed_skus.append(decision.sku)
-                shadow_movements.append((decision.sku, -consumed, "sale"))
+                if mirror_sales_to_hub:
+                    shadow_movements.append((decision.sku, -consumed, "sale"))
 
         self._save_stock_levels(stock_levels)
         for sku, delta, reason in shadow_movements:
