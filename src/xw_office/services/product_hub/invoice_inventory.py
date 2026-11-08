@@ -6,6 +6,7 @@ import uuid
 
 from xw_office.core.database import session_scope
 from xw_office.models.inventory_document_booking import InventoryDocumentBooking
+from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.services.product_hub.inventory import InventoryV2Service
 
@@ -38,6 +39,57 @@ class InvoiceInventoryBookingService:
         self._session_factory = session_factory
         self._inventory = InventoryV2Service(session_factory)
         self._repository = InventoryRepository(session_factory)
+        self._products = ProductHubRepository(session_factory)
+
+    def apply_invoice_context(
+        self,
+        *,
+        document_id: str,
+        positions,
+        source: str = "sevdesk.invoice_release",
+    ) -> list[InvoiceInventoryBookingResult]:
+        """Book resolvable physical product positions from a normalized context.
+
+        Digital, service, shipping, discount, and unknown positions are ignored by
+        design.  A product-like position without an exact Hub SKU raises so a final
+        invoice cannot silently disappear from inventory accounting.
+        """
+        results: list[InvoiceInventoryBookingResult] = []
+        unresolved: list[str] = []
+        for position in positions:
+            if getattr(position, "kind", "") != "product":
+                continue
+            sku = str(getattr(position, "sku", "") or "").strip().upper()
+            quantity = getattr(position, "quantity_int", 0)
+            if not sku or quantity <= 0:
+                continue
+            resolved = self._products.resolve_sku(sku)
+            if resolved is None or not resolved.variant.active:
+                unresolved.append(sku or "<ohne SKU>")
+                continue
+            if not resolved.variant.stock_enabled:
+                continue
+            results.append(
+                self.apply_line(
+                    InvoiceInventoryLine(
+                        document_id=document_id,
+                        position_key=(
+                            str(getattr(position, "source_id", "") or "").strip()
+                            or f"position-{getattr(position, 'position_number', 0)}"
+                        ),
+                        variant_id=resolved.variant.id,
+                        quantity=int(quantity),
+                        movement_kind="sale",
+                    ),
+                    source=source,
+                )
+            )
+        if unresolved:
+            raise ValueError(
+                "Physische Rechnungspositionen ohne eindeutige Product-Hub-Variante: "
+                + ", ".join(sorted(set(unresolved)))
+            )
+        return results
 
     def apply_line(self, line: InvoiceInventoryLine, *, source: str = "sevdesk.invoice_release") -> InvoiceInventoryBookingResult:
         document_id = str(line.document_id or "").strip()

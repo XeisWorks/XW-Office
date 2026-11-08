@@ -44,6 +44,7 @@ from xw_office.services.wix.client import WixOrdersClient
 
 if TYPE_CHECKING:
     from xw_office.services.inventory.service import InventoryService
+    from xw_office.services.product_hub.invoice_inventory import InvoiceInventoryBookingService
 
 try:
     import fitz
@@ -267,6 +268,7 @@ class InvoiceProcessingService:
         offene_sendungen: OffeneSendungenService | None = None,
         search_index: InvoiceSearchIndexService | None = None,
         print_decision: Any | None = None,
+        invoice_inventory: InvoiceInventoryBookingService | None = None,
     ) -> None:
         self._invoices = invoice_client
         self._search_index = search_index
@@ -294,6 +296,7 @@ class InvoiceProcessingService:
         self._customer_aftercare = customer_aftercare
         self._offene_sendungen = offene_sendungen
         self._print_decision = print_decision
+        self._invoice_inventory = invoice_inventory
         self._invoice_work_context_cache: dict[str, InvoiceWorkContext] = {}
 
     def load_invoice_table_rows(
@@ -2086,6 +2089,12 @@ class InvoiceProcessingService:
         invoice_key = str(summary.id or "").strip()
         self._invoice_detail_cache.pop(invoice_key, None)
         self._invoice_work_context_cache.pop(invoice_key, None)
+        if self._invoice_inventory is not None and not digital_only:
+            context = self.load_invoice_work_context(summary, load_positions=True, force=True)
+            self._invoice_inventory.apply_invoice_context(
+                document_id=str(summary.id or ""),
+                positions=context.positions,
+            )
         return self._next_flags(
             flags,
             payment_applicable=(self._stamp(flags).payment_applicable or bool(summary.order_reference.strip())),

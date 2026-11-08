@@ -15,6 +15,7 @@
 - Der Legacy-/Hub-Katalog kann die Artikelart `external_print`, `pod` oder `digital` nun explizit mitführen; unbekannte Werte fallen kontrolliert auf `external_print` zurück. Die bestehende Drucklogik ist damit rückwärtskompatibel vorbereitet, aber noch nicht vollständig auf den neuen Plan verdrahtet.
 - Der Hub-Schwellenpfad bewertet den aktuellen Bestand jetzt sofort nach einer Schwellenänderung und öffnet bzw. löst Warnungen ohne erfundene Bewegungsbuchung auf. API- und Servicetests decken die Erhöhung und Senkung der Schwelle ab.
 - Für P03 ist `inventory_document_booking` ergänzt: je Dokument, exakter Position und Bewegungsart wird die bereits angewandte kumulative Menge persistiert. Wiederholte Freigabe-/Polling-Aufrufe buchen damit 0 Differenz; Mengenänderungen und Rückbuchungen wenden nur die Differenz an. Migration und 2 Integrationsfälle sind enthalten.
+- Der Freigabeweg kann den Buchungskern nun optional aus dem Bootstrap verwenden: Nach erfolgreicher physischer sevDesk-Freigabe werden normalisierte Produktpositionen gegen exakte Hub-Varianten aufgelöst und über die Buchungsmarke gebucht. Digitale Positionen bleiben ohne Bewegung; fehlende physische Varianten werden als Fehler sichtbar.
 - **Noch offen:** tatsächliche Live-/sevDesk-Snapshot-Anbindung, historische Positionsprüfung und die Pakete P01–P08.
 
 ## 1. Verbindliche Fachentscheidungen

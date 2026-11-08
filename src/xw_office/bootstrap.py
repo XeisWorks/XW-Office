@@ -89,6 +89,7 @@ from xw_office.services.product_hub.sevdesk_inventory_reconciliation import (
 )
 from xw_office.services.products.brand_service import ProductBrandService
 from xw_office.services.products.catalog import ProductCatalogService
+from xw_office.services.product_hub.invoice_inventory import InvoiceInventoryBookingService
 from xw_office.services.products.field_bulk_service import ProductFieldBulkService
 from xw_office.services.products.print_decision import PrintDecisionEngine
 from xw_office.services.qr_codes.service import QrCodeService
@@ -274,6 +275,11 @@ def register_default_services(container: Container) -> None:
                 else None
             ),
             print_decision=c.resolve(PrintDecisionEngine),
+            invoice_inventory=(
+                c.resolve(InvoiceInventoryBookingService)
+                if (c.config.database_url or "").strip()
+                else None
+            ),
         ),
     )
     container.register(
@@ -636,6 +642,10 @@ def register_default_services(container: Container) -> None:
     # This keeps local dev/test environments (no DB) working without needing env vars.
     if (container.config.database_url or "").strip():
         container.register(SessionMaker, lambda c: create_session_factory(c.config))
+        container.register(
+            InvoiceInventoryBookingService,
+            lambda c: InvoiceInventoryBookingService(c.resolve(SessionMaker)),
+        )
         container.register(
             SevdeskInventoryReconciliationService,
             lambda c: SevdeskInventoryReconciliationService(
