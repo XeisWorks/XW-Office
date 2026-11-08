@@ -48,6 +48,8 @@ class StockOut(BaseModel):
     on_hand: int
     reserved: int
     reorder_point: int
+    automatic_reorder_point: int = 0
+    reorder_mode: str = "auto"
     target_stock: int
     default_reprint_qty: int
     version: int

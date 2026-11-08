@@ -81,6 +81,8 @@ class InventoryRepository:
         reorder_point: int | None = None,
         target_stock: int | None = None,
         default_reprint_qty: int | None = None,
+        automatic_reorder_point: int | None = None,
+        reorder_mode: str | None = None,
     ) -> InventoryStock:
         with self._scope() as session:
             stock = session.get(InventoryStock, (variant_id, location_id))
@@ -93,6 +95,12 @@ class InventoryRepository:
                 stock.target_stock = target_stock
             if default_reprint_qty is not None:
                 stock.default_reprint_qty = default_reprint_qty
+            if automatic_reorder_point is not None:
+                stock.automatic_reorder_point = automatic_reorder_point
+            if reorder_mode is not None:
+                if reorder_mode not in {"auto", "fixed"}:
+                    raise ValueError("reorder_mode muss auto oder fixed sein")
+                stock.reorder_mode = reorder_mode
             session.flush()
             return stock
 

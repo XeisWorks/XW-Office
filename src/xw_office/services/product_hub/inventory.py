@@ -267,6 +267,8 @@ class InventoryV2Service:
         reorder_point: int | None = None,
         target_stock: int | None = None,
         default_reprint_qty: int | None = None,
+        automatic_reorder_point: int | None = None,
+        reorder_mode: str | None = None,
     ) -> object:
         """Update policy values and immediately reconcile the current alert state.
 
@@ -280,6 +282,8 @@ class InventoryV2Service:
             raise ValueError("target_stock darf nicht negativ sein")
         if default_reprint_qty is not None and default_reprint_qty < 0:
             raise ValueError("default_reprint_qty darf nicht negativ sein")
+        if automatic_reorder_point is not None and automatic_reorder_point < 0:
+            raise ValueError("automatic_reorder_point darf nicht negativ sein")
         location = self._inventory.get_or_create_location(
             code=location_code, name=DEFAULT_LOCATION_NAME
         )
@@ -289,6 +293,8 @@ class InventoryV2Service:
             reorder_point=reorder_point,
             target_stock=target_stock,
             default_reprint_qty=default_reprint_qty,
+            automatic_reorder_point=automatic_reorder_point,
+            reorder_mode=reorder_mode,
         )
         alert_opened = self._refresh_alert_state(variant_id, location.id, stock.on_hand)
         if alert_opened is not None:
@@ -320,6 +326,9 @@ class InventoryV2Service:
             variant_id=variant_id,
             location_code=location_code,
             reorder_point=result.active_reorder_point,
+            # Keep the automatic proposal visible even when a fixed override is active.
+            automatic_reorder_point=result.automatic_reorder_point,
+            reorder_mode="fixed" if fixed_reorder_point is not None else "auto",
         )
         return result
 

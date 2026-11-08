@@ -168,6 +168,7 @@ packages:
     depends_on: [P03, P04]
     implementation_notes:
       - InventoryV2Service.refresh_reorder_point persistiert den Forecast-/Fixwert je Variante und bewertet den Alarmzustand sofort neu.
+      - inventory_stock speichert automatischen Vorschlag und `auto`/`fixed`-Modus getrennt vom aktiven Alarmbestand.
       - Historischer SevDesk-Feed, regelmäßiger Worker-Refresh und Anzeige der Datenqualität sind noch offen.
     scope:
       - 60 volle Kalendermonate aus finalen sevDesk-Positionen und eindeutigen Gegenmengen aggregieren.

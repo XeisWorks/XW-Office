@@ -66,6 +66,8 @@ class InventoryStock(Base):
     on_hand: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     reserved: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     reorder_point: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    automatic_reorder_point: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reorder_mode: Mapped[str] = mapped_column(String(12), default="auto", nullable=False)
     target_stock: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     default_reprint_qty: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)

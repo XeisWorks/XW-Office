@@ -17,6 +17,7 @@
 - Der Rechnungs-Freigabepfad prüft physische Product-Hub-SKUs jetzt vor dem sevDesk-Freigabeschritt; erst nach erfolgreicher Freigabe wird die idempotente Bestandsbewegung angewandt. Damit werden unauflösbare Positionen nicht mehr erst nach einer externen Freigabe sichtbar.
 - Für Gegenbelege steht ein konservativer `SevdeskCreditNoteInventoryService` bereit: automatische Rückbuchung erfolgt nur bei expliziter Ursprungsrechnung und Ursprungsposition; unklare Geld-/Positionsbelege werden als `needs_review` gemeldet.
 - `InventoryV2Service.refresh_reorder_point` kann den Drei-Monats-Forecast bzw. den SKU-Fixwert persistieren und die Warnung sofort neu bewerten; ein regelmäßiger Historien-Worker und die Anzeige der Forecast-Datenqualität fehlen noch.
+- Der Lagerbestand speichert neben dem aktiven Alarmbestand jetzt auch den automatischen Forecast und den Modus `auto`/`fixed`, damit ein Fixwert den Vorschlag nicht verdeckt.
 
 - **P00 – Live-Datenvertrag und Bestandsquellen:** begonnen und erster lesender Audit-Baustein umgesetzt in `services/product_hub/inventory_audit.py`; keine Bestands- oder sevDesk-Schreibzugriffe.
 - Der Audit meldet doppelte SKU, fehlende physische sevDesk-Part-Mappings, negative oder fehlende Quellbestände, Legacy-/Hub-Drift und fehlendes Verkaufsstartdatum. Drei Unit-Tests laufen grün.
