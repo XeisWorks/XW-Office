@@ -126,6 +126,7 @@ packages:
     depends_on: [P02]
     implementation_notes:
       - Finalisierungen führen vor dem sevDesk-Freigabeschritt eine physische SKU-Auflösungsprüfung durch; nach erfolgreicher Freigabe wird die idempotente Hub-Buchung ausgeführt.
+      - SevdeskInvoiceInventoryPoller verarbeitet finale externe Rechnungen mit derselben Dokument-/Positionsidentität und meldet unklare Positionen statt sie zu schätzen.
       - Externe sevDesk-Freigaben und Legacy-Shadow-Spiegelung sind noch nicht als laufender Poller verdrahtet.
     scope:
       - Einen gemeinsamen Buchungsdienst für Desktop-Freigabe und externen sevDesk-Poller bauen.
