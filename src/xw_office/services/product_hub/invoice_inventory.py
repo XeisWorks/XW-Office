@@ -86,6 +86,11 @@ class InvoiceInventoryBookingService:
             return None
         return resolved
 
+    def sku_for_variant(self, variant_id: uuid.UUID) -> str:
+        """Return the canonical SKU for an already-resolved booking variant."""
+        variant = self._products.get_variant(variant_id)
+        return str(variant.sku if variant is not None else "").strip().upper()
+
     def _resolve_invoice_lines(self, positions):
         unresolved: list[str] = []
         resolved_lines = []

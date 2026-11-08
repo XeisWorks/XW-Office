@@ -133,6 +133,7 @@ packages:
       - SevdeskInvoiceInventoryPoller verarbeitet finale externe Rechnungen mit derselben Dokument-/Positionsidentität und meldet unklare Positionen statt sie zu schätzen.
       - START lässt bei aktivem InvoiceInventoryBookingService die Legacy-Verbrauchsspiegelung in den Hub aus, damit die Freigabebuchung nicht doppelt belastet wird; der Legacy-Bestand bleibt operativ erhalten.
       - Externe sevDesk-Freigaben und Legacy-Shadow-Spiegelung laufen über den idempotenten `xw-inventory-worker`; der Dienst wird als eigener Railway-Worker aktiviert.
+      - Der externe Feed schreibt zusätzlich über `InventoryExternalMirrorService` mit eigener Idempotenz-Tabelle in die Legacy-JSON-Bestände; Unterdeckung wird als `shortage`/`needs_review` ausgegeben und nie negativ gekappt.
     scope:
       - Einen gemeinsamen Buchungsdienst für Desktop-Freigabe und externen sevDesk-Poller bauen.
       - Finalen Belegstatus und endgültige Positionen nach Freigabe erneut lesen.

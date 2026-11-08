@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Callable, Protocol
 
 from xw_office.services.product_hub.invoice_inventory import InvoiceInventoryBookingService, InvoiceInventoryLine
 
@@ -23,9 +23,15 @@ class CreditNoteProcessingResult:
 class SevdeskCreditNoteInventoryService:
     """Apply only credit positions with explicit origin invoice and position IDs."""
 
-    def __init__(self, provider: CreditNoteProvider, booking: InvoiceInventoryBookingService) -> None:
+    def __init__(
+        self,
+        provider: CreditNoteProvider,
+        booking: InvoiceInventoryBookingService,
+        on_applied: Callable[[InvoiceInventoryLine, object], object] | None = None,
+    ) -> None:
         self._provider = provider
         self._booking = booking
+        self._on_applied = on_applied
 
     def process_year(self, year: int) -> CreditNoteProcessingResult:
         result = CreditNoteProcessingResult()
@@ -72,6 +78,23 @@ class SevdeskCreditNoteInventoryService:
                     result.already_applied += 1
                 else:
                     result.processed += 1
+                if self._on_applied is not None:
+                    mirror_line = InvoiceInventoryLine(
+                        document_id=credit_id,
+                        position_key=_position_key(position),
+                        variant_id=resolved.variant.id,
+                        quantity=quantity,
+                        movement_kind="return",
+                        original_document_id=origin_invoice,
+                        original_position_key=origin_position,
+                    )
+                    mirror = self._on_applied(mirror_line, applied)
+                    mirror_status = str(getattr(mirror, "status", ""))
+                    if mirror_status not in {"mirrored", "already_applied"}:
+                        result.needs_review.append(
+                            f"{credit_id}/{_position_key(position)}: Legacy-Mirror {mirror_status or 'unbekannt'} "
+                            f"{getattr(mirror, 'detail', '')}".strip()
+                        )
         return result
 
 

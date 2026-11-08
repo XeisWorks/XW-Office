@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import datetime
-from typing import Protocol
+from typing import Callable, Protocol
 
 from xw_office.services.product_hub.invoice_inventory import InvoiceInventoryBookingService, InvoiceInventoryLine
 
@@ -24,9 +24,15 @@ class InvoicePollResult:
 class SevdeskInvoiceInventoryPoller:
     """Book only final, exact SKU/position invoice lines; never drafts."""
 
-    def __init__(self, provider: InvoiceReleaseProvider, booking: InvoiceInventoryBookingService) -> None:
+    def __init__(
+        self,
+        provider: InvoiceReleaseProvider,
+        booking: InvoiceInventoryBookingService,
+        on_applied: Callable[[InvoiceInventoryLine, object], object] | None = None,
+    ) -> None:
         self._provider = provider
         self._booking = booking
+        self._on_applied = on_applied
 
     def poll(self, *, since: datetime.date | None = None) -> InvoicePollResult:
         result = InvoicePollResult()
@@ -71,6 +77,23 @@ class SevdeskInvoiceInventoryPoller:
                     result.already_applied += 1
                 else:
                     result.processed += 1
+                if self._on_applied is not None:
+                    mirror = self._on_applied(
+                        InvoiceInventoryLine(
+                            document_id=invoice_id,
+                            position_key=position_key,
+                            variant_id=resolved.variant.id,
+                            quantity=quantity,
+                            source_revision=revision,
+                        ),
+                        applied,
+                    )
+                    mirror_status = str(getattr(mirror, "status", ""))
+                    if mirror_status not in {"mirrored", "already_applied"}:
+                        result.needs_review.append(
+                            f"{invoice_id}/{position_key}: Legacy-Mirror {mirror_status or 'unbekannt'} "
+                            f"{getattr(mirror, 'detail', '')}".strip()
+                        )
         return result
 
 
