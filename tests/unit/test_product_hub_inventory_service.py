@@ -239,6 +239,30 @@ def test_record_movement_crossing_to_zero_opens_out_of_stock_alert(
     assert result.alert_opened.type == "out_of_stock"
 
 
+def test_zero_stock_supersedes_existing_low_stock_alert(
+    service: InventoryV2Service, inventory_repo: InventoryRepository, variant_id: uuid.UUID
+) -> None:
+    location = inventory_repo.get_or_create_location(code="MAIN", name="Hauptlager")
+    inventory_repo.set_stock_thresholds(variant_id, location.id, reorder_point=5)
+
+    service.record_movement(
+        variant_id=variant_id, delta=10, reason="import_baseline",
+        source="test", idempotency_key="rm-state-a",
+    )
+    low = service.record_movement(
+        variant_id=variant_id, delta=-6, reason="sale", source="test", idempotency_key="rm-state-b",
+    )
+    empty = service.record_movement(
+        variant_id=variant_id, delta=-4, reason="sale", source="test", idempotency_key="rm-state-c",
+    )
+
+    assert low.alert_opened is not None and low.alert_opened.type == "low_stock"
+    assert empty.alert_opened is not None and empty.alert_opened.type == "out_of_stock"
+    alerts = inventory_repo.list_open_alerts()
+    assert len(alerts) == 1
+    assert alerts[0].type == "out_of_stock"
+
+
 def test_record_movement_does_not_reopen_already_open_alert(
     service: InventoryV2Service, inventory_repo: InventoryRepository, variant_id: uuid.UUID
 ) -> None:

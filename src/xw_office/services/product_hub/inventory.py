@@ -371,6 +371,15 @@ class InventoryV2Service:
         threshold = stock.reorder_point if stock is not None else 0
         if observed_stock <= threshold:
             alert_type = "out_of_stock" if observed_stock <= 0 else "low_stock"
+            # A zero balance supersedes an earlier low-stock warning (and vice
+            # versa when a manual threshold refresh reclassifies the same
+            # balance). Keep exactly one active state per SKU/location.
+            for other_type in ("low_stock", "out_of_stock"):
+                if other_type == alert_type:
+                    continue
+                other = self._inventory.get_open_alert(variant_id, location_id, other_type)
+                if other is not None:
+                    self._inventory.resolve_alert(other.id)
             existing = self._inventory.get_open_alert(variant_id, location_id, alert_type)
             alert = self._inventory.open_or_update_alert(
                 variant_id=variant_id,
@@ -389,13 +398,22 @@ class InventoryV2Service:
     def _apply_alert_crossing(
         self, variant_id: uuid.UUID, location_id: uuid.UUID, before: int, after: int
     ) -> InventoryAlert | None:
-        """``before > threshold AND after <= threshold`` per the build plan's exact
-        crossing rule; resolves any open alert once stock is back above threshold."""
+        """Keep the single active warning in sync with the observed stock.
+
+        A new warning is emitted on the threshold crossing, or when an existing
+        low-stock warning changes class because the balance reaches zero.
+        """
         stock = self._inventory.get_stock(variant_id, location_id)
         threshold = stock.reorder_point if stock is not None else 0
 
-        if before > threshold and after <= threshold:
+        if after <= threshold:
             alert_type = "out_of_stock" if after <= 0 else "low_stock"
+            for other_type in ("low_stock", "out_of_stock"):
+                if other_type == alert_type:
+                    continue
+                other = self._inventory.get_open_alert(variant_id, location_id, other_type)
+                if other is not None:
+                    self._inventory.resolve_alert(other.id)
             already_open = self._inventory.get_open_alert(variant_id, location_id, alert_type)
             alert = self._inventory.open_or_update_alert(
                 variant_id=variant_id,
