@@ -569,6 +569,7 @@ class InventoryV2Service:
             if conflict.entity_type == "inventory_stock" and conflict.field_name == "on_hand"
         ]
         all_open_sync_conflicts = self._sync.list_open_sync_conflicts()
+        source_audit = self.audit_inventory_sources()
         checks = [
             InventoryCutoverCheck(
                 code="shadow_mode",
@@ -594,6 +595,26 @@ class InventoryV2Service:
                     "Keine offene Inventory-Drift in der Sync-Queue."
                     if not open_inventory_drifts
                     else f"{len(open_inventory_drifts)} offene Inventory-Drift-Konflikte."
+                ),
+            ),
+            InventoryCutoverCheck(
+                code="source_contract",
+                label="Aktive physische Quellen sind eindeutig gemappt",
+                state="ready" if source_audit.blocking_issue_count == 0 else "blocked",
+                detail=(
+                    "Keine blockierenden SKU-/Artikelart-/sevDesk-Mappingfehler im read-only Snapshot."
+                    if source_audit.blocking_issue_count == 0
+                    else f"{source_audit.blocking_issue_count} blockierende Audit-Probleme im Bestandsquellen-Snapshot."
+                ),
+            ),
+            InventoryCutoverCheck(
+                code="shadow_quantity_drift",
+                label="Legacy-/Hub-Mengen sind abgeglichen",
+                state="ready" if source_audit.legacy_hub_drift_count == 0 else "blocked",
+                detail=(
+                    "Keine Legacy-/Hub-Mengenabweichung im Snapshot."
+                    if source_audit.legacy_hub_drift_count == 0
+                    else f"{source_audit.legacy_hub_drift_count} Varianten mit abweichendem Legacy-/Hub-Bestand."
                 ),
             ),
             InventoryCutoverCheck(

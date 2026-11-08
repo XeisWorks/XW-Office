@@ -235,8 +235,11 @@ packages:
 
   - id: P08
     title: Shadow-Abnahme und Product-Hub-Bestands-Cutover
-    status: planned
+    status: partially_integrated
     depends_on: [P02, P03, P04, P05, P06, P07]
+    implementation_notes:
+      - Die bestehende Cutover-Readiness prüft neben Ledger-/Sync-Gates jetzt auch den read-only Bestandsquellenvertrag und Legacy-/Hub-Mengenabweichungen.
+      - Der eigentliche Master-Cutover bleibt bewusst blockiert, bis Shadow-Lauf, Projektionen, Backup und Rollback außerhalb der Anwendung nachgewiesen sind.
     scope:
       - Gezählt/Legacy/Hub/sevDesk je Variante abgleichen und offene Konflikte bereinigen.
       - Alle produktiven Bestands-Schreibpfade, sevDesk-/Wix-Projektionen und Rollback praktisch testen.

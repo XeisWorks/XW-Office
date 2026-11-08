@@ -27,6 +27,7 @@
 - `InventoryV2Service.refresh_reorder_point` kann den Drei-Monats-Forecast bzw. den SKU-Fixwert persistieren und die Warnung sofort neu bewerten; ein regelmäßiger Historien-Worker und die Anzeige der Forecast-Datenqualität fehlen noch.
 - Der Lagerbestand speichert neben dem aktiven Alarmbestand jetzt auch den automatischen Forecast und den Modus `auto`/`fixed`, damit ein Fixwert den Vorschlag nicht verdeckt.
 - Die Hub-Ledgerbuchung sperrt Lagerort und Bestandszeile transaktional, revalidiert den Idempotenzschlüssel nach dem Lock und rollt bei einem konkurrierenden Unique-Key-Sieg die Zwischenänderung zurück.
+- Die Cutover-Readiness nimmt nun den read-only Bestandsquellen-Audit und direkte Legacy-/Hub-Mengenabweichungen als eigene Gates auf; der Master bleibt bis zu den manuellen Betriebsnachweisen absichtlich deaktiviert.
 
 - **P00 – Live-Datenvertrag und Bestandsquellen:** begonnen und erster lesender Audit-Baustein umgesetzt in `services/product_hub/inventory_audit.py`; keine Bestands- oder sevDesk-Schreibzugriffe.
 - Der Audit meldet doppelte SKU, fehlende physische sevDesk-Part-Mappings, negative oder fehlende Quellbestände, Legacy-/Hub-Drift und fehlendes Verkaufsstartdatum. Der Live-DB-Snapshot ist jetzt als read-only `InventoryV2Service.audit_inventory_sources()` und `GET /api/v1/inventory/audit` verfügbar; vier Audit-Tests laufen grün.
