@@ -86,7 +86,7 @@ packages:
 
   - id: P01
     title: Artikelart, Policy und sichere Ledger-Transaktion
-    status: planned
+    status: foundation_ready
     depends_on: [P00]
     scope:
       - Additive Migration für external_print, pod, digital sowie Forecast- und Alarmmodus auto/fixed pro Variante und Lagerort.
@@ -165,7 +165,7 @@ packages:
 
   - id: P06
     title: Lagerbereinigter POD- und Druckerei-Plan in RECHNUNGEN
-    status: planned
+    status: foundation_ready
     depends_on: [P01, P03, P05]
     scope:
       - PRINT PRODUKTE OFFEN um bestellt, Lager, anderweitig eingeplant, aus Lager und neu drucken ergänzen.
