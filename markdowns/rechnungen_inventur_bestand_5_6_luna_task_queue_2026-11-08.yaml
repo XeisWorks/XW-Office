@@ -175,7 +175,8 @@ packages:
       - InventoryV2Service.refresh_reorder_point persistiert den Forecast-/Fixwert je Variante und bewertet den Alarmzustand sofort neu.
       - inventory_stock speichert automatischen Vorschlag und `auto`/`fixed`-Modus getrennt vom aktiven Alarmbestand.
       - InventoryForecastRefreshService aggregiert finale Rechnungs-/Gutschriftpositionen und aktualisiert alle aktiven physischen Varianten; die Provider-/Worker-Terminierung bleibt offen.
-      - Historischer SevDesk-Feed, regelmäßiger Worker-Refresh und Anzeige der Datenqualität sind noch offen.
+      - `SevdeskHistoryProviderAdapter` nutzt den bestehenden paginierten Monatsfeed read-only; `POST /api/v1/inventory/forecast/refresh` und `xw-inventory-forecast-refresh` liefern einen geschützten Einmal-Refresh für Desktop/Railway-Cron.
+      - Ein regelmäßiger Worker-Refresh und eine breitere Anzeige der Datenqualität bleiben als Deployment-Konfiguration offen.
     scope:
       - 60 volle Kalendermonate aus finalen sevDesk-Positionen und eindeutigen Gegenmengen aggregieren.
       - Volle Monate seit Verkaufbarkeit einschließlich Nullmonaten ermitteln; vor sechs Monaten Startwert 50 verwenden.

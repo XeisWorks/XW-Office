@@ -99,6 +99,19 @@ class InventorySummaryOut(BaseModel):
     updated_at: datetime.datetime
 
 
+class InventoryForecastRefreshRequest(BaseModel):
+    as_of: datetime.date | None = None
+    years: int = 5
+
+
+class InventoryForecastRefreshOut(BaseModel):
+    refreshed: int
+    skipped: int
+    errors: list[str]
+    as_of: datetime.date
+    years: int
+
+
 class InventoryCutoverCheckOut(BaseModel):
     code: str
     label: str

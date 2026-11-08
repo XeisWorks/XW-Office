@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class SevdeskHistoryProvider(Protocol):
@@ -11,6 +11,67 @@ class SevdeskHistoryProvider(Protocol):
     def list_invoice_positions(self, invoice_id: str) -> list[dict]: ...
     def list_credit_notes_for_year(self, year: int) -> list[dict]: ...
     def list_credit_note_positions(self, credit_note_id: str) -> list[dict]: ...
+
+
+class SevdeskMonthlyHistoryProvider(Protocol):
+    """Small monthly sevDesk source used by the production history adapter."""
+
+    def load_invoices(self, year: int, month: int) -> list[dict[str, Any]]: ...
+    def load_credit_notes(self, year: int, month: int) -> list[dict[str, Any]]: ...
+    def load_positions(self, resource: str, document_id: str) -> list[dict[str, Any]]: ...
+
+
+class SevdeskHistoryProviderAdapter:
+    """Adapt the existing month-filtered sevDesk client to the forecast protocol.
+
+    The tax client already owns the proven pagination/date-filter behavior. This
+    adapter only groups those read calls by year and never performs a write.
+    """
+
+    def __init__(self, monthly_provider: SevdeskMonthlyHistoryProvider) -> None:
+        self._monthly = monthly_provider
+
+    def list_invoices_for_year(self, year: int) -> list[dict[str, Any]]:
+        return self._deduplicate(
+            row
+            for month in range(1, 13)
+            for row in self._monthly.load_invoices(year, month)
+        )
+
+    def list_credit_notes_for_year(self, year: int) -> list[dict[str, Any]]:
+        return self._deduplicate(
+            row
+            for month in range(1, 13)
+            for row in self._monthly.load_credit_notes(year, month)
+        )
+
+    def list_invoice_positions(self, invoice_id: str) -> list[dict[str, Any]]:
+        return self._monthly.load_positions("Invoice", invoice_id)
+
+    def list_credit_note_positions(self, credit_note_id: str) -> list[dict[str, Any]]:
+        return self._monthly.load_positions("CreditNote", credit_note_id)
+
+    @staticmethod
+    def _deduplicate(rows: Any) -> list[dict[str, Any]]:
+        seen: set[str] = set()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            key = str(row.get("id") or "").strip()
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            result.append(dict(row))
+        return result
+
+
+def sevdesk_history_provider_from_connection(connection: Any) -> SevdeskHistoryProviderAdapter:
+    """Create the production adapter on top of the existing sevDesk connection."""
+    from xw_office.services.finanzonline.zm_service import SevdeskZmInvoiceProvider
+
+    return SevdeskHistoryProviderAdapter(SevdeskZmInvoiceProvider(connection))
 
 
 @dataclass(frozen=True)
@@ -136,4 +197,11 @@ def _full_months_between(start: datetime.date, end: datetime.date) -> int:
     return max(0, (end.year - start.year) * 12 + end.month - start.month + 1)
 
 
-__all__ = ["SevdeskHistoryAudit", "SevdeskHistoryProvider", "audit_sevdesk_history"]
+__all__ = [
+    "SevdeskHistoryAudit",
+    "SevdeskHistoryProvider",
+    "SevdeskHistoryProviderAdapter",
+    "SevdeskMonthlyHistoryProvider",
+    "audit_sevdesk_history",
+    "sevdesk_history_provider_from_connection",
+]

@@ -34,6 +34,8 @@ from xw_office.services.product_hub.conflicts import ConflictAdviceService, Conf
 from xw_office.services.product_hub.content_generation import ContentGenerationService
 from xw_office.services.product_hub.editing import EditingService
 from xw_office.services.product_hub.inventory import InventoryV2Service
+from xw_office.services.product_hub.inventory_forecast_refresh import InventoryForecastRefreshService
+from xw_office.services.product_hub.sevdesk_history_audit import sevdesk_history_provider_from_connection
 from xw_office.services.product_hub.inventory_count import InventoryCountService
 from xw_office.services.product_hub.inventory_alert_tasks import InventoryAlertTaskService
 from xw_office.services.mailing.service import MailDeliveryService
@@ -528,9 +530,25 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
             master_enabled=resolved.inventory_master_enabled,
         )
 
+    _forecast_refresh_service = (
+        InventoryForecastRefreshService(
+            _session_factory,
+            sevdesk_history_provider_from_connection(build_sevdesk_connection(_runtime_config)),
+        )
+        if _session_factory is not None
+        else None
+    )
+
+    def get_forecast_refresh_service() -> InventoryForecastRefreshService:
+        assert _forecast_refresh_service is not None
+        return _forecast_refresh_service
+
     app.include_router(
         build_inventory_router(
-            get_inventory_repo, get_inventory_service, require_product_hub_edit_enabled
+            get_inventory_repo,
+            get_inventory_service,
+            require_product_hub_edit_enabled,
+            get_forecast_refresh_service if _forecast_refresh_service is not None else None,
         ),
         dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
     )

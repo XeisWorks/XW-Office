@@ -8,12 +8,14 @@ require the edit gate, same reasoning as the products edit API — they write.
 from __future__ import annotations
 
 import uuid
+import datetime
 from collections.abc import Callable, Generator
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from xw_office.repositories.product_hub_inventory import InventoryRepository, NegativeStockError
 from xw_office.services.product_hub.inventory import InventoryV2Service
+from xw_office.services.product_hub.inventory_forecast_refresh import InventoryForecastRefreshService
 from xw_office.web.schemas.inventory import (
     InventoryAlertOut,
     InventoryCutoverCheckOut,
@@ -31,6 +33,8 @@ from xw_office.web.schemas.inventory import (
     ReconcileResponse,
     StockOut,
     ThresholdUpdateRequest,
+    InventoryForecastRefreshOut,
+    InventoryForecastRefreshRequest,
 )
 
 InventoryRepoDependency = Callable[[], Generator[InventoryRepository, None, None]]
@@ -42,6 +46,7 @@ def build_inventory_router(
     get_repo: InventoryRepoDependency,
     get_service: InventoryServiceDependency,
     require_edit_enabled: EditGateDependency,
+    get_forecast_refresh: Callable[[], InventoryForecastRefreshService] | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1/inventory", tags=["product-hub-inventory"])
     write_router = APIRouter()
@@ -61,6 +66,24 @@ def build_inventory_router(
     @router.get("/audit")
     def get_inventory_audit(service: InventoryV2Service = Depends(get_service)) -> dict[str, object]:
         return service.audit_inventory_sources().as_dict()
+
+    if get_forecast_refresh is not None:
+
+        @router.post("/forecast/refresh", response_model=InventoryForecastRefreshOut)
+        def refresh_forecast(
+            request: InventoryForecastRefreshRequest,
+            service: InventoryForecastRefreshService = Depends(get_forecast_refresh),
+            _edit: None = Depends(require_edit_enabled),
+        ) -> InventoryForecastRefreshOut:
+            years = max(1, min(5, int(request.years)))
+            result = service.refresh(as_of=request.as_of, years=years)
+            return InventoryForecastRefreshOut(
+                refreshed=result.refreshed,
+                skipped=result.skipped,
+                errors=list(result.errors),
+                as_of=request.as_of or datetime.date.today(),
+                years=years,
+            )
 
     @router.get("/cutover-readiness", response_model=InventoryCutoverReadinessOut)
     def get_cutover_readiness(
