@@ -132,7 +132,7 @@ packages:
       - Finalisierungen führen vor dem sevDesk-Freigabeschritt eine physische SKU-Auflösungsprüfung durch; nach erfolgreicher Freigabe wird die idempotente Hub-Buchung ausgeführt.
       - SevdeskInvoiceInventoryPoller verarbeitet finale externe Rechnungen mit derselben Dokument-/Positionsidentität und meldet unklare Positionen statt sie zu schätzen.
       - START lässt bei aktivem InvoiceInventoryBookingService die Legacy-Verbrauchsspiegelung in den Hub aus, damit die Freigabebuchung nicht doppelt belastet wird; der Legacy-Bestand bleibt operativ erhalten.
-      - Externe sevDesk-Freigaben und Legacy-Shadow-Spiegelung sind noch nicht als laufender Poller verdrahtet.
+      - Externe sevDesk-Freigaben und Legacy-Shadow-Spiegelung laufen über den idempotenten `xw-inventory-worker`; der Dienst wird als eigener Railway-Worker aktiviert.
     scope:
       - Einen gemeinsamen Buchungsdienst für Desktop-Freigabe und externen sevDesk-Poller bauen.
       - Finalen Belegstatus und endgültige Positionen nach Freigabe erneut lesen.
@@ -154,7 +154,7 @@ packages:
     implementation_notes:
       - InvoiceInventoryBookingService.apply_credit_line verarbeitet eindeutig referenzierte Gegenbelegpositionen idempotent.
       - Persistierte Ursprungsreferenzen begrenzen die Summe mehrerer Teilgutschriften auf die gebuchte Verkaufsmenge.
-      - SevDesk-Gegenbeleg-Feed, needs_review-Fallliste und bestehende Refund-Prozess-Verdrahtung sind noch offen.
+      - SevDesk-Gegenbeleg-Feed und `needs_review`-Fallliste laufen über `xw-inventory-worker`; die bestehende Refund-UI bleibt ein separater manueller Erzeugungspfad und erzeugt keine automatische Doppelbuchung.
       - SevdeskCreditNoteInventoryService verarbeitet einen Provider-Jahresfeed konservativ: nur explizite Ursprungsrechnung/-position werden gebucht, alle anderen Fälle landen in needs_review.
       - `xw-inventory-sync` pollt finale externe Rechnungen und rescannt Gutschriften idempotent; unklare Positionen werden im JSON-Ergebnis als `needs_review` ausgegeben und mit Exit-Code 1 signalisiert.
     scope:
@@ -176,7 +176,7 @@ packages:
     implementation_notes:
       - InventoryV2Service.refresh_reorder_point persistiert den Forecast-/Fixwert je Variante und bewertet den Alarmzustand sofort neu.
       - inventory_stock speichert automatischen Vorschlag und `auto`/`fixed`-Modus getrennt vom aktiven Alarmbestand.
-      - InventoryForecastRefreshService aggregiert finale Rechnungs-/Gutschriftpositionen und aktualisiert alle aktiven physischen Varianten; die Provider-/Worker-Terminierung bleibt offen.
+      - InventoryForecastRefreshService aggregiert finale Rechnungs-/Gutschriftpositionen und aktualisiert alle aktiven physischen Varianten; die wiederholbare Worker-Ausführung ist als `xw-inventory-worker` implementiert.
       - `SevdeskHistoryProviderAdapter` nutzt den bestehenden paginierten Monatsfeed read-only; `POST /api/v1/inventory/forecast/refresh` und `xw-inventory-forecast-refresh` liefern einen geschützten Einmal-Refresh für Desktop/Railway-Cron.
       - `xw-inventory-worker` führt Forecast-Refresh und sevDesk-Abgleich in einem idempotenten Intervall aus; Railway-Service-Aktivierung und Datenqualitäts-Dashboard bleiben Deployment-/Betriebsgates.
     scope:
