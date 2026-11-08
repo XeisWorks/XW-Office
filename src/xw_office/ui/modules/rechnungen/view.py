@@ -4227,6 +4227,17 @@ class RechnungenView(QWidget):
         for item in products:
             block = self._piece_block_from_open_product(item)
             qty = block.print_qty
+            # Legacy callers may provide an unplanned aggregate (no inventory
+            # snapshot yet). Preserve the historical print action for that
+            # explicit unknown state; planned external_print rows carry
+            # ``on_hand``/``print_quantity`` and correctly remain a reorder case.
+            if (
+                qty <= 0
+                and item.print_quantity is None
+                and item.on_hand is None
+                and str(item.article_kind or "external_print").strip().lower() == "external_print"
+            ):
+                qty = max(0, int(item.quantity or 0))
             if qty <= 0:
                 continue
             if not self._open_print_product_ready(item) and not _configure_missing_piece_print(
