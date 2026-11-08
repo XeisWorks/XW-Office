@@ -493,7 +493,7 @@ class InventoryV2Service:
                         0, int(stock.automatic_reorder_point if stock is not None else alert.threshold or 0)
                     ),
                     forecast_window=(
-                        f"{stock.forecast_window_start} bis {stock.forecast_window_end}"
+                        f"{stock.forecast_window_start} bis {stock.forecast_window_end} ({stock.forecast_data_quality})"
                         if stock is not None and stock.forecast_window_start and stock.forecast_window_end
                         else "bis zu 60 vollständige Monate"
                     ),
