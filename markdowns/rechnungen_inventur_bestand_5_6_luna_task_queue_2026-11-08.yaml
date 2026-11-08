@@ -71,8 +71,11 @@ source_paths:
 packages:
   - id: P00
     title: Live-Datenvertrag und Bestandsquellen lesen
-    status: in_progress
+    status: partially_integrated
     depends_on: []
+    implementation_notes:
+      - Read-only SevdeskHistoryAudit prüft finale Rechnungen/Gutschriften über ein 60-Monats-Fenster, ignoriert Entwürfe, summiert Netto-Stückzahlen und meldet fehlende SKU bzw. Abdeckung.
+      - Die konkrete Live-Ausführung gegen sevDesk und der Bestandsquellen-/Mappingbericht bleiben als Betriebsjob offen.
     scope:
       - Read-only Bericht über aktive physische Varianten, SKU- und sevDesk-Part-Mappings, fehlende/mehrdeutige Zuordnungen.
       - sevDesk-Rechnungs- und Gegenbelegdaten lesend auf Status, Positionen, Stückzahlen und historische Abdeckung prüfen.
