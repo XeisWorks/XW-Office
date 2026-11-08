@@ -173,8 +173,11 @@ packages:
 
   - id: P06
     title: Lagerbereinigter POD- und Druckerei-Plan in RECHNUNGEN
-    status: foundation_ready
+    status: partially_integrated
     depends_on: [P01, P03, P05]
+    implementation_notes:
+      - PieceBlock unterscheidet POD und external_print: POD nutzt endlichen Lagerbestand und Dreierchargen, Druckerei-Noten erzeugen bei Unterdeckung keinen lokalen Druckauftrag, sondern einen Nachbestellhinweis.
+      - Die zentrale offene Rechnungsaggregation, Drucklauf-Buchung und UI-Ausgabe müssen noch auf diesen Plan umgestellt werden.
     scope:
       - PRINT PRODUKTE OFFEN um bestellt, Lager, anderweitig eingeplant, aus Lager und neu drucken ergänzen.
       - Bedarf je exakter Variante über alle offenen Rechnungen aggregieren; keine Doppelzuteilung von Lagerstücken.

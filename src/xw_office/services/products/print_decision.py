@@ -45,12 +45,23 @@ class PieceBlock:
             return False
         if self.stock_status is None:
             return True  # unknown — assume print needed
+        if self.product.article_kind == "external_print":
+            return False
         return self.stock_status.on_hand < self.qty_needed
+
+    @property
+    def needs_replenishment(self) -> bool:
+        """True when an externally printed title is short in local stock."""
+        if self.product is None or self.product.is_digital or self.stock_status is None:
+            return False
+        return self.product.article_kind == "external_print" and self.stock_status.on_hand < self.qty_needed
 
     @property
     def print_qty(self) -> int:
         """How many copies to print: max(qty_needed, reprint_batch_qty)."""
         if self.product is None or self.product.is_digital:
+            return 0
+        if self.product.article_kind == "external_print":
             return 0
         if self.stock_status is None:
             return self.qty_needed
@@ -72,10 +83,14 @@ class PieceBlock:
         on_hand = self.stock_status.on_hand
         target = self.product.print_rule.min_stock_target
         if on_hand == 0:
+            if self.product.article_kind == "external_print":
+                return f"⚠ Nachbestellen — Druckerei-Note (Fehlmenge {self.qty_needed})"
             batch = self.product.print_rule.reprint_batch_qty
             return f"⚠ Leer — Drucken! ({batch} Stk)"
         if on_hand < self.qty_needed:
             short = self.qty_needed - on_hand
+            if self.product.article_kind == "external_print":
+                return f"⚠ Nachbestellen — {on_hand} Stk, {short} fehlen"
             return f"⚠ Zu wenig ({on_hand} Stk, {short} fehlen)"
         if on_hand <= target:
             return f"⚡ Niedrig ({on_hand}/{target})"

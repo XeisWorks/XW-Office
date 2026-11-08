@@ -10,6 +10,7 @@
 
 - Aktueller Zwischenstand: Der Freigabe-Buchungskern verarbeitet physische Rechnungspositionen idempotent; eindeutig referenzierte Gutschriften werden als begrenzte Gegenbewegungen ebenfalls idempotent gebucht. Die SevDesk-Gegenbeleg-Feedverdrahtung und `needs_review`-Fallliste bleiben offen.
 - Eine geführte Product-Hub-Inventur ist als `InventoryCountService` mit persistierter Zählliste, Differenzvorschau, Stichtags-Snapshot und idempotenter `recount`-Buchung umgesetzt. Die geschützte API unterstützt Start, Zeilenerfassung und Abschluss; bestätigte Inventuren sind unveränderlich.
+- Die bestehende `PieceBlock`-Druckentscheidung berücksichtigt nun den Artikeltyp: POD nutzt Lagerstücke und druckt Fehlmengen in Chargen von drei; Druckerei-Noten werden bei Unterdeckung als Nachbestellung markiert und nicht lokal gedruckt. Die Sammelaggregation im RECHNUNGEN-Panel und bestätigte `print_run`-Buchungen sind noch offen.
 
 - **P00 – Live-Datenvertrag und Bestandsquellen:** begonnen und erster lesender Audit-Baustein umgesetzt in `services/product_hub/inventory_audit.py`; keine Bestands- oder sevDesk-Schreibzugriffe.
 - Der Audit meldet doppelte SKU, fehlende physische sevDesk-Part-Mappings, negative oder fehlende Quellbestände, Legacy-/Hub-Drift und fehlendes Verkaufsstartdatum. Drei Unit-Tests laufen grün.
