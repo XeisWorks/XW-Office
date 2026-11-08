@@ -221,6 +221,7 @@ packages:
     implementation_notes:
       - InventoryAlertTaskService persistiert eine Aufgabe pro Alarm, erzeugt die Mail mit SKU, Titel, Ist-/Alarmbestand, Datenfenster und Absatzfeldern und schützt Wiederholungen.
       - Die Task-Erzeugung sperrt Alarm und bestehende Task-Zeile transaktional, damit parallele Klicks denselben Duplikatschutz auch unter PostgreSQL einhalten.
+      - `GET /api/v1/inventory/alerts/tasks` stellt persistierte Versand-/Fehlerzustände für Retry- und Betriebsprüfung bereit; erneutes Senden bleibt über `explicit_resend` kontrolliert.
       - RECHNUNGEN zeigt bei offenen Product-Hub-Alarmen einen LAGERALARME-Button mit Popup, Schwellenänderung und Task-erzeugen-Aktion.
       - Das Popup zeigt automatischen Vorschlag/Modus und kann zwischen `fixed` und `auto` wechseln; Task-Mails enthalten jetzt auch Forecastwerte und Produktlink.
       - Absatzwerte werden bis zur SevDesk-Historienverdrahtung als optionale Eingabefelder übergeben; Fehler-/Retry-Dashboard bleibt offen.

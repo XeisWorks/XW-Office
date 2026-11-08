@@ -57,3 +57,6 @@ def test_task_mail_contains_inventory_facts_and_is_deduplicated() -> None:
     assert "Ist-Bestand: 2" in mail.sent[0]["text_body"]
     assert "Durchschnittlicher Monatsverkauf:" in mail.sent[0]["text_body"]
     assert "Produktlink: /app/products/" in mail.sent[0]["text_body"]
+    tasks = service.list_tasks(status="sent")
+    assert len(tasks) == 1
+    assert tasks[0].alert_id == alert_id

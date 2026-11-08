@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import datetime
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
 
 from xw_office.core.database import session_scope
 from xw_office.models.inventory_alert_task import InventoryAlertTask
@@ -28,6 +28,14 @@ class InventoryAlertTaskService:
     """Render and send exactly one task mail per alert unless explicitly retried."""
 
     RECIPIENT = "todo@xeisworks.at"
+
+    def list_tasks(self, *, status: str | None = None, limit: int = 100) -> list[InventoryAlertTask]:
+        """Return recent durable task attempts for an operational retry view."""
+        with session_scope(self._session_factory) as session:
+            stmt = select(InventoryAlertTask).order_by(desc(InventoryAlertTask.created_at)).limit(max(1, min(500, int(limit))))
+            if status:
+                stmt = stmt.where(InventoryAlertTask.status == str(status).strip())
+            return list(session.scalars(stmt).all())
 
     def __init__(self, session_factory) -> None:
         self._session_factory = session_factory

@@ -218,3 +218,5 @@ class InventoryAlertTaskOut(BaseModel):
     recipient: str
     subject: str
     error: str = ""
+    created_at: datetime.datetime | None = None
+    sent_at: datetime.datetime | None = None

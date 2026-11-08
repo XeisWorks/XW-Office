@@ -18,6 +18,26 @@ def build_inventory_alert_task_router(
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1/inventory/alerts", tags=["product-hub-inventory-alerts"])
 
+    @router.get("/tasks", response_model=list[InventoryAlertTaskOut])
+    def list_tasks(
+        task_status: str | None = None,
+        limit: int = 100,
+        service: InventoryAlertTaskService = Depends(get_service),
+    ) -> list[InventoryAlertTaskOut]:
+        return [
+            InventoryAlertTaskOut(
+                alert_id=task.alert_id,
+                task_id=task.id,
+                status=task.status,
+                recipient=task.recipient,
+                subject=task.subject,
+                error=task.error,
+                created_at=task.created_at,
+                sent_at=task.sent_at,
+            )
+            for task in service.list_tasks(status=task_status, limit=limit)
+        ]
+
     @router.post("/{alert_id}/task", response_model=InventoryAlertTaskOut, dependencies=[Depends(require_edit_enabled)])
     def create_task(
         alert_id: uuid.UUID,
