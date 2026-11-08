@@ -8,6 +8,8 @@
 
 ## Implementierungsfortschritt
 
+- Aktueller Zwischenstand: Der Freigabe-Buchungskern verarbeitet physische Rechnungspositionen idempotent; eindeutig referenzierte Gutschriften werden als begrenzte Gegenbewegungen ebenfalls idempotent gebucht. Die SevDesk-Gegenbeleg-Feedverdrahtung und `needs_review`-Fallliste bleiben offen.
+
 - **P00 – Live-Datenvertrag und Bestandsquellen:** begonnen und erster lesender Audit-Baustein umgesetzt in `services/product_hub/inventory_audit.py`; keine Bestands- oder sevDesk-Schreibzugriffe.
 - Der Audit meldet doppelte SKU, fehlende physische sevDesk-Part-Mappings, negative oder fehlende Quellbestände, Legacy-/Hub-Drift und fehlendes Verkaufsstartdatum. Drei Unit-Tests laufen grün.
 - Als gemeinsame Grundlage für P05 ist `services/product_hub/inventory_forecast.py` ergänzt: vollständige Kalendermonate, 60-Monats-Fenster, Nettoverkauf minus Gutschriften, Startwert 50 bis sechs volle Verkaufsmonate und manueller Fixwert sind deterministisch testbar.

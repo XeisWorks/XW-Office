@@ -133,8 +133,12 @@ packages:
 
   - id: P04
     title: Storno- und Gutschrift-Rückbuchung
-    status: planned
+    status: foundation_ready
     depends_on: [P03]
+    implementation_notes:
+      - InvoiceInventoryBookingService.apply_credit_line verarbeitet eindeutig referenzierte Gegenbelegpositionen idempotent.
+      - Persistierte Ursprungsreferenzen begrenzen die Summe mehrerer Teilgutschriften auf die gebuchte Verkaufsmenge.
+      - SevDesk-Gegenbeleg-Feed, needs_review-Fallliste und bestehende Refund-Prozess-Verdrahtung sind noch offen.
     scope:
       - Finale sevDesk-Stornos und Gutschriften mit Ursprungsrechnung und Positionsmengen verknüpfen.
       - Voll- und Teilmengen automatisch idempotent als eigene Gegenbewegung buchen.

@@ -4,6 +4,7 @@ import uuid
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+import pytest
 
 from xw_office.models.base import Base
 from xw_office.models.inventory_document_booking import InventoryDocumentBooking
@@ -75,3 +76,44 @@ def test_changed_final_quantity_applies_only_the_difference_and_credit_reverses(
     location = InventoryRepository(factory).get_or_create_location(code="MAIN", name="Hauptlager")
     stock = InventoryRepository(factory).get_stock(variant_id, location.id)
     assert stock is not None and stock.on_hand == 8
+
+
+def test_credit_is_limited_to_original_sale_and_is_idempotent() -> None:
+    factory, variant_id = _factory()
+    inventory = InventoryV2Service(factory)
+    inventory.record_movement(
+        variant_id=variant_id,
+        delta=10,
+        reason="import_baseline",
+        source="test",
+        idempotency_key="booking-baseline-3",
+    )
+    booking = InvoiceInventoryBookingService(factory)
+    booking.apply_line(InvoiceInventoryLine("invoice-3", "pos-1", variant_id, 3))
+    credit = InvoiceInventoryLine(
+        "credit-3",
+        "credit-pos-1",
+        variant_id,
+        2,
+        movement_kind="return",
+        original_document_id="invoice-3",
+        original_position_key="pos-1",
+    )
+
+    first = booking.apply_credit_line(credit)
+    second = booking.apply_credit_line(credit)
+
+    assert first.delta == 2
+    assert second.status == "already_applied"
+    with pytest.raises(ValueError, match="überschreitet"):
+        booking.apply_credit_line(
+            InvoiceInventoryLine(
+                "credit-4",
+                "credit-pos-1",
+                variant_id,
+                2,
+                movement_kind="return",
+                original_document_id="invoice-3",
+                original_position_key="pos-1",
+            )
+        )

@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import uuid
 
+from sqlalchemy import func
+
 from xw_office.core.database import session_scope
 from xw_office.models.inventory_document_booking import InventoryDocumentBooking
 from xw_office.repositories.product_hub import ProductHubRepository
@@ -19,6 +21,8 @@ class InvoiceInventoryLine:
     quantity: int
     movement_kind: str = "sale"
     source_revision: str = ""
+    original_document_id: str = ""
+    original_position_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -91,6 +95,36 @@ class InvoiceInventoryBookingService:
             )
         return results
 
+    def apply_credit_line(
+        self,
+        line: InvoiceInventoryLine,
+        *,
+        source: str = "sevdesk.credit_note",
+    ) -> InvoiceInventoryBookingResult:
+        """Apply an unambiguous credit against an existing sale booking."""
+        if line.movement_kind != "return":
+            raise ValueError("apply_credit_line benötigt movement_kind='return'")
+        original_document_id = str(line.original_document_id or "").strip()
+        original_position_key = str(line.original_position_key or "").strip()
+        if not original_document_id or not original_position_key:
+            raise ValueError("Gutschrift benötigt einen eindeutigen Ursprungsbeleg und Positionsschlüssel")
+        sale = self._get_booking(original_document_id, original_position_key, "sale")
+        if sale is None or sale.quantity_applied >= 0:
+            raise ValueError("Keine gebuchte Verkaufsposition für die Gutschrift gefunden")
+        existing_return = self._get_booking(line.document_id, line.position_key, "return")
+        # Replaying the same credit-note position must remain idempotent.
+        if existing_return is not None and existing_return.quantity_applied == line.quantity:
+            return self.apply_line(line, source=source)
+        already_returned = existing_return.quantity_applied if existing_return is not None else 0
+        total_returned = self._get_returned_quantity(original_document_id, original_position_key)
+        other_returned = max(0, total_returned - already_returned)
+        max_return = max(0, -sale.quantity_applied - other_returned)
+        if line.quantity > max_return:
+            raise ValueError(
+                f"Gutschriftmenge {line.quantity} überschreitet die noch rückbuchbare Menge {max_return}"
+            )
+        return self.apply_line(line, source=source)
+
     def apply_line(self, line: InvoiceInventoryLine, *, source: str = "sevdesk.invoice_release") -> InvoiceInventoryBookingResult:
         document_id = str(line.document_id or "").strip()
         position_key = str(line.position_key or "").strip()
@@ -128,6 +162,8 @@ class InvoiceInventoryBookingService:
                 quantity_applied=signed_target,
                 source_revision=line.source_revision,
                 last_idempotency_key=key,
+                original_document_id=line.original_document_id,
+                original_position_key=line.original_position_key,
             )
             status = "applied"
         else:
@@ -167,6 +203,15 @@ class InvoiceInventoryBookingService:
                     setattr(booking, key, value)
             session.flush()
             return booking
+
+    def _get_returned_quantity(self, original_document_id: str, original_position_key: str) -> int:
+        with session_scope(self._session_factory) as session:
+            total = session.query(func.coalesce(func.sum(InventoryDocumentBooking.quantity_applied), 0)).filter_by(
+                original_document_id=original_document_id,
+                original_position_key=original_position_key,
+                movement_kind="return",
+            ).scalar()
+            return int(total or 0)
 
 
 __all__ = [

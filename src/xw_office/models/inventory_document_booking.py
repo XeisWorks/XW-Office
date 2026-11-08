@@ -38,6 +38,8 @@ class InventoryDocumentBooking(Base):
     quantity_applied: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     source_revision: Mapped[str] = mapped_column(String(240), default="", nullable=False)
     last_idempotency_key: Mapped[str] = mapped_column(String(240), default="", nullable=False)
+    original_document_id: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    original_position_key: Mapped[str] = mapped_column(String(160), default="", nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
