@@ -426,6 +426,10 @@ class InventoryV2Service:
         stock = self._inventory.get_stock(variant_id, location.id)
         return stock.on_hand if stock is not None else 0
 
+    def resolve_variant_by_sku(self, sku: str):
+        """Resolve an exact Hub SKU for desktop consumers without exposing the repository."""
+        return self._products.resolve_sku(sku)
+
     def list_open_alert_details(self) -> list[InventoryAlertDetail]:
         """Return open alerts enriched for the RECHNUNGEN popup."""
         details: list[InventoryAlertDetail] = []

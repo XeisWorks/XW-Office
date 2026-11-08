@@ -195,6 +195,7 @@ packages:
       - PieceBlock unterscheidet POD und external_print: POD nutzt endlichen Lagerbestand und Dreierchargen, Druckerei-Noten erzeugen bei Unterdeckung keinen lokalen Druckauftrag, sondern einen Nachbestellhinweis.
       - Einzel- und Sammeldruck im offenen RECHNUNGEN-Panel verwenden die berechnete Printmenge statt ungeprüfter Bestellmenge.
       - Bestätigte manuelle Druckläufe schreiben den Legacy-Bestand und spiegeln die Produktion mit reason `print_run` und stabilem Idempotenzschlüssel.
+      - Die offene Druckentscheidung liest den zentralen Hub-Bestand zuerst und nutzt sevDesk nur als Fallback für nicht angeschlossene Desktop-Umgebungen.
       - Die zentrale offene Rechnungsaggregation, Drucklauf-Buchung und UI-Ausgabe müssen noch auf diesen Plan umgestellt werden.
     scope:
       - PRINT PRODUKTE OFFEN um bestellt, Lager, anderweitig eingeplant, aus Lager und neu drucken ergänzen.

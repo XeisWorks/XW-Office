@@ -4491,19 +4491,32 @@ class RechnungenView(QWidget):
             catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
             block = resolve_piece_print_config(catalog, block)
             if block.product is not None and not block.product.is_digital:
-                part_id = str(block.product.sevdesk_part_id or "").strip()
-                if part_id:
-                    parts: PartClient = self._container.resolve(PartClient)
-                    cached_stock = parts.get_cached_part_stock(part_id)
-                    if cached_stock is not None:
+                try:
+                    hub: InventoryV2Service = self._container.resolve(InventoryV2Service)
+                    resolved = hub.resolve_variant_by_sku(block.sku)
+                    if resolved is not None:
                         block.stock_status = StockStatus(
                             sku=block.sku,
                             product_name=block.product.name,
                             is_digital=False,
-                            on_hand=int(cached_stock),
+                            on_hand=hub.variant_on_hand(resolved.variant.id),
                             min_stock_target=block.product.print_rule.min_stock_target,
                             reprint_batch_qty=block.product.print_rule.reprint_batch_qty,
                         )
+                except Exception:
+                    part_id = str(block.product.sevdesk_part_id or "").strip()
+                    if part_id:
+                        parts: PartClient = self._container.resolve(PartClient)
+                        cached_stock = parts.get_cached_part_stock(part_id)
+                        if cached_stock is not None:
+                            block.stock_status = StockStatus(
+                                sku=block.sku,
+                                product_name=block.product.name,
+                                is_digital=False,
+                                on_hand=int(cached_stock),
+                                min_stock_target=block.product.print_rule.min_stock_target,
+                                reprint_batch_qty=block.product.print_rule.reprint_batch_qty,
+                            )
             return block
         except Exception as exc:  # noqa: BLE001 - dialog can still create config.
             logger.debug("Open print product catalog lookup failed sku=%s: %s", sku, exc)
