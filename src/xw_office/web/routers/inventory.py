@@ -58,6 +58,10 @@ def build_inventory_router(
             updated_at=summary.updated_at,
         )
 
+    @router.get("/audit")
+    def get_inventory_audit(service: InventoryV2Service = Depends(get_service)) -> dict[str, object]:
+        return service.audit_inventory_sources().as_dict()
+
     @router.get("/cutover-readiness", response_model=InventoryCutoverReadinessOut)
     def get_cutover_readiness(
         service: InventoryV2Service = Depends(get_service),

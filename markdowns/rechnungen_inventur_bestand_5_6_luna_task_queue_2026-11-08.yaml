@@ -75,7 +75,7 @@ packages:
     depends_on: []
     implementation_notes:
       - Read-only SevdeskHistoryAudit prüft finale Rechnungen/Gutschriften über ein 60-Monats-Fenster, ignoriert Entwürfe, summiert Netto-Stückzahlen und meldet fehlende SKU bzw. Abdeckung.
-      - Die konkrete Live-Ausführung gegen sevDesk und der Bestandsquellen-/Mappingbericht bleiben als Betriebsjob offen.
+      - Die konkrete Live-Ausführung gegen sevDesk bleibt als Betriebsjob offen; der read-only Bestandsquellen-/Mappingbericht ist über `InventoryV2Service.audit_inventory_sources()` und `GET /api/v1/inventory/audit` produktiv lesbar.
     scope:
       - Read-only Bericht über aktive physische Varianten, SKU- und sevDesk-Part-Mappings, fehlende/mehrdeutige Zuordnungen.
       - sevDesk-Rechnungs- und Gegenbelegdaten lesend auf Status, Positionen, Stückzahlen und historische Abdeckung prüfen.

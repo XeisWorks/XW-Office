@@ -47,6 +47,7 @@ from xw_office.repositories.product_hub_inventory import InventoryRepository, Ne
 from xw_office.repositories.product_hub_sync import SyncRepository, append_outbox_event
 from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.product_hub.inventory_forecast import FinalizedSale, ReorderPointResult, calculate_reorder_point
+from xw_office.services.product_hub.inventory_audit import InventoryAuditReport, InventoryAuditRow, audit_inventory_sources
 
 DEFAULT_LOCATION_CODE = "MAIN"
 DEFAULT_LOCATION_NAME = "Hauptlager"
@@ -494,6 +495,60 @@ class InventoryV2Service:
             sync_errors=sync_errors,
             updated_at=datetime.datetime.now(datetime.timezone.utc),
         )
+
+    def audit_inventory_sources(self) -> InventoryAuditReport:
+        """Build a read-only Legacy/Hub/mapping audit for cutover preparation."""
+        products = self._products.list_products(ProductFilter(active=True, include_archived=True))
+        variants = self._products.list_variants_for_products([product.id for product in products])
+        product_by_id = {product.id: product for product in products}
+        variant_ids = [variant.id for variant in variants]
+        product_ids = [product.id for product in products]
+        variant_mappings = {
+            mapping.internal_entity_id: mapping
+            for mapping in self._products.list_channel_mappings_for_entities(variant_ids, entity_type="variant")
+            if mapping.channel == "sevdesk"
+        }
+        product_mappings = {
+            mapping.internal_entity_id: mapping
+            for mapping in self._products.list_channel_mappings_for_entities(product_ids, entity_type="product")
+            if mapping.channel == "sevdesk"
+        }
+        raw_legacy = self._settings.get_value_json(LEGACY_STOCK_LEVELS_KEY)
+        try:
+            legacy_values = json.loads(raw_legacy) if raw_legacy else {}
+        except json.JSONDecodeError:
+            legacy_values = {}
+        if not isinstance(legacy_values, dict):
+            legacy_values = {}
+        rows: list[InventoryAuditRow] = []
+        location = self._inventory.get_location_by_code(DEFAULT_LOCATION_CODE)
+        for variant in variants:
+            product = product_by_id.get(variant.product_id)
+            if product is None:
+                continue
+            raw_kind = (variant.attributes or {}).get("article_kind") or (product.attributes or {}).get("article_kind")
+            kind = str(raw_kind or ("digital" if not variant.stock_enabled else "external_print")).strip().lower()
+            mapping = variant_mappings.get(variant.id) or product_mappings.get(product.id)
+            part_id = str(mapping.external_id if mapping is not None else product.sevdesk_part_id or "").strip()
+            legacy_raw = legacy_values.get(variant.sku)
+            try:
+                legacy_stock = int(legacy_raw) if legacy_raw is not None else None
+            except (TypeError, ValueError):
+                legacy_stock = None
+            hub_stock = self._inventory.get_stock(variant.id, location.id) if location is not None else None
+            rows.append(
+                InventoryAuditRow(
+                    sku=variant.sku,
+                    title=str(variant.name or product.name),
+                    article_kind=kind,
+                    active=bool(variant.active and product.active),
+                    sevdesk_part_id=part_id,
+                    legacy_on_hand=legacy_stock,
+                    hub_on_hand=int(hub_stock.on_hand) if hub_stock is not None else None,
+                    sellable_since=product.release_date,
+                )
+            )
+        return audit_inventory_sources(rows)
 
     # -- PR15 cutover readiness -------------------------------------------------------
 
