@@ -431,3 +431,24 @@ def test_set_product_stock_updates_product_and_workflow_snapshots(tmp_path: Path
     stock_levels = json.loads(repo.values["inventory.stock_levels"])
     assert products[0]["on_hand"] == 7
     assert stock_levels == {"XW-6-003": 7, "OTHER": 4}
+
+
+def test_record_print_run_mirrors_print_reason_and_updates_legacy_snapshot(tmp_path: Path) -> None:
+    repo = _RepoStub(
+        {
+            "inventory.products": _product_payload(tmp_path / "score.pdf"),
+            "inventory.stock_levels": json.dumps({"XW-6-003": 1}),
+        }
+    )
+    mirror = _ShadowMirrorStub()
+    service = InventoryService(AppConfig(), repo, shadow_mirror=mirror)
+    service.record_print_run(
+        sku="XW-6-003", qty_printed=3, new_stock=4,
+        external_reference="print-run:test", idempotency_key="print-run:test",
+    )
+    assert json.loads(repo.values["inventory.stock_levels"])["XW-6-003"] == 4
+    assert mirror.calls == [{
+        "sku": "XW-6-003", "delta": 3, "reason": "print_run",
+        "source": "legacy_inventory.print_run", "external_reference": "print-run:test",
+        "idempotency_key": "print-run:test",
+    }]

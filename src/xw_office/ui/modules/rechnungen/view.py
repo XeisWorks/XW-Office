@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import datetime
 import html
+import hashlib
 import logging
 import os
 import re
@@ -4246,7 +4247,14 @@ class RechnungenView(QWidget):
                 try:
                     engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
                     new_stock = engine.record_print_and_update_sevdesk(block, qty)
-                    self._container.resolve(InventoryService).set_product_stock(block.sku, new_stock)
+                    run_token = hashlib.sha256(repr(products_key).encode("utf-8")).hexdigest()[:24]
+                    self._container.resolve(InventoryService).record_print_run(
+                        sku=block.sku,
+                        qty_printed=qty,
+                        new_stock=new_stock,
+                        external_reference=f"print-run:{run_token}:{block.sku}",
+                        idempotency_key=f"print-run:{run_token}:{block.sku}",
+                    )
                 except Exception as exc:
                     logger.warning("Stock update after PRINT SELECTED PRODUCTS failed for %s: %s", block.sku, exc)
                     warnings.append(f"{block.sku}: {exc}")

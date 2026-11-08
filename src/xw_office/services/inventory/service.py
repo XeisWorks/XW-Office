@@ -688,6 +688,52 @@ class InventoryService:
             self._settings_repo.set_value_json(_STOCK_KEY, mutate_stock(current_raw))
         self._mirror_legacy_stock_update(wanted, quantity)
 
+    def record_print_run(
+        self,
+        *,
+        sku: str,
+        qty_printed: int,
+        new_stock: int,
+        external_reference: str,
+        idempotency_key: str = "",
+    ) -> None:
+        """Persist a confirmed local print and mirror it as ``print_run``.
+
+        This keeps print production distinguishable from an absolute/manual stock
+        correction while retaining the legacy stock snapshot during Shadow Mode.
+        """
+        wanted = str(sku or "").strip().upper()
+        produced = max(0, int(qty_printed or 0))
+        target = max(0, int(new_stock or 0))
+        if not wanted or produced <= 0:
+            return
+        if self.update_product_fields({wanted: {"on_hand": target}}) <= 0:
+            raise RuntimeError(f"Lokaler Produktdatensatz nicht gefunden: {wanted}")
+        if self._settings_repo is not None:
+            def mutate_stock(raw: str | None) -> str:
+                try:
+                    payload = json.loads(raw) if raw else {}
+                except json.JSONDecodeError:
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                payload[wanted] = target
+                return json.dumps(payload, ensure_ascii=False)
+
+            atomic_mutator = getattr(self._settings_repo, "mutate_value_json", None)
+            if callable(atomic_mutator):
+                atomic_mutator(_STOCK_KEY, mutate_stock)
+            else:
+                self._settings_repo.set_value_json(_STOCK_KEY, mutate_stock(self._settings_repo.get_value_json(_STOCK_KEY)))
+        self._mirror_legacy_stock_movement(
+            sku=wanted,
+            delta=produced,
+            reason="print_run",
+            source="legacy_inventory.print_run",
+            external_reference=external_reference,
+            idempotency_key=idempotency_key,
+        )
+
     def _mirror_legacy_stock_update(self, sku: str, quantity: int) -> None:
         """Mirror after a successful legacy write, without ever blocking that write.
 
