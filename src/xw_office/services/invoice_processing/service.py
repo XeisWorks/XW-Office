@@ -2069,6 +2069,11 @@ class InvoiceProcessingService:
         digital_only: bool = False,
         printed_copy: bool = False,
     ) -> FulfillmentFlags:
+        preflight_context = None
+        if self._invoice_inventory is not None and not digital_only:
+            preflight_context = self.load_invoice_work_context(summary, load_positions=True, force=True)
+            if preflight_context.positions:
+                self._invoice_inventory.validate_invoice_context(preflight_context.positions)
         if printed_copy:
             self._invoices.send_invoice_document(summary.id, send_type="VPR", send_draft=False)
         else:

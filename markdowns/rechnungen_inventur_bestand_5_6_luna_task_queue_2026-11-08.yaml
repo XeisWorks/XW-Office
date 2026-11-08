@@ -124,6 +124,9 @@ packages:
     title: Idempotenter sevDesk-Rechnungsabgang je Position
     status: partially_integrated
     depends_on: [P02]
+    implementation_notes:
+      - Finalisierungen führen vor dem sevDesk-Freigabeschritt eine physische SKU-Auflösungsprüfung durch; nach erfolgreicher Freigabe wird die idempotente Hub-Buchung ausgeführt.
+      - Externe sevDesk-Freigaben und Legacy-Shadow-Spiegelung sind noch nicht als laufender Poller verdrahtet.
     scope:
       - Einen gemeinsamen Buchungsdienst für Desktop-Freigabe und externen sevDesk-Poller bauen.
       - Finalen Belegstatus und endgültige Positionen nach Freigabe erneut lesen.

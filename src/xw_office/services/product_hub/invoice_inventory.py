@@ -59,7 +59,29 @@ class InvoiceInventoryBookingService:
         invoice cannot silently disappear from inventory accounting.
         """
         results: list[InvoiceInventoryBookingResult] = []
+        for position in self._resolve_invoice_lines(positions):
+            resolved, quantity, position_key = position
+            results.append(
+                self.apply_line(
+                    InvoiceInventoryLine(
+                        document_id=document_id,
+                        position_key=position_key,
+                        variant_id=resolved.variant.id,
+                        quantity=quantity,
+                        movement_kind="sale",
+                    ),
+                    source=source,
+                )
+            )
+        return results
+
+    def validate_invoice_context(self, positions) -> None:
+        """Resolve all physical product positions before an external finalization."""
+        self._resolve_invoice_lines(positions)
+
+    def _resolve_invoice_lines(self, positions):
         unresolved: list[str] = []
+        resolved_lines = []
         for position in positions:
             if getattr(position, "kind", "") != "product":
                 continue
@@ -73,19 +95,12 @@ class InvoiceInventoryBookingService:
                 continue
             if not resolved.variant.stock_enabled:
                 continue
-            results.append(
-                self.apply_line(
-                    InvoiceInventoryLine(
-                        document_id=document_id,
-                        position_key=(
-                            str(getattr(position, "source_id", "") or "").strip()
-                            or f"position-{getattr(position, 'position_number', 0)}"
-                        ),
-                        variant_id=resolved.variant.id,
-                        quantity=int(quantity),
-                        movement_kind="sale",
-                    ),
-                    source=source,
+            resolved_lines.append(
+                (
+                    resolved,
+                    int(quantity),
+                    str(getattr(position, "source_id", "") or "").strip()
+                    or f"position-{getattr(position, 'position_number', 0)}",
                 )
             )
         if unresolved:
@@ -93,7 +108,7 @@ class InvoiceInventoryBookingService:
                 "Physische Rechnungspositionen ohne eindeutige Product-Hub-Variante: "
                 + ", ".join(sorted(set(unresolved)))
             )
-        return results
+        return resolved_lines
 
     def apply_credit_line(
         self,
