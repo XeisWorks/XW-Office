@@ -45,7 +45,7 @@ def test_history_audit_reports_missing_sku() -> None:
 def test_history_provider_adapter_groups_months_and_deduplicates_ids() -> None:
     class Monthly:
         def load_invoices(self, year: int, month: int):
-            return [{"id": "inv-1", "month": month}] if month in {1, 2} else []
+            return [{"id": "inv-1", "month": month, "status": 200, "invoiceDate": f"{year}-01-01"}] if month in {1, 2} else []
 
         def load_credit_notes(self, year: int, month: int):
             return [{"id": "credit-1", "month": month}] if month in {3, 4} else []
@@ -54,6 +54,7 @@ def test_history_provider_adapter_groups_months_and_deduplicates_ids() -> None:
             return [{"resource": resource, "id": document_id}]
 
     adapter = SevdeskHistoryProviderAdapter(Monthly())
-    assert adapter.list_invoices_for_year(2026) == [{"id": "inv-1", "month": 1}]
+    assert adapter.list_invoices_for_year(2026) == [{"id": "inv-1", "month": 1, "status": 200, "invoiceDate": "2026-01-01"}]
     assert adapter.list_credit_notes_for_year(2026) == [{"id": "credit-1", "month": 3}]
     assert adapter.list_invoice_positions("inv-1")[0]["resource"] == "Invoice"
+    assert len(adapter.list_final_invoices(since=datetime.date(2026, 1, 1))) == 1

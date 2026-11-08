@@ -51,6 +51,22 @@ class SevdeskHistoryProviderAdapter:
     def list_credit_note_positions(self, credit_note_id: str) -> list[dict[str, Any]]:
         return self._monthly.load_positions("CreditNote", credit_note_id)
 
+    def list_final_invoices(self, *, since: datetime.date | None = None) -> list[dict[str, Any]]:
+        default_since = datetime.date.today().replace(year=datetime.date.today().year - 5)
+        start_year = (since or default_since).year
+        end_year = datetime.date.today().year
+        result: list[dict[str, Any]] = []
+        for year in range(start_year, end_year + 1):
+            for row in self.list_invoices_for_year(year):
+                if _is_draft(row):
+                    continue
+                if since is not None:
+                    occurred = _parse_date(row, ("invoiceDate", "date", "create", "updated"))
+                    if occurred is None or occurred < since:
+                        continue
+                result.append(row)
+        return result
+
     @staticmethod
     def _deduplicate(rows: Any) -> list[dict[str, Any]]:
         seen: set[str] = set()

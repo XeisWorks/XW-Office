@@ -67,6 +67,7 @@ xw-print-center = "xw_office.print_center.__main__:main"
 xw-content-web = "xw_office.web.__main__:main"
 xw-invoice-collection = "xw_office.services.invoice_collection.cli:main"
 xw-inventory-forecast-refresh = "xw_office.services.product_hub.forecast_cli:main"
+xw-inventory-sync = "xw_office.services.product_hub.inventory_sync_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
