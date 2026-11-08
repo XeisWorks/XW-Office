@@ -24,7 +24,10 @@ def main(argv: list[str] | None = None) -> int:
     if not (config.database_url or "").strip():
         parser.error("DATABASE_URL is required")
     today = dt.date.today()
-    since = dt.date.fromisoformat(args.since) if args.since else today - dt.timedelta(days=7)
+    # A 30-day overlap makes a restarted Railway worker resilient to weekends,
+    # outages and delayed sevDesk finalization; booking and Legacy mirror keys are
+    # idempotent, so the overlap is safe.
+    since = dt.date.fromisoformat(args.since) if args.since else today - dt.timedelta(days=30)
     factory = create_session_factory(config)
     provider = sevdesk_history_provider_from_connection(build_sevdesk_connection(config))
     booking = InvoiceInventoryBookingService(factory)

@@ -8,7 +8,7 @@ Für Railway wird ein eigener Worker-Service mit demselben Repository und Image 
 PYTHONPATH=/app/src python -m xw_office.services.product_hub.inventory_worker_cli --interval-seconds 86400
 ```
 
-Der Zyklus ist idempotent. Ein Fehler in einem Zyklus beendet den Dienst nicht, sondern wird geloggt und beim nächsten Intervall erneut versucht. Für eine einmalige manuelle Prüfung:
+Der Rechnungsfeed überlappt standardmäßig 30 Tage, damit Neustarts und verspätete sevDesk-Freigaben keine Position auslassen; Ledger- und Legacy-Mirror-Schlüssel sind idempotent. Ein Fehler in einem Zyklus beendet den Dienst nicht, sondern wird geloggt und beim nächsten Intervall erneut versucht. Für eine einmalige manuelle Prüfung:
 
 ```text
 PYTHONPATH=src python -m xw_office.services.product_hub.inventory_worker_cli --once
