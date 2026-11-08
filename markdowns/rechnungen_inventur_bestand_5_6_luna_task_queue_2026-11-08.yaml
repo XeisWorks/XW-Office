@@ -100,8 +100,12 @@ packages:
 
   - id: P02
     title: Geführte Inventur und Stichtag
-    status: planned
+    status: foundation_ready
     depends_on: [P01]
+    implementation_notes:
+      - InventoryCountService erzeugt eine eingefrorene Zählliste aktiver physischer Varianten mit SKU, Titel, Lagerort und Systembestand.
+      - Gezählte Differenzen werden beim Abschluss als idempotente recount-Bewegungen gebucht; bestätigte Inventuren sind unveränderlich.
+      - API-Endpunkte für Start, Abruf, Zeilenerfassung und Abschluss sind unter /api/v1/inventory/counts verfügbar.
     scope:
       - Zählliste für aktive external_print- und pod-Varianten mit SKU, Titel, Lagerort und vorhandener Menge.
       - Zwischenstand, Referenz, Prüfung, Differenzvorschau und bestätigter Abschluss je Variante.

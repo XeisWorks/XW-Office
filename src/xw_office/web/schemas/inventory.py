@@ -146,3 +146,36 @@ class LegacyInventoryBaselineApplyRequest(BaseModel):
 class LegacyInventoryBaselineApplyOut(BaseModel):
     applied_skus: list[str]
     blocked_items: list[LegacyInventoryBaselineItemOut]
+
+
+class InventoryCountRecordRequest(BaseModel):
+    counted_quantity: int
+    note: str = ""
+
+
+class InventoryCountLineOut(BaseModel):
+    id: uuid.UUID
+    variant_id: uuid.UUID
+    sku: str
+    title: str
+    location_code: str
+    system_quantity: int
+    counted_quantity: int | None = None
+    difference: int | None = None
+    status: str
+    note: str = ""
+    movement_id: uuid.UUID | None = None
+
+
+class InventoryCountOut(BaseModel):
+    id: uuid.UUID
+    status: str
+    location_code: str
+    started_at: datetime.datetime
+    confirmed_at: datetime.datetime | None = None
+    baseline_source_hash: str
+    lines: list[InventoryCountLineOut]
+
+
+class InventoryCountConfirmRequest(BaseModel):
+    actor: str = ""

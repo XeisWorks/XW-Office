@@ -22,6 +22,7 @@ from xw_office.models.expense_pipeline import (
 )
 from xw_office.models.invoice_search_index import InvoiceSearchIndex
 from xw_office.models.inventory_document_booking import InventoryDocumentBooking
+from xw_office.models.inventory_count import InventoryCountLine, InventoryCountSession
 from xw_office.models.pc_registry import PcRegistry
 from xw_office.models.plc_shipment import PlcShipment
 from xw_office.models.product_hub import (
@@ -124,6 +125,8 @@ __all__ = [
     "InventoryStock",
     "InvoiceSearchIndex",
     "InventoryDocumentBooking",
+    "InventoryCountLine",
+    "InventoryCountSession",
     "OutboxEvent",
     "ProductAssetJob",
     "PcRegistry",

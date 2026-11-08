@@ -34,6 +34,7 @@ from xw_office.services.product_hub.conflicts import ConflictAdviceService, Conf
 from xw_office.services.product_hub.content_generation import ContentGenerationService
 from xw_office.services.product_hub.editing import EditingService
 from xw_office.services.product_hub.inventory import InventoryV2Service
+from xw_office.services.product_hub.inventory_count import InventoryCountService
 from xw_office.services.product_hub.onboarding import ProductOnboardingService
 from xw_office.services.product_hub.onedrive import OneDriveAssetClient
 from xw_office.services.product_hub.onedrive_assets import OneDriveAssetService
@@ -49,6 +50,7 @@ from xw_office.services.wix.product_details_client import WixProductDetailsClien
 from xw_office.web.routers.conflicts import build_conflicts_router
 from xw_office.web.routers.covers import build_covers_router
 from xw_office.web.routers.inventory import build_inventory_router
+from xw_office.web.routers.inventory_count import build_inventory_count_router
 from xw_office.web.routers.products import build_products_router
 from xw_office.web.routers.share_public import build_share_public_router
 from xw_office.web.routers.sharing_admin import build_sharing_admin_router
@@ -526,6 +528,12 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
     app.include_router(
         build_inventory_router(
             get_inventory_repo, get_inventory_service, require_product_hub_edit_enabled
+        ),
+        dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
+    )
+    app.include_router(
+        build_inventory_count_router(
+            lambda: InventoryCountService(_session_factory), require_product_hub_edit_enabled
         ),
         dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
     )
