@@ -12,6 +12,7 @@
 - Der Audit meldet doppelte SKU, fehlende physische sevDesk-Part-Mappings, negative oder fehlende Quellbestände, Legacy-/Hub-Drift und fehlendes Verkaufsstartdatum. Drei Unit-Tests laufen grün.
 - Als gemeinsame Grundlage für P05 ist `services/product_hub/inventory_forecast.py` ergänzt: vollständige Kalendermonate, 60-Monats-Fenster, Nettoverkauf minus Gutschriften, Startwert 50 bis sechs volle Verkaufsmonate und manueller Fixwert sind deterministisch testbar.
 - Als gemeinsame Grundlage für P01/P06 ist `services/product_hub/inventory_policy.py` ergänzt: digitale Artikel bewegen keinen Bestand, Druckerei-Noten melden Fehlmengen als Nachbestellung und POD druckt fehlende Mengen in Dreierchargen nach Lagerverbrauch.
+- Der Legacy-/Hub-Katalog kann die Artikelart `external_print`, `pod` oder `digital` nun explizit mitführen; unbekannte Werte fallen kontrolliert auf `external_print` zurück. Die bestehende Drucklogik ist damit rückwärtskompatibel vorbereitet, aber noch nicht vollständig auf den neuen Plan verdrahtet.
 - **Noch offen:** tatsächliche Live-/sevDesk-Snapshot-Anbindung, historische Positionsprüfung und die Pakete P01–P08.
 
 ## 1. Verbindliche Fachentscheidungen

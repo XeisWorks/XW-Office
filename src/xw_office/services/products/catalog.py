@@ -250,6 +250,10 @@ class Product:
     brand_name: str = ""
     brand_id: str = ""
     is_digital: bool = False
+    # Physical POD and external-print products have finite on-hand stock.  The
+    # default preserves the legacy catalog behavior until a row is explicitly
+    # classified; digital remains the only kind without physical stock.
+    article_kind: str = "external_print"
     sevdesk_part_id: str = ""
     wix_product_id: str = ""
     print_file_path: str = ""
@@ -382,6 +386,7 @@ class ProductCatalogService:
             existing.sevdesk_part_id = part.id
             existing.name = part.name or existing.name
             existing.is_digital = not part.stock_enabled
+            existing.article_kind = "digital" if not part.stock_enabled else existing.article_kind
             return existing
 
         product = Product(
@@ -390,6 +395,7 @@ class ProductCatalogService:
             name=part.name,
             sevdesk_part_id=part.id,
             is_digital=not part.stock_enabled,
+            article_kind="digital" if not part.stock_enabled else "external_print",
             print_rule=PrintRule(),
         )
         self._by_sku[canonical_sku] = product
@@ -471,12 +477,19 @@ class ProductCatalogService:
         print_assets.sort(key=lambda item: int(item.get("sort_order") or 0))
         path = str(print_assets[0].get("uri") or "").strip() if print_assets else ""
         product_data = snapshot.product
+        raw_kind = str(
+            variant.get("article_kind")
+            or product_data.get("article_kind")
+            or ("digital" if str(product_data.get("product_type") or "") == "digital" else "external_print")
+        ).strip().lower()
+        article_kind = raw_kind if raw_kind in {"external_print", "pod", "digital"} else "external_print"
         product = Product(
             id=str(product_data.get("id") or ""), sku=str(variant.get("sku") or sku),
             name=str(variant.get("name") or product_data.get("name") or sku),
             category=str(product_data.get("category") or ""),
             brand_name=str(product_data.get("brand_name") or ""),
             is_digital=str(product_data.get("product_type") or "") == "digital",
+            article_kind=article_kind,
             print_file_path=resolve_shared_path(path),
             print_rule=PrintRule(
                 min_stock_target=int(rule.get("min_stock_target") or 5),
@@ -1073,6 +1086,12 @@ class ProductCatalogService:
                 brand_id=str(item.get("brand_id") or ""),
                 sevdesk_part_id=str(item.get("sevdesk_id") or ""),
                 wix_product_id=str(item.get("wix_id") or ""),
+                article_kind=(
+                    str(item.get("article_kind") or "").strip().lower()
+                    if str(item.get("article_kind") or "").strip().lower()
+                    in {"external_print", "pod", "digital"}
+                    else ("digital" if str(item.get("product_type") or "") == "digital" else "external_print")
+                ),
                 print_file_path=resolve_shared_path(str(item.get("print_file_path") or "")),
             )
             self._by_sku[sku] = product
