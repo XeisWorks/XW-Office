@@ -10,6 +10,7 @@
 
 - **P00 – Live-Datenvertrag und Bestandsquellen:** begonnen und erster lesender Audit-Baustein umgesetzt in `services/product_hub/inventory_audit.py`; keine Bestands- oder sevDesk-Schreibzugriffe.
 - Der Audit meldet doppelte SKU, fehlende physische sevDesk-Part-Mappings, negative oder fehlende Quellbestände, Legacy-/Hub-Drift und fehlendes Verkaufsstartdatum. Drei Unit-Tests laufen grün.
+- Als gemeinsame Grundlage für P05 ist `services/product_hub/inventory_forecast.py` ergänzt: vollständige Kalendermonate, 60-Monats-Fenster, Nettoverkauf minus Gutschriften, Startwert 50 bis sechs volle Verkaufsmonate und manueller Fixwert sind deterministisch testbar.
 - **Noch offen:** tatsächliche Live-/sevDesk-Snapshot-Anbindung, historische Positionsprüfung und die Pakete P01–P08.
 
 ## 1. Verbindliche Fachentscheidungen

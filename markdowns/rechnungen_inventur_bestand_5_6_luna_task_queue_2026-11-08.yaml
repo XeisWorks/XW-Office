@@ -149,7 +149,7 @@ packages:
 
   - id: P05
     title: Absatzprognose und zustandsbasierte Lagerwarnung
-    status: planned
+    status: foundation_ready
     depends_on: [P03, P04]
     scope:
       - 60 volle Kalendermonate aus finalen sevDesk-Positionen und eindeutigen Gegenmengen aggregieren.
