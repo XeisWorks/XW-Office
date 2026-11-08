@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+import datetime
 
 import pytest
 from sqlalchemy import create_engine
@@ -17,6 +18,7 @@ from xw_office.services.product_hub.inventory import (
     InventoryV2Service,
     LegacyInventoryShadowBridge,
 )
+from xw_office.services.product_hub.inventory_forecast import FinalizedSale
 
 
 @pytest.fixture
@@ -380,3 +382,25 @@ def test_compute_summary_counts_alerts_and_products(
     assert summary.physical_products == 1
     assert summary.out_of_stock == 1
     assert summary.open_reprint_alerts == 1
+
+
+def test_refresh_reorder_point_persists_forecast_and_rechecks_alert(
+    service: InventoryV2Service,
+    inventory_repo: InventoryRepository,
+    product_repo: ProductHubRepository,
+) -> None:
+    _product, variant = product_repo.create_product(sku="XW-FORECAST", name="Forecast", status="live")
+    location = inventory_repo.get_or_create_location(code="MAIN", name="Hauptlager")
+    inventory_repo.set_stock_thresholds(variant.id, location.id, reorder_point=50)
+    result = service.refresh_reorder_point(
+        variant_id=variant.id,
+        sales=[
+            FinalizedSale("XW-FORECAST", datetime.date(2026, month, 15), 10)
+            for month in range(1, 7)
+        ],
+        as_of=datetime.date(2026, 8, 1),
+        sellable_since=datetime.date(2025, 1, 1),
+    )
+    assert result.active_reorder_point == 10
+    stock = inventory_repo.get_stock(variant.id, location.id)
+    assert stock is not None and stock.reorder_point == 10

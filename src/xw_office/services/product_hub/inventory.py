@@ -46,6 +46,7 @@ from xw_office.repositories.product_hub import ProductFilter, ProductHubReposito
 from xw_office.repositories.product_hub_inventory import InventoryRepository, NegativeStockError
 from xw_office.repositories.product_hub_sync import SyncRepository, append_outbox_event
 from xw_office.repositories.settings_kv import SettingKvRepository
+from xw_office.services.product_hub.inventory_forecast import FinalizedSale, ReorderPointResult, calculate_reorder_point
 
 DEFAULT_LOCATION_CODE = "MAIN"
 DEFAULT_LOCATION_NAME = "Hauptlager"
@@ -293,6 +294,34 @@ class InventoryV2Service:
         if alert_opened is not None:
             self._emit_flow_task_intent(alert_opened, variant_id)
         return stock
+
+    def refresh_reorder_point(
+        self,
+        *,
+        variant_id: uuid.UUID,
+        sales: list[FinalizedSale] | tuple[FinalizedSale, ...],
+        as_of: datetime.date,
+        sellable_since: datetime.date | None,
+        fixed_reorder_point: int | None = None,
+        location_code: str = DEFAULT_LOCATION_CODE,
+    ) -> ReorderPointResult:
+        """Recalculate and persist the automatic/fixed threshold for one variant."""
+        variant = self._products.get_variant(variant_id)
+        if variant is None:
+            raise KeyError(f"Variante {variant_id} nicht gefunden")
+        result = calculate_reorder_point(
+            sku=variant.sku,
+            sales=sales,
+            as_of=as_of,
+            sellable_since=sellable_since,
+            fixed_reorder_point=fixed_reorder_point,
+        )
+        self.update_thresholds(
+            variant_id=variant_id,
+            location_code=location_code,
+            reorder_point=result.active_reorder_point,
+        )
+        return result
 
     def _refresh_alert_state(
         self, variant_id: uuid.UUID, location_id: uuid.UUID, observed_stock: int
