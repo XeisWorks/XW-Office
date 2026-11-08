@@ -3,6 +3,11 @@
 **Scope, deliberately limited** (per the build plan's own framing of PR13 as
 "Hub-Lagerledger aufbauen, noch ohne finalen Master-Cutover"):
 
+Current implementation status: invoice-release booking, guided counts, the
+read-only sevDesk/history adapters, forecast worker, and desktop print/alert
+consumers are now implemented. The legacy source remains mirrored until the
+explicit cutover gates pass; unit tests alone never enable the master flag.
+
 - The append-only ledger (``InventoryRepository.record_movement``), alert crossing
   detection, and the ``/api/v1/inventory/summary`` tile endpoint are fully built and
   usable by new code today.
@@ -86,6 +91,9 @@ class InventoryAlertDetail:
     reorder_point: int
     automatic_reorder_point: int
     reorder_mode: str
+    average_monthly_sales: float = 0.0
+    three_month_demand: int = 0
+    forecast_window: str = "bis zu 60 vollständige Monate"
 
 
 class MovementResult:
@@ -453,6 +461,12 @@ class InventoryV2Service:
                     reorder_point=int(stock.reorder_point if stock is not None else alert.threshold or 0),
                     automatic_reorder_point=int(stock.automatic_reorder_point if stock is not None else alert.threshold or 0),
                     reorder_mode=str(stock.reorder_mode if stock is not None else "auto"),
+                    average_monthly_sales=(
+                        max(0, int(stock.automatic_reorder_point if stock is not None else alert.threshold or 0)) / 3
+                    ),
+                    three_month_demand=max(
+                        0, int(stock.automatic_reorder_point if stock is not None else alert.threshold or 0)
+                    ),
                 )
             )
         return details

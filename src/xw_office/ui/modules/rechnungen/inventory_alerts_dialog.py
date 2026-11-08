@@ -39,11 +39,15 @@ class InventoryAlertsDialog(QDialog):
         self._stock = QLabel("—")
         self._mode = QLabel("—")
         self._threshold = QSpinBox()
+        self._forecast = QLabel("Forecast")
+        self._window = QLabel("Datenfenster")
         self._threshold.setRange(0, 1_000_000)
         form.addRow("Produkt / SKU:", self._product)
         form.addRow("Ist-Bestand:", self._stock)
         form.addRow("Alarmbestand:", self._threshold)
         form.addRow("Automatik / Modus:", self._mode)
+        form.addRow("Absatz / 3 Monate:", self._forecast)
+        form.addRow("Datenfenster:", self._window)
         layout.addLayout(form)
         buttons = QHBoxLayout()
         self._save = QPushButton("Alarmbestand speichern")
@@ -75,6 +79,8 @@ class InventoryAlertsDialog(QDialog):
             self._product.setText("Keine aktiven Lageralarme")
             self._stock.setText("—")
             self._threshold.setValue(0)
+            self._forecast.setText("—")
+            self._window.setText("—")
             self._mode.setText("—")
 
     def _select(self, row: int) -> None:
@@ -85,6 +91,8 @@ class InventoryAlertsDialog(QDialog):
         self._stock.setText(str(detail.on_hand))
         self._threshold.setValue(detail.reorder_point)
         self._mode.setText(f"{detail.automatic_reorder_point} / {detail.reorder_mode}")
+        self._forecast.setText(f"{detail.average_monthly_sales:.2f} Stk/Monat / {detail.three_month_demand} Stk")
+        self._window.setText(detail.forecast_window)
 
     def _current(self):
         row = self._list.currentRow()
