@@ -197,6 +197,8 @@ def build_inventory_router(
                 reorder_point=body.reorder_point,
                 target_stock=body.target_stock,
                 default_reprint_qty=body.default_reprint_qty,
+                automatic_reorder_point=body.automatic_reorder_point,
+                reorder_mode=body.reorder_mode,
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc

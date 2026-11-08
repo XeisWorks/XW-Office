@@ -37,20 +37,25 @@ class InventoryAlertsDialog(QDialog):
         form = QFormLayout()
         self._product = QLabel("—")
         self._stock = QLabel("—")
+        self._mode = QLabel("—")
         self._threshold = QSpinBox()
         self._threshold.setRange(0, 1_000_000)
         form.addRow("Produkt / SKU:", self._product)
         form.addRow("Ist-Bestand:", self._stock)
         form.addRow("Alarmbestand:", self._threshold)
+        form.addRow("Automatik / Modus:", self._mode)
         layout.addLayout(form)
         buttons = QHBoxLayout()
         self._save = QPushButton("Alarmbestand speichern")
         self._save.clicked.connect(self._save_threshold)
+        self._auto = QPushButton("Automatik verwenden")
+        self._auto.clicked.connect(self._use_automatic)
         self._task = QPushButton("Task erzeugen")
         self._task.clicked.connect(self._create_task)
         close = QPushButton("Schließen")
         close.clicked.connect(self.accept)
         buttons.addWidget(self._save)
+        buttons.addWidget(self._auto)
         buttons.addWidget(self._task)
         buttons.addStretch()
         buttons.addWidget(close)
@@ -70,6 +75,7 @@ class InventoryAlertsDialog(QDialog):
             self._product.setText("Keine aktiven Lageralarme")
             self._stock.setText("—")
             self._threshold.setValue(0)
+            self._mode.setText("—")
 
     def _select(self, row: int) -> None:
         if row < 0 or row >= len(self._details):
@@ -78,6 +84,7 @@ class InventoryAlertsDialog(QDialog):
         self._product.setText(f"{detail.title} ({detail.sku})")
         self._stock.setText(str(detail.on_hand))
         self._threshold.setValue(detail.reorder_point)
+        self._mode.setText(f"{detail.automatic_reorder_point} / {detail.reorder_mode}")
 
     def _current(self):
         row = self._list.currentRow()
@@ -92,6 +99,23 @@ class InventoryAlertsDialog(QDialog):
                 variant_id=detail.alert.variant_id,
                 location_code=detail.location_code,
                 reorder_point=self._threshold.value(),
+                reorder_mode="fixed",
+            )
+            self.refresh()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Alarmbestand", str(exc))
+
+    def _use_automatic(self) -> None:
+        detail = self._current()
+        if detail is None:
+            return
+        try:
+            self._inventory.update_thresholds(
+                variant_id=detail.alert.variant_id,
+                location_code=detail.location_code,
+                reorder_point=detail.automatic_reorder_point,
+                automatic_reorder_point=detail.automatic_reorder_point,
+                reorder_mode="auto",
             )
             self.refresh()
         except Exception as exc:  # noqa: BLE001

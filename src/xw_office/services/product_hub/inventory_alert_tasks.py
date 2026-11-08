@@ -57,9 +57,14 @@ class InventoryAlertTaskService:
             title = str((variant.name if variant is not None else "") or (product.name if product is not None else sku))
             on_hand = int(stock.on_hand if stock is not None else alert.observed_stock or 0)
             threshold = int(alert.threshold if alert.threshold is not None else 0)
+            if sales_average_monthly is None and stock is not None:
+                sales_average_monthly = max(0, int(stock.automatic_reorder_point or 0)) / 3
+            if three_month_demand is None and stock is not None:
+                three_month_demand = int(stock.automatic_reorder_point or 0)
             average_text = "unbekannt" if sales_average_monthly is None else f"{sales_average_monthly:.2f} Stk/Monat"
             demand_text = "unbekannt" if three_month_demand is None else f"{three_month_demand} Stk"
             subject = f"Lageralarm: {sku} – {title}"
+            product_link = f"/app/products/{product.id}" if product is not None else "nicht verfügbar"
             body = (
                 "Lageralarm aus XW-Office\n\n"
                 f"Alarm-ID: {alert.id}\nSKU: {sku}\nProdukttitel: {title}\n"
@@ -67,6 +72,7 @@ class InventoryAlertTaskService:
                 f"Ist-Bestand: {on_hand}\nAlarmbestand: {threshold}\n"
                 f"Durchschnittlicher Monatsverkauf: {average_text}\n"
                 f"Drei-Monats-Bedarf: {demand_text}\nDatenfenster: {data_window}\n"
+                f"Produktlink: {product_link}\n"
             )
             if existing is None:
                 existing = InventoryAlertTask(

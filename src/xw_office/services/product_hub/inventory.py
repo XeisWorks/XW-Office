@@ -83,6 +83,8 @@ class InventoryAlertDetail:
     location_code: str
     on_hand: int
     reorder_point: int
+    automatic_reorder_point: int
+    reorder_mode: str
 
 
 class MovementResult:
@@ -448,6 +450,8 @@ class InventoryV2Service:
                     location_code=location.code if location is not None else DEFAULT_LOCATION_CODE,
                     on_hand=int(stock.on_hand if stock is not None else alert.observed_stock or 0),
                     reorder_point=int(stock.reorder_point if stock is not None else alert.threshold or 0),
+                    automatic_reorder_point=int(stock.automatic_reorder_point if stock is not None else alert.threshold or 0),
+                    reorder_mode=str(stock.reorder_mode if stock is not None else "auto"),
                 )
             )
         return details

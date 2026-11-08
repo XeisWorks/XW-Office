@@ -61,6 +61,8 @@ class ThresholdUpdateRequest(BaseModel):
     reorder_point: int | None = None
     target_stock: int | None = None
     default_reprint_qty: int | None = None
+    automatic_reorder_point: int | None = None
+    reorder_mode: str | None = None
 
 
 class InventoryAlertOut(BaseModel):
