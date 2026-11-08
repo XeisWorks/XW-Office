@@ -76,7 +76,7 @@ packages:
     depends_on: []
     implementation_notes:
       - Read-only SevdeskHistoryAudit prüft finale Rechnungen/Gutschriften über ein 60-Monats-Fenster, ignoriert Entwürfe, summiert Netto-Stückzahlen und meldet fehlende SKU bzw. Abdeckung.
-      - Die konkrete Live-Ausführung gegen sevDesk bleibt als Betriebsjob offen; der read-only Bestandsquellen-/Mappingbericht ist über `InventoryV2Service.audit_inventory_sources()` und `GET /api/v1/inventory/audit` produktiv lesbar.
+      - Die konkrete Live-Ausführung gegen sevDesk ist über `xw-inventory-sync` bzw. den langlebigen `xw-inventory-worker` vorgesehen; der read-only Bestandsquellen-/Mappingbericht ist über `InventoryV2Service.audit_inventory_sources()` und `GET /api/v1/inventory/audit` produktiv lesbar.
     scope:
       - Read-only Bericht über aktive physische Varianten, SKU- und sevDesk-Part-Mappings, fehlende/mehrdeutige Zuordnungen.
       - sevDesk-Rechnungs- und Gegenbelegdaten lesend auf Status, Positionen, Stückzahlen und historische Abdeckung prüfen.
@@ -178,7 +178,7 @@ packages:
       - inventory_stock speichert automatischen Vorschlag und `auto`/`fixed`-Modus getrennt vom aktiven Alarmbestand.
       - InventoryForecastRefreshService aggregiert finale Rechnungs-/Gutschriftpositionen und aktualisiert alle aktiven physischen Varianten; die Provider-/Worker-Terminierung bleibt offen.
       - `SevdeskHistoryProviderAdapter` nutzt den bestehenden paginierten Monatsfeed read-only; `POST /api/v1/inventory/forecast/refresh` und `xw-inventory-forecast-refresh` liefern einen geschützten Einmal-Refresh für Desktop/Railway-Cron.
-      - Ein regelmäßiger Worker-Refresh und eine breitere Anzeige der Datenqualität bleiben als Deployment-Konfiguration offen.
+      - `xw-inventory-worker` führt Forecast-Refresh und sevDesk-Abgleich in einem idempotenten Intervall aus; Railway-Service-Aktivierung und Datenqualitäts-Dashboard bleiben Deployment-/Betriebsgates.
     scope:
       - 60 volle Kalendermonate aus finalen sevDesk-Positionen und eindeutigen Gegenmengen aggregieren.
       - Volle Monate seit Verkaufbarkeit einschließlich Nullmonaten ermitteln; vor sechs Monaten Startwert 50 verwenden.
