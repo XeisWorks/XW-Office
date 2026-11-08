@@ -196,7 +196,7 @@ packages:
       - Einzel- und Sammeldruck im offenen RECHNUNGEN-Panel verwenden die berechnete Printmenge statt ungeprüfter Bestellmenge.
       - Bestätigte manuelle Druckläufe schreiben den Legacy-Bestand und spiegeln die Produktion mit reason `print_run` und stabilem Idempotenzschlüssel.
       - Die offene Druckentscheidung liest den zentralen Hub-Bestand zuerst und nutzt sevDesk nur als Fallback für nicht angeschlossene Desktop-Umgebungen.
-      - Die zentrale offene Rechnungsaggregation, Drucklauf-Buchung und UI-Ausgabe müssen noch auf diesen Plan umgestellt werden.
+      - Die zentrale offene Rechnungsaggregation nutzt nun einen lagerbereinigten Plan; vollständige Varianten-/Reservierungsprojektion über alle Seiten und Rollback-Nachweise bleiben offen.
     scope:
       - PRINT PRODUKTE OFFEN um bestellt, Lager, anderweitig eingeplant, aus Lager und neu drucken ergänzen.
       - Bedarf je exakter Variante über alle offenen Rechnungen aggregieren; keine Doppelzuteilung von Lagerstücken.

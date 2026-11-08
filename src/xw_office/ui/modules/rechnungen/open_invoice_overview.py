@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
@@ -24,6 +24,61 @@ class PrintProductAggregate:
     description: str
     quantity: int
     category_label: str = ""
+    ordered_quantity: int | None = None
+    on_hand: int | None = None
+    from_stock: int = 0
+    print_quantity: int | None = None
+    disposition: str = ""
+    article_kind: str = "external_print"
+
+
+def plan_open_print_products(
+    products: list[PrintProductAggregate],
+    *,
+    stock_by_sku: dict[str, int],
+    article_kind_by_sku: dict[str, str] | None = None,
+    batch_size: int = 3,
+) -> list[PrintProductAggregate]:
+    """Allocate open demand once across finite stock and POD print batches."""
+    if batch_size < 1:
+        raise ValueError("batch_size muss positiv sein")
+    remaining_stock = {str(key).strip().upper(): max(0, int(value)) for key, value in stock_by_sku.items()}
+    kinds = {str(key).strip().upper(): str(value or "external_print").strip().lower() for key, value in (article_kind_by_sku or {}).items()}
+    planned: list[PrintProductAggregate] = []
+    for item in products:
+        sku = str(item.sku or "").strip().upper()
+        ordered = max(0, int(item.ordered_quantity if item.ordered_quantity is not None else item.quantity or 0))
+        kind = kinds.get(sku, item.article_kind or "external_print")
+        available = remaining_stock.get(sku, item.on_hand)
+        if available is None:
+            planned.append(replace(item, ordered_quantity=ordered, article_kind=kind))
+            continue
+        available = max(0, int(available))
+        from_stock = min(ordered, available) if kind != "digital" else 0
+        shortage = max(0, ordered - from_stock)
+        if kind == "pod":
+            print_qty = batch_size * ((shortage + batch_size - 1) // batch_size)
+            disposition = "lager_und_pod_druck" if print_qty else "aus_lager"
+        elif kind == "external_print":
+            print_qty = 0
+            disposition = "nachbestellen" if shortage else "aus_lager"
+        else:
+            print_qty = 0
+            disposition = "digital"
+        remaining_stock[sku] = available - from_stock + print_qty - shortage
+        planned.append(
+            replace(
+                item,
+                quantity=print_qty,
+                ordered_quantity=ordered,
+                on_hand=available,
+                from_stock=from_stock,
+                print_quantity=print_qty,
+                disposition=disposition,
+                article_kind=kind,
+            )
+        )
+    return planned
 
 
 @dataclass(frozen=True)

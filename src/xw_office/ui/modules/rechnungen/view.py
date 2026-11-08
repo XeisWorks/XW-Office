@@ -124,6 +124,7 @@ from xw_office.ui.modules.rechnungen.open_invoice_overview import (
     open_invoice_overview_key,
     overview_from_visible_summaries,
     overview_payload_from_object,
+    plan_open_print_products,
     resolve_open_invoice_overview,
     unknown_open_invoice_summaries,
 )
@@ -3225,7 +3226,26 @@ class RechnungenView(QWidget):
                 can_start=self._can_run_open_overview_job,
             )
 
+    def _plan_open_print_overview(self, overview: OpenInvoiceOverview) -> OpenInvoiceOverview:
+        stock_by_sku: dict[str, int] = {}
+        article_kind_by_sku: dict[str, str] = {}
+        for item in overview.print_products:
+            block = self._piece_block_from_open_product(item)
+            sku = str(item.sku or "").strip().upper()
+            if not sku or block.product is None:
+                continue
+            article_kind_by_sku[sku] = str(block.product.article_kind or "external_print").strip().lower()
+            if block.stock_status is not None:
+                stock_by_sku[sku] = int(block.stock_status.on_hand)
+        planned = plan_open_print_products(
+            list(overview.print_products),
+            stock_by_sku=stock_by_sku,
+            article_kind_by_sku=article_kind_by_sku,
+        )
+        return replace(overview, print_products=planned)
+
     def _apply_open_invoice_overview(self, overview: OpenInvoiceOverview) -> None:
+        overview = self._plan_open_print_overview(overview)
         for key, value in overview.cache_updates.items():
             self._wix_digital_cache[str(key)] = bool(value)
         self._open_total.setText(str(max(0, overview.total)))
@@ -3995,6 +4015,12 @@ class RechnungenView(QWidget):
             description=item.description,
             quantity=quantity,
             category_label=item.category_label,
+            ordered_quantity=item.ordered_quantity,
+            on_hand=item.on_hand,
+            from_stock=item.from_stock,
+            print_quantity=item.print_quantity,
+            disposition=item.disposition,
+            article_kind=item.article_kind,
         )
 
     def _on_open_product_quantity_changed(self, item: PrintProductAggregate, quantity: int) -> None:
@@ -4345,6 +4371,14 @@ class RechnungenView(QWidget):
             description.setStyleSheet("color: #cbd5e1; font-size: 11px;")
             text_col.addWidget(description)
         policy_block = self._piece_block_from_open_product(item)
+        if item.ordered_quantity is not None and item.disposition:
+            plan_hint = QLabel(
+                f"Bestellt: {item.ordered_quantity} · aus Lager: {item.from_stock} · "
+                f"neu drucken: {item.quantity} · {item.disposition}"
+            )
+            plan_hint.setWordWrap(True)
+            plan_hint.setStyleSheet("color: #a7f3d0; font-size: 11px;")
+            text_col.addWidget(plan_hint)
         if policy_block.stock_status is not None:
             stock_hint = QLabel(policy_block.stock_label)
             stock_hint.setWordWrap(True)
@@ -4454,11 +4488,17 @@ class RechnungenView(QWidget):
         return category
 
     def _plain_open_print_product_line(self, item: PrintProductAggregate) -> str:
+        plan = ""
+        if item.ordered_quantity is not None and item.disposition:
+            plan = (
+                f" bestellt {item.ordered_quantity}, aus Lager {item.from_stock}, "
+                f"neu drucken {item.quantity} ({item.disposition})"
+            )
         return (
             f"{max(0, int(item.quantity or 0))}x "
             f"{str(item.title or item.sku or 'Unbenanntes Produkt').strip()} "
             f"{str(item.sku or '-').strip()} "
-            f"{self._open_product_description(item)}"
+            f"{self._open_product_description(item)}{plan}"
         )
 
     def _open_print_product_ready(self, item: PrintProductAggregate) -> bool:
