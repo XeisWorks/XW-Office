@@ -14,6 +14,7 @@ def test_invoice_summary_from_api_object() -> None:
         "id": 12,
         "invoiceNumber": "R-99",
         "invoiceDate": "2024-03-01",
+        "create": "2024-03-01T08:15:00+01:00",
         "status": "200",
         "sumGross": 19.99,
         "contact": {"name": "Test GmbH"},
@@ -21,6 +22,7 @@ def test_invoice_summary_from_api_object() -> None:
     summary = InvoiceSummary.from_api_object(raw)
     assert summary.id == "12"
     assert summary.invoice_number == "R-99"
+    assert summary.source_created_at == "2024-03-01T08:15:00+01:00"
     assert summary.status_code == 200
     assert summary.contact_name == "Test GmbH"
     row = summary.as_table_row()

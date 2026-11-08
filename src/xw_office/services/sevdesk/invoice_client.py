@@ -157,6 +157,7 @@ class InvoiceSummary(BaseModel):
     has_unreleased_sku: bool = False
     order_reference: str = ""
     sevdesk_reference: str = ""
+    source_created_at: str = Field(default="", alias="sourceCreatedAt")
     source_updated_at: str = Field(default="", alias="sourceUpdatedAt")
 
     @field_validator("status_code", mode="before")
@@ -182,6 +183,7 @@ class InvoiceSummary(BaseModel):
         "delivery_country_code",
         "order_reference",
         "sevdesk_reference",
+        "source_created_at",
         "source_updated_at",
         mode="before",
     )
@@ -286,6 +288,9 @@ class InvoiceSummary(BaseModel):
             "is_sensitive_country": country_code.upper() in DEFAULT_SENSITIVE_COUNTRY_CODES,
             "order_reference": order_reference,
             "sevdesk_reference": sevdesk_reference,
+            "sourceCreatedAt": str(
+                raw.get("create") or raw.get("createdAt") or raw.get("created") or ""
+            ).strip(),
             "sourceUpdatedAt": str(raw.get("update") or raw.get("updatedAt") or raw.get("updated") or "").strip(),
         }
         return cls.model_validate(payload)

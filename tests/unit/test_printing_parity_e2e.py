@@ -11,6 +11,13 @@ from xw_office.services.invoice_processing.service import (
     FulfillmentFlags,
     InvoiceProcessingService,
 )
+from xw_office.services.invoice_processing.buyer_notes import (
+    BUYER_NOTE_ACK,
+    BUYER_NOTE_DELIVERY_NOTE,
+    BUYER_NOTE_SKIP,
+    BuyerNoteCase,
+    BuyerNoteReviewSelection,
+)
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 
 
@@ -467,6 +474,253 @@ def test_fullflow_prints_all_physical_output_before_fulfillment_and_mail() -> No
         "mail:INV-001",
         "wix:INV-002",
         "mail:INV-002",
+    ]
+
+
+def test_fullflow_prints_physical_invoices_oldest_first_with_stable_ties() -> None:
+    invoice_client = _InvoiceClientE2E()
+    repo = _SettingsRepoE2E()
+    service = InvoiceProcessingService(
+        AppConfig(),
+        invoice_client,
+        repo,
+        _WixOrdersPhysicalStub(),
+        _MailServiceStub(),
+    )
+    invoice_client.list_invoice_summaries = lambda **_: [
+        InvoiceSummary(
+            id="30",
+            invoice_number="R-030",
+            invoice_date="2026-11-08",
+            source_created_at="2026-11-08T10:00:00+01:00",
+            order_reference="WIX-30",
+        ),
+        InvoiceSummary(
+            id="20",
+            invoice_number="R-020",
+            invoice_date="2026-11-08",
+            source_created_at="2026-11-08T08:00:00+01:00",
+            order_reference="WIX-20",
+        ),
+        InvoiceSummary(
+            id="10",
+            invoice_number="R-010",
+            invoice_date="2026-11-07",
+            source_created_at="2026-11-07T18:00:00+01:00",
+            order_reference="WIX-10",
+        ),
+    ]
+    print_events: list[str] = []
+
+    with patch.object(
+        service,
+        "_run_finalize_step",
+        side_effect=lambda _summary, flags, **_kwargs: flags,
+    ), patch.object(
+        service,
+        "_run_payment_step",
+        side_effect=lambda _summary, flags: flags,
+    ), patch.object(
+        service,
+        "_run_aftercare_delivery_note_step",
+        side_effect=lambda _summary, flags: flags,
+    ), patch.object(
+        service,
+        "_run_invoice_print_step",
+        side_effect=lambda summary, flags: (
+            print_events.append(f"invoice:{summary.id}")
+            or replace(flags, invoice_printed=True)
+        ),
+    ), patch.object(
+        service,
+        "_run_label_print_step",
+        side_effect=lambda summary, flags, **_kwargs: (
+            print_events.append(f"label:{summary.id}")
+            or replace(flags, label_printed=True)
+        ),
+    ), patch.object(
+        service,
+        "_run_product_step",
+        side_effect=lambda _summary, flags, **_kwargs: replace(flags, wix_fulfilled=True),
+    ), patch.object(
+        service,
+        "_run_mail_step",
+        side_effect=lambda _summary, flags, **_kwargs: replace(flags, mail_sent=True),
+    ):
+        result = service.run_start_fullflow(full_mode=True)
+
+    assert result["failures"] == 0
+    assert result["invoice_print_ids"] == ["10", "20", "30"]
+    assert result["label_print_ids"] == ["10", "20", "30"]
+    assert print_events == [
+        "invoice:10",
+        "label:10",
+        "invoice:20",
+        "label:20",
+        "invoice:30",
+        "label:30",
+    ]
+
+
+def test_start_priority_uses_numeric_id_for_same_day_without_creation_time() -> None:
+    service = InvoiceProcessingService(
+        AppConfig(),
+        _InvoiceClientE2E(),
+        _SettingsRepoE2E(),
+        _WixOrdersPhysicalStub(),
+        _MailServiceStub(),
+    )
+    summaries = [
+        InvoiceSummary(id="103", invoice_date="2026-11-08", order_reference="WIX-103"),
+        InvoiceSummary(id="101", invoice_date="2026-11-08", order_reference="WIX-101"),
+        InvoiceSummary(id="102", invoice_date="2026-11-08", order_reference="WIX-102"),
+    ]
+
+    summaries.sort(key=service._start_processing_priority)  # noqa: SLF001
+
+    assert [summary.id for summary in summaries] == ["101", "102", "103"]
+
+
+def test_start_priority_keeps_older_digital_invoice_after_physical_queue() -> None:
+    class _MixedWixOrdersStub(_WixOrdersPhysicalStub):
+        def is_reference_digital_only(self, reference: str) -> bool:
+            return reference.startswith("DIGITAL-")
+
+        def is_reference_manual_licensed_delivery(
+            self,
+            reference: str,
+            *,
+            use_cache: bool = True,
+        ) -> bool:
+            return reference.startswith("LICENSE-")
+
+    service = InvoiceProcessingService(
+        AppConfig(),
+        _InvoiceClientE2E(),
+        _SettingsRepoE2E(),
+        _MixedWixOrdersStub(),
+        _MailServiceStub(),
+    )
+    summaries = [
+        InvoiceSummary(id="1", invoice_date="2026-11-01", order_reference="DIGITAL-1"),
+        InvoiceSummary(id="4", invoice_date="2026-11-04", order_reference="PHYSICAL-4"),
+        InvoiceSummary(id="2", invoice_date="2026-11-02", order_reference="LICENSE-2"),
+        InvoiceSummary(id="3", invoice_date="2026-11-03", order_reference="PHYSICAL-3"),
+    ]
+
+    summaries.sort(key=service._start_processing_priority)  # noqa: SLF001
+
+    assert [summary.id for summary in summaries] == ["3", "4", "1", "2"]
+
+
+def test_buyer_note_actions_keep_chronology_and_paper_bundle_order(tmp_path) -> None:
+    invoice_client = _InvoiceClientE2E()
+    service = InvoiceProcessingService(
+        AppConfig(),
+        invoice_client,
+        _SettingsRepoE2E(),
+        _WixOrdersPhysicalStub(),
+        _MailServiceStub(),
+    )
+    invoice_client.list_invoice_summaries = lambda **_: [
+        InvoiceSummary(id="3", invoice_date="2026-11-08", order_reference="WIX-3"),
+        InvoiceSummary(id="1", invoice_date="2026-11-06", order_reference="WIX-1"),
+        InvoiceSummary(id="2", invoice_date="2026-11-07", order_reference="WIX-2"),
+    ]
+    delivery_note = tmp_path / "delivery-note.pdf"
+    delivery_note.write_bytes(b"%PDF-1.4\ntest")
+    events: list[str] = []
+    note_actions = {
+        "1": (
+            BuyerNoteCase(
+                invoice_id="1",
+                invoice_number="R-1",
+                order_reference="WIX-1",
+                customer_name="Old Customer",
+                address_lines=("Old Customer", "Old Street 1", "1010 Wien"),
+            ),
+            BuyerNoteReviewSelection(
+                action=BUYER_NOTE_DELIVERY_NOTE,
+                address_lines=("Old Customer", "Old Street 1", "1010 Wien"),
+            ),
+        ),
+        "2": (
+            BuyerNoteCase(
+                invoice_id="2",
+                invoice_number="R-2",
+                order_reference="WIX-2",
+                customer_name="Middle Customer",
+            ),
+            BuyerNoteReviewSelection(action=BUYER_NOTE_ACK),
+        ),
+        "3": (
+            BuyerNoteCase(
+                invoice_id="3",
+                invoice_number="R-3",
+                order_reference="WIX-3",
+                customer_name="New Customer",
+            ),
+            BuyerNoteReviewSelection(action=BUYER_NOTE_SKIP),
+        ),
+    }
+
+    with patch.object(
+        service,
+        "_run_finalize_step",
+        side_effect=lambda _summary, flags, **_kwargs: flags,
+    ), patch.object(
+        service,
+        "_run_payment_step",
+        side_effect=lambda _summary, flags: flags,
+    ), patch.object(
+        service,
+        "_run_aftercare_delivery_note_step",
+        side_effect=lambda _summary, flags: flags,
+    ), patch.object(
+        service._delivery_notes,
+        "generate_pdf",
+        side_effect=lambda _context: delivery_note,
+    ), patch.object(
+        service._invoice_printer,
+        "print_pdf_bytes",
+        side_effect=lambda _data, **_kwargs: events.append("delivery-note:1"),
+    ), patch.object(
+        service,
+        "_run_invoice_print_step",
+        side_effect=lambda summary, flags: (
+            events.append(f"invoice:{summary.id}")
+            or replace(flags, invoice_printed=True)
+        ),
+    ), patch.object(
+        service,
+        "_run_label_print_step",
+        side_effect=lambda summary, flags, **_kwargs: (
+            events.append(f"label:{summary.id}")
+            or replace(flags, label_printed=True)
+        ),
+    ), patch.object(
+        service,
+        "_run_product_step",
+        side_effect=lambda _summary, flags, **_kwargs: replace(flags, wix_fulfilled=True),
+    ), patch.object(
+        service,
+        "_run_mail_step",
+        side_effect=lambda _summary, flags, **_kwargs: replace(flags, mail_sent=True),
+    ):
+        result = service.run_start_fullflow(
+            full_mode=True,
+            buyer_note_actions=note_actions,
+        )
+
+    assert result["failures"] == 0
+    assert result["skipped"] == 1
+    assert result["invoice_print_ids"] == ["1", "2"]
+    assert events == [
+        "delivery-note:1",
+        "invoice:1",
+        "label:1",
+        "invoice:2",
+        "label:2",
     ]
 
 

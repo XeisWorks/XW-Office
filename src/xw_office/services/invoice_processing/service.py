@@ -23,7 +23,6 @@ from xw_office.services.invoice_processing.buyer_notes import (
     normalized_lines,
 )
 from xw_office.services.invoice_processing.context import (
-    InvoiceCapabilities,
     InvoiceOrigin,
     InvoiceWorkContext,
     address_lines_from_invoice,
@@ -565,9 +564,30 @@ class InvoiceProcessingService:
             if progress_callback is not None:
                 progress_callback("START: Wix-Kontext wird geladen...")
             self._prefetch_wix_order_context(summaries)
-            summaries.sort(key=lambda item: self._start_processing_priority(item))
+            delivery_kinds = {
+                id(item): self._start_delivery_kind(item)
+                for item in summaries
+            }
+            summaries.sort(
+                key=lambda item: self._start_processing_priority(
+                    item,
+                    delivery_kind=delivery_kinds[id(item)],
+                )
+            )
+            logger.info(
+                "START execution plan: %s",
+                " -> ".join(
+                    (
+                        f"{delivery_kinds[id(item)]}:"
+                        f"{item.invoice_number or item.id}:"
+                        f"{item.invoice_date or item.source_created_at or 'date-missing'}"
+                    )
+                    for item in summaries
+                ),
+            )
             result = self._run_start_fullflow_print_first(
                 summaries=summaries,
+                delivery_kinds=delivery_kinds,
                 started=started,
                 print_products=print_products,
                 should_abort=should_abort,
@@ -705,6 +725,7 @@ class InvoiceProcessingService:
         self,
         *,
         summaries: list[InvoiceSummary],
+        delivery_kinds: dict[int, str],
         started: float,
         print_products: bool,
         should_abort: Callable[[], bool] | None,
@@ -765,8 +786,9 @@ class InvoiceProcessingService:
             flags = self.read_fulfillment_flags(summary.id)
 
             try:
-                manual_licensed = self._is_manual_licensed_delivery(summary)
-                digital_only = self._is_digital_only(summary) if summary.order_reference.strip() else False
+                delivery_kind = delivery_kinds[id(original_summary)]
+                manual_licensed = delivery_kind == "manual-license"
+                digital_only = delivery_kind in {"digital", "manual-license"}
                 if manual_licensed or digital_only:
                     post_tasks.append(
                         _StartPostTask(
@@ -1005,11 +1027,66 @@ class InvoiceProcessingService:
                 raise
             return self._run_label_print_step(summary, flags)
 
-    def _start_processing_priority(self, summary: InvoiceSummary) -> tuple[int, str]:
-        """Process physical invoices before digital-only orders for faster visible output."""
-        if not str(summary.order_reference or "").strip():
-            return (0, summary.invoice_date or summary.id)
-        return (1 if self._is_digital_only(summary) else 0, summary.invoice_date or summary.id)
+    @staticmethod
+    def _start_datetime(value: object) -> datetime | None:
+        """Return one comparable UTC-naive timestamp for a sevDesk date value."""
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+
+    def _start_delivery_kind(self, summary: InvoiceSummary) -> str:
+        """Return the existing START lane once for sorting and execution."""
+        if self._is_manual_licensed_delivery(summary):
+            return "manual-license"
+        return "digital" if self._is_digital_only(summary) else "physical"
+
+    def _start_processing_priority(
+        self,
+        summary: InvoiceSummary,
+        *,
+        delivery_kind: str | None = None,
+    ) -> tuple[int, int, datetime, int, datetime, int, int, str, str]:
+        """Sort paper output oldest-first and keep digital work after it.
+
+        ``invoiceDate`` is commonly identical for several drafts created on
+        the same day.  The sevDesk client deliberately returns newest IDs
+        first for the UI, so relying on Python's stable sort would reverse the
+        desired paper order for those ties.  Creation time and the numeric
+        sevDesk ID therefore form explicit, ascending tie-breakers.
+        """
+        kind = delivery_kind or self._start_delivery_kind(summary)
+        kind_rank = {"physical": 0, "digital": 1, "manual-license": 2}[kind]
+        invoice_time = self._start_datetime(summary.invoice_date)
+        created_time = self._start_datetime(summary.source_created_at)
+        effective_time = invoice_time or created_time
+        missing_time = effective_time is None
+        if missing_time:
+            logger.warning(
+                "START chronology has no valid invoice/create date invoice=%s; using ID fallback",
+                summary.id,
+            )
+
+        raw_id = str(summary.id or "").strip()
+        numeric_id = int(raw_id) if raw_id.isdigit() else 0
+        non_numeric_id = 0 if raw_id.isdigit() else 1
+        return (
+            kind_rank,
+            1 if missing_time else 0,
+            effective_time or datetime.max,
+            1 if created_time is None else 0,
+            created_time or datetime.max,
+            non_numeric_id,
+            numeric_id,
+            str(summary.invoice_number or "").casefold(),
+            raw_id.casefold(),
+        )
 
     def build_inventory_requirements(
         self,
