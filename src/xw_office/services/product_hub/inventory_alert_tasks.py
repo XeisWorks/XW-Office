@@ -43,10 +43,16 @@ class InventoryAlertTaskService:
         explicit_resend: bool = False,
     ) -> InventoryAlertTaskResult:
         with session_scope(self._session_factory) as session:
-            alert = session.get(InventoryAlert, alert_id)
+            # Serialize task creation per alert on PostgreSQL.  A repeated click
+            # therefore observes the already-sent row instead of racing a second mail.
+            alert = session.get(InventoryAlert, alert_id, with_for_update=True)
             if alert is None:
                 raise KeyError(f"Inventory alert {alert_id} nicht gefunden")
-            existing = session.scalar(select(InventoryAlertTask).where(InventoryAlertTask.alert_id == alert_id))
+            existing = session.scalar(
+                select(InventoryAlertTask)
+                .where(InventoryAlertTask.alert_id == alert_id)
+                .with_for_update()
+            )
             if existing is not None and existing.status == "sent" and not explicit_resend:
                 return self._result(existing)
             variant = session.get(ProductVariant, alert.variant_id)
