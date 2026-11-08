@@ -3,7 +3,7 @@
 - **Stand:** 8. November 2026
 - **Repository:** `XeisWorks/XW-Office`
 - **Codebasis bei der Analyse:** `main` / `2684773`
-- **Status:** fachliche Entscheidungen bestätigt; Umsetzung und Produktionsdatenprüfung offen
+- **Status:** fachliche Umsetzung weitgehend integriert und vollständig getestet; Produktionsdaten-/Deployment-Gates noch offen
 - **Arbeitsplan:** [rechnungen_inventur_bestand_5_6_luna_task_queue_2026-11-08.yaml](rechnungen_inventur_bestand_5_6_luna_task_queue_2026-11-08.yaml)
 
 ## Implementierungsfortschritt
@@ -30,6 +30,7 @@
 - Der Lagerbestand speichert neben dem aktiven Alarmbestand jetzt auch den automatischen Forecast und den Modus `auto`/`fixed`, damit ein Fixwert den Vorschlag nicht verdeckt.
 - Die Hub-Ledgerbuchung sperrt Lagerort und Bestandszeile transaktional, revalidiert den Idempotenzschlüssel nach dem Lock und rollt bei einem konkurrierenden Unique-Key-Sieg die Zwischenänderung zurück.
 - Die Cutover-Readiness nimmt nun den read-only Bestandsquellen-Audit und direkte Legacy-/Hub-Mengenabweichungen als eigene Gates auf; der Master bleibt bis zu den manuellen Betriebsnachweisen absichtlich deaktiviert.
+- Gesamtprüfung am 8. November 2026: `python -m pytest -q` → **1.962 bestanden**; `python -m alembic heads/current` → `034_inventory_forecast_fields` (Head). `main` ist sauber zu `origin/main` gepusht.
 
 - **P00 – Live-Datenvertrag und Bestandsquellen:** begonnen und erster lesender Audit-Baustein umgesetzt in `services/product_hub/inventory_audit.py`; keine Bestands- oder sevDesk-Schreibzugriffe.
 - Der Audit meldet doppelte SKU, fehlende physische sevDesk-Part-Mappings, negative oder fehlende Quellbestände, Legacy-/Hub-Drift und fehlendes Verkaufsstartdatum. Der Live-DB-Snapshot ist jetzt als read-only `InventoryV2Service.audit_inventory_sources()` und `GET /api/v1/inventory/audit` verfügbar; vier Audit-Tests laufen grün.
@@ -39,7 +40,7 @@
 - Der Hub-Schwellenpfad bewertet den aktuellen Bestand jetzt sofort nach einer Schwellenänderung und öffnet bzw. löst Warnungen ohne erfundene Bewegungsbuchung auf. API- und Servicetests decken die Erhöhung und Senkung der Schwelle ab.
 - Für P03 ist `inventory_document_booking` ergänzt: je Dokument, exakter Position und Bewegungsart wird die bereits angewandte kumulative Menge persistiert. Wiederholte Freigabe-/Polling-Aufrufe buchen damit 0 Differenz; Mengenänderungen und Rückbuchungen wenden nur die Differenz an. Migration und 2 Integrationsfälle sind enthalten.
 - Der Freigabeweg kann den Buchungskern nun optional aus dem Bootstrap verwenden: Nach erfolgreicher physischer sevDesk-Freigabe werden normalisierte Produktpositionen gegen exakte Hub-Varianten aufgelöst und über die Buchungsmarke gebucht. Digitale Positionen bleiben ohne Bewegung; fehlende physische Varianten werden als Fehler sichtbar.
-- **Noch offen:** tatsächliche Live-/sevDesk-Snapshot-Anbindung, historische Positionsprüfung und die Pakete P01–P08.
+- **Verbleibende Betriebs-Gates:** Railway-Cron-Zeitplan und sevDesk-/Graph-Produktionszugänge müssen in der Zielumgebung aktiviert werden; die echte Inventur, ein repräsentativer Shadow-Lauf, Projektionstests, Backup und Rollback-Probe sind bewusst nicht automatisierbar und blockieren den Product-Hub-Master-Cutover.
 
 ## 1. Verbindliche Fachentscheidungen
 

@@ -18,6 +18,7 @@ instructions:
     - Fertige und getestete Änderungen nach main integrieren und origin/main ohne Force-Push aktualisieren.
   cutover_guard:
     - Hub-Master-Flag erst nach Inventur, Shadow-Abgleich, Projektionstests und Rollback-Probe aktivieren.
+    - Code-/Testabschluss erreicht; verbleibende Gates sind echte sevDesk-/Graph-/Railway-Zugänge, Cron-Aktivierung, Produktionsinventur und dokumentierter Shadow-/Rollback-Nachweis.
     - Historische Rechnungen nur für Prognose lesen; nicht rückwirkend vom gezählten Anfangsbestand abziehen.
 
 confirmed_policy:
