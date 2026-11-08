@@ -580,7 +580,7 @@ class InvoiceProcessingService:
                     (
                         f"{delivery_kinds[id(item)]}:"
                         f"{item.invoice_number or item.id}:"
-                        f"{item.invoice_date or item.source_created_at or 'date-missing'}"
+                        f"{item.source_created_at or 'id-fallback'}"
                     )
                     for item in summaries
                 ),
@@ -1052,24 +1052,20 @@ class InvoiceProcessingService:
         summary: InvoiceSummary,
         *,
         delivery_kind: str | None = None,
-    ) -> tuple[int, int, datetime, int, datetime, int, int, str, str]:
-        """Sort paper output oldest-first and keep digital work after it.
+    ) -> tuple[int, int, datetime, int, int, str, str]:
+        """Sort longest-waiting paper work first and digital work after it.
 
-        ``invoiceDate`` is commonly identical for several drafts created on
-        the same day.  The sevDesk client deliberately returns newest IDs
-        first for the UI, so relying on Python's stable sort would reverse the
-        desired paper order for those ties.  Creation time and the numeric
-        sevDesk ID therefore form explicit, ascending tie-breakers.
+        The operational age starts when sevDesk creates the draft.  A manually
+        changed or backdated ``invoiceDate`` must not move newer work ahead of
+        drafts that have already been waiting.  Numeric sevDesk ID is the
+        deterministic ascending fallback and tie-breaker.
         """
         kind = delivery_kind or self._start_delivery_kind(summary)
         kind_rank = {"physical": 0, "digital": 1, "manual-license": 2}[kind]
-        invoice_time = self._start_datetime(summary.invoice_date)
         created_time = self._start_datetime(summary.source_created_at)
-        effective_time = invoice_time or created_time
-        missing_time = effective_time is None
-        if missing_time:
+        if created_time is None:
             logger.warning(
-                "START chronology has no valid invoice/create date invoice=%s; using ID fallback",
+                "START chronology has no valid create date invoice=%s; using ID fallback",
                 summary.id,
             )
 
@@ -1078,8 +1074,6 @@ class InvoiceProcessingService:
         non_numeric_id = 0 if raw_id.isdigit() else 1
         return (
             kind_rank,
-            1 if missing_time else 0,
-            effective_time or datetime.max,
             1 if created_time is None else 0,
             created_time or datetime.max,
             non_numeric_id,

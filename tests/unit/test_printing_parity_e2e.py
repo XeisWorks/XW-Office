@@ -477,7 +477,7 @@ def test_fullflow_prints_all_physical_output_before_fulfillment_and_mail() -> No
     ]
 
 
-def test_fullflow_prints_physical_invoices_oldest_first_with_stable_ties() -> None:
+def test_fullflow_orders_physical_invoices_by_wait_time_not_invoice_date() -> None:
     invoice_client = _InvoiceClientE2E()
     repo = _SettingsRepoE2E()
     service = InvoiceProcessingService(
@@ -491,21 +491,21 @@ def test_fullflow_prints_physical_invoices_oldest_first_with_stable_ties() -> No
         InvoiceSummary(
             id="30",
             invoice_number="R-030",
-            invoice_date="2026-11-08",
+            invoice_date="2026-11-01",
             source_created_at="2026-11-08T10:00:00+01:00",
             order_reference="WIX-30",
         ),
         InvoiceSummary(
             id="20",
             invoice_number="R-020",
-            invoice_date="2026-11-08",
+            invoice_date="2026-11-12",
             source_created_at="2026-11-08T08:00:00+01:00",
             order_reference="WIX-20",
         ),
         InvoiceSummary(
             id="10",
             invoice_number="R-010",
-            invoice_date="2026-11-07",
+            invoice_date="2026-11-15",
             source_created_at="2026-11-07T18:00:00+01:00",
             order_reference="WIX-10",
         ),
@@ -562,7 +562,7 @@ def test_fullflow_prints_physical_invoices_oldest_first_with_stable_ties() -> No
     ]
 
 
-def test_start_priority_uses_numeric_id_for_same_day_without_creation_time() -> None:
+def test_start_priority_uses_numeric_id_when_creation_time_is_missing() -> None:
     service = InvoiceProcessingService(
         AppConfig(),
         _InvoiceClientE2E(),
@@ -571,14 +571,33 @@ def test_start_priority_uses_numeric_id_for_same_day_without_creation_time() -> 
         _MailServiceStub(),
     )
     summaries = [
-        InvoiceSummary(id="103", invoice_date="2026-11-08", order_reference="WIX-103"),
-        InvoiceSummary(id="101", invoice_date="2026-11-08", order_reference="WIX-101"),
+        InvoiceSummary(id="103", invoice_date="2026-11-01", order_reference="WIX-103"),
+        InvoiceSummary(id="101", invoice_date="2026-11-15", order_reference="WIX-101"),
         InvoiceSummary(id="102", invoice_date="2026-11-08", order_reference="WIX-102"),
     ]
 
     summaries.sort(key=service._start_processing_priority)  # noqa: SLF001
 
     assert [summary.id for summary in summaries] == ["101", "102", "103"]
+
+
+def test_start_priority_uses_numeric_id_for_equal_creation_time() -> None:
+    service = InvoiceProcessingService(
+        AppConfig(),
+        _InvoiceClientE2E(),
+        _SettingsRepoE2E(),
+        _WixOrdersPhysicalStub(),
+        _MailServiceStub(),
+    )
+    created = "2026-11-08T08:00:00+01:00"
+    summaries = [
+        InvoiceSummary(id="202", source_created_at=created, order_reference="WIX-202"),
+        InvoiceSummary(id="201", source_created_at=created, order_reference="WIX-201"),
+    ]
+
+    summaries.sort(key=service._start_processing_priority)  # noqa: SLF001
+
+    assert [summary.id for summary in summaries] == ["201", "202"]
 
 
 def test_start_priority_keeps_older_digital_invoice_after_physical_queue() -> None:
