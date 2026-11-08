@@ -8,6 +8,12 @@ read-only sevDesk/history adapters, forecast worker, and desktop print/alert
 consumers are now implemented. The legacy source remains mirrored until the
 explicit cutover gates pass; unit tests alone never enable the master flag.
 
+The historical PR13 scope bullets below describe the pre-implementation
+baseline. Later inventory packages now provide the invoice-release bridge,
+external sevDesk polling, guided counts, forecast refresh, print planning, and
+alert/task consumers; the remaining operational gates are documented in the
+current planning markdown and PROGRESS.md.
+
 - The append-only ledger (``InventoryRepository.record_movement``), alert crossing
   detection, and the ``/api/v1/inventory/summary`` tile endpoint are fully built and
   usable by new code today.
@@ -940,6 +946,46 @@ class LegacyInventoryShadowBridge:
                 resolution="shadow_mirror_recovered",
                 resolved_by="legacy-inventory-shadow",
             )
+
+    def record_external_shortage(
+        self,
+        *,
+        sku: str,
+        requested_delta: int,
+        current_on_hand: int | None,
+        target_on_hand: int | None,
+        detail: str,
+        external_reference: str = "",
+    ) -> bool:
+        """Persist an external-feed underflow as an actionable shadow conflict.
+
+        The sevDesk feed may be able to identify the SKU while the Legacy JSON
+        source has fewer units than the finalized sale.  The external mirror
+        intentionally clamps that JSON value to zero; this companion queue entry
+        keeps the missing quantity visible until an operator reconciles it.
+        """
+        clean_sku = str(sku or "").strip().upper()
+        resolved = self._products.resolve_sku(clean_sku)
+        if resolved is None:
+            return False
+        normalized_detail = (
+            str(detail or "").strip()
+            or "Externer sevDesk-Abgang überschreitet den Legacy-Bestand."
+        )
+        reference = str(external_reference or "").strip()
+        if reference:
+            normalized_detail = f"{normalized_detail} (Beleg: {reference})"
+        self._record_issue(
+            variant_id=resolved.variant.id,
+            sku=clean_sku,
+            status="shortage",
+            detail=normalized_detail,
+            source="sevdesk_external_feed",
+            current_on_hand=current_on_hand,
+            requested_delta=int(requested_delta),
+            target_on_hand=target_on_hand,
+        )
+        return True
 
     def mirror_absolute_stock(
         self, *, sku: str, new_stock: int, source: str, external_reference: str = ""
