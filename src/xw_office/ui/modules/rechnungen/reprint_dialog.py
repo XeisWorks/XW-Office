@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from xw_office.services.inventory.service import ReprintPreflight
 from xw_office.ui.widgets.data_table import DataTable
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ class ReprintPreviewDialog(QDialog):
     - "IM BESTAND" table: SKUs die nicht gedruckt werden (Stock OK)
     """
 
-    def __init__(self, preflight: object, parent: QWidget | None = None) -> None:
+    def __init__(self, preflight: ReprintPreflight, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.preflight = preflight
         self.setWindowTitle("📋 Nachdrucke Übersicht")

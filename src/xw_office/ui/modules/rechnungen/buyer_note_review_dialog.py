@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from xw_office.services.invoice_processing.buyer_notes import (
@@ -36,7 +37,7 @@ class BuyerNoteReviewDialog(QDialog):
         cases: list[BuyerNoteCase],
         *,
         allow_delivery_note: bool,
-        parent: object | None = None,
+        parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("START – Käufernotizen und Lieferschein")
