@@ -529,7 +529,14 @@ def test_waiting_manual_sync_reuses_scan_completed_by_other_pc(
     def after_waiting_for_lock(key: str, mutator: Callable[[str | None], str]) -> str:
         # Simulate the other PC committing its successful scan before releasing the lock.
         finished = datetime.datetime.now(datetime.UTC)
-        return mutator(json.dumps({"periods": {"2026-09-01/2026-09-30": finished.isoformat()}}))
+        return mutator(
+            json.dumps(
+                {
+                    "periods": {"2026-09-01/2026-09-30": finished.isoformat()},
+                    "generation": 1,
+                }
+            )
+        )
 
     monkeypatch.setattr(settings, "mutate_value_json", after_waiting_for_lock)
     result = service.synchronize_bank_expenses(

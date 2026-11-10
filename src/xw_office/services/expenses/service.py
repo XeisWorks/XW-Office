@@ -60,6 +60,7 @@ EXPENSE_CACHE_MAX_AGE = datetime.timedelta(minutes=5)
 
 class _ExpenseSyncState(BaseModel):
     periods: dict[str, AwareDatetime] = Field(default_factory=dict)
+    generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -332,9 +333,18 @@ class ExpenseAuditService:
             raise ValueError("Das Startdatum muss vor dem Enddatum liegen.")
         if self._bank_provider is None:
             raise RuntimeError("Für diesen Mandanten ist kein sevDesk-Konto konfiguriert.")
-        requested_at = datetime.datetime.now(datetime.UTC)
         period_key = f"{start.isoformat()}/{end.isoformat()}"
         result: BankExpenseLoad | None = None
+        observed_state_json = (
+            self._repo.get_value_json(f"expenses.sync.{self._tenant_key}")
+            if force and self._repo is not None and self._pipeline_repo is not None
+            else None
+        )
+        observed_generation = (
+            _ExpenseSyncState.model_validate_json(observed_state_json).generation
+            if observed_state_json
+            else 0
+        )
 
         def synchronize(current: str | None) -> str:
             nonlocal result
@@ -344,7 +354,7 @@ class ExpenseAuditService:
             fresh = (
                 synced_at is not None
                 and datetime.timedelta(0) <= now - synced_at < EXPENSE_CACHE_MAX_AGE
-                and (not force or synced_at > requested_at)
+                and (not force or state.generation > observed_generation)
             )
             loaded = self._load_bank_expenses(
                 start=start,
@@ -361,6 +371,8 @@ class ExpenseAuditService:
             elif not fresh:
                 state.periods.pop(period_key, None)
                 synced_at = None
+            if not fresh:
+                state.generation += 1
             result = replace(loaded, refreshed=not fresh, synced_at=synced_at)
             return state.model_dump_json()
 
