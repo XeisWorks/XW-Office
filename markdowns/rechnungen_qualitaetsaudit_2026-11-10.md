@@ -568,7 +568,7 @@ dauerhafte externe Claims und konsistenter Legacy-/Hub-Verbrauch.
 | Gate | Priorität | Status | Benötigter Nachweis / anfängerfreundlicher Ablauf |
 | --- | --- | --- | --- |
 | G1 – Windows/Hardware/Integration | P2 | BLOCKIERT | In einer freigegebenen Testumgebung einen Wix-Testauftrag und einen manuell angelegten sevDesk-Testentwurf mit eindeutiger Testadresse bereitstellen. Testdrucker wählen, zuerst PDF/Label/PLC im Testmodus prüfen, anschließend die erlaubten START-Schritte einzeln abnehmen. Versand ausschließlich an eigene Testadresse. Auch Escape/Schließen/Retry und 100–200 % Windows-Skalierung prüfen; Ergebnis und Beleg-/Job-IDs ohne Secrets protokollieren. |
-| G2 – Mehr-PC/PostgreSQL/Cutover | P1 | BLOCKIERT | Isolierte PostgreSQL-Testdatenbank und zwei Testinstanzen bereitstellen, keine Produktiv-URL verwenden. AP02/AP03 mit gleichzeitigen Aktionen und Prozessabbruch prüfen. Danach mit fachlich bestätigter Inventur, Backup, Shadow-Abgleich und Rollback-Probe die vorhandenen Cutover-Gates abarbeiten. Dieses Audit schaltet keine Master-Flags um. |
+| G2 - Mehr-PC/PostgreSQL/Cutover | P1 | BLOCKIERT | Isolierte PostgreSQL-Testdatenbank und zwei Testinstanzen sind erforderlich. Docker CLI ist installiert, der lokale Docker-Dienst laeuft jedoch nicht; eine isolierte PostgreSQL-Test-URL ist nicht konfiguriert. Keine Produktiv-URL verwenden. AP02/AP03 mit gleichzeitigen Aktionen und Prozessabbruch pruefen; danach Inventur, Backup, Shadow-Abgleich und Rollback-Probe durchfuehren. Dieses Audit schaltet keine Master-Flags um. |
 
 ### Abschlussnachweis
 
