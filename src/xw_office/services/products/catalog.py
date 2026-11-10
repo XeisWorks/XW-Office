@@ -615,6 +615,11 @@ class ProductCatalogService:
             self._unreleased_products = self._load_unreleased_products()
         return list(self._unreleased_products)
 
+    @property
+    def unreleased_products_loaded(self) -> bool:
+        """Whether the disk/setting-backed unreleased catalog is already cached."""
+        return self._unreleased_products is not None
+
     def unreleased_owners(self) -> list[str]:
         return sorted(
             _KNOWN_COMMISSION_OWNERS

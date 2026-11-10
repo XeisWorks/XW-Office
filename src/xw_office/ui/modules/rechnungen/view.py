@@ -7861,7 +7861,7 @@ class RechnungenView(QWidget):
             titles = clarified
         return [replace(piece, name=title, qty_needed=1) for title in titles]
 
-    def _on_stuecke_loaded(self, items: object) -> None:
+    def _on_stuecke_loaded(self, items: object, *, catalog_warmed: bool = False) -> None:
         requested_ref = ""
         payload_items: object = items
         if isinstance(items, dict):
@@ -7871,6 +7871,40 @@ class RechnungenView(QWidget):
         current_ref = selected.order_reference.strip() if selected is not None else ""
         if requested_ref and requested_ref != current_ref:
             return
+        if not catalog_warmed:
+            try:
+                catalog_to_warm: ProductCatalogService | None = self._container.resolve(
+                    ProductCatalogService
+                )
+            except KeyError:
+                catalog_to_warm = None
+            if catalog_to_warm is not None and not catalog_to_warm.unreleased_products_loaded:
+                self._piece_config_seq += 1
+                config_seq = self._piece_config_seq
+                if self._piece_config_worker is not None and self._piece_config_worker.isRunning():
+                    self._piece_config_worker.cancel()
+                self._stuecke_hint.setText("Katalogdaten werden geladen...")
+                self._stuecke_hint.show()
+                self._gb_stuecke.show()
+
+                def warm_catalog() -> object:
+                    return catalog_to_warm.list_unreleased_products()
+
+                worker = BackgroundWorker(warm_catalog)
+                worker.signals.result.connect(
+                    lambda _products, source=items, token=config_seq: self._on_unreleased_catalog_warmed(
+                        source, token
+                    )
+                )
+                worker.signals.error.connect(
+                    lambda exc, token=config_seq: self._on_piece_config_error(token, exc)
+                )
+                worker.signals.finished.connect(
+                    lambda current=worker: self._on_piece_config_finished(current)
+                )
+                self._piece_config_worker = worker
+                worker.start()
+                return
         self._piece_config_seq += 1
         config_seq = self._piece_config_seq
         if self._piece_config_worker is not None and self._piece_config_worker.isRunning():
@@ -7969,6 +8003,18 @@ class RechnungenView(QWidget):
         )
         self._piece_config_worker = worker
         worker.start()
+
+    def _on_unreleased_catalog_warmed(self, items: object, sequence: int) -> None:
+        if sequence != self._piece_config_seq or self._shutting_down:
+            return
+        requested_ref = ""
+        if isinstance(items, dict):
+            requested_ref = str(items.get("__requested_ref") or "").strip()
+        selected = self._selected_summary()
+        current_ref = selected.order_reference.strip() if selected is not None else ""
+        if requested_ref and requested_ref != current_ref:
+            return
+        self._on_stuecke_loaded(items, catalog_warmed=True)
 
     def _on_piece_configured(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}

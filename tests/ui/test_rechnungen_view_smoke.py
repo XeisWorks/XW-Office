@@ -104,6 +104,36 @@ def test_cached_invoice_piece_is_hydrated_before_product_panel_render(
     assert cached_piece.has_direct_print_config is True
 
 
+def test_unreleased_catalog_disk_and_settings_read_runs_off_ui_thread(
+    qtbot: object,
+    monkeypatch: object,
+) -> None:
+    container = _build_container()
+    catalog = container.resolve(ProductCatalogService)
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    entered, release, heartbeat = Event(), Event(), Event()
+
+    def blocked_load() -> list[object]:
+        entered.set()
+        assert release.wait(3)
+        return []
+
+    monkeypatch.setattr(catalog, "_load_unreleased_products", blocked_load)
+    piece = PieceBlock(sku="SKU-1", name="Titel", qty_needed=1)
+    view._on_stuecke_loaded([piece])  # noqa: SLF001
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=2000)
+        QTimer.singleShot(0, heartbeat.set)
+        qtbot.waitUntil(heartbeat.is_set, timeout=1000)
+        assert catalog.unreleased_products_loaded is False
+    finally:
+        release.set()
+
+    qtbot.waitUntil(lambda: view._current_piece_blocks == [piece], timeout=3000)  # noqa: SLF001
+    assert catalog.unreleased_products_loaded is True
+
+
 def test_unknown_unreleased_title_offers_shared_product_creation_flow(qtbot: object, monkeypatch: object) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
