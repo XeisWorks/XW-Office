@@ -306,7 +306,7 @@ class InvoiceProcessingService:
         self._invoice_pdf_cache: OrderedDict[str, bytes] = OrderedDict()
         self._invoice_pdf_cache_bytes = 0
         self._invoice_snapshot_lock = RLock()
-        self._invoice_snapshot_generations: dict[str, int] = {}
+        self._invoice_snapshot_generation = 0
         self._invoice_detail_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._invoice_detail_cache_updated_at: dict[str, float] = {}
         self._wix_address_cache: dict[str, list[str]] = {}
@@ -391,14 +391,14 @@ class InvoiceProcessingService:
         if not key:
             return
         with self._invoice_snapshot_lock:
-            self._invoice_snapshot_generations[key] = self._invoice_snapshot_generations.get(key, 0) + 1
+            self._invoice_snapshot_generation += 1
             self._drop_invoice_pdf_cache_entry(key)
             self._drop_invoice_detail_cache(key)
             self._drop_invoice_work_context_cache(key)
 
-    def _invoice_snapshot_generation(self, invoice_id: str) -> int:
+    def _current_invoice_snapshot_generation(self) -> int:
         with self._invoice_snapshot_lock:
-            return self._invoice_snapshot_generations.get(invoice_id, 0)
+            return self._invoice_snapshot_generation
 
     def load_invoice_batch(
         self,
@@ -1935,7 +1935,7 @@ class InvoiceProcessingService:
         to render sevDesk customer, address or position data.
         """
         invoice_id = str(summary.id or "").strip()
-        generation = self._invoice_snapshot_generation(invoice_id)
+        generation = self._current_invoice_snapshot_generation()
         with self._invoice_snapshot_lock:
             cached = self._invoice_work_context_cache.get(invoice_id)
             cached_at = self._invoice_work_context_cache_updated_at.get(invoice_id)
@@ -2019,7 +2019,7 @@ class InvoiceProcessingService:
         # invoice context.  Do not let it poison the cache for retries/printing.
         if invoice_id and (not load_positions or context.positions_loaded):
             with self._invoice_snapshot_lock:
-                if generation == self._invoice_snapshot_generations.get(invoice_id, 0):
+                if generation == self._invoice_snapshot_generation:
                     self._put_invoice_work_context_cache(invoice_id, context)
         return context
 
@@ -3803,7 +3803,7 @@ class InvoiceProcessingService:
 
     def _fetch_invoice_detail(self, invoice_id: str, *, force: bool = False) -> dict[str, Any]:
         invoice_key = str(invoice_id).strip()
-        generation = self._invoice_snapshot_generation(invoice_key)
+        generation = self._current_invoice_snapshot_generation()
         with self._invoice_snapshot_lock:
             cached = None if force else self._invoice_detail_cache.get(invoice_key)
             cached_at = self._invoice_detail_cache_updated_at.get(invoice_key)
@@ -3816,7 +3816,7 @@ class InvoiceProcessingService:
         invoice = self._invoices.fetch_invoice_by_id(invoice_id)
         normalized = invoice if isinstance(invoice, dict) else {}
         with self._invoice_snapshot_lock:
-            if generation == self._invoice_snapshot_generations.get(invoice_key, 0):
+            if generation == self._invoice_snapshot_generation:
                 self._put_invoice_detail_cache(invoice_key, normalized)
         return normalized
 
@@ -3866,7 +3866,7 @@ class InvoiceProcessingService:
         expected_invoice_number: str = "",
     ) -> bytes:
         cache_key = str(invoice_id)
-        generation = self._invoice_snapshot_generation(cache_key)
+        generation = self._current_invoice_snapshot_generation()
         with self._invoice_snapshot_lock:
             cached = self._invoice_pdf_cache.get(cache_key)
             if cached:
@@ -3902,7 +3902,7 @@ class InvoiceProcessingService:
                             )
                         else:
                             with self._invoice_snapshot_lock:
-                                if generation == self._invoice_snapshot_generations.get(cache_key, 0):
+                                if generation == self._invoice_snapshot_generation:
                                     self._cache_invoice_pdf(cache_key, rendered_pdf)
                             return rendered_pdf
                 pdf_bytes = self._invoices.get_invoice_pdf(invoice_id)
@@ -3914,7 +3914,7 @@ class InvoiceProcessingService:
                     if sanity_issue:
                         raise ValueError(f"sevDesk PDF unplausibel: {sanity_issue}")
                     with self._invoice_snapshot_lock:
-                        if generation == self._invoice_snapshot_generations.get(cache_key, 0):
+                        if generation == self._invoice_snapshot_generation:
                             self._cache_invoice_pdf(cache_key, pdf_bytes)
                     return pdf_bytes
             except Exception as exc:  # noqa: BLE001 - retry transient sevDesk render/getPdf states.
