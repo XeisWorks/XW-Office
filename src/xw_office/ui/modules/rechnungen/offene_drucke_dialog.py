@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -33,7 +33,9 @@ class OffeneDruckeDialog(QDialog):
         self._attachments: list[PrintAttachment] = []
         self._worker: BackgroundWorker | None = None
         self._attachment_worker: BackgroundWorker | None = None
+        self._action_worker: BackgroundWorker | None = None
         self._attachment_seq = 0
+        self._closing = False
         self.setWindowTitle("OPEN PRINTS")
         self.resize(960, 600)
         root = QVBoxLayout(self)
@@ -79,22 +81,43 @@ class OffeneDruckeDialog(QDialog):
         # The alert itself is a retry point for the Office -> Flow bridge.
         QTimer.singleShot(0, lambda: self._load(True))
 
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        self._closing = True
+        super().closeEvent(event)
+
+    def accept(self) -> None:
+        self._closing = True
+        super().accept()
+
+    def reject(self) -> None:
+        self._closing = True
+        super().reject()
+
     def _load(self, refresh: bool) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
         self._refresh.setEnabled(False)
         self._status.setText("Aktualisiere OPEN PRINTS…")
-        self._worker = BackgroundWorker(
+        worker = BackgroundWorker(
             lambda: (
                 self._service.refresh_from_graph() if refresh else self._service.load_open_cases()
             )
         )
-        self._worker.signals.result.connect(self._loaded)
-        self._worker.signals.error.connect(self._load_error)
-        self._worker.signals.finished.connect(lambda: self._refresh.setEnabled(True))
-        self._worker.start()
+        self._worker = worker
+        worker.signals.result.connect(self._loaded)
+        worker.signals.error.connect(self._load_error)
+        worker.signals.finished.connect(lambda current=worker: self._load_finished(current))
+        worker.start()
+
+    def _load_finished(self, worker: BackgroundWorker) -> None:
+        if self._worker is worker:
+            self._worker = None
+        if not self._closing:
+            self._refresh.setEnabled(True)
 
     def _loaded(self, result: object) -> None:
+        if self._closing:
+            return
         self._cases = result if isinstance(result, list) else []
         self._list.clear()
         for case in self._cases:
@@ -111,6 +134,8 @@ class OffeneDruckeDialog(QDialog):
             self._clear_detail()
 
     def _load_error(self, exc: Exception) -> None:
+        if self._closing:
+            return
         self._status.setText("Aktualisieren fehlgeschlagen")
         QMessageBox.warning(
             self, "OPEN PRINTS", f"Druckaufträge konnten nicht geladen werden:\n\n{exc}"
@@ -160,6 +185,8 @@ class OffeneDruckeDialog(QDialog):
         if self._attachment_worker is not worker:
             return
         self._attachment_worker = None
+        if self._closing:
+            return
         if seq != self._attachment_seq:
             # A row selected during the previous request still needs its own
             # attachments. Keep reads sequential and load the latest selection.
@@ -168,6 +195,8 @@ class OffeneDruckeDialog(QDialog):
             self._open_attachment_button.setEnabled(bool(self._attachments))
 
     def _attachments_loaded(self, result: object) -> None:
+        if self._closing:
+            return
         self._attachments = result if isinstance(result, list) else []
         self._attachment_list.clear()
         for attachment in self._attachments:
@@ -206,6 +235,8 @@ class OffeneDruckeDialog(QDialog):
         worker.start()
 
     def _open_local_file(self, value: object) -> None:
+        if self._closing:
+            return
         path = value if isinstance(value, Path) else None
         if (
             path is None
@@ -220,10 +251,43 @@ class OffeneDruckeDialog(QDialog):
 
     def _mark_done(self) -> None:
         case = self._current_case()
-        if case is None:
+        if case is None or (self._action_worker is not None and self._action_worker.isRunning()):
             return
-        self._service.mark_done(case.id, done=True)
-        self._loaded([item for item in self._cases if item.id != case.id])
+        case_id = case.id
+        self._done.setEnabled(False)
+        self._status.setText("Markiere Druckauftrag als erledigt…")
+        worker = BackgroundWorker(lambda: self._service.mark_done(case_id, done=True))
+        self._action_worker = worker
+        worker.signals.result.connect(lambda _result: self._mark_done_succeeded(case_id) if not self._closing else None)
+        worker.signals.error.connect(self._mark_done_failed)
+        worker.signals.finished.connect(lambda current=worker: self._mark_done_finished(current))
+        worker.start()
+
+    def _mark_done_succeeded(self, case_id: str) -> None:
+        self._cases = [case for case in self._cases if case.id != case_id]
+        self._list.clear()
+        for case in self._cases:
+            item = QListWidgetItem(f"{case.title}\n{case.received_at}")
+            item.setData(Qt.ItemDataRole.UserRole, case.id)
+            self._list.addItem(item)
+        self._status.setText(f"{len(self._cases)} offene Druckaufträge")
+        if self._cases:
+            self._list.setCurrentRow(0)
+        else:
+            self._clear_detail()
+
+    def _mark_done_failed(self, exc: Exception) -> None:
+        if self._closing:
+            return
+        self._status.setText("Erledigen fehlgeschlagen")
+        self._done.setEnabled(self._current_case() is not None)
+        QMessageBox.warning(self, "OPEN PRINTS", f"Druckauftrag konnte nicht erledigt werden:\n\n{exc}")
+
+    def _mark_done_finished(self, worker: BackgroundWorker) -> None:
+        if self._action_worker is worker:
+            self._action_worker = None
+        if not self._closing and self._current_case() is not None:
+            self._done.setEnabled(True)
 
     def open_count(self) -> int:
         return len(self._cases)
