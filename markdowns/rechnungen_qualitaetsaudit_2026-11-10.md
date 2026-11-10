@@ -149,7 +149,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F17 | P2 | TEILWEISE | Alarmdetail-Laden, Schwellenwertspeichern und Task-Mail laufen asynchron. Refund-Liste, Mailvorbereitung/-versand und PDF-Abruf, OPEN-PRINTS-Anhaenge/Erledigen, Ueberweisungs-PDF sowie PLC-Trackingimport und Paketcode-Zuordnung nutzen Worker. Nachbetreuungs-Badgezaehler und weitere UI-I/O-Pfade bleiben offen. | Eventloop-Heartbeats mit blockierten Fakes fuer Refunds, OPEN-PRINTS, Ueberweisungs-PDF und PLC-Trackingaktionen; Ruff/mypy der geaenderten Dialoge |
 | F18 | P2 | TEILWEISE | Sendungen-, Ueberweisungs-, Nachbetreuungs- und OPEN-PRINTS-Dialoge warten beim Schliessen nicht mehr im GUI-Thread auf Worker und verwerfen spaete UI-Ergebnisse. Weitere Dialoge und globale Close-Policies bleiben offen. | Blockierende Fake-Worker: Dialog schliesst sofort; Nachbetreuung/Ueberweisung/OPEN-PRINTS ohne UI-Callbacks nach Close |
 | F19 | P2 | TEILWEISE | Invoice-PDFs verwenden jetzt einen 64-MiB-LRU und pruefen die erwartete Rechnungsnummer auch bei Cache-Hits; ein abweichendes PDF wird verworfen und neu geladen. Header-/WorkContext-Revisionen und gebuendelte Produktauflosung bleiben offen. | Regression: Nummernabweichung im Cache erzeugt neuen Fetch; Byte-Limit behaelt nur aktuelle PDFs |
-| F20 | P2 | TEILWEISE | pytest laedt keine lokale dotenv-Konfiguration; sensible Umgebungsvariablen werden entfernt und externe Socket-Verbindungen blockiert (Loopback bleibt erlaubt). Groessere Controller-Extraktion und vollstaendige mypy-Bereinigung bleiben offen. | Gesamtsuite ohne lokale Credentials/ausgehende Verbindungen; mypy-Baseline dokumentiert |
+| F20 | P2 | TEILWEISE | pytest laedt keine lokale dotenv-Konfiguration; sensible Umgebungsvariablen werden entfernt und externe Socket-Verbindungen blockiert (Loopback bleibt erlaubt). `InvoiceProcessingService` ist mypy-fehlerfrei; weitere Paketbereinigung und Controller-Extraktion bleiben offen. | Gesamtsuite ohne lokale Credentials/ausgehende Verbindungen; mypy-Baseline dokumentiert |
 | F21 | P1 | ERLEDIGT | `view.py::_DraftInvoiceDialog`: nach erfolgreicher Vorschau konnte die Ordernummer ge?ndert und weiterhin best?tigt werden. Jede Eingabe?nderung invalidiert nun die Vorschaufreigabe. | Qt-Test: Vorschau A ? Eingabe B bleibt gesperrt, erst Vorschau B erlaubt Best?tigen |
 
 ## 5. Performance-Audit
@@ -385,8 +385,9 @@ Netzwerkanfrage aus. Warm-Cache spart Requests nachweisbar per Fake-Zähler.
 
 **Teilweise umgesetzt:** `tests/conftest.py` deaktiviert dotenv-Laden, entfernt
 relevante Credential-/Datenbank-Variablen und sperrt externe Socket-Verbindungen.
-Lokale Loopback-Testserver bleiben erlaubt. Mypy-Baseline und Controller-Extraktion
-sind weiterhin offen.
+Lokale Loopback-Testserver bleiben erlaubt. `services/invoice_processing/service.py`
+ist jetzt mit `--follow-imports=silent` mypy-fehlerfrei; Repository-weite Mypy-Baseline,
+weitere betroffene Module und Controller-Extraktion sind weiterhin offen.
 
 Testprozess von lokalen `.env`-/Credentials isolieren und echte externe
 Verbindungen standardmäßig sperren; lokale Testclient-Verbindungen zulassen.
@@ -416,6 +417,7 @@ Geänderte Produktionsdateien:
 - `ui/modules/rechnungen/digital_licenses_dialog.py`: fester Kundenkontext,
   Aktionssperren und Worker-Identität (F04).
 - `services/invoice_processing/service.py` und `ui/modules/rechnungen/refunds_dialog.py`: dauerhafter Claim fuer Gutschrift-Mails; unklarer Versand sperrt Retry.
+- `services/invoice_processing/service.py`: optionale API-Payloads werden vor verschachteltem Zugriff typisiert/nachgewiesen; mypy fuer die Datei von 44 Fehlern auf 0 reduziert, ohne Geschaeftsregeln zu aendern.
 - `ui/modules/rechnungen/view.py`: manuelle Worker und asynchroner Alarmzähler (F05/F06).
 - `ui/modules/rechnungen/offene_drucke_dialog.py`: sequenzsichere Anhänge (F07).
 
@@ -433,7 +435,7 @@ vorhandene PLC-Funktion angepasst (F08).
 
 ### Tatsächliche Prüfergebnisse
 
-Aktueller Gesamtlauf nach den letzten Aenderungen: **2.075 bestanden, 1 Warnung, 0 fehlgeschlagen in 160,68 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
+Aktueller Gesamtlauf nach den letzten Aenderungen: **2.075 bestanden, 1 Warnung, 0 fehlgeschlagen in 139,41 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
 
 Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
 - Erster Gesamtlauf: **1.979 bestanden, 4 fehlgeschlagen**, 138,53 s.
@@ -471,6 +473,10 @@ Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
 - Aktueller gezielter Lauf: 74 bestanden aus InvoiceService-, InvoiceBooking- und
   InvoiceClient-Tests (1,77 s). Ruff auf acht geaenderten Python-Dateien: gruen.
   Mypy fuer invoice_inventory.py: gruen. PostgreSQL-Barrieren sind lokal nicht nachgewiesen.
+- InvoiceProcessingService-Typbereinigung: fokussierter Lauf **148 bestanden**
+  ueber Verarbeitung, Work-Context, Claims, Inventory-Start, Wix-Orders/Cache und
+  InvoiceClient; Ruff fuer `service.py` gruen, mypy fuer `service.py` **0 Fehler**
+  (vorher 44). Andere Module und die Paket-Baseline bleiben offen.
   eine provisorische Schlüsseländerung kaschiert.
 
 Reproduktion der regulären Prüfungen aus dem Repository:

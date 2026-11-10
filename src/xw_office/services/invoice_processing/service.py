@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.core.app_paths import state_dir
@@ -56,7 +56,7 @@ if TYPE_CHECKING:
     from xw_office.services.product_hub.invoice_inventory import InvoiceInventoryBookingService
 
 try:
-    import fitz
+    import fitz  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover - optional at import time
     fitz = None
 
@@ -69,6 +69,14 @@ PAYMENT_PROVIDER_ACCOUNT_NAMES = {
     "mollie": "Mollie",
 }
 PAYMENT_BOOKABLE_STATUSES = {"PAID", "APPROVED"}
+
+
+def _dict_or_empty(value: object) -> dict[str, Any]:
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
+
+
+def _list_or_empty(value: object) -> list[Any]:
+    return value if isinstance(value, list) else []
 
 _SENSITIVE_COUNTRIES_KEY = "rechnungen.sensitive_country_codes"
 _ALLOWED_COUNTRIES_KEY = "rechnungen.allowed_country_codes"
@@ -616,9 +624,15 @@ class InvoiceProcessingService:
                 mail_recipient_override=mail_recipient_override,
                 buyer_note_actions=buyer_note_actions,
             )
-            result["processed"] = int(result["processed"]) + int(resume_result["processed"])
-            result["failures"] = int(result["failures"]) + int(resume_result["failures"])
-            result["successful"] = int(result["successful"]) + int(resume_result["successful"])
+            result["processed"] = int(cast(int, result["processed"])) + int(
+                resume_result["processed"]
+            )
+            result["failures"] = int(cast(int, result["failures"])) + int(
+                resume_result["failures"]
+            )
+            result["successful"] = int(cast(int, result["successful"])) + int(
+                resume_result["successful"]
+            )
             result["aborted"] = bool(result["aborted"]) or bool(resume_result["aborted"])
             result["resumed"] = int(resume_result["processed"])
             result["resume_failures"] = int(resume_result["failures"])
@@ -1214,14 +1228,14 @@ class InvoiceProcessingService:
                 continue
             if wix_summary and self._is_digital_only(summary):
                 continue
-            if wix_summary:
+            if wix_summary and self._wix_orders is not None:
                 try:
                     items = self._wix_orders.fetch_order_line_items(reference)
                 except Exception as exc:
                     raise RuntimeError(
                         f"Wix-Inventar-Preflight fehlgeschlagen fuer Bestellung {reference}: {exc}"
                     ) from exc
-                for item in items or []:
+                for item in items:
                     sku = str(getattr(item, "sku", "") or "").strip().upper()
                     if not sku or bool(getattr(item, "is_digital", False)):
                         continue
@@ -1304,7 +1318,7 @@ class InvoiceProcessingService:
                 continue
 
             address = self._get_wix_address_lines_cached(ref) if ref else []
-            raw_items = order.get("lineItems") if isinstance(order.get("lineItems"), list) else []
+            raw_items = _list_or_empty(order.get("lineItems"))
             item_dicts = [item for item in raw_items if isinstance(item, dict)]
             physical: bool | None = None
             if item_dicts and self._wix_orders is not None:
@@ -1320,7 +1334,7 @@ class InvoiceProcessingService:
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Buyer-note line-item resolve failed ref=%s: %s", ref, exc)
                     items = []
-                for item in items or []:
+                for item in items:
                     products.append(
                         BuyerNoteProduct(
                             quantity=str(getattr(item, "qty", 1) or 1),
@@ -1331,12 +1345,14 @@ class InvoiceProcessingService:
                     )
             if not address:
                 try:
-                    fallback = self.get_cached_invoice_detail_context(
-                        summary
-                    ) or self.get_invoice_detail_context(summary)
+                    fallback = _dict_or_empty(
+                        self.get_cached_invoice_detail_context(summary)
+                        or self.get_invoice_detail_context(summary)
+                    )
+                    fallback_lines = _list_or_empty(fallback.get("shipping_lines"))
                     address = [
                         str(line).strip()
-                        for line in fallback.get("shipping_lines", [])
+                        for line in fallback_lines
                         if str(line).strip()
                     ]
                 except Exception as exc:  # noqa: BLE001
@@ -1368,7 +1384,8 @@ class InvoiceProcessingService:
         return cases
 
     def _prefetch_wix_order_context(self, summaries: list[InvoiceSummary]) -> None:
-        if self._wix_orders is None or not self._wix_orders.has_credentials():
+        wix_orders = self._wix_orders
+        if wix_orders is None or not wix_orders.has_credentials():
             return
         refs = sorted({s.order_reference.strip() for s in summaries if s.order_reference.strip()})
         if not refs:
@@ -1385,18 +1402,18 @@ class InvoiceProcessingService:
         started = time.perf_counter()
 
         def load_ref(ref: str) -> tuple[str, list[str], bool]:
-            if not hasattr(self._wix_orders, "resolve_order"):
-                lines = self._wix_orders.resolve_order_address_lines(ref)
-                digital_only = bool(self._wix_orders.is_reference_digital_only(ref))
+            if not hasattr(wix_orders, "resolve_order"):
+                lines = wix_orders.resolve_order_address_lines(ref)
+                digital_only = bool(wix_orders.is_reference_digital_only(ref))
                 return ref, list(lines), digital_only
-            order = self._wix_orders.resolve_order(ref)
+            order = wix_orders.resolve_order(ref)
             if not order:
                 return ref, [], False
-            lines = self._wix_orders.best_address_lines_from_order(order)
-            raw_items = order.get("lineItems") if isinstance(order.get("lineItems"), list) else []
+            lines = wix_orders.best_address_lines_from_order(order)
+            raw_items = _list_or_empty(order.get("lineItems"))
             item_dicts = [item for item in raw_items if isinstance(item, dict)]
             digital_only = bool(item_dicts) and all(
-                self._wix_orders.line_item_is_digital(item) for item in item_dicts
+                wix_orders.line_item_is_digital(item) for item in item_dicts
             )
             return ref, lines, bool(digital_only)
 
@@ -2450,7 +2467,7 @@ class InvoiceProcessingService:
                 data["payment_warning"] = ""
             elif str(overrides.get("last_warning") or "").strip():
                 data["payment_warning"] = str(overrides.get("last_warning") or "").strip()
-        return FulfillmentFlags(**data)
+        return FulfillmentFlags(**cast(dict[str, Any], data))
 
     def _with_error(self, flags: FulfillmentFlags, exc: Exception) -> FulfillmentFlags:
         stamped = self._stamp(flags)
@@ -2641,31 +2658,15 @@ class InvoiceProcessingService:
 
     @staticmethod
     def _build_payment_payee(order: dict[str, Any], invoice_number: str) -> str:
-        buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
-        billing = order.get("billingInfo") if isinstance(order.get("billingInfo"), dict) else {}
-        billing_contact = (
-            billing.get("contactDetails") if isinstance(billing.get("contactDetails"), dict) else {}
-        )
-        shipping = order.get("shippingInfo") if isinstance(order.get("shippingInfo"), dict) else {}
-        logistics = shipping.get("logistics") if isinstance(shipping.get("logistics"), dict) else {}
-        destination = (
-            logistics.get("shippingDestination")
-            if isinstance(logistics.get("shippingDestination"), dict)
-            else {}
-        )
-        shipping_contact = (
-            destination.get("contactDetails")
-            if isinstance(destination.get("contactDetails"), dict)
-            else {}
-        )
-        recipient = (
-            order.get("recipientInfo") if isinstance(order.get("recipientInfo"), dict) else {}
-        )
-        recipient_contact = (
-            recipient.get("contactDetails")
-            if isinstance(recipient.get("contactDetails"), dict)
-            else {}
-        )
+        buyer = _dict_or_empty(order.get("buyerInfo"))
+        billing = _dict_or_empty(order.get("billingInfo"))
+        billing_contact = _dict_or_empty(billing.get("contactDetails"))
+        shipping = _dict_or_empty(order.get("shippingInfo"))
+        logistics = _dict_or_empty(shipping.get("logistics"))
+        destination = _dict_or_empty(logistics.get("shippingDestination"))
+        shipping_contact = _dict_or_empty(destination.get("contactDetails"))
+        recipient = _dict_or_empty(order.get("recipientInfo"))
+        recipient_contact = _dict_or_empty(recipient.get("contactDetails"))
 
         def _full_name(source: dict[str, Any]) -> str:
             first = str(source.get("firstName") or "").strip()
@@ -3024,8 +3025,8 @@ class InvoiceProcessingService:
         service = self._customer_aftercare
         if service is None:
             return flags
-        invoice = self._fetch_invoice_detail(summary.id)
-        contact = invoice.get("contact") if isinstance(invoice.get("contact"), dict) else {}
+        invoice = _dict_or_empty(self._fetch_invoice_detail(summary.id))
+        contact = _dict_or_empty(invoice.get("contact"))
         sevdesk_contact_id = str(contact.get("id") or invoice.get("contactId") or "").strip()
         order_number = str(summary.order_reference or "").strip()
         wix_order: dict[str, Any] = {}
@@ -3037,7 +3038,7 @@ class InvoiceProcessingService:
                 logger.warning(
                     "Wix redelivery context resolve failed ref=%s: %s", order_number, exc
                 )
-        buyer = wix_order.get("buyerInfo") if isinstance(wix_order.get("buyerInfo"), dict) else {}
+        buyer = _dict_or_empty(wix_order.get("buyerInfo"))
         wix_contact_id = str(buyer.get("contactId") or "").strip()
         customer_email = str(
             buyer.get("email") or contact.get("email") or invoice.get("email") or ""
@@ -3303,7 +3304,10 @@ class InvoiceProcessingService:
             logger.warning("Wix fulfillment readback failed ref=%s: %s", reference, exc)
             return False
         expected = {
-            (str(item.get("id") or "").strip(), int(item.get("quantity") or 0))
+            (
+                str(item.get("id") or "").strip(),
+                int(cast(int, item.get("quantity") or 0)),
+            )
             for item in expected_items
         }
         for fulfillment in fulfillments:
@@ -3314,7 +3318,10 @@ class InvoiceProcessingService:
             if not isinstance(raw_items, list):
                 continue
             actual = {
-                (str(item.get("id") or "").strip(), int(item.get("quantity") or 0))
+                (
+                    str(item.get("id") or "").strip(),
+                    int(cast(int, item.get("quantity") or 0)),
+                )
                 for item in raw_items
                 if isinstance(item, dict)
             }
@@ -3340,7 +3347,9 @@ class InvoiceProcessingService:
         if self._inventory is None or self._wix_orders is None:
             return
         quantities_by_line_id = {
-            str(item.get("id") or "").strip(): max(0, int(item.get("quantity") or 0))
+            str(item.get("id") or "").strip(): max(
+                0, int(cast(int, item.get("quantity") or 0))
+            )
             for item in fulfilled_items
             if str(item.get("id") or "").strip()
         }
@@ -3383,7 +3392,7 @@ class InvoiceProcessingService:
     def _created_fulfillment_id(created: object) -> str:
         if not isinstance(created, dict):
             return ""
-        nested = created.get("fulfillment") if isinstance(created.get("fulfillment"), dict) else {}
+        nested = _dict_or_empty(created.get("fulfillment"))
         return str(created.get("id") or nested.get("id") or "").strip()
 
     @staticmethod
@@ -3396,7 +3405,7 @@ class InvoiceProcessingService:
         for raw in raw_items:
             if not isinstance(raw, dict):
                 continue
-            nested_line = raw.get("lineItem") if isinstance(raw.get("lineItem"), dict) else {}
+            nested_line = _dict_or_empty(raw.get("lineItem"))
             item_id = str(
                 raw.get("id")
                 or raw.get("lineItemId")
@@ -3537,7 +3546,7 @@ class InvoiceProcessingService:
             value = str(invoice.get(key) or "").strip()
             if value:
                 candidates.append(value)
-        contact = invoice.get("contact") if isinstance(invoice.get("contact"), dict) else {}
+        contact = _dict_or_empty(invoice.get("contact"))
         for key in ("email", "emailAddress"):
             value = str(contact.get(key) or "").strip()
             if value:
@@ -3786,7 +3795,12 @@ class InvoiceProcessingService:
             try:
                 render_payload = self._invoices.render_invoice_pdf(invoice_id)
                 if callable(extractor):
-                    rendered_pdf = extractor(render_payload)
+                    rendered_pdf_result = extractor(render_payload)
+                    rendered_pdf = (
+                        bytes(rendered_pdf_result)
+                        if isinstance(rendered_pdf_result, (bytes, bytearray))
+                        else b""
+                    )
                     if rendered_pdf:
                         sanity_issue = self._invoice_pdf_sanity_issue(
                             rendered_pdf,
@@ -4062,7 +4076,7 @@ class InvoiceProcessingService:
 
     def _order_has_flagged_sku(self, order: dict[str, Any]) -> bool:
         exact, prefixes, suffixes = self._load_sku_flags()
-        raw_items = order.get("lineItems") if isinstance(order.get("lineItems"), list) else []
+        raw_items = _list_or_empty(order.get("lineItems"))
         for raw_item in raw_items:
             if not isinstance(raw_item, dict):
                 continue
@@ -4099,24 +4113,12 @@ class InvoiceProcessingService:
 
     @staticmethod
     def _line_item_sku(raw_item: dict[str, Any]) -> str:
-        physical = (
-            raw_item.get("physicalProperties")
-            if isinstance(raw_item.get("physicalProperties"), dict)
-            else {}
-        )
+        physical = _dict_or_empty(raw_item.get("physicalProperties"))
         sku = str(physical.get("sku") or "").strip().upper()
         if sku:
             return sku
-        catalog = (
-            raw_item.get("catalogReference")
-            if isinstance(raw_item.get("catalogReference"), dict)
-            else {}
-        )
-        options = (
-            catalog.get("catalogItemOptions")
-            if isinstance(catalog.get("catalogItemOptions"), dict)
-            else {}
-        )
+        catalog = _dict_or_empty(raw_item.get("catalogReference"))
+        options = _dict_or_empty(catalog.get("catalogItemOptions"))
         return str(options.get("sku") or "").strip().upper()
 
     def _load_sensitive_country_codes(self) -> set[str]:
