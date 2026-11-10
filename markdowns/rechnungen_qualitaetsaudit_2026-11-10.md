@@ -641,8 +641,9 @@ Fortschreibung AP08: `0038419` (`Type-check ProductsView worker payloads`) wurde
 
 Fortschreibung AP06: `9a7b329` (`Move aftercare tab database work off UI thread`) wurde nach 11 fokussierten und 2.094 Gesamttests erfolgreich zu `origin/main` gepusht. Aftercare-Liste, Positionen und Statusaktionen laufen im Worker; Auswahlwechsel verwerfen veraltete Positionsantworten.
 
-Der finale Suite-Nachweis dieses Fortschreibungsschritts steht oben. Commit-/Push-
-Nachweise werden nach der Integration ergänzt. Das folgende statische Inventar
+Fortschreibung AP06: 296ac8e (Avoid synchronous invoice dialog count reads) wurde nach 32 gezielten UI-Tests und 2.099 Gesamttests zu origin/main gepusht. Sendungen-, Digital- und Ueberweisungsdialoge liefern lokale Zaehlersnapshots; Nachbetreuungs-Badges aktualisieren sich asynchron.
+
+Der finale Suite-Nachweis dieses Fortschreibungsschritts steht oben. Weitere Commit-/Push-Nachweise werden nach ihrer Integration ergänzt. Das folgende statische Inventar
 wurde aus dem vorherigen Quellstand erzeugt und dient als Navigationshilfe; nach
 spaeteren Codeaenderungen koennen einzelne Zeilennummern abweichen.
 
