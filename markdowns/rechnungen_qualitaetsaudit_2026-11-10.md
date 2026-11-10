@@ -1,0 +1,1912 @@
+# RECHNUNGEN – Qualitätsaudit und Umsetzungsplan
+
+Stand: **10.11.2026**, Europe/Vienna. Repository: `XeisWorks/XW-Office`.
+Geprüfte Ausgangsbasis: `main`, `eb162c5d8c40db8052d31bc8bb009e27aa6cd351`.
+Vor Beginn sauberer Arbeitsbaum und erfolgreicher `git pull --ff-only origin main`.
+
+## 1. Executive Summary
+
+Der Rechnungsbereich besitzt bereits umfangreichen Regressionsschutz, asynchrone
+Listen-/Detailpfade, START-Wiederaufnahme, Druckwarteschlange und einen
+quellenneutralen sevDesk-Kontext. Die wichtigsten Risiken liegen an den Übergängen
+zwischen diesen Bausteinen: Fallidentität bei asynchronen Antworten, dauerhaftes
+Beanspruchen externer Schreibaktionen, unvollständige Positionsdaten sowie
+Transaktionsgrenzen zwischen Lagerbewegung, Buchungsmarke und Legacy-Bestand.
+
+**21 Code-/Testbefunde: 9 ERLEDIGT, 12 OFFEN. Keine bestätigte P0-Störung.**
+Zwei zusätzliche Betriebsabnahmen sind BLOCKIERT durch benötigte Testbelege,
+Hardware und eine isolierte PostgreSQL-Betriebsumgebung; sie sind nicht als
+zusätzliche Softwarefehler gezählt. „OFFEN“ bedeutet eine konkrete, im Folgenden
+abgrenzbare Aufgabe, nicht eine Behauptung über bereits eingetretene Schäden.
+
+Direkt behoben wurden falsche Nullmengen, unzulässige Bestandsmengen, doppelte
+Lageralarm-Mails während eines laufenden Versands, vertauschter Kundenkontext bei
+digitaler Lieferung, verlorene Worker-Referenzen, blockierender Lageralarm-Zähler,
+veraltete Druckanhänge und zwei überholte Regressionserwartungen.
+
+**Keine Freigabe zum Bestands-Master-Cutover aus diesem Audit ableiten.**
+Die offenen P1-Pakete betreffen Datenintegrität. Produktive Rechnungen, E-Mails,
+Drucker, Bestände und Infrastruktur wurden nicht gezielt verändert. Alle neuen
+Regressionstests verwenden Fakes bzw. lokale SQLite-Datenbanken.
+
+### Belegstufen und Grenzen
+
+- **Testbeleg:** mit Regressionstest oder lokalem reproduzierbarem Experiment nachgewiesen.
+- **Codebeleg:** Aufrufpfad und Fehlerbedingung im aktuellen Quelltext nachvollzogen;
+  ein tatsächlicher Produktionsvorfall wird damit nicht behauptet.
+- **Prüfauftrag:** Hardware-, Mehr-PC-, DPI- oder Produktionsverhalten noch nicht nachgewiesen.
+- Das vollständige statische Inventar in Anhang A erfasst alle 25 Python-Dateien
+  des Untermenüs, ihre Methoden sowie deklarierte Aktionen, Dialogaufrufe, Signale,
+  Timer und Worker. Dynamisch erzeugte Buttons sind als Schleifen-/Factory-Stellen
+  enthalten. Diese Erfassung ersetzt keinen manuellen Klicktest jeder Instanz.
+- Ein durchgehender produktiver End-to-End-Test aller Integrationen wurde bewusst
+  nicht durchgeführt. Erfolgreiche Mocktests sind keine Freigabe echter Belege.
+
+## 2. Verbindliche Quellen und jüngste Änderungen
+
+Gelesen bzw. gegen die betroffenen aktuellen Pfade abgeglichen:
+
+- `AGENTS.md`, `CLAUDE.md`, `pyproject.toml`, `tests/conftest.py`.
+- `markdowns/rechnungen_manuelle_sevdesk_entwuerfe_5_6_luna_umbauspezifikation_2026-11-06.md`.
+- `markdowns/rechnungen_inventur_bestand_5_6_luna_umbauspezifikation_2026-11-08.md`
+  und zugehörige YAML-Arbeitsliste; Product-Hub-Fortschrittsdokument.
+- `docs/rechnungen_umbauphasen_autonom.md`, `docs/phase_master_daily_rechnungen.md`,
+  `docs/REFUND_FLOW_AUDIT_2026-11-05.md` und Rechnungen-Performanceplan vom 01.07.
+- Vorhandene Rechnungs-, START-, Inventur-, Refund-, Druck-, PLC-, Kundenbetreuungs-,
+  Such- und Rapid-Switch-Tests; die Gesamtsuite wurde zusätzlich ausgeführt.
+
+Historische „erledigt“-Angaben wurden nicht als Nachweis übernommen. Beispiel:
+Die Inventur-Spezifikation behauptet Schutz paralleler Alarm-Mails. Der tatsächliche
+Code gab die Sperre jedoch vor dem Graph-Aufruf frei und ließ `pending` erneut zu
+(F03). Umgekehrt setzt der **neuere Commit `f1e759c`** den offenen Produktdruck
+bewusst unabhängig vom Bestand. Diese neuere implementierte Entscheidung wird
+erhalten, auch wenn ältere Texte einen lagerbereinigten Druckknopf beschreiben.
+`eb162c5`/`f8ea319` ergänzen Paketinhalt und echte Post-Ereignisse; F08 aktualisiert
+deren veraltete Testverträge, ohne die neuen Funktionen zurückzubauen.
+
+Das geschützte Content-Studio-Originalarchiv bleibt unverändert.
+
+## 3. Funktionsinventar und Datenflüsse
+
+Die folgenden Pfade wurden im aktuellen Code verfolgt. Die exakten Einstiegsstellen
+und Signalverdrahtungen stehen vollständig in Anhang A.
+
+| Oberfläche / Einstieg | Ausführung und Ergebnis | Wichtige Grenzen / Status |
+| --- | --- | --- |
+| Tagesgeschäft-Aktionsleiste | Aktualisieren, Entwurf, Custom-/PLC-Label, Statistik, Sonderauftrag, START/STOP und Alarmbuttons delegieren in Rechnungen/Services | Lazy eingebettete Rechnungsansicht; Parent übernimmt mehrere Badge-Refreshes |
+| Rechnungsliste | Erst Entwürfe, anschließend aktuelle Nichtentwürfe, weitere Seiten; Tabellenmodell mit Proxy-Sortierung | Keine API-Abfrage pro gezeichneter Tabellenzelle; Nachladen weiter nötig |
+| Suche | 220-ms-Debounce, lokaler Index/Service-Suche, Reset und Wiederherstellen der geladenen Liste | Sequenzschutz und Suchbanner vorhanden |
+| Zeilenauswahl / Detail | Sofort Summary-Felder, dann verzögerte Cache-/API-Hydration; Kunden-, Versand-, Notiz- und Produktbereich | Wix- und sevDesk-Pfade getrennt; F05 schützt manuelle Worker-Lebensdauer |
+| Tabellenaktion / Kontext | PLC/Post, Zoll, Nachlieferung; Statuschips lösen kontrollierte Retry-Schritte aus | Anwendbarkeit wird teilweise über Flags geprüft; serviceweite Claim-Lücke F12 |
+| Detailmenüs | Rechnung, Adresslabel, PLC, archivierte Packlisten, Noten; Ansehen von PDF/PLC/Zoll/Packlisten/Paketinhalt; sevDesk/Wix/Kundenmail | Ausgewählte Rechnung und Archive müssen zusammenpassen |
+| Wix-Rechnungsentwurf | Eingabe → Preview → Produktklärung → Draft-Service → sevDesk-Entwurf → optional Browser | Kein automatischer neuer Erstattungsprozess; Preview-/Dialogabbruch erhalten |
+| Manueller sevDesk-Entwurf | Rechnung + InvoicePos → normalisierter Kontext → Adresse/Kunde/Produkte, PLC ohne Wix | Reiner sevDesk-Pfad vorhanden; Kandidatenabgrenzung F13 und fehlende Daten F09/F14 offen |
+| START | Vorprüfung/B2B/Käufernotizen → Produktklärung → optional Notendruck → Freigabe/Rechnung/Label → Zahlung/Wix/Mail → Journal/Ergebnis | Selektierter und gesamter Scope; STOP kooperativ zwischen Schritten, keine Rücknahme bereits erfolgter Writes |
+| START-Recovery | Persistierte Fulfillment-Flags → fehlende Schritte nachholen, Papier vor nachgelagerten Aktionen | Vorhandenen Print-first-Fix `346c7aa` erhalten; Mehr-PC-Claims F12 |
+| Produktdruck einzeln/gesamt | Konfiguration/PDF-Seiten prüfen → PrintQueue/PDF-XChange → bestätigten Erfolg buchen | Kein Raster-/Acrobat-Fallback; offener Druck bleibt gemäß `f1e759c` editierbar und bestandsunabhängig |
+| Druckhistorie / Reprints | Persistierte START-Snapshots und gezielter Wiederholungsdruck | Historische Anzeige erzeugt allein keine Lagerbewegung; neue Druckproduktion benötigt eigene Identität |
+| PLC / Zoll / Packlisten | Kontext, Produkt, Gewicht, Mehrpaket-Aufteilung, Zollartikel → Shipment-Service/Importdatei → Archiv/Packliste/Ergebnis | Mehrpaket-Nicht-EU wird ausdrücklich blockiert; vorhandene Archive und zusätzliche Sendungen gesondert |
+| Paketinhalt & Tracking | Persistierte Paketpositionen, bestätigter Trackingcode, Original-XML-Import, Annahme/Zustellung anzeigen | Post-Ereignisse nicht aus bloßem Labeldruck ableiten; DB-I/O im Dialog F17 |
+| Offene Sendungen | Mail-/Fallliste → Detail/Adresse/Positionen → Label/Lieferschein/erledigt | Sequenzzähler für Details, asynchrone Aktionen, manuelle Felder; Close-Waits F18 |
+| OPEN PRINTS | Graph/Flow-Liste → Anhänge → lokalen Download öffnen → erledigt | F07 verhindert Übernahme alter Anhangslisten; Erledigen weiterhin synchron, F17 |
+| Offene Überweisungen | Maildetail → Zahlungsformular → QR/PDF → verschieben/Outlook erledigt | Bedeutet keine Banküberweisung; PDF-Download bleibt synchron, F17 |
+| Digitale Lieferung | Bezahlte Lizenzfälle → fehlende PDF zuordnen → personalisieren → Sichtkontrolle → Outlook-Entwurf → manuellen Versand bestätigen → Wix-Abschluss | F04 bindet Dateien/Entwurf an denselben Fall; keine automatische Mailfreigabe |
+| Lageralarme | Badge → Liste/Ist/Schwelle/Forecast → Fixwert/Automatik → manuelle Task-Mail | F03 dauerhafte Claim-/Unklar-Semantik; F06 asynchroner Badge; Popup-I/O noch F17 |
+| Nachlieferungen / Betreuung | Review/Manager/Tab → Rollen/Mengen/Adresse/Snooze/sofort/erledigt/storniert → optional Zusatzrechnung | Klare Fallzustände, Originalbeleg und nicht verrechnete Nachlieferung erhalten; Mehrschritttransaktionen prüfen |
+| Käufernotizen | Jede Notiz lesen, Lieferschein vormerken, digital bestätigen oder Datensatz überspringen → START fortsetzen | Unvollständige Bestätigung sperrt Fortsetzen; Cancel beendet Vorprüfung |
+| Stornos & Gutschriften | Flow-Statusliste → finales Gutschrift-PDF / bestätigte Kundenmail | Erstellung erfolgt laut UI ausschließlich in Wix; kein neuer Storno-Button hinzuerfunden; F12/F17 |
+| Sonderauftrag | Wix-Produkte/Freitextmodus → validierter Payment Link → Zwischenablage | Digital-Handling pro Produkt, kein physisches Fulfillment im Lizenzpfad |
+| PLC-Statistik / Zahlungs-QR | Worker lädt Perioden bzw. lokale QR-Datei/Ordner öffnen | Statistik: Woche/Monat/Jahr/Gesamt; kein Erfolgsnachweis für Zustellung |
+
+Historische, nicht mehr aktiv verdrahtete Einstiege: `RefundDialog` beschreibt noch den alten kombinierten Refund; die aktuelle View ?ffnet stattdessen den Wix-Hinweis bzw. `RefundsDialog`. Der Nachdruck-Handler und `ReprintPreviewDialog` sind vorhanden, aber in der aktuellen Tagesgesch?ft-Aktionsleiste nicht als eigener Button verbunden. Diese Stellen sind im statischen Inventar enthalten; sie wurden nicht als produktiv erreichbare neue Aktion freigeschaltet.
+
+### Service- und Persistenzgrenzen
+
+- `services/invoice_processing/{service,context,buyer_notes}.py`: Orchestrierung,
+  Fähigkeiten, Positionen, Adressfallback, PDF-/Header-Caches, Fulfillment-Journal.
+- `services/sevdesk/{invoice_client,part_client,refund_client,payment_booking}.py`,
+  `services/http_client.py`: API-Parsing, Freigabe, PDF, Part-Bestand, Gutschriften,
+  Zahlungen, Rate-Limit und Timeout. HTTP-GET-Retries sind von Writes zu unterscheiden.
+- `services/wix/client.py`, Wix-Cache und Draft-Service: exakte Auflösung,
+  Single-flight/Cache, Positionen, Adresse, Zahlung, Fulfillment, Lizenz- und Sonderaufträge.
+- `services/printing/*`, `services/products/{catalog,print_decision}.py`,
+  `services/inventory/service.py`: Druckplan, Warteschlange, Spoolerbestätigung,
+  Legacy-Lager und Shadow-Spiegelung. Mehrere Schreibpfade bestehen weiter.
+- `services/product_hub/{invoice_inventory,inventory,inventory_count,inventory_alert_tasks,
+  sevdesk_invoice_inventory,sevdesk_credit_note_inventory,inventory_forecast_refresh}.py`
+  und Worker/Repositories: Buchungsmarken, Ledger, Inventur, Forecast, Gegenbelege,
+  Konflikte, Task-Mail. SQLite-Tests beweisen keine PostgreSQL-Sperrsemantik.
+- `services/{sendungen,transfers,drucke,digital_licenses,customer_aftercare,mailing,plc,
+  daily_business}` und deren Repositories: abhängige Arbeitslisten, Versand,
+  Nachlieferungen, Outlook/Graph, Archive und Statusanzeigen.
+- `SettingKvRepository.mutate_value_json()` serialisiert das gemeinsame JSON pro
+  Schlüssel unter PostgreSQL. Das verhindert kein Überschreiben veralteter
+  **Felder desselben Rechnungsflagsatzes** und ist kein Claim externer Aktionen.
+
+## 4. Befundliste
+
+Prioritäten: **P0 kritisch**, **P1 hoch**, **P2 mittel**, **P3 niedrig**.
+Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschiebung eindeutig.
+
+| ID | Priorität | Status | Fundstelle / Ursache / reproduzierbare Auswirkung | Beleg |
+| --- | --- | --- | --- | --- |
+| F01 | P1 | ERLEDIGT | `invoice_processing/context.py::normalize_invoice_positions`: `quantity or qty` machte numerische 0 zu Default 1 bzw. alternativer Menge. Nullposition konnte physisch verarbeitet werden. Nun nur bei fehlendem/leeren Feld fallback. | Parametrisierte Tests mit int/float/Decimal/Text-Null und alternativer Menge |
+| F02 | P1 | ERLEDIGT | `product_hub/invoice_inventory.py::_resolve_invoice_lines`: Bruchmenge wurde über `quantity_int` abgeschnitten; Part ohne SKU still übersprungen. Vorprüfung/Anwendung lehnen Bruchmengen und positive ungelöste Part-Zeilen nun ab. Nullposition bleibt ohne Buchung. | 0,5/1,5/2,9; Part ohne SKU; kein Booking bei Ablehnung |
+| F03 | P1 | ERLEDIGT | `product_hub/inventory_alert_tasks.py::create_and_send`: nach Commit konnte zweiter Aufruf `pending` wieder beanspruchen. Jetzt aktive Claims immer gesperrt; `sent/unknown/failed` nur mit explizitem Resend. Transportfehler bleiben `unknown`; UI erklärt laufenden/unklaren Versand. | Reentranter Aufruf während Mail-Fake, Timeout nach Annahme, expliziter Resend |
+| F04 | P1 | ERLEDIGT | `digital_licenses_dialog.py::_on_files_prepared/_on_draft_created`: Callback las die aktuelle Auswahl statt des ursprünglichen Falls; Dateien A konnten Entwurf B zugeordnet werden. Beide Stufen erfassen jetzt den Fall; Auswahl/Refresh/Aktionen sind gesperrt; alter Worker-Finish löscht neuen Worker nicht. | Echter Qt-Worker-Test mit zwei Fällen und verzögerten Fake-Stufen |
+| F05 | P2 | ERLEDIGT | `view.py::_load_sevdesk_context`: alter Finish setzte `_stuecke_worker=None`, während der neue Worker lief. Nun Identitätsprüfung, vollständige Liste laufender Kontextworker für Shutdown und Sequenzschutz auch bei Fehlern. | Überlappende manuelle Loads; alter Finish erhält neue Referenz; beide im Shutdown |
+| F06 | P2 | ERLEDIGT | `view.py::_refresh_inventory_alert_count`: DB-Abfrage im Konstruktor und Timer/UI-Thread, Fehler als 0 versteckt. Nun Worker, Coalescing, Laden beim Anzeigen, Timer-Stopp bei Hide/Shutdown und sichtbarer `?`-Fehlerstatus. | Eventloop-Heartbeat bei blockiertem Fake, ein Request für wiederholten Aufruf |
+| F07 | P1 | ERLEDIGT | `offene_drucke_dialog.py::_select`: Auswahl B während Load A wurde verworfen; A-Anhänge erschienen bei B. Sequenzschutz und anschließender Load der letzten Auswahl; Downloads erfassen weiterhin ihren Fall. Datei zusätzlich lesbar formatiert. | A→B→C während verzögertem A: nur A/C gelesen, ausschließlich C angezeigt |
+| F08 | P2 | ERLEDIGT | `test_database.py`, `test_rechnungen_view_smoke.py`: erwarteten weder neue PLC-Tabellen noch Menü „Paketinhalt & Tracking“. Tests aktualisiert; Produktion unverändert. | Zuvor fehlgeschlagene Erwartungen laufen jetzt grün |
+| F09 | P1 | OFFEN | `InvoiceProcessingService.load_invoice_work_context/_run_finalize_step/build_inventory_requirements`: Positionsfehler werden zu leerem, gecachtem Kontext; bei leeren Positionen entfällt Validierung, Freigabe kann trotzdem erfolgen. Datenfehler und wirklich leere Rechnung sind ununterscheidbar. | Codebeleg: Exception-Zweig, Cache-Schreiben und `if preflight_context.positions` |
+| F10 | P1 | OFFEN | `InvoiceInventoryBookingService.apply_line`: Ledgerbewegung und Booking-Upsert haben getrennte Transaktionen; Schlüssel hängt nur vom Ziel ab. Folge 2→3→2 verwendet alten Bewegungsschlüssel erneut und schreibt trotzdem die Buchungsmarke um. | Lokales SQLite-Experiment: Anfang 10, Endbestand 7 statt 8 |
+| F11 | P1 | OFFEN | `invoice_inventory.py::apply_credit_line`: Ursprungsverkauf, Summe Rückbuchungen und neue Gegenbewegung werden separat gelesen/geschrieben. Zwei unterschiedliche parallele Gutschriften können dieselbe Restmenge sehen. | Codebeleg; echte PostgreSQL-Race noch nicht ausgeführt |
+| F12 | P1 | OFFEN | Rechnungs-Mail/START/Retry/Produktdruck: Worker-Guards gelten je Widget/Prozess. Kein gemeinsamer dauerhafter Claim pro Rechnung/Operation; Graph-Fallback kann trotz unklarer sevDesk-Antwort folgen, wenn der Statusprobe fehlschlägt. Auch Part-`get+set` beim direkten Druck ist nicht atomar. | Codebeleg in `send_invoice_mail_for_invoice`, `_run_fulfillment_chip_action`, `record_print_and_update_sevdesk` |
+| F13 | P1 | OFFEN | Kontext kennt `wix_candidate`, UI-Hydration und mehrere Folgepfade verzweigen aber weiterhin allein nach `order_reference`. Manuelle fünfstellige Fremdreferenz kann Wix-Pfad aktivieren; fehlender Wix-Treffer lädt nicht zuverlässig sevDesk-Produkte nach. | Codebeleg: Referenzparser, `_hydrate_detail_for_selection`, `_load_wix_context`, `_update_plc_controls` |
+| F14 | P1 | OFFEN | `load_invoice_piece_blocks`/`get_piece_blocks_from_invoice_positions`: normalisiertes `printable=False` wird nicht durchgängig ausgewertet; 1,5 kann als 1 Druckstück erscheinen. Freitext/unaufgelöste Positionen sind nicht vollständig in der Produktdarstellung sichtbar. F02 schützt den Hub-Buchungsadapter, nicht alle Druckadapter. | Codebeleg: `int(quantity_int)`, Filter nur `kind == product`; Formatwarnungen werden nicht dargestellt |
+| F15 | P1 | OFFEN | Externe Invoice-/Credit-Feedadapter: `_quantity` nutzt `int(float(...))`; Bruchmengen werden gekürzt, ungültige Mengen zu 0. Unbekannter Status ist nicht automatisch Draft; fehlende Positions-ID hat teilweise Ersatzwert. | Codebeleg in `sevdesk_invoice_inventory.py` und `sevdesk_credit_note_inventory.py`; Provider-Verträge vor Änderung mitprüfen |
+| F16 | P1 | OFFEN | START/Legacy-Lager: aktuelle Freigabe bucht Hub je Rechnung, Legacy-Verbrauch erfolgt weiterhin nach erfolgreichem Gesamtbatch; Teilfehler/STOP können Drift hinterlassen. Ohne `+ Noten` wird im UI eine Vorprüfung mit fehlenden Positionsdaten erzeugt; Unterdeckung wird nicht überall vor externer Freigabe geprüft. | Codebeleg in `tagesgeschaeft_view.py::_on_start_clicked/_on_start_product_preflight_ready`, `InventoryService.execute_start_workflow` |
+| F17 | P2 | OFFEN | UI-Thread-I/O verbleibt in Lageralarm-Popup, Refund-Liste/PDF/Mail, Tracking-Import/Codebestätigung, Betreuungstab, Überweisungs-PDF und OPEN-PRINTS-Erledigen. Produkt-/Bestandsauflösung und Druckkonfigurationsspeichern erfolgen teilweise beim Rendern/Dialogabschluss. | Direkte Service-/Repository-Aufrufe in UI-Slots, ohne Worker-Grenze |
+| F18 | P2 | OFFEN | Dialog-Lebenszyklus: Sendungen/Überweisungen warten beim Schließen mehrfach bis 3 s pro Worker; andere Dialoge haben keine einheitliche Close-/Escape-Policy für laufende Writes. Globale Worker-Retention verhindert vorzeitige QThread-Zerstörung, aber nicht späte fachliche Callbacks. | Codebeleg: `_wait_for_workers`, Dialoge ohne Shutdown-Protokoll; Betriebs-Race nicht pauschal behauptet |
+| F19 | P2 | OFFEN | Header-/WorkContext-/PDF-Caches sind unbeschränkt bzw. nicht einheitlich revisionsgebunden; Cache-Hit des PDFs umgeht erneute Plausibilitätsprüfung. Manuelle Änderungen und lange Sitzungen können veraltete Inhalte/RAM-Bedarf begünstigen. Zusätzlich `load_positions=False`/Fehlerkontext ohne Vollständigkeitsmerkmal. | Codebeleg: `_invoice_*_cache`, `_context_is_current`, `_get_invoice_pdf_bytes` |
+| F20 | P2 | OFFEN | Qualitätsgates: striktes mypy scheitert bereits im Ausgangsstand; ein Teil der Fremdtests hängt von nachgeladenen Umgebungscredentials ab. Standard-Gesamtsuite ist ohne äußere Isolation nicht zuverlässig hermetisch. | Baselinevergleich und isolierter Testlauf; Details in Abschnitt 8 |
+| F21 | P1 | ERLEDIGT | `view.py::_DraftInvoiceDialog`: nach erfolgreicher Vorschau konnte die Ordernummer ge?ndert und weiterhin best?tigt werden. Jede Eingabe?nderung invalidiert nun die Vorschaufreigabe. | Qt-Test: Vorschau A ? Eingabe B bleibt gesperrt, erst Vorschau B erlaubt Best?tigen |
+
+## 5. Performance-Audit
+
+### Messmethode und Zahlen
+
+Lokale Windows-Umgebung, Python **3.14.10**, PySide6 **6.11.0**, Qt `offscreen`.
+Synthetische `InvoiceSummary.as_table_row()`-Zeilen, neun sichtbare Tabellenspalten,
+`DataTable` mit Proxy, fünf Wiederholungen und Median; Sortierung abwechselnd
+auf-/absteigend nach `sevDesk`, Filter `Kunde 99` in Kundenspalte, jeweils mit
+`rowCount()` ausgewertet. Reine POD-Planung über 100 wiederkehrende SKUs einmal
+gemessen. Gemessen nach den Fixes; **kein Vorher/Nachher-Geschwindigkeitsgewinn
+für Tabellen behauptet**, weil deren Algorithmus unverändert ist.
+
+| Zeilen | Tabelle setzen inkl. bestehendem Proxy | Umsortieren | Filtern | POD-Planung |
+| ---: | ---: | ---: | ---: | ---: |
+| 100 | 1,30 ms | 1,13 ms | 0,42 ms | 0,42 ms |
+| 1.000 | 34,90 ms | 22,80 ms | 4,08 ms | 3,35 ms |
+| 10.000 | 389,02 ms | 317,79 ms | 38,97 ms | 34,80 ms |
+
+Grenzen: kein echtes Paint/Scroll-Profil, keine Netzwerk-/Druckerzeiten,
+keine PostgreSQL-Latenz, keine Messung des gesamten Hauptfensters oder des
+Speichermaximums. Parallele Testprozesse machen die Werte zu Orientierungswerten.
+Bei 10.000 geladenen Zeilen ist bereits die Sortierung ein sichtbarer UI-Block;
+Pagination beibehalten und solche Mengen nicht ungefragt komplett materialisieren.
+
+Der F06-Test misst eine Eigenschaft statt einer fragilen Millisekundengrenze:
+Während der Fake-DB-Aufruf blockiert, läuft ein GUI-Timer-Heartbeat weiter;
+wiederholtes Aktualisieren startet keinen zweiten Aufruf. Vorher lag genau dieser
+Service-Aufruf im GUI-Thread. Die Datenbank wird dadurch nicht schneller,
+die Oberfläche bleibt während ihrer Antwort bedienbar.
+
+### Bestehende sinnvolle Optimierungen
+
+- Gestuftes Laden, Suche mit Debounce, Source-/Proxy-Zeilenabbildung.
+- Gemeinsamer Wix-Kontext statt separater Meta-/Positionsrequests, TTL-/persistenter
+  Cache und Single-flight im Wix-Client; Selektion hat Vorrang vor Warmup.
+- Priorisierte BackgroundJobManager-Queues, sequenzgebundene Ergebnisse,
+  inkrementelle Hint-Patches, Phasenmetriken für Auswahl/START/Wix.
+- START bündelt Kontext und nutzt begrenzte Parallelität für Nacharbeiten;
+  Druckerfolg und nachgelagerte Kundenaktionen bleiben getrennt nachvollziehbar.
+
+### Verbleibende Engpässe und Messaufträge
+
+- F17: jeden synchronen I/O-Slot einzeln auf Worker umstellen, DTO vor Start im
+  GUI-Thread erfassen; keine Qt-Widgets im Job lesen. UI-Heartbeat mit langsamen
+  Fakes als Abnahmekriterium, nicht nur `worker.start()` als Quelltexttest.
+- `_piece_block_from_open_product` kann pro Produkt den Hub lesen; für große
+  Übersichten Bestände/Katalogkonfiguration einmal pro Batch auflösen. SQL-Queries
+  zählen; Ziel höchstens konstante Batch-Abfragen statt eine je Zeile.
+- Fulfillment-JSON wird mehrfach vollständig gelesen/dekodiert; pro Batch einen
+  unveränderlichen Snapshot verwenden, Writes weiter atomar. Keine bloße lokale
+  Kopie als Mehr-PC-Lösung ausgeben.
+- PDF-Retryfolge wartet bereits 0,5+1+2+4 Sekunden zusätzlich zu Requests;
+  in Hintergrundjobs akzeptabel, für Cancel gezielt unterbrechbare Warte-/Retry-
+  Grenzen und begrenzten Cache vorsehen (F19). Kein blindes Write-Retry hinzufügen.
+
+## 6. Konsistenz und UX
+
+Umgesetzt: Nullmengen bleiben Null; unklare Task-Mail-Zustände werden verständlich
+erklärt; Lageralarmfehler verschwinden nicht als scheinbare Entwarnung; digitale
+Lieferung sperrt Auswahl und Aktionsbuttons während ihrer Verarbeitung; OPEN
+PRINTS zeigt zum gewählten Fall gehörende Anhänge. Bestehende Entwurfsfarbe,
+sichtbare Käufernotizen und Druck-/Archivaktionen bleiben erhalten.
+
+Weitere konkrete Verbesserungen innerhalb F13/F14/F17/F18:
+
+- Capability-Modell tatsächlich an Button-Verfügbarkeit binden; „nicht anwendbar“,
+  „lädt“, „Daten fehlen“ und „fehlgeschlagen“ unterscheiden.
+- Im Lageralarmdialog Aktionen bei leerer Liste deaktivieren, aktuelle Auswahl
+  nach Schwellenänderung erhalten und Status `pending/sent/unknown/failed`
+  dauerhaft zeigen; expliziten, bestätigten Wiederholungsversand nach Prüfung anbieten.
+- „Mail wurde gesendet“ von „war bereits gesendet“ unterscheiden; Mehrfachklick
+  darf keinen neuen Versand behaupten. Auch bei externen Statusfehlern nachvollziehbar bleiben.
+- `Selected`, `OPEN PRINTS`, unterschiedliche Umlaut-/ASCII-Schreibweisen und
+  einzelne bereits im Quelltext beschädigte Platzhalter vereinheitlichen.
+  Keine pauschale Encoding-Konvertierung des großen Views ohne Sichtkontrolle.
+- Typisierte numerische Editoren statt stiller Mengenreparatur im Nachlieferungs-
+  dialog: ungültige Texte/negative Werte anzeigen, nicht still auf 1 setzen.
+- Lange feste Buttonreihen und Mindestgrößen (digitale Lieferung 1020×650,
+  breite Nachlieferungs-/PLC-Dialoge) bei 1366×768, 100/125/150/200 % prüfen.
+  Erst nach bestätigtem Clipping Wrap/Scroll/Größenregeln ändern.
+- Tastaturpfade Tab/Enter/Escape, Doppelklick, Dialog-X, Abbrechen während Load,
+  Vorschau ablehnen und Retry nach Fehler systematisch in Gate G1 abnehmen.
+
+## 7. Architektur-Audit und konkrete offene Arbeitspakete
+
+UI, Services und Repositories sind grundsätzlich vorhanden und über DI angebunden.
+Die Grenzverletzungen liegen vor allem in großen UI-Orchestratoren und in
+mehrstufigen Writes über mehrere Services. `view.py` hat rund 7.900 Zeilen,
+`tagesgeschaeft_view.py` 1.757, PLC-Dialog 2.409; das überschreitet die
+CLAUDE-Richtgröße von etwa 800 deutlich. Eine sofortige Gesamtextraktion wäre
+risikoreich. Erst Schnittstellen/Regressionen sichern, dann kleine Controller für
+Kontextladen, Dokumentaktionen, Druckübersicht und Journal auslagern.
+
+Jedes folgende Paket ist **OFFEN**, enthält bewusst keinen Produktivschreibauftrag
+und wird erst mit passenden Tests integriert. P1 vor optionaler UI-Politur abarbeiten.
+
+### AP01 – Vollständiger, fehlersicherer Rechnungskontext (F09, F13, F14; P1)
+
+Kontext um explizite Header-/Positions-Ladezustände und Warnungen erweitern.
+Positionsfehler niemals als vollständigen leeren Kontext cachen. Ein bestätigter
+fehlender Wix-Treffer fällt auf sevDesk zurück; bloßer Kandidat schaltet keine
+Wix-Schreibaktion frei. Unbekannte/bruchzahlige Originalpositionen sichtbar halten,
+Druck und Bestandsbuchung jedoch sperren, bis eindeutig geklärt.
+
+**Akzeptanz:** Timeout bei InvoicePos führt zu null Freigabe-/Druck-/Lagerwrites;
+Retry lädt Positionen erneut. Manuelle fünfstellige Referenz ohne Wix-Treffer nutzt
+sevDesk. 0, 0,5, 1,5, Part ohne SKU, Versand, Rabatt, Freitext und reine Digitalware
+werden mit begründeten Fähigkeiten angezeigt. Wix-Bestandspfade bleiben kompatibel.
+
+### AP02 – Atomare Dokumentbuchung und Gegenbeleggrenzen (F10, F11; P1)
+
+Ledgerbewegung, Booking-Ziel, Bestandszeile und Alarmbewertung unter einer
+gemeinsamen Session/Transaktion verarbeiten. Pro Ursprungsposition sperren,
+auch beim ersten Booking; eine monoton identifizierte Revision/Transition statt
+wiederverwendetem reinem Zielmengen-Schlüssel einsetzen. Keine historische
+Bewegung überschreiben; bestehende Keys bei Einführung kompatibel behandeln.
+
+**Akzeptanz:** 10→Zielverkauf 2→3→2 ergibt 8; Wiederholung jeder Transition bleibt
+idempotent. Prozessabbruch zwischen Bewegung und Booking heilt ohne Doppelbewegung.
+Zwei PCs buchen dieselbe Position gleichzeitig einmal; zwei Gegenbelege können
+zusammen nie die Ursprungsmenge überschreiten. Echte PostgreSQL-Tests mit Barrieren
+für beide Interleavings, Rollback und leere Erstzeile ergänzen. Negative Bestände
+bleiben gesperrt und erzeugen einen dauerhaften Klärfall.
+
+### AP03 – Dauerhafte Claims externer Aktionen (F12; P1)
+
+Gemeinsamen Status pro Rechnung und Aktion mit `pending/running/succeeded/unknown/failed`
+und eindeutiger Operation-ID einführen. START, manuelle Aktion und Retry verwenden
+denselben Dienst. Lease-Recovery nur mit Zustandsabgleich, niemals durch erneutes
+blindes Senden. Unklare sevDesk-Mailantwort ohne verlässlichen Readback darf keinen
+automatischen Graph-Zweitversand auslösen. Part-Bestandsprojektion vom Ledger ableiten,
+nicht mit konkurrierendem `get+set` erhöhen.
+
+**Akzeptanz:** zwei Widgetinstanzen/zwei Prozesse, START+manuelle Mail und Retry
+gleichzeitig erzeugen höchstens eine Mail/Freigabe/Fulfillment-Aktion. Timeout nach
+Serverannahme bleibt sichtbar unklar. Druckwiederholung ist ein bewusst neuer Lauf;
+ein alter Lauf bucht bei Recovery keinen zweiten Zugang. Bestehende sevDesk-first-
+Strategie und die PDF-/Graph-Fallbacktests fachlich abgestimmt weiterführen.
+
+### AP04 – Externe Belege strikt normalisieren (F15; P1)
+
+Gemeinsame Decimal-basierte Mengen-/Identitätsvalidierung für Invoice-/Credit-Feed
+verwenden. Nur explizit finale, unterstützte Statuswerte buchen. Ungültige Zahlen,
+Bruchmengen, fehlende IDs und unklare Gegenbelege in `needs_review`, nicht als
+Menge 0 oder erfundene Positionsidentität behandeln. Provider-Pagination und
+persistente Wasserstände samt Überlappung erhalten.
+
+**Akzeptanz:** 0/0,5/1,5/NaN/Infinity/fehlender Status/fehlende Positions-ID,
+digitale und stornierte Belege erzeugen nur fachlich zulässige Bewegungen;
+Neustart verarbeitet Fehlerfälle erneut und überspringt keine späteren Belege.
+
+### AP05 – Legacy-/Hub-Bestand und START-Teilfehler (F16; P1)
+
+Eine pro erfolgreichem finalen Dokument idempotente Legacy-/Hub-Spiegelung statt
+nachträglichem pauschalem Batchverbrauch einsetzen. Das gemeinsame Dokumentjournal
+liefert den Recovery-Status. Unterdeckungsprüfung vom optionalen Notendruckdialog
+trennen; Stichtag und echte Bestandsquelle explizit beachten.
+
+**Akzeptanz:** 2 erfolgreiche + 1 fehlgeschlagene Rechnung, STOP nach erster
+Freigabe, extern finalisierter Beleg und Wiederaufnahme ergeben je erfolgreichen
+Beleg einmal Verbrauch in beiden Welten. Auch normales START ohne `+ Noten`
+finalisiert bei ungeklärter physischer Unterdeckung nicht. Keine doppelte Legacy-
+Verbrauchsbuchung nach Poller-Recovery. Die bewusst bestandsunabhängige offene
+Produktdruckliste aus `f1e759c` bleibt erhalten.
+
+### AP06 – UI-I/O und gemeinsame Dialogaktionen (F17, F18; P2)
+
+Zuerst Alarm-, Refund-, Überweisungs-PDF- und Tracking-Slots auf vorhandenen
+`UiAsyncAction`/BackgroundWorker umstellen. Snapshot/Identität vor Workerstart;
+Callbacks auf aktuelle Auswahl prüfen oder bewusst ursprünglichen Fall bearbeiten.
+Schreibaktionen gemeinsam sperren, Datenbank-/Netzfehler im Dialog lassen.
+Für Schließen/Escape bei Writes eine einheitliche Policy: im Hintergrund mit
+dauerhaftem Ergebnis fortsetzen oder Schließen bis zum sicheren Punkt verhindern.
+Keine mehrsekündigen `wait()`-Schleifen im GUI-Thread.
+
+**Akzeptanz:** 2-s-Fake-Netzwerk blockiert keinen Heartbeat; Abbruch/Retry und
+Zeilenwechsel zeigen keine fremden Daten; Doppelklick startet einen Auftrag;
+Dialogschließen führt weder zu QThread-Abbruch noch unbemerktem neuen Write.
+Erfolg erst nach nachgewiesenem externen bzw. Spooler-Ergebnis anzeigen.
+
+### AP07 – Cacheverträge und Batchauflösung (F19; P2)
+
+Revision, Vollständigkeit und gegebenenfalls TTL für Header/Positionen/PDF festlegen;
+Freigabe, Entwurfsänderung und Löschung invalidieren alle abhängigen Einträge.
+PDF-LRU mit Byte-Limit; Erwartungsnummer auch bei Cache-Hit prüfen.
+Produkt-/Bestandsdaten vor Rendering gebündelt auflösen.
+
+**Akzeptanz:** Entwurfsvorschau→Freigabe liefert final nummeriertes PDF;
+Rechnung auf zweitem PC geändert→Reload zeigt neue Positionen/Adresse;
+1.000 PDF-Ansichten halten definiertes RAM-Limit ein; GUI-Rendern löst keine
+Netzwerkanfrage aus. Warm-Cache spart Requests nachweisbar per Fake-Zähler.
+
+### AP08 – Reproduzierbare Qualitätsgates und kleine Controller (F20; P2)
+
+Testprozess von lokalen `.env`-/Credentials isolieren und echte externe
+Verbindungen standardmäßig sperren; lokale Testclient-Verbindungen zulassen.
+Striktes mypy zuerst je bearbeitetem Controller/DTO bereinigen, Baseline nicht
+mit pauschalem `ignore_errors` verstecken. Anschließend große Klassen entlang
+stabiler Ports aufteilen, jeweils mit bestehendem UI-/START-Testpaket.
+
+**Akzeptanz:** identische Tests auf sauberem PC ohne Secrets; keine externen
+Netzwerkaufrufe; mypy-Fehlerzahl pro Paket sinkt; Ruff bleibt grün;
+Refactoring ändert keine sichtbaren Geschäftsregeln oder Datenverträge.
+
+## 8. Erledigte Verbesserungen und Qualitätssicherung
+
+Geänderte Produktionsdateien:
+
+- `services/invoice_processing/context.py`: Menge 0 korrekt erhalten (F01).
+- `services/product_hub/invoice_inventory.py`: Mengen-/Zuordnungsvalidierung (F02).
+- `services/product_hub/inventory_alert_tasks.py` und Alarmdialog:
+  aktiver Claim, unklarer Versand und verständliche Rückmeldung (F03).
+- `ui/modules/rechnungen/digital_licenses_dialog.py`: fester Kundenkontext,
+  Aktionssperren und Worker-Identität (F04).
+- `ui/modules/rechnungen/view.py`: manuelle Worker und asynchroner Alarmzähler (F05/F06).
+- `ui/modules/rechnungen/offene_drucke_dialog.py`: sequenzsichere Anhänge (F07).
+
+Gezielte Tests ergänzt in `test_invoice_work_context.py`,
+`test_invoice_inventory_booking.py`, `test_inventory_alert_tasks.py`,
+`test_rechnungen_view_smoke.py`, `test_digital_licenses_dialog.py` und neu
+`test_offene_drucke_dialog.py`. `test_database.py` und Toolbar-Smoke an tatsächlich
+vorhandene PLC-Funktion angepasst (F08).
+
+### Tatsächliche Prüfergebnisse
+
+Die abschließenden Zahlen werden nach dem letzten unveränderten Testlauf hier
+eingetragen. Bereits durchgeführt:
+
+- Erster Gesamtlauf: **1.979 bestanden, 4 fehlgeschlagen**, 138,53 s.
+  Zwei stale PLC-Erwartungen durch F08 behoben. Zwei Wix-Media-Tests übernahmen
+  Umgebungscredentials; ein unerwarteter externer Leseaufruf erhielt HTTP 403.
+  Kein erfolgreicher produktiver Write wurde beobachtet. Keine Credentials in
+  dieses Dokument oder Commits übernehmen. Folgeprüfungen extern netzwerkgesperrt.
+- Fokussierter Lauf nach F01–F06/F08: **105 bestanden**.
+- Erweiterter Lauf inklusive digitaler Lieferregression: **104 bestanden**
+  (anderer Dateiumfang); OPEN-PRINTS-/digitale UI-Tests danach **3 bestanden**.
+- Ein temporärer Offline-Runner sperrte zunächst versehentlich auch lokale
+  Asyncio-Sockets; diese Fehlversuche sind **kein Produktfehler**. Der korrigierte
+  Runner erlaubt Loopback und leert die vier geerbten Wix-Credential-Variablen
+  je Test. MockTransports/ASGI/SQLite funktionieren weiter; Kontrolllauf **8 grün**.
+- Ruff über alle geänderten Python-Dateien plus neue UI-Testdatei: **grün**.
+  Die vorherigen 58 Ruff-Meldungen im angefassten OPEN-PRINTS-Dialog wurden durch
+  dessen lokale Formatierung entfernt; keine Repository-weite Formatierung.
+- Striktes mypy für die sieben zunächst bearbeiteten Produktionsdateien,
+  `--follow-imports=silent`: Ausgangsstand **113 Fehler in 6 Dateien**;
+  abschließenden Vergleich unten festhalten. Das ist kein grünes Typprüfungs-Gate.
+  Die Baseline stammt aus einem temporären `git archive HEAD src`, nicht aus
+  einem anderen Checkout oder alten Audittext.
+- Lokales SQLite-Experiment zu F10: Endbestand **7 statt 8**; bewusst nicht durch
+  eine provisorische Schlüsseländerung kaschiert.
+
+Reproduktion der regulären Prüfungen aus dem Repository:
+
+```powershell
+$env:QT_QPA_PLATFORM = 'offscreen'
+.\.venv\Scripts\python.exe -m pytest tests/unit tests/ui tests/integration -q
+.\.venv\Scripts\python.exe -m ruff check <geaenderte-Python-Dateien>
+.\.venv\Scripts\python.exe -m mypy --follow-imports=silent <betroffene-Produktionsdateien>
+```
+
+Vor einer Wiederholung der Gesamtsuite die Isolation gemäß AP08 sicherstellen;
+einfaches Löschen von Shell-Variablen reicht bei späterem `.env`-Nachladen nicht.
+Lokale Laufprotokolle bleiben außerhalb des Repositories im TEMP-Verzeichnis.
+
+### Verwendeter isolierter Test-Runner
+
+Der folgende Inhalt wurde als tempor?re Python-Datei ausgef?hrt, mit den drei
+Testverzeichnissen als Argumenten. Er ben?tigt keine zus?tzliche Dependency.
+Loopback-Verbindungen bleiben f?r Starlette/Asyncio erlaubt. Der Runner ersetzt
+keinen produktiven Schutz oder eine dauerhafte Testinfrastruktur (AP08).
+
+```python
+import os
+import socket
+import sys
+import pytest
+
+sys.path[:0] = [os.path.abspath("src"), os.path.abspath(".")]
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+original_connect = socket.socket.connect
+original_connect_ex = socket.socket.connect_ex
+
+def local_address(sock, address):
+    return sock.family == getattr(socket, "AF_UNIX", -1) or (
+        isinstance(address, tuple)
+        and address[0] in ("127.0.0.1", "::1", "localhost")
+    )
+
+def connect(sock, address):
+    if local_address(sock, address):
+        return original_connect(sock, address)
+    raise RuntimeError("Audit blocks external network connections")
+
+def connect_ex(sock, address):
+    if local_address(sock, address):
+        return original_connect_ex(sock, address)
+    raise RuntimeError("Audit blocks external network connections")
+
+socket.socket.connect = connect
+socket.socket.connect_ex = connect_ex
+
+class Isolation:
+    @pytest.fixture(autouse=True)
+    def clear_inherited_wix_credentials(self, monkeypatch):
+        for key in ("WIX_API_KEY_DATA", "WIX_API_KEY", "WIX_SITE_ID", "WIX_ACCOUNT_ID"):
+            monkeypatch.delenv(key, raising=False)
+
+raise SystemExit(pytest.main(sys.argv[1:], plugins=[Isolation()]))
+```
+
+## 9. Verbindlicher Regressionsschutz
+
+- `tests/integration/test_rechnungen_rapid_switch.py`: letzte Auswahl gewinnt,
+  alte Wix-Antworten dürfen neue Auswahl nicht überschreiben.
+- Rechnungen-Smokes/Suchtests: sofortige Summary-Anzeige vor Hydration,
+  START-Deferral, gestuftes Nachladen, aktuelle Sortierung, Reset der Suche.
+- `test_invoice_work_context.py` und InvoiceProcessing-Tests: manueller sevDesk-
+  Entwurf ohne Wix, Rechnungsadresse als Fallback, eindeutige Herkunft.
+- `test_inventory_start_workflow.py`, `test_inventory_policy.py`,
+  `test_invoice_inventory_booking.py`, externe Feed-/Gegenbeleg-/Inventurtests:
+  Entwurf bucht nicht, Freigabe einmal, richtige Gegenbelegmengen, keine negative
+  Bestandsfiktion, Stichtag und Konfliktpersistenz.
+- `test_rechnungen_product_print.py` und Toolbar-Smokes: unabhängige Mengen-
+  Stepper, einzelne bzw. gesamte Produktdruckaktion, titelgebundene XW-010-
+  Konfiguration, manueller Mehrdruck, gespeicherte Historie. **Die neue
+  bestandsunabhängige offene Druckmenge nicht aus alten Plänen zurückbauen.**
+- Drucktests einschließlich `test_no_external_pdf_printing.py`: nativer
+  vektorbasierter Produktdruck, kein automatischer Acrobat-/Raster-Fallback,
+  bestätigter Spoolererfolg vor Bestandszugang.
+- PLC-Tests: mehrere Sendungen und Packlisten, Duplikaterkennung, Gebühren-/
+  Zollregeln, Paketinhalt, Tracking-XML und echte Annahme-/Zustellereignisse erhalten.
+- Käufernotiz-/Betreuungs-/Nachlieferungstests: vollständige Bestätigung,
+  Skip/Snooze, richtige Rollen und Mengen, keine automatische Doppelverrechnung.
+- Neue F03/F04/F05/F06/F07-Tests müssen bei Änderungen an Worker-/Dialogmustern
+  gemeinsam mitlaufen; ein reiner `isRunning()`-Check ersetzt ihre Datenbindung nicht.
+
+## 10. Abschlussbewertung und Betriebsabnahmen
+
+Die sicheren Fixes verbessern konkrete Fehlersituationen und die Reaktionsfähigkeit
+des Alarmzählers. Die verbleibenden P1-Aufgaben sind vor größeren Refactorings
+abzuarbeiten: vollständige Positionsdaten, atomare Buchungs-/Gegenbelegtransaktionen,
+dauerhafte externe Claims und konsistenter Legacy-/Hub-Verbrauch.
+
+| Gate | Priorität | Status | Benötigter Nachweis / anfängerfreundlicher Ablauf |
+| --- | --- | --- | --- |
+| G1 – Windows/Hardware/Integration | P2 | BLOCKIERT | In einer freigegebenen Testumgebung einen Wix-Testauftrag und einen manuell angelegten sevDesk-Testentwurf mit eindeutiger Testadresse bereitstellen. Testdrucker wählen, zuerst PDF/Label/PLC im Testmodus prüfen, anschließend die erlaubten START-Schritte einzeln abnehmen. Versand ausschließlich an eigene Testadresse. Auch Escape/Schließen/Retry und 100–200 % Windows-Skalierung prüfen; Ergebnis und Beleg-/Job-IDs ohne Secrets protokollieren. |
+| G2 – Mehr-PC/PostgreSQL/Cutover | P1 | BLOCKIERT | Isolierte PostgreSQL-Testdatenbank und zwei Testinstanzen bereitstellen, keine Produktiv-URL verwenden. AP02/AP03 mit gleichzeitigen Aktionen und Prozessabbruch prüfen. Danach mit fachlich bestätigter Inventur, Backup, Shadow-Abgleich und Rollback-Probe die vorhandenen Cutover-Gates abarbeiten. Dieses Audit schaltet keine Master-Flags um. |
+
+### Abschlussnachweis
+
+Implementierungscommit: **`dafebdd`** ? `Fix invoice quantity validation and asynchronous action races`. Der separate Dokumentationscommit enth?lt diesen Bericht; seine ID ist ?ber `git log -1 -- markdowns/rechnungen_qualitaetsaudit_2026-11-10.md` eindeutig ermittelbar. Dieser Implementierungscommit wurde erfolgreich zu `origin/main` gepusht. Der Dokumentationscommit wird im selben Arbeitslauf nachgeschoben und abschlie?end gegen `origin/main` gepr?ft.
+
+Finale Suite, Typprüfungsvergleich sowie Commit-/Push-Nachweis werden vor Abschluss
+der Audit-Arbeit ergänzt. Das folgende statische Inventar wird aus dem finalen
+Quellstand erzeugt; es ist Teil dieses eigenständig nutzbaren Berichts.
+
+<!-- STATIC_INVENTORY -->
+
+## Anhang A – Vollständiges statisches UI-Inventar
+
+Automatisch aus dem finalen AST erfasst und für die oben beschriebenen Flows herangezogen. Fundstellen beziehen sich auf den Audit-Commit. Zeilen sind Navigationshilfen. Zählwerte sind **Deklarationsstellen**, keine Anzahl zur Laufzeit sichtbarer Instanzen. Signalverbindungen schließen Worker-, Tabellen-, Menü- und Timer-Signale ein. Qt-Standardbuttons, dynamische Schleifen und Delegate-Klickzonen sind über ihre Factory bzw. Eventmethoden erfasst.
+
+| Datei | Zeilen | Methoden/Funktionen | Signalverbindungen | Worker-/Jobstellen | Timerstellen |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `__init__.py` | 1 | 0 | 0 | 0 | 0 |
+| `buyer_note_review_dialog.py` | 220 | 9 | 7 | 0 | 0 |
+| `customer_aftercare_invoice_dialog.py` | 239 | 21 | 12 | 3 | 1 |
+| `customer_aftercare_manager_dialog.py` | 443 | 32 | 24 | 5 | 1 |
+| `customer_aftercare_review_dialog.py` | 292 | 10 | 4 | 0 | 0 |
+| `customer_aftercare_tab.py` | 550 | 22 | 14 | 2 | 0 |
+| `digital_licenses_dialog.py` | 324 | 18 | 15 | 3 | 2 |
+| `inventory_alerts_dialog.py` | 155 | 7 | 5 | 0 | 0 |
+| `offene_drucke_dialog.py` | 233 | 14 | 15 | 3 | 1 |
+| `offene_sendungen_dialog.py` | 955 | 66 | 22 | 3 | 4 |
+| `offene_ueberweisungen_dialog.py` | 546 | 36 | 18 | 3 | 2 |
+| `open_invoice_overview.py` | 818 | 29 | 0 | 1 | 0 |
+| `payment_qr_dialog.py` | 81 | 4 | 4 | 0 | 0 |
+| `plc_evidence_dialog.py` | 194 | 5 | 3 | 0 | 0 |
+| `plc_label_dialog.py` | 2409 | 79 | 34 | 2 | 2 |
+| `plc_statistics_dialog.py` | 162 | 8 | 5 | 1 | 0 |
+| `print_dialog.py` | 729 | 43 | 12 | 0 | 0 |
+| `product_preflight_dialog.py` | 206 | 9 | 2 | 0 | 0 |
+| `redelivery_dialog.py` | 272 | 9 | 5 | 0 | 0 |
+| `refund_dialog.py` | 70 | 2 | 2 | 0 | 0 |
+| `refunds_dialog.py` | 157 | 6 | 4 | 0 | 0 |
+| `reprint_dialog.py` | 121 | 2 | 2 | 0 | 0 |
+| `special_order_dialog.py` | 371 | 22 | 13 | 2 | 1 |
+| `tagesgeschaeft_view.py` | 1757 | 82 | 55 | 11 | 2 |
+| `view.py` | 7903 | 395 | 136 | 30 | 13 |
+
+### A – __init__.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/__init__.py`.
+
+Keine direkten UI-/Signal-/Timer-/Worker-Einstiege in dieser Datei.
+
+### A – buyer_note_review_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/buyer_note_review_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.services.invoice_processing.buyer_notes`.
+
+**BuyerNoteReviewDialog** (Z. 31): `__init__`:34; `_build_ui`:56; `_item_label`:125; `_case`:129; `_save_editor_values`:134; `_show_case`:147; `_choose`:180; `_accept_if_complete`:203; `selections`:215.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 66 | UI / Aktion | `QListWidget()` |
+| 68 | Signal → Handler | `self._case_list.currentRowChanged.connect(self._show_case)` |
+| 78 | UI / Aktion | `QPlainTextEdit()` |
+| 85 | UI / Aktion | `QPlainTextEdit()` |
+| 94 | UI / Aktion | `QPlainTextEdit()` |
+| 100 | UI / Aktion | `QPushButton('Gelesen – ohne Lieferschein')` |
+| 101 | Signal → Handler | `self._ack.clicked.connect(lambda: self._choose(BUYER_NOTE_ACK))` |
+| 103 | UI / Aktion | `QPushButton('Lieferschein vormerken')` |
+| 104 | Signal → Handler | `self._delivery.clicked.connect(lambda: self._choose(BUYER_NOTE_DELIVERY_NOTE))` |
+| 106 | UI / Aktion | `QPushButton('Digital bestätigt')` |
+| 107 | Signal → Handler | `self._digital.clicked.connect(lambda: self._choose(BUYER_NOTE_DIGITAL_ACK))` |
+| 109 | UI / Aktion | `QPushButton('Diesen Datensatz überspringen')` |
+| 110 | Signal → Handler | `self._skip.clicked.connect(lambda: self._choose(BUYER_NOTE_SKIP))` |
+| 116 | UI / Aktion | `QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)` |
+| 119 | UI / Aktion | `buttons.addButton('START fortsetzen', QDialogButtonBox.ButtonRole.AcceptRole)` |
+| 120 | Signal → Handler | `buttons.accepted.connect(self._accept_if_complete)` |
+| 121 | Signal → Handler | `buttons.rejected.connect(self.reject)` |
+| 186 | Popup / Modal | `QMessageBox.warning(self, 'Lieferadresse fehlt', 'Für den Lieferschein muss eine Lieferadresse vorhanden sein.')` |
+| 207 | Popup / Modal | `QMessageBox.warning(self, 'Prüfung unvollständig', f'Bitte noch {len(missing)} Käufernotiz(en) bestätigen oder überspringen.')` |
+
+### A – customer_aftercare_invoice_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/customer_aftercare_invoice_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.core.container`, `xw_office.core.worker`, `xw_office.services.crm.types`, `xw_office.services.customer_aftercare.invoice_service`, `xw_office.services.customer_aftercare.pricing_policy`, `xw_office.services.customer_aftercare.service`, `xw_office.services.sevdesk.contact_client`.
+
+**CustomerAftercareInvoiceDialog** (Z. 50): `__init__`:53; `closeEvent`:76; `accept`:80; `reject`:84; `_wait_for_workers`:88; `_build_ui`:93; `_load_contacts`:138; `_populate_contacts`:161; `_selected_contact_id`:173; `_on_create_clicked`:176; `_on_skip_clicked`:213; `_set_buttons_enabled`:236.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 74 | Timer | `QTimer.singleShot(0, self._load_contacts)` |
+| 107 | UI / Aktion | `QPlainTextEdit('\n'.join(lines))` |
+| 112 | UI / Aktion | `QComboBox()` |
+| 116 | UI / Aktion | `QLineEdit('AT')` |
+| 126 | UI / Aktion | `QDialogButtonBox()` |
+| 127 | UI / Aktion | `QPushButton('Zusatzrechnung erstellen')` |
+| 128 | UI / Aktion | `QPushButton('Ohne Rechnung erledigen')` |
+| 129 | UI / Aktion | `QPushButton('Später')` |
+| 130 | UI / Aktion | `buttons.addButton(self._btn_create, QDialogButtonBox.ButtonRole.AcceptRole)` |
+| 131 | UI / Aktion | `buttons.addButton(self._btn_skip, QDialogButtonBox.ButtonRole.ActionRole)` |
+| 132 | UI / Aktion | `buttons.addButton(self._btn_later, QDialogButtonBox.ButtonRole.RejectRole)` |
+| 133 | Signal → Handler | `self._btn_create.clicked.connect(self._on_create_clicked)` |
+| 134 | Signal → Handler | `self._btn_skip.clicked.connect(self._on_skip_clicked)` |
+| 135 | Signal → Handler | `self._btn_later.clicked.connect(self.reject)` |
+| 154 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 155 | Signal → Handler | `worker.signals.result.connect(on_result)` |
+| 156 | Signal → Handler | `worker.signals.error.connect(on_error)` |
+| 157 | Signal → Handler | `worker.signals.finished.connect(lambda: setattr(self, '_contacts_worker', None))` |
+| 179 | Popup / Modal | `QMessageBox.warning(self, 'Zusatzrechnung', 'Bitte einen sevDesk-Kontakt auswählen.')` |
+| 183 | Popup / Modal | `QMessageBox.warning(self, 'Zusatzrechnung', 'Bitte ein gültiges 2-stelliges Länderkürzel angeben.')` |
+| 206 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 207 | Signal → Handler | `worker.signals.result.connect(on_result)` |
+| 208 | Signal → Handler | `worker.signals.error.connect(on_error)` |
+| 209 | Signal → Handler | `worker.signals.finished.connect(lambda: setattr(self, '_action_worker', None))` |
+| 229 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 230 | Signal → Handler | `worker.signals.result.connect(on_result)` |
+| 231 | Signal → Handler | `worker.signals.error.connect(on_error)` |
+| 232 | Signal → Handler | `worker.signals.finished.connect(lambda: setattr(self, '_action_worker', None))` |
+
+### A – customer_aftercare_manager_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/customer_aftercare_manager_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.core.container`, `xw_office.core.worker`, `xw_office.repositories.customer_aftercare`, `xw_office.services.customer_aftercare`, `xw_office.services.customer_aftercare.service`, `xw_office.services.sendungen.service`, `xw_office.ui.modules.rechnungen.customer_aftercare_invoice_dialog`, `xw_office.ui.modules.rechnungen.customer_aftercare_review_dialog`, `xw_office.ui.modules.rechnungen.offene_sendungen_dialog`, `xw_office.ui.modules.rechnungen.redelivery_dialog`.
+
+**CustomerAftercareManagerDialog** (Z. 56): `__init__`:59; `closeEvent`:83; `accept`:87; `reject`:92; `_bump_seq`:97; `_wait_for_workers`:101; `open_count`:106; `_build_ui`:109; `_current_filter`:199; `_load_cases`:202; `_populate_list`:232; `_on_case_selected`:249; `_load_items`:268; `_open_review_dialog`:289; `_open_invoice_dialog`:302; `_prepare_nachsendung`:311; `_apply_outcome`:397; `_mark_resolved`:416; `_mark_cancelled`:422; `_run_action`:428.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 81 | Timer | `QTimer.singleShot(0, self._load_cases)` |
+| 118 | UI / Aktion | `QComboBox()` |
+| 121 | Signal → Handler | `self._filter_combo.currentIndexChanged.connect(lambda _index: self._load_cases())` |
+| 125 | UI / Aktion | `QPushButton('Aktualisieren')` |
+| 126 | Signal → Handler | `self._btn_refresh.clicked.connect(self._load_cases)` |
+| 134 | UI / Aktion | `QListWidget()` |
+| 135 | Signal → Handler | `self._list.currentRowChanged.connect(self._on_case_selected)` |
+| 157 | UI / Aktion | `QPlainTextEdit()` |
+| 164 | UI / Aktion | `QPlainTextEdit()` |
+| 171 | UI / Aktion | `QPushButton('Prüfen / Bestätigen…')` |
+| 172 | Signal → Handler | `self._btn_review.clicked.connect(self._open_review_dialog)` |
+| 174 | UI / Aktion | `QPushButton('Zusatzrechnung…')` |
+| 175 | Signal → Handler | `self._btn_invoice.clicked.connect(self._open_invoice_dialog)` |
+| 177 | UI / Aktion | `QPushButton('Nachsendung vorbereiten…')` |
+| 178 | Signal → Handler | `self._btn_nachsendung.clicked.connect(self._prepare_nachsendung)` |
+| 180 | UI / Aktion | `QPushButton('Als erledigt markieren')` |
+| 181 | Signal → Handler | `self._btn_resolve.clicked.connect(self._mark_resolved)` |
+| 183 | UI / Aktion | `QPushButton('Stornieren')` |
+| 184 | Signal → Handler | `self._btn_cancel.clicked.connect(self._mark_cancelled)` |
+| 194 | UI / Aktion | `QDialogButtonBox(QDialogButtonBox.StandardButton.Close)` |
+| 195 | Signal → Handler | `buttons.rejected.connect(self.reject)` |
+| 196 | Signal → Handler | `buttons.accepted.connect(self.accept)` |
+| 225 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 226 | Signal → Handler | `worker.signals.result.connect(on_result)` |
+| 227 | Signal → Handler | `worker.signals.error.connect(on_error)` |
+| 228 | Signal → Handler | `worker.signals.finished.connect(lambda: setattr(self, '_load_worker', None))` |
+| 283 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 284 | Signal → Handler | `worker.signals.result.connect(on_result)` |
+| 285 | Signal → Handler | `worker.signals.finished.connect(lambda: setattr(self, '_detail_worker', None))` |
+| 296 | Popup / Modal | `dialog.exec()` |
+| 307 | Popup / Modal | `dialog.exec()` |
+| 344 | Popup / Modal | `dlg.exec()` |
+| 346 | Hintergrundarbeit | `BackgroundWorker(legacy_job)` |
+| 347 | Signal → Handler | `worker.signals.result.connect(legacy_result)` |
+| 348 | Signal → Handler | `worker.signals.error.connect(lambda exc: self._status.setText(f'Nachsendung konnte nicht vorbereitet werden: {exc}'))` |
+| 349 | Signal → Handler | `worker.signals.finished.connect(lambda: setattr(self, '_action_worker', None))` |
+| 366 | Popup / Modal | `dialog.exec()` |
+| 390 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 391 | Signal → Handler | `worker.signals.result.connect(on_result)` |
+| 392 | Signal → Handler | `worker.signals.error.connect(on_error)` |
+| 393 | Signal → Handler | `worker.signals.finished.connect(lambda: setattr(self, '_action_worker', None))` |
+| 438 | Hintergrundarbeit | `BackgroundWorker(fn)` |
+| 439 | Signal → Handler | `worker.signals.result.connect(on_result)` |
+| 440 | Signal → Handler | `worker.signals.error.connect(on_error)` |
+| 441 | Signal → Handler | `worker.signals.finished.connect(lambda: setattr(self, '_action_worker', None))` |
+
+### A – customer_aftercare_review_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/customer_aftercare_review_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.core.config`, `xw_office.repositories.customer_aftercare`, `xw_office.services.customer_aftercare.service`.
+
+**ReviewDialogOutcome** (Z. 66): Datenmodell / Konstanten.
+**CustomerAftercareReviewDialog** (Z. 74): `__init__`:77; `outcome`:94; `_build_ui`:97; `_format_items`:196; `_error_party_label`:205; `_refresh_trigger_preview`:213; `_current_outcome`:231; `_on_apply`:274; `_on_defer`:286; `_on_ignore`:290.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 107 | UI / Aktion | `QComboBox()` |
+| 115 | Signal → Handler | `self._type_combo.currentIndexChanged.connect(self._refresh_trigger_preview)` |
+| 122 | UI / Aktion | `QCheckBox('Kulanz anwenden')` |
+| 136 | UI / Aktion | `QPlainTextEdit()` |
+| 144 | UI / Aktion | `QTableWidget(0, 4)` |
+| 145 | UI / Aktion | `self._items_table.setHorizontalHeaderLabels(['', 'Position', 'SKU / Komponente', 'Menge'])` |
+| 174 | UI / Aktion | `QPlainTextEdit()` |
+| 181 | UI / Aktion | `QDialogButtonBox()` |
+| 182 | UI / Aktion | `QPushButton('Übernehmen')` |
+| 183 | UI / Aktion | `QPushButton('Bearbeiten')` |
+| 184 | UI / Aktion | `QPushButton('Ignorieren')` |
+| 185 | UI / Aktion | `button_row.addButton(self._btn_apply, QDialogButtonBox.ButtonRole.AcceptRole)` |
+| 186 | UI / Aktion | `button_row.addButton(self._btn_edit, QDialogButtonBox.ButtonRole.ActionRole)` |
+| 187 | UI / Aktion | `button_row.addButton(self._btn_ignore, QDialogButtonBox.ButtonRole.DestructiveRole)` |
+| 188 | Signal → Handler | `self._btn_apply.clicked.connect(self._on_apply)` |
+| 189 | Signal → Handler | `self._btn_edit.clicked.connect(self._on_defer)` |
+| 190 | Signal → Handler | `self._btn_ignore.clicked.connect(self._on_ignore)` |
+| 277 | Popup / Modal | `QMessageBox.warning(self, 'Nachlieferposition fehlt', 'Bitte mindestens eine Rechnungsposition oder Stimme auswählen.')` |
+
+### A – customer_aftercare_tab.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/customer_aftercare_tab.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.core.worker`, `xw_office.repositories.customer_aftercare`, `xw_office.services.customer_aftercare.service`, `xw_office.services.printing.label_printer`, `xw_office.services.printing.print_queue`, `xw_office.services.sendungen.service`, `xw_office.services.sevdesk.invoice_client`, `xw_office.ui.modules.rechnungen.redelivery_dialog`.
+
+**CustomerAftercareTab** (Z. 51): `__init__`:54; `_build_ui`:65; `refresh`:142; `_current`:168; `_select`:172; `_update_dispatch_actions`:229; `_dispatch_print_request`:270; `_run_dispatch_action`:323; `_show_delivery_note`:357; `_print_delivery_note`:372; `_print_label`:399; `_edit`:426; `_snooze`:459; `_show_invoice`:501; `_immediate`:534; `_resolve`:540; `_cancel`:546.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 70 | UI / Aktion | `QPushButton('Aktualisieren')` |
+| 71 | Signal → Handler | `refresh.clicked.connect(self.refresh)` |
+| 76 | UI / Aktion | `QListWidget()` |
+| 77 | Signal → Handler | `self._list.currentRowChanged.connect(self._select)` |
+| 87 | UI / Aktion | `QPlainTextEdit()` |
+| 92 | UI / Aktion | `QPlainTextEdit()` |
+| 106 | UI / Aktion | `QPushButton(label)` |
+| 107 | Signal → Handler | `button.clicked.connect(callback)` |
+| 113 | UI / Aktion | `QPushButton('Lieferschein zeigen')` |
+| 117 | Signal → Handler | `self._btn_delivery_show.clicked.connect(self._show_delivery_note)` |
+| 119 | UI / Aktion | `QPushButton('Lieferschein drucken')` |
+| 123 | Signal → Handler | `self._btn_delivery_print.clicked.connect(self._print_delivery_note)` |
+| 125 | UI / Aktion | `QPushButton('Label drucken')` |
+| 127 | Signal → Handler | `self._btn_label_print.clicked.connect(self._print_label)` |
+| 130 | UI / Aktion | `QPushButton('Erledigt')` |
+| 131 | Signal → Handler | `self._btn_resolve.clicked.connect(self._resolve)` |
+| 133 | UI / Aktion | `QPushButton('Stornieren')` |
+| 134 | Signal → Handler | `self._btn_cancel.clicked.connect(self._cancel)` |
+| 282 | Popup / Modal | `QMessageBox.information(self, 'Nachlieferung drucken', 'Bitte die Nachlieferung zuerst aktivieren (Sofort versenden oder Fälligkeit).')` |
+| 298 | Popup / Modal | `QMessageBox.information(self, 'Nachlieferung drucken', 'Keine zustellfähige Lieferadresse vorhanden.')` |
+| 315 | Popup / Modal | `QMessageBox.information(self, 'Nachlieferung drucken', 'Bitte in „Bearbeiten…“ mindestens eine nachzuliefernde Position auswählen.')` |
+| 340 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 341 | Signal → Handler | `worker.signals.result.connect(on_result)` |
+| 342 | Signal → Handler | `worker.signals.error.connect(lambda exc: QMessageBox.warning(self, 'Nachlieferung drucken', f'Druck konnte nicht vorbereitet werden:\n\n{exc}'))` |
+| 343 | Popup / Modal | `QMessageBox.warning(self, 'Nachlieferung drucken', f'Druck konnte nicht vorbereitet werden:\n\n{exc}')` |
+| 353 | Signal → Handler | `worker.signals.finished.connect(finished)` |
+| 394 | Popup / Modal | `QMessageBox.information(self, 'Lieferschein', 'Lieferschein erfolgreich an Rechnungen gesendet.')` |
+| 421 | Popup / Modal | `QMessageBox.information(self, 'Label', 'Label erfolgreich an Drucker gesendet.')` |
+| 441 | Popup / Modal | `dialog.exec()` |
+| 468 | Popup / Modal | `QInputDialog.getItem(self, 'Nachlieferung snoozen', 'Snooze:', labels, 0, False)` |
+| 482 | Popup / Modal | `QInputDialog.getText(self, 'Snooze bis', 'Datum/Uhrzeit (TT.MM.JJJJ HH:MM):', text=default)` |
+| 493 | Popup / Modal | `QMessageBox.warning(self, 'Snooze', 'Bitte Datum als TT.MM.JJJJ HH:MM eingeben.')` |
+| 495 | Popup / Modal | `QInputDialog.getText(self, 'Snooze-Grund', 'Grund (optional):')` |
+| 504 | Popup / Modal | `QMessageBox.information(self, 'Originalrechnung', 'Keine sevDesk-Rechnung verknüpft.')` |
+| 523 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 524 | Signal → Handler | `worker.signals.result.connect(done)` |
+| 525 | Signal → Handler | `worker.signals.error.connect(lambda exc: QMessageBox.warning(self, 'Originalrechnung', f'Rechnung konnte nicht geladen werden:\n\n{exc}'))` |
+| 526 | Popup / Modal | `QMessageBox.warning(self, 'Originalrechnung', f'Rechnung konnte nicht geladen werden:\n\n{exc}')` |
+| 530 | Signal → Handler | `worker.signals.finished.connect(lambda: setattr(self, '_invoice_worker', None))` |
+
+### A – digital_licenses_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/digital_licenses_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.core.container`, `xw_office.core.worker`, `xw_office.services.digital_licenses`.
+
+**DigitalLicensesDialog** (Z. 30): `__init__`:33; `_build_ui`:47; `open_count`:98; `_load_cases`:103; `_on_cases_loaded`:113; `_selected_case`:127; `_show_selected_case`:133; `_pick_missing_pdf`:161; `_prepare_selected`:180; `_on_files_prepared`:206; `_start_draft_job`:234; `_on_draft_worker_finished`:250; `_on_draft_created`:259; `_mark_selected_done`:268; `_on_mark_done_finished`:294; `_run_action`:304; `_on_error`:322.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 45 | Timer | `QTimer.singleShot(0, self._load_cases)` |
+| 55 | UI / Aktion | `QPushButton('Aktualisieren')` |
+| 56 | Signal → Handler | `self._btn_refresh.clicked.connect(self._load_cases)` |
+| 63 | UI / Aktion | `QListWidget()` |
+| 64 | Signal → Handler | `self._list.currentRowChanged.connect(self._show_selected_case)` |
+| 73 | UI / Aktion | `QPlainTextEdit()` |
+| 78 | UI / Aktion | `QPushButton('Fehlende Druck-PDF zuordnen')` |
+| 79 | Signal → Handler | `self._btn_pick_missing.clicked.connect(self._pick_missing_pdf)` |
+| 81 | UI / Aktion | `QPushButton('PDFs erstellen und pruefen')` |
+| 82 | Signal → Handler | `self._btn_prepare.clicked.connect(self._prepare_selected)` |
+| 85 | UI / Aktion | `QPushButton('E-Mail wurde gesendet – abschliessen')` |
+| 86 | Signal → Handler | `self._btn_done.clicked.connect(self._mark_selected_done)` |
+| 94 | UI / Aktion | `QDialogButtonBox(QDialogButtonBox.StandardButton.Close)` |
+| 95 | Signal → Handler | `buttons.rejected.connect(self.reject)` |
+| 107 | Hintergrundarbeit | `BackgroundWorker(self._service.list_open_cases)` |
+| 108 | Signal → Handler | `self._load_worker.signals.result.connect(self._on_cases_loaded)` |
+| 109 | Signal → Handler | `self._load_worker.signals.error.connect(self._on_error)` |
+| 110 | Signal → Handler | `self._load_worker.signals.finished.connect(lambda: setattr(self, '_load_worker', None))` |
+| 167 | Popup / Modal | `QMessageBox.information(self, 'Druck-PDF', 'Alle Produkte haben bereits einen gueltigen Druckpfad.')` |
+| 169 | Popup / Modal | `QFileDialog.getOpenFileName(self, 'Druck-PDF zuordnen', '', 'PDF (*.pdf)')` |
+| 173 | Popup / Modal | `QMessageBox.warning(self, 'Druck-PDF', 'Die Datei wurde nicht gefunden.')` |
+| 196 | Popup / Modal | `QMessageBox.warning(self, 'Externe Bestellung', 'Bitte zuerst alle fehlenden Druck-PDFs zuordnen.')` |
+| 219 | Popup / Modal | `QMessageBox.question(self, 'PDF-Kontrolle', 'Die personalisierten PDFs wurden geoeffnet. Sind Name, Seiten und Vollstaendigkeit korrekt?', QMessageBox.StandardButton.Yes &#124; QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)` |
+| 243 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 244 | Signal → Handler | `worker.signals.result.connect(on_result)` |
+| 245 | Signal → Handler | `worker.signals.error.connect(self._on_error)` |
+| 246 | Signal → Handler | `worker.signals.finished.connect(lambda: self._on_draft_worker_finished(worker))` |
+| 262 | Popup / Modal | `QMessageBox.information(self, 'Outlook-Entwurf', 'Der Entwurf wurde gespeichert und geoeffnet. Sende ihn in Outlook und bestaetige danach hier den Versand.')` |
+| 275 | Popup / Modal | `QMessageBox.warning(self, 'Externe Bestellung', 'Bitte zuerst die PDFs kontrollieren und den Outlook-Entwurf speichern.')` |
+| 281 | Popup / Modal | `QMessageBox.question(self, 'Externe Bestellung', 'Hast du die E-Mail mit Rechnung und allen Noten-PDFs gesendet?\n\nDanach wird Wix-Fulfillment abgeschlossen.')` |
+| 300 | Timer | `QTimer.singleShot(0, self.accept)` |
+| 315 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 317 | Signal → Handler | `self._action_worker.signals.result.connect(result_handler)` |
+| 318 | Signal → Handler | `self._action_worker.signals.error.connect(self._on_error)` |
+| 319 | Signal → Handler | `self._action_worker.signals.finished.connect(lambda: setattr(self, '_action_worker', None))` |
+| 324 | Popup / Modal | `QMessageBox.warning(self, 'Externe Bestellung', str(exc))` |
+
+### A – inventory_alerts_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/inventory_alerts_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.services.mailing.service`, `xw_office.services.product_hub.inventory`, `xw_office.services.product_hub.inventory_alert_tasks`.
+
+**InventoryAlertsDialog** (Z. 23): `__init__`:24; `refresh`:69; `_select`:86; `_current`:97; `_save_threshold`:101; `_use_automatic`:116; `_create_task`:132.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 34 | UI / Aktion | `QListWidget()` |
+| 35 | Signal → Handler | `self._list.currentRowChanged.connect(self._select)` |
+| 41 | UI / Aktion | `QSpinBox()` |
+| 53 | UI / Aktion | `QPushButton('Alarmbestand speichern')` |
+| 54 | Signal → Handler | `self._save.clicked.connect(self._save_threshold)` |
+| 55 | UI / Aktion | `QPushButton('Automatik verwenden')` |
+| 56 | Signal → Handler | `self._auto.clicked.connect(self._use_automatic)` |
+| 57 | UI / Aktion | `QPushButton('Task erzeugen')` |
+| 58 | Signal → Handler | `self._task.clicked.connect(self._create_task)` |
+| 59 | UI / Aktion | `QPushButton('Schließen')` |
+| 60 | Signal → Handler | `close.clicked.connect(self.accept)` |
+| 114 | Popup / Modal | `QMessageBox.warning(self, 'Alarmbestand', str(exc))` |
+| 130 | Popup / Modal | `QMessageBox.warning(self, 'Alarmbestand', str(exc))` |
+| 139 | Popup / Modal | `QMessageBox.information(self, 'Task erzeugen', 'Task-Mail wurde an todo@xeisworks.at gesendet.')` |
+| 141 | Popup / Modal | `QMessageBox.information(self, 'Task erzeugen', 'Die Task-Mail wird bereits versendet.')` |
+| 143 | Popup / Modal | `QMessageBox.warning(self, 'Task erzeugen', 'Der Versandstatus ist unklar. Bitte zuerst den Mailversand prüfen. Es wird keine weitere Mail automatisch versendet.')` |
+| 150 | Popup / Modal | `QMessageBox.warning(self, 'Task erzeugen', result.error or 'Task-Mail konnte nicht gesendet werden.')` |
+| 152 | Popup / Modal | `QMessageBox.warning(self, 'Task erzeugen', str(exc))` |
+
+### A – offene_drucke_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/offene_drucke_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.core.container`, `xw_office.core.worker`, `xw_office.services.drucke.service`.
+
+**OffeneDruckeDialog** (Z. 28): `__init__`:29; `_load`:82; `_loaded`:97; `_load_error`:113; `_clear_detail`:119; `_current_case`:126; `_select`:130; `_on_attachment_finished`:159; `_attachments_loaded`:170; `_open_attachment`:183; `_open_local_file`:208; `_mark_done`:221; `open_count`:228; `_format_size`:232.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 42 | UI / Aktion | `QPushButton('Aktualisieren')` |
+| 43 | Signal → Handler | `self._refresh.clicked.connect(lambda: self._load(True))` |
+| 48 | UI / Aktion | `QListWidget()` |
+| 49 | Signal → Handler | `self._list.currentRowChanged.connect(self._select)` |
+| 53 | UI / Aktion | `QTextEdit()` |
+| 57 | UI / Aktion | `QListWidget()` |
+| 58 | Signal → Handler | `self._attachment_list.itemDoubleClicked.connect(lambda _item: self._open_attachment())` |
+| 61 | UI / Aktion | `QPushButton('Anhang öffnen')` |
+| 62 | Signal → Handler | `self._open_attachment_button.clicked.connect(self._open_attachment)` |
+| 70 | UI / Aktion | `QPushButton('Als erledigt markieren')` |
+| 71 | Signal → Handler | `self._done.clicked.connect(self._mark_done)` |
+| 73 | UI / Aktion | `QPushButton('Schließen')` |
+| 74 | Signal → Handler | `close.clicked.connect(self.accept)` |
+| 80 | Timer | `QTimer.singleShot(0, lambda: self._load(True))` |
+| 87 | Hintergrundarbeit | `BackgroundWorker(lambda: self._service.refresh_from_graph() if refresh else self._service.load_open_cases())` |
+| 92 | Signal → Handler | `self._worker.signals.result.connect(self._loaded)` |
+| 93 | Signal → Handler | `self._worker.signals.error.connect(self._load_error)` |
+| 94 | Signal → Handler | `self._worker.signals.finished.connect(lambda: self._refresh.setEnabled(True))` |
+| 115 | Popup / Modal | `QMessageBox.warning(self, 'OPEN PRINTS', f'Druckaufträge konnten nicht geladen werden:\n\n{exc}')` |
+| 144 | Hintergrundarbeit | `BackgroundWorker(lambda: self._service.list_attachments(case.id))` |
+| 146 | Signal → Handler | `worker.signals.result.connect(lambda result: self._attachments_loaded(result) if seq == self._attachment_seq else None)` |
+| 149 | Signal → Handler | `worker.signals.error.connect(lambda exc: self._status.setText(f'Anhänge konnten nicht geladen werden: {exc}') if seq == self._attachment_seq else None)` |
+| 156 | Signal → Handler | `worker.signals.finished.connect(lambda: self._on_attachment_finished(worker, seq))` |
+| 195 | Hintergrundarbeit | `BackgroundWorker(lambda: self._service.download_attachment_to_cache(case.id, attachment.id, attachment.name))` |
+| 201 | Signal → Handler | `worker.signals.result.connect(self._open_local_file)` |
+| 202 | Signal → Handler | `worker.signals.error.connect(lambda exc: QMessageBox.warning(self, 'Anhang öffnen', str(exc)))` |
+| 203 | Popup / Modal | `QMessageBox.warning(self, 'Anhang öffnen', str(exc))` |
+| 205 | Signal → Handler | `worker.signals.finished.connect(lambda: self._on_attachment_finished(worker, seq))` |
+| 215 | Popup / Modal | `QMessageBox.warning(self, 'Anhang öffnen', 'Die Datei konnte nicht mit dem Windows-Standardprogramm geöffnet werden.')` |
+
+### A – offene_sendungen_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/offene_sendungen_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.core.container`, `xw_office.core.worker`, `xw_office.services.printing.label_printer`, `xw_office.services.printing.print_queue`, `xw_office.services.sendungen.service`, `xw_office.ui.modules.rechnungen.customer_aftercare_tab`.
+
+**_SendungProductsModel** (Z. 47): `__init__`:50; `rowCount`:54; `columnCount`:57; `data`:60; `setData`:74; `flags`:107; `headerData`:117; `set_products`:122; `add_product`:127; `remove_row`:133; `products`:140.
+**_ContentSizedPlainTextEdit** (Z. 144): `__init__`:145; `resizeEvent`:156; `_schedule_resize`:160; `_resize_to_contents`:164.
+**OffeneSendungenDialog** (Z. 170): `__init__`:173; `closeEvent`:197; `accept`:201; `reject`:207; `_wait_for_workers`:213; `_build_ui`:219; `open_count`:388; `_load_cases`:391; `_on_cases_loaded`:441; `_schedule_silent_refresh_after_detail`:488; `_case_list_text`:495; `_on_cases_load_error`:513; `_current_case`:519; `_on_case_selected`:525; `_extract_selected`:539; `_invalidate_detail_load`:561; `_on_detail_worker_finished`:568; `_on_detail_loaded`:576; `_set_case_metadata`:629; `_on_detail_error`:652; `_set_detail_loading`:662; `_clear_detail`:670; `_compact_thread_text`:681; `_set_actions_enabled`:686; `_set_products`:698; `_add_product_row`:703; `_remove_selected_product_row`:706; `_address_lines`:710; `_products_from_table`:713; `_manual_bool`:717; `_validated_products`:724; `_cell_text`:745; `_save_current_manual_fields`:750; `_print_label`:761; `_on_label_printed`:794; `_create_delivery_note`:797; `_show_delivery_note`:810; `_on_delivery_note_ready`:832; `_print_delivery_note`:835; `_on_delivery_note_printed`:862; `_delivery_note_request`:867; `_mark_done`:884; `_on_mark_done_finished`:910; `_start_action`:920; `_finish_action`:946.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 150 | Timer | `QTimer(self)` |
+| 151 | Timer | `self._resize_timer.setSingleShot(True)` |
+| 152 | Signal → Handler | `self._resize_timer.timeout.connect(self._resize_to_contents)` |
+| 153 | Signal → Handler | `self.textChanged.connect(self._schedule_resize)` |
+| 154 | Signal → Handler | `self.document().documentLayout().documentSizeChanged.connect(self._schedule_resize)` |
+| 188 | Timer | `QTimer(self)` |
+| 189 | Timer | `self._silent_refresh_timer.setSingleShot(True)` |
+| 190 | Signal → Handler | `self._silent_refresh_timer.timeout.connect(lambda: self._load_cases(refresh=True, preserve=True, silent=True))` |
+| 195 | Timer | `QTimer.singleShot(0, lambda: self._load_cases(refresh=False))` |
+| 225 | UI / Aktion | `QTabWidget()` |
+| 231 | UI / Aktion | `QPushButton('Aktualisieren')` |
+| 232 | Signal → Handler | `self._btn_refresh.clicked.connect(lambda: self._load_cases(refresh=True, preserve=True))` |
+| 236 | UI / Aktion | `QPushButton('OpenAI neu extrahieren')` |
+| 237 | Signal → Handler | `self._btn_extract.clicked.connect(lambda: self._extract_selected(force=True))` |
+| 245 | UI / Aktion | `QListWidget()` |
+| 246 | Signal → Handler | `self._list.currentRowChanged.connect(self._on_case_selected)` |
+| 296 | UI / Aktion | `QTableView()` |
+| 305 | UI / Aktion | `QPushButton('+ Produkt')` |
+| 306 | Signal → Handler | `self._btn_add_product.clicked.connect(lambda: self._add_product_row(SendungProductLine()))` |
+| 310 | UI / Aktion | `QPushButton('− Produkt')` |
+| 311 | Signal → Handler | `self._btn_remove_product.clicked.connect(self._remove_selected_product_row)` |
+| 317 | UI / Aktion | `QPlainTextEdit()` |
+| 324 | UI / Aktion | `QPushButton('Lieferschein zeigen')` |
+| 325 | Signal → Handler | `self._btn_delivery_show.clicked.connect(self._show_delivery_note)` |
+| 327 | UI / Aktion | `QPushButton('Lieferschein drucken')` |
+| 328 | Signal → Handler | `self._btn_delivery_print.clicked.connect(self._print_delivery_note)` |
+| 339 | UI / Aktion | `QPlainTextEdit()` |
+| 344 | UI / Aktion | `QPushButton('Label drucken')` |
+| 345 | Signal → Handler | `self._btn_label.clicked.connect(self._print_label)` |
+| 357 | UI / Aktion | `QPushButton('✓')` |
+| 367 | Signal → Handler | `self._btn_done.clicked.connect(self._mark_done)` |
+| 376 | UI / Aktion | `tabs.addTab(sendungen_tab, 'OFFENE SENDUNGEN')` |
+| 385 | UI / Aktion | `tabs.addTab(aftercare_tab, 'NACHLIEFERUNGEN')` |
+| 431 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 432 | Signal → Handler | `self._load_worker.signals.result.connect(lambda result, token=seq, keep=preserve, cid=selected_id: self._on_cases_loaded(token, result, preserve=keep, selected_id=cid))` |
+| 437 | Signal → Handler | `self._load_worker.signals.error.connect(self._on_cases_load_error)` |
+| 438 | Signal → Handler | `self._load_worker.signals.finished.connect(lambda: setattr(self, '_load_worker', None))` |
+| 517 | Popup / Modal | `QMessageBox.warning(self, 'OFFENE SENDUNGEN', f'Laden fehlgeschlagen:\n\n{exc}')` |
+| 553 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 556 | Signal → Handler | `worker.signals.result.connect(lambda result, token=seq: self._on_detail_loaded(token, result))` |
+| 557 | Signal → Handler | `worker.signals.error.connect(lambda exc, token=seq: self._on_detail_error(token, exc))` |
+| 558 | Signal → Handler | `worker.signals.finished.connect(lambda w=worker: self._on_detail_worker_finished(w))` |
+| 660 | Popup / Modal | `QMessageBox.warning(self, 'OFFENE SENDUNGEN', f'Details konnten nicht geladen werden:\n\n{exc}')` |
+| 735 | Popup / Modal | `QMessageBox.information(self, 'Lieferpreis fehlt', f'Bitte in Produktzeile {row} einen Lieferpreis eingeben (Standard: € 5,90).')` |
+| 767 | Popup / Modal | `QMessageBox.information(self, 'Label', 'Keine Adresszeilen vorhanden.')` |
+| 795 | Popup / Modal | `QMessageBox.information(self, 'Label', 'Label erfolgreich an Drucker gesendet.')` |
+| 863 | Popup / Modal | `QMessageBox.information(self, 'Lieferschein', 'Lieferschein erfolgreich an Rechnungen gesendet.')` |
+| 916 | Timer | `QTimer.singleShot(0, self.accept)` |
+| 933 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 935 | Signal → Handler | `worker.signals.result.connect(on_result)` |
+| 936 | Signal → Handler | `worker.signals.error.connect(lambda exc: QMessageBox.warning(self, 'Aktion fehlgeschlagen', str(exc)))` |
+| 937 | Popup / Modal | `QMessageBox.warning(self, 'Aktion fehlgeschlagen', str(exc))` |
+| 939 | Signal → Handler | `worker.signals.finished.connect(lambda current=worker, target=button, text=idle_text: self._finish_action(current, target, text))` |
+
+### A – offene_ueberweisungen_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/offene_ueberweisungen_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.core.container`, `xw_office.core.worker`, `xw_office.services.transfers.models`, `xw_office.services.transfers.payment_qr`, `xw_office.services.transfers.service`, `xw_office.ui.modules.rechnungen.payment_qr_dialog`.
+
+**OffeneUeberweisungenDialog** (Z. 37): `__init__`:40; `closeEvent`:55; `accept`:59; `reject`:65; `_wait_for_workers`:71; `_build_ui`:77; `open_count`:181; `_load_cases`:184; `_on_cases_loaded`:206; `_on_cases_load_error`:227; `_clear_detail`:233; `_set_payment_loading`:247; `_set_payment_actions_enabled`:261; `_current_case`:266; `_on_case_selected`:272; `_on_detail_worker_finished`:309; `_on_case_detail_loaded`:317; `_on_case_detail_error`:330; `_fill_payment_form`:340; `_collect_payment_form`:355; `_summarize_selected`:392; `_show_invoice`:408; `_generate_qr`:431; `_on_qr_generated`:444; `_defer`:452; `_mark_done`:471; `_start_action`:506; `_detail_status_for_action`:530; `_on_action_error`:533; `_finish_action`:537.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 53 | Timer | `QTimer.singleShot(0, lambda: self._load_cases(refresh=True))` |
+| 87 | UI / Aktion | `QPushButton('Aktualisieren')` |
+| 88 | Signal → Handler | `self._btn_refresh.clicked.connect(lambda: self._load_cases(refresh=True))` |
+| 96 | UI / Aktion | `QListWidget()` |
+| 97 | Signal → Handler | `self._list.currentRowChanged.connect(self._on_case_selected)` |
+| 108 | UI / Aktion | `QPlainTextEdit()` |
+| 114 | UI / Aktion | `QPlainTextEdit()` |
+| 121 | UI / Aktion | `QLineEdit()` |
+| 122 | UI / Aktion | `QLineEdit()` |
+| 123 | UI / Aktion | `QLineEdit()` |
+| 124 | UI / Aktion | `QLineEdit()` |
+| 125 | UI / Aktion | `QLineEdit('EUR')` |
+| 127 | UI / Aktion | `QLineEdit()` |
+| 128 | UI / Aktion | `QLineEdit()` |
+| 129 | UI / Aktion | `QLineEdit()` |
+| 130 | UI / Aktion | `QLineEdit()` |
+| 147 | UI / Aktion | `QPushButton('Mit OpenAI zusammenfassen')` |
+| 148 | Signal → Handler | `self._btn_summary.clicked.connect(self._summarize_selected)` |
+| 154 | UI / Aktion | `QPushButton('Rechnung zeigen')` |
+| 155 | Signal → Handler | `self._btn_show_invoice.clicked.connect(self._show_invoice)` |
+| 158 | UI / Aktion | `QPushButton('QR-Code generieren')` |
+| 159 | Signal → Handler | `self._btn_generate_qr.clicked.connect(self._generate_qr)` |
+| 162 | UI / Aktion | `QPushButton('Spaeter - Alarm bleibt')` |
+| 163 | Signal → Handler | `self._btn_defer.clicked.connect(self._defer)` |
+| 166 | UI / Aktion | `QPushButton('Ueberweisung durchgefuehrt')` |
+| 167 | Signal → Handler | `self._btn_done.clicked.connect(self._mark_done)` |
+| 176 | UI / Aktion | `QDialogButtonBox(QDialogButtonBox.StandardButton.Close)` |
+| 177 | Signal → Handler | `buttons.rejected.connect(self.reject)` |
+| 178 | Signal → Handler | `buttons.accepted.connect(self.accept)` |
+| 200 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 201 | Signal → Handler | `self._load_worker.signals.result.connect(lambda result, token=seq: self._on_cases_loaded(token, result))` |
+| 202 | Signal → Handler | `self._load_worker.signals.error.connect(self._on_cases_load_error)` |
+| 203 | Signal → Handler | `self._load_worker.signals.finished.connect(lambda: setattr(self, '_load_worker', None))` |
+| 231 | Popup / Modal | `QMessageBox.warning(self, 'OFFENE UEBERWEISUNGEN', f'Laden fehlgeschlagen:\n\n{exc}')` |
+| 301 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 304 | Signal → Handler | `worker.signals.result.connect(lambda result, token=seq: self._on_case_detail_loaded(token, result))` |
+| 305 | Signal → Handler | `worker.signals.error.connect(lambda exc, token=seq: self._on_case_detail_error(token, exc))` |
+| 306 | Signal → Handler | `worker.signals.finished.connect(lambda w=worker: self._on_detail_worker_finished(w))` |
+| 338 | Popup / Modal | `QMessageBox.warning(self, 'OFFENE UEBERWEISUNGEN', f'Zahlungsdaten konnten nicht geladen werden:\n\n{exc}')` |
+| 414 | Popup / Modal | `QMessageBox.information(self, 'Rechnung', 'Keine PDF-Rechnung in dieser Mail gefunden.')` |
+| 419 | Popup / Modal | `QInputDialog.getItem(self, 'PDF auswaehlen', 'Anhang:', labels, 0, False)` |
+| 429 | Popup / Modal | `QMessageBox.warning(self, 'Rechnung', 'PDF konnte nicht geoeffnet werden.')` |
+| 450 | Popup / Modal | `PaymentQrDialog(qr_path, payment, self).exec()` |
+| 468 | Timer | `QTimer.singleShot(0, self.accept)` |
+| 475 | Popup / Modal | `QMessageBox.question(self, 'Ueberweisung durchgefuehrt', 'Diese Ueberweisung als durchgefuehrt markieren?\nDie Mail wird in Outlook als erledigt markiert.\nDer Alarm verschwindet danach fuer diesen Fall.')` |
+| 519 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 521 | Signal → Handler | `worker.signals.result.connect(on_result)` |
+| 522 | Signal → Handler | `worker.signals.error.connect(self._on_action_error)` |
+| 523 | Signal → Handler | `worker.signals.finished.connect(lambda current=worker, target=button, text=idle_text: self._finish_action(current, target, text))` |
+| 535 | Popup / Modal | `QMessageBox.warning(self, title, str(exc))` |
+
+### A – open_invoice_overview.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/open_invoice_overview.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.services.invoice_processing.service`, `xw_office.services.products.catalog`, `xw_office.services.sevdesk.invoice_client`, `xw_office.services.wix.client`.
+
+**PrintProductAggregate** (Z. 19): Datenmodell / Konstanten.
+Funktion `plan_open_print_products`: Z. 35.
+**UnreleasedAssignment** (Z. 85): Datenmodell / Konstanten.
+**BuyerNote** (Z. 94): Datenmodell / Konstanten.
+**OpenInvoiceOverview** (Z. 105): `suffix`:124.
+Funktion `open_invoice_overview_key`: Z. 128.
+Funktion `overview_from_visible_summaries`: Z. 140.
+Funktion `unknown_open_invoice_summaries`: Z. 224.
+Funktion `resolve_open_invoice_overview`: Z. 246.
+Funktion `_resolve_one_summary`: Z. 346.
+Funktion `_resolve_hint_context`: Z. 433.
+Funktion `_cached_hint_context`: Z. 449.
+Funktion `note_has_plc_label_hint`: Z. 473.
+Funktion `_separate_piece_titles`: Z. 489.
+**_ProductAccumulator** (Z. 505): `__init__`:506; `add_items`:514; `to_list`:536.
+**_UnreleasedAccumulator** (Z. 558): `__init__`:559; `add_items`:562; `to_list`:600.
+**_BuyerNoteAccumulator** (Z. 611): `__init__`:612; `add`:615; `to_list`:639.
+Funktion `_cached_reference_digital_only`: Z. 650.
+Funktion `_cached_order_buyer_note`: Z. 662.
+Funktion `_cached_order_customer_name`: Z. 673.
+Funktion `_cached_order_line_items`: Z. 687.
+Funktion `_cached_order_shipping_name`: Z. 699.
+Funktion `_order_shipping_name`: Z. 713.
+Funktion `_order_line_items`: Z. 735.
+Funktion `overview_payload_from_object`: Z. 754.
+Funktion `_int_value`: Z. 814.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 271 | Hintergrundarbeit | `ThreadPoolExecutor(max_workers=min(4, len(summaries)))` |
+
+### A – payment_qr_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/payment_qr_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.services.transfers.models`.
+
+**PaymentQrDialog** (Z. 21): `__init__`:24; `_build_ui`:30; `_open_png`:74; `_open_folder`:78.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 59 | UI / Aktion | `QPushButton('PNG oeffnen')` |
+| 60 | Signal → Handler | `btn_open.clicked.connect(self._open_png)` |
+| 63 | UI / Aktion | `QPushButton('Ordner oeffnen')` |
+| 64 | Signal → Handler | `btn_folder.clicked.connect(self._open_folder)` |
+| 69 | UI / Aktion | `QDialogButtonBox(QDialogButtonBox.StandardButton.Close)` |
+| 70 | Signal → Handler | `buttons.rejected.connect(self.reject)` |
+| 71 | Signal → Handler | `buttons.accepted.connect(self.accept)` |
+| 76 | Popup / Modal | `QMessageBox.warning(self, 'QR', 'PNG konnte nicht geoeffnet werden.')` |
+| 81 | Popup / Modal | `QMessageBox.warning(self, 'QR', 'Ordner konnte nicht geoeffnet werden.')` |
+
+### A – plc_evidence_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/plc_evidence_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.repositories.plc_shipment`.
+
+**PlcEvidenceDialog** (Z. 18): `__init__`:19; `_render`:58; `_parcel_html`:94; `_import_tracking`:162; `_confirm_code`:181.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 40 | UI / Aktion | `QComboBox(self)` |
+| 42 | UI / Aktion | `QLineEdit(self)` |
+| 44 | UI / Aktion | `QPushButton('Code zuordnen', self)` |
+| 45 | Signal → Handler | `self._confirm.clicked.connect(self._confirm_code)` |
+| 50 | UI / Aktion | `QPushButton('Post-Tracking-XML importieren', self)` |
+| 51 | Signal → Handler | `import_button.clicked.connect(self._import_tracking)` |
+| 53 | UI / Aktion | `QPushButton('Schließen', self)` |
+| 54 | Signal → Handler | `close.clicked.connect(self.accept)` |
+| 163 | Popup / Modal | `QFileDialog.getOpenFileName(self, 'Originale Post-Trackingdatei auswählen', '', 'Post-Tracking XML (*.xml)')` |
+| 174 | Popup / Modal | `QMessageBox.warning(self, 'Post-Tracking', f'Import fehlgeschlagen: {exc}')` |
+| 177 | Popup / Modal | `QMessageBox.information(self, 'Post-Tracking', f'{count} neue Post-Ereignisse für diese Rechnung importiert.')` |
+| 189 | Popup / Modal | `QMessageBox.warning(self, 'PLC-Code', 'Der Code gehört nicht zu dieser Sendung oder ist bereits einem anderen Paket zugeordnet.')` |
+
+### A – plc_label_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/plc_label_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.core.container`, `xw_office.core.worker`, `xw_office.repositories.settings_kv`, `xw_office.services.invoice_processing.context`, `xw_office.services.invoice_processing.service`, `xw_office.services.plc.customs_document`, `xw_office.services.plc.label_archive`, `xw_office.services.plc.models`, `xw_office.services.plc.packing_list`, `xw_office.services.plc.partial_fulfillment`, `xw_office.services.plc.polling`, `xw_office.services.plc.pricing`, `xw_office.services.plc.service`, `xw_office.services.plc.webservice`, `xw_office.services.printing.print_jobs`, `xw_office.services.printing.print_queue`, `xw_office.services.secrets.service`, `xw_office.services.sevdesk.invoice_client`, `xw_office.services.shipping.countries`, `xw_office.services.wix.client`.
+
+Funktion `queue_archived_plc_label`: Z. 94.
+Funktion `queue_archived_plc_customs`: Z. 134.
+Funktion `queue_packing_lists`: Z. 169.
+**_PlcDialogContext** (Z. 205): Datenmodell / Konstanten.
+**_PlcSendResult** (Z. 215): Datenmodell / Konstanten.
+**PlcLabelPrintDialog** (Z. 222): `__init__`:225; `_build_ui`:312; `_load_context`:548; `_on_context_loaded`:645; `_on_context_error`:687; `_on_product_selected`:693; `_on_address_edit`:698; `_on_weight_edit`:705; `_packing_item_key`:711; `_partial_fulfillment_order_key`:721; `_open_quantities_for_items`:724; `_open_quantity_for_item`:737; `_on_package_count_changed`:742; `_set_multi_parcel_tools_visible`:746; `_snapshot_parcel_state`:755; `_split_package_quantity`:772; `_format_package_quantity`:779; `_resize_parcel_state`:782; `_set_package_count`:806; `_add_parcel`:817; `_clear_package`:829; `_delete_parcel`:836; `_package_action_widget`:865; `_ordered_open_widget`:876; `_refresh_parcel_header_delete_buttons`:898; `_layout_parcel_header_buttons`:916; `_add_parcel_widget`:927; `_rebuild_parcel_controls`:939; `_clear_parcel_weight_inputs`:1040; `_update_parcel_summaries`:1048; `_on_parcel_weight_edit`:1068; `_auto_distribute_by_weight`:1086; `_on_order_number_edit`:1224; `_on_country_completed`:1227; `_current_mode`:1230; `_build_reference`:1234; `_current_address_lines`:1253; `_parse_address`:1269; `_country_group`:1276; `_current_country`:1284; `_current_country_group`:1287; `_update_price`:1295; `_sync_product_options`:1330; `_update_customs_visibility`:1343; `_find_product`:1359; `_customs_cell`:1367; `_append_customs_row`:1370; `_populate_customs_table`:1397; `_add_empty_customs_row`:1419; `_remove_selected_customs_row`:1424; `_customs_text`:1430; `_set_customs_details_visible`:1434; `_customs_rows_complete`:1444; `_gross_weight_kg`:1460; `_update_customs_summary`:1467; `_build_customs_articles`:1525; `_is_b2b_packing_order`:1548; `_allocation_warning_rows`:1551; `_confirm_allocation_warnings`:1563; `_capture_pending_fulfillment`:1637; `_record_pending_fulfillment`:1663; `_build_parcels_and_packing_lists`:1677; `_print_packing_lists`:1830; `_send_to_plc`:1862; `_start_send`:1972; `_on_send_result`:2004; `_show_success_overlay`:2138; `_on_send_error`:2192; `_handle_duplicate_archived_label`:2218; `_next_additional_shipment`:2332; `_append_reference_suffix`:2352; `_queue_webservice_label`:2361; `_queue_customs_document`:2364; `_load_products`:2368.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 310 | Timer | `QTimer.singleShot(0, self._load_context)` |
+| 339 | UI / Aktion | `QComboBox()` |
+| 344 | UI / Aktion | `QComboBox()` |
+| 345 | Signal → Handler | `self._product_combo.currentTextChanged.connect(self._on_product_selected)` |
+| 348 | UI / Aktion | `QLineEdit()` |
+| 350 | Signal → Handler | `self._weight_edit.textChanged.connect(self._on_weight_edit)` |
+| 354 | UI / Aktion | `QSpinBox()` |
+| 358 | Signal → Handler | `self._package_count.valueChanged.connect(self._on_package_count_changed)` |
+| 360 | UI / Aktion | `QPushButton(f'Nach Gewicht verteilen (max. {_PACKING_TARGET_NET_WEIGHT_KG:.1f} kg Warengewicht)')` |
+| 366 | Signal → Handler | `self._auto_distribute_btn.clicked.connect(self._auto_distribute_by_weight)` |
+| 369 | UI / Aktion | `QLineEdit()` |
+| 371 | Signal → Handler | `self._primary_order_number.textChanged.connect(self._on_order_number_edit)` |
+| 375 | UI / Aktion | `QLineEdit()` |
+| 377 | Signal → Handler | `self._secondary_order_number.textChanged.connect(self._on_order_number_edit)` |
+| 380 | UI / Aktion | `QPlainTextEdit()` |
+| 385 | UI / Aktion | `QLineEdit()` |
+| 387 | Signal → Handler | `self._company_edit.textChanged.connect(self._on_address_edit)` |
+| 390 | UI / Aktion | `QLineEdit()` |
+| 392 | Signal → Handler | `self._name_edit.textChanged.connect(self._on_address_edit)` |
+| 395 | UI / Aktion | `QLineEdit()` |
+| 397 | Signal → Handler | `self._street_edit.textChanged.connect(self._on_address_edit)` |
+| 400 | UI / Aktion | `QLineEdit()` |
+| 402 | Signal → Handler | `self._postal_city_edit.textChanged.connect(self._on_address_edit)` |
+| 405 | UI / Aktion | `QComboBox()` |
+| 416 | Signal → Handler | `country_completer.activated[str].connect(self._on_country_completed)` |
+| 418 | Signal → Handler | `self._country_combo.editTextChanged.connect(self._on_address_edit)` |
+| 421 | UI / Aktion | `QPlainTextEdit()` |
+| 426 | Signal → Handler | `self._address_edit.textChanged.connect(self._on_address_edit)` |
+| 429 | UI / Aktion | `QLineEdit()` |
+| 457 | UI / Aktion | `QTableWidget(0, 0, self._parcel_group)` |
+| 462 | Signal → Handler | `self._packing_table.itemChanged.connect(self._update_parcel_summaries)` |
+| 464 | Signal → Handler | `packing_header.sectionResized.connect(lambda *_args: self._layout_parcel_header_buttons())` |
+| 465 | Signal → Handler | `packing_header.geometriesChanged.connect(self._layout_parcel_header_buttons)` |
+| 497 | UI / Aktion | `QPushButton('Artikeldetails anzeigen')` |
+| 499 | Signal → Handler | `self._customs_details_btn.toggled.connect(self._set_customs_details_visible)` |
+| 506 | UI / Aktion | `QTableWidget(0, 8, self._customs_details)` |
+| 507 | UI / Aktion | `self._customs_table.setHorizontalHeaderLabels(['Artikel (Englisch)', 'SKU', 'Anzahl', 'Netto kg/Stk', 'Wert/Stk', 'Währung', 'Ursprung', 'Zolltarif-Nr.'])` |
+| 517 | Signal → Handler | `self._customs_table.itemChanged.connect(self._update_customs_summary)` |
+| 521 | UI / Aktion | `QPushButton('Artikel hinzufügen')` |
+| 522 | UI / Aktion | `QPushButton('Ausgewählten Artikel entfernen')` |
+| 523 | Signal → Handler | `add_customs.clicked.connect(self._add_empty_customs_row)` |
+| 524 | Signal → Handler | `remove_customs.clicked.connect(self._remove_selected_customs_row)` |
+| 536 | UI / Aktion | `QPushButton('Senden an PLC')` |
+| 537 | UI / Aktion | `QPushButton('Packliste drucken')` |
+| 538 | UI / Aktion | `QPushButton('Abbrechen')` |
+| 542 | Signal → Handler | `self._packing_print_btn.clicked.connect(self._print_packing_lists)` |
+| 543 | Signal → Handler | `self._send_btn.clicked.connect(self._send_to_plc)` |
+| 544 | Signal → Handler | `cancel_button.clicked.connect(self.reject)` |
+| 640 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 641 | Signal → Handler | `self._load_worker.signals.result.connect(self._on_context_loaded)` |
+| 642 | Signal → Handler | `self._load_worker.signals.error.connect(self._on_context_error)` |
+| 820 | Popup / Modal | `QMessageBox.warning(self, 'Paketaufteilung', f'Es sind höchstens {self._package_count.maximum()} Pakete möglich.')` |
+| 849 | Popup / Modal | `QMessageBox.warning(self, 'Paket löschen', 'Bitte zuerst alle Mengen als ganze Zahl oder im Format 10+1 eintragen.')` |
+| 869 | UI / Aktion | `QPushButton('Liste leeren', widget)` |
+| 872 | Signal → Handler | `clear_button.clicked.connect(lambda _checked=False, index=package_index: self._clear_package(index))` |
+| 905 | UI / Aktion | `QToolButton(header.viewport())` |
+| 911 | Signal → Handler | `button.clicked.connect(lambda _checked=False, index=package_index: self._delete_parcel(index))` |
+| 931 | UI / Aktion | `QPushButton('+', widget)` |
+| 934 | Signal → Handler | `add_button.clicked.connect(lambda _checked=False: self._add_parcel())` |
+| 965 | UI / Aktion | `self._packing_table.setHorizontalHeaderLabels(['Produkt', 'Bestellt / offen', *[f'Paket {number}' for number in range(1, package_count + 1)], '+'])` |
+| 1022 | UI / Aktion | `QLineEdit()` |
+| 1035 | Signal → Handler | `edit.textChanged.connect(self._on_parcel_weight_edit)` |
+| 1095 | Popup / Modal | `QMessageBox.warning(self, 'Paketaufteilung', 'Keine physischen Produkte zum Verteilen gefunden.')` |
+| 1118 | Popup / Modal | `QMessageBox.information(self, 'Paketaufteilung', 'Für diese Bestellung sind keine offenen Produkte mehr vorhanden.')` |
+| 1125 | Popup / Modal | `QMessageBox.warning(self, 'Gewicht fehlt', 'Die automatische Verteilung benötigt ein Wix-Gewicht für jedes physische Produkt.\n\nOhne Gewicht: ' + ', '.join(missing_weights))` |
+| 1141 | Popup / Modal | `QMessageBox.warning(self, 'Produkt zu schwer für ein Paket', f'Dieses Produkt würde allein die sichere Grenze von {_PACKING_TARGET_NET_WEIGHT_KG:.1f} kg Warengewicht überschreiten:\n\n' + '\n'.join(too_heavy) + '\n\nSie wird nicht automatisch geteilt, weil gleiche Produkte zusammenbleib…` |
+| 1173 | Popup / Modal | `QMessageBox.warning(self, 'Zu viele Pakete', f'Die sichere Verteilung benötigt {len(bins)} Pakete; erlaubt sind höchstens {self._package_count.maximum()}.')` |
+| 1597 | UI / Aktion | `QTableWidget(len(rows), 3, dialog)` |
+| 1599 | UI / Aktion | `table.setHorizontalHeaderLabels(['Produkt', 'Verteilt', 'Offen'])` |
+| 1625 | UI / Aktion | `QPushButton('✕ Zurück und prüfen', dialog)` |
+| 1627 | Signal → Handler | `cancel.clicked.connect(dialog.reject)` |
+| 1628 | UI / Aktion | `QPushButton(f'✓ {action} trotzdem', dialog)` |
+| 1631 | Signal → Handler | `proceed.clicked.connect(dialog.accept)` |
+| 1635 | Popup / Modal | `dialog.exec()` |
+| 1833 | Popup / Modal | `QMessageBox.information(self, 'Packliste', 'Eine Packliste kann erstellt werden, sobald mindestens zwei Pakete angelegt sind.')` |
+| 1856 | Popup / Modal | `QMessageBox.warning(self, 'Packliste', f'Packliste konnte nicht gedruckt werden: {exc}')` |
+| 1875 | Popup / Modal | `QMessageBox.warning(self, 'PLC', 'Bitte folgende Empfängerdaten eingeben: ' + ', '.join(missing_fields))` |
+| 1884 | Popup / Modal | `QMessageBox.warning(self, 'PLC', 'Bitte Lieferadresse eingeben.')` |
+| 1889 | Popup / Modal | `QMessageBox.warning(self, 'PLC', 'Adresse ist unvollständig.')` |
+| 1903 | Popup / Modal | `QMessageBox.information(self, 'Zollerklärung', 'Für dieses Zielland wird keine Zollerklärung benötigt.')` |
+| 1910 | Popup / Modal | `QMessageBox.warning(self, 'PLC', 'Versandprodukt ist nicht konfiguriert.')` |
+| 1915 | Popup / Modal | `QMessageBox.warning(self, 'PLC', 'Mehrpaket-Sendungen außerhalb der EU benötigen eine paketweise Zollartikelaufteilung und sind noch nicht verfügbar.')` |
+| 1928 | Popup / Modal | `QMessageBox.warning(self, 'PLC', str(exc))` |
+| 1941 | Popup / Modal | `QMessageBox.warning(self, 'PLC', str(exc))` |
+| 1944 | Popup / Modal | `QMessageBox.warning(self, 'PLC', 'Für dieses Zielland wird mindestens ein Zollartikel benötigt.')` |
+| 1961 | Popup / Modal | `QMessageBox.warning(self, 'PLC', str(exc))` |
+| 1998 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 1999 | Signal → Handler | `self._send_worker.signals.result.connect(lambda result: self._on_send_result(shipment, result))` |
+| 2000 | Signal → Handler | `self._send_worker.signals.error.connect(lambda exc: self._on_send_error(shipment, exc))` |
+| 2001 | Signal → Handler | `self._send_worker.signals.finished.connect(lambda: self._send_btn.setEnabled(True))` |
+| 2094 | Popup / Modal | `QMessageBox.warning(self, 'Zollerklärung erstellt' if self._customs_only else 'PLC-Label erstellt', f'{failure_message}{archive_note}\n\nDetails: {exc}')` |
+| 2190 | Timer | `QTimer.singleShot(_SUCCESS_OVERLAY_MS, self.accept)` |
+| 2201 | Popup / Modal | `QMessageBox.warning(self, 'Zollerklärung bereits erstellt' if self._customs_only else 'PLC-Label bereits erstellt', 'PLC sperrt eine zweite Erstellung dieser Zollerklärung. Ein lokales Archiv-PDF wurde noch nicht gefunden, daher kann XW-Office keinen sicheren Nachdruck ausführen.' if se…` |
+| 2216 | Popup / Modal | `QMessageBox.critical(self, 'PLC Fehler', str(exc))` |
+| 2254 | UI / Aktion | `box.addButton(reprint_label, QMessageBox.ButtonRole.AcceptRole)` |
+| 2256 | UI / Aktion | `box.addButton('Label-PDF öffnen', QMessageBox.ButtonRole.ActionRole)` |
+| 2263 | UI / Aktion | `box.addButton('Zoll-Original öffnen', QMessageBox.ButtonRole.ActionRole)` |
+| 2265 | UI / Aktion | `box.addButton('Zoll-A5 öffnen', QMessageBox.ButtonRole.ActionRole)` |
+| 2266 | UI / Aktion | `box.addButton('Neue Zollerklärung erstellen' if self._customs_only else 'Neues Label erstellen', QMessageBox.ButtonRole.ActionRole)` |
+| 2270 | UI / Aktion | `box.addButton('Abbrechen', QMessageBox.ButtonRole.RejectRole)` |
+| 2272 | Popup / Modal | `box.exec()` |
+| 2294 | Popup / Modal | `QMessageBox.warning(self, 'PLC-Nachdruck', f'Nachdruck konnte nicht eingereiht werden:\n\n{exc}')` |
+
+### A – plc_statistics_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/plc_statistics_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.core.worker`, `xw_office.services.plc.statistics`.
+
+**_StatisticsPage** (Z. 23): `__init__`:24; `apply`:64.
+**PlcStatisticsDialog** (Z. 99): `__init__`:100; `_build_ui`:110; `_reload`:137; `_on_loaded`:148; `_on_error`:157; `_on_finished`:160.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 47 | UI / Aktion | `QTableWidget(0, 4)` |
+| 48 | UI / Aktion | `self._table.setHorizontalHeaderLabels(['Land', 'Sendungen', 'Gewicht', 'Preis'])` |
+| 117 | UI / Aktion | `QPushButton('Aktualisieren')` |
+| 118 | Signal → Handler | `self._refresh.clicked.connect(self._reload)` |
+| 126 | UI / Aktion | `QTabWidget()` |
+| 130 | UI / Aktion | `self._tabs.addTab(page, label)` |
+| 133 | UI / Aktion | `QDialogButtonBox(QDialogButtonBox.StandardButton.Close)` |
+| 134 | Signal → Handler | `buttons.rejected.connect(self.reject)` |
+| 142 | Hintergrundarbeit | `BackgroundWorker(self._service.load)` |
+| 143 | Signal → Handler | `self._worker.signals.result.connect(self._on_loaded)` |
+| 144 | Signal → Handler | `self._worker.signals.error.connect(self._on_error)` |
+| 145 | Signal → Handler | `self._worker.signals.finished.connect(self._on_finished)` |
+
+### A – print_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/print_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.core.container`, `xw_office.core.printer_detect`, `xw_office.core.signals`, `xw_office.core.types`, `xw_office.services.inventory`, `xw_office.services.printing.pdf_renderer`, `xw_office.services.printing.planned_pdf_printer`, `xw_office.services.printing.print_jobs`, `xw_office.services.printing.print_queue`, `xw_office.services.products.catalog`, `xw_office.services.products.print_decision`.
+
+Funktion `_format_page_ranges`: Z. 57.
+**_PrintPlanModel** (Z. 73): `__init__`:76; `rowCount`:81; `columnCount`:84; `data`:87; `setData`:100; `flags`:112; `headerData`:120; `add_row`:125; `remove_row`:131; `plan`:138; `_printer_for_profile`:141.
+**_PrintProfileDelegate** (Z. 148): `__init__`:149; `createEditor`:153; `setEditorData`:160; `setModelData`:171.
+**ProductPrintConfigDialog** (Z. 176): `__init__`:177; `values`:265; `accept`:271; `_browse_pdf`:294; `_open_pdf`:299; `_open_pdf_folder`:306; `_load_initial_plan_rows`:314; `_add_plan_row`:326; `_remove_selected_plan_row`:329; `_parse_plan`:332; `_pdf_path`:342; `_refresh_pdf_status`:345; `_refresh_plan_summary`:374; `_plan_coverage_note`:390; `_refresh_title_override_note`:420; `_profile_printer`:444; `_backend_label`:451.
+Funktion `_check_printer_runtime`: Z. 458.
+Funktion `_print_with_dialog`: Z. 482.
+Funktion `run_invoice_pdf_print`: Z. 538.
+Funktion `run_label_pdf_print`: Z. 548.
+Funktion `run_plc_label_pdf_print`: Z. 558.
+Funktion `run_music_pdf_print`: Z. 574.
+Funktion `_configure_missing_piece_print`: Z. 584.
+Funktion `prepare_piece_pdf_print`: Z. 636.
+Funktion `run_piece_pdf_print`: Z. 705.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 154 | UI / Aktion | `QComboBox(parent)` |
+| 166 | Signal → Handler | `editor.currentIndexChanged.connect(lambda _selected, combo=editor: self.commitData.emit(combo))` |
+| 195 | UI / Aktion | `QLineEdit(str(piece.print_file_path or ''))` |
+| 196 | Signal → Handler | `self._path_edit.textChanged.connect(self._refresh_pdf_status)` |
+| 199 | UI / Aktion | `QPushButton('PDF waehlen')` |
+| 200 | Signal → Handler | `browse_btn.clicked.connect(self._browse_pdf)` |
+| 202 | UI / Aktion | `QPushButton('PDF oeffnen')` |
+| 203 | Signal → Handler | `open_pdf_btn.clicked.connect(self._open_pdf)` |
+| 205 | UI / Aktion | `QPushButton('Ordner')` |
+| 206 | Signal → Handler | `open_folder_btn.clicked.connect(self._open_pdf_folder)` |
+| 226 | UI / Aktion | `QTableView(self)` |
+| 229 | Signal → Handler | `self._plan_model.dataChanged.connect(lambda *_args: self._refresh_plan_summary())` |
+| 230 | Signal → Handler | `self._plan_model.rowsInserted.connect(lambda *_args: self._refresh_plan_summary())` |
+| 231 | Signal → Handler | `self._plan_model.rowsRemoved.connect(lambda *_args: self._refresh_plan_summary())` |
+| 237 | UI / Aktion | `QPushButton('Zeile hinzufuegen')` |
+| 238 | Signal → Handler | `add_row_btn.clicked.connect(lambda: self._add_plan_row('Alle Seiten', ''))` |
+| 240 | UI / Aktion | `QPushButton('Zeile entfernen')` |
+| 241 | Signal → Handler | `remove_row_btn.clicked.connect(self._remove_selected_plan_row)` |
+| 258 | UI / Aktion | `QDialogButtonBox(QDialogButtonBox.StandardButton.Save &#124; QDialogButtonBox.StandardButton.Cancel)` |
+| 259 | Signal → Handler | `buttons.accepted.connect(self.accept)` |
+| 260 | Signal → Handler | `buttons.rejected.connect(self.reject)` |
+| 275 | Popup / Modal | `QMessageBox.warning(self, 'Druck konfigurieren', str(exc))` |
+| 278 | Popup / Modal | `QMessageBox.warning(self, 'Druck konfigurieren', 'Bitte einen PDF-Druckpfad waehlen.')` |
+| 281 | Popup / Modal | `QMessageBox.warning(self, 'Druck konfigurieren', 'Bitte Drucker oder Druckplan angeben.')` |
+| 285 | Popup / Modal | `QMessageBox.warning(self, 'Druck konfigurieren', 'Die gewaehlte PDF-Datei existiert nicht.')` |
+| 290 | Popup / Modal | `QMessageBox.warning(self, 'Druck konfigurieren', 'Die PDF-Datei konnte nicht geoeffnet werden.')` |
+| 295 | Popup / Modal | `QFileDialog.getOpenFileName(self, 'Produkt-PDF waehlen', self._path_edit.text(), 'PDF (*.pdf)')` |
+| 463 | Popup / Modal | `QMessageBox.warning(parent, 'Druck nicht verfuegbar', 'Kein konfigurierter Drucker ist verfuegbar (Ampel rot).')` |
+| 473 | Popup / Modal | `QMessageBox.warning(parent, 'Falscher Drucker', 'Der gewaehlt Drucker ist nicht in den konfigurierten Druckern enthalten.')` |
+| 492 | Popup / Modal | `QFileDialog.getOpenFileName(parent, title, '', 'PDF (*.pdf);;Alle Dateien (*.*)')` |
+| 506 | Popup / Modal | `dialog.exec()` |
+| 521 | Popup / Modal | `QMessageBox.warning(parent, 'Druck', 'Kein Drucker ausgewaehlt.')` |
+| 590 | Popup / Modal | `dialog.exec()` |
+| 658 | Popup / Modal | `QMessageBox.warning(parent, 'Produktdruck', f'Kein PDF-Pfad für SKU {piece.sku} konfiguriert.')` |
+| 670 | Popup / Modal | `QMessageBox.critical(parent, 'Produktdruck fehlgeschlagen', f'Die Produkt-PDF konnte nicht geoeffnet werden:\n\n{exc}')` |
+| 724 | Popup / Modal | `QMessageBox.critical(parent, 'Produktdruck fehlgeschlagen', f'Die Produkt-PDF konnte nicht ueber den hinterlegten Druckplan gedruckt werden:\n\n{exc}')` |
+
+### A – product_preflight_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/product_preflight_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.services.draft_invoice.service`.
+
+**ProductPreflightDialog** (Z. 22): `__init__`:25; `_build`:44; `show_dialog`:144; `_collect_draft`:148; `_create`:173; `_skip`:180; `_fmt_num`:185; `_fmt_currency`:191; `_parse_optional_float`:197.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 76 | UI / Aktion | `QPlainTextEdit()` |
+| 81 | UI / Aktion | `QPlainTextEdit()` |
+| 98 | UI / Aktion | `QLineEdit(draft.name)` |
+| 99 | UI / Aktion | `QLineEdit(draft.sku)` |
+| 100 | UI / Aktion | `QLineEdit(self._fmt_currency(draft.price_gross))` |
+| 101 | UI / Aktion | `QLineEdit(self._fmt_num(draft.tax_rate if draft.tax_rate is not None else 10.0))` |
+| 102 | UI / Aktion | `QComboBox()` |
+| 111 | UI / Aktion | `QPlainTextEdit()` |
+| 113 | UI / Aktion | `QPlainTextEdit()` |
+| 136 | UI / Aktion | `QPushButton('Überspringen')` |
+| 137 | Signal → Handler | `btn_skip.clicked.connect(self._skip)` |
+| 138 | UI / Aktion | `QPushButton('Produkt anlegen')` |
+| 139 | Signal → Handler | `btn_create.clicked.connect(self._create)` |
+| 145 | Popup / Modal | `self.exec()` |
+| 152 | Popup / Modal | `QMessageBox.warning(self, 'Produkt', 'Name und SKU dürfen nicht leer sein.')` |
+| 158 | Popup / Modal | `QMessageBox.warning(self, 'Produkt', str(exc))` |
+
+### A – redelivery_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/redelivery_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.repositories.customer_aftercare`.
+
+**RedeliveryDialogOutcome** (Z. 31): Datenmodell / Konstanten.
+**RedeliveryDialog** (Z. 39): `__init__`:42; `outcome`:60; `_build_ui`:63; `_preview`:142; `_remove_selected_items`:163; `_decode_address`:172; `_add_item_row`:181; `_add_manual_item`:199; `_save`:221.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 73 | UI / Aktion | `QPlainTextEdit()` |
+| 90 | UI / Aktion | `QComboBox()` |
+| 98 | UI / Aktion | `QPlainTextEdit()` |
+| 104 | UI / Aktion | `QPlainTextEdit()` |
+| 111 | UI / Aktion | `QTableWidget(0, 5)` |
+| 112 | UI / Aktion | `self._table.setHorizontalHeaderLabels(['', 'Produkt / Stimme', 'SKU / Komponente', 'Menge', 'Quelle'])` |
+| 121 | UI / Aktion | `QPushButton('Manuelle Position hinzufügen')` |
+| 122 | Signal → Handler | `add_button.clicked.connect(self._add_manual_item)` |
+| 125 | UI / Aktion | `QPushButton('Ausgewählte Position entfernen')` |
+| 126 | Signal → Handler | `remove_button.clicked.connect(self._remove_selected_items)` |
+| 129 | UI / Aktion | `QPushButton('Lieferschein-Vorschau')` |
+| 130 | Signal → Handler | `preview_button.clicked.connect(self._preview)` |
+| 133 | UI / Aktion | `QDialogButtonBox()` |
+| 134 | UI / Aktion | `QPushButton('Nachlieferung speichern')` |
+| 135 | UI / Aktion | `QPushButton('Abbrechen')` |
+| 136 | UI / Aktion | `buttons.addButton(save, QDialogButtonBox.ButtonRole.AcceptRole)` |
+| 137 | UI / Aktion | `buttons.addButton(cancel, QDialogButtonBox.ButtonRole.RejectRole)` |
+| 138 | Signal → Handler | `save.clicked.connect(self._save)` |
+| 139 | Signal → Handler | `cancel.clicked.connect(self.reject)` |
+| 154 | Popup / Modal | `QMessageBox.information(self, 'Lieferschein-Vorschau', f'NACHLIEFERUNG\n\n{address}\n\n' + ('\n'.join(products) if products else '(keine Position ausgewählt)') + f'\n\n{note}')` |
+| 200 | Popup / Modal | `QInputDialog.getText(self, 'Manuelle Position', 'Produktbezeichnung:')` |
+| 203 | Popup / Modal | `QInputDialog.getText(self, 'Manuelle Position', 'SKU (optional):')` |
+| 206 | Popup / Modal | `QInputDialog.getInt(self, 'Manuelle Position', 'Menge:', 1, 1, 999)` |
+
+### A – refund_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/refund_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.services.sevdesk.invoice_client`.
+
+**RefundDialog** (Z. 17): `__init__`:20; `send_customer_mail`:69.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 50 | UI / Aktion | `QCheckBox('Kundenmail über Wix senden')` |
+| 55 | UI / Aktion | `QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel &#124; QDialogButtonBox.StandardButton.Ok)` |
+| 64 | Signal → Handler | `buttons.accepted.connect(self.accept)` |
+| 65 | Signal → Handler | `buttons.rejected.connect(self.reject)` |
+
+### A – refunds_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/refunds_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.services.flow_api`, `xw_office.services.invoice_processing.service`, `xw_office.services.mailing.service`, `xw_office.services.sevdesk.invoice_client`, `xw_office.services.sevdesk.refund_client`, `xw_office.services.wix.client`.
+
+**RefundsDialog** (Z. 33): `__init__`:34; `_load`:54; `_credit_note_id`:87; `_open_pdf`:93; `_send_mail`:108.
+Funktion `_find_email`: Z. 149.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 42 | UI / Aktion | `QTableWidget(0, 8, self)` |
+| 43 | UI / Aktion | `self._table.setHorizontalHeaderLabels(['Refund', 'Order', 'Betrag', 'Wix', 'Aktion', 'Status', 'sevDesk', 'Aktionen'])` |
+| 48 | UI / Aktion | `QDialogButtonBox(QDialogButtonBox.StandardButton.Close)` |
+| 49 | Signal → Handler | `buttons.rejected.connect(self.reject)` |
+| 50 | Signal → Handler | `buttons.accepted.connect(self.accept)` |
+| 58 | Popup / Modal | `QMessageBox.warning(self, 'Refunds', f'Refund-Liste konnte nicht geladen werden:\n\n{exc}')` |
+| 76 | UI / Aktion | `QPushButton('PDF')` |
+| 77 | Signal → Handler | `pdf.clicked.connect(lambda _checked=False, index=row_index: self._open_pdf(index))` |
+| 78 | UI / Aktion | `QPushButton('Mail')` |
+| 79 | Signal → Handler | `mail.clicked.connect(lambda _checked=False, index=row_index: self._send_mail(index))` |
+| 106 | Popup / Modal | `QMessageBox.warning(self, 'Gutschrift-PDF', str(exc))` |
+| 128 | Popup / Modal | `QInputDialog.getText(self, 'Gutschrift senden', 'E-Mail-Adresse:')` |
+| 133 | Popup / Modal | `QMessageBox.question(self, 'Gutschrift senden', f'Gutschrift {number} an {email.strip()} senden?')` |
+| 144 | Popup / Modal | `QMessageBox.information(self, 'Gutschrift gesendet', f'Die Gutschrift wurde an {email.strip()} gesendet.')` |
+| 146 | Popup / Modal | `QMessageBox.warning(self, 'Gutschrift senden', str(exc))` |
+
+### A – reprint_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/reprint_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.ui.widgets.data_table`.
+
+**ReprintPreviewDialog** (Z. 20): `__init__`:28; `_build_ui`:36.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 116 | UI / Aktion | `QDialogButtonBox(QDialogButtonBox.StandardButton.Ok &#124; QDialogButtonBox.StandardButton.Cancel)` |
+| 119 | Signal → Handler | `buttons.accepted.connect(self.accept)` |
+| 120 | Signal → Handler | `buttons.rejected.connect(self.reject)` |
+
+### A – special_order_dialog.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/special_order_dialog.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.core.container`, `xw_office.core.worker`, `xw_office.services.special_orders`.
+
+**SpecialOrderDialog** (Z. 35): `__init__`:38; `_build_ui`:48; `_load_products`:116; `_on_products_loaded`:126; `_filter_products`:131; `_update_mode`:148; `_add_selected_product`:159; `_remove_product`:168; `_refresh_selected_products`:179; `_sync_price_from_selection`:204; `_create_link`:212; `_build_items`:252; `_find_handling_product`:308; `_is_selected_product`:314; `_same_product`:323; `_payment_link_title`:332; `_payment_link_description`:341; `_product_price`:349; `_on_link_created`:355; `_on_link_error`:362; `_https_url`:367.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 46 | Timer | `QTimer.singleShot(0, self._load_products)` |
+| 54 | UI / Aktion | `QComboBox()` |
+| 58 | Signal → Handler | `self._mode.currentIndexChanged.connect(self._update_mode)` |
+| 61 | UI / Aktion | `QLineEdit()` |
+| 63 | UI / Aktion | `QTextEdit()` |
+| 72 | UI / Aktion | `QSpinBox()` |
+| 86 | UI / Aktion | `QLineEdit()` |
+| 88 | Signal → Handler | `self._product_filter.textChanged.connect(self._filter_products)` |
+| 90 | UI / Aktion | `QListWidget()` |
+| 93 | Signal → Handler | `self._product_list.itemClicked.connect(self._add_selected_product)` |
+| 98 | UI / Aktion | `QListWidget()` |
+| 106 | UI / Aktion | `QPushButton('Payment Link erstellen + kopieren')` |
+| 107 | Signal → Handler | `self._create_btn.clicked.connect(self._create_link)` |
+| 111 | UI / Aktion | `QDialogButtonBox(QDialogButtonBox.StandardButton.Close)` |
+| 112 | Signal → Handler | `buttons.rejected.connect(self.reject)` |
+| 120 | Hintergrundarbeit | `BackgroundWorker(self._service.list_wix_products)` |
+| 121 | Signal → Handler | `self._worker.signals.result.connect(self._on_products_loaded)` |
+| 122 | Signal → Handler | `self._worker.signals.error.connect(lambda exc: self._status.setText(str(exc)))` |
+| 123 | Signal → Handler | `self._worker.signals.finished.connect(lambda: setattr(self, '_worker', None))` |
+| 195 | UI / Aktion | `QPushButton('✕')` |
+| 198 | Signal → Handler | `remove_btn.clicked.connect(lambda _checked=False, product=product: self._remove_product(product))` |
+| 217 | Popup / Modal | `QMessageBox.warning(self, 'Sonderauftrag', 'Titel ist Pflicht.')` |
+| 222 | Popup / Modal | `QMessageBox.warning(self, 'Sonderauftrag', str(exc))` |
+| 245 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 246 | Signal → Handler | `self._worker.signals.result.connect(self._on_link_created)` |
+| 247 | Signal → Handler | `self._worker.signals.error.connect(self._on_link_error)` |
+| 248 | Signal → Handler | `self._worker.signals.finished.connect(lambda: self._create_btn.setEnabled(True))` |
+| 249 | Signal → Handler | `self._worker.signals.finished.connect(lambda: setattr(self, '_worker', None))` |
+| 360 | Popup / Modal | `QMessageBox.information(self, 'Sonderauftrag', f'Payment Link erstellt und in die Zwischenablage kopiert:\n{url}')` |
+| 364 | Popup / Modal | `QMessageBox.warning(self, 'Sonderauftrag', str(exc))` |
+
+### A – tagesgeschaeft_view.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/tagesgeschaeft_view.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.core.container`, `xw_office.core.signals`, `xw_office.core.types`, `xw_office.core.worker`, `xw_office.services.b2b_credit`, `xw_office.services.background_jobs.service`, `xw_office.services.customer_aftercare.service`, `xw_office.services.daily_business.service`, `xw_office.services.digital_licenses`, `xw_office.services.draft_invoice.service`, `xw_office.services.drucke.service`, `xw_office.services.inventory.service`, `xw_office.services.invoice_processing.buyer_notes`, `xw_office.services.invoice_processing.service`, `xw_office.services.sendungen.service`, `xw_office.services.sevdesk.invoice_client`, `xw_office.services.transfers.service`, `xw_office.ui.modules.rechnungen.buyer_note_review_dialog`, `xw_office.ui.modules.rechnungen.customer_aftercare_review_dialog`, `xw_office.ui.modules.rechnungen.product_preflight_dialog`, `xw_office.ui.modules.rechnungen.reprint_dialog`, `xw_office.ui.modules.rechnungen.view`, `xw_office.ui.widgets.data_table`, `xw_office.ui.widgets.search_bar`.
+
+**_QueueTabView** (Z. 80): `__init__`:83; `_build_ui`:92; `hideEvent`:124; `closeEvent`:127; `reload`:130; `_on_load_result`:145; `_on_load_error`:154; `_on_search`:158; `_queue_search_suggestions`:161; `_on_selection_changed`:172.
+**QueuePopupDialog** (Z. 186): `__init__`:189.
+**_StartDialog** (Z. 211): `__init__`:214; `full_mode`:278; `selected_mode`:282; `_format_preflight`:285.
+**TagesgeschaeftView** (Z. 316): `__init__`:319; `showEvent`:363; `hideEvent`:368; `closeEvent`:372; `has_active_flow`:384; `prepare_shutdown`:397; `request_shutdown`:401; `shutdown_complete`:411; `_shutdown_workers`:416; `_wait_for_workers`:433; `_build_ui`:443; `_materialize_rechnungen_view`:626; `_set_invoice_ui_ready`:637; `_reload_invoice_view`:649; `_create_invoice_draft`:653; `_open_custom_label`:657; `_open_manual_plc_label`:661; `_open_plc_statistics`:665; `_open_statistics`:669; `_open_special_order`:673; `_build_alert_button`:677; `_refresh_badges`:690; `_create_badge_refresh_worker`:699; `_on_badges_result`:786; `_on_badges_error`:843; `_update_alert_button`:847; `_on_sendungen_alert_clicked`:854; `_on_drucke_alert_clicked`:868; `_on_digital_licenses_alert_clicked`:875; `_on_transfer_alert_clicked`:886; `_on_mollie_alert_clicked`:893; `_on_b2b_credit_alert_clicked`:903; `_on_lieferkorrektur_review_alert_clicked`:927; `_on_lieferkorrektur_due_alert_clicked`:930; `_open_lieferkorrekturen_dialog`:933; `_maybe_show_next_lieferkorrektur_review_popup`:950; `_show_lieferkorrektur_review_popup`:993; `_apply_lieferkorrektur_review_outcome`:1001; `_on_start_clicked`:1041; `_on_start_preflight_ready`:1137; `_start_missing_product_check`:1199; `_show_b2b_credit_holds`:1244; `_on_start_product_preflight_ready`:1327; `_run_product_preflight_dialogs`:1491; `_on_start_executed`:1501; `_offer_digital_license_delivery`:1599; `_on_digital_license_candidates_ready`:1615; `_on_start_preflight_error`:1640; `_set_start_running`:1650; `_on_start_stop_clicked`:1660; `_on_reprints_clicked`:1678; `_on_reprint_preflight_ready`:1696; `_on_reprint_executed`:1720; `_on_reprint_error`:1750.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 103 | Signal → Handler | `self._search.search_changed.connect(self._on_search)` |
+| 108 | UI / Aktion | `QPushButton('Aktualisieren')` |
+| 109 | Signal → Handler | `self._btn_refresh.clicked.connect(lambda: self.reload())` |
+| 122 | Signal → Handler | `sel.selectionChanged.connect(self._on_selection_changed)` |
+| 139 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 140 | Signal → Handler | `self._worker.signals.result.connect(self._on_load_result)` |
+| 141 | Signal → Handler | `self._worker.signals.error.connect(self._on_load_error)` |
+| 142 | Signal → Handler | `self._worker.signals.finished.connect(lambda: self._btn_refresh.setEnabled(True))` |
+| 204 | UI / Aktion | `QDialogButtonBox(QDialogButtonBox.StandardButton.Close)` |
+| 205 | Signal → Handler | `buttons.rejected.connect(self.reject)` |
+| 206 | Signal → Handler | `buttons.accepted.connect(self.accept)` |
+| 239 | UI / Aktion | `QPushButton('📄 Nur Rechnungen')` |
+| 242 | UI / Aktion | `QPushButton('📄 + 🖨 Rechnungen + Druck (Noten & Labels vorbereiten)')` |
+| 259 | UI / Aktion | `QPlainTextEdit()` |
+| 267 | Signal → Handler | `self._mode_invoices.toggled.connect(lambda c: self._mode_full.setChecked(not c) if c else None)` |
+| 268 | Signal → Handler | `self._mode_full.toggled.connect(lambda c: self._mode_invoices.setChecked(not c) if c else None)` |
+| 270 | UI / Aktion | `QDialogButtonBox(QDialogButtonBox.StandardButton.Ok &#124; QDialogButtonBox.StandardButton.Cancel)` |
+| 273 | Signal → Handler | `buttons.accepted.connect(self.accept)` |
+| 274 | Signal → Handler | `buttons.rejected.connect(self.reject)` |
+| 358 | Timer | `QTimer(self)` |
+| 359 | Timer | `self._badge_timer.setInterval(60000)` |
+| 360 | Signal → Handler | `self._badge_timer.timeout.connect(self._refresh_badges)` |
+| 454 | UI / Aktion | `QToolButton()` |
+| 467 | Signal → Handler | `self._btn_refresh.clicked.connect(self._reload_invoice_view)` |
+| 470 | UI / Aktion | `QPushButton('Entwurf')` |
+| 473 | Signal → Handler | `self._btn_draft.clicked.connect(self._create_invoice_draft)` |
+| 476 | UI / Aktion | `QToolButton()` |
+| 491 | UI / Aktion | `QMenu(self._btn_label_menu)` |
+| 492 | Signal → Handler | `label_menu.addAction('Custom-Label …').triggered.connect(self._open_custom_label)` |
+| 492 | UI / Aktion | `label_menu.addAction('Custom-Label …')` |
+| 493 | Signal → Handler | `label_menu.addAction('PLC-Label …').triggered.connect(self._open_manual_plc_label)` |
+| 493 | UI / Aktion | `label_menu.addAction('PLC-Label …')` |
+| 497 | UI / Aktion | `QToolButton()` |
+| 511 | Signal → Handler | `self._btn_statistics.clicked.connect(self._open_statistics)` |
+| 514 | UI / Aktion | `QPushButton('Sonderauftrag')` |
+| 517 | Signal → Handler | `self._btn_special_order.clicked.connect(self._open_special_order)` |
+| 520 | UI / Aktion | `QToolButton()` |
+| 537 | Signal → Handler | `self._btn_start.clicked.connect(lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, include_product_print=False))` |
+| 541 | UI / Aktion | `QMenu(self._btn_start)` |
+| 542 | Signal → Handler | `start_menu.addAction('Selected').triggered.connect(lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, selected_only=True, include_product_print=False))` |
+| 542 | UI / Aktion | `start_menu.addAction('Selected')` |
+| 545 | Signal → Handler | `start_menu.addAction('+ Noten').triggered.connect(lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, selected_only=False, include_product_print=True))` |
+| 545 | UI / Aktion | `start_menu.addAction('+ Noten')` |
+| 548 | Signal → Handler | `start_menu.addAction('+ Noten Selected').triggered.connect(lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, selected_only=True, include_product_print=True))` |
+| 548 | UI / Aktion | `start_menu.addAction('+ Noten Selected')` |
+| 553 | UI / Aktion | `QPushButton('STOP')` |
+| 567 | Signal → Handler | `self._btn_stop.clicked.connect(self._on_start_stop_clicked)` |
+| 572 | Signal → Handler | `self._btn_sendungen_alert.clicked.connect(self._on_sendungen_alert_clicked)` |
+| 577 | Signal → Handler | `self._btn_drucke_alert.clicked.connect(self._on_drucke_alert_clicked)` |
+| 582 | Signal → Handler | `self._btn_digital_licenses_alert.clicked.connect(self._on_digital_licenses_alert_clicked)` |
+| 587 | Signal → Handler | `self._btn_transfer_alert.clicked.connect(self._on_transfer_alert_clicked)` |
+| 592 | Signal → Handler | `self._btn_mollie_alert.clicked.connect(self._on_mollie_alert_clicked)` |
+| 597 | Signal → Handler | `self._btn_lieferkorrektur_review_alert.clicked.connect(self._on_lieferkorrektur_review_alert_clicked)` |
+| 604 | Signal → Handler | `self._btn_lieferkorrektur_due_alert.clicked.connect(self._on_lieferkorrektur_due_alert_clicked)` |
+| 609 | Signal → Handler | `self._btn_b2b_credit_alert.clicked.connect(self._on_b2b_credit_alert_clicked)` |
+| 624 | Timer | `QTimer.singleShot(0, self._materialize_rechnungen_view)` |
+| 678 | UI / Aktion | `QPushButton(label)` |
+| 691 | Hintergrundarbeit | `self._background_jobs.submit(queue=_BADGE_JOB_QUEUE, priority=10, coalesce_key='tagesgeschaeft-badges', start_fn=self._create_badge_refresh_worker, can_start=lambda: self._badge_worker is None or not self._badge_worker.isRunning())` |
+| 780 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 781 | Signal → Handler | `self._badge_worker.signals.result.connect(self._on_badges_result)` |
+| 782 | Signal → Handler | `self._badge_worker.signals.error.connect(self._on_badges_error)` |
+| 783 | Signal → Handler | `self._badge_worker.signals.finished.connect(lambda: setattr(self, '_badge_worker', None))` |
+| 915 | Popup / Modal | `QMessageBox.information(self, 'B2B-Zahlungsplan', 'Mindestens eine Rate ist fällig. Bitte in sevDesk die nächste Teilrechnung prüfen/erstellen und nach Zahlung den Zahlungseingang kontrollieren.')` |
+| 922 | Popup / Modal | `QMessageBox.information(self, 'B2B-Zahlungen', 'Aktuell keine B2B-Kreditfreigabe offen.')` |
+| 924 | Popup / Modal | `QMessageBox.warning(self, 'B2B-Zahlungen', f'Prüfung fehlgeschlagen:\n{exc}')` |
+| 987 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 988 | Signal → Handler | `worker.signals.result.connect(on_result)` |
+| 989 | Signal → Handler | `worker.signals.finished.connect(lambda: setattr(self, '_lieferkorrektur_popup_fetch_worker', None))` |
+| 998 | Popup / Modal | `dialog.exec()` |
+| 1034 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 1035 | Signal → Handler | `worker.signals.result.connect(on_done)` |
+| 1036 | Signal → Handler | `worker.signals.error.connect(on_error)` |
+| 1037 | Signal → Handler | `worker.signals.finished.connect(lambda: setattr(self, '_lieferkorrektur_popup_apply_worker', None))` |
+| 1065 | Popup / Modal | `QMessageBox.information(self, 'START SELECTED', 'Bitte zuerst eine oder mehrere Rechnungen markieren.')` |
+| 1132 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 1133 | Signal → Handler | `self._start_worker.signals.result.connect(self._on_start_preflight_ready)` |
+| 1134 | Signal → Handler | `self._start_worker.signals.error.connect(self._on_start_preflight_error)` |
+| 1160 | Popup / Modal | `review.exec()` |
+| 1178 | Popup / Modal | `dlg.exec()` |
+| 1238 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 1239 | Signal → Handler | `self._start_product_worker.signals.result.connect(self._on_start_product_preflight_ready)` |
+| 1240 | Signal → Handler | `self._start_product_worker.signals.error.connect(self._on_start_preflight_error)` |
+| 1241 | Signal → Handler | `self._start_product_worker.signals.finished.connect(lambda: setattr(self, '_start_product_worker', None))` |
+| 1273 | UI / Aktion | `dialog.addButton('30/35/35-Plan speichern', QMessageBox.ButtonRole.ActionRole)` |
+| 1274 | UI / Aktion | `dialog.addButton('Kundenlimit bearbeiten', QMessageBox.ButtonRole.ActionRole)` |
+| 1275 | UI / Aktion | `dialog.addButton(QMessageBox.StandardButton.Close)` |
+| 1276 | Popup / Modal | `dialog.exec()` |
+| 1286 | Popup / Modal | `QMessageBox.information(self, 'Zahlungsplan gespeichert', f'{saved} Zahlungsplan/Pläne wurden gespeichert.\nDie eigentlichen sevDesk-Anzahlungs-/Teilrechnungen bitte zunächst manuell erstellen. Fällige Schritte erscheinen danach als B2B-Alarm.')` |
+| 1294 | Popup / Modal | `QMessageBox.critical(self, 'Zahlungsplan', f'Plan konnte nicht gespeichert werden:\n{exc}')` |
+| 1302 | Popup / Modal | `QMessageBox.warning(self, 'Kundenlimit', 'Für diesen Datensatz ist kein Kundenname verfügbar.')` |
+| 1305 | Popup / Modal | `QInputDialog.getDouble(self, 'Kundenlimit', f'Neues Netto-Limit für {customer} (EUR):', current, 0.0, 100000000.0, 2)` |
+| 1319 | Popup / Modal | `QMessageBox.critical(self, 'Kundenlimit', f'Limit konnte nicht gespeichert werden:\n{exc}')` |
+| 1321 | Popup / Modal | `QMessageBox.information(self, 'Kundenlimit gespeichert', 'Das Limit wurde gespeichert. Bitte START erneut anklicken; die Freigabe wird dann neu geprüft.')` |
+| 1357 | Popup / Modal | `QMessageBox.warning(self, 'START', 'START-Preflight ist nicht mehr verfuegbar.')` |
+| 1485 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 1486 | Signal → Handler | `self._start_exec_worker.signals.result.connect(self._on_start_executed)` |
+| 1487 | Signal → Handler | `self._start_exec_worker.signals.error.connect(self._on_start_preflight_error)` |
+| 1488 | Signal → Handler | `self._start_exec_worker.signals.finished.connect(lambda: self._set_start_running(False))` |
+| 1569 | Popup / Modal | `QMessageBox.information(self, 'START abgeschlossen', '\n'.join(lines))` |
+| 1608 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 1609 | Signal → Handler | `worker.signals.result.connect(self._on_digital_license_candidates_ready)` |
+| 1610 | Signal → Handler | `worker.signals.error.connect(lambda exc: logger.warning('Digital-license reconcile failed: %s', exc))` |
+| 1611 | Signal → Handler | `worker.signals.finished.connect(lambda: setattr(self, '_digital_license_offer_worker', None))` |
+| 1620 | Popup / Modal | `QMessageBox.question(self, 'Digitale Lieferung', f"{count} digitale Bestellung{('en' if count != 1 else '')} wurde vorbereitet. Digitale Lieferung jetzt ausfuehren?", QMessageBox.StandardButton.Yes &#124; QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)` |
+| 1644 | Popup / Modal | `QMessageBox.warning(self, 'Fehler', f'Pre-Flight konnte nicht erstellt werden:\n\n{exc}')` |
+| 1691 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 1692 | Signal → Handler | `self._reprint_worker.signals.result.connect(self._on_reprint_preflight_ready)` |
+| 1693 | Signal → Handler | `self._reprint_worker.signals.error.connect(self._on_reprint_error)` |
+| 1702 | Popup / Modal | `dlg.exec()` |
+| 1715 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 1716 | Signal → Handler | `self._reprint_exec_worker.signals.result.connect(self._on_reprint_executed)` |
+| 1717 | Signal → Handler | `self._reprint_exec_worker.signals.error.connect(self._on_reprint_error)` |
+| 1732 | Popup / Modal | `QMessageBox.information(self, 'Nachdrucke abgeschlossen', f"Positionen geprüft: {result.decisions_count}\nDruckjobs: {len(result.printed_skus)}\nSKU: {(', '.join(result.printed_skus) if result.printed_skus else 'keine')}\nBestand aktualisiert: {result.stock_updated}" + ('\n\nHinweise:\n…` |
+| 1753 | Popup / Modal | `QMessageBox.warning(self, 'Fehler', f'Nachdrucke-Workflow konnte nicht ausgefuehrt werden:\n\n{exc}')` |
+
+### A – view.py
+
+Quelle: `src/xw_office/ui/modules/rechnungen/view.py`.
+
+Direkte interne Abhängigkeiten: `xw_office.core.container`, `xw_office.core.performance_metrics`, `xw_office.core.signals`, `xw_office.core.types`, `xw_office.core.worker`, `xw_office.repositories.customer_aftercare`, `xw_office.repositories.plc_shipment`, `xw_office.services.background_jobs.service`, `xw_office.services.customer_aftercare.redelivery`, `xw_office.services.customer_aftercare.service`, `xw_office.services.daily_business.service`, `xw_office.services.digital_licenses`, `xw_office.services.draft_invoice.service`, `xw_office.services.drucke.service`, `xw_office.services.inventory`, `xw_office.services.invoice_processing.context`, `xw_office.services.invoice_processing.service`, `xw_office.services.mailing.outlook_compose`, `xw_office.services.plc.label_archive`, `xw_office.services.plc.statistics`, `xw_office.services.printer_status.service`, `xw_office.services.printing.label_printer`, `xw_office.services.printing.planned_pdf_printer`, `xw_office.services.printing.print_queue`, `xw_office.services.product_hub.inventory`, `xw_office.services.products.catalog`, `xw_office.services.products.print_decision`, `xw_office.services.secrets.service`, `xw_office.services.sendungen.service`, `xw_office.services.sevdesk.invoice_client`, `xw_office.services.sevdesk.part_client`, `xw_office.services.wix.client`, `xw_office.ui.dialogs.unreleased_title_dialog`, `xw_office.ui.modules.rechnungen.customer_aftercare_manager_dialog`, `xw_office.ui.modules.rechnungen.digital_licenses_dialog`, `xw_office.ui.modules.rechnungen.inventory_alerts_dialog`, `xw_office.ui.modules.rechnungen.offene_drucke_dialog`, `xw_office.ui.modules.rechnungen.offene_sendungen_dialog`, `xw_office.ui.modules.rechnungen.offene_ueberweisungen_dialog`, `xw_office.ui.modules.rechnungen.open_invoice_overview`, `xw_office.ui.modules.rechnungen.plc_evidence_dialog`, `xw_office.ui.modules.rechnungen.plc_label_dialog`, `xw_office.ui.modules.rechnungen.plc_statistics_dialog`, `xw_office.ui.modules.rechnungen.print_dialog`, `xw_office.ui.modules.rechnungen.product_preflight_dialog`, `xw_office.ui.modules.rechnungen.redelivery_dialog`, `xw_office.ui.modules.rechnungen.refunds_dialog`, `xw_office.ui.modules.rechnungen.special_order_dialog`, `xw_office.ui.modules.rechnungen.tagesgeschaeft_view`, `xw_office.ui.widgets.busy_spinner`, `xw_office.ui.widgets.data_table`, `xw_office.ui.widgets.progress_overlay`, `xw_office.ui.widgets.search_bar`, `xw_office.ui.widgets.toolbar`.
+
+**_PrintRunSnapshot** (Z. 161): Datenmodell / Konstanten.
+**_RunOutputPrintRequest** (Z. 175): Datenmodell / Konstanten.
+**_HintsIconDelegate** (Z. 220): `__init__`:231; `_icon_for_key`:237; `_tinted_icon_for_key`:249; `paint`:275; `sizeHint`:327.
+**_InvoiceStatusDelegate** (Z. 334): `paint`:339; `sizeHint`:372.
+**_SevdeskDraftActionDelegate** (Z. 379): `_button_geometry`:383; `hit_remove_action`:390; `paint`:394; `sizeHint`:421.
+**_ActionsDelegate** (Z. 428): `__init__`:441; `_rendered_icon_for_key`:445; `_layout`:488; `action_at_x`:500; `visible_action_at_x`:508; `_visible_layout`:515; `paint`:526; `sizeHint`:547.
+**_FulfillmentDelegate** (Z. 554): `__init__`:566; `_icon`:571; `_layout`:580; `chip_at_x`:592; `paint`:600; `sizeHint`:647.
+**_DraftInvoiceDialog** (Z. 654): `__init__`:657; `_invalidate_preview`:705; `wix_order_number`:711; `open_in_sevdesk`:715; `preview_ok`:719; `on_preview_requested`:722; `set_preview_result`:725; `set_preview_loading`:737; `_accept_if_valid`:746.
+**_CustomLabelDialog** (Z. 759): `__init__`:760; `_on_print_clicked`:790; `_on_print_result`:819; `_on_print_error`:822; `_on_print_finished`:826.
+**_PieceListModel** (Z. 831): `__init__`:844; `set_pieces`:848; `rowCount`:853; `data`:856; `rows`:885; `set_print_enabled`:899; `adjust_quantity`:906; `quantity_for_block`:914; `toggle_selected`:920; `show_print_confirmation`:930.
+**_PieceDelegate** (Z. 960): `__init__`:966; `paint`:972; `sizeHint`:1102; `editorEvent`:1107; `_button_rects`:1158; `_checkbox_rect`:1169.
+**RechnungenView** (Z. 1173): `__init__`:1176; `_build_ui`:1334; `showEvent`:1985; `hideEvent`:2013; `mousePressEvent`:2020; `_should_clear_selection_for_global_pos`:2030; `_global_pos_inside_widget`:2038; `closeEvent`:2042; `prepare_shutdown`:2046; `request_shutdown`:2050; `shutdown_complete`:2073; `_shutdown_workers`:2076; `set_badge_refresh_managed_externally`:2108; `set_top_actions_managed_externally`:2115; `set_start_workflow_running`:2119; `reload_first_page`:2182; `create_draft_from_wix_order`:2185; `open_custom_label_dialog`:2188; `open_manual_plc_label_dialog`:2191; `open_plc_statistics_dialog`:2194; `open_special_order_dialog`:2197; `open_sendungen_dialog`:2200; `open_drucke_dialog`:2207; `open_digital_licenses_dialog`:2214; `open_ueberweisungen_dialog`:2221; `open_lieferkorrekturen_dialog`:2226; `open_queue_dialog`:2232; `show_start_summary`:2244; `_stop_mollie_worker`:2253; `resizeEvent`:2260; `_start_search_index_sync`:2265; `_reset_search`:2288; `_on_search`:2292; `_on_printer_status`:2318; `_initialize_printer_status`:2325; `_reload_first_page`:2329; `_load_more`:2345; `_start_load`:2353; `_blank_hint_patch`:2424; `_prepare_rows_for_hint_prefetch`:2432; `_current_sevdesk_token`:2444; `_has_sevdesk_token`:2448; `_on_load_result`:2451; `_apply_load_result_data`:2496; `_sort_rows_by_actuality`:2572; `_summary_actuality_key`:2598; `_schedule_open_overview_refresh`:2610; `_schedule_post_load_prefetch`:2621; `_submit_side_job`:2641; `_update_load_more_button`:2657; `_apply_table_column_layout`:2684; `_refresh_mollie_alert_count`:2703; `_create_mollie_badge_worker`:2712; `_on_mollie_badge_result`:2734; `update_mollie_alert_count`:2750; `update_sendungen_alert_count`:2758; `update_drucke_alert_count`:2766; `update_digital_licenses_alert_count`:2774; `_on_mollie_alert_clicked`:2784; `_on_sendungen_alert_clicked`:2788; `_on_drucke_alert_clicked`:2791; `_on_digital_licenses_alert_clicked`:2796; `_refresh_inventory_alert_count`:2801; `_on_inventory_alert_count`:2818; `_on_inventory_alert_error`:2829; `_on_inventory_alert_finished`:2835; `_on_inventory_alert_clicked`:2838; `_on_special_order_clicked`:2847; `_selected_summary`:2851; `selected_summaries`:2857; `_require_selected_invoice`:2865; `_invoice_search_suggestions`:2876; `_rebuild_search_index`:2907; `_on_load_error`:2925; `_on_load_finished`:2942; `_restore_loaded_invoice_list`:2954; `_on_search_result`:2967; `_on_search_error`:3007; `_on_search_finished`:3016; `_refresh_open_invoice_overview`:3019; `_start_open_invoice_overview`:3089; `_can_run_open_overview_job`:3132; `_create_open_overview_worker`:3139; `_on_open_overview_result`:3183; `_merge_open_overview_batches`:3204; `_on_open_overview_error`:3267; `_on_open_overview_finished`:3277; `_plan_open_print_overview`:3287; `_apply_open_invoice_overview`:3322; `mark_print_products_last_run`:3349; `_print_tab_label`:3383; `_print_tab_tooltip`:3390; `_rebuild_print_product_tabs`:3400; `_on_print_products_tab_changed`:3423; `_render_active_print_tab`:3437; `_merge_session_print_products`:3481; `_merge_session_unreleased`:3498; `_merge_session_buyer_notes`:3509; `_unreleased_session_key`:3521; `_print_product_session_key`:3529; `_print_product_display_overview`:3537; `_buyer_note_session_key`:3559; `_snapshot_payload`:3566; `_persist_print_run_history`:3605; `_persist_last_start_overview`:3618; `_restore_last_start_overview`:3651; `_restore_legacy_start_overview`:3752; `_clear_unreleased_rows`:3825; `_set_unreleased_message`:3832; `_build_unreleased_row`:3839; `_render_unreleased_assignments`:3882; `_clear_buyer_note_rows`:3929; `_set_buyer_notes_message`:3936; `_build_buyer_note_row`:3942; `_render_buyer_notes`:3970; `_clear_open_print_product_rows`:3994; `_set_open_products_message`:4001; `_render_open_print_products`:4008; `_displayed_print_products`:4047; `_open_product_check_key`:4054; `_selected_displayed_print_products`:4062; `_on_open_product_check_changed`:4072; `_open_product_quantity`:4076; `_open_product_with_quantity`:4083; `_on_open_product_quantity_changed`:4101; `_set_open_products_feedback`:4121; `_update_print_all_products_button`:4125; `_active_run_output_ids`:4133; `_update_print_run_output_buttons`:4141; `_on_print_run_invoices_clicked`:4157; `_on_print_run_labels_clicked`:4160; `_start_run_output_print`:4163; `_start_next_run_output_print`:4196; `_on_print_run_output_result`:4218; `_on_print_run_output_error`:4239; `_on_print_run_output_finished`:4246; `_print_all_products_key`:4252; `_on_print_all_open_products_clicked`:4263; `_on_print_all_open_products_result`:4379; `_build_open_print_product_row`:4383; `_open_product_description`:4536; `_plain_open_print_product_line`:4572; `_open_print_product_ready`:4587; `_piece_block_from_open_product`:4601; `_on_open_product_manage_clicked`:4648; `_on_open_product_print_clicked`:4674; `_show_toolbutton_print_confirmation`:4701; `_format_open_print_products`:4731; `_warm_wix_context_for_summaries`:4768; `_start_next_wix_warm_batch`:4800; `_launch_next_wix_warm_batch`:4811; `_can_run_wix_warm_job`:4837; `_run_wix_warm_batch`:4846; `_on_wix_warm_result`:4900; `_on_wix_warm_error`:4923; `_on_wix_warm_finished`:4926; `_restart_hint_prefetch`:4934; `_prioritize_summaries_for_background_prefetch`:4957; `_prioritize_hint_prefetch_for_summary`:4988; `_start_next_hint_prefetch`:5006; `_create_next_hint_prefetch_worker`:5013; `_on_hint_prefetch_result`:5042; `_on_hint_prefetch_error`:5051; `_on_hint_prefetch_finished`:5054; `_apply_hint_patch_to_visible_rows`:5059; `_set_detail_actions_busy`:5070; `_clear_detail_actions_busy`:5094; `_apply_fulfillment_flags_to_row`:5098; `_fulfillment_tooltip`:5122; `_on_print_clicked`:5137; `_on_print_label_clicked`:5163; `_on_custom_label_clicked`:5197; `_on_manual_plc_label_clicked`:5208; `_on_plc_statistics_clicked`:5211; `_on_print_plc_selected`:5214; `_cached_customer_email_for_summary`:5217; `_open_plc_post_popup`:5239; `_open_customs_declaration_dialog`:5355; `_on_print_music_clicked`:5373; `_on_send_invoice_clicked`:5447; `_on_table_selection_changed`:5483; `_on_table_clicked`:5490; `_select_visible_table_row`:5496; `eventFilter`:5520; `_run_fulfillment_chip_action`:5622; `_on_fulfillment_step_result`:5670; `_on_fulfillment_step_error`:5682; `_on_fulfillment_step_finished`:5689; `_run_row_action`:5693; `_open_redelivery_popup`:5712; `_show_redelivery_dialog`:5730; `_on_redelivery_prepare_error`:5746; `_apply_redelivery_outcome`:5750; `_on_redelivery_applied`:5781; `_on_redelivery_apply_error`:5789; `_run_selected_row_action`:5793; `_confirm_delete_draft`:5798; `_on_delete_draft_result`:5830; `_on_delete_draft_error`:5837; `_on_delete_draft_finished`:5844; `_resolve_plc_archive_path_for_summary`:5848; `_resolve_plc_archive_paths_for_summary`:5866; `_resolve_plc_customs_archive_path_for_summary`:5880; `_resolve_packing_list_archive_paths_for_summary`:5892; `_packing_list_menu_label`:5906; `_populate_packing_list_menus`:5913; `_populate_multi_shipment_menu`:5932; `_open_plc_evidence`:5951; `_open_archived_packing_list`:5966; `_reprint_archived_packing_list`:5970; `_prime_plc_archive_index`:5987; `_on_plc_archive_index_ready`:6011; `_on_plc_archive_index_error`:6022; `_on_open_plc_label_clicked`:6025; `_open_archived_plc_label`:6031; `_on_open_plc_customs_clicked`:6035; `_on_open_invoice_pdf_clicked`:6042; `_on_invoice_pdf_preview_result`:6064; `_on_invoice_pdf_preview_error`:6074; `_on_invoice_pdf_preview_finished`:6081; `_on_open_sevdesk_invoice_clicked`:6085; `_sevdesk_invoice_url`:6097; `_open_customer_mail`:6105; `_on_customer_mail_ready`:6153; `_on_customer_mail_error`:6176; `_open_customer_mail_outlook`:6179; `_outlook_sender_email`:6190; `_customer_mail_subject`:6199; `_customer_email_from_loaded_context`:6206; `_clean_email_value`:6229; `_open_wix_download_links`:6235; `_open_refund_dialog`:6254; `_open_refunds_dialog`:6261; `_refresh_detail_for_selection`:6264; `_populate_detail_for_summary`:6299; `_hydrate_detail_for_selection`:6327; `_load_sevdesk_context`:6353; `_on_sevdesk_context_finished`:6387; `_on_sevdesk_context_loaded`:6393; `_on_sevdesk_context_error`:6416; `_reset_detail`:6421; `_close_invoice_detail`:6445; `_update_action_state`:6452; `_reset_wix_meta`:6474; `_prefill_detail_from_invoice`:6483; `_prefill_detail_from_invoice_cache`:6514; `_apply_invoice_detail_context`:6541; `_apply_cached_wix_context`:6573; `_piece_blocks_from_cached_wix_items`:6608; `_load_wix_context`:6632; `_resolve_wix_order_summary`:6732; `_fetch_wix_order_line_items`:6746; `_on_wix_context_loaded`:6759; `_on_wix_context_error`:6792; `_on_wix_context_finished`:6800; `_load_phase_label`:6825; `_get_cached_wix_context`:6832; `_put_cached_wix_context`:6845; `_load_wix_meta`:6863; `_on_wix_meta_loaded`:6866; `_on_wix_meta_error`:6941; `_update_plc_controls`:6946; `_normalize_shipping_lines`:6999; `_set_shipping_editor_lines`:7007; `_current_shipping_lines`:7015; `_should_replace_shipping_lines`:7019; `_address_quality_score`:7029; `_adjust_shipping_editor_height`:7047; `_on_shipping_editor_changed`:7054; `_on_direct_label_print_result`:7071; `_on_direct_label_print_error`:7079; `_on_direct_invoice_print_result`:7086; `_on_direct_invoice_print_error`:7094; `_on_send_invoice_result`:7101; `_on_send_invoice_error`:7113; `_on_send_invoice_finished`:7120; `_on_create_draft_clicked`:7124; `_on_create_draft_result`:7152; `_on_create_draft_error`:7186; `_on_create_draft_finished`:7194; `_on_draft_product_plan_ready`:7197; `_on_draft_product_plan_finished`:7216; `_run_product_preflight_dialogs`:7219; `_run_draft_preview`:7229; `_on_draft_preview_finished`:7255; `_on_draft_preview_result`:7259; `_reset_stuecke`:7299; `_load_stuecke`:7310; `_clarify_unreleased_piece`:7313; `_create_unreleased_product_from_alias`:7366; `_on_add_unreleased_from_item`:7457; `clarify_unreleased_start_issues`:7464; `_split_unreleased_piece`:7492; `_on_stuecke_loaded`:7515; `_on_product_print_clicked`:7672; `_on_product_print_result`:7758; `_on_product_print_error`:7786; `_on_product_print_finished`:7793; `_on_individual_product_print_finished`:7799; `_default_piece_print_qty`:7805; `_set_piece_print_controls_enabled`:7808; `_on_product_manage_clicked`:7816; `_piece_header_text`:7831; `_piece_detail_lines`:7836; `_piece_stock_text`:7851; `_piece_stock_color`:7871; `_describe_piece_print_config`:7883; `_on_stuecke_error`:7900.
+
+| Zeile | Typ | Deklaration / Aufruf |
+| ---: | --- | --- |
+| 672 | UI / Aktion | `QLineEdit(self)` |
+| 677 | UI / Aktion | `QPushButton('Vorschau laden')` |
+| 681 | UI / Aktion | `QPlainTextEdit(self)` |
+| 687 | UI / Aktion | `QCheckBox('Nach Erstellung in sevDesk öffnen', self)` |
+| 696 | UI / Aktion | `QDialogButtonBox(QDialogButtonBox.StandardButton.Ok &#124; QDialogButtonBox.StandardButton.Cancel, parent=self)` |
+| 700 | Signal → Handler | `buttons.accepted.connect(self._accept_if_valid)` |
+| 701 | Signal → Handler | `buttons.rejected.connect(self.reject)` |
+| 703 | Signal → Handler | `self._order_number.textChanged.connect(self._invalidate_preview)` |
+| 723 | Signal → Handler | `self._btn_preview.clicked.connect(callback)` |
+| 773 | UI / Aktion | `QPlainTextEdit(self)` |
+| 783 | UI / Aktion | `QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, parent=self)` |
+| 784 | UI / Aktion | `QPushButton('PRINT')` |
+| 785 | UI / Aktion | `buttons.addButton(self._btn_print, QDialogButtonBox.ButtonRole.AcceptRole)` |
+| 786 | Signal → Handler | `buttons.rejected.connect(self.reject)` |
+| 787 | Signal → Handler | `self._btn_print.clicked.connect(self._on_print_clicked)` |
+| 795 | Popup / Modal | `QMessageBox.information(self, 'CUSTOM-LABEL', 'Bitte eine Lieferadresse mit mindestens zwei Zeilen eingeben.')` |
+| 813 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 814 | Signal → Handler | `self._worker.signals.result.connect(self._on_print_result)` |
+| 815 | Signal → Handler | `self._worker.signals.error.connect(self._on_print_error)` |
+| 816 | Signal → Handler | `self._worker.signals.finished.connect(self._on_print_finished)` |
+| 824 | Popup / Modal | `QMessageBox.warning(self, 'CUSTOM-LABEL', f'Label konnte nicht gedruckt werden:\n\n{exc}')` |
+| 952 | Timer | `QTimer(self)` |
+| 953 | Timer | `timer.setSingleShot(True)` |
+| 954 | Signal → Handler | `timer.timeout.connect(clear_confirmation)` |
+| 955 | Signal → Handler | `timer.timeout.connect(timer.deleteLater)` |
+| 963 | Signaldefinition | `Signal(object, int)` |
+| 964 | Signaldefinition | `Signal(object)` |
+| 1219 | Timer | `QTimer(self)` |
+| 1220 | Timer | `self._inventory_alert_timer.setInterval(60000)` |
+| 1221 | Signal → Handler | `self._inventory_alert_timer.timeout.connect(self._refresh_inventory_alert_count)` |
+| 1248 | Timer | `QTimer(self)` |
+| 1249 | Timer | `self._wix_warm_timer.setSingleShot(True)` |
+| 1250 | Signal → Handler | `self._wix_warm_timer.timeout.connect(self._launch_next_wix_warm_batch)` |
+| 1266 | Timer | `QTimer(self)` |
+| 1267 | Timer | `self._mollie_timer.setInterval(120000)` |
+| 1268 | Signal → Handler | `self._mollie_timer.timeout.connect(self._refresh_mollie_alert_count)` |
+| 1278 | Signal → Handler | `self._piece_delegate.print_clicked.connect(self._on_product_print_clicked)` |
+| 1279 | Signal → Handler | `self._piece_delegate.manage_clicked.connect(self._on_product_manage_clicked)` |
+| 1332 | Timer | `QTimer.singleShot(0, self._restore_last_start_overview)` |
+| 1340 | UI / Aktion | `self._toolbar.add_button('refresh', 'Aktualisieren', tooltip='Erste Seite neu laden')` |
+| 1345 | Signal → Handler | `refresh.clicked.connect(self._reload_first_page)` |
+| 1346 | UI / Aktion | `self._toolbar.add_button('draft', 'Rechnungs-Entwurf', tooltip='Neuen sevDesk-Rechnungsentwurf aus Wix-Order-Nr erstellen')` |
+| 1351 | Signal → Handler | `self._btn_draft.clicked.connect(self._on_create_draft_clicked)` |
+| 1352 | UI / Aktion | `self._toolbar.add_button('shipping', 'VERSAND', tooltip='Offene Sendungen und Nachlieferungen bearbeiten')` |
+| 1357 | Signal → Handler | `self._btn_shipping.clicked.connect(self.open_sendungen_dialog)` |
+| 1358 | UI / Aktion | `self._toolbar.add_button('label', 'CUSTOM-LABEL', tooltip='Freie Lieferadresse eingeben und direkt als Label drucken')` |
+| 1363 | Signal → Handler | `self._btn_custom_label.clicked.connect(self._on_custom_label_clicked)` |
+| 1364 | UI / Aktion | `self._toolbar.add_button('manual_plc_label', 'PLC-LABEL', tooltip='PLC-Label mit manuell eingegebener Empfängeradresse erstellen')` |
+| 1369 | Signal → Handler | `self._btn_manual_plc_label.clicked.connect(self._on_manual_plc_label_clicked)` |
+| 1370 | UI / Aktion | `self._toolbar.add_button('plc_statistics', 'PLC-ÜBERSICHT', tooltip='Wochen-, Monats- und Jahresstatistik der gedruckten PLC-Labels')` |
+| 1375 | Signal → Handler | `self._btn_plc_statistics.clicked.connect(self._on_plc_statistics_clicked)` |
+| 1376 | UI / Aktion | `self._toolbar.add_button('special_order', 'Sonderauftrag', tooltip='Wix Payment Link fuer Sonderauftrag erstellen')` |
+| 1381 | Signal → Handler | `self._btn_special_order.clicked.connect(self._on_special_order_clicked)` |
+| 1383 | UI / Aktion | `self._toolbar.add_button('sendungen_alert', '✉ OFFENE SENDUNGEN', tooltip='Offene Versand-Mails anzeigen')` |
+| 1395 | Signal → Handler | `self._btn_sendungen_alert.clicked.connect(self._on_sendungen_alert_clicked)` |
+| 1397 | UI / Aktion | `self._toolbar.add_button('drucke_alert', '🖨 OPEN PRINTS', tooltip='Offene Druckaufträge anzeigen')` |
+| 1406 | Signal → Handler | `self._btn_drucke_alert.clicked.connect(self._on_drucke_alert_clicked)` |
+| 1408 | UI / Aktion | `self._toolbar.add_button('digital_licenses_alert', 'EXTERNE BESTELLUNG', tooltip='Bezahlte externe digitale Bestellungen anzeigen')` |
+| 1420 | Signal → Handler | `self._btn_digital_licenses_alert.clicked.connect(self._on_digital_licenses_alert_clicked)` |
+| 1422 | UI / Aktion | `self._toolbar.add_button('mollie_alert', '💳 MOLLIE AUTH', tooltip='Offene Mollie-Authorisierungen anzeigen')` |
+| 1434 | Signal → Handler | `self._btn_mollie_alert.clicked.connect(self._on_mollie_alert_clicked)` |
+| 1436 | UI / Aktion | `self._toolbar.add_button('inventory_alert', 'LAGERALARME', tooltip='Aktive Lageralarme, Alarmbestand und Tasks anzeigen')` |
+| 1445 | Signal → Handler | `self._btn_inventory_alert.clicked.connect(self._on_inventory_alert_clicked)` |
+| 1453 | Signal → Handler | `self._search_banner.reset_requested.connect(self._reset_search)` |
+| 1483 | Signal → Handler | `self._table.clicked.connect(self._on_table_clicked)` |
+| 1498 | UI / Aktion | `QPushButton('Weitere Rechnungen laden')` |
+| 1502 | Signal → Handler | `self._btn_more.clicked.connect(self._load_more)` |
+| 1542 | UI / Aktion | `QPushButton('PRINT SELECTED PRODUCTS')` |
+| 1547 | Signal → Handler | `self._btn_print_all_products.clicked.connect(self._on_print_all_open_products_clicked)` |
+| 1548 | UI / Aktion | `QPushButton('PRINT INVOICES')` |
+| 1554 | Signal → Handler | `self._btn_print_run_invoices.clicked.connect(self._on_print_run_invoices_clicked)` |
+| 1555 | UI / Aktion | `QPushButton('PRINT LABELS')` |
+| 1561 | Signal → Handler | `self._btn_print_run_labels.clicked.connect(self._on_print_run_labels_clicked)` |
+| 1625 | UI / Aktion | `QTabWidget()` |
+| 1627 | Signal → Handler | `self._print_products_tabs.currentChanged.connect(self._on_print_products_tab_changed)` |
+| 1636 | UI / Aktion | `self._print_products_tabs.addTab(current_page, 'AKTUELL')` |
+| 1647 | UI / Aktion | `QToolButton()` |
+| 1658 | Signal → Handler | `self._btn_close_detail.clicked.connect(self._close_invoice_detail)` |
+| 1717 | Signal → Handler | `self._gb_info.toggled.connect(self._info_content.setVisible)` |
+| 1731 | UI / Aktion | `QPlainTextEdit()` |
+| 1737 | Signal → Handler | `self._shipping_editor.textChanged.connect(self._on_shipping_editor_changed)` |
+| 1782 | UI / Aktion | `QAction('Rechnung', self)` |
+| 1784 | Signal → Handler | `self._print_invoice_action.triggered.connect(self._on_print_clicked)` |
+| 1785 | UI / Aktion | `QAction('Versandlabel', self)` |
+| 1787 | Signal → Handler | `self._print_label_action.triggered.connect(self._on_print_label_clicked)` |
+| 1788 | UI / Aktion | `QAction('PLC-Label', self)` |
+| 1790 | Signal → Handler | `self._print_plc_action.triggered.connect(self._on_print_plc_selected)` |
+| 1791 | UI / Aktion | `QMenu('Archivierte Packlisten', self)` |
+| 1793 | Signal → Handler | `self._print_packing_lists_menu.aboutToShow.connect(self._populate_packing_list_menus)` |
+| 1794 | UI / Aktion | `QAction('Noten / Produkte', self)` |
+| 1796 | Signal → Handler | `self._print_music_action.triggered.connect(self._on_print_music_clicked)` |
+| 1797 | UI / Aktion | `QMenu(self)` |
+| 1805 | UI / Aktion | `self._print_menu.addAction(self._print_music_action)` |
+| 1814 | UI / Aktion | `QToolButton()` |
+| 1826 | UI / Aktion | `QAction('Rechnungs-PDF', self)` |
+| 1828 | Signal → Handler | `self._view_invoice_action.triggered.connect(self._on_open_invoice_pdf_clicked)` |
+| 1829 | UI / Aktion | `QAction('PLC-Label', self)` |
+| 1831 | Signal → Handler | `self._view_plc_action.triggered.connect(self._on_open_plc_label_clicked)` |
+| 1832 | UI / Aktion | `QAction('Zolldokument', self)` |
+| 1834 | Signal → Handler | `self._view_customs_action.triggered.connect(self._on_open_plc_customs_clicked)` |
+| 1835 | UI / Aktion | `QMenu('Archivierte Packlisten', self)` |
+| 1837 | Signal → Handler | `self._view_packing_lists_menu.aboutToShow.connect(self._populate_packing_list_menus)` |
+| 1838 | UI / Aktion | `QAction('Paketinhalt & Tracking', self)` |
+| 1839 | Signal → Handler | `self._view_plc_evidence_action.triggered.connect(self._open_plc_evidence)` |
+| 1840 | UI / Aktion | `QMenu(self)` |
+| 1847 | UI / Aktion | `self._view_menu.addAction(self._view_plc_evidence_action)` |
+| 1857 | UI / Aktion | `QToolButton()` |
+| 1869 | UI / Aktion | `QPushButton()` |
+| 1875 | Signal → Handler | `self._btn_open_sevdesk_invoice.clicked.connect(self._on_open_sevdesk_invoice_clicked)` |
+| 1880 | UI / Aktion | `QPushButton(' WIX ORDER')` |
+| 1886 | Signal → Handler | `self._btn_open_wix_order.clicked.connect(lambda: self._run_selected_row_action('wix'))` |
+| 1890 | UI / Aktion | `QPushButton('✉️ Kundenmail')` |
+| 1893 | Signal → Handler | `self._btn_customer_mail.clicked.connect(lambda: self._run_selected_row_action('mail'))` |
+| 1897 | UI / Aktion | `QPushButton('✉️ Rechnung')` |
+| 1901 | Signal → Handler | `self._btn_send_invoice.clicked.connect(self._on_send_invoice_clicked)` |
+| 1905 | UI / Aktion | `QPushButton('Stornos & Gutschriften')` |
+| 1908 | Signal → Handler | `self._btn_refunds.clicked.connect(self._open_refunds_dialog)` |
+| 1911 | UI / Aktion | `QMenu(self)` |
+| 1912 | UI / Aktion | `QMenu('PLC-Labels', self._multi_shipment_menu)` |
+| 1913 | UI / Aktion | `QMenu('Packlisten', self._multi_shipment_menu)` |
+| 1916 | Signal → Handler | `self._multi_shipment_menu.aboutToShow.connect(self._populate_multi_shipment_menu)` |
+| 1917 | UI / Aktion | `QToolButton()` |
+| 1935 | UI / Aktion | `QListView(self._gb_stuecke)` |
+| 1977 | Signal → Handler | `self._search.search_changed.connect(self._on_search)` |
+| 1980 | Signal → Handler | `sel.selectionChanged.connect(self._on_table_selection_changed)` |
+| 1983 | Signal → Handler | `signals.printer_status_changed.connect(self._on_printer_status)` |
+| 1991 | Timer | `QTimer.singleShot(0, self._initialize_printer_status)` |
+| 1997 | Timer | `QTimer.singleShot(4000, self._start_search_index_sync)` |
+| 2180 | Timer | `QTimer.singleShot(0, lambda s=summary, token=seq: self._hydrate_detail_for_selection(s, token))` |
+| 2202 | Popup / Modal | `dlg.exec()` |
+| 2209 | Popup / Modal | `dlg.exec()` |
+| 2216 | Popup / Modal | `dlg.exec()` |
+| 2223 | Popup / Modal | `dlg.exec()` |
+| 2228 | Popup / Modal | `dlg.exec()` |
+| 2242 | Popup / Modal | `dlg.exec()` |
+| 2279 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 2280 | Signal → Handler | `self._index_sync_worker.signals.error.connect(lambda exc: logger.warning('Invoice search index sync failed: %s', exc))` |
+| 2283 | Signal → Handler | `self._index_sync_worker.signals.finished.connect(lambda: setattr(self, '_index_sync_worker', None))` |
+| 2312 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 2313 | Signal → Handler | `self._search_worker.signals.result.connect(self._on_search_result)` |
+| 2314 | Signal → Handler | `self._search_worker.signals.error.connect(self._on_search_error)` |
+| 2315 | Signal → Handler | `self._search_worker.signals.finished.connect(self._on_search_finished)` |
+| 2417 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 2418 | Signal → Handler | `self._worker.signals.result.connect(self._on_load_result)` |
+| 2419 | Signal → Handler | `self._worker.signals.error.connect(self._on_load_error)` |
+| 2420 | Signal → Handler | `self._worker.signals.finished.connect(self._on_load_finished)` |
+| 2619 | Timer | `QTimer.singleShot(0, run_refresh)` |
+| 2639 | Timer | `QTimer.singleShot(2500, run_prefetch)` |
+| 2649 | Hintergrundarbeit | `self._background_jobs.submit(queue=_SIDE_JOB_QUEUE, priority=priority, coalesce_key=coalesce_key, start_fn=start_fn, can_start=can_start)` |
+| 2704 | Hintergrundarbeit | `self._background_jobs.submit(queue='badge-refresh', priority=20, coalesce_key='rechnungen-mollie-badges', start_fn=self._create_mollie_badge_worker, can_start=lambda: self._mollie_badge_worker is None or not self._mollie_badge_worker.isRunning())` |
+| 2729 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 2730 | Signal → Handler | `self._mollie_badge_worker.signals.result.connect(self._on_mollie_badge_result)` |
+| 2731 | Signal → Handler | `self._mollie_badge_worker.signals.finished.connect(lambda: setattr(self, '_mollie_badge_worker', None))` |
+| 2793 | Popup / Modal | `dlg.exec()` |
+| 2798 | Popup / Modal | `dlg.exec()` |
+| 2811 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 2813 | Signal → Handler | `worker.signals.result.connect(self._on_inventory_alert_count)` |
+| 2814 | Signal → Handler | `worker.signals.error.connect(self._on_inventory_alert_error)` |
+| 2815 | Signal → Handler | `worker.signals.finished.connect(self._on_inventory_alert_finished)` |
+| 2842 | Popup / Modal | `QMessageBox.warning(self, 'Lageralarme', str(exc))` |
+| 2844 | Popup / Modal | `dlg.exec()` |
+| 2849 | Popup / Modal | `dlg.exec()` |
+| 2869 | Popup / Modal | `QMessageBox.information(self, 'Aktion', 'Bitte zuerst eine Rechnung in der Liste auswählen.')` |
+| 2935 | Popup / Modal | `QMessageBox.warning(self, 'Fehler', f'Rechnungen konnten nicht geladen werden:\n\n{exc}')` |
+| 3010 | Popup / Modal | `QMessageBox.warning(self, 'Suche', f'Rechnungssuche fehlgeschlagen:\n\n{exc}')` |
+| 3177 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 3178 | Signal → Handler | `self._open_overview_worker.signals.result.connect(self._on_open_overview_result)` |
+| 3179 | Signal → Handler | `self._open_overview_worker.signals.error.connect(self._on_open_overview_error)` |
+| 3180 | Signal → Handler | `self._open_overview_worker.signals.finished.connect(self._on_open_overview_finished)` |
+| 3409 | UI / Aktion | `tabs.addTab(page, '')` |
+| 4174 | Popup / Modal | `QMessageBox.question(self, f"PRINT {('LABELS' if labels else 'INVOICES')}", f'{len(invoice_ids)} {output_label} dieses START-Laufs gesammelt drucken?', QMessageBox.StandardButton.Yes &#124; QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)` |
+| 4211 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 4212 | Signal → Handler | `self._run_output_worker.signals.result.connect(self._on_print_run_output_result)` |
+| 4213 | Signal → Handler | `self._run_output_worker.signals.error.connect(self._on_print_run_output_error)` |
+| 4214 | Signal → Handler | `self._run_output_worker.signals.finished.connect(self._on_print_run_output_finished)` |
+| 4233 | Popup / Modal | `QMessageBox.warning(self, f"PRINT {('LABELS' if labels else 'INVOICES')}", f'{message}\n\nFehlgeschlagen:\n{details}')` |
+| 4240 | Popup / Modal | `QMessageBox.warning(self, 'Sammeldruck', f'Sammeldruck konnte nicht ausgefuehrt werden:\n\n{exc}')` |
+| 4268 | Popup / Modal | `QMessageBox.information(self, 'PRINT SELECTED PRODUCTS', 'Keine aktivierten Print-Produkte in der aktuellen Liste gefunden.')` |
+| 4275 | Popup / Modal | `QMessageBox.question(self, 'PRINT HISTORICAL RUN', 'Diese Produkte stammen aus einem abgeschlossenen Lauf.\n\nErneut drucken?', QMessageBox.StandardButton.Yes &#124; QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)` |
+| 4286 | Popup / Modal | `QMessageBox.question(self, 'PRINT SELECTED PRODUCTS', 'Produkte bereits gedruckt.\n\nErneut drucken?', QMessageBox.StandardButton.Yes &#124; QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)` |
+| 4372 | Hintergrundarbeit | `BackgroundWorker(worker_job)` |
+| 4373 | Signal → Handler | `self._product_print_worker.signals.result.connect(self._on_product_print_result)` |
+| 4374 | Signal → Handler | `self._product_print_worker.signals.result.connect(self._on_print_all_open_products_result)` |
+| 4375 | Signal → Handler | `self._product_print_worker.signals.error.connect(self._on_product_print_error)` |
+| 4376 | Signal → Handler | `self._product_print_worker.signals.finished.connect(self._on_product_print_finished)` |
+| 4393 | UI / Aktion | `QCheckBox()` |
+| 4398 | Signal → Handler | `checkbox.stateChanged.connect(lambda state, aggregate=item: self._on_open_product_check_changed(aggregate, state == Qt.CheckState.Checked.value))` |
+| 4406 | UI / Aktion | `QSpinBox()` |
+| 4414 | Signal → Handler | `qty_input.valueChanged.connect(lambda value, aggregate=item: self._on_open_product_quantity_changed(aggregate, value))` |
+| 4474 | UI / Aktion | `QPushButton('+')` |
+| 4495 | Signal → Handler | `add_unreleased_btn.clicked.connect(lambda _checked=False, aggregate=item: self._on_add_unreleased_from_item(aggregate))` |
+| 4500 | UI / Aktion | `QToolButton()` |
+| 4513 | Signal → Handler | `action.customContextMenuRequested.connect(lambda _pos, aggregate=item: self._on_open_product_manage_clicked(aggregate))` |
+| 4522 | Signal → Handler | `action.clicked.connect(lambda _checked=False, aggregate=item, button=action: self._on_open_product_print_clicked(aggregate, button))` |
+| 4531 | Signal → Handler | `action.clicked.connect(lambda _checked=False, aggregate=item: self._on_open_product_manage_clicked(aggregate))` |
+| 4728 | Timer | `QTimer.singleShot(4000, restore)` |
+| 4822 | Hintergrundarbeit | `self._background_jobs.submit_callable(queue='network-background', priority=_PRIORITY_WIX_WARMUP, key='wix-warmup', fn=lambda token, batch=tuple(refs): self._run_wix_warm_batch(batch, token), on_result=self._on_wix_warm_result, on_error=self._on_wix_warm_error, on_finished=self._on_wix_w…` |
+| 5036 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 5037 | Signal → Handler | `self._hint_worker.signals.result.connect(self._on_hint_prefetch_result)` |
+| 5038 | Signal → Handler | `self._hint_worker.signals.error.connect(self._on_hint_prefetch_error)` |
+| 5039 | Signal → Handler | `self._hint_worker.signals.finished.connect(self._on_hint_prefetch_finished)` |
+| 5157 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 5158 | Signal → Handler | `self._fulfillment_step_worker.signals.result.connect(self._on_direct_invoice_print_result)` |
+| 5159 | Signal → Handler | `self._fulfillment_step_worker.signals.error.connect(self._on_direct_invoice_print_error)` |
+| 5160 | Signal → Handler | `self._fulfillment_step_worker.signals.finished.connect(self._on_fulfillment_step_finished)` |
+| 5171 | Popup / Modal | `QMessageBox.information(self, 'Labeldruck', 'Bitte zuerst eine vollständige Lieferadresse mit mindestens zwei Zeilen eingeben.')` |
+| 5191 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 5192 | Signal → Handler | `self._fulfillment_step_worker.signals.result.connect(self._on_direct_label_print_result)` |
+| 5193 | Signal → Handler | `self._fulfillment_step_worker.signals.error.connect(self._on_direct_label_print_error)` |
+| 5194 | Signal → Handler | `self._fulfillment_step_worker.signals.finished.connect(self._on_fulfillment_step_finished)` |
+| 5206 | Popup / Modal | `dlg.exec()` |
+| 5209 | Popup / Modal | `PlcLabelPrintDialog(self._container, None, self).exec()` |
+| 5212 | Popup / Modal | `PlcStatisticsDialog(self._container.resolve(PlcStatisticsService), self).exec()` |
+| 5270 | UI / Aktion | `box.addButton(reprint_label, QMessageBox.ButtonRole.AcceptRole)` |
+| 5271 | UI / Aktion | `box.addButton('Label-PDF öffnen', QMessageBox.ButtonRole.ActionRole)` |
+| 5275 | UI / Aktion | `box.addButton('Zoll-Original öffnen', QMessageBox.ButtonRole.ActionRole)` |
+| 5277 | UI / Aktion | `box.addButton('Zoll-A5 öffnen', QMessageBox.ButtonRole.ActionRole)` |
+| 5281 | UI / Aktion | `box.addButton('Neues Label erstellen', QMessageBox.ButtonRole.ActionRole)` |
+| 5282 | UI / Aktion | `box.addButton('Abbrechen', QMessageBox.ButtonRole.RejectRole)` |
+| 5284 | Popup / Modal | `box.exec()` |
+| 5302 | Popup / Modal | `QMessageBox.warning(self, 'PLC-Nachdruck', f'Der Nachdruck konnte nicht vollständig eingereiht werden. Die archivierten PDFs bleiben erhalten.\n\n{exc}')` |
+| 5312 | Popup / Modal | `QMessageBox.information(self, 'PLC-Nachdruck', f'Archivierter Nachdruck eingereiht: {job_text}')` |
+| 5347 | Popup / Modal | `dlg.exec()` |
+| 5370 | Popup / Modal | `dlg.exec()` |
+| 5401 | Popup / Modal | `QMessageBox.information(self, 'Noten drucken', message)` |
+| 5441 | Hintergrundarbeit | `BackgroundWorker(worker_job)` |
+| 5442 | Signal → Handler | `self._product_print_worker.signals.result.connect(self._on_product_print_result)` |
+| 5443 | Signal → Handler | `self._product_print_worker.signals.error.connect(self._on_product_print_error)` |
+| 5444 | Signal → Handler | `self._product_print_worker.signals.finished.connect(self._on_product_print_finished)` |
+| 5453 | Popup / Modal | `QMessageBox.question(self, 'Rechnung senden', f'Rechnung {summary.invoice_number or summary.id} wirklich an den Kunden senden?\n\nDer Versand wird danach sofort gestartet.', QMessageBox.StandardButton.Yes &#124; QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)` |
+| 5477 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 5478 | Signal → Handler | `self._invoice_mail_worker.signals.result.connect(self._on_send_invoice_result)` |
+| 5479 | Signal → Handler | `self._invoice_mail_worker.signals.error.connect(self._on_send_invoice_error)` |
+| 5480 | Signal → Handler | `self._invoice_mail_worker.signals.finished.connect(self._on_send_invoice_finished)` |
+| 5664 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 5665 | Signal → Handler | `self._fulfillment_step_worker.signals.result.connect(self._on_fulfillment_step_result)` |
+| 5666 | Signal → Handler | `self._fulfillment_step_worker.signals.error.connect(self._on_fulfillment_step_error)` |
+| 5667 | Signal → Handler | `self._fulfillment_step_worker.signals.finished.connect(self._on_fulfillment_step_finished)` |
+| 5676 | Popup / Modal | `QMessageBox.information(self, 'Fulfillment aktualisiert', f"Rechnung {invoice}: Schritt '{chip}' wurde erneut ausgeführt.")` |
+| 5683 | Popup / Modal | `QMessageBox.warning(self, 'Fulfillment-Fehler', f'Schritt konnte nicht ausgeführt werden:\n\n{exc}')` |
+| 5723 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 5724 | Signal → Handler | `worker.signals.result.connect(self._show_redelivery_dialog)` |
+| 5725 | Signal → Handler | `worker.signals.error.connect(self._on_redelivery_prepare_error)` |
+| 5726 | Signal → Handler | `worker.signals.finished.connect(lambda: setattr(self, '_redelivery_prepare_worker', None))` |
+| 5741 | Popup / Modal | `dialog.exec()` |
+| 5748 | Popup / Modal | `QMessageBox.warning(self, 'Nachlieferung', f'Rechnungskontext konnte nicht geladen werden:\n\n{exc}')` |
+| 5774 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 5775 | Signal → Handler | `worker.signals.result.connect(lambda _payload: self._on_redelivery_applied())` |
+| 5776 | Signal → Handler | `worker.signals.error.connect(self._on_redelivery_apply_error)` |
+| 5777 | Signal → Handler | `worker.signals.finished.connect(lambda: setattr(self, '_redelivery_apply_worker', None))` |
+| 5783 | Popup / Modal | `QMessageBox.information(self, 'Nachlieferung gespeichert', 'Die Nachlieferung wurde angelegt und wartet auf den gewählten Versandmodus.')` |
+| 5791 | Popup / Modal | `QMessageBox.warning(self, 'Nachlieferung', f'Speichern fehlgeschlagen:\n\n{exc}')` |
+| 5803 | Popup / Modal | `QMessageBox.question(self, 'Rechnungsentwurf löschen', 'Rechnungsentwurf wirklich löschen?', QMessageBox.StandardButton.Yes &#124; QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)` |
+| 5824 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 5825 | Signal → Handler | `self._delete_draft_worker.signals.result.connect(self._on_delete_draft_result)` |
+| 5826 | Signal → Handler | `self._delete_draft_worker.signals.error.connect(self._on_delete_draft_error)` |
+| 5827 | Signal → Handler | `self._delete_draft_worker.signals.finished.connect(self._on_delete_draft_finished)` |
+| 5838 | Popup / Modal | `QMessageBox.warning(self, 'Rechnungsentwurf löschen', f'Der Rechnungsentwurf konnte nicht gelöscht werden:\n\n{exc}')` |
+| 5926 | UI / Aktion | `menu.addAction(self._packing_list_menu_label(path, position))` |
+| 5927 | Signal → Handler | `action.triggered.connect(lambda _checked=False, selected_path=path, selected_reference=reference, handler=callback: handler(selected_path, selected_reference))` |
+| 5940 | UI / Aktion | `labels_menu.addAction(f'PLC-Label {position} – {reference}')` |
+| 5941 | Signal → Handler | `action.triggered.connect(lambda _checked=False, selected_path=path: self._open_archived_plc_label(selected_path))` |
+| 5945 | UI / Aktion | `packing_menu.addAction(self._packing_list_menu_label(path, position))` |
+| 5946 | Signal → Handler | `action.triggered.connect(lambda _checked=False, selected_path=path: self._open_archived_packing_list(selected_path))` |
+| 5961 | Popup / Modal | `dialog.exec()` |
+| 5964 | Popup / Modal | `QMessageBox.warning(self, 'PLC-Nachweis', f'Der Paketnachweis konnte nicht geladen werden: {exc}')` |
+| 5968 | Popup / Modal | `QMessageBox.warning(self, 'Packliste öffnen', 'Die archivierte Packliste konnte nicht geöffnet werden.')` |
+| 5974 | Popup / Modal | `QMessageBox.warning(self, 'Packliste drucken', f'Der Nachdruck der archivierten Packliste konnte nicht eingereiht werden.\n\n{exc}')` |
+| 5981 | Popup / Modal | `QMessageBox.information(self, 'Packliste drucken', f'Archivierte Packliste zum Druck eingereiht: {job_id[:8]}…')` |
+| 5999 | Hintergrundarbeit | `self._background_jobs.submit_callable(queue='cpu', priority=5, key='plc-archive-index', fn=job, on_result=self._on_plc_archive_index_ready, on_error=self._on_plc_archive_index_error, on_finished=lambda: setattr(self, '_plc_archive_index_handle', None), owner=self, replace='coalesce_pend…` |
+| 6020 | Timer | `QTimer.singleShot(0, lambda summary=pending: self._open_plc_post_popup(summary))` |
+| 6033 | Popup / Modal | `QMessageBox.warning(self, 'PLC-PDF öffnen', 'Das PLC-Label konnte nicht geöffnet werden.')` |
+| 6040 | Popup / Modal | `QMessageBox.warning(self, 'Zolldokument oeffnen', 'Das Zolldokument konnte nicht geoeffnet werden.')` |
+| 6058 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 6059 | Signal → Handler | `self._invoice_pdf_preview_worker.signals.result.connect(self._on_invoice_pdf_preview_result)` |
+| 6060 | Signal → Handler | `self._invoice_pdf_preview_worker.signals.error.connect(self._on_invoice_pdf_preview_error)` |
+| 6061 | Signal → Handler | `self._invoice_pdf_preview_worker.signals.finished.connect(self._on_invoice_pdf_preview_finished)` |
+| 6068 | Popup / Modal | `QMessageBox.warning(self, 'Rechnungs-PDF ansehen', 'Das Rechnungs-PDF konnte nicht geoeffnet werden.')` |
+| 6075 | Popup / Modal | `QMessageBox.warning(self, 'Rechnungs-PDF ansehen', f'Rechnungs-PDF konnte nicht geladen werden:\n\n{exc}')` |
+| 6091 | Popup / Modal | `QMessageBox.warning(self, 'sevDesk oeffnen', 'Die Rechnung konnte nicht in sevDesk geoeffnet werden.')` |
+| 6107 | Popup / Modal | `QMessageBox.information(self, 'Kunden-Mail', 'Eine Kunden-Mail wird bereits vorbereitet.')` |
+| 6147 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 6148 | Signal → Handler | `self._customer_mail_worker.signals.result.connect(lambda payload: self._on_customer_mail_ready(summary, payload))` |
+| 6149 | Signal → Handler | `self._customer_mail_worker.signals.error.connect(self._on_customer_mail_error)` |
+| 6150 | Signal → Handler | `self._customer_mail_worker.signals.finished.connect(lambda: setattr(self, '_customer_mail_worker', None))` |
+| 6157 | Popup / Modal | `QMessageBox.information(self, 'Kunden-Mail', 'Für diese Rechnung konnte keine Kunden-E-Mail-Adresse ermittelt werden.')` |
+| 6169 | Popup / Modal | `QMessageBox.warning(self, 'Kunden-Mail', f'Der Mail-Entwurf konnte nicht in Outlook Classic geöffnet werden.{detail}')` |
+| 6177 | Popup / Modal | `QMessageBox.warning(self, 'Kunden-Mail', f'Mail konnte nicht vorbereitet werden:\n\n{exc}')` |
+| 6237 | Popup / Modal | `QMessageBox.information(self, 'Download-Links', 'Diese Rechnung hat keine Wix-Order-Referenz.')` |
+| 6246 | Popup / Modal | `QMessageBox.warning(self, 'Download-Links', 'Wix-Order konnte nicht aufgelöst werden.')` |
+| 6255 | Popup / Modal | `QMessageBox.information(self, 'Refund in Wix erstellen', 'Refunds werden ausschließlich in Wix erstellt. Den aktuellen Beleg- und Prüfstatus findest du unter ‚Stornos & Gutschriften‘.')` |
+| 6262 | Popup / Modal | `RefundsDialog(self._container, self).exec()` |
+| 6297 | Timer | `QTimer.singleShot(0, lambda s=summary, token=seq: self._hydrate_detail_for_selection(s, token))` |
+| 6375 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 6376 | Signal → Handler | `worker.signals.result.connect(self._on_sevdesk_context_loaded)` |
+| 6377 | Signal → Handler | `worker.signals.error.connect(lambda exc: self._on_sevdesk_context_error(exc) if context_seq == self._sevdesk_context_seq and (not self._shutting_down) else None)` |
+| 6382 | Signal → Handler | `worker.signals.finished.connect(lambda: self._on_sevdesk_context_finished(worker))` |
+| 6717 | Hintergrundarbeit | `self._background_jobs.submit_callable(queue='ui-critical-network', priority=0, key='selected-wix-context', fn=job, on_result=self._on_wix_context_loaded, on_error=self._on_wix_context_error, on_finished=self._on_wix_context_finished, owner=self, replace='cancel_previous')` |
+| 7080 | Popup / Modal | `QMessageBox.warning(self, 'Labeldruck', f'Label konnte nicht gedruckt werden:\n\n{exc}')` |
+| 7095 | Popup / Modal | `QMessageBox.warning(self, 'Rechnungsdruck', f'Rechnung konnte nicht gedruckt werden:\n\n{exc}')` |
+| 7107 | Popup / Modal | `QMessageBox.information(self, 'Rechnung gesendet', f'Rechnung {invoice} wurde an {recipient} gesendet.')` |
+| 7114 | Popup / Modal | `QMessageBox.warning(self, 'Rechnung senden', f'Rechnung konnte nicht gesendet werden:\n\n{exc}')` |
+| 7132 | Popup / Modal | `dlg.exec()` |
+| 7146 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 7147 | Signal → Handler | `self._draft_product_worker.signals.result.connect(self._on_draft_product_plan_ready)` |
+| 7148 | Signal → Handler | `self._draft_product_worker.signals.error.connect(self._on_create_draft_error)` |
+| 7149 | Signal → Handler | `self._draft_product_worker.signals.finished.connect(self._on_draft_product_plan_finished)` |
+| 7177 | Popup / Modal | `QMessageBox.information(self, 'Rechnungs-Entwurf erstellt', '\n'.join(message_lines))` |
+| 7188 | Popup / Modal | `QMessageBox.warning(self, 'Rechnungs-Entwurf fehlgeschlagen', f'Der Entwurf konnte nicht erstellt werden:\n\n{exc}')` |
+| 7210 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 7211 | Signal → Handler | `self._draft_worker.signals.result.connect(self._on_create_draft_result)` |
+| 7212 | Signal → Handler | `self._draft_worker.signals.error.connect(self._on_create_draft_error)` |
+| 7213 | Signal → Handler | `self._draft_worker.signals.finished.connect(self._on_create_draft_finished)` |
+| 7244 | Hintergrundarbeit | `BackgroundWorker(job)` |
+| 7246 | Signal → Handler | `worker.signals.result.connect(lambda payload: self._on_draft_preview_result(dlg, payload))` |
+| 7247 | Signal → Handler | `worker.signals.error.connect(lambda exc: dlg.set_preview_result(f'Vorschau fehlgeschlagen:\n{exc}', ok=False))` |
+| 7250 | Signal → Handler | `worker.signals.finished.connect(lambda current=worker: self._on_draft_preview_finished(current))` |
+| 7418 | Popup / Modal | `dialog.exec()` |
+| 7603 | UI / Aktion | `QSpinBox()` |
+| 7614 | UI / Aktion | `QToolButton()` |
+| 7629 | Signal → Handler | `print_btn.clicked.connect(lambda _checked=False, block=item, qty=qty_input: self._on_product_print_clicked(block, qty.value()))` |
+| 7635 | UI / Aktion | `QToolButton()` |
+| 7644 | Signal → Handler | `manage_btn.clicked.connect(lambda _checked=False, block=item: self._on_product_manage_clicked(block))` |
+| 7745 | Hintergrundarbeit | `self._background_jobs.submit_callable(queue='printing', priority=20, key=f'product-print:{block.sku}:{time.monotonic_ns()}', fn=lambda _token: worker_job(), on_result=self._on_product_print_result, on_error=self._on_product_print_error, on_finished=finished, owner=self, replace='allow_p…` |
+| 7787 | Popup / Modal | `QMessageBox.critical(self, 'Produktdruck fehlgeschlagen', f'Die Produkt-PDF konnte nicht ueber den hinterlegten Druckplan gedruckt werden:\n\n{exc}')` |
