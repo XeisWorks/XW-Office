@@ -13,7 +13,7 @@ import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from rapidfuzz import fuzz
 
@@ -466,7 +466,8 @@ class ProductCatalogService:
         if variant is None:
             logger.warning("Product Hub snapshot has no usable variant for %s", sku)
             return None
-        rule = variant.get("print_rule") if isinstance(variant.get("print_rule"), dict) else {}
+        raw_rule = variant.get("print_rule")
+        rule: dict[str, object] = raw_rule if isinstance(raw_rule, dict) else {}
         assets = [item for item in snapshot.assets if isinstance(item, dict)]
         print_assets = [
             item for item in assets
@@ -477,6 +478,8 @@ class ProductCatalogService:
         print_assets.sort(key=lambda item: int(item.get("sort_order") or 0))
         path = str(print_assets[0].get("uri") or "").strip() if print_assets else ""
         product_data = snapshot.product
+        if not isinstance(product_data, dict):
+            product_data = {}
         raw_kind = str(
             variant.get("article_kind")
             or product_data.get("article_kind")
@@ -492,18 +495,23 @@ class ProductCatalogService:
             article_kind=article_kind,
             print_file_path=resolve_shared_path(path),
             print_rule=PrintRule(
-                min_stock_target=int(rule.get("min_stock_target") or 5),
-                reprint_batch_qty=int(rule.get("reprint_batch_qty") or 3),
+                min_stock_target=int(cast(int | float | str, rule.get("min_stock_target") or 5)),
+                reprint_batch_qty=int(cast(int | float | str, rule.get("reprint_batch_qty") or 3)),
             ),
             status=str(product_data.get("status") or "draft"),
         )
         self._by_sku[sku] = product
         legacy_config = self._direct_print_config.get(sku) or {}
+        raw_print_plan = rule.get("print_plan")
         self._direct_print_config[sku] = {
             "default": {
                 "path": product.print_file_path,
                 "profile_id": str(rule.get("print_profile_id") or "").strip(),
-                "print_plan": [item for item in (rule.get("print_plan") or []) if isinstance(item, dict)],
+                "print_plan": (
+                    [item for item in raw_print_plan if isinstance(item, dict)]
+                    if isinstance(raw_print_plan, list)
+                    else []
+                ),
             },
             "titles": legacy_config.get("titles") if isinstance(legacy_config.get("titles"), dict) else {},
         }
@@ -516,16 +524,14 @@ class ProductCatalogService:
         config = self._direct_print_config.get(sku) or {}
         if not isinstance(config, dict):
             return {}
-        titles = config.get("titles") if isinstance(config.get("titles"), dict) else {}
+        raw_titles = config.get("titles")
+        titles: dict[str, object] = raw_titles if isinstance(raw_titles, dict) else {}
         title_key = str(title or "").strip()
         canonical_title = self.resolve_product_title(sku, title_key)
         for requested_title in (title_key, canonical_title):
-            if (
-                requested_title
-                and requested_title in titles
-                and isinstance(titles[requested_title], dict)
-            ):
-                resolved = dict(titles[requested_title])
+            title_config = titles.get(requested_title) if requested_title else None
+            if isinstance(title_config, dict):
+                resolved = dict(cast(dict[str, object], title_config))
                 resolved["resolved_title"] = requested_title
                 return resolved
             normalized_title_key = normalize_legacy_title(requested_title)
@@ -534,7 +540,7 @@ class ProductCatalogService:
                     if not isinstance(candidate_config, dict):
                         continue
                     if normalize_legacy_title(str(candidate_title or "")) == normalized_title_key:
-                        resolved = dict(candidate_config)
+                        resolved = dict(cast(dict[str, object], candidate_config))
                         resolved["resolved_title"] = str(candidate_title or "").strip()
                         return resolved
         if sku in _UNRELEASED_DYNAMIC_SKUS and title_key:
@@ -840,13 +846,17 @@ class ProductCatalogService:
         if match is None:
             return {}
         resolved_title, pdf_path = match
-        default = config.get("default") if isinstance(config.get("default"), dict) else {}
+        raw_default = config.get("default")
+        default: dict[str, object] = raw_default if isinstance(raw_default, dict) else {}
+        raw_print_plan = default.get("print_plan")
         return {
             "path": str(pdf_path),
             "profile_id": str(default.get("profile_id") or "").strip(),
-            "print_plan": [
-                entry for entry in (default.get("print_plan") or []) if isinstance(entry, dict)
-            ],
+            "print_plan": (
+                [entry for entry in raw_print_plan if isinstance(entry, dict)]
+                if isinstance(raw_print_plan, list)
+                else []
+            ),
             "resolved_title": resolved_title,
         }
 
@@ -936,26 +946,26 @@ class ProductCatalogService:
             if isinstance(products, list):
                 raw_products.extend(product for product in products if isinstance(product, dict))
 
-        by_canonical: dict[str, dict[str, object]] = {}
+        by_canonical: dict[str, tuple[str, list[str], list[str]]] = {}
         for product in raw_products:
             if bool(product.get("ignored")):
                 continue
             canonical = str(product.get("canonical_name") or "").strip()
             if not canonical:
                 continue
-            by_canonical[normalize_legacy_title(canonical)] = {
-                "canonical_name": canonical,
-                "aliases": [
-                    str(alias).strip()
-                    for alias in (product.get("aliases") or [])
-                    if str(alias).strip()
-                ],
-                "owners": [
-                    str(owner).strip()
-                    for owner in (product.get("owners") or [])
-                    if str(owner).strip()
-                ],
-            }
+            raw_aliases = product.get("aliases")
+            raw_owners = product.get("owners")
+            aliases = (
+                [str(alias).strip() for alias in raw_aliases if str(alias).strip()]
+                if isinstance(raw_aliases, list)
+                else []
+            )
+            owners = (
+                [str(owner).strip() for owner in raw_owners if str(owner).strip()]
+                if isinstance(raw_owners, list)
+                else []
+            )
+            by_canonical[normalize_legacy_title(canonical)] = (canonical, aliases, owners)
 
         overrides: list[object] = list(self._local_unreleased_overrides)
         if self._settings_repo is not None:
@@ -976,29 +986,28 @@ class ProductCatalogService:
             if not canonical or not alias or not owner:
                 continue
             key = normalize_legacy_title(canonical)
-            target = by_canonical.setdefault(
-                key, {"canonical_name": canonical, "aliases": [], "owners": []}
-            )
-            aliases = target["aliases"]
-            if isinstance(aliases, list) and alias not in aliases and alias != canonical:
+            target = by_canonical.get(key)
+            if target is None:
+                target = (canonical, [], [])
+                by_canonical[key] = target
+            _target_name, aliases, _owners = target
+            if alias not in aliases and alias != canonical:
                 aliases.append(alias)
-            target["owners"] = [owner]
+            by_canonical[key] = (target[0], aliases, [owner])
 
         return [
-            UnreleasedProduct(
-                canonical_name=str(item["canonical_name"]),
-                aliases=tuple(str(alias) for alias in item["aliases"]),
-                owners=tuple(str(owner) for owner in item["owners"]),
-            )
-            for item in sorted(
-                by_canonical.values(), key=lambda row: str(row["canonical_name"]).casefold()
+            UnreleasedProduct(canonical_name=name, aliases=tuple(aliases), owners=tuple(owners))
+            for name, aliases, owners in sorted(
+                by_canonical.values(), key=lambda row: row[0].casefold()
             )
         ]
 
     def _unreleased_pdf_files(self, config: dict[str, object]) -> list[Path]:
-        default = config.get("default") if isinstance(config.get("default"), dict) else {}
+        raw_default = config.get("default")
+        default: dict[str, object] = raw_default if isinstance(raw_default, dict) else {}
         raw_paths = [str(default.get("path") or "").strip()]
-        titles = config.get("titles") if isinstance(config.get("titles"), dict) else {}
+        raw_titles = config.get("titles")
+        titles: dict[str, object] = raw_titles if isinstance(raw_titles, dict) else {}
         raw_paths.extend(
             str(candidate.get("path") or "").strip()
             for candidate in titles.values()
