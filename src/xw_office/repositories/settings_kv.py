@@ -4,7 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from collections.abc import Callable, Generator
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.models.settings_kv import SettingKV
@@ -64,3 +64,43 @@ class SettingKvRepository:
                 row.value_json = updated
             session.flush()
             return updated
+
+    def mutate_values_json(
+        self,
+        mutations: dict[str, Callable[[str | None], str]],
+    ) -> dict[str, str]:
+        """Apply several JSON setting mutations in one transaction.
+
+        PostgreSQL advisory locks are acquired in sorted-key order to serialize
+        cross-process writers without deadlocks. This is used when a legacy stock
+        snapshot and its idempotency journal must commit as one operation.
+        """
+        if not mutations:
+            return {}
+        keys = list(mutations)
+        updated: dict[str, str] = {}
+        with self._scope() as session:
+            bind = session.get_bind()
+            if bind is not None and bind.dialect.name == "postgresql":
+                for key in sorted(keys):
+                    session.execute(
+                        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                        {"key": key},
+                    )
+            rows = {
+                row.key: row
+                for row in session.scalars(
+                    select(SettingKV).where(SettingKV.key.in_(keys)).with_for_update()
+                ).all()
+            }
+            for key, mutator in mutations.items():
+                row = rows.get(key)
+                current = None if row is None else row.value_json
+                value = mutator(current)
+                updated[key] = value
+                if row is None:
+                    session.add(SettingKV(key=key, value_json=value))
+                else:
+                    row.value_json = value
+            session.flush()
+        return updated

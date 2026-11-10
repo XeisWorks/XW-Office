@@ -627,6 +627,7 @@ class InvoiceProcessingService:
         pending_manual_license_ids: list[str] = []
         invoice_print_ids: list[str] = []
         label_print_ids: list[str] = []
+        stock_consumed_invoice_ids: list[str] = []
         for summary in summaries:
             if should_abort is not None and should_abort():
                 aborted = True
@@ -693,6 +694,14 @@ class InvoiceProcessingService:
                         printed_copy=(full_mode and not digital_only),
                     ),
                 )
+                if full_mode and not digital_only and not any(
+                    marker in flags.last_warning
+                    for marker in (
+                        "START-Lagerbuchung fehlgeschlagen:",
+                        "Product-Hub-Bestandsbuchung fehlgeschlagen:",
+                    )
+                ):
+                    stock_consumed_invoice_ids.append(str(summary.id))
                 flags = run_phase("payment", lambda: self._run_payment_step(summary, flags))
                 if full_mode:
                     if not digital_only:
@@ -745,6 +754,7 @@ class InvoiceProcessingService:
             "pending_digital_license_case_ids": pending_manual_license_ids,
             "invoice_print_ids": invoice_print_ids,
             "label_print_ids": label_print_ids,
+            "stock_consumed_invoice_ids": stock_consumed_invoice_ids,
         }
 
     def _run_start_fullflow_print_first(
@@ -769,6 +779,7 @@ class InvoiceProcessingService:
         pending_manual_license_ids: list[str] = []
         invoice_print_ids: list[str] = []
         label_print_ids: list[str] = []
+        stock_consumed_invoice_ids: list[str] = []
         aborted = False
         persist_lock = Lock()
 
@@ -843,6 +854,17 @@ class InvoiceProcessingService:
 
                 if progress_callback is not None:
                     progress_callback(f"START: {label} wird gedruckt...")
+                # Persist the recovery identity before sevDesk's irreversible
+                # sendBy call. If the process exits after remote finalization,
+                # the next START can find the now-finalized invoice and replay
+                # its idempotent inventory bookings and paper output.
+                flags = persist(
+                    summary,
+                    self._with_error(
+                        flags,
+                        RuntimeError("START nach externer Rechnungsfreigabe unvollstaendig"),
+                    ),
+                )
                 flags = persist(
                     summary,
                     run_phase(
@@ -856,6 +878,14 @@ class InvoiceProcessingService:
                         ),
                     ),
                 )
+                if not any(
+                    marker in flags.last_warning
+                    for marker in (
+                        "START-Lagerbuchung fehlgeschlagen:",
+                        "Product-Hub-Bestandsbuchung fehlgeschlagen:",
+                    )
+                ):
+                    stock_consumed_invoice_ids.append(str(summary.id))
                 if flags.last_warning.startswith("Product-Hub-Bestandsbuchung"):
                     deferred_warning = flags.last_warning
                 flags = persist(
@@ -1069,6 +1099,7 @@ class InvoiceProcessingService:
             "pending_digital_license_case_ids": pending_manual_license_ids,
             "invoice_print_ids": invoice_print_ids,
             "label_print_ids": label_print_ids,
+            "stock_consumed_invoice_ids": stock_consumed_invoice_ids,
         }
 
     def _run_product_step_compat(
@@ -1158,77 +1189,83 @@ class InvoiceProcessingService:
             raw_id.casefold(),
         )
 
+    def build_invoice_inventory_requirements(
+        self,
+        *,
+        invoice_ids: list[str] | None = None,
+    ) -> dict[str, dict[str, int]]:
+        """Return physical invoice demand grouped by invoice and SKU."""
+        summaries = self._load_start_target_summaries(invoice_ids=invoice_ids)
+        requirements: dict[str, dict[str, int]] = {}
+        wix_available = self._wix_orders is not None and self._wix_orders.has_credentials()
+        for summary in summaries:
+            invoice_id = str(summary.id or "").strip()
+            if not invoice_id:
+                continue
+            per_invoice: dict[str, int] = {}
+            reference = str(summary.order_reference or "").strip()
+            wix_summary = self._get_wix_order_summary_cached(reference) if reference and wix_available else {}
+            if reference and self._is_manual_licensed_delivery(summary):
+                continue
+            if wix_summary and self._is_digital_only(summary):
+                continue
+            if wix_summary:
+                try:
+                    items = self._wix_orders.fetch_order_line_items(reference)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Wix-Inventar-Preflight fehlgeschlagen fuer Bestellung {reference}: {exc}"
+                    ) from exc
+                for item in items or []:
+                    sku = str(getattr(item, "sku", "") or "").strip().upper()
+                    if not sku or bool(getattr(item, "is_digital", False)):
+                        continue
+                    try:
+                        qty = int(getattr(item, "qty", 0) or 0)
+                    except (TypeError, ValueError) as exc:
+                        raise RuntimeError(
+                            f"Ungueltige Wix-Menge fuer {reference}/{sku}"
+                        ) from exc
+                    if qty < 0:
+                        raise RuntimeError(f"Negative Wix-Menge fuer {reference}/{sku}")
+                    if qty:
+                        per_invoice[sku] = per_invoice.get(sku, 0) + qty
+            else:
+                context = self.load_invoice_work_context(summary, load_positions=True, force=True)
+                if not context.positions_loaded:
+                    detail = context.positions_error or "Rechnungspositionen fehlen"
+                    raise RuntimeError(
+                        f"Inventarvorpruefung fuer {invoice_id} unvollstaendig: {detail}"
+                    )
+                for position in context.positions:
+                    if position.kind != "product":
+                        continue
+                    if not position.sku:
+                        raise RuntimeError(
+                            f"Inventarvorpruefung fuer {invoice_id}: Produktposition ohne SKU"
+                        )
+                    if not position.quantity_is_integer:
+                        raise RuntimeError(
+                            f"Inventarvorpruefung fuer {invoice_id}: Bruchmenge bei {position.sku}"
+                        )
+                    quantity = position.quantity_int
+                    if quantity > 0:
+                        per_invoice[position.sku] = per_invoice.get(position.sku, 0) + quantity
+            if per_invoice:
+                requirements[invoice_id] = per_invoice
+        return requirements
+
     def build_inventory_requirements(
         self,
         *,
         invoice_ids: list[str] | None = None,
     ) -> dict[str, int]:
-        """Aggregate physical product quantities for the exact START scope.
-
-        Wix-backed drafts continue to use their order line items.  Drafts
-        created directly in sevDesk have no external order reference, so their
-        normalized sevDesk positions are included without contacting Wix.
-        """
-        summaries = self._load_start_target_summaries(invoice_ids=invoice_ids)
-        requirements: dict[str, int] = {}
-        wix_available = self._wix_orders is not None and self._wix_orders.has_credentials()
-        references = sorted(
-            {
-                summary.order_reference.strip()
-                for summary in summaries
-                if summary.order_reference.strip()
-            }
-        )
-        for reference in references:
-            if not wix_available:
-                continue
-            # Custom paid digital-license orders are fulfilled manually in the
-            # Digital License wizard.  They must never reserve or decrement
-            # physical stock during START's print pre-flight.
-            try:
-                if self._is_manual_licensed_delivery(
-                    next(
-                        summary
-                        for summary in summaries
-                        if str(summary.order_reference or "").strip() == reference
-                    )
-                ):
-                    continue
-            except StopIteration:
-                pass
-            try:
-                items = self._wix_orders.fetch_order_line_items(reference)
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Wix-Inventar-Preflight fehlgeschlagen fuer Bestellung {reference}: {exc}"
-                ) from exc
-            for item in items or []:
-                sku = str(getattr(item, "sku", "") or "").strip().upper()
-                if not sku:
-                    continue
-                try:
-                    qty = max(0, int(getattr(item, "qty", 0) or 0))
-                except (TypeError, ValueError):
-                    qty = 0
-                if qty:
-                    requirements[sku] = requirements.get(sku, 0) + qty
-        for summary in summaries:
-            if str(summary.order_reference or "").strip():
-                continue
-            try:
-                context = self.load_invoice_work_context(summary, load_positions=True)
-            except Exception as exc:  # noqa: BLE001 - one malformed draft must not hide others
-                logger.warning(
-                    "sevDesk-Inventar-Preflight fehlgeschlagen invoice=%s: %s", summary.id, exc
-                )
-                continue
-            for position in context.positions:
-                if position.kind != "product" or not position.sku or position.quantity <= 0:
-                    continue
-                requirements[position.sku] = (
-                    requirements.get(position.sku, 0) + position.quantity_int
-                )
-        return requirements
+        """Aggregate physical product quantities for the exact START scope."""
+        aggregate: dict[str, int] = {}
+        for per_invoice in self.build_invoice_inventory_requirements(invoice_ids=invoice_ids).values():
+            for sku, quantity in per_invoice.items():
+                aggregate[sku] = aggregate.get(sku, 0) + quantity
+        return aggregate
 
     def is_manual_licensed_delivery(self, summary: InvoiceSummary) -> bool:
         """Public classification used by START pre-flight UI components."""
@@ -2146,6 +2183,34 @@ class InvoiceProcessingService:
                             exc,
                             exc_info=True,
                         )
+                if self._inventory is not None:
+                    try:
+                        context = self.load_invoice_work_context(
+                            summary,
+                            load_positions=True,
+                            force=True,
+                        )
+                        if not context.positions_loaded:
+                            raise RuntimeError(
+                                context.positions_error or "Rechnungspositionen fehlen"
+                            )
+                        requirements = self._legacy_invoice_stock_requirements(
+                            context.positions
+                        )
+                        if requirements:
+                            self._inventory.execute_start_invoice_consumption(
+                                {str(summary.id): requirements},
+                                [str(summary.id)],
+                                mirror_sales_to_hub=self._invoice_inventory is None,
+                            )
+                    except Exception as exc:  # noqa: BLE001 - finalized invoice must be printed.
+                        inventory_warning = f"START-Lagerbuchung fehlgeschlagen: {exc}"
+                        logger.warning(
+                            "START resume invoice=%s legacy stock consumption failed: %s",
+                            summary.id,
+                            exc,
+                            exc_info=True,
+                        )
                 if not flags.invoice_printed:
                     flags = persist(
                         summary,
@@ -2387,6 +2452,11 @@ class InvoiceProcessingService:
             )
         if self._invoice_inventory is not None and not digital_only and preflight_context.positions:
             self._invoice_inventory.validate_invoice_context(preflight_context.positions)
+        legacy_requirements = self._legacy_invoice_stock_requirements(
+            preflight_context.positions
+        ) if printed_copy else {}
+        if self._inventory is not None and legacy_requirements:
+            self._inventory.validate_invoice_stock(legacy_requirements)
         self._send_invoice_document_once(
             summary.id, send_type="VPR" if printed_copy else "VPDF"
         )
@@ -2403,6 +2473,21 @@ class InvoiceProcessingService:
         self._invoice_detail_cache.pop(invoice_key, None)
         self._invoice_work_context_cache.pop(invoice_key, None)
         inventory_warning = ""
+        if self._inventory is not None and printed_copy and legacy_requirements:
+            try:
+                self._inventory.execute_start_invoice_consumption(
+                    {invoice_key: legacy_requirements},
+                    [invoice_key],
+                    mirror_sales_to_hub=self._invoice_inventory is None,
+                )
+            except Exception as exc:  # noqa: BLE001 - sevDesk is already finalized.
+                inventory_warning = f"START-Lagerbuchung fehlgeschlagen: {exc}"
+                logger.warning(
+                    "Invoice %s finalized but START stock consumption failed: %s",
+                    summary.id,
+                    exc,
+                    exc_info=True,
+                )
         if self._invoice_inventory is not None and not digital_only:
             # Invoice positions cannot change after the successful sendBy call.
             # Reuse the already validated context instead of issuing the same
@@ -2418,7 +2503,10 @@ class InvoiceProcessingService:
                 # would disappear from the draft queue before invoice/label
                 # output.  Keep the accounting discrepancy visible, but let
                 # the recoverable paper and customer-delivery flow continue.
-                inventory_warning = f"Product-Hub-Bestandsbuchung fehlgeschlagen: {exc}"
+                product_warning = f"Product-Hub-Bestandsbuchung fehlgeschlagen: {exc}"
+                inventory_warning = "; ".join(
+                    value for value in (inventory_warning, product_warning) if value
+                )
                 logger.warning(
                     "Invoice %s finalized but local inventory booking failed: %s",
                     summary.id,
@@ -2435,6 +2523,23 @@ class InvoiceProcessingService:
         if inventory_warning:
             return self._next_flags(next_flags, last_warning=inventory_warning)
         return next_flags
+
+    @staticmethod
+    def _legacy_invoice_stock_requirements(positions: list[Any]) -> dict[str, int]:
+        requirements: dict[str, int] = {}
+        for position in positions:
+            if getattr(position, "kind", "") != "product":
+                continue
+            sku = str(getattr(position, "sku", "") or "").strip().upper()
+            if not sku:
+                raise RuntimeError("START-Bestandspruefung: Produktposition ohne SKU")
+            if not bool(getattr(position, "quantity_is_integer", True)):
+                raise RuntimeError(f"Bruchmenge bei physischem Artikel {sku}")
+            quantity = int(getattr(position, "quantity_int", 0) or 0)
+            if quantity <= 0:
+                continue
+            requirements[sku] = requirements.get(sku, 0) + quantity
+        return requirements
 
     @staticmethod
     def _parse_iso_timestamp(value: object) -> datetime | None:

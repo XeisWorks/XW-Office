@@ -24,6 +24,7 @@ except Exception:  # pragma: no cover - optional at import time
 logger = logging.getLogger(__name__)
 
 _STOCK_KEY = "inventory.stock_levels"
+_INVOICE_CONSUMPTION_KEY = "inventory.invoice_consumption.v1"
 _REQUIREMENTS_KEY = "daily_business.pending_requirements"
 _PRODUCTS_KEY = "inventory.products"
 _PRINT_PLANS_KEY = "inventory.print_plans"
@@ -75,6 +76,7 @@ class StartPreflight:
     missing_position_data: bool
     b2b_holds: list[dict[str, str]] = field(default_factory=list)
     buyer_note_cases: list[BuyerNoteCase] = field(default_factory=list)
+    invoice_requirements: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 class StartMode(str, Enum):
@@ -444,6 +446,154 @@ class InventoryService:
             stock_updated=True,
             warnings=warnings,
         )
+
+    def execute_start_invoice_consumption(
+        self,
+        requirements_by_invoice: dict[str, dict[str, int]],
+        finalized_invoice_ids: list[str],
+        *,
+        mirror_sales_to_hub: bool = True,
+    ) -> StartExecutionReport:
+        """Consume legacy stock once for each invoice confirmed as finalized.
+
+        The stock snapshot, product rows and per-invoice journal are committed
+        together. Replays also retry the deterministic Hub mirror key so a process
+        interruption after the legacy commit can repair a missed shadow movement.
+        """
+        if self._settings_repo is None:
+            raise RuntimeError("START-Bestand kann ohne gemeinsamen Settings-Speicher nicht gebucht werden")
+        mutate_many = getattr(self._settings_repo, "mutate_values_json", None)
+        if not callable(mutate_many):
+            raise RuntimeError("Transaktionaler Settings-Speicher fuer START-Buchungen fehlt")
+
+        invoice_ids = sorted({str(value or "").strip() for value in finalized_invoice_ids if str(value or "").strip()})
+        requested = {
+            invoice_id: {
+                str(sku or "").strip().upper(): max(0, int(quantity))
+                for sku, quantity in requirements_by_invoice.get(invoice_id, {}).items()
+                if str(sku or "").strip() and int(quantity) > 0
+            }
+            for invoice_id in invoice_ids
+        }
+        requested = {invoice_id: values for invoice_id, values in requested.items() if values}
+        journal_key = _INVOICE_CONSUMPTION_KEY
+        new_movements: list[tuple[str, str, int]] = []
+        already_booked: set[str] = set()
+
+        def parse_object(raw: str | None, key: str) -> dict[str, object]:
+            try:
+                value = json.loads(raw) if raw else {}
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"Ungueltiges JSON in {key}; START-Buchung gesperrt") from exc
+            if not isinstance(value, dict):
+                raise RuntimeError(f"Ungueltiges Format in {key}; START-Buchung gesperrt")
+            return value
+
+        def mutate_journal(raw: str | None) -> str:
+            journal = parse_object(raw, journal_key)
+            for invoice_id, quantities in requested.items():
+                for sku, quantity in quantities.items():
+                    identity = f"{invoice_id}:{sku}"
+                    previous = journal.get(identity)
+                    if isinstance(previous, dict):
+                        if int(previous.get("quantity") or 0) != quantity:
+                            raise RuntimeError(
+                                f"START-Buchungsmenge fuer {identity} hat sich nach Freigabe geaendert"
+                            )
+                        already_booked.add(identity)
+                        continue
+                    journal[identity] = {
+                        "invoice_id": invoice_id,
+                        "sku": sku,
+                        "quantity": quantity,
+                    }
+                    new_movements.append((invoice_id, sku, quantity))
+            return json.dumps(journal, ensure_ascii=False)
+
+        def mutate_stock(raw: str | None) -> str:
+            stock = parse_object(raw, _STOCK_KEY)
+            for invoice_id, sku, quantity in new_movements:
+                try:
+                    current = max(0, int(stock.get(sku) or 0))
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError(f"Ungueltiger Lagerbestand fuer {sku}") from exc
+                if current < quantity:
+                    raise RuntimeError(
+                        f"START-Bestand fuer {sku} reicht nicht: {current} vorhanden, {quantity} benoetigt"
+                    )
+                stock[sku] = current - quantity
+            return json.dumps(stock, ensure_ascii=False)
+
+        def mutate_products(raw: str | None) -> str:
+            try:
+                rows = json.loads(raw) if raw else []
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"Ungueltiges JSON in {_PRODUCTS_KEY}") from exc
+            if not isinstance(rows, list):
+                raise RuntimeError(f"Ungueltiges Format in {_PRODUCTS_KEY}")
+            deltas: dict[str, int] = {}
+            for _invoice_id, sku, quantity in new_movements:
+                deltas[sku] = deltas.get(sku, 0) + quantity
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                sku = str(row.get("sku") or "").strip().upper()
+                if sku not in deltas:
+                    continue
+                row["on_hand"] = max(0, int(row.get("on_hand") or 0) - deltas[sku])
+            return json.dumps(rows, ensure_ascii=False)
+
+        mutate_many(
+            {
+                journal_key: mutate_journal,
+                _STOCK_KEY: mutate_stock,
+                _PRODUCTS_KEY: mutate_products,
+            }
+        )
+        if mirror_sales_to_hub:
+            for invoice_id, sku, quantity in [
+                *new_movements,
+                *[
+                    (invoice_id, sku, quantity)
+                    for invoice_id, quantities in requested.items()
+                    for sku, quantity in quantities.items()
+                    if f"{invoice_id}:{sku}" in already_booked
+                ],
+            ]:
+                self._mirror_legacy_stock_movement(
+                    sku=sku,
+                    delta=-quantity,
+                    reason="sale",
+                    source="legacy_inventory.start_invoice",
+                    external_reference=f"invoice:{invoice_id}",
+                    idempotency_key=f"start-invoice:{invoice_id}:{sku}",
+                )
+        consumed_skus = sorted(
+            {sku for quantities in requested.values() for sku in quantities}
+        )
+        return StartExecutionReport(
+            mode=StartMode.INVOICES_AND_PRINT,
+            open_invoice_count=len(invoice_ids),
+            decisions_count=sum(len(items) for items in requested.values()),
+            printed_skus=[],
+            consumed_skus=consumed_skus,
+            stock_updated=bool(new_movements),
+        )
+
+    def validate_invoice_stock(self, requirements: dict[str, int]) -> None:
+        """Fail before invoice finalization when confirmed stock cannot cover it."""
+        stock_levels = self.load_stock_levels()
+        for raw_sku, raw_quantity in requirements.items():
+            sku = str(raw_sku or "").strip().upper()
+            quantity = int(raw_quantity)
+            if not sku or quantity <= 0:
+                continue
+            current = max(0, int(stock_levels.get(sku, 0)))
+            if current < quantity:
+                raise RuntimeError(
+                    f"START-Bestand fuer {sku} reicht nicht: {current} vorhanden, "
+                    f"{quantity} benoetigt"
+                )
 
     def _print_decision_product(self, sku: str, qty: int, warnings: list[str]) -> bool:
         """Print one SKU through the new PyMuPDF/QPrinter print-plan path."""

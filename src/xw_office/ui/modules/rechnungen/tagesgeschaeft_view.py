@@ -1110,13 +1110,17 @@ class TagesgeschaeftView(QWidget):
                     buyer_note_cases=buyer_note_cases,
                 )
             inventory_service: InventoryService = self._container.resolve(InventoryService)
-            requirements = invoice_service.build_inventory_requirements(
+            invoice_requirements = invoice_service.build_invoice_inventory_requirements(
                 invoice_ids=(
                     list(self._start_selected_invoice_ids)
                     if self._start_selected_only
                     else None
                 )
             )
+            requirements: dict[str, int] = {}
+            for per_invoice in invoice_requirements.values():
+                for sku, quantity in per_invoice.items():
+                    requirements[sku] = requirements.get(sku, 0) + quantity
             inventory_preflight = inventory_service.build_start_preflight(
                 open_count,
                 requirements=requirements,
@@ -1127,6 +1131,7 @@ class TagesgeschaeftView(QWidget):
                 missing_position_data=inventory_preflight.missing_position_data,
                 b2b_holds=b2b_holds,
                 buyer_note_cases=buyer_note_cases,
+                invoice_requirements=invoice_requirements,
             )
 
         self._start_worker = BackgroundWorker(job)
@@ -1448,33 +1453,36 @@ class TagesgeschaeftView(QWidget):
                     inventory_warning = (
                         "Inventar wurde nicht aktualisiert, weil kein Druckplan vorlag."
                     )
-                elif bool(batch_result.get("failures")) or bool(batch_result.get("aborted")):
-                    inventory_warning = (
-                        "Inventar wurde nicht aktualisiert, weil der Lauf Fehler hatte "
-                        "oder manuell gestoppt wurde."
-                    )
                 else:
-                    inventory_report = inventory_service.execute_start_workflow(
-                        preflight,
-                        mode,
-                        print_products=False,
-                        mirror_sales_to_hub=not invoice_service.invoice_inventory_enabled,
-                    )
-                    if print_report is not None:
-                        inventory_report = StartExecutionReport(
-                            mode=inventory_report.mode,
-                            open_invoice_count=inventory_report.open_invoice_count,
-                            decisions_count=inventory_report.decisions_count,
-                            printed_skus=list(print_report.printed_skus),
-                            consumed_skus=list(inventory_report.consumed_skus),
-                            stock_updated=(
-                                print_report.stock_updated and inventory_report.stock_updated
-                            ),
-                            warnings=[
-                                *print_report.warnings,
-                                *inventory_report.warnings,
-                            ],
+                    finalized_ids = [
+                        str(value)
+                        for value in batch_result.get("stock_consumed_invoice_ids", [])
+                        if str(value or "").strip()
+                    ]
+                    try:
+                        inventory_report = inventory_service.execute_start_invoice_consumption(
+                            preflight.invoice_requirements,
+                            finalized_ids,
+                            mirror_sales_to_hub=not invoice_service.invoice_inventory_enabled,
                         )
+                    except Exception as exc:
+                        inventory_warning = f"START-Lagerbuchung fehlgeschlagen: {exc}"
+                    if print_report is not None:
+                        if inventory_report is not None:
+                            inventory_report = StartExecutionReport(
+                                mode=inventory_report.mode,
+                                open_invoice_count=inventory_report.open_invoice_count,
+                                decisions_count=inventory_report.decisions_count,
+                                printed_skus=list(print_report.printed_skus),
+                                consumed_skus=list(inventory_report.consumed_skus),
+                                stock_updated=(
+                                    print_report.stock_updated or inventory_report.stock_updated
+                                ),
+                                warnings=[
+                                    *print_report.warnings,
+                                    *inventory_report.warnings,
+                                ],
+                            )
             return {
                 "batch": batch_result,
                 "inventory_report": inventory_report,

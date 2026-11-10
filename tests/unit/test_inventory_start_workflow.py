@@ -6,8 +6,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from xw_office.core.config import AppConfig, PrintingSection
+from xw_office.models.base import Base
+from xw_office.models.settings_kv import SettingKV
+from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.inventory.service import (
     InventoryService,
     StartMode,
@@ -23,6 +28,13 @@ class _RepoStub:
 
     def set_value_json(self, key: str, value_json: str) -> None:
         self.values[key] = value_json
+
+    def mutate_values_json(self, mutations: dict[str, object]) -> dict[str, str]:
+        pending: dict[str, str] = {}
+        for key, mutation in mutations.items():
+            pending[key] = mutation(self.values.get(key))  # type: ignore[operator]
+        self.values.update(pending)
+        return pending
 
 
 class _ShadowMirrorStub:
@@ -321,6 +333,80 @@ def test_execute_invoices_mode_keeps_stock_unchanged() -> None:
 
     assert report.stock_updated is False
     assert repo.values["inventory.stock_levels"] == raw_stock
+
+
+def test_invoice_consumption_is_per_document_idempotent_and_skips_unfinalized() -> None:
+    repo = _RepoStub(
+        {
+            "inventory.stock_levels": json.dumps({"XW-6-003": 8}),
+            "inventory.products": _product_payload(Path("unused.pdf")),
+        }
+    )
+    mirror = _ShadowMirrorStub()
+    service = InventoryService(AppConfig(), repo, shadow_mirror=mirror)
+
+    report = service.execute_start_invoice_consumption(
+        {
+            "invoice-1": {"xw-6-003": 2},
+            "invoice-2": {"XW-6-003": 3},
+        },
+        ["invoice-1"],
+    )
+    replay = service.execute_start_invoice_consumption(
+        {"invoice-1": {"XW-6-003": 2}}, ["invoice-1"]
+    )
+
+    assert report.consumed_skus == ["XW-6-003"]
+    assert report.stock_updated is True
+    assert replay.stock_updated is False
+    assert json.loads(repo.values["inventory.stock_levels"]) == {"XW-6-003": 6}
+    assert json.loads(repo.values["inventory.invoice_consumption.v1"]) == {
+        "invoice-1:XW-6-003": {
+            "invoice_id": "invoice-1",
+            "sku": "XW-6-003",
+            "quantity": 2,
+        }
+    }
+    assert len(mirror.calls) == 2
+    assert mirror.calls[0]["idempotency_key"] == "start-invoice:invoice-1:XW-6-003"
+
+
+def test_invoice_consumption_fails_without_partial_stock_or_journal_update() -> None:
+    repo = _RepoStub(
+        {
+            "inventory.stock_levels": json.dumps({"XW-6-003": 1}),
+            "inventory.products": _product_payload(Path("unused.pdf")),
+        }
+    )
+    service = InventoryService(AppConfig(), repo)
+
+    with pytest.raises(RuntimeError, match="reicht nicht"):
+        service.execute_start_invoice_consumption(
+            {"invoice-1": {"XW-6-003": 2}}, ["invoice-1"]
+        )
+
+    assert json.loads(repo.values["inventory.stock_levels"]) == {"XW-6-003": 1}
+    assert "inventory.invoice_consumption.v1" not in repo.values
+
+
+def test_invoice_consumption_database_transaction_rolls_back_all_keys() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine, tables=[SettingKV.__table__])
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+    repository = SettingKvRepository(factory)
+    repository.set_value_json("inventory.stock_levels", json.dumps({"XW-6-003": 1}))
+    repository.set_value_json("inventory.products", _product_payload(Path("unused.pdf")))
+    service = InventoryService(AppConfig(), repository)
+
+    with pytest.raises(RuntimeError, match="reicht nicht"):
+        service.execute_start_invoice_consumption(
+            {"invoice-1": {"XW-6-003": 2}}, ["invoice-1"]
+        )
+
+    assert json.loads(repository.get_value_json("inventory.stock_levels") or "{}") == {
+        "XW-6-003": 1
+    }
+    assert repository.get_value_json("inventory.invoice_consumption.v1") is None
 
 
 def test_build_reprint_preflight_identifies_low_stock() -> None:

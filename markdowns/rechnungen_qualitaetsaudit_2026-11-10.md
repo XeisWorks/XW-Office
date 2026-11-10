@@ -325,19 +325,26 @@ Unbekannte Statuswerte, Bruch-/Ungueltigmengen und fehlende Positions-IDs werden
 nicht gebucht. Statusdefinition gemaess [sevDesk API-Dokumentation](https://api.sevdesk.de/).
 Persistente Cursor und Provider-Page-Limit bleiben offen.
 
-### AP05 – Legacy-/Hub-Bestand und START-Teilfehler (F16; P1)
+### AP05 - Legacy-/Hub-Bestand und START-Teilfehler (F16; teilweise umgesetzt; P1)
 
-Eine pro erfolgreichem finalen Dokument idempotente Legacy-/Hub-Spiegelung statt
-nachträglichem pauschalem Batchverbrauch einsetzen. Das gemeinsame Dokumentjournal
-liefert den Recovery-Status. Unterdeckungsprüfung vom optionalen Notendruckdialog
-trennen; Stichtag und echte Bestandsquelle explizit beachten.
+Den pauschalen Batchverbrauch durch dokumentweise idempotente Legacy-Buchungen
+ersetzen. Vor `sendBy` Bestand pruefen; die offene Druckliste bleibt davon unabhaengig.
+Vor dem externen Write den Recovery-Status persistieren. Legacy-Snapshot,
+Produktzeilen und Verbrauchsjournal atomar speichern; Hub-Buchungen bleiben ueber
+ihre Dokument-/Positionsidentitaet idempotent und werden bei Resume erneut versucht.
 
-**Akzeptanz:** 2 erfolgreiche + 1 fehlgeschlagene Rechnung, STOP nach erster
-Freigabe, extern finalisierter Beleg und Wiederaufnahme ergeben je erfolgreichen
-Beleg einmal Verbrauch in beiden Welten. Auch normales START ohne `+ Noten`
-finalisiert bei ungeklärter physischer Unterdeckung nicht. Keine doppelte Legacy-
-Verbrauchsbuchung nach Poller-Recovery. Die bewusst bestandsunabhängige offene
-Produktdruckliste aus `f1e759c` bleibt erhalten.
+**Teilweise umgesetzt:** Legacy-Verbrauch wird nur fuer erfolgreich finalisierte
+Dokumente gebucht und ueber `invoice_id:SKU` gegen Wiederholung geschuetzt.
+`SettingKvRepository.mutate_values_json` speichert Journal, Stock-Snapshot und
+Produktzeilen gemeinsam; Start-Resume wiederholt die idempotente Buchung.
+Unterdeckung sperrt die externe Freigabe. Preflight-Mengen werden nach Rechnung
+gruppiert, unvollstaendige Positionen und Bruchmengen blockieren die Planung.
+
+**Noch offen:** Abnahme eines 2+1-Teilfehler-/STOP-Szenarios mit echten sevDesk- und
+Hub-Testbelegen sowie Poller-Recovery in einer isolierten Umgebung. Die Legacy-
+und Hub-Journale sind getrennt und koennen nur ueber den Recovery-Lauf konvergieren.
+Die bewusst bestandsunabhaengige offene Produktdruckliste aus `f1e759c` bleibt
+erhalten.
 
 ### AP06 – UI-I/O und gemeinsame Dialogaktionen (F17, F18; P2)
 
