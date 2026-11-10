@@ -634,6 +634,8 @@ Frueherer Auditstand: `dafebdd` (`Fix invoice quantity validation and asynchrono
 
 Fortschreibung F12: `f95d4e8` (`Add persistent claims for product printing`) wurde nach den Tests erfolgreich zu `origin/main` gepusht. Suite: **2.091 bestanden**, Ruff: **gruen**. Mypy-Baseline fuer die drei betroffenen Services/Views: **20 bestehende Fehler in `ProductsView`**, keine in den neuen Claim-/Druckservice-Methoden. G1/G2 bleiben wie oben BLOCKIERT; `unknown`-Claim-Abgleich durch Bedienpersonal bleibt OFFEN.
 
+Fortschreibung AP08: `0038419` (`Type-check ProductsView worker payloads`) wurde nach 26 fokussierten und 2.092 Gesamttests erfolgreich zu `origin/main` gepusht. `ProductsView`-Mypy ist 0; die Repository-Baseline liegt bei 646 Fehlern in 100 Dateien.
+
 Der finale Suite-Nachweis dieses Fortschreibungsschritts steht oben. Commit-/Push-
 Nachweise werden nach der Integration ergänzt. Das folgende statische Inventar
 wurde aus dem vorherigen Quellstand erzeugt und dient als Navigationshilfe; nach
