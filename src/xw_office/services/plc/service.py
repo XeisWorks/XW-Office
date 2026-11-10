@@ -107,7 +107,7 @@ class PlcShipmentService:
             ):
                 raise ValueError("Packlisten und PLC-Pakete stimmen nicht überein")
             by_number = {context.package_number: context for context in packing_contexts}
-            parcel_snapshots = tuple(
+            parcel_snapshots: tuple[dict[str, object], ...] = tuple(
                 {
                     "reference": parcel.reference,
                     "weight_kg": str(parcel.weight_kg),
