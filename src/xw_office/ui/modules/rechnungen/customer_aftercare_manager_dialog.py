@@ -74,6 +74,7 @@ class CustomerAftercareManagerDialog(QDialog):
         self._action_worker: BackgroundWorker | None = None
         self._load_seq = 0
         self._detail_seq = 0
+        self._closing = False
         self._build_ui()
         index = self._filter_combo.findData(initial_filter)
         if index >= 0:
@@ -81,27 +82,24 @@ class CustomerAftercareManagerDialog(QDialog):
         QTimer.singleShot(0, self._load_cases)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        self._wait_for_workers()
+        self._invalidate_callbacks()
         super().closeEvent(event)
 
     def accept(self) -> None:
-        self._bump_seq()
-        self._wait_for_workers()
+        self._invalidate_callbacks()
         super().accept()
 
     def reject(self) -> None:
-        self._bump_seq()
-        self._wait_for_workers()
+        self._invalidate_callbacks()
         super().reject()
+
+    def _invalidate_callbacks(self) -> None:
+        self._closing = True
+        self._bump_seq()
 
     def _bump_seq(self) -> None:
         self._load_seq += 1
         self._detail_seq += 1
-
-    def _wait_for_workers(self) -> None:
-        for worker in (self._load_worker, self._detail_worker, self._action_worker):
-            if worker is not None and worker.isRunning():
-                worker.wait(3000)
 
     def open_count(self) -> int:
         return self._service.count_pending_review() + self._service.count_due()
@@ -200,6 +198,8 @@ class CustomerAftercareManagerDialog(QDialog):
         return str(self._filter_combo.currentData() or "alle")
 
     def _load_cases(self) -> None:
+        if self._closing:
+            return
         if self._load_worker is not None and self._load_worker.isRunning():
             return
         self._bump_seq()
@@ -211,21 +211,21 @@ class CustomerAftercareManagerDialog(QDialog):
             return self._service.list_cases_for_filter(filter_key)
 
         def on_result(cases: object) -> None:
-            if seq != self._load_seq:
+            if self._closing or seq != self._load_seq:
                 return
             self._cases = cases if isinstance(cases, list) else []
             self._populate_list()
             self._status.setText(f"{len(self._cases)} Fälle")
 
         def on_error(exc: Exception) -> None:
-            if seq != self._load_seq:
+            if self._closing or seq != self._load_seq:
                 return
             self._status.setText(f"Fehler beim Laden: {exc}")
 
         worker = BackgroundWorker(job)
         worker.signals.result.connect(on_result)
         worker.signals.error.connect(on_error)
-        worker.signals.finished.connect(lambda: setattr(self, "_load_worker", None))
+        worker.signals.finished.connect(lambda current=worker: self._clear_worker("_load_worker", current))
         self._load_worker = worker
         worker.start()
 
@@ -273,7 +273,7 @@ class CustomerAftercareManagerDialog(QDialog):
             return self._service.get_items(case_id)
 
         def on_result(items: object) -> None:
-            if seq != self._detail_seq:
+            if self._closing or seq != self._detail_seq:
                 return
             rows = items if isinstance(items, list) else []
             self._selected_items = rows
@@ -282,7 +282,7 @@ class CustomerAftercareManagerDialog(QDialog):
 
         worker = BackgroundWorker(job)
         worker.signals.result.connect(on_result)
-        worker.signals.finished.connect(lambda: setattr(self, "_detail_worker", None))
+        worker.signals.finished.connect(lambda current=worker: self._clear_worker("_detail_worker", current))
         self._detail_worker = worker
         worker.start()
 
@@ -340,13 +340,15 @@ class CustomerAftercareManagerDialog(QDialog):
                 )
 
             def legacy_result(_result: object) -> None:
+                if self._closing:
+                    return
                 dlg = OffeneSendungenDialog(self._container, self)
                 dlg.exec()
 
             worker = BackgroundWorker(legacy_job)
             worker.signals.result.connect(legacy_result)
-            worker.signals.error.connect(lambda exc: self._status.setText(f"Nachsendung konnte nicht vorbereitet werden: {exc}"))
-            worker.signals.finished.connect(lambda: setattr(self, "_action_worker", None))
+            worker.signals.error.connect(lambda exc: self._show_action_error(exc, "Nachsendung konnte nicht vorbereitet werden"))
+            worker.signals.finished.connect(lambda current=worker: self._clear_worker("_action_worker", current))
             self._action_worker = worker
             worker.start()
             return
@@ -382,15 +384,16 @@ class CustomerAftercareManagerDialog(QDialog):
             )
 
         def on_result(_result: object) -> None:
-            self._load_cases()
+            if not self._closing:
+                self._load_cases()
 
         def on_error(exc: Exception) -> None:
-            self._status.setText(f"Nachsendung konnte nicht vorbereitet werden: {exc}")
+            self._show_action_error(exc, "Nachsendung konnte nicht vorbereitet werden")
 
         worker = BackgroundWorker(job)
         worker.signals.result.connect(on_result)
         worker.signals.error.connect(on_error)
-        worker.signals.finished.connect(lambda: setattr(self, "_action_worker", None))
+        worker.signals.finished.connect(lambda current=worker: self._clear_worker("_action_worker", current))
         self._action_worker = worker
         worker.start()
 
@@ -398,18 +401,24 @@ class CustomerAftercareManagerDialog(QDialog):
         if outcome.action == "defer":
             return  # stays PENDING_REVIEW — no service call needed
         if outcome.action == "confirm":
-            confirm_kwargs: dict[str, object] = {}
-            if outcome.selected_items:
-                confirm_kwargs["selected_items"] = outcome.selected_items
-            self._run_action(
-                lambda: self._service.confirm_case(
+            def confirm() -> None:
+                if outcome.selected_items:
+                    self._service.confirm_case(
+                        case_id,
+                        case_type=outcome.case_type,
+                        courtesy=outcome.courtesy,
+                        note=outcome.note,
+                        selected_items=outcome.selected_items,
+                    )
+                    return
+                self._service.confirm_case(
                     case_id,
                     case_type=outcome.case_type,
                     courtesy=outcome.courtesy,
                     note=outcome.note,
-                    **confirm_kwargs,
                 )
-            )
+
+            self._run_action(confirm)
         elif outcome.action == "ignore":
             self._run_action(lambda: self._service.ignore_case(case_id))
 
@@ -426,18 +435,29 @@ class CustomerAftercareManagerDialog(QDialog):
         self._run_action(lambda: self._service.mark_cancelled(case.id))
 
     def _run_action(self, fn: Any) -> None:
+        if self._closing:
+            return
         if self._action_worker is not None and self._action_worker.isRunning():
             return
 
         def on_result(_result: object) -> None:
-            self._load_cases()
+            if not self._closing:
+                self._load_cases()
 
         def on_error(exc: Exception) -> None:
-            self._status.setText(f"Aktion fehlgeschlagen: {exc}")
+            self._show_action_error(exc, "Aktion fehlgeschlagen")
 
         worker = BackgroundWorker(fn)
         worker.signals.result.connect(on_result)
         worker.signals.error.connect(on_error)
-        worker.signals.finished.connect(lambda: setattr(self, "_action_worker", None))
+        worker.signals.finished.connect(lambda current=worker: self._clear_worker("_action_worker", current))
         self._action_worker = worker
         worker.start()
+
+    def _show_action_error(self, exc: Exception, prefix: str) -> None:
+        if not self._closing:
+            self._status.setText(f"{prefix}: {exc}")
+
+    def _clear_worker(self, attribute: str, worker: BackgroundWorker) -> None:
+        if getattr(self, attribute) is worker:
+            setattr(self, attribute, None)

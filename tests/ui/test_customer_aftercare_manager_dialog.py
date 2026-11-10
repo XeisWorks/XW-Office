@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import uuid
+from threading import Event
 
 from xw_office.core.config import AppConfig
+from xw_office.core.worker import BackgroundWorker
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.sendungen.service import OffeneSendungenService
@@ -126,6 +128,31 @@ def test_open_count_sums_pending_and_due(qtbot: object) -> None:
     qtbot.addWidget(dialog)
 
     assert dialog.open_count() == 1
+
+
+def test_close_does_not_wait_for_running_worker(qtbot: object, monkeypatch) -> None:
+    dialog = CustomerAftercareManagerDialog(_FakeContainer(_FakeService()))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    _wait_loaded(qtbot, dialog)
+    entered, release = Event(), Event()
+
+    def blocked() -> None:
+        entered.set()
+        release.wait(3)
+
+    worker = BackgroundWorker(blocked)
+    dialog._action_worker = worker  # noqa: SLF001
+    wait_calls: list[bool] = []
+    monkeypatch.setattr(BackgroundWorker, "wait", lambda *_args: wait_calls.append(True))
+    worker.start()
+    qtbot.waitUntil(entered.is_set)
+
+    dialog.close()
+
+    assert dialog._closing is True  # noqa: SLF001
+    assert wait_calls == []
+    release.set()
+    qtbot.waitUntil(lambda: not worker.isRunning(), timeout=2000)
 
 
 def test_review_confirm_outcome_calls_confirm_case(qtbot: object, monkeypatch) -> None:

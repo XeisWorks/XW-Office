@@ -147,7 +147,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F15 | P1 | ERLEDIGT | Decimal-Mengen, finale Statuswerte, stabile Positions-IDs und Needs-Review wurden strikt validiert. Der Invoice-Poll speichert einen atomaren Erfolgswasserstand mit 30-Tage-Overlap; bei Fehlern/Needs-Review bleibt er stehen. sevDesk-Seitenlimit wirft `TaxPageLimitError`, bevor Ergebnisse als vollstaendig gelten. | Feed-Validierungs-, Checkpoint- und `load_tax_resource`-Paginationstests |
 | F16 | P1 | TEILWEISE | START bucht Hub je finalisierter Rechnung und Legacy-Bestand ueber ein transaktionales Journal je `invoice_id:SKU`; Wiederholung bleibt idempotent. Offen bleiben die getrennten Legacy-/Hub-Journale und der isolierte 2+1-Teilfehler-/STOP-Betriebsnachweis. | SQLite-Regression fuer per-Rechnung-Verbrauch, Replay, fehlgeschlagene Buchung ohne Teilupdate und Transaktionsrollback; externer Mehrsystemnachweis Gate G2 |
 | F17 | P2 | TEILWEISE | Alarmdetail-Laden, Schwellenwertspeichern und Task-Mail laufen asynchron. Refund-Liste, Mailvorbereitung/-versand, PDF-Abruf und lokale Dateiablage nutzen Worker. OPEN-PRINTS laedt und oeffnet Anhaenge asynchron; auch das Markieren als erledigt laeuft jetzt im Worker und sperrt Mehrfachklicks. Tracking und Betreuung bleiben noch zu pruefen. | Eventloop-Heartbeat fuer Refund-Liste/PDF, OPEN-PRINTS-Erledigen und Ueberweisungs-PDF bei blockierten Fakes; Ruff/mypy fuer Refund-, Alarm- und OPEN-PRINTS-Dialog |
-| F18 | P2 | TEILWEISE | Sendungen-/Ueberweisungsdialoge brechen beim Schliessen nicht mehr durch 3-s-Waits den GUI-Thread. Laufende Writes duerfen abschliessen; Ergebnisse/Fehler werden nach Close nicht mehr in Widgets zurueckgeschrieben. OPEN-PRINTS verwirft nach Close ebenfalls Worker-Ergebnisse; andere Dialoge und globale Close-Policies bleiben offen. | Blockierende Fake-Worker: Dialog schliesst sofort; keine UI-Callbacks nach Close |
+| F18 | P2 | TEILWEISE | Sendungen-, Ueberweisungs-, Nachbetreuungs- und OPEN-PRINTS-Dialoge warten beim Schliessen nicht mehr im GUI-Thread auf Worker und verwerfen spaete UI-Ergebnisse. Weitere Dialoge und globale Close-Policies bleiben offen. | Blockierende Fake-Worker: Dialog schliesst sofort; Nachbetreuung/Ueberweisung/OPEN-PRINTS ohne UI-Callbacks nach Close |
 | F19 | P2 | TEILWEISE | Invoice-PDFs verwenden jetzt einen 64-MiB-LRU und pruefen die erwartete Rechnungsnummer auch bei Cache-Hits; ein abweichendes PDF wird verworfen und neu geladen. Header-/WorkContext-Revisionen und gebuendelte Produktauflosung bleiben offen. | Regression: Nummernabweichung im Cache erzeugt neuen Fetch; Byte-Limit behaelt nur aktuelle PDFs |
 | F20 | P2 | TEILWEISE | pytest laedt keine lokale dotenv-Konfiguration; sensible Umgebungsvariablen werden entfernt und externe Socket-Verbindungen blockiert (Loopback bleibt erlaubt). Groessere Controller-Extraktion und vollstaendige mypy-Bereinigung bleiben offen. | Gesamtsuite ohne lokale Credentials/ausgehende Verbindungen; mypy-Baseline dokumentiert |
 | F21 | P1 | ERLEDIGT | `view.py::_DraftInvoiceDialog`: nach erfolgreicher Vorschau konnte die Ordernummer ge?ndert und weiterhin best?tigt werden. Jede Eingabe?nderung invalidiert nun die Vorschaufreigabe. | Qt-Test: Vorschau A ? Eingabe B bleibt gesperrt, erst Vorschau B erlaubt Best?tigen |
@@ -349,7 +349,7 @@ erhalten.
 
 ### AP06 – UI-I/O und gemeinsame Dialogaktionen (F17, F18; teilweise umgesetzt; P2)
 
-**Teilweise umgesetzt (F17/F18):** Lageralarm-Laden, Schwellenwertspeichern und Task-Mail laufen im Worker; Refund-Liste, Gutschrift-Mail, Refund-PDF, OPEN-PRINTS-Anhaenge und Erledigen-Aktion ebenfalls. Sendungen-, Ueberweisungs- und OPEN-PRINTS-Dialoge warten beim Schliessen nicht im GUI-Thread und verwerfen spaete UI-Ergebnisse. Tracking und Betreuung bleiben offen.
+**Teilweise umgesetzt (F17/F18):** Lageralarm-Laden, Schwellenwertspeichern und Task-Mail laufen im Worker; Refund-Liste, Gutschrift-Mail, Refund-PDF, OPEN-PRINTS-Anhaenge und Erledigen-Aktion ebenfalls. Sendungen-, Ueberweisungs-, Nachbetreuungs- und OPEN-PRINTS-Dialoge warten beim Schliessen nicht im GUI-Thread und verwerfen spaete UI-Ergebnisse. Tracking und Betreuung bleiben offen.
 
 Zuerst Alarm-, Refund-, Überweisungs-PDF- und Tracking-Slots auf vorhandenen
 `UiAsyncAction`/BackgroundWorker umstellen. Snapshot/Identität vor Workerstart;
@@ -421,6 +421,8 @@ Geänderte Produktionsdateien:
 
 - `ui/modules/rechnungen/offene_ueberweisungen_dialog.py`: Rechnungsauswahl aus dem asynchron geladenen Fallkontext; PDF-Download und temporaere Dateiablage im Worker (F17).
 
+- `ui/modules/rechnungen/customer_aftercare_manager_dialog.py`: schliesst ohne Worker-Wartezeit; invalidiert Detail-/Aktionscallbacks und behaelt typisierte Bestaetigungsdaten (F18).
+
 Gezielte Tests ergänzt in `test_invoice_work_context.py`,
 `test_invoice_inventory_booking.py`, `test_inventory_alert_tasks.py`,
 `test_rechnungen_view_smoke.py`, `test_digital_licenses_dialog.py` und neu
@@ -458,6 +460,7 @@ eingetragen. Bereits durchgeführt:
 - Gutschrift-Mailclaim: **2 neue Fake-Transporttests** belegen einmaligen Erfolg und Sperre nach unklarem Timeout; Refund-Dialog/Claim-Tests zusammen **6 bestanden**. Ruff gruen. Mypy im gesamten `invoice_processing/service.py` zeigt die bekannte bestehende Baseline von 44 Fehlern; die bearbeiteten neuen Methoden erzeugten keine neue Meldung.
 - OPEN-PRINTS-Aktion: **3 Qt-Tests bestanden** (schnelle Zeilenauswahl, blockierendes Markieren ohne UI-Blockade/Mehrfachklick, Schliessen waehrend Worker ohne spaeten UI-Write); Ruff und mypy fuer den Dialog gruen.
 - Ueberweisungs-PDF: **7 UI-Tests bestanden**; blockierter Fake-Download laesst Eventloop-Heartbeat laufen, Schaltflaeche bleibt bis zum Abschluss gesperrt; Ruff und mypy fuer den Dialog gruen.
+- Nachbetreuungsmanager: **8 UI-Tests bestanden**, einschliesslich Close bei blockiertem Worker ohne Aufruf von `wait()`; Ruff und mypy fuer den Dialog gruen.
 - AP04-Feed-Normalisierung: **51 Tests bestanden** ueber Invoice-/Credit-Feeds,
   Status-/Decimal-Helfer und Bestandsbuchung (2,43 s); Ruff: **gruen**.
 - Regression fuer F10: Ziel 2->3->2 bei Anfangsbestand 10 ergibt Endbestand 8;
