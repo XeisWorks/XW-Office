@@ -1124,6 +1124,13 @@ def test_detail_buttons_use_same_row_actions_as_invoice_list(qtbot: object, monk
     view._summaries = [summary]  # noqa: SLF001
     view._table.set_data([summary.as_table_row()])  # noqa: SLF001
     view._table.select_source_row(0)  # noqa: SLF001
+    monkeypatch.setattr(
+        invoice_service,
+        "get_cached_invoice_work_context",
+        lambda _summary: types.SimpleNamespace(confirmed_wix_order_number="20899"),
+        raising=False,
+    )
+    view._update_plc_controls()  # noqa: SLF001
     calls: list[tuple[str, str]] = []
     monkeypatch.setattr(
         view,
@@ -2514,6 +2521,26 @@ def test_rechnungen_falls_back_to_sevdesk_when_wix_reference_is_not_found(
     cached = view._get_cached_wix_context("54321")  # noqa: SLF001
     assert cached is not None
     assert cached["status"] == "Wix-Order nicht gefunden"
+
+
+def test_wix_order_button_requires_confirmed_context(
+    qtbot: object, monkeypatch: MonkeyPatch
+) -> None:
+    view = RechnungenView(_build_container())
+    qtbot.addWidget(view)
+    summary = InvoiceSummary.model_validate(
+        {
+            "id": "manual-reference-button",
+            "invoiceNumber": "RE-MANUAL-2",
+            "order_reference": "54321",
+        }
+    )
+    monkeypatch.setattr(view, "_selected_summary", lambda: summary)
+
+    view._update_plc_controls()  # noqa: SLF001
+
+    assert view._btn_open_wix_order.isHidden()  # noqa: SLF001
+    assert not view._btn_open_wix_order.isEnabled()  # noqa: SLF001
 
 
 def test_rechnungen_applies_persistent_wix_cache_before_background_load(

@@ -7304,7 +7304,7 @@ class RechnungenView(QWidget):
         self._btn_view.setEnabled(has_selection)
         self._view_invoice_action.setEnabled(has_selection)
         self._btn_open_sevdesk_invoice.setEnabled(has_selection)
-        has_wix = bool(selected is not None and str(selected.order_reference or "").strip())
+        has_wix = False
         if selected is not None:
             try:
                 service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
