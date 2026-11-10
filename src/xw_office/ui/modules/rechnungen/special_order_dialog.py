@@ -154,7 +154,9 @@ class SpecialOrderDialog(QDialog):
         self._selected_list.setVisible(is_existing_articles)
         for widget in self._custom_fields:
             widget.setVisible(not is_existing_articles)
-        self.layout().invalidate()
+        layout = self.layout()
+        if layout is not None:
+            layout.invalidate()
 
     def _add_selected_product(self, item: QListWidgetItem) -> None:
         product = item.data(256)

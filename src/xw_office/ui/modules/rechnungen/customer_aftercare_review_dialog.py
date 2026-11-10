@@ -239,9 +239,10 @@ class CustomerAftercareReviewDialog(QDialog):
             original = check.data(Qt.ItemDataRole.UserRole)
             if not isinstance(original, CustomerAftercareItem):
                 continue
+            quantity_item = self._items_table.item(row, 3)
             try:
-                quantity = max(1, int(self._items_table.item(row, 3).text()))
-            except (AttributeError, ValueError):
+                quantity = max(1, int(quantity_item.text() if quantity_item is not None else "1"))
+            except ValueError:
                 quantity = 1
             quantity = min(quantity, max(1, int(original.quantity or 1)))
             selected.append(

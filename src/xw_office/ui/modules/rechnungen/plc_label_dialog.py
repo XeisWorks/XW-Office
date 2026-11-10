@@ -569,14 +569,16 @@ class PlcLabelPrintDialog(QDialog):
                         cached_items = cached.get("items")
                         items = list(cached_items) if isinstance(cached_items, list) else []
                     else:
-                        meta = wix.resolve_order_summary(ref)
+                        resolved_meta = wix.resolve_order_summary(ref)
+                        meta = resolved_meta if isinstance(resolved_meta, dict) else {}
                         context_method = getattr(wix, "resolve_plc_shipping_context", None)
                         plc_context = context_method(ref) if callable(context_method) else {}
                         items = wix.fetch_order_line_items(ref)
+                    meta = meta if isinstance(meta, dict) else {}
+                    plc_context = plc_context if isinstance(plc_context, dict) else {}
                     order_number = str(meta.get("wix_order_number") or order_number or "").strip()
-                    if isinstance(plc_context, dict):
-                        order_number = str(plc_context.get("order_number") or order_number).strip()
-                        email = str(plc_context.get("email") or "").strip()
+                    order_number = str(plc_context.get("order_number") or order_number).strip()
+                    email = str(plc_context.get("email") or "").strip()
                     shipping = str(meta.get("wix_shipping_address") or "").strip()
                     if shipping:
                         address_lines = [ln.strip() for ln in shipping.splitlines() if ln.strip()]
@@ -1040,8 +1042,10 @@ class PlcLabelPrintDialog(QDialog):
     def _clear_parcel_weight_inputs(self) -> None:
         while self._parcel_weights_form.count():
             child = self._parcel_weights_form.takeAt(0)
-            if child.widget() is not None:
-                child.widget().deleteLater()
+            if child is not None:
+                widget = child.widget()
+                if widget is not None:
+                    widget.deleteLater()
         self._parcel_weight_edits = []
         self._parcel_contents_labels = []
 
