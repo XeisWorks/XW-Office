@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from xw_office.core.config import AppConfig
+from xw_office.services.invoice_processing.context import InvoiceWorkContext
 from xw_office.services.invoice_processing.service import FulfillmentFlags, InvoiceProcessingService
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 
@@ -1664,3 +1665,80 @@ def test_ambiguous_invoice_finalize_failure_blocks_second_send() -> None:
         service._run_finalize_step(summary, FulfillmentFlags())
 
     assert client.send_invoice_document_calls == 1
+
+
+@pytest.mark.parametrize("confirmation", ["normal", "readback", "existing_claim"])
+def test_confirmed_invoice_finalization_invalidates_all_caches(confirmation: str) -> None:
+    summary = InvoiceSummary(id="finalize-cache", invoiceNumber="RE-FINALIZE-CACHE")
+    client = _InvoiceClientStub([summary])
+    service = InvoiceProcessingService(AppConfig(), client, _RepoStub({}))  # type: ignore[arg-type]
+    if confirmation == "readback":
+        client.fail_send_invoice_document = True
+        client.invoice_payloads[summary.id] = {"id": summary.id, "status": "200"}
+    elif confirmation == "existing_claim":
+        service._send_invoice_document_once(summary.id, send_type="VPDF")  # noqa: SLF001
+
+    service._cache_invoice_pdf(summary.id, b"%PDF stale draft")  # noqa: SLF001
+    service._put_invoice_detail_cache(summary.id, {"invoiceNumber": "RE-FINALIZE-CACHE"})  # noqa: SLF001
+    service._put_invoice_work_context_cache(  # noqa: SLF001
+        summary.id,
+        InvoiceWorkContext(summary=summary, origin="sevdesk_only"),
+    )
+    service._batch_cache[("draft", 50, 0)] = (0.0, [], [])  # noqa: SLF001
+
+    service._send_invoice_document_once(summary.id, send_type="VPDF")  # noqa: SLF001
+
+    assert client.send_invoice_document_calls == 1
+    assert not service._invoice_pdf_cache  # noqa: SLF001
+    assert not service._invoice_detail_cache  # noqa: SLF001
+    assert not service._invoice_work_context_cache  # noqa: SLF001
+    assert not service._batch_cache  # noqa: SLF001
+
+
+def test_external_invoice_creation_can_invalidate_batch_snapshots() -> None:
+    first = InvoiceSummary(id="batch-first", invoiceNumber="RE-BATCH-1")
+    second = InvoiceSummary(id="batch-second", invoiceNumber="RE-BATCH-2")
+    client = _InvoiceClientStub([first])
+    service = InvoiceProcessingService(AppConfig(), client, _RepoStub({}))  # type: ignore[arg-type]
+
+    _, initial = service.load_invoice_batch(status=100, limit=10, offset=0)
+    client._rows.append(second)
+    _, cached = service.load_invoice_batch(status=100, limit=10, offset=0)
+
+    service.invalidate_invoice_batch_cache()
+    _, refreshed = service.load_invoice_batch(status=100, limit=10, offset=0)
+
+    assert [summary.id for summary in initial] == [first.id]
+    assert [summary.id for summary in cached] == [first.id]
+    assert [summary.id for summary in refreshed] == [first.id, second.id]
+
+
+def test_invalidation_during_invoice_load_does_not_repopulate_stale_batch() -> None:
+    from threading import Event, Thread
+
+    started = Event()
+    release = Event()
+
+    class _BlockingInvoiceClientStub(_InvoiceClientStub):
+        def list_invoice_summaries(self, **kwargs) -> list[InvoiceSummary]:
+            started.set()
+            release.wait(2)
+            return super().list_invoice_summaries(**kwargs)
+
+    summary = InvoiceSummary(id="batch-race", invoiceNumber="RE-BATCH-RACE")
+    service = InvoiceProcessingService(
+        AppConfig(), _BlockingInvoiceClientStub([summary]), _RepoStub({})  # type: ignore[arg-type]
+    )
+    worker = Thread(target=lambda: service.load_invoice_batch(status=100, limit=10, offset=0))
+    worker.start()
+    try:
+        assert started.wait(1)
+        service.invalidate_invoice_batch_cache()
+        release.set()
+        worker.join(1)
+
+        assert not worker.is_alive()
+        assert not service._batch_cache  # noqa: SLF001
+    finally:
+        release.set()
+        worker.join(1)

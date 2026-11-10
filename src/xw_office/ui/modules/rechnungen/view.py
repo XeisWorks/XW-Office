@@ -7271,6 +7271,7 @@ class RechnungenView(QWidget):
         invoice_number = str(draft_payload.get("invoice_number") or "").strip()
         wix_order_number = str(draft_payload.get("wix_order_number") or "").strip()
         positions = str(draft_payload.get("positions") or "0")
+        self._container.resolve(InvoiceProcessingService).invalidate_invoice_batch_cache()
         message_lines = [
             f"Wix-Order-Nr: {wix_order_number}",
             f"Rechnung: {invoice_number}",

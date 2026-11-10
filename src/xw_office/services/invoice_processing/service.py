@@ -318,6 +318,8 @@ class InvoiceProcessingService:
             tuple[int | None, int, int],
             tuple[float, list[dict[str, str]], list[InvoiceSummary]],
         ] = {}
+        self._batch_cache_lock = Lock()
+        self._batch_cache_generation = 0
         self._mail_service = mail_service
         self._drafts = draft_invoice_service
         self._inventory = inventory_service
@@ -375,6 +377,12 @@ class InvoiceProcessingService:
         self._apply_unreleased_sku_flags(summaries)
         return summaries
 
+    def invalidate_invoice_batch_cache(self) -> None:
+        """Invalidate list snapshots after an invoice is created outside this service."""
+        with self._batch_cache_lock:
+            self._batch_cache_generation += 1
+            self._batch_cache.clear()
+
     def load_invoice_batch(
         self,
         *,
@@ -384,7 +392,9 @@ class InvoiceProcessingService:
     ) -> tuple[list[dict[str, str]], list[InvoiceSummary]]:
         """Return table rows and parallel summaries for detail view."""
         key = (status, int(limit), int(offset))
-        cached = self._batch_cache.get(key)
+        with self._batch_cache_lock:
+            generation = self._batch_cache_generation
+            cached = self._batch_cache.get(key)
         now = time.perf_counter()
         if cached is not None:
             ts, cached_rows, cached_summaries = cached
@@ -400,7 +410,9 @@ class InvoiceProcessingService:
         self._apply_unreleased_sku_flags(summaries)
         rows = [s.as_table_row() for s in summaries]
         final_rows = self._rows_with_fulfillment(summaries, rows)
-        self._batch_cache[key] = (now, list(final_rows), list(summaries))
+        with self._batch_cache_lock:
+            if generation == self._batch_cache_generation:
+                self._batch_cache[key] = (time.perf_counter(), list(final_rows), list(summaries))
         return final_rows, summaries
 
     def load_recent_non_draft_batch(
@@ -413,7 +425,9 @@ class InvoiceProcessingService:
     ) -> tuple[list[dict[str, str]], list[InvoiceSummary]]:
         """Return newest non-draft invoices for the Rechnungen history pane."""
         key = ("recent_non_draft", int(limit), int(offset))
-        cached = self._batch_cache.get(key)  # type: ignore[arg-type]
+        with self._batch_cache_lock:
+            generation = self._batch_cache_generation
+            cached = self._batch_cache.get(key)  # type: ignore[arg-type]
         now = time.perf_counter()
         if cached is not None:
             ts, cached_rows, cached_summaries = cached
@@ -430,7 +444,9 @@ class InvoiceProcessingService:
         self._apply_unreleased_sku_flags(summaries)
         rows = [s.as_table_row() for s in summaries]
         final_rows = self._rows_with_fulfillment(summaries, rows)
-        self._batch_cache[key] = (now, list(final_rows), list(summaries))  # type: ignore[index]
+        with self._batch_cache_lock:
+            if generation == self._batch_cache_generation:
+                self._batch_cache[key] = (time.perf_counter(), list(final_rows), list(summaries))  # type: ignore[index]
         return final_rows, summaries
 
     def warm_startup_batches(self, *, draft_limit: int = 5, open_limit: int = 5) -> tuple[int, int]:
@@ -479,10 +495,7 @@ class InvoiceProcessingService:
             self._search_index.forget(summary.id)
         invoice_key = str(summary.id or "").strip()
         if invoice_key:
-            self._drop_invoice_pdf_cache_entry(invoice_key)
-            self._drop_invoice_detail_cache(invoice_key)
-            self._drop_invoice_work_context_cache(invoice_key)
-        self._batch_cache.clear()
+            self._invalidate_invoice_caches(invoice_key)
 
     def read_fulfillment_flags(self, invoice_id: str) -> FulfillmentFlags:
         all_flags = self._load_fulfillment_flags_map()
@@ -1500,9 +1513,6 @@ class InvoiceProcessingService:
         current = self._resolve_current_start_summary(summary)
         if int(current.status_code or 0) == 100:
             self._send_invoice_document_once(current.id, send_type="VPDF")
-            invoice_key = str(current.id or "").strip()
-            self._drop_invoice_detail_cache(invoice_key)
-            self._drop_invoice_work_context_cache(invoice_key)
             current = self._resolve_current_start_summary(current)
         return current
 
@@ -1511,6 +1521,7 @@ class InvoiceProcessingService:
         claim = self._operation_claims.acquire(invoice_id, "invoice_finalize")
         if not claim.acquired:
             if claim.state == "succeeded":
+                self._invalidate_invoice_caches(invoice_id)
                 return
             raise RuntimeError(
                 f"Rechnungsfreigabe nicht gestartet: Claim-Status {claim.state}; "
@@ -1529,6 +1540,7 @@ class InvoiceProcessingService:
             state = self._invoice_finalization_state(refreshed)
             if state == "final":
                 self._operation_claims.finish(claim, "succeeded")
+                self._invalidate_invoice_caches(invoice_id)
                 return
             if state == "draft":
                 self._operation_claims.finish(claim, "failed", error=str(finalize_error))
@@ -1538,6 +1550,7 @@ class InvoiceProcessingService:
                 f"Rechnungsstatus fuer {invoice_id} nach Freigabeversuch unklar."
             ) from finalize_error
         self._operation_claims.finish(claim, "succeeded")
+        self._invalidate_invoice_caches(invoice_id)
 
     def export_final_invoice_pdf(self, invoice_id: str, target_dir: Path | str) -> Path:
         """Persist the validated final invoice PDF for Outlook attachments."""
@@ -2563,10 +2576,9 @@ class InvoiceProcessingService:
             )
         # Finalization can assign the definitive invoice number. Do not let a
         # draft-era detail response (often containing only header="Rechnung")
-        # leak into the subsequent mail subject/template rendering.
+        # leak into the subsequent mail subject/template rendering. The
+        # finalization helper invalidates PDF, detail, context and batch caches.
         invoice_key = str(summary.id or "").strip()
-        self._drop_invoice_detail_cache(invoice_key)
-        self._drop_invoice_work_context_cache(invoice_key)
         inventory_warning = ""
         if self._inventory is not None and printed_copy and legacy_requirements:
             try:
@@ -3792,6 +3804,15 @@ class InvoiceProcessingService:
     def _drop_invoice_detail_cache(self, invoice_id: str) -> None:
         self._invoice_detail_cache.pop(invoice_id, None)
         self._invoice_detail_cache_updated_at.pop(invoice_id, None)
+
+    def _invalidate_invoice_caches(self, invoice_id: str) -> None:
+        """Drop every in-process invoice snapshot after a confirmed mutation."""
+        key = str(invoice_id or "").strip()
+        if key:
+            self._drop_invoice_pdf_cache_entry(key)
+            self._drop_invoice_detail_cache(key)
+            self._drop_invoice_work_context_cache(key)
+        self.invalidate_invoice_batch_cache()
 
     def _put_invoice_work_context_cache(
         self,
