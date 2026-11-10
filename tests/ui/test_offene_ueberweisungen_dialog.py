@@ -4,6 +4,8 @@ from decimal import Decimal
 from pathlib import Path
 from threading import Event
 
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QMessageBox
 
 from xw_office.services.transfers.models import (
@@ -213,3 +215,33 @@ def test_dialog_close_does_not_wait_for_running_worker(qtbot: object, monkeypatc
     assert wait_calls == []
     release.set()
     qtbot.waitUntil(lambda: not worker.isRunning(), timeout=2000)
+
+
+def test_show_invoice_download_does_not_block_event_loop(qtbot: object, monkeypatch) -> None:
+    service = _FakeTransferService()
+    entered, release = Event(), Event()
+    opened: list[str] = []
+
+    def blocked_download(case_id: str, attachment_id: str) -> bytes:
+        assert (case_id, attachment_id) == ("m1", "a1")
+        entered.set()
+        assert release.wait(3)
+        return b"%PDF-1.7 test"
+
+    monkeypatch.setattr(service, "download_attachment_bytes", blocked_download)
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url.toLocalFile()) or True)
+    dialog = OffeneUeberweisungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    try:
+        _wait_dialog_loaded(qtbot, dialog)
+        dialog._show_invoice()  # noqa: SLF001
+        qtbot.waitUntil(entered.is_set)
+        beats: list[bool] = []
+        QTimer.singleShot(20, lambda: beats.append(True))
+        qtbot.waitUntil(lambda: bool(beats))
+        assert not dialog._btn_show_invoice.isEnabled()  # noqa: SLF001
+    finally:
+        release.set()
+        qtbot.waitUntil(lambda: dialog._action_worker is None, timeout=3000)  # noqa: SLF001
+    assert len(opened) == 1
+    assert Path(opened[0]).read_bytes() == b"%PDF-1.7 test"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -28,7 +30,12 @@ from shiboken6 import isValid
 
 from xw_office.core.container import Container
 from xw_office.core.worker import BackgroundWorker
-from xw_office.services.transfers.models import TransferCase, TransferFieldSource, TransferPaymentData
+from xw_office.services.transfers.models import (
+    TransferAttachment,
+    TransferCase,
+    TransferFieldSource,
+    TransferPaymentData,
+)
 from xw_office.services.transfers.payment_qr import PaymentQrError
 from xw_office.services.transfers.service import OffeneUeberweisungenService
 from xw_office.ui.modules.rechnungen.payment_qr_dialog import PaymentQrDialog
@@ -42,6 +49,7 @@ class OffeneUeberweisungenDialog(QDialog):
         self._container = container
         self._service: OffeneUeberweisungenService = container.resolve(OffeneUeberweisungenService)
         self._cases: list[TransferCase] = []
+        self._attachments: list[TransferAttachment] = []
         self._selected_attachment_id: str | None = None
         self._load_worker: BackgroundWorker | None = None
         self._detail_worker: BackgroundWorker | None = None
@@ -230,6 +238,7 @@ class OffeneUeberweisungenDialog(QDialog):
 
     def _clear_detail(self, message: str) -> None:
         self._meta.setText(message)
+        self._attachments = []
         self._summary.setPlainText("")
         self._thread.setPlainText("")
         self._recipient.setText("")
@@ -321,9 +330,10 @@ class OffeneUeberweisungenDialog(QDialog):
         case = self._current_case()
         if case is None or case.id != case_id or not isinstance(payment, TransferPaymentData):
             return
-        self._selected_attachment_id = attachments[0].id if attachments else None
+        self._attachments = [item for item in attachments if isinstance(item, TransferAttachment)]
+        self._selected_attachment_id = self._attachments[0].id if self._attachments else None
         self._fill_payment_form(payment)
-        self._set_payment_actions_enabled(True, has_attachment=bool(attachments))
+        self._set_payment_actions_enabled(True, has_attachment=bool(self._attachments))
 
     def _on_case_detail_error(self, seq: int, exc: Exception) -> None:
         if self._closing or not isValid(self):
@@ -407,7 +417,7 @@ class OffeneUeberweisungenDialog(QDialog):
         case = self._current_case()
         if case is None:
             return
-        attachments = self._service.list_pdf_attachments(case.id)
+        attachments = list(self._attachments)
         if not attachments:
             QMessageBox.information(self, "Rechnung", "Keine PDF-Rechnung in dieser Mail gefunden.")
             return
@@ -419,12 +429,27 @@ class OffeneUeberweisungenDialog(QDialog):
                 return
             chosen = attachments[labels.index(selected_label)]
 
-        data = self._service.download_attachment_bytes(case.id, chosen.id)
-        temp_path = Path(__file__).resolve().parents[5] / "state" / "tmp" / f"transfer_{case.id}_{chosen.name}"
-        temp_path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path.write_bytes(data)
-        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(temp_path))):
-            QMessageBox.warning(self, "Rechnung", "PDF konnte nicht geoeffnet werden.")
+        case_id = case.id
+        attachment_id = chosen.id
+
+        def job() -> Path:
+            data = self._service.download_attachment_bytes(case_id, attachment_id)
+            descriptor, filename = tempfile.mkstemp(prefix="xw-transfer-", suffix=".pdf")
+            os.close(descriptor)
+            path = Path(filename)
+            try:
+                path.write_bytes(data)
+            except Exception:
+                path.unlink(missing_ok=True)
+                raise
+            return path
+
+        def open_invoice(payload: object) -> None:
+            path = payload if isinstance(payload, Path) else None
+            if path is None or not path.is_file() or not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+                QMessageBox.warning(self, "Rechnung", "PDF konnte nicht geoeffnet werden.")
+
+        self._start_action(self._btn_show_invoice, "Lade Rechnung...", job, open_invoice)
 
     def _generate_qr(self) -> None:
         case = self._current_case()
