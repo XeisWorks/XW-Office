@@ -3258,7 +3258,24 @@ class RechnungenView(QWidget):
             stock_by_sku=stock_by_sku,
             article_kind_by_sku=article_kind_by_sku,
         )
-        return replace(overview, print_products=planned)
+        # Product-Hub stock is currently informational.  Keep the calculated
+        # allocation on each row, but never let it reduce the editable and
+        # printable open order quantity.
+        informational = [
+            replace(
+                item,
+                quantity=max(
+                    0,
+                    int(
+                        item.ordered_quantity
+                        if item.ordered_quantity is not None
+                        else item.quantity or 0
+                    ),
+                ),
+            )
+            for item in planned
+        ]
+        return replace(overview, print_products=informational)
 
     def _apply_open_invoice_overview(self, overview: OpenInvoiceOverview) -> None:
         overview = self._plan_open_print_overview(overview)
@@ -4242,18 +4259,9 @@ class RechnungenView(QWidget):
         prepared_jobs: list[tuple[PieceBlock, int, Callable[[], None]]] = []
         for item in products:
             block = self._piece_block_from_open_product(item)
-            qty = block.print_qty
-            # Legacy callers may provide an unplanned aggregate (no inventory
-            # snapshot yet). Preserve the historical print action for that
-            # explicit unknown state; planned external_print rows carry
-            # ``on_hand``/``print_quantity`` and correctly remain a reorder case.
-            if (
-                qty <= 0
-                and item.print_quantity is None
-                and item.on_hand is None
-                and str(item.article_kind or "external_print").strip().lower() == "external_print"
-            ):
-                qty = max(0, int(item.quantity or 0))
+            # This quantity is explicitly visible and editable in the panel.
+            # Inventory hints must not recalculate or veto it at print time.
+            qty = max(0, int(item.quantity or 0))
             if qty <= 0:
                 continue
             if not self._open_print_product_ready(item) and not _configure_missing_piece_print(
@@ -4399,9 +4407,11 @@ class RechnungenView(QWidget):
             text_col.addWidget(description)
         policy_block = self._piece_block_from_open_product(item)
         if item.ordered_quantity is not None and item.disposition:
+            suggested = max(0, int(item.print_quantity or 0))
             plan_hint = QLabel(
-                f"Bestellt: {item.ordered_quantity} · aus Lager: {item.from_stock} · "
-                f"neu drucken: {item.quantity} · {item.disposition}"
+                f"Bestand (nur Hinweis): bestellt {item.ordered_quantity} · "
+                f"aus Lager {item.from_stock} · Druckvorschlag {suggested} · "
+                f"{item.disposition}"
             )
             plan_hint.setWordWrap(True)
             plan_hint.setStyleSheet("color: #a7f3d0; font-size: 11px;")
@@ -4447,7 +4457,10 @@ class RechnungenView(QWidget):
 
         action = QToolButton()
         action.setFixedSize(28, 26)
-        action.setEnabled(self._print_allowed and policy_block.print_qty > 0)
+        # The button also owns the print-settings context menu.  It must remain
+        # interactive even when stock suggests zero copies or no printer is
+        # currently ready.
+        action.setEnabled(True)
         action.setStyleSheet(
             "QToolButton { background-color: #334155; border: 1px solid #64748b; border-radius: 4px; }"
             "QToolButton:hover { background-color: #475569; border-color: #94a3b8; }"
@@ -4517,9 +4530,10 @@ class RechnungenView(QWidget):
     def _plain_open_print_product_line(self, item: PrintProductAggregate) -> str:
         plan = ""
         if item.ordered_quantity is not None and item.disposition:
+            suggested = max(0, int(item.print_quantity or 0))
             plan = (
                 f" bestellt {item.ordered_quantity}, aus Lager {item.from_stock}, "
-                f"neu drucken {item.quantity} ({item.disposition})"
+                f"Druckvorschlag {suggested} ({item.disposition}; nur Hinweis)"
             )
         return (
             f"{max(0, int(item.quantity or 0))}x "
@@ -4622,11 +4636,18 @@ class RechnungenView(QWidget):
     ) -> None:
         requested_quantity = self._open_product_quantity(item)
         block = self._piece_block_from_open_product(item)
-        quantity = block.print_qty if requested_quantity > 0 else 0
+        quantity = requested_quantity
         if quantity <= 0:
             self._container.resolve(AppSignals).status_message.emit(
                 f"{item.sku}: Menge ist 0 – kein Druckauftrag gestartet.",
                 5000,
+            )
+            return
+        if not self._print_allowed:
+            self._container.resolve(AppSignals).status_message.emit(
+                f"{item.sku}: Drucker derzeit nicht bereit; "
+                "Druckeinstellungen sind per Rechtsklick erreichbar.",
+                7000,
             )
             return
         self._on_product_print_clicked(
@@ -4656,7 +4677,9 @@ class RechnungenView(QWidget):
                     "QToolButton:hover { background-color: #475569; border-color: #94a3b8; }"
                     "QToolButton:disabled { background-color: #1f2937; border-color: #334155; }"
                 )
-                button.setEnabled(self._print_allowed)
+                # The settings context menu must remain reachable even when a
+                # printer goes offline after the print confirmation.
+                button.setEnabled(True)
             except RuntimeError:
                 return
 

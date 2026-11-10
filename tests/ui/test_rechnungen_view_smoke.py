@@ -20,7 +20,7 @@ from xw_office.services.draft_invoice.service import DraftInvoiceService
 from xw_office.services.inventory.service import StartMode, StartPreflight
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.services.plc.label_archive import PlcLabelArchive
-from xw_office.services.products.catalog import Product, ProductCatalogService
+from xw_office.services.products.catalog import Product, ProductCatalogService, StockStatus
 from xw_office.services.products.print_decision import PieceBlock, PrintDecisionEngine
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sendungen.service import OffeneSendungenService
@@ -1311,6 +1311,155 @@ def test_ready_print_product_reaches_settings_via_right_click(qtbot: object, mon
     button.customContextMenuRequested.emit(QPoint(0, 0))
 
     assert opened == ["XW-6612"]
+
+
+def test_open_product_inventory_is_informational_and_never_disables_action(
+    qtbot: object,
+    monkeypatch: object,
+) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    item = PrintProductAggregate(
+        sku="XW-STOCK-INFO",
+        title="Bestandsprodukt",
+        description="Besetzung A",
+        quantity=2,
+    )
+    block = PieceBlock(
+        sku=item.sku,
+        name=item.title,
+        qty_needed=item.quantity,
+        product=Product(
+            id="stock-info",
+            sku=item.sku,
+            name=item.title,
+            article_kind="pod",
+        ),
+        stock_status=StockStatus(
+            sku=item.sku,
+            product_name=item.title,
+            is_digital=False,
+            on_hand=10,
+            min_stock_target=5,
+            reprint_batch_qty=3,
+        ),
+    )
+    assert block.print_qty == 0
+    monkeypatch.setattr(view, "_piece_block_from_open_product", lambda _item: block)
+    monkeypatch.setattr(view, "_open_print_product_ready", lambda _item: True)
+
+    # Even before printer discovery completes, the button stays interactive so
+    # its right-click settings path remains available.
+    view._print_allowed = False  # noqa: SLF001
+    row = view._build_open_print_product_row(item)  # noqa: SLF001
+    qtbot.addWidget(row)  # type: ignore[attr-defined]
+    button = row.findChildren(QToolButton)[0]
+
+    assert button.isEnabled()
+    assert button.contextMenuPolicy() == Qt.ContextMenuPolicy.CustomContextMenu
+
+
+def test_open_product_print_uses_visible_quantity_not_inventory_suggestion(
+    qtbot: object,
+    monkeypatch: object,
+) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    view._print_allowed = True  # noqa: SLF001
+    item = PrintProductAggregate(
+        sku="XW-STOCK-PRINT",
+        title="Bestandsprodukt",
+        description="Besetzung A",
+        quantity=2,
+    )
+    block = PieceBlock(
+        sku=item.sku,
+        name=item.title,
+        qty_needed=item.quantity,
+        product=Product(
+            id="stock-print",
+            sku=item.sku,
+            name=item.title,
+            article_kind="pod",
+        ),
+        stock_status=StockStatus(
+            sku=item.sku,
+            product_name=item.title,
+            is_digital=False,
+            on_hand=10,
+            min_stock_target=5,
+            reprint_batch_qty=3,
+        ),
+    )
+    printed: list[tuple[str, int]] = []
+    monkeypatch.setattr(view, "_piece_block_from_open_product", lambda _item: block)
+    monkeypatch.setattr(
+        view,
+        "_on_product_print_clicked",
+        lambda current, quantity, **_kwargs: printed.append((current.sku, quantity)),
+    )
+
+    view._on_open_product_print_clicked(item)  # noqa: SLF001
+
+    assert block.print_qty == 0
+    assert printed == [(item.sku, 2)]
+
+
+def test_open_product_stock_plan_keeps_order_quantity_printable(
+    qtbot: object,
+    monkeypatch: object,
+) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    item = PrintProductAggregate(
+        sku="XW-STOCK-PLAN",
+        title="Bestandsprodukt",
+        description="Besetzung A",
+        quantity=2,
+    )
+    block = PieceBlock(
+        sku=item.sku,
+        name=item.title,
+        qty_needed=item.quantity,
+        product=Product(
+            id="stock-plan",
+            sku=item.sku,
+            name=item.title,
+            article_kind="pod",
+        ),
+        stock_status=StockStatus(
+            sku=item.sku,
+            product_name=item.title,
+            is_digital=False,
+            on_hand=10,
+            min_stock_target=5,
+            reprint_batch_qty=3,
+        ),
+    )
+    monkeypatch.setattr(view, "_piece_block_from_open_product", lambda _item: block)
+
+    planned = view._plan_open_print_overview(  # noqa: SLF001
+        OpenInvoiceOverview(
+            key="stock-is-informational",
+            total=1,
+            with_ref=1,
+            physical=1,
+            digital=0,
+            unknown=0,
+            with_note=0,
+            plc=0,
+            complete=True,
+            print_products=[item],
+        )
+    ).print_products[0]
+
+    assert planned.quantity == 2
+    assert planned.ordered_quantity == 2
+    assert planned.on_hand == 10
+    assert planned.print_quantity == 0
 
 
 def test_print_products_remain_frozen_after_completed_run(qtbot: object) -> None:
