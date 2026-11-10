@@ -47,32 +47,28 @@ class OffeneUeberweisungenDialog(QDialog):
         self._detail_worker: BackgroundWorker | None = None
         self._detail_workers: list[BackgroundWorker] = []
         self._action_worker: BackgroundWorker | None = None
+        self._closing = False
         self._load_seq = 0
         self._detail_seq = 0
         self._build_ui()
         QTimer.singleShot(0, lambda: self._load_cases(refresh=True))
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        self._wait_for_workers()
+        self._invalidate_dialog_callbacks()
         super().closeEvent(event)
 
     def accept(self) -> None:
-        self._detail_seq += 1
-        self._load_seq += 1
-        self._wait_for_workers()
+        self._invalidate_dialog_callbacks()
         super().accept()
 
     def reject(self) -> None:
-        self._detail_seq += 1
-        self._load_seq += 1
-        self._wait_for_workers()
+        self._invalidate_dialog_callbacks()
         super().reject()
 
-    def _wait_for_workers(self) -> None:
-        workers = [self._load_worker, self._detail_worker, self._action_worker, *self._detail_workers]
-        for worker in workers:
-            if worker is not None and worker.isRunning():
-                worker.wait(3000)
+    def _invalidate_dialog_callbacks(self) -> None:
+        self._closing = True
+        self._detail_seq += 1
+        self._load_seq += 1
 
     def _build_ui(self) -> None:
         self.setWindowTitle("OFFENE UEBERWEISUNGEN")
@@ -204,7 +200,7 @@ class OffeneUeberweisungenDialog(QDialog):
         self._load_worker.start()
 
     def _on_cases_loaded(self, seq: int, result: object) -> None:
-        if not isValid(self):
+        if self._closing or not isValid(self):
             return
         if seq != self._load_seq:
             return
@@ -225,6 +221,8 @@ class OffeneUeberweisungenDialog(QDialog):
             self._clear_detail("Keine offenen Ueberweisungen.")
 
     def _on_cases_load_error(self, exc: Exception) -> None:
+        if self._closing or not isValid(self):
+            return
         self._list.setEnabled(True)
         self._status.setText("Laden fehlgeschlagen")
         self._clear_detail("Offene Ueberweisungen konnten nicht geladen werden.")
@@ -315,7 +313,7 @@ class OffeneUeberweisungenDialog(QDialog):
             pass
 
     def _on_case_detail_loaded(self, seq: int, result: object) -> None:
-        if not isValid(self):
+        if self._closing or not isValid(self):
             return
         if seq != self._detail_seq or not isinstance(result, tuple) or len(result) != 3:
             return
@@ -328,7 +326,7 @@ class OffeneUeberweisungenDialog(QDialog):
         self._set_payment_actions_enabled(True, has_attachment=bool(attachments))
 
     def _on_case_detail_error(self, seq: int, exc: Exception) -> None:
-        if not isValid(self):
+        if self._closing or not isValid(self):
             return
         if seq != self._detail_seq:
             return
@@ -518,7 +516,11 @@ class OffeneUeberweisungenDialog(QDialog):
         self._detail_status_for_action(busy_text)
         self._action_worker = BackgroundWorker(job)
         worker = self._action_worker
-        worker.signals.result.connect(on_result)
+        worker.signals.result.connect(
+            lambda payload: on_result(payload)
+            if not self._closing and isValid(self)
+            else None
+        )
         worker.signals.error.connect(self._on_action_error)
         worker.signals.finished.connect(
             lambda current=worker, target=button, text=idle_text: self._finish_action(
@@ -531,6 +533,8 @@ class OffeneUeberweisungenDialog(QDialog):
         self._source_label.setText(text)
 
     def _on_action_error(self, exc: Exception) -> None:
+        if self._closing or not isValid(self):
+            return
         title = "QR-Code" if isinstance(exc, PaymentQrError) else "Aktion fehlgeschlagen"
         QMessageBox.warning(self, title, str(exc))
 
@@ -542,5 +546,7 @@ class OffeneUeberweisungenDialog(QDialog):
     ) -> None:
         if self._action_worker is worker:
             self._action_worker = None
+        if self._closing or not isValid(self) or not isValid(button):
+            return
         button.setEnabled(True)
         button.setText(idle_text)

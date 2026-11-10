@@ -179,6 +179,7 @@ class OffeneSendungenDialog(QDialog):
         self._detail_worker: BackgroundWorker | None = None
         self._detail_workers: list[BackgroundWorker] = []
         self._action_worker: BackgroundWorker | None = None
+        self._closing = False
         self._load_seq = 0
         self._detail_seq = 0
         self._delivery_pdf_by_case: dict[str, Path] = {}
@@ -195,26 +196,21 @@ class OffeneSendungenDialog(QDialog):
         QTimer.singleShot(0, lambda: self._load_cases(refresh=False))
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        self._wait_for_workers()
+        self._invalidate_dialog_callbacks()
         super().closeEvent(event)
 
     def accept(self) -> None:
-        self._load_seq += 1
-        self._detail_seq += 1
-        self._wait_for_workers()
+        self._invalidate_dialog_callbacks()
         super().accept()
 
     def reject(self) -> None:
-        self._load_seq += 1
-        self._detail_seq += 1
-        self._wait_for_workers()
+        self._invalidate_dialog_callbacks()
         super().reject()
 
-    def _wait_for_workers(self) -> None:
-        workers = [self._load_worker, self._detail_worker, self._action_worker, *self._detail_workers]
-        for worker in workers:
-            if worker is not None and worker.isRunning():
-                worker.wait(3000)
+    def _invalidate_dialog_callbacks(self) -> None:
+        self._closing = True
+        self._load_seq += 1
+        self._detail_seq += 1
 
     def _build_ui(self) -> None:
         self.setWindowTitle("OFFENE SENDUNGEN")
@@ -446,7 +442,7 @@ class OffeneSendungenDialog(QDialog):
         preserve: bool = False,
         selected_id: str = "",
     ) -> None:
-        if not isValid(self):
+        if self._closing or not isValid(self):
             return
         if seq != self._load_seq:
             return
@@ -511,6 +507,8 @@ class OffeneSendungenDialog(QDialog):
         return f"{badge}{short_date} {display_name}"
 
     def _on_cases_load_error(self, exc: Exception) -> None:
+        if self._closing or not isValid(self):
+            return
         self._list.setEnabled(True)
         self._status.setText("Laden fehlgeschlagen")
         self._clear_detail("Offene Sendungen konnten nicht geladen werden.")
@@ -574,7 +572,7 @@ class OffeneSendungenDialog(QDialog):
             pass
 
     def _on_detail_loaded(self, seq: int, result: object) -> None:
-        if not isValid(self):
+        if self._closing or not isValid(self):
             return
         if seq != self._detail_seq or not isinstance(result, tuple) or len(result) != 3:
             return
@@ -650,7 +648,7 @@ class OffeneSendungenDialog(QDialog):
         self._meta.setText("\n".join(metadata))
 
     def _on_detail_error(self, seq: int, exc: Exception) -> None:
-        if not isValid(self):
+        if self._closing or not isValid(self):
             return
         if seq != self._detail_seq:
             return
@@ -932,9 +930,15 @@ class OffeneSendungenDialog(QDialog):
         self._detail_status.setText(busy_text)
         self._action_worker = BackgroundWorker(job)
         worker = self._action_worker
-        worker.signals.result.connect(on_result)
+        worker.signals.result.connect(
+            lambda payload: on_result(payload)
+            if not self._closing and isValid(self)
+            else None
+        )
         worker.signals.error.connect(
             lambda exc: QMessageBox.warning(self, "Aktion fehlgeschlagen", str(exc))
+            if not self._closing and isValid(self)
+            else None
         )
         worker.signals.finished.connect(
             lambda current=worker, target=button, text=idle_text: self._finish_action(
@@ -951,5 +955,7 @@ class OffeneSendungenDialog(QDialog):
     ) -> None:
         if self._action_worker is worker:
             self._action_worker = None
+        if self._closing or not isValid(self) or not isValid(button):
+            return
         button.setEnabled(True)
         button.setText(idle_text)

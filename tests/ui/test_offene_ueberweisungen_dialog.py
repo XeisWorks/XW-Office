@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
+from threading import Event
 
 from PySide6.QtWidgets import QMessageBox
 
@@ -12,6 +13,7 @@ from xw_office.services.transfers.models import (
     TransferPaymentData,
 )
 from xw_office.services.transfers.service import OffeneUeberweisungenService
+from xw_office.core.worker import BackgroundWorker
 from xw_office.ui.modules.rechnungen.offene_ueberweisungen_dialog import OffeneUeberweisungenDialog
 
 
@@ -193,3 +195,21 @@ def test_dialog_generate_qr_uses_manual_form_values(qtbot: object, monkeypatch) 
     assert service.last_generated_payment.recipient == "Manual Recipient"
     assert service.last_generated_payment.amount == Decimal("999.99")
     assert len(service.saved_manual_calls) == 1
+
+
+def test_dialog_close_does_not_wait_for_running_worker(qtbot: object, monkeypatch) -> None:
+    dialog = OffeneUeberweisungenDialog(_FakeContainer(_FakeTransferService()))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    release = Event()
+    worker = BackgroundWorker(lambda: release.wait(2))
+    dialog._action_worker = worker  # noqa: SLF001
+    wait_calls: list[bool] = []
+    monkeypatch.setattr(BackgroundWorker, "wait", lambda *_args: wait_calls.append(True))
+    worker.start()
+
+    dialog.close()
+
+    assert dialog._closing is True  # noqa: SLF001
+    assert wait_calls == []
+    release.set()
+    qtbot.waitUntil(lambda: not worker.isRunning(), timeout=2000)

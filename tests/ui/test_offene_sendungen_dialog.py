@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 from time import sleep
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QTabWidget
 
 from xw_office.core.config import AppConfig, PrintingSection
+from xw_office.core.worker import BackgroundWorker
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.sendungen.service import (
     OffeneSendungenService,
@@ -229,3 +231,21 @@ def test_dialog_mark_done_saves_manual_fields_and_removes_case(qtbot: object) ->
     assert service.mark_done_calls == [("m1", True)]
     assert service.saved_manual[-1]["manual_text"] == "Bitte schnell senden"
     qtbot.waitUntil(lambda: dialog.result() == QDialog.DialogCode.Accepted, timeout=2000)
+
+
+def test_dialog_close_does_not_wait_for_running_worker(qtbot: object, monkeypatch) -> None:
+    dialog = OffeneSendungenDialog(_FakeContainer(_FakeSendungenService()))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    release = Event()
+    worker = BackgroundWorker(lambda: release.wait(2))
+    dialog._action_worker = worker  # noqa: SLF001
+    wait_calls: list[bool] = []
+    monkeypatch.setattr(BackgroundWorker, "wait", lambda *_args: wait_calls.append(True))
+    worker.start()
+
+    dialog.close()
+
+    assert dialog._closing is True  # noqa: SLF001
+    assert wait_calls == []
+    release.set()
+    qtbot.waitUntil(lambda: not worker.isRunning(), timeout=2000)
