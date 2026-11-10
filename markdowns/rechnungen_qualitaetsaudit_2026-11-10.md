@@ -86,10 +86,10 @@ und Signalverdrahtungen stehen vollständig in Anhang A.
 | Produktdruck einzeln/gesamt | Konfiguration/PDF-Seiten prüfen → PrintQueue/PDF-XChange → bestätigten Erfolg buchen | Kein Raster-/Acrobat-Fallback; offener Druck bleibt gemäß `f1e759c` editierbar und bestandsunabhängig |
 | Druckhistorie / Reprints | Persistierte START-Snapshots und gezielter Wiederholungsdruck | Historische Anzeige erzeugt allein keine Lagerbewegung; neue Druckproduktion benötigt eigene Identität |
 | PLC / Zoll / Packlisten | Kontext, Produkt, Gewicht, Mehrpaket-Aufteilung, Zollartikel → Shipment-Service/Importdatei → Archiv/Packliste/Ergebnis | Mehrpaket-Nicht-EU wird ausdrücklich blockiert; vorhandene Archive und zusätzliche Sendungen gesondert |
-| Paketinhalt & Tracking | Persistierte Paketpositionen, bestätigter Trackingcode, Original-XML-Import, Annahme/Zustellung anzeigen | Post-Ereignisse nicht aus bloßem Labeldruck ableiten; DB-I/O im Dialog F17 |
+| Paketinhalt & Tracking | Persistierte Paketpositionen, bestaetigter Trackingcode, Original-XML-Import, Annahme/Zustellung anzeigen | Post-Ereignisse nicht aus blossem Labeldruck ableiten; PLC-Trackingimport und Paketcode-Zuordnung laufen im Worker (F17) |
 | Offene Sendungen | Mail-/Fallliste → Detail/Adresse/Positionen → Label/Lieferschein/erledigt | Sequenzzähler für Details, asynchrone Aktionen, manuelle Felder; Close-Waits F18 |
-| OPEN PRINTS | Graph/Flow-Liste → Anhänge → lokalen Download öffnen → erledigt | F07 verhindert Übernahme alter Anhangslisten; Erledigen weiterhin synchron, F17 |
-| Offene Überweisungen | Maildetail → Zahlungsformular → QR/PDF → verschieben/Outlook erledigt | Bedeutet keine Banküberweisung; PDF-Download bleibt synchron, F17 |
+| OPEN PRINTS | Graph/Flow-Liste -> Anhaenge -> lokalen Download oeffnen -> erledigt | F07 verhindert Uebernahme alter Anhangslisten; Laden, Download und Erledigen laufen asynchron, F17 |
+| Offene Ueberweisungen | Maildetail -> Zahlungsformular -> QR/PDF -> verschieben/Outlook erledigt | Bedeutet keine Bankueberweisung; Rechnungsauswahl und PDF-Download asynchron, F17 |
 | Digitale Lieferung | Bezahlte Lizenzfälle → fehlende PDF zuordnen → personalisieren → Sichtkontrolle → Outlook-Entwurf → manuellen Versand bestätigen → Wix-Abschluss | F04 bindet Dateien/Entwurf an denselben Fall; keine automatische Mailfreigabe |
 | Lageralarme | Badge → Liste/Ist/Schwelle/Forecast → Fixwert/Automatik → manuelle Task-Mail | F03 dauerhafte Claim-/Unklar-Semantik; F06 asynchroner Badge; Popup-I/O noch F17 |
 | Nachlieferungen / Betreuung | Review/Manager/Tab → Rollen/Mengen/Adresse/Snooze/sofort/erledigt/storniert → optional Zusatzrechnung | Klare Fallzustände, Originalbeleg und nicht verrechnete Nachlieferung erhalten; Mehrschritttransaktionen prüfen |
@@ -146,7 +146,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F14 | P1 | TEILWEISE | `load_invoice_piece_blocks` gibt nur explizit druckbare ganzzahlige Produktpositionen aus. Bruchmengen und nichtphysische/unaufgeloeste Positionen erscheinen mit Warntext im Positionsbereich; vollstaendige Darstellung aller Originalfelder bleibt offen. | Regression: Menge 1,5 wird nicht als 1 gedruckt; Freitext und Bruchmenge erzeugen sichtbare Klaerhinweise |
 | F15 | P1 | ERLEDIGT | Decimal-Mengen, finale Statuswerte, stabile Positions-IDs und Needs-Review wurden strikt validiert. Der Invoice-Poll speichert einen atomaren Erfolgswasserstand mit 30-Tage-Overlap; bei Fehlern/Needs-Review bleibt er stehen. sevDesk-Seitenlimit wirft `TaxPageLimitError`, bevor Ergebnisse als vollstaendig gelten. | Feed-Validierungs-, Checkpoint- und `load_tax_resource`-Paginationstests |
 | F16 | P1 | TEILWEISE | START bucht Hub je finalisierter Rechnung und Legacy-Bestand ueber ein transaktionales Journal je `invoice_id:SKU`; Wiederholung bleibt idempotent. Offen bleiben die getrennten Legacy-/Hub-Journale und der isolierte 2+1-Teilfehler-/STOP-Betriebsnachweis. | SQLite-Regression fuer per-Rechnung-Verbrauch, Replay, fehlgeschlagene Buchung ohne Teilupdate und Transaktionsrollback; externer Mehrsystemnachweis Gate G2 |
-| F17 | P2 | TEILWEISE | Alarmdetail-Laden, Schwellenwertspeichern und Task-Mail laufen asynchron. Refund-Liste, Mailvorbereitung/-versand, PDF-Abruf und lokale Dateiablage nutzen Worker. OPEN-PRINTS laedt und oeffnet Anhaenge asynchron; auch das Markieren als erledigt laeuft jetzt im Worker und sperrt Mehrfachklicks. Tracking und Betreuung bleiben noch zu pruefen. | Eventloop-Heartbeat fuer Refund-Liste/PDF, OPEN-PRINTS-Erledigen und Ueberweisungs-PDF bei blockierten Fakes; Ruff/mypy fuer Refund-, Alarm- und OPEN-PRINTS-Dialog |
+| F17 | P2 | TEILWEISE | Alarmdetail-Laden, Schwellenwertspeichern und Task-Mail laufen asynchron. Refund-Liste, Mailvorbereitung/-versand und PDF-Abruf, OPEN-PRINTS-Anhaenge/Erledigen, Ueberweisungs-PDF sowie PLC-Trackingimport und Paketcode-Zuordnung nutzen Worker. Nachbetreuungs-Badgezaehler und weitere UI-I/O-Pfade bleiben offen. | Eventloop-Heartbeats mit blockierten Fakes fuer Refunds, OPEN-PRINTS, Ueberweisungs-PDF und PLC-Trackingaktionen; Ruff/mypy der geaenderten Dialoge |
 | F18 | P2 | TEILWEISE | Sendungen-, Ueberweisungs-, Nachbetreuungs- und OPEN-PRINTS-Dialoge warten beim Schliessen nicht mehr im GUI-Thread auf Worker und verwerfen spaete UI-Ergebnisse. Weitere Dialoge und globale Close-Policies bleiben offen. | Blockierende Fake-Worker: Dialog schliesst sofort; Nachbetreuung/Ueberweisung/OPEN-PRINTS ohne UI-Callbacks nach Close |
 | F19 | P2 | TEILWEISE | Invoice-PDFs verwenden jetzt einen 64-MiB-LRU und pruefen die erwartete Rechnungsnummer auch bei Cache-Hits; ein abweichendes PDF wird verworfen und neu geladen. Header-/WorkContext-Revisionen und gebuendelte Produktauflosung bleiben offen. | Regression: Nummernabweichung im Cache erzeugt neuen Fetch; Byte-Limit behaelt nur aktuelle PDFs |
 | F20 | P2 | TEILWEISE | pytest laedt keine lokale dotenv-Konfiguration; sensible Umgebungsvariablen werden entfernt und externe Socket-Verbindungen blockiert (Loopback bleibt erlaubt). Groessere Controller-Extraktion und vollstaendige mypy-Bereinigung bleiben offen. | Gesamtsuite ohne lokale Credentials/ausgehende Verbindungen; mypy-Baseline dokumentiert |
@@ -349,9 +349,9 @@ erhalten.
 
 ### AP06 – UI-I/O und gemeinsame Dialogaktionen (F17, F18; teilweise umgesetzt; P2)
 
-**Teilweise umgesetzt (F17/F18):** Lageralarm-Laden, Schwellenwertspeichern und Task-Mail laufen im Worker; Refund-Liste, Gutschrift-Mail, Refund-PDF, OPEN-PRINTS-Anhaenge und Erledigen-Aktion ebenfalls. Sendungen-, Ueberweisungs-, Nachbetreuungs- und OPEN-PRINTS-Dialoge warten beim Schliessen nicht im GUI-Thread und verwerfen spaete UI-Ergebnisse. Tracking und Betreuung bleiben offen.
+**Teilweise umgesetzt (F17/F18):** Lageralarm-Laden, Schwellenwertspeichern und Task-Mail laufen im Worker; Refund-Liste, Gutschrift-Mail, Refund-PDF, OPEN-PRINTS-Anhaenge und Erledigen-Aktion ebenfalls. Sendungen-, Ueberweisungs-, Nachbetreuungs- und OPEN-PRINTS-Dialoge warten beim Schliessen nicht im GUI-Thread und verwerfen spaete UI-Ergebnisse. Nachbetreuungs-Badgezaehler und weitere UI-I/O-Pfade bleiben offen.
 
-Zuerst Alarm-, Refund-, Überweisungs-PDF- und Tracking-Slots auf vorhandenen
+Zuerst Nachbetreuungs-Badgezaehler und verbleibende UI-I/O-Slots auf vorhandenen
 `UiAsyncAction`/BackgroundWorker umstellen. Snapshot/Identität vor Workerstart;
 Callbacks auf aktuelle Auswahl prüfen oder bewusst ursprünglichen Fall bearbeiten.
 Schreibaktionen gemeinsam sperren, Datenbank-/Netzfehler im Dialog lassen.
@@ -423,6 +423,8 @@ Geänderte Produktionsdateien:
 
 - `ui/modules/rechnungen/customer_aftercare_manager_dialog.py`: schliesst ohne Worker-Wartezeit; invalidiert Detail-/Aktionscallbacks und behaelt typisierte Bestaetigungsdaten (F18).
 
+- `ui/modules/rechnungen/plc_evidence_dialog.py`: PLC-Nachweis laden, Original-Tracking-XML importieren und Paketcode zuordnen laufen asynchron; spaete Ergebnisse werden nach Dialogschluss verworfen (F17/F18).
+
 Gezielte Tests ergänzt in `test_invoice_work_context.py`,
 `test_invoice_inventory_booking.py`, `test_inventory_alert_tasks.py`,
 `test_rechnungen_view_smoke.py`, `test_digital_licenses_dialog.py` und neu
@@ -461,6 +463,7 @@ Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
 - OPEN-PRINTS-Aktion: **3 Qt-Tests bestanden** (schnelle Zeilenauswahl, blockierendes Markieren ohne UI-Blockade/Mehrfachklick, Schliessen waehrend Worker ohne spaeten UI-Write); Ruff und mypy fuer den Dialog gruen.
 - Ueberweisungs-PDF: **7 UI-Tests bestanden**; blockierter Fake-Download laesst Eventloop-Heartbeat laufen, Schaltflaeche bleibt bis zum Abschluss gesperrt; Ruff und mypy fuer den Dialog gruen.
 - Nachbetreuungsmanager: **8 UI-Tests bestanden**, einschliesslich Close bei blockiertem Worker ohne Aufruf von `wait()`; Ruff und mypy fuer den Dialog gruen.
+- PLC-Paketnachweis: **2 Qt-Tests bestanden**; blockierte Codezuordnung und XML-Import halten den Eventloop frei; Ruff und mypy gruen.
 - AP04-Feed-Normalisierung: **51 Tests bestanden** ueber Invoice-/Credit-Feeds,
   Status-/Decimal-Helfer und Bestandsbuchung (2,43 s); Ruff: **gruen**.
 - Regression fuer F10: Ziel 2->3->2 bei Anfangsbestand 10 ergibt Endbestand 8;

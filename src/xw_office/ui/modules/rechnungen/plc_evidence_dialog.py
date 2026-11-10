@@ -2,17 +2,21 @@
 from __future__ import annotations
 
 import html
+from collections.abc import Callable
 from datetime import timezone
 from pathlib import Path
 from urllib.parse import quote
+from typing import Any
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPushButton, QTextBrowser, QVBoxLayout,
 )
 
 from xw_office.repositories.plc_shipment import PlcParcelEvidence, PlcShipmentRepository
+from xw_office.core.worker import BackgroundWorker
 
 
 class PlcEvidenceDialog(QDialog):
@@ -24,6 +28,9 @@ class PlcEvidenceDialog(QDialog):
         self._repository = repository
         self._invoice_id = invoice_id
         self._invoice_number = invoice_number
+        self._worker: BackgroundWorker | None = None
+        self._closing = False
+        self._reload_pending = False
         self.setWindowTitle("PLC: Paketinhalt und Sendungsnachweis")
         self.resize(780, 610)
         layout = QVBoxLayout(self)
@@ -47,18 +54,41 @@ class PlcEvidenceDialog(QDialog):
         row.addWidget(self._code, 1)
         row.addWidget(self._confirm)
         layout.addLayout(row)
-        import_button = QPushButton("Post-Tracking-XML importieren", self)
-        import_button.clicked.connect(self._import_tracking)
-        layout.addWidget(import_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        self._import_button = QPushButton("Post-Tracking-XML importieren", self)
+        self._import_button.clicked.connect(self._import_tracking)
+        layout.addWidget(self._import_button, alignment=Qt.AlignmentFlag.AlignLeft)
         close = QPushButton("Schließen", self)
         close.clicked.connect(self.accept)
         layout.addWidget(close, alignment=Qt.AlignmentFlag.AlignRight)
-        self._render()
+        self._reload()
 
-    def _render(self) -> None:
-        entries = self._repository.list_parcel_evidence(
-            invoice_id=self._invoice_id, invoice_number=self._invoice_number
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        self._closing = True
+        super().closeEvent(event)
+
+    def accept(self) -> None:
+        self._closing = True
+        super().accept()
+
+    def reject(self) -> None:
+        self._closing = True
+        super().reject()
+
+    def _reload(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self._set_busy(True)
+        self._start_worker(
+            lambda: self._repository.list_parcel_evidence(
+                invoice_id=self._invoice_id, invoice_number=self._invoice_number
+            ),
+            self._render,
         )
+
+    def _render(self, result: object) -> None:
+        if self._closing:
+            return
+        entries = result if isinstance(result, list) else []
         self._package.clear()
         parts: list[str] = []
         if not entries:
@@ -89,6 +119,43 @@ class PlcEvidenceDialog(QDialog):
         self._package.setVisible(enabled)
         self._code.setVisible(enabled)
         self._confirm.setVisible(enabled)
+
+    def _set_busy(self, busy: bool) -> None:
+        self._import_button.setEnabled(not busy)
+        self._confirm.setEnabled(not busy and self._package.count() > 0)
+        self._package.setEnabled(not busy)
+        self._code.setEnabled(not busy)
+
+    def _show_error(self, exc: Exception) -> None:
+        if not self._closing:
+            QMessageBox.warning(self, "PLC-Paketnachweis", str(exc))
+
+    def _worker_finished(self, worker: BackgroundWorker) -> None:
+        if self._worker is worker:
+            self._worker = None
+        if self._reload_pending and not self._closing:
+            self._reload_pending = False
+            self._reload()
+            return
+        if not self._closing:
+            self._set_busy(False)
+
+    def _start_worker(
+        self,
+        job: Callable[[], Any],
+        on_result: Callable[[object], None],
+    ) -> None:
+        if self._closing:
+            return
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self._set_busy(True)
+        worker = BackgroundWorker(job)
+        self._worker = worker
+        worker.signals.result.connect(on_result)
+        worker.signals.error.connect(self._show_error)
+        worker.signals.finished.connect(lambda current=worker: self._worker_finished(current))
+        worker.start()
 
     @staticmethod
     def _parcel_html(entry: PlcParcelEvidence) -> str:
@@ -161,34 +228,56 @@ class PlcEvidenceDialog(QDialog):
 
     def _import_tracking(self) -> None:
         filename, _filter = QFileDialog.getOpenFileName(
-            self, "Originale Post-Trackingdatei auswählen", "", "Post-Tracking XML (*.xml)"
+            self, "Originale Post-Trackingdatei auswaehlen", "", "Post-Tracking XML (*.xml)"
         )
         if not filename:
             return
-        try:
-            count = self._repository.import_post_tracking_xml(
-                Path(filename).read_bytes(), invoice_id=self._invoice_id,
+
+        def job() -> int:
+            return self._repository.import_post_tracking_xml(
+                Path(filename).read_bytes(),
+                invoice_id=self._invoice_id,
                 invoice_number=self._invoice_number,
             )
-        except Exception as exc:  # noqa: BLE001 - imports must not close the evidence dialog.
-            QMessageBox.warning(self, "Post-Tracking", f"Import fehlgeschlagen: {exc}")
-            return
-        self._render()
-        QMessageBox.information(
-            self, "Post-Tracking", f"{count} neue Post-Ereignisse für diese Rechnung importiert."
-        )
+
+        def on_imported(result: object) -> None:
+            if self._closing:
+                return
+            count = result if isinstance(result, int) else 0
+            QMessageBox.information(
+                self,
+                "Post-Tracking",
+                f"{count} neue Post-Ereignisse fuer diese Rechnung importiert.",
+            )
+            self._reload_pending = True
+
+        self._start_worker(job, on_imported)
 
     def _confirm_code(self) -> None:
         selection = self._package.currentData()
         if not selection:
             return
-        if not self._repository.confirm_parcel_code(
-            shipment_id=selection[0], package_number=selection[1],
-            tracking_code=self._code.text(),
-        ):
-            QMessageBox.warning(
-                self, "PLC-Code", "Der Code gehört nicht zu dieser Sendung oder ist bereits einem anderen Paket zugeordnet."
+        shipment_id, package_number = selection
+        tracking_code = self._code.text().strip()
+
+        def job() -> bool:
+            return self._repository.confirm_parcel_code(
+                shipment_id=shipment_id,
+                package_number=package_number,
+                tracking_code=tracking_code,
             )
-            return
-        self._code.clear()
-        self._render()
+
+        def on_confirmed(result: object) -> None:
+            if self._closing:
+                return
+            if result is not True:
+                QMessageBox.warning(
+                    self,
+                    "PLC-Code",
+                    "Der Code gehoert nicht zu dieser Sendung oder ist bereits einem anderen Paket zugeordnet.",
+                )
+                return
+            self._code.clear()
+            self._reload_pending = True
+
+        self._start_worker(job, on_confirmed)
