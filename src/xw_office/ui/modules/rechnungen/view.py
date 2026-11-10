@@ -1931,6 +1931,7 @@ class RechnungenView(QWidget):
         self._stuecke_layout.setSpacing(4)
         self._stuecke_hint = QLabel("—")
         self._stuecke_hint.setWordWrap(True)
+        self._stuecke_hint.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._stuecke_layout.addWidget(self._stuecke_hint)
         self._piece_list = QListView(self._gb_stuecke)
         self._piece_list.setModel(self._piece_model)
@@ -6424,17 +6425,33 @@ class RechnungenView(QWidget):
             )
             self._dl_order_ref.setText("Keine externe Bestellung")
         self._on_stuecke_loaded({"__requested_ref": "", "items": data.get("items") or []})
-        warnings = (
-            [
-                f"{position.name} ({position.quantity}): {', '.join(position.warnings)}"
-                for position in context.positions
-                if position.warnings
-            ]
-            if isinstance(context, InvoiceWorkContext)
-            else []
-        )
-        if warnings:
-            self._stuecke_hint.setText("sevDesk-Positionen mit Kl\u00e4rbedarf:\n" + "\n".join(warnings))
+        if isinstance(context, InvoiceWorkContext) and context.positions:
+            position_lines = ["sevDesk-Positionen (vollstaendiger Kontext):"]
+            for position in context.positions:
+                title = position.name.strip() or "Unbenannte Position"
+                position_lines.append(
+                    f"Pos. {position.position_number}: {title} | Art: {position.kind}"
+                )
+                position_lines.append(
+                    f"  Menge: {position.quantity} | SKU: {position.sku or '—'} "
+                    f"({position.sku_source or 'keine'}) | druckbar: "
+                    f"{'ja' if position.printable else 'nein'}"
+                )
+                if position.description.strip():
+                    position_lines.append(f"  Beschreibung: {position.description.strip()}")
+                position_lines.append(
+                    f"  InvoicePos-ID: {position.source_id or '—'} | Part-ID: {position.part_id or '—'}"
+                )
+                details = []
+                if position.unit_weight_kg is not None:
+                    details.append(f"Gewicht: {position.unit_weight_kg:g} kg")
+                if position.unit_value is not None:
+                    details.append(f"Einzelwert: {position.unit_value} {position.currency}")
+                if details:
+                    position_lines.append("  " + " | ".join(details))
+                if position.warnings:
+                    position_lines.append(f"  Klaerbedarf: {'; '.join(position.warnings)}")
+            self._stuecke_hint.setText("\n".join(position_lines))
             self._stuecke_hint.show()
             self._gb_stuecke.show()
         self._update_plc_controls()

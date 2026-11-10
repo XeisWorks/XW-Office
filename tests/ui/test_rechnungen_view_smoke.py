@@ -1,6 +1,7 @@
 """Smoke tests for the Rechnungen daily-business view."""
 from __future__ import annotations
 
+from decimal import Decimal
 from threading import Event
 import types
 from pathlib import Path
@@ -20,6 +21,7 @@ from xw_office.services.daily_business.service import DailyBusinessService
 from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.draft_invoice.service import DraftInvoiceService
 from xw_office.services.inventory.service import StartMode, StartPreflight
+from xw_office.services.invoice_processing.context import InvoiceWorkContext, InvoiceWorkPosition
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.products.catalog import Product, ProductCatalogService, StockStatus
@@ -3015,6 +3017,60 @@ def test_old_sevdesk_worker_finish_does_not_clear_new_request(
             release.set()
         qtbot.waitUntil(lambda: not view._sevdesk_context_workers)
     assert view._stuecke_worker is None
+
+
+def test_sevdesk_context_displays_all_position_details(qtbot: QtBot, monkeypatch: MonkeyPatch) -> None:
+    summary = InvoiceSummary(id="invoice-details", invoiceNumber="RE-DETAILS")
+    position = InvoiceWorkPosition(
+        source_id="invoice-pos-1",
+        position_number=2,
+        part_id="part-9",
+        sku="XW-010",
+        sku_source="part.partNumber",
+        name="Notenheft",
+        description="Ausgabe 2026",
+        quantity=Decimal("1.5"),
+        kind="product",
+        printable=False,
+        unit_weight_kg=0.25,
+        unit_value=Decimal("12.50"),
+        warnings=("Bruchmenge muss geprueft werden",),
+    )
+    context = InvoiceWorkContext(
+        summary=summary,
+        origin="sevdesk_only",
+        positions=(position,),
+        positions_loaded=True,
+    )
+    container, _ = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    monkeypatch.setattr(view, "_selected_summary", lambda: summary)
+    monkeypatch.setattr(view, "_update_plc_controls", lambda: None)
+
+    view._on_sevdesk_context_loaded(
+        {
+            "context_seq": view._sevdesk_context_seq,
+            "invoice_id": summary.id,
+            "context": context,
+            "items": [],
+        }
+    )
+
+    rendered = view._stuecke_hint.text()
+    for detail in (
+        "Pos. 2: Notenheft",
+        "Menge: 1.5",
+        "SKU: XW-010",
+        "Beschreibung: Ausgabe 2026",
+        "InvoicePos-ID: invoice-pos-1",
+        "Part-ID: part-9",
+        "Gewicht: 0.25 kg",
+        "Einzelwert: 12.50 EUR",
+        "Bruchmenge muss geprueft werden",
+    ):
+        assert detail in rendered
+    assert not view._stuecke_hint.isHidden()
 
 def test_draft_preview_is_invalidated_when_order_number_changes(qtbot: QtBot) -> None:
     dialog = _DraftInvoiceDialog()

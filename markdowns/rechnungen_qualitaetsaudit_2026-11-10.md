@@ -143,7 +143,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F11 | P1 | ERLEDIGT | `apply_credit_line`: sperrt die Ursprungsposition und berechnet bestehende R?ckgaben in derselben Transaktion wie die neue Gegenbuchung. Konkurrierende Credits serialisieren auf der Ursprungs-Booking-Zeile. | Unit-Abdeckung f?r Cap und Replay; PostgreSQL-Barrierenachweis verbleibt im Betriebs-/DB-Gate G2 |
 | F12 | P1 | TEILWEISE | Rechnungs-Mail, sevDesk-Freigabe, Wix-Fulfillment und Gutschrift-Mail nutzen dauerhafte Claims je Beleg/Aktion; running/succeeded/unknown sperrt Retry, und ein unklarer sevDesk-Mail-Readback sperrt den Graph-Zweitversand. Offen bleiben direkter Produktdruck, weitere externe UI-Einstiege und die ledgerbasierte Part-Bestandsprojektion statt get+set. | Unit-Regression fuer Mail/Finalize/Fulfillment/Gutschrift-Mail, Timeout-unklar und Claim-Persistenz; PostgreSQL-Parallelitaet bleibt G2 |
 | F13 | P1 | TEILWEISE | Kontext bestaetigt Wix weiterhin nicht ueber die Referenz allein. Die Detailansicht faellt bei leerem Wix-Treffer oder Wix-Fehler auf sevDesk-Positionen zurueck und zeigt den Wix-Link nur bei bestaetigtem Kontext. Weitere Folgepfade mit roher `order_reference` bleiben zu pruefen. | Regression fuer fuenfstellige Fremdreferenz ohne Wix-Treffer; UI zeigt sevDesk-Positionen |
-| F14 | P1 | TEILWEISE | `load_invoice_piece_blocks` gibt nur explizit druckbare ganzzahlige Produktpositionen aus. Bruchmengen und nichtphysische/unaufgeloeste Positionen erscheinen mit Warntext im Positionsbereich; vollstaendige Darstellung aller Originalfelder bleibt offen. | Regression: Menge 1,5 wird nicht als 1 gedruckt; Freitext und Bruchmenge erzeugen sichtbare Klaerhinweise |
+| F14 | P1 | TEILWEISE | `load_invoice_piece_blocks` gibt nur explizit druckbare ganzzahlige Produktpositionen aus. Die SevDesk-Detailansicht zeigt jetzt jede normalisierte Position mit Art, Menge, SKU/Quelle, Druckbarkeit, Beschreibung, IDs, Gewicht/Wert und Klaerhinweisen als auswaehlbaren Text. Rohfelder, die nicht in den WorkContext uebernommen werden, bleiben ausserhalb der UI. | Regression: Menge 1,5 wird nicht als 1 gedruckt; UI-Test prueft alle normalisierten Positionsdetails einschliesslich Beschreibung und Bruchmengenhinweis |
 | F15 | P1 | ERLEDIGT | Decimal-Mengen, finale Statuswerte, stabile Positions-IDs und Needs-Review wurden strikt validiert. Der Invoice-Poll speichert einen atomaren Erfolgswasserstand mit 30-Tage-Overlap; bei Fehlern/Needs-Review bleibt er stehen. sevDesk-Seitenlimit wirft `TaxPageLimitError`, bevor Ergebnisse als vollstaendig gelten. | Feed-Validierungs-, Checkpoint- und `load_tax_resource`-Paginationstests |
 | F16 | P1 | TEILWEISE | START bucht Hub je finalisierter Rechnung und Legacy-Bestand ueber ein transaktionales Journal je `invoice_id:SKU`; Wiederholung bleibt idempotent. Offen bleiben die getrennten Legacy-/Hub-Journale und der isolierte 2+1-Teilfehler-/STOP-Betriebsnachweis. | SQLite-Regression fuer per-Rechnung-Verbrauch, Replay, fehlgeschlagene Buchung ohne Teilupdate und Transaktionsrollback; externer Mehrsystemnachweis Gate G2 |
 | F17 | P2 | TEILWEISE | Alarmdetail-Laden, Schwellenwertspeichern und Task-Mail laufen asynchron. Refund-Liste, Mailvorbereitung/-versand und PDF-Abruf, OPEN-PRINTS-Anhaenge/Erledigen, Ueberweisungs-PDF sowie PLC-Trackingimport und Paketcode-Zuordnung nutzen Worker. Nachbetreuungs-Badgezaehler und weitere UI-I/O-Pfade bleiben offen. | Eventloop-Heartbeats mit blockierten Fakes fuer Refunds, OPEN-PRINTS, Ueberweisungs-PDF und PLC-Trackingaktionen; Ruff/mypy der geaenderten Dialoge |
@@ -419,6 +419,7 @@ Geänderte Produktionsdateien:
 - `services/invoice_processing/service.py` und `ui/modules/rechnungen/refunds_dialog.py`: dauerhafter Claim fuer Gutschrift-Mails; unklarer Versand sperrt Retry.
 - `services/invoice_processing/service.py`: optionale API-Payloads werden vor verschachteltem Zugriff typisiert/nachgewiesen; mypy fuer die Datei von 44 Fehlern auf 0 reduziert, ohne Geschaeftsregeln zu aendern.
 - `ui/modules/rechnungen/view.py`: manuelle Worker und asynchroner Alarmzähler (F05/F06).
+- `ui/modules/rechnungen/view.py`: alle normalisierten SevDesk-Positionsdetails bleiben sichtbar, auch wenn eine Position nicht druckbar ist; Text kann markiert/kopiert werden (F14).
 - `ui/modules/rechnungen/offene_drucke_dialog.py`: sequenzsichere Anhänge (F07).
 
 - `ui/modules/rechnungen/offene_ueberweisungen_dialog.py`: Rechnungsauswahl aus dem asynchron geladenen Fallkontext; PDF-Download und temporaere Dateiablage im Worker (F17).
@@ -435,7 +436,7 @@ vorhandene PLC-Funktion angepasst (F08).
 
 ### Tatsächliche Prüfergebnisse
 
-Aktueller Gesamtlauf nach den letzten Aenderungen: **2.075 bestanden, 1 Warnung, 0 fehlgeschlagen in 139,41 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
+Aktueller Gesamtlauf nach den letzten Aenderungen: **2.076 bestanden, 1 Warnung, 0 fehlgeschlagen in 139,23 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
 
 Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
 - Erster Gesamtlauf: **1.979 bestanden, 4 fehlgeschlagen**, 138,53 s.
@@ -477,6 +478,9 @@ Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
   ueber Verarbeitung, Work-Context, Claims, Inventory-Start, Wix-Orders/Cache und
   InvoiceClient; Ruff fuer `service.py` gruen, mypy fuer `service.py` **0 Fehler**
   (vorher 44). Andere Module und die Paket-Baseline bleiben offen.
+- F14 Positionsdarstellung: Rechnungsansicht **82 bestanden**, inklusive Test aller
+  normalisierten Details fuer nichtdruckbare SevDesk-Positionen; Ruff fuer View und
+  Testdatei gruen. Gesamtsuite danach **2.076 bestanden**.
   eine provisorische Schlüsseländerung kaschiert.
 
 Reproduktion der regulären Prüfungen aus dem Repository:
