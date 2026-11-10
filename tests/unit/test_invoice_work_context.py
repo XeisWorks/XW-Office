@@ -73,6 +73,25 @@ def test_manual_invoice_address_falls_back_from_billing_to_shipping() -> None:
     assert source == "billing_fallback"
 
 
+def test_manual_invoice_address_tolerates_missing_or_malformed_nested_fields() -> None:
+    summary = InvoiceSummary(id="43", contact_name="Fallback Name")
+    billing, shipping, source = address_lines_from_invoice(
+        {
+            "contact": None,
+            "addressZip": None,
+            "addressCity": "Town",
+            "shippingAddress": [],
+            "deliveryName": "Recipient",
+            "deliveryAddress": {"postalCode": "12345", "city": "Port"},
+        },
+        summary,
+    )
+
+    assert billing == ("Fallback Name", "Town")
+    assert shipping == ("Recipient", "12345 Port")
+    assert source == "sevdesk_delivery"
+
+
 def test_capabilities_disable_wix_but_enable_sevdesk_actions() -> None:
     positions = normalize_invoice_positions(
         [{"id": "p1", "part": {"partNumber": "XW-1"}, "name": "Notenheft", "quantity": 1}]

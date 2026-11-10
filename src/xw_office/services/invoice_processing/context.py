@@ -219,7 +219,8 @@ def address_lines_from_invoice(invoice: dict[str, Any], summary: InvoiceSummary)
 ]:
     """Return billing, shipping and source without mutating sevDesk."""
 
-    contact = invoice.get("contact") if isinstance(invoice.get("contact"), dict) else {}
+    contact_raw = invoice.get("contact")
+    contact: dict[str, Any] = contact_raw if isinstance(contact_raw, dict) else {}
     def first(*values: object) -> str:
         for value in values:
             text = _text(value)
@@ -230,8 +231,8 @@ def address_lines_from_invoice(invoice: dict[str, Any], summary: InvoiceSummary)
     billing_name = first(invoice.get("addressName"), invoice.get("name"), contact.get("name"), summary.contact_name)
     billing_street = first(invoice.get("addressStreet"), invoice.get("street"))
     billing_city = first(
-        " ".join(part for part in (invoice.get("addressZip"), invoice.get("addressCity")) if _text(part)),
-        " ".join(part for part in (invoice.get("zip"), invoice.get("city")) if _text(part)),
+        " ".join(part for part in (_text(invoice.get("addressZip")), _text(invoice.get("addressCity"))) if part),
+        " ".join(part for part in (_text(invoice.get("zip")), _text(invoice.get("city"))) if part),
     )
     billing_country = first(invoice.get("addressCountryCode"), invoice.get("addressCountry"), summary.display_country)
     billing_country = country_label_for_address(billing_country) if billing_country else ""
@@ -241,17 +242,18 @@ def address_lines_from_invoice(invoice: dict[str, Any], summary: InvoiceSummary)
         if billing and billing_country and billing[-1].casefold() != billing_country.casefold():
             billing.append(billing_country)
 
-    shipping_obj = invoice.get("shippingAddress")
-    if not isinstance(shipping_obj, dict):
-        shipping_obj = invoice.get("deliveryAddress") if isinstance(invoice.get("deliveryAddress"), dict) else {}
+    shipping_obj_raw = invoice.get("shippingAddress")
+    if not isinstance(shipping_obj_raw, dict):
+        shipping_obj_raw = invoice.get("deliveryAddress")
+    shipping_obj: dict[str, Any] = shipping_obj_raw if isinstance(shipping_obj_raw, dict) else {}
     shipping_name = first(invoice.get("deliveryName"), invoice.get("shippingName"), shipping_obj.get("name"))
     shipping_street = first(
         invoice.get("deliveryStreet"), invoice.get("shippingStreet"), shipping_obj.get("street"), shipping_obj.get("addressLine1")
     )
     shipping_city = first(
-        " ".join(part for part in (invoice.get("deliveryZip"), invoice.get("deliveryCity")) if _text(part)),
-        " ".join(part for part in (invoice.get("shippingZip"), invoice.get("shippingCity")) if _text(part)),
-        " ".join(part for part in (shipping_obj.get("postalCode"), shipping_obj.get("city")) if _text(part)),
+        " ".join(part for part in (_text(invoice.get("deliveryZip")), _text(invoice.get("deliveryCity"))) if part),
+        " ".join(part for part in (_text(invoice.get("shippingZip")), _text(invoice.get("shippingCity"))) if part),
+        " ".join(part for part in (_text(shipping_obj.get("postalCode")), _text(shipping_obj.get("city"))) if part),
     )
     shipping_country = first(
         invoice.get("deliveryCountry"), invoice.get("deliveryAddressCountry"), invoice.get("shippingCountry"), shipping_obj.get("country")
