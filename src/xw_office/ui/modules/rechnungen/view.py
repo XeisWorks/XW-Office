@@ -1283,6 +1283,7 @@ class RechnungenView(QWidget):
         self._sevdesk_context_seq = 0
         self._wix_meta_worker: BackgroundWorker | None = None
         self._wix_context_worker: BackgroundWorker | None = None
+        self._wix_download_worker: BackgroundWorker | None = None
         self._customer_mail_worker: BackgroundWorker | None = None
         self._redelivery_prepare_worker: BackgroundWorker | None = None
         self._redelivery_apply_worker: BackgroundWorker | None = None
@@ -2191,6 +2192,7 @@ class RechnungenView(QWidget):
                 self._piece_config_worker,
                 self._wix_meta_worker,
                 self._wix_context_worker,
+                self._wix_download_worker,
                 self._customer_mail_worker,
                 self._wix_warm_worker,
                 self._hint_worker,
@@ -6510,8 +6512,25 @@ class RechnungenView(QWidget):
                 "Diese Rechnung hat keine Wix-Order-Referenz.",
             )
             return
-        wix_orders: WixOrdersClient = self._container.resolve(WixOrdersClient)
-        url = wix_orders.resolve_order_dashboard_url(summary.order_reference)
+        if self._wix_download_worker is not None and self._wix_download_worker.isRunning():
+            return
+
+        order_reference = summary.order_reference.strip()
+
+        def job() -> str:
+            wix_orders: WixOrdersClient = self._container.resolve(WixOrdersClient)
+            return wix_orders.resolve_order_dashboard_url(order_reference)
+
+        self._wix_download_worker = BackgroundWorker(job)
+        self._wix_download_worker.signals.result.connect(self._on_wix_download_links_ready)
+        self._wix_download_worker.signals.error.connect(self._on_wix_download_links_error)
+        self._wix_download_worker.signals.finished.connect(self._on_wix_download_links_finished)
+        self._wix_download_worker.start()
+
+    def _on_wix_download_links_ready(self, payload: object) -> None:
+        if self._shutting_down:
+            return
+        url = str(payload or "").strip()
         if not url:
             QMessageBox.warning(
                 self,
@@ -6520,6 +6539,13 @@ class RechnungenView(QWidget):
             )
             return
         QDesktopServices.openUrl(QUrl(url))
+
+    def _on_wix_download_links_error(self, exc: Exception) -> None:
+        if not self._shutting_down:
+            QMessageBox.warning(self, "Download-Links", f"Wix-Order konnte nicht aufgeloest werden:\n\n{exc}")
+
+    def _on_wix_download_links_finished(self) -> None:
+        self._wix_download_worker = None
 
     def _open_refund_dialog(self, summary: InvoiceSummary) -> None:
         QMessageBox.information(
