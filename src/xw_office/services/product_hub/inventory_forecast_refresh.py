@@ -66,7 +66,6 @@ class InventoryForecastRefreshService:
                 occurred_on = _parse_date(document, ("invoiceDate", "creditNoteDate", "date", "create", "updated"))
                 if occurred_on is None or occurred_on < window_start or occurred_on >= as_of.replace(day=1):
                     continue
-                document_id = str(document.get("id") or "")
                 for position in positions:
                     sku = _position_sku(position).upper()
                     quantity = _position_units(position)

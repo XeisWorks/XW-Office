@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Literal
 import httpx
 
 if TYPE_CHECKING:
+    from xw_office.repositories.settings_kv import SettingKvRepository
     from xw_office.services.secrets.service import SecretService
     from xw_office.services.wix.client import WixProduct, WixProductsClient
 
@@ -46,9 +47,13 @@ class SpecialOrderService:
         *,
         secret_service: "SecretService",
         wix_products: "WixProductsClient",
+        settings_repo: "SettingKvRepository | None" = None,
     ) -> None:
         self._secrets = secret_service
         self._wix_products = wix_products
+        from xw_office.services.invoice_processing.operation_claims import InvoiceOperationClaimStore
+
+        self._claims = InvoiceOperationClaimStore(settings_repo)
 
     def list_wix_products(self) -> list[WixProduct]:
         return self._wix_products.list_products()
@@ -71,7 +76,6 @@ class SpecialOrderService:
             "description": description.strip(),
             "currency": "EUR",
             "expirationDate": expiration_date.strip(),
-            "clientRequestKey": str(uuid.uuid4()),
             "customer": {
                 "email": customer_email.strip(),
                 "firstName": customer_first_name.strip(),
@@ -79,9 +83,28 @@ class SpecialOrderService:
             },
             "items": [self._item_payload(item) for item in items],
         }
-        if self._wix_api_key() and self._wix_site_id():
-            return self._create_payment_link_rest(payload, fallback_title=title)
-        return self._create_payment_link_via_endpoint(payload, fallback_title=title)
+        intent = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        intent_id = hashlib.sha256(intent.encode("utf-8")).hexdigest()
+        claim = self._claims.acquire_new_run(f"special-order-{intent_id}", "payment_link")
+        if not claim.acquired:
+            if claim.state == "succeeded":
+                raise RuntimeError("Payment Link wurde bereits erstellt; bitte den bestehenden Link verwenden.")
+            raise RuntimeError(
+                "Payment-Link-Ergebnis ist noch offen oder unklar. Keine automatische Wiederholung; "
+                "bitte den bestehenden Wix-Link manuell abgleichen."
+            )
+        payload["clientRequestKey"] = claim.operation_id
+        try:
+            if self._wix_api_key() and self._wix_site_id():
+                link = self._create_payment_link_rest(payload, fallback_title=title)
+            else:
+                link = self._create_payment_link_via_endpoint(payload, fallback_title=title)
+        except Exception as exc:
+            self._claims.finish(claim, "unknown", error=str(exc))
+            raise
+        if not self._claims.finish(claim, "succeeded"):
+            raise RuntimeError("Payment Link wurde erstellt, der Vorgangsstatus konnte nicht gespeichert werden.")
+        return link
 
     def _create_payment_link_via_endpoint(self, payload: dict[str, object], *, fallback_title: str) -> SpecialOrderLink:
         endpoint = self._endpoint()

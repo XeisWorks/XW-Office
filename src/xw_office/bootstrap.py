@@ -386,6 +386,7 @@ def register_default_services(container: Container) -> None:
         lambda c: SpecialOrderService(
             secret_service=c.resolve(SecretService),
             wix_products=c.resolve(WixProductsClient),
+            settings_repo=c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
         ),
     )
 

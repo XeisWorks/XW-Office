@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
-from typing import Any
 
 from xw_office.repositories.product_hub import normalize_sku
 

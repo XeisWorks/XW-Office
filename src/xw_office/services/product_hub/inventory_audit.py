@@ -8,7 +8,7 @@ changes legacy settings, Hub rows, or external channel data.
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from collections import Counter
 
 
