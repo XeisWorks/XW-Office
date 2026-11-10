@@ -16,6 +16,10 @@ from xw_office.services.wix.client import _parse_order_line_item
 logger = logging.getLogger(__name__)
 
 
+def _dict_payload(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 @dataclass(frozen=True)
 class ProductDraft:
     name: str
@@ -211,7 +215,7 @@ class DraftInvoiceService:
                 }
             )
 
-        buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
+        buyer = _dict_payload(order.get("buyerInfo"))
         customer = " ".join(
             part
             for part in (str(buyer.get("firstName") or "").strip(), str(buyer.get("lastName") or "").strip())
@@ -531,7 +535,7 @@ class DraftInvoiceService:
             if part is None or not part.id.strip():
                 continue
             updated = dict(patched[index])
-            current_part = updated.get("part") if isinstance(updated.get("part"), dict) else {}
+            current_part = _dict_payload(updated.get("part"))
             current_part_id = str(current_part.get("id") or "").strip()
             had_part = bool(current_part_id)
             # START must not alter commercial data on an already reviewed
@@ -550,14 +554,13 @@ class DraftInvoiceService:
             current_text = str(updated.get("text") or "").strip()
             if override and not had_part and (not current_text or current_text.casefold() == sku.casefold()):
                 updated["text"] = override
-            if part.unity and isinstance(part.unity, dict) and part.unity.get("id"):
-                current_unity = (
-                    updated.get("unity") if isinstance(updated.get("unity"), dict) else {}
-                )
+            part_unity = _dict_payload(part.unity)
+            if part_unity.get("id"):
+                current_unity = _dict_payload(updated.get("unity"))
                 if str(current_unity.get("id") or "").strip() != str(
-                    part.unity.get("id") or ""
+                    part_unity.get("id") or ""
                 ).strip():
-                    updated["unity"] = dict(part.unity)
+                    updated["unity"] = dict(part_unity)
             patched[index] = updated
         return patched
 
@@ -699,7 +702,7 @@ class DraftInvoiceService:
 
     @staticmethod
     def _fallback_target_for_order(order_number: str, order: dict[str, Any]) -> ProductIssueTarget:
-        buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
+        buyer = _dict_payload(order.get("buyerInfo"))
         customer_name = " ".join(
             part
             for part in (str(buyer.get("firstName") or "").strip(), str(buyer.get("lastName") or "").strip())
@@ -719,7 +722,7 @@ class DraftInvoiceService:
         return order
 
     def _resolve_or_create_contact(self, order: dict[str, Any]) -> str:
-        buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
+        buyer = _dict_payload(order.get("buyerInfo"))
         email = str(buyer.get("email") or "").strip().lower()
         if email:
             contacts = self._contacts.list_contacts(max_pages=20, depth=1)
@@ -727,8 +730,8 @@ class DraftInvoiceService:
                 if str(contact.email or "").strip().lower() == email:
                     return str(contact.id)
 
-        billing = order.get("billingInfo") if isinstance(order.get("billingInfo"), dict) else {}
-        contact_details = billing.get("contactDetails") if isinstance(billing.get("contactDetails"), dict) else {}
+        billing = _dict_payload(order.get("billingInfo"))
+        contact_details = _dict_payload(billing.get("contactDetails"))
         first = str(contact_details.get("firstName") or "").strip()
         last = str(contact_details.get("lastName") or "").strip()
         company = str(contact_details.get("company") or "").strip()
