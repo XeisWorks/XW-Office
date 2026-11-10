@@ -646,6 +646,8 @@ Fortschreibung AP06: 296ac8e (Avoid synchronous invoice dialog count reads) wurd
 
 Fortschreibung AP06: 8197e64 (Move B2B credit alert reads off UI thread) wurde nach 10 gezielten Tagesgeschaeft-Tests und 2.100 Gesamttests zu origin/main gepusht. Die manuelle B2B-Pruefung laedt Rechnungen und Planstatus im Worker; bestaetigte Datenbank-Schreibaktionen bleiben als offener Teil von AP06 dokumentiert.
 
+Fortschreibung AP06: cf45a12 (Move confirmed B2B credit writes off UI thread) wurde nach 11 gezielten Tagesgeschaeft-Qt-Tests und 2.101 Gesamttests zu origin/main gepusht. Zahlungsplaene und Kundenlimits werden erst nach bewusster Bestaetigung gespeichert und blockieren den GUI-Thread nicht; Fehler bleiben sichtbar.
+
 Der finale Suite-Nachweis dieses Fortschreibungsschritts steht oben. Weitere Commit-/Push-Nachweise werden nach ihrer Integration ergänzt. Das folgende statische Inventar
 wurde aus dem vorherigen Quellstand erzeugt und dient als Navigationshilfe; nach
 spaeteren Codeaenderungen koennen einzelne Zeilennummern abweichen.
