@@ -9,7 +9,11 @@ import uuid
 from pathlib import Path
 
 from xw_office.repositories.settings_kv import SettingKvRepository
-from xw_office.services.drucke.xw_flow_client import FlowPrintEmailCase, XwFlowPrintClient
+from xw_office.services.drucke.xw_flow_client import (
+    FlowPrintCase,
+    FlowPrintEmailCase,
+    XwFlowPrintClient,
+)
 from xw_office.services.mailing.graph_client import GraphMailClient
 from xw_office.services.secrets.service import SecretService
 
@@ -185,12 +189,10 @@ class OffeneDruckeService:
             message_id = str(item.get("id") or "").strip()
             if not message_id:
                 continue
-            sender_obj = item.get("from") if isinstance(item.get("from"), dict) else {}
-            address = (
-                sender_obj.get("emailAddress")
-                if isinstance(sender_obj.get("emailAddress"), dict)
-                else {}
-            )
+            raw_sender = item.get("from")
+            sender_obj: dict[str, object] = raw_sender if isinstance(raw_sender, dict) else {}
+            raw_address = sender_obj.get("emailAddress")
+            address: dict[str, object] = raw_address if isinstance(raw_address, dict) else {}
             sender = str(address.get("address") or address.get("name") or "").strip()
             cases.append(
                 PrintCase(
@@ -255,7 +257,7 @@ class OffeneDruckeService:
             for item in remote
         ]
 
-    def _flow_case(self, source_id: str):
+    def _flow_case(self, source_id: str) -> FlowPrintCase | None:
         if self._flow_prints is None or not self._flow_prints.is_configured():
             return None
         return next(
