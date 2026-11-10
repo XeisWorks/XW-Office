@@ -144,7 +144,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F12 | P1 | OFFEN | Rechnungs-Mail, sevDesk-Freigabe und Wix-Fulfillment nutzen jetzt dauerhafte Claims je Beleg/Aktion; unknown/running sperrt Retry, und ein unklarer sevDesk-Mail-Readback sperrt den Graph-Zweitversand. Offen bleiben direkter Produktdruck, Refunds, gemeinsame Claims mit weiteren UI-Einstiegen und die ledgerbasierte Part-Bestandsprojektion statt get+set. | Unit-Regression fuer Mail/Finalize/Fulfillment und Claim-Persistenz; PostgreSQL-Parallelitaet bleibt G2 |
 | F13 | P1 | TEILWEISE | Kontext bestaetigt Wix weiterhin nicht ueber die Referenz allein. Die Detailansicht faellt bei leerem Wix-Treffer oder Wix-Fehler auf sevDesk-Positionen zurueck und zeigt den Wix-Link nur bei bestaetigtem Kontext. Weitere Folgepfade mit roher `order_reference` bleiben zu pruefen. | Regression fuer fuenfstellige Fremdreferenz ohne Wix-Treffer; UI zeigt sevDesk-Positionen |
 | F14 | P1 | TEILWEISE | `load_invoice_piece_blocks` gibt nur explizit druckbare ganzzahlige Produktpositionen aus. Bruchmengen und nichtphysische/unaufgeloeste Positionen erscheinen mit Warntext im Positionsbereich; vollstaendige Darstellung aller Originalfelder bleibt offen. | Regression: Menge 1,5 wird nicht als 1 gedruckt; Freitext und Bruchmenge erzeugen sichtbare Klaerhinweise |
-| F15 | P1 | OFFEN | Dezimalmengen, finale Statuswerte, stabile Positions-IDs und Needs-Review-Verhalten der Invoice-/Credit-Feedadapter sind jetzt strikt validiert. Offen bleiben persistenter Wasserstand/Overlap und ein Beleg, dass Provider-Pagination bei Seitenlimit keine spaeteren Belege ueberspringt. | Regressionen fuer 0/0,5/1,5/NaN/Infinity/fehlende Menge, unbekannte Stati und fehlende IDs; `sevdesk_feed_validation.py` |
+| F15 | P1 | ERLEDIGT | Decimal-Mengen, finale Statuswerte, stabile Positions-IDs und Needs-Review wurden strikt validiert. Der Invoice-Poll speichert einen atomaren Erfolgswasserstand mit 30-Tage-Overlap; bei Fehlern/Needs-Review bleibt er stehen. sevDesk-Seitenlimit wirft `TaxPageLimitError`, bevor Ergebnisse als vollstaendig gelten. | Feed-Validierungs-, Checkpoint- und `load_tax_resource`-Paginationstests |
 | F16 | P1 | OFFEN | START/Legacy-Lager: aktuelle Freigabe bucht Hub je Rechnung, Legacy-Verbrauch erfolgt weiterhin nach erfolgreichem Gesamtbatch; Teilfehler/STOP können Drift hinterlassen. Ohne `+ Noten` wird im UI eine Vorprüfung mit fehlenden Positionsdaten erzeugt; Unterdeckung wird nicht überall vor externer Freigabe geprüft. | Codebeleg in `tagesgeschaeft_view.py::_on_start_clicked/_on_start_product_preflight_ready`, `InventoryService.execute_start_workflow` |
 | F17 | P2 | OFFEN | UI-Thread-I/O verbleibt in Lageralarm-Popup, Refund-Liste/PDF/Mail, Tracking-Import/Codebestätigung, Betreuungstab, Überweisungs-PDF und OPEN-PRINTS-Erledigen. Produkt-/Bestandsauflösung und Druckkonfigurationsspeichern erfolgen teilweise beim Rendern/Dialogabschluss. | Direkte Service-/Repository-Aufrufe in UI-Slots, ohne Worker-Grenze |
 | F18 | P2 | OFFEN | Dialog-Lebenszyklus: Sendungen/Überweisungen warten beim Schließen mehrfach bis 3 s pro Worker; andere Dialoge haben keine einheitliche Close-/Escape-Policy für laufende Writes. Globale Worker-Retention verhindert vorzeitige QThread-Zerstörung, aber nicht späte fachliche Callbacks. | Codebeleg: `_wait_for_workers`, Dialoge ohne Shutdown-Protokoll; Betriebs-Race nicht pauschal behauptet |
@@ -319,11 +319,12 @@ persistente Wasserstände samt Überlappung erhalten.
 digitale und stornierte Belege erzeugen nur fachlich zulässige Bewegungen;
 Neustart verarbeitet Fehlerfälle erneut und überspringt keine späteren Belege.
 
-**Teilweise umgesetzt:** Mengen werden als Decimal erhalten; nur sevDesk-Status
-`200` (open), `750` (partially paid) und `1000` (paid) werden als final akzeptiert.
-Unbekannte Statuswerte, Bruch-/Ungueltigmengen und fehlende Positions-IDs werden
-nicht gebucht. Statusdefinition gemaess [sevDesk API-Dokumentation](https://api.sevdesk.de/).
-Persistente Cursor und Provider-Page-Limit bleiben offen.
+**Umgesetzt:** Mengen werden als Decimal erhalten; nur sevDesk-Status `200` (open),
+`750` (partially paid) und `1000` (paid) werden als final akzeptiert. Unbekannte
+Statuswerte, Bruch-/Ungueltigmengen und fehlende Positions-IDs werden nicht gebucht.
+Der atomare SettingKV-Wasserstand wird nur nach vollstaendigem Poll ohne Needs-Review
+fortgeschrieben; jeder Lauf liest mit 30 Tagen Ueberlappung. Das sevDesk-Seitenlimit
+bricht mit `TaxPageLimitError` ab. Statusdefinition gemaess [sevDesk API-Dokumentation](https://api.sevdesk.de/).
 
 ### AP05 - Legacy-/Hub-Bestand und START-Teilfehler (F16; teilweise umgesetzt; P1)
 
