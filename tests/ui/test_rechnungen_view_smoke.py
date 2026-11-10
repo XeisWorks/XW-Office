@@ -2025,6 +2025,47 @@ def test_individual_product_print_clicks_are_queued_without_blocking_each_other(
     assert started == ["XW-FIRST", "XW-SECOND"]
 
 
+def test_individual_product_print_rejects_duplicate_active_sku(
+    qtbot: object,
+    monkeypatch: object,
+) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    release = Event()
+    prepared: list[str] = []
+    accepted: list[str] = []
+
+    def fake_prepare(_parent: object, _container: object, *, piece: PieceBlock, copies: int, wait: bool = False):
+        prepared.append(piece.sku)
+
+        def job() -> None:
+            release.wait(timeout=2)
+
+        return job
+
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.print_dialog.prepare_piece_pdf_print", fake_prepare)
+    view._on_printer_status(True)  # noqa: SLF001
+    view._on_product_print_clicked(  # noqa: SLF001
+        PieceBlock(sku="XW-DUP", name="Notenheft", qty_needed=1),
+        1,
+        on_accepted=lambda: accepted.append("first"),
+    )
+    qtbot.waitUntil(lambda: bool(view._product_print_handles), timeout=1000)  # noqa: SLF001
+    view._on_product_print_clicked(  # noqa: SLF001
+        PieceBlock(sku="XW-DUP", name="Notenheft", qty_needed=1),
+        1,
+        on_accepted=lambda: accepted.append("duplicate"),
+    )
+
+    assert prepared == ["XW-DUP"]
+    assert accepted == ["first"]
+    assert len(view._product_print_handles) == 1  # noqa: SLF001
+    release.set()
+    qtbot.waitUntil(lambda: not view._product_print_handles, timeout=2000)  # noqa: SLF001
+    assert not view._active_individual_print_keys  # noqa: SLF001
+
+
 def test_product_print_partial_failure_books_completed_copies(qtbot: object, monkeypatch: object) -> None:
     """Regression test for the XW-6612 reorder's failure path.
 

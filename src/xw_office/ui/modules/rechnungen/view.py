@@ -1208,6 +1208,7 @@ class RechnungenView(QWidget):
         self._open_overview_worker: BackgroundWorker | None = None
         self._product_print_worker: BackgroundWorker | None = None
         self._product_print_handles: list[JobHandle] = []
+        self._active_individual_print_keys: set[str] = set()
         self._did_initial_load = False
         self._print_allowed = False
         self._open_draft_after_create = False
@@ -7754,9 +7755,25 @@ class RechnungenView(QWidget):
         from xw_office.ui.modules.rechnungen.print_dialog import prepare_piece_pdf_print
         from xw_office.services.printing.planned_pdf_printer import PrintPlanPartialFailure
 
+        print_key = str(
+            (block.product.sevdesk_part_id if block.product is not None else "")
+            or block.sku
+            or block.name
+        ).strip().casefold()
+        if print_key in self._active_individual_print_keys:
+            self._container.resolve(AppSignals).status_message.emit(
+                f"Produktdruck fuer {block.sku or block.name} laeuft bereits.", 5000
+            )
+            return
+        self._active_individual_print_keys.add(print_key)
         qty = max(1, int(quantity or self._default_piece_print_qty(block)))
-        job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty, wait=True)
+        try:
+            job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty, wait=True)
+        except Exception:
+            self._active_individual_print_keys.discard(print_key)
+            raise
         if job is None:
+            self._active_individual_print_keys.discard(print_key)
             return
 
         row = self._table.selected_source_row()
@@ -7813,19 +7830,23 @@ class RechnungenView(QWidget):
         handle: JobHandle
 
         def finished() -> None:
-            self._on_individual_product_print_finished(handle)
+            self._on_individual_product_print_finished(handle, print_key)
 
-        handle = self._background_jobs.submit_callable(
-            queue="printing",
-            priority=20,
-            key=f"product-print:{block.sku}:{time.monotonic_ns()}",
-            fn=lambda _token: worker_job(),
-            on_result=self._on_product_print_result,
-            on_error=self._on_product_print_error,
-            on_finished=finished,
-            owner=self,
-            replace="allow_parallel",
-        )
+        try:
+            handle = self._background_jobs.submit_callable(
+                queue="printing",
+                priority=20,
+                key=f"product-print:{block.sku}:{time.monotonic_ns()}",
+                fn=lambda _token: worker_job(),
+                on_result=self._on_product_print_result,
+                on_error=self._on_product_print_error,
+                on_finished=finished,
+                owner=self,
+                replace="allow_parallel",
+            )
+        except Exception:
+            self._active_individual_print_keys.discard(print_key)
+            raise
         self._product_print_handles.append(handle)
 
     def _on_product_print_result(self, payload: object) -> None:
@@ -7869,9 +7890,10 @@ class RechnungenView(QWidget):
         self._update_print_all_products_button()
         self._update_plc_controls()
 
-    def _on_individual_product_print_finished(self, handle: JobHandle) -> None:
+    def _on_individual_product_print_finished(self, handle: JobHandle, print_key: str) -> None:
         if handle in self._product_print_handles:
             self._product_print_handles.remove(handle)
+        self._active_individual_print_keys.discard(print_key)
         self._update_print_all_products_button()
 
     @staticmethod

@@ -141,7 +141,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F09 | P1 | ERLEDIGT | `InvoiceProcessingService.load_invoice_work_context/_run_finalize_step/build_inventory_requirements`: Positionsfehler werden als unvollst?ndiger Kontext mit Ladezustand/Fehlertext behandelt und nicht gecacht. Freigabe und Produktdruck brechen vor dem externen Schreibaufruf ab; Retry l?dt erneut. | Regressionen: Timeout bleibt uncached, Freigabe sendet nicht, Druck gibt klare Exception, Retry l?dt erfolgreich |
 | F10 | P1 | ERLEDIGT | `InvoiceInventoryBookingService.apply_line`: Booking, append-only Ledgerbewegung, materialisierter Bestand und Alarmstatus laufen in einer Session/Transaktion. Jede Mengen?nderung verwendet eine fortlaufende Transition-ID statt wiederverwendeter Zielmenge. | SQLite-Regression 10?2?3?2 ergibt 8; Replay bleibt idempotent; Transaktionscode sperrt vorhandene und erstmalige Booking-Zeile |
 | F11 | P1 | ERLEDIGT | `apply_credit_line`: sperrt die Ursprungsposition und berechnet bestehende R?ckgaben in derselben Transaktion wie die neue Gegenbuchung. Konkurrierende Credits serialisieren auf der Ursprungs-Booking-Zeile. | Unit-Abdeckung f?r Cap und Replay; PostgreSQL-Barrierenachweis verbleibt im Betriebs-/DB-Gate G2 |
-| F12 | P1 | TEILWEISE | Rechnungs-Mail, sevDesk-Freigabe, Wix-Fulfillment und Gutschrift-Mail nutzen dauerhafte Claims je Beleg/Aktion; running/succeeded/unknown sperrt Retry, und ein unklarer sevDesk-Mail-Readback sperrt den Graph-Zweitversand. Offen bleiben direkter Produktdruck, weitere externe UI-Einstiege und die ledgerbasierte Part-Bestandsprojektion statt get+set. | Unit-Regression fuer Mail/Finalize/Fulfillment/Gutschrift-Mail, Timeout-unklar und Claim-Persistenz; PostgreSQL-Parallelitaet bleibt G2 |
+| F12 | P1 | TEILWEISE | Rechnungs-Mail, sevDesk-Freigabe, Wix-Fulfillment und Gutschrift-Mail nutzen dauerhafte Claims je Beleg/Aktion; running/succeeded/unknown sperrt Retry, und ein unklarer sevDesk-Mail-Readback sperrt den Graph-Zweitversand. Direkter Produktdruck blockiert nun gleichzeitige UI-Auftraege derselben SKU/Part-ID, laesst einen bewussten neuen Lauf nach Abschluss zu. Offen bleiben persistente Cross-Instance-Claims fuer Druck, weitere externe UI-Einstiege und die ledgerbasierte Part-Bestandsprojektion statt get+set. | Unit-Regression fuer Mail/Finalize/Fulfillment/Gutschrift-Mail, Timeout-unklar und Claim-Persistenz; UI-Test weist Parallelitaet fuer verschiedene SKUs und Doppelklick-Sperre derselben SKU nach; PostgreSQL-Parallelitaet bleibt G2 |
 | F13 | P1 | TEILWEISE | Kontext bestaetigt Wix weiterhin nicht ueber die Referenz allein. Die Detailansicht faellt bei leerem Wix-Treffer oder Wix-Fehler auf sevDesk-Positionen zurueck und zeigt den Wix-Link nur bei bestaetigtem Kontext. Weitere Folgepfade mit roher `order_reference` bleiben zu pruefen. | Regression fuer fuenfstellige Fremdreferenz ohne Wix-Treffer; UI zeigt sevDesk-Positionen |
 | F14 | P1 | TEILWEISE | `load_invoice_piece_blocks` gibt nur explizit druckbare ganzzahlige Produktpositionen aus. Die SevDesk-Detailansicht zeigt jetzt jede normalisierte Position mit Art, Menge, SKU/Quelle, Druckbarkeit, Beschreibung, IDs, Gewicht/Wert und Klaerhinweisen als auswaehlbaren Text. Rohfelder, die nicht in den WorkContext uebernommen werden, bleiben ausserhalb der UI. | Regression: Menge 1,5 wird nicht als 1 gedruckt; UI-Test prueft alle normalisierten Positionsdetails einschliesslich Beschreibung und Bruchmengenhinweis |
 | F15 | P1 | ERLEDIGT | Decimal-Mengen, finale Statuswerte, stabile Positions-IDs und Needs-Review wurden strikt validiert. Der Invoice-Poll speichert einen atomaren Erfolgswasserstand mit 30-Tage-Overlap; bei Fehlern/Needs-Review bleibt er stehen. sevDesk-Seitenlimit wirft `TaxPageLimitError`, bevor Ergebnisse als vollstaendig gelten. | Feed-Validierungs-, Checkpoint- und `load_tax_resource`-Paginationstests |
@@ -295,6 +295,8 @@ blindes Senden. Unklare sevDesk-Mailantwort ohne verlässlichen Readback darf ke
 automatischen Graph-Zweitversand auslösen. Part-Bestandsprojektion vom Ledger ableiten,
 nicht mit konkurrierendem `get+set` erhöhen.
 
+Direkter Produktdruck blockiert parallele UI-Auftraege derselben Part-ID/SKU; ein neuer Druck nach Abschluss bleibt bewusst erlaubt.
+
 **Akzeptanz:** zwei Widgetinstanzen/zwei Prozesse, START+manuelle Mail und Retry
 gleichzeitig erzeugen höchstens eine Mail/Freigabe/Fulfillment-Aktion. Timeout nach
 Serverannahme bleibt sichtbar unklar. Druckwiederholung ist ein bewusst neuer Lauf;
@@ -305,7 +307,7 @@ Strategie und die PDF-/Graph-Fallbacktests fachlich abgestimmt weiterführen.
 eindeutige Wix-Fulfillments teilen `InvoiceOperationClaimStore`. Status `running`,
 `succeeded`, `unknown` und `failed` werden ueber SettingKV persistiert; PostgreSQL-
 Advisory-Locks serialisieren gleichzeitige Clients. Unklare Resultate sperren Retry.
-Gutschrift-Mails verwenden jetzt ebenfalls einen dauerhaften Claim je Gutschrift; ein unklarer Graph-Ausgang sperrt automatische Wiederholung. Direkter Produktdruck/Part-Stock und weitere externe UI-Aktionen bleiben offen.
+Gutschrift-Mails verwenden jetzt ebenfalls einen dauerhaften Claim je Gutschrift; ein unklarer Graph-Ausgang sperrt automatische Wiederholung. Direkter Produktdruck hat einen UI-lokalen In-Flight-Guard gegen gleiche SKU/Part-ID; persistente Claims fuer Druck/Part-Stock und weitere externe UI-Aktionen bleiben offen.
 
 ### AP04 – Externe Belege strikt normalisieren (F15; P1)
 
@@ -420,6 +422,7 @@ Geänderte Produktionsdateien:
 - `services/invoice_processing/service.py`: optionale API-Payloads werden vor verschachteltem Zugriff typisiert/nachgewiesen; mypy fuer die Datei von 44 Fehlern auf 0 reduziert, ohne Geschaeftsregeln zu aendern.
 - `ui/modules/rechnungen/view.py`: manuelle Worker und asynchroner Alarmzähler (F05/F06).
 - `ui/modules/rechnungen/view.py`: alle normalisierten SevDesk-Positionsdetails bleiben sichtbar, auch wenn eine Position nicht druckbar ist; Text kann markiert/kopiert werden (F14).
+- `ui/modules/rechnungen/view.py`: verhindert gleichzeitig gestartete Einzelproduktdrucke fuer dieselbe SKU/Part-ID, erlaubt bewusste Wiederholung nach Abschluss (F12).
 - `ui/modules/rechnungen/offene_drucke_dialog.py`: sequenzsichere Anhänge (F07).
 
 - `ui/modules/rechnungen/offene_ueberweisungen_dialog.py`: Rechnungsauswahl aus dem asynchron geladenen Fallkontext; PDF-Download und temporaere Dateiablage im Worker (F17).
@@ -439,7 +442,7 @@ vorhandene PLC-Funktion angepasst (F08).
 
 ### Tatsächliche Prüfergebnisse
 
-Aktueller Gesamtlauf nach den letzten Aenderungen: **2.080 bestanden, 1 Warnung, 0 fehlgeschlagen in 145,85 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
+Aktueller Gesamtlauf nach den letzten Aenderungen: **2.081 bestanden, 1 Warnung, 0 fehlgeschlagen in 142,24 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
 
 Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
 - Erster Gesamtlauf: **1.979 bestanden, 4 fehlgeschlagen**, 138,53 s.
@@ -489,6 +492,9 @@ Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
   `tagesgeschaeft_view.py` enthaelt 19 bestehende Typfehler ausserhalb der Close-Aenderung.
   Badge-Regression: **8 Tests bestanden**, einschliesslich des asynchronen
   Nachbetreuungs-Refreshs nach dem Sendungsdialog. Gesamtsuite danach **2.080 bestanden**.
+- F12 Einzelproduktdruck: Rechnungsansicht **83 Tests bestanden**; paralleler Druck
+  verschiedener SKUs bleibt erlaubt, zweiter aktiver Auftrag derselben SKU wird
+  verworfen, und die Sperre faellt nach Abschluss weg. Gesamtsuite danach **2.081 bestanden**.
   eine provisorische Schlüsseländerung kaschiert.
 
 Reproduktion der regulären Prüfungen aus dem Repository:
