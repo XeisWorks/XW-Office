@@ -503,11 +503,26 @@ Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
 - AP07 Cache-TTL: zwei neue InvoiceService-Regressionen belegen Warm-Cache innerhalb der Frist und erneuten Header-/Positionsabruf nach Ablauf; Ruff und mypy fuer `service.py` gruen. Gesamtsuite danach **2.083 bestanden**.
 - AP08 Worker-Payload-Typen: `tagesgeschaeft_view.py` mypy von 19 Fehlern auf 0 bereinigt; ungültige Badge-Zähler und asynchrone Listen-/Popup-Payloads werden defensiv geprüft. Ruff fuer Produktions- und Testdatei gruen; Badge-/Aftercare-UI **9 bestanden**; Gesamtsuite danach **2.084 bestanden, 1 bestehende Starlette/httpx-Deprecation-Warnung**.
 - AP08 Aftercare-Tabellen und Callbacks: fehlende optionale Zellen werden ueber einen zentralen Default-Reader behandelt; Callback-Typen spiegeln die tatsaechlich ignorierten Rueckgabewerte wider. `redelivery_dialog.py` und `customer_aftercare_tab.py` mypy/Ruff fehlerfrei; Qt-Regression fuer fehlende Tabellenzellen; Manager-Dialog **9 bestanden**; Rechnungs-UI-MyPy sinkt von 150 auf 140 Fehler in 9 statt 11 Dateien. Repository-weite Messung sank von 680/104 auf 666/101; Gesamtsuite danach **2.085 bestanden, 1 Warnung**.
-- F12 Part-Stock-Konkurrenz im Prozess: `PrintDecisionEngine` sperrt pro sevDesk-Part die Bestandsabfrage und -erhoehung; gleichzeitige Worker verlieren keine Erhoehung. `print_decision.py` mypy/Ruff fehlerfrei; fokussierte Drucktests **13 bestanden**; Gesamtsuite **2.086 bestanden, 1 bestehende Starlette/httpx-Deprecation-Warnung**. Cross-PC-Claim und Ledgerprojektion bleiben offen.
-- F12 Cross-Instance-Part-Lock: `SettingKvRepository.advisory_lock` haelt den PostgreSQL-Transaktionslock waehrend der begrenzten Part-GET/SET-Sequenz; Bootstrap injiziert das gemeinsame Repository in `PrintDecisionEngine`. Thread-Test mit zwei Engines und gemeinsamem Lock-Port belegt Serialisierung; Repository-, Claim- und Drucktests **21 bestanden**, einschliesslich SQLite-Kontext-/Schluesselvalidierung; Ruff und mypy fuer Repository, Bootstrap und Druckservice gruen. Kein echter PostgreSQL-Parallelitaetslauf (G2); persistenter Print-Claim und Ledgerprojektion bleiben offen. Aktueller Gesamtlauf: **2.087 bestanden, 1 Warnung**.
+- F12 Part-Stock-Konkurrenz im Prozess: `PrintDecisionEngine` sperrt pro sevDesk-Part die Bestandsabfrage und -erhoehung; gleichzeitige Worker verlieren keine Erhoehung. `print_decision.py` mypy/Ruff fehlerfrei; fokussierte Drucktests **13 bestanden**; Gesamtsuite **2.086 bestanden, 1 bestehende Starlette/httpx-Deprecation-Warnung**.
+- F12 Cross-Instance-Part-Lock: `SettingKvRepository.advisory_lock` haelt den PostgreSQL-Transaktionslock waehrend der begrenzten Part-GET/SET-Sequenz; Bootstrap injiziert das gemeinsame Repository in `PrintDecisionEngine`. Thread-Test mit zwei Engines und gemeinsamem Lock-Port belegt Serialisierung; Repository-, Claim- und Drucktests **21 bestanden**, einschliesslich SQLite-Kontext-/Schluesselvalidierung; Ruff und mypy fuer Repository, Bootstrap und Druckservice gruen. Kein echter PostgreSQL-Parallelitaetslauf (G2).
 - F12 Einzelproduktdruck: Rechnungsansicht **83 Tests bestanden**; paralleler Druck
   verschiedener SKUs bleibt erlaubt, zweiter aktiver Auftrag derselben SKU wird
   verworfen, und die Sperre faellt nach Abschluss weg. Gesamtsuite danach **2.081 bestanden**.
+
+- F12 persistenter Druck-Claim: Vor jedem physischen Produktdruck wird jetzt ein
+  Claim pro sevDesk-Part-ID (Fallback: normalisierte SKU) atomar in `SettingKV`
+  erworben. Das gilt fuer Rechnungs-Einzel-/Sammeldruck, offene Produkte und den
+  Produktbereich. Andere Instanzen werden bei `running`/`unknown` blockiert;
+  ein bewusster erneuter Druck nach `succeeded` erhaelt eine neue Lauf-ID. Claim-,
+  Legacy-Druck- und Rechnungs-UI-Tests **94 bestanden**; Ruff fuer alle geaenderten
+  Python-Dateien gruen; finale Suite **2.091 bestanden, 1 bestehende
+  Starlette/httpx-Deprecation-Warnung, 0 fehlgeschlagen (150,21 s)**. Ein Drucker-
+  oder sevDesk-Fehler nach moeglichem physischen Druck bleibt `unknown` und sperrt
+  automatische Wiederholung; eine Bedienoberflaeche fuer manuellen Abgleich ist
+  weiterhin OFFEN. Echtes PostgreSQL-/Mehr-PC-Verhalten bleibt bis G2 BLOCKIERT.
+  Mypy fuer die drei betroffenen Services/Views meldet weiterhin **20 bestehende
+  Fehler ausschliesslich in `ProductsView`** (u. a. alte Callback-Signaturen und
+  Bestandskorrektur); `operation_claims.py` und `print_decision.py` sind fehlerfrei.
   eine provisorische Schlüsseländerung kaschiert.
 
 Reproduktion der regulären Prüfungen aus dem Repository:
@@ -597,10 +612,11 @@ raise SystemExit(pytest.main(sys.argv[1:], plugins=[Isolation()]))
 
 ## 10. Abschlussbewertung und Betriebsabnahmen
 
-Die sicheren Fixes verbessern konkrete Fehlersituationen und die Reaktionsfähigkeit
-des Alarmzählers. Die verbleibenden P1-Aufgaben sind vor größeren Refactorings
-abzuarbeiten: vollständige Positionsdaten, atomare Buchungs-/Gegenbelegtransaktionen,
-dauerhafte externe Claims und konsistenter Legacy-/Hub-Verbrauch.
+Die sicheren Fixes verbessern konkrete Fehlersituationen, die Reaktionsfähigkeit
+des Alarmzählers und die Konkurrenzsicherheit beim Produktdruck. Der persistente
+Claim fuer physische Produktdrucke ist umgesetzt; weitere externe Claims,
+atomare Buchungs-/Gegenbelegtransaktionen und konsistenter Legacy-/Hub-Verbrauch
+bleiben offen.
 
 | Gate | Priorität | Status | Benötigter Nachweis / anfängerfreundlicher Ablauf |
 | --- | --- | --- | --- |
@@ -611,9 +627,10 @@ dauerhafte externe Claims und konsistenter Legacy-/Hub-Verbrauch.
 
 Implementierungscommit: **`dafebdd`** ? `Fix invoice quantity validation and asynchronous action races`. Der separate Dokumentationscommit enth?lt diesen Bericht; seine ID ist ?ber `git log -1 -- markdowns/rechnungen_qualitaetsaudit_2026-11-10.md` eindeutig ermittelbar. Dieser Implementierungscommit wurde erfolgreich zu `origin/main` gepusht. Der Dokumentationscommit wird im selben Arbeitslauf nachgeschoben und abschlie?end gegen `origin/main` gepr?ft.
 
-Finale Suite, Typprüfungsvergleich sowie Commit-/Push-Nachweis werden vor Abschluss
-der Audit-Arbeit ergänzt. Das folgende statische Inventar wird aus dem finalen
-Quellstand erzeugt; es ist Teil dieses eigenständig nutzbaren Berichts.
+Der finale Suite-Nachweis dieses Fortschreibungsschritts steht oben. Commit-/Push-
+Nachweise werden nach der Integration ergänzt. Das folgende statische Inventar
+wurde aus dem vorherigen Quellstand erzeugt und dient als Navigationshilfe; nach
+spaeteren Codeaenderungen koennen einzelne Zeilennummern abweichen.
 
 <!-- STATIC_INVENTORY -->
 

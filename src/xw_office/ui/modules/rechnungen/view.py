@@ -4343,15 +4343,35 @@ class RechnungenView(QWidget):
         def worker_job() -> dict[str, object]:
             printed: list[str] = []
             warnings: list[str] = []
+            claim_warnings: list[str] = []
+            engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
             for block, qty, job in prepared_jobs:
-                job()
+                claim = engine.acquire_product_print_claim(block)
+                if not claim.acquired:
+                    claim_warnings.append(f"{block.sku}: Claim {claim.state}")
+                    continue
+                try:
+                    job()
+                except Exception as exc:
+                    engine.finish_product_print_claim(claim, "unknown", error=str(exc))
+                    warnings.append(f"{block.sku}: Druckergebnis unklar: {exc}")
+                    continue
                 printed.append(f"{block.sku} ({qty}x)")
                 if block.product is None or not str(block.product.sevdesk_part_id or "").strip():
+                    engine.finish_product_print_claim(
+                        claim, "unknown", error="Druck bestaetigt, sevDesk-Part fehlt"
+                    )
                     warnings.append(f"{block.sku}: kein sevDesk-Part fuer Bestandsbuchung hinterlegt")
                     continue
                 try:
-                    engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
                     new_stock = engine.record_print_and_update_sevdesk(block, qty)
+                except Exception as exc:
+                    engine.finish_product_print_claim(claim, "unknown", error=str(exc))
+                    logger.warning("Stock update after PRINT SELECTED PRODUCTS failed for %s: %s", block.sku, exc)
+                    warnings.append(f"{block.sku}: {exc}")
+                    continue
+                engine.finish_product_print_claim(claim, "succeeded")
+                try:
                     run_token = hashlib.sha256(repr(products_key).encode("utf-8")).hexdigest()[:24]
                     self._container.resolve(InventoryService).record_print_run(
                         sku=block.sku,
@@ -4367,6 +4387,7 @@ class RechnungenView(QWidget):
                 "sku": f"{len(printed)} Produkt(e)",
                 "quantity": total_copies,
                 "stock_warning": "\n".join(warnings),
+                "claim_warning": "; ".join(claim_warnings),
                 "printed": ", ".join(printed),
                 "print_all_key": products_key,
             }
@@ -5419,23 +5440,44 @@ class RechnungenView(QWidget):
         def worker_job() -> dict[str, object]:
             warnings: list[str] = []
             printed: list[str] = []
+            claim_warnings: list[str] = []
+            engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
             for block, qty, job in selected_jobs:
-                job()
-                printed.append(f"{block.sku} ({qty}x)")
+                claim = engine.acquire_product_print_claim(block)
+                if not claim.acquired:
+                    claim_warnings.append(f"{block.sku}: Claim {claim.state}")
+                    continue
                 try:
-                    engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
+                    job()
+                    printed.append(f"{block.sku} ({qty}x)")
+                    if block.product is None or not str(block.product.sevdesk_part_id or "").strip():
+                        engine.finish_product_print_claim(
+                            claim, "unknown", error="Druck bestaetigt, sevDesk-Part fehlt"
+                        )
+                        warnings.append(f"{block.sku}: kein sevDesk-Part fuer Bestandsbuchung hinterlegt")
+                        continue
                     new_stock = engine.record_print_and_update_sevdesk(
                         block, qty, invoice_ref=invoice_ref
                     )
-                    if new_stock > 0:
-                        self._container.resolve(InventoryService).set_product_stock(block.sku, new_stock)
                 except Exception as exc:
+                    engine.finish_product_print_claim(claim, "unknown", error=str(exc))
                     logger.warning("Stock update after batch product print failed: %s", exc)
                     warnings.append(f"{block.sku}: {exc}")
+                    continue
+                engine.finish_product_print_claim(claim, "succeeded")
+                if new_stock > 0:
+                    try:
+                        self._container.resolve(InventoryService).set_product_stock(
+                            block.sku, new_stock
+                        )
+                    except Exception as exc:
+                        logger.warning("Local stock mirror update failed for %s: %s", block.sku, exc)
+                        warnings.append(f"{block.sku}: lokaler Bestandsspiegel nicht aktualisiert: {exc}")
             return {
                 "sku": f"{len(printed)} Produkt(e)",
                 "quantity": total_copies,
                 "stock_warning": "\n".join(warnings),
+                "claim_warning": "; ".join(claim_warnings),
                 "printed": ", ".join(printed),
                 "skipped": ", ".join(skipped),
             }
@@ -7788,6 +7830,17 @@ class RechnungenView(QWidget):
         signals.status_message.emit(f"Produktdruck fuer {block.sku} eingereiht ({qty}x).", 5000)
 
         def worker_job() -> dict[str, object]:
+            engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
+            claim = engine.acquire_product_print_claim(block)
+            if not claim.acquired:
+                return {
+                    "sku": block.sku,
+                    "quantity": 0,
+                    "claim_warning": (
+                        f"Druck ist durch einen {claim.state}-Claim gesperrt. "
+                        "Bei unklarem Druckergebnis erst den physischen Lauf abgleichen."
+                    ),
+                }
             completed = qty
             print_warning = ""
             try:
@@ -7799,8 +7852,17 @@ class RechnungenView(QWidget):
                 completed = exc.completed_copies
                 print_warning = str(exc)
                 if completed <= 0:
+                    engine.finish_product_print_claim(
+                        claim, "failed", error="Kein Exemplar wurde gedruckt"
+                    )
                     raise
+            except Exception as exc:
+                engine.finish_product_print_claim(claim, "unknown", error=str(exc))
+                raise
             if block.product is None or not str(block.product.sevdesk_part_id or "").strip():
+                engine.finish_product_print_claim(
+                    claim, "unknown", error="Druck bestaetigt, aber kein sevDesk-Part zugeordnet"
+                )
                 return {
                     "sku": block.sku,
                     "quantity": completed,
@@ -7808,11 +7870,12 @@ class RechnungenView(QWidget):
                     "print_warning": print_warning,
                 }
             try:
-                engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
                 new_stock = engine.record_print_and_update_sevdesk(block, completed, invoice_ref=invoice_ref)
             except Exception as exc:
+                engine.finish_product_print_claim(claim, "unknown", error=str(exc))
                 logger.warning("Stock update after product print failed: %s", exc)
                 return {"sku": block.sku, "quantity": completed, "stock_warning": str(exc), "print_warning": print_warning}
+            engine.finish_product_print_claim(claim, "succeeded")
             local_warning = ""
             try:
                 self._container.resolve(InventoryService).set_product_stock(block.sku, new_stock)
@@ -7853,11 +7916,23 @@ class RechnungenView(QWidget):
         data = payload if isinstance(payload, dict) else {}
         sku = str(data.get("sku") or "").strip() or "Produkt"
         qty = str(data.get("quantity") or "").strip() or "?"
+        claim_warning = str(data.get("claim_warning") or "").strip()
+        printed = str(data.get("printed") or "").strip()
         warning = str(data.get("stock_warning") or "").strip()
         local_warning = str(data.get("local_warning") or "").strip()
         print_warning = str(data.get("print_warning") or "").strip()
         signals: AppSignals = self._container.resolve(AppSignals)
-        if print_warning and warning:
+        if claim_warning:
+            details = [claim_warning]
+            if warning:
+                details.append(warning)
+            if local_warning:
+                details.append(local_warning)
+            message = f"{sku}: Druck gesperrt: {'; '.join(details)}"
+            if printed:
+                message += f" Erfolgreich gedruckt: {printed}"
+            signals.status_message.emit(message, 12000)
+        elif print_warning and warning:
             signals.status_message.emit(
                 f"{sku}: nur {qty}x gedruckt, Bestand nicht gebucht ({warning}). Rest abgebrochen: {print_warning}",
                 12000,

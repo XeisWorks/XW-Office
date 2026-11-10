@@ -12,9 +12,13 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Lock
-from typing import TYPE_CHECKING, Iterable, cast
+from typing import TYPE_CHECKING, Iterable, Literal, cast
 
 from xw_office.services.products.catalog import Product, StockStatus
+from xw_office.services.invoice_processing.operation_claims import (
+    InvoiceOperationClaimStore,
+    OperationClaim,
+)
 
 if TYPE_CHECKING:
     from xw_office.services.products.catalog import ProductCatalogService
@@ -206,6 +210,7 @@ class PrintDecisionEngine:
         self._catalog = catalog
         self._part_client = part_client
         self._settings_repo = settings_repo
+        self._print_claims = InvoiceOperationClaimStore(settings_repo)
         self._part_stock_locks_guard = Lock()
         self._part_stock_locks: dict[str, Lock] = {}
 
@@ -351,6 +356,26 @@ class PrintDecisionEngine:
             invoice_ref,
         )
         return new_stock
+
+    def acquire_product_print_claim(self, piece: PieceBlock) -> OperationClaim:
+        """Claim one physical Part print across the app and configured workstations."""
+        part_id = str(
+            piece.product.sevdesk_part_id if piece.product is not None else ""
+        ).strip()
+        identity = part_id or str(piece.sku or "").strip().upper()
+        if not identity:
+            raise ValueError("SKU oder sevDesk-Part-ID fehlt fuer den Druck-Claim")
+        return self._print_claims.acquire_new_run(identity, "physical_product_print")
+
+    def finish_product_print_claim(
+        self,
+        claim: OperationClaim,
+        state: Literal["succeeded", "unknown", "failed"],
+        *,
+        error: str = "",
+    ) -> bool:
+        """Persist the print outcome; unknown outcomes stay locked for reconciliation."""
+        return self._print_claims.finish(claim, state, error=error)
 
     def _part_stock_lock(self, part_id: str) -> Lock:
         """Return the process-wide lock for one sevDesk Part stock read/write pair."""

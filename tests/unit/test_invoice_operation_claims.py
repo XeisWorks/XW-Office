@@ -6,6 +6,8 @@ from sqlalchemy.orm import sessionmaker
 from xw_office.models.base import Base
 from xw_office.models.settings_kv import SettingKV
 from xw_office.repositories.settings_kv import SettingKvRepository
+from xw_office.services.products.catalog import Product, ProductCatalogService
+from xw_office.services.products.print_decision import PieceBlock, PrintDecisionEngine
 from xw_office.services.invoice_processing.operation_claims import InvoiceOperationClaimStore
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 
@@ -57,6 +59,80 @@ def test_unknown_claim_blocks_automatic_retry() -> None:
 
     assert retry.acquired is False
     assert retry.state == "unknown"
+
+
+def test_new_print_run_uses_new_id_after_success_but_serializes_other_workstations() -> None:
+    repository = _repository()
+    first_store = InvoiceOperationClaimStore(repository)
+    first = first_store.acquire_new_run("part-1", "physical_product_print")
+    assert first.acquired is True
+
+    competing = InvoiceOperationClaimStore(repository).acquire_new_run(
+        "part-1", "physical_product_print"
+    )
+    assert competing.acquired is False
+    assert competing.state == "running"
+
+    assert first_store.finish(first, "succeeded") is True
+    deliberate_reprint = InvoiceOperationClaimStore(repository).acquire_new_run(
+        "part-1", "physical_product_print"
+    )
+    assert deliberate_reprint.acquired is True
+    assert deliberate_reprint.operation_id != first.operation_id
+    assert first_store.finish(deliberate_reprint, "succeeded") is True
+
+
+def test_unknown_print_run_requires_manual_reconciliation() -> None:
+    repository = _repository()
+    store = InvoiceOperationClaimStore(repository)
+    claim = store.acquire_new_run("part-2", "physical_product_print")
+    assert store.finish(claim, "unknown", error="printer result uncertain") is True
+
+    retry = InvoiceOperationClaimStore(repository).acquire_new_run(
+        "part-2", "physical_product_print"
+    )
+
+    assert retry.acquired is False
+    assert retry.state == "unknown"
+
+
+def test_print_decision_engine_persists_product_print_claims() -> None:
+    repository = _repository()
+
+    class PartClient:
+        def get_part_stock(self, _part_id: str) -> int:
+            return 0
+
+        def set_part_stock(self, _part_id: str, _stock: int) -> None:
+            return None
+
+        def find_part_by_sku(self, _sku: str):
+            return None
+
+    piece = PieceBlock(
+        sku="XW-1",
+        name="Testprodukt",
+        qty_needed=1,
+        product=Product(
+            id="product-1", sku="XW-1", name="Testprodukt", sevdesk_part_id="part-1"
+        ),
+    )
+    engine = PrintDecisionEngine(
+        ProductCatalogService(), PartClient(), settings_repo=repository  # type: ignore[arg-type]
+    )
+    second_engine = PrintDecisionEngine(
+        ProductCatalogService(), PartClient(), settings_repo=repository  # type: ignore[arg-type]
+    )
+
+    first = engine.acquire_product_print_claim(piece)
+    competing = second_engine.acquire_product_print_claim(piece)
+    assert first.acquired is True
+    assert competing.acquired is False
+
+    assert engine.finish_product_print_claim(first, "succeeded") is True
+    deliberate_reprint = second_engine.acquire_product_print_claim(piece)
+    assert deliberate_reprint.acquired is True
+    assert deliberate_reprint.operation_id != first.operation_id
 
 
 def test_credit_note_mail_claim_blocks_duplicate_after_success() -> None:

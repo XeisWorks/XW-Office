@@ -433,6 +433,20 @@ class _FakeWixOrdersClient:
 
 
 class _FakePrintDecisionEngine:
+    def acquire_product_print_claim(self, piece: PieceBlock) -> object:
+        return types.SimpleNamespace(
+            invoice_id=piece.sku,
+            operation="physical_product_print",
+            operation_id=f"test:{piece.sku}",
+            state="running",
+            acquired=True,
+        )
+
+    def finish_product_print_claim(
+        self, _claim: object, _state: str, *, error: str = ""
+    ) -> bool:
+        return True
+
     def get_piece_blocks(
         self,
         _items: list[dict[str, object]],

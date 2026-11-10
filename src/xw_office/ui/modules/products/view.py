@@ -1475,9 +1475,23 @@ class ProductsView(QWidget):
         self._sync_status_lbl.setText(f"Produktion laeuft: {row.sku} ({copies}x)")
 
         def worker_job() -> dict[str, object]:
-            print_job()
+            engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
+            inventory: InventoryService = self._container.resolve(InventoryService)
+            claim = engine.acquire_product_print_claim(piece)
+            if not claim.acquired:
+                return {
+                    "sku": row.sku,
+                    "quantity": 0,
+                    "new_stock": None,
+                    "claim_warning": (
+                        f"Druck ist durch einen {claim.state}-Claim gesperrt. "
+                        "Bei unklarem Druckergebnis erst den physischen Lauf abgleichen."
+                    ),
+                    "stock_warning": "",
+                    "local_warning": "",
+                }
             try:
-                engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
+                print_job()
                 new_stock = engine.record_print_and_update_sevdesk(
                     piece,
                     copies,
@@ -1485,8 +1499,9 @@ class ProductsView(QWidget):
                 )
                 if new_stock <= 0:
                     raise RuntimeError("sevDesk-Bestand konnte nicht aktualisiert werden")
-                inventory: InventoryService = self._container.resolve(InventoryService)
+                engine.finish_product_print_claim(claim, "succeeded")
             except Exception as exc:  # noqa: BLE001 - stock systems have varied failures
+                engine.finish_product_print_claim(claim, "unknown", error=str(exc))
                 logger.warning("Stock update after production print failed for %s: %s", row.sku, exc)
                 return {
                     "sku": row.sku,
@@ -1519,7 +1534,12 @@ class ProductsView(QWidget):
         data = payload if isinstance(payload, dict) else {}
         sku = str(data.get("sku") or "Produkt")
         quantity = int(data.get("quantity") or 0)
+        claim_warning = str(data.get("claim_warning") or "").strip()
         warning = str(data.get("stock_warning") or "").strip()
+        if claim_warning:
+            self._sync_status_lbl.setText(f"Druck gesperrt: {sku} — {claim_warning}")
+            QMessageBox.warning(self, "Produktdruck gesperrt", claim_warning)
+            return
         if warning:
             self._sync_status_lbl.setText(
                 f"Druck erfolgreich, Bestand nicht gebucht: {sku} ({quantity}x)"

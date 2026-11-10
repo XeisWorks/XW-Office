@@ -68,6 +68,42 @@ class InvoiceOperationClaimStore:
             acquired=bool(decision.get("acquired", False)),
         )
 
+    def acquire_new_run(self, invoice_id: str, operation: str) -> OperationClaim:
+        """Start a deliberate new run after success, while blocking concurrent/unclear runs.
+
+        Physical production is repeatable by operator intent. A succeeded prior run
+        therefore advances to a fresh operation ID; a running or unknown result stays
+        blocked so a second workstation cannot duplicate an in-flight/uncertain print.
+        """
+        key = self._key(invoice_id, operation)
+        decision: dict[str, str | bool] = {}
+
+        def mutate(raw: str | None) -> str:
+            previous = self._decode(raw)
+            state = previous.get("state", "")
+            if state in {"running", "unknown"}:
+                decision.update(
+                    acquired=False,
+                    operation_id=previous.get("operation_id", ""),
+                    state=state,
+                )
+                return raw or "{}"
+            operation_id = (
+                str(uuid.uuid4()) if state == "succeeded" else previous.get("operation_id", "")
+            ) or str(uuid.uuid4())
+            payload = {"operation_id": operation_id, "state": "running", "error": ""}
+            decision.update(acquired=True, operation_id=operation_id, state="running")
+            return json.dumps(payload, separators=(",", ":"))
+
+        self._mutate(key, mutate)
+        return OperationClaim(
+            invoice_id=str(invoice_id),
+            operation=str(operation),
+            operation_id=str(decision.get("operation_id", "")),
+            state=cast(ClaimState, str(decision.get("state", "unknown"))),
+            acquired=bool(decision.get("acquired", False)),
+        )
+
     def finish(
         self,
         claim: OperationClaim,
