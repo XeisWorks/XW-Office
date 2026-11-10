@@ -27,6 +27,11 @@ class _InvoiceClientStub:
         self.invoice_positions: dict[str, list[dict[str, object]]] = {}
         self.position_fetch_errors: dict[str, Exception] = {}
         self.position_fetch_calls: list[str] = []
+        self.invoice_fetch_calls = 0
+        self.fail_invoice_fetch_call: int | None = None
+        self.send_invoice_mail_calls = 0
+        self.send_invoice_document_calls = 0
+        self.fail_send_invoice_document = False
 
     def list_invoice_summaries(
         self,
@@ -38,6 +43,9 @@ class _InvoiceClientStub:
         return list(self._rows)
 
     def fetch_invoice_by_id(self, invoice_id: str) -> dict[str, object]:
+        self.invoice_fetch_calls += 1
+        if self.invoice_fetch_calls == self.fail_invoice_fetch_call:
+            raise TimeoutError("sevDesk readback timed out")
         if invoice_id in self.invoice_payloads:
             return dict(self.invoice_payloads[invoice_id])
         return {
@@ -61,11 +69,14 @@ class _InvoiceClientStub:
         return b"%PDF-1.4\nstub"
 
     def send_invoice_document(self, invoice_id: str, *, send_type: str, send_draft: bool) -> None:
+        self.send_invoice_document_calls += 1
         self.last_send_document = {
             "invoice_id": invoice_id,
             "send_type": send_type,
             "send_draft": send_draft,
         }
+        if self.fail_send_invoice_document:
+            raise TimeoutError("sevDesk finalize response timed out")
 
     def send_invoice_via_email(
         self,
@@ -76,6 +87,7 @@ class _InvoiceClientStub:
         text: str,
         copy: bool = True,
     ) -> dict[str, object]:
+        self.send_invoice_mail_calls += 1
         if self.fail_mail:
             raise RuntimeError("sevDesk mail down")
         self.mail_calls.append(
@@ -229,6 +241,8 @@ class _WixOrdersStub:
         self.orders: dict[str, dict[str, object]] = {}
         self.line_items: dict[str, list[object]] = {}
         self.payment_details: dict[str, dict[str, object]] = {}
+        self.create_fulfillment_calls = 0
+        self.create_fulfillment_result: dict[str, str] = {"id": "fulfillment-1"}
 
     def has_credentials(self) -> bool:
         return True
@@ -280,8 +294,9 @@ class _WixOrdersStub:
         return items
 
     def create_fulfillment(self, reference: str, items: list[dict[str, str]]) -> dict[str, str]:
+        self.create_fulfillment_calls += 1
         self._created_fulfillment = (reference, list(items))
-        return {"id": "fulfillment-1"} if items else {}
+        return dict(self.create_fulfillment_result) if items else {}
 
     def fulfillment_status(self, reference: str) -> str:
         return self._fulfillment_status
@@ -788,6 +803,28 @@ def test_direct_wix_fulfillment_mirrors_only_completed_physical_skus() -> None:
         summary, svc.read_fulfillment_flags("10c"), inventory_already_accounted=True
     )
     assert len(inventory.calls) == 1
+
+
+def test_uncertain_wix_fulfillment_blocks_automatic_retry() -> None:
+    summary = InvoiceSummary(id="10d", invoiceNumber="RE-TEST-10D", order_reference="54323")
+    wix = _WixOrdersStub()
+    wix._fulfillable_items = [{"id": "physical-1", "quantity": 1}]
+    wix.create_fulfillment_result = {}
+    service = InvoiceProcessingService(
+        AppConfig(),
+        _InvoiceClientStub([summary]),  # type: ignore[arg-type]
+        None,
+        wix,  # type: ignore[arg-type]
+    )
+
+    first = service._run_product_step(summary, FulfillmentFlags())  # noqa: SLF001
+    second = service._run_product_step(summary, FulfillmentFlags())  # noqa: SLF001
+
+    assert first.wix_fulfilled is False
+    assert "Retry gesperrt" in first.last_warning
+    assert second.wix_fulfilled is False
+    assert "Claim-Status unknown" in second.last_warning
+    assert wix.create_fulfillment_calls == 1
 
 
 def test_invoice_list_hints_follow_legacy_alarm_rules() -> None:
@@ -1341,6 +1378,12 @@ def test_send_invoice_mail_falls_back_to_graph_when_sevdesk_fails() -> None:
     summary = InvoiceSummary(id="12", invoiceNumber="RE-TEST-12", order_reference="")
     client = _InvoiceClientStub([summary])
     client.fail_mail = True
+    client.invoice_payloads[summary.id] = {
+        "id": summary.id,
+        "invoiceNumber": summary.invoice_number,
+        "sendType": "VPR",
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
     mailer = _MailServiceStub()
     svc = InvoiceProcessingService(
         AppConfig(),
@@ -1472,3 +1515,37 @@ def test_send_invoice_mail_skips_when_internal_mail_flag_already_set() -> None:
     assert flags.mail_sent is True
     assert recipient == "max@example.test"
     assert client.mail_calls == []
+
+
+def test_ambiguous_sevdesk_mail_failure_blocks_graph_and_retry() -> None:
+    summary = InvoiceSummary(id="mail-unknown", invoiceNumber="RE-MAIL-UNKNOWN")
+    client = _InvoiceClientStub([summary])
+    client.fail_mail = True
+    client.fail_invoice_fetch_call = 2  # the readback after sendViaEmail
+    mailer = _MailServiceStub()
+    service = InvoiceProcessingService(
+        AppConfig(), client, _RepoStub({}), None, mailer  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(RuntimeError, match="Graph-Fallback gesperrt"):
+        service.send_invoice_mail_for_invoice(summary)
+    with pytest.raises(RuntimeError, match="Claim-Status unknown"):
+        service.send_invoice_mail_for_invoice(summary)
+
+    assert client.send_invoice_mail_calls == 1
+    assert mailer.calls == []
+
+
+def test_ambiguous_invoice_finalize_failure_blocks_second_send() -> None:
+    summary = InvoiceSummary(id="finalize-unknown", invoiceNumber="RE-FINALIZE-UNKNOWN")
+    client = _InvoiceClientStub([summary])
+    client.fail_send_invoice_document = True
+    client.fail_invoice_fetch_call = 2  # readback after sendBy
+    service = InvoiceProcessingService(AppConfig(), client, _RepoStub({}))  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="unklar"):
+        service._run_finalize_step(summary, FulfillmentFlags())
+    with pytest.raises(RuntimeError, match="Claim-Status unknown"):
+        service._run_finalize_step(summary, FulfillmentFlags())
+
+    assert client.send_invoice_document_calls == 1

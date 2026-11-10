@@ -141,7 +141,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F09 | P1 | ERLEDIGT | `InvoiceProcessingService.load_invoice_work_context/_run_finalize_step/build_inventory_requirements`: Positionsfehler werden als unvollst?ndiger Kontext mit Ladezustand/Fehlertext behandelt und nicht gecacht. Freigabe und Produktdruck brechen vor dem externen Schreibaufruf ab; Retry l?dt erneut. | Regressionen: Timeout bleibt uncached, Freigabe sendet nicht, Druck gibt klare Exception, Retry l?dt erfolgreich |
 | F10 | P1 | ERLEDIGT | `InvoiceInventoryBookingService.apply_line`: Booking, append-only Ledgerbewegung, materialisierter Bestand und Alarmstatus laufen in einer Session/Transaktion. Jede Mengen?nderung verwendet eine fortlaufende Transition-ID statt wiederverwendeter Zielmenge. | SQLite-Regression 10?2?3?2 ergibt 8; Replay bleibt idempotent; Transaktionscode sperrt vorhandene und erstmalige Booking-Zeile |
 | F11 | P1 | ERLEDIGT | `apply_credit_line`: sperrt die Ursprungsposition und berechnet bestehende R?ckgaben in derselben Transaktion wie die neue Gegenbuchung. Konkurrierende Credits serialisieren auf der Ursprungs-Booking-Zeile. | Unit-Abdeckung f?r Cap und Replay; PostgreSQL-Barrierenachweis verbleibt im Betriebs-/DB-Gate G2 |
-| F12 | P1 | OFFEN | Rechnungs-Mail/START/Retry/Produktdruck: Worker-Guards gelten je Widget/Prozess. Kein gemeinsamer dauerhafter Claim pro Rechnung/Operation; Graph-Fallback kann trotz unklarer sevDesk-Antwort folgen, wenn der Statusprobe fehlschlägt. Auch Part-`get+set` beim direkten Druck ist nicht atomar. | Codebeleg in `send_invoice_mail_for_invoice`, `_run_fulfillment_chip_action`, `record_print_and_update_sevdesk` |
+| F12 | P1 | OFFEN | Rechnungs-Mail, sevDesk-Freigabe und Wix-Fulfillment nutzen jetzt dauerhafte Claims je Beleg/Aktion; unknown/running sperrt Retry, und ein unklarer sevDesk-Mail-Readback sperrt den Graph-Zweitversand. Offen bleiben direkter Produktdruck, Refunds, gemeinsame Claims mit weiteren UI-Einstiegen und die ledgerbasierte Part-Bestandsprojektion statt get+set. | Unit-Regression fuer Mail/Finalize/Fulfillment und Claim-Persistenz; PostgreSQL-Parallelitaet bleibt G2 |
 | F13 | P1 | OFFEN | Kontext kennt `wix_candidate`, UI-Hydration und mehrere Folgepfade verzweigen aber weiterhin allein nach `order_reference`. Manuelle fünfstellige Fremdreferenz kann Wix-Pfad aktivieren; fehlender Wix-Treffer lädt nicht zuverlässig sevDesk-Produkte nach. | Codebeleg: Referenzparser, `_hydrate_detail_for_selection`, `_load_wix_context`, `_update_plc_controls` |
 | F14 | P1 | OFFEN | `load_invoice_piece_blocks`/`get_piece_blocks_from_invoice_positions`: normalisiertes `printable=False` wird nicht durchgängig ausgewertet; 1,5 kann als 1 Druckstück erscheinen. Freitext/unaufgelöste Positionen sind nicht vollständig in der Produktdarstellung sichtbar. F02 schützt den Hub-Buchungsadapter, nicht alle Druckadapter. | Codebeleg: `int(quantity_int)`, Filter nur `kind == product`; Formatwarnungen werden nicht dargestellt |
 | F15 | P1 | OFFEN | Dezimalmengen, finale Statuswerte, stabile Positions-IDs und Needs-Review-Verhalten der Invoice-/Credit-Feedadapter sind jetzt strikt validiert. Offen bleiben persistenter Wasserstand/Overlap und ein Beleg, dass Provider-Pagination bei Seitenlimit keine spaeteren Belege ueberspringt. | Regressionen fuer 0/0,5/1,5/NaN/Infinity/fehlende Menge, unbekannte Stati und fehlende IDs; `sevdesk_feed_validation.py` |
@@ -286,7 +286,7 @@ eine Session. Erstbuchungen werden per Unique-Insert angelegt und dann gesperrt.
 Credit-Pruefung sperrt die Ursprungsposition bis Gegenbewegung und Booking committet
 sind. SQLite-Regressionsfaelle bestehen; PostgreSQL-Interleavings bleiben Gate G2.
 
-### AP03 – Dauerhafte Claims externer Aktionen (F12; P1)
+### AP03 - Dauerhafte Claims externer Aktionen (teilweise umgesetzt; F12 bleibt OFFEN; P1)
 
 Gemeinsamen Status pro Rechnung und Aktion mit `pending/running/succeeded/unknown/failed`
 und eindeutiger Operation-ID einführen. START, manuelle Aktion und Retry verwenden
@@ -300,6 +300,12 @@ gleichzeitig erzeugen höchstens eine Mail/Freigabe/Fulfillment-Aktion. Timeout 
 Serverannahme bleibt sichtbar unklar. Druckwiederholung ist ein bewusst neuer Lauf;
 ein alter Lauf bucht bei Recovery keinen zweiten Zugang. Bestehende sevDesk-first-
 Strategie und die PDF-/Graph-Fallbacktests fachlich abgestimmt weiterführen.
+
+**Umgesetzt:** `invoice_mail`, `invoice_finalize` und nach Line-Item-Fingerprint
+eindeutige Wix-Fulfillments teilen `InvoiceOperationClaimStore`. Status `running`,
+`succeeded`, `unknown` und `failed` werden ueber SettingKV persistiert; PostgreSQL-
+Advisory-Locks serialisieren gleichzeitige Clients. Unklare Resultate sperren Retry.
+Direkter Produktdruck/Part-Stock und weitere externe UI-Aktionen bleiben offen.
 
 ### AP04 – Externe Belege strikt normalisieren (F15; P1)
 
@@ -423,6 +429,9 @@ eingetragen. Bereits durchgeführt:
   abschließenden Vergleich unten festhalten. Das ist kein grünes Typprüfungs-Gate.
   Die Baseline stammt aus einem temporären `git archive HEAD src`, nicht aus
   einem anderen Checkout oder alten Audittext.
+- AP03-Claims und externe Aktionstests: **90 bestanden** aus InvoiceService-,
+  Claim-Store- und Wix-Client-Tests (1,63 s); Ruff: **gruen**; mypy strict fuer
+  `operation_claims.py`: **gruen**.
 - AP04-Feed-Normalisierung: **51 Tests bestanden** ueber Invoice-/Credit-Feeds,
   Status-/Decimal-Helfer und Bestandsbuchung (2,43 s); Ruff: **gruen**.
 - Regression fuer F10: Ziel 2->3->2 bei Anfangsbestand 10 ergibt Endbestand 8;

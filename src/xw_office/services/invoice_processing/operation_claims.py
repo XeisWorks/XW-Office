@@ -1,0 +1,141 @@
+"""Durable per-invoice claims for actions that can create external side effects."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from collections.abc import Callable
+import json
+from threading import Lock
+from typing import Literal, cast
+import uuid
+
+ClaimState = Literal["pending", "running", "succeeded", "unknown", "failed"]
+_TERMINAL_BLOCKING_STATES = {"running", "succeeded", "unknown"}
+
+
+@dataclass(frozen=True)
+class OperationClaim:
+    invoice_id: str
+    operation: str
+    operation_id: str
+    state: ClaimState
+    acquired: bool
+
+
+class InvoiceOperationClaimStore:
+    """Serialize one external action across processes through SettingKV mutation."""
+
+    def __init__(self, settings_repo: object | None) -> None:
+        self._settings = settings_repo
+        self._local_lock = Lock()
+        self._local: dict[str, dict[str, str]] = {}
+
+    @staticmethod
+    def _key(invoice_id: str, operation: str) -> str:
+        clean_invoice = str(invoice_id or "").strip()
+        clean_operation = str(operation or "").strip()
+        if not clean_invoice or not clean_operation:
+            raise ValueError("invoice_id und operation sind erforderlich")
+        key = f"rechnungen.invoice_claim.v1:{clean_invoice}:{clean_operation}"
+        if len(key) > 256:
+            raise ValueError("Claim-Schluessel ist zu lang")
+        return key
+
+    def acquire(self, invoice_id: str, operation: str) -> OperationClaim:
+        key = self._key(invoice_id, operation)
+        decision: dict[str, str | bool] = {}
+
+        def mutate(raw: str | None) -> str:
+            previous = self._decode(raw)
+            state = previous.get("state", "")
+            if state in _TERMINAL_BLOCKING_STATES:
+                decision.update(
+                    acquired=False,
+                    operation_id=previous.get("operation_id", ""),
+                    state=state,
+                )
+                return raw or "{}"
+            operation_id = previous.get("operation_id") or str(uuid.uuid4())
+            payload = {"operation_id": operation_id, "state": "running", "error": ""}
+            decision.update(acquired=True, operation_id=operation_id, state="running")
+            return json.dumps(payload, separators=(",", ":"))
+
+        self._mutate(key, mutate)
+        return OperationClaim(
+            invoice_id=str(invoice_id),
+            operation=str(operation),
+            operation_id=str(decision.get("operation_id", "")),
+            state=cast(ClaimState, str(decision.get("state", "unknown"))),
+            acquired=bool(decision.get("acquired", False)),
+        )
+
+    def finish(
+        self,
+        claim: OperationClaim,
+        state: Literal["succeeded", "unknown", "failed"],
+        *,
+        error: str = "",
+    ) -> bool:
+        if not claim.acquired:
+            return False
+        key = self._key(claim.invoice_id, claim.operation)
+        updated = False
+
+        def mutate(raw: str | None) -> str:
+            nonlocal updated
+            payload = self._decode(raw)
+            if payload.get("operation_id") != claim.operation_id or payload.get("state") != "running":
+                return raw or "{}"
+            payload.update(state=state, error=str(error or "")[:1000])
+            updated = True
+            return json.dumps(payload, separators=(",", ":"))
+
+        self._mutate(key, mutate)
+        return updated
+
+    def get(self, invoice_id: str, operation: str) -> OperationClaim | None:
+        key = self._key(invoice_id, operation)
+        raw = self._get_raw(key)
+        if raw is None:
+            return None
+        payload = self._decode(raw)
+        state = payload.get("state", "unknown")
+        return OperationClaim(
+            invoice_id=str(invoice_id),
+            operation=str(operation),
+            operation_id=payload.get("operation_id", ""),
+            state=cast(ClaimState, state),
+            acquired=False,
+        )
+
+    def _mutate(self, key: str, mutator: Callable[[str | None], str]) -> None:
+        method = getattr(self._settings, "mutate_value_json", None)
+        if callable(method):
+            method(key, mutator)
+            return
+        with self._local_lock:
+            current = self._local.get(key)
+            raw = json.dumps(current, separators=(",", ":")) if current is not None else None
+            self._local[key] = self._decode(mutator(raw))
+
+    def _get_raw(self, key: str) -> str | None:
+        method = getattr(self._settings, "get_value_json", None)
+        if callable(method):
+            return cast(str | None, method(key))
+        with self._local_lock:
+            payload = self._local.get(key)
+            return None if payload is None else json.dumps(payload, separators=(",", ":"))
+
+    @staticmethod
+    def _decode(raw: str | None) -> dict[str, str]:
+        if not raw:
+            return {}
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invoice-Claim ist unlesbar; externe Aktion bleibt gesperrt") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("Invoice-Claim hat ein ungueltiges Format; Aktion bleibt gesperrt")
+        return {str(key): str(value or "") for key, value in payload.items()}
+
+
+__all__ = ["ClaimState", "OperationClaim", "InvoiceOperationClaimStore"]

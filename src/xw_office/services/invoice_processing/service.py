@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import hashlib
 import json
 import logging
 import re
@@ -31,6 +32,9 @@ from xw_office.services.invoice_processing.context import (
     address_lines_from_invoice,
     build_capabilities,
     normalize_invoice_positions,
+)
+from xw_office.services.invoice_processing.operation_claims import (
+    InvoiceOperationClaimStore,
 )
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.mailing.service import MailAttachment, MailDeliveryService
@@ -281,6 +285,7 @@ class InvoiceProcessingService:
         self._invoices = invoice_client
         self._search_index = search_index
         self._settings_repo = settings_repo
+        self._operation_claims = InvoiceOperationClaimStore(settings_repo)
         self._wix_orders = wix_orders
         self._invoice_printer = InvoicePrinter(config.printing, print_queue=print_queue)
         self._label_printer = LabelPrinter(config.printing, print_queue=print_queue)
@@ -1431,12 +1436,45 @@ class InvoiceProcessingService:
         """Finalize a sevDesk invoice without printing or sending an email."""
         current = self._resolve_current_start_summary(summary)
         if int(current.status_code or 0) == 100:
-            self._invoices.send_invoice_document(current.id, send_type="VPDF", send_draft=False)
+            self._send_invoice_document_once(current.id, send_type="VPDF")
             invoice_key = str(current.id or "").strip()
             self._invoice_detail_cache.pop(invoice_key, None)
             self._invoice_work_context_cache.pop(invoice_key, None)
             current = self._resolve_current_start_summary(current)
         return current
+
+    def _send_invoice_document_once(self, invoice_id: str, *, send_type: str) -> None:
+        """Finalize one invoice behind the same durable claim used by START/manual paths."""
+        claim = self._operation_claims.acquire(invoice_id, "invoice_finalize")
+        if not claim.acquired:
+            if claim.state == "succeeded":
+                return
+            raise RuntimeError(
+                f"Rechnungsfreigabe nicht gestartet: Claim-Status {claim.state}; "
+                "Belegstatus pruefen, bevor erneut freigegeben wird."
+            )
+        try:
+            self._invoices.send_invoice_document(invoice_id, send_type=send_type, send_draft=False)
+        except Exception as finalize_error:
+            try:
+                refreshed = self._invoices.fetch_invoice_by_id(invoice_id)
+            except Exception as probe_error:  # noqa: BLE001 - status cannot be reconciled.
+                self._operation_claims.finish(claim, "unknown", error=str(probe_error))
+                raise RuntimeError(
+                    f"Rechnungsstatus fuer {invoice_id} nach Freigabeversuch unklar."
+                ) from finalize_error
+            state = self._invoice_finalization_state(refreshed)
+            if state == "final":
+                self._operation_claims.finish(claim, "succeeded")
+                return
+            if state == "draft":
+                self._operation_claims.finish(claim, "failed", error=str(finalize_error))
+                raise
+            self._operation_claims.finish(claim, "unknown", error=str(finalize_error))
+            raise RuntimeError(
+                f"Rechnungsstatus fuer {invoice_id} nach Freigabeversuch unklar."
+            ) from finalize_error
+        self._operation_claims.finish(claim, "succeeded")
 
     def export_final_invoice_pdf(self, invoice_id: str, target_dir: Path | str) -> Path:
         """Persist the validated final invoice PDF for Outlook attachments."""
@@ -1586,8 +1624,7 @@ class InvoiceProcessingService:
         *,
         recipient_override: str | None = None,
     ) -> tuple[FulfillmentFlags, str, str]:
-        """Send one invoice manually using the same sevDesk-first path as START."""
-
+        """Send one invoice manually or through START using a shared durable claim."""
         flags = self.read_fulfillment_flags(summary.id)
         invoice = self._fetch_invoice_detail(summary.id)
         subject, text_body = self._build_mail_content(summary, invoice)
@@ -1599,9 +1636,20 @@ class InvoiceProcessingService:
             self.write_fulfillment_flags(summary.id, next_flags)
             logger.info("Invoice %s: email skipped (already sent)", summary.id)
             return next_flags, to_email, subject
-
         if not to_email:
             raise RuntimeError("Keine E-Mail-Adresse fuer Rechnungsversand")
+
+        claim = self._operation_claims.acquire(summary.id, "invoice_mail")
+        if not claim.acquired:
+            if claim.state == "succeeded":
+                next_flags = self._next_flags(flags, mail_sent=True)
+                self.write_fulfillment_flags(summary.id, next_flags)
+                return next_flags, to_email, subject
+            raise RuntimeError(
+                f"Rechnungs-Mail nicht gestartet: Claim-Status {claim.state}; "
+                "Status pruefen, bevor erneut gesendet wird."
+            )
+
         html_body = self._build_mail_html(text_body)
         sevdesk_error: Exception | None = None
         sender = getattr(self._invoices, "send_invoice_via_email", None)
@@ -1614,49 +1662,46 @@ class InvoiceProcessingService:
                     text=html_body,
                     copy=False,
                 )
-            except TypeError:
-                try:
-                    sender(
-                        summary.id,
-                        to=to_email,
-                        subject=subject,
-                        text=html_body,
-                        copy=False,
-                    )
-                except Exception as exc:  # noqa: BLE001 - Graph fallback below.
-                    sevdesk_error = exc
-                    logger.warning("sevDesk invoice mail failed for %s: %s", summary.id, exc)
-                else:
-                    next_flags = self._next_flags(flags, mail_sent=True)
-                    self.write_fulfillment_flags(summary.id, next_flags)
-                    return next_flags, to_email, subject
-            except Exception as exc:  # noqa: BLE001 - Graph fallback below.
+            except Exception as exc:  # noqa: BLE001 - read back before considering Graph.
                 sevdesk_error = exc
                 logger.warning("sevDesk invoice mail failed for %s: %s", summary.id, exc)
             else:
+                self._operation_claims.finish(claim, "succeeded")
                 next_flags = self._next_flags(flags, mail_sent=True)
                 self.write_fulfillment_flags(summary.id, next_flags)
                 return next_flags, to_email, subject
-        else:
-            sevdesk_error = RuntimeError("sevDesk sendViaEmail ist nicht verfuegbar")
 
-        # Guard against duplicate emails when sevDesk returned an error but actually sent.
-        try:
-            refreshed = self._invoices.fetch_invoice_by_id(summary.id)
-        except Exception as probe_exc:  # noqa: BLE001
-            logger.debug("Invoice %s: sevDesk mail probe failed: %s", summary.id, probe_exc)
-        else:
-            if isinstance(refreshed, dict):
-                self._invoice_detail_cache[str(summary.id)] = refreshed
-                self._invoice_work_context_cache.pop(str(summary.id), None)
-                if self._sevdesk_mail_sent(refreshed):
-                    next_flags = self._next_flags(flags, mail_sent=True)
-                    self.write_fulfillment_flags(summary.id, next_flags)
-                    logger.warning(
-                        "Invoice %s: sevDesk mail marked as sent after error, Graph fallback skipped",
-                        summary.id,
-                    )
-                    return next_flags, to_email, subject
+        can_use_graph_fallback = not callable(sender)
+        if callable(sender):
+            try:
+                refreshed = self._invoices.fetch_invoice_by_id(summary.id)
+            except Exception as probe_exc:  # noqa: BLE001 - an uncertain result must not resend.
+                self._operation_claims.finish(claim, "unknown", error=str(probe_exc))
+                raise RuntimeError(
+                    f"sevDesk-Mailstatus fuer {summary.id} ist unklar; Graph-Fallback gesperrt."
+                ) from probe_exc
+            if not isinstance(refreshed, dict):
+                self._operation_claims.finish(claim, "unknown", error="Ungueltige Readback-Antwort")
+                raise RuntimeError(
+                    f"sevDesk-Mailstatus fuer {summary.id} ist unklar; Graph-Fallback gesperrt."
+                ) from sevdesk_error
+            self._invoice_detail_cache[str(summary.id)] = refreshed
+            self._invoice_work_context_cache.pop(str(summary.id), None)
+            if self._sevdesk_mail_sent(refreshed):
+                self._operation_claims.finish(claim, "succeeded")
+                next_flags = self._next_flags(flags, mail_sent=True)
+                self.write_fulfillment_flags(summary.id, next_flags)
+                logger.warning(
+                    "Invoice %s: sevDesk mail marked as sent after error, Graph fallback skipped",
+                    summary.id,
+                )
+                return next_flags, to_email, subject
+            can_use_graph_fallback = self._mail_probe_confirms_unsent(refreshed)
+            if not can_use_graph_fallback:
+                self._operation_claims.finish(claim, "unknown", error=str(sevdesk_error or "Unclear readback"))
+                raise RuntimeError(
+                    f"sevDesk-Mailstatus fuer {summary.id} ist unklar; Graph-Fallback gesperrt."
+                ) from sevdesk_error
 
         if self._mail_service is not None and self._mail_service.is_configured():
             try:
@@ -1668,14 +1713,17 @@ class InvoiceProcessingService:
                     html_body=html_body,
                     attachments=[attachment],
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 - transport acceptance can be unclear.
+                self._operation_claims.finish(claim, "unknown", error=str(exc))
                 raise RuntimeError(
-                    f"sevDesk-Mail fehlgeschlagen ({sevdesk_error}); Graph-Mail fehlgeschlagen ({exc})"
+                    f"sevDesk-Mail fehlgeschlagen ({sevdesk_error}); Graph-Mailstatus unklar ({exc})"
                 ) from exc
+            self._operation_claims.finish(claim, "succeeded")
             next_flags = self._next_flags(flags, mail_sent=True)
             self.write_fulfillment_flags(summary.id, next_flags)
             return next_flags, to_email, subject
 
+        self._operation_claims.finish(claim, "failed", error=str(sevdesk_error or "No mail transport"))
         raise RuntimeError(
             f"sevDesk-Mail fehlgeschlagen ({sevdesk_error}); Graph-Mail nicht konfiguriert"
         )
@@ -2339,15 +2387,10 @@ class InvoiceProcessingService:
             )
         if self._invoice_inventory is not None and not digital_only and preflight_context.positions:
             self._invoice_inventory.validate_invoice_context(preflight_context.positions)
-        if printed_copy:
-            self._invoices.send_invoice_document(summary.id, send_type="VPR", send_draft=False)
-        else:
-            # ``sendViaEmail`` can finalize a draft itself, but a transient mail
-            # or rate-limit failure then leaves it without a final invoice
-            # number.  That also makes the Graph fallback PDF unusable.  Finalize
-            # first through the documented non-draft sendBy operation.  VPDF
-            # records a digital document without claiming a physical print.
-            self._invoices.send_invoice_document(summary.id, send_type="VPDF", send_draft=False)
+        self._send_invoice_document_once(
+            summary.id, send_type="VPR" if printed_copy else "VPDF"
+        )
+        if not printed_copy:
             logger.info(
                 "Invoice %s: %s invoice finalized as VPDF before mail",
                 summary.id,
@@ -3033,15 +3076,52 @@ class InvoiceProcessingService:
                 flags, product_ready=True, wix_fulfilled=False, last_warning=message
             )
 
-        created = self._wix_orders.create_fulfillment(reference, items)
-        if not created:
-            logger.warning("Wix-Fulfillment konnte nicht erstellt werden fuer %s", reference)
-            return self._next_flags(
-                flags,
-                product_ready=True,
-                wix_fulfilled=False,
-                last_warning=f"Wix-Fulfillment konnte nicht erstellt werden fuer {reference}",
+        action_fingerprint = hashlib.sha256(
+            json.dumps(items, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:32]
+        claim = self._operation_claims.acquire(
+            summary.id, f"wix_fulfillment_{action_fingerprint}"
+        )
+        if not claim.acquired:
+            if claim.state == "succeeded":
+                return self._next_flags(flags, product_ready=True, wix_fulfilled=True)
+            message = (
+                f"Wix-Fulfillment fuer {reference} hat Claim-Status {claim.state}; "
+                "Wix-Status pruefen, bevor erneut verarbeitet wird."
             )
+            return self._next_flags(
+                flags, product_ready=True, wix_fulfilled=False, last_warning=message
+            )
+        try:
+            created = self._wix_orders.create_fulfillment(reference, items)
+        except Exception as exc:  # noqa: BLE001 - reconcile before any retry.
+            exists = self._wix_fulfillment_matches(reference, items)
+            if exists:
+                self._operation_claims.finish(claim, "succeeded")
+                created = {"already_exists": True}
+            else:
+                self._operation_claims.finish(claim, "unknown", error=str(exc))
+                return self._next_flags(
+                    flags,
+                    product_ready=True,
+                    wix_fulfilled=False,
+                    last_warning=f"Wix-Fulfillmentstatus unklar fuer {reference}: {exc}",
+                )
+        else:
+            if created:
+                self._operation_claims.finish(claim, "succeeded")
+            elif self._wix_fulfillment_matches(reference, items):
+                self._operation_claims.finish(claim, "succeeded")
+                created = {"already_exists": True}
+            else:
+                self._operation_claims.finish(claim, "unknown", error="No fulfillment readback")
+                logger.warning("Wix-Fulfillmentstatus unklar fuer %s", reference)
+                return self._next_flags(
+                    flags,
+                    product_ready=True,
+                    wix_fulfilled=False,
+                    last_warning=f"Wix-Fulfillmentstatus unklar fuer {reference}; Retry gesperrt",
+                )
         if not inventory_already_accounted:
             self._mirror_direct_wix_fulfillment_stock(
                 summary=summary,
@@ -3050,6 +3130,36 @@ class InvoiceProcessingService:
                 created=created,
             )
         return self._next_flags(flags, product_ready=True, wix_fulfilled=True)
+
+    def _wix_fulfillment_matches(
+        self, reference: str, expected_items: list[dict[str, object]]
+    ) -> bool:
+        if self._wix_orders is None:
+            return False
+        try:
+            fulfillments = self._wix_orders.list_fulfillments(reference)
+        except Exception as exc:  # noqa: BLE001 - an unreadable response is not proof.
+            logger.warning("Wix fulfillment readback failed ref=%s: %s", reference, exc)
+            return False
+        expected = {
+            (str(item.get("id") or "").strip(), int(item.get("quantity") or 0))
+            for item in expected_items
+        }
+        for fulfillment in fulfillments:
+            raw_items = fulfillment.get("lineItems")
+            if not isinstance(raw_items, list):
+                nested = fulfillment.get("fulfillment")
+                raw_items = nested.get("lineItems") if isinstance(nested, dict) else None
+            if not isinstance(raw_items, list):
+                continue
+            actual = {
+                (str(item.get("id") or "").strip(), int(item.get("quantity") or 0))
+                for item in raw_items
+                if isinstance(item, dict)
+            }
+            if expected and expected.issubset(actual):
+                return True
+        return False
 
     def _mirror_direct_wix_fulfillment_stock(
         self,
@@ -3303,6 +3413,31 @@ class InvoiceProcessingService:
         if send_date and send_type_norm in ("", "vm", "mail", "email", "e-mail"):
             return True
         return False
+
+    @staticmethod
+    def _invoice_finalization_state(invoice: object) -> str:
+        if not isinstance(invoice, dict):
+            return "unknown"
+        status = str(invoice.get("status") or "").strip()
+        if status == "100":
+            return "draft"
+        if status in {"200", "750", "1000"}:
+            return "final"
+        return "unknown"
+
+    @staticmethod
+    def _mail_probe_confirms_unsent(invoice: dict[str, Any]) -> bool:
+        """Require an explicit sevDesk signal before sending a Graph fallback."""
+        sent_flag = invoice.get("sent")
+        if isinstance(sent_flag, bool):
+            return not sent_flag
+        if str(sent_flag or "").strip().lower() in {"0", "false", "no"}:
+            return True
+        send_type = invoice.get("sendType")
+        if isinstance(send_type, dict):
+            send_type = send_type.get("id") or send_type.get("value") or send_type.get("name")
+        send_type_norm = str(send_type or "").strip().lower()
+        return bool(send_type_norm and send_type_norm not in {"vm", "mail", "email", "e-mail"})
 
     def _resolve_customer_email(self, summary: InvoiceSummary, invoice: dict[str, Any]) -> str:
         if summary.order_reference.strip():
