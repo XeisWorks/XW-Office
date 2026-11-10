@@ -8,7 +8,7 @@ import re
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from PySide6.QtCore import QTimer, Qt, QUrl
 from PySide6.QtGui import QBrush, QColor, QDesktopServices
@@ -43,6 +43,7 @@ from xw_office.services.plc.polling import (
     DEFAULT_PLC_IMPORT_DIR,
     DEFAULT_TEST_PLC_IMPORT_DIR,
     PlcConfig,
+    ShipmentAddress,
     write_import_file,
 )
 from xw_office.services.plc.models import (
@@ -61,7 +62,11 @@ from xw_office.services.plc.packing_list import PackingListContext, PackingListI
 from xw_office.services.plc.partial_fulfillment import PartialFulfillmentStore
 from xw_office.services.plc.service import PlcDuplicateShipmentError, PlcShipmentService
 from xw_office.services.plc.webservice import PlcWebserviceResult, webservice_settings_from_secrets
-from xw_office.services.printing.print_jobs import PdfPrintJob
+from xw_office.services.printing.print_jobs import (
+    PageOrientationName,
+    PageSizeName,
+    PdfPrintJob,
+)
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
@@ -89,6 +94,22 @@ _MAX_PARCEL_GROSS_WEIGHT_KG = 12.0
 _PACKING_WEIGHT_RESERVE_KG = 0.8
 _PACKING_TARGET_NET_WEIGHT_KG = _MAX_PARCEL_GROSS_WEIGHT_KG - _PACKING_WEIGHT_RESERVE_KG
 _PACKAGE_QUANTITY_PATTERN = re.compile(r"^(\d+)(?:\s*\+\s*(\d+))?$")
+_PAGE_SIZES: dict[str, PageSizeName] = {"": "", "A4": "A4", "A5": "A5"}
+_PAGE_ORIENTATIONS: dict[str, PageOrientationName] = {
+    "": "",
+    "portrait": "portrait",
+    "landscape": "landscape",
+}
+
+
+def _page_size(value: object, fallback: PageSizeName) -> PageSizeName:
+    size = _PAGE_SIZES.get(str(value or ""), fallback)
+    return size or fallback
+
+
+def _page_orientation(value: object, fallback: PageOrientationName) -> PageOrientationName:
+    orientation = _PAGE_ORIENTATIONS.get(str(value or ""), fallback)
+    return orientation or fallback
 
 
 def queue_archived_plc_label(
@@ -118,8 +139,8 @@ def queue_archived_plc_label(
             copies=1,
             job_kind="label",
             description=f"PLC-Label {reference}",
-            page_size=str(getattr(profile, "page_size", "") or "A5"),
-            orientation=str(getattr(profile, "orientation", "") or "portrait"),
+            page_size=_page_size(getattr(profile, "page_size", ""), "A5"),
+            orientation=_page_orientation(getattr(profile, "orientation", ""), "portrait"),
             placement_mode=str(getattr(profile, "placement_mode", "") or "paper_origin"),  # type: ignore[arg-type]
             scale_mode=str(getattr(profile, "scale_mode", "") or "none"),  # type: ignore[arg-type]
             alignment=str(getattr(profile, "alignment", "") or "center"),  # type: ignore[arg-type]
@@ -143,7 +164,7 @@ def queue_archived_plc_customs(
         raise RuntimeError("Drucker 'Zollformular XW 100' ist nicht konfiguriert")
     if not os.path.isfile(pdf_path):
         raise RuntimeError(f"Archiviertes PLC-Zollformular fehlt: {pdf_path}")
-    print_path = ensure_customs_a5_print_file(pdf_path)
+    print_path = ensure_customs_a5_print_file(Path(pdf_path))
     queue: PrintQueueService = container.resolve(PrintQueueService)
     return queue.enqueue(
         PdfPrintJob(
@@ -152,8 +173,8 @@ def queue_archived_plc_customs(
             copies=1,
             job_kind="invoice",
             description=f"Zollformular {reference}",
-            page_size=str(getattr(profile, "page_size", "") or "A5"),
-            orientation=str(getattr(profile, "orientation", "") or "portrait"),
+            page_size=_page_size(getattr(profile, "page_size", ""), "A5"),
+            orientation=_page_orientation(getattr(profile, "orientation", ""), "portrait"),
             placement_mode=str(getattr(profile, "placement_mode", "") or "paper_origin"),  # type: ignore[arg-type]
             scale_mode=str(getattr(profile, "scale_mode", "") or "fit"),  # type: ignore[arg-type]
             scale_percent=float(getattr(profile, "scale_percent", 100.0) or 100.0),
@@ -413,7 +434,7 @@ class PlcLabelPrintDialog(QDialog):
             country_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
             country_completer.setFilterMode(Qt.MatchFlag.MatchStartsWith)
             country_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
-            country_completer.activated[str].connect(self._on_country_completed)
+            country_completer.activated.connect(self._on_country_completed)
             self._country_combo.setCompleter(country_completer)
             self._country_combo.editTextChanged.connect(self._on_address_edit)
             form.addRow("Land:", self._country_combo)
@@ -1231,7 +1252,7 @@ class PlcLabelPrintDialog(QDialog):
     def _on_country_completed(self, value: str) -> None:
         self._country_combo.setEditText(country_name_en(value))
 
-    def _current_mode(self) -> str:
+    def _current_mode(self) -> Literal["LIVE", "TEST"]:
         # The direct web-service transfer is the only remaining PLC mode.
         return "LIVE"
 
@@ -1270,7 +1291,7 @@ class PlcLabelPrintDialog(QDialog):
             ]
         return [ln.strip() for ln in self._address_edit.toPlainText().splitlines() if ln.strip()]
 
-    def _parse_address(self, lines: list[str]):
+    def _parse_address(self, lines: list[str]) -> ShipmentAddress:
         return parse_shipment_address_lines(
             lines,
             fallback_name=self._summary.contact_name,
@@ -1333,7 +1354,11 @@ class PlcLabelPrintDialog(QDialog):
 
     def _sync_product_options(self) -> None:
         group = self._current_country_group()
-        options = [item for item in self._product_catalog if group in item.get("regions", set())]
+        options: list[dict[str, object]] = []
+        for item in self._product_catalog:
+            regions = item.get("regions")
+            if isinstance(regions, (set, list, tuple)) and group in regions:
+                options.append(item)
         labels = [str(item["label"]) for item in options]
         current = self._product_combo.currentText().strip()
         self._product_combo.blockSignals(True)
@@ -1360,7 +1385,7 @@ class PlcLabelPrintDialog(QDialog):
         if needs_customs and self._manual_entry and self._customs_table.rowCount() == 0:
             self._add_empty_customs_row()
 
-    def _find_product(self) -> dict:
+    def _find_product(self) -> dict[str, object]:
         label = self._product_combo.currentText().strip()
         for item in self._product_catalog:
             if str(item.get("label") or "").strip() == label:
@@ -1650,8 +1675,8 @@ class PlcLabelPrintDialog(QDialog):
             return self._partial_fulfillment_order_key(), quantities
         for row in range(1, self._packing_table.rowCount()):
             product_cell = self._packing_table.item(row, 0)
-            item = product_cell.data(Qt.ItemDataRole.UserRole) if product_cell is not None else None
-            if not isinstance(item, WixOrderItem):
+            row_item = product_cell.data(Qt.ItemDataRole.UserRole) if product_cell is not None else None
+            if not isinstance(row_item, WixOrderItem):
                 continue
             dispatched = 0
             for package_index in range(int(self._package_count.value())):
@@ -1660,7 +1685,7 @@ class PlcLabelPrintDialog(QDialog):
                 if parsed is not None:
                     dispatched += parsed[0]
             if dispatched:
-                item_key = self._packing_item_key(item)
+                item_key = self._packing_item_key(row_item)
                 quantities[item_key] = quantities.get(item_key, 0) + dispatched
         return self._partial_fulfillment_order_key(), quantities
 
@@ -1810,8 +1835,8 @@ class PlcLabelPrintDialog(QDialog):
 
         parcels: list[PlcParcel] = []
         contexts: list[PackingListContext] = []
-        for package_index, (items, weight) in enumerate(zip(assignments, weights), start=1):
-            if not items:
+        for package_index, (parcel_items, weight) in enumerate(zip(assignments, weights), start=1):
+            if not parcel_items:
                 if not allow_partial:
                     raise ValueError(f"Paket {package_index} enthält keine Artikel.")
                 allocation_warnings.append(f"Paket {package_index} enthält keine zugeordneten Artikel.")
@@ -1825,7 +1850,7 @@ class PlcLabelPrintDialog(QDialog):
                     package_number=package_index,
                     package_count=package_count,
                     weight_kg=weight,
-                    items=tuple(items),
+                    items=tuple(parcel_items),
                 )
             )
         self._last_allocation_warnings = tuple(allocation_warnings)
@@ -2222,7 +2247,7 @@ class PlcLabelPrintDialog(QDialog):
     def _handle_duplicate_archived_label(
         self,
         shipment: PlcShipmentDraft,
-        archive_path: object | None,
+        archive_path: Path | None,
     ) -> None:
         box = QMessageBox(self)
         customs_path = self._label_archive.find_customs_document(shipment)
@@ -2307,7 +2332,7 @@ class PlcLabelPrintDialog(QDialog):
                 self._status.setText(f"Archivierter PLC-Nachdruck eingereiht: {jobs}")
                 self._show_success_overlay("PLC-Dokumente erneut eingereiht")
             return
-        if open_btn is not None and clicked is open_btn:
+        if open_btn is not None and clicked is open_btn and archive_path is not None:
             QDesktopServices.openUrl(QUrl.fromLocalFile(os.fspath(archive_path)))
             self._status.setText("Archiviertes PLC-Label geöffnet")
             return
@@ -2369,7 +2394,7 @@ class PlcLabelPrintDialog(QDialog):
         return queue_archived_plc_customs(self._container, pdf_path, reference)
 
     @staticmethod
-    def _load_products() -> list[dict]:
+    def _load_products() -> list[dict[str, object]]:
         defaults = {
             "Paket Oesterreich": {"product_id": os.getenv("PLC_PRODUCT_ID_PAKET_OESTERREICH", "10")},
             "Premium Int. Outbound B2B": {"product_id": os.getenv("PLC_PRODUCT_ID_PREMIUM_INT_OUTBOUND_B2B", "45")},

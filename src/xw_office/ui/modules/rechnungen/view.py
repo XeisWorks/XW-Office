@@ -15,7 +15,21 @@ from urllib.parse import quote
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QAbstractListModel, QEvent, QModelIndex, QRect, QSize, QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import (
+    QAbstractItemModel,
+    QAbstractListModel,
+    QEvent,
+    QModelIndex,
+    QPersistentModelIndex,
+    QPoint,
+    QSortFilterProxyModel,
+    QRect,
+    QSize,
+    QTimer,
+    Qt,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -157,6 +171,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _int_or_default(value: object, default: int) -> int:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _list_payload(value: object) -> list[object]:
+    return value if isinstance(value, list) else []
+
+
 @dataclass
 class _PrintRunSnapshot:
     print_products: list[PrintProductAggregate]
@@ -272,7 +298,12 @@ class _HintsIconDelegate(QStyledItemDelegate):
         self._tinted_cache[cache_key] = tinted
         return tinted if not tinted.isNull() else None
 
-    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
         row_data = index.data(Qt.ItemDataRole.UserRole)
         if not isinstance(row_data, dict):
             super().paint(painter, option, index)
@@ -324,7 +355,9 @@ class _HintsIconDelegate(QStyledItemDelegate):
             x += size + gap
         painter.restore()
 
-    def sizeHint(self, option, index):  # type: ignore[override]
+    def sizeHint(
+        self, option: QStyleOptionViewItem, index: QModelIndex | QPersistentModelIndex
+    ) -> QSize:
         base = super().sizeHint(option, index)
         if base.height() < 22:
             base.setHeight(22)
@@ -336,7 +369,12 @@ class _InvoiceStatusDelegate(QStyledItemDelegate):
 
     _DEFAULT_COLOR = "#94a3b8"
 
-    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
         row_data = index.data(Qt.ItemDataRole.UserRole)
         if not isinstance(row_data, dict):
             super().paint(painter, option, index)
@@ -369,7 +407,9 @@ class _InvoiceStatusDelegate(QStyledItemDelegate):
         painter.drawEllipse(target)
         painter.restore()
 
-    def sizeHint(self, option, index):  # type: ignore[override]
+    def sizeHint(
+        self, option: QStyleOptionViewItem, index: QModelIndex | QPersistentModelIndex
+    ) -> QSize:
         base = super().sizeHint(option, index)
         if base.height() < 22:
             base.setHeight(22)
@@ -391,7 +431,12 @@ class _SevdeskDraftActionDelegate(QStyledItemDelegate):
         x, y, size = cls._button_geometry(width, height)
         return x <= int(local_x) <= x + size and y <= int(local_y) <= y + size
 
-    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
         row_data = index.data(Qt.ItemDataRole.UserRole)
         if not isinstance(row_data, dict) or not bool(row_data.get("__draft_remove_enabled__")):
             super().paint(painter, option, index)
@@ -418,7 +463,9 @@ class _SevdeskDraftActionDelegate(QStyledItemDelegate):
         painter.drawLine(target.left() + 4, target.bottom() - 4, target.right() - 4, target.top() + 4)
         painter.restore()
 
-    def sizeHint(self, option, index):  # type: ignore[override]
+    def sizeHint(
+        self, option: QStyleOptionViewItem, index: QModelIndex | QPersistentModelIndex
+    ) -> QSize:
         base = super().sizeHint(option, index)
         if base.height() < 22:
             base.setHeight(22)
@@ -523,7 +570,12 @@ class _ActionsDelegate(QStyledItemDelegate):
             x += size + gap
         return out
 
-    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
         row_data = index.data(Qt.ItemDataRole.UserRole)
         if not isinstance(row_data, dict):
             super().paint(painter, option, index)
@@ -544,7 +596,9 @@ class _ActionsDelegate(QStyledItemDelegate):
             painter.drawPixmap(target, pix)
         painter.restore()
 
-    def sizeHint(self, option, index):  # type: ignore[override]
+    def sizeHint(
+        self, option: QStyleOptionViewItem, index: QModelIndex | QPersistentModelIndex
+    ) -> QSize:
         base = super().sizeHint(option, index)
         if base.height() < 22:
             base.setHeight(22)
@@ -597,7 +651,12 @@ class _FulfillmentDelegate(QStyledItemDelegate):
                 return key
         return ""
 
-    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
         row_data = index.data(Qt.ItemDataRole.UserRole)
         if not isinstance(row_data, dict):
             super().paint(painter, option, index)
@@ -644,7 +703,9 @@ class _FulfillmentDelegate(QStyledItemDelegate):
                 painter.setOpacity(1.0)
         painter.restore()
 
-    def sizeHint(self, option, index):  # type: ignore[override]
+    def sizeHint(
+        self, option: QStyleOptionViewItem, index: QModelIndex | QPersistentModelIndex
+    ) -> QSize:
         base = super().sizeHint(option, index)
         if base.height() < 22:
             base.setHeight(22)
@@ -850,10 +911,16 @@ class _PieceListModel(QAbstractListModel):
         self._rows = list(rows)
         self.endResetModel()
 
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def rowCount(
+        self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()
+    ) -> int:
         return 0 if parent.isValid() else len(self._rows)
 
-    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> object:
+    def data(
+        self,
+        index: QModelIndex | QPersistentModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> object:
         if not index.isValid() or not (0 <= index.row() < len(self._rows)):
             return None
         row = self._rows[index.row()]
@@ -867,9 +934,10 @@ class _PieceListModel(QAbstractListModel):
         if role == self.FLAGGED_ROLE:
             return bool(row.get("flagged"))
         if role == self.QUANTITY_ROLE:
-            return int(row.get("quantity") or 1)
+            return _int_or_default(row.get("quantity") or 1, 1)
         if role == self.DETAILS_ROLE:
-            return list(row.get("details") or [])
+            details = row.get("details")
+            return list(details) if isinstance(details, list) else []
         if role == self.STOCK_ROLE:
             return str(row.get("stock") or "")
         if role == self.STOCK_COLOR_ROLE:
@@ -890,7 +958,7 @@ class _PieceListModel(QAbstractListModel):
                 result.append(
                     (
                         block,
-                        int(row.get("quantity") or 1),
+                        _int_or_default(row.get("quantity") or 1, 1),
                         bool(row.get("selected", row.get("flagged"))),
                     )
                 )
@@ -907,14 +975,17 @@ class _PieceListModel(QAbstractListModel):
         if not (0 <= source_row < len(self._rows)):
             return
         row = self._rows[source_row]
-        row["quantity"] = max(1, min(999, max(1, int(row.get("quantity") or 1)) + int(delta)))
+        row["quantity"] = max(
+            1,
+            min(999, max(1, _int_or_default(row.get("quantity") or 1, 1)) + int(delta)),
+        )
         idx = self.index(source_row, 0)
         self.dataChanged.emit(idx, idx, [self.QUANTITY_ROLE])
 
     def quantity_for_block(self, block: PieceBlock) -> int:
         for row in self._rows:
             if row.get("block") is block:
-                return max(1, int(row.get("quantity") or 1))
+                return max(1, _int_or_default(row.get("quantity") or 1, 1))
         return 1
 
     def toggle_selected(self, source_row: int) -> None:
@@ -931,7 +1002,7 @@ class _PieceListModel(QAbstractListModel):
         for source_row, row in enumerate(self._rows):
             if row.get("block") is not block:
                 continue
-            token = int(row.get("print_confirmation_token") or 0) + 1
+            token = _int_or_default(row.get("print_confirmation_token") or 0, 0) + 1
             row["print_confirmation_token"] = token
             row["print_confirmed"] = True
             idx = self.index(source_row, 0)
@@ -943,7 +1014,7 @@ class _PieceListModel(QAbstractListModel):
                 target = self._rows[target_row]
                 if target.get("block") is not block:
                     return
-                if int(target.get("print_confirmation_token") or 0) != expected_token:
+                if _int_or_default(target.get("print_confirmation_token") or 0, 0) != expected_token:
                     return
                 target["print_confirmed"] = False
                 target_idx = self.index(target_row, 0)
@@ -969,7 +1040,12 @@ class _PieceDelegate(QStyledItemDelegate):
         self._print_icon = QIcon(str(icons_dir / "print.png"))
         self._manage_icon = QIcon(str(icons_dir / "printondemand.png"))
 
-    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = option.rect.adjusted(3, 3, -3, -3)
@@ -1099,16 +1175,30 @@ class _PieceDelegate(QStyledItemDelegate):
                     )
         painter.restore()
 
-    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+    def sizeHint(
+        self,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> QSize:
         details = index.data(_PieceListModel.DETAILS_ROLE)
         has_details = bool(isinstance(details, list) and any(str(line).strip() for line in details))
         return QSize(option.rect.width(), 68 if has_details else 54)
 
-    def editorEvent(self, event, model, option, index) -> bool:  # type: ignore[override]
-        if event.type() != QEvent.Type.MouseButtonRelease or not index.isValid():
+    def editorEvent(
+        self,
+        event: QEvent,
+        model: QAbstractItemModel,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> bool:
+        if (
+            event.type() != QEvent.Type.MouseButtonRelease
+            or not index.isValid()
+            or not isinstance(event, QMouseEvent)
+        ):
             return super().editorEvent(event, model, option, index)
-        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
-        mouse_button = event.button() if hasattr(event, "button") else Qt.MouseButton.NoButton
+        pos = event.position().toPoint()
+        mouse_button = event.button()
         block = index.data(_PieceListModel.BLOCK_ROLE)
         if not isinstance(block, PieceBlock):
             return False
@@ -2019,7 +2109,7 @@ class RechnungenView(QWidget):
         self._inventory_alert_timer.stop()
         self._stop_mollie_worker()
 
-    def mousePressEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             global_pos = self.mapToGlobal(event.position().toPoint())
             if self._should_clear_selection_for_global_pos(global_pos):
@@ -2029,7 +2119,7 @@ class RechnungenView(QWidget):
                 self._refresh_detail_for_selection()
         super().mousePressEvent(event)
 
-    def _should_clear_selection_for_global_pos(self, global_pos: object) -> bool:
+    def _should_clear_selection_for_global_pos(self, global_pos: QPoint) -> bool:
         if self._global_pos_inside_widget(self._table, global_pos):
             return False
         if self._global_pos_inside_widget(self._detail_scroll, global_pos):
@@ -2037,8 +2127,8 @@ class RechnungenView(QWidget):
         return True
 
     @staticmethod
-    def _global_pos_inside_widget(widget: QWidget, global_pos: object) -> bool:
-        local_pos = widget.mapFromGlobal(global_pos)  # type: ignore[arg-type]
+    def _global_pos_inside_widget(widget: QWidget, global_pos: QPoint) -> bool:
+        local_pos = widget.mapFromGlobal(global_pos)
         return widget.isVisible() and widget.rect().contains(local_pos)
 
     def closeEvent(self, event: QCloseEvent) -> None:
@@ -2958,7 +3048,7 @@ class RechnungenView(QWidget):
         self._search.refresh_suggestions()
         self._rebuild_search_index()
         self._refresh_detail_for_selection()
-        signals: AppSignals = self._container.resolve(AppSignals)
+        signals = self._container.resolve(AppSignals)
         signals.status_message.emit(
             f"Rechnungen zurückgesetzt ({len(self._loaded_summaries)} in geladener Liste)",
             3000,
@@ -3231,16 +3321,16 @@ class RechnungenView(QWidget):
         for result in self._open_overview_batch_results:
             updates.update(result.cache_updates)
         unreleased: dict[tuple[str, str, str], UnreleasedAssignment] = {}
-        for row in [
+        for assignment in [
             *base.unreleased_assignments,
             *(item for result in self._open_overview_batch_results for item in result.unreleased_assignments),
         ]:
-            key = (
-                row.title.casefold(),
-                row.shipping_name.casefold(),
-                row.order_reference.casefold(),
+            assignment_key = (
+                assignment.title.casefold(),
+                assignment.shipping_name.casefold(),
+                assignment.order_reference.casefold(),
             )
-            unreleased[key] = row
+            unreleased[assignment_key] = assignment
         return OpenInvoiceOverview(
             key=base.key,
             total=base.total,
@@ -3408,10 +3498,10 @@ class RechnungenView(QWidget):
             self._print_product_tab_pages.append(page)
             tabs.addTab(page, "")
         while tabs.count() > 1 + len(self._print_run_history):
-            page = tabs.widget(tabs.count() - 1)
+            removed_page = tabs.widget(tabs.count() - 1)
             tabs.removeTab(tabs.count() - 1)
-            if page is not None:
-                page.deleteLater()
+            if removed_page is not None:
+                removed_page.deleteLater()
             if self._print_product_tab_pages:
                 self._print_product_tab_pages.pop()
         for index in range(tabs.count()):
@@ -3668,7 +3758,7 @@ class RechnungenView(QWidget):
             if not isinstance(raw, dict):
                 continue
             products: list[PrintProductAggregate] = []
-            for row in raw.get("print_products") if isinstance(raw.get("print_products"), list) else []:
+            for row in _list_payload(raw.get("print_products")):
                 if not isinstance(row, dict):
                     continue
                 sku = str(row.get("sku") or "").strip()
@@ -3687,7 +3777,7 @@ class RechnungenView(QWidget):
                     category_label=str(row.get("category_label") or "").strip(),
                 ))
             buyer_notes: list[BuyerNote] = []
-            for row in raw.get("buyer_notes") if isinstance(raw.get("buyer_notes"), list) else []:
+            for row in _list_payload(raw.get("buyer_notes")):
                 if not isinstance(row, dict):
                     continue
                 note = str(row.get("note") or "").strip()
@@ -3700,7 +3790,7 @@ class RechnungenView(QWidget):
                         source_label=str(row.get("source_label") or "Quelle unbekannt").strip() or "Quelle unbekannt",
                     ))
             assignments: list[UnreleasedAssignment] = []
-            for row in raw.get("unreleased_assignments") if isinstance(raw.get("unreleased_assignments"), list) else []:
+            for row in _list_payload(raw.get("unreleased_assignments")):
                 if not isinstance(row, dict):
                     continue
                 title = str(row.get("title") or "").strip()
@@ -3725,12 +3815,12 @@ class RechnungenView(QWidget):
                 saved_at=str(raw.get("saved_at") or ""),
                 invoice_print_ids=[
                     str(item).strip()
-                    for item in (raw.get("invoice_print_ids") if isinstance(raw.get("invoice_print_ids"), list) else [])
+                    for item in (_list_payload(raw.get("invoice_print_ids")))
                     if str(item).strip()
                 ],
                 label_print_ids=[
                     str(item).strip()
-                    for item in (raw.get("label_print_ids") if isinstance(raw.get("label_print_ids"), list) else [])
+                    for item in (_list_payload(raw.get("label_print_ids")))
                     if str(item).strip()
                 ],
                 mode_label=str(raw.get("mode_label") or "START"),
@@ -3763,7 +3853,7 @@ class RechnungenView(QWidget):
             return
 
         products: list[PrintProductAggregate] = []
-        for row in payload.get("print_products") if isinstance(payload.get("print_products"), list) else []:
+        for row in _list_payload(payload.get("print_products")):
             if not isinstance(row, dict):
                 continue
             sku = str(row.get("sku") or "").strip()
@@ -3825,7 +3915,7 @@ class RechnungenView(QWidget):
     def _clear_unreleased_rows(self) -> None:
         while self._unreleased_rows_layout.count():
             item = self._unreleased_rows_layout.takeAt(0)
-            widget = item.widget()
+            widget = item.widget() if item is not None else None
             if widget is not None:
                 widget.deleteLater()
 
@@ -3880,10 +3970,11 @@ class RechnungenView(QWidget):
         return row
 
     def _render_unreleased_assignments(self, overview: OpenInvoiceOverview) -> None:
-        historical = self._active_print_history_index is not None
+        history_index = self._active_print_history_index
+        historical = history_index is not None
         assignments = (
-            self._print_run_history[self._active_print_history_index].unreleased_assignments
-            if historical and self._active_print_history_index < len(self._print_run_history)
+            self._print_run_history[history_index].unreleased_assignments
+            if history_index is not None and history_index < len(self._print_run_history)
             else list(overview.unreleased_assignments)
         )
         if overview.unknown and not assignments and not historical:
@@ -3929,7 +4020,7 @@ class RechnungenView(QWidget):
     def _clear_buyer_note_rows(self) -> None:
         while self._buyer_notes_rows_layout.count():
             item = self._buyer_notes_rows_layout.takeAt(0)
-            widget = item.widget()
+            widget = item.widget() if item is not None else None
             if widget is not None:
                 widget.deleteLater()
 
@@ -3968,10 +4059,11 @@ class RechnungenView(QWidget):
         return row
 
     def _render_buyer_notes(self, overview: OpenInvoiceOverview) -> None:
-        historical = self._active_print_history_index is not None
+        history_index = self._active_print_history_index
+        historical = history_index is not None
         notes = (
-            self._print_run_history[self._active_print_history_index].buyer_notes
-            if historical and self._active_print_history_index < len(self._print_run_history)
+            self._print_run_history[history_index].buyer_notes
+            if history_index is not None and history_index < len(self._print_run_history)
             else list(overview.buyer_notes)
         )
         if not notes:
@@ -3994,7 +4086,7 @@ class RechnungenView(QWidget):
     def _clear_open_print_product_rows(self) -> None:
         while self._open_products_rows_layout.count():
             item = self._open_products_rows_layout.takeAt(0)
-            widget = item.widget()
+            widget = item.widget() if item is not None else None
             if widget is not None:
                 widget.deleteLater()
 
@@ -4311,7 +4403,7 @@ class RechnungenView(QWidget):
                 self._container,
                 block,
             ):
-                signals: AppSignals = self._container.resolve(AppSignals)
+                signals = self._container.resolve(AppSignals)
                 signals.status_message.emit(
                     f"PRINT SELECTED PRODUCTS abgebrochen: {block.sku} wurde nicht konfiguriert.",
                     8000,
@@ -4319,7 +4411,7 @@ class RechnungenView(QWidget):
                 return
             job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty, wait=True)
             if job is None:
-                signals: AppSignals = self._container.resolve(AppSignals)
+                signals = self._container.resolve(AppSignals)
                 signals.status_message.emit(
                     f"PRINT SELECTED PRODUCTS abgebrochen: {block.sku} ist nicht druckbereit.",
                     8000,
@@ -4332,7 +4424,7 @@ class RechnungenView(QWidget):
 
         self._btn_print_all_products.setEnabled(False)
         total_copies = sum(qty for _block, qty, _job in prepared_jobs)
-        signals: AppSignals = self._container.resolve(AppSignals)
+        signals = self._container.resolve(AppSignals)
         signals.status_message.emit(
             f"PRINT SELECTED PRODUCTS gestartet: {len(prepared_jobs)} Produkt(e), {total_copies}x.",
             5000,
@@ -4840,11 +4932,14 @@ class RechnungenView(QWidget):
         self._wix_warm_inflight_refs = set(refs)
         self._wix_warm_started_at = time.perf_counter()
         logger.info("Wix context warmup start refs=%s pending=%s", len(refs), len(self._wix_warm_queue))
+        def run_batch(token: CancelToken) -> list[dict[str, object]]:
+            return self._run_wix_warm_batch(tuple(refs), token)
+
         handle = self._background_jobs.submit_callable(
             queue="network-background",
             priority=_PRIORITY_WIX_WARMUP,
             key="wix-warmup",
-            fn=lambda token, batch=tuple(refs): self._run_wix_warm_batch(batch, token),
+            fn=run_batch,
             on_result=self._on_wix_warm_result,
             on_error=self._on_wix_warm_error,
             on_finished=self._on_wix_warm_finished,
@@ -4932,9 +5027,20 @@ class RechnungenView(QWidget):
             if not ref:
                 continue
             status = str(data.get("status") or "").strip()
-            meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
-            items = data.get("items") if isinstance(data.get("items"), list) else []
-            patch = data.get("patch") if isinstance(data.get("patch"), dict) else self._blank_hint_patch()
+            raw_meta = data.get("meta")
+            meta = (
+                {str(key): str(value) for key, value in raw_meta.items()}
+                if isinstance(raw_meta, dict)
+                else {}
+            )
+            raw_items = data.get("items")
+            items = [item for item in raw_items if isinstance(item, PieceBlock)] if isinstance(raw_items, list) else []
+            raw_patch = data.get("patch")
+            patch = (
+                {str(key): value for key, value in raw_patch.items()}
+                if isinstance(raw_patch, dict)
+                else self._blank_hint_patch()
+            )
             self._put_cached_wix_context(ref, status=status, meta=meta, items=items)
             self._apply_hint_patch_to_visible_rows(ref, patch)
             if ref == selected_ref and not status:
@@ -5066,7 +5172,12 @@ class RechnungenView(QWidget):
         if seq != self._hint_seq:
             return
         ref = str(data.get("reference") or "").strip()
-        patch = data.get("patch") if isinstance(data.get("patch"), dict) else self._blank_hint_patch()
+        raw_patch = data.get("patch")
+        patch = (
+            {str(key): value for key, value in raw_patch.items()}
+            if isinstance(raw_patch, dict)
+            else self._blank_hint_patch()
+        )
         self._apply_hint_patch_to_visible_rows(ref, patch)
 
     def _on_hint_prefetch_error(self, exc: Exception) -> None:
@@ -5559,7 +5670,7 @@ class RechnungenView(QWidget):
         if selected_after == selected_before:
             self._refresh_detail_for_selection()
 
-    def eventFilter(self, watched: Any, event: QEvent) -> bool:  # type: ignore[override]
+    def eventFilter(self, watched: Any, event: QEvent) -> bool:
         if watched is self._table.viewport() and event.type() in (
             QEvent.Type.MouseMove,
             QEvent.Type.MouseButtonPress,
@@ -5625,7 +5736,8 @@ class RechnungenView(QWidget):
                             width=rect.width(),
                             height=rect.height(),
                         ):
-                            source_index = self._table.model().mapToSource(index)
+                            model = self._table.model()
+                            source_index = model.mapToSource(index) if isinstance(model, QSortFilterProxyModel) else index
                             row = int(source_index.row())
                             if 0 <= row < len(self._summaries):
                                 self._confirm_delete_draft(self._summaries[row])
@@ -5639,7 +5751,8 @@ class RechnungenView(QWidget):
                             height=rect.height(),
                         )
                         if chip:
-                            source_index = self._table.model().mapToSource(index)
+                            model = self._table.model()
+                            source_index = model.mapToSource(index) if isinstance(model, QSortFilterProxyModel) else index
                             row = int(source_index.row())
                             if 0 <= row < len(self._summaries):
                                 row_payload = self._table.selected_row_data() or {}
@@ -5653,7 +5766,8 @@ class RechnungenView(QWidget):
                             height=rect.height(),
                         )
                         if action:
-                            source_index = self._table.model().mapToSource(index)
+                            model = self._table.model()
+                            source_index = model.mapToSource(index) if isinstance(model, QSortFilterProxyModel) else index
                             row = int(source_index.row())
                             if 0 <= row < len(self._summaries):
                                 self._run_row_action(self._summaries[row], action)
@@ -6254,7 +6368,8 @@ class RechnungenView(QWidget):
         if summary.order_reference.strip():
             cached = self._get_cached_wix_context(summary.order_reference)
             if cached is not None:
-                meta = cached.get("meta") if isinstance(cached.get("meta"), dict) else {}
+                raw_meta = cached.get("meta")
+                meta = raw_meta if isinstance(raw_meta, dict) else {}
                 email = self._clean_email_value(meta.get("wix_customer_email"))
                 if email:
                     return email
@@ -6340,7 +6455,8 @@ class RechnungenView(QWidget):
 
     def _populate_detail_for_summary(self, summary: InvoiceSummary) -> None:
         self._gb_open.hide()
-        self._print_products_tabs.hide()
+        if self._print_products_tabs is not None:
+            self._print_products_tabs.hide()
         self._gb_open_products.hide()
         self._gb_buyer_notes.hide()
         self._gb_unreleased.hide()
@@ -6504,7 +6620,8 @@ class RechnungenView(QWidget):
 
     def _reset_detail(self) -> None:
         self._gb_open.show()
-        self._print_products_tabs.show()
+        if self._print_products_tabs is not None:
+            self._print_products_tabs.show()
         self._gb_open_products.show()
         self._gb_buyer_notes.show()
         self._gb_unreleased.show()
@@ -6734,8 +6851,9 @@ class RechnungenView(QWidget):
                 self._stuecke_hint.show()
                 self._gb_stuecke.show()
                 return
-            meta = cached.get("meta") if isinstance(cached.get("meta"), dict) else {}
-            items = cached.get("items") if isinstance(cached.get("items"), list) else []
+            raw_meta = cached.get("meta")
+            meta = raw_meta if isinstance(raw_meta, dict) else {}
+            items = _list_payload(cached.get("items"))
             self._on_wix_meta_loaded({**meta, "__requested_ref": ref, "seq": seq})
             self._on_stuecke_loaded({"__requested_ref": ref, "items": items, "seq": seq})
             return
@@ -6845,8 +6963,9 @@ class RechnungenView(QWidget):
         seq = int(data.get("seq") or 0)
         requested_ref = str(data.get("__requested_ref") or "").strip()
         status = str(data.get("status") or "").strip()
-        meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
-        items = data.get("items") if isinstance(data.get("items"), list) else []
+        raw_meta = data.get("meta")
+        meta = raw_meta if isinstance(raw_meta, dict) else {}
+        items = [item for item in _list_payload(data.get("items")) if isinstance(item, PieceBlock)]
         self._put_cached_wix_context(
             requested_ref,
             status=status,
@@ -6950,7 +7069,10 @@ class RechnungenView(QWidget):
         cached = self._wix_context_cache.get(ref)
         if not cached:
             return None
-        ts = float(cached.get("ts") or 0.0)
+        try:
+            ts = float(str(cached.get("ts") or 0.0))
+        except ValueError:
+            ts = 0.0
         if (time.monotonic() - ts) > _WIX_CONTEXT_CACHE_TTL_SECONDS:
             self._wix_context_cache.pop(ref, None)
             return None
@@ -7265,7 +7387,8 @@ class RechnungenView(QWidget):
 
     def _on_create_draft_result(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}
-        draft_payload = data.get("draft") if isinstance(data.get("draft"), dict) else data
+        raw_draft = data.get("draft")
+        draft_payload = raw_draft if isinstance(raw_draft, dict) else data
         apply_result = data.get("apply")
         invoice_id = str(draft_payload.get("invoice_id") or "").strip()
         invoice_number = str(draft_payload.get("invoice_number") or "").strip()
@@ -7386,7 +7509,7 @@ class RechnungenView(QWidget):
         lines.append(f"E-Mail: {preview.get('email', '—')}")
         lines.append("")
         lines.append("Positionen:")
-        items = preview.get("items") if isinstance(preview.get("items"), list) else []
+        items = _list_payload(preview.get("items"))
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -7540,7 +7663,7 @@ class RechnungenView(QWidget):
             aliases=aliases,
         )
 
-        signals: AppSignals = self._container.resolve(AppSignals)
+        signals = self._container.resolve(AppSignals)
         signals.status_message.emit(
             f"Unreleased-Produkt '{canonical_name}' gespeichert.",
             5000,
@@ -7990,7 +8113,7 @@ class RechnungenView(QWidget):
             signals.status_message.emit(f"Druckkonfiguration fuer {block.sku} gespeichert.", 5000)
             self._on_stuecke_loaded(self._current_piece_blocks)
             return
-        signals: AppSignals = self._container.resolve(AppSignals)
+        signals = self._container.resolve(AppSignals)
         signals.status_message.emit(
             f"Druckkonfiguration fuer {block.sku} nicht geaendert.",
             5000,

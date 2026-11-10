@@ -13,6 +13,7 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPushButton, QTextBrowser, QVBoxLayout,
+    QWidget,
 )
 
 from xw_office.repositories.plc_shipment import PlcParcelEvidence, PlcShipmentRepository
@@ -22,7 +23,7 @@ from xw_office.core.worker import BackgroundWorker
 class PlcEvidenceDialog(QDialog):
     def __init__(
         self, repository: PlcShipmentRepository, *, invoice_id: str,
-        invoice_number: str = "", parent: QDialog | None = None,
+        invoice_number: str = "", parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._repository = repository
