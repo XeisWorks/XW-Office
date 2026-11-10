@@ -25,7 +25,7 @@ class DeliveryNoteService:
 
     def generate_pdf(self, context: DeliveryNoteContext) -> Path:
         try:
-            import fitz
+            import fitz  # type: ignore[import-untyped]
         except Exception as exc:  # pragma: no cover
             raise RuntimeError("PyMuPDF fuer Lieferschein-PDF nicht verfuegbar") from exc
 
