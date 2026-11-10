@@ -278,6 +278,18 @@ def test_mollie_atomic_cache_merge_keeps_newer_payment_snapshot() -> None:
     assert state["payments"]["tr_1"]["status"] == "paid"
 
 
+def test_mollie_atomic_cache_merge_keeps_equal_timestamp_enrichment() -> None:
+    repository = _MemorySettingsRepository()
+    cache = MolliePaymentCache(repository, "token")
+    cache.merge({"tr_1": {"status": "paid", "fetched_at": 20}})
+    state = cache.merge(
+        {"tr_1": {"status": "paid", "fetched_at": 20, "orderNumber": "10001", "email": "a@b.c"}}
+    )
+
+    assert state["payments"]["tr_1"]["orderNumber"] == "10001"
+    assert state["payments"]["tr_1"]["email"] == "a@b.c"
+
+
 def test_wix_blocks_conflicting_ids_and_reads_paging_metadata_cursor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -344,7 +344,7 @@ class ExpenseAuditService:
             fresh = (
                 synced_at is not None
                 and datetime.timedelta(0) <= now - synced_at < EXPENSE_CACHE_MAX_AGE
-                and (not force or synced_at >= requested_at)
+                and (not force or synced_at > requested_at)
             )
             loaded = self._load_bank_expenses(
                 start=start,

@@ -396,6 +396,32 @@ def test_shared_sync_expires_and_manual_refresh_bypasses_freshness(
     assert provider.fetch_calls == provider.resolve_calls == 3
 
 
+def test_manual_refresh_is_not_skipped_when_cache_timestamp_matches_request(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = SettingKvRepository(session_factory)
+    provider = _BankProviderStub([_bank_row()])
+    service = ExpenseAuditService(
+        settings, bank_provider=provider, pipeline_repo=ExpensePipelineRepository(session_factory),  # type: ignore[arg-type]
+    )
+    period = {"start": date(2026, 9, 1), "end": date(2026, 9, 30)}
+    now = datetime.datetime(2026, 10, 15, 18, 0, tzinfo=datetime.UTC)
+    monkeypatch.setattr(
+        expense_service_module,
+        "datetime",
+        SimpleNamespace(
+            datetime=SimpleNamespace(now=lambda tz: now),
+            timedelta=datetime.timedelta,
+            UTC=datetime.UTC,
+        ),
+    )
+    service.synchronize_bank_expenses(**period)
+    manual = service.synchronize_bank_expenses(**period, force=True)
+
+    assert manual.refreshed
+    assert provider.fetch_calls == provider.resolve_calls == 2
+
+
 @pytest.mark.parametrize("age_seconds, refreshed", [(299, False), (300, True), (-1, True)])
 def test_shared_cache_freshness_boundary_is_exactly_five_minutes(
     session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch,

@@ -42,10 +42,17 @@ class MolliePaymentCache:
             current_payments = cast(dict[str, dict[str, Any]], current["payments"])
             for payment_id, candidate in payments.items():
                 existing = current_payments.get(payment_id)
-                if existing is None or float(candidate.get("fetched_at", 0)) > float(
-                    existing.get("fetched_at", 0)
-                ):
+                candidate_at = float(candidate.get("fetched_at", 0))
+                existing_at = float(existing.get("fetched_at", 0)) if existing else 0.0
+                if existing is None or candidate_at > existing_at:
                     current_payments[payment_id] = candidate
+                elif candidate_at == existing_at:
+                    merged = dict(existing)
+                    merged.update(candidate)
+                    for key in ("orderNumber", "customer", "email", "wixReference"):
+                        if not candidate.get(key) and existing.get(key):
+                            merged[key] = existing[key]
+                    current_payments[payment_id] = merged
             if full_refresh_at is not None:
                 current["full_refresh_at"] = max(
                     float(current.get("full_refresh_at", 0)), full_refresh_at
