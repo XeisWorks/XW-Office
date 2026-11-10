@@ -945,19 +945,8 @@ class TagesgeschaeftView(QWidget):
     def _open_lieferkorrekturen_dialog(self, *, initial_filter: str) -> None:
         if self._rechnungen_view is None:
             return
-        review_count, due_count = self._rechnungen_view.open_lieferkorrekturen_dialog(
-            initial_filter=initial_filter
-        )
-        self._lieferkorrektur_review_count = max(0, int(review_count))
-        self._lieferkorrektur_due_count = max(0, int(due_count))
-        self._update_alert_button(
-            self._btn_lieferkorrektur_review_alert,
-            "KORREKTUR ZU PRUEFEN",
-            self._lieferkorrektur_review_count,
-        )
-        self._update_alert_button(
-            self._btn_lieferkorrektur_due_alert, "LIEFERKORREKTUR FAELLIG", self._lieferkorrektur_due_count
-        )
+        self._rechnungen_view.open_lieferkorrekturen_dialog(initial_filter=initial_filter)
+        self._refresh_badges()
 
     def _maybe_show_next_lieferkorrektur_review_popup(self) -> None:
         """Hybrid review-popup (spec §4, user-confirmed behavior).

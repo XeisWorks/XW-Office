@@ -132,6 +132,16 @@ def test_dialog_constructor_does_not_refresh_graph_synchronously(qtbot: object) 
     assert service.refresh_called == 0
 
 
+def test_open_count_uses_loaded_cases(qtbot: object, monkeypatch) -> None:
+    service = _FakeTransferService()
+    dialog = OffeneUeberweisungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    _wait_dialog_loaded(qtbot, dialog)
+    monkeypatch.setattr(service, "open_count", lambda: (_ for _ in ()).throw(AssertionError("sync read")))
+
+    assert dialog.open_count() == 1
+
+
 def test_dialog_defer_calls_service(qtbot: object, monkeypatch) -> None:
     service = _FakeTransferService()
     dialog = OffeneUeberweisungenDialog(_FakeContainer(service))  # type: ignore[arg-type]

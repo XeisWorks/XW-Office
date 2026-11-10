@@ -162,7 +162,7 @@ def test_new_review_cases_without_active_window_does_not_start_popup_worker(qtbo
     assert view._lieferkorrektur_review_popup_open is False  # noqa: SLF001
 
 
-def test_review_alert_click_opens_dialog_prefiltered_and_updates_badges(
+def test_review_alert_click_opens_dialog_prefiltered_and_refreshes_badges_async(
     qtbot: object, monkeypatch
 ) -> None:
     container = _build_container()
@@ -172,17 +172,18 @@ def test_review_alert_click_opens_dialog_prefiltered_and_updates_badges(
 
     calls: list[dict[str, object]] = []
 
-    def fake_open(*, initial_filter: str) -> tuple[int, int]:
+    def fake_open(*, initial_filter: str) -> None:
         calls.append({"initial_filter": initial_filter})
-        return (5, 1)
+
+    badge_refreshes: list[bool] = []
+    monkeypatch.setattr(view, "_refresh_badges", lambda: badge_refreshes.append(True))  # noqa: SLF001
 
     monkeypatch.setattr(view._rechnungen_view, "open_lieferkorrekturen_dialog", fake_open)  # noqa: SLF001
 
     view._on_lieferkorrektur_review_alert_clicked()  # noqa: SLF001
 
     assert calls == [{"initial_filter": "zu_pruefen"}]
-    assert view._btn_lieferkorrektur_review_alert.text() == "KORREKTUR ZU PRUEFEN (5)"  # noqa: SLF001
-    assert view._btn_lieferkorrektur_due_alert.text() == "LIEFERKORREKTUR FAELLIG (1)"  # noqa: SLF001
+    assert badge_refreshes == [True]
 
 
 def test_due_alert_click_opens_dialog_prefiltered_to_faellig(qtbot: object, monkeypatch) -> None:
@@ -193,12 +194,15 @@ def test_due_alert_click_opens_dialog_prefiltered_to_faellig(qtbot: object, monk
 
     calls: list[dict[str, object]] = []
 
-    def fake_open(*, initial_filter: str) -> tuple[int, int]:
+    def fake_open(*, initial_filter: str) -> None:
         calls.append({"initial_filter": initial_filter})
-        return (0, 0)
+
+    badge_refreshes: list[bool] = []
+    monkeypatch.setattr(view, "_refresh_badges", lambda: badge_refreshes.append(True))  # noqa: SLF001
 
     monkeypatch.setattr(view._rechnungen_view, "open_lieferkorrekturen_dialog", fake_open)  # noqa: SLF001
 
     view._on_lieferkorrektur_due_alert_clicked()  # noqa: SLF001
 
     assert calls == [{"initial_filter": "faellig"}]
+    assert badge_refreshes == [True]

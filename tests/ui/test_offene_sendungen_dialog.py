@@ -231,6 +231,29 @@ def test_dialog_mark_done_saves_manual_fields_and_removes_case(qtbot: object) ->
     assert service.mark_done_calls == [("m1", True)]
     assert service.saved_manual[-1]["manual_text"] == "Bitte schnell senden"
     qtbot.waitUntil(lambda: dialog.result() == QDialog.DialogCode.Accepted, timeout=2000)
+    assert dialog.open_count() == 0
+
+
+def test_unknown_mark_done_payload_reloads_without_synchronous_count(qtbot: object, monkeypatch: object) -> None:
+    service = _FakeSendungenService()
+    dialog = OffeneSendungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    _wait_dialog_loaded(qtbot, dialog)
+    monkeypatch.setattr(service, "open_count", lambda: (_ for _ in ()).throw(AssertionError("sync read")))
+
+    dialog._on_mark_done_finished(object())  # noqa: SLF001
+
+    qtbot.waitUntil(lambda: dialog._status.text() == "1 offene Sendungen", timeout=2000)  # noqa: SLF001
+
+
+def test_open_count_uses_loaded_cases(qtbot: object, monkeypatch: object) -> None:
+    service = _FakeSendungenService()
+    dialog = OffeneSendungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    _wait_dialog_loaded(qtbot, dialog)
+    monkeypatch.setattr(service, "open_count", lambda: (_ for _ in ()).throw(AssertionError("sync read")))
+
+    assert dialog.open_count() == 1
 
 
 def test_dialog_close_does_not_wait_for_running_worker(qtbot: object, monkeypatch) -> None:

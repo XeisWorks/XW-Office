@@ -8,7 +8,14 @@ from pathlib import Path
 import re
 from typing import Any
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    QPersistentModelIndex,
+    Qt,
+    QTimer,
+    QUrl,
+)
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QResizeEvent
 from PySide6.QtWidgets import (
     QDialog,
@@ -51,13 +58,21 @@ class _SendungProductsModel(QAbstractTableModel):
         super().__init__(parent)
         self._rows: list[SendungProductLine] = []
 
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def rowCount(
+        self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()
+    ) -> int:
         return 0 if parent.isValid() else len(self._rows)
 
-    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def columnCount(
+        self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()
+    ) -> int:
         return 0 if parent.isValid() else len(self._headers)
 
-    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> object:
+    def data(
+        self,
+        index: QModelIndex | QPersistentModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> object:
         if not index.isValid() or not (0 <= index.row() < len(self._rows)):
             return None
         row = self._rows[index.row()]
@@ -71,7 +86,12 @@ class _SendungProductsModel(QAbstractTableModel):
             return int(Qt.AlignmentFlag.AlignCenter)
         return None
 
-    def setData(self, index: QModelIndex, value: object, role: int = Qt.ItemDataRole.EditRole) -> bool:
+    def setData(
+        self,
+        index: QModelIndex | QPersistentModelIndex,
+        value: object,
+        role: int = Qt.ItemDataRole.EditRole,
+    ) -> bool:
         if not index.isValid() or not (0 <= index.row() < len(self._rows)):
             return False
         row = self._rows[index.row()]
@@ -104,7 +124,7 @@ class _SendungProductsModel(QAbstractTableModel):
         self.dataChanged.emit(index, index, [role])
         return True
 
-    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
+    def flags(self, index: QModelIndex | QPersistentModelIndex) -> Qt.ItemFlag:
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
         base = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
@@ -175,6 +195,7 @@ class OffeneSendungenDialog(QDialog):
         self._container = container
         self._service: OffeneSendungenService = container.resolve(OffeneSendungenService)
         self._cases: list[SendungCase] = []
+        self._open_case_count = 0
         self._load_worker: BackgroundWorker | None = None
         self._detail_worker: BackgroundWorker | None = None
         self._detail_workers: list[BackgroundWorker] = []
@@ -382,7 +403,7 @@ class OffeneSendungenDialog(QDialog):
         outer.addWidget(tabs)
 
     def open_count(self) -> int:
-        return self._service.open_count()
+        return self._open_case_count
 
     def _load_cases(
         self,
@@ -451,6 +472,7 @@ class OffeneSendungenDialog(QDialog):
         else:
             cases, names = result, {}
         self._cases = list(cases) if isinstance(cases, list) else []
+        self._open_case_count = len(self._cases)
         self._recipient_names = dict(names) if isinstance(names, dict) else {}
         self._list.blockSignals(True)
         self._list.clear()
@@ -888,7 +910,7 @@ class OffeneSendungenDialog(QDialog):
         products = self._products_from_table()
         manual_text = self._manual_text.toPlainText()
 
-        def job() -> bool:
+        def job() -> int:
             self._service.save_manual_fields(
                 case_id,
                 address_lines=address,
@@ -906,10 +928,12 @@ class OffeneSendungenDialog(QDialog):
         )
 
     def _on_mark_done_finished(self, payload: object) -> None:
-        try:
-            remaining = int(payload)
-        except (TypeError, ValueError):
-            remaining = self._service.open_count()
+        if type(payload) is not int:
+            self._status.setText("Erledigt-Status unklar – offene Sendungen werden neu geladen…")
+            self._load_cases(refresh=False)
+            return
+        remaining = payload
+        self._open_case_count = remaining
         if remaining <= 0:
             QTimer.singleShot(0, self.accept)
             return

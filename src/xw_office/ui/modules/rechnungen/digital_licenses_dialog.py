@@ -35,7 +35,7 @@ class DigitalLicensesDialog(QDialog):
         self._container = container
         self._service: DigitalLicenseService = container.resolve(DigitalLicenseService)
         self._cases: list[DigitalLicenseCase] = []
-        self._loaded_once = False
+        self._open_case_count = 0
         self._load_worker: BackgroundWorker | None = None
         self._action_worker: BackgroundWorker | None = None
         self._prepared_files: list[Path] = []
@@ -96,9 +96,7 @@ class DigitalLicensesDialog(QDialog):
         root.addWidget(buttons)
 
     def open_count(self) -> int:
-        if self._loaded_once:
-            return len(self._cases)
-        return self._service.open_count(limit=30, use_cache=True)
+        return self._open_case_count
 
     def _load_cases(self) -> None:
         if self._load_worker is not None and self._load_worker.isRunning():
@@ -112,7 +110,7 @@ class DigitalLicensesDialog(QDialog):
 
     def _on_cases_loaded(self, payload: object) -> None:
         self._cases = list(payload) if isinstance(payload, list) else []
-        self._loaded_once = True
+        self._open_case_count = len(self._cases)
         self._list.clear()
         for case in self._cases:
             item = QListWidgetItem(f"{case.order_reference or '-'} | {case.customer_name or '-'}")
@@ -212,7 +210,7 @@ class DigitalLicensesDialog(QDialog):
         for path in files:
             try:
                 if hasattr(os, "startfile"):
-                    os.startfile(str(path))  # type: ignore[attr-defined]
+                    os.startfile(str(path))
             except OSError as exc:
                 self._on_error(RuntimeError(f"PDF konnte nicht geoeffnet werden: {path}: {exc}"))
                 return
@@ -292,10 +290,12 @@ class DigitalLicensesDialog(QDialog):
         self._run_action(job, "Markiere Versand als erledigt...", self._on_mark_done_finished)
 
     def _on_mark_done_finished(self, payload: object) -> None:
-        try:
-            remaining = int(payload)
-        except (TypeError, ValueError):
-            remaining = self._service.open_count()
+        if type(payload) is not int:
+            self._status.setText("Abschlussstatus unklar – offene Bestellungen werden neu geladen…")
+            self._load_cases()
+            return
+        remaining = payload
+        self._open_case_count = remaining
         if remaining <= 0:
             QTimer.singleShot(0, self.accept)
             return

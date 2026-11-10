@@ -63,6 +63,39 @@ def test_mark_done_closes_dialog_when_queue_is_empty(qtbot: object, monkeypatch)
 
     qtbot.waitUntil(lambda: service.mark_done_calls == 1, timeout=2000)
     qtbot.waitUntil(lambda: dialog.result() == QDialog.DialogCode.Accepted, timeout=2000)
+    assert dialog.open_count() == 0
+
+
+def test_unknown_mark_done_payload_reloads_without_synchronous_count(
+    qtbot: object, monkeypatch: MonkeyPatch
+) -> None:
+    service = _FakeDigitalLicenseService()
+    dialog = DigitalLicensesDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    qtbot.waitUntil(lambda: dialog._list.count() == 1, timeout=2000)  # noqa: SLF001
+
+
+def test_open_count_uses_loaded_cases(qtbot: object, monkeypatch: MonkeyPatch) -> None:
+    service = _FakeDigitalLicenseService()
+    dialog = DigitalLicensesDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    qtbot.waitUntil(lambda: dialog._list.count() == 1, timeout=2000)  # noqa: SLF001
+    monkeypatch.setattr(
+        service,
+        "open_count",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("sync read")),
+    )
+
+    assert dialog.open_count() == 1
+    monkeypatch.setattr(
+        service,
+        "open_count",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("sync read")),
+    )
+
+    dialog._on_mark_done_finished(object())  # noqa: SLF001
+
+    qtbot.waitUntil(lambda: dialog._list.count() == 1, timeout=2000)  # noqa: SLF001
 
 def test_license_pipeline_keeps_original_customer_and_second_worker(
     qtbot: QtBot, monkeypatch: MonkeyPatch, tmp_path: Path,

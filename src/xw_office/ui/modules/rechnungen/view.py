@@ -2225,11 +2225,9 @@ class RechnungenView(QWidget):
         dlg.exec()
         return dlg.open_count()
 
-    def open_lieferkorrekturen_dialog(self, *, initial_filter: str = "alle") -> tuple[int, int]:
+    def open_lieferkorrekturen_dialog(self, *, initial_filter: str = "alle") -> None:
         dlg = CustomerAftercareManagerDialog(self._container, self, initial_filter=initial_filter)
         dlg.exec()
-        service: CustomerAftercareService = self._container.resolve(CustomerAftercareService)
-        return service.count_pending_review(), service.count_due()
 
     def open_queue_dialog(self, queue_name: str, title: str, fallback_count: int = 0) -> None:
         from xw_office.ui.modules.rechnungen.tagesgeschaeft_view import QueuePopupDialog

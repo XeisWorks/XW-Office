@@ -183,7 +183,7 @@ class OffeneUeberweisungenDialog(QDialog):
         root.addWidget(buttons)
 
     def open_count(self) -> int:
-        return self._service.open_count()
+        return len(self._cases)
 
     def _load_cases(self, *, refresh: bool) -> None:
         if self._load_worker is not None and self._load_worker.isRunning():
