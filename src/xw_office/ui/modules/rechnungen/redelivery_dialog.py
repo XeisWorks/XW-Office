@@ -145,9 +145,9 @@ class RedeliveryDialog(QDialog):
             check = self._table.item(row, 0)
             if check is None or check.checkState() != Qt.CheckState.Checked:
                 continue
-            name = (self._table.item(row, 1).text() if self._table.item(row, 1) else "Position").strip()
-            sku = (self._table.item(row, 2).text() if self._table.item(row, 2) else "").strip()
-            qty = (self._table.item(row, 3).text() if self._table.item(row, 3) else "1").strip()
+            name = self._cell_text(row, 1, "Position")
+            sku = self._cell_text(row, 2)
+            qty = self._cell_text(row, 3, "1")
             products.append(f"{qty}x {name}" + (f" ({sku})" if sku else ""))
         address = self._address.toPlainText().strip() or "(Lieferadresse fehlt)"
         note = self._note.toPlainText().strip() or "Kostenlose Nachlieferung – nicht verrechnen."
@@ -159,6 +159,10 @@ class RedeliveryDialog(QDialog):
             + ("\n".join(products) if products else "(keine Position ausgewählt)")
             + f"\n\n{note}",
         )
+
+    def _cell_text(self, row: int, column: int, default: str = "") -> str:
+        item = self._table.item(row, column)
+        return item.text().strip() if item is not None else default
 
     def _remove_selected_items(self) -> None:
         rows = sorted(
@@ -228,11 +232,11 @@ class RedeliveryDialog(QDialog):
             is_selected = check.checkState() == Qt.CheckState.Checked
             original = check.data(Qt.ItemDataRole.UserRole)
             original = original if isinstance(original, CustomerAftercareItem) else None
-            name = (self._table.item(row, 1).text() if self._table.item(row, 1) else "").strip()
-            sku = (self._table.item(row, 2).text() if self._table.item(row, 2) else "").strip()
+            name = self._cell_text(row, 1)
+            sku = self._cell_text(row, 2)
             sku = sku.split(" / ", 1)[0].strip()
             try:
-                quantity = max(1, int((self._table.item(row, 3).text() if self._table.item(row, 3) else "1").strip()))
+                quantity = max(1, int(self._cell_text(row, 3, "1")))
             except ValueError:
                 quantity = 1
             if isinstance(original, CustomerAftercareItem) and str(original.source_kind or "") != "manual":

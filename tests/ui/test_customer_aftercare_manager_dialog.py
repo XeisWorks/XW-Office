@@ -13,6 +13,7 @@ from xw_office.ui.modules.rechnungen.customer_aftercare_manager_dialog import (
 )
 from xw_office.ui.modules.rechnungen.customer_aftercare_tab import CustomerAftercareTab
 from xw_office.ui.modules.rechnungen.customer_aftercare_review_dialog import ReviewDialogOutcome
+from xw_office.ui.modules.rechnungen.redelivery_dialog import RedeliveryDialog
 
 
 class _FakeService:
@@ -248,3 +249,21 @@ def test_redelivery_tab_print_request_uses_confirmed_items_and_address(qtbot: ob
     assert note == "Kostenlose Nachlieferung"
     assert tab._btn_delivery_print.isEnabled()  # noqa: SLF001
     assert tab._btn_label_print.isEnabled()  # noqa: SLF001
+
+
+def test_redelivery_preview_tolerates_missing_optional_table_cells(qtbot: object, monkeypatch) -> None:
+    service = _FakeService()
+    dialog = RedeliveryDialog(service.case, service.items)
+    qtbot.addWidget(dialog)
+    dialog._table.takeItem(0, 1)  # noqa: SLF001
+    dialog._table.takeItem(0, 2)  # noqa: SLF001
+    dialog._table.takeItem(0, 3)  # noqa: SLF001
+    messages: list[str] = []
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.redelivery_dialog.QMessageBox.information",
+        lambda _parent, _title, message: messages.append(message),
+    )
+
+    dialog._preview()  # noqa: SLF001
+
+    assert messages and "1x Position" in messages[0]

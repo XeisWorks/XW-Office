@@ -140,7 +140,8 @@ class CustomerAftercareTab(QWidget):
         root.addWidget(splitter)
 
     def refresh(self) -> None:
-        selected_id = str(self._current().id) if self._current() is not None else ""
+        current = self._current()
+        selected_id = str(current.id) if current is not None else ""
         self._cases = self._service.list_cases_for_filter("alle")
         self._list.clear()
         selected_row = -1
@@ -325,7 +326,7 @@ class CustomerAftercareTab(QWidget):
         button: QPushButton,
         running_text: str,
         job: Callable[[], object],
-        on_result: Callable[[object], None],
+        on_result: Callable[[object], object],
     ) -> None:
         if self._dispatch_worker is not None and self._dispatch_worker.isRunning():
             return
