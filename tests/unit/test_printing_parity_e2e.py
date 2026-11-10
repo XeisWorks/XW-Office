@@ -1,10 +1,13 @@
 """End-to-end test for invoice printing + mail flow parity."""
+
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
-from unittest.mock import patch
+from threading import Barrier
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from xw_office.core.config import AppConfig
 from xw_office.services.invoice_processing.service import (
@@ -205,9 +208,14 @@ def test_invoice_print_step_uses_legacy_printer() -> None:
     mailer = _MailServiceStub()
     service = InvoiceProcessingService(config, invoice_client, repo, None, mailer)
 
-    with patch("xw_office.services.printing.invoice_printer.InvoicePrinter._queue_file") as mock_print, patch(
-        "xw_office.services.printing.invoice_printer.InvoicePrinter._printer_name"
-    ) as mock_printer_name:
+    with (
+        patch(
+            "xw_office.services.printing.invoice_printer.InvoicePrinter._queue_file"
+        ) as mock_print,
+        patch(
+            "xw_office.services.printing.invoice_printer.InvoicePrinter._printer_name"
+        ) as mock_printer_name,
+    ):
         mock_printer_name.return_value = "TestPrinter"
         summary = InvoiceSummary(id="INV-001", invoice_number="R-001", contact_name="John Doe")
         result = service._run_invoice_print_step(summary, FulfillmentFlags(invoice_printed=False))  # noqa: SLF001
@@ -299,13 +307,20 @@ def test_fullflow_invoice_and_label_steps() -> None:
         )
     ]
 
-    with patch("xw_office.services.printing.invoice_printer.InvoicePrinter._queue_file") as mock_inv_print, patch(
-        "xw_office.services.printing.label_printer.LabelPrinter.print_address"
-    ) as mock_label_print, patch(
-        "xw_office.services.printing.invoice_printer.InvoicePrinter._printer_name"
-    ) as mock_printer_name, patch(
-        "xw_office.services.printing.label_printer.LabelPrinter._printer_name"
-    ) as mock_label_printer_name:
+    with (
+        patch(
+            "xw_office.services.printing.invoice_printer.InvoicePrinter._queue_file"
+        ) as mock_inv_print,
+        patch(
+            "xw_office.services.printing.label_printer.LabelPrinter.print_address"
+        ) as mock_label_print,
+        patch(
+            "xw_office.services.printing.invoice_printer.InvoicePrinter._printer_name"
+        ) as mock_printer_name,
+        patch(
+            "xw_office.services.printing.label_printer.LabelPrinter._printer_name"
+        ) as mock_label_printer_name,
+    ):
         mock_printer_name.return_value = "TestPrinter"
         mock_label_printer_name.return_value = "TestLabelPrinter"
         result = service.run_start_fullflow(full_mode=True)
@@ -343,34 +358,42 @@ def test_aftercare_failure_blocks_invoice_and_label_print() -> None:
         )
     ]
 
-    with patch.object(
-        service,
-        "_run_aftercare_delivery_note_step",
-        side_effect=RuntimeError("customer_aftercare_case.sevdesk_contact_id missing"),
-    ), patch.object(
-        service,
-        "_run_finalize_step",
-        side_effect=lambda _summary, flags, **_kwargs: flags,
-    ), patch.object(
-        service,
-        "_run_payment_step",
-        side_effect=lambda _summary, flags: flags,
-    ), patch.object(
-        service,
-        "_run_invoice_print_step",
-        side_effect=lambda _summary, flags: replace(flags, invoice_printed=True),
-    ) as invoice_print, patch.object(
-        service,
-        "_run_label_print_step",
-        side_effect=lambda _summary, flags: replace(flags, label_printed=True),
-    ) as label_print, patch.object(
-        service,
-        "_run_product_step",
-        side_effect=lambda _summary, flags: replace(flags, wix_fulfilled=True),
-    ), patch.object(
-        service,
-        "_run_mail_step",
-        side_effect=lambda _summary, flags, **_kwargs: replace(flags, mail_sent=True),
+    with (
+        patch.object(
+            service,
+            "_run_aftercare_delivery_note_step",
+            side_effect=RuntimeError("customer_aftercare_case.sevdesk_contact_id missing"),
+        ),
+        patch.object(
+            service,
+            "_run_finalize_step",
+            side_effect=lambda _summary, flags, **_kwargs: flags,
+        ),
+        patch.object(
+            service,
+            "_run_payment_step",
+            side_effect=lambda _summary, flags: flags,
+        ),
+        patch.object(
+            service,
+            "_run_invoice_print_step",
+            side_effect=lambda _summary, flags: replace(flags, invoice_printed=True),
+        ) as invoice_print,
+        patch.object(
+            service,
+            "_run_label_print_step",
+            side_effect=lambda _summary, flags: replace(flags, label_printed=True),
+        ) as label_print,
+        patch.object(
+            service,
+            "_run_product_step",
+            side_effect=lambda _summary, flags: replace(flags, wix_fulfilled=True),
+        ),
+        patch.object(
+            service,
+            "_run_mail_step",
+            side_effect=lambda _summary, flags, **_kwargs: replace(flags, mail_sent=True),
+        ),
     ):
         result = service.run_start_fullflow(full_mode=True)
 
@@ -430,7 +453,9 @@ def test_fullflow_prints_all_physical_output_before_fulfillment_and_mail() -> No
 
     events: list[str] = []
 
-    def finalize(summary: InvoiceSummary, flags: FulfillmentFlags, **_kwargs: object) -> FulfillmentFlags:
+    def finalize(
+        summary: InvoiceSummary, flags: FulfillmentFlags, **_kwargs: object
+    ) -> FulfillmentFlags:
         events.append(f"finalize:{summary.id}")
         return replace(flags, payment_applicable=True)
 
@@ -449,15 +474,19 @@ def test_fullflow_prints_all_physical_output_before_fulfillment_and_mail() -> No
         events.append(f"wix:{summary.id}")
         return replace(flags, product_ready=True, wix_fulfilled=True)
 
-    def mail(summary: InvoiceSummary, flags: FulfillmentFlags, **_kwargs: object) -> FulfillmentFlags:
+    def mail(
+        summary: InvoiceSummary, flags: FulfillmentFlags, **_kwargs: object
+    ) -> FulfillmentFlags:
         events.append(f"mail:{summary.id}")
         return replace(flags, mail_sent=True)
 
-    with patch.object(service, "_run_finalize_step", side_effect=finalize), patch.object(
-        service, "_run_invoice_print_step", side_effect=invoice_print
-    ), patch.object(service, "_run_label_print_step", side_effect=label_print), patch.object(
-        service, "_run_product_step", side_effect=wix_fulfillment
-    ), patch.object(service, "_run_mail_step", side_effect=mail):
+    with (
+        patch.object(service, "_run_finalize_step", side_effect=finalize),
+        patch.object(service, "_run_invoice_print_step", side_effect=invoice_print),
+        patch.object(service, "_run_label_print_step", side_effect=label_print),
+        patch.object(service, "_run_product_step", side_effect=wix_fulfillment),
+        patch.object(service, "_run_mail_step", side_effect=mail),
+    ):
         result = service.run_start_fullflow(full_mode=True)
 
     assert result["processed"] == 2
@@ -512,40 +541,46 @@ def test_fullflow_orders_physical_invoices_by_wait_time_not_invoice_date() -> No
     ]
     print_events: list[str] = []
 
-    with patch.object(
-        service,
-        "_run_finalize_step",
-        side_effect=lambda _summary, flags, **_kwargs: flags,
-    ), patch.object(
-        service,
-        "_run_payment_step",
-        side_effect=lambda _summary, flags: flags,
-    ), patch.object(
-        service,
-        "_run_aftercare_delivery_note_step",
-        side_effect=lambda _summary, flags: flags,
-    ), patch.object(
-        service,
-        "_run_invoice_print_step",
-        side_effect=lambda summary, flags: (
-            print_events.append(f"invoice:{summary.id}")
-            or replace(flags, invoice_printed=True)
+    with (
+        patch.object(
+            service,
+            "_run_finalize_step",
+            side_effect=lambda _summary, flags, **_kwargs: flags,
         ),
-    ), patch.object(
-        service,
-        "_run_label_print_step",
-        side_effect=lambda summary, flags, **_kwargs: (
-            print_events.append(f"label:{summary.id}")
-            or replace(flags, label_printed=True)
+        patch.object(
+            service,
+            "_run_payment_step",
+            side_effect=lambda _summary, flags: flags,
         ),
-    ), patch.object(
-        service,
-        "_run_product_step",
-        side_effect=lambda _summary, flags, **_kwargs: replace(flags, wix_fulfilled=True),
-    ), patch.object(
-        service,
-        "_run_mail_step",
-        side_effect=lambda _summary, flags, **_kwargs: replace(flags, mail_sent=True),
+        patch.object(
+            service,
+            "_run_aftercare_delivery_note_step",
+            side_effect=lambda _summary, flags: flags,
+        ),
+        patch.object(
+            service,
+            "_run_invoice_print_step",
+            side_effect=lambda summary, flags: (
+                print_events.append(f"invoice:{summary.id}") or replace(flags, invoice_printed=True)
+            ),
+        ),
+        patch.object(
+            service,
+            "_run_label_print_step",
+            side_effect=lambda summary, flags, **_kwargs: (
+                print_events.append(f"label:{summary.id}") or replace(flags, label_printed=True)
+            ),
+        ),
+        patch.object(
+            service,
+            "_run_product_step",
+            side_effect=lambda _summary, flags, **_kwargs: replace(flags, wix_fulfilled=True),
+        ),
+        patch.object(
+            service,
+            "_run_mail_step",
+            side_effect=lambda _summary, flags, **_kwargs: replace(flags, mail_sent=True),
+        ),
     ):
         result = service.run_start_fullflow(full_mode=True)
 
@@ -683,48 +718,56 @@ def test_buyer_note_actions_keep_chronology_and_paper_bundle_order(tmp_path) -> 
         ),
     }
 
-    with patch.object(
-        service,
-        "_run_finalize_step",
-        side_effect=lambda _summary, flags, **_kwargs: flags,
-    ), patch.object(
-        service,
-        "_run_payment_step",
-        side_effect=lambda _summary, flags: flags,
-    ), patch.object(
-        service,
-        "_run_aftercare_delivery_note_step",
-        side_effect=lambda _summary, flags: flags,
-    ), patch.object(
-        service._delivery_notes,
-        "generate_pdf",
-        side_effect=lambda _context: delivery_note,
-    ), patch.object(
-        service._invoice_printer,
-        "print_pdf_bytes",
-        side_effect=lambda _data, **_kwargs: events.append("delivery-note:1"),
-    ), patch.object(
-        service,
-        "_run_invoice_print_step",
-        side_effect=lambda summary, flags: (
-            events.append(f"invoice:{summary.id}")
-            or replace(flags, invoice_printed=True)
+    with (
+        patch.object(
+            service,
+            "_run_finalize_step",
+            side_effect=lambda _summary, flags, **_kwargs: flags,
         ),
-    ), patch.object(
-        service,
-        "_run_label_print_step",
-        side_effect=lambda summary, flags, **_kwargs: (
-            events.append(f"label:{summary.id}")
-            or replace(flags, label_printed=True)
+        patch.object(
+            service,
+            "_run_payment_step",
+            side_effect=lambda _summary, flags: flags,
         ),
-    ), patch.object(
-        service,
-        "_run_product_step",
-        side_effect=lambda _summary, flags, **_kwargs: replace(flags, wix_fulfilled=True),
-    ), patch.object(
-        service,
-        "_run_mail_step",
-        side_effect=lambda _summary, flags, **_kwargs: replace(flags, mail_sent=True),
+        patch.object(
+            service,
+            "_run_aftercare_delivery_note_step",
+            side_effect=lambda _summary, flags: flags,
+        ),
+        patch.object(
+            service._delivery_notes,
+            "generate_pdf",
+            side_effect=lambda _context: delivery_note,
+        ),
+        patch.object(
+            service._invoice_printer,
+            "print_pdf_bytes",
+            side_effect=lambda _data, **_kwargs: events.append("delivery-note:1"),
+        ),
+        patch.object(
+            service,
+            "_run_invoice_print_step",
+            side_effect=lambda summary, flags: (
+                events.append(f"invoice:{summary.id}") or replace(flags, invoice_printed=True)
+            ),
+        ),
+        patch.object(
+            service,
+            "_run_label_print_step",
+            side_effect=lambda summary, flags, **_kwargs: (
+                events.append(f"label:{summary.id}") or replace(flags, label_printed=True)
+            ),
+        ),
+        patch.object(
+            service,
+            "_run_product_step",
+            side_effect=lambda _summary, flags, **_kwargs: replace(flags, wix_fulfilled=True),
+        ),
+        patch.object(
+            service,
+            "_run_mail_step",
+            side_effect=lambda _summary, flags, **_kwargs: replace(flags, mail_sent=True),
+        ),
     ):
         result = service.run_start_fullflow(
             full_mode=True,
@@ -790,9 +833,14 @@ def test_fullflow_skips_print_for_digital_only_wix_orders() -> None:
         )
     ]
 
-    with patch("xw_office.services.printing.invoice_printer.InvoicePrinter._queue_file") as mock_inv_print, patch(
-        "xw_office.services.printing.label_printer.LabelPrinter.print_address"
-    ) as mock_label_print:
+    with (
+        patch(
+            "xw_office.services.printing.invoice_printer.InvoicePrinter._queue_file"
+        ) as mock_inv_print,
+        patch(
+            "xw_office.services.printing.label_printer.LabelPrinter.print_address"
+        ) as mock_label_print,
+    ):
         result = service.run_start_fullflow(full_mode=True)
 
     assert result["processed"] == 1
@@ -857,6 +905,184 @@ def test_digital_fullflow_finalizes_before_graph_mail_fallback() -> None:
     assert len(mailer.calls) == 1
     attachment = mailer.calls[0]["attachments"][0]
     assert attachment.filename == "RE-263001.pdf"
+
+
+def test_finalize_reuses_validated_positions_and_inventory_failure_is_non_blocking() -> None:
+    invoice_client = _InvoiceClientE2E()
+    inventory = Mock()
+    inventory.apply_invoice_context.side_effect = RuntimeError("Movement would drive on_hand to -1")
+    service = InvoiceProcessingService(
+        AppConfig(),
+        invoice_client,
+        _SettingsRepoE2E(),
+        _WixOrdersPhysicalStub(),
+        _MailServiceStub(),
+        invoice_inventory=inventory,
+    )
+    summary = InvoiceSummary(id="INV-STOCK-1", order_reference="21766")
+    context = SimpleNamespace(positions=(SimpleNamespace(source_id="POS-1"),))
+
+    with patch.object(
+        service,
+        "load_invoice_work_context",
+        return_value=context,
+    ) as load_context:
+        flags = service._run_finalize_step(  # noqa: SLF001
+            summary,
+            FulfillmentFlags(),
+            printed_copy=True,
+        )
+
+    assert invoice_client.send_calls == [("INV-STOCK-1", "VPR", False)]
+    load_context.assert_called_once_with(summary, load_positions=True, force=True)
+    inventory.validate_invoice_context.assert_called_once_with(context.positions)
+    inventory.apply_invoice_context.assert_called_once_with(
+        document_id="INV-STOCK-1",
+        positions=context.positions,
+    )
+    assert "Product-Hub-Bestandsbuchung fehlgeschlagen" in flags.last_warning
+
+
+def test_fullflow_resumes_stranded_physical_invoice_without_duplicate_print() -> None:
+    class _FinalizedPhysicalInvoiceClient(_InvoiceClientE2E):
+        def list_invoice_summaries(
+            self, *, limit: int, offset: int, status: int | None = None
+        ) -> list[InvoiceSummary]:
+            return []
+
+        def fetch_invoice_by_id(self, invoice_id: str) -> dict:
+            payload = super().fetch_invoice_by_id(invoice_id)
+            payload.update(
+                {
+                    "status": 200,
+                    "invoiceNumber": "RE-262719",
+                    "customerInternalNote": "21766",
+                    "create": "2026-11-09T16:50:41+01:00",
+                }
+            )
+            return payload
+
+    invoice_client = _FinalizedPhysicalInvoiceClient()
+    repo = _SettingsRepoE2E()
+    repo.values["rechnungen.fulfillment_status"] = json.dumps(
+        {
+            "138929853": FulfillmentFlags(
+                payment_applicable=True,
+                last_run_iso=(datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+                last_error="Movement would drive on_hand to -1",
+            ).as_row_payload()
+        }
+    )
+    service = InvoiceProcessingService(
+        AppConfig(),
+        invoice_client,
+        repo,
+        _WixOrdersPhysicalStub(),
+        _MailServiceStub(),
+    )
+    prints: list[str] = []
+
+    with (
+        patch.object(
+            service,
+            "_run_invoice_print_step",
+            side_effect=lambda summary, flags: (
+                prints.append(f"invoice:{summary.order_reference}")
+                or replace(flags, invoice_printed=True)
+            ),
+        ),
+        patch.object(
+            service,
+            "_run_label_print_step",
+            side_effect=lambda summary, flags, **_kwargs: (
+                prints.append(f"label:{summary.order_reference}")
+                or replace(flags, label_printed=True)
+            ),
+        ),
+        patch.object(
+            service,
+            "_run_payment_step",
+            side_effect=lambda _summary, flags: replace(flags, payment_booked=True),
+        ),
+        patch.object(
+            service,
+            "_run_product_step",
+            side_effect=lambda _summary, flags, **_kwargs: replace(flags, wix_fulfilled=True),
+        ),
+        patch.object(
+            service,
+            "_run_mail_step",
+            side_effect=lambda _summary, flags, **_kwargs: replace(flags, mail_sent=True),
+        ),
+    ):
+        first = service.run_start_fullflow(full_mode=True)
+        second = service.run_start_fullflow(full_mode=True)
+
+    assert first["resumed"] == 1
+    assert first["failures"] == 0
+    assert second["resumed"] == 0
+    assert prints == ["invoice:21766", "label:21766"]
+    flags = service.read_fulfillment_flags("138929853")
+    assert flags.invoice_printed is True
+    assert flags.label_printed is True
+    assert flags.mail_sent is True
+
+
+def test_fullflow_runs_independent_post_processing_concurrently() -> None:
+    invoice_client = _InvoiceClientE2E()
+    invoice_client.list_invoice_summaries = lambda **_: [
+        InvoiceSummary(id="101", order_reference="WIX-101"),
+        InvoiceSummary(id="102", order_reference="WIX-102"),
+    ]
+    service = InvoiceProcessingService(
+        AppConfig(),
+        invoice_client,
+        _SettingsRepoE2E(),
+        _WixOrdersPhysicalStub(),
+        _MailServiceStub(),
+    )
+    payment_barrier = Barrier(2, timeout=2)
+
+    def book_payment(_summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
+        payment_barrier.wait()
+        return replace(flags, payment_booked=True)
+
+    with (
+        patch.object(
+            service,
+            "_run_finalize_step",
+            side_effect=lambda _summary, flags, **_kwargs: replace(flags, payment_applicable=True),
+        ),
+        patch.object(
+            service,
+            "_run_invoice_print_step",
+            side_effect=lambda _summary, flags: replace(flags, invoice_printed=True),
+        ),
+        patch.object(
+            service,
+            "_run_label_print_step",
+            side_effect=lambda _summary, flags, **_kwargs: replace(flags, label_printed=True),
+        ),
+        patch.object(
+            service,
+            "_run_payment_step",
+            side_effect=book_payment,
+        ),
+        patch.object(
+            service,
+            "_run_product_step",
+            side_effect=lambda _summary, flags, **_kwargs: replace(flags, wix_fulfilled=True),
+        ),
+        patch.object(
+            service,
+            "_run_mail_step",
+            side_effect=lambda _summary, flags, **_kwargs: replace(flags, mail_sent=True),
+        ),
+    ):
+        result = service.run_start_fullflow(full_mode=True)
+
+    assert result["failures"] == 0
+    assert result["successful"] == 2
 
 
 def test_fullflow_resumes_incomplete_finalized_digital_invoice_once() -> None:
@@ -1011,14 +1237,17 @@ def test_fullflow_routes_manual_license_before_generic_digital_only() -> None:
     )
     invoice_client.list_invoice_summaries = lambda **_: [summary]
 
-    with patch.object(
-        service,
-        "finalize_invoice_without_delivery",
-        side_effect=lambda current: current,
-    ) as finalize, patch.object(
-        service,
-        "_run_payment_step",
-        side_effect=lambda _summary, flags: flags,
+    with (
+        patch.object(
+            service,
+            "finalize_invoice_without_delivery",
+            side_effect=lambda current: current,
+        ) as finalize,
+        patch.object(
+            service,
+            "_run_payment_step",
+            side_effect=lambda _summary, flags: flags,
+        ),
     ):
         result = service.run_start_fullflow(full_mode=True)
 
@@ -1118,13 +1347,17 @@ def test_print_label_for_invoice_uses_override_lines_and_persists_flag() -> None
     mailer = _MailServiceStub()
     service = InvoiceProcessingService(config, invoice_client, repo, None, mailer)
 
-    with patch("xw_office.services.printing.label_printer.LabelPrinter.print_address") as mock_label_print:
+    with patch(
+        "xw_office.services.printing.label_printer.LabelPrinter.print_address"
+    ) as mock_label_print:
         result = service.print_label_for_invoice(
             "INV-001",
             override_lines=["John Doe", "Edited Street 9", "6020 Innsbruck", "AT"],
         )
 
-    mock_label_print.assert_called_once_with(["John Doe", "Edited Street 9", "6020 Innsbruck", "AT"])
+    mock_label_print.assert_called_once_with(
+        ["John Doe", "Edited Street 9", "6020 Innsbruck", "AT"]
+    )
     assert result.label_printed is True
     stored = repo.get_value_json("rechnungen.fulfillment_status") or ""
     assert "label_printed" in stored

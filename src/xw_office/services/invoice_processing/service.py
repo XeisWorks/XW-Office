@@ -1,4 +1,5 @@
 """Orchestrates invoice-related operations (no UI)."""
+
 from __future__ import annotations
 
 import html
@@ -6,9 +7,11 @@ import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable
 
 from xw_office.repositories.settings_kv import SettingKvRepository
@@ -64,6 +67,8 @@ _ALLOWED_COUNTRIES_KEY = "rechnungen.allowed_country_codes"
 _SKU_FLAGS_KEY = "rechnungen.sku_flags"
 _FULFILLMENT_STATUS_KEY = "rechnungen.fulfillment_status"
 _FULFILLMENT_RESUME_MAX_AGE = timedelta(hours=24)
+_PHYSICAL_FULFILLMENT_RESUME_MAX_AGE = timedelta(days=7)
+_START_POST_WORKERS = 3
 _SKU_FLAGS_RETRY_DELAY_SECONDS = 30.0
 _FULFILLMENT_MAIL_TEMPLATE_KEY = "rechnungen.fulfillment_mail_template_html"
 _FULFILLMENT_MAIL_SUBJECT_KEY = "rechnungen.fulfillment_mail_subject"
@@ -186,7 +191,9 @@ class FulfillmentFlags:
             last_run_iso=str(payload.get("last_run_iso") or ""),
             last_error=str(payload.get("last_error") or ""),
             last_warning=str(payload.get("last_warning") or ""),
-            product_applicable=bool(payload.get("product_applicable", payload.get("product_ready", False))),
+            product_applicable=bool(
+                payload.get("product_applicable", payload.get("product_ready", False))
+            ),
             wix_applicable=bool(payload.get("wix_applicable", payload.get("wix_fulfilled", False))),
             mail_applicable=bool(payload.get("mail_applicable", True)),
         )
@@ -248,6 +255,7 @@ class _StartPostTask:
     digital_only: bool
     manual_licensed: bool = False
     buyer_note_selection: BuyerNoteReviewSelection | None = None
+    deferred_warning: str = ""
 
 
 class InvoiceProcessingService:
@@ -522,9 +530,7 @@ class InvoiceProcessingService:
         repo_type = type(self._settings_repo)
         has_atomic_mutator = callable(getattr(repo_type, "mutate_value_json", None))
         mutate = (
-            getattr(self._settings_repo, "mutate_value_json", None)
-            if has_atomic_mutator
-            else None
+            getattr(self._settings_repo, "mutate_value_json", None) if has_atomic_mutator else None
         )
         if callable(mutate):
             mutate(_FULFILLMENT_STATUS_KEY, merge)
@@ -555,7 +561,7 @@ class InvoiceProcessingService:
         summaries = self._load_start_target_summaries(invoice_ids=invoice_ids)
         if full_mode:
             if invoice_ids is None:
-                resume_result = self._resume_incomplete_digital_fulfillment(
+                resume_result = self._resume_incomplete_fulfillment(
                     should_abort=should_abort,
                     progress_callback=progress_callback,
                     mail_recipient_override=mail_recipient_override,
@@ -572,10 +578,7 @@ class InvoiceProcessingService:
             if progress_callback is not None:
                 progress_callback("START: Wix-Kontext wird geladen...")
             self._prefetch_wix_order_context(summaries)
-            delivery_kinds = {
-                id(item): self._start_delivery_kind(item)
-                for item in summaries
-            }
+            delivery_kinds = {id(item): self._start_delivery_kind(item) for item in summaries}
             summaries.sort(
                 key=lambda item: self._start_processing_priority(
                     item,
@@ -657,7 +660,9 @@ class InvoiceProcessingService:
                 if progress_callback is not None:
                     progress_callback(f"START: {label} wird vorbereitet...")
                 manual_licensed = self._is_manual_licensed_delivery(summary)
-                digital_only = self._is_digital_only(summary) if summary.order_reference.strip() else False
+                digital_only = (
+                    self._is_digital_only(summary) if summary.order_reference.strip() else False
+                )
                 if manual_licensed:
                     summary = run_phase(
                         "manual_license_finalize",
@@ -687,19 +692,27 @@ class InvoiceProcessingService:
                 if full_mode:
                     if not digital_only:
                         flags = self._run_aftercare_delivery_note_step(summary, flags)
-                        flags = run_phase("invoice_print", lambda: self._run_invoice_print_step(summary, flags))
+                        flags = run_phase(
+                            "invoice_print", lambda: self._run_invoice_print_step(summary, flags)
+                        )
                         if progress_callback is not None:
                             progress_callback(f"START: Label fuer {label} wird gedruckt...")
-                        flags = run_phase("label_print", lambda: self._run_label_print_step(summary, flags))
+                        flags = run_phase(
+                            "label_print", lambda: self._run_label_print_step(summary, flags)
+                        )
                     flags = run_phase(
                         "wix_fulfillment",
-                        lambda: self._run_product_step(summary, flags, inventory_already_accounted=True),
+                        lambda: self._run_product_step(
+                            summary, flags, inventory_already_accounted=True
+                        ),
                     )
                 if progress_callback is not None:
                     progress_callback(f"START: Mail fuer {label} wird gesendet...")
                 flags = run_phase(
                     "mail",
-                    lambda: self._run_mail_step(summary, flags, recipient_override=mail_recipient_override),
+                    lambda: self._run_mail_step(
+                        summary, flags, recipient_override=mail_recipient_override
+                    ),
                 )
                 successful += 1
             except Exception as exc:
@@ -752,22 +765,29 @@ class InvoiceProcessingService:
         invoice_print_ids: list[str] = []
         label_print_ids: list[str] = []
         aborted = False
+        persist_lock = Lock()
 
         def persist(summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
-            updates[str(summary.id)] = flags
-            self.write_fulfillment_flags(str(summary.id), flags)
+            # Post-processing uses a small worker pool.  Serialize the compact
+            # recovery-journal update so test repositories and production DB
+            # repositories observe the same atomic behavior.
+            with persist_lock:
+                updates[str(summary.id)] = flags
+                self.write_fulfillment_flags(str(summary.id), flags)
             return flags
 
         def run_phase(summary: InvoiceSummary, phase: str, operation: Callable[[], Any]) -> Any:
             phase_started = time.perf_counter()
             try:
                 result = operation()
-            except Exception:
+            except Exception as exc:
                 logger.info(
-                    "START phase invoice=%s phase=%s elapsed_ms=%s outcome=failed",
+                    "START phase invoice=%s phase=%s elapsed_ms=%s outcome=failed error=%s: %s",
                     summary.id,
                     phase,
                     int((time.perf_counter() - phase_started) * 1000),
+                    type(exc).__name__,
+                    exc,
                 )
                 raise
             logger.info(
@@ -792,6 +812,7 @@ class InvoiceProcessingService:
                 continue
             label = summary.invoice_number or summary.order_reference or summary.id
             flags = self.read_fulfillment_flags(summary.id)
+            deferred_warning = ""
 
             try:
                 delivery_kind = delivery_kinds[id(original_summary)]
@@ -830,10 +851,8 @@ class InvoiceProcessingService:
                         ),
                     ),
                 )
-                flags = persist(
-                    summary,
-                    run_phase(summary, "payment", lambda: self._run_payment_step(summary, flags)),
-                )
+                if flags.last_warning.startswith("Product-Hub-Bestandsbuchung"):
+                    deferred_warning = flags.last_warning
                 flags = persist(
                     summary,
                     run_phase(
@@ -846,7 +865,9 @@ class InvoiceProcessingService:
                     case, selection = note_action
                     address_lines = normalized_lines(selection.address_lines or case.address_lines)
                     if not address_lines:
-                        raise RuntimeError("Lieferschein kann ohne Lieferadresse nicht gedruckt werden")
+                        raise RuntimeError(
+                            "Lieferschein kann ohne Lieferadresse nicht gedruckt werden"
+                        )
                     if progress_callback is not None:
                         progress_callback(f"START: Lieferschein fuer {label} wird gedruckt...")
                     delivery_note = run_phase(
@@ -856,7 +877,8 @@ class InvoiceProcessingService:
                             DeliveryNoteContext(
                                 invoice_number=str(summary.invoice_number or "").strip(),
                                 order_reference=str(summary.order_reference or "").strip(),
-                                customer_name=case.customer_name or str(summary.contact_name or "").strip(),
+                                customer_name=case.customer_name
+                                or str(summary.contact_name or "").strip(),
                                 address_lines=address_lines,
                                 products=case.products,
                                 buyer_note=case.note_text,
@@ -873,7 +895,11 @@ class InvoiceProcessingService:
                     )
                 flags = persist(
                     summary,
-                    run_phase(summary, "invoice_print", lambda: self._run_invoice_print_step(summary, flags)),
+                    run_phase(
+                        summary,
+                        "invoice_print",
+                        lambda: self._run_invoice_print_step(summary, flags),
+                    ),
                 )
                 if progress_callback is not None:
                     progress_callback(f"START: Label fuer {label} wird gedruckt...")
@@ -894,7 +920,14 @@ class InvoiceProcessingService:
                         ),
                     ),
                 )
-                post_tasks.append(_StartPostTask(summary=summary, flags=flags, digital_only=False))
+                post_tasks.append(
+                    _StartPostTask(
+                        summary=summary,
+                        flags=flags,
+                        digital_only=False,
+                        deferred_warning=deferred_warning,
+                    )
+                )
             except Exception as exc:
                 failed_ids.add(str(summary.id))
                 persist(summary, self._with_error(flags, exc))
@@ -912,19 +945,25 @@ class InvoiceProcessingService:
                 # through to automatic Wix fulfillment and sevDesk mail.
                 if task.manual_licensed:
                     if progress_callback is not None:
-                        progress_callback(f"START: {label} wird als digitale Lieferung vorbereitet...")
+                        progress_callback(
+                            f"START: {label} wird als digitale Lieferung vorbereitet..."
+                        )
                     summary = self.finalize_invoice_without_delivery(summary)
                     flags = persist(
                         summary,
-                        run_phase(summary, "payment", lambda: self._run_payment_step(summary, flags)),
+                        run_phase(
+                            summary, "payment", lambda: self._run_payment_step(summary, flags)
+                        ),
                     )
-                    pending_manual_license_ids.append(str(summary.id))
-                    self.write_fulfillment_flags(summary.id, flags)
+                    with persist_lock:
+                        pending_manual_license_ids.append(str(summary.id))
                     return str(summary.id), flags, True
                 if task.digital_only:
                     if progress_callback is not None:
                         progress_callback(f"START: {label} wird vorbereitet...")
-                    run_phase(summary, "product_mapping", lambda: self._repair_draft_products(summary))
+                    run_phase(
+                        summary, "product_mapping", lambda: self._repair_draft_products(summary)
+                    )
                     flags = persist(
                         summary,
                         run_phase(
@@ -940,41 +979,65 @@ class InvoiceProcessingService:
                     )
                     flags = persist(
                         summary,
-                        run_phase(summary, "payment", lambda: self._run_payment_step(summary, flags)),
+                        run_phase(
+                            summary, "payment", lambda: self._run_payment_step(summary, flags)
+                        ),
                     )
-                    self.write_fulfillment_flags(summary.id, flags)
-                flags = run_phase(
+                elif not flags.payment_booked:
+                    flags = persist(
+                        summary,
+                        run_phase(
+                            summary, "payment", lambda: self._run_payment_step(summary, flags)
+                        ),
+                    )
+                flags = persist(
                     summary,
-                    "wix_fulfillment",
-                    lambda: self._run_product_step_compat(summary, flags),
+                    run_phase(
+                        summary,
+                        "wix_fulfillment",
+                        lambda: self._run_product_step_compat(summary, flags),
+                    ),
                 )
-                self.write_fulfillment_flags(summary.id, flags)
                 if progress_callback is not None:
                     progress_callback(f"START: Mail fuer {label} wird gesendet...")
                 flags = run_phase(
                     summary,
                     "mail",
-                    lambda: self._run_mail_step(summary, flags, recipient_override=mail_recipient_override),
+                    lambda: self._run_mail_step(
+                        summary, flags, recipient_override=mail_recipient_override
+                    ),
                 )
+                if task.deferred_warning:
+                    flags = self._next_flags(flags, last_warning=task.deferred_warning)
                 return str(summary.id), flags, True
             except Exception as exc:
                 return str(summary.id), self._with_error(flags, exc), False
 
         if post_tasks:
             post_started = time.perf_counter()
-            logger.info("START post-processing start tasks=%s workers=serial", len(post_tasks))
-            for task in post_tasks:
-                summary_id, flags, success = run_post_task(task)
-                updates[summary_id] = flags
-                self.write_fulfillment_flags(summary_id, flags)
-                if success:
-                    successful_ids.add(summary_id)
-                else:
-                    failed_ids.add(summary_id)
+            workers = min(_START_POST_WORKERS, len(post_tasks))
             logger.info(
-                "START post-processing done elapsed_ms=%s tasks=%s workers=serial",
+                "START post-processing start tasks=%s workers=%s",
+                len(post_tasks),
+                workers,
+            )
+            with ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="invoice-start-post",
+            ) as executor:
+                futures = {executor.submit(run_post_task, task): task for task in post_tasks}
+                for future in as_completed(futures):
+                    summary_id, flags, success = future.result()
+                    persist(futures[future].summary, flags)
+                    if success:
+                        successful_ids.add(summary_id)
+                    else:
+                        failed_ids.add(summary_id)
+            logger.info(
+                "START post-processing done elapsed_ms=%s tasks=%s workers=%s",
                 int((time.perf_counter() - post_started) * 1000),
                 len(post_tasks),
+                workers,
             )
 
         self.write_fulfillment_flags_batch(updates)
@@ -1105,7 +1168,11 @@ class InvoiceProcessingService:
         requirements: dict[str, int] = {}
         wix_available = self._wix_orders is not None and self._wix_orders.has_credentials()
         references = sorted(
-            {summary.order_reference.strip() for summary in summaries if summary.order_reference.strip()}
+            {
+                summary.order_reference.strip()
+                for summary in summaries
+                if summary.order_reference.strip()
+            }
         )
         for reference in references:
             if not wix_available:
@@ -1146,12 +1213,16 @@ class InvoiceProcessingService:
             try:
                 context = self.load_invoice_work_context(summary, load_positions=True)
             except Exception as exc:  # noqa: BLE001 - one malformed draft must not hide others
-                logger.warning("sevDesk-Inventar-Preflight fehlgeschlagen invoice=%s: %s", summary.id, exc)
+                logger.warning(
+                    "sevDesk-Inventar-Preflight fehlgeschlagen invoice=%s: %s", summary.id, exc
+                )
                 continue
             for position in context.positions:
                 if position.kind != "product" or not position.sku or position.quantity <= 0:
                     continue
-                requirements[position.sku] = requirements.get(position.sku, 0) + position.quantity_int
+                requirements[position.sku] = (
+                    requirements.get(position.sku, 0) + position.quantity_int
+                )
         return requirements
 
     def is_manual_licensed_delivery(self, summary: InvoiceSummary) -> bool:
@@ -1164,7 +1235,11 @@ class InvoiceProcessingService:
         for summary in summaries:
             sources: list[BuyerNoteSource] = []
             if str(summary.buyer_note or "").strip():
-                sources.append(BuyerNoteSource("sevdesk_invoice", "sevDesk-Rechnung", summary.buyer_note.strip()))
+                sources.append(
+                    BuyerNoteSource(
+                        "sevdesk_invoice", "sevDesk-Rechnung", summary.buyer_note.strip()
+                    )
+                )
 
             ref = str(summary.order_reference or "").strip()
             order: dict[str, Any] = {}
@@ -1186,7 +1261,9 @@ class InvoiceProcessingService:
             item_dicts = [item for item in raw_items if isinstance(item, dict)]
             physical: bool | None = None
             if item_dicts and self._wix_orders is not None:
-                physical = not all(self._wix_orders.line_item_is_digital(item) for item in item_dicts)
+                physical = not all(
+                    self._wix_orders.line_item_is_digital(item) for item in item_dicts
+                )
             products: list[BuyerNoteProduct] = []
             if ref and self._wix_orders is not None and physical is not False:
                 # Keep mixed/unknown orders useful for the review by loading
@@ -1207,15 +1284,26 @@ class InvoiceProcessingService:
                     )
             if not address:
                 try:
-                    fallback = self.get_cached_invoice_detail_context(summary) or self.get_invoice_detail_context(summary)
-                    address = [str(line).strip() for line in fallback.get("shipping_lines", []) if str(line).strip()]
+                    fallback = self.get_cached_invoice_detail_context(
+                        summary
+                    ) or self.get_invoice_detail_context(summary)
+                    address = [
+                        str(line).strip()
+                        for line in fallback.get("shipping_lines", [])
+                        if str(line).strip()
+                    ]
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("Buyer-note address fallback failed invoice=%s: %s", summary.id, exc)
+                    logger.warning(
+                        "Buyer-note address fallback failed invoice=%s: %s", summary.id, exc
+                    )
 
             customer_name = str(summary.contact_name or "").strip()
             if order and self._wix_orders is not None:
                 try:
-                    customer_name = str(self._wix_orders.resolve_order_summary(ref).get("wix_customer_name") or customer_name).strip()
+                    customer_name = str(
+                        self._wix_orders.resolve_order_summary(ref).get("wix_customer_name")
+                        or customer_name
+                    ).strip()
                 except Exception:  # noqa: BLE001
                     pass
             cases.append(
@@ -1261,8 +1349,7 @@ class InvoiceProcessingService:
             raw_items = order.get("lineItems") if isinstance(order.get("lineItems"), list) else []
             item_dicts = [item for item in raw_items if isinstance(item, dict)]
             digital_only = bool(item_dicts) and all(
-                self._wix_orders.line_item_is_digital(item)
-                for item in item_dicts
+                self._wix_orders.line_item_is_digital(item) for item in item_dicts
             )
             return ref, lines, bool(digital_only)
 
@@ -1404,7 +1491,9 @@ class InvoiceProcessingService:
         elif step == "product_ready":
             next_flags = self._run_product_step(summary, flags)
         elif step == "mail_sent":
-            next_flags = self._run_mail_step(summary, flags, recipient_override=mail_recipient_override)
+            next_flags = self._run_mail_step(
+                summary, flags, recipient_override=mail_recipient_override
+            )
         elif step == "wix_fulfilled":
             next_flags = self._run_product_step(summary, flags)
         elif step == "payment_booked":
@@ -1429,9 +1518,7 @@ class InvoiceProcessingService:
         summary = self._load_summary_by_id(invoice_id)
         flags = self.read_fulfillment_flags(summary.id)
         lines = [
-            str(line or "").strip()
-            for line in (override_lines or [])
-            if str(line or "").strip()
+            str(line or "").strip() for line in (override_lines or []) if str(line or "").strip()
         ]
         if not lines:
             full = self._invoices.fetch_invoice_by_id(summary.id)
@@ -1504,7 +1591,9 @@ class InvoiceProcessingService:
         flags = self.read_fulfillment_flags(summary.id)
         invoice = self._fetch_invoice_detail(summary.id)
         subject, text_body = self._build_mail_content(summary, invoice)
-        to_email = str(recipient_override or "").strip() or self._resolve_customer_email(summary, invoice)
+        to_email = str(recipient_override or "").strip() or self._resolve_customer_email(
+            summary, invoice
+        )
         if flags.mail_sent or self._sevdesk_mail_sent(invoice):
             next_flags = self._next_flags(flags, mail_sent=True)
             self.write_fulfillment_flags(summary.id, next_flags)
@@ -1587,7 +1676,9 @@ class InvoiceProcessingService:
             self.write_fulfillment_flags(summary.id, next_flags)
             return next_flags, to_email, subject
 
-        raise RuntimeError(f"sevDesk-Mail fehlgeschlagen ({sevdesk_error}); Graph-Mail nicht konfiguriert")
+        raise RuntimeError(
+            f"sevDesk-Mail fehlgeschlagen ({sevdesk_error}); Graph-Mail nicht konfiguriert"
+        )
 
     def build_credit_note_mail_content(
         self,
@@ -1598,7 +1689,9 @@ class InvoiceProcessingService:
         """Build a Gutschrift mail with the configured invoice template/signature."""
         number = str(credit_note_number or "").strip() or "Gutschrift"
         summary = InvoiceSummary(id="credit-note", invoiceNumber=number, contact_name=customer_name)
-        subject, body = self._build_mail_content(summary, {"invoiceNumber": number, "name": customer_name})
+        subject, body = self._build_mail_content(
+            summary, {"invoiceNumber": number, "name": customer_name}
+        )
         subject = subject.replace("Rechnung", "Gutschrift")
         body = body.replace("Rechnung", "Gutschrift")
         return subject, body
@@ -1619,7 +1712,9 @@ class InvoiceProcessingService:
             "warnings": list(context.warnings),
         }
 
-    def get_cached_invoice_detail_context(self, summary: InvoiceSummary) -> dict[str, object] | None:
+    def get_cached_invoice_detail_context(
+        self, summary: InvoiceSummary
+    ) -> dict[str, object] | None:
         """Return cached sevDesk detail context without triggering an API call."""
         context = self.get_cached_invoice_work_context(summary)
         if context is None:
@@ -1681,8 +1776,12 @@ class InvoiceProcessingService:
                 if cached_order:
                     origin = "wix_confirmed"
                     confirmed = candidate
-                    customer_name = str(cached_order.get("wix_customer_name") or customer_name).strip()
-                    customer_email = str(cached_order.get("wix_customer_email") or customer_email).strip()
+                    customer_name = str(
+                        cached_order.get("wix_customer_name") or customer_name
+                    ).strip()
+                    customer_email = str(
+                        cached_order.get("wix_customer_email") or customer_email
+                    ).strip()
 
         capabilities = build_capabilities(
             customer_email=customer_email,
@@ -1702,11 +1801,7 @@ class InvoiceProcessingService:
             shipping_address_source=shipping_source,
             positions=tuple(positions),
             capabilities=capabilities,
-            warnings=tuple(
-                warning
-                for position in positions
-                for warning in position.warnings
-            ),
+            warnings=tuple(warning for position in positions for warning in position.warnings),
             source_updated_at=str(summary.source_updated_at or invoice.get("update") or "").strip(),
         )
         self._invoice_work_context_cache[invoice_id] = context
@@ -1721,7 +1816,9 @@ class InvoiceProcessingService:
     @staticmethod
     def _context_is_current(context: InvoiceWorkContext, summary: InvoiceSummary) -> bool:
         expected = str(summary.source_updated_at or "").strip()
-        return not expected or not context.source_updated_at or context.source_updated_at == expected
+        return (
+            not expected or not context.source_updated_at or context.source_updated_at == expected
+        )
 
     def load_invoice_piece_blocks(
         self,
@@ -1731,7 +1828,9 @@ class InvoiceProcessingService:
     ) -> list[Any]:
         """Return sevDesk-backed printable product blocks for one invoice."""
         context = self.load_invoice_work_context(summary, force=force, load_positions=True)
-        printable_positions = [position for position in context.positions if position.kind == "product"]
+        printable_positions = [
+            position for position in context.positions if position.kind == "product"
+        ]
         if self._print_decision is not None:
             builder = getattr(self._print_decision, "get_piece_blocks_from_invoice_positions", None)
             if callable(builder):
@@ -1780,8 +1879,12 @@ class InvoiceProcessingService:
             offset += limit_per_page
         return all_rows
 
-    def _load_start_target_summaries(self, *, invoice_ids: list[str] | None = None) -> list[InvoiceSummary]:
-        ids = [str(invoice_id).strip() for invoice_id in (invoice_ids or []) if str(invoice_id).strip()]
+    def _load_start_target_summaries(
+        self, *, invoice_ids: list[str] | None = None
+    ) -> list[InvoiceSummary]:
+        ids = [
+            str(invoice_id).strip() for invoice_id in (invoice_ids or []) if str(invoice_id).strip()
+        ]
         if not ids:
             return self._load_all_open_drafts(limit_per_page=100, max_pages=20)
         summaries: list[InvoiceSummary] = []
@@ -1804,45 +1907,52 @@ class InvoiceProcessingService:
                 for summary in self._load_all_open_drafts(limit_per_page=100, max_pages=20)
             }
             summaries = [
-                listed.get(str(summary.id or "").strip(), summary)
-                for summary in summaries
+                listed.get(str(summary.id or "").strip(), summary) for summary in summaries
             ]
         return summaries
 
-    def _resume_incomplete_digital_fulfillment(
+    def _resume_incomplete_fulfillment(
         self,
         *,
         should_abort: Callable[[], bool] | None,
         progress_callback: Callable[[str], None] | None,
         mail_recipient_override: str | None,
     ) -> dict[str, int | bool]:
-        """Resume missing post-finalization steps for known digital invoices.
+        """Resume recent finalized invoices from the fulfillment journal.
 
-        START normally selects sevDesk drafts only. Once ``sendBy`` succeeds, a
-        later payment/Wix/mail failure would therefore disappear from the next
-        draft run. Persisted fulfillment flags provide the recovery journal.
-        Physical and manual-license deliveries stay manual to avoid accidental
-        printing or external delivery actions.
+        START normally selects sevDesk drafts only. Once ``sendBy`` succeeds,
+        any later failure would otherwise make the invoice disappear from the
+        next run.  Missing physical output is replayed strictly from persisted
+        print flags; completed paper documents are never printed twice.
+        Manual-license deliveries remain manual by design.
         """
         states = self._load_fulfillment_flags_map()
         now = datetime.now(timezone.utc)
 
-        def is_recent(last_run_iso: str) -> bool:
+        def is_recent(
+            last_run_iso: str,
+            *,
+            max_age: timedelta = _PHYSICAL_FULFILLMENT_RESUME_MAX_AGE,
+        ) -> bool:
             try:
                 stamp = datetime.fromisoformat(last_run_iso)
             except (TypeError, ValueError):
                 return False
             if stamp.tzinfo is None:
                 stamp = stamp.replace(tzinfo=timezone.utc)
-            return now - stamp <= _FULFILLMENT_RESUME_MAX_AGE
+            return now - stamp <= max_age
 
         candidate_ids = [
             invoice_id
             for invoice_id, flags in states.items()
             if flags.last_run_iso
-            and is_recent(flags.last_run_iso)
-            and not flags.invoice_printed
-            and not flags.label_printed
+            and (
+                is_recent(
+                    flags.last_run_iso,
+                    max_age=_FULFILLMENT_RESUME_MAX_AGE,
+                )
+                or (flags.last_error and is_recent(flags.last_run_iso))
+            )
             and (
                 flags.last_error
                 or not flags.mail_sent
@@ -1858,7 +1968,7 @@ class InvoiceProcessingService:
             logger.info(
                 "START resume skipped stale fulfillment states=%s max_age_hours=%s",
                 stale_count,
-                int(_FULFILLMENT_RESUME_MAX_AGE.total_seconds() // 3600),
+                int(_PHYSICAL_FULFILLMENT_RESUME_MAX_AGE.total_seconds() // 3600),
             )
         candidate_ids.sort(key=lambda invoice_id: states[invoice_id].last_run_iso, reverse=True)
         if not candidate_ids:
@@ -1868,51 +1978,177 @@ class InvoiceProcessingService:
         failures = 0
         successful = 0
         aborted = False
+        summaries: list[InvoiceSummary] = []
         for invoice_id in candidate_ids[:100]:
+            try:
+                summary = self._load_summary_by_id(invoice_id)
+            except Exception as exc:
+                failures += 1
+                self.write_fulfillment_flags(invoice_id, self._with_error(states[invoice_id], exc))
+                logger.warning("START resume invoice=%s load failed: %s", invoice_id, exc)
+                continue
+            # Only active accounting states are eligible. In particular, never
+            # revive a cancelled invoice (1001) from an old journal.
+            if (
+                int(summary.status_code or 0) in {200, 300, 1000}
+                and summary.order_reference.strip()
+            ):
+                summaries.append(summary)
+
+        self._prefetch_wix_order_context(summaries)
+        resumable: list[tuple[InvoiceSummary, str]] = []
+        for summary in summaries:
+            delivery_kind = self._start_delivery_kind(summary)
+            if delivery_kind == "manual-license":
+                continue
+            flags = states[str(summary.id)]
+            if delivery_kind == "digital":
+                if not is_recent(
+                    flags.last_run_iso,
+                    max_age=_FULFILLMENT_RESUME_MAX_AGE,
+                ):
+                    continue
+                needs_work = bool(
+                    flags.last_error
+                    or not flags.mail_sent
+                    or (flags.payment_applicable and not flags.payment_booked)
+                    or (flags.wix_applicable and not flags.wix_fulfilled)
+                )
+            else:
+                needs_work = bool(
+                    flags.last_error
+                    or not flags.invoice_printed
+                    or not flags.label_printed
+                    or not flags.mail_sent
+                    or (flags.payment_applicable and not flags.payment_booked)
+                    or (flags.wix_applicable and not flags.wix_fulfilled)
+                )
+            if needs_work:
+                resumable.append((summary, delivery_kind))
+
+        resumable.sort(
+            key=lambda item: self._start_processing_priority(
+                item[0],
+                delivery_kind=item[1],
+            )
+        )
+        persist_lock = Lock()
+
+        def persist(summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
+            with persist_lock:
+                self.write_fulfillment_flags(summary.id, flags)
+            return flags
+
+        post_tasks: list[_StartPostTask] = []
+        for summary, delivery_kind in resumable:
             if should_abort is not None and should_abort():
                 aborted = True
                 break
-            flags = states[invoice_id]
-            try:
-                summary = self._load_summary_by_id(invoice_id)
-                # Only active accounting states are eligible. In particular,
-                # never revive a cancelled invoice (1001) from an old journal.
-                if int(summary.status_code or 0) not in {200, 300, 1000}:
-                    continue
-                if not summary.order_reference.strip():
-                    continue
-                self._prefetch_wix_order_context([summary])
-                if self._is_manual_licensed_delivery(summary) or not self._is_digital_only(summary):
-                    continue
-
-                processed += 1
-                if progress_callback is not None:
-                    label = summary.invoice_number or summary.order_reference or summary.id
-                    progress_callback(f"START: Unvollstaendige digitale Rechnung {label} wird fortgesetzt...")
+            flags = states[str(summary.id)]
+            label = summary.invoice_number or summary.order_reference or summary.id
+            processed += 1
+            if delivery_kind == "digital":
                 logger.info("START resume digital invoice=%s", summary.id)
+                post_tasks.append(_StartPostTask(summary=summary, flags=flags, digital_only=True))
+                continue
 
-                if not flags.payment_booked:
-                    flags = self._run_payment_step(summary, flags)
-                    self.write_fulfillment_flags(summary.id, flags)
-                if not flags.wix_fulfilled:
-                    flags = self._run_product_step_compat(summary, flags)
-                    self.write_fulfillment_flags(summary.id, flags)
-                if not flags.mail_sent:
-                    flags = self._run_mail_step(
+            logger.info("START resume physical invoice=%s", summary.id)
+            if progress_callback is not None:
+                progress_callback(f"START: Unvollstaendige Rechnung {label} wird gedruckt...")
+            inventory_warning = ""
+            try:
+                # Retrying is safe because invoice inventory bookings are
+                # idempotent per document position.  A local stock discrepancy
+                # remains a warning and must never strand paper output again.
+                if self._invoice_inventory is not None:
+                    try:
+                        context = self.load_invoice_work_context(
+                            summary,
+                            load_positions=True,
+                            force=True,
+                        )
+                        self._invoice_inventory.apply_invoice_context(
+                            document_id=str(summary.id or ""),
+                            positions=context.positions,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        inventory_warning = f"Product-Hub-Bestandsbuchung fehlgeschlagen: {exc}"
+                        logger.warning(
+                            "START resume invoice=%s inventory booking failed: %s",
+                            summary.id,
+                            exc,
+                            exc_info=True,
+                        )
+                if not flags.invoice_printed:
+                    flags = persist(
                         summary,
-                        flags,
-                        recipient_override=mail_recipient_override,
+                        self._run_optional_aftercare_delivery_note_step(summary, flags),
                     )
-                    self.write_fulfillment_flags(summary.id, flags)
-                if flags.last_error:
-                    flags = self._next_flags(flags)
-                    self.write_fulfillment_flags(summary.id, flags)
-                successful += 1
-                logger.info("START resume digital invoice=%s outcome=ok", summary.id)
+                    flags = persist(summary, self._run_invoice_print_step(summary, flags))
+                if not flags.label_printed:
+                    flags = persist(summary, self._run_label_print_step_compat(summary, flags))
+                post_tasks.append(
+                    _StartPostTask(
+                        summary=summary,
+                        flags=flags,
+                        digital_only=False,
+                        deferred_warning=inventory_warning,
+                    )
+                )
             except Exception as exc:
                 failures += 1
-                self.write_fulfillment_flags(invoice_id, self._with_error(flags, exc))
-                logger.warning("START resume digital invoice=%s outcome=failed: %s", invoice_id, exc)
+                persist(summary, self._with_error(flags, exc))
+                logger.warning(
+                    "START resume physical invoice=%s outcome=failed: %s", summary.id, exc
+                )
+
+        def run_post_task(task: _StartPostTask) -> tuple[str, bool]:
+            summary = task.summary
+            flags = task.flags
+            label = summary.invoice_number or summary.order_reference or summary.id
+            try:
+                if progress_callback is not None:
+                    progress_callback(
+                        f"START: Unvollstaendige Rechnung {label} wird fortgesetzt..."
+                    )
+                if not flags.payment_booked:
+                    flags = persist(summary, self._run_payment_step(summary, flags))
+                if not flags.wix_fulfilled:
+                    flags = persist(summary, self._run_product_step_compat(summary, flags))
+                if not flags.mail_sent:
+                    flags = persist(
+                        summary,
+                        self._run_mail_step(
+                            summary,
+                            flags,
+                            recipient_override=mail_recipient_override,
+                        ),
+                    )
+                if task.deferred_warning:
+                    flags = self._next_flags(flags, last_warning=task.deferred_warning)
+                elif flags.last_error:
+                    flags = self._next_flags(flags)
+                persist(summary, flags)
+                logger.info("START resume invoice=%s outcome=ok", summary.id)
+                return str(summary.id), True
+            except Exception as exc:
+                persist(summary, self._with_error(flags, exc))
+                logger.warning("START resume invoice=%s outcome=failed: %s", summary.id, exc)
+                return str(summary.id), False
+
+        if post_tasks:
+            workers = min(_START_POST_WORKERS, len(post_tasks))
+            with ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="invoice-start-resume",
+            ) as executor:
+                futures = [executor.submit(run_post_task, task) for task in post_tasks]
+                for future in as_completed(futures):
+                    _invoice_id, ok = future.result()
+                    if ok:
+                        successful += 1
+                    else:
+                        failures += 1
 
         logger.info(
             "START resume metric processed=%s failures=%s successful=%s aborted=%s",
@@ -2076,7 +2312,9 @@ class InvoiceProcessingService:
     ) -> FulfillmentFlags:
         preflight_context = None
         if self._invoice_inventory is not None and not digital_only:
-            preflight_context = self.load_invoice_work_context(summary, load_positions=True, force=True)
+            preflight_context = self.load_invoice_work_context(
+                summary, load_positions=True, force=True
+            )
             if preflight_context.positions:
                 self._invoice_inventory.validate_invoice_context(preflight_context.positions)
         if printed_copy:
@@ -2099,17 +2337,39 @@ class InvoiceProcessingService:
         invoice_key = str(summary.id or "").strip()
         self._invoice_detail_cache.pop(invoice_key, None)
         self._invoice_work_context_cache.pop(invoice_key, None)
+        inventory_warning = ""
         if self._invoice_inventory is not None and not digital_only:
-            context = self.load_invoice_work_context(summary, load_positions=True, force=True)
-            self._invoice_inventory.apply_invoice_context(
-                document_id=str(summary.id or ""),
-                positions=context.positions,
-            )
-        return self._next_flags(
+            # Invoice positions cannot change after the successful sendBy call.
+            # Reuse the already validated context instead of issuing the same
+            # sevDesk detail/position requests a second time.
+            positions = preflight_context.positions if preflight_context is not None else ()
+            try:
+                self._invoice_inventory.apply_invoice_context(
+                    document_id=str(summary.id or ""),
+                    positions=positions,
+                )
+            except Exception as exc:  # noqa: BLE001 - sevDesk is already finalized.
+                # At this point stopping would strand a finalized invoice: it
+                # would disappear from the draft queue before invoice/label
+                # output.  Keep the accounting discrepancy visible, but let
+                # the recoverable paper and customer-delivery flow continue.
+                inventory_warning = f"Product-Hub-Bestandsbuchung fehlgeschlagen: {exc}"
+                logger.warning(
+                    "Invoice %s finalized but local inventory booking failed: %s",
+                    summary.id,
+                    exc,
+                    exc_info=True,
+                )
+        next_flags = self._next_flags(
             flags,
-            payment_applicable=(self._stamp(flags).payment_applicable or bool(summary.order_reference.strip())),
+            payment_applicable=(
+                self._stamp(flags).payment_applicable or bool(summary.order_reference.strip())
+            ),
             mail_sent=self._stamp(flags).mail_sent,
         )
+        if inventory_warning:
+            return self._next_flags(next_flags, last_warning=inventory_warning)
+        return next_flags
 
     @staticmethod
     def _parse_iso_timestamp(value: object) -> datetime | None:
@@ -2157,13 +2417,29 @@ class InvoiceProcessingService:
     def _build_payment_payee(order: dict[str, Any], invoice_number: str) -> str:
         buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
         billing = order.get("billingInfo") if isinstance(order.get("billingInfo"), dict) else {}
-        billing_contact = billing.get("contactDetails") if isinstance(billing.get("contactDetails"), dict) else {}
+        billing_contact = (
+            billing.get("contactDetails") if isinstance(billing.get("contactDetails"), dict) else {}
+        )
         shipping = order.get("shippingInfo") if isinstance(order.get("shippingInfo"), dict) else {}
         logistics = shipping.get("logistics") if isinstance(shipping.get("logistics"), dict) else {}
-        destination = logistics.get("shippingDestination") if isinstance(logistics.get("shippingDestination"), dict) else {}
-        shipping_contact = destination.get("contactDetails") if isinstance(destination.get("contactDetails"), dict) else {}
-        recipient = order.get("recipientInfo") if isinstance(order.get("recipientInfo"), dict) else {}
-        recipient_contact = recipient.get("contactDetails") if isinstance(recipient.get("contactDetails"), dict) else {}
+        destination = (
+            logistics.get("shippingDestination")
+            if isinstance(logistics.get("shippingDestination"), dict)
+            else {}
+        )
+        shipping_contact = (
+            destination.get("contactDetails")
+            if isinstance(destination.get("contactDetails"), dict)
+            else {}
+        )
+        recipient = (
+            order.get("recipientInfo") if isinstance(order.get("recipientInfo"), dict) else {}
+        )
+        recipient_contact = (
+            recipient.get("contactDetails")
+            if isinstance(recipient.get("contactDetails"), dict)
+            else {}
+        )
 
         def _full_name(source: dict[str, Any]) -> str:
             first = str(source.get("firstName") or "").strip()
@@ -2264,7 +2540,9 @@ class InvoiceProcessingService:
                 continue
         return None
 
-    def _run_payment_step(self, summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
+    def _run_payment_step(
+        self, summary: InvoiceSummary, flags: FulfillmentFlags
+    ) -> FulfillmentFlags:
         stamped = self._stamp(flags)
         if not summary.order_reference.strip() or self._wix_orders is None:
             return self._next_flags(stamped, payment_applicable=False, payment_booked=False)
@@ -2289,7 +2567,9 @@ class InvoiceProcessingService:
                     payment_booked=False,
                     last_warning=f"Rechnung {invoice_id}: keine Wix-Bestellung fuer Zahlungsbuchung gefunden",
                 )
-            order_id = str(order.get("id") or order.get("orderId") or order.get("_id") or "").strip()
+            order_id = str(
+                order.get("id") or order.get("orderId") or order.get("_id") or ""
+            ).strip()
             if not order_id:
                 return self._next_flags(
                     stamped,
@@ -2311,9 +2591,11 @@ class InvoiceProcessingService:
             # though the order endpoint still exposes a meaningful aggregate
             # status.  Keep that status visible instead of degrading the case
             # to the misleading "no provider transaction ID" warning.
-            payment_status = str(
-                payment_details.get("paymentStatus") or order.get("paymentStatus") or ""
-            ).strip().upper()
+            payment_status = (
+                str(payment_details.get("paymentStatus") or order.get("paymentStatus") or "")
+                .strip()
+                .upper()
+            )
             if payment_status and payment_status not in PAYMENT_BOOKABLE_STATUSES:
                 return self._next_flags(
                     stamped,
@@ -2365,7 +2647,9 @@ class InvoiceProcessingService:
             order_no = str(summary.order_reference or "").strip()
             if not order_no:
                 order_no = str(self._invoices.invoice_reference(invoice) or "").strip()
-            invoice_number = str(summary.invoice_number or invoice.get("invoiceNumber") or "").strip()
+            invoice_number = str(
+                summary.invoice_number or invoice.get("invoiceNumber") or ""
+            ).strip()
             if not invoice_number:
                 return self._next_flags(
                     stamped,
@@ -2478,7 +2762,9 @@ class InvoiceProcessingService:
             message = str(exc or "").strip().lower()
             if "already" in message or "bereits" in message:
                 return self._next_flags(stamped, payment_applicable=True, payment_booked=True)
-            return self._next_flags(stamped, payment_applicable=True, payment_booked=False, last_warning=str(exc))
+            return self._next_flags(
+                stamped, payment_applicable=True, payment_booked=False, last_warning=str(exc)
+            )
 
     def _run_aftercare_delivery_note_step(
         self, summary: InvoiceSummary, flags: FulfillmentFlags
@@ -2522,10 +2808,14 @@ class InvoiceProcessingService:
                 resolved = self._wix_orders.resolve_order(order_number)
                 wix_order = resolved if isinstance(resolved, dict) else {}
             except Exception as exc:  # noqa: BLE001 - matching remains retryable
-                logger.warning("Wix redelivery context resolve failed ref=%s: %s", order_number, exc)
+                logger.warning(
+                    "Wix redelivery context resolve failed ref=%s: %s", order_number, exc
+                )
         buyer = wix_order.get("buyerInfo") if isinstance(wix_order.get("buyerInfo"), dict) else {}
         wix_contact_id = str(buyer.get("contactId") or "").strip()
-        customer_email = str(buyer.get("email") or contact.get("email") or invoice.get("email") or "").strip()
+        customer_email = str(
+            buyer.get("email") or contact.get("email") or invoice.get("email") or ""
+        ).strip()
         cases = service.claim_for_invoice(
             invoice_id=str(summary.id or ""),
             invoice_number=str(summary.invoice_number or ""),
@@ -2546,13 +2836,17 @@ class InvoiceProcessingService:
             except (TypeError, ValueError):
                 raw_address = []
             if isinstance(raw_address, list) and raw_address:
-                address_lines = tuple(str(line).strip() for line in raw_address if str(line).strip())
+                address_lines = tuple(
+                    str(line).strip() for line in raw_address if str(line).strip()
+                )
                 if address_lines:
                     break
         if not address_lines:
             address_lines = tuple(self._shipping_lines_from_invoice(invoice, summary))
         if not address_lines:
-            raise RuntimeError("Nachlieferungs-Lieferschein kann ohne Lieferadresse nicht gedruckt werden")
+            raise RuntimeError(
+                "Nachlieferungs-Lieferschein kann ohne Lieferadresse nicht gedruckt werden"
+            )
 
         products: list[BuyerNoteProduct] = []
         origin_refs: list[str] = []
@@ -2629,10 +2923,14 @@ class InvoiceProcessingService:
                 try:
                     self._offene_sendungen.mark_done(dispatch_id, done=True)
                 except Exception as exc:  # noqa: BLE001 - physical print already succeeded
-                    logger.warning("Nachlieferungs-Dispatch konnte nicht geschlossen werden: %s", exc)
+                    logger.warning(
+                        "Nachlieferungs-Dispatch konnte nicht geschlossen werden: %s", exc
+                    )
         return flags
 
-    def _run_invoice_print_step(self, summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
+    def _run_invoice_print_step(
+        self, summary: InvoiceSummary, flags: FulfillmentFlags
+    ) -> FulfillmentFlags:
         pdf_bytes = self._get_invoice_pdf_bytes(
             summary.id,
             expected_invoice_number=summary.invoice_number,
@@ -2675,11 +2973,15 @@ class InvoiceProcessingService:
         fulfillment_status = ""
         if hasattr(self._wix_orders, "fulfillment_status"):
             try:
-                fulfillment_status = str(self._wix_orders.fulfillment_status(reference) or "").strip().upper()
+                fulfillment_status = (
+                    str(self._wix_orders.fulfillment_status(reference) or "").strip().upper()
+                )
             except Exception as exc:
                 logger.warning("Wix fulfillment-status resolve failed ref=%s: %s", reference, exc)
 
-        items = self._normalize_wix_fulfillment_items(self._wix_orders.get_fulfillable_items(reference))
+        items = self._normalize_wix_fulfillment_items(
+            self._wix_orders.get_fulfillable_items(reference)
+        )
         if not items:
             fallback = getattr(self._wix_orders, "physical_fulfillment_line_items", None)
             if callable(fallback):
@@ -2692,7 +2994,9 @@ class InvoiceProcessingService:
                             len(items),
                         )
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning("Wix physical fulfillment fallback failed ref=%s: %s", reference, exc)
+                    logger.warning(
+                        "Wix physical fulfillment fallback failed ref=%s: %s", reference, exc
+                    )
         if not items:
             existing_fulfillments = self._wix_orders.list_fulfillments(reference)
             if existing_fulfillments or fulfillment_status == "FULFILLED":
@@ -2703,7 +3007,9 @@ class InvoiceProcessingService:
                 else f"Wix-Digital-Fulfillment nicht bestaetigt fuer {reference}"
             )
             logger.warning(message)
-            return self._next_flags(flags, product_ready=True, wix_fulfilled=False, last_warning=message)
+            return self._next_flags(
+                flags, product_ready=True, wix_fulfilled=False, last_warning=message
+            )
 
         created = self._wix_orders.create_fulfillment(reference, items)
         if not created:
@@ -2788,7 +3094,9 @@ class InvoiceProcessingService:
         return str(created.get("id") or nested.get("id") or "").strip()
 
     @staticmethod
-    def _normalize_wix_fulfillment_items(raw_items: list[dict[str, Any]] | object) -> list[dict[str, object]]:
+    def _normalize_wix_fulfillment_items(
+        raw_items: list[dict[str, Any]] | object,
+    ) -> list[dict[str, object]]:
         if not isinstance(raw_items, list):
             return []
         items: list[dict[str, object]] = []
@@ -2851,7 +3159,9 @@ class InvoiceProcessingService:
             mail_applicable=True,
         )
 
-    def _shipping_lines_from_invoice(self, invoice: dict[str, Any], summary: InvoiceSummary) -> list[str]:
+    def _shipping_lines_from_invoice(
+        self, invoice: dict[str, Any], summary: InvoiceSummary
+    ) -> list[str]:
         invoice_lines = self._shipping_lines_from_invoice_data(invoice, summary)
         if summary.order_reference.strip():
             wix_lines = self._get_wix_address_lines_cached(summary.order_reference)
@@ -2860,7 +3170,9 @@ class InvoiceProcessingService:
         return invoice_lines
 
     @classmethod
-    def _best_shipping_lines(cls, preferred_lines: list[str], fallback_lines: list[str]) -> list[str]:
+    def _best_shipping_lines(
+        cls, preferred_lines: list[str], fallback_lines: list[str]
+    ) -> list[str]:
         preferred = [str(line or "").strip() for line in preferred_lines if str(line or "").strip()]
         fallback = [str(line or "").strip() for line in fallback_lines if str(line or "").strip()]
         if not preferred:
@@ -2879,9 +3191,15 @@ class InvoiceProcessingService:
         if not normalized:
             return 0
         score = min(len(normalized), 5)
-        has_street = any(re.search(r"\d", line) and not re.match(r"^\d{4,6}\b", line) for line in normalized[1:])
-        has_postal_city = any(re.search(r"\b\d{4,6}\b", line) and re.search(r"[A-Za-z]", line) for line in normalized)
-        has_country = len(normalized) >= 3 and bool(re.match(r"^[A-Z][A-Z\s.-]{1,}$", normalized[-1]))
+        has_street = any(
+            re.search(r"\d", line) and not re.match(r"^\d{4,6}\b", line) for line in normalized[1:]
+        )
+        has_postal_city = any(
+            re.search(r"\b\d{4,6}\b", line) and re.search(r"[A-Za-z]", line) for line in normalized
+        )
+        has_country = len(normalized) >= 3 and bool(
+            re.match(r"^[A-Z][A-Z\s.-]{1,}$", normalized[-1])
+        )
         if has_street:
             score += 5
         if has_postal_city:
@@ -2892,7 +3210,9 @@ class InvoiceProcessingService:
             score -= 8
         return score
 
-    def _shipping_lines_from_invoice_data(self, invoice: dict[str, Any], summary: InvoiceSummary) -> list[str]:
+    def _shipping_lines_from_invoice_data(
+        self, invoice: dict[str, Any], summary: InvoiceSummary
+    ) -> list[str]:
         """Build shipping lines from sevDesk invoice/contact data only."""
         _billing, shipping, _source = address_lines_from_invoice(invoice, summary)
         if shipping:
@@ -2977,7 +3297,9 @@ class InvoiceProcessingService:
         if not reference:
             return
         try:
-            self._drafts.repair_draft_product_mapping(summary.id, reference, create_missing_products=False)
+            self._drafts.repair_draft_product_mapping(
+                summary.id, reference, create_missing_products=False
+            )
         except Exception as exc:
             logger.warning("Produktabgleich fuer Entwurf %s fehlgeschlagen: %s", summary.id, exc)
 
@@ -2989,7 +3311,9 @@ class InvoiceProcessingService:
                 return wix_name
         for value in (
             invoice.get("name"),
-            (invoice.get("contact") or {}).get("name") if isinstance(invoice.get("contact"), dict) else "",
+            (invoice.get("contact") or {}).get("name")
+            if isinstance(invoice.get("contact"), dict)
+            else "",
             summary.contact_name,
         ):
             text = str(value or "").strip()
@@ -3004,20 +3328,28 @@ class InvoiceProcessingService:
     @staticmethod
     def _invoice_items_html(invoice: dict[str, Any]) -> str:
         lines: list[str] = []
-        raw_positions = invoice.get("positions") or invoice.get("invoicePosSave") or invoice.get("invoicePos")
+        raw_positions = (
+            invoice.get("positions") or invoice.get("invoicePosSave") or invoice.get("invoicePos")
+        )
         if isinstance(raw_positions, list):
             for item in raw_positions:
                 if not isinstance(item, dict):
                     continue
-                name = str(item.get("name") or item.get("text") or item.get("partName") or "").strip()
-                quantity = str(item.get("quantity") or item.get("qty") or item.get("count") or "").strip()
+                name = str(
+                    item.get("name") or item.get("text") or item.get("partName") or ""
+                ).strip()
+                quantity = str(
+                    item.get("quantity") or item.get("qty") or item.get("count") or ""
+                ).strip()
                 if name and quantity:
                     lines.append(f"{html.escape(quantity)}x {html.escape(name)}")
                 elif name:
                     lines.append(html.escape(name))
         return "<br>".join(lines)
 
-    def _mail_template_values(self, summary: InvoiceSummary, invoice: dict[str, Any]) -> dict[str, str]:
+    def _mail_template_values(
+        self, summary: InvoiceSummary, invoice: dict[str, Any]
+    ) -> dict[str, str]:
         invoice_number = self._invoice_number(summary, invoice)
         return {
             "{{customer_name}}": self._resolve_customer_name(summary, invoice),
@@ -3033,14 +3365,20 @@ class InvoiceProcessingService:
         body = self._settings_repo.get_value_json(_FULFILLMENT_MAIL_TEMPLATE_KEY)
         return str(subject or "").strip(), str(body or "").strip()
 
-    def _build_mail_content(self, summary: InvoiceSummary, invoice: dict[str, Any]) -> tuple[str, str]:
+    def _build_mail_content(
+        self, summary: InvoiceSummary, invoice: dict[str, Any]
+    ) -> tuple[str, str]:
         invoice_number = self._invoice_number(summary, invoice)
         subject_template, body_template = self._load_mail_templates()
         subject = subject_template or _LEGACY_MAIL_SUBJECT
         body = body_template or _LEGACY_MAIL_BODY
         for token, value in self._mail_template_values(summary, invoice).items():
-            subject = subject.replace(token, value).replace(token.replace("{{", "{").replace("}}", "}"), value)
-            body = body.replace(token, value).replace(token.replace("{{", "{").replace("}}", "}"), value)
+            subject = subject.replace(token, value).replace(
+                token.replace("{{", "{").replace("}}", "}"), value
+            )
+            body = body.replace(token, value).replace(
+                token.replace("{{", "{").replace("}}", "}"), value
+            )
         subject = subject.replace("{invoice_number}", invoice_number)
         body = body.replace("{invoice_number}", invoice_number)
         body = body.strip() or _LEGACY_MAIL_BODY.format(invoice_number=invoice_number).strip()
@@ -3054,25 +3392,30 @@ class InvoiceProcessingService:
             inner = self._mail_service.plain_text_to_html(content)
         else:
             normalized = content.replace("\r\n", "\n").replace("\r", "\n").strip()
-            paragraphs = [chunk.strip() for chunk in re.split(r"\n\s*\n", normalized) if chunk.strip()]
+            paragraphs = [
+                chunk.strip() for chunk in re.split(r"\n\s*\n", normalized) if chunk.strip()
+            ]
             escaped_paragraphs = [
-                html.escape(paragraph).replace("\n", "<br>")
-                for paragraph in paragraphs
+                html.escape(paragraph).replace("\n", "<br>") for paragraph in paragraphs
             ]
             inner = "\n".join(f"<p>{paragraph}</p>" for paragraph in escaped_paragraphs)
         return (
-            "<html><body style=\"font-family:Segoe UI,Arial,sans-serif;color:#0f172a;line-height:1.5;\">"
+            '<html><body style="font-family:Segoe UI,Arial,sans-serif;color:#0f172a;line-height:1.5;">'
             f"{inner}"
             "</body></html>"
         )
 
-    def _build_invoice_attachment(self, summary: InvoiceSummary, invoice: dict[str, Any]) -> MailAttachment:
+    def _build_invoice_attachment(
+        self, summary: InvoiceSummary, invoice: dict[str, Any]
+    ) -> MailAttachment:
         invoice_number = self._invoice_number(summary, invoice)
         pdf_bytes = self._get_invoice_pdf_bytes(
             summary.id,
             expected_invoice_number=invoice_number,
         )
-        return MailAttachment(filename=f"{invoice_number}.pdf", content=pdf_bytes, mime_type="application/pdf")
+        return MailAttachment(
+            filename=f"{invoice_number}.pdf", content=pdf_bytes, mime_type="application/pdf"
+        )
 
     def _fetch_invoice_detail(self, invoice_id: str, *, force: bool = False) -> dict[str, Any]:
         invoice_key = str(invoice_id).strip()
@@ -3108,7 +3451,9 @@ class InvoiceProcessingService:
                             expected_invoice_number=expected_invoice_number,
                         )
                         if sanity_issue:
-                            logger.info("Invoice %s renderPdf ignored: %s", invoice_id, sanity_issue)
+                            logger.info(
+                                "Invoice %s renderPdf ignored: %s", invoice_id, sanity_issue
+                            )
                         else:
                             self._invoice_pdf_cache[str(invoice_id)] = rendered_pdf
                             return rendered_pdf
@@ -3295,18 +3640,26 @@ class InvoiceProcessingService:
             return defaults
         if not isinstance(data, list):
             return defaults
-        parsed = {
-            self._normalize_country_key(item)
-            for item in data
-            if str(item).strip()
-        }
+        parsed = {self._normalize_country_key(item) for item in data if str(item).strip()}
         return parsed or defaults
 
     def _build_invoice_list_hints_from_order(self, order: dict[str, Any]) -> InvoiceListHintFlags:
         note = str(order.get("buyerNote") or order.get("buyerNotes") or "").strip()
-        billing_lines = tuple(self._wix_orders.billing_address_lines_from_order(order)) if self._wix_orders else ()
-        shipping_lines = tuple(self._wix_orders.shipping_address_lines_from_order(order)) if self._wix_orders else ()
-        address_mismatch = bool(billing_lines and shipping_lines and self._addresses_differ(billing_lines, shipping_lines))
+        billing_lines = (
+            tuple(self._wix_orders.billing_address_lines_from_order(order))
+            if self._wix_orders
+            else ()
+        )
+        shipping_lines = (
+            tuple(self._wix_orders.shipping_address_lines_from_order(order))
+            if self._wix_orders
+            else ()
+        )
+        address_mismatch = bool(
+            billing_lines
+            and shipping_lines
+            and self._addresses_differ(billing_lines, shipping_lines)
+        )
         shipping_country = shipping_lines[-1] if shipping_lines else ""
         country_invalid = bool(shipping_country) and not self._country_allowed(shipping_country)
         unreleased_sku = self._order_has_flagged_sku(order)
@@ -3326,7 +3679,9 @@ class InvoiceProcessingService:
             return True
         return normalized in self._load_allowed_country_keys()
 
-    def _addresses_differ(self, left: tuple[str, ...] | list[str], right: tuple[str, ...] | list[str]) -> bool:
+    def _addresses_differ(
+        self, left: tuple[str, ...] | list[str], right: tuple[str, ...] | list[str]
+    ) -> bool:
         def normalize(lines: tuple[str, ...] | list[str]) -> list[str]:
             normalized: list[str] = []
             for line in lines:
@@ -3359,7 +3714,9 @@ class InvoiceProcessingService:
         if not normalized:
             return False
         exact, prefixes, suffixes = self._load_sku_flags()
-        return self._sku_matches_flags(normalized, exact=exact, prefixes=prefixes, suffixes=suffixes)
+        return self._sku_matches_flags(
+            normalized, exact=exact, prefixes=prefixes, suffixes=suffixes
+        )
 
     @staticmethod
     def _sku_matches_flags(
@@ -3380,12 +3737,24 @@ class InvoiceProcessingService:
 
     @staticmethod
     def _line_item_sku(raw_item: dict[str, Any]) -> str:
-        physical = raw_item.get("physicalProperties") if isinstance(raw_item.get("physicalProperties"), dict) else {}
+        physical = (
+            raw_item.get("physicalProperties")
+            if isinstance(raw_item.get("physicalProperties"), dict)
+            else {}
+        )
         sku = str(physical.get("sku") or "").strip().upper()
         if sku:
             return sku
-        catalog = raw_item.get("catalogReference") if isinstance(raw_item.get("catalogReference"), dict) else {}
-        options = catalog.get("catalogItemOptions") if isinstance(catalog.get("catalogItemOptions"), dict) else {}
+        catalog = (
+            raw_item.get("catalogReference")
+            if isinstance(raw_item.get("catalogReference"), dict)
+            else {}
+        )
+        options = (
+            catalog.get("catalogItemOptions")
+            if isinstance(catalog.get("catalogItemOptions"), dict)
+            else {}
+        )
         return str(options.get("sku") or "").strip().upper()
 
     def _load_sensitive_country_codes(self) -> set[str]:
@@ -3400,11 +3769,7 @@ class InvoiceProcessingService:
             return set(DEFAULT_SENSITIVE_COUNTRY_CODES)
         if not isinstance(data, list):
             return set(DEFAULT_SENSITIVE_COUNTRY_CODES)
-        parsed = {
-            str(item).strip().upper()
-            for item in data
-            if str(item).strip()
-        }
+        parsed = {str(item).strip().upper() for item in data if str(item).strip()}
         return parsed or set(DEFAULT_SENSITIVE_COUNTRY_CODES)
 
     def _apply_sensitive_country_flags(self, summaries: list[InvoiceSummary]) -> None:
@@ -3412,7 +3777,9 @@ class InvoiceProcessingService:
         for summary in summaries:
             code = summary.address_country_code.strip().upper()
             delivery_code = summary.delivery_country_code.strip().upper()
-            summary.is_sensitive_country = code in sensitive_codes or delivery_code in sensitive_codes
+            summary.is_sensitive_country = (
+                code in sensitive_codes or delivery_code in sensitive_codes
+            )
 
     def _load_sku_flags(self) -> tuple[set[str], tuple[str, ...], tuple[str, ...]]:
         if self._settings_repo is None:
@@ -3425,7 +3792,9 @@ class InvoiceProcessingService:
             fallback = self._sku_flags_cache or self._default_sku_flags()
             self._sku_flags_cache = fallback
             self._sku_flags_retry_after = time.monotonic() + _SKU_FLAGS_RETRY_DELAY_SECONDS
-            logger.warning("SKU flags unavailable from settings; using cached/default flags: %s", exc)
+            logger.warning(
+                "SKU flags unavailable from settings; using cached/default flags: %s", exc
+            )
             return fallback
         self._sku_flags_retry_after = 0.0
         if not raw:
