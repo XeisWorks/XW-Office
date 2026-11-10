@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import logging
 import os
 import time
-from typing import TYPE_CHECKING, Callable, Mapping, Protocol
+from typing import TYPE_CHECKING, Callable, Mapping, Protocol, cast
 
 from xw_office.services.plc.models import PlcShipmentDraft, clean_reference
 from xw_office.services.plc.polling import ShipmentAddress, normalize_shipment_address
@@ -321,24 +321,24 @@ def _article_row(article: object) -> dict[str, object]:
 def _create_zeep_service(settings: PlcWebserviceSettings) -> _PlcSoapService:
     """Create the WSDL client lazily so app start never performs network I/O."""
     try:
-        import requests
+        import requests  # type: ignore[import-untyped]
         from zeep import Client, Settings
         from zeep.transports import Transport
     except ImportError as exc:  # pragma: no cover - covered by project dependency declaration.
         raise PlcWebserviceError("Zeep/requests fÃ¼r PLC-Webservice nicht installiert") from exc
 
     session = requests.Session()
-    transport = Transport(
+    transport = Transport(  # type: ignore[no-untyped-call]
         session=session,
         timeout=settings.timeout_seconds,
         operation_timeout=settings.timeout_seconds,
     )
-    client = Client(
+    client = Client(  # type: ignore[no-untyped-call]
         wsdl=settings.wsdl_url,
         transport=transport,
         settings=Settings(strict=False, xml_huge_tree=True),
     )
-    return client.service  # type: ignore[return-value]
+    return cast(_PlcSoapService, client.service)
 
 
 def _response_object(response: object, key: str) -> object:
