@@ -6820,37 +6820,6 @@ class RechnungenView(QWidget):
         self._shipping_status.setText(text)
         self._set_shipping_editor_lines([])
 
-    def _prefill_detail_from_invoice(self, summary: InvoiceSummary) -> None:
-        self._wix_order_no.setText(summary.order_reference or "â€”")
-        try:
-            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-            context = service.get_invoice_detail_context(summary)
-        except Exception as exc:
-            logger.warning("Invoice detail prefill failed for %s: %s", summary.id, exc)
-            self._wix_customer.setText(summary.contact_name or "â€”")
-            if summary.order_reference:
-                self._shipping_status.setText("Lade Wix-Datenâ€¦")
-            else:
-                self._shipping_status.setText("Keine Versandadresse verfuegbar")
-            return
-
-        customer_name = str(context.get("customer_name") or "").strip() or summary.contact_name or "â€”"
-        customer_email = str(context.get("customer_email") or "").strip() or "â€”"
-        shipping_lines = self._normalize_shipping_lines(context.get("shipping_lines"))  # type: ignore[arg-type]
-        self._wix_customer.setText(customer_name)
-        self._wix_customer_email.setText(customer_email)
-        self._shipping_source_lines = shipping_lines
-        override_lines = list(self._shipping_address_overrides.get(summary.id, []))
-        if shipping_lines:
-            self._shipping_status.setText("Adresse aus sevDesk")
-            self._set_shipping_editor_lines(override_lines or shipping_lines)
-        elif summary.order_reference:
-            self._shipping_status.setText("Lade Wix-Datenâ€¦")
-            self._set_shipping_editor_lines(override_lines)
-        else:
-            self._shipping_status.setText("Keine Versandadresse in sevDesk")
-            self._set_shipping_editor_lines(override_lines)
-
     def _prefill_detail_from_invoice_cache(self, summary: InvoiceSummary) -> None:
         """Apply cached sevDesk details without turning row selection into I/O."""
         override_lines = list(self._shipping_address_overrides.get(summary.id, []))
