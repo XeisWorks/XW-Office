@@ -28,7 +28,7 @@ def test_async_action_sets_and_restores_busy_state(qtbot: object) -> None:
     assert status.text() == "Lade..."
 
     release.set()
-    qtbot.waitUntil(lambda: not action.is_running(), timeout=2000)
+    qtbot.waitUntil(lambda: not action.is_running() and button.isEnabled(), timeout=2000)
     assert button.isEnabled()
     assert button.text() == "Laden"
     assert results == [True]

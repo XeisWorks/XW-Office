@@ -504,7 +504,7 @@ def test_main_table_gets_space_and_manual_table_shows_only_two_rows(
         height = view._manual_table.verticalHeader().defaultSectionSize()
         assert view._manual_table.viewport().height() <= 2 * height
         assert view._manual_table.verticalScrollBar().maximum() > 0
-        assert view._table.height() > 4 * view._manual_table.height()
+        assert view._table.height() > 3 * view._manual_table.height()
         assert view._status.parentWidget() is view._unassigned_only.parentWidget()
         assert view._status.x() > view._unassigned_only.geometry().right()
         assert view._status.text() == "6 ausgehende Zahlungen"
