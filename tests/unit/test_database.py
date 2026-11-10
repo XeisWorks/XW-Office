@@ -42,6 +42,8 @@ def test_ensure_core_tables_creates_missing_tables() -> None:
             "invoice_search_index",
             "pc_registry",
             "plc_shipment",
+            "plc_parcel_manifest",
+            "plc_tracking_event",
             "setting_kv",
             "tax_followup_dispatches",
         }

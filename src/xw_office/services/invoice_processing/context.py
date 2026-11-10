@@ -149,7 +149,10 @@ def normalize_invoice_positions(
 
         name = _text(raw.get("name") or part.get("name") or raw.get("text"))
         description = _text(raw.get("text") or part.get("text"))
-        quantity = decimal_value(raw.get("quantity") or raw.get("qty"), Decimal("1"))
+        raw_quantity = raw.get("quantity")
+        if raw_quantity is None or str(raw_quantity).strip() == "":
+            raw_quantity = raw.get("qty")
+        quantity = decimal_value(raw_quantity, Decimal("1"))
         position_number_raw = raw.get("positionNumber")
         try:
             position_number = int(position_number_raw) if position_number_raw is not None else index

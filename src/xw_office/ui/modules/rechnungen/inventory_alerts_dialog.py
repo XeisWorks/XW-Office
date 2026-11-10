@@ -137,6 +137,15 @@ class InventoryAlertsDialog(QDialog):
             result = self._tasks.create_and_send(detail.alert.id, mail_delivery=self._mail)
             if result.status == "sent":
                 QMessageBox.information(self, "Task erzeugen", "Task-Mail wurde an todo@xeisworks.at gesendet.")
+            elif result.status == "pending":
+                QMessageBox.information(self, "Task erzeugen", "Die Task-Mail wird bereits versendet.")
+            elif result.status == "unknown":
+                QMessageBox.warning(
+                    self,
+                    "Task erzeugen",
+                    "Der Versandstatus ist unklar. Bitte zuerst den Mailversand prüfen. "
+                    "Es wird keine weitere Mail automatisch versendet.",
+                )
             else:
                 QMessageBox.warning(self, "Task erzeugen", result.error or "Task-Mail konnte nicht gesendet werden.")
         except Exception as exc:  # noqa: BLE001

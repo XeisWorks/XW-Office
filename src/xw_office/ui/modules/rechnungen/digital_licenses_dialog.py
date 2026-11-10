@@ -40,6 +40,7 @@ class DigitalLicensesDialog(QDialog):
         self._action_worker: BackgroundWorker | None = None
         self._prepared_files: list[Path] = []
         self._draft_worker: BackgroundWorker | None = None
+        self._license_preparing = False
         self._build_ui()
         QTimer.singleShot(0, self._load_cases)
 
@@ -131,7 +132,7 @@ class DigitalLicensesDialog(QDialog):
 
     def _show_selected_case(self, _row: int) -> None:
         case = self._selected_case()
-        enabled = case is not None
+        enabled = case is not None and not self._license_preparing
         self._btn_pick_missing.setEnabled(enabled)
         self._btn_prepare.setEnabled(enabled)
         self._btn_done.setEnabled(enabled)
@@ -177,6 +178,10 @@ class DigitalLicensesDialog(QDialog):
         self._show_selected_case(self._list.currentRow())
 
     def _prepare_selected(self) -> None:
+        if self._license_preparing or (
+            self._action_worker is not None and self._action_worker.isRunning()
+        ):
+            return
         case = self._selected_case()
         if case is None:
             return
@@ -193,14 +198,12 @@ class DigitalLicensesDialog(QDialog):
         if self._draft_worker is not None and self._draft_worker.isRunning():
             return
         self._status.setText("Personalisierte PDFs werden erstellt...")
-        worker = BackgroundWorker(lambda: self._service.prepare_license_files(case))
-        worker.signals.result.connect(self._on_files_prepared)
-        worker.signals.error.connect(self._on_error)
-        worker.signals.finished.connect(lambda: setattr(self, "_draft_worker", None))
-        self._draft_worker = worker
-        worker.start()
+        self._start_draft_job(
+            lambda: self._service.prepare_license_files(case),
+            lambda payload: self._on_files_prepared(payload, case),
+        )
 
-    def _on_files_prepared(self, payload: object) -> None:
+    def _on_files_prepared(self, payload: object, case: DigitalLicenseCase) -> None:
         files = [Path(item) for item in payload] if isinstance(payload, list) else []
         if not files:
             self._on_error(RuntimeError("Keine Lizenz-PDF erzeugt"))
@@ -222,22 +225,39 @@ class DigitalLicensesDialog(QDialog):
         ) != QMessageBox.StandardButton.Yes:
             self._status.setText("PDF-Kontrolle zurueckgestellt – Fall bleibt offen.")
             return
-        case = self._selected_case()
-        if case is None:
-            return
         self._status.setText("Outlook-Entwurf wird gespeichert...")
-        worker = BackgroundWorker(lambda: self._service.create_outlook_draft(case, self._prepared_files))
-        worker.signals.result.connect(self._on_draft_created)
+        self._start_draft_job(
+            lambda: self._service.create_outlook_draft(case, files),
+            lambda payload: self._on_draft_created(payload, case),
+        )
+
+    def _start_draft_job(
+        self,
+        job: Callable[[], object],
+        on_result: Callable[[object], None],
+    ) -> None:
+        self._license_preparing = True
+        self._list.setEnabled(False)
+        self._btn_refresh.setEnabled(False)
+        self._show_selected_case(self._list.currentRow())
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(on_result)
         worker.signals.error.connect(self._on_error)
-        worker.signals.finished.connect(lambda: setattr(self, "_draft_worker", None))
+        worker.signals.finished.connect(lambda: self._on_draft_worker_finished(worker))
         self._draft_worker = worker
         worker.start()
 
-    def _on_draft_created(self, _payload: object) -> None:
-        case = self._selected_case()
-        if case is not None:
-            case.state = "DRAFT_READY"
-            self._btn_done.setEnabled(True)
+    def _on_draft_worker_finished(self, worker: BackgroundWorker) -> None:
+        if self._draft_worker is not worker:
+            return
+        self._draft_worker = None
+        self._license_preparing = False
+        self._list.setEnabled(True)
+        self._btn_refresh.setEnabled(True)
+        self._show_selected_case(self._list.currentRow())
+
+    def _on_draft_created(self, _payload: object, case: DigitalLicenseCase) -> None:
+        case.state = "DRAFT_READY"
         self._status.setText("Outlook-Entwurf gespeichert. Bitte in Outlook pruefen und senden.")
         QMessageBox.information(
             self,
@@ -246,6 +266,8 @@ class DigitalLicensesDialog(QDialog):
         )
 
     def _mark_selected_done(self) -> None:
+        if self._license_preparing:
+            return
         case = self._selected_case()
         if case is None:
             return
@@ -285,7 +307,9 @@ class DigitalLicensesDialog(QDialog):
         message: str,
         on_result: Callable[[object], None] | None = None,
     ) -> None:
-        if self._action_worker is not None and self._action_worker.isRunning():
+        if self._license_preparing or (
+            self._action_worker is not None and self._action_worker.isRunning()
+        ):
             return
         self._status.setText(message)
         self._action_worker = BackgroundWorker(job)  # type: ignore[arg-type]

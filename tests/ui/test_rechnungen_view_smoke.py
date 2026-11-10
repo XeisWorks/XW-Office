@@ -5,7 +5,9 @@ from threading import Event
 import types
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, Qt, QTimer
+from pytest import MonkeyPatch
+from pytestqt.qtbot import QtBot
 from PySide6.QtWidgets import QCheckBox, QDialog, QLabel, QMessageBox, QSpinBox, QToolButton
 
 from xw_office.bootstrap import register_default_services
@@ -944,6 +946,7 @@ def test_rechnungen_toolbar_controls_exist(qtbot: object) -> None:
         "PLC-Label",
         "Zolldokument",
         "Archivierte Packlisten",
+        "Paketinhalt & Tracking",
     ]
     assert not view._btn_print.icon().isNull()  # noqa: SLF001
     assert not view._btn_view.icon().isNull()  # noqa: SLF001
@@ -2893,3 +2896,97 @@ def test_custom_label_dialog_opens_even_when_print_status_is_unknown(qtbot: obje
     view._on_custom_label_clicked()  # noqa: SLF001
 
     assert called["count"] == 1
+
+def test_inventory_badge_load_keeps_gui_responsive_and_coalesces(
+    qtbot: QtBot, monkeypatch: MonkeyPatch,
+) -> None:
+    from xw_office.services.product_hub.inventory import InventoryV2Service
+
+    container, _service = _build_rechnungen_test_container()
+    entered, release = Event(), Event()
+    calls = []
+
+    class SlowInventory:
+        def list_open_alert_details(self) -> list[object]:
+            calls.append(1)
+            entered.set()
+            assert release.wait(3)
+            return [object(), object()]
+
+    container.register(InventoryV2Service, lambda _: SlowInventory())
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    # Construction and hidden widgets must not start recurring database work.
+    assert calls == []
+    assert not view._inventory_alert_timer.isActive()
+    heartbeat = []
+    try:
+        view._refresh_inventory_alert_count()
+        qtbot.waitUntil(entered.is_set)
+        view._refresh_inventory_alert_count()
+        QTimer.singleShot(0, lambda: heartbeat.append(True))
+        qtbot.waitUntil(lambda: bool(heartbeat))
+        assert calls == [1]
+        assert view._inventory_alert_worker in view._shutdown_workers()
+    finally:
+        release.set()
+        qtbot.waitUntil(lambda: view._inventory_alert_worker is None)
+    assert view._btn_inventory_alert.text() == 'LAGERALARME (2)'
+    view._on_inventory_alert_error(RuntimeError('DB unavailable'))
+    assert view._btn_inventory_alert.text() == 'LAGERALARME (?)'
+    assert 'DB unavailable' in view._btn_inventory_alert.toolTip()
+
+
+def test_old_sevdesk_worker_finish_does_not_clear_new_request(
+    qtbot: QtBot, monkeypatch: MonkeyPatch,
+) -> None:
+    from xw_office.services.invoice_processing.context import InvoiceWorkContext
+
+    container, service = _build_rechnungen_test_container()
+    entered = [Event(), Event()]
+    releases = [Event(), Event()]
+
+    def load(summary: InvoiceSummary, **kwargs: object) -> InvoiceWorkContext:
+        index = int(summary.id)
+        entered[index].set()
+        assert releases[index].wait(3)
+        return InvoiceWorkContext(summary=summary, origin='sevdesk_only')
+
+    monkeypatch.setattr(service, 'load_invoice_work_context', load, raising=False)
+    monkeypatch.setattr(service, 'load_invoice_piece_blocks', lambda _: [], raising=False)
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    old = new = None
+    try:
+        view._sevdesk_context_seq += 1
+        view._load_sevdesk_context(InvoiceSummary(id='0'), 1)
+        old = view._stuecke_worker
+        qtbot.waitUntil(entered[0].is_set)
+        view._sevdesk_context_seq += 1
+        view._load_sevdesk_context(InvoiceSummary(id='1'), 2)
+        new = view._stuecke_worker
+        qtbot.waitUntil(entered[1].is_set)
+        assert old in view._shutdown_workers()
+        assert new in view._shutdown_workers()
+        releases[0].set()
+        qtbot.waitUntil(lambda: old not in view._sevdesk_context_workers)
+        assert view._stuecke_worker is new
+    finally:
+        for release in releases:
+            release.set()
+        qtbot.waitUntil(lambda: not view._sevdesk_context_workers)
+    assert view._stuecke_worker is None
+
+def test_draft_preview_is_invalidated_when_order_number_changes(qtbot: QtBot) -> None:
+    dialog = _DraftInvoiceDialog()
+    qtbot.addWidget(dialog)
+    dialog._order_number.setText('12345')
+    dialog.set_preview_result('Preview for first order', ok=True)
+    assert dialog.preview_ok
+    dialog._order_number.setText('54321')
+    assert not dialog.preview_ok
+    dialog._accept_if_valid()
+    assert dialog.result() != QDialog.DialogCode.Accepted
+    dialog.set_preview_result('Preview for second order', ok=True)
+    dialog._accept_if_valid()
+    assert dialog.result() == QDialog.DialogCode.Accepted

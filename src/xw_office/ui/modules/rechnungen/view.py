@@ -700,6 +700,12 @@ class _DraftInvoiceDialog(QDialog):
         buttons.accepted.connect(self._accept_if_valid)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self._order_number.textChanged.connect(self._invalidate_preview)
+
+    def _invalidate_preview(self, _text: str) -> None:
+        self._preview_ok = False
+        self._status.setText("Eingabe geändert. Bitte Vorschau erneut laden.")
+        self._status.setStyleSheet("color: #b91c1c;")
 
     @property
     def wix_order_number(self) -> str:
@@ -1179,7 +1185,9 @@ class RechnungenView(QWidget):
         self._draft_product_worker: BackgroundWorker | None = None
         self._draft_preview_worker: BackgroundWorker | None = None
         self._mollie_badge_worker: BackgroundWorker | None = None
+        self._inventory_alert_worker: BackgroundWorker | None = None
         self._stuecke_worker: BackgroundWorker | None = None
+        self._sevdesk_context_workers: list[BackgroundWorker] = []
         self._sevdesk_context_seq = 0
         self._wix_meta_worker: BackgroundWorker | None = None
         self._wix_context_worker: BackgroundWorker | None = None
@@ -1436,8 +1444,6 @@ class RechnungenView(QWidget):
         )
         self._btn_inventory_alert.clicked.connect(self._on_inventory_alert_clicked)
         self._btn_inventory_alert.hide()
-        self._refresh_inventory_alert_count()
-        self._inventory_alert_timer.start()
         layout.addWidget(self._toolbar)
 
         self._search = SearchBar("Suchen…", debounce_ms=220, min_chars=2, max_suggestions=12)
@@ -1978,6 +1984,8 @@ class RechnungenView(QWidget):
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
+        self._refresh_inventory_alert_count()
+        self._inventory_alert_timer.start()
         if not self._printer_status_initialized:
             self._printer_status_initialized = True
             QTimer.singleShot(0, self._initialize_printer_status)
@@ -2006,6 +2014,7 @@ class RechnungenView(QWidget):
         super().hideEvent(event)
         self._post_load_prefetch_seq += 1
         self._mollie_timer.stop()
+        self._inventory_alert_timer.stop()
         self._stop_mollie_worker()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
@@ -2047,6 +2056,7 @@ class RechnungenView(QWidget):
         self._detail_context_seq += 1
         self._sevdesk_context_seq += 1
         self._mollie_timer.stop()
+        self._inventory_alert_timer.stop()
         self._wix_warm_timer.stop()
         self._wix_warm_queue.clear()
         self._wix_warm_inflight_refs.clear()
@@ -2074,6 +2084,7 @@ class RechnungenView(QWidget):
                 self._draft_product_worker,
                 self._draft_preview_worker,
                 self._mollie_badge_worker,
+                self._inventory_alert_worker,
                 self._stuecke_worker,
                 self._wix_meta_worker,
                 self._wix_context_worker,
@@ -2089,6 +2100,7 @@ class RechnungenView(QWidget):
                 self._product_print_worker,
                 self._redelivery_prepare_worker,
                 self._redelivery_apply_worker,
+                *self._sevdesk_context_workers,
             )
             if worker is not None
         )
@@ -2787,16 +2799,41 @@ class RechnungenView(QWidget):
         self.update_digital_licenses_alert_count(dlg.open_count())
 
     def _refresh_inventory_alert_count(self) -> None:
-        try:
+        if self._shutting_down:
+            return
+        if self._inventory_alert_worker is not None and self._inventory_alert_worker.isRunning():
+            return
+
+        def job() -> int:
             service = self._container.resolve(InventoryV2Service)
-            count = len(service.list_open_alert_details())
-        except Exception:
-            count = 0
+            return len(service.list_open_alert_details())
+
+        worker = BackgroundWorker(job)
+        self._inventory_alert_worker = worker
+        worker.signals.result.connect(self._on_inventory_alert_count)
+        worker.signals.error.connect(self._on_inventory_alert_error)
+        worker.signals.finished.connect(self._on_inventory_alert_finished)
+        worker.start()
+
+    def _on_inventory_alert_count(self, payload: object) -> None:
+        if not isinstance(payload, int):
+            return
+        count = payload
+        self._btn_inventory_alert.setToolTip("Aktuelle Lageralarme anzeigen")
         if count:
             self._btn_inventory_alert.setText(f"LAGERALARME ({count})")
             self._btn_inventory_alert.show()
         else:
             self._btn_inventory_alert.hide()
+
+    def _on_inventory_alert_error(self, exc: Exception) -> None:
+        logger.warning("Inventory alert count could not be loaded: %s", exc)
+        self._btn_inventory_alert.setText("LAGERALARME (?)")
+        self._btn_inventory_alert.setToolTip(f"Lageralarme konnten nicht geladen werden: {exc}")
+        self._btn_inventory_alert.show()
+
+    def _on_inventory_alert_finished(self) -> None:
+        self._inventory_alert_worker = None
 
     def _on_inventory_alert_clicked(self) -> None:
         try:
@@ -6337,10 +6374,21 @@ class RechnungenView(QWidget):
 
         worker = BackgroundWorker(job)
         worker.signals.result.connect(self._on_sevdesk_context_loaded)
-        worker.signals.error.connect(self._on_sevdesk_context_error)
-        worker.signals.finished.connect(lambda: setattr(self, "_stuecke_worker", None))
+        worker.signals.error.connect(
+            lambda exc: self._on_sevdesk_context_error(exc)
+            if context_seq == self._sevdesk_context_seq and not self._shutting_down
+            else None
+        )
+        worker.signals.finished.connect(lambda: self._on_sevdesk_context_finished(worker))
         self._stuecke_worker = worker
+        self._sevdesk_context_workers.append(worker)
         worker.start()
+
+    def _on_sevdesk_context_finished(self, worker: BackgroundWorker) -> None:
+        if worker in self._sevdesk_context_workers:
+            self._sevdesk_context_workers.remove(worker)
+        if self._stuecke_worker is worker:
+            self._stuecke_worker = None
 
     def _on_sevdesk_context_loaded(self, payload: object) -> None:
         data = payload if isinstance(payload, dict) else {}

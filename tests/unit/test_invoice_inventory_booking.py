@@ -8,6 +8,7 @@ import pytest
 
 from xw_office.models.base import Base
 from xw_office.models.inventory_document_booking import InventoryDocumentBooking
+from xw_office.models.product_hub import ProductVariant
 from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.services.product_hub.inventory import InventoryV2Service
@@ -15,6 +16,7 @@ from xw_office.services.product_hub.invoice_inventory import (
     InvoiceInventoryBookingService,
     InvoiceInventoryLine,
 )
+from xw_office.services.invoice_processing.context import normalize_invoice_positions
 
 
 def _factory() -> tuple[sessionmaker[Session], uuid.UUID]:
@@ -25,6 +27,54 @@ def _factory() -> tuple[sessionmaker[Session], uuid.UUID]:
         sku="XW-BOOKING", name="Booking test"
     )
     return factory, variant.id
+
+
+@pytest.mark.parametrize("quantity", ["0.5", "1.5", "2.9"])
+def test_fractional_product_quantity_stops_before_any_booking(quantity: str) -> None:
+    factory, _variant_id = _factory()
+    service = InvoiceInventoryBookingService(factory)
+    positions = normalize_invoice_positions(
+        [{"part": {"partNumber": "XW-BOOKING"}, "quantity": quantity}]
+    )
+    with pytest.raises(ValueError, match="Bruchmenge"):
+        service.validate_invoice_context(positions)
+    with pytest.raises(ValueError, match="Bruchmenge"):
+        service.apply_invoice_context(document_id="fractional", positions=positions)
+    with factory() as session:
+        assert session.query(InventoryDocumentBooking).count() == 0
+
+
+def test_unresolved_part_without_sku_is_not_silently_ignored() -> None:
+    factory, _variant_id = _factory()
+    service = InvoiceInventoryBookingService(factory)
+    positions = normalize_invoice_positions(
+        [{"part": {"id": "missing-part"}, "quantity": 1}]
+    )
+    with pytest.raises(ValueError, match="ohne SKU"):
+        service.validate_invoice_context(positions)
+
+
+def test_zero_quantity_does_not_require_a_physical_mapping() -> None:
+    factory, _variant_id = _factory()
+    service = InvoiceInventoryBookingService(factory)
+    positions = normalize_invoice_positions(
+        [{"part": {"id": "missing-part"}, "quantity": 0}]
+    )
+    assert service.apply_invoice_context(document_id="zero", positions=positions) == []
+
+
+def test_fractional_digital_position_does_not_require_stock_booking() -> None:
+    factory, variant_id = _factory()
+    with factory() as session:
+        variant = session.get(ProductVariant, variant_id)
+        assert variant is not None
+        variant.stock_enabled = False
+        session.commit()
+    service = InvoiceInventoryBookingService(factory)
+    positions = normalize_invoice_positions(
+        [{"part": {"partNumber": "XW-BOOKING"}, "quantity": "0.5"}]
+    )
+    assert service.apply_invoice_context(document_id="digital", positions=positions) == []
 
 
 def test_same_finalized_position_is_applied_only_once() -> None:

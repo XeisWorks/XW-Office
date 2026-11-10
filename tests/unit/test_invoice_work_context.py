@@ -1,11 +1,30 @@
 from decimal import Decimal
 
+import pytest
+
 from xw_office.services.invoice_processing.context import (
     address_lines_from_invoice,
     build_capabilities,
     normalize_invoice_positions,
 )
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
+
+
+@pytest.mark.parametrize("value", [0, 0.0, "0", Decimal("0")])
+def test_zero_quantity_does_not_become_one_printable_copy(value: object) -> None:
+    position, = normalize_invoice_positions(
+        [{"part": {"partNumber": "XW-1"}, "quantity": value, "qty": 9}]
+    )
+    assert position.quantity == Decimal("0")
+    assert position.printable is False
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_missing_quantity_uses_alternative_qty(value: object) -> None:
+    position, = normalize_invoice_positions(
+        [{"part": {"partNumber": "XW-1"}, "quantity": value, "qty": 2}]
+    )
+    assert position.quantity == Decimal("2")
 
 
 def test_manual_invoice_positions_classify_products_shipping_and_services() -> None:

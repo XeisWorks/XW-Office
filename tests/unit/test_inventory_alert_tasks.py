@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
+from typing import Any
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -10,6 +11,8 @@ from xw_office.models.base import Base
 from xw_office.models.product_hub import Product, ProductVariant
 from xw_office.models.product_hub_inventory import InventoryAlert, InventoryLocation, InventoryStock
 from xw_office.services.product_hub.inventory_alert_tasks import InventoryAlertTaskService
+from xw_office.models.inventory_alert_task import InventoryAlertTask
+import pytest
 
 
 class _Mail:
@@ -20,7 +23,7 @@ class _Mail:
     def plain_text_to_html(value: str) -> str:
         return value
 
-    def send_mail(self, **kwargs) -> None:
+    def send_mail(self, **kwargs: Any) -> None:
         self.sent.append(kwargs)
 
 
@@ -60,3 +63,49 @@ def test_task_mail_contains_inventory_facts_and_is_deduplicated() -> None:
     tasks = service.list_tasks(status="sent")
     assert len(tasks) == 1
     assert tasks[0].alert_id == alert_id
+
+
+def test_reentrant_caller_cannot_send_an_already_claimed_task() -> None:
+    factory, alert_id = _factory()
+    service = InventoryAlertTaskService(factory)
+
+    class ReentrantMail(_Mail):
+        def send_mail(self, **kwargs: Any) -> None:
+            result = service.create_and_send(alert_id, mail_delivery=self, explicit_resend=True)
+            assert result.status == "pending"
+            super().send_mail(**kwargs)
+
+    mail = ReentrantMail()
+    assert service.create_and_send(alert_id, mail_delivery=mail).status == "sent"
+    assert len(mail.sent) == 1
+
+
+def test_transport_timeout_is_unknown_and_is_not_blindly_retried() -> None:
+    factory, alert_id = _factory()
+    service = InventoryAlertTaskService(factory)
+
+    class TimeoutMail(_Mail):
+        def send_mail(self, **kwargs: Any) -> None:
+            super().send_mail(**kwargs)
+            raise TimeoutError("Graph response lost")
+
+    mail = TimeoutMail()
+    assert service.create_and_send(alert_id, mail_delivery=mail).status == "unknown"
+    assert service.create_and_send(alert_id, mail_delivery=mail).status == "unknown"
+    assert len(mail.sent) == 1
+
+
+@pytest.mark.parametrize("status", ["sent", "unknown", "failed"])
+def test_only_explicit_resend_can_reuse_a_completed_attempt(status: str) -> None:
+    factory, alert_id = _factory()
+    service = InventoryAlertTaskService(factory)
+    mail = _Mail()
+    service.create_and_send(alert_id, mail_delivery=mail)
+    with factory() as session:
+        task = session.query(InventoryAlertTask).one()
+        task.status = status
+        session.commit()
+    assert service.create_and_send(alert_id, mail_delivery=mail).status == status
+    assert len(mail.sent) == 1
+    assert service.create_and_send(alert_id, mail_delivery=mail, explicit_resend=True).status == "sent"
+    assert len(mail.sent) == 2

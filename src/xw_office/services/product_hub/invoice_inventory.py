@@ -97,9 +97,13 @@ class InvoiceInventoryBookingService:
         for position in positions:
             if getattr(position, "kind", "") != "product":
                 continue
+            quantity_is_integer = getattr(position, "quantity_is_integer", True)
             sku = str(getattr(position, "sku", "") or "").strip().upper()
             quantity = getattr(position, "quantity_int", 0)
-            if not sku or quantity <= 0:
+            if quantity <= 0 and quantity_is_integer:
+                continue
+            if not sku:
+                unresolved.append("<ohne SKU>")
                 continue
             resolved = self._products.resolve_sku(sku)
             if resolved is None or not resolved.variant.active:
@@ -107,6 +111,8 @@ class InvoiceInventoryBookingService:
                 continue
             if not resolved.variant.stock_enabled:
                 continue
+            if not quantity_is_integer:
+                raise ValueError("Physische Rechnungsposition enthält eine Bruchmenge")
             resolved_lines.append(
                 (
                     resolved,

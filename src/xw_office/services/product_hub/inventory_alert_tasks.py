@@ -61,8 +61,13 @@ class InventoryAlertTaskService:
                 .where(InventoryAlertTask.alert_id == alert_id)
                 .with_for_update()
             )
-            if existing is not None and existing.status == "sent" and not explicit_resend:
-                return self._result(existing)
+            if existing is not None:
+                # The row lock protects the durable claim, not the Graph call
+                # after commit. Never let another caller reuse an active claim.
+                if existing.status == "pending":
+                    return self._result(existing)
+                if existing.status in {"sent", "unknown", "failed"} and not explicit_resend:
+                    return self._result(existing)
             variant = session.get(ProductVariant, alert.variant_id)
             product = session.get(Product, variant.product_id) if variant is not None else None
             location = session.get(InventoryLocation, alert.location_id)
@@ -120,9 +125,11 @@ class InventoryAlertTaskService:
             with session_scope(self._session_factory) as session:
                 task = session.get(InventoryAlertTask, task_id)
                 if task is not None:
-                    task.status = "failed"
+                    # A transport exception cannot prove that Graph rejected
+                    # the message. Preserve uncertainty instead of blind retry.
+                    task.status = "unknown"
                     task.error = str(exc)[:2000]
-            return InventoryAlertTaskResult(alert_id, task_id, "failed", self.RECIPIENT, subject, body, str(exc))
+            return InventoryAlertTaskResult(alert_id, task_id, "unknown", self.RECIPIENT, subject, body, str(exc))
         with session_scope(self._session_factory) as session:
             task = session.get(InventoryAlertTask, task_id)
             if task is not None:
