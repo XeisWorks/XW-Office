@@ -97,6 +97,25 @@ def test_badges_result_hides_buttons_at_zero(qtbot: object) -> None:
     assert view._btn_lieferkorrektur_due_alert.isHidden()  # noqa: SLF001
 
 
+def test_badges_result_ignores_invalid_count_payloads(qtbot: object) -> None:
+    container = _build_container()
+    view = TagesgeschaeftView(container)
+    qtbot.addWidget(view)
+
+    view._on_badges_result(  # noqa: SLF001
+        {
+            "rechnungen": None,
+            "mollie": "unbekannt",
+            "gutscheine": -2,
+            "sendungen": [],
+            "lieferkorrektur_review": "3",
+        }
+    )
+
+    assert view._btn_mollie_alert.isHidden()  # noqa: SLF001
+    assert view._btn_sendungen_alert.text() == "OFFENE SENDUNGEN (3)"  # noqa: SLF001
+
+
 def test_close_defers_without_blocking_until_workers_finish(qtbot: object, monkeypatch) -> None:
     container = _build_container()
     view = TagesgeschaeftView(container)

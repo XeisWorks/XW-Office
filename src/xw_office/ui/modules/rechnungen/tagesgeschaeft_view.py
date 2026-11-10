@@ -77,6 +77,19 @@ _QUEUE_COLUMNS = ["Ref", "Kunde", "Betrag", "Status", "Hinweis", "Mark."]
 _BADGE_JOB_QUEUE = "badge-refresh"
 
 
+def _count_or_zero(value: object) -> int:
+    try:
+        return max(0, int(str(value)))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _string_items(value: object) -> list[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    return [text for item in value if (text := str(item).strip())]
+
+
 class _QueueTabView(QWidget):
     """Generic queue tab for Mollie/Gutscheine/Downloads/Refunds."""
 
@@ -789,17 +802,17 @@ class TagesgeschaeftView(QWidget):
 
     def _on_badges_result(self, result: object) -> None:
         counts = result if isinstance(result, dict) else {}
-        open_count = max(0, int(counts.get("rechnungen", 0)))
-        mollie_count = max(0, int(counts.get("mollie", 0)))
-        gutscheine_count = max(0, int(counts.get("gutscheine", 0)))
-        sendungen_count = max(0, int(counts.get("sendungen", 0))) + max(
-            0, int(counts.get("lieferkorrektur_review", 0))
+        open_count = _count_or_zero(counts.get("rechnungen", 0))
+        mollie_count = _count_or_zero(counts.get("mollie", 0))
+        gutscheine_count = _count_or_zero(counts.get("gutscheine", 0))
+        sendungen_count = _count_or_zero(counts.get("sendungen", 0)) + _count_or_zero(
+            counts.get("lieferkorrektur_review", 0)
         )
-        drucke_count = max(0, int(counts.get("drucke", 0)))
-        digital_licenses_count = max(0, int(counts.get("digital_licenses", 0)))
-        transfer_count = max(0, int(counts.get("transfer", counts.get("refunds", 0))))
+        drucke_count = _count_or_zero(counts.get("drucke", 0))
+        digital_licenses_count = _count_or_zero(counts.get("digital_licenses", 0))
+        transfer_count = _count_or_zero(counts.get("transfer", counts.get("refunds", 0)))
         transfer_login_required = bool(counts.get("transfer_login_required"))
-        self._b2b_credit_count = max(0, int(counts.get("b2b_credit", 0)))
+        self._b2b_credit_count = _count_or_zero(counts.get("b2b_credit", 0))
 
         self._sendungen_count = sendungen_count
         self._drucke_count = drucke_count
@@ -978,9 +991,16 @@ class TagesgeschaeftView(QWidget):
             return case, aftercare_service.get_items(case.id)
 
         def on_result(result: object) -> None:
-            if result is None:
+            if (
+                not isinstance(result, tuple)
+                or len(result) != 2
+                or not isinstance(result[0], CustomerAftercareCase)
+                or not isinstance(result[1], list)
+            ):
                 return
             case, items = result
+            if not all(isinstance(item, CustomerAftercareItem) for item in items):
+                return
             self._show_lieferkorrektur_review_popup(case, items)
 
         worker = BackgroundWorker(job)
@@ -1008,16 +1028,21 @@ class TagesgeschaeftView(QWidget):
             if outcome is None or outcome.action == "defer":
                 return
             if outcome.action == "confirm":
-                confirm_kwargs: dict[str, object] = {}
                 if outcome.selected_items:
-                    confirm_kwargs["selected_items"] = outcome.selected_items
-                aftercare_service.confirm_case(
-                    case.id,
-                    case_type=outcome.case_type,
-                    courtesy=outcome.courtesy,
-                    note=outcome.note,
-                    **confirm_kwargs,
-                )
+                    aftercare_service.confirm_case(
+                        case.id,
+                        case_type=outcome.case_type,
+                        courtesy=outcome.courtesy,
+                        note=outcome.note,
+                        selected_items=outcome.selected_items,
+                    )
+                else:
+                    aftercare_service.confirm_case(
+                        case.id,
+                        case_type=outcome.case_type,
+                        courtesy=outcome.courtesy,
+                        note=outcome.note,
+                    )
             elif outcome.action == "ignore":
                 aftercare_service.ignore_case(case.id)
 
@@ -1142,8 +1167,8 @@ class TagesgeschaeftView(QWidget):
         if self._start_abort_requested:
             self._pending_start_preflight = None
             self._set_start_running(False)
-            signals: AppSignals = self._container.resolve(AppSignals)
-            signals.status_message.emit("START gestoppt", 2500)
+            stop_signals: AppSignals = self._container.resolve(AppSignals)
+            stop_signals.status_message.emit("START gestoppt", 2500)
             return
         if not isinstance(result, StartPreflight):
             self._set_start_running(False)
@@ -1284,8 +1309,10 @@ class TagesgeschaeftView(QWidget):
                 service = self._container.resolve(B2bCreditService)
                 saved = 0
                 for payload in holds:
-                    hold = service.hold_from_dict(payload)
-                    service.save_plan(service.create_installment_plan(hold, accepted_on=date.today()))
+                    credit_hold = service.hold_from_dict(payload)
+                    service.save_plan(
+                        service.create_installment_plan(credit_hold, accepted_on=date.today())
+                    )
                     saved += 1
                 QMessageBox.information(
                     self,
@@ -1332,8 +1359,8 @@ class TagesgeschaeftView(QWidget):
         if self._start_abort_requested:
             self._pending_start_preflight = None
             self._set_start_running(False)
-            signals: AppSignals = self._container.resolve(AppSignals)
-            signals.status_message.emit("START gestoppt", 2500)
+            stop_signals: AppSignals = self._container.resolve(AppSignals)
+            stop_signals.status_message.emit("START gestoppt", 2500)
             return
         plan = result if isinstance(result, ProductPreflightPlan) else ProductPreflightPlan(issues=[], part_categories=[])
         preflight_elapsed_ms = int(
@@ -1453,11 +1480,9 @@ class TagesgeschaeftView(QWidget):
                         "Inventar wurde nicht aktualisiert, weil kein Druckplan vorlag."
                     )
                 else:
-                    finalized_ids = [
-                        str(value)
-                        for value in batch_result.get("stock_consumed_invoice_ids", [])
-                        if str(value or "").strip()
-                    ]
+                    finalized_ids = _string_items(
+                        batch_result.get("stock_consumed_invoice_ids", [])
+                    )
                     try:
                         inventory_report = inventory_service.execute_start_invoice_consumption(
                             preflight.invoice_requirements,
@@ -1509,22 +1534,21 @@ class TagesgeschaeftView(QWidget):
         if not isinstance(result, dict):
             return
         self._pending_start_preflight = None
-        batch = result.get("batch") if isinstance(result.get("batch"), dict) else result
+        batch: dict[str, object] = result
+        batch_payload = result.get("batch")
+        if isinstance(batch_payload, dict):
+            batch = batch_payload
         inventory_report = result.get("inventory_report")
         inventory_warning = str(result.get("inventory_warning") or "")
         product_apply = result.get("product_apply")
 
-        processed = int(batch.get("processed") or 0)
-        failures = int(batch.get("failures") or 0)
-        successful = int(batch.get("successful") or max(0, processed - failures))
+        processed = _count_or_zero(batch.get("processed"))
+        failures = _count_or_zero(batch.get("failures"))
+        successful = _count_or_zero(batch.get("successful")) or max(0, processed - failures)
         full_mode = bool(batch.get("full_mode"))
         print_products = bool(batch.get("print_products"))
         aborted = bool(batch.get("aborted"))
-        pending_license_ids = [
-            str(item).strip()
-            for item in (batch.get("pending_digital_license_case_ids") or [])
-            if str(item).strip()
-        ]
+        pending_license_ids = _string_items(batch.get("pending_digital_license_case_ids", []))
         mode_label = StartMode.INVOICES_AND_PRINT.value if full_mode else StartMode.INVOICES_ONLY.value
 
         signals: AppSignals = self._container.resolve(AppSignals)
@@ -1587,16 +1611,8 @@ class TagesgeschaeftView(QWidget):
                     failures=failures,
                     selected_only=self._start_selected_only,
                     mode_label=mode_label,
-                    invoice_print_ids=[
-                        str(item).strip()
-                        for item in (batch.get("invoice_print_ids") or [])
-                        if str(item).strip()
-                    ],
-                    label_print_ids=[
-                        str(item).strip()
-                        for item in (batch.get("label_print_ids") or [])
-                        if str(item).strip()
-                    ],
+                    invoice_print_ids=_string_items(batch.get("invoice_print_ids", [])),
+                    label_print_ids=_string_items(batch.get("label_print_ids", [])),
                 )
             self._rechnungen_view._reload_first_page(preserve_print_tab=True)
         self._refresh_badges()

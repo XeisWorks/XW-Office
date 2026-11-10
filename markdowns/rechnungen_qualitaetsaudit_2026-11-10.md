@@ -149,7 +149,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F17 | P2 | TEILWEISE | Alarmdetail-Laden, Schwellenwertspeichern und Task-Mail laufen asynchron. Refund-Liste, Mailvorbereitung/-versand und PDF-Abruf, OPEN-PRINTS-Anhaenge/Erledigen, Ueberweisungs-PDF sowie PLC-Trackingimport und Paketcode-Zuordnung nutzen Worker. Due-/Wix-/Inbox-Pruefungen und Nachbetreuungs-Badgezaehler laufen bereits im koaleszierten BackgroundWorker von `TagesgeschaeftView._refresh_badges`; auch der Sendungsdialog verwendet den gecachten Zaehler und aktualisiert danach asynchron. Weitere UI-I/O-Pfade bleiben zu pruefen. | Eventloop-Heartbeats mit blockierten Fakes fuer Refunds, OPEN-PRINTS, Ueberweisungs-PDF und PLC-Trackingaktionen; Regression verbietet den synchronen Nachbetreuungs-DB-Zugriff nach Sendungsdialog; Fallback-/Badge-Tests |
 | F18 | P2 | TEILWEISE | Sendungen-, Ueberweisungs-, Nachbetreuungs- und OPEN-PRINTS-Dialoge verwerfen spaete UI-Ergebnisse. Auch der Zusatzrechnungsdialog wartet beim Schliessen nicht mehr auf Kontakt-Reads; bei laufender Rechnungserstellung bleibt er fuer Ergebnisfeedback offen. `TagesgeschaeftView` deferiert Close jetzt ereignisgesteuert, statt bis zu fuenf Sekunden im GUI-Thread auf Worker zu warten. In `ui/modules/rechnungen` gibt es keine direkten `.wait()`-Aufrufe mehr; weitere spaete Callback-/Close-Policies bleiben zu auditieren. | Blockierte Fake-Worker: Aftercare-Dialog bleibt reaktionsfaehig, ignoriert spaete Leseergebnisse und erhaelt Write-Feedback; Tagesgeschaeft-Close-Heartbeat bleibt reaktionsfaehig und schliesst nach Worker-Ende |
 | F19 | P2 | TEILWEISE | Invoice-PDFs verwenden jetzt einen 64-MiB-LRU und pruefen die erwartete Rechnungsnummer auch bei Cache-Hits; ein abweichendes PDF wird verworfen und neu geladen. Header-/WorkContext-Caches haben eine 30-Sekunden-TTL; gemeinsame Inhaltsrevisionen und gebuendelte Produktauflosung bleiben offen. | Regression: Header-/WorkContext-TTL erzwingt erneuten Fetch; Warm-Cache bleibt innerhalb der Frist; PDF-Nummernpruefung und Byte-Limit |
-| F20 | P2 | TEILWEISE | pytest laedt keine lokale dotenv-Konfiguration; sensible Umgebungsvariablen werden entfernt und externe Socket-Verbindungen blockiert (Loopback bleibt erlaubt). `InvoiceProcessingService` ist mypy-fehlerfrei; weitere Paketbereinigung und Controller-Extraktion bleiben offen. | Gesamtsuite ohne lokale Credentials/ausgehende Verbindungen; mypy-Baseline dokumentiert |
+| F20 | P2 | TEILWEISE | pytest laedt keine lokale dotenv-Konfiguration; sensible Umgebungsvariablen werden entfernt und externe Socket-Verbindungen blockiert (Loopback bleibt erlaubt). `InvoiceProcessingService` und `tagesgeschaeft_view.py` sind jeweils mit `--follow-imports=silent` mypy-fehlerfrei; weitere Paketbereinigung und Controller-Extraktion bleiben offen. | Gesamtsuite ohne lokale Credentials/ausgehende Verbindungen; mypy-Baseline dokumentiert |
 | F21 | P1 | ERLEDIGT | `view.py::_DraftInvoiceDialog`: nach erfolgreicher Vorschau konnte die Ordernummer ge?ndert und weiterhin best?tigt werden. Jede Eingabe?nderung invalidiert nun die Vorschaufreigabe. | Qt-Test: Vorschau A ? Eingabe B bleibt gesperrt, erst Vorschau B erlaubt Best?tigen |
 
 ## 5. Performance-Audit
@@ -388,8 +388,12 @@ Netzwerkanfrage aus. Warm-Cache spart Requests nachweisbar per Fake-Zähler.
 **Teilweise umgesetzt:** `tests/conftest.py` deaktiviert dotenv-Laden, entfernt
 relevante Credential-/Datenbank-Variablen und sperrt externe Socket-Verbindungen.
 Lokale Loopback-Testserver bleiben erlaubt. `services/invoice_processing/service.py`
-ist jetzt mit `--follow-imports=silent` mypy-fehlerfrei; Repository-weite Mypy-Baseline,
-weitere betroffene Module und Controller-Extraktion sind weiterhin offen.
+und `ui/modules/rechnungen/tagesgeschaeft_view.py` sind jetzt einzeln mit
+`--follow-imports=silent` mypy-fehlerfrei. Bei der zweiten Datei wurden 19
+Typfehler an optionalen/ungeprüften Worker-Payloads behoben; fehlerhafte Badge-Zähler
+werden als null behandelt, und unerwartete Popup-/Listenpayloads werden verworfen.
+Repository-weite Mypy-Baseline, weitere betroffene Module und Controller-Extraktion
+sind weiterhin offen.
 
 Testprozess von lokalen `.env`-/Credentials isolieren und echte externe
 Verbindungen standardmäßig sperren; lokale Testclient-Verbindungen zulassen.
@@ -443,7 +447,7 @@ vorhandene PLC-Funktion angepasst (F08).
 
 ### Tatsächliche Prüfergebnisse
 
-Aktueller Gesamtlauf nach den letzten Aenderungen: **2.083 bestanden, 1 Warnung, 0 fehlgeschlagen in 143,74 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
+Aktueller Gesamtlauf nach den letzten Aenderungen: **2.084 bestanden, 1 Warnung, 0 fehlgeschlagen in 155,12 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
 
 Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
 - Erster Gesamtlauf: **1.979 bestanden, 4 fehlgeschlagen**, 138,53 s.
@@ -494,6 +498,7 @@ Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
   Badge-Regression: **8 Tests bestanden**, einschliesslich des asynchronen
   Nachbetreuungs-Refreshs nach dem Sendungsdialog. Gesamtsuite danach **2.080 bestanden**.
 - AP07 Cache-TTL: zwei neue InvoiceService-Regressionen belegen Warm-Cache innerhalb der Frist und erneuten Header-/Positionsabruf nach Ablauf; Ruff und mypy fuer `service.py` gruen. Gesamtsuite danach **2.083 bestanden**.
+- AP08 Worker-Payload-Typen: `tagesgeschaeft_view.py` mypy von 19 Fehlern auf 0 bereinigt; ungültige Badge-Zähler und asynchrone Listen-/Popup-Payloads werden defensiv geprüft. Ruff fuer Produktions- und Testdatei gruen; Badge-/Aftercare-UI **9 bestanden**; Gesamtsuite danach **2.084 bestanden, 1 bestehende Starlette/httpx-Deprecation-Warnung**.
 - F12 Einzelproduktdruck: Rechnungsansicht **83 Tests bestanden**; paralleler Druck
   verschiedener SKUs bleibt erlaubt, zweiter aktiver Auftrag derselben SKU wird
   verworfen, und die Sperre faellt nach Abschluss weg. Gesamtsuite danach **2.081 bestanden**.
