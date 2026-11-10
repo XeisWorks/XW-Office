@@ -2416,6 +2416,45 @@ def test_rechnungen_caches_stale_wix_context_result(qtbot: object) -> None:
     assert cached["meta"]["wix_customer_email"] == "kunde@example.test"
 
 
+def test_rechnungen_falls_back_to_sevdesk_when_wix_reference_is_not_found(
+    qtbot: object,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    view = RechnungenView(_build_container())
+    qtbot.addWidget(view)
+    summary = InvoiceSummary.model_validate(
+        {
+            "id": "manual-reference",
+            "invoiceNumber": "RE-MANUAL-1",
+            "status": 100,
+            "order_reference": "54321",
+        }
+    )
+    fallback_calls: list[InvoiceSummary] = []
+    monkeypatch.setattr(view, "_selected_summary", lambda: summary)
+    monkeypatch.setattr(
+        view,
+        "_load_sevdesk_context",
+        lambda invoice, _seq: fallback_calls.append(invoice),
+    )
+    view._wix_context_seq = 3  # noqa: SLF001
+
+    view._on_wix_context_loaded(  # noqa: SLF001
+        {
+            "seq": 3,
+            "__requested_ref": "54321",
+            "status": "",
+            "meta": {},
+            "items": [],
+        }
+    )
+
+    assert fallback_calls == [summary]
+    cached = view._get_cached_wix_context("54321")  # noqa: SLF001
+    assert cached is not None
+    assert cached["status"] == "Wix-Order nicht gefunden"
+
+
 def test_rechnungen_applies_persistent_wix_cache_before_background_load(
     qtbot: object,
     monkeypatch,

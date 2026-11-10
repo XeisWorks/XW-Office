@@ -6334,11 +6334,24 @@ class RechnungenView(QWidget):
             return
         self._prefill_detail_from_invoice_cache(summary)
         if summary.order_reference:
-            has_memory_context = self._get_cached_wix_context(summary.order_reference) is not None
+            cached_context = self._get_cached_wix_context(summary.order_reference)
+            has_memory_context = cached_context is not None
+            cached_status = str((cached_context or {}).get("status") or "").strip()
+            if cached_status:
+                self._reset_wix_meta(cached_status)
+                self._load_sevdesk_context(summary, seq)
+                self._start_next_wix_warm_batch()
+                return
             if has_memory_context:
                 self._load_wix_context(summary.order_reference, show_loading=False)
             else:
                 has_persistent_context = self._apply_cached_wix_context(summary.order_reference)
+                cached_context = self._get_cached_wix_context(summary.order_reference)
+                cached_status = str((cached_context or {}).get("status") or "").strip()
+                if has_persistent_context and cached_status:
+                    self._load_sevdesk_context(summary, seq)
+                    self._start_next_wix_warm_batch()
+                    return
                 has_complete_context = self._get_cached_wix_context(summary.order_reference) is not None
                 if not has_complete_context:
                     self._load_wix_context(
@@ -6411,6 +6424,19 @@ class RechnungenView(QWidget):
             )
             self._dl_order_ref.setText("Keine externe Bestellung")
         self._on_stuecke_loaded({"__requested_ref": "", "items": data.get("items") or []})
+        warnings = (
+            [
+                f"{position.name} ({position.quantity}): {', '.join(position.warnings)}"
+                for position in context.positions
+                if position.warnings
+            ]
+            if isinstance(context, InvoiceWorkContext)
+            else []
+        )
+        if warnings:
+            self._stuecke_hint.setText("sevDesk-Positionen mit Kl\u00e4rbedarf:\n" + "\n".join(warnings))
+            self._stuecke_hint.show()
+            self._gb_stuecke.show()
         self._update_plc_controls()
 
     def _on_sevdesk_context_error(self, exc: Exception) -> None:
@@ -6720,7 +6746,7 @@ class RechnungenView(QWidget):
             key="selected-wix-context",
             fn=job,
             on_result=self._on_wix_context_loaded,
-            on_error=self._on_wix_context_error,
+            on_error=lambda exc: self._on_wix_context_error(exc, ref, seq),
             on_finished=self._on_wix_context_finished,
             owner=self,
             replace="cancel_previous",
@@ -6784,18 +6810,48 @@ class RechnungenView(QWidget):
             self._stuecke_hint.setText(status)
             self._stuecke_hint.show()
             self._gb_stuecke.show()
+            if selected is not None:
+                self._load_sevdesk_context(selected, self._detail_context_seq)
+            return
+
+        if not meta:
+            not_found = "Wix-Order nicht gefunden; sevDesk-Positionen werden verwendet"
+            self._put_cached_wix_context(
+                requested_ref,
+                status="Wix-Order nicht gefunden",
+                meta={},
+                items=[],
+            )
+            self._reset_wix_meta(not_found)
+            if selected is not None:
+                self._load_sevdesk_context(selected, self._detail_context_seq)
             return
 
         self._on_wix_meta_loaded({**meta, "__requested_ref": requested_ref})
         self._on_stuecke_loaded({"__requested_ref": requested_ref, "items": items})
 
-    def _on_wix_context_error(self, exc: Exception) -> None:
+    def _on_wix_context_error(
+        self,
+        exc: Exception,
+        order_reference: str = "",
+        seq: int = 0,
+    ) -> None:
+        if seq and seq != self._wix_context_seq:
+            return
+        selected = self._selected_summary()
+        if (
+            order_reference
+            and (selected is None or selected.order_reference.strip() != order_reference)
+        ):
+            return
         if not self._current_shipping_lines():
             self._shipping_status.setText(f"Wix-Fehler: {exc}")
         self._reset_stuecke()
         self._stuecke_hint.setText(f"Fehler: {exc}")
         self._stuecke_hint.show()
         self._gb_stuecke.show()
+        if selected is not None:
+            self._load_sevdesk_context(selected, self._detail_context_seq)
 
     def _on_wix_context_finished(self) -> None:
         if self._selected_wix_started_at:

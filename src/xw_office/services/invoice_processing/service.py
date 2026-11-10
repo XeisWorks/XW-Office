@@ -1933,7 +1933,7 @@ class InvoiceProcessingService:
             detail = context.positions_error or "Positionsdaten sind nicht vollständig geladen"
             raise RuntimeError(f"Rechnungspositionen für {summary.invoice_number or summary.id} fehlen: {detail}")
         printable_positions = [
-            position for position in context.positions if position.kind == "product"
+            position for position in context.positions if position.printable
         ]
         if self._print_decision is not None:
             builder = getattr(self._print_decision, "get_piece_blocks_from_invoice_positions", None)

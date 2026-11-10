@@ -1463,6 +1463,34 @@ def test_header_only_context_does_not_satisfy_full_context_load() -> None:
     assert client.position_fetch_calls == [summary.id]
 
 
+def test_piece_blocks_exclude_fractional_lines_and_keep_context_warnings() -> None:
+    summary = InvoiceSummary(id="piece-integrity", invoiceNumber="RE-PIECE-1")
+    client = _InvoiceClientStub([summary])
+    client.invoice_positions[summary.id] = [
+        {
+            "id": "integer-line",
+            "positionNumber": 1,
+            "quantity": "2",
+            "part": {"id": "part-1", "partNumber": "XW-010", "name": "Print"},
+        },
+        {
+            "id": "fractional-line",
+            "positionNumber": 2,
+            "quantity": "1.5",
+            "part": {"id": "part-2", "partNumber": "XW-020", "name": "Fractional"},
+        },
+        {"id": "text-line", "positionNumber": 3, "quantity": "1", "text": "Freitext"},
+    ]
+    service = InvoiceProcessingService(AppConfig(), client, _RepoStub({}))  # type: ignore[arg-type]
+
+    blocks = service.load_invoice_piece_blocks(summary)
+    context = service.load_invoice_work_context(summary)
+
+    assert [(block.sku, block.qty_needed) for block in blocks] == [("XW-010", 2)]
+    assert any("Bruchmenge" in warning for warning in context.warnings)
+    assert any("Keine physische Produktposition" in warning for warning in context.warnings)
+
+
 def test_send_invoice_mail_skips_when_sevdesk_invoice_already_sent() -> None:
     summary = InvoiceSummary(id="13", invoiceNumber="RE-TEST-13", order_reference="")
     client = _InvoiceClientStub([summary])
