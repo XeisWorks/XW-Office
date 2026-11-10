@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import re
 import time
-from typing import Iterable
+from typing import Any, Iterable
 
 DEFAULT_PLC_IMPORT_DIR = r"C:\ondot\ShipmentImport"
 DEFAULT_TEST_PLC_IMPORT_DIR = r"C:\ondot\ShipmentImport_TEST"
@@ -99,9 +99,9 @@ def build_postdefaultport_lines(
     *,
     product_id: str,
     address: ShipmentAddress,
-    parcels: list[dict],
-    metadata: dict | None = None,
-    articles: list[dict] | None = None,
+    parcels: list[dict[str, Any]],
+    metadata: dict[str, Any] | None = None,
+    articles: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     meta = metadata or {}
     delimiter = config.delimiter or "|"

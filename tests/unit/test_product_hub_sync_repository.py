@@ -53,10 +53,14 @@ def test_claim_outbox_events_marks_claimed_and_respects_available_at(
 ) -> None:
     now = datetime.datetime.now(datetime.timezone.utc)
     with session_factory() as session:
-        append_outbox_event(
+        event = append_outbox_event(
             session, aggregate_type="product", aggregate_id=uuid.uuid4(),
             event_type="product.updated", payload={},
         )
+        # SQLite's CURRENT_TIMESTAMP can land in the next second after ``now`` was
+        # captured above. Set the ready time explicitly so this test does not depend
+        # on whether the insert crosses a wall-clock second boundary.
+        event.available_at = now
         session.commit()
 
     claimed = repo.claim_outbox_events(limit=10, now=now)
