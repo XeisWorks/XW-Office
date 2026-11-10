@@ -63,6 +63,10 @@ except Exception:  # pragma: no cover - optional at import time
 logger = logging.getLogger(__name__)
 _INVOICE_PDF_CACHE_MAX_BYTES = 64 * 1024 * 1024
 _INVOICE_CONTEXT_CACHE_MAX_ENTRIES = 256
+_INVENTORY_BOOKING_WARNING_PREFIXES = (
+    "START-Lagerbuchung fehlgeschlagen:",
+    "Product-Hub-Bestandsbuchung fehlgeschlagen:",
+)
 _INVOICE_DETAIL_CACHE_TTL_SECONDS = 30.0
 _INVOICE_WORK_CONTEXT_CACHE_TTL_SECONDS = 30.0
 
@@ -2192,6 +2196,7 @@ class InvoiceProcessingService:
                 flags.last_error
                 or not flags.mail_sent
                 or (flags.payment_applicable and not flags.payment_booked)
+                or self._inventory_booking_retry_pending(flags.last_warning)
             )
         ]
         stale_count = sum(
@@ -2257,6 +2262,7 @@ class InvoiceProcessingService:
                     or not flags.mail_sent
                     or (flags.payment_applicable and not flags.payment_booked)
                     or (flags.wix_applicable and not flags.wix_fulfilled)
+                    or self._inventory_booking_retry_pending(flags.last_warning)
                 )
             if needs_work:
                 resumable.append((summary, delivery_kind))
@@ -2342,6 +2348,8 @@ class InvoiceProcessingService:
                             exc,
                             exc_info=True,
                         )
+                if not inventory_warning and self._inventory_booking_retry_pending(flags.last_warning):
+                    flags = persist(summary, self._next_flags(flags, last_warning=""))
                 if not flags.invoice_printed:
                     flags = persist(
                         summary,
@@ -2564,6 +2572,14 @@ class InvoiceProcessingService:
             wix_applicable=stamped.wix_applicable,
             mail_applicable=stamped.mail_applicable,
         )
+
+    def _inventory_booking_retry_pending(self, message: str) -> bool:
+        warning = str(message or "")
+        if warning.startswith(_INVENTORY_BOOKING_WARNING_PREFIXES[0]):
+            return self._inventory is not None
+        if warning.startswith(_INVENTORY_BOOKING_WARNING_PREFIXES[1]):
+            return self._invoice_inventory is not None
+        return False
 
     def _run_finalize_step(
         self,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -1360,6 +1361,80 @@ def test_start_preserves_payment_warning_after_later_successful_steps() -> None:
     assert flags.mail_sent is True
     assert flags.payment_booked is False
     assert "Payment-Status nicht buchbar (NOT_PAID)" in flags.payment_warning
+
+
+def test_start_resume_retries_stock_warning_after_other_steps_completed() -> None:
+    summary = InvoiceSummary(
+        id="stock-resume-1",
+        invoiceNumber="RE-STOCK-RESUME",
+        status_code=1000,
+        order_reference="20528",
+    )
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads[summary.id] = {
+        "id": summary.id,
+        "invoiceNumber": summary.invoice_number,
+        "status": 1000,
+        "customerInternalNote": summary.order_reference,
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+    wix = _WixOrdersStub()
+    repo = _RepoStub({})
+
+    class StockBooking:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def apply_invoice_context(self, **_kwargs: object) -> None:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("temporary database outage")
+
+    stock = StockBooking()
+    service = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        repo,  # type: ignore[arg-type]
+        wix,  # type: ignore[arg-type]
+        _MailServiceStub(),  # type: ignore[arg-type]
+        invoice_inventory=stock,  # type: ignore[arg-type]
+    )
+    service.write_fulfillment_flags(
+        summary.id,
+        FulfillmentFlags(
+            invoice_printed=True,
+            label_printed=True,
+            mail_sent=True,
+            payment_applicable=True,
+            payment_booked=True,
+            wix_applicable=True,
+            wix_fulfilled=True,
+            last_run_iso=datetime.now(timezone.utc).isoformat(),
+            last_warning="Product-Hub-Bestandsbuchung fehlgeschlagen: temporary outage",
+        ),
+    )
+    assert service.read_fulfillment_flags(summary.id).last_warning.startswith(
+        "Product-Hub-Bestandsbuchung fehlgeschlagen:"
+    )
+    assert service._inventory_booking_retry_pending(  # noqa: SLF001
+        service.read_fulfillment_flags(summary.id).last_warning
+    )
+
+    first = service._resume_incomplete_fulfillment(  # noqa: SLF001
+        should_abort=None, progress_callback=None, mail_recipient_override=None
+    )
+    assert first["processed"] == 1
+    assert stock.calls == 1
+    assert "Product-Hub-Bestandsbuchung fehlgeschlagen" in service.read_fulfillment_flags(
+        summary.id
+    ).last_warning
+
+    second = service._resume_incomplete_fulfillment(  # noqa: SLF001
+        should_abort=None, progress_callback=None, mail_recipient_override=None
+    )
+    assert second["processed"] == 1
+    assert stock.calls == 2
+    assert service.read_fulfillment_flags(summary.id).last_warning == ""
 
 
 def test_inventory_requirements_use_only_requested_invoice_ids() -> None:
