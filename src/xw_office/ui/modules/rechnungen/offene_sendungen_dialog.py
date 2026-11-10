@@ -203,7 +203,6 @@ class OffeneSendungenDialog(QDialog):
         self._closing = False
         self._load_seq = 0
         self._detail_seq = 0
-        self._delivery_pdf_by_case: dict[str, Path] = {}
         self._recipient_names: dict[str, str] = {}
         self._silent_refresh_scheduled = False
         self._silent_refresh_pending = False
@@ -767,17 +766,6 @@ class OffeneSendungenDialog(QDialog):
         value = index.data(Qt.ItemDataRole.DisplayRole) if index.isValid() else ""
         return str(value or "").strip()
 
-    def _save_current_manual_fields(self) -> None:
-        case = self._current_case()
-        if case is None:
-            return
-        self._service.save_manual_fields(
-            case.id,
-            address_lines=self._address_lines(),
-            products=self._products_from_table(),
-            manual_text=self._manual_text.toPlainText(),
-        )
-
     def _print_label(self) -> None:
         case = self._current_case()
         if case is None:
@@ -813,19 +801,6 @@ class OffeneSendungenDialog(QDialog):
 
     def _on_label_printed(self, _payload: object) -> None:
         QMessageBox.information(self, "Label", "Label erfolgreich an Drucker gesendet.")
-
-    def _create_delivery_note(self) -> Path:
-        case = self._current_case()
-        if case is None:
-            raise RuntimeError("Keine Sendung ausgewaehlt")
-        path = self._service.generate_delivery_note_pdf(
-            case.id,
-            address_lines=self._address_lines(),
-            products=self._products_from_table(),
-            short_note=self._manual_text.toPlainText(),
-        )
-        self._delivery_pdf_by_case[case.id] = path
-        return path
 
     def _show_delivery_note(self) -> None:
         request = self._delivery_note_request()
