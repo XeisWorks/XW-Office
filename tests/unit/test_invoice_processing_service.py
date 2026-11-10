@@ -643,11 +643,14 @@ def test_finalize_refreshes_invoice_number_before_mail_subject() -> None:
     svc = InvoiceProcessingService(  # type: ignore[arg-type]
         AppConfig(), client, repo, None, _MailServiceStub()
     )
-    svc._invoice_detail_cache[summary.id] = {  # noqa: SLF001
-        "id": summary.id,
-        "header": "Rechnung",
-        "contact": {"emails": [{"value": "max@example.test"}]},
-    }
+    svc._put_invoice_detail_cache(  # noqa: SLF001
+        summary.id,
+        {
+            "id": summary.id,
+            "header": "Rechnung",
+            "contact": {"emails": [{"value": "max@example.test"}]},
+        },
+    )
 
     svc._run_finalize_step(  # noqa: SLF001
         summary,
@@ -1461,6 +1464,55 @@ def test_header_only_context_does_not_satisfy_full_context_load() -> None:
 
     assert full.positions_loaded is True
     assert client.position_fetch_calls == [summary.id]
+
+
+def test_invoice_header_cache_expires_and_refetches_remote_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import xw_office.services.invoice_processing.service as invoice_service_module
+
+    summary = InvoiceSummary(id="header-ttl", invoiceNumber="RE-HEADER-TTL")
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads[summary.id] = {"id": summary.id, "name": "Old Name"}
+    service = InvoiceProcessingService(AppConfig(), client, _RepoStub({}))  # type: ignore[arg-type]
+    monkeypatch.setattr(invoice_service_module, "_INVOICE_DETAIL_CACHE_TTL_SECONDS", 5.0)
+
+    assert service._fetch_invoice_detail(summary.id)["name"] == "Old Name"  # noqa: SLF001
+    client.invoice_payloads[summary.id] = {"id": summary.id, "name": "Updated Name"}
+    assert service._fetch_invoice_detail(summary.id)["name"] == "Old Name"  # noqa: SLF001
+    service._invoice_detail_cache_updated_at[summary.id] -= 5.01  # noqa: SLF001
+
+    refreshed = service._fetch_invoice_detail(summary.id)  # noqa: SLF001
+
+    assert refreshed["name"] == "Updated Name"
+    assert client.invoice_fetch_calls == 2
+
+
+def test_work_context_cache_expires_and_reloads_positions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import xw_office.services.invoice_processing.service as invoice_service_module
+
+    summary = InvoiceSummary(id="work-context-ttl", invoiceNumber="RE-CONTEXT-TTL")
+    client = _InvoiceClientStub([summary])
+    service = InvoiceProcessingService(AppConfig(), client, _RepoStub({}))  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        invoice_service_module, "_INVOICE_WORK_CONTEXT_CACHE_TTL_SECONDS", 5.0
+    )
+    monkeypatch.setattr(invoice_service_module, "_INVOICE_DETAIL_CACHE_TTL_SECONDS", 5.0)
+
+    first = service.load_invoice_work_context(summary, load_positions=True)
+    assert service.load_invoice_work_context(summary, load_positions=True) is first
+    assert client.position_fetch_calls == [summary.id]
+    service._invoice_work_context_cache_updated_at[summary.id] -= 5.01  # noqa: SLF001
+    service._invoice_detail_cache_updated_at[summary.id] -= 5.01  # noqa: SLF001
+
+    assert service.get_cached_invoice_work_context(summary) is None
+    refreshed = service.load_invoice_work_context(summary, load_positions=True)
+
+    assert refreshed.positions_loaded is True
+    assert client.position_fetch_calls == [summary.id, summary.id]
+    assert client.invoice_fetch_calls == 2
 
 
 def test_piece_blocks_exclude_fractional_lines_and_keep_context_warnings() -> None:

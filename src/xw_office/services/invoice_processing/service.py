@@ -63,6 +63,8 @@ except Exception:  # pragma: no cover - optional at import time
 logger = logging.getLogger(__name__)
 _INVOICE_PDF_CACHE_MAX_BYTES = 64 * 1024 * 1024
 _INVOICE_CONTEXT_CACHE_MAX_ENTRIES = 256
+_INVOICE_DETAIL_CACHE_TTL_SECONDS = 30.0
+_INVOICE_WORK_CONTEXT_CACHE_TTL_SECONDS = 30.0
 
 PAYMENT_PROVIDER_ACCOUNT_NAMES = {
     "stripe": "Stripe",
@@ -304,6 +306,7 @@ class InvoiceProcessingService:
         self._invoice_pdf_cache: OrderedDict[str, bytes] = OrderedDict()
         self._invoice_pdf_cache_bytes = 0
         self._invoice_detail_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._invoice_detail_cache_updated_at: dict[str, float] = {}
         self._wix_address_cache: dict[str, list[str]] = {}
         self._wix_digital_cache: dict[str, bool] = {}
         self._wix_order_summary_cache: dict[str, dict[str, str]] = {}
@@ -324,6 +327,7 @@ class InvoiceProcessingService:
         self._print_decision = print_decision
         self._invoice_inventory = invoice_inventory
         self._invoice_work_context_cache: OrderedDict[str, InvoiceWorkContext] = OrderedDict()
+        self._invoice_work_context_cache_updated_at: dict[str, float] = {}
 
     @property
     def invoice_inventory_enabled(self) -> bool:
@@ -476,8 +480,8 @@ class InvoiceProcessingService:
         invoice_key = str(summary.id or "").strip()
         if invoice_key:
             self._drop_invoice_pdf_cache_entry(invoice_key)
-            self._invoice_detail_cache.pop(invoice_key, None)
-            self._invoice_work_context_cache.pop(invoice_key, None)
+            self._drop_invoice_detail_cache(invoice_key)
+            self._drop_invoice_work_context_cache(invoice_key)
         self._batch_cache.clear()
 
     def read_fulfillment_flags(self, invoice_id: str) -> FulfillmentFlags:
@@ -1497,8 +1501,8 @@ class InvoiceProcessingService:
         if int(current.status_code or 0) == 100:
             self._send_invoice_document_once(current.id, send_type="VPDF")
             invoice_key = str(current.id or "").strip()
-            self._invoice_detail_cache.pop(invoice_key, None)
-            self._invoice_work_context_cache.pop(invoice_key, None)
+            self._drop_invoice_detail_cache(invoice_key)
+            self._drop_invoice_work_context_cache(invoice_key)
             current = self._resolve_current_start_summary(current)
         return current
 
@@ -1745,7 +1749,7 @@ class InvoiceProcessingService:
                     f"sevDesk-Mailstatus fuer {summary.id} ist unklar; Graph-Fallback gesperrt."
                 ) from sevdesk_error
             self._put_invoice_detail_cache(str(summary.id), refreshed)
-            self._invoice_work_context_cache.pop(str(summary.id), None)
+            self._drop_invoice_work_context_cache(str(summary.id))
             if self._sevdesk_mail_sent(refreshed):
                 self._operation_claims.finish(claim, "succeeded")
                 next_flags = self._next_flags(flags, mail_sent=True)
@@ -1902,11 +1906,20 @@ class InvoiceProcessingService:
         """
         invoice_id = str(summary.id or "").strip()
         cached = self._invoice_work_context_cache.get(invoice_id)
+        cached_at = self._invoice_work_context_cache_updated_at.get(invoice_id)
+        cache_is_fresh = (
+            cached_at is not None
+            and 0 <= time.monotonic() - cached_at < _INVOICE_WORK_CONTEXT_CACHE_TTL_SECONDS
+        )
         if cached is not None:
-            self._invoice_work_context_cache.move_to_end(invoice_id)
+            if cache_is_fresh:
+                self._invoice_work_context_cache.move_to_end(invoice_id)
+            else:
+                self._drop_invoice_work_context_cache(invoice_id)
         if (
             not force
             and cached is not None
+            and cache_is_fresh
             and self._context_is_current(cached, summary)
             and (not load_positions or cached.positions_loaded)
         ):
@@ -1977,14 +1990,23 @@ class InvoiceProcessingService:
         return context
 
     def get_cached_invoice_work_context(self, summary: InvoiceSummary) -> InvoiceWorkContext | None:
-        context = self._invoice_work_context_cache.get(str(summary.id or "").strip())
+        invoice_id = str(summary.id or "").strip()
+        context = self._invoice_work_context_cache.get(invoice_id)
+        cached_at = self._invoice_work_context_cache_updated_at.get(invoice_id)
+        cache_is_fresh = (
+            cached_at is not None
+            and 0 <= time.monotonic() - cached_at < _INVOICE_WORK_CONTEXT_CACHE_TTL_SECONDS
+        )
         if (
             context is not None
+            and cache_is_fresh
             and context.positions_loaded
             and self._context_is_current(context, summary)
         ):
-            self._invoice_work_context_cache.move_to_end(str(summary.id or "").strip())
+            self._invoice_work_context_cache.move_to_end(invoice_id)
             return context
+        if context is not None and not cache_is_fresh:
+            self._drop_invoice_work_context_cache(invoice_id)
         return None
 
     @staticmethod
@@ -2543,8 +2565,8 @@ class InvoiceProcessingService:
         # draft-era detail response (often containing only header="Rechnung")
         # leak into the subsequent mail subject/template rendering.
         invoice_key = str(summary.id or "").strip()
-        self._invoice_detail_cache.pop(invoice_key, None)
-        self._invoice_work_context_cache.pop(invoice_key, None)
+        self._drop_invoice_detail_cache(invoice_key)
+        self._drop_invoice_work_context_cache(invoice_key)
         inventory_warning = ""
         if self._inventory is not None and printed_copy and legacy_requirements:
             try:
@@ -3747,29 +3769,45 @@ class InvoiceProcessingService:
     def _fetch_invoice_detail(self, invoice_id: str, *, force: bool = False) -> dict[str, Any]:
         invoice_key = str(invoice_id).strip()
         cached = None if force else self._invoice_detail_cache.get(invoice_key)
-        if cached is not None:
-            self._invoice_detail_cache.move_to_end(invoice_key)
-            return cached
+        cached_at = self._invoice_detail_cache_updated_at.get(invoice_key)
+        if cached is not None and cached_at is not None:
+            age = time.monotonic() - cached_at
+            if 0 <= age < _INVOICE_DETAIL_CACHE_TTL_SECONDS:
+                self._invoice_detail_cache.move_to_end(invoice_key)
+                return cached
+            self._drop_invoice_detail_cache(invoice_key)
         invoice = self._invoices.fetch_invoice_by_id(invoice_id)
         normalized = invoice if isinstance(invoice, dict) else {}
         self._put_invoice_detail_cache(invoice_key, normalized)
         return normalized
 
     def _put_invoice_detail_cache(self, invoice_id: str, value: dict[str, Any]) -> None:
-        self._invoice_detail_cache.pop(invoice_id, None)
+        self._drop_invoice_detail_cache(invoice_id)
         self._invoice_detail_cache[invoice_id] = value
+        self._invoice_detail_cache_updated_at[invoice_id] = time.monotonic()
         while len(self._invoice_detail_cache) > _INVOICE_CONTEXT_CACHE_MAX_ENTRIES:
-            self._invoice_detail_cache.popitem(last=False)
+            expired_id, _ = self._invoice_detail_cache.popitem(last=False)
+            self._invoice_detail_cache_updated_at.pop(expired_id, None)
+
+    def _drop_invoice_detail_cache(self, invoice_id: str) -> None:
+        self._invoice_detail_cache.pop(invoice_id, None)
+        self._invoice_detail_cache_updated_at.pop(invoice_id, None)
 
     def _put_invoice_work_context_cache(
         self,
         invoice_id: str,
         value: InvoiceWorkContext,
     ) -> None:
-        self._invoice_work_context_cache.pop(invoice_id, None)
+        self._drop_invoice_work_context_cache(invoice_id)
         self._invoice_work_context_cache[invoice_id] = value
+        self._invoice_work_context_cache_updated_at[invoice_id] = time.monotonic()
         while len(self._invoice_work_context_cache) > _INVOICE_CONTEXT_CACHE_MAX_ENTRIES:
-            self._invoice_work_context_cache.popitem(last=False)
+            expired_id, _ = self._invoice_work_context_cache.popitem(last=False)
+            self._invoice_work_context_cache_updated_at.pop(expired_id, None)
+
+    def _drop_invoice_work_context_cache(self, invoice_id: str) -> None:
+        self._invoice_work_context_cache.pop(invoice_id, None)
+        self._invoice_work_context_cache_updated_at.pop(invoice_id, None)
 
     def _get_invoice_pdf_bytes(
         self,

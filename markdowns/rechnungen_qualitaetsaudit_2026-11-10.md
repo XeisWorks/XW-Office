@@ -148,7 +148,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F16 | P1 | TEILWEISE | START bucht Hub je finalisierter Rechnung und Legacy-Bestand ueber ein transaktionales Journal je `invoice_id:SKU`; Wiederholung bleibt idempotent. Offen bleiben die getrennten Legacy-/Hub-Journale und der isolierte 2+1-Teilfehler-/STOP-Betriebsnachweis. | SQLite-Regression fuer per-Rechnung-Verbrauch, Replay, fehlgeschlagene Buchung ohne Teilupdate und Transaktionsrollback; externer Mehrsystemnachweis Gate G2 |
 | F17 | P2 | TEILWEISE | Alarmdetail-Laden, Schwellenwertspeichern und Task-Mail laufen asynchron. Refund-Liste, Mailvorbereitung/-versand und PDF-Abruf, OPEN-PRINTS-Anhaenge/Erledigen, Ueberweisungs-PDF sowie PLC-Trackingimport und Paketcode-Zuordnung nutzen Worker. Due-/Wix-/Inbox-Pruefungen und Nachbetreuungs-Badgezaehler laufen bereits im koaleszierten BackgroundWorker von `TagesgeschaeftView._refresh_badges`; auch der Sendungsdialog verwendet den gecachten Zaehler und aktualisiert danach asynchron. Weitere UI-I/O-Pfade bleiben zu pruefen. | Eventloop-Heartbeats mit blockierten Fakes fuer Refunds, OPEN-PRINTS, Ueberweisungs-PDF und PLC-Trackingaktionen; Regression verbietet den synchronen Nachbetreuungs-DB-Zugriff nach Sendungsdialog; Fallback-/Badge-Tests |
 | F18 | P2 | TEILWEISE | Sendungen-, Ueberweisungs-, Nachbetreuungs- und OPEN-PRINTS-Dialoge verwerfen spaete UI-Ergebnisse. Auch der Zusatzrechnungsdialog wartet beim Schliessen nicht mehr auf Kontakt-Reads; bei laufender Rechnungserstellung bleibt er fuer Ergebnisfeedback offen. `TagesgeschaeftView` deferiert Close jetzt ereignisgesteuert, statt bis zu fuenf Sekunden im GUI-Thread auf Worker zu warten. In `ui/modules/rechnungen` gibt es keine direkten `.wait()`-Aufrufe mehr; weitere spaete Callback-/Close-Policies bleiben zu auditieren. | Blockierte Fake-Worker: Aftercare-Dialog bleibt reaktionsfaehig, ignoriert spaete Leseergebnisse und erhaelt Write-Feedback; Tagesgeschaeft-Close-Heartbeat bleibt reaktionsfaehig und schliesst nach Worker-Ende |
-| F19 | P2 | TEILWEISE | Invoice-PDFs verwenden jetzt einen 64-MiB-LRU und pruefen die erwartete Rechnungsnummer auch bei Cache-Hits; ein abweichendes PDF wird verworfen und neu geladen. Header-/WorkContext-Revisionen und gebuendelte Produktauflosung bleiben offen. | Regression: Nummernabweichung im Cache erzeugt neuen Fetch; Byte-Limit behaelt nur aktuelle PDFs |
+| F19 | P2 | TEILWEISE | Invoice-PDFs verwenden jetzt einen 64-MiB-LRU und pruefen die erwartete Rechnungsnummer auch bei Cache-Hits; ein abweichendes PDF wird verworfen und neu geladen. Header-/WorkContext-Caches haben eine 30-Sekunden-TTL; gemeinsame und Inhaltsrevisionen und gebuendelte Produktauflosung bleiben offen. | Regression: Header-/WorkContext-TTL erzwingt erneuten Fetch; Warm-Cache bleibt innerhalb der Frist; PDF-Nummernpruefung und Byte-Limit |
 | F20 | P2 | TEILWEISE | pytest laedt keine lokale dotenv-Konfiguration; sensible Umgebungsvariablen werden entfernt und externe Socket-Verbindungen blockiert (Loopback bleibt erlaubt). `InvoiceProcessingService` ist mypy-fehlerfrei; weitere Paketbereinigung und Controller-Extraktion bleiben offen. | Gesamtsuite ohne lokale Credentials/ausgehende Verbindungen; mypy-Baseline dokumentiert |
 | F21 | P1 | ERLEDIGT | `view.py::_DraftInvoiceDialog`: nach erfolgreicher Vorschau konnte die Ordernummer ge?ndert und weiterhin best?tigt werden. Jede Eingabe?nderung invalidiert nun die Vorschaufreigabe. | Qt-Test: Vorschau A ? Eingabe B bleibt gesperrt, erst Vorschau B erlaubt Best?tigen |
 
@@ -370,7 +370,7 @@ Erfolg erst nach nachgewiesenem externen bzw. Spooler-Ergebnis anzeigen.
 
 **Teilweise umgesetzt:** Invoice-PDF-Cache ist ein 64-MiB-LRU; Cache-Hits werden
 erneut gegen die erwartete Rechnungsnummer geprueft. Header-/WorkContext-Caches
-sind auf je 256 Eintraege begrenzt, aber weiterhin nicht einheitlich revisionsgebunden.
+sind auf je 256 Eintraege begrenzt und laufen nach 30 Sekunden ab; fehlende gemeinsame Inhaltsrevisionen werden dadurch zeitlich begrenzt.
 Produkt-/Bestandsdaten werden noch nicht durchgaengig vor dem Rendern gebuendelt.
 
 Revision, Vollständigkeit und gegebenenfalls TTL für Header/Positionen/PDF festlegen;
@@ -420,6 +420,7 @@ Geänderte Produktionsdateien:
   Aktionssperren und Worker-Identität (F04).
 - `services/invoice_processing/service.py` und `ui/modules/rechnungen/refunds_dialog.py`: dauerhafter Claim fuer Gutschrift-Mails; unklarer Versand sperrt Retry.
 - `services/invoice_processing/service.py`: optionale API-Payloads werden vor verschachteltem Zugriff typisiert/nachgewiesen; mypy fuer die Datei von 44 Fehlern auf 0 reduziert, ohne Geschaeftsregeln zu aendern.
+- `services/invoice_processing/service.py`: Header- und WorkContext-Caches erhalten eine 30-Sekunden-TTL mit gebundener Timestamp-Invalidierung (F19).
 - `ui/modules/rechnungen/view.py`: manuelle Worker und asynchroner Alarmzähler (F05/F06).
 - `ui/modules/rechnungen/view.py`: alle normalisierten SevDesk-Positionsdetails bleiben sichtbar, auch wenn eine Position nicht druckbar ist; Text kann markiert/kopiert werden (F14).
 - `ui/modules/rechnungen/view.py`: verhindert gleichzeitig gestartete Einzelproduktdrucke fuer dieselbe SKU/Part-ID, erlaubt bewusste Wiederholung nach Abschluss (F12).
@@ -442,7 +443,7 @@ vorhandene PLC-Funktion angepasst (F08).
 
 ### Tatsächliche Prüfergebnisse
 
-Aktueller Gesamtlauf nach den letzten Aenderungen: **2.081 bestanden, 1 Warnung, 0 fehlgeschlagen in 142,24 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
+Aktueller Gesamtlauf nach den letzten Aenderungen: **2.083 bestanden, 1 Warnung, 0 fehlgeschlagen in 143,74 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
 
 Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
 - Erster Gesamtlauf: **1.979 bestanden, 4 fehlgeschlagen**, 138,53 s.
@@ -492,6 +493,7 @@ Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
   `tagesgeschaeft_view.py` enthaelt 19 bestehende Typfehler ausserhalb der Close-Aenderung.
   Badge-Regression: **8 Tests bestanden**, einschliesslich des asynchronen
   Nachbetreuungs-Refreshs nach dem Sendungsdialog. Gesamtsuite danach **2.080 bestanden**.
+- AP07 Cache-TTL: zwei neue InvoiceService-Regressionen belegen Warm-Cache innerhalb der Frist und erneuten Header-/Positionsabruf nach Ablauf; Ruff und mypy fuer `service.py` gruen. Gesamtsuite danach **2.083 bestanden**.
 - F12 Einzelproduktdruck: Rechnungsansicht **83 Tests bestanden**; paralleler Druck
   verschiedener SKUs bleibt erlaubt, zweiter aktiver Auftrag derselben SKU wird
   verworfen, und die Sperre faellt nach Abschluss weg. Gesamtsuite danach **2.081 bestanden**.
