@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 import time
 from datetime import date
@@ -342,6 +343,7 @@ class TagesgeschaeftView(QWidget):
         self._reprint_worker: BackgroundWorker | None = None
         self._reprint_exec_worker: BackgroundWorker | None = None
         self._b2b_credit_check_worker: BackgroundWorker | None = None
+        self._b2b_credit_action_worker: BackgroundWorker | None = None
         self._shutdown_requested = False
         self._start_requested_mode: StartMode = StartMode.INVOICES_AND_PRINT
         self._start_selected_mode: StartMode = StartMode.INVOICES_AND_PRINT
@@ -448,6 +450,7 @@ class TagesgeschaeftView(QWidget):
                 self._reprint_worker,
                 self._reprint_exec_worker,
                 self._b2b_credit_check_worker,
+                self._b2b_credit_action_worker,
                 self._lieferkorrektur_popup_fetch_worker,
                 self._lieferkorrektur_popup_apply_worker,
             )
@@ -974,8 +977,51 @@ class TagesgeschaeftView(QWidget):
             self._b2b_credit_check_worker = None
         if self._shutdown_requested:
             return
-        self._btn_b2b_credit_alert.setEnabled(True)
-        self._update_alert_button(self._btn_b2b_credit_alert, "B2B ZAHLUNGEN", self._b2b_credit_count)
+        if self._b2b_credit_action_worker is None or not self._b2b_credit_action_worker.isRunning():
+            self._btn_b2b_credit_alert.setEnabled(True)
+            self._update_alert_button(self._btn_b2b_credit_alert, "B2B ZAHLUNGEN", self._b2b_credit_count)
+        self._refresh_badges()
+
+    def _start_b2b_credit_action(
+        self,
+        job: Callable[[], object],
+        on_success: Callable[[object], None],
+        *,
+        busy_text: str,
+        error_title: str,
+    ) -> None:
+        if self._shutdown_requested:
+            return
+        if self._b2b_credit_action_worker is not None and self._b2b_credit_action_worker.isRunning():
+            QMessageBox.information(self, "B2B-Zahlungen", "Eine B2B-Aktion wird bereits gespeichert.")
+            return
+        self._btn_b2b_credit_alert.setEnabled(False)
+        self._btn_b2b_credit_alert.setText(busy_text)
+        worker = BackgroundWorker(job)
+        self._b2b_credit_action_worker = worker
+        worker.signals.result.connect(
+            lambda payload: on_success(payload) if not self._shutdown_requested else None
+        )
+        worker.signals.error.connect(
+            lambda exc: self._on_b2b_credit_action_error(error_title, exc)
+        )
+        worker.signals.finished.connect(
+            lambda current=worker: self._on_b2b_credit_action_finished(current)
+        )
+        worker.start()
+
+    def _on_b2b_credit_action_error(self, title: str, exc: Exception) -> None:
+        if not self._shutdown_requested:
+            QMessageBox.critical(self, title, f"Speichern fehlgeschlagen:\n{exc}")
+
+    def _on_b2b_credit_action_finished(self, worker: BackgroundWorker) -> None:
+        if self._b2b_credit_action_worker is worker:
+            self._b2b_credit_action_worker = None
+        if self._shutdown_requested:
+            return
+        if self._b2b_credit_check_worker is None or not self._b2b_credit_check_worker.isRunning():
+            self._btn_b2b_credit_alert.setEnabled(True)
+            self._update_alert_button(self._btn_b2b_credit_alert, "B2B ZAHLUNGEN", self._b2b_credit_count)
         self._refresh_badges()
 
     def _on_lieferkorrektur_review_alert_clicked(self) -> None:
@@ -1336,25 +1382,35 @@ class TagesgeschaeftView(QWidget):
         dialog.exec()
         clicked = dialog.clickedButton()
         if clicked is plan_button:
-            try:
+            hold_payloads = tuple(dict(payload) for payload in holds)
+
+            def job() -> int:
                 service = self._container.resolve(B2bCreditService)
-                saved = 0
-                for payload in holds:
+                for payload in hold_payloads:
                     credit_hold = service.hold_from_dict(payload)
                     service.save_plan(
                         service.create_installment_plan(credit_hold, accepted_on=date.today())
                     )
-                    saved += 1
+                return len(hold_payloads)
+
+            def on_saved(payload: object) -> None:
+                if type(payload) is not int:
+                    QMessageBox.warning(self, "Zahlungsplan", "Der Speicherstatus ist unklar.")
+                    return
                 QMessageBox.information(
                     self,
                     "Zahlungsplan gespeichert",
-                    f"{saved} Zahlungsplan/Pläne wurden gespeichert.\n"
-                    "Die eigentlichen sevDesk-Anzahlungs-/Teilrechnungen bitte zunächst manuell erstellen. "
+                    f"{payload} Zahlungsplan/Pläne wurden gespeichert.\n"
+                    "Die sevDesk-Anzahlungs-/Teilrechnungen bitte manuell erstellen; "
                     "Fällige Schritte erscheinen danach als B2B-Alarm.",
                 )
-            except Exception as exc:  # noqa: BLE001
-                QMessageBox.critical(self, "Zahlungsplan", f"Plan konnte nicht gespeichert werden:\n{exc}")
-            self._refresh_badges()
+
+            self._start_b2b_credit_action(
+                job,
+                on_saved,
+                busy_text="B2B-Plan wird gespeichert...",
+                error_title="Zahlungsplan",
+            )
             return
         if clicked is not edit_button:
             return
@@ -1375,15 +1431,31 @@ class TagesgeschaeftView(QWidget):
         )
         if not accepted:
             return
-        try:
+
+        def save_limit() -> tuple[str, float]:
             self._container.resolve(B2bCreditService).set_customer_limit(customer, value)
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Kundenlimit", f"Limit konnte nicht gespeichert werden:\n{exc}")
-            return
-        QMessageBox.information(
-            self,
-            "Kundenlimit gespeichert",
-            "Das Limit wurde gespeichert. Bitte START erneut anklicken; die Freigabe wird dann neu geprüft.",
+            return customer, value
+
+        def on_limit_saved(payload: object) -> None:
+            if (
+                not isinstance(payload, tuple)
+                or len(payload) != 2
+                or not isinstance(payload[0], str)
+                or type(payload[1]) not in (int, float)
+            ):
+                QMessageBox.warning(self, "Kundenlimit", "Der Speicherstatus ist unklar.")
+                return
+            QMessageBox.information(
+                self,
+                "Kundenlimit gespeichert",
+                "Das Limit wurde gespeichert. Bitte START erneut anklicken; die Freigabe wird dann neu geprüft.",
+            )
+
+        self._start_b2b_credit_action(
+            save_limit,
+            on_limit_saved,
+            busy_text="Kundenlimit wird gespeichert...",
+            error_title="Kundenlimit",
         )
 
     def _on_start_product_preflight_ready(self, result: object) -> None:

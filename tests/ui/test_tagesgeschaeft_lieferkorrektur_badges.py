@@ -250,3 +250,49 @@ def test_b2b_credit_check_keeps_event_loop_responsive(qtbot: object, monkeypatch
         assert view._btn_b2b_credit_alert.isEnabled() is True  # noqa: SLF001
     finally:
         release.set()
+
+
+def test_b2b_credit_action_keeps_event_loop_responsive_and_serialized(
+    qtbot: object, monkeypatch
+) -> None:
+    entered, release, heartbeat = Event(), Event(), Event()
+    started: list[bool] = []
+    results: list[object] = []
+    monkeypatch.setattr(TagesgeschaeftView, "_refresh_badges", lambda _self: None)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_args, **_kwargs: None)
+    view = TagesgeschaeftView(_build_container())
+    qtbot.addWidget(view)
+
+    def blocked_write() -> object:
+        started.append(True)
+        entered.set()
+        release.wait(3)
+        return "saved"
+
+    try:
+        QTimer.singleShot(0, heartbeat.set)
+        started_at = time.monotonic()
+        view._start_b2b_credit_action(  # noqa: SLF001
+            blocked_write,
+            results.append,
+            busy_text="Saving...",
+            error_title="B2B",
+        )
+        assert time.monotonic() - started_at < 0.5
+        assert view._btn_b2b_credit_alert.isEnabled() is False  # noqa: SLF001
+        qtbot.waitUntil(entered.is_set, timeout=2000)
+        qtbot.waitUntil(heartbeat.is_set, timeout=500)
+
+        view._start_b2b_credit_action(  # noqa: SLF001
+            lambda: "duplicate",
+            results.append,
+            busy_text="Saving...",
+            error_title="B2B",
+        )
+        assert started == [True]
+        release.set()
+        qtbot.waitUntil(lambda: view._b2b_credit_action_worker is None, timeout=2000)  # noqa: SLF001
+        assert results == ["saved"]
+        assert view._btn_b2b_credit_alert.isEnabled() is True  # noqa: SLF001
+    finally:
+        release.set()
