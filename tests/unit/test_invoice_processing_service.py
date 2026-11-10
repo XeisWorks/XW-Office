@@ -1790,3 +1790,38 @@ def test_invalidation_during_invoice_load_does_not_repopulate_stale_batch() -> N
     finally:
         release.set()
         worker.join(1)
+
+
+def test_invalidation_during_invoice_detail_load_does_not_repopulate_stale_detail() -> None:
+    from threading import Event, Thread
+
+    started = Event()
+    release = Event()
+
+    class _BlockingInvoiceClientStub(_InvoiceClientStub):
+        def fetch_invoice_by_id(self, invoice_id: str) -> dict[str, object]:
+            started.set()
+            release.wait(2)
+            return super().fetch_invoice_by_id(invoice_id)
+
+    summary = InvoiceSummary(id="detail-race", invoiceNumber="RE-DETAIL-RACE")
+    client = _BlockingInvoiceClientStub([summary])
+    service = InvoiceProcessingService(
+        AppConfig(), client, _RepoStub({})  # type: ignore[arg-type]
+    )
+    worker = Thread(target=lambda: service._fetch_invoice_detail(summary.id))  # noqa: SLF001
+    worker.start()
+    try:
+        assert started.wait(1)
+        service.invalidate_invoice_detail_cache(summary.id)
+        release.set()
+        worker.join(1)
+
+        assert not worker.is_alive()
+        assert summary.id not in service._invoice_detail_cache  # noqa: SLF001
+        service._fetch_invoice_detail(summary.id)  # noqa: SLF001
+        assert client.invoice_fetch_calls == 2
+        assert summary.id in service._invoice_detail_cache  # noqa: SLF001
+    finally:
+        release.set()
+        worker.join(1)
