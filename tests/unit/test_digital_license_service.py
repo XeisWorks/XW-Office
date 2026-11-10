@@ -1,6 +1,10 @@
 import json
 import types
+from collections.abc import Callable
 from pathlib import Path
+from threading import Event, Lock, Thread
+
+import pytest
 
 from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
@@ -74,6 +78,40 @@ class _WixCompanyAndContact(_Wix):
         }
 
 
+class _WixFulfillment(_Wix):
+    def __init__(self, *, block_create: bool = False, fail_after_accept: bool = False) -> None:
+        self.status = ""
+        self.create_calls = 0
+        self.entered = Event()
+        self.release = Event()
+        if not block_create:
+            self.release.set()
+        self.fail_after_accept = fail_after_accept
+
+    def fulfillment_status(self, _reference: str) -> str:
+        return self.status
+
+    def get_fulfillable_items(self, _reference: str) -> list[dict[str, object]]:
+        return [{"id": "line-1", "quantity": 1}]
+
+    def create_fulfillment(
+        self,
+        _reference: str,
+        items: list[dict[str, object]],
+        *,
+        notify_customer: bool,
+    ) -> bool:
+        assert items == [{"id": "line-1", "quantity": 1}]
+        assert notify_customer is False
+        self.create_calls += 1
+        self.entered.set()
+        assert self.release.wait(3)
+        self.status = "FULFILLED"
+        if self.fail_after_accept:
+            raise TimeoutError("Wix accepted fulfillment; response timed out")
+        return True
+
+
 class _WixRegularDigital(_Wix):
     def is_reference_manual_digital_license(self, reference: str, *, use_cache: bool = True) -> bool:
         assert use_cache is False
@@ -102,13 +140,21 @@ class _Secrets:
 
 class _Settings:
     def __init__(self, raw: str | None = None) -> None:
-        self.raw = raw
+        self._values = {"digital_licenses.completed": raw} if raw is not None else {}
+        self._lock = Lock()
 
     def get_value_json(self, key: str) -> str | None:
-        return self.raw
+        with self._lock:
+            return self._values.get(key)
 
     def set_value_json(self, key: str, value_json: str) -> None:
-        self.raw = value_json
+        with self._lock:
+            self._values[key] = value_json
+
+    def mutate_value_json(self, key: str, mutator: Callable[[str | None], str]) -> None:
+        with self._lock:
+            current = self._values.get(key)
+            self._values[key] = mutator(current)
 
 
 def _service(settings: _Settings, pdf: Path, wix: object | None = None) -> DigitalLicenseService:
@@ -120,6 +166,95 @@ def _service(settings: _Settings, pdf: Path, wix: object | None = None) -> Digit
         secret_service=_Secrets(),  # type: ignore[arg-type]
         settings_repo=settings,  # type: ignore[arg-type]
     )
+
+
+def test_manual_license_wix_fulfillment_claim_prevents_duplicate_across_services(
+    tmp_path: Path,
+) -> None:
+    pdf = tmp_path / "piece.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    settings = _Settings()
+    wix = _WixFulfillment()
+    first_service = _service(settings, pdf, wix=wix)
+    second_service = _service(settings, pdf, wix=wix)
+    case = first_service.list_open_cases()[0]
+
+    first_service.mark_done(case)
+    second_service.mark_done(case)
+
+    assert wix.create_calls == 1
+    assert first_service._operation_claims.get(  # noqa: SLF001
+        case.invoice_id, "digital_license_fulfillment"
+    ).state == "succeeded"
+
+
+def test_manual_license_fulfillment_readback_resolves_accepted_timeout(tmp_path: Path) -> None:
+    pdf = tmp_path / "piece.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    settings = _Settings()
+    wix = _WixFulfillment(fail_after_accept=True)
+    service = _service(settings, pdf, wix=wix)
+    case = service.list_open_cases()[0]
+
+    service.mark_done(case)
+    service.mark_done(case)
+
+    assert wix.create_calls == 1
+    assert service._operation_claims.get(  # noqa: SLF001
+        case.invoice_id, "digital_license_fulfillment"
+    ).state == "succeeded"
+
+
+def test_manual_license_unclear_fulfillment_blocks_retry(tmp_path: Path) -> None:
+    pdf = tmp_path / "piece.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    settings = _Settings()
+    wix = _WixFulfillment(fail_after_accept=True)
+    wix.fulfillment_status = lambda _ref: ""  # type: ignore[method-assign]
+    service = _service(settings, pdf, wix=wix)
+    case = service.list_open_cases()[0]
+
+    with pytest.raises(RuntimeError, match="automatische Wiederholung ist gesperrt"):
+        service.mark_done(case)
+    with pytest.raises(RuntimeError, match="Ergebnis ist unklar"):
+        _service(settings, pdf, wix=wix).mark_done(case)
+
+    assert wix.create_calls == 1
+    assert service._operation_claims.get(  # noqa: SLF001
+        case.invoice_id, "digital_license_fulfillment"
+    ).state == "unknown"
+
+
+def test_manual_license_in_flight_claim_blocks_second_service(tmp_path: Path) -> None:
+    pdf = tmp_path / "piece.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    settings = _Settings()
+    wix = _WixFulfillment(block_create=True)
+    first_service = _service(settings, pdf, wix=wix)
+    second_service = _service(settings, pdf, wix=wix)
+    case = first_service.list_open_cases()[0]
+    errors: list[Exception] = []
+
+    def run_first() -> None:
+        try:
+            first_service.mark_done(case)
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = Thread(target=run_first)
+    worker.start()
+    try:
+        assert wix.entered.wait(1)
+        with pytest.raises(RuntimeError, match="bereits in Bearbeitung"):
+            second_service.mark_done(case)
+        assert wix.create_calls == 1
+    finally:
+        wix.release.set()
+        worker.join(2)
+
+    assert not worker.is_alive()
+    assert not errors
+    assert wix.create_calls == 1
 
 
 def test_list_open_cases_ignores_handling_line(tmp_path: Path) -> None:

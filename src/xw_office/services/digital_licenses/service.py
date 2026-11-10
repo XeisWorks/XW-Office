@@ -8,11 +8,13 @@ import logging
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from xw_office.services.layout.service import LayoutToolsService
+from xw_office.services.invoice_processing.operation_claims import InvoiceOperationClaimStore
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 from xw_office.core.shared_paths import resolve_shared_path
 
@@ -83,6 +85,7 @@ class DigitalLicenseService:
         self._layout = layout
         self._secrets = secret_service
         self._settings_repo = settings_repo
+        self._operation_claims = InvoiceOperationClaimStore(settings_repo)
         self._inventory = inventory
         self._fulfillment_repo = fulfillment_repo
         self._output_dir = resolve_shared_path(output_dir) or output_dir
@@ -159,7 +162,7 @@ class DigitalLicenseService:
                 cases.append(case)
         return cases
 
-    def _load_persisted_cases(self, rows: list[object]) -> list[DigitalLicenseCase]:
+    def _load_persisted_cases(self, rows: Sequence[object]) -> list[DigitalLicenseCase]:
         completed = self._load_completed()
         cases: list[DigitalLicenseCase] = []
         for row in rows:
@@ -401,16 +404,64 @@ class DigitalLicenseService:
     def mark_done(self, case: DigitalLicenseCase) -> None:
         ref = str(case.order_reference or "").strip()
         if ref:
-            status = str(getattr(self._wix_orders, "fulfillment_status", lambda _ref: "")(ref) or "").upper()
-            if status == "FULFILLED":
-                normalized = []
-            else:
-                items = self._wix_orders.get_fulfillable_items(ref)
-                normalized = self._normalize_fulfillment_items(items)
-            if normalized:
-                created = self._wix_orders.create_fulfillment(ref, normalized, notify_customer=False)
-                if not created:
-                    raise RuntimeError(f"Wix-Fulfillment konnte nicht bestaetigt werden fuer {ref}")
+            claim = self._operation_claims.acquire(case.invoice_id, "digital_license_fulfillment")
+            if not claim.acquired and claim.state != "succeeded":
+                raise RuntimeError(
+                    "Wix-Fulfillment ist bereits in Bearbeitung oder sein Ergebnis ist unklar. "
+                    "Bitte den Wix-Status pruefen, bevor erneut abgeschlossen wird."
+                )
+            if claim.acquired:
+                dispatched = False
+                try:
+                    status = str(
+                        getattr(self._wix_orders, "fulfillment_status", lambda _ref: "")(ref)
+                        or ""
+                    ).upper()
+                    if status != "FULFILLED":
+                        items = self._wix_orders.get_fulfillable_items(ref)
+                        normalized = self._normalize_fulfillment_items(items)
+                        if normalized:
+                            dispatched = True
+                            created = self._wix_orders.create_fulfillment(
+                                ref, normalized, notify_customer=False
+                            )
+                            if not created:
+                                raise RuntimeError(
+                                    f"Wix-Fulfillment konnte nicht bestaetigt werden fuer {ref}"
+                                )
+                except Exception as exc:
+                    if dispatched:
+                        try:
+                            status = str(
+                                getattr(self._wix_orders, "fulfillment_status", lambda _ref: "")(
+                                    ref
+                                )
+                                or ""
+                            ).upper()
+                        except Exception as readback_error:
+                            status = ""
+                            logger.warning(
+                                "Digital license fulfillment readback failed for %s: %s",
+                                ref,
+                                readback_error,
+                            )
+                        if status == "FULFILLED":
+                            self._operation_claims.finish(claim, "succeeded")
+                        else:
+                            self._operation_claims.finish(
+                                claim,
+                                "unknown",
+                                error=f"{exc}; readback status={status or 'unavailable'}",
+                            )
+                            raise RuntimeError(
+                                "Wix-Fulfillment wurde angestossen, aber nicht bestaetigt. "
+                                "Bitte Wix manuell pruefen; automatische Wiederholung ist gesperrt."
+                            ) from exc
+                    else:
+                        self._operation_claims.finish(claim, "failed", error=str(exc))
+                        raise
+                else:
+                    self._operation_claims.finish(claim, "succeeded")
         if self._fulfillment_repo is not None:
             from datetime import datetime, timezone
 
@@ -492,7 +543,12 @@ class DigitalLicenseService:
         for raw in raw_items:
             item_id = str(raw.get("id") or raw.get("lineItemId") or "").strip()
             if not item_id:
-                line_item = raw.get("lineItem") if isinstance(raw.get("lineItem"), dict) else {}
+                line_item_raw = raw.get("lineItem")
+                line_item = (
+                    cast(dict[str, object], line_item_raw)
+                    if isinstance(line_item_raw, dict)
+                    else {}
+                )
                 item_id = str(line_item.get("id") or line_item.get("lineItemId") or "").strip()
             if not item_id:
                 continue
