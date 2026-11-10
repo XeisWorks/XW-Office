@@ -189,7 +189,7 @@ class SpecialOrderService:
         payload = SpecialOrderService._string_keyed_dict(data)
         if payload is None:
             raise RuntimeError("Website lieferte keine JSON-Antwort")
-        if not payload.get("ok"):
+        if payload.get("ok") is not True:
             raise RuntimeError(str(payload.get("message") or payload.get("error") or "Payment Link fehlgeschlagen"))
         link = SpecialOrderLink(
             id=str(payload.get("id") or ""),

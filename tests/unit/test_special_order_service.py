@@ -18,6 +18,14 @@ def test_endpoint_response_without_success_reports_server_error() -> None:
         )
 
 
+def test_endpoint_response_does_not_accept_string_false_as_success() -> None:
+    with pytest.raises(RuntimeError, match="Payment Link fehlgeschlagen"):
+        SpecialOrderService._link_from_endpoint_response(
+            {"ok": "false", "url": "https://example.test/pay"},
+            fallback_title="Test",
+        )
+
+
 def test_rest_response_accepts_nested_link_and_rejects_non_object_links() -> None:
     result = SpecialOrderService._link_from_rest_response(
         {
