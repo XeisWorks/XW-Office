@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+
+from xw_office.models.inventory_document_booking import InventoryDocumentBooking
 from tests.unit.test_invoice_inventory_booking import _factory
 from xw_office.services.product_hub.invoice_inventory import InvoiceInventoryBookingService, InvoiceInventoryLine
 from xw_office.services.product_hub.inventory import InventoryV2Service
@@ -19,6 +22,18 @@ class _Provider:
         return []
 
 
+class _OneCreditProvider:
+    def __init__(self, credit: dict, position: dict) -> None:
+        self.credit = credit
+        self.position = position
+
+    def list_credit_notes_for_year(self, year: int):
+        return [self.credit]
+
+    def list_credit_note_positions(self, credit_note_id: str):
+        return [self.position]
+
+
 def test_credit_feed_only_processes_unambiguous_origin() -> None:
     factory, variant_id = _factory()
     inventory = InventoryV2Service(factory)
@@ -28,3 +43,76 @@ def test_credit_feed_only_processes_unambiguous_origin() -> None:
     result = SevdeskCreditNoteInventoryService(_Provider(), booking).process_year(2026)
     assert result.processed == 1
     assert any("Ursprungsrechnung" in issue for issue in result.needs_review)
+
+
+@pytest.mark.parametrize("quantity", ["0.5", "1.5", "NaN", "Infinity", "not-a-number", None])
+def test_credit_feed_rejects_fractional_or_invalid_quantities(quantity: object) -> None:
+    factory, variant_id = _factory()
+    InventoryV2Service(factory).record_movement(
+        variant_id=variant_id,
+        delta=10,
+        reason="import_baseline",
+        source="test",
+        idempotency_key="credit-feed-invalid-baseline",
+    )
+    booking = InvoiceInventoryBookingService(factory)
+    booking.apply_line(InvoiceInventoryLine("origin-invoice", "origin-pos", variant_id, 2))
+    provider = _OneCreditProvider(
+        {"id": "bad-credit", "status": 200, "invoiceId": "origin-invoice"},
+        {
+            "id": "credit-pos",
+            "invoicePosId": "origin-pos",
+            "quantity": quantity,
+            "part": {"number": "XW-BOOKING"},
+        },
+    )
+
+    result = SevdeskCreditNoteInventoryService(provider, booking).process_year(2026)
+
+    assert result.processed == 0
+    assert len(result.needs_review) == 1
+    with factory() as session:
+        assert session.query(InventoryDocumentBooking).filter_by(movement_kind="return").count() == 0
+
+
+def test_credit_feed_requires_final_status_and_stable_position_id() -> None:
+    factory, variant_id = _factory()
+    InventoryV2Service(factory).record_movement(
+        variant_id=variant_id,
+        delta=10,
+        reason="import_baseline",
+        source="test",
+        idempotency_key="credit-feed-identity-baseline",
+    )
+    booking = InvoiceInventoryBookingService(factory)
+    booking.apply_line(InvoiceInventoryLine("origin-invoice", "origin-pos", variant_id, 2))
+    provider = _OneCreditProvider(
+        {"id": "credit-unknown", "status": 300, "invoiceId": "origin-invoice"},
+        {
+            "positionNumber": 1,
+            "invoicePosId": "origin-pos",
+            "quantity": 1,
+            "part": {"number": "XW-BOOKING"},
+        },
+    )
+
+    result = SevdeskCreditNoteInventoryService(provider, booking).process_year(2026)
+
+    assert result.processed == 0
+    assert any("Status" in issue for issue in result.needs_review)
+    missing_identity = _OneCreditProvider(
+        {"id": "credit-missing-position-id", "status": 200, "invoiceId": "origin-invoice"},
+        {
+            "positionNumber": 1,
+            "invoicePosId": "origin-pos",
+            "quantity": 1,
+            "part": {"number": "XW-BOOKING"},
+        },
+    )
+    identity_result = SevdeskCreditNoteInventoryService(  # type: ignore[arg-type]
+        missing_identity, booking
+    ).process_year(2026)
+    assert identity_result.processed == 0
+    assert any("Positions-ID" in issue for issue in identity_result.needs_review)
+    with factory() as session:
+        assert session.query(InventoryDocumentBooking).filter_by(movement_kind="return").count() == 0

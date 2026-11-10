@@ -144,7 +144,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F12 | P1 | OFFEN | Rechnungs-Mail/START/Retry/Produktdruck: Worker-Guards gelten je Widget/Prozess. Kein gemeinsamer dauerhafter Claim pro Rechnung/Operation; Graph-Fallback kann trotz unklarer sevDesk-Antwort folgen, wenn der Statusprobe fehlschlägt. Auch Part-`get+set` beim direkten Druck ist nicht atomar. | Codebeleg in `send_invoice_mail_for_invoice`, `_run_fulfillment_chip_action`, `record_print_and_update_sevdesk` |
 | F13 | P1 | OFFEN | Kontext kennt `wix_candidate`, UI-Hydration und mehrere Folgepfade verzweigen aber weiterhin allein nach `order_reference`. Manuelle fünfstellige Fremdreferenz kann Wix-Pfad aktivieren; fehlender Wix-Treffer lädt nicht zuverlässig sevDesk-Produkte nach. | Codebeleg: Referenzparser, `_hydrate_detail_for_selection`, `_load_wix_context`, `_update_plc_controls` |
 | F14 | P1 | OFFEN | `load_invoice_piece_blocks`/`get_piece_blocks_from_invoice_positions`: normalisiertes `printable=False` wird nicht durchgängig ausgewertet; 1,5 kann als 1 Druckstück erscheinen. Freitext/unaufgelöste Positionen sind nicht vollständig in der Produktdarstellung sichtbar. F02 schützt den Hub-Buchungsadapter, nicht alle Druckadapter. | Codebeleg: `int(quantity_int)`, Filter nur `kind == product`; Formatwarnungen werden nicht dargestellt |
-| F15 | P1 | OFFEN | Externe Invoice-/Credit-Feedadapter: `_quantity` nutzt `int(float(...))`; Bruchmengen werden gekürzt, ungültige Mengen zu 0. Unbekannter Status ist nicht automatisch Draft; fehlende Positions-ID hat teilweise Ersatzwert. | Codebeleg in `sevdesk_invoice_inventory.py` und `sevdesk_credit_note_inventory.py`; Provider-Verträge vor Änderung mitprüfen |
+| F15 | P1 | OFFEN | Dezimalmengen, finale Statuswerte, stabile Positions-IDs und Needs-Review-Verhalten der Invoice-/Credit-Feedadapter sind jetzt strikt validiert. Offen bleiben persistenter Wasserstand/Overlap und ein Beleg, dass Provider-Pagination bei Seitenlimit keine spaeteren Belege ueberspringt. | Regressionen fuer 0/0,5/1,5/NaN/Infinity/fehlende Menge, unbekannte Stati und fehlende IDs; `sevdesk_feed_validation.py` |
 | F16 | P1 | OFFEN | START/Legacy-Lager: aktuelle Freigabe bucht Hub je Rechnung, Legacy-Verbrauch erfolgt weiterhin nach erfolgreichem Gesamtbatch; Teilfehler/STOP können Drift hinterlassen. Ohne `+ Noten` wird im UI eine Vorprüfung mit fehlenden Positionsdaten erzeugt; Unterdeckung wird nicht überall vor externer Freigabe geprüft. | Codebeleg in `tagesgeschaeft_view.py::_on_start_clicked/_on_start_product_preflight_ready`, `InventoryService.execute_start_workflow` |
 | F17 | P2 | OFFEN | UI-Thread-I/O verbleibt in Lageralarm-Popup, Refund-Liste/PDF/Mail, Tracking-Import/Codebestätigung, Betreuungstab, Überweisungs-PDF und OPEN-PRINTS-Erledigen. Produkt-/Bestandsauflösung und Druckkonfigurationsspeichern erfolgen teilweise beim Rendern/Dialogabschluss. | Direkte Service-/Repository-Aufrufe in UI-Slots, ohne Worker-Grenze |
 | F18 | P2 | OFFEN | Dialog-Lebenszyklus: Sendungen/Überweisungen warten beim Schließen mehrfach bis 3 s pro Worker; andere Dialoge haben keine einheitliche Close-/Escape-Policy für laufende Writes. Globale Worker-Retention verhindert vorzeitige QThread-Zerstörung, aber nicht späte fachliche Callbacks. | Codebeleg: `_wait_for_workers`, Dialoge ohne Shutdown-Protokoll; Betriebs-Race nicht pauschal behauptet |
@@ -313,6 +313,12 @@ persistente Wasserstände samt Überlappung erhalten.
 digitale und stornierte Belege erzeugen nur fachlich zulässige Bewegungen;
 Neustart verarbeitet Fehlerfälle erneut und überspringt keine späteren Belege.
 
+**Teilweise umgesetzt:** Mengen werden als Decimal erhalten; nur sevDesk-Status
+`200` (open), `750` (partially paid) und `1000` (paid) werden als final akzeptiert.
+Unbekannte Statuswerte, Bruch-/Ungueltigmengen und fehlende Positions-IDs werden
+nicht gebucht. Statusdefinition gemaess [sevDesk API-Dokumentation](https://api.sevdesk.de/).
+Persistente Cursor und Provider-Page-Limit bleiben offen.
+
 ### AP05 – Legacy-/Hub-Bestand und START-Teilfehler (F16; P1)
 
 Eine pro erfolgreichem finalen Dokument idempotente Legacy-/Hub-Spiegelung statt
@@ -417,6 +423,8 @@ eingetragen. Bereits durchgeführt:
   abschließenden Vergleich unten festhalten. Das ist kein grünes Typprüfungs-Gate.
   Die Baseline stammt aus einem temporären `git archive HEAD src`, nicht aus
   einem anderen Checkout oder alten Audittext.
+- AP04-Feed-Normalisierung: **51 Tests bestanden** ueber Invoice-/Credit-Feeds,
+  Status-/Decimal-Helfer und Bestandsbuchung (2,43 s); Ruff: **gruen**.
 - Regression fuer F10: Ziel 2->3->2 bei Anfangsbestand 10 ergibt Endbestand 8;
   jede Transition hat eine eigene ID, Replay erzeugt keine zweite Bewegung.
 - Aktueller gezielter Lauf: 74 bestanden aus InvoiceService-, InvoiceBooking- und

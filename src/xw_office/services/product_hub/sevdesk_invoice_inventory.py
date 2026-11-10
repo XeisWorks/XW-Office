@@ -6,6 +6,7 @@ import datetime
 from typing import Callable, Protocol
 
 from xw_office.services.product_hub.invoice_inventory import InvoiceInventoryBookingService, InvoiceInventoryLine
+from xw_office.services.product_hub.sevdesk_feed_validation import document_state, feed_quantity
 
 
 class InvoiceReleaseProvider(Protocol):
@@ -37,23 +38,32 @@ class SevdeskInvoiceInventoryPoller:
     def poll(self, *, since: datetime.date | None = None) -> InvoicePollResult:
         result = InvoicePollResult()
         for invoice in self._provider.list_final_invoices(since=since):
-            if _is_draft(invoice):
+            state = document_state(invoice)
+            if state == "draft":
                 continue
             invoice_id = str(invoice.get("id") or "").strip()
             if not invoice_id:
                 result.needs_review.append("Rechnung ohne ID")
                 continue
+            if state != "final":
+                result.needs_review.append(f"{invoice_id}: unbekannter oder nicht finaler Status")
+                continue
             revision = str(invoice.get("updated") or invoice.get("version") or "").strip()
             for position in self._provider.list_invoice_positions(invoice_id):
                 if str(position.get("kind") or "product").strip().casefold() not in {"product", ""}:
                     continue
-                quantity = _quantity(position)
-                if quantity <= 0:
+                quantity = feed_quantity(position)
+                if quantity is None or quantity != quantity.to_integral_value():
+                    result.needs_review.append(f"{invoice_id}: ungültige/bruchteilige Positionsmenge")
+                    continue
+                if quantity == 0:
                     continue
                 sku = _sku(position)
                 position_key = _position_key(position)
                 if not sku or not position_key:
-                    result.needs_review.append(f"{invoice_id}: Position ohne SKU/ID")
+                    result.needs_review.append(
+                        f"{invoice_id}: Position ohne stabile Positions-ID oder SKU"
+                    )
                     continue
                 resolved = self._booking.resolve_physical_sku(sku)
                 if resolved is None:
@@ -65,7 +75,7 @@ class SevdeskInvoiceInventoryPoller:
                             document_id=invoice_id,
                             position_key=position_key,
                             variant_id=resolved.variant.id,
-                            quantity=quantity,
+                            quantity=int(quantity),
                             source_revision=revision,
                         ),
                         source="sevdesk.final_invoice_poll",
@@ -97,30 +107,13 @@ class SevdeskInvoiceInventoryPoller:
         return result
 
 
-def _is_draft(document: dict) -> bool:
-    try:
-        return int(document.get("status")) == 100
-    except (TypeError, ValueError):
-        return str(document.get("status") or "").strip().casefold() in {"draft", "entwurf"}
-
-
-def _quantity(position: dict) -> int:
-    try:
-        return max(0, int(float(position.get("quantity", position.get("qty", 0)))))
-    except (TypeError, ValueError):
-        return 0
-
-
 def _sku(position: dict) -> str:
     part = position.get("part") if isinstance(position.get("part"), dict) else {}
     return str(position.get("sku") or position.get("partNumber") or part.get("number") or "").strip().upper()
 
 
 def _position_key(position: dict) -> str:
-    for key in ("id", "positionNumber", "position"):
-        if str(position.get(key) or "").strip():
-            return str(position[key]).strip()
-    return ""
+    return str(position.get("id") or "").strip()
 
 
 __all__ = ["InvoicePollResult", "InvoiceReleaseProvider", "SevdeskInvoiceInventoryPoller"]

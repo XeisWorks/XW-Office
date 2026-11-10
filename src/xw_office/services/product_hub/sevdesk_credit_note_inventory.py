@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
 from xw_office.services.product_hub.invoice_inventory import InvoiceInventoryBookingService, InvoiceInventoryLine
+from xw_office.services.product_hub.sevdesk_feed_validation import document_state, feed_quantity
 
 
 class CreditNoteProvider(Protocol):
@@ -36,24 +37,34 @@ class SevdeskCreditNoteInventoryService:
     def process_year(self, year: int) -> CreditNoteProcessingResult:
         result = CreditNoteProcessingResult()
         for credit in self._provider.list_credit_notes_for_year(year):
-            if _is_draft(credit):
+            state = document_state(credit)
+            if state == "draft":
                 continue
             credit_id = str(credit.get("id") or "").strip()
             if not credit_id:
                 result.needs_review.append("Gutschrift ohne ID")
+                continue
+            if state != "final":
+                result.needs_review.append(f"{credit_id}: unbekannter oder nicht finaler Status")
                 continue
             origin_invoice = _origin_invoice_id(credit)
             if not origin_invoice:
                 result.needs_review.append(f"{credit_id}: Ursprungsrechnung nicht eindeutig")
                 continue
             for position in self._provider.list_credit_note_positions(credit_id):
-                quantity = _quantity(position)
-                if quantity <= 0:
+                quantity = feed_quantity(position)
+                if quantity is None or quantity != quantity.to_integral_value():
+                    result.needs_review.append(f"{credit_id}: ungültige/bruchteilige Positionsmenge")
+                    continue
+                if quantity == 0:
                     continue
                 origin_position = _origin_position_key(position)
                 sku = _sku(position)
-                if not origin_position or not sku:
-                    result.needs_review.append(f"{credit_id}: Position ohne Ursprungsposition/SKU")
+                position_key = _position_key(position)
+                if not origin_position or not sku or not position_key:
+                    result.needs_review.append(
+                        f"{credit_id}: Position ohne Positions-ID/Ursprungsposition/SKU"
+                    )
                     continue
                 resolved = self._booking.resolve_physical_sku(sku)  # exact Hub resolution; no guessing
                 if resolved is None:
@@ -63,9 +74,9 @@ class SevdeskCreditNoteInventoryService:
                     applied = self._booking.apply_credit_line(
                         InvoiceInventoryLine(
                             document_id=credit_id,
-                            position_key=_position_key(position),
+                            position_key=position_key,
                             variant_id=resolved.variant.id,
-                            quantity=quantity,
+                            quantity=int(quantity),
                             movement_kind="return",
                             original_document_id=origin_invoice,
                             original_position_key=origin_position,
@@ -81,9 +92,9 @@ class SevdeskCreditNoteInventoryService:
                 if self._on_applied is not None:
                     mirror_line = InvoiceInventoryLine(
                         document_id=credit_id,
-                        position_key=_position_key(position),
+                        position_key=position_key,
                         variant_id=resolved.variant.id,
-                        quantity=quantity,
+                        quantity=int(quantity),
                         movement_kind="return",
                         original_document_id=origin_invoice,
                         original_position_key=origin_position,
@@ -96,13 +107,6 @@ class SevdeskCreditNoteInventoryService:
                             f"{getattr(mirror, 'detail', '')}".strip()
                         )
         return result
-
-
-def _is_draft(document: dict) -> bool:
-    try:
-        return int(document.get("status")) == 100
-    except (TypeError, ValueError):
-        return str(document.get("status") or "").strip().casefold() in {"draft", "entwurf"}
 
 
 def _origin_invoice_id(document: dict) -> str:
@@ -130,22 +134,12 @@ def _origin_position_key(position: dict) -> str:
 
 
 def _position_key(position: dict) -> str:
-    for key in ("id", "positionNumber", "position", "creditNotePosId"):
-        if str(position.get(key) or "").strip():
-            return str(position[key]).strip()
-    return "position-unknown"
+    return str(position.get("id") or position.get("creditNotePosId") or "").strip()
 
 
 def _sku(position: dict) -> str:
     part = position.get("part") if isinstance(position.get("part"), dict) else {}
     return str(position.get("sku") or position.get("partNumber") or part.get("number") or "").strip().upper()
-
-
-def _quantity(position: dict) -> int:
-    try:
-        return max(0, int(float(position.get("quantity", position.get("qty", 0)))))
-    except (TypeError, ValueError):
-        return 0
 
 
 __all__ = ["CreditNoteProcessingResult", "CreditNoteProvider", "SevdeskCreditNoteInventoryService"]
