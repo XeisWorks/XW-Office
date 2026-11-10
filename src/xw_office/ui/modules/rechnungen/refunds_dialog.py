@@ -27,7 +27,6 @@ from shiboken6 import isValid
 from xw_office.core.worker import BackgroundWorker
 from xw_office.services.flow_api import FlowRefundsClient
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
-from xw_office.services.mailing.service import MailAttachment, MailDeliveryService
 from xw_office.services.sevdesk.invoice_client import InvoiceClient
 from xw_office.services.sevdesk.refund_client import SevDeskRefundClient
 from xw_office.services.wix.client import WixOrdersClient
@@ -206,18 +205,19 @@ class RefundsDialog(QDialog):
         ) != QMessageBox.StandardButton.Yes:
             return
         sevdesk = self._container.resolve(SevDeskRefundClient)
-        mailer = self._container.resolve(MailDeliveryService)
+        processing = self._container.resolve(InvoiceProcessingService)
         subject = draft.get("subject", "")
         body = draft.get("body", "")
 
         def send() -> str:
             pdf = sevdesk.get_credit_note_pdf(credit_note_id)
-            mailer.send_mail(
-                to_email=email.strip(),
+            processing.send_credit_note_mail(
+                credit_note_id,
+                recipient=email.strip(),
+                credit_note_number=number,
                 subject=subject,
                 text_body=body,
-                html_body=mailer.plain_text_to_html(body),
-                attachments=[MailAttachment(filename=f"{number}.pdf", content=pdf)],
+                pdf_bytes=pdf,
             )
             return email.strip()
 

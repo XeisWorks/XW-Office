@@ -1786,6 +1786,54 @@ class InvoiceProcessingService:
         body = body.replace("Rechnung", "Gutschrift")
         return subject, body
 
+    def send_credit_note_mail(
+        self,
+        credit_note_id: str,
+        *,
+        recipient: str,
+        credit_note_number: str,
+        subject: str,
+        text_body: str,
+        pdf_bytes: bytes,
+    ) -> None:
+        """Send a credit-note email once, blocking automatic replay on uncertainty."""
+        identity = str(credit_note_id or "").strip()
+        address = str(recipient or "").strip()
+        if not identity or not address or not pdf_bytes:
+            raise ValueError("Gutschrift-ID, Empfaenger und PDF sind erforderlich")
+        claim = self._operation_claims.acquire(identity, "credit_note_mail")
+        if not claim.acquired:
+            raise RuntimeError(
+                f"Mailaktion fuer Gutschrift {credit_note_number or identity} ist bereits "
+                f"beansprucht oder ihr Ergebnis unklar (Status: {claim.state})."
+            )
+        if self._mail_service is None:
+            self._operation_claims.finish(
+                claim, "failed", error="Mailtransport nicht konfiguriert"
+            )
+            raise RuntimeError("Mailtransport ist nicht konfiguriert.")
+        body = str(text_body or "")
+        try:
+            self._mail_service.send_mail(
+                to_email=address,
+                subject=str(subject or ""),
+                text_body=body,
+                html_body=self._mail_service.plain_text_to_html(body),
+                attachments=[
+                    MailAttachment(
+                        filename=f"{str(credit_note_number or identity)}.pdf",
+                        content=pdf_bytes,
+                    )
+                ],
+            )
+        except Exception as exc:
+            self._operation_claims.finish(claim, "unknown", error=str(exc))
+            raise RuntimeError(
+                "Versandergebnis der Gutschrift-Mail ist unklar. Vor einem erneuten "
+                "Versand bitte den Postausgang pruefen."
+            ) from exc
+        self._operation_claims.finish(claim, "succeeded")
+
     def get_invoice_detail_context(self, summary: InvoiceSummary) -> dict[str, object]:
         """Return sevDesk-backed customer/shipping fallback data for the detail panel."""
         context = self.load_invoice_work_context(summary)

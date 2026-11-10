@@ -141,7 +141,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F09 | P1 | ERLEDIGT | `InvoiceProcessingService.load_invoice_work_context/_run_finalize_step/build_inventory_requirements`: Positionsfehler werden als unvollst?ndiger Kontext mit Ladezustand/Fehlertext behandelt und nicht gecacht. Freigabe und Produktdruck brechen vor dem externen Schreibaufruf ab; Retry l?dt erneut. | Regressionen: Timeout bleibt uncached, Freigabe sendet nicht, Druck gibt klare Exception, Retry l?dt erfolgreich |
 | F10 | P1 | ERLEDIGT | `InvoiceInventoryBookingService.apply_line`: Booking, append-only Ledgerbewegung, materialisierter Bestand und Alarmstatus laufen in einer Session/Transaktion. Jede Mengen?nderung verwendet eine fortlaufende Transition-ID statt wiederverwendeter Zielmenge. | SQLite-Regression 10?2?3?2 ergibt 8; Replay bleibt idempotent; Transaktionscode sperrt vorhandene und erstmalige Booking-Zeile |
 | F11 | P1 | ERLEDIGT | `apply_credit_line`: sperrt die Ursprungsposition und berechnet bestehende R?ckgaben in derselben Transaktion wie die neue Gegenbuchung. Konkurrierende Credits serialisieren auf der Ursprungs-Booking-Zeile. | Unit-Abdeckung f?r Cap und Replay; PostgreSQL-Barrierenachweis verbleibt im Betriebs-/DB-Gate G2 |
-| F12 | P1 | OFFEN | Rechnungs-Mail, sevDesk-Freigabe und Wix-Fulfillment nutzen jetzt dauerhafte Claims je Beleg/Aktion; unknown/running sperrt Retry, und ein unklarer sevDesk-Mail-Readback sperrt den Graph-Zweitversand. Offen bleiben direkter Produktdruck, Refunds, gemeinsame Claims mit weiteren UI-Einstiegen und die ledgerbasierte Part-Bestandsprojektion statt get+set. | Unit-Regression fuer Mail/Finalize/Fulfillment und Claim-Persistenz; PostgreSQL-Parallelitaet bleibt G2 |
+| F12 | P1 | TEILWEISE | Rechnungs-Mail, sevDesk-Freigabe, Wix-Fulfillment und Gutschrift-Mail nutzen dauerhafte Claims je Beleg/Aktion; running/succeeded/unknown sperrt Retry, und ein unklarer sevDesk-Mail-Readback sperrt den Graph-Zweitversand. Offen bleiben direkter Produktdruck, weitere externe UI-Einstiege und die ledgerbasierte Part-Bestandsprojektion statt get+set. | Unit-Regression fuer Mail/Finalize/Fulfillment/Gutschrift-Mail, Timeout-unklar und Claim-Persistenz; PostgreSQL-Parallelitaet bleibt G2 |
 | F13 | P1 | TEILWEISE | Kontext bestaetigt Wix weiterhin nicht ueber die Referenz allein. Die Detailansicht faellt bei leerem Wix-Treffer oder Wix-Fehler auf sevDesk-Positionen zurueck und zeigt den Wix-Link nur bei bestaetigtem Kontext. Weitere Folgepfade mit roher `order_reference` bleiben zu pruefen. | Regression fuer fuenfstellige Fremdreferenz ohne Wix-Treffer; UI zeigt sevDesk-Positionen |
 | F14 | P1 | TEILWEISE | `load_invoice_piece_blocks` gibt nur explizit druckbare ganzzahlige Produktpositionen aus. Bruchmengen und nichtphysische/unaufgeloeste Positionen erscheinen mit Warntext im Positionsbereich; vollstaendige Darstellung aller Originalfelder bleibt offen. | Regression: Menge 1,5 wird nicht als 1 gedruckt; Freitext und Bruchmenge erzeugen sichtbare Klaerhinweise |
 | F15 | P1 | ERLEDIGT | Decimal-Mengen, finale Statuswerte, stabile Positions-IDs und Needs-Review wurden strikt validiert. Der Invoice-Poll speichert einen atomaren Erfolgswasserstand mit 30-Tage-Overlap; bei Fehlern/Needs-Review bleibt er stehen. sevDesk-Seitenlimit wirft `TaxPageLimitError`, bevor Ergebnisse als vollstaendig gelten. | Feed-Validierungs-, Checkpoint- und `load_tax_resource`-Paginationstests |
@@ -286,7 +286,7 @@ eine Session. Erstbuchungen werden per Unique-Insert angelegt und dann gesperrt.
 Credit-Pruefung sperrt die Ursprungsposition bis Gegenbewegung und Booking committet
 sind. SQLite-Regressionsfaelle bestehen; PostgreSQL-Interleavings bleiben Gate G2.
 
-### AP03 - Dauerhafte Claims externer Aktionen (teilweise umgesetzt; F12 bleibt OFFEN; P1)
+### AP03 - Dauerhafte Claims externer Aktionen (teilweise umgesetzt; F12 teilweise offen; P1)
 
 Gemeinsamen Status pro Rechnung und Aktion mit `pending/running/succeeded/unknown/failed`
 und eindeutiger Operation-ID einführen. START, manuelle Aktion und Retry verwenden
@@ -305,7 +305,7 @@ Strategie und die PDF-/Graph-Fallbacktests fachlich abgestimmt weiterführen.
 eindeutige Wix-Fulfillments teilen `InvoiceOperationClaimStore`. Status `running`,
 `succeeded`, `unknown` und `failed` werden ueber SettingKV persistiert; PostgreSQL-
 Advisory-Locks serialisieren gleichzeitige Clients. Unklare Resultate sperren Retry.
-Direkter Produktdruck/Part-Stock und weitere externe UI-Aktionen bleiben offen.
+Gutschrift-Mails verwenden jetzt ebenfalls einen dauerhaften Claim je Gutschrift; ein unklarer Graph-Ausgang sperrt automatische Wiederholung. Direkter Produktdruck/Part-Stock und weitere externe UI-Aktionen bleiben offen.
 
 ### AP04 – Externe Belege strikt normalisieren (F15; P1)
 
@@ -419,6 +419,7 @@ Geänderte Produktionsdateien:
   aktiver Claim, unklarer Versand und verständliche Rückmeldung (F03).
 - `ui/modules/rechnungen/digital_licenses_dialog.py`: fester Kundenkontext,
   Aktionssperren und Worker-Identität (F04).
+- `services/invoice_processing/service.py` und `ui/modules/rechnungen/refunds_dialog.py`: dauerhafter Claim fuer Gutschrift-Mails; unklarer Versand sperrt Retry.
 - `ui/modules/rechnungen/view.py`: manuelle Worker und asynchroner Alarmzähler (F05/F06).
 - `ui/modules/rechnungen/offene_drucke_dialog.py`: sequenzsichere Anhänge (F07).
 
@@ -456,6 +457,7 @@ eingetragen. Bereits durchgeführt:
 - AP03-Claims und externe Aktionstests: **90 bestanden** aus InvoiceService-,
   Claim-Store- und Wix-Client-Tests (1,63 s); Ruff: **gruen**; mypy strict fuer
   `operation_claims.py`: **gruen**.
+- Gutschrift-Mailclaim: **2 neue Fake-Transporttests** belegen einmaligen Erfolg und Sperre nach unklarem Timeout; Refund-Dialog/Claim-Tests zusammen **6 bestanden**. Ruff gruen. Mypy im gesamten `invoice_processing/service.py` zeigt die bekannte bestehende Baseline von 44 Fehlern; die bearbeiteten neuen Methoden erzeugten keine neue Meldung.
 - AP04-Feed-Normalisierung: **51 Tests bestanden** ueber Invoice-/Credit-Feeds,
   Status-/Decimal-Helfer und Bestandsbuchung (2,43 s); Ruff: **gruen**.
 - Regression fuer F10: Ziel 2->3->2 bei Anfangsbestand 10 ergibt Endbestand 8;

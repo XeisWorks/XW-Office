@@ -7,6 +7,7 @@ from xw_office.models.base import Base
 from xw_office.models.settings_kv import SettingKV
 from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.invoice_processing.operation_claims import InvoiceOperationClaimStore
+from xw_office.services.invoice_processing.service import InvoiceProcessingService
 
 
 def _repository() -> SettingKvRepository:
@@ -56,4 +57,76 @@ def test_unknown_claim_blocks_automatic_retry() -> None:
 
     assert retry.acquired is False
     assert retry.state == "unknown"
+
+
+def test_credit_note_mail_claim_blocks_duplicate_after_success() -> None:
+    repository = _repository()
+    service = InvoiceProcessingService.__new__(InvoiceProcessingService)
+    service._operation_claims = InvoiceOperationClaimStore(repository)
+
+    class Mailer:
+        calls = 0
+
+        def send_mail(self, **kwargs: object) -> None:
+            self.calls += 1
+            attachment = kwargs["attachments"]
+            assert attachment[0].content == b"pdf"  # type: ignore[index,union-attr]
+
+        @staticmethod
+        def plain_text_to_html(value: str) -> str:
+            return value
+
+    mailer = Mailer()
+    service._mail_service = mailer
+    kwargs = {
+        "recipient": "customer@example.test",
+        "credit_note_number": "G-100",
+        "subject": "Gutschrift",
+        "text_body": "Hallo",
+        "pdf_bytes": b"pdf",
+    }
+    service.send_credit_note_mail("credit-100", **kwargs)
+
+    try:
+        service.send_credit_note_mail("credit-100", **kwargs)
+    except RuntimeError as exc:
+        assert "bereits beansprucht" in str(exc)
+    else:
+        raise AssertionError("duplicate credit-note mail was allowed")
+    assert mailer.calls == 1
+
+
+def test_unclear_credit_note_mail_result_blocks_retry() -> None:
+    repository = _repository()
+    service = InvoiceProcessingService.__new__(InvoiceProcessingService)
+    service._operation_claims = InvoiceOperationClaimStore(repository)
+
+    class Mailer:
+        calls = 0
+
+        def send_mail(self, **_kwargs: object) -> None:
+            self.calls += 1
+            raise TimeoutError("transport timed out after submission")
+
+        @staticmethod
+        def plain_text_to_html(value: str) -> str:
+            return value
+
+    mailer = Mailer()
+    service._mail_service = mailer
+    kwargs = {
+        "recipient": "customer@example.test",
+        "credit_note_number": "G-101",
+        "subject": "Gutschrift",
+        "text_body": "Hallo",
+        "pdf_bytes": b"pdf",
+    }
+    for expected in ("unklar", "bereits beansprucht"):
+        try:
+            service.send_credit_note_mail("credit-101", **kwargs)
+        except RuntimeError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("unclear credit-note mail result was retried")
+    assert mailer.calls == 1
 
