@@ -147,7 +147,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F15 | P1 | ERLEDIGT | Decimal-Mengen, finale Statuswerte, stabile Positions-IDs und Needs-Review wurden strikt validiert. Der Invoice-Poll speichert einen atomaren Erfolgswasserstand mit 30-Tage-Overlap; bei Fehlern/Needs-Review bleibt er stehen. sevDesk-Seitenlimit wirft `TaxPageLimitError`, bevor Ergebnisse als vollstaendig gelten. | Feed-Validierungs-, Checkpoint- und `load_tax_resource`-Paginationstests |
 | F16 | P1 | TEILWEISE | START bucht Hub je finalisierter Rechnung und Legacy-Bestand ueber ein transaktionales Journal je `invoice_id:SKU`; Wiederholung bleibt idempotent. Offen bleiben die getrennten Legacy-/Hub-Journale und der isolierte 2+1-Teilfehler-/STOP-Betriebsnachweis. | SQLite-Regression fuer per-Rechnung-Verbrauch, Replay, fehlgeschlagene Buchung ohne Teilupdate und Transaktionsrollback; externer Mehrsystemnachweis Gate G2 |
 | F17 | P2 | TEILWEISE | Alarmdetail-Laden, Schwellenwertspeichern und Task-Mail laufen asynchron. Refund-Liste, Mailvorbereitung/-versand und PDF-Abruf, OPEN-PRINTS-Anhaenge/Erledigen, Ueberweisungs-PDF sowie PLC-Trackingimport und Paketcode-Zuordnung nutzen Worker. Due-/Wix-/Inbox-Pruefungen und Nachbetreuungs-Badgezaehler laufen bereits im koaleszierten BackgroundWorker von `TagesgeschaeftView._refresh_badges`; weitere UI-I/O-Pfade bleiben zu pruefen. | Eventloop-Heartbeats mit blockierten Fakes fuer Refunds, OPEN-PRINTS, Ueberweisungs-PDF und PLC-Trackingaktionen; Fallback-/Badge-Tests; Codepfad `_create_badge_refresh_worker` |
-| F18 | P2 | TEILWEISE | Sendungen-, Ueberweisungs-, Nachbetreuungs- und OPEN-PRINTS-Dialoge warten beim Schliessen nicht mehr im GUI-Thread auf Worker und verwerfen spaete UI-Ergebnisse. Weitere Dialoge und globale Close-Policies bleiben offen. | Blockierende Fake-Worker: Dialog schliesst sofort; Nachbetreuung/Ueberweisung/OPEN-PRINTS ohne UI-Callbacks nach Close |
+| F18 | P2 | TEILWEISE | Sendungen-, Ueberweisungs-, Nachbetreuungs- und OPEN-PRINTS-Dialoge verwerfen spaete UI-Ergebnisse. Auch der Zusatzrechnungsdialog wartet beim Schliessen nicht mehr auf Kontakt-Reads; bei laufender Rechnungserstellung bleibt er fuer Ergebnisfeedback offen. `TagesgeschaeftView` deferiert Close jetzt ereignisgesteuert, statt bis zu fuenf Sekunden im GUI-Thread auf Worker zu warten. In `ui/modules/rechnungen` gibt es keine direkten `.wait()`-Aufrufe mehr; weitere spaete Callback-/Close-Policies bleiben zu auditieren. | Blockierte Fake-Worker: Aftercare-Dialog bleibt reaktionsfaehig, ignoriert spaete Leseergebnisse und erhaelt Write-Feedback; Tagesgeschaeft-Close-Heartbeat bleibt reaktionsfaehig und schliesst nach Worker-Ende |
 | F19 | P2 | TEILWEISE | Invoice-PDFs verwenden jetzt einen 64-MiB-LRU und pruefen die erwartete Rechnungsnummer auch bei Cache-Hits; ein abweichendes PDF wird verworfen und neu geladen. Header-/WorkContext-Revisionen und gebuendelte Produktauflosung bleiben offen. | Regression: Nummernabweichung im Cache erzeugt neuen Fetch; Byte-Limit behaelt nur aktuelle PDFs |
 | F20 | P2 | TEILWEISE | pytest laedt keine lokale dotenv-Konfiguration; sensible Umgebungsvariablen werden entfernt und externe Socket-Verbindungen blockiert (Loopback bleibt erlaubt). `InvoiceProcessingService` ist mypy-fehlerfrei; weitere Paketbereinigung und Controller-Extraktion bleiben offen. | Gesamtsuite ohne lokale Credentials/ausgehende Verbindungen; mypy-Baseline dokumentiert |
 | F21 | P1 | ERLEDIGT | `view.py::_DraftInvoiceDialog`: nach erfolgreicher Vorschau konnte die Ordernummer ge?ndert und weiterhin best?tigt werden. Jede Eingabe?nderung invalidiert nun die Vorschaufreigabe. | Qt-Test: Vorschau A ? Eingabe B bleibt gesperrt, erst Vorschau B erlaubt Best?tigen |
@@ -425,6 +425,8 @@ Geänderte Produktionsdateien:
 - `ui/modules/rechnungen/offene_ueberweisungen_dialog.py`: Rechnungsauswahl aus dem asynchron geladenen Fallkontext; PDF-Download und temporaere Dateiablage im Worker (F17).
 
 - `ui/modules/rechnungen/customer_aftercare_manager_dialog.py`: schliesst ohne Worker-Wartezeit; invalidiert Detail-/Aktionscallbacks und behaelt typisierte Bestaetigungsdaten (F18).
+- `ui/modules/rechnungen/customer_aftercare_invoice_dialog.py`: blockierte Kontakt-Reads halten Close nicht mehr auf und spaete Ergebnisse werden verworfen; laufende Rechnungserstellung bleibt bis zum Ergebnis offen.
+- `ui/modules/rechnungen/tagesgeschaeft_view.py`: Shutdown wartet asynchron auf die Worker statt bis zu fuenf Sekunden im GUI-Thread zu blockieren; Timer schliesst nach Worker-Ende.
 
 - `ui/modules/rechnungen/plc_evidence_dialog.py`: PLC-Nachweis laden, Original-Tracking-XML importieren und Paketcode zuordnen laufen asynchron; spaete Ergebnisse werden nach Dialogschluss verworfen (F17/F18).
 
@@ -436,7 +438,7 @@ vorhandene PLC-Funktion angepasst (F08).
 
 ### Tatsächliche Prüfergebnisse
 
-Aktueller Gesamtlauf nach den letzten Aenderungen: **2.076 bestanden, 1 Warnung, 0 fehlgeschlagen in 139,23 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
+Aktueller Gesamtlauf nach den letzten Aenderungen: **2.079 bestanden, 1 Warnung, 0 fehlgeschlagen in 142,23 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
 
 Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
 - Erster Gesamtlauf: **1.979 bestanden, 4 fehlgeschlagen**, 138,53 s.
@@ -481,6 +483,10 @@ Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
 - F14 Positionsdarstellung: Rechnungsansicht **82 bestanden**, inklusive Test aller
   normalisierten Details fuer nichtdruckbare SevDesk-Positionen; Ruff fuer View und
   Testdatei gruen. Gesamtsuite danach **2.076 bestanden**.
+- F18 Close-Lebenszyklus: **14 fokussierte Tests bestanden** fuer Aftercare-Dialog und
+  Tagesgeschaeft-Close; Ruff gruen. Mypy fuer den Zusatzrechnungsdialog gruen;
+  `tagesgeschaeft_view.py` enthaelt 19 bestehende Typfehler ausserhalb der Close-Aenderung.
+  Gesamtsuite danach **2.079 bestanden**.
   eine provisorische Schlüsseländerung kaschiert.
 
 Reproduktion der regulären Prüfungen aus dem Repository:

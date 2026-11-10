@@ -1,9 +1,14 @@
 """Tests for the Lieferkorrektur badges/popup wiring in TagesgeschaeftView (Phase 10)."""
 from __future__ import annotations
 
+from threading import Event
+
+from PySide6.QtCore import QTimer
+
 from xw_office.core.config import AppConfig
 from xw_office.core.container import Container
 from xw_office.core.signals import AppSignals
+from xw_office.core.worker import BackgroundWorker
 from xw_office.bootstrap import register_default_services
 from xw_office.ui.modules.rechnungen.tagesgeschaeft_view import TagesgeschaeftView
 
@@ -61,6 +66,36 @@ def test_badges_result_hides_buttons_at_zero(qtbot: object) -> None:
 
     assert view._btn_lieferkorrektur_review_alert.isHidden()  # noqa: SLF001
     assert view._btn_lieferkorrektur_due_alert.isHidden()  # noqa: SLF001
+
+
+def test_close_defers_without_blocking_until_workers_finish(qtbot: object, monkeypatch) -> None:
+    container = _build_container()
+    view = TagesgeschaeftView(container)
+    qtbot.addWidget(view)
+    monkeypatch.setattr(view, "_refresh_badges", lambda: None)  # noqa: SLF001
+    view.show()
+    entered, release = Event(), Event()
+
+    def blocked_job() -> None:
+        entered.set()
+        release.wait(3)
+
+    worker = BackgroundWorker(blocked_job)
+    view._badge_worker = worker  # noqa: SLF001
+    worker.start()
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=3000)
+        heartbeat = Event()
+        QTimer.singleShot(0, heartbeat.set)
+        view.close()
+        qtbot.waitUntil(heartbeat.is_set, timeout=500)
+        assert not view.isHidden()
+        assert view._close_timer.isActive()  # noqa: SLF001
+        release.set()
+        qtbot.waitUntil(view.isHidden, timeout=3000)
+        assert not view._close_timer.isActive()  # noqa: SLF001
+    finally:
+        release.set()
 
 
 def test_new_review_cases_without_active_window_does_not_start_popup_worker(qtbot: object) -> None:

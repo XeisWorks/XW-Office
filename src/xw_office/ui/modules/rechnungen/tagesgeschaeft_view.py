@@ -355,9 +355,13 @@ class TagesgeschaeftView(QWidget):
         self._pending_start_preflight: StartPreflight | None = None
         self._start_product_preflight_started_at = 0.0
         self._start_abort_requested = False
+        self._close_ready = False
         self._badge_timer = QTimer(self)
         self._badge_timer.setInterval(60000)
         self._badge_timer.timeout.connect(self._refresh_badges)
+        self._close_timer = QTimer(self)
+        self._close_timer.setInterval(50)
+        self._close_timer.timeout.connect(self._finish_pending_close)
         self._build_ui()
 
     def showEvent(self, event: QShowEvent) -> None:
@@ -370,15 +374,18 @@ class TagesgeschaeftView(QWidget):
         self._badge_timer.stop()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self._close_ready:
+            self._close_timer.stop()
+            super().closeEvent(event)
+            return
         self._badge_timer.stop()
-        if self._rechnungen_view is not None and self._rechnungen_view.prepare_shutdown() is False:
-            logger.warning("Tagesgeschaeft close postponed because Rechnung jobs are still running")
+        self.request_shutdown()
+        if not self.shutdown_complete():
+            logger.info("Tagesgeschaeft close deferred until background jobs finish")
             event.ignore()
+            self._close_timer.start()
             return
-        if not self._wait_for_workers():
-            logger.warning("Tagesgeschaeft close postponed because a worker is still running")
-            event.ignore()
-            return
+        self._close_ready = True
         super().closeEvent(event)
 
     def has_active_flow(self) -> bool:
@@ -430,15 +437,12 @@ class TagesgeschaeftView(QWidget):
             if worker is not None
         )
 
-    def _wait_for_workers(self) -> bool:
-        self.request_shutdown()
-        deadline = time.monotonic() + 5.0
-        for worker in self._shutdown_workers():
-            if worker.isRunning():
-                remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
-                if not worker.wait(remaining_ms):
-                    return False
-        return True
+    def _finish_pending_close(self) -> None:
+        if not self.shutdown_complete():
+            return
+        self._close_timer.stop()
+        self._close_ready = True
+        self.close()
 
     def _build_ui(self) -> None:
         self._main_layout = QVBoxLayout(self)

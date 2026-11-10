@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import uuid
+from threading import Event
 
+from PySide6.QtCore import QTimer
 from xw_office.core.config import AppConfig
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
 from xw_office.services.crm.types import ContactRecord
@@ -60,6 +62,30 @@ class _FakeInvoiceService:
         return InvoiceCreationResult(invoice_id="999", invoice_number="RE-999", reused_existing=False)
 
 
+class _BlockingContactClient(_FakeContactClient):
+    def __init__(self, entered: Event, release: Event) -> None:
+        super().__init__([ContactRecord(id="2", name="Musikhaus Mueller", email="mueller@example.com")])
+        self.entered = entered
+        self.release = release
+
+    def list_contacts(self, **kwargs: object) -> list[ContactRecord]:
+        self.entered.set()
+        self.release.wait(3)
+        return super().list_contacts(**kwargs)
+
+
+class _BlockingInvoiceService(_FakeInvoiceService):
+    def __init__(self, entered: Event, release: Event) -> None:
+        super().__init__()
+        self.entered = entered
+        self.release = release
+
+    def create_invoice(self, case, items, *, contact_id: str, country_code: str) -> InvoiceCreationResult:
+        self.entered.set()
+        self.release.wait(3)
+        return super().create_invoice(case, items, contact_id=contact_id, country_code=country_code)
+
+
 class _FakeContainer:
     def __init__(self, aftercare: _FakeAftercareService, invoices: _FakeInvoiceService, contacts: _FakeContactClient) -> None:
         self.config = AppConfig()
@@ -106,6 +132,62 @@ def test_positions_preview_shows_courtesy_discount(qtbot: object) -> None:
     qtbot.addWidget(dialog)
 
     assert "Notenheft A" in dialog._positions_view.toPlainText()  # noqa: SLF001
+
+
+def test_close_during_contact_load_does_not_wait_or_apply_late_result(qtbot: object) -> None:
+    entered, release = Event(), Event()
+    dialog = CustomerAftercareInvoiceDialog(
+        _FakeContainer(
+            _FakeAftercareService(),
+            _FakeInvoiceService(),
+            _BlockingContactClient(entered, release),
+        ),  # type: ignore[arg-type]
+        _case(),
+        _items(),
+    )
+    qtbot.addWidget(dialog)
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=3000)
+        heartbeat = Event()
+        QTimer.singleShot(0, heartbeat.set)
+        dialog.reject()
+        qtbot.waitUntil(heartbeat.is_set, timeout=500)
+        assert dialog.result() == dialog.DialogCode.Rejected
+        release.set()
+        qtbot.waitUntil(lambda: dialog._contacts_worker is None, timeout=3000)  # noqa: SLF001
+        assert dialog._contact_combo.count() == 0  # noqa: SLF001
+    finally:
+        release.set()
+
+
+def test_close_during_invoice_creation_preserves_result_feedback(qtbot: object) -> None:
+    entered, release = Event(), Event()
+    invoices = _BlockingInvoiceService(entered, release)
+    dialog = CustomerAftercareInvoiceDialog(
+        _FakeContainer(
+            _FakeAftercareService(),
+            invoices,
+            _FakeContactClient(
+                [ContactRecord(id="2", name="Musikhaus Mueller", email="mueller@example.com")]
+            ),
+        ),  # type: ignore[arg-type]
+        _case(),
+        _items(),
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+    try:
+        _wait_contacts_loaded(qtbot, dialog)
+        dialog._btn_create.click()  # noqa: SLF001
+        qtbot.waitUntil(entered.is_set, timeout=3000)
+        dialog.reject()
+        assert not dialog.isHidden()
+        assert "wird noch abgeschlossen" in dialog._status.text()  # noqa: SLF001
+        release.set()
+        qtbot.waitUntil(lambda: dialog.result() == dialog.DialogCode.Accepted, timeout=3000)
+        assert dialog.created_invoice is not None
+    finally:
+        release.set()
 
 
 def test_create_without_contact_shows_warning_and_does_not_call_service(

@@ -68,27 +68,45 @@ class CustomerAftercareInvoiceDialog(QDialog):
         self._contacts: list[ContactRecord] = []
         self._contacts_worker: BackgroundWorker | None = None
         self._action_worker: BackgroundWorker | None = None
+        self._closing = False
+        self._allow_action_close = False
         self.action_taken: str = "later"
         self.created_invoice: InvoiceCreationResult | None = None
         self._build_ui()
         QTimer.singleShot(0, self._load_contacts)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        self._wait_for_workers()
+        if self._action_is_running() and not self._allow_action_close:
+            self._status.setText("Die Zusatzrechnungs-Aktion wird noch abgeschlossen.")
+            event.ignore()
+            return
+        self._invalidate_callbacks()
         super().closeEvent(event)
 
     def accept(self) -> None:
-        self._wait_for_workers()
+        if self._action_is_running() and not self._allow_action_close:
+            return
+        self._invalidate_callbacks()
         super().accept()
 
     def reject(self) -> None:
-        self._wait_for_workers()
+        if self._action_is_running():
+            self._status.setText("Die Zusatzrechnungs-Aktion wird noch abgeschlossen.")
+            return
+        self._invalidate_callbacks()
         super().reject()
 
-    def _wait_for_workers(self) -> None:
-        for worker in (self._contacts_worker, self._action_worker):
-            if worker is not None and worker.isRunning():
-                worker.wait(3000)
+    def _action_is_running(self) -> bool:
+        # Keep the dialog open until the queued result/error callback has run,
+        # even if the worker thread has already stopped.
+        return self._action_worker is not None
+
+    def _invalidate_callbacks(self) -> None:
+        self._closing = True
+
+    def _clear_worker(self, attribute: str, worker: BackgroundWorker) -> None:
+        if getattr(self, attribute) is worker:
+            setattr(self, attribute, None)
 
     def _build_ui(self) -> None:
         self.setWindowTitle("Zusatzrechnung")
@@ -136,6 +154,8 @@ class CustomerAftercareInvoiceDialog(QDialog):
         root.addWidget(buttons)
 
     def _load_contacts(self) -> None:
+        if self._closing:
+            return
         if self._contacts_worker is not None and self._contacts_worker.isRunning():
             return
         self._status.setText("Lade sevDesk-Kontakte…")
@@ -144,17 +164,23 @@ class CustomerAftercareInvoiceDialog(QDialog):
             return self._contacts_client.list_contacts()
 
         def on_result(contacts: object) -> None:
+            if self._closing:
+                return
             self._contacts = contacts if isinstance(contacts, list) else []
             self._populate_contacts()
             self._status.setText("")
 
         def on_error(exc: Exception) -> None:
+            if self._closing:
+                return
             self._status.setText(f"Kontakte konnten nicht geladen werden: {exc}")
 
         worker = BackgroundWorker(job)
         worker.signals.result.connect(on_result)
         worker.signals.error.connect(on_error)
-        worker.signals.finished.connect(lambda: setattr(self, "_contacts_worker", None))
+        worker.signals.finished.connect(
+            lambda current=worker: self._clear_worker("_contacts_worker", current)
+        )
         self._contacts_worker = worker
         worker.start()
 
@@ -174,6 +200,8 @@ class CustomerAftercareInvoiceDialog(QDialog):
         return str(self._contact_combo.currentData() or "")
 
     def _on_create_clicked(self) -> None:
+        if self._closing:
+            return
         contact_id = self._selected_contact_id()
         if not contact_id:
             QMessageBox.warning(self, "Zusatzrechnung", "Bitte einen sevDesk-Kontakt auswählen.")
@@ -193,24 +221,33 @@ class CustomerAftercareInvoiceDialog(QDialog):
             )
 
         def on_result(result: object) -> None:
+            if self._closing:
+                return
             self._set_buttons_enabled(True)
             if isinstance(result, InvoiceCreationResult):
                 self.created_invoice = result
                 self.action_taken = "invoiced"
+                self._allow_action_close = True
                 self.accept()
 
         def on_error(exc: Exception) -> None:
+            if self._closing:
+                return
             self._set_buttons_enabled(True)
             self._status.setText(f"Fehler: {exc}")
 
         worker = BackgroundWorker(job)
         worker.signals.result.connect(on_result)
         worker.signals.error.connect(on_error)
-        worker.signals.finished.connect(lambda: setattr(self, "_action_worker", None))
+        worker.signals.finished.connect(
+            lambda current=worker: self._clear_worker("_action_worker", current)
+        )
         self._action_worker = worker
         worker.start()
 
     def _on_skip_clicked(self) -> None:
+        if self._closing:
+            return
         if self._action_worker is not None and self._action_worker.isRunning():
             return
         self._set_buttons_enabled(False)
@@ -219,17 +256,24 @@ class CustomerAftercareInvoiceDialog(QDialog):
             self._aftercare.mark_invoice_skipped(self._case.id)
 
         def on_result(_result: object) -> None:
+            if self._closing:
+                return
             self.action_taken = "skipped"
+            self._allow_action_close = True
             self.accept()
 
         def on_error(exc: Exception) -> None:
+            if self._closing:
+                return
             self._set_buttons_enabled(True)
             self._status.setText(f"Fehler: {exc}")
 
         worker = BackgroundWorker(job)
         worker.signals.result.connect(on_result)
         worker.signals.error.connect(on_error)
-        worker.signals.finished.connect(lambda: setattr(self, "_action_worker", None))
+        worker.signals.finished.connect(
+            lambda current=worker: self._clear_worker("_action_worker", current)
+        )
         self._action_worker = worker
         worker.start()
 
