@@ -2693,6 +2693,52 @@ def test_rechnungen_piece_details_use_model_instead_of_row_widgets(
     assert not view._piece_list.isHidden()  # noqa: SLF001
 
 
+def test_open_product_enrichment_runs_off_ui_thread_and_discards_stale_result(
+    qtbot: QtBot, monkeypatch: MonkeyPatch
+) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    first = PrintProductAggregate(sku="XW-OLD", title="Alt", description="", quantity=1)
+    latest = PrintProductAggregate(sku="XW-LATEST", title="Aktuell", description="", quantity=1)
+    latest_overview = OpenInvoiceOverview(
+        key="latest", total=1, with_ref=1, physical=1, digital=0,
+        unknown=0, with_note=0, plc=0, complete=True, print_products=[latest],
+    )
+    entered, release, heartbeat = Event(), Event(), Event()
+
+    def blocked(item: PrintProductAggregate) -> PieceBlock:
+        if item.sku == first.sku:
+            entered.set()
+            assert release.wait(3)
+        return PieceBlock(sku=str(item.sku), name=str(item.title), qty_needed=1)
+
+    monkeypatch.setattr(view, "_resolve_piece_block_from_open_product", blocked)
+    monkeypatch.setattr(view, "_resolve_open_print_product_ready", lambda _item: True)
+    view._apply_open_invoice_overview(
+        OpenInvoiceOverview(
+            key="slow-old", total=1, with_ref=1, physical=1, digital=0,
+            unknown=0, with_note=0, plc=0, complete=True, print_products=[first],
+        )
+    )
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=2000)
+        QTimer.singleShot(0, heartbeat.set)
+        qtbot.waitUntil(heartbeat.is_set, timeout=1000)
+        assert view._open_products_rows_layout.count() >= 2  # noqa: SLF001
+        view._apply_open_invoice_overview(latest_overview)
+    finally:
+        release.set()
+
+    qtbot.waitUntil(
+        lambda: view._open_product_prepared_target
+        == view._open_product_preparation_key(latest_overview),
+        timeout=5000,
+    )
+    assert view._open_product_check_key(latest) in view._open_product_prepared_blocks  # noqa: SLF001
+    assert view._open_product_check_key(first) not in view._open_product_prepared_blocks  # noqa: SLF001
+
+
 def test_late_invoice_product_configuration_is_discarded_after_selection_change(
     qtbot: QtBot, monkeypatch: MonkeyPatch
 ) -> None:

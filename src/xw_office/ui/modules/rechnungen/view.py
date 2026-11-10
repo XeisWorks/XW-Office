@@ -1298,6 +1298,14 @@ class RechnungenView(QWidget):
         self._invoice_pdf_preview_worker: BackgroundWorker | None = None
         self._delete_draft_worker: BackgroundWorker | None = None
         self._open_overview_worker: BackgroundWorker | None = None
+        self._open_product_preparation_worker: BackgroundWorker | None = None
+        self._open_product_preparation_seq = 0
+        self._open_product_preparation_target: tuple[object, ...] | None = None
+        self._open_product_preparation_pending: OpenInvoiceOverview | None = None
+        self._open_product_current_overview: OpenInvoiceOverview | None = None
+        self._open_product_prepared_target: tuple[object, ...] | None = None
+        self._open_product_prepared_blocks: dict[tuple[str, str, str], PieceBlock] = {}
+        self._open_product_ready_cache: dict[tuple[str, str, str], bool] = {}
         self._product_print_worker: BackgroundWorker | None = None
         self._product_print_handles: list[JobHandle] = []
         self._active_individual_print_keys: set[str] = set()
@@ -2192,6 +2200,7 @@ class RechnungenView(QWidget):
                 self._invoice_pdf_preview_worker,
                 self._delete_draft_worker,
                 self._open_overview_worker,
+                self._open_product_preparation_worker,
                 self._product_print_worker,
                 self._redelivery_prepare_worker,
                 self._redelivery_apply_worker,
@@ -3421,6 +3430,7 @@ class RechnungenView(QWidget):
         return replace(overview, print_products=informational)
 
     def _apply_open_invoice_overview(self, overview: OpenInvoiceOverview) -> None:
+        self._ensure_open_product_preparation(overview)
         overview = self._plan_open_print_overview(overview)
         for key, value in overview.cache_updates.items():
             self._wix_digital_cache[str(key)] = bool(value)
@@ -3446,6 +3456,85 @@ class RechnungenView(QWidget):
         self._render_open_print_products(self._print_product_display_overview(overview))
         self._render_buyer_notes(overview)
         self._render_unreleased_assignments(overview)
+
+    def _open_product_preparation_key(
+        self, overview: OpenInvoiceOverview
+    ) -> tuple[object, ...]:
+        return (
+            overview.key,
+            self._active_print_history_index,
+            tuple(self._open_product_check_key(item) for item in overview.print_products),
+        )
+
+    def _ensure_open_product_preparation(self, overview: OpenInvoiceOverview) -> None:
+        target = self._open_product_preparation_key(overview)
+        self._open_product_current_overview = overview
+        if target == self._open_product_prepared_target or target == self._open_product_preparation_target:
+            return
+        worker = self._open_product_preparation_worker
+        if worker is not None and worker.isRunning():
+            self._open_product_preparation_seq += 1
+            self._open_product_preparation_target = target
+            self._open_product_preparation_pending = overview
+            return
+        self._open_product_preparation_seq += 1
+        seq = self._open_product_preparation_seq
+        self._open_product_preparation_target = target
+        items = list(overview.print_products)
+
+        def job() -> tuple[int, tuple[object, ...], dict[tuple[str, str, str], PieceBlock], dict[tuple[str, str, str], bool]]:
+            blocks: dict[tuple[str, str, str], PieceBlock] = {}
+            ready: dict[tuple[str, str, str], bool] = {}
+            for item in items:
+                key = self._open_product_check_key(item)
+                blocks[key] = self._resolve_piece_block_from_open_product(item)
+                ready[key] = self._resolve_open_print_product_ready(item)
+            return seq, target, blocks, ready
+
+        worker = BackgroundWorker(job)
+        self._open_product_preparation_worker = worker
+        worker.signals.result.connect(self._on_open_product_preparation_result)
+        worker.signals.error.connect(
+            lambda exc, worker_seq=seq, worker_target=target: self._on_open_product_preparation_error(
+                exc, worker_seq, worker_target
+            )
+        )
+        worker.signals.finished.connect(self._on_open_product_preparation_finished)
+        worker.start()
+
+    def _on_open_product_preparation_result(self, payload: object) -> None:
+        if not isinstance(payload, tuple) or len(payload) != 4:
+            return
+        seq, target, blocks, ready = payload
+        if seq != self._open_product_preparation_seq or target != self._open_product_preparation_target:
+            return
+        if isinstance(blocks, dict) and isinstance(ready, dict):
+            self._open_product_prepared_blocks = blocks
+            self._open_product_ready_cache = ready
+            self._open_product_prepared_target = target
+            overview = self._open_product_current_overview
+            if overview is not None and self._open_product_preparation_key(overview) == target:
+                self._apply_open_invoice_overview(overview)
+
+    def _on_open_product_preparation_error(
+        self, exc: Exception, seq: int, target: tuple[object, ...]
+    ) -> None:
+        logger.warning("Open print product preparation failed: %s", exc)
+        if seq != self._open_product_preparation_seq or target != self._open_product_preparation_target:
+            return
+        overview = self._open_product_current_overview
+        if target is not None and overview is not None:
+            self._open_product_prepared_target = target
+            self._open_product_prepared_blocks = {}
+            self._open_product_ready_cache = {}
+            self._apply_open_invoice_overview(overview)
+
+    def _on_open_product_preparation_finished(self) -> None:
+        self._open_product_preparation_worker = None
+        pending = self._open_product_preparation_pending
+        self._open_product_preparation_pending = None
+        if pending is not None:
+            self._ensure_open_product_preparation(pending)
 
     def mark_print_products_last_run(
         self,
@@ -4118,6 +4207,7 @@ class RechnungenView(QWidget):
                 print_products=list(snapshot.print_products),
                 unreleased_assignments=list(snapshot.unreleased_assignments),
             )
+        self._ensure_open_product_preparation(overview)
         if overview.unknown and not overview.print_products:
             self._set_open_products_message("Print-Produkte werden ermittelt...", loading=True)
             self._update_print_all_products_button()
@@ -4550,12 +4640,11 @@ class RechnungenView(QWidget):
         if sku_clean == "XW-010":
             try:
                 catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
-                res = catalog.resolve_unreleased_title(raw_title)
-                if res.is_resolved and res.canonical_name:
-                    resolved_title = res.canonical_name
+                resolution = catalog.resolve_unreleased_title(raw_title)
+                if resolution.is_resolved and resolution.canonical_name:
+                    resolved_title = resolution.canonical_name
             except Exception:
                 pass
-
         title = QLabel(resolved_title)
         title.setWordWrap(True)
         title.setStyleSheet("color: #ffffff; font-weight: 700;")
@@ -4709,6 +4798,9 @@ class RechnungenView(QWidget):
         )
 
     def _open_print_product_ready(self, item: PrintProductAggregate) -> bool:
+        return self._open_product_ready_cache.get(self._open_product_check_key(item), False)
+
+    def _resolve_open_print_product_ready(self, item: PrintProductAggregate) -> bool:
         try:
             catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
             config = catalog.resolve_print_config(item.sku, title=item.title)
@@ -4723,6 +4815,11 @@ class RechnungenView(QWidget):
         return bool(profile_id or (isinstance(plan, list) and any(isinstance(entry, dict) for entry in plan)))
 
     def _piece_block_from_open_product(self, item: PrintProductAggregate) -> PieceBlock:
+        return self._open_product_prepared_blocks.get(
+            self._open_product_check_key(item), self._basic_piece_block_from_open_product(item)
+        )
+
+    def _basic_piece_block_from_open_product(self, item: PrintProductAggregate) -> PieceBlock:
         sku = str(item.sku or "").strip().upper()
         title = str(item.title or "").strip() or sku
         description = str(item.description or "").strip()
@@ -4734,6 +4831,11 @@ class RechnungenView(QWidget):
             is_unreleased=True,
             stock_status=None,
         )
+        return block
+
+    def _resolve_piece_block_from_open_product(self, item: PrintProductAggregate) -> PieceBlock:
+        block = self._basic_piece_block_from_open_product(item)
+        sku = block.sku
         try:
             catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
             block = resolve_piece_print_config(catalog, block)
