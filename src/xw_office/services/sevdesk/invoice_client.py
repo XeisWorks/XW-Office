@@ -1125,7 +1125,9 @@ class InvoiceClient:
         payload = response.json()
         objects = payload.get("objects") if isinstance(payload, dict) else []
         if not isinstance(objects, list):
-            return []
+            raise ValueError(
+                f"Unexpected InvoicePos payload for invoice {str(invoice_id).strip()}"
+            )
         result = [item for item in objects if isinstance(item, dict)]
         result.sort(
             key=lambda item: (

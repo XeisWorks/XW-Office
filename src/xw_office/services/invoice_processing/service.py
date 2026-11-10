@@ -1747,18 +1747,24 @@ class InvoiceProcessingService:
         """
         invoice_id = str(summary.id or "").strip()
         cached = self._invoice_work_context_cache.get(invoice_id)
-        if not force and cached is not None and self._context_is_current(cached, summary):
+        if (
+            not force
+            and cached is not None
+            and self._context_is_current(cached, summary)
+            and (not load_positions or cached.positions_loaded)
+        ):
             return cached
 
         invoice = self._fetch_invoice_detail(invoice_id, force=force)
         positions: tuple[Any, ...] = ()
+        positions_error = ""
         if load_positions and invoice_id:
             try:
                 raw_positions = self._invoices.fetch_invoice_positions(invoice_id)
                 positions = normalize_invoice_positions(raw_positions)
             except Exception as exc:  # noqa: BLE001 - invoice header remains useful.
                 logger.warning("Invoice positions could not be loaded for %s: %s", invoice_id, exc)
-                positions = ()
+                positions_error = str(exc) or exc.__class__.__name__
 
         billing, shipping, shipping_source = address_lines_from_invoice(invoice, summary)
         customer_name = self._resolve_customer_name(summary, invoice)
@@ -1803,13 +1809,23 @@ class InvoiceProcessingService:
             capabilities=capabilities,
             warnings=tuple(warning for position in positions for warning in position.warnings),
             source_updated_at=str(summary.source_updated_at or invoice.get("update") or "").strip(),
+            header_loaded=True,
+            positions_loaded=load_positions and not positions_error,
+            positions_error=positions_error,
         )
-        self._invoice_work_context_cache[invoice_id] = context
+        # A failed or intentionally skipped positions request is not a complete
+        # invoice context.  Do not let it poison the cache for retries/printing.
+        if invoice_id and (not load_positions or context.positions_loaded):
+            self._invoice_work_context_cache[invoice_id] = context
         return context
 
     def get_cached_invoice_work_context(self, summary: InvoiceSummary) -> InvoiceWorkContext | None:
         context = self._invoice_work_context_cache.get(str(summary.id or "").strip())
-        if context is not None and self._context_is_current(context, summary):
+        if (
+            context is not None
+            and context.positions_loaded
+            and self._context_is_current(context, summary)
+        ):
             return context
         return None
 
@@ -1828,6 +1844,9 @@ class InvoiceProcessingService:
     ) -> list[Any]:
         """Return sevDesk-backed printable product blocks for one invoice."""
         context = self.load_invoice_work_context(summary, force=force, load_positions=True)
+        if not context.positions_loaded:
+            detail = context.positions_error or "Positionsdaten sind nicht vollständig geladen"
+            raise RuntimeError(f"Rechnungspositionen für {summary.invoice_number or summary.id} fehlen: {detail}")
         printable_positions = [
             position for position in context.positions if position.kind == "product"
         ]
@@ -2310,13 +2329,16 @@ class InvoiceProcessingService:
         digital_only: bool = False,
         printed_copy: bool = False,
     ) -> FulfillmentFlags:
-        preflight_context = None
-        if self._invoice_inventory is not None and not digital_only:
-            preflight_context = self.load_invoice_work_context(
-                summary, load_positions=True, force=True
+        preflight_context = self.load_invoice_work_context(
+            summary, load_positions=True, force=True
+        )
+        if not preflight_context.positions_loaded:
+            detail = preflight_context.positions_error or "Positionsdaten sind nicht vollständig geladen"
+            raise RuntimeError(
+                f"Rechnungsfreigabe für {summary.invoice_number or summary.id} gesperrt: {detail}"
             )
-            if preflight_context.positions:
-                self._invoice_inventory.validate_invoice_context(preflight_context.positions)
+        if self._invoice_inventory is not None and not digital_only and preflight_context.positions:
+            self._invoice_inventory.validate_invoice_context(preflight_context.positions)
         if printed_copy:
             self._invoices.send_invoice_document(summary.id, send_type="VPR", send_draft=False)
         else:
@@ -2342,7 +2364,7 @@ class InvoiceProcessingService:
             # Invoice positions cannot change after the successful sendBy call.
             # Reuse the already validated context instead of issuing the same
             # sevDesk detail/position requests a second time.
-            positions = preflight_context.positions if preflight_context is not None else ()
+            positions = preflight_context.positions
             try:
                 self._invoice_inventory.apply_invoice_context(
                     document_id=str(summary.id or ""),

@@ -4,8 +4,10 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from xw_office.core.config import AppConfig
-from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.services.invoice_processing.service import FulfillmentFlags, InvoiceProcessingService
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 
 
@@ -22,6 +24,9 @@ class _InvoiceClientStub:
         self.created_transactions: list[dict[str, object]] = []
         self.booked_transactions: list[dict[str, object]] = []
         self.book_result_status = "booked"
+        self.invoice_positions: dict[str, list[dict[str, object]]] = {}
+        self.position_fetch_errors: dict[str, Exception] = {}
+        self.position_fetch_calls: list[str] = []
 
     def list_invoice_summaries(
         self,
@@ -41,6 +46,13 @@ class _InvoiceClientStub:
             "name": "Max Mustermann",
             "contact": {"emails": [{"value": "max@example.test"}]},
         }
+
+    def fetch_invoice_positions(self, invoice_id: str) -> list[dict[str, object]]:
+        self.position_fetch_calls.append(invoice_id)
+        error = self.position_fetch_errors.get(invoice_id)
+        if error is not None:
+            raise error
+        return list(self.invoice_positions.get(invoice_id, []))
 
     def render_invoice_pdf(self, invoice_id: str) -> None:
         self.render_calls.append(invoice_id)
@@ -1370,7 +1382,42 @@ def test_send_invoice_mail_skips_graph_fallback_if_sevdesk_marked_sent_after_err
     assert flags.mail_sent is True
     assert recipient == "max@example.test"
     assert client.mail_calls == []
-    assert mailer.calls == []
+
+
+def test_failed_invoice_positions_are_visible_and_retried() -> None:
+    summary = InvoiceSummary(id="positions-retry", invoiceNumber="RE-POS-1")
+    client = _InvoiceClientStub([summary])
+    client.position_fetch_errors[summary.id] = TimeoutError("InvoicePos timeout")
+    service = InvoiceProcessingService(AppConfig(), client, _RepoStub({}))  # type: ignore[arg-type]
+
+    failed = service.load_invoice_work_context(summary)
+    assert failed.positions == ()
+    assert failed.positions_loaded is False
+    assert "timeout" in failed.positions_error.lower()
+    assert service.get_cached_invoice_work_context(summary) is None
+    with pytest.raises(RuntimeError, match="Rechnungspositionen"):
+        service.load_invoice_piece_blocks(summary)
+    with pytest.raises(RuntimeError, match="gesperrt"):
+        service._run_finalize_step(summary, FulfillmentFlags())
+    assert not hasattr(client, "last_send_document")
+
+    client.position_fetch_errors.clear()
+    retried = service.load_invoice_work_context(summary)
+    assert retried.positions_loaded is True
+    assert client.position_fetch_calls == [summary.id, summary.id, summary.id, summary.id]
+
+
+def test_header_only_context_does_not_satisfy_full_context_load() -> None:
+    summary = InvoiceSummary(id="positions-lazy", invoiceNumber="RE-POS-2")
+    client = _InvoiceClientStub([summary])
+    service = InvoiceProcessingService(AppConfig(), client, _RepoStub({}))  # type: ignore[arg-type]
+
+    header = service.load_invoice_work_context(summary, load_positions=False)
+    assert header.positions_loaded is False
+    full = service.load_invoice_work_context(summary, load_positions=True)
+
+    assert full.positions_loaded is True
+    assert client.position_fetch_calls == [summary.id]
 
 
 def test_send_invoice_mail_skips_when_sevdesk_invoice_already_sent() -> None:

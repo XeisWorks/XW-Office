@@ -13,7 +13,7 @@ zwischen diesen Bausteinen: Fallidentität bei asynchronen Antworten, dauerhafte
 Beanspruchen externer Schreibaktionen, unvollständige Positionsdaten sowie
 Transaktionsgrenzen zwischen Lagerbewegung, Buchungsmarke und Legacy-Bestand.
 
-**21 Code-/Testbefunde: 9 ERLEDIGT, 12 OFFEN. Keine bestätigte P0-Störung.**
+**21 Code-/Testbefunde: 12 ERLEDIGT, 9 OFFEN. Keine best?tigte P0-St?rung.**
 Zwei zusätzliche Betriebsabnahmen sind BLOCKIERT durch benötigte Testbelege,
 Hardware und eine isolierte PostgreSQL-Betriebsumgebung; sie sind nicht als
 zusätzliche Softwarefehler gezählt. „OFFEN“ bedeutet eine konkrete, im Folgenden
@@ -80,7 +80,7 @@ und Signalverdrahtungen stehen vollständig in Anhang A.
 | Tabellenaktion / Kontext | PLC/Post, Zoll, Nachlieferung; Statuschips lösen kontrollierte Retry-Schritte aus | Anwendbarkeit wird teilweise über Flags geprüft; serviceweite Claim-Lücke F12 |
 | Detailmenüs | Rechnung, Adresslabel, PLC, archivierte Packlisten, Noten; Ansehen von PDF/PLC/Zoll/Packlisten/Paketinhalt; sevDesk/Wix/Kundenmail | Ausgewählte Rechnung und Archive müssen zusammenpassen |
 | Wix-Rechnungsentwurf | Eingabe → Preview → Produktklärung → Draft-Service → sevDesk-Entwurf → optional Browser | Kein automatischer neuer Erstattungsprozess; Preview-/Dialogabbruch erhalten |
-| Manueller sevDesk-Entwurf | Rechnung + InvoicePos → normalisierter Kontext → Adresse/Kunde/Produkte, PLC ohne Wix | Reiner sevDesk-Pfad vorhanden; Kandidatenabgrenzung F13 und fehlende Daten F09/F14 offen |
+| Manueller sevDesk-Entwurf | Rechnung + InvoicePos → normalisierter Kontext → Adresse/Kunde/Produkte, PLC ohne Wix | Reiner sevDesk-Pfad vorhanden; Kandidatenabgrenzung F13 und fehlende Daten F14 offen |
 | START | Vorprüfung/B2B/Käufernotizen → Produktklärung → optional Notendruck → Freigabe/Rechnung/Label → Zahlung/Wix/Mail → Journal/Ergebnis | Selektierter und gesamter Scope; STOP kooperativ zwischen Schritten, keine Rücknahme bereits erfolgter Writes |
 | START-Recovery | Persistierte Fulfillment-Flags → fehlende Schritte nachholen, Papier vor nachgelagerten Aktionen | Vorhandenen Print-first-Fix `346c7aa` erhalten; Mehr-PC-Claims F12 |
 | Produktdruck einzeln/gesamt | Konfiguration/PDF-Seiten prüfen → PrintQueue/PDF-XChange → bestätigten Erfolg buchen | Kein Raster-/Acrobat-Fallback; offener Druck bleibt gemäß `f1e759c` editierbar und bestandsunabhängig |
@@ -138,9 +138,9 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F06 | P2 | ERLEDIGT | `view.py::_refresh_inventory_alert_count`: DB-Abfrage im Konstruktor und Timer/UI-Thread, Fehler als 0 versteckt. Nun Worker, Coalescing, Laden beim Anzeigen, Timer-Stopp bei Hide/Shutdown und sichtbarer `?`-Fehlerstatus. | Eventloop-Heartbeat bei blockiertem Fake, ein Request für wiederholten Aufruf |
 | F07 | P1 | ERLEDIGT | `offene_drucke_dialog.py::_select`: Auswahl B während Load A wurde verworfen; A-Anhänge erschienen bei B. Sequenzschutz und anschließender Load der letzten Auswahl; Downloads erfassen weiterhin ihren Fall. Datei zusätzlich lesbar formatiert. | A→B→C während verzögertem A: nur A/C gelesen, ausschließlich C angezeigt |
 | F08 | P2 | ERLEDIGT | `test_database.py`, `test_rechnungen_view_smoke.py`: erwarteten weder neue PLC-Tabellen noch Menü „Paketinhalt & Tracking“. Tests aktualisiert; Produktion unverändert. | Zuvor fehlgeschlagene Erwartungen laufen jetzt grün |
-| F09 | P1 | OFFEN | `InvoiceProcessingService.load_invoice_work_context/_run_finalize_step/build_inventory_requirements`: Positionsfehler werden zu leerem, gecachtem Kontext; bei leeren Positionen entfällt Validierung, Freigabe kann trotzdem erfolgen. Datenfehler und wirklich leere Rechnung sind ununterscheidbar. | Codebeleg: Exception-Zweig, Cache-Schreiben und `if preflight_context.positions` |
-| F10 | P1 | OFFEN | `InvoiceInventoryBookingService.apply_line`: Ledgerbewegung und Booking-Upsert haben getrennte Transaktionen; Schlüssel hängt nur vom Ziel ab. Folge 2→3→2 verwendet alten Bewegungsschlüssel erneut und schreibt trotzdem die Buchungsmarke um. | Lokales SQLite-Experiment: Anfang 10, Endbestand 7 statt 8 |
-| F11 | P1 | OFFEN | `invoice_inventory.py::apply_credit_line`: Ursprungsverkauf, Summe Rückbuchungen und neue Gegenbewegung werden separat gelesen/geschrieben. Zwei unterschiedliche parallele Gutschriften können dieselbe Restmenge sehen. | Codebeleg; echte PostgreSQL-Race noch nicht ausgeführt |
+| F09 | P1 | ERLEDIGT | `InvoiceProcessingService.load_invoice_work_context/_run_finalize_step/build_inventory_requirements`: Positionsfehler werden als unvollst?ndiger Kontext mit Ladezustand/Fehlertext behandelt und nicht gecacht. Freigabe und Produktdruck brechen vor dem externen Schreibaufruf ab; Retry l?dt erneut. | Regressionen: Timeout bleibt uncached, Freigabe sendet nicht, Druck gibt klare Exception, Retry l?dt erfolgreich |
+| F10 | P1 | ERLEDIGT | `InvoiceInventoryBookingService.apply_line`: Booking, append-only Ledgerbewegung, materialisierter Bestand und Alarmstatus laufen in einer Session/Transaktion. Jede Mengen?nderung verwendet eine fortlaufende Transition-ID statt wiederverwendeter Zielmenge. | SQLite-Regression 10?2?3?2 ergibt 8; Replay bleibt idempotent; Transaktionscode sperrt vorhandene und erstmalige Booking-Zeile |
+| F11 | P1 | ERLEDIGT | `apply_credit_line`: sperrt die Ursprungsposition und berechnet bestehende R?ckgaben in derselben Transaktion wie die neue Gegenbuchung. Konkurrierende Credits serialisieren auf der Ursprungs-Booking-Zeile. | Unit-Abdeckung f?r Cap und Replay; PostgreSQL-Barrierenachweis verbleibt im Betriebs-/DB-Gate G2 |
 | F12 | P1 | OFFEN | Rechnungs-Mail/START/Retry/Produktdruck: Worker-Guards gelten je Widget/Prozess. Kein gemeinsamer dauerhafter Claim pro Rechnung/Operation; Graph-Fallback kann trotz unklarer sevDesk-Antwort folgen, wenn der Statusprobe fehlschlägt. Auch Part-`get+set` beim direkten Druck ist nicht atomar. | Codebeleg in `send_invoice_mail_for_invoice`, `_run_fulfillment_chip_action`, `record_print_and_update_sevdesk` |
 | F13 | P1 | OFFEN | Kontext kennt `wix_candidate`, UI-Hydration und mehrere Folgepfade verzweigen aber weiterhin allein nach `order_reference`. Manuelle fünfstellige Fremdreferenz kann Wix-Pfad aktivieren; fehlender Wix-Treffer lädt nicht zuverlässig sevDesk-Produkte nach. | Codebeleg: Referenzparser, `_hydrate_detail_for_selection`, `_load_wix_context`, `_update_plc_controls` |
 | F14 | P1 | OFFEN | `load_invoice_piece_blocks`/`get_piece_blocks_from_invoice_positions`: normalisiertes `printable=False` wird nicht durchgängig ausgewertet; 1,5 kann als 1 Druckstück erscheinen. Freitext/unaufgelöste Positionen sind nicht vollständig in der Produktdarstellung sichtbar. F02 schützt den Hub-Buchungsadapter, nicht alle Druckadapter. | Codebeleg: `int(quantity_int)`, Filter nur `kind == product`; Formatwarnungen werden nicht dargestellt |
@@ -245,10 +245,11 @@ CLAUDE-Richtgröße von etwa 800 deutlich. Eine sofortige Gesamtextraktion wäre
 risikoreich. Erst Schnittstellen/Regressionen sichern, dann kleine Controller für
 Kontextladen, Dokumentaktionen, Druckübersicht und Journal auslagern.
 
-Jedes folgende Paket ist **OFFEN**, enthält bewusst keinen Produktivschreibauftrag
-und wird erst mit passenden Tests integriert. P1 vor optionaler UI-Politur abarbeiten.
+AP01 ist teilweise umgesetzt: F09 ist erledigt, F13/F14 und die weiteren AP01-Akzeptanzpunkte bleiben offen.
+AP02-Implementierung F10/F11 ist lokal umgesetzt; echter PostgreSQL-Parallelitaetsnachweis
+und Betriebsabnahme bleiben Gate G2. Die uebrigen Pakete sind offen.
 
-### AP01 – Vollständiger, fehlersicherer Rechnungskontext (F09, F13, F14; P1)
+### AP01 - Vollstaendiger, fehlersicherer Rechnungskontext (F09 ERLEDIGT; F13/F14 OFFEN; P1)
 
 Kontext um explizite Header-/Positions-Ladezustände und Warnungen erweitern.
 Positionsfehler niemals als vollständigen leeren Kontext cachen. Ein bestätigter
@@ -261,7 +262,11 @@ Retry lädt Positionen erneut. Manuelle fünfstellige Referenz ohne Wix-Treffer 
 sevDesk. 0, 0,5, 1,5, Part ohne SKU, Versand, Rabatt, Freitext und reine Digitalware
 werden mit begründeten Fähigkeiten angezeigt. Wix-Bestandspfade bleiben kompatibel.
 
-### AP02 – Atomare Dokumentbuchung und Gegenbeleggrenzen (F10, F11; P1)
+**Umgesetzt (F09):** Ladezustand und Positionsfehler sind Teil des Kontexts; ein
+Fehlerzustand wird nicht gecacht. Freigabe und Produktdruck brechen vor Writes ab.
+Timeout, Retry, Header-only-Nachladen und Freigabesperre sind regressionsgetestet.
+
+### AP02 - Atomare Dokumentbuchung und Gegenbeleggrenzen (F10/F11 umgesetzt; PostgreSQL-Gate G2 offen; P1)
 
 Ledgerbewegung, Booking-Ziel, Bestandszeile und Alarmbewertung unter einer
 gemeinsamen Session/Transaktion verarbeiten. Pro Ursprungsposition sperren,
@@ -275,6 +280,11 @@ Zwei PCs buchen dieselbe Position gleichzeitig einmal; zwei Gegenbelege können
 zusammen nie die Ursprungsmenge überschreiten. Echte PostgreSQL-Tests mit Barrieren
 für beide Interleavings, Rollback und leere Erstzeile ergänzen. Negative Bestände
 bleiben gesperrt und erzeugen einen dauerhaften Klärfall.
+
+**Umgesetzt (F10/F11):** Booking, Ledgerbewegung, Bestand und Alarmstatus teilen
+eine Session. Erstbuchungen werden per Unique-Insert angelegt und dann gesperrt.
+Credit-Pruefung sperrt die Ursprungsposition bis Gegenbewegung und Booking committet
+sind. SQLite-Regressionsfaelle bestehen; PostgreSQL-Interleavings bleiben Gate G2.
 
 ### AP03 – Dauerhafte Claims externer Aktionen (F12; P1)
 
@@ -360,7 +370,14 @@ Refactoring ändert keine sichtbaren Geschäftsregeln oder Datenverträge.
 
 Geänderte Produktionsdateien:
 
-- `services/invoice_processing/context.py`: Menge 0 korrekt erhalten (F01).
+- `services/invoice_processing/context.py`: Menge 0 korrekt erhalten (F01), expliziter
+  Positionsladezustand (F09).
+- `services/invoice_processing/service.py` und `services/sevdesk/invoice_client.py`:
+  fehlende/fehlerhafte InvoicePos-Antworten nicht cachen; Freigabe und Produktdruck
+  bei unvollst?ndigem Kontext vor externem Write sperren (F09).
+- `services/product_hub/invoice_inventory.py` und `services/product_hub/inventory.py`:
+  atomare Dokumentbewegungen, monoton eindeutige Transitionen und gesperrte Credit-Caps
+  (F10/F11).
 - `services/product_hub/invoice_inventory.py`: Mengen-/Zuordnungsvalidierung (F02).
 - `services/product_hub/inventory_alert_tasks.py` und Alarmdialog:
   aktiver Claim, unklarer Versand und verständliche Rückmeldung (F03).
@@ -400,7 +417,11 @@ eingetragen. Bereits durchgeführt:
   abschließenden Vergleich unten festhalten. Das ist kein grünes Typprüfungs-Gate.
   Die Baseline stammt aus einem temporären `git archive HEAD src`, nicht aus
   einem anderen Checkout oder alten Audittext.
-- Lokales SQLite-Experiment zu F10: Endbestand **7 statt 8**; bewusst nicht durch
+- Regression fuer F10: Ziel 2->3->2 bei Anfangsbestand 10 ergibt Endbestand 8;
+  jede Transition hat eine eigene ID, Replay erzeugt keine zweite Bewegung.
+- Aktueller gezielter Lauf: 74 bestanden aus InvoiceService-, InvoiceBooking- und
+  InvoiceClient-Tests (1,77 s). Ruff auf acht geaenderten Python-Dateien: gruen.
+  Mypy fuer invoice_inventory.py: gruen. PostgreSQL-Barrieren sind lokal nicht nachgewiesen.
   eine provisorische Schlüsseländerung kaschiert.
 
 Reproduktion der regulären Prüfungen aus dem Repository:

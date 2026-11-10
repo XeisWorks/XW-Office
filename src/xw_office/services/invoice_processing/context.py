@@ -84,6 +84,9 @@ class InvoiceWorkContext:
     capabilities: InvoiceCapabilities = field(default_factory=InvoiceCapabilities)
     warnings: tuple[str, ...] = ()
     source_updated_at: str = ""
+    header_loaded: bool = True
+    positions_loaded: bool = False
+    positions_error: str = ""
 
     @property
     def wix_order_number(self) -> str:

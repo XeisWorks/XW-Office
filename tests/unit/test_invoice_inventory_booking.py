@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 import pytest
 
 from xw_office.models.base import Base
 from xw_office.models.inventory_document_booking import InventoryDocumentBooking
+from xw_office.models.product_hub_inventory import InventoryMovement
 from xw_office.models.product_hub import ProductVariant
 from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_inventory import InventoryRepository
@@ -128,6 +130,67 @@ def test_changed_final_quantity_applies_only_the_difference_and_credit_reverses(
     assert stock is not None and stock.on_hand == 8
 
 
+def test_repeated_historical_quantity_gets_a_new_transition_identity() -> None:
+    factory, variant_id = _factory()
+    inventory = InventoryV2Service(factory)
+    inventory.record_movement(
+        variant_id=variant_id,
+        delta=10,
+        reason="import_baseline",
+        source="test",
+        idempotency_key="booking-baseline-revision",
+    )
+    booking = InvoiceInventoryBookingService(factory)
+    first = InvoiceInventoryLine("invoice-revision", "pos-1", variant_id, 2)
+    assert booking.apply_line(first).delta == -2
+    assert booking.apply_line(InvoiceInventoryLine("invoice-revision", "pos-1", variant_id, 3)).delta == -1
+    replayed_target = booking.apply_line(first)
+
+    assert replayed_target.delta == 1
+    location = InventoryRepository(factory).get_or_create_location(code="MAIN", name="Hauptlager")
+    stock = InventoryRepository(factory).get_stock(variant_id, location.id)
+    assert stock is not None and stock.on_hand == 8
+    with factory() as session:
+        movements = session.query(InventoryMovement).filter_by(
+            external_reference="invoice-revision:pos-1"
+        ).count()
+    assert movements == 3
+
+
+def test_booking_update_failure_rolls_back_ledger_and_stock() -> None:
+    factory, variant_id = _factory()
+    inventory = InventoryV2Service(factory)
+    inventory.record_movement(
+        variant_id=variant_id,
+        delta=10,
+        reason="import_baseline",
+        source="test",
+        idempotency_key="booking-baseline-rollback",
+    )
+    with factory() as session:
+        session.execute(text(
+            "CREATE TRIGGER reject_invoice_booking_update "
+            "BEFORE UPDATE ON inventory_document_booking "
+            "BEGIN SELECT RAISE(ABORT, 'injected booking failure'); END"
+        ))
+        session.commit()
+
+    booking = InvoiceInventoryBookingService(factory)
+    with pytest.raises(IntegrityError, match="injected booking failure"):
+        booking.apply_line(InvoiceInventoryLine("invoice-rollback", "pos-1", variant_id, 2))
+
+    location = InventoryRepository(factory).get_or_create_location(code="MAIN", name="Hauptlager")
+    stock = InventoryRepository(factory).get_stock(variant_id, location.id)
+    assert stock is not None and stock.on_hand == 10
+    with factory() as session:
+        assert session.query(InventoryDocumentBooking).filter_by(
+            document_id="invoice-rollback"
+        ).count() == 0
+        assert session.query(InventoryMovement).filter_by(
+            external_reference="invoice-rollback:pos-1"
+        ).count() == 0
+
+
 def test_credit_is_limited_to_original_sale_and_is_idempotent() -> None:
     factory, variant_id = _factory()
     inventory = InventoryV2Service(factory)
@@ -155,7 +218,7 @@ def test_credit_is_limited_to_original_sale_and_is_idempotent() -> None:
 
     assert first.delta == 2
     assert second.status == "already_applied"
-    with pytest.raises(ValueError, match="überschreitet"):
+    with pytest.raises(ValueError, match="Credit quantity"):
         booking.apply_credit_line(
             InvoiceInventoryLine(
                 "credit-4",

@@ -251,14 +251,16 @@ class InventoryV2Service:
         note: str = "",
         actor: str = "",
         occurred_at: datetime.datetime | None = None,
+        session: Session | None = None,
     ) -> MovementResult:
-        location = self._inventory.get_or_create_location(
+        inventory = InventoryRepository(session) if session is not None else self._inventory
+        location = inventory.get_or_create_location(
             code=location_code, name=DEFAULT_LOCATION_NAME
         )
-        before_stock = self._inventory.get_stock(variant_id, location.id)
+        before_stock = inventory.get_stock(variant_id, location.id)
         before_on_hand = before_stock.on_hand if before_stock is not None else 0
 
-        movement = self._inventory.record_movement(
+        movement = inventory.record_movement(
             variant_id=variant_id,
             location_id=location.id,
             delta=delta,
@@ -272,9 +274,12 @@ class InventoryV2Service:
         )
 
         alert_opened = self._apply_alert_crossing(
-            variant_id, location.id, before_on_hand, movement.on_hand_after
+            variant_id, location.id, before_on_hand, movement.on_hand_after,
+            inventory=inventory,
         )
-        if alert_opened is not None:
+        # A caller-supplied session means the enclosing operation owns commit.
+        # Defer outbox creation until that commit has succeeded.
+        if alert_opened is not None and session is None:
             self._emit_flow_task_intent(alert_opened, variant_id)
         return MovementResult(movement=movement, alert_opened=alert_opened)
 
@@ -402,14 +407,21 @@ class InventoryV2Service:
         return None
 
     def _apply_alert_crossing(
-        self, variant_id: uuid.UUID, location_id: uuid.UUID, before: int, after: int
+        self,
+        variant_id: uuid.UUID,
+        location_id: uuid.UUID,
+        before: int,
+        after: int,
+        *,
+        inventory: InventoryRepository | None = None,
     ) -> InventoryAlert | None:
         """Keep the single active warning in sync with the observed stock.
 
         A new warning is emitted on the threshold crossing, or when an existing
         low-stock warning changes class because the balance reaches zero.
         """
-        stock = self._inventory.get_stock(variant_id, location_id)
+        repo = inventory or self._inventory
+        stock = repo.get_stock(variant_id, location_id)
         threshold = stock.reorder_point if stock is not None else 0
 
         if after <= threshold:
@@ -417,11 +429,11 @@ class InventoryV2Service:
             for other_type in ("low_stock", "out_of_stock"):
                 if other_type == alert_type:
                     continue
-                other = self._inventory.get_open_alert(variant_id, location_id, other_type)
+                other = repo.get_open_alert(variant_id, location_id, other_type)
                 if other is not None:
-                    self._inventory.resolve_alert(other.id)
-            already_open = self._inventory.get_open_alert(variant_id, location_id, alert_type)
-            alert = self._inventory.open_or_update_alert(
+                    repo.resolve_alert(other.id)
+            already_open = repo.get_open_alert(variant_id, location_id, alert_type)
+            alert = repo.open_or_update_alert(
                 variant_id=variant_id,
                 location_id=location_id,
                 alert_type=alert_type,
@@ -432,9 +444,9 @@ class InventoryV2Service:
 
         if after > threshold:
             for alert_type in ("low_stock", "out_of_stock"):
-                open_alert = self._inventory.get_open_alert(variant_id, location_id, alert_type)
+                open_alert = repo.get_open_alert(variant_id, location_id, alert_type)
                 if open_alert is not None:
-                    self._inventory.resolve_alert(open_alert.id)
+                    repo.resolve_alert(open_alert.id)
         return None
 
     def _emit_flow_task_intent(self, alert: InventoryAlert, variant_id: uuid.UUID) -> None:

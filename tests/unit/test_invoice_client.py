@@ -3,6 +3,7 @@ import base64
 from datetime import date, datetime, timedelta, timezone
 import json
 import httpx
+import pytest
 
 from xw_office.core.config import AppConfig
 from xw_office.services.http_client import SevdeskConnection
@@ -160,6 +161,19 @@ def test_invoice_client_fetch_invoice_positions_uses_invoice_filter_params() -> 
 
     assert len(positions) == 1
     assert positions[0]["id"] == "POS-1"
+
+
+def test_invoice_client_rejects_malformed_invoice_positions_payload() -> None:
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json={"objects": {"unexpected": "shape"}})
+        ),
+        base_url="https://example.test/api/v1",
+    )
+    invoice_client = InvoiceClient(SevdeskConnection(client=client, config=AppConfig()))
+
+    with pytest.raises(ValueError, match="Unexpected InvoicePos payload"):
+        invoice_client.fetch_invoice_positions("123")
 
 
 def test_update_invoice_draft_includes_tax_set_and_discount_passthrough() -> None:
