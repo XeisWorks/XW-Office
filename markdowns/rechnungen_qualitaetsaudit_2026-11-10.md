@@ -366,8 +366,8 @@ Erfolg erst nach nachgewiesenem externen bzw. Spooler-Ergebnis anzeigen.
 
 **Teilweise umgesetzt:** Invoice-PDF-Cache ist ein 64-MiB-LRU; Cache-Hits werden
 erneut gegen die erwartete Rechnungsnummer geprueft. Header-/WorkContext-Caches
-sind weiterhin nicht einheitlich revisionsgebunden, und Produkt-/Bestandsdaten
-werden noch nicht durchgaengig vor dem Rendern gebuendelt.
+sind auf je 256 Eintraege begrenzt, aber weiterhin nicht einheitlich revisionsgebunden.
+Produkt-/Bestandsdaten werden noch nicht durchgaengig vor dem Rendern gebuendelt.
 
 Revision, Vollständigkeit und gegebenenfalls TTL für Header/Positionen/PDF festlegen;
 Freigabe, Entwurfsänderung und Löschung invalidieren alle abhängigen Einträge.

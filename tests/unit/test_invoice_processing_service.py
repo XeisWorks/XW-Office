@@ -1500,6 +1500,7 @@ def test_invoice_pdf_cache_checks_expected_number_and_obeys_byte_limit(
     client = _InvoiceClientStub([summary])
     service = InvoiceProcessingService(AppConfig(), client, _RepoStub({}))  # type: ignore[arg-type]
     monkeypatch.setattr(invoice_service_module, "_INVOICE_PDF_CACHE_MAX_BYTES", 20)
+    monkeypatch.setattr(invoice_service_module, "_INVOICE_CONTEXT_CACHE_MAX_ENTRIES", 2)
     monkeypatch.setattr(
         service,
         "_invoice_pdf_sanity_issue",
@@ -1520,6 +1521,9 @@ def test_invoice_pdf_cache_checks_expected_number_and_obeys_byte_limit(
     service._cache_invoice_pdf("large", b"123456789012345678901")  # noqa: SLF001
     assert "large" not in service._invoice_pdf_cache  # noqa: SLF001
     assert service._invoice_pdf_cache_bytes == 8  # noqa: SLF001
+    for key in ("one", "two", "three"):
+        service._put_invoice_detail_cache(key, {"id": key})  # noqa: SLF001
+    assert list(service._invoice_detail_cache) == ["two", "three"]  # noqa: SLF001
 
 
 def test_send_invoice_mail_skips_when_sevdesk_invoice_already_sent() -> None:

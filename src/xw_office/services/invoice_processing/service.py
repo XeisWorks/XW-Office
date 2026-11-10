@@ -62,6 +62,7 @@ except Exception:  # pragma: no cover - optional at import time
 
 logger = logging.getLogger(__name__)
 _INVOICE_PDF_CACHE_MAX_BYTES = 64 * 1024 * 1024
+_INVOICE_CONTEXT_CACHE_MAX_ENTRIES = 256
 
 PAYMENT_PROVIDER_ACCOUNT_NAMES = {
     "stripe": "Stripe",
@@ -294,7 +295,7 @@ class InvoiceProcessingService:
         self._label_printer = LabelPrinter(config.printing, print_queue=print_queue)
         self._invoice_pdf_cache: OrderedDict[str, bytes] = OrderedDict()
         self._invoice_pdf_cache_bytes = 0
-        self._invoice_detail_cache: dict[str, dict[str, Any]] = {}
+        self._invoice_detail_cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._wix_address_cache: dict[str, list[str]] = {}
         self._wix_digital_cache: dict[str, bool] = {}
         self._wix_order_summary_cache: dict[str, dict[str, str]] = {}
@@ -314,7 +315,7 @@ class InvoiceProcessingService:
         self._offene_sendungen = offene_sendungen
         self._print_decision = print_decision
         self._invoice_inventory = invoice_inventory
-        self._invoice_work_context_cache: dict[str, InvoiceWorkContext] = {}
+        self._invoice_work_context_cache: OrderedDict[str, InvoiceWorkContext] = OrderedDict()
 
     @property
     def invoice_inventory_enabled(self) -> bool:
@@ -1726,7 +1727,7 @@ class InvoiceProcessingService:
                 raise RuntimeError(
                     f"sevDesk-Mailstatus fuer {summary.id} ist unklar; Graph-Fallback gesperrt."
                 ) from sevdesk_error
-            self._invoice_detail_cache[str(summary.id)] = refreshed
+            self._put_invoice_detail_cache(str(summary.id), refreshed)
             self._invoice_work_context_cache.pop(str(summary.id), None)
             if self._sevdesk_mail_sent(refreshed):
                 self._operation_claims.finish(claim, "succeeded")
@@ -1836,6 +1837,8 @@ class InvoiceProcessingService:
         """
         invoice_id = str(summary.id or "").strip()
         cached = self._invoice_work_context_cache.get(invoice_id)
+        if cached is not None:
+            self._invoice_work_context_cache.move_to_end(invoice_id)
         if (
             not force
             and cached is not None
@@ -1905,7 +1908,7 @@ class InvoiceProcessingService:
         # A failed or intentionally skipped positions request is not a complete
         # invoice context.  Do not let it poison the cache for retries/printing.
         if invoice_id and (not load_positions or context.positions_loaded):
-            self._invoice_work_context_cache[invoice_id] = context
+            self._put_invoice_work_context_cache(invoice_id, context)
         return context
 
     def get_cached_invoice_work_context(self, summary: InvoiceSummary) -> InvoiceWorkContext | None:
@@ -1915,6 +1918,7 @@ class InvoiceProcessingService:
             and context.positions_loaded
             and self._context_is_current(context, summary)
         ):
+            self._invoice_work_context_cache.move_to_end(str(summary.id or "").strip())
             return context
         return None
 
@@ -3687,11 +3691,28 @@ class InvoiceProcessingService:
         invoice_key = str(invoice_id).strip()
         cached = None if force else self._invoice_detail_cache.get(invoice_key)
         if cached is not None:
+            self._invoice_detail_cache.move_to_end(invoice_key)
             return cached
         invoice = self._invoices.fetch_invoice_by_id(invoice_id)
         normalized = invoice if isinstance(invoice, dict) else {}
-        self._invoice_detail_cache[invoice_key] = normalized
+        self._put_invoice_detail_cache(invoice_key, normalized)
         return normalized
+
+    def _put_invoice_detail_cache(self, invoice_id: str, value: dict[str, Any]) -> None:
+        self._invoice_detail_cache.pop(invoice_id, None)
+        self._invoice_detail_cache[invoice_id] = value
+        while len(self._invoice_detail_cache) > _INVOICE_CONTEXT_CACHE_MAX_ENTRIES:
+            self._invoice_detail_cache.popitem(last=False)
+
+    def _put_invoice_work_context_cache(
+        self,
+        invoice_id: str,
+        value: InvoiceWorkContext,
+    ) -> None:
+        self._invoice_work_context_cache.pop(invoice_id, None)
+        self._invoice_work_context_cache[invoice_id] = value
+        while len(self._invoice_work_context_cache) > _INVOICE_CONTEXT_CACHE_MAX_ENTRIES:
+            self._invoice_work_context_cache.popitem(last=False)
 
     def _get_invoice_pdf_bytes(
         self,
