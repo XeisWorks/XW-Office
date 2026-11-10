@@ -20,7 +20,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import Enum
-from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from pydantic import AwareDatetime, BaseModel, Field
@@ -61,6 +60,19 @@ EXPENSE_CACHE_MAX_AGE = datetime.timedelta(minutes=5)
 class _ExpenseSyncState(BaseModel):
     periods: dict[str, AwareDatetime] = Field(default_factory=dict)
     generation: int = 0
+
+
+@dataclass(frozen=True)
+class ExpensePositionRuleView:
+    """Tenant-normalized view of a persisted expense position rule."""
+
+    id: uuid.UUID
+    position_key: str
+    label: str
+    payee_normalized: str
+    counterparty_iban: str
+    purpose_contains: str
+    enabled: bool
 
 
 @dataclass(frozen=True)
@@ -936,11 +948,11 @@ class ExpenseAuditService:
             enabled=enabled,
         )
 
-    def list_position_rules(self) -> list[ExpensePositionRule]:
+    def list_position_rules(self) -> list[ExpensePositionRuleView]:
         if self._pipeline_repo is None:
             return []
         return [
-            SimpleNamespace(
+            ExpensePositionRuleView(
                 id=item.id,
                 position_key=self._public_position_key(item.position_key),
                 label=item.label,
@@ -951,7 +963,7 @@ class ExpenseAuditService:
             )
             for item in self._pipeline_repo.list_position_rules(enabled_only=False)
             if self._owns_position_key(item.position_key)
-        ]  # type: ignore[return-value]
+        ]
 
     def set_position_rule_enabled(self, rule_id: str, enabled: bool) -> bool:
         if self._pipeline_repo is None:

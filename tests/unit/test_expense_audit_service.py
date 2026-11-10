@@ -475,6 +475,29 @@ def test_shared_sync_is_scoped_by_tenant_and_period(
     assert settings.get_value_json("expenses.sync.wuedara") is not None
 
 
+def test_position_rule_view_exposes_tenant_local_key(
+    session_factory: sessionmaker[Session],
+) -> None:
+    settings = SettingKvRepository(session_factory)
+    pipeline = ExpensePipelineRepository(session_factory)
+    pipeline.add_position_rule(
+        position_key="wuedara:travel",
+        label="Fahrtkosten",
+        payee_normalized="bahn",
+    )
+    service = ExpenseAuditService(
+        settings,
+        pipeline_repo=pipeline,
+        tenant_key="wuedara",
+    )
+
+    rules = service.list_position_rules()
+
+    assert len(rules) == 1
+    assert rules[0].position_key == "travel"
+    assert rules[0].label == "Fahrtkosten"
+
+
 @pytest.mark.parametrize("empty", [False, True])
 def test_partial_sync_never_marks_period_fresh(
     session_factory: sessionmaker[Session], empty: bool
