@@ -1277,6 +1277,8 @@ class RechnungenView(QWidget):
         self._mollie_badge_worker: BackgroundWorker | None = None
         self._inventory_alert_worker: BackgroundWorker | None = None
         self._stuecke_worker: BackgroundWorker | None = None
+        self._piece_config_worker: BackgroundWorker | None = None
+        self._piece_config_seq = 0
         self._sevdesk_context_workers: list[BackgroundWorker] = []
         self._sevdesk_context_seq = 0
         self._wix_meta_worker: BackgroundWorker | None = None
@@ -2178,6 +2180,7 @@ class RechnungenView(QWidget):
                 self._mollie_badge_worker,
                 self._inventory_alert_worker,
                 self._stuecke_worker,
+                self._piece_config_worker,
                 self._wix_meta_worker,
                 self._wix_context_worker,
                 self._customer_mail_worker,
@@ -7543,6 +7546,9 @@ class RechnungenView(QWidget):
         dlg.set_preview_result("\n".join(lines), ok=can_create)
 
     def _reset_stuecke(self) -> None:
+        self._piece_config_seq += 1
+        if self._piece_config_worker is not None and self._piece_config_worker.isRunning():
+            self._piece_config_worker.cancel()
         self._current_piece_blocks = []
         self._piece_print_buttons = []
         self._piece_quantity_inputs = []
@@ -7768,6 +7774,10 @@ class RechnungenView(QWidget):
         current_ref = selected.order_reference.strip() if selected is not None else ""
         if requested_ref and requested_ref != current_ref:
             return
+        self._piece_config_seq += 1
+        config_seq = self._piece_config_seq
+        if self._piece_config_worker is not None and self._piece_config_worker.isRunning():
+            self._piece_config_worker.cancel()
 
         self._gb_stuecke.show()
         self._piece_print_buttons = []
@@ -7797,9 +7807,10 @@ class RechnungenView(QWidget):
             else:
                 expanded_pieces.append(piece)
         for piece in expanded_pieces:
+            if not isinstance(piece, PieceBlock):
+                continue
             if catalog is not None:
                 self._clarify_unreleased_piece(piece, catalog, requested_ref or current_ref)
-                resolve_piece_print_config(catalog, piece)
             key = (
                 str(piece.sku or "").strip().upper(),
                 str(piece.name or "").strip(),
@@ -7810,110 +7821,91 @@ class RechnungenView(QWidget):
                 continue
             seen.add(key)
             deduped.append(piece)
-        self._current_piece_blocks = deduped
-        invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-        model_rows: list[dict[str, object]] = []
-        for item in self._current_piece_blocks:
-            flagged_for_print = bool(item.is_unreleased or invoice_service.is_flagged_sku(item.sku))
-            show_print_controls = not (item.product is not None and item.product.is_digital)
-            model_rows.append(
-                {
-                    "block": item,
-                    "flagged": bool(flagged_for_print and show_print_controls),
-                    "quantity": self._default_piece_print_qty(item),
-                    "header": self._piece_header_text(item, flagged_for_print),
-                    "details": self._piece_detail_lines(item),
-                    "stock": self._piece_stock_text(item),
-                    "stock_color": self._piece_stock_color(item),
-                    "print_enabled": self._print_allowed,
-                }
+
+        print_enabled = self._print_allowed
+        self._stuecke_hint.setText("Produkt- und Druckdaten werden geladen...")
+        self._stuecke_hint.show()
+
+        def job() -> dict[str, object]:
+            catalog_service: ProductCatalogService | None
+            try:
+                catalog_service = self._container.resolve(ProductCatalogService)
+            except KeyError:
+                catalog_service = None
+            invoice_service: InvoiceProcessingService = self._container.resolve(
+                InvoiceProcessingService
             )
-        self._piece_model.set_pieces(model_rows)
+            model_rows: list[dict[str, object]] = []
+            for item in deduped:
+                if catalog_service is not None:
+                    resolve_piece_print_config(catalog_service, item)
+                flagged_for_print = bool(
+                    item.is_unreleased or invoice_service.is_flagged_sku(item.sku)
+                )
+                show_print_controls = not (item.product is not None and item.product.is_digital)
+                model_rows.append(
+                    {
+                        "block": item,
+                        "flagged": bool(flagged_for_print and show_print_controls),
+                        "quantity": self._default_piece_print_qty(item),
+                        "header": self._piece_header_text(item, flagged_for_print),
+                        "details": self._piece_detail_lines(item),
+                        "stock": self._piece_stock_text(item),
+                        "stock_color": self._piece_stock_color(item),
+                        "print_enabled": print_enabled,
+                    }
+                )
+            return {
+                "seq": config_seq,
+                "requested_ref": requested_ref,
+                "pieces": deduped,
+                "rows": model_rows,
+            }
+
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(self._on_piece_configured)
+        worker.signals.error.connect(
+            lambda exc, token=config_seq: self._on_piece_config_error(token, exc)
+        )
+        worker.signals.finished.connect(
+            lambda current=worker: self._on_piece_config_finished(current)
+        )
+        self._piece_config_worker = worker
+        worker.start()
+
+    def _on_piece_configured(self, payload: object) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        try:
+            sequence = int(data.get("seq") or 0)
+        except (TypeError, ValueError):
+            return
+        if sequence != self._piece_config_seq or self._shutting_down:
+            return
+        requested_ref = str(data.get("requested_ref") or "").strip()
+        selected = self._selected_summary()
+        current_ref = selected.order_reference.strip() if selected is not None else ""
+        if requested_ref and requested_ref != current_ref:
+            return
+        pieces = data.get("pieces")
+        rows = data.get("rows")
+        if not isinstance(pieces, list) or not isinstance(rows, list):
+            self._on_piece_config_error(sequence, RuntimeError("Ungueltige Produktdaten"))
+            return
+        self._current_piece_blocks = [piece for piece in pieces if isinstance(piece, PieceBlock)]
+        self._piece_model.set_pieces([row for row in rows if isinstance(row, dict)])
+        self._stuecke_hint.hide()
         self._piece_list.show()
-        return
-        for item in self._current_piece_blocks:
-            # Header line: "×2  [XW-001]  Produktname ★"
-            flagged_for_print = bool(item.is_unreleased or invoice_service.is_flagged_sku(item.sku))
-            row_widget = QWidget()
-            row_layout = QVBoxLayout(row_widget)
-            row_layout.setContentsMargins(0, 0, 0, 6)
-            row_layout.setSpacing(2)
-            header_row = QHBoxLayout()
-            header_row.setContentsMargins(0, 0, 0, 0)
-            header_row.setSpacing(8)
-            lbl = QLabel(self._piece_header_text(item, flagged_for_print))
-            lbl.setWordWrap(True)
-            header_row.addWidget(lbl, stretch=1)
 
-            if flagged_for_print:
-                qty_input = QSpinBox()
-                qty_input.setRange(1, 999)
-                qty_input.setValue(self._default_piece_print_qty(item))
-                qty_input.setFixedHeight(24)
-                qty_input.setFixedWidth(64)
-                qty_input.setEnabled(self._print_allowed)
-                qty_input.setToolTip("Anzahl fuer diesen Produktdruck")
-                header_row.addWidget(qty_input)
-                self._piece_quantity_inputs.append(qty_input)
-                self._piece_quantity_controls.append((item, qty_input))
+    def _on_piece_config_error(self, sequence: int, exc: Exception) -> None:
+        if sequence != self._piece_config_seq or self._shutting_down:
+            return
+        logger.warning("Invoice product data could not be prepared: %s", exc)
+        self._stuecke_hint.setText(f"Produktdaten konnten nicht geladen werden: {exc}")
+        self._stuecke_hint.show()
 
-                print_btn = QToolButton()
-                print_btn.setIcon(QIcon(str(Path(__file__).resolve().parents[5] / "icons" / "print.png")))
-                print_btn.setFixedSize(30, 26)
-                print_btn.setStyleSheet(
-                    "QToolButton { background-color: #334155; border: 1px solid #64748b; border-radius: 4px; }"
-                    "QToolButton:hover { background-color: #475569; border-color: #94a3b8; }"
-                    "QToolButton:disabled { background-color: #1f2937; border-color: #334155; }"
-                )
-                print_btn.setEnabled(self._print_allowed)
-                if item.has_direct_print_config:
-                    print_btn.setToolTip("Direkter Produktdruck ueber hinterlegten Druckplan")
-                elif item.print_file_path is not None:
-                    print_btn.setToolTip("PDF vorhanden, aber noch kein Druckplan/Profil im neuen Repo hinterlegt")
-                else:
-                    print_btn.setToolTip("Kein PDF-Pfad im neuen Repo hinterlegt")
-                print_btn.clicked.connect(
-                    lambda _checked=False, block=item, qty=qty_input: self._on_product_print_clicked(block, qty.value())
-                )
-                header_row.addWidget(print_btn)
-                self._piece_print_buttons.append(print_btn)
-
-                manage_btn = QToolButton()
-                manage_btn.setIcon(QIcon(str(Path(__file__).resolve().parents[5] / "icons" / "printondemand.png")))
-                manage_btn.setFixedSize(30, 26)
-                manage_btn.setStyleSheet(
-                    "QToolButton { background-color: #334155; border: 1px solid #64748b; border-radius: 4px; }"
-                    "QToolButton:hover { background-color: #475569; border-color: #94a3b8; }"
-                    "QToolButton:disabled { background-color: #1f2937; border-color: #334155; }"
-                )
-                manage_btn.setToolTip("PDF-Pfad und Druckplan direkt fuer dieses Produkt pflegen")
-                manage_btn.clicked.connect(lambda _checked=False, block=item: self._on_product_manage_clicked(block))
-                header_row.addWidget(manage_btn)
-
-            row_layout.addLayout(header_row)
-
-            for detail_line in self._piece_detail_lines(item):
-                detail_lbl = QLabel(detail_line)
-                detail_lbl.setWordWrap(True)
-                detail_lbl.setStyleSheet("color: #64748b; font-size: 11px; padding-left: 8px;")
-                row_layout.addWidget(detail_lbl)
-
-            stock_lbl = QLabel(self._piece_stock_text(item))
-            stock_lbl.setWordWrap(True)
-            # Colour: red for print-needed, orange for low, green for OK, grey for digital
-            if item.product is None:
-                color = "#9e9e9e"
-            elif item.product.is_digital:
-                color = "#64748b"
-            elif item.needs_print:
-                color = "#ef4444"
-            elif item.stock_status is not None and item.stock_status.needs_reprint:
-                color = "#f59e0b"
-            else:
-                color = "#16a34a"
-            stock_lbl.setStyleSheet(f"color: {color}; font-size: 11px; padding-left: 8px;")
-            row_layout.addWidget(stock_lbl)
-            self._stuecke_layout.addWidget(row_widget)
+    def _on_piece_config_finished(self, worker: BackgroundWorker) -> None:
+        if self._piece_config_worker is worker:
+            self._piece_config_worker = None
 
     def _on_product_print_clicked(
         self,

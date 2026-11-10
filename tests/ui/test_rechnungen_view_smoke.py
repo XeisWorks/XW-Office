@@ -25,7 +25,10 @@ from xw_office.services.invoice_processing.context import InvoiceWorkContext, In
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.products.catalog import Product, ProductCatalogService, StockStatus
-from xw_office.services.products.print_decision import PieceBlock, PrintDecisionEngine
+from xw_office.services.products.print_decision import (
+    PieceBlock,
+    PrintDecisionEngine,
+)
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sendungen.service import OffeneSendungenService
 from xw_office.services.transfers.service import OffeneUeberweisungenService
@@ -95,6 +98,7 @@ def test_cached_invoice_piece_is_hydrated_before_product_panel_render(
 
     view._on_stuecke_loaded([cached_piece])  # noqa: SLF001
 
+    qtbot.waitUntil(lambda: view._current_piece_blocks == [cached_piece], timeout=2000)  # noqa: SLF001
     assert view._current_piece_blocks == [cached_piece]  # noqa: SLF001
     assert cached_piece.print_file_path == pdf_path
     assert cached_piece.has_direct_print_config is True
@@ -2567,6 +2571,7 @@ def test_rechnungen_applies_persistent_wix_cache_before_background_load(
     )
     assert "Wixstrasse 7" in view._shipping_editor.toPlainText()  # noqa: SLF001
     assert view._wix_customer.text() == "Wix Kunde"  # noqa: SLF001
+    qtbot.waitUntil(lambda: view._piece_model.rowCount() == 1, timeout=3000)  # noqa: SLF001
     assert view._piece_model.rowCount() == 1  # noqa: SLF001
     assert "Cache Produkt" in str(view._piece_model.index(0, 0).data())  # noqa: SLF001
     assert not view._piece_list.isHidden()  # noqa: SLF001
@@ -2631,10 +2636,13 @@ def test_rechnungen_wix_shipping_address_replaces_sevdesk_prefill(
     assert view._shipping_status.text() == "Adresse aus Wix"  # noqa: SLF001
 
 
-def test_rechnungen_piece_details_use_model_instead_of_row_widgets(qtbot: object) -> None:
+def test_rechnungen_piece_details_use_model_instead_of_row_widgets(
+    qtbot: QtBot, monkeypatch: MonkeyPatch
+) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
     qtbot.addWidget(view)
+    monkeypatch.setattr(view, "_load_wix_context", lambda *_args, **_kwargs: None)
     summary = InvoiceSummary.model_validate(
         {
             "id": "pieces",
@@ -2654,8 +2662,32 @@ def test_rechnungen_piece_details_use_model_instead_of_row_widgets(qtbot: object
         PieceBlock(sku=f"XW-{index:03d}", name=f"Produkt {index}", qty_needed=1)
         for index in range(100)
     ]
-    view._on_stuecke_loaded({"__requested_ref": "20999", "items": pieces})  # noqa: SLF001
+    entered, release, heartbeat = Event(), Event(), Event()
 
+    def blocked_resolver(catalog: ProductCatalogService, piece: PieceBlock) -> PieceBlock:
+        del catalog
+        entered.set()
+        assert release.wait(3)
+        piece.product = Product(id=piece.sku, sku=piece.sku, name=piece.name)
+        return piece
+
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.resolve_piece_print_config", blocked_resolver
+    )
+    view._on_stuecke_loaded({"__requested_ref": "20999", "items": pieces})  # noqa: SLF001
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=2000)
+        QTimer.singleShot(0, heartbeat.set)
+        qtbot.waitUntil(heartbeat.is_set, timeout=1000)
+        assert view._piece_model.rowCount() == 0  # noqa: SLF001
+    finally:
+        release.set()
+    qtbot.waitUntil(
+        lambda: view._piece_model.rowCount() == 100
+        or "Produktdaten konnten nicht geladen" in view._stuecke_hint.text(),
+        timeout=5000,
+    )
+    assert view._piece_model.rowCount() == 100, view._stuecke_hint.text()  # noqa: SLF001
     assert view._piece_model.rowCount() == 100  # noqa: SLF001
     assert view._stuecke_layout.count() == 2  # noqa: SLF001
     assert not view._piece_list.isHidden()  # noqa: SLF001
