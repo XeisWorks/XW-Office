@@ -413,12 +413,12 @@ class InvoiceSummary(BaseModel):
             )
         return "\n".join(lines)
 
-    def as_table_row(self) -> dict[str, str]:
+    def as_table_row(self) -> dict[str, Any]:
         """Keys match German column headers used in :class:`DataTable`."""
         indicator_symbols = self.indicator_symbols()
         icon_keys = self.indicator_icon_keys()
 
-        row: dict[str, str] = {
+        row: dict[str, Any] = {
             "sevDesk": self.invoice_number or "—",
             "WIX": self.wix_order_number() or "—",
             "Datum": self.formatted_date_short,
@@ -524,12 +524,16 @@ class InvoiceClient:
             params["startDate"] = int(start_timestamp)
         if end_timestamp is not None:
             params["endDate"] = int(end_timestamp)
-        request_kwargs: dict[str, object] = {"params": params}
-        if request_timeout is not None:
-            request_kwargs["timeout"] = max(0.1, float(request_timeout))
-        if max_retries is not None:
-            request_kwargs["max_retries"] = max(0, int(max_retries))
-        response = self._conn.get("/Invoice", **request_kwargs)
+        retries = max(0, int(max_retries)) if max_retries is not None else None
+        if request_timeout is None:
+            response = self._conn.get("/Invoice", params=params, max_retries=retries)
+        else:
+            response = self._conn.get(
+                "/Invoice",
+                params=params,
+                max_retries=retries,
+                timeout=max(0.1, float(request_timeout)),
+            )
         payload = response.json()
         objects = payload.get("objects")
         if not isinstance(objects, list):
@@ -1131,7 +1135,7 @@ class InvoiceClient:
         result = [item for item in objects if isinstance(item, dict)]
         result.sort(
             key=lambda item: (
-                int(item.get("positionNumber"))
+                int(str(item.get("positionNumber")))
                 if str(item.get("positionNumber") or "").strip().lstrip("-").isdigit()
                 else 0,
                 str(item.get("id") or ""),
@@ -1346,11 +1350,12 @@ class InvoiceClient:
                 encoded = str(raw).strip()
                 if encoded.lower().startswith("data:application/pdf;base64,"):
                     encoded = encoded.split(",", 1)[1]
-                decoded = base64.b64decode(encoded, validate=False)
+                decoded_payload = base64.b64decode(encoded, validate=False)
             except Exception:
                 continue
-            if decoded.startswith(b"%PDF"):
-                return decoded
+            if decoded_payload.startswith(b"%PDF"):
+                return decoded_payload
+        decoded: bytes | None
         response_block = payload.get("response")
         if isinstance(response_block, dict):
             decoded = self._extract_pdf_from_payload(response_block)
