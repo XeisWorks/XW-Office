@@ -638,6 +638,8 @@ Fortschreibung F12: `f95d4e8` (`Add persistent claims for product printing`) wur
 
 Fortschreibung AP08: `0038419` (`Type-check ProductsView worker payloads`) wurde nach 26 fokussierten und 2.092 Gesamttests erfolgreich zu `origin/main` gepusht. `ProductsView`-Mypy ist 0; die Repository-Baseline liegt bei 646 Fehlern in 100 Dateien.
 
+Fortschreibung AP06: `9a7b329` (`Move aftercare tab database work off UI thread`) wurde nach 11 fokussierten und 2.094 Gesamttests erfolgreich zu `origin/main` gepusht. Aftercare-Liste, Positionen und Statusaktionen laufen im Worker; Auswahlwechsel verwerfen veraltete Positionsantworten.
+
 Der finale Suite-Nachweis dieses Fortschreibungsschritts steht oben. Commit-/Push-
 Nachweise werden nach der Integration ergänzt. Das folgende statische Inventar
 wurde aus dem vorherigen Quellstand erzeugt und dient als Navigationshilfe; nach
