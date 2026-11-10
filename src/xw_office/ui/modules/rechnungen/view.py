@@ -2417,6 +2417,14 @@ class RechnungenView(QWidget):
         self._on_printer_status(service.snapshot().printing_allowed)
 
     def _reload_first_page(self, *, preserve_print_tab: bool = False) -> None:
+        service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+        invalidate_batch = getattr(service, "invalidate_invoice_batch_cache", None)
+        if callable(invalidate_batch):
+            invalidate_batch()
+        selected = self._selected_summary()
+        invalidate_detail = getattr(service, "invalidate_invoice_detail_cache", None)
+        if selected is not None and callable(invalidate_detail):
+            invalidate_detail(str(selected.id or ""))
         if not preserve_print_tab:
             self._active_print_history_index = None
             self._print_products_last_run = False

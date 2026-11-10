@@ -1742,6 +1742,25 @@ def test_external_invoice_creation_can_invalidate_batch_snapshots() -> None:
     assert [summary.id for summary in refreshed] == [first.id, second.id]
 
 
+def test_explicit_detail_invalidation_drops_pdf_detail_and_context_caches() -> None:
+    summary = InvoiceSummary(id="explicit-refresh", invoiceNumber="RE-EXPLICIT-REFRESH")
+    service = InvoiceProcessingService(
+        AppConfig(), _InvoiceClientStub([summary]), _RepoStub({})  # type: ignore[arg-type]
+    )
+    service._cache_invoice_pdf(summary.id, b"%PDF old")  # noqa: SLF001
+    service._put_invoice_detail_cache(summary.id, {"invoiceNumber": "OLD"})  # noqa: SLF001
+    service._put_invoice_work_context_cache(  # noqa: SLF001
+        summary.id,
+        InvoiceWorkContext(summary=summary, origin="sevdesk_only"),
+    )
+
+    service.invalidate_invoice_detail_cache(summary.id)
+
+    assert not service._invoice_pdf_cache  # noqa: SLF001
+    assert not service._invoice_detail_cache  # noqa: SLF001
+    assert not service._invoice_work_context_cache  # noqa: SLF001
+
+
 def test_invalidation_during_invoice_load_does_not_repopulate_stale_batch() -> None:
     from threading import Event, Thread
 

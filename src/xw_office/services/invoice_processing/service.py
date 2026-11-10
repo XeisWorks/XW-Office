@@ -383,6 +383,15 @@ class InvoiceProcessingService:
             self._batch_cache_generation += 1
             self._batch_cache.clear()
 
+    def invalidate_invoice_detail_cache(self, invoice_id: str) -> None:
+        """Invalidate cached detail documents before an explicit user refresh."""
+        key = str(invoice_id or "").strip()
+        if not key:
+            return
+        self._drop_invoice_pdf_cache_entry(key)
+        self._drop_invoice_detail_cache(key)
+        self._drop_invoice_work_context_cache(key)
+
     def load_invoice_batch(
         self,
         *,
