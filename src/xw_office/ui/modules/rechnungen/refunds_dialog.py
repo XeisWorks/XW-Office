@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -21,7 +22,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
+from xw_office.core.worker import BackgroundWorker
 from xw_office.services.flow_api import FlowRefundsClient
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.services.mailing.service import MailAttachment, MailDeliveryService
@@ -35,6 +38,8 @@ class RefundsDialog(QDialog):
         super().__init__(parent)
         self._container = container
         self._rows: list[dict[str, Any]] = []
+        self._worker: BackgroundWorker | None = None
+        self._closing = False
         self.setWindowTitle("Stornos & Gutschriften")
         self.resize(980, 520)
         layout = QVBoxLayout(self)
@@ -51,12 +56,19 @@ class RefundsDialog(QDialog):
         layout.addWidget(buttons)
         self._load()
 
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        self._closing = True
+        super().closeEvent(event)
+
     def _load(self) -> None:
-        try:
-            self._rows = self._container.resolve(FlowRefundsClient).list_refunds(limit=250)
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "Refunds", f"Refund-Liste konnte nicht geladen werden:\n\n{exc}")
-            self._rows = []
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self._set_busy(True)
+        client = self._container.resolve(FlowRefundsClient)
+        self._start_worker(lambda: client.list_refunds(limit=250), self._on_rows_loaded)
+
+    def _on_rows_loaded(self, result: object) -> None:
+        self._rows = list(result) if isinstance(result, list) else []
         self._table.setRowCount(len(self._rows))
         for row_index, row in enumerate(self._rows):
             values = [
@@ -66,7 +78,10 @@ class RefundsDialog(QDialog):
                 row.get("wix_refund_status", ""),
                 row.get("sevdesk_action", ""),
                 row.get("process_status", ""),
-                row.get("sevdesk_credit_note_id") or row.get("sevdesk_cancellation_invoice_id") or row.get("sevdesk_invoice_id") or "",
+                row.get("sevdesk_credit_note_id")
+                or row.get("sevdesk_cancellation_invoice_id")
+                or row.get("sevdesk_invoice_id")
+                or "",
             ]
             for column, value in enumerate(values):
                 self._table.setItem(row_index, column, QTableWidgetItem(str(value)))
@@ -84,6 +99,40 @@ class RefundsDialog(QDialog):
             action_layout.addWidget(mail)
             self._table.setCellWidget(row_index, 7, actions)
 
+    def _start_worker(
+        self,
+        job: Callable[[], Any],
+        on_result: Callable[[object], None],
+    ) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self._set_busy(True)
+        worker = BackgroundWorker(job)
+        self._worker = worker
+        worker.signals.result.connect(
+            lambda result: on_result(result) if not self._closing and isValid(self) else None
+        )
+        worker.signals.error.connect(self._on_worker_error)
+        worker.signals.finished.connect(lambda current=worker: self._worker_finished(current))
+        worker.start()
+
+    def _worker_error_title(self) -> str:
+        return "Refunds"
+
+    def _on_worker_error(self, exc: Exception) -> None:
+        if not self._closing and isValid(self):
+            QMessageBox.warning(self, self._worker_error_title(), str(exc))
+
+    def _worker_finished(self, worker: BackgroundWorker) -> None:
+        is_current = self._worker is worker
+        if is_current:
+            self._worker = None
+        if is_current and not self._closing and isValid(self):
+            self._set_busy(False)
+
+    def _set_busy(self, busy: bool) -> None:
+        self._table.setEnabled(not busy)
+
     def _credit_note_id(self, index: int) -> str:
         row = self._rows[index]
         if row.get("process_status") not in {"done_creditnote", "done_creditnote_partial"}:
@@ -94,62 +143,102 @@ class RefundsDialog(QDialog):
         credit_note_id = self._credit_note_id(index)
         if not credit_note_id:
             return
-        try:
-            pdf = self._container.resolve(SevDeskRefundClient).get_credit_note_pdf(credit_note_id)
+        client = self._container.resolve(SevDeskRefundClient)
+
+        def job() -> str:
+            pdf = client.get_credit_note_pdf(credit_note_id)
             descriptor, filename = tempfile.mkstemp(prefix="xw-gutschrift-", suffix=".pdf")
             os.close(descriptor)
             path = Path(filename)
             path.write_bytes(pdf)
-            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
-                raise RuntimeError("PDF konnte nicht geöffnet werden")
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "Gutschrift-PDF", str(exc))
+            return str(path)
+
+        def open_file(filename: object) -> None:
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(filename))):
+                QMessageBox.warning(self, "Gutschrift-PDF", "PDF konnte nicht geoeffnet werden")
+
+        self._start_worker(job, open_file)
 
     def _send_mail(self, index: int) -> None:
-        row = self._rows[index]
+        row = dict(self._rows[index])
         credit_note_id = self._credit_note_id(index)
         if not credit_note_id:
             return
-        try:
-            sevdesk = self._container.resolve(SevDeskRefundClient)
+        invoice_id = str(row.get("sevdesk_invoice_id") or "")
+        order_reference = str(row.get("wix_order_number") or "").strip()
+        sevdesk = self._container.resolve(SevDeskRefundClient)
+        invoice_client = self._container.resolve(InvoiceClient)
+        wix_client = self._container.resolve(WixOrdersClient)
+        processing = self._container.resolve(InvoiceProcessingService)
+
+        def prepare() -> dict[str, str]:
             note = sevdesk.fetch_credit_note(credit_note_id)
             number = str(note.get("creditNumber") or note.get("invoiceNumber") or credit_note_id)
-            invoice_id = str(row.get("sevdesk_invoice_id") or "")
-            invoice = self._container.resolve(InvoiceClient).fetch_invoice_by_id(invoice_id) if invoice_id else {}
+            invoice_result = invoice_client.fetch_invoice_by_id(invoice_id) if invoice_id else {}
+            invoice = invoice_result if isinstance(invoice_result, dict) else {}
             wix_summary: dict[str, Any] = {}
-            order_reference = str(row.get("wix_order_number") or "").strip()
             if order_reference:
                 try:
-                    wix_summary = self._container.resolve(WixOrdersClient).resolve_order_summary(order_reference)
-                except Exception:  # noqa: BLE001 - explicit recipient prompt remains available.
+                    wix_summary = wix_client.resolve_order_summary(order_reference)
+                except Exception:  # noqa: BLE001 - recipient can still be entered manually.
                     pass
             email = str(wix_summary.get("wix_customer_email") or "").strip() or _find_email(invoice)
-            if not email:
-                email, accepted = QInputDialog.getText(self, "Gutschrift senden", "E-Mail-Adresse:")
-                if not accepted or not email.strip():
-                    return
-            customer_name = str(wix_summary.get("wix_customer_name") or invoice.get("name") or "Kunde").strip()
-            subject, body = self._container.resolve(InvoiceProcessingService).build_credit_note_mail_content(number, customer_name=customer_name)
-            answer = QMessageBox.question(self, "Gutschrift senden", f"Gutschrift {number} an {email.strip()} senden?")
-            if answer != QMessageBox.StandardButton.Yes:
+            name = str(wix_summary.get("wix_customer_name") or invoice.get("name") or "Kunde").strip()
+            subject, body = processing.build_credit_note_mail_content(number, customer_name=name)
+            return {"number": number, "email": email, "subject": subject, "body": body}
+
+        self._start_worker(prepare, lambda draft: self._confirm_credit_note_mail(draft, credit_note_id))
+
+    def _confirm_credit_note_mail(self, payload: object, credit_note_id: str) -> None:
+        if not isinstance(payload, dict):
+            return
+        draft = {str(key): str(value or "") for key, value in payload.items()}
+        email = draft.get("email", "").strip()
+        if not email:
+            email, accepted = QInputDialog.getText(self, "Gutschrift senden", "E-Mail-Adresse:")
+            if not accepted or not email.strip():
                 return
+        number = draft.get("number", credit_note_id)
+        if QMessageBox.question(
+            self,
+            "Gutschrift senden",
+            f"Gutschrift {number} an {email.strip()} senden?",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        sevdesk = self._container.resolve(SevDeskRefundClient)
+        mailer = self._container.resolve(MailDeliveryService)
+        subject = draft.get("subject", "")
+        body = draft.get("body", "")
+
+        def send() -> str:
             pdf = sevdesk.get_credit_note_pdf(credit_note_id)
-            self._container.resolve(MailDeliveryService).send_mail(
+            mailer.send_mail(
                 to_email=email.strip(),
                 subject=subject,
                 text_body=body,
-                html_body=self._container.resolve(MailDeliveryService).plain_text_to_html(body),
+                html_body=mailer.plain_text_to_html(body),
                 attachments=[MailAttachment(filename=f"{number}.pdf", content=pdf)],
             )
-            QMessageBox.information(self, "Gutschrift gesendet", f"Die Gutschrift wurde an {email.strip()} gesendet.")
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "Gutschrift senden", str(exc))
+            return email.strip()
+
+        def on_sent(recipient: object) -> None:
+            QMessageBox.information(
+                self,
+                "Gutschrift gesendet",
+                f"Die Gutschrift wurde an {recipient} gesendet.",
+            )
+
+        self._start_worker(send, on_sent)
 
 
 def _find_email(value: Any) -> str:
     if not isinstance(value, dict):
         return ""
-    for source in (value, value.get("contact") if isinstance(value.get("contact"), dict) else {}):
+    sources: list[dict[str, Any]] = [value]
+    contact = value.get("contact")
+    if isinstance(contact, dict):
+        sources.append(contact)
+    for source in sources:
         for key in ("email", "toEmail", "contactEmail", "emailAddress"):
             candidate = str(source.get(key) or "").strip()
             if "@" in candidate:

@@ -116,9 +116,10 @@ class InventoryAlertsDialog(QDialog):
             QMessageBox.warning(self, "Lageralarme", str(exc))
 
     def _worker_finished(self, worker: BackgroundWorker) -> None:
-        if self._worker is worker:
+        is_current = self._worker is worker
+        if is_current:
             self._worker = None
-        if not self._closing and isValid(self):
+        if is_current and not self._closing and isValid(self):
             self._set_busy(False)
 
     def _set_busy(self, busy: bool) -> None:
