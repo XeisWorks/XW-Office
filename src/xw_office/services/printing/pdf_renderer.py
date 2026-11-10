@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
-import fitz  # PyMuPDF
+import fitz  # type: ignore[import-untyped]  # PyMuPDF
 from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtGui import QImage, QPageLayout, QPageSize, QPainter
 from PySide6.QtPrintSupport import QPrinter
@@ -361,6 +361,12 @@ def _is_music_like_job(job_kind: str) -> bool:
     return str(job_kind or "").strip().casefold() in {"music", "product"}
 
 
+def _resolve_black_enhancement(value: BlackEnhancement) -> ResolvedBlackEnhancement:
+    if value == "auto" or value == "auto_music":
+        return "none"
+    return value
+
+
 def _resolve_page_render_strategy(
     *,
     job_kind: str,
@@ -369,23 +375,23 @@ def _resolve_page_render_strategy(
     analysis: PagePrintAnalysis | None,
 ) -> PageRenderStrategy:
     if not _is_music_like_job(job_kind):
-        color = "rgb" if requested_render_color_mode == "auto" else cast(ResolvedRenderColorMode, requested_render_color_mode)
-        enhancement = "none" if requested_black_enhancement in {"auto", "auto_music"} else requested_black_enhancement
-        return PageRenderStrategy(color, cast(ResolvedBlackEnhancement, enhancement), analysis, "off")
+        color = "rgb" if requested_render_color_mode == "auto" else requested_render_color_mode
+        enhancement = _resolve_black_enhancement(requested_black_enhancement)
+        return PageRenderStrategy(color, enhancement, analysis, "off")
 
-    if requested_black_enhancement not in {"auto", "auto_music"}:
+    if requested_black_enhancement != "auto" and requested_black_enhancement != "auto_music":
         color = "gray" if requested_render_color_mode == "auto" else requested_render_color_mode
         return PageRenderStrategy(
-            cast(ResolvedRenderColorMode, color),
-            cast(ResolvedBlackEnhancement, requested_black_enhancement),
+            color,
+            _resolve_black_enhancement(requested_black_enhancement),
             analysis,
             "explicit",
         )
 
     if requested_render_color_mode != "auto":
-        color = cast(ResolvedRenderColorMode, requested_render_color_mode)
-        enhancement: ResolvedBlackEnhancement = "adaptive_music" if color == "gray" else "none"
-        return PageRenderStrategy(color, enhancement, analysis, "medium")
+        color = requested_render_color_mode
+        resolved_enhancement: ResolvedBlackEnhancement = "adaptive_music" if color == "gray" else "none"
+        return PageRenderStrategy(color, resolved_enhancement, analysis, "medium")
 
     if analysis is not None and analysis.page_class == "notation":
         return PageRenderStrategy("gray", "adaptive_music", analysis, "medium")
