@@ -1,6 +1,14 @@
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+from sqlalchemy import create_engine
+
+from xw_office.models.base import Base
+from xw_office.models.settings_kv import SettingKV
 from xw_office.services.product_hub.migration_preview import (
     HubAliasSnapshot,
-    HubPrintAssetSnapshot,
     HubVariantSnapshot,
     build_migration_preview,
     preview_payload,
@@ -74,12 +82,3 @@ def test_preview_script_reads_database_without_changing_legacy_setting(tmp_path:
     assert json.loads(output.read_text(encoding="utf-8"))["entries"][0]["status"] == "unmatched"
     with engine.connect() as connection:
         assert connection.execute(SettingKV.__table__.select()).one().value_json == legacy_json
-import json
-from pathlib import Path
-import subprocess
-import sys
-
-from sqlalchemy import create_engine
-
-from xw_office.models.base import Base
-from xw_office.models.settings_kv import SettingKV
