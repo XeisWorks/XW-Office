@@ -7,9 +7,9 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from PySide6.QtCore import QEvent, QTimer, Qt
+from PySide6.QtCore import QEvent, QModelIndex, QPersistentModelIndex, QObject, QSize, QTimer, Qt
 from PySide6.QtGui import QColor, QIcon, QImage, QMouseEvent, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QStyledItemDelegate,
     QStyle,
+    QStyleOptionViewItem,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -135,7 +136,12 @@ class _SyncPresenceDelegate(QStyledItemDelegate):
         self._tinted_cache[cache_key] = tinted
         return tinted if not tinted.isNull() else None
 
-    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
         row_data = index.data(Qt.ItemDataRole.UserRole)
         if not isinstance(row_data, dict):
             super().paint(painter, option, index)
@@ -175,7 +181,11 @@ class _SyncPresenceDelegate(QStyledItemDelegate):
             x += size + gap
         painter.restore()
 
-    def sizeHint(self, option, index):  # type: ignore[override]
+    def sizeHint(
+        self,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> QSize:
         base = super().sizeHint(option, index)
         if base.height() < 22:
             base.setHeight(22)
@@ -228,7 +238,12 @@ class _SyncConflictDelegate(QStyledItemDelegate):
         self._tinted_cache[cache_key] = tinted
         return tinted if not tinted.isNull() else None
 
-    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
         row_data = index.data(Qt.ItemDataRole.UserRole)
         if not isinstance(row_data, dict):
             super().paint(painter, option, index)
@@ -267,7 +282,11 @@ class _SyncConflictDelegate(QStyledItemDelegate):
             x += size + gap
         painter.restore()
 
-    def sizeHint(self, option, index):  # type: ignore[override]
+    def sizeHint(
+        self,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> QSize:
         base = super().sizeHint(option, index)
         if base.height() < 22:
             base.setHeight(22)
@@ -298,7 +317,12 @@ class _SyncActionDelegate(QStyledItemDelegate):
         x, y, button_width, button_height = cls._button_geometry(width, height)
         return x <= int(local_x) <= x + button_width and y <= int(local_y) <= y + button_height
 
-    def paint(self, painter: QPainter, option, index) -> None:  # type: ignore[override]
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
         row_data = index.data(Qt.ItemDataRole.UserRole)
         field = str(index.model().headerData(index.column(), Qt.Orientation.Horizontal) or "")
         enabled = isinstance(row_data, dict) and bool(row_data.get(f"__action_enabled__{field}"))
@@ -337,7 +361,11 @@ class _SyncActionDelegate(QStyledItemDelegate):
             icon.paint(painter, icon_rect, Qt.AlignmentFlag.AlignCenter)
         painter.restore()
 
-    def sizeHint(self, option, index):  # type: ignore[override]
+    def sizeHint(
+        self,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> QSize:
         base = super().sizeHint(option, index)
         if base.height() < 24:
             base.setHeight(24)
@@ -389,6 +417,8 @@ class ProductsView(QWidget):
         self._print_confirmed_skus: set[str] = set()
         self._sync_filter_text: str = ""
         self._sync_filter_status: str = ""
+        self._inv_filter_text = ""
+        self._inv_filter_category = ""
         self._sync_status_delegate = _SyncPresenceDelegate(self)
         self._sync_conflict_delegate = _SyncConflictDelegate(self)
         self._sync_action_delegate = _SyncActionDelegate(self)
@@ -470,9 +500,11 @@ class ProductsView(QWidget):
 
     def _on_inv_loaded(self, rows: object) -> None:
         self._inv_refresh_btn.setEnabled(True)
-        if not isinstance(rows, list):
+        if not isinstance(rows, list) or not all(isinstance(row, ProductRow) for row in rows):
+            self._inv_status_lbl.setText("Fehler: unerwartete Produktdaten vom Hintergrunddienst")
+            logger.error("ProductsView inventory worker returned invalid payload: %s", type(rows).__name__)
             return
-        self._all_rows = rows  # type: ignore[assignment]
+        self._all_rows = cast(list[ProductRow], rows)
         self._inv_brand_btn.setEnabled(bool(self._all_rows))
         self._inv_fields_btn.setEnabled(bool(self._all_rows))
         self._refresh_inv_category_options()
@@ -616,9 +648,11 @@ class ProductsView(QWidget):
 
     def _on_wix_loaded(self, rows: object) -> None:
         self._wix_load_btn.setEnabled(True)
-        if not isinstance(rows, list):
+        if not isinstance(rows, list) or not all(isinstance(row, WixProduct) for row in rows):
+            self._wix_status_lbl.setText("Fehler: unerwartete Wix-Daten vom Hintergrunddienst")
+            logger.error("ProductsView Wix worker returned invalid payload: %s", type(rows).__name__)
             return
-        self._wix_rows = rows  # type: ignore[assignment]
+        self._wix_rows = cast(list[WixProduct], rows)
         self._wix_fields_btn.setEnabled(bool(self._wix_rows))
         self._wix_status_lbl.setText(f"{len(self._wix_rows)} Wix-Produkte geladen")
         self._wix_search.refresh_suggestions()
@@ -1214,6 +1248,8 @@ class ProductsView(QWidget):
             if accepted:
                 QMessageBox.warning(self, "Bestandskorrektur", "Referenz oder Notiz darf nicht leer sein.")
             return
+        quantity: int | None = None
+        target_stock: int | None = None
         if reason == "return":
             quantity, accepted = QInputDialog.getInt(
                 self,
@@ -1231,7 +1267,6 @@ class ProductsView(QWidget):
                 f"Aktueller lokaler Bestand: {row.on_hand}\n\n"
                 "Legacy-Bestand schreiben und Shadow-Bewegung 'return' erzeugen?"
             )
-            correction_kwargs: dict[str, object] = {"quantity": quantity}
         else:
             target_stock, accepted = QInputDialog.getInt(
                 self,
@@ -1249,7 +1284,6 @@ class ProductsView(QWidget):
                 f"Aktueller lokaler Bestand: {row.on_hand}\n\n"
                 "Legacy-Bestand schreiben und Shadow-Bewegung 'recount' erzeugen?"
             )
-            correction_kwargs = {"target_stock": target_stock}
         if QMessageBox.question(self, "Bestandskorrektur bestätigen", question) != QMessageBox.StandardButton.Yes:
             return
 
@@ -1262,7 +1296,8 @@ class ProductsView(QWidget):
                 sku=row.sku,
                 reason=reason,
                 reference=reference,
-                **correction_kwargs,
+                quantity=quantity,
+                target_stock=target_stock,
             )
 
         self._stock_correction_worker = BackgroundWorker(job)
@@ -1725,7 +1760,7 @@ class ProductsView(QWidget):
         self._legacy_import_btn.setEnabled(False)
         self._sync_status_lbl.setText("Importiere Legacy-Druckdaten...")
 
-        def job():
+        def job() -> object:
             return inv.import_legacy_print_data()
 
         self._save_worker = BackgroundWorker(job)
@@ -2211,7 +2246,7 @@ class ProductsView(QWidget):
         """Open dialog for bulk product field editing."""
         self._run_bulk_field_dialog(self._selected_product_skus(), source_label="Produkte")
 
-    def eventFilter(self, watched: object, event: QEvent) -> bool:
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self._sync_table.viewport() and event.type() == QEvent.Type.MouseButtonRelease:
             if isinstance(event, QMouseEvent) and event.button() in {
                 Qt.MouseButton.LeftButton,

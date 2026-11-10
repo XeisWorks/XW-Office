@@ -70,6 +70,26 @@ class _FakeBrandService(ProductBrandService):
         )
 
 
+def test_products_view_rejects_invalid_background_payloads(
+    qtbot: object, monkeypatch: object
+) -> None:
+    monkeypatch.setattr(ProductsView, "_load_sync_sources", lambda self, *args, **kwargs: None)
+    view = ProductsView(Container(AppConfig()))
+    qtbot.addWidget(view)
+    inventory_tab = view._build_inventory_tab()  # noqa: SLF001
+    view.layout().addWidget(inventory_tab)
+    wix_tab = view._build_wix_tab()  # noqa: SLF001
+    view.layout().addWidget(wix_tab)
+
+    view._on_inv_loaded([object()])  # noqa: SLF001
+    assert view._inv_status_lbl.text() == "Fehler: unerwartete Produktdaten vom Hintergrunddienst"  # noqa: SLF001
+    assert view._all_rows == []  # noqa: SLF001
+
+    view._on_wix_loaded([object()])  # noqa: SLF001
+    assert view._wix_status_lbl.text() == "Fehler: unerwartete Wix-Daten vom Hintergrunddienst"  # noqa: SLF001
+    assert view._wix_rows == []  # noqa: SLF001
+
+
 def test_products_brand_bulk_flow_smoke(qtbot: object, monkeypatch: object) -> None:
     # Avoid async sync loading in constructor; we manually feed the table.
     monkeypatch.setattr(ProductsView, "_load_sync_sources", lambda self, *args, **kwargs: None)

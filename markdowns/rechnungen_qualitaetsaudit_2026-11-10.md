@@ -149,7 +149,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F17 | P2 | TEILWEISE | Alarmdetail-Laden, Schwellenwertspeichern und Task-Mail laufen asynchron. Refund-Liste, Mailvorbereitung/-versand und PDF-Abruf, OPEN-PRINTS-Anhaenge/Erledigen, Ueberweisungs-PDF sowie PLC-Trackingimport und Paketcode-Zuordnung nutzen Worker. Due-/Wix-/Inbox-Pruefungen und Nachbetreuungs-Badgezaehler laufen bereits im koaleszierten BackgroundWorker von `TagesgeschaeftView._refresh_badges`; auch der Sendungsdialog verwendet den gecachten Zaehler und aktualisiert danach asynchron. Weitere UI-I/O-Pfade bleiben zu pruefen. | Eventloop-Heartbeats mit blockierten Fakes fuer Refunds, OPEN-PRINTS, Ueberweisungs-PDF und PLC-Trackingaktionen; Regression verbietet den synchronen Nachbetreuungs-DB-Zugriff nach Sendungsdialog; Fallback-/Badge-Tests |
 | F18 | P2 | TEILWEISE | Sendungen-, Ueberweisungs-, Nachbetreuungs- und OPEN-PRINTS-Dialoge verwerfen spaete UI-Ergebnisse. Auch der Zusatzrechnungsdialog wartet beim Schliessen nicht mehr auf Kontakt-Reads; bei laufender Rechnungserstellung bleibt er fuer Ergebnisfeedback offen. `TagesgeschaeftView` deferiert Close jetzt ereignisgesteuert, statt bis zu fuenf Sekunden im GUI-Thread auf Worker zu warten. In `ui/modules/rechnungen` gibt es keine direkten `.wait()`-Aufrufe mehr; weitere spaete Callback-/Close-Policies bleiben zu auditieren. | Blockierte Fake-Worker: Aftercare-Dialog bleibt reaktionsfaehig, ignoriert spaete Leseergebnisse und erhaelt Write-Feedback; Tagesgeschaeft-Close-Heartbeat bleibt reaktionsfaehig und schliesst nach Worker-Ende |
 | F19 | P2 | TEILWEISE | Invoice-PDFs verwenden jetzt einen 64-MiB-LRU und pruefen die erwartete Rechnungsnummer auch bei Cache-Hits; ein abweichendes PDF wird verworfen und neu geladen. Header-/WorkContext-Caches haben eine 30-Sekunden-TTL; gemeinsame Inhaltsrevisionen und gebuendelte Produktauflosung bleiben offen. | Regression: Header-/WorkContext-TTL erzwingt erneuten Fetch; Warm-Cache bleibt innerhalb der Frist; PDF-Nummernpruefung und Byte-Limit |
-| F20 | P2 | TEILWEISE | pytest laedt keine lokale dotenv-Konfiguration; sensible Umgebungsvariablen werden entfernt und externe Socket-Verbindungen blockiert (Loopback bleibt erlaubt). `InvoiceProcessingService`, `tagesgeschaeft_view.py`, `redelivery_dialog.py`, `customer_aftercare_tab.py` und `print_decision.py` sind jeweils mit `--follow-imports=silent` mypy-fehlerfrei. Rechnungs-UI-Baseline: 140 Fehler in 9 Dateien; Repository-Baseline: 666 Fehler in 101 Dateien (zuvor 680/104). Weitere Typbereinigung und Controller-Extraktion bleiben offen. | Gesamtsuite ohne lokale Credentials/ausgehende Verbindungen; MyPy-Baseline dokumentiert |
+| F20 | P2 | TEILWEISE | pytest laedt keine lokale dotenv-Konfiguration; sensible Umgebungsvariablen werden entfernt und externe Socket-Verbindungen blockiert (Loopback bleibt erlaubt). `InvoiceProcessingService`, `tagesgeschaeft_view.py`, `redelivery_dialog.py`, `customer_aftercare_tab.py`, `print_decision.py` und `ProductsView` sind jeweils mit `--follow-imports=silent` mypy-fehlerfrei. Rechnungs-UI-Baseline: 140 Fehler in 9 Dateien; Repository-Baseline: 646 Fehler in 100 Dateien (zuvor 666/101, jetzt 20 Fehler weniger). Weitere Typbereinigung und Controller-Extraktion bleiben offen. | Gesamtsuite ohne lokale Credentials/ausgehende Verbindungen; MyPy-Baseline dokumentiert |
 | F21 | P1 | ERLEDIGT | `view.py::_DraftInvoiceDialog`: nach erfolgreicher Vorschau konnte die Ordernummer ge?ndert und weiterhin best?tigt werden. Jede Eingabe?nderung invalidiert nun die Vorschaufreigabe. | Qt-Test: Vorschau A ? Eingabe B bleibt gesperrt, erst Vorschau B erlaubt Best?tigen |
 
 ## 5. Performance-Audit
@@ -396,7 +396,10 @@ Ein aktueller Paketlauf ueber `src/xw_office` findet 666 MyPy-Fehler in 101 Date
 (vor den letzten Dateibereinigungen 680/104); der isolierte Rechnungs-UI-Lauf findet
 140 Fehler in 9 Dateien (urspruenglich 150 in 11 Dateien). `redelivery_dialog.py`,
 `customer_aftercare_tab.py` und `print_decision.py` sind ebenfalls einzeln fehlerfrei.
-Weitere betroffene Module und Controller-Extraktion sind weiterhin offen.
+`ProductsView` ist jetzt ebenfalls einzeln mypy-fehlerfrei; sechs Delegate-Overrides,
+Worker-Payloads, Filterzustand, Bestandskorrektur-Argumente und ein Event-Filter
+wurden praezise typisiert. Weitere betroffene Module und Controller-Extraktion sind
+weiterhin offen.
 
 Testprozess von lokalen `.env`-/Credentials isolieren und echte externe
 Verbindungen standardmäßig sperren; lokale Testclient-Verbindungen zulassen.
@@ -439,6 +442,7 @@ Geänderte Produktionsdateien:
 - `ui/modules/rechnungen/customer_aftercare_invoice_dialog.py`: blockierte Kontakt-Reads halten Close nicht mehr auf und spaete Ergebnisse werden verworfen; laufende Rechnungserstellung bleibt bis zum Ergebnis offen.
 - `ui/modules/rechnungen/tagesgeschaeft_view.py`: Shutdown wartet asynchron auf die Worker statt bis zu fuenf Sekunden im GUI-Thread zu blockieren; Timer schliesst nach Worker-Ende.
 - `ui/modules/rechnungen/tagesgeschaeft_view.py`: nach dem Sendungsdialog wird der Nachbetreuungs-Badge aus dem letzten Snapshot angezeigt und der Datenbank-Refresh im Worker gestartet (F17).
+- `ui/modules/products/view.py`: Delegate-Signaturen, Worker-Payloads, Filterzustand, Bestandskorrektur und Event-Filter mypy-fehlerfrei typisiert (F20).
 
 - `ui/modules/rechnungen/plc_evidence_dialog.py`: PLC-Nachweis laden, Original-Tracking-XML importieren und Paketcode zuordnen laufen asynchron; spaete Ergebnisse werden nach Dialogschluss verworfen (F17/F18).
 
@@ -450,7 +454,7 @@ vorhandene PLC-Funktion angepasst (F08).
 
 ### Tatsächliche Prüfergebnisse
 
-Aktueller Gesamtlauf nach der F12-Druck-Claim-Fortschreibung: **2.091 bestanden, 1 Warnung, 0 fehlgeschlagen in 150,21 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
+Aktueller Gesamtlauf nach der ProductsView-Typ- und Payload-Pruefung: **2.092 bestanden, 1 Warnung, 0 fehlgeschlagen in 146,44 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
 
 Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
 - Erster Gesamtlauf: **1.979 bestanden, 4 fehlgeschlagen**, 138,53 s.
@@ -503,6 +507,7 @@ Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
 - AP07 Cache-TTL: zwei neue InvoiceService-Regressionen belegen Warm-Cache innerhalb der Frist und erneuten Header-/Positionsabruf nach Ablauf; Ruff und mypy fuer `service.py` gruen. Gesamtsuite danach **2.083 bestanden**.
 - AP08 Worker-Payload-Typen: `tagesgeschaeft_view.py` mypy von 19 Fehlern auf 0 bereinigt; ungültige Badge-Zähler und asynchrone Listen-/Popup-Payloads werden defensiv geprüft. Ruff fuer Produktions- und Testdatei gruen; Badge-/Aftercare-UI **9 bestanden**; Gesamtsuite danach **2.084 bestanden, 1 bestehende Starlette/httpx-Deprecation-Warnung**.
 - AP08 Aftercare-Tabellen und Callbacks: fehlende optionale Zellen werden ueber einen zentralen Default-Reader behandelt; Callback-Typen spiegeln die tatsaechlich ignorierten Rueckgabewerte wider. `redelivery_dialog.py` und `customer_aftercare_tab.py` mypy/Ruff fehlerfrei; Qt-Regression fuer fehlende Tabellenzellen; Manager-Dialog **9 bestanden**; Rechnungs-UI-MyPy sinkt von 150 auf 140 Fehler in 9 statt 11 Dateien. Repository-weite Messung sank von 680/104 auf 666/101; Gesamtsuite danach **2.085 bestanden, 1 Warnung**.
+- AP08 `ProductsView`-Typen: 20 lokale MyPy-Fehler auf 0 reduziert; keine pauschalen `ignore_errors`, Override-Signaturen entsprechen Qt, Produkt-/Wix-Worker-Payloads werden zur Laufzeit typvalidiert und Korrekturparameter sind explizit. Produkte-UI und Inventurkorrektur **26 bestanden**, Ruff gruen. Repository-MyPy sinkt weiter von 666 Fehlern/101 Dateien auf **646/100**. Gesamtsuite nach Aenderung: **2.092 bestanden, 1 bestehende Warnung, 0 fehlgeschlagen (146,44 s)**.
 - F12 Part-Stock-Konkurrenz im Prozess: `PrintDecisionEngine` sperrt pro sevDesk-Part die Bestandsabfrage und -erhoehung; gleichzeitige Worker verlieren keine Erhoehung. `print_decision.py` mypy/Ruff fehlerfrei; fokussierte Drucktests **13 bestanden**; Gesamtsuite **2.086 bestanden, 1 bestehende Starlette/httpx-Deprecation-Warnung**.
 - F12 Cross-Instance-Part-Lock: `SettingKvRepository.advisory_lock` haelt den PostgreSQL-Transaktionslock waehrend der begrenzten Part-GET/SET-Sequenz; Bootstrap injiziert das gemeinsame Repository in `PrintDecisionEngine`. Thread-Test mit zwei Engines und gemeinsamem Lock-Port belegt Serialisierung; Repository-, Claim- und Drucktests **21 bestanden**, einschliesslich SQLite-Kontext-/Schluesselvalidierung; Ruff und mypy fuer Repository, Bootstrap und Druckservice gruen. Kein echter PostgreSQL-Parallelitaetslauf (G2).
 - F12 Einzelproduktdruck: Rechnungsansicht **83 Tests bestanden**; paralleler Druck
