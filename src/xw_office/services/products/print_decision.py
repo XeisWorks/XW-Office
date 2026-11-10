@@ -8,6 +8,7 @@ Integrates:
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Lock
@@ -200,9 +201,11 @@ class PrintDecisionEngine:
         self,
         catalog: ProductCatalogService,
         part_client: PartClient,
+        settings_repo: object | None = None,
     ) -> None:
         self._catalog = catalog
         self._part_client = part_client
+        self._settings_repo = settings_repo
         self._part_stock_locks_guard = Lock()
         self._part_stock_locks: dict[str, Lock] = {}
 
@@ -329,7 +332,13 @@ class PrintDecisionEngine:
             raise ValueError("Gedruckte Menge darf nicht negativ sein")
         if quantity == 0:
             return self._part_client.get_part_stock(part_id)
-        with self._part_stock_lock(part_id):
+        advisory_lock = getattr(self._settings_repo, "advisory_lock", None)
+        shared_lock = (
+            advisory_lock(f"sevdesk-part-stock:{part_id}")
+            if callable(advisory_lock)
+            else nullcontext()
+        )
+        with self._part_stock_lock(part_id), shared_lock:
             current = self._part_client.get_part_stock(part_id)
             new_stock = current + quantity
             self._part_client.set_part_stock(part_id, new_stock)

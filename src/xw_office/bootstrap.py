@@ -207,6 +207,9 @@ def register_default_services(container: Container) -> None:
         lambda c: PrintDecisionEngine(
             catalog=c.resolve(ProductCatalogService),
             part_client=c.resolve(PartClient),
+            settings_repo=(
+                c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None
+            ),
         ),
     )
     container.register(

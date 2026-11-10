@@ -67,6 +67,21 @@ def test_setting_kv_mutate_value_json(session_factory: sessionmaker[Session]) ->
     assert json.loads(repo.get_value_json("shared.items") or "[]") == ["first", "second"]
 
 
+def test_setting_kv_advisory_lock_context_is_usable_without_postgres(
+    session_factory: sessionmaker[Session],
+) -> None:
+    repo = SettingKvRepository(session_factory)
+
+    with repo.advisory_lock("sevdesk-part-stock:part-1"):
+        repo.set_value_json("lock.test", '{"inside":true}')
+
+    assert repo.get_value_json("lock.test") == '{"inside":true}'
+
+    with pytest.raises(ValueError, match="darf nicht leer"):
+        with repo.advisory_lock(" "):
+            pass
+
+
 def test_api_secret_upsert(session_factory: sessionmaker[Session]) -> None:
     blob = b"\x00cipher-demo\x00"
     with session_factory() as s:

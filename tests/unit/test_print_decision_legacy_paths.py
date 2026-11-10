@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
 import time
+from collections.abc import Generator
 
 from xw_office.services.products.catalog import Product, ProductCatalogService
 from xw_office.services.products.print_decision import PieceBlock, PrintDecisionEngine
@@ -87,6 +89,68 @@ def test_concurrent_print_stock_updates_for_same_part_are_serialized() -> None:
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: engine.record_print_and_update_sevdesk(piece, 2), range(2)))
+
+    assert sorted(results) == [7, 9]
+    assert part_client.stock == 9
+    assert part_client.max_active_reads == 1
+
+
+def test_separate_engines_share_part_stock_lock() -> None:
+    class SharedLockRepository:
+        def __init__(self) -> None:
+            self._guard = Lock()
+            self._locks: dict[str, Lock] = {}
+
+        @contextmanager
+        def advisory_lock(self, key: str) -> Generator[None, None, None]:
+            with self._guard:
+                lock = self._locks.setdefault(key, Lock())
+            with lock:
+                yield
+
+    class ConcurrentPartClient(_PartClientStub):
+        def __init__(self) -> None:
+            self.stock = 5
+            self._state_lock = Lock()
+            self._active_reads = 0
+            self.max_active_reads = 0
+
+        def get_part_stock(self, _part_id: str) -> int:
+            with self._state_lock:
+                self._active_reads += 1
+                self.max_active_reads = max(self.max_active_reads, self._active_reads)
+                observed_stock = self.stock
+            time.sleep(0.03)
+            with self._state_lock:
+                self._active_reads -= 1
+            return observed_stock
+
+        def set_part_stock(self, _part_id: str, new_stock: int) -> None:
+            with self._state_lock:
+                self.stock = new_stock
+
+    shared_locks = SharedLockRepository()
+    part_client = ConcurrentPartClient()
+    catalog = ProductCatalogService(_RepoStub("[]"))
+    engines = [
+        PrintDecisionEngine(catalog, part_client, settings_repo=shared_locks),
+        PrintDecisionEngine(catalog, part_client, settings_repo=shared_locks),
+    ]
+    piece = PieceBlock(
+        sku="XW-1",
+        name="Testprodukt",
+        qty_needed=2,
+        product=Product(
+            id="product-1", sku="XW-1", name="Testprodukt", sevdesk_part_id="part-1"
+        ),
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(
+                lambda engine: engine.record_print_and_update_sevdesk(piece, 2), engines
+            )
+        )
 
     assert sorted(results) == [7, 9]
     assert part_client.stock == 9

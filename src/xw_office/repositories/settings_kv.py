@@ -30,6 +30,26 @@ class SettingKvRepository:
             row = session.get(SettingKV, key)
             return None if row is None else row.value_json
 
+    @contextmanager
+    def advisory_lock(self, key: str) -> Generator[None, None, None]:
+        """Hold a transaction-scoped PostgreSQL lock while a caller performs I/O.
+
+        This is intended for short, serialized read/modify/write operations whose
+        external system does not provide an atomic increment endpoint. The caller
+        must keep the protected operation bounded and must not invoke UI work here.
+        """
+        lock_key = str(key or "").strip()
+        if not lock_key:
+            raise ValueError("Advisory-Lock-Schluessel darf nicht leer sein")
+        with self._scope() as session:
+            bind = session.get_bind()
+            if bind is not None and bind.dialect.name == "postgresql":
+                session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                    {"key": lock_key},
+                )
+            yield
+
     def set_value_json(self, key: str, value_json: str) -> SettingKV:
         with self._scope() as session:
             row = session.get(SettingKV, key)
