@@ -70,11 +70,17 @@ def _parse_part(raw: dict[str, Any]) -> SevdeskPart:
         stock_enabled = stock_enabled_raw.strip() not in ("0", "false", "")
     else:
         stock_enabled = True  # default: assume physical
-    category = raw.get("category") if isinstance(raw.get("category"), dict) else {}
-    unity = raw.get("unity") if isinstance(raw.get("unity"), dict) else {}
+    raw_category = raw.get("category")
+    category: dict[str, object] = raw_category if isinstance(raw_category, dict) else {}
+    raw_unity = raw.get("unity")
+    unity: dict[str, object] = raw_unity if isinstance(raw_unity, dict) else {}
     tax_rate_raw = raw.get("taxRate")
     try:
-        tax_rate = float(tax_rate_raw) if tax_rate_raw not in (None, "") else None
+        tax_rate = (
+            float(tax_rate_raw)
+            if tax_rate_raw is not None and tax_rate_raw != ""
+            else None
+        )
     except (TypeError, ValueError):
         tax_rate = None
     return SevdeskPart(
