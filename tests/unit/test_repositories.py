@@ -120,6 +120,91 @@ def test_plc_shipment_reservation_blocks_duplicate_after_creation(
     assert duplicate.shipment.status == "created"
 
 
+def test_plc_parcel_evidence_requires_explicit_code_assignment_for_multiple_packages(
+    session_factory: sessionmaker[Session],
+) -> None:
+    repo = PlcShipmentRepository(session_factory)
+    key = "c" * 64
+    repo.reserve(
+        request_key=key, invoice_id="invoice-2", reference="20857",
+        invoice_number="RE-2", mode="TEST", transport="webservice",
+        product_code="10", country_iso2="AT",
+        parcel_snapshots=(
+            {"reference": "20857-P1", "weight_kg": "0.5", "contents": [
+                {"quantity": 2, "name": "Alpenmarsch", "sku": "XW-400"}
+            ]},
+            {"reference": "20857-P2", "weight_kg": "0.6", "contents": [
+                {"quantity": 1, "name": "Bergklang", "sku": "XW-401"}
+            ]},
+        ),
+    )
+    repo.mark_created(
+        key, tracking_codes=("CODE-1", "CODE-2"),
+        collo_codes=(("CODE-2",), ("CODE-1",)), label_sha256="d" * 64,
+    )
+    evidence = repo.list_parcel_evidence(invoice_id="invoice-2")
+    assert [entry.tracking_code for entry in evidence] == ["", ""]
+    assert [entry.contents[0]["name"] for entry in evidence] == ["Alpenmarsch", "Bergklang"]
+    assert repo.confirm_parcel_code(
+        shipment_id=evidence[0].shipment_id, package_number=1, tracking_code="CODE-1"
+    )
+    assert not repo.confirm_parcel_code(
+        shipment_id=evidence[0].shipment_id, package_number=2, tracking_code="CODE-1"
+    )
+    assert not repo.confirm_parcel_code(
+        shipment_id=evidence[0].shipment_id, package_number=2, tracking_code="FOREIGN"
+    )
+    assert repo.list_parcel_evidence(invoice_id="invoice-2")[0].code_assignment == "operator_confirmed"
+
+
+def test_plc_single_parcel_code_is_assigned_without_operator_guess(
+    session_factory: sessionmaker[Session],
+) -> None:
+    repo = PlcShipmentRepository(session_factory)
+    key = "e" * 64
+    repo.reserve(
+        request_key=key, invoice_id="invoice-3", reference="20858",
+        invoice_number="RE-3", mode="TEST", transport="webservice",
+        product_code="10", country_iso2="AT",
+        parcel_snapshots=({"reference": "20858", "weight_kg": "0.7", "contents": []},),
+    )
+    repo.mark_created(key, tracking_codes=("ONLY-CODE",), label_sha256="f" * 64)
+    entry = repo.list_parcel_evidence(invoice_id="invoice-3")[0]
+    assert entry.tracking_code == "ONLY-CODE"
+    assert entry.code_assignment == "single_parcel"
+    assert entry.confirmed_at is None
+
+
+def test_plc_imports_only_known_post_tracking_events_once(
+    session_factory: sessionmaker[Session],
+) -> None:
+    repo = PlcShipmentRepository(session_factory)
+    key = "1" * 64
+    repo.reserve(
+        request_key=key, invoice_id="invoice-4", reference="20859",
+        invoice_number="RE-4", mode="LIVE", transport="webservice",
+        product_code="10", country_iso2="AT",
+        parcel_snapshots=({"reference": "20859", "weight_kg": "0.4", "contents": []},),
+    )
+    repo.mark_created(key, tracking_codes=("KNOWN",), label_sha256="2" * 64)
+    raw = b"""<t:TrackingData xmlns:t="http://Post.at/Pis/TrackingProcessor/Default/TrackingEvent_V2.0.0">
+      <TrackingEvents><Header><TrackingVersion>2</TrackingVersion><EventCount>2</EventCount></Header>
+        <Event><ParcelEventId>123</ParcelEventId><IdentCode>KNOWN</IdentCode>
+          <EventTimestamp>2026-11-10T10:11:12.000</EventTimestamp>
+          <ParcelEventTypeCode>ZUS</ParcelEventTypeCode><ParcelEventReasonCode>ZP</ParcelEventReasonCode>
+        </Event>
+        <Event><ParcelEventId>124</ParcelEventId><IdentCode>OTHER</IdentCode>
+          <EventTimestamp>2026-11-10T10:12:12.000</EventTimestamp>
+          <ParcelEventTypeCode>AVI</ParcelEventTypeCode>
+        </Event>
+      </TrackingEvents></t:TrackingData>"""
+    assert repo.import_post_tracking_xml(raw, invoice_id="invoice-4") == 1
+    assert repo.import_post_tracking_xml(raw, invoice_id="invoice-4") == 0
+    entry = repo.list_parcel_evidence(invoice_id="invoice-4")[0]
+    assert [(event.event_type, event.event_reason) for event in entry.events] == [("ZUS", "ZP")]
+    assert len(entry.events[0].source_sha256) == 64
+
+
 def test_customer_aftercare_reserve_by_message_id_is_idempotent(
     session_factory: sessionmaker[Session],
 ) -> None:

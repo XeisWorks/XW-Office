@@ -32,6 +32,8 @@ from xw_office.models import (
     InvoiceSearchIndex,
     PcRegistry,
     PlcShipment,
+    PlcParcelManifest,
+    PlcTrackingEvent,
     SettingKV,
     TaxFollowupDispatch,
 )
@@ -57,6 +59,8 @@ _CORE_TABLES = (
     InvoiceSearchIndex.__table__,
     PcRegistry.__table__,
     PlcShipment.__table__,
+    PlcParcelManifest.__table__,
+    PlcTrackingEvent.__table__,
     SettingKV.__table__,
     TaxFollowupDispatch.__table__,
 )

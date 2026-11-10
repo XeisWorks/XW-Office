@@ -106,6 +106,7 @@ class PlcWebserviceResult:
     pdf_bytes: bytes
     tracking_codes: tuple[str, ...]
     shipment_documents: bytes = b""
+    collo_codes: tuple[tuple[str, ...], ...] = ()
 
 
 def webservice_settings_from_secrets(secrets: "SecretService", *, mode: str) -> PlcWebserviceSettings:
@@ -212,7 +213,8 @@ class PlcWebserviceClient:
             field_name="shipmentDocuments",
             allow_empty=True,
         )
-        codes = tuple(_tracking_codes(response))
+        collo_codes = _collo_codes(response)
+        codes = tuple(dict.fromkeys(code for group in collo_codes for code in group))
         logger.info(
             "PLC webservice success mode=%s product=%s elapsed_ms=%s tracking_count=%s pdf_bytes=%s",
             settings.mode,
@@ -221,7 +223,12 @@ class PlcWebserviceClient:
             len(codes),
             len(pdf_bytes),
         )
-        return PlcWebserviceResult(pdf_bytes=pdf_bytes, tracking_codes=codes, shipment_documents=documents)
+        return PlcWebserviceResult(
+            pdf_bytes=pdf_bytes,
+            tracking_codes=codes,
+            shipment_documents=documents,
+            collo_codes=collo_codes,
+        )
 
 
 def build_import_shipment_row(settings: PlcWebserviceSettings, shipment: PlcShipmentDraft) -> dict[str, object]:
@@ -346,6 +353,11 @@ def _response_value(response: object, key: str) -> str:
 
 
 def _tracking_codes(response: object) -> list[str]:
+    return list(dict.fromkeys(code for group in _collo_codes(response) for code in group))
+
+
+def _collo_codes(response: object) -> tuple[tuple[str, ...], ...]:
+    """Keep PLC's response groups; their order is not treated as parcel proof."""
     result: object
     if isinstance(response, Mapping):
         result = response.get("ImportShipmentResult") or []
@@ -358,7 +370,7 @@ def _tracking_codes(response: object) -> list[str]:
     if not isinstance(result, (list, tuple)):
         result = [result]
 
-    codes: list[str] = []
+    groups: list[tuple[str, ...]] = []
     for collo in result:
         values = collo.get("ColloCodeList") if isinstance(collo, Mapping) else getattr(collo, "ColloCodeList", None)
         if isinstance(values, Mapping):
@@ -367,12 +379,14 @@ def _tracking_codes(response: object) -> list[str]:
             values = getattr(values, "ColloCodeRow") or []
         if not isinstance(values, (list, tuple)):
             values = [values] if values is not None else []
+        codes: list[str] = []
         for code_row in values:
             value = code_row.get("Code") if isinstance(code_row, Mapping) else getattr(code_row, "Code", None)
             text = str(value or "").strip()
             if text and text not in codes:
                 codes.append(text)
-    return codes
+        groups.append(tuple(codes))
+    return tuple(groups)
 
 
 def _decode_base64_field(value: object, *, field_name: str, allow_empty: bool = False) -> bytes:

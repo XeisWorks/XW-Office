@@ -1636,6 +1636,14 @@ class PlcLabelPrintDialog(QDialog):
 
     def _capture_pending_fulfillment(self) -> tuple[str, dict[str, int]]:
         quantities: dict[str, int] = {}
+        if self._package_count.value() == 1:
+            physical_items = [item for item in self._packing_items if not item.is_digital]
+            for index, item in enumerate(physical_items):
+                dispatched = self._open_quantity_for_item(index, item)
+                if dispatched:
+                    key = self._packing_item_key(item)
+                    quantities[key] = quantities.get(key, 0) + dispatched
+            return self._partial_fulfillment_order_key(), quantities
         for row in range(1, self._packing_table.rowCount()):
             product_cell = self._packing_table.item(row, 0)
             item = product_cell.data(Qt.ItemDataRole.UserRole) if product_cell is not None else None
@@ -1680,9 +1688,30 @@ class PlcLabelPrintDialog(QDialog):
             weight = self._gross_weight_kg()
             if weight is None:
                 raise ValueError("Bitte Gewicht angeben.")
+            physical_items = [item for item in self._packing_items if not item.is_digital]
+            items = tuple(
+                PackingListItem(
+                    quantity=quantity,
+                    name=(
+                        f"{item.name} – {', '.join(item.custom_piece_titles)}"
+                        if item.custom_piece_titles else item.name
+                    ),
+                    sku=str(item.sku or ""),
+                )
+                for index, item in enumerate(physical_items)
+                if (quantity := self._open_quantity_for_item(index, item)) > 0
+            )
             return (
                 (PlcParcel(weight_kg=weight, package_type=package_type, reference=reference),),
-                (),
+                (PackingListContext(
+                    reference=reference,
+                    invoice_number=self._summary.invoice_number or self._summary.id,
+                    customer_name=self._summary.contact_name,
+                    package_number=1,
+                    package_count=1,
+                    weight_kg=weight,
+                    items=items,
+                ),),
             )
 
         if self._packing_table.rowCount() <= 1:
@@ -1941,6 +1970,11 @@ class PlcLabelPrintDialog(QDialog):
         self._start_send(shipment, transport)
 
     def _start_send(self, shipment: PlcShipmentDraft, transport: str) -> None:
+        self._pending_packing_contexts = tuple(
+            replace(context, reference=shipment.reference, invoice_number=shipment.invoice_number)
+            for context in self._pending_packing_contexts
+        )
+        packing_contexts = self._pending_packing_contexts
         self._send_btn.setEnabled(False)
         self._status.setText("Sende an PLC-Webservice..." if transport == "webservice" else "Erzeuge PLC-Importdatei...")
 
@@ -1949,7 +1983,7 @@ class PlcLabelPrintDialog(QDialog):
                 secrets: SecretService = self._container.resolve(SecretService)
                 settings = webservice_settings_from_secrets(secrets, mode=shipment.mode)
                 service: PlcShipmentService = self._container.resolve(PlcShipmentService)
-                result = service.submit_webservice(settings, shipment)
+                result = service.submit_webservice(settings, shipment, packing_contexts=packing_contexts)
                 return _PlcSendResult(transport="webservice", reference=shipment.reference, webservice_result=result)
 
             import_dir = str(
@@ -1994,8 +2028,6 @@ class PlcLabelPrintDialog(QDialog):
             return
         # A customs-only run uses the same PLC CN23 response, but must not
         # mark stock as dispatched or queue its accompanying label PDF.
-        if not self._customs_only:
-            self._record_pending_fulfillment()
         archive_path = None
         customs_path = None
         customs_print_path = None
@@ -2023,13 +2055,15 @@ class PlcLabelPrintDialog(QDialog):
                 job_id = self._queue_webservice_label(archive_path, shipment.reference)
                 service: PlcShipmentService = self._container.resolve(PlcShipmentService)
                 service.mark_print_queued(shipment, job_id)
+                self._record_pending_fulfillment()
             if customs_print_path is not None:
                 customs_job_id = self._queue_customs_document(customs_print_path, shipment.reference)
-            if self._pending_packing_contexts:
+            if self._pending_packing_contexts and any(context.items for context in self._pending_packing_contexts):
                 packing_list_path = PackingListService().generate_pdf(
                     self._pending_packing_contexts,
                     output_dir=self._label_archive.packing_lists_dir,
                 )
+                service.record_packing_pdf(shipment, packing_list_path)
                 packing_list_job_id = queue_packing_lists(
                     self._container,
                     packing_list_path,

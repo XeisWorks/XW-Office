@@ -4,9 +4,11 @@ from __future__ import annotations
 import hashlib
 from decimal import Decimal
 import threading
+from pathlib import Path
 
 from xw_office.repositories.plc_shipment import PlcShipmentRepository
 from xw_office.services.plc.models import PlcShipmentDraft
+from xw_office.services.plc.packing_list import PackingListContext
 from xw_office.services.plc.pricing import quote_plc_price
 from xw_office.services.plc.webservice import (
     PlcWebserviceClient,
@@ -43,9 +45,11 @@ class PlcShipmentService:
         self,
         settings: PlcWebserviceSettings,
         shipment: PlcShipmentDraft,
+        *,
+        packing_contexts: tuple[PackingListContext, ...] = (),
     ) -> PlcWebserviceResult:
         request_key = shipment.request_fingerprint()
-        self._reserve(request_key, shipment)
+        self._reserve(request_key, shipment, packing_contexts)
         try:
             result = self._webservice_client.submit(settings, shipment)
         except PlcWebserviceRejectedError as exc:
@@ -65,6 +69,7 @@ class PlcShipmentService:
                 request_key,
                 tracking_codes=result.tracking_codes,
                 label_sha256=label_sha256,
+                collo_codes=result.collo_codes,
             )
         else:
             with self._memory_lock:
@@ -79,13 +84,45 @@ class PlcShipmentService:
             with self._memory_lock:
                 self._memory_states[request_key] = "print_queued"
 
+    def record_packing_pdf(self, shipment: PlcShipmentDraft, path: Path) -> None:
+        if self._audit_repository is not None:
+            self._audit_repository.set_packing_pdf_sha256(
+                shipment.request_fingerprint(), hashlib.sha256(path.read_bytes()).hexdigest()
+            )
+
     def mark_printed_by_job_id(self, print_job_id: str) -> bool:
         if self._audit_repository is None:
             return False
         return self._audit_repository.mark_printed_by_job_id(print_job_id) is not None
 
-    def _reserve(self, request_key: str, shipment: PlcShipmentDraft) -> None:
+    def _reserve(
+        self, request_key: str, shipment: PlcShipmentDraft,
+        packing_contexts: tuple[PackingListContext, ...] = (),
+    ) -> None:
         if self._audit_repository is not None:
+            if packing_contexts and (
+                len(packing_contexts) != len(shipment.parcels)
+                or sorted(context.package_number for context in packing_contexts)
+                != list(range(1, len(shipment.parcels) + 1))
+            ):
+                raise ValueError("Packlisten und PLC-Pakete stimmen nicht überein")
+            by_number = {context.package_number: context for context in packing_contexts}
+            parcel_snapshots = tuple(
+                {
+                    "reference": parcel.reference,
+                    "weight_kg": str(parcel.weight_kg),
+                    "contents": [
+                        {
+                            "quantity": item.quantity,
+                            "display_quantity": item.display_quantity,
+                            "name": item.name,
+                            "sku": item.sku,
+                        }
+                        for item in by_number[index].items
+                    ] if index in by_number else [],
+                }
+                for index, parcel in enumerate(shipment.parcels, start=1)
+            )
             weight_kg = Decimal(str(sum(float(parcel.weight_kg) for parcel in shipment.parcels)))
             quote = quote_plc_price(
                 product_id=shipment.product_id,
@@ -103,6 +140,7 @@ class PlcShipmentService:
                 country_iso2=shipment.country_iso2,
                 weight_kg=weight_kg,
                 price_eur=quote.price_eur if quote is not None else None,
+                parcel_snapshots=parcel_snapshots,
             )
             if reservation.state == "already_created":
                 raise PlcDuplicateShipmentError(
@@ -119,7 +157,7 @@ class PlcShipmentService:
                         error_code="CLIENT_SERIALIZATION",
                         error_message=reservation.shipment.error_message,
                     )
-                    self._reserve(request_key, shipment)
+                    self._reserve(request_key, shipment, packing_contexts)
                     return
                 raise PlcSubmissionBlockedError(
                     "Der vorherige PLC-Aufruf hat einen unklaren Status. "

@@ -2,9 +2,14 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import replace
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
+from xw_office.models.base import Base
+from xw_office.repositories.plc_shipment import PlcShipmentRepository
 from xw_office.services.plc.models import (
     PlcCustomsArticle,
     PlcParcel,
@@ -15,10 +20,12 @@ from xw_office.services.plc.models import (
 )
 from xw_office.services.plc.polling import PlcConfig, ShipmentAddress
 from xw_office.services.plc.service import PlcDuplicateShipmentError, PlcShipmentService
+from xw_office.services.plc.packing_list import PackingListContext, PackingListItem
 from xw_office.services.plc.webservice import (
     PlcWebserviceClient,
     PlcWebserviceRejectedError,
     PlcWebserviceSettings,
+    PlcWebserviceResult,
     build_import_shipment_row,
     webservice_settings_from_secrets,
 )
@@ -287,6 +294,7 @@ def test_webservice_client_decodes_pdf_and_tracking_codes() -> None:
 
     assert result.pdf_bytes == pdf
     assert result.tracking_codes == ("1000000500113230110301",)
+    assert result.collo_codes == (("1000000500113230110301",),)
     assert result.shipment_documents == customs_pdf
     assert calls[0]["Number"] == "20856"
 
@@ -319,3 +327,35 @@ def test_service_suppresses_same_submission_in_memory() -> None:
     with pytest.raises(PlcDuplicateShipmentError):
         service.submit_webservice(_settings(), shipment)
     assert soap.calls == 1
+
+
+def test_service_persists_exact_package_contents_before_plc_call() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    repo = PlcShipmentRepository(sessionmaker(bind=engine, expire_on_commit=False))
+    shipment = replace(_shipment(), parcels=(
+        PlcParcel(weight_kg=0.4, reference="20856-P1"),
+        PlcParcel(weight_kg=0.6, reference="20856-P2"),
+    ))
+    contexts = tuple(PackingListContext(
+        reference=shipment.reference, invoice_number=shipment.invoice_number,
+        customer_name="Max", package_number=index, package_count=2,
+        weight_kg=parcel.weight_kg,
+        items=(PackingListItem(quantity=index, name=f"Produkt {index}", sku=f"XW-{index}"),),
+    ) for index, parcel in enumerate(shipment.parcels, start=1))
+
+    class FakeClient:
+        def submit(self, _settings: object, _shipment: object) -> PlcWebserviceResult:
+            # The reservation must already contain the immutable product snapshot.
+            with engine.connect() as connection:
+                assert connection.exec_driver_sql("SELECT count(*) FROM plc_parcel_manifest").scalar() == 2
+            return PlcWebserviceResult(
+                pdf_bytes=b"%PDF-1.4", tracking_codes=("C2", "C1"),
+                collo_codes=(("C2",), ("C1",)),
+            )
+
+    service = PlcShipmentService(FakeClient(), repo)  # type: ignore[arg-type]
+    service.submit_webservice(_settings(), shipment, packing_contexts=contexts)
+    evidence = repo.list_parcel_evidence(invoice_id=shipment.invoice_id)
+    assert [entry.contents[0]["quantity"] for entry in evidence] == [1, 2]
+    assert [entry.tracking_code for entry in evidence] == ["", ""]

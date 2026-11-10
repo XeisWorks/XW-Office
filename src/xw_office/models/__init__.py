@@ -26,7 +26,7 @@ from xw_office.models.inventory_count import InventoryCountLine, InventoryCountS
 from xw_office.models.inventory_alert_task import InventoryAlertTask
 from xw_office.models.inventory_external_mirror import InventoryExternalMirror
 from xw_office.models.pc_registry import PcRegistry
-from xw_office.models.plc_shipment import PlcShipment
+from xw_office.models.plc_shipment import PlcParcelManifest, PlcShipment, PlcTrackingEvent
 from xw_office.models.product_hub import (
     AuditLog,
     Category,
@@ -135,6 +135,9 @@ __all__ = [
     "ProductAssetJob",
     "PcRegistry",
     "PlcShipment",
+    "PlcParcelManifest",
+    "PlcTrackingEvent",
+    "TaxFollowupDispatch",
     "PriceList",
     "PrintRule",
     "Product",

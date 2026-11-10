@@ -83,6 +83,8 @@ from xw_office.services.inventory import InventoryService
 from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.mailing.outlook_compose import open_classic_outlook_draft
 from xw_office.services.plc.label_archive import PlcLabelArchive
+from xw_office.repositories.plc_shipment import PlcShipmentRepository
+from xw_office.ui.modules.rechnungen.plc_evidence_dialog import PlcEvidenceDialog
 from xw_office.services.printer_status.service import PrinterStatusService
 from xw_office.services.products.catalog import (
     ProductCatalogService,
@@ -1827,6 +1829,8 @@ class RechnungenView(QWidget):
         self._view_packing_lists_menu = QMenu("Archivierte Packlisten", self)
         self._view_packing_lists_menu.setToolTip("Inhalte historischer Pakete ansehen")
         self._view_packing_lists_menu.aboutToShow.connect(self._populate_packing_list_menus)
+        self._view_plc_evidence_action = QAction("Paketinhalt & Tracking", self)
+        self._view_plc_evidence_action.triggered.connect(self._open_plc_evidence)
         self._view_menu = QMenu(self)
         self._view_menu.addActions((
             self._view_invoice_action,
@@ -1834,6 +1838,7 @@ class RechnungenView(QWidget):
             self._view_customs_action,
         ))
         self._view_menu.addMenu(self._view_packing_lists_menu)
+        self._view_menu.addAction(self._view_plc_evidence_action)
         for action in (
             self._view_invoice_action,
             self._view_plc_action,
@@ -5905,6 +5910,21 @@ class RechnungenView(QWidget):
                 lambda _checked=False, selected_path=path: self._open_archived_packing_list(selected_path)
             )
         packing_menu.setEnabled(bool(self._selected_packing_list_paths))
+
+    def _open_plc_evidence(self) -> None:
+        summary = self._selected_summary()
+        if summary is None:
+            return
+        try:
+            repository: PlcShipmentRepository = self._container.resolve(PlcShipmentRepository)
+            dialog = PlcEvidenceDialog(
+                repository, invoice_id=str(summary.id or ""),
+                invoice_number=str(summary.invoice_number or ""), parent=self,
+            )
+            dialog.exec()
+        except Exception as exc:  # noqa: BLE001 - DB problems must not break invoice selection.
+            logger.exception("PLC parcel evidence could not be opened")
+            QMessageBox.warning(self, "PLC-Nachweis", f"Der Paketnachweis konnte nicht geladen werden: {exc}")
 
     def _open_archived_packing_list(self, path: str, _reference: str = "") -> None:
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):

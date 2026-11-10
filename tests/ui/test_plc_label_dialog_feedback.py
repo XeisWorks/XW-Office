@@ -358,6 +358,22 @@ def test_multiple_parcels_split_physical_items_and_prepare_two_packing_lists(qtb
     assert all("Download" not in item.name for packing_list in packing_lists for item in packing_list.items)
 
 
+def test_single_parcel_retains_physical_items_for_shipment_evidence(qtbot: object) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+    dialog._packing_items = [  # noqa: SLF001
+        WixOrderItem(sku="XW-400", name="Alpenmarsch", qty=2),
+        WixOrderItem(sku="XW-PDF", name="Download", qty=1, is_digital=True),
+    ]
+    dialog._packing_open_quantities = [2]  # noqa: SLF001
+    dialog._weight_edit.setText("0,5")  # noqa: SLF001
+    parcels, contexts = dialog._build_parcels_and_packing_lists(  # noqa: SLF001
+        reference="21104", package_type="PC"
+    )
+    assert len(parcels) == len(contexts) == 1
+    assert [(item.sku, item.quantity) for item in contexts[0].items] == [("XW-400", 2)]
+
+
 def test_multi_parcel_controls_only_appear_from_two_packages(qtbot: object) -> None:
     dialog = PlcLabelPrintDialog(_container(), None)
     qtbot.addWidget(dialog)
