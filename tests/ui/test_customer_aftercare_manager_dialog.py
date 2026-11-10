@@ -353,3 +353,36 @@ def test_redelivery_preview_tolerates_missing_optional_table_cells(qtbot: object
     dialog._preview()  # noqa: SLF001
 
     assert messages and "1x Position" in messages[0]
+
+
+def test_redelivery_quantities_use_bounded_numeric_editors(qtbot: object) -> None:
+    source_item = CustomerAftercareItem(
+        role="MISSING_TO_SEND",
+        name="Originalposition",
+        sku="XW-1",
+        quantity=3,
+        source_kind="sevdesk_invoice_position",
+    )
+    manual_item = CustomerAftercareItem(
+        role="MISSING_TO_SEND",
+        name="Manuelle Position",
+        sku="XW-2",
+        quantity=1,
+        source_kind="manual",
+    )
+    dialog = RedeliveryDialog(_FakeService().case, [source_item, manual_item])
+    qtbot.addWidget(dialog)
+
+    source_quantity = dialog._table.cellWidget(0, 3)  # noqa: SLF001
+    manual_quantity = dialog._table.cellWidget(1, 3)  # noqa: SLF001
+    assert source_quantity.minimum() == 1
+    assert source_quantity.maximum() == 3
+    assert manual_quantity.maximum() == 999
+    source_quantity.setValue(3)
+    manual_quantity.setValue(4)
+
+    dialog._save()  # noqa: SLF001
+
+    outcome = dialog.outcome()
+    assert outcome is not None
+    assert [item.quantity for item in outcome.items] == [3, 4]

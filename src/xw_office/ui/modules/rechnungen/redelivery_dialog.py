@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -161,6 +162,10 @@ class RedeliveryDialog(QDialog):
         )
 
     def _cell_text(self, row: int, column: int, default: str = "") -> str:
+        if column == 3:
+            editor = self._table.cellWidget(row, column)
+            if isinstance(editor, QSpinBox):
+                return str(editor.value())
         item = self._table.item(row, column)
         return item.text().strip() if item is not None else default
 
@@ -192,7 +197,16 @@ class RedeliveryDialog(QDialog):
         self._table.setItem(row, 0, check)
         self._table.setItem(row, 1, QTableWidgetItem(item.name or item.sku or "Position"))
         self._table.setItem(row, 2, QTableWidgetItem(" / ".join(part for part in (item.sku, item.component_id) if part)))
-        self._table.setItem(row, 3, QTableWidgetItem(str(max(1, int(item.quantity or 1)))))
+        quantity = QSpinBox()
+        original_quantity = max(1, int(item.quantity or 1))
+        maximum = (
+            999
+            if str(item.source_kind or "") == "manual"
+            else min(999, original_quantity)
+        )
+        quantity.setRange(1, maximum)
+        quantity.setValue(min(original_quantity, maximum))
+        self._table.setCellWidget(row, 3, quantity)
         source = "Manuell"
         if item.source_kind == "product_hub_component":
             source = f"Stimme aus {item.parent_sku or 'Product Hub'}"
@@ -236,9 +250,23 @@ class RedeliveryDialog(QDialog):
             sku = self._cell_text(row, 2)
             sku = sku.split(" / ", 1)[0].strip()
             try:
-                quantity = max(1, int(self._cell_text(row, 3, "1")))
+                quantity = int(self._cell_text(row, 3, ""))
             except ValueError:
-                quantity = 1
+                QMessageBox.warning(
+                    self,
+                    "Menge ungueltig",
+                    f"Bitte fuer Zeile {row + 1} eine ganzzahlige Menge zwischen 1 und 999 eingeben.",
+                )
+                self._table.setCurrentCell(row, 3)
+                return
+            if not 1 <= quantity <= 999:
+                QMessageBox.warning(
+                    self,
+                    "Menge ungueltig",
+                    f"Bitte fuer Zeile {row + 1} eine ganzzahlige Menge zwischen 1 und 999 eingeben.",
+                )
+                self._table.setCurrentCell(row, 3)
+                return
             if isinstance(original, CustomerAftercareItem) and str(original.source_kind or "") != "manual":
                 quantity = min(quantity, max(1, int(original.quantity or 1)))
             if is_selected:
