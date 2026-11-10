@@ -146,7 +146,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F14 | P1 | TEILWEISE | `load_invoice_piece_blocks` gibt nur explizit druckbare ganzzahlige Produktpositionen aus. Die SevDesk-Detailansicht zeigt jetzt jede normalisierte Position mit Art, Menge, SKU/Quelle, Druckbarkeit, Beschreibung, IDs, Gewicht/Wert und Klaerhinweisen als auswaehlbaren Text. Rohfelder, die nicht in den WorkContext uebernommen werden, bleiben ausserhalb der UI. | Regression: Menge 1,5 wird nicht als 1 gedruckt; UI-Test prueft alle normalisierten Positionsdetails einschliesslich Beschreibung und Bruchmengenhinweis |
 | F15 | P1 | ERLEDIGT | Decimal-Mengen, finale Statuswerte, stabile Positions-IDs und Needs-Review wurden strikt validiert. Der Invoice-Poll speichert einen atomaren Erfolgswasserstand mit 30-Tage-Overlap; bei Fehlern/Needs-Review bleibt er stehen. sevDesk-Seitenlimit wirft `TaxPageLimitError`, bevor Ergebnisse als vollstaendig gelten. | Feed-Validierungs-, Checkpoint- und `load_tax_resource`-Paginationstests |
 | F16 | P1 | TEILWEISE | START bucht Hub je finalisierter Rechnung und Legacy-Bestand ueber ein transaktionales Journal je `invoice_id:SKU`; Wiederholung bleibt idempotent. Offen bleiben die getrennten Legacy-/Hub-Journale und der isolierte 2+1-Teilfehler-/STOP-Betriebsnachweis. | SQLite-Regression fuer per-Rechnung-Verbrauch, Replay, fehlgeschlagene Buchung ohne Teilupdate und Transaktionsrollback; externer Mehrsystemnachweis Gate G2 |
-| F17 | P2 | TEILWEISE | Alarmdetail-Laden, Schwellenwertspeichern und Task-Mail laufen asynchron. Refund-Liste, Mailvorbereitung/-versand und PDF-Abruf, OPEN-PRINTS-Anhaenge/Erledigen, Ueberweisungs-PDF sowie PLC-Trackingimport und Paketcode-Zuordnung nutzen Worker. Due-/Wix-/Inbox-Pruefungen und Nachbetreuungs-Badgezaehler laufen bereits im koaleszierten BackgroundWorker von `TagesgeschaeftView._refresh_badges`; weitere UI-I/O-Pfade bleiben zu pruefen. | Eventloop-Heartbeats mit blockierten Fakes fuer Refunds, OPEN-PRINTS, Ueberweisungs-PDF und PLC-Trackingaktionen; Fallback-/Badge-Tests; Codepfad `_create_badge_refresh_worker` |
+| F17 | P2 | TEILWEISE | Alarmdetail-Laden, Schwellenwertspeichern und Task-Mail laufen asynchron. Refund-Liste, Mailvorbereitung/-versand und PDF-Abruf, OPEN-PRINTS-Anhaenge/Erledigen, Ueberweisungs-PDF sowie PLC-Trackingimport und Paketcode-Zuordnung nutzen Worker. Due-/Wix-/Inbox-Pruefungen und Nachbetreuungs-Badgezaehler laufen bereits im koaleszierten BackgroundWorker von `TagesgeschaeftView._refresh_badges`; auch der Sendungsdialog verwendet den gecachten Zaehler und aktualisiert danach asynchron. Weitere UI-I/O-Pfade bleiben zu pruefen. | Eventloop-Heartbeats mit blockierten Fakes fuer Refunds, OPEN-PRINTS, Ueberweisungs-PDF und PLC-Trackingaktionen; Regression verbietet den synchronen Nachbetreuungs-DB-Zugriff nach Sendungsdialog; Fallback-/Badge-Tests |
 | F18 | P2 | TEILWEISE | Sendungen-, Ueberweisungs-, Nachbetreuungs- und OPEN-PRINTS-Dialoge verwerfen spaete UI-Ergebnisse. Auch der Zusatzrechnungsdialog wartet beim Schliessen nicht mehr auf Kontakt-Reads; bei laufender Rechnungserstellung bleibt er fuer Ergebnisfeedback offen. `TagesgeschaeftView` deferiert Close jetzt ereignisgesteuert, statt bis zu fuenf Sekunden im GUI-Thread auf Worker zu warten. In `ui/modules/rechnungen` gibt es keine direkten `.wait()`-Aufrufe mehr; weitere spaete Callback-/Close-Policies bleiben zu auditieren. | Blockierte Fake-Worker: Aftercare-Dialog bleibt reaktionsfaehig, ignoriert spaete Leseergebnisse und erhaelt Write-Feedback; Tagesgeschaeft-Close-Heartbeat bleibt reaktionsfaehig und schliesst nach Worker-Ende |
 | F19 | P2 | TEILWEISE | Invoice-PDFs verwenden jetzt einen 64-MiB-LRU und pruefen die erwartete Rechnungsnummer auch bei Cache-Hits; ein abweichendes PDF wird verworfen und neu geladen. Header-/WorkContext-Revisionen und gebuendelte Produktauflosung bleiben offen. | Regression: Nummernabweichung im Cache erzeugt neuen Fetch; Byte-Limit behaelt nur aktuelle PDFs |
 | F20 | P2 | TEILWEISE | pytest laedt keine lokale dotenv-Konfiguration; sensible Umgebungsvariablen werden entfernt und externe Socket-Verbindungen blockiert (Loopback bleibt erlaubt). `InvoiceProcessingService` ist mypy-fehlerfrei; weitere Paketbereinigung und Controller-Extraktion bleiben offen. | Gesamtsuite ohne lokale Credentials/ausgehende Verbindungen; mypy-Baseline dokumentiert |
@@ -349,9 +349,9 @@ erhalten.
 
 ### AP06 – UI-I/O und gemeinsame Dialogaktionen (F17, F18; teilweise umgesetzt; P2)
 
-**Teilweise umgesetzt (F17/F18):** Lageralarm-Laden, Schwellenwertspeichern und Task-Mail laufen im Worker; Refund-Liste, Gutschrift-Mail, Refund-PDF, OPEN-PRINTS-Anhaenge und Erledigen-Aktion ebenfalls. Sendungen-, Ueberweisungs-, Nachbetreuungs- und OPEN-PRINTS-Dialoge warten beim Schliessen nicht im GUI-Thread und verwerfen spaete UI-Ergebnisse. Nachbetreuungs-Badgezaehler und weitere UI-I/O-Pfade bleiben offen.
+**Teilweise umgesetzt (F17/F18):** Lageralarm-Laden, Schwellenwertspeichern und Task-Mail laufen im Worker; Refund-Liste, Gutschrift-Mail, Refund-PDF, OPEN-PRINTS-Anhaenge und Erledigen-Aktion ebenfalls. Sendungen-, Ueberweisungs-, Nachbetreuungs- und OPEN-PRINTS-Dialoge warten beim Schliessen nicht im GUI-Thread und verwerfen spaete UI-Ergebnisse. Auch Zusatzrechnungsdialog und Tagesgeschaeft-Close blockieren nicht mehr; Nachbetreuungszaehler nach dem Sendungsdialog werden aus dem Cache angezeigt und im Hintergrund aktualisiert. Verbleibende UI-I/O-Pfade und spaete Callback-Policies bleiben offen.
 
-Zuerst Nachbetreuungs-Badgezaehler und verbleibende UI-I/O-Slots auf vorhandenen
+Verbleibende UI-I/O-Slots auf vorhandenen
 `UiAsyncAction`/BackgroundWorker umstellen. Snapshot/Identität vor Workerstart;
 Callbacks auf aktuelle Auswahl prüfen oder bewusst ursprünglichen Fall bearbeiten.
 Schreibaktionen gemeinsam sperren, Datenbank-/Netzfehler im Dialog lassen.
@@ -427,6 +427,7 @@ Geänderte Produktionsdateien:
 - `ui/modules/rechnungen/customer_aftercare_manager_dialog.py`: schliesst ohne Worker-Wartezeit; invalidiert Detail-/Aktionscallbacks und behaelt typisierte Bestaetigungsdaten (F18).
 - `ui/modules/rechnungen/customer_aftercare_invoice_dialog.py`: blockierte Kontakt-Reads halten Close nicht mehr auf und spaete Ergebnisse werden verworfen; laufende Rechnungserstellung bleibt bis zum Ergebnis offen.
 - `ui/modules/rechnungen/tagesgeschaeft_view.py`: Shutdown wartet asynchron auf die Worker statt bis zu fuenf Sekunden im GUI-Thread zu blockieren; Timer schliesst nach Worker-Ende.
+- `ui/modules/rechnungen/tagesgeschaeft_view.py`: nach dem Sendungsdialog wird der Nachbetreuungs-Badge aus dem letzten Snapshot angezeigt und der Datenbank-Refresh im Worker gestartet (F17).
 
 - `ui/modules/rechnungen/plc_evidence_dialog.py`: PLC-Nachweis laden, Original-Tracking-XML importieren und Paketcode zuordnen laufen asynchron; spaete Ergebnisse werden nach Dialogschluss verworfen (F17/F18).
 
@@ -438,7 +439,7 @@ vorhandene PLC-Funktion angepasst (F08).
 
 ### Tatsächliche Prüfergebnisse
 
-Aktueller Gesamtlauf nach den letzten Aenderungen: **2.079 bestanden, 1 Warnung, 0 fehlgeschlagen in 142,23 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
+Aktueller Gesamtlauf nach den letzten Aenderungen: **2.080 bestanden, 1 Warnung, 0 fehlgeschlagen in 145,85 s**. Die einzelne Warnung ist die bestehende Starlette-Deprecation zu `httpx` in `fastapi.testclient`; sie blockiert den Lauf nicht.
 
 Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
 - Erster Gesamtlauf: **1.979 bestanden, 4 fehlgeschlagen**, 138,53 s.
@@ -486,7 +487,8 @@ Die folgenden historischen Teillaeufe dokumentieren den Entwicklungsverlauf:
 - F18 Close-Lebenszyklus: **14 fokussierte Tests bestanden** fuer Aftercare-Dialog und
   Tagesgeschaeft-Close; Ruff gruen. Mypy fuer den Zusatzrechnungsdialog gruen;
   `tagesgeschaeft_view.py` enthaelt 19 bestehende Typfehler ausserhalb der Close-Aenderung.
-  Gesamtsuite danach **2.079 bestanden**.
+  Badge-Regression: **8 Tests bestanden**, einschliesslich des asynchronen
+  Nachbetreuungs-Refreshs nach dem Sendungsdialog. Gesamtsuite danach **2.080 bestanden**.
   eine provisorische Schlüsseländerung kaschiert.
 
 Reproduktion der regulären Prüfungen aus dem Repository:

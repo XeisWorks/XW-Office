@@ -859,15 +859,10 @@ class TagesgeschaeftView(QWidget):
         if self._rechnungen_view is None:
             return
         count = self._rechnungen_view.open_sendungen_dialog()
-        try:
-            aftercare_service: CustomerAftercareService = self._container.resolve(
-                CustomerAftercareService
-            )
-            count += aftercare_service.count_pending_review()
-        except Exception:  # noqa: BLE001 - regular shipments remain usable without aftercare
-            pass
+        count += self._lieferkorrektur_review_count
         self._sendungen_count = max(0, int(count))
         self._update_alert_button(self._btn_sendungen_alert, "OFFENE SENDUNGEN", self._sendungen_count)
+        self._refresh_badges()
 
     def _on_drucke_alert_clicked(self) -> None:
         if self._rechnungen_view is None:

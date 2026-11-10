@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from threading import Event
+from types import SimpleNamespace
 
 from PySide6.QtCore import QTimer
 
@@ -9,6 +10,7 @@ from xw_office.core.config import AppConfig
 from xw_office.core.container import Container
 from xw_office.core.signals import AppSignals
 from xw_office.core.worker import BackgroundWorker
+from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.bootstrap import register_default_services
 from xw_office.ui.modules.rechnungen.tagesgeschaeft_view import TagesgeschaeftView
 
@@ -55,6 +57,33 @@ def test_today_open_shipments_badge_includes_unreviewed_aftercare(qtbot: object)
     )
 
     assert view._btn_sendungen_alert.text() == "OFFENE SENDUNGEN (6)"  # noqa: SLF001
+
+
+def test_sendungen_close_uses_cached_aftercare_count_and_refreshes_async(
+    qtbot: object, monkeypatch
+) -> None:
+    container = _build_container()
+    view = TagesgeschaeftView(container)
+    qtbot.addWidget(view)
+    view._rechnungen_view = SimpleNamespace(  # noqa: SLF001
+        open_sendungen_dialog=lambda: 4,
+        request_shutdown=lambda: None,
+        shutdown_complete=lambda: True,
+    )
+    view._lieferkorrektur_review_count = 2  # noqa: SLF001
+    refresh_calls: list[bool] = []
+    monkeypatch.setattr(view, "_refresh_badges", lambda: refresh_calls.append(True))
+    aftercare = container.resolve(CustomerAftercareService)
+    monkeypatch.setattr(
+        aftercare,
+        "count_pending_review",
+        lambda: (_ for _ in ()).throw(AssertionError("synchronous aftercare query")),
+    )
+
+    view._on_sendungen_alert_clicked()  # noqa: SLF001
+
+    assert view._btn_sendungen_alert.text() == "OFFENE SENDUNGEN (6)"  # noqa: SLF001
+    assert refresh_calls == [True]
 
 
 def test_badges_result_hides_buttons_at_zero(qtbot: object) -> None:
