@@ -25,10 +25,13 @@ from xw_office.models.product_hub_inventory import InventoryMovement
 from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.repositories.settings_kv import SettingKvRepository
+from xw_office.services.sevdesk.part_client import PartClient
 from xw_office.services.invoice_processing.operation_claims import (
     InvoiceOperationClaimStore,
     OperationClaim,
 )
+from xw_office.services.products.catalog import Product, ProductCatalogService
+from xw_office.services.products.print_decision import PieceBlock, PrintDecisionEngine
 from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.product_hub.invoice_inventory import (
     InvoiceInventoryBookingService,
@@ -199,3 +202,81 @@ def test_parallel_claim_stores_across_postgres_connections_have_one_winner(
     assert sum(claim.acquired for claim in claims) == 1
     assert {claim.state for claim in claims} == {"running"}
     assert len({claim.operation_id for claim in claims}) == 1
+
+
+def test_parallel_part_stock_updates_are_serialized_by_postgres_advisory_lock(
+    postgres_factory: sessionmaker[Session],
+) -> None:
+    factory = postgres_factory
+    first_read = threading.Event()
+    release_first_read = threading.Event()
+    second_read = threading.Event()
+    guard = threading.Lock()
+    state_guard = threading.Lock()
+    state = {"reads": 0, "stock": 10}
+
+    class SharedPartClient:
+        def get_part_stock(self, _part_id: str) -> int:
+            with guard:
+                state["reads"] += 1
+                read_number = state["reads"]
+            if read_number == 1:
+                first_read.set()
+                if not release_first_read.wait(timeout=10):
+                    raise TimeoutError("first stock read was not released")
+            else:
+                second_read.set()
+            with state_guard:
+                return state["stock"]
+
+        def set_part_stock(self, _part_id: str, stock: int) -> None:
+            with state_guard:
+                state["stock"] = stock
+
+        def find_part_by_sku(self, _sku: str) -> None:
+            return None
+
+    repository = SettingKvRepository(factory)
+    part_client = SharedPartClient()
+    engines = [
+        PrintDecisionEngine(
+            ProductCatalogService(), cast(PartClient, part_client), settings_repo=repository
+        ),
+        PrintDecisionEngine(
+            ProductCatalogService(), cast(PartClient, part_client), settings_repo=repository
+        ),
+    ]
+    piece = PieceBlock(
+        sku="XW-PG-PART",
+        name="PostgreSQL part stock test",
+        qty_needed=1,
+        product=Product(
+            id="product-pg-part",
+            sku="XW-PG-PART",
+            name="PostgreSQL part stock test",
+            sevdesk_part_id="pg-part-1",
+        ),
+    )
+    second_started = threading.Event()
+
+    def update(engine: PrintDecisionEngine, *, second: bool = False) -> int:
+        if second:
+            second_started.set()
+        return engine.record_print_and_update_sevdesk(
+            piece, qty_printed=1, invoice_ref="pg-part-lock"
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_future = pool.submit(update, engines[0])
+        assert first_read.wait(timeout=5)
+        second_future = pool.submit(update, engines[1], second=True)
+        try:
+            assert second_started.wait(timeout=5)
+            assert not second_read.wait(timeout=0.2)
+        finally:
+            release_first_read.set()
+        assert first_future.result(timeout=30) == 11
+        assert second_future.result(timeout=30) == 12
+
+    assert state["stock"] == 12
+    assert state["reads"] == 2
