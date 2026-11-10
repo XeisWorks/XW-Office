@@ -146,7 +146,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F14 | P1 | TEILWEISE | `load_invoice_piece_blocks` gibt nur explizit druckbare ganzzahlige Produktpositionen aus. Bruchmengen und nichtphysische/unaufgeloeste Positionen erscheinen mit Warntext im Positionsbereich; vollstaendige Darstellung aller Originalfelder bleibt offen. | Regression: Menge 1,5 wird nicht als 1 gedruckt; Freitext und Bruchmenge erzeugen sichtbare Klaerhinweise |
 | F15 | P1 | ERLEDIGT | Decimal-Mengen, finale Statuswerte, stabile Positions-IDs und Needs-Review wurden strikt validiert. Der Invoice-Poll speichert einen atomaren Erfolgswasserstand mit 30-Tage-Overlap; bei Fehlern/Needs-Review bleibt er stehen. sevDesk-Seitenlimit wirft `TaxPageLimitError`, bevor Ergebnisse als vollstaendig gelten. | Feed-Validierungs-, Checkpoint- und `load_tax_resource`-Paginationstests |
 | F16 | P1 | OFFEN | START/Legacy-Lager: aktuelle Freigabe bucht Hub je Rechnung, Legacy-Verbrauch erfolgt weiterhin nach erfolgreichem Gesamtbatch; Teilfehler/STOP können Drift hinterlassen. Ohne `+ Noten` wird im UI eine Vorprüfung mit fehlenden Positionsdaten erzeugt; Unterdeckung wird nicht überall vor externer Freigabe geprüft. | Codebeleg in `tagesgeschaeft_view.py::_on_start_clicked/_on_start_product_preflight_ready`, `InventoryService.execute_start_workflow` |
-| F17 | P2 | OFFEN | UI-Thread-I/O verbleibt in Lageralarm-Popup, Refund-Liste/PDF/Mail, Tracking-Import/Codebestätigung, Betreuungstab, Überweisungs-PDF und OPEN-PRINTS-Erledigen. Produkt-/Bestandsauflösung und Druckkonfigurationsspeichern erfolgen teilweise beim Rendern/Dialogabschluss. | Direkte Service-/Repository-Aufrufe in UI-Slots, ohne Worker-Grenze |
+| F17 | P2 | TEILWEISE | Alarmdetail-Laden, Schwellenwertspeichern und Task-Mail laufen jetzt in BackgroundWorkern; Eingaben werden vor Workerstart aufgenommen, Fehler bleiben sichtbar. Refunds, Tracking, Betreuung, Ueberweisungs-PDF und OPEN-PRINTS bleiben noch synchron. | Eventloop-Heartbeat mit blockiertem Fake bei Laden/Speichern; Ruff/mypy fuer Alarmdialog |
 | F18 | P2 | TEILWEISE | Sendungen-/Ueberweisungsdialoge brechen beim Schliessen nicht mehr durch 3-s-Waits den GUI-Thread. Laufende Writes duerfen abschliessen; Ergebnisse/Fehler werden nach Close nicht mehr in Widgets zurueckgeschrieben. Andere Dialoge und globale Close-Policies bleiben offen. | Blockierende Fake-Worker: Dialog schliesst sofort; keine UI-Callbacks nach Close |
 | F19 | P2 | TEILWEISE | Invoice-PDFs verwenden jetzt einen 64-MiB-LRU und pruefen die erwartete Rechnungsnummer auch bei Cache-Hits; ein abweichendes PDF wird verworfen und neu geladen. Header-/WorkContext-Revisionen und gebuendelte Produktauflosung bleiben offen. | Regression: Nummernabweichung im Cache erzeugt neuen Fetch; Byte-Limit behaelt nur aktuelle PDFs |
 | F20 | P2 | TEILWEISE | pytest laedt keine lokale dotenv-Konfiguration; sensible Umgebungsvariablen werden entfernt und externe Socket-Verbindungen blockiert (Loopback bleibt erlaubt). Groessere Controller-Extraktion und vollstaendige mypy-Bereinigung bleiben offen. | Gesamtsuite ohne lokale Credentials/ausgehende Verbindungen; mypy-Baseline dokumentiert |
@@ -349,10 +349,11 @@ erhalten.
 
 ### AP06 – UI-I/O und gemeinsame Dialogaktionen (F17, F18; teilweise umgesetzt; P2)
 
-**Teilweise umgesetzt (F18):** Sendungen- und Ueberweisungsdialoge invalidieren
-Callbacks beim Schliessen und warten nicht mehr im GUI-Thread auf laufende Worker.
-Actions laufen als dauerhafte Hintergrundauftraege weiter; UI-Ergebnis-/Fehler-
-Callbacks werden nach dem Schliessen verworfen. F17 und die weiteren Dialoge bleiben offen.
+**Teilweise umgesetzt (F17/F18):** Lageralarm-Laden, Schwellenwertspeichern und
+Task-Mail laufen im Worker; bei Fehlern bleibt der Dialog offen und zeigt den Fehler.
+Sendungen- und Ueberweisungsdialoge invalidieren Callbacks beim Schliessen, warten
+nicht im GUI-Thread auf Worker und verwerfen spaete UI-Ergebnisse. Refunds, Tracking
+und weitere UI-I/O-Grenzen bleiben offen.
 
 Zuerst Alarm-, Refund-, Überweisungs-PDF- und Tracking-Slots auf vorhandenen
 `UiAsyncAction`/BackgroundWorker umstellen. Snapshot/Identität vor Workerstart;
