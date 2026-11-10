@@ -4011,7 +4011,6 @@ class InvoiceProcessingService:
             order = self._wix_orders.resolve_order(ref)
         except Exception as exc:
             logger.warning("Invoice hints: Wix resolve failed ref=%s: %s", ref, exc)
-            self._wix_hint_cache[ref] = empty
             return empty
         if not order:
             logger.info("Invoice hints: no Wix order found for ref=%s", ref)

@@ -865,6 +865,35 @@ def test_invoice_list_hints_follow_legacy_alarm_rules() -> None:
     assert "Lieferland außerhalb Freigabe" in hints.tooltip()
 
 
+def test_invoice_list_hints_retry_after_transient_wix_failure() -> None:
+    class _FlakyWixOrdersStub(_WixOrdersStub):
+        def __init__(self) -> None:
+            super().__init__()
+            self.resolve_calls = 0
+            self.orders["20519"] = {"buyerNote": "Bitte rasch liefern", "lineItems": []}
+
+        def resolve_order(self, reference: str) -> dict[str, object]:
+            self.resolve_calls += 1
+            if self.resolve_calls == 1:
+                raise TimeoutError("temporary Wix timeout")
+            return super().resolve_order(reference)
+
+    wix = _FlakyWixOrdersStub()
+    service = InvoiceProcessingService(
+        AppConfig(),
+        _InvoiceClientStub([]),  # type: ignore[arg-type]
+        _RepoStub({}),
+        wix,  # type: ignore[arg-type]
+    )
+
+    first = service.resolve_invoice_list_hints("20519")
+    second = service.resolve_invoice_list_hints("20519")
+
+    assert first.buyer_note == ""
+    assert second.buyer_note == "Bitte rasch liefern"
+    assert wix.resolve_calls == 2
+
+
 def test_start_fullflow_repairs_draft_products_before_finalize() -> None:
     summary = InvoiceSummary(id="11", invoiceNumber="RE-TEST-11", order_reference="20519")
     client = _InvoiceClientStub([summary])
