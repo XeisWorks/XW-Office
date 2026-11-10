@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import uuid
-from threading import Event
+from threading import Event, get_ident
+
+from PySide6.QtCore import QTimer
 
 from xw_office.core.config import AppConfig
 from xw_office.core.worker import BackgroundWorker
@@ -38,6 +40,7 @@ class _FakeService:
         self.resolve_calls: list[uuid.UUID] = []
         self.cancel_calls: list[uuid.UUID] = []
         self.list_calls: list[str] = []
+        self.read_threads: list[int] = []
 
     def count_pending_review(self) -> int:
         return 1
@@ -46,10 +49,12 @@ class _FakeService:
         return 0
 
     def list_cases_for_filter(self, filter_key: str) -> list[CustomerAftercareCase]:
+        self.read_threads.append(get_ident())
         self.list_calls.append(filter_key)
         return [self.case]
 
     def get_items(self, case_id: uuid.UUID) -> list[CustomerAftercareItem]:
+        self.read_threads.append(get_ident())
         return self.items
 
     def confirm_case(self, case_id: uuid.UUID, *, case_type: str, courtesy: bool, note: str = "") -> None:
@@ -237,6 +242,7 @@ def test_redelivery_tab_print_request_uses_confirmed_items_and_address(qtbot: ob
     service.case.note = "Kostenlose Nachlieferung"
     tab = CustomerAftercareTab(_FakeContainer(service))  # type: ignore[arg-type]
     qtbot.addWidget(tab)
+    qtbot.waitUntil(lambda: tab._items_loaded_case_id == str(service.case_id), timeout=3000)  # noqa: SLF001
 
     request = tab._dispatch_print_request()  # noqa: SLF001
 
@@ -249,6 +255,86 @@ def test_redelivery_tab_print_request_uses_confirmed_items_and_address(qtbot: ob
     assert note == "Kostenlose Nachlieferung"
     assert tab._btn_delivery_print.isEnabled()  # noqa: SLF001
     assert tab._btn_label_print.isEnabled()  # noqa: SLF001
+    assert service.read_threads
+    assert all(thread_id != get_ident() for thread_id in service.read_threads)
+
+
+def test_aftercare_tab_case_action_keeps_event_loop_responsive(
+    qtbot: object, monkeypatch: object
+) -> None:
+    service = _FakeService()
+    entered = Event()
+    release = Event()
+
+    def slow_resolve(case_id: uuid.UUID) -> None:
+        entered.set()
+        release.wait(timeout=3)
+        service.resolve_calls.append(case_id)
+
+    monkeypatch.setattr(service, "mark_resolved", slow_resolve)
+    tab = CustomerAftercareTab(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(tab)
+    qtbot.waitUntil(lambda: tab._items_loaded_case_id == str(service.case_id), timeout=3000)  # noqa: SLF001
+
+    ticks = 0
+
+    def heartbeat() -> None:
+        nonlocal ticks
+        ticks += 1
+
+    timer = QTimer(tab)
+    timer.setInterval(5)
+    timer.timeout.connect(heartbeat)
+    timer.start()
+    try:
+        tab._resolve()  # noqa: SLF001
+        qtbot.waitUntil(entered.is_set, timeout=1000)
+        qtbot.wait(40)
+        assert ticks > 0
+        assert service.resolve_calls == []
+    finally:
+        release.set()
+    qtbot.waitUntil(lambda: service.resolve_calls == [service.case_id], timeout=3000)
+    timer.stop()
+
+
+def test_aftercare_tab_discards_stale_item_result_after_selection_change(
+    qtbot: object, monkeypatch: object
+) -> None:
+    service = _FakeService()
+    second_case = CustomerAftercareCase(
+        case_type="B2B_WRONG_DELIVERY",
+        ai_suggested_type="B2B_WRONG_DELIVERY",
+        customer_name="Second customer",
+        status="WAITING",
+    )
+    second_case.id = uuid.uuid4()  # type: ignore[assignment]
+    first_entered = Event()
+    release_first = Event()
+
+    monkeypatch.setattr(service, "list_cases_for_filter", lambda _filter: [service.case, second_case])
+
+    def get_items(case_id: uuid.UUID) -> list[CustomerAftercareItem]:
+        if case_id == service.case_id:
+            first_entered.set()
+            release_first.wait(timeout=3)
+            return service.items
+        return [CustomerAftercareItem(role="MISSING_TO_SEND", name="Second item", sku="XW-2", quantity=1)]
+
+    monkeypatch.setattr(service, "get_items", get_items)
+    tab = CustomerAftercareTab(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(tab)
+    try:
+        qtbot.waitUntil(first_entered.is_set, timeout=3000)
+        tab._list.setCurrentRow(1)  # noqa: SLF001
+        qtbot.waitUntil(
+            lambda: tab._items_loaded_case_id == str(second_case.id), timeout=3000  # noqa: SLF001
+        )
+        release_first.set()
+        qtbot.waitUntil(lambda: not tab._read_workers, timeout=3000)  # noqa: SLF001
+        assert "Second item" in tab._positions.toPlainText()  # noqa: SLF001
+    finally:
+        release_first.set()
 
 
 def test_redelivery_preview_tolerates_missing_optional_table_cells(qtbot: object, monkeypatch) -> None:
