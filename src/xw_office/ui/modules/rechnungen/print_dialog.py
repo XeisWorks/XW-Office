@@ -6,11 +6,18 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import fitz
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QUrl
+import fitz  # type: ignore[import-untyped]
+from PySide6.QtCore import (
+    QAbstractItemModel,
+    QAbstractTableModel,
+    QModelIndex,
+    QPersistentModelIndex,
+    Qt,
+    QUrl,
+)
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter, QPrinterInfo
-from PySide6.QtWidgets import QStyledItemDelegate
+from PySide6.QtWidgets import QStyleOptionViewItem, QStyledItemDelegate
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -78,13 +85,21 @@ class _PrintPlanModel(QAbstractTableModel):
         self._profiles = profiles
         self._rows: list[dict[str, str]] = []
 
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def rowCount(
+        self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()
+    ) -> int:
         return 0 if parent.isValid() else len(self._rows)
 
-    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def columnCount(
+        self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()
+    ) -> int:
         return 0 if parent.isValid() else 2
 
-    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> object:
+    def data(
+        self,
+        index: QModelIndex | QPersistentModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> object:
         if not index.isValid() or not (0 <= index.row() < len(self._rows)):
             return None
         row = self._rows[index.row()]
@@ -97,7 +112,12 @@ class _PrintPlanModel(QAbstractTableModel):
             return row.get("range", "Alle Seiten") if index.column() == 0 else row.get("profile_id", "")
         return None
 
-    def setData(self, index: QModelIndex, value: object, role: int = Qt.ItemDataRole.EditRole) -> bool:
+    def setData(
+        self,
+        index: QModelIndex | QPersistentModelIndex,
+        value: object,
+        role: int = Qt.ItemDataRole.EditRole,
+    ) -> bool:
         if role != Qt.ItemDataRole.EditRole or not index.isValid() or not (0 <= index.row() < len(self._rows)):
             return False
         if index.column() == 0:
@@ -109,7 +129,7 @@ class _PrintPlanModel(QAbstractTableModel):
         self.dataChanged.emit(index, index, [role, Qt.ItemDataRole.DisplayRole])
         return True
 
-    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
+    def flags(self, index: QModelIndex | QPersistentModelIndex) -> Qt.ItemFlag:
         if not index.isValid():
             return Qt.ItemFlag.NoItemFlags
         flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
@@ -150,14 +170,21 @@ class _PrintProfileDelegate(QStyledItemDelegate):
         super().__init__(parent)
         self._profiles = profiles
 
-    def createEditor(self, parent: QWidget, _option, _index: QModelIndex) -> QComboBox:  # type: ignore[override]
+    def createEditor(
+        self,
+        parent: QWidget,
+        _option: QStyleOptionViewItem,
+        _index: QModelIndex | QPersistentModelIndex,
+    ) -> QComboBox:
         combo = QComboBox(parent)
         for candidate_id, label, printer, _backend in self._profiles:
             display = printer or label or candidate_id
             combo.addItem(display, candidate_id)
         return combo
 
-    def setEditorData(self, editor: QWidget, index: QModelIndex) -> None:
+    def setEditorData(
+        self, editor: QWidget, index: QModelIndex | QPersistentModelIndex
+    ) -> None:
         if isinstance(editor, QComboBox):
             current = str(index.data(Qt.ItemDataRole.EditRole) or "")
             found = editor.findData(current)
@@ -168,7 +195,12 @@ class _PrintProfileDelegate(QStyledItemDelegate):
                 )
                 editor.setProperty("xw_print_plan_commit_connected", True)
 
-    def setModelData(self, editor: QWidget, model: QAbstractTableModel, index: QModelIndex) -> None:
+    def setModelData(
+        self,
+        editor: QWidget,
+        model: QAbstractItemModel,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
         if isinstance(editor, QComboBox):
             model.setData(index, str(editor.currentData() or ""))
 
@@ -687,17 +719,29 @@ def prepare_piece_pdf_print(
 
     def job() -> None:
         queue: PrintQueueService = container.resolve(PrintQueueService)
-        kwargs = {
-            "print_plan": piece.print_plan,
-            "profile_id": piece.print_profile_id,
-            "copies": effective_copies,
-            "page_count": page_count,
-            "print_queue": queue,
-            "job_kind": "product",
-        }
         if wait:
-            kwargs["wait"] = True
-        print_pdf_by_plan(path, container.config.printing, **kwargs)
+            print_pdf_by_plan(
+                path,
+                container.config.printing,
+                print_plan=piece.print_plan,
+                profile_id=piece.print_profile_id,
+                copies=effective_copies,
+                page_count=page_count,
+                print_queue=queue,
+                job_kind="product",
+                wait=True,
+            )
+        else:
+            print_pdf_by_plan(
+                path,
+                container.config.printing,
+                print_plan=piece.print_plan,
+                profile_id=piece.print_profile_id,
+                copies=effective_copies,
+                page_count=page_count,
+                print_queue=queue,
+                job_kind="product",
+            )
 
     return job
 
