@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 import re
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -37,7 +38,7 @@ class PackingListService:
         if not contexts:
             raise ValueError("Mindestens eine Packliste wird benötigt")
         try:
-            import fitz
+            import fitz  # type: ignore[import-untyped]
         except Exception as exc:  # pragma: no cover - dependency is mandatory in production.
             raise RuntimeError("PyMuPDF für Packlisten-PDF nicht verfügbar") from exc
 
@@ -81,7 +82,7 @@ class PackingListService:
         return target
 
     @staticmethod
-    def _draw_slip(page: object, rect: object, context: PackingListContext, logo_path: Path) -> None:
+    def _draw_slip(page: Any, rect: Any, context: PackingListContext, logo_path: Path) -> None:
         import fitz
 
         area = fitz.Rect(rect)
