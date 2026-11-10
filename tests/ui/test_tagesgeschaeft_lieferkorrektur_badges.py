@@ -2,16 +2,20 @@
 from __future__ import annotations
 
 from threading import Event
+import time
 from types import SimpleNamespace
 
 from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QMessageBox
 
 from xw_office.core.config import AppConfig
 from xw_office.core.container import Container
 from xw_office.core.signals import AppSignals
 from xw_office.core.worker import BackgroundWorker
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
+from xw_office.services.b2b_credit import B2bCreditService
 from xw_office.bootstrap import register_default_services
+from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.ui.modules.rechnungen.tagesgeschaeft_view import TagesgeschaeftView
 
 
@@ -206,3 +210,43 @@ def test_due_alert_click_opens_dialog_prefiltered_to_faellig(qtbot: object, monk
 
     assert calls == [{"initial_filter": "faellig"}]
     assert badge_refreshes == [True]
+
+
+def test_b2b_credit_check_keeps_event_loop_responsive(qtbot: object, monkeypatch) -> None:
+    entered, release, heartbeat = Event(), Event(), Event()
+    load_calls: list[bool] = []
+
+    def blocked_load(self, **_kwargs):
+        load_calls.append(True)
+        entered.set()
+        release.wait(3)
+        return []
+
+    monkeypatch.setattr(InvoiceProcessingService, "load_invoice_summaries", blocked_load)
+    monkeypatch.setattr(B2bCreditService, "evaluate", lambda _self, _summaries: [])
+    monkeypatch.setattr(B2bCreditService, "count_due_plans", lambda _self: 0)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(TagesgeschaeftView, "_refresh_badges", lambda _self: None)
+
+    view = TagesgeschaeftView(_build_container())
+    qtbot.addWidget(view)
+    view._rechnungen_view = SimpleNamespace(  # noqa: SLF001
+        request_shutdown=lambda: None,
+        shutdown_complete=lambda: True,
+    )
+    try:
+        QTimer.singleShot(0, heartbeat.set)
+        started = time.monotonic()
+        view._on_b2b_credit_alert_clicked()  # noqa: SLF001
+        assert time.monotonic() - started < 0.5
+        qtbot.waitUntil(entered.is_set, timeout=2000)
+        qtbot.waitUntil(heartbeat.is_set, timeout=500)
+        assert view._btn_b2b_credit_alert.isEnabled() is False  # noqa: SLF001
+
+        view._on_b2b_credit_alert_clicked()  # noqa: SLF001
+        assert load_calls == [True]
+        release.set()
+        qtbot.waitUntil(lambda: view._b2b_credit_check_worker is None, timeout=2000)  # noqa: SLF001
+        assert view._btn_b2b_credit_alert.isEnabled() is True  # noqa: SLF001
+    finally:
+        release.set()

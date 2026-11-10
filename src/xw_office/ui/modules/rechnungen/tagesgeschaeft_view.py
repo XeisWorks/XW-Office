@@ -341,6 +341,8 @@ class TagesgeschaeftView(QWidget):
         self._digital_license_offer_worker: BackgroundWorker | None = None
         self._reprint_worker: BackgroundWorker | None = None
         self._reprint_exec_worker: BackgroundWorker | None = None
+        self._b2b_credit_check_worker: BackgroundWorker | None = None
+        self._shutdown_requested = False
         self._start_requested_mode: StartMode = StartMode.INVOICES_AND_PRINT
         self._start_selected_mode: StartMode = StartMode.INVOICES_AND_PRINT
         self._start_include_product_print = False
@@ -421,6 +423,7 @@ class TagesgeschaeftView(QWidget):
     def request_shutdown(self) -> None:
         """Ask all page workers to stop without blocking the GUI thread."""
         self._badge_timer.stop()
+        self._shutdown_requested = True
         self._start_abort_requested = True
         if self._rechnungen_view is not None:
             self._rechnungen_view.request_shutdown()
@@ -444,6 +447,7 @@ class TagesgeschaeftView(QWidget):
                 self._digital_license_offer_worker,
                 self._reprint_worker,
                 self._reprint_exec_worker,
+                self._b2b_credit_check_worker,
                 self._lieferkorrektur_popup_fetch_worker,
                 self._lieferkorrektur_popup_apply_worker,
             )
@@ -913,27 +917,65 @@ class TagesgeschaeftView(QWidget):
         self._refresh_badges()
 
     def _on_b2b_credit_alert_clicked(self) -> None:
-        """Re-run the read-only gate and show the same controlled hold dialog."""
-        if self._rechnungen_view is None:
+        """Re-run the read-only gate in a worker and show its result on the UI thread."""
+        if self._rechnungen_view is None or self._shutdown_requested:
             return
-        try:
+        if self._b2b_credit_check_worker is not None and self._b2b_credit_check_worker.isRunning():
+            return
+
+        self._btn_b2b_credit_alert.setEnabled(False)
+        self._btn_b2b_credit_alert.setText("B2B-Zahlungen werden geprueft...")
+
+        def job() -> tuple[list[dict[str, str]], int]:
             invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             summaries = invoice_service.load_invoice_summaries(status=100, limit=1000, offset=0)
             service: B2bCreditService = self._container.resolve(B2bCreditService)
             holds = [hold.as_dict() for hold in service.evaluate(summaries)]
-            if holds:
-                self._show_b2b_credit_holds(holds)
-            elif service.count_due_plans() > 0:
-                QMessageBox.information(
-                    self,
-                    "B2B-Zahlungsplan",
-                    "Mindestens eine Rate ist fällig. Bitte in sevDesk die nächste Teilrechnung "
-                    "prüfen/erstellen und nach Zahlung den Zahlungseingang kontrollieren.",
-                )
-            else:
-                QMessageBox.information(self, "B2B-Zahlungen", "Aktuell keine B2B-Kreditfreigabe offen.")
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "B2B-Zahlungen", f"Prüfung fehlgeschlagen:\n{exc}")
+            return holds, service.count_due_plans()
+
+        worker = BackgroundWorker(job)
+        self._b2b_credit_check_worker = worker
+        worker.signals.result.connect(self._on_b2b_credit_check_result)
+        worker.signals.error.connect(self._on_b2b_credit_check_error)
+        worker.signals.finished.connect(lambda current=worker: self._on_b2b_credit_check_finished(current))
+        worker.start()
+
+    def _on_b2b_credit_check_result(self, payload: object) -> None:
+        if self._shutdown_requested:
+            return
+        if (
+            not isinstance(payload, tuple)
+            or len(payload) != 2
+            or not isinstance(payload[0], list)
+            or type(payload[1]) is not int
+            or not all(isinstance(hold, dict) for hold in payload[0])
+        ):
+            QMessageBox.warning(self, "B2B-Zahlungen", "Die Pruefung lieferte ein ungueltiges Ergebnis.")
+            return
+        holds, due_count = payload
+        if holds:
+            self._show_b2b_credit_holds(holds)
+        elif due_count > 0:
+            QMessageBox.information(
+                self,
+                "B2B-Zahlungsplan",
+                "Mindestens eine Rate ist faellig. Bitte in sevDesk die naechste Teilrechnung "
+                "pruefen/erstellen und nach Zahlung den Zahlungseingang kontrollieren.",
+            )
+        else:
+            QMessageBox.information(self, "B2B-Zahlungen", "Aktuell keine B2B-Kreditfreigabe offen.")
+
+    def _on_b2b_credit_check_error(self, exc: Exception) -> None:
+        if not self._shutdown_requested:
+            QMessageBox.warning(self, "B2B-Zahlungen", f"Pruefung fehlgeschlagen:\r\n{exc}")
+
+    def _on_b2b_credit_check_finished(self, worker: BackgroundWorker) -> None:
+        if self._b2b_credit_check_worker is worker:
+            self._b2b_credit_check_worker = None
+        if self._shutdown_requested:
+            return
+        self._btn_b2b_credit_alert.setEnabled(True)
+        self._update_alert_button(self._btn_b2b_credit_alert, "B2B ZAHLUNGEN", self._b2b_credit_count)
         self._refresh_badges()
 
     def _on_lieferkorrektur_review_alert_clicked(self) -> None:
