@@ -837,6 +837,54 @@ def test_archived_packing_lists_appear_in_view_and_print_menus(
     assert queued == [(container, str(packlist), "20844")]
 
 
+def test_multi_shipment_button_opens_all_labels_and_packing_lists(
+    qtbot: object,
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = invoice_service._draft  # noqa: SLF001
+    archive = PlcLabelArchive(tmp_path)
+    first = tmp_path / "20844 - RE-DRAFT.pdf"
+    second = tmp_path / "20844-2 - RE-DRAFT-2.pdf"
+    first.write_bytes(b"%PDF-1.7\nfirst")
+    packlists = tmp_path / "packlists"
+    packlists.mkdir()
+    packing_list = packlists / "20844 - RE-DRAFT - Packlisten - 20261013_090000.pdf"
+    packing_list.write_bytes(b"%PDF-1.7\npacking list")
+    archive.refresh_index()
+    view._plc_label_archive = archive  # noqa: SLF001
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    view._table.select_source_row(0)  # noqa: SLF001
+    view._update_plc_controls()  # noqa: SLF001
+
+    assert view._btn_multi_shipments.isHidden()  # noqa: SLF001
+
+    second.write_bytes(b"%PDF-1.7\nsecond")
+    archive.refresh_index()
+    view._update_plc_controls()  # noqa: SLF001
+
+    assert not view._btn_multi_shipments.isHidden()  # noqa: SLF001
+    view._populate_multi_shipment_menu()  # noqa: SLF001
+    label_menu, packing_menu = [action.menu() for action in view._multi_shipment_menu.actions()]  # noqa: SLF001
+    assert [action.text() for action in label_menu.actions()] == [
+        "PLC-Label 1 – 20844 / RE-DRAFT",
+        "PLC-Label 2 – 20844-2 / RE-DRAFT-2",
+    ]
+    assert len(packing_menu.actions()) == 1
+
+    opened: list[str] = []
+    monkeypatch.setattr(view, "_open_archived_plc_label", lambda path: opened.append(path))
+    monkeypatch.setattr(view, "_open_archived_packing_list", lambda path: opened.append(path))
+    for action in (*label_menu.actions(), *packing_menu.actions()):
+        action.trigger()
+
+    assert opened == [str(first), str(second), str(packing_list)]
+
+
 def test_start_dialog_keeps_full_mode_when_print_plan_missing(qtbot: object) -> None:
     preflight = StartPreflight(open_invoice_count=2, decisions=[], missing_position_data=True)
     dialog = _StartDialog(preflight, initial_mode=StartMode.INVOICES_AND_PRINT)

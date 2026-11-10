@@ -29,6 +29,7 @@ class PlcLabelArchive:
         )
         self._root = root.expanduser().resolve()
         self._index_by_pair: dict[tuple[str, str], Path] = {}
+        self._labels_by_exact_pair: dict[tuple[str, str], Path] = {}
         self._customs_index_by_pair: dict[tuple[str, str], Path] = {}
         self._index_ready = False
         self._index_lock = RLock()
@@ -38,6 +39,10 @@ class PlcLabelArchive:
         # Keep reprintable labels next to the existing application state, not
         # in the temporary directory which the print queue cleans up.
         return Path(__file__).resolve().parents[4] / "state" / "plc_labels"
+
+    @property
+    def packing_lists_dir(self) -> Path:
+        return self._root / "packlists"
 
     def path_for(self, shipment: PlcShipmentDraft) -> Path:
         order = _safe_filename_part(shipment.reference, fallback="unbekannte-bestellung")
@@ -159,6 +164,38 @@ class PlcLabelArchive:
         candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
         return candidates[0]
 
+    def find_all_for_invoice(
+        self,
+        *,
+        order_reference: str,
+        invoice_number: str,
+        refresh: bool = True,
+    ) -> list[Path]:
+        """Return the original label and every numbered follow-up shipment.
+
+        Both references receive the same suffix when a further shipment is
+        created.  Matching both prevents an unrelated order or invoice from
+        appearing in the document menu.
+        """
+        order = _safe_filename_part(order_reference, fallback="")
+        invoice = _safe_filename_part(invoice_number, fallback="")
+        if not order or not invoice:
+            return []
+        if refresh:
+            self.refresh_index()
+        with self._index_lock:
+            indexed = dict(self._labels_by_exact_pair)
+
+        paths: list[Path] = []
+        for suffix in ("", *(f"-{number}" for number in range(2, 100))):
+            key = (f"{order}{suffix}", f"{invoice}{suffix}")
+            candidate = indexed.get(key)
+            if candidate is None and not suffix:
+                candidate = self._root / f"{order} - {invoice}.pdf"
+            if candidate is not None and candidate.is_file():
+                paths.append(candidate)
+        return paths
+
     def find_packing_lists_for_invoice(
         self,
         *,
@@ -175,7 +212,7 @@ class PlcLabelArchive:
         invoice = _safe_filename_part(invoice_number, fallback="")
         if not order or not invoice:
             return []
-        root = self._root / "packlists"
+        root = self.packing_lists_dir
         if not root.is_dir():
             return []
 
@@ -199,10 +236,12 @@ class PlcLabelArchive:
     def refresh_index(self) -> tuple[int, int]:
         """Scan label/customs archive once; intended for a background worker."""
         labels: dict[tuple[str, str], Path] = {}
+        exact_labels: dict[tuple[str, str], Path] = {}
         customs: dict[tuple[str, str], Path] = {}
         if not self._root.exists() or not self._root.is_dir():
             with self._index_lock:
                 self._index_by_pair = labels
+                self._labels_by_exact_pair = exact_labels
                 self._customs_index_by_pair = customs
                 self._index_ready = True
             return 0, 0
@@ -210,6 +249,9 @@ class PlcLabelArchive:
             pair = _label_pair(file_path)
             if pair is not None:
                 _remember_newer(labels, pair, file_path)
+            exact_pair = _exact_label_pair(file_path)
+            if exact_pair is not None:
+                exact_labels[exact_pair] = file_path
         customs_root = self._root / "customs"
         if customs_root.is_dir():
             for file_path in customs_root.glob("*.pdf"):
@@ -218,6 +260,7 @@ class PlcLabelArchive:
                     _remember_newer(customs, pair, file_path)
         with self._index_lock:
             self._index_by_pair = labels
+            self._labels_by_exact_pair = exact_labels
             self._customs_index_by_pair = customs
             self._index_ready = True
         return len(labels), len(customs)
@@ -247,11 +290,18 @@ def _remember_newer(index: dict[tuple[str, str], Path], key: tuple[str, str], pa
 
 
 def _label_pair(path: Path) -> tuple[str, str] | None:
+    pair = _exact_label_pair(path)
+    if pair is None:
+        return None
+    return (_strip_numeric_suffix(pair[0]), _strip_numeric_suffix(pair[1]))
+
+
+def _exact_label_pair(path: Path) -> tuple[str, str] | None:
     if not path.is_file() or " - " not in path.stem:
         return None
     raw_order, raw_invoice = path.stem.split(" - ", 1)
-    order = _strip_numeric_suffix(_safe_filename_part(raw_order, fallback=""))
-    invoice = _strip_numeric_suffix(_safe_filename_part(raw_invoice, fallback=""))
+    order = _safe_filename_part(raw_order, fallback="")
+    invoice = _safe_filename_part(raw_invoice, fallback="")
     return (order, invoice) if order and invoice else None
 
 

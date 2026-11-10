@@ -48,7 +48,7 @@ class PackingListService:
         # invoice prefix lets the invoice view find it years later, while the
         # timestamp keeps a deliberate reprint from overwriting its history.
         target = output_dir / (
-            f"{reference} - {invoice} - Packlisten - {datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+            f"{reference} - {invoice} - Packlisten - {datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.pdf"
         )
         root = Path(__file__).resolve().parents[4]
         logo_path = root / "icons" / "logo NEU.png"

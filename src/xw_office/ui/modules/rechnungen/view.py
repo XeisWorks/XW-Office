@@ -1304,6 +1304,7 @@ class RechnungenView(QWidget):
         self._plc_archive_index_ready = False
         self._pending_plc_archive_popup: InvoiceSummary | None = None
         self._selected_plc_label_path = ""
+        self._selected_plc_label_paths: list[str] = []
         self._selected_plc_customs_path = ""
         self._selected_packing_list_paths: list[str] = []
         self._plc_archive_lookup_cache: dict[tuple[str, str], str] = {}
@@ -1750,10 +1751,10 @@ class RechnungenView(QWidget):
         self._action_state = QLabel("Keine Rechnung ausgewählt")
         self._action_state.setWordWrap(True)
         self._action_state.setStyleSheet("color: #64748b;")
-        actions_layout.addWidget(self._action_state, 3, 0, 1, 3)
+        actions_layout.addWidget(self._action_state, 4, 0, 1, 3)
         self._plc_last = QLabel("Letzter PLC-Druck: —")
         self._plc_last.setStyleSheet("color: #64748b; font-size: 11px;")
-        actions_layout.addWidget(self._plc_last, 4, 0, 1, 3)
+        actions_layout.addWidget(self._plc_last, 5, 0, 1, 3)
         self._action_state.hide()
         self._plc_last.hide()
 
@@ -1895,6 +1896,21 @@ class RechnungenView(QWidget):
         self._btn_refunds.setStyleSheet(action_button_style)
         self._btn_refunds.clicked.connect(self._open_refunds_dialog)
         actions_layout.addWidget(self._btn_refunds, 2, 0, 1, 3)
+
+        self._multi_shipment_menu = QMenu(self)
+        self._multi_shipment_labels_menu = QMenu("PLC-Labels", self._multi_shipment_menu)
+        self._multi_shipment_packing_menu = QMenu("Packlisten", self._multi_shipment_menu)
+        self._multi_shipment_menu.addMenu(self._multi_shipment_labels_menu)
+        self._multi_shipment_menu.addMenu(self._multi_shipment_packing_menu)
+        self._multi_shipment_menu.aboutToShow.connect(self._populate_multi_shipment_menu)
+        self._btn_multi_shipments = QToolButton()
+        self._btn_multi_shipments.setText("Sendungen & Packlisten")
+        self._btn_multi_shipments.setToolTip("Alle PLC-Labels und Packlisten dieser Bestellung öffnen")
+        self._btn_multi_shipments.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._btn_multi_shipments.setMenu(self._multi_shipment_menu)
+        self._btn_multi_shipments.setStyleSheet(action_button_style)
+        self._btn_multi_shipments.setVisible(False)
+        actions_layout.addWidget(self._btn_multi_shipments, 3, 0, 1, 3)
 
         self._gb_actions.hide()
         detail_main.addWidget(self._gb_actions)
@@ -5264,13 +5280,9 @@ class RechnungenView(QWidget):
             recipient_email=recipient_email,
         )
         dlg.exec()
-        self._plc_archive_lookup_cache.pop(
-            (
-                str(summary.order_reference or "").strip(),
-                str(summary.invoice_number or summary.id or "").strip(),
-            ),
-            None,
-        )
+        self._plc_archive_lookup_cache.clear()
+        self._plc_archive_index_ready = False
+        self._prime_plc_archive_index()
         # The dialog can create a versioned packlist while this invoice stays
         # selected.  Refresh its document-menu state immediately on return.
         self._update_plc_controls()
@@ -5786,6 +5798,20 @@ class RechnungenView(QWidget):
         self._plc_archive_lookup_cache[cache_key] = resolved
         return resolved
 
+    def _resolve_plc_archive_paths_for_summary(self, summary: InvoiceSummary) -> list[str]:
+        order_ref = str(summary.order_reference or "").strip()
+        invoice_no = str(summary.invoice_number or summary.id or "").strip()
+        if not order_ref or not invoice_no:
+            return []
+        return [
+            os.fspath(path)
+            for path in self._plc_label_archive.find_all_for_invoice(
+                order_reference=order_ref,
+                invoice_number=invoice_no,
+                refresh=False,
+            )
+        ]
+
     def _resolve_plc_customs_archive_path_for_summary(self, summary: InvoiceSummary) -> str:
         order_ref = str(summary.order_reference or "").strip()
         invoice_no = str(summary.invoice_number or summary.id or "").strip()
@@ -5837,6 +5863,25 @@ class RechnungenView(QWidget):
                     lambda _checked=False, selected_path=path, selected_reference=reference, handler=callback:
                     handler(selected_path, selected_reference)
                 )
+
+    def _populate_multi_shipment_menu(self) -> None:
+        """Expose every archived label and packing-list version from one button."""
+        labels_menu = self._multi_shipment_labels_menu
+        packing_menu = self._multi_shipment_packing_menu
+        labels_menu.clear()
+        packing_menu.clear()
+        for position, path in enumerate(self._selected_plc_label_paths, start=1):
+            reference = Path(path).stem.replace(" - ", " / ", 1)
+            action = labels_menu.addAction(f"PLC-Label {position} – {reference}")
+            action.triggered.connect(
+                lambda _checked=False, selected_path=path: self._open_archived_plc_label(selected_path)
+            )
+        for position, path in enumerate(self._selected_packing_list_paths, start=1):
+            action = packing_menu.addAction(self._packing_list_menu_label(path, position))
+            action.triggered.connect(
+                lambda _checked=False, selected_path=path: self._open_archived_packing_list(selected_path)
+            )
+        packing_menu.setEnabled(bool(self._selected_packing_list_paths))
 
     def _open_archived_packing_list(self, path: str, _reference: str = "") -> None:
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
@@ -5901,6 +5946,9 @@ class RechnungenView(QWidget):
         path = str(self._selected_plc_label_path or "").strip()
         if not path:
             return
+        self._open_archived_plc_label(path)
+
+    def _open_archived_plc_label(self, path: str) -> None:
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
             QMessageBox.warning(self, "PLC-PDF öffnen", "Das PLC-Label konnte nicht geöffnet werden.")
 
@@ -6831,12 +6879,15 @@ class RechnungenView(QWidget):
         self._btn_send_invoice.setEnabled(selected is not None)
 
         self._selected_plc_label_path = ""
+        self._selected_plc_label_paths = []
         self._selected_plc_customs_path = ""
         self._selected_packing_list_paths = []
         if selected is not None:
             self._selected_plc_label_path = self._resolve_plc_archive_path_for_summary(selected)
+            self._selected_plc_label_paths = self._resolve_plc_archive_paths_for_summary(selected)
             self._selected_plc_customs_path = self._resolve_plc_customs_archive_path_for_summary(selected)
             self._selected_packing_list_paths = self._resolve_packing_list_archive_paths_for_summary(selected)
+        self._btn_multi_shipments.setVisible(len(self._selected_plc_label_paths) > 1)
         has_archived_plc = bool(self._selected_plc_label_path)
         has_archived_customs = bool(self._selected_plc_customs_path)
         has_archived_packing_lists = bool(self._selected_packing_list_paths)

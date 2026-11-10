@@ -43,6 +43,10 @@ def test_two_portrait_a6_packing_lists_share_one_landscape_a5_page(tmp_path) -> 
     assert "Notenheft" in text
     assert "Partitur" in text
 
+    second_pdf_path = PackingListService().generate_pdf(contexts, output_dir=tmp_path)
+    assert second_pdf_path != pdf_path
+    assert pdf_path.is_file() and second_pdf_path.is_file()
+
 
 def test_packing_list_compacts_rows_when_more_than_eight_items_are_assigned(tmp_path) -> None:
     items = tuple(PackingListItem(quantity=1, name=f"Artikel {number}", sku=f"XW-{number}") for number in range(1, 11))

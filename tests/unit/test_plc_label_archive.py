@@ -47,6 +47,7 @@ def test_archive_keeps_the_exact_plc_pdf_under_order_and_invoice_number(tmp_path
     assert path == tmp_path / "20868 - RE-261952.pdf"
     assert path.read_bytes() == pdf
     assert archive.find(_shipment()) == path
+    assert archive.packing_lists_dir == tmp_path / "packlists"
 
 
 def test_archive_uses_windows_safe_filename_parts(tmp_path) -> None:
@@ -120,6 +121,34 @@ def test_background_index_serves_suffixed_label_and_customs_lookups_without_resc
     assert archive.find_customs_for_invoice(
         order_reference="20868", invoice_number="RE-261952", refresh=False
     ) == customs
+
+
+def test_archive_lists_all_labels_for_one_order_without_unrelated_shipments(tmp_path) -> None:
+    archive = PlcLabelArchive(tmp_path)
+    original = archive.save(_shipment(), b"%PDF-1.7\noriginal")
+    second = archive.save(
+        _shipment(reference="20868-2", invoice_number="RE-261952-2"),
+        b"%PDF-1.7\nsecond",
+    )
+    third = archive.save(
+        _shipment(reference="20868-3", invoice_number="RE-261952-3"),
+        b"%PDF-1.7\nthird",
+    )
+    archive.save(
+        _shipment(reference="20868-4", invoice_number="RE-OTHER-4"),
+        b"%PDF-1.7\nunrelated invoice",
+    )
+    archive.save(
+        _shipment(reference="OTHER-2", invoice_number="RE-261952-2"),
+        b"%PDF-1.7\nunrelated order",
+    )
+
+    assert archive.find_all_for_invoice(
+        order_reference="20868", invoice_number="RE-261952"
+    ) == [original, second, third]
+    assert archive.find_all_for_invoice(
+        order_reference="20868", invoice_number="RE-261952", refresh=False
+    ) == [original, second, third]
 
 
 def test_packing_list_archive_keeps_all_versions_and_finds_legacy_files(tmp_path) -> None:

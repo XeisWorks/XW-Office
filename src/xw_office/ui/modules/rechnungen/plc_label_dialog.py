@@ -1818,8 +1818,10 @@ class PlcLabelPrintDialog(QDialog):
             )
             if not self._confirm_allocation_warnings(action="Packliste drucken"):
                 return
-            output_dir = Path(__file__).resolve().parents[4] / "state" / "plc_labels" / "packlists"
-            pdf_path = PackingListService().generate_pdf(packing_contexts, output_dir=output_dir)
+            pdf_path = PackingListService().generate_pdf(
+                packing_contexts,
+                output_dir=self._label_archive.packing_lists_dir,
+            )
             job_id = queue_packing_lists(self._container, pdf_path, reference)
         except (OSError, RuntimeError, ValueError) as exc:
             QMessageBox.warning(self, "Packliste", f"Packliste konnte nicht gedruckt werden: {exc}")
@@ -2026,7 +2028,7 @@ class PlcLabelPrintDialog(QDialog):
             if self._pending_packing_contexts:
                 packing_list_path = PackingListService().generate_pdf(
                     self._pending_packing_contexts,
-                    output_dir=archive_path.parent / "packlists",
+                    output_dir=self._label_archive.packing_lists_dir,
                 )
                 packing_list_job_id = queue_packing_lists(
                     self._container,
