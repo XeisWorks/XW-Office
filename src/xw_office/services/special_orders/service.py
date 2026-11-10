@@ -14,7 +14,7 @@ import httpx
 
 if TYPE_CHECKING:
     from xw_office.services.secrets.service import SecretService
-    from xw_office.services.wix.client import WixProductsClient
+    from xw_office.services.wix.client import WixProduct, WixProductsClient
 
 SpecialOrderMode = Literal["physical_custom", "digital_custom", "digital_sheet_music"]
 
@@ -50,7 +50,7 @@ class SpecialOrderService:
         self._secrets = secret_service
         self._wix_products = wix_products
 
-    def list_wix_products(self) -> list[object]:
+    def list_wix_products(self) -> list[WixProduct]:
         return self._wix_products.list_products()
 
     def create_payment_link(
@@ -65,7 +65,7 @@ class SpecialOrderService:
         customer_last_name: str,
         expiration_date: str = "",
     ) -> SpecialOrderLink:
-        payload = {
+        payload: dict[str, object] = {
             "mode": mode,
             "title": title.strip(),
             "description": description.strip(),
@@ -124,7 +124,12 @@ class SpecialOrderService:
 
     def _payment_link_payload(self, payload: dict[str, object]) -> dict[str, object]:
         mode = str(payload.get("mode") or "").strip()
-        normalized_items = [self._line_item_for_rest(item, mode) for item in payload.get("items", []) if isinstance(item, dict)]
+        raw_items = payload.get("items")
+        normalized_items = [
+            self._line_item_for_rest(item, mode)
+            for raw_item in (raw_items if isinstance(raw_items, list) else [])
+            if (item := self._string_keyed_dict(raw_item)) is not None
+        ]
         payment_link: dict[str, object] = {
             "title": str(payload.get("title") or "").strip(),
             "description": str(payload.get("description") or "").strip() or None,
@@ -163,7 +168,7 @@ class SpecialOrderService:
         if price <= 0:
             raise RuntimeError(f"Preis fuer '{name}' muss groesser als 0 sein")
         custom_item: dict[str, object] = {
-            "quantity": int(item.get("quantity") or 1),
+            "quantity": int(str(item.get("quantity") or 1)),
             "name": name,
             "price": f"{price:.2f}",
             "physicalProperties": {
@@ -181,13 +186,16 @@ class SpecialOrderService:
 
     @staticmethod
     def _link_from_endpoint_response(data: object, *, fallback_title: str) -> SpecialOrderLink:
-        if not isinstance(data, dict) or not data.get("ok"):
-            raise RuntimeError(str(data.get("message") or data.get("error") or "Payment Link fehlgeschlagen"))
+        payload = SpecialOrderService._string_keyed_dict(data)
+        if payload is None:
+            raise RuntimeError("Website lieferte keine JSON-Antwort")
+        if not payload.get("ok"):
+            raise RuntimeError(str(payload.get("message") or payload.get("error") or "Payment Link fehlgeschlagen"))
         link = SpecialOrderLink(
-            id=str(data.get("id") or ""),
-            url=str(data.get("url") or ""),
-            status=str(data.get("status") or ""),
-            title=str(data.get("title") or fallback_title),
+            id=str(payload.get("id") or ""),
+            url=str(payload.get("url") or ""),
+            status=str(payload.get("status") or ""),
+            title=str(payload.get("title") or fallback_title),
         )
         if not link.url:
             raise RuntimeError("Website lieferte keinen Payment-Link-URL")
@@ -195,10 +203,11 @@ class SpecialOrderService:
 
     @staticmethod
     def _link_from_rest_response(data: object, *, fallback_title: str) -> SpecialOrderLink:
-        if not isinstance(data, dict):
+        response = SpecialOrderService._string_keyed_dict(data)
+        if response is None:
             raise RuntimeError("Wix Payment Links API lieferte keine JSON-Antwort")
-        payment_link = data.get("paymentLink") if isinstance(data.get("paymentLink"), dict) else data
-        links = payment_link.get("links") if isinstance(payment_link, dict) and isinstance(payment_link.get("links"), dict) else {}
+        payment_link = SpecialOrderService._string_keyed_dict(response.get("paymentLink")) or response
+        links = SpecialOrderService._string_keyed_dict(payment_link.get("links")) or {}
         url = str(links.get("url") or links.get("originalUrl") or payment_link.get("url") or "").strip()
         link = SpecialOrderLink(
             id=str(payment_link.get("_id") or payment_link.get("id") or ""),
@@ -209,6 +218,12 @@ class SpecialOrderService:
         if not link.url:
             raise RuntimeError("Wix Payment Links API lieferte keinen Payment-Link-URL")
         return link
+
+    @staticmethod
+    def _string_keyed_dict(value: object) -> dict[str, object] | None:
+        if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+            return None
+        return value
 
     def open_link_mail_draft(
         self,
