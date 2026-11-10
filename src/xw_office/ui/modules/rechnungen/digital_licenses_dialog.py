@@ -24,7 +24,11 @@ from PySide6.QtWidgets import (
 
 from xw_office.core.container import Container
 from xw_office.core.worker import BackgroundWorker
-from xw_office.services.digital_licenses import DigitalLicenseCase, DigitalLicenseService
+from xw_office.services.digital_licenses import (
+    DigitalLicenseCase,
+    DigitalLicenseLine,
+    DigitalLicenseService,
+)
 
 
 class DigitalLicensesDialog(QDialog):
@@ -170,10 +174,20 @@ class DigitalLicensesDialog(QDialog):
         if not Path(path).is_file():
             QMessageBox.warning(self, "Druck-PDF", "Die Datei wurde nicht gefunden.")
             return
-        self._service.apply_print_path(missing.sku, path)
-        missing.print_file_path = path
-        missing.missing_print_file = False
-        self._show_selected_case(self._list.currentRow())
+        self._status.setText("Druck-PDF-Zuordnung wird gespeichert...")
+        self._start_draft_job(
+            lambda: self._service.apply_print_path(missing.sku, path),
+            lambda _payload: self._on_print_path_applied(missing, path),
+        )
+
+    def _on_print_path_applied(
+        self,
+        line: DigitalLicenseLine,
+        path: str,
+    ) -> None:
+        line.print_file_path = path
+        line.missing_print_file = False
+        self._status.setText("Druck-PDF-Zuordnung gespeichert.")
 
     def _prepare_selected(self) -> None:
         if self._license_preparing or (

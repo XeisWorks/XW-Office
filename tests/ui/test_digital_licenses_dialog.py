@@ -6,8 +6,11 @@ from pytestqt.qtbot import QtBot
 
 from PySide6.QtWidgets import QDialog, QMessageBox
 
-from xw_office.services.digital_licenses import DigitalLicenseCase
-from xw_office.services.digital_licenses import DigitalLicenseService
+from xw_office.services.digital_licenses import (
+    DigitalLicenseCase,
+    DigitalLicenseLine,
+    DigitalLicenseService,
+)
 from xw_office.ui.modules.rechnungen.digital_licenses_dialog import DigitalLicensesDialog
 
 
@@ -96,6 +99,51 @@ def test_open_count_uses_loaded_cases(qtbot: object, monkeypatch: MonkeyPatch) -
     dialog._on_mark_done_finished(object())  # noqa: SLF001
 
     qtbot.waitUntil(lambda: dialog._list.count() == 1, timeout=2000)  # noqa: SLF001
+
+
+def test_print_path_persistence_runs_in_worker_and_updates_captured_line(
+    qtbot: QtBot, monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    from threading import Event
+
+    service = _FakeDigitalLicenseService()
+    line = DigitalLicenseLine(
+        sku="SKU-1", name="Noten", quantity=1, missing_print_file=True
+    )
+    service.case.lines = [line]
+    path = tmp_path / "noten.pdf"
+    path.write_bytes(b"%PDF-test")
+    entered, release = Event(), Event()
+    saved: list[tuple[str, str]] = []
+
+    def save_print_path(sku: str, print_path: str) -> None:
+        saved.append((sku, print_path))
+        entered.set()
+        assert release.wait(3)
+
+    monkeypatch.setattr(service, "apply_print_path", save_print_path, raising=False)
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.digital_licenses_dialog.QFileDialog.getOpenFileName",
+        lambda *_args, **_kwargs: (str(path), "PDF (*.pdf)"),
+    )
+    dialog = DigitalLicensesDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    qtbot.waitUntil(lambda: dialog._list.count() == 1, timeout=2000)  # noqa: SLF001
+    try:
+        dialog._pick_missing_pdf()  # noqa: SLF001
+        qtbot.waitUntil(entered.is_set, timeout=2000)
+        assert dialog._draft_worker is not None  # noqa: SLF001
+        assert dialog._draft_worker.isRunning()  # noqa: SLF001
+        assert not dialog._list.isEnabled()  # noqa: SLF001
+        assert line.missing_print_file
+        release.set()
+        qtbot.waitUntil(lambda: dialog._draft_worker is None, timeout=2000)  # noqa: SLF001
+    finally:
+        release.set()
+
+    assert saved == [("SKU-1", str(path))]
+    assert line.print_file_path == str(path)
+    assert not line.missing_print_file
 
 def test_license_pipeline_keeps_original_customer_and_second_worker(
     qtbot: QtBot, monkeypatch: MonkeyPatch, tmp_path: Path,
