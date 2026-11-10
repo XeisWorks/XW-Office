@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import tempfile
 
-import fitz
+import fitz  # type: ignore[import-untyped]
 
 
 MM_TO_PT = 72.0 / 25.4
@@ -88,7 +88,7 @@ def build_customs_a5_print_pdf(pdf_bytes: bytes) -> bytes:
                 "keywords": _PRINT_READY_MARKER,
             }
         )
-        prepared = output.tobytes(garbage=4, deflate=True)
+        prepared = bytes(output.tobytes(garbage=4, deflate=True))
     except PlcCustomsDocumentError:
         raise
     except Exception as exc:  # noqa: BLE001 - preserve a user-facing recovery error.
@@ -150,7 +150,7 @@ def _visible_content_bbox(page: fitz.Page) -> fitz.Rect:
 def _is_a5_portrait(rect: fitz.Rect) -> bool:
     width_mm = rect.width / MM_TO_PT
     height_mm = rect.height / MM_TO_PT
-    return abs(width_mm - A5_WIDTH_MM) <= 1.0 and abs(height_mm - A5_HEIGHT_MM) <= 1.0
+    return bool(abs(width_mm - A5_WIDTH_MM) <= 1.0 and abs(height_mm - A5_HEIGHT_MM) <= 1.0)
 
 
 def _is_print_ready_file(path: Path) -> bool:
