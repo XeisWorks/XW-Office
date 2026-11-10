@@ -149,7 +149,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F17 | P2 | OFFEN | UI-Thread-I/O verbleibt in Lageralarm-Popup, Refund-Liste/PDF/Mail, Tracking-Import/Codebestätigung, Betreuungstab, Überweisungs-PDF und OPEN-PRINTS-Erledigen. Produkt-/Bestandsauflösung und Druckkonfigurationsspeichern erfolgen teilweise beim Rendern/Dialogabschluss. | Direkte Service-/Repository-Aufrufe in UI-Slots, ohne Worker-Grenze |
 | F18 | P2 | OFFEN | Dialog-Lebenszyklus: Sendungen/Überweisungen warten beim Schließen mehrfach bis 3 s pro Worker; andere Dialoge haben keine einheitliche Close-/Escape-Policy für laufende Writes. Globale Worker-Retention verhindert vorzeitige QThread-Zerstörung, aber nicht späte fachliche Callbacks. | Codebeleg: `_wait_for_workers`, Dialoge ohne Shutdown-Protokoll; Betriebs-Race nicht pauschal behauptet |
 | F19 | P2 | TEILWEISE | Invoice-PDFs verwenden jetzt einen 64-MiB-LRU und pruefen die erwartete Rechnungsnummer auch bei Cache-Hits; ein abweichendes PDF wird verworfen und neu geladen. Header-/WorkContext-Revisionen und gebuendelte Produktauflosung bleiben offen. | Regression: Nummernabweichung im Cache erzeugt neuen Fetch; Byte-Limit behaelt nur aktuelle PDFs |
-| F20 | P2 | OFFEN | Qualitätsgates: striktes mypy scheitert bereits im Ausgangsstand; ein Teil der Fremdtests hängt von nachgeladenen Umgebungscredentials ab. Standard-Gesamtsuite ist ohne äußere Isolation nicht zuverlässig hermetisch. | Baselinevergleich und isolierter Testlauf; Details in Abschnitt 8 |
+| F20 | P2 | TEILWEISE | pytest laedt keine lokale dotenv-Konfiguration; sensible Umgebungsvariablen werden entfernt und externe Socket-Verbindungen blockiert (Loopback bleibt erlaubt). Groessere Controller-Extraktion und vollstaendige mypy-Bereinigung bleiben offen. | Gesamtsuite ohne lokale Credentials/ausgehende Verbindungen; mypy-Baseline dokumentiert |
 | F21 | P1 | ERLEDIGT | `view.py::_DraftInvoiceDialog`: nach erfolgreicher Vorschau konnte die Ordernummer ge?ndert und weiterhin best?tigt werden. Jede Eingabe?nderung invalidiert nun die Vorschaufreigabe. | Qt-Test: Vorschau A ? Eingabe B bleibt gesperrt, erst Vorschau B erlaubt Best?tigen |
 
 ## 5. Performance-Audit
@@ -379,7 +379,12 @@ Rechnung auf zweitem PC geändert→Reload zeigt neue Positionen/Adresse;
 1.000 PDF-Ansichten halten definiertes RAM-Limit ein; GUI-Rendern löst keine
 Netzwerkanfrage aus. Warm-Cache spart Requests nachweisbar per Fake-Zähler.
 
-### AP08 – Reproduzierbare Qualitätsgates und kleine Controller (F20; P2)
+### AP08 – Reproduzierbare Qualitätsgates und kleine Controller (F20; teilweise umgesetzt; P2)
+
+**Teilweise umgesetzt:** `tests/conftest.py` deaktiviert dotenv-Laden, entfernt
+relevante Credential-/Datenbank-Variablen und sperrt externe Socket-Verbindungen.
+Lokale Loopback-Testserver bleiben erlaubt. Mypy-Baseline und Controller-Extraktion
+sind weiterhin offen.
 
 Testprozess von lokalen `.env`-/Credentials isolieren und echte externe
 Verbindungen standardmäßig sperren; lokale Testclient-Verbindungen zulassen.

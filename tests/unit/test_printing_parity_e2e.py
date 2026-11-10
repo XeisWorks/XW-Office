@@ -53,6 +53,7 @@ class _InvoiceClientE2E:
         return {
             "id": invoice_id,
             "invoiceNumber": "R-001",
+            "sent": False,
             "name": "John Doe",
             "street": "Main St 1",
             "zip": "6020",
@@ -63,6 +64,9 @@ class _InvoiceClientE2E:
                 "emails": [{"value": "john@example.test"}],
             },
         }
+
+    def fetch_invoice_positions(self, invoice_id: str) -> list[dict]:
+        return []
 
     def send_invoice_document(self, invoice_id: str, *, send_type: str, send_draft: bool) -> None:
         self.send_calls.append((invoice_id, send_type, send_draft))
@@ -920,7 +924,10 @@ def test_finalize_reuses_validated_positions_and_inventory_failure_is_non_blocki
         invoice_inventory=inventory,
     )
     summary = InvoiceSummary(id="INV-STOCK-1", order_reference="21766")
-    context = SimpleNamespace(positions=(SimpleNamespace(source_id="POS-1"),))
+    context = SimpleNamespace(
+        positions=(SimpleNamespace(source_id="POS-1"),),
+        positions_loaded=True,
+    )
 
     with patch.object(
         service,

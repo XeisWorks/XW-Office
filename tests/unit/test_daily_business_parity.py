@@ -35,6 +35,7 @@ class TestCoreOperations:
         ]
         invoice_client.send_invoice_document = MagicMock()
         invoice_client.send_invoice_via_email = MagicMock()
+        invoice_client.fetch_invoice_positions = MagicMock(return_value=[])
         invoice_client.fetch_invoice_by_id.return_value = {
             "id": "INV-001",
             "invoiceNumber": "R-001",
@@ -44,6 +45,7 @@ class TestCoreOperations:
         repo = MagicMock()
         repo.get_value_json = MagicMock(return_value=None)
         repo.set_value_json = MagicMock()
+        repo.mutate_value_json = None
 
         service = InvoiceProcessingService(
             AppConfig(), invoice_client, repo, None
