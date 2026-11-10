@@ -37,3 +37,17 @@ def test_evidence_dialog_confirms_scanned_code_for_specific_package(qtbot: objec
     evidence = repo.list_parcel_evidence(invoice_id="invoice-5")
     assert [entry.tracking_code for entry in evidence] == ["", "CODE-2"]
     assert "CODE-2" in dialog._details.toPlainText()  # noqa: SLF001
+    raw = b"""<TrackingData><TrackingEvents>
+      <Header><TrackingVersion>2</TrackingVersion><EventCount>2</EventCount></Header>
+      <Event><ParcelEventId>1</ParcelEventId><IdentCode>CODE-2</IdentCode>
+        <EventTimestamp>2026-11-10T10:00:00</EventTimestamp><ParcelEventTypeCode>ANA</ParcelEventTypeCode>
+      </Event>
+      <Event><ParcelEventId>2</ParcelEventId><IdentCode>CODE-2</IdentCode>
+        <EventTimestamp>2026-11-11T11:00:00</EventTimestamp><ParcelEventTypeCode>ZUS</ParcelEventTypeCode>
+      </Event>
+    </TrackingEvents></TrackingData>"""
+    assert repo.import_post_tracking_xml(raw, invoice_id="invoice-5") == 2
+    dialog._render()  # noqa: SLF001
+    details = dialog._details.toPlainText()  # noqa: SLF001
+    assert "Post-Annahme: 10.11.2026 10:00" in details
+    assert "Zustellung: 11.11.2026 11:00" in details

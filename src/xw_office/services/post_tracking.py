@@ -64,7 +64,7 @@ def parse_post_tracking_xml(raw: bytes) -> tuple[PostTrackingEvent, ...]:
             occurred_at = occurred_at.astimezone(ZoneInfo("Europe/Vienna")).replace(tzinfo=None)
         events.append(PostTrackingEvent(
             tracking_code=code, event_id=event_id, occurred_at=occurred_at,
-            event_type=event_type, event_reason=child_text(node, "ParcelEventReasonCode"),
+            event_type=event_type.upper(), event_reason=child_text(node, "ParcelEventReasonCode").upper(),
             event_postal_code=child_text(node, "EventPostalCode"),
             event_city=child_text(node, "EventCity"),
             event_country=child_text(node, "EventCountry"), source_sha256=digest,

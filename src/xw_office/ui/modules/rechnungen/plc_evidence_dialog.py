@@ -121,10 +121,25 @@ class PlcEvidenceDialog(QDialog):
                     html.escape(code) for code in entry.available_codes
                 )
         pdf_note = "Packlisten-PDF gesichert" if entry.packing_pdf_sha256 else "Kein Packlisten-PDF nachgewiesen"
+        accepted = min((event.occurred_at for event in entry.events if event.event_type == "ANA"), default=None)
+        accepted_abroad = min((event.occurred_at for event in entry.events if event.event_type == "ANI"), default=None)
+        delivered = max((event.occurred_at for event in entry.events if event.event_type == "ZUS"), default=None)
+        acceptance_note = (
+            "Post-Annahme: " + accepted.strftime("%d.%m.%Y %H:%M")
+            if accepted else "Post-Annahme: nicht aus importierten Ereignissen belegt"
+        )
+        if accepted_abroad:
+            acceptance_note += "; Annahme im Ausland: " + accepted_abroad.strftime("%d.%m.%Y %H:%M")
+        delivery_note = (
+            "Zustellung: " + delivered.strftime("%d.%m.%Y %H:%M")
+            if delivered else "Zustellung: nicht aus importierten Ereignissen belegt"
+        )
         events = "".join(
             "<li>" + html.escape(event.occurred_at.strftime("%d.%m.%Y %H:%M:%S"))
             + " · " + html.escape(
                 "Elektronisch angekündigt (AVI)" if event.event_type == "AVI"
+                else "Post-Annahme (ANA)" if event.event_type == "ANA"
+                else "Annahme im Ausland (ANI)" if event.event_type == "ANI"
                 else "Zustellung (ZUS)" if event.event_type == "ZUS"
                 else event.event_type
             )
@@ -140,8 +155,8 @@ class PlcEvidenceDialog(QDialog):
         )
         return (
             f"<h4>{html.escape(title)}</h4><ul>{contents}</ul>"
-            f"<p>Tracking: {tracking}<br>{pdf_note}<br>Post-Annahme/Zustellung: "
-            "über den Tracking-Link prüfen.</p>" + event_note
+            f"<p>Tracking: {tracking}<br>{pdf_note}<br>{acceptance_note}<br>{delivery_note}<br>"
+            "Offizielle Details über den Tracking-Link prüfen.</p>" + event_note
         )
 
     def _import_tracking(self) -> None:
