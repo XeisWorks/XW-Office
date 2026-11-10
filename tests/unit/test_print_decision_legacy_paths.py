@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Lock
+import time
 
-from xw_office.services.products.catalog import ProductCatalogService
-from xw_office.services.products.print_decision import PrintDecisionEngine
+from xw_office.services.products.catalog import Product, ProductCatalogService
+from xw_office.services.products.print_decision import PieceBlock, PrintDecisionEngine
 from xw_office.services.wix.client import WixOrderItem
 
 
@@ -47,3 +50,44 @@ def test_engine_uses_new_repo_inventory_pdf_paths(tmp_path: Path) -> None:
     assert blocks
     assert blocks[0].print_file_path is not None
     assert blocks[0].print_file_path == repo_pdf
+
+
+def test_concurrent_print_stock_updates_for_same_part_are_serialized() -> None:
+    class ConcurrentPartClient(_PartClientStub):
+        def __init__(self) -> None:
+            self.stock = 5
+            self._state_lock = Lock()
+            self._active_reads = 0
+            self.max_active_reads = 0
+
+        def get_part_stock(self, _part_id: str) -> int:
+            with self._state_lock:
+                self._active_reads += 1
+                self.max_active_reads = max(self.max_active_reads, self._active_reads)
+                observed_stock = self.stock
+            time.sleep(0.03)
+            with self._state_lock:
+                self._active_reads -= 1
+            return observed_stock
+
+        def set_part_stock(self, _part_id: str, new_stock: int) -> None:
+            with self._state_lock:
+                self.stock = new_stock
+
+    part_client = ConcurrentPartClient()
+    engine = PrintDecisionEngine(ProductCatalogService(_RepoStub("[]")), part_client)
+    piece = PieceBlock(
+        sku="XW-1",
+        name="Testprodukt",
+        qty_needed=2,
+        product=Product(
+            id="product-1", sku="XW-1", name="Testprodukt", sevdesk_part_id="part-1"
+        ),
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: engine.record_print_and_update_sevdesk(piece, 2), range(2)))
+
+    assert sorted(results) == [7, 9]
+    assert part_client.stock == 9
+    assert part_client.max_active_reads == 1

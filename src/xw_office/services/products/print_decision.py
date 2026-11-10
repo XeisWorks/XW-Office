@@ -10,13 +10,15 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable
+from threading import Lock
+from typing import TYPE_CHECKING, Iterable, cast
 
 from xw_office.services.products.catalog import Product, StockStatus
 
 if TYPE_CHECKING:
     from xw_office.services.products.catalog import ProductCatalogService
     from xw_office.services.sevdesk.part_client import PartClient
+    from xw_office.services.sevdesk.part_client import SevdeskPart
     from xw_office.services.wix.client import WixOrderItem
 
 logger = logging.getLogger(__name__)
@@ -142,11 +144,18 @@ def resolve_piece_print_config(
     piece.name = configured_name
     piece.product = product
     piece.print_profile_id = str(config.get("profile_id") or "").strip()
-    piece.print_plan = [
-        entry for entry in (config.get("print_plan") or [])
+    piece.print_plan = _normalize_print_plan(config.get("print_plan"))
+    return piece
+
+
+def _normalize_print_plan(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {key: item for key, item in entry.items() if isinstance(key, str) and isinstance(item, str)}
+        for entry in value
         if isinstance(entry, dict)
     ]
-    return piece
 
 
 @dataclass
@@ -194,6 +203,8 @@ class PrintDecisionEngine:
     ) -> None:
         self._catalog = catalog
         self._part_client = part_client
+        self._part_stock_locks_guard = Lock()
+        self._part_stock_locks: dict[str, Lock] = {}
 
     # ------------------------------------------------------------------ #
     # Main entry points                                                    #
@@ -312,9 +323,16 @@ class PrintDecisionEngine:
             )
             return 0
 
-        current = self._part_client.get_part_stock(piece.product.sevdesk_part_id)
-        new_stock = current + qty_printed
-        self._part_client.set_part_stock(piece.product.sevdesk_part_id, new_stock)
+        part_id = str(piece.product.sevdesk_part_id or "").strip()
+        quantity = int(qty_printed)
+        if quantity < 0:
+            raise ValueError("Gedruckte Menge darf nicht negativ sein")
+        if quantity == 0:
+            return self._part_client.get_part_stock(part_id)
+        with self._part_stock_lock(part_id):
+            current = self._part_client.get_part_stock(part_id)
+            new_stock = current + quantity
+            self._part_client.set_part_stock(part_id, new_stock)
         logger.info(
             "Stock updated for SKU %s (sevDesk %s): %d -> %d (invoice=%s)",
             piece.sku,
@@ -324,6 +342,15 @@ class PrintDecisionEngine:
             invoice_ref,
         )
         return new_stock
+
+    def _part_stock_lock(self, part_id: str) -> Lock:
+        """Return the process-wide lock for one sevDesk Part stock read/write pair."""
+        with self._part_stock_locks_guard:
+            lock = self._part_stock_locks.get(part_id)
+            if lock is None:
+                lock = Lock()
+                self._part_stock_locks[part_id] = lock
+            return lock
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                     #
@@ -406,10 +433,7 @@ class PrintDecisionEngine:
             note=note,
             is_unreleased=is_unreleased,
             print_profile_id=str(direct_cfg.get("profile_id") or "").strip(),
-            print_plan=[
-                entry for entry in (direct_cfg.get("print_plan") or [])
-                if isinstance(entry, dict)
-            ],
+            print_plan=_normalize_print_plan(direct_cfg.get("print_plan")),
             product=product,
             stock_status=stock_status,
         )
@@ -442,17 +466,18 @@ class PrintDecisionEngine:
             logger.warning("_fetch_stock_by_sku_safe(%r) failed: %s", sku, exc)
             return None
 
-    def _cached_part_by_sku(self, sku: str):
+    def _cached_part_by_sku(self, sku: str) -> SevdeskPart | None:
         cached_lookup = getattr(self._part_client, "get_cached_part_by_sku", None)
         if callable(cached_lookup):
-            return cached_lookup(sku)
+            return cast(SevdeskPart | None, cached_lookup(sku))
         # Test doubles and legacy adapters retain the historical behaviour.
         return self._part_client.find_part_by_sku(sku)
 
     def _cached_stock(self, sevdesk_part_id: str) -> int | None:
         cached_lookup = getattr(self._part_client, "get_cached_part_stock", None)
         if callable(cached_lookup):
-            return cached_lookup(sevdesk_part_id)
+            value = cached_lookup(sevdesk_part_id)
+            return int(value) if isinstance(value, int) else None
         # Compatibility fallback for legacy callers.  Production PartClient
         # always exposes the cache-only method above.
         return self._fetch_stock_safe(sevdesk_part_id)
