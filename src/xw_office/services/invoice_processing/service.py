@@ -8,6 +8,8 @@ import json
 import logging
 import re
 import time
+from collections.abc import Sequence
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -59,6 +61,7 @@ except Exception:  # pragma: no cover - optional at import time
     fitz = None
 
 logger = logging.getLogger(__name__)
+_INVOICE_PDF_CACHE_MAX_BYTES = 64 * 1024 * 1024
 
 PAYMENT_PROVIDER_ACCOUNT_NAMES = {
     "stripe": "Stripe",
@@ -289,7 +292,8 @@ class InvoiceProcessingService:
         self._wix_orders = wix_orders
         self._invoice_printer = InvoicePrinter(config.printing, print_queue=print_queue)
         self._label_printer = LabelPrinter(config.printing, print_queue=print_queue)
-        self._invoice_pdf_cache: dict[str, bytes] = {}
+        self._invoice_pdf_cache: OrderedDict[str, bytes] = OrderedDict()
+        self._invoice_pdf_cache_bytes = 0
         self._invoice_detail_cache: dict[str, dict[str, Any]] = {}
         self._wix_address_cache: dict[str, list[str]] = {}
         self._wix_digital_cache: dict[str, bool] = {}
@@ -462,7 +466,7 @@ class InvoiceProcessingService:
             self._search_index.forget(summary.id)
         invoice_key = str(summary.id or "").strip()
         if invoice_key:
-            self._invoice_pdf_cache.pop(invoice_key, None)
+            self._drop_invoice_pdf_cache_entry(invoice_key)
             self._invoice_detail_cache.pop(invoice_key, None)
             self._invoice_work_context_cache.pop(invoice_key, None)
         self._batch_cache.clear()
@@ -2525,7 +2529,7 @@ class InvoiceProcessingService:
         return next_flags
 
     @staticmethod
-    def _legacy_invoice_stock_requirements(positions: list[Any]) -> dict[str, int]:
+    def _legacy_invoice_stock_requirements(positions: Sequence[Any]) -> dict[str, int]:
         requirements: dict[str, int] = {}
         for position in positions:
             if getattr(position, "kind", "") != "product":
@@ -3695,9 +3699,16 @@ class InvoiceProcessingService:
         *,
         expected_invoice_number: str = "",
     ) -> bytes:
-        cached = self._invoice_pdf_cache.get(str(invoice_id))
+        cache_key = str(invoice_id)
+        cached = self._invoice_pdf_cache.get(cache_key)
         if cached:
-            return cached
+            self._invoice_pdf_cache.move_to_end(cache_key)
+            if not self._invoice_pdf_sanity_issue(
+                cached,
+                expected_invoice_number=expected_invoice_number,
+            ):
+                return cached
+            self._drop_invoice_pdf_cache_entry(cache_key)
         extractor = getattr(self._invoices, "extract_pdf_from_payload", None)
         last_exc: Exception | None = None
         for attempt, delay in enumerate((0.0, 0.5, 1.0, 2.0, 4.0), start=1):
@@ -3717,7 +3728,7 @@ class InvoiceProcessingService:
                                 "Invoice %s renderPdf ignored: %s", invoice_id, sanity_issue
                             )
                         else:
-                            self._invoice_pdf_cache[str(invoice_id)] = rendered_pdf
+                            self._cache_invoice_pdf(cache_key, rendered_pdf)
                             return rendered_pdf
                 pdf_bytes = self._invoices.get_invoice_pdf(invoice_id)
                 if pdf_bytes:
@@ -3727,12 +3738,32 @@ class InvoiceProcessingService:
                     )
                     if sanity_issue:
                         raise ValueError(f"sevDesk PDF unplausibel: {sanity_issue}")
-                    self._invoice_pdf_cache[str(invoice_id)] = pdf_bytes
+                    self._cache_invoice_pdf(cache_key, pdf_bytes)
                     return pdf_bytes
             except Exception as exc:  # noqa: BLE001 - retry transient sevDesk render/getPdf states.
                 last_exc = exc
                 logger.info("Invoice %s PDF attempt %s failed: %s", invoice_id, attempt, exc)
         raise RuntimeError("PDF nicht verfügbar") from last_exc
+
+    def _cache_invoice_pdf(self, invoice_id: str, pdf_bytes: bytes) -> None:
+        previous = self._invoice_pdf_cache.pop(invoice_id, None)
+        if previous is not None:
+            self._invoice_pdf_cache_bytes -= len(previous)
+        if len(pdf_bytes) > _INVOICE_PDF_CACHE_MAX_BYTES:
+            return
+        self._invoice_pdf_cache[invoice_id] = pdf_bytes
+        self._invoice_pdf_cache_bytes += len(pdf_bytes)
+        while self._invoice_pdf_cache_bytes > _INVOICE_PDF_CACHE_MAX_BYTES:
+            _old_id, old_pdf = self._invoice_pdf_cache.popitem(last=False)
+            self._invoice_pdf_cache_bytes -= len(old_pdf)
+
+    def _drop_invoice_pdf_cache_entry(self, invoice_id: str) -> None:
+        previous = self._invoice_pdf_cache.pop(invoice_id, None)
+        if previous is not None:
+            self._invoice_pdf_cache_bytes = max(
+                0,
+                self._invoice_pdf_cache_bytes - len(previous),
+            )
 
     @staticmethod
     def _invoice_pdf_sanity_issue(

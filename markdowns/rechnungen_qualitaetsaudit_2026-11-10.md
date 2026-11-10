@@ -148,7 +148,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F16 | P1 | OFFEN | START/Legacy-Lager: aktuelle Freigabe bucht Hub je Rechnung, Legacy-Verbrauch erfolgt weiterhin nach erfolgreichem Gesamtbatch; Teilfehler/STOP können Drift hinterlassen. Ohne `+ Noten` wird im UI eine Vorprüfung mit fehlenden Positionsdaten erzeugt; Unterdeckung wird nicht überall vor externer Freigabe geprüft. | Codebeleg in `tagesgeschaeft_view.py::_on_start_clicked/_on_start_product_preflight_ready`, `InventoryService.execute_start_workflow` |
 | F17 | P2 | OFFEN | UI-Thread-I/O verbleibt in Lageralarm-Popup, Refund-Liste/PDF/Mail, Tracking-Import/Codebestätigung, Betreuungstab, Überweisungs-PDF und OPEN-PRINTS-Erledigen. Produkt-/Bestandsauflösung und Druckkonfigurationsspeichern erfolgen teilweise beim Rendern/Dialogabschluss. | Direkte Service-/Repository-Aufrufe in UI-Slots, ohne Worker-Grenze |
 | F18 | P2 | OFFEN | Dialog-Lebenszyklus: Sendungen/Überweisungen warten beim Schließen mehrfach bis 3 s pro Worker; andere Dialoge haben keine einheitliche Close-/Escape-Policy für laufende Writes. Globale Worker-Retention verhindert vorzeitige QThread-Zerstörung, aber nicht späte fachliche Callbacks. | Codebeleg: `_wait_for_workers`, Dialoge ohne Shutdown-Protokoll; Betriebs-Race nicht pauschal behauptet |
-| F19 | P2 | OFFEN | Header-/WorkContext-/PDF-Caches sind unbeschränkt bzw. nicht einheitlich revisionsgebunden; Cache-Hit des PDFs umgeht erneute Plausibilitätsprüfung. Manuelle Änderungen und lange Sitzungen können veraltete Inhalte/RAM-Bedarf begünstigen. Zusätzlich `load_positions=False`/Fehlerkontext ohne Vollständigkeitsmerkmal. | Codebeleg: `_invoice_*_cache`, `_context_is_current`, `_get_invoice_pdf_bytes` |
+| F19 | P2 | TEILWEISE | Invoice-PDFs verwenden jetzt einen 64-MiB-LRU und pruefen die erwartete Rechnungsnummer auch bei Cache-Hits; ein abweichendes PDF wird verworfen und neu geladen. Header-/WorkContext-Revisionen und gebuendelte Produktauflosung bleiben offen. | Regression: Nummernabweichung im Cache erzeugt neuen Fetch; Byte-Limit behaelt nur aktuelle PDFs |
 | F20 | P2 | OFFEN | Qualitätsgates: striktes mypy scheitert bereits im Ausgangsstand; ein Teil der Fremdtests hängt von nachgeladenen Umgebungscredentials ab. Standard-Gesamtsuite ist ohne äußere Isolation nicht zuverlässig hermetisch. | Baselinevergleich und isolierter Testlauf; Details in Abschnitt 8 |
 | F21 | P1 | ERLEDIGT | `view.py::_DraftInvoiceDialog`: nach erfolgreicher Vorschau konnte die Ordernummer ge?ndert und weiterhin best?tigt werden. Jede Eingabe?nderung invalidiert nun die Vorschaufreigabe. | Qt-Test: Vorschau A ? Eingabe B bleibt gesperrt, erst Vorschau B erlaubt Best?tigen |
 
@@ -362,7 +362,12 @@ Zeilenwechsel zeigen keine fremden Daten; Doppelklick startet einen Auftrag;
 Dialogschließen führt weder zu QThread-Abbruch noch unbemerktem neuen Write.
 Erfolg erst nach nachgewiesenem externen bzw. Spooler-Ergebnis anzeigen.
 
-### AP07 – Cacheverträge und Batchauflösung (F19; P2)
+### AP07 – Cacheverträge und Batchauflösung (F19; teilweise umgesetzt; P2)
+
+**Teilweise umgesetzt:** Invoice-PDF-Cache ist ein 64-MiB-LRU; Cache-Hits werden
+erneut gegen die erwartete Rechnungsnummer geprueft. Header-/WorkContext-Caches
+sind weiterhin nicht einheitlich revisionsgebunden, und Produkt-/Bestandsdaten
+werden noch nicht durchgaengig vor dem Rendern gebuendelt.
 
 Revision, Vollständigkeit und gegebenenfalls TTL für Header/Positionen/PDF festlegen;
 Freigabe, Entwurfsänderung und Löschung invalidieren alle abhängigen Einträge.

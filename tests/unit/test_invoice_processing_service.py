@@ -1491,6 +1491,37 @@ def test_piece_blocks_exclude_fractional_lines_and_keep_context_warnings() -> No
     assert any("Keine physische Produktposition" in warning for warning in context.warnings)
 
 
+def test_invoice_pdf_cache_checks_expected_number_and_obeys_byte_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import xw_office.services.invoice_processing.service as invoice_service_module
+
+    summary = InvoiceSummary(id="pdf-cache", invoiceNumber="RE-PDF-NEW")
+    client = _InvoiceClientStub([summary])
+    service = InvoiceProcessingService(AppConfig(), client, _RepoStub({}))  # type: ignore[arg-type]
+    monkeypatch.setattr(invoice_service_module, "_INVOICE_PDF_CACHE_MAX_BYTES", 20)
+    monkeypatch.setattr(
+        service,
+        "_invoice_pdf_sanity_issue",
+        lambda pdf, *, expected_invoice_number: "wrong invoice" if pdf == b"old" else "",
+    )
+    service._cache_invoice_pdf("pdf-cache", b"old")  # noqa: SLF001
+
+    result = service._get_invoice_pdf_bytes(  # noqa: SLF001
+        summary.id,
+        expected_invoice_number=summary.invoice_number,
+    )
+
+    assert result == b"%PDF-1.4\nstub"
+    assert client.render_calls == [summary.id]
+    service._cache_invoice_pdf("next", b"12345678")  # noqa: SLF001
+    assert "pdf-cache" not in service._invoice_pdf_cache  # noqa: SLF001
+    assert "next" in service._invoice_pdf_cache  # noqa: SLF001
+    service._cache_invoice_pdf("large", b"123456789012345678901")  # noqa: SLF001
+    assert "large" not in service._invoice_pdf_cache  # noqa: SLF001
+    assert service._invoice_pdf_cache_bytes == 8  # noqa: SLF001
+
+
 def test_send_invoice_mail_skips_when_sevdesk_invoice_already_sent() -> None:
     summary = InvoiceSummary(id="13", invoiceNumber="RE-TEST-13", order_reference="")
     client = _InvoiceClientStub([summary])
