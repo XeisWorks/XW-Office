@@ -2693,6 +2693,62 @@ def test_rechnungen_piece_details_use_model_instead_of_row_widgets(
     assert not view._piece_list.isHidden()  # noqa: SLF001
 
 
+def test_late_invoice_product_configuration_is_discarded_after_selection_change(
+    qtbot: QtBot, monkeypatch: MonkeyPatch
+) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    monkeypatch.setattr(view, "_load_wix_context", lambda *_args, **_kwargs: None)
+    summaries = [
+        InvoiceSummary.model_validate(
+            {
+                "id": f"piece-{key}",
+                "invoiceNumber": f"RE-{key}",
+                "status": 1000,
+                "order_reference": key,
+            }
+        )
+        for key in ("A", "B")
+    ]
+    view._summaries = summaries  # noqa: SLF001
+    view._table.set_data([summary.as_table_row() for summary in summaries])  # noqa: SLF001
+    view._table.select_source_row(0)  # noqa: SLF001
+    entered, release = Event(), Event()
+
+    def resolver(catalog: ProductCatalogService, piece: PieceBlock) -> PieceBlock:
+        del catalog
+        if piece.sku == "SKU-A":
+            entered.set()
+            assert release.wait(3)
+        piece.product = Product(id=piece.sku, sku=piece.sku, name=piece.name)
+        return piece
+
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.resolve_piece_print_config", resolver
+    )
+    try:
+        view._on_stuecke_loaded(  # noqa: SLF001
+            {
+                "__requested_ref": "A",
+                "items": [PieceBlock(sku="SKU-A", name="Invoice A", qty_needed=1)],
+            }
+        )
+        qtbot.waitUntil(entered.is_set, timeout=2000)
+        view._table.select_source_row(1)  # noqa: SLF001
+        view._on_stuecke_loaded(  # noqa: SLF001
+            {
+                "__requested_ref": "B",
+                "items": [PieceBlock(sku="SKU-B", name="Invoice B", qty_needed=1)],
+            }
+        )
+    finally:
+        release.set()
+
+    qtbot.waitUntil(lambda: view._piece_model.rowCount() == 1, timeout=3000)  # noqa: SLF001
+    assert "Invoice B" in str(view._piece_model.index(0, 0).data())  # noqa: SLF001
+
+
 def test_rechnungen_cached_wix_summary_allows_product_fallback_when_items_missing(
     qtbot: object,
     monkeypatch,
