@@ -644,6 +644,8 @@ Fortschreibung AP06: `9a7b329` (`Move aftercare tab database work off UI thread`
 
 Fortschreibung AP06: 296ac8e (Avoid synchronous invoice dialog count reads) wurde nach 32 gezielten UI-Tests und 2.099 Gesamttests zu origin/main gepusht. Sendungen-, Digital- und Ueberweisungsdialoge liefern lokale Zaehlersnapshots; Nachbetreuungs-Badges aktualisieren sich asynchron.
 
+Fortschreibung AP06: 8197e64 (Move B2B credit alert reads off UI thread) wurde nach 10 gezielten Tagesgeschaeft-Tests und 2.100 Gesamttests zu origin/main gepusht. Die manuelle B2B-Pruefung laedt Rechnungen und Planstatus im Worker; bestaetigte Datenbank-Schreibaktionen bleiben als offener Teil von AP06 dokumentiert.
+
 Der finale Suite-Nachweis dieses Fortschreibungsschritts steht oben. Weitere Commit-/Push-Nachweise werden nach ihrer Integration ergänzt. Das folgende statische Inventar
 wurde aus dem vorherigen Quellstand erzeugt und dient als Navigationshilfe; nach
 spaeteren Codeaenderungen koennen einzelne Zeilennummern abweichen.
