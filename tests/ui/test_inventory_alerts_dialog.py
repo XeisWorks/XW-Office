@@ -30,6 +30,7 @@ def test_inventory_alert_load_and_save_leave_event_loop_responsive(qtbot) -> Non
     save_started = Event()
     release = Event()
     saved: list[dict[str, object]] = []
+    load_calls = 0
     detail = SimpleNamespace(
         alert=SimpleNamespace(id="alert-1", variant_id="variant-1"),
         sku="XW-TEST",
@@ -46,6 +47,8 @@ def test_inventory_alert_load_and_save_leave_event_loop_responsive(qtbot) -> Non
 
     class Inventory:
         def list_open_alert_details(self):
+            nonlocal load_calls
+            load_calls += 1
             load_started.set()
             release.wait(2)
             return [detail]
@@ -54,6 +57,7 @@ def test_inventory_alert_load_and_save_leave_event_loop_responsive(qtbot) -> Non
             save_started.set()
             release.wait(2)
             saved.append(kwargs)
+            detail.reorder_point = kwargs["reorder_point"]
 
     dialog = InventoryAlertsDialog(_AlertsContainer(Inventory()))  # type: ignore[arg-type]
     qtbot.addWidget(dialog)
@@ -80,3 +84,6 @@ def test_inventory_alert_load_and_save_leave_event_loop_responsive(qtbot) -> Non
             "reorder_mode": "fixed",
         }
     ]
+    qtbot.waitUntil(lambda: load_calls == 2, timeout=1000)
+    qtbot.waitUntil(lambda: dialog._worker is None, timeout=1000)  # noqa: SLF001
+    assert dialog._threshold.value() == 7  # noqa: SLF001

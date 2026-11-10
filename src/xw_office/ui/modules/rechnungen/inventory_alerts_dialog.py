@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QDialog,
@@ -37,6 +37,7 @@ class InventoryAlertsDialog(QDialog):
         self._details: list[InventoryAlertDetail] = []
         self._worker: BackgroundWorker | None = None
         self._closing = False
+        self._refresh_pending = False
         self.setWindowTitle("Lageralarme")
         self.resize(650, 420)
         layout = QVBoxLayout(self)
@@ -76,7 +77,10 @@ class InventoryAlertsDialog(QDialog):
         self.refresh()
 
     def refresh(self) -> None:
+        if self._closing or not isValid(self):
+            return
         if self._worker is not None and self._worker.isRunning():
+            self._refresh_pending = True
             return
         self._set_busy(True)
         worker = BackgroundWorker(self._inventory.list_open_alert_details)
@@ -121,6 +125,9 @@ class InventoryAlertsDialog(QDialog):
             self._worker = None
         if is_current and not self._closing and isValid(self):
             self._set_busy(False)
+            if self._refresh_pending:
+                self._refresh_pending = False
+                QTimer.singleShot(0, self.refresh)
 
     def _set_busy(self, busy: bool) -> None:
         for button in (self._save, self._auto, self._task):
