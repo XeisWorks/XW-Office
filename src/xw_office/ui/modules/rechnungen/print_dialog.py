@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import fitz
+import fitz  # type: ignore[import-untyped]  # PyMuPDF does not ship type stubs.
 from shiboken6 import isValid
 from PySide6.QtCore import (
     QAbstractItemModel,

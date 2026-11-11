@@ -2391,11 +2391,14 @@ neue Einreihungen werden nach Shutdown abgelehnt.
 
 Regressionen blockieren Dateizugriffe und PDF-Oeffnung, pruefen den Qt-Heartbeat,
 korrekte Seitenbereiche, genau einen Worker bei zwoelf gleichzeitigen Erstauftraegen
-und alle erhaltenen Jobs. Die vollstaendige lokale Suite auf `d82ae39` plus dem
-Readiness-Doc-Fast-Forward `7d6b514` besteht mit **2.258 Tests, 5 uebersprungen und
+und alle erhaltenen Jobs. Die vollstaendige lokale Suite auf dem Rechnungs-/Druck-
+Code-Stand von `2eb98f7` (nach Readiness-Doc-Fast-Forward `7d6b514`) besteht mit
+**2.258 Tests, 5 uebersprungen und
 1 bestehender Starlette/httpx-Deprecation-Warnung (165,28 s)**. Druck-/Queue-Tests:
 23 bestanden; globales Ruff und gezieltes MyPy fuer `print_queue.py` und
-`print_dialog.py` gruen. Das globale MyPy-Gate bleibt wegen bestehender Fehler in
+`print_dialog.py` gruen. Striktes paketweites MyPy der 27 Rechnungsdateien ist
+ebenfalls fehlerfrei; nur der nicht typisierte PyMuPDF-Import wird am Import-
+Boundary markiert. Das globale MyPy-Gate bleibt wegen bestehender Fehler in
 anderen Dateien separat offen.
 
 ### F25 - aktueller Rechnungslisten-/Eventloop-Beleg
