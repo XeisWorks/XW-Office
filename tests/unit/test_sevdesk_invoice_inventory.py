@@ -54,6 +54,31 @@ def test_invoice_feed_rejects_fractional_or_invalid_quantities(quantity: object)
         assert session.query(InventoryDocumentBooking).count() == 0
 
 
+def test_external_invoice_poll_uses_bulk_positions_when_provider_supports_it() -> None:
+    factory, variant_id = _factory()
+    InventoryV2Service(factory).record_movement(
+        variant_id=variant_id,
+        delta=10,
+        reason="import_baseline",
+        source="test",
+        idempotency_key="poll-bulk-baseline",
+    )
+
+    class BulkProvider(_Provider):
+        def list_final_invoices(self, *, since=None):
+            return [{"id": "bulk-invoice", "status": 200, "updated": "2026-11-08"}]
+
+        def list_invoice_positions(self, invoice_id: str):
+            raise AssertionError("bulk provider must avoid per-document position reads")
+
+        def list_invoice_positions_bulk(self, invoice_ids: list[str]):
+            assert invoice_ids == ["bulk-invoice"]
+            return [{"invoice": {"id": "bulk-invoice"}, "id": "bulk-pos", "quantity": 2, "part": {"number": "XW-BOOKING"}}]
+
+    result = SevdeskInvoiceInventoryPoller(BulkProvider(), InvoiceInventoryBookingService(factory)).poll()
+    assert result.processed == 1
+
+
 def test_invoice_feed_requires_explicit_final_status_and_position_id() -> None:
     factory, _variant_id = _factory()
     provider = _OneInvoiceProvider(

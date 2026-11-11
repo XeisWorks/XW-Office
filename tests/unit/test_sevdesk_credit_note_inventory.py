@@ -45,6 +45,31 @@ def test_credit_feed_only_processes_unambiguous_origin() -> None:
     assert any("Ursprungsrechnung" in issue for issue in result.needs_review)
 
 
+def test_credit_feed_uses_bulk_positions_when_provider_supports_it() -> None:
+    factory, variant_id = _factory()
+    inventory = InventoryV2Service(factory)
+    inventory.record_movement(
+        variant_id=variant_id,
+        delta=10,
+        reason="import_baseline",
+        source="test",
+        idempotency_key="credit-bulk-baseline",
+    )
+    booking = InvoiceInventoryBookingService(factory)
+    booking.apply_line(InvoiceInventoryLine("invoice-1", "pos-1", variant_id, 2))
+
+    class BulkProvider(_Provider):
+        def list_credit_note_positions(self, credit_note_id: str):
+            raise AssertionError("bulk provider must avoid per-document position reads")
+
+        def list_credit_note_positions_bulk(self, credit_note_ids: list[str]):
+            assert credit_note_ids == ["credit-1", "credit-ambiguous"]
+            return [{"creditNote": {"id": "credit-1"}, "id": "credit-pos-1", "invoicePosId": "pos-1", "quantity": 1, "part": {"number": "XW-BOOKING"}}]
+
+    result = SevdeskCreditNoteInventoryService(BulkProvider(), booking).process_year(2026)
+    assert result.processed == 1
+
+
 @pytest.mark.parametrize("quantity", ["0.5", "1.5", "NaN", "Infinity", "not-a-number", None])
 def test_credit_feed_rejects_fractional_or_invalid_quantities(quantity: object) -> None:
     factory, variant_id = _factory()

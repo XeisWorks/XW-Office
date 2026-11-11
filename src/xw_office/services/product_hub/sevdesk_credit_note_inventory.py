@@ -36,7 +36,11 @@ class SevdeskCreditNoteInventoryService:
 
     def process_year(self, year: int) -> CreditNoteProcessingResult:
         result = CreditNoteProcessingResult()
-        for credit in self._provider.list_credit_notes_for_year(year):
+        credits = self._provider.list_credit_notes_for_year(year)
+        bulk_positions = _bulk_positions(
+            self._provider, credits, "list_credit_note_positions_bulk", "creditNote"
+        )
+        for credit in credits:
             state = document_state(credit)
             if state == "draft":
                 continue
@@ -51,7 +55,12 @@ class SevdeskCreditNoteInventoryService:
             if not origin_invoice:
                 result.needs_review.append(f"{credit_id}: Ursprungsrechnung nicht eindeutig")
                 continue
-            for position in self._provider.list_credit_note_positions(credit_id):
+            positions = (
+                bulk_positions.get(credit_id, [])
+                if bulk_positions is not None
+                else self._provider.list_credit_note_positions(credit_id)
+            )
+            for position in positions:
                 quantity = feed_quantity(position)
                 if quantity is None or quantity != quantity.to_integral_value():
                     result.needs_review.append(f"{credit_id}: ungültige/bruchteilige Positionsmenge")
@@ -142,6 +151,27 @@ def _sku(position: dict[str, object]) -> str:
     raw_part = position.get("part")
     part = raw_part if isinstance(raw_part, dict) else {}
     return str(position.get("sku") or position.get("partNumber") or part.get("number") or "").strip().upper()
+
+
+def _bulk_positions(
+    provider: object,
+    documents: list[dict[str, object]],
+    method_name: str,
+    parent_key: str,
+) -> dict[str, list[dict[str, object]]] | None:
+    loader = getattr(provider, method_name, None)
+    if not callable(loader):
+        return None
+    ids = [str(document.get("id") or "").strip() for document in documents]
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for position in loader(ids):
+        if not isinstance(position, dict):
+            continue
+        parent = position.get(parent_key)
+        parent_id = str(parent.get("id") if isinstance(parent, dict) else parent or "").strip()
+        if parent_id:
+            grouped.setdefault(parent_id, []).append(dict(position))
+    return grouped
 
 
 __all__ = ["CreditNoteProcessingResult", "CreditNoteProvider", "SevdeskCreditNoteInventoryService"]

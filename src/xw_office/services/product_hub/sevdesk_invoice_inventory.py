@@ -40,7 +40,9 @@ class SevdeskInvoiceInventoryPoller:
 
     def poll(self, *, since: datetime.date | None = None) -> InvoicePollResult:
         result = InvoicePollResult()
-        for invoice in self._provider.list_final_invoices(since=since):
+        invoices = self._provider.list_final_invoices(since=since)
+        bulk_positions = _bulk_positions(self._provider, invoices, "list_invoice_positions_bulk", "invoice")
+        for invoice in invoices:
             state = document_state(invoice)
             if state == "draft":
                 continue
@@ -52,7 +54,12 @@ class SevdeskInvoiceInventoryPoller:
                 result.needs_review.append(f"{invoice_id}: unbekannter oder nicht finaler Status")
                 continue
             revision = str(invoice.get("updated") or invoice.get("version") or "").strip()
-            for position in self._provider.list_invoice_positions(invoice_id):
+            positions = (
+                bulk_positions.get(invoice_id, [])
+                if bulk_positions is not None
+                else self._provider.list_invoice_positions(invoice_id)
+            )
+            for position in positions:
                 if str(position.get("kind") or "product").strip().casefold() not in {"product", ""}:
                     continue
                 quantity = feed_quantity(position)
@@ -140,6 +147,27 @@ def _sku(position: dict[str, object]) -> str:
 
 def _position_key(position: dict[str, object]) -> str:
     return str(position.get("id") or "").strip()
+
+
+def _bulk_positions(
+    provider: object,
+    documents: list[dict[str, object]],
+    method_name: str,
+    parent_key: str,
+) -> dict[str, list[dict[str, object]]] | None:
+    loader = getattr(provider, method_name, None)
+    if not callable(loader):
+        return None
+    ids = [str(document.get("id") or "").strip() for document in documents]
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for position in loader(ids):
+        if not isinstance(position, dict):
+            continue
+        parent = position.get(parent_key)
+        parent_id = str(parent.get("id") if isinstance(parent, dict) else parent or "").strip()
+        if parent_id:
+            grouped.setdefault(parent_id, []).append(dict(position))
+    return grouped
 
 
 __all__ = ["InvoicePollResult", "InvoiceReleaseProvider", "SevdeskInvoiceInventoryPoller"]
