@@ -3,19 +3,23 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import fitz  # type: ignore[import-untyped]
+import fitz
+from shiboken6 import isValid
 from PySide6.QtCore import (
     QAbstractItemModel,
     QAbstractTableModel,
     QModelIndex,
     QPersistentModelIndex,
+    QTimer,
     Qt,
     QUrl,
 )
 from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter, QPrinterInfo
 from PySide6.QtWidgets import QStyleOptionViewItem, QStyledItemDelegate
 from PySide6.QtWidgets import (
@@ -37,6 +41,7 @@ from PySide6.QtWidgets import (
 
 from xw_office.core.signals import AppSignals
 from xw_office.core.types import PrinterStatus
+from xw_office.core.worker import BackgroundWorker
 from xw_office.services.inventory import InventoryService
 from xw_office.services.products.catalog import ProductCatalogService
 from xw_office.services.products.print_decision import PieceBlock, resolve_piece_print_config
@@ -63,6 +68,24 @@ _PRODUCT_PRINT_PROFILE_IDS = {
     "brochure_mono",
     "brochure_duo",
 }
+
+
+@dataclass(frozen=True)
+class _PdfInspectionResult:
+    path: str
+    page_count: int | None
+    error: str = ""
+
+
+def _inspect_product_pdf(raw_path: str) -> _PdfInspectionResult:
+    path = Path(raw_path)
+    if not path.is_file():
+        return _PdfInspectionResult(str(path), None, f"Datei fehlt: {path}")
+    try:
+        with fitz.open(str(path)) as document:
+            return _PdfInspectionResult(str(path), len(document))
+    except Exception as exc:  # noqa: BLE001 - displayed in the configuration dialog.
+        return _PdfInspectionResult(str(path), None, f"PDF kann nicht gelesen werden: {exc}")
 
 
 def _format_page_ranges(pages: list[int]) -> str:
@@ -219,6 +242,17 @@ class ProductPrintConfigDialog(QDialog):
         self._container = container
         self._piece = piece
         self._page_count: int | None = None
+        self._pdf_generation = 0
+        self._pdf_validation_generation = -1
+        self._pdf_validation_path = ""
+        self._pdf_pending_path: str | None = None
+        self._pdf_status_worker: BackgroundWorker | None = None
+        self._pending_accept = False
+        self._closing = False
+        self._pdf_status_timer = QTimer(self)
+        self._pdf_status_timer.setSingleShot(True)
+        self._pdf_status_timer.setInterval(150)
+        self._pdf_status_timer.timeout.connect(self._start_pdf_inspection)
 
         root = QVBoxLayout(self)
         root.setSpacing(10)
@@ -229,7 +263,7 @@ class ProductPrintConfigDialog(QDialog):
 
         form = QFormLayout()
         self._path_edit = QLineEdit(str(piece.print_file_path or ""))
-        self._path_edit.textChanged.connect(self._refresh_pdf_status)
+        self._path_edit.textChanged.connect(self._on_pdf_path_changed)
         browse_row = QHBoxLayout()
         browse_row.addWidget(self._path_edit, stretch=1)
         browse_btn = QPushButton("PDF waehlen")
@@ -294,6 +328,7 @@ class ProductPrintConfigDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+        self._save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         root.addWidget(buttons)
 
         self.resize(620, 360)
@@ -316,16 +351,38 @@ class ProductPrintConfigDialog(QDialog):
         if not profile_id and not plan:
             QMessageBox.warning(self, "Druck konfigurieren", "Bitte Drucker oder Druckplan angeben.")
             return
-        pdf_path = self._pdf_path()
-        if not pdf_path.is_file():
-            QMessageBox.warning(self, "Druck konfigurieren", "Die gewaehlte PDF-Datei existiert nicht.")
+        if self._pdf_validation_generation != self._pdf_generation:
+            self._pending_accept = True
+            self._save_button.setEnabled(False)
+            self._pdf_status.setText("PDF wird geprueft; Speichern folgt nach erfolgreicher Pruefung.")
+            if not self._pdf_status_timer.isActive() and self._pdf_pending_path is not None:
+                self._pdf_status_timer.start(0)
             return
         if self._page_count is None:
-            self._refresh_pdf_status()
-        if self._page_count is None:
-            QMessageBox.warning(self, "Druck konfigurieren", "Die PDF-Datei konnte nicht geoeffnet werden.")
+            QMessageBox.warning(
+                self,
+                "Druck konfigurieren",
+                self._pdf_status.text() or "Die PDF-Datei konnte nicht geoeffnet werden.",
+            )
             return
         super().accept()
+
+    def reject(self) -> None:
+        self._stop_pdf_inspection()
+        super().reject()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._stop_pdf_inspection()
+        super().closeEvent(event)
+
+    def _stop_pdf_inspection(self) -> None:
+        self._closing = True
+        self._pending_accept = False
+        self._pdf_status_timer.stop()
+        self._pdf_pending_path = None
+        self._pdf_generation += 1
+        if self._pdf_status_worker is not None and self._pdf_status_worker.isRunning():
+            self._pdf_status_worker.cancel()
 
     def _browse_pdf(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Produkt-PDF waehlen", self._path_edit.text(), "PDF (*.pdf)")
@@ -378,34 +435,93 @@ class ProductPrintConfigDialog(QDialog):
     def _pdf_path(self) -> Path:
         return Path(self._path_edit.text().strip())
 
+    def _on_pdf_path_changed(self, _raw_path: str) -> None:
+        self._pending_accept = False
+        self._save_button.setEnabled(True)
+        self._refresh_pdf_status()
+
     def _refresh_pdf_status(self) -> None:
+        self._pdf_generation += 1
+        generation = self._pdf_generation
         raw_path = self._path_edit.text().strip()
         self._page_count = None
+        self._pdf_validation_path = ""
+        self._pdf_validation_generation = -1
+        self._pdf_status_timer.stop()
+        if self._pdf_status_worker is not None and self._pdf_status_worker.isRunning():
+            self._pdf_status_worker.cancel()
         if not raw_path:
+            self._pdf_pending_path = None
+            self._pdf_validation_generation = generation
             self._pdf_status.setText("Kein PDF-Pfad gewaehlt.")
             self._refresh_plan_summary()
             return
-        path = Path(raw_path)
-        if not path.is_file():
-            self._pdf_status.setText(f"Datei fehlt: {path}")
-            self._refresh_plan_summary()
-            return
-        doc = None
-        try:
-            doc = fitz.open(str(path))
-            self._page_count = len(doc)
-        except Exception as exc:  # noqa: BLE001 - shown to user as validation status.
-            self._pdf_status.setText(f"PDF kann nicht gelesen werden: {exc}")
-            self._refresh_plan_summary()
-            return
-        finally:
-            try:
-                if doc is not None:
-                    doc.close()
-            except Exception:
-                pass
-        self._pdf_status.setText(f"PDF gefunden: {path.name} ({self._page_count} Seite(n))")
+        self._pdf_pending_path = raw_path
+        self._pdf_status.setText("PDF wird geprueft...")
         self._refresh_plan_summary()
+        self._pdf_status_timer.start(150)
+
+    def _start_pdf_inspection(self) -> None:
+        raw_path = self._pdf_pending_path
+        if raw_path is None:
+            return
+        current = self._pdf_status_worker
+        if current is not None and current.isRunning():
+            current.cancel()
+            return
+        self._pdf_pending_path = None
+        generation = self._pdf_generation
+        worker = BackgroundWorker(_inspect_product_pdf, raw_path)
+        self._pdf_status_worker = worker
+        worker.signals.result.connect(
+            lambda result, token=generation: self._on_pdf_inspection_result(token, result)
+            if isValid(self)
+            else None
+        )
+        worker.signals.finished.connect(
+            lambda current_worker=worker, token=generation: self._on_pdf_inspection_finished(
+                token, current_worker
+            )
+            if isValid(self)
+            else None
+        )
+        worker.start()
+
+    def _on_pdf_inspection_result(self, generation: int, result: object) -> None:
+        if (
+            self._closing
+            or generation != self._pdf_generation
+            or not isinstance(result, _PdfInspectionResult)
+        ):
+            return
+        self._pdf_validation_generation = generation
+        self._pdf_validation_path = result.path
+        self._page_count = result.page_count
+        if result.error:
+            self._pdf_status.setText(result.error)
+        else:
+            self._pdf_status.setText(
+                f"PDF gefunden: {Path(result.path).name} ({result.page_count} Seite(n))"
+            )
+        self._refresh_plan_summary()
+        if not self._pending_accept:
+            return
+        self._pending_accept = False
+        self._save_button.setEnabled(True)
+        if self._page_count is None:
+            QMessageBox.warning(self, "Druck konfigurieren", self._pdf_status.text())
+            return
+        super().accept()
+
+    def _on_pdf_inspection_finished(self, generation: int, worker: BackgroundWorker) -> None:
+        if self._pdf_status_worker is worker:
+            self._pdf_status_worker = None
+        if (
+            not self._closing
+            and generation != self._pdf_generation
+            and self._pdf_pending_path is not None
+        ):
+            self._pdf_status_timer.start(0)
 
     def _refresh_plan_summary(self) -> None:
         if not hasattr(self, "_plan_summary"):
