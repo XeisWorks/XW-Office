@@ -108,6 +108,7 @@ def test_invalid_optional_invoice_amounts_remain_absent() -> None:
     assert position.unit_tax is None
     assert position.tax_rate is None
     assert position.sum_gross_accounting is None
+    assert position.unit_value is None
 
 
 def test_manual_invoice_address_falls_back_from_billing_to_shipping() -> None:

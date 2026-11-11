@@ -207,7 +207,7 @@ def normalize_invoice_positions(
 
         unit_price_gross = _optional_decimal(raw.get("priceGross"))
         unit_price_net = _optional_decimal(raw.get("priceNet"))
-        unit_value = decimal_value(raw.get("priceGross") or raw.get("price"), Decimal("0"))
+        unit_value = _optional_decimal(raw.get("priceGross") or raw.get("price"))
         result.append(
             InvoiceWorkPosition(
                 source_id=_text(raw.get("id")) or f"position-{index}",
