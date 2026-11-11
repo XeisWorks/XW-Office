@@ -33,6 +33,19 @@ def test_assess_cutover_is_read_only_and_fails_closed(tmp_path: Path, monkeypatc
     assert after == before
 
 
+def test_cutover_cli_accepts_explicit_worker_activation_marker(monkeypatch) -> None:
+    monkeypatch.setenv("XW_INVENTORY_WORKER_ACTIVE", "true")
+
+    from scripts.product_hub.check_inventory_cutover import _runtime_configuration_checks
+
+    worker_check = next(
+        check for check in _runtime_configuration_checks() if check["code"] == "inventory_worker_service"
+    )
+
+    assert worker_check["state"] == "ready"
+    assert "als aktiv konfiguriert" in worker_check["detail"]
+
+
 def test_cutover_cli_resolves_public_database_url_without_argument(monkeypatch) -> None:
     monkeypatch.delenv("XW_INVENTORY_DATABASE_URL", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)

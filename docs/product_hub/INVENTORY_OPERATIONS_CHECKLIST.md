@@ -55,6 +55,10 @@ freigeschaltet. Für einen einmaligen Lauf kann bei Bedarf ein kontrolliertes
 `railway up` mit temporärem `--once`-Startkommando verwendet werden; der Dauerbetrieb
 bleibt danach wiederherzustellen:
 
+Zusätzlich ist `XW_INVENTORY_WORKER_ACTIVE=true` als nicht-geheimer Betriebsmarker in
+`XW-Product-Hub` und `xw-inventory-worker` gesetzt. Dadurch kann der Readiness-CLI den
+bereits nachgewiesenen Worker-Service als `ready` statt pauschal als `manual` ausweisen.
+
 ```powershell
 railway deployment list --service xw-inventory-worker --environment production --json
 railway logs --service xw-inventory-worker --environment production --latest --json --lines 100

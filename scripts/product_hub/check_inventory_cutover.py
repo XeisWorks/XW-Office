@@ -74,6 +74,12 @@ def _runtime_configuration_checks() -> list[dict[str, str]]:
         if not str(os.getenv(key) or "").strip()
     ]
     missing = (["SEVDESK_API_TOKEN"] if missing_sevdesk else []) + missing_graph
+    worker_active = str(os.getenv("XW_INVENTORY_WORKER_ACTIVE") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     return [
         {
             "code": "provider_credentials",
@@ -88,8 +94,12 @@ def _runtime_configuration_checks() -> list[dict[str, str]]:
         {
             "code": "inventory_worker_service",
             "label": "Separater xw-inventory-worker ist aktiviert",
-            "state": "manual",
-            "detail": "Railway-Service-Aktivierung muss im Deployment nachgewiesen werden.",
+            "state": "ready" if worker_active else "manual",
+            "detail": (
+                "Railway-Service xw-inventory-worker ist als aktiv konfiguriert."
+                if worker_active
+                else "Railway-Service-Aktivierung muss im Deployment nachgewiesen werden."
+            ),
         },
     ]
 
