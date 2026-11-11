@@ -145,6 +145,8 @@ printing:
 inventory:
   alarm_threshold: 5
   auto_sync_on_start: true
+  # Activate START stock checks and bookings only after inventory cutover.
+  start_stock_booking_enabled: false
 
 crm:
   fuzzy_match_threshold: 75

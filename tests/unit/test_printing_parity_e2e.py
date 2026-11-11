@@ -9,7 +9,7 @@ from threading import Barrier
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from xw_office.core.config import AppConfig
+from xw_office.core.config import AppConfig, InventorySection
 from xw_office.services.invoice_processing.service import (
     FulfillmentFlags,
     InvoiceProcessingService,
@@ -925,7 +925,7 @@ def test_finalize_reuses_validated_positions_and_inventory_failure_is_non_blocki
     inventory = Mock()
     inventory.apply_invoice_context.side_effect = RuntimeError("Movement would drive on_hand to -1")
     service = InvoiceProcessingService(
-        AppConfig(),
+        AppConfig(inventory=InventorySection(start_stock_booking_enabled=True)),
         invoice_client,
         _SettingsRepoE2E(),
         _WixOrdersPhysicalStub(),

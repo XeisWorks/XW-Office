@@ -1189,6 +1189,14 @@ class TagesgeschaeftView(QWidget):
             credit_service: B2bCreditService = self._container.resolve(B2bCreditService)
             b2b_holds = [hold.as_dict() for hold in credit_service.evaluate(summaries)]
             buyer_note_cases = invoice_service.load_buyer_note_cases(summaries)
+            if not self._container.config.inventory.start_stock_booking_enabled:
+                return StartPreflight(
+                    open_invoice_count=open_count,
+                    decisions=[],
+                    missing_position_data=True,
+                    b2b_holds=b2b_holds,
+                    buyer_note_cases=buyer_note_cases,
+                )
             inventory_service: InventoryService = self._container.resolve(InventoryService)
             invoice_requirements = invoice_service.build_invoice_inventory_requirements(
                 invoice_ids=(
@@ -1233,7 +1241,7 @@ class TagesgeschaeftView(QWidget):
             self._set_start_running(False)
             self._show_b2b_credit_holds(result.b2b_holds)
             return
-        if not self._start_include_product_print:
+        if self._container.config.inventory.start_stock_booking_enabled and not self._start_include_product_print:
             missing_skus = sorted(
                 decision.sku for decision in result.decisions if decision.will_print
             )
@@ -1591,7 +1599,11 @@ class TagesgeschaeftView(QWidget):
                     ),
                     "product_apply": apply_result,
                 }
-            if mode == StartMode.INVOICES_AND_PRINT and self._start_include_product_print:
+            if (
+                self._container.config.inventory.start_stock_booking_enabled
+                and mode == StartMode.INVOICES_AND_PRINT
+                and self._start_include_product_print
+            ):
                 print_report = inventory_service.execute_start_workflow(
                     preflight,
                     StartMode.PRINT_ONLY,
@@ -1626,7 +1638,9 @@ class TagesgeschaeftView(QWidget):
             )
             inventory_report: StartExecutionReport | None = None
             inventory_warning = ""
-            if mode == StartMode.INVOICES_AND_PRINT:
+            if mode == StartMode.INVOICES_AND_PRINT and not self._container.config.inventory.start_stock_booking_enabled:
+                inventory_warning = "Bestandsbuchung ist derzeit deaktiviert."
+            elif mode == StartMode.INVOICES_AND_PRINT:
                 if preflight.missing_position_data:
                     inventory_warning = (
                         "Inventar wurde nicht aktualisiert, weil kein Druckplan vorlag."

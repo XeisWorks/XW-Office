@@ -12,7 +12,7 @@ from pytestqt.qtbot import QtBot
 from PySide6.QtWidgets import QCheckBox, QDialog, QLabel, QMessageBox, QSpinBox, QToolButton
 
 from xw_office.bootstrap import register_default_services
-from xw_office.core.config import AppConfig
+from xw_office.core.config import AppConfig, InventorySection
 from xw_office.core.container import Container
 from xw_office.core.signals import AppSignals
 from xw_office.core.types import ModuleKey
@@ -56,8 +56,10 @@ from xw_office.ui.modules.rechnungen.view import (
 from xw_office.ui.dialogs.unreleased_title_dialog import UnreleasedTitleDecision
 
 
-def _build_container() -> Container:
-    cfg = AppConfig()
+def _build_container(*, start_stock_booking_enabled: bool = False) -> Container:
+    cfg = AppConfig(
+        inventory=InventorySection(start_stock_booking_enabled=start_stock_booking_enabled)
+    )
     container = Container(cfg)
     container.register(AppSignals, lambda _: AppSignals())
     register_default_services(container)
@@ -1140,7 +1142,7 @@ def test_plain_start_skips_inventory_dialog(qtbot: object, monkeypatch) -> None:
 
 
 def test_plain_start_checks_stock_in_preflight(qtbot: QtBot, monkeypatch: MonkeyPatch) -> None:
-    container = _build_container()
+    container = _build_container(start_stock_booking_enabled=True)
     view = TagesgeschaeftView(container)
     qtbot.addWidget(view)
     invoice_service = container.resolve(InvoiceProcessingService)
@@ -1165,10 +1167,39 @@ def test_plain_start_checks_stock_in_preflight(qtbot: QtBot, monkeypatch: Monkey
     assert results[0].decisions[0].will_print is True
 
 
+def test_plain_start_ignores_stock_when_booking_switch_is_off(
+    qtbot: QtBot, monkeypatch: MonkeyPatch
+) -> None:
+    container = _build_container()
+    view = TagesgeschaeftView(container)
+    qtbot.addWidget(view)
+    invoice_service = container.resolve(InvoiceProcessingService)
+    credit_service = container.resolve(B2bCreditService)
+    summary = InvoiceSummary(id="stock-disabled", status_code=100)
+    monkeypatch.setattr(invoice_service, "load_invoice_summaries", lambda **_kw: [summary])
+    monkeypatch.setattr(invoice_service, "filter_start_ready", lambda rows: rows)
+    monkeypatch.setattr(invoice_service, "load_buyer_note_cases", lambda _rows: [])
+    monkeypatch.setattr(
+        invoice_service,
+        "build_invoice_inventory_requirements",
+        lambda **_kw: (_ for _ in ()).throw(AssertionError("stock preflight ran")),
+    )
+    monkeypatch.setattr(credit_service, "evaluate", lambda _rows: [])
+    results: list[StartPreflight] = []
+    monkeypatch.setattr(view, "_on_start_preflight_ready", results.append)
+
+    view._on_start_clicked(include_product_print=False)  # noqa: SLF001
+    qtbot.waitUntil(lambda: bool(results), timeout=3000)
+
+    assert results[0].decisions == []
+    assert results[0].invoice_requirements == {}
+    assert results[0].missing_position_data is True
+
+
 def test_plain_start_stops_before_invoice_release_for_missing_stock(
     qtbot: QtBot, monkeypatch: MonkeyPatch
 ) -> None:
-    view = TagesgeschaeftView(_build_container())
+    view = TagesgeschaeftView(_build_container(start_stock_booking_enabled=True))
     qtbot.addWidget(view)
     warnings: list[str] = []
     continued: list[bool] = []

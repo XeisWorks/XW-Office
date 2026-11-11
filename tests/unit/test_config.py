@@ -1,5 +1,7 @@
 """Tests for configuration loading."""
 
+from pathlib import Path
+
 from xw_office.core.config import AppConfig, load_config
 
 
@@ -14,11 +16,19 @@ def test_default_config_values() -> None:
     assert config.sevdesk.http_max_retries == 3
     assert config.sevdesk.http_retry_backoff_seconds == 0.75
     assert config.crm.fuzzy_match_threshold == 75
+    assert config.inventory.start_stock_booking_enabled is False
 
 
 def test_load_config_with_missing_file() -> None:
     config = load_config("nonexistent.yaml")
     assert config.app.name == "XeisWorks Office"
+
+
+def test_start_stock_booking_can_be_enabled_in_yaml(tmp_path: Path) -> None:
+    config_path = tmp_path / "stock-enabled.yaml"
+    config_path.write_text("inventory:\n  start_stock_booking_enabled: true\n", encoding="utf-8")
+
+    assert load_config(config_path).inventory.start_stock_booking_enabled is True
 
 
 def test_customer_aftercare_defaults() -> None:
@@ -38,6 +48,7 @@ def test_customer_aftercare_defaults() -> None:
 
 def test_customer_aftercare_loaded_from_yaml() -> None:
     config = load_config("config/default.yaml")
+    assert config.inventory.start_stock_booking_enabled is False
     assert config.customer_aftercare.enabled is True
     assert config.customer_aftercare.courtesy.product_discount_percent == 30
     assert config.customer_aftercare.courtesy.shipping_discount_percent == 100

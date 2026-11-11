@@ -328,6 +328,7 @@ class InvoiceProcessingService:
         self._mail_service = mail_service
         self._drafts = draft_invoice_service
         self._inventory = inventory_service
+        self._start_stock_booking_enabled = config.inventory.start_stock_booking_enabled
         self._delivery_notes = delivery_note_service or DeliveryNoteService()
         self._customer_aftercare = customer_aftercare
         self._offene_sendungen = offene_sendungen
@@ -339,7 +340,7 @@ class InvoiceProcessingService:
     @property
     def invoice_inventory_enabled(self) -> bool:
         """Whether finalized physical invoice lines are booked by the Hub core."""
-        return self._invoice_inventory is not None
+        return self._start_stock_booking_enabled and self._invoice_inventory is not None
 
     def load_invoice_table_rows(
         self,
@@ -859,7 +860,7 @@ class InvoiceProcessingService:
                         printed_copy=(full_mode and not digital_only),
                     ),
                 )
-                if full_mode and not digital_only and not any(
+                if self._start_stock_booking_enabled and full_mode and not digital_only and not any(
                     marker in flags.last_warning
                     for marker in (
                         "START-Lagerbuchung fehlgeschlagen:",
@@ -1046,7 +1047,7 @@ class InvoiceProcessingService:
                         ),
                     ),
                 )
-                if not any(
+                if self._start_stock_booking_enabled and not any(
                     marker in flags.last_warning
                     for marker in (
                         "START-Lagerbuchung fehlgeschlagen:",
@@ -2407,7 +2408,7 @@ class InvoiceProcessingService:
                 # Retrying is safe because invoice inventory bookings are
                 # idempotent per document position.  A local stock discrepancy
                 # remains a warning and must never strand paper output again.
-                if self._invoice_inventory is not None:
+                if self._start_stock_booking_enabled and self._invoice_inventory is not None:
                     try:
                         context = self.load_invoice_work_context(
                             summary,
@@ -2426,7 +2427,7 @@ class InvoiceProcessingService:
                             exc,
                             exc_info=True,
                         )
-                if self._inventory is not None:
+                if self._start_stock_booking_enabled and self._inventory is not None:
                     try:
                         context = self.load_invoice_work_context(
                             summary,
@@ -2684,6 +2685,8 @@ class InvoiceProcessingService:
         )
 
     def _inventory_booking_retry_pending(self, message: str) -> bool:
+        if not self._start_stock_booking_enabled:
+            return False
         warning = str(message or "")
         if warning.startswith(_INVENTORY_BOOKING_WARNING_PREFIXES[0]):
             return self._inventory is not None
@@ -2707,12 +2710,12 @@ class InvoiceProcessingService:
             raise RuntimeError(
                 f"Rechnungsfreigabe für {summary.invoice_number or summary.id} gesperrt: {detail}"
             )
-        if self._invoice_inventory is not None and not digital_only and preflight_context.positions:
+        if self._start_stock_booking_enabled and self._invoice_inventory is not None and not digital_only and preflight_context.positions:
             self._invoice_inventory.validate_invoice_context(preflight_context.positions)
         legacy_requirements = self._legacy_invoice_stock_requirements(
             preflight_context.positions
-        ) if printed_copy else {}
-        if self._inventory is not None and legacy_requirements:
+        ) if printed_copy and self._start_stock_booking_enabled else {}
+        if self._start_stock_booking_enabled and self._inventory is not None and legacy_requirements:
             self._inventory.validate_invoice_stock(legacy_requirements)
         self._send_invoice_document_once(
             summary.id, send_type="VPR" if printed_copy else "VPDF"
@@ -2729,7 +2732,7 @@ class InvoiceProcessingService:
         # finalization helper invalidates PDF, detail, context and batch caches.
         invoice_key = str(summary.id or "").strip()
         inventory_warning = ""
-        if self._inventory is not None and printed_copy and legacy_requirements:
+        if self._start_stock_booking_enabled and self._inventory is not None and printed_copy and legacy_requirements:
             try:
                 self._inventory.execute_start_invoice_consumption(
                     {invoice_key: legacy_requirements},
@@ -2744,7 +2747,7 @@ class InvoiceProcessingService:
                     exc,
                     exc_info=True,
                 )
-        if self._invoice_inventory is not None and not digital_only:
+        if self._start_stock_booking_enabled and self._invoice_inventory is not None and not digital_only:
             # Invoice positions cannot change after the successful sendBy call.
             # Reuse the already validated context instead of issuing the same
             # sevDesk detail/position requests a second time.

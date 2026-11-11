@@ -283,6 +283,7 @@ def register_default_services(container: Container) -> None:
             invoice_inventory=(
                 c.resolve(InvoiceInventoryBookingService)
                 if (c.config.database_url or "").strip()
+                and c.config.inventory.start_stock_booking_enabled
                 and c.config.product_hub.inventory_master_enabled
                 else None
             ),

@@ -181,6 +181,7 @@ class PrintingSection:
 class InventorySection:
     alarm_threshold: int = 5
     auto_sync_on_start: bool = True
+    start_stock_booking_enabled: bool = False
 
 
 @dataclass(frozen=True)

@@ -7,10 +7,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from xw_office.core.config import AppConfig
+from xw_office.core.config import AppConfig, InventorySection
 from xw_office.services.invoice_processing.context import InvoiceWorkContext
 from xw_office.services.invoice_processing.service import FulfillmentFlags, InvoiceProcessingService
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
+
+
+def _stock_enabled_config() -> AppConfig:
+    return AppConfig(inventory=InventorySection(start_stock_booking_enabled=True))
 
 
 class _InvoiceClientStub:
@@ -1442,7 +1446,7 @@ def test_start_resume_retries_stock_warning_after_other_steps_completed() -> Non
 
     stock = StockBooking()
     service = InvoiceProcessingService(
-        AppConfig(),
+        _stock_enabled_config(),
         client,  # type: ignore[arg-type]
         repo,  # type: ignore[arg-type]
         wix,  # type: ignore[arg-type]
@@ -1517,7 +1521,7 @@ def test_finalize_books_product_hub_inventory_after_successful_sevdesk_release()
 
     booking = Booking()
     service = InvoiceProcessingService(
-        AppConfig(),
+        _stock_enabled_config(),
         client,  # type: ignore[arg-type]
         _RepoStub({}),
         None,
@@ -1536,6 +1540,62 @@ def test_finalize_books_product_hub_inventory_after_successful_sevdesk_release()
     assert len(booking.validated) == 1
     assert booking.applied and booking.applied[0][0] == summary.id
     assert flags.last_warning == ""
+
+
+def test_finalize_does_not_check_or_book_stock_while_start_switch_is_off() -> None:
+    summary = InvoiceSummary(
+        id="release-without-stock-1",
+        invoiceNumber="RE-WITHOUT-STOCK-1",
+        status_code=1000,
+    )
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads[summary.id] = {
+        "id": summary.id,
+        "invoiceNumber": summary.invoice_number,
+        "status": 1000,
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+    client.invoice_positions[summary.id] = [
+        {"part": {"id": "part-100", "partNumber": "XW-100"}, "quantity": "2"}
+    ]
+
+    class ForbiddenInventory:
+        def validate_invoice_context(self, _positions: object) -> None:
+            raise AssertionError("Hub stock validation ran with switch off")
+
+        def apply_invoice_context(self, **_kwargs: object) -> None:
+            raise AssertionError("Hub stock booking ran with switch off")
+
+        def validate_invoice_stock(self, _requirements: object) -> None:
+            raise AssertionError("Legacy stock validation ran with switch off")
+
+        def execute_start_invoice_consumption(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("Legacy stock booking ran with switch off")
+
+    forbidden = ForbiddenInventory()
+    service = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        _RepoStub({}),
+        None,
+        _MailServiceStub(),
+        inventory_service=forbidden,  # type: ignore[arg-type]
+        invoice_inventory=forbidden,  # type: ignore[arg-type]
+    )
+
+    flags = service._run_finalize_step(  # noqa: SLF001
+        summary,
+        service.read_fulfillment_flags(summary.id),
+        digital_only=False,
+        printed_copy=True,
+    )
+
+    assert client.send_invoice_document_calls == 1
+    assert flags.last_warning == ""
+    assert service.invoice_inventory_enabled is False
+    assert service._inventory_booking_retry_pending(  # noqa: SLF001
+        "START-Lagerbuchung fehlgeschlagen: older run"
+    ) is False
 
 
 def test_start_resume_after_legacy_failure_replays_hub_booking_idempotently() -> None:
@@ -1585,7 +1645,7 @@ def test_start_resume_after_legacy_failure_replays_hub_booking_idempotently() ->
     hub = IdempotentHubBooking()
     legacy = LegacyInventory()
     service = InvoiceProcessingService(
-        AppConfig(),
+        _stock_enabled_config(),
         client,  # type: ignore[arg-type]
         repo,  # type: ignore[arg-type]
         wix,  # type: ignore[arg-type]
