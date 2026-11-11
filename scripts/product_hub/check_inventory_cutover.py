@@ -41,6 +41,7 @@ def assess_cutover(
     *,
     shadow_enabled: bool = False,
     master_enabled: bool = False,
+    include_runtime_configuration: bool = True,
 ) -> dict[str, Any]:
     """Return the same readiness evidence as the web endpoint, without writes."""
     engine = create_engine(database_url, pool_pre_ping=True, future=True)
@@ -54,13 +55,25 @@ def assess_cutover(
         {"code": check.code, "label": check.label, "state": check.state, "detail": check.detail}
         for check in readiness.checks
     ]
-    checks.extend(_runtime_configuration_checks())
+    if include_runtime_configuration:
+        checks.extend(_runtime_configuration_checks())
     eligible = bool(readiness.eligible and all(check["state"] == "ready" for check in checks))
     return {
         "master_enabled": readiness.master_enabled,
         "shadow_enabled": readiness.shadow_enabled,
         "eligible": eligible,
         "assessed_at": readiness.assessed_at.isoformat(),
+        "checks": checks,
+    }
+
+
+def assess_runtime_configuration() -> dict[str, Any]:
+    """Return only deployment/runtime checks; no database connection is needed."""
+    checks = _runtime_configuration_checks()
+    return {
+        "master_enabled": False,
+        "shadow_enabled": False,
+        "eligible": all(check["state"] == "ready" for check in checks),
         "checks": checks,
     }
 
@@ -120,18 +133,32 @@ def main() -> int:
     parser.add_argument("--shadow-enabled", action="store_true")
     parser.add_argument("--master-enabled", action="store_true")
     parser.add_argument("--json", action="store_true", dest="as_json")
+    parser.add_argument(
+        "--skip-runtime-configuration",
+        action="store_true",
+        help="Nur Datenbank-/Cutover-Gates prüfen (für Railway Postgres-Service).",
+    )
+    parser.add_argument(
+        "--runtime-only",
+        action="store_true",
+        help="Nur Credential-/Worker-Gates prüfen; keine Datenbankverbindung öffnen.",
+    )
     args = parser.parse_args()
     try:
-        database_url = _resolve_database_url(str(args.database_url))
-        if not database_url:
-            parser.error(
-                "DATABASE_URL/DATABASE_PUBLIC_URL oder --database-url ist erforderlich"
+        if args.runtime_only:
+            payload = assess_runtime_configuration()
+        else:
+            database_url = _resolve_database_url(str(args.database_url))
+            if not database_url:
+                parser.error(
+                    "DATABASE_URL/DATABASE_PUBLIC_URL oder --database-url ist erforderlich"
+                )
+            payload = assess_cutover(
+                database_url,
+                shadow_enabled=bool(args.shadow_enabled),
+                master_enabled=bool(args.master_enabled),
+                include_runtime_configuration=not bool(args.skip_runtime_configuration),
             )
-        payload = assess_cutover(
-            database_url,
-            shadow_enabled=bool(args.shadow_enabled),
-            master_enabled=bool(args.master_enabled),
-        )
     except Exception as exc:  # noqa: BLE001 - CLI must expose a stable failure code
         print(f"Cutover-Readiness konnte nicht ermittelt werden: {exc}", file=sys.stderr)
         return 1

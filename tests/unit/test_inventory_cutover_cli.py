@@ -5,7 +5,11 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from scripts.product_hub.check_inventory_cutover import _resolve_database_url, assess_cutover
+from scripts.product_hub.check_inventory_cutover import (
+    _resolve_database_url,
+    assess_cutover,
+    assess_runtime_configuration,
+)
 from xw_office.models.base import Base
 
 
@@ -44,6 +48,29 @@ def test_cutover_cli_accepts_explicit_worker_activation_marker(monkeypatch) -> N
 
     assert worker_check["state"] == "ready"
     assert "als aktiv konfiguriert" in worker_check["detail"]
+
+
+def test_assess_cutover_can_skip_runtime_checks_for_database_service(tmp_path: Path) -> None:
+    database_path = tmp_path / "database-only.db"
+    database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
+    engine = create_engine(database_url, future=True)
+    Base.metadata.create_all(engine)
+
+    payload = assess_cutover(database_url, include_runtime_configuration=False)
+
+    assert not any(check["code"] == "provider_credentials" for check in payload["checks"])
+    assert not any(check["code"] == "inventory_worker_service" for check in payload["checks"])
+
+
+def test_assess_runtime_configuration_needs_no_database(monkeypatch) -> None:
+    for key in ("SEVDESK_API_TOKEN", "MS_GRAPH_TENANT_ID", "MS_GRAPH_CLIENT_ID", "MS_GRAPH_MAILBOX"):
+        monkeypatch.setenv(key, "configured")
+    monkeypatch.setenv("XW_INVENTORY_WORKER_ACTIVE", "true")
+
+    payload = assess_runtime_configuration()
+
+    assert payload["eligible"] is True
+    assert {check["state"] for check in payload["checks"]} == {"ready"}
 
 
 def test_cutover_cli_resolves_public_database_url_without_argument(monkeypatch) -> None:

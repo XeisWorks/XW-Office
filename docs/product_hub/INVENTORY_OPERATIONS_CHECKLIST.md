@@ -29,7 +29,16 @@ railway run --service Postgres --environment production -- `
   --out "$env:TEMP\xw-inventory-cutover-$(Get-Date -Format yyyyMMdd-HHmmss).json"
 
 railway run --service Postgres --environment production -- `
-  python scripts/product_hub/check_inventory_cutover.py --json
+  python scripts/product_hub/check_inventory_cutover.py --skip-runtime-configuration --json
+```
+
+Die Runtime-Gates werden getrennt im Product-Hub-Service geprüft; dadurch wird keine
+private Postgres-DNS-Adresse außerhalb des Railway-Netzes verwendet und es werden keine
+Secretwerte ausgegeben:
+
+```powershell
+railway run --service XW-Product-Hub --environment production -- `
+  python scripts/product_hub/check_inventory_cutover.py --runtime-only --json
 ```
 
 Der Readiness-Check darf `eligible=false` liefern. Das ist vor der Inventur erwartbar und
