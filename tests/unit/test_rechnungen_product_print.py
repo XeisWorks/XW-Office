@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import fitz
-from PySide6.QtCore import QRect, Qt
+from threading import Event
+
+from PySide6.QtCore import QRect, QTimer, Qt
 from PySide6.QtWidgets import QComboBox, QStyleOptionViewItem
 
 from xw_office.core.config import AppConfig, PrintingSection
@@ -17,6 +19,12 @@ from xw_office.services.printer_status.service import PrinterStatusService, Prin
 from xw_office.ui.modules.rechnungen import print_dialog
 from xw_office.ui.modules.rechnungen.print_dialog import ProductPrintConfigDialog, prepare_piece_pdf_print
 from xw_office.ui.modules.rechnungen.view import _PieceDelegate
+
+
+def _wait_for_pdf_inspection(qtbot: object, dialog: ProductPrintConfigDialog) -> None:
+    qtbot.waitUntil(  # type: ignore[attr-defined]
+        lambda: dialog._pdf_validation_generation == dialog._pdf_generation, timeout=5000  # noqa: SLF001
+    )
 
 
 def test_product_print_runtime_check_uses_nonblocking_printer_snapshot(monkeypatch) -> None:
@@ -315,6 +323,7 @@ def test_product_print_config_dialog_builds_plan_rows_with_start_end(qtbot: obje
 
     dialog = ProductPrintConfigDialog(None, container, piece)
     qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    _wait_for_pdf_inspection(qtbot, dialog)
 
     path, profile_id, plan = dialog.values()
 
@@ -368,6 +377,7 @@ def test_print_plan_summary_flags_gap_and_overlap(qtbot: object, tmp_path) -> No
 
     dialog = ProductPrintConfigDialog(None, container, piece)
     qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    _wait_for_pdf_inspection(qtbot, dialog)
 
     assert "Luecke bei Seite(n) 3" in dialog._plan_summary.text()  # noqa: SLF001
 
@@ -401,6 +411,7 @@ def test_print_plan_summary_confirms_full_coverage(qtbot: object, tmp_path) -> N
 
     dialog = ProductPrintConfigDialog(None, container, piece)
     qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    _wait_for_pdf_inspection(qtbot, dialog)
 
     assert "Deckt alle 5 Seite(n) genau einmal ab" in dialog._plan_summary.text()  # noqa: SLF001
 
@@ -429,6 +440,7 @@ def test_print_dialog_shows_note_for_other_title_overrides(qtbot: object, tmp_pa
 
     dialog = ProductPrintConfigDialog(None, container, piece)
     qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    _wait_for_pdf_inspection(qtbot, dialog)
 
     note = dialog._title_override_note.text()  # noqa: SLF001
     assert not dialog._title_override_note.isHidden()  # noqa: SLF001
@@ -459,6 +471,7 @@ def test_print_dialog_hides_note_when_no_other_title_overrides_exist(qtbot: obje
 
     dialog = ProductPrintConfigDialog(None, container, piece)
     qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    _wait_for_pdf_inspection(qtbot, dialog)
 
     assert dialog._title_override_note.isHidden()  # noqa: SLF001
 
@@ -490,6 +503,7 @@ def test_print_plan_printer_selection_commits_immediately(qtbot: object, tmp_pat
     )
     dialog = ProductPrintConfigDialog(None, container, piece)
     qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    _wait_for_pdf_inspection(qtbot, dialog)
     model = dialog._plan_model  # noqa: SLF001
     index = model.index(1, 1)
     delegate = dialog._plan_table.itemDelegateForColumn(1)  # noqa: SLF001
@@ -506,3 +520,177 @@ def test_print_plan_printer_selection_commits_immediately(qtbot: object, tmp_pat
         {"range": "1-8", "profile_id": "brochure_mono"},
         {"range": "9-END", "profile_id": "noten_duplex"},
     ]
+
+
+def test_product_pdf_inspection_keeps_dialog_responsive(qtbot: object, tmp_path, monkeypatch) -> None:
+    pdf_path = tmp_path / "slow.pdf"
+    document = fitz.open()
+    document.new_page()
+    document.save(pdf_path)
+    document.close()
+    entered = Event()
+    release = Event()
+    real_open = fitz.open
+
+    def slow_open(path: str):
+        entered.set()
+        assert release.wait(timeout=5)
+        return real_open(path)
+
+    monkeypatch.setattr(print_dialog.fitz, "open", slow_open)
+    dialog = ProductPrintConfigDialog(
+        None,
+        Container(AppConfig()),
+        PieceBlock(
+            sku="XW-SLOW",
+            name="Langsames PDF",
+            qty_needed=1,
+            print_profile_id="noten_duplex",
+            product=Product(
+                id="slow",
+                sku="XW-SLOW",
+                name="Langsames PDF",
+                print_file_path=str(pdf_path),
+            ),
+        ),
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    qtbot.waitUntil(entered.is_set, timeout=3000)  # type: ignore[attr-defined]
+    heartbeats: list[int] = []
+    timer = QTimer(dialog)
+    timer.timeout.connect(lambda: heartbeats.append(1))
+    timer.start(10)
+    qtbot.waitUntil(lambda: bool(heartbeats), timeout=1000)  # type: ignore[attr-defined]
+    release.set()
+    qtbot.waitUntil(  # type: ignore[attr-defined]
+        lambda: dialog._pdf_validation_generation == dialog._pdf_generation, timeout=3000  # noqa: SLF001
+    )
+
+    assert dialog._page_count == 1  # noqa: SLF001
+    assert heartbeats
+
+
+def test_product_pdf_inspection_discards_stale_path_result(qtbot: object, tmp_path, monkeypatch) -> None:
+    first_path = tmp_path / "first.pdf"
+    first_document = fitz.open()
+    first_document.new_page()
+    first_document.save(first_path)
+    first_document.close()
+    latest_path = tmp_path / "latest.pdf"
+    latest_document = fitz.open()
+    latest_document.new_page()
+    latest_document.new_page()
+    latest_document.save(latest_path)
+    latest_document.close()
+    first_entered = Event()
+    release_first = Event()
+    real_open = fitz.open
+
+    def delayed_first_open(path: str):
+        if str(path) == str(first_path):
+            first_entered.set()
+            assert release_first.wait(timeout=5)
+        return real_open(path)
+
+    monkeypatch.setattr(print_dialog.fitz, "open", delayed_first_open)
+    dialog = ProductPrintConfigDialog(
+        None,
+        Container(AppConfig()),
+        PieceBlock(
+            sku="XW-SWITCH",
+            name="Pfadwechsel",
+            qty_needed=1,
+            product=Product(
+                id="switch",
+                sku="XW-SWITCH",
+                name="Pfadwechsel",
+                print_file_path=str(first_path),
+            ),
+        ),
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    qtbot.waitUntil(first_entered.is_set, timeout=3000)  # type: ignore[attr-defined]
+
+    dialog._path_edit.setText(str(latest_path))  # noqa: SLF001
+    release_first.set()
+    qtbot.waitUntil(  # type: ignore[attr-defined]
+        lambda: dialog._pdf_validation_path == str(latest_path), timeout=4000  # noqa: SLF001
+    )
+
+    assert dialog._page_count == 2  # noqa: SLF001
+    assert "latest.pdf" in dialog._pdf_status.text()  # noqa: SLF001
+
+
+def test_product_pdf_inspection_resumes_pending_save_after_validation(qtbot: object, tmp_path) -> None:
+    pdf_path = tmp_path / "save-after-check.pdf"
+    document = fitz.open()
+    document.new_page()
+    document.save(pdf_path)
+    document.close()
+    dialog = ProductPrintConfigDialog(
+        None,
+        Container(AppConfig()),
+        PieceBlock(
+            sku="XW-SAVE",
+            name="Speichern nach Pruefung",
+            qty_needed=1,
+            print_profile_id="noten_duplex",
+            product=Product(
+                id="save",
+                sku="XW-SAVE",
+                name="Speichern nach Pruefung",
+                print_file_path=str(pdf_path),
+            ),
+        ),
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+
+    dialog.accept()
+    qtbot.waitUntil(  # type: ignore[attr-defined]
+        lambda: dialog.result() == dialog.DialogCode.Accepted, timeout=3000
+    )
+
+    assert dialog._page_count == 1  # noqa: SLF001
+
+
+def test_product_pdf_inspection_ignores_result_after_dialog_close(qtbot: object, tmp_path, monkeypatch) -> None:
+    pdf_path = tmp_path / "close-during-check.pdf"
+    document = fitz.open()
+    document.new_page()
+    document.save(pdf_path)
+    document.close()
+    entered = Event()
+    release = Event()
+    real_open = fitz.open
+
+    def delayed_open(path: str):
+        entered.set()
+        assert release.wait(timeout=5)
+        return real_open(path)
+
+    monkeypatch.setattr(print_dialog.fitz, "open", delayed_open)
+    dialog = ProductPrintConfigDialog(
+        None,
+        Container(AppConfig()),
+        PieceBlock(
+            sku="XW-CLOSE",
+            name="Schliessen waehrend PDF-Pruefung",
+            qty_needed=1,
+            product=Product(
+                id="close",
+                sku="XW-CLOSE",
+                name="Schliessen waehrend PDF-Pruefung",
+                print_file_path=str(pdf_path),
+            ),
+        ),
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    qtbot.waitUntil(entered.is_set, timeout=3000)  # type: ignore[attr-defined]
+    worker = dialog._pdf_status_worker  # noqa: SLF001
+    assert worker is not None
+
+    dialog.close()
+    release.set()
+    qtbot.waitUntil(lambda: not worker.isRunning(), timeout=3000)  # type: ignore[attr-defined]
+
+    assert dialog._page_count is None  # noqa: SLF001
