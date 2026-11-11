@@ -15,7 +15,9 @@ from xw_office.models.product_hub import Product, ProductVariant
 from xw_office.models.product_hub_inventory import InventoryStock
 from xw_office.models.inventory_count import InventoryCountLine, InventoryCountSession
 from xw_office.repositories.product_hub_inventory import InventoryRepository
+from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.product_hub.inventory import DEFAULT_LOCATION_CODE, InventoryV2Service
+from xw_office.services.product_hub.sevdesk_feed_checkpoint import set_invoice_feed_start
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,7 @@ class InventoryCountService:
         self._session_factory = session_factory
         self._inventory = InventoryV2Service(session_factory)
         self._repository = InventoryRepository(session_factory)
+        self._settings = SettingKvRepository(session_factory)
 
     def start(self, *, location_code: str = DEFAULT_LOCATION_CODE) -> InventoryCountView:
         location = self._repository.get_or_create_location(code=location_code, name="Hauptlager")
@@ -137,6 +140,11 @@ class InventoryCountService:
     def confirm(self, *, count_id: uuid.UUID, actor: str = "") -> InventoryCountView:
         view = self.get(count_id)
         if view.status != "draft":
+            if view.confirmed_at is not None:
+                set_invoice_feed_start(
+                    self._settings,
+                    first_eligible_date=view.confirmed_at.date() + datetime.timedelta(days=1),
+                )
             return view
         if any(line.counted_quantity is None for line in view.lines):
             raise ValueError("Alle Inventurzeilen müssen gezählt und geprüft sein")
@@ -171,11 +179,16 @@ class InventoryCountService:
                     if db_line is not None:
                         db_line.difference = 0
                         db_line.status = "applied"
+        confirmed_at = datetime.datetime.now(datetime.timezone.utc)
+        set_invoice_feed_start(
+            self._settings,
+            first_eligible_date=confirmed_at.date() + datetime.timedelta(days=1),
+        )
         with session_scope(self._session_factory) as session:
             count = session.get(InventoryCountSession, count_id)
             if count is not None:
                 count.status = "confirmed"
-                count.confirmed_at = datetime.datetime.now(datetime.timezone.utc)
+                count.confirmed_at = confirmed_at
                 count.counted_at = count.confirmed_at
                 count.confirmed_by = actor
         return self.get(count_id)

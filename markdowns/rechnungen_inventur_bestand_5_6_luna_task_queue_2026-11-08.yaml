@@ -112,6 +112,7 @@ packages:
     implementation_notes:
       - InventoryCountService erzeugt eine eingefrorene Zählliste aktiver physischer Varianten mit SKU, Titel, Lagerort und Systembestand.
       - Gezählte Differenzen werden beim Abschluss als idempotente recount-Bewegungen gebucht; bestätigte Inventuren sind unveränderlich.
+      - Der Abschluss persistiert den sevDesk-Feed-Stichtag monoton in `setting_kv`; der externe Abgang darf erst ab dem Folgetag des bestätigten Inventurabschlusses buchen, damit historische Verkäufe nicht gegen den gezählten Anfangsbestand doppelt abgezogen werden.
       - API-Endpunkte für Start, Abruf, Zeilenerfassung und Abschluss sind unter /api/v1/inventory/counts verfügbar.
       - Jede gestartete Zählsitzung ist zusätzlich als UTF-8-CSV unter `/api/v1/inventory/counts/{count_id}/export.csv` exportierbar.
       - Die Desktop-Produkteansicht bietet nun einen asynchronen Dialog für dieselbe eingefrorene Zählliste; Mengen, Notizen und der unveränderliche Abschluss werden ohne UI-Blockierung erfasst.
@@ -138,6 +139,7 @@ packages:
       - Externe sevDesk-Freigaben und Legacy-Shadow-Spiegelung laufen über den idempotenten `xw-inventory-worker`; der Dienst wird als eigener Railway-Worker aktiviert.
       - Der externe Feed schreibt zusätzlich über `InventoryExternalMirrorService` mit eigener Idempotenz-Tabelle in die Legacy-JSON-Bestände; Unterdeckung wird als `shortage`/`needs_review` ausgegeben und nie negativ gekappt.
       - Eine externe Unterdeckung erzeugt zusätzlich einen deduplizierten `legacy_inventory`-Sync-Konflikt für die exakte Hub-Variante und bleibt damit in Cutover-/Produkt-Hub-Ansichten sichtbar.
+      - Der sevDesk-Feed-Wasserstand wird nach bestätigter Inventur auf den Folgetag des Stichtags begrenzt; Overlap- und explizite Backfill-Aufrufe können dadurch nicht versehentlich vor der neuen Baseline buchen.
       - Reicht der Hub-Bestand selbst bei einer extern freigegebenen Rechnung nicht aus, bucht der Poller nicht negativ, sondern ruft den Unterdeckungs-Callback auf und legt denselben sichtbaren Klärfall an.
     scope:
       - Einen gemeinsamen Buchungsdienst für Desktop-Freigabe und externen sevDesk-Poller bauen.

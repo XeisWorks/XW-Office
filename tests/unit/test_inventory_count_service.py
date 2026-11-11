@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from xw_office.models.base import Base
 from xw_office.models.product_hub import Product, ProductVariant
 from xw_office.models.product_hub_inventory import InventoryMovement
+from xw_office.models.settings_kv import SettingKV
 from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.product_hub.inventory_count import InventoryCountService
 
@@ -50,6 +51,8 @@ def test_count_confirm_applies_one_recount_and_is_idempotent() -> None:
     assert repeated.status == "confirmed"
     with factory() as session:
         assert session.query(InventoryMovement).filter_by(reason="recount").count() == 1
+        setting = session.get(SettingKV, "product_hub.sevdesk_invoice_feed_start.v1")
+        assert setting is not None
 
 
 def test_count_requires_all_lines_and_excludes_digital_variants() -> None:
