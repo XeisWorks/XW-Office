@@ -2277,7 +2277,13 @@ Eine blockierte Fake-Secret-Pruefung bestaetigt, dass der Qt-Heartbeat weiterlae
 
 Im Nachaudit wurde ausserdem die 300-ms-Fulfillment-Phase der 50-Zeilen-Batches weiter zerlegt: sie las Fulfillment-Flags und START-Zurueckstellungen ueber zwei unabhaengige SettingKV-Datenbank-Rundreisen. `SettingKvRepository.get_values_json()` und der Rechnungslisten-Batch lesen diese beiden aktuellen Werte jetzt gemeinsam in einer Abfrage/einem Snapshot; es wird kein Cache eingefuehrt, sodass Aenderungen anderer PCs beim naechsten Batch sichtbar bleiben. Regressionen pruefen die Mehrfachwert-Abfrage und genau einen Snapshot-Aufruf. 23 gezielte Repository-/START-Tests, Ruff sowie striktes MyPy fuer `settings_kv.py` und `invoice_processing/service.py` sind gruen. Ein instrumentierter Echtlauf mit dem neuen Code steht noch aus; deshalb bleibt F25 TEILWEISE.
 
-Nach dieser Aenderung bestand die lokale Vollsuite erneut mit **2.222 Tests**, 5 optionalen PostgreSQL-Ueberspringungen und derselben bestehenden Starlette/httpx-Deprecation-Warnung (168,56 s); globales Ruff, `git diff --check` und die gezielte strikte Typpruefung sind ebenfalls gruen.
+Nach der SettingKV-Aenderung bestand die lokale Vollsuite mit **2.222 Tests**, 5 optionalen PostgreSQL-Ueberspringungen und derselben bestehenden Starlette/httpx-Deprecation-Warnung (168,56 s). Nach dem Refund-Dialog-Fix und der Stabilisierung eines asynchronen Sendungen-UI-Tests bestand sie mit **2.223 Tests**, 5 Ueberspringungen und derselben Warnung (160,73 s). Nach dem Fast-Forward der aktuellen Ops-Aenderungen bis `488f636` besteht die gemeinsame Basis mit **2.226 Tests**, 5 Ueberspringungen und derselben Warnung (157,03 s); globales Ruff, `git diff --check` und gezieltes striktes MyPy sind gruen.
+
+## Fortschreibung F17 - Refund-Dialog-Services im Worker
+
+Der Nachaudit fand in `RefundsDialog` noch synchrone Container-Aufloesungen vor dem Workerstart: beim Laden der Refund-Liste, beim Oeffnen eines Gutschrift-PDFs und vor der Mailvorbereitung/-sendung. Diese Services werden jetzt innerhalb der jeweiligen Worker aufgeloest. Ein blockierender Fake prueft den Qt-Heartbeat bei Refund-Mailvorbereitung; die Listen-/PDF-Regressions pruefen ebenfalls, dass alle Service-Aufloesungen abseits des UI-Threads laufen. `test_refunds_dialog.py` besteht mit 3 Tests, gezieltes striktes MyPy und Ruff sind gruen. F17 bleibt TEILWEISE bis die verbleibenden UI-Pfade weiter geprueft sind.
+
+Ein Vollsuite-Lauf direkt vor diesem Nachaudit deckte einen Test-Race in `test_offene_sendungen_dialog.py` auf: Der Fake erhoehte `refresh_called` im Worker, bevor das Qt-Ergebnis gerendert war. Der Test wartete zuvor nur auf den Worker-Nebeneffekt und las dadurch gelegentlich den Lade- statt Endstatus. Er wartet nun auf den sichtbaren abgeschlossenen UI-Status; die betroffenen Sendungen-/Refund-Dialogtests bestehen zusammen mit 14 Tests.
 
 ## Fortschreibung F23 - Wix Payment-Link-Readback
 

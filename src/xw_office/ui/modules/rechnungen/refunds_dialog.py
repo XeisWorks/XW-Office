@@ -82,8 +82,10 @@ class RefundsDialog(QDialog):
         if self._worker is not None and self._worker.isRunning():
             return
         self._set_busy(True)
-        client = self._container.resolve(FlowRefundsClient)
-        self._start_worker(lambda: client.list_refunds(limit=250), self._on_rows_loaded)
+        self._start_worker(
+            lambda: self._container.resolve(FlowRefundsClient).list_refunds(limit=250),
+            self._on_rows_loaded,
+        )
 
     def _on_rows_loaded(self, result: object) -> None:
         self._rows = list(result) if isinstance(result, list) else []
@@ -167,9 +169,9 @@ class RefundsDialog(QDialog):
         credit_note_id = self._credit_note_id(index)
         if not credit_note_id:
             return
-        client = self._container.resolve(SevDeskRefundClient)
 
         def job() -> str:
+            client: SevDeskRefundClient = self._container.resolve(SevDeskRefundClient)
             pdf = client.get_credit_note_pdf(credit_note_id)
             descriptor, filename = tempfile.mkstemp(prefix="xw-gutschrift-", suffix=".pdf")
             os.close(descriptor)
@@ -190,12 +192,12 @@ class RefundsDialog(QDialog):
             return
         invoice_id = str(row.get("sevdesk_invoice_id") or "")
         order_reference = str(row.get("wix_order_number") or "").strip()
-        sevdesk = self._container.resolve(SevDeskRefundClient)
-        invoice_client = self._container.resolve(InvoiceClient)
-        wix_client = self._container.resolve(WixOrdersClient)
-        processing = self._container.resolve(InvoiceProcessingService)
 
         def prepare() -> dict[str, str]:
+            sevdesk: SevDeskRefundClient = self._container.resolve(SevDeskRefundClient)
+            invoice_client: InvoiceClient = self._container.resolve(InvoiceClient)
+            wix_client: WixOrdersClient = self._container.resolve(WixOrdersClient)
+            processing: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             note = sevdesk.fetch_credit_note(credit_note_id)
             number = str(note.get("creditNumber") or note.get("invoiceNumber") or credit_note_id)
             invoice_result = invoice_client.fetch_invoice_by_id(invoice_id) if invoice_id else {}
@@ -229,12 +231,12 @@ class RefundsDialog(QDialog):
             f"Gutschrift {number} an {email.strip()} senden?",
         ) != QMessageBox.StandardButton.Yes:
             return
-        sevdesk = self._container.resolve(SevDeskRefundClient)
-        processing = self._container.resolve(InvoiceProcessingService)
         subject = draft.get("subject", "")
         body = draft.get("body", "")
 
         def send() -> str:
+            sevdesk: SevDeskRefundClient = self._container.resolve(SevDeskRefundClient)
+            processing: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             pdf = sevdesk.get_credit_note_pdf(credit_note_id)
             processing.send_credit_note_mail(
                 credit_note_id,

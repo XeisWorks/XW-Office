@@ -142,7 +142,12 @@ def test_dialog_loads_cases_and_prefills_shipping_fields(qtbot: object) -> None:
     qtbot.addWidget(dialog)
     _wait_dialog_loaded(qtbot, dialog)
 
-    qtbot.waitUntil(lambda: service.refresh_called == 1, timeout=3000)
+    # The worker increments the fake before its result signal updates the UI.
+    # Wait for the rendered completion state instead of racing that side effect.
+    qtbot.waitUntil(
+        lambda: service.refresh_called == 1 and dialog._status.text() == "1 offene Sendungen",  # noqa: SLF001
+        timeout=3000,
+    )
     assert dialog._status.text() == "1 offene Sendungen"  # noqa: SLF001
     assert "Ein Musikbuch" in dialog._summary.text()  # noqa: SLF001
     assert dialog._manual_text.toPlainText() == "Ein Musikbuch an Max Muster senden."  # noqa: SLF001
