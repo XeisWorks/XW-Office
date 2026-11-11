@@ -520,6 +520,35 @@ def test_query_inventory_returns_items() -> None:
     assert result[0]["quantity"] == 7
 
 
+def test_update_inventory_item_sends_revision_and_exact_quantity() -> None:
+    calls: list[tuple[str, dict]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((str(request.url), json.loads(request.content)))
+        return httpx.Response(
+            200,
+            json={"inventoryItem": {"id": "inv-1", "revision": "8", "quantity": 12}},
+        )
+
+    client = _client()
+    client._http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    try:
+        result = client.update_inventory_item("inv-1", revision="7", quantity=12)
+    finally:
+        client.close()
+
+    assert result["revision"] == "8"
+    assert calls == [
+        (
+            "https://www.wixapis.com/stores/v3/inventory-items/inv-1",
+            {
+                "inventoryItem": {"id": "inv-1", "revision": "7", "quantity": 12},
+                "reason": "MANUAL",
+            },
+        )
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Single-field updates — v3
 # ---------------------------------------------------------------------------

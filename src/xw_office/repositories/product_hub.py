@@ -1318,6 +1318,34 @@ class ProductHubRepository:
             session.flush()
             return mapping
 
+    def record_channel_push(
+        self,
+        mapping_id: uuid.UUID,
+        *,
+        external_revision: str | None,
+        payload_hash: str,
+    ) -> ChannelMapping:
+        """Record a successful canonical-to-channel projection.
+
+        The mapping metadata is operational bookkeeping only; the external
+        channel remains the source of truth for its own revision.  Keeping the
+        write marker here lets retries compare the latest provider revision and
+        detect direct external edits before overwriting them.
+        """
+        with self._scope() as session:
+            mapping = session.get(ChannelMapping, mapping_id)
+            if mapping is None:
+                raise KeyError(f"Channel mapping {mapping_id} not found")
+            now = datetime.datetime.now(datetime.timezone.utc)
+            mapping.external_revision = external_revision or None
+            mapping.source_payload_hash = payload_hash
+            mapping.last_pushed_at = now
+            mapping.last_success_at = now
+            mapping.sync_status = "synced"
+            mapping.last_error = None
+            session.flush()
+            return mapping
+
     def assign_sevdesk_part_to_variant(
         self, *, product_id: uuid.UUID, variant_id: uuid.UUID, part_id: str
     ) -> ChannelMapping:

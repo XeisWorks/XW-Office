@@ -256,6 +256,14 @@ packages:
     readiness_cli: scripts/product_hub/check_inventory_cutover.py
     rollback_probe_test: tests/unit/test_product_hub_inventory_service.py::test_disabling_master_flag_preserves_ledger_and_materialized_stock
     status: partially_integrated
+    projection_implementation:
+      status: implemented
+      service: src/xw_office/services/product_hub/inventory_projection.py
+      cli: src/xw_office/services/product_hub/inventory_projection_cli.py
+      notes:
+        - Idempotente sevDesk-Part- und Wix-V3-Bestandsprojektion mit exakter Varianten-Zuordnung.
+        - Letzte Zielmenge wird archiviert; externe Direktänderungen werden als sync_conflict sichtbar.
+        - Provider-Schreibvorgänge bleiben bis zum Master-Cutover explizit deaktiviert.
     depends_on: [P02, P03, P04, P05, P06, P07]
     implementation_notes:
       - Die bestehende Cutover-Readiness prüft neben Ledger-/Sync-Gates jetzt auch den read-only Bestandsquellenvertrag und Legacy-/Hub-Mengenabweichungen.

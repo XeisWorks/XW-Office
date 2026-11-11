@@ -25,14 +25,18 @@ current planning markdown and PROGRESS.md.
   itself does not ask PR13 to complete — it asks PR13 to *inventarisieren*
   (catalogue/identify) those paths, which is done here in this docstring and in
   `docs/product_hub/PROGRESS.md`, not by rewriting them.
-- **Not done**: automatic sevdesk stock reading. `PartClient`/`SevdeskConnection`
+- Historical PR13 note: automatic sevDesk stock reading was not part of the original
+  ledger package. The current write-gated projection service uses `PartClient` from
+  the worker CLI and keeps the production provider dry-run/readback probe as an
+  explicit operational gate. `PartClient`/`SevdeskConnection`
   require a full desktop `AppConfig`, which the lean web service has deliberately
   never constructed (see `web/app.py`'s existing `_EnvSecretSource` precedent for
   Wix — sevdesk would need the same kind of careful, separately-verified shim, not
   something to rush under time pressure after two near-misses this session already).
   `reconcile_variant_stock` below takes the external stock figure as a parameter
   instead of fetching it live — the comparison/conflict-creation logic is real and
-  tested, just not wired to an automatic sevdesk poll yet.
+  tested; automatic projection is deliberately separate from this read-only
+  reconciliation method and is invoked by `inventory_projection_cli`.
 - **Not done**: the actual XW-Flow HTTP integration. There is no XW-Flow API client
   anywhere in this codebase and its contract is undocumented here, so a real HTTP
   call would be fabricated. Instead, a newly-opened alert writes an
@@ -757,8 +761,12 @@ class InventoryV2Service:
             InventoryCutoverCheck(
                 code="channel_projections",
                 label="Wix- und sevdesk-Bestandsprojektionen sind getestet",
-                state="blocked",
-                detail="Die PR15-Projektionsadapter sind noch nicht implementiert.",
+                state="manual",
+                detail=(
+                    "Die idempotenten sevDesk-/Wix-Projektionsadapter und Provider-"
+                    "Revisionstests sind implementiert. Vor dem Master-Cutover muss "
+                    "eine produktionsnahe Dry-Run-/Berechtigungsprobe dokumentiert werden."
+                ),
             ),
             InventoryCutoverCheck(
                 code="sync_queue",

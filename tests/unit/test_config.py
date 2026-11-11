@@ -31,6 +31,18 @@ def test_start_stock_booking_can_be_enabled_in_yaml(tmp_path: Path) -> None:
     assert load_config(config_path).inventory.start_stock_booking_enabled is True
 
 
+def test_product_hub_runtime_flags_are_loaded_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("XW_PRODUCT_HUB_SYNC_PUSH_ENABLED", "true")
+    monkeypatch.setenv("XW_PRODUCT_HUB_INVENTORY_SHADOW_ENABLED", "yes")
+    monkeypatch.setenv("XW_PRODUCT_HUB_INVENTORY_MASTER_ENABLED", "on")
+
+    config = load_config("nonexistent.yaml")
+
+    assert config.product_hub.sync_push_enabled is True
+    assert config.product_hub.inventory_shadow_enabled is True
+    assert config.product_hub.inventory_master_enabled is True
+
+
 def test_customer_aftercare_defaults() -> None:
     config = AppConfig()
     assert config.customer_aftercare.enabled is True

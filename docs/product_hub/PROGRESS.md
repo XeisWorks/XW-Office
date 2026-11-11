@@ -6,6 +6,15 @@ Update this file at the end of every PR.
 
 ## Inventur-/Rechnungsabgang-Umbau (2026-11-11)
 
+Die bisher fehlenden PR15-Bestandsprojektionen sind jetzt als `InventoryProjectionService`
+implementiert: sevDesk-Part- und Wix-Stocks werden nur bei eindeutiger Varianten-Zuordnung
+projiziert, externe Direktänderungen werden über die letzte Projektion als `sync_conflict`
+erkannt, und Wix-V3-Revisionen werden vor jedem PATCH verwendet. `inventory_projection_cli`
+ist standardmäßig read-only; der Worker ruft den Schreibpfad ausschließlich bei
+`XW_PRODUCT_HUB_INVENTORY_MASTER_ENABLED=true` und fehlerfreiem sevDesk-Sync auf.
+Gezielte Projektions-/Wix-Revisionstests sind grün; die produktionsnahe Provider-Dry-Run-
+und Berechtigungsprobe bleibt ein manueller Cutover-Nachweis.
+
 P07 wurde nachgeschärft: Das RECHNUNGEN-Lageralarm-Popup zeigt nun Zielbestand und empfohlene Bestell-/Nachdruckmenge. Die manuelle Microsoft-Graph-Task-Mail enthält zusätzlich Alarmmodus, Zielbestand, Bestell-/Nachdruckmenge und Erstellzeitpunkt. Die gezielten P07-/Inventurtests laufen grün; Inventur und Shadow-/Rollback-Nachweis bleiben externe Cutover-Gates.
 
 Stabiler Gesamt-Regressionslauf am 11. November 2026: `python -m pytest -q` → **2.200 bestanden, 5 übersprungen**; Alembic `037_plc_parcel_evidence` bleibt der aktuelle Head. Hosted CI `43081193618` bestätigt für `8976a9c` Ruff, **2.200/5** und den bestehenden weichen MyPy-Gate.
@@ -1358,7 +1367,7 @@ it's an operational sign-off gate:
 6. keine kritischen Sync-Fehler offen
 7. Inventory-Movement-Idempotency getestet *(this one **is** done — see above)*
 8. Druckpfad verwendet Hub-Bestand *(not true — `PrintDecisionEngine` is untouched)*
-9. Wix-/sevdesk-Projektionen getestet *(not built — that's what PR15 itself would add)*
+9. Wix-/sevdesk-Projektionen getestet *(Adapter und Provider-Revisionstests inzwischen umgesetzt; produktionsnahe Dry-Run-/Berechtigungsprobe bleibt offen)*
 
 Attempting PR15 now would mean flipping `product_hub.inventory_master_enabled=true`
 — making the Hub the **canonical source of truth for a real business's physical
@@ -1381,10 +1390,12 @@ session correctly stopped short of.
 The Product Hub now exposes `GET /api/v1/inventory/cutover-readiness` and the
 WebUI page `/app/inventory/cutover`. It reports live ledger/stock evidence, open
 sevdesk inventory drift and the full sync queue, while explicitly keeping the
-remaining legacy mutation paths, missing channel projections and the human
+remaining legacy mutation paths, the live channel-projection probe and the human
 operational sign-off as blocking gates. `XW_PRODUCT_HUB_INVENTORY_SHADOW_ENABLED`
 and `XW_PRODUCT_HUB_INVENTORY_MASTER_ENABLED` are read-only deploy flags in this
-surface; the UI cannot enable the master or perform any stock/external write.
+surface; the UI cannot enable the master or perform any stock/external write. The
+canonical projection service and read-only/write-gated worker CLI now exist; this
+surface still keeps the live provider probe and operational sign-off manual.
 
 The next controlled bridge step is also available: `/app/inventory/cutover` shows a
 read-only preview of legacy `inventory.stock_levels` against exact active Hub

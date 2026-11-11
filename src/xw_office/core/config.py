@@ -445,5 +445,17 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
         yaml_data.setdefault("product_hub", {})["catalog_read_enabled"] = (
             hub_read_flag.lower() in {"1", "true", "yes", "ja", "on"}
         )
+    for env_name, config_name in (
+        ("XW_PRODUCT_HUB_CATALOG_WRITE_ENABLED", "catalog_write_enabled"),
+        ("XW_PRODUCT_HUB_SYNC_PUSH_ENABLED", "sync_push_enabled"),
+        ("XW_PRODUCT_HUB_INVENTORY_SHADOW_ENABLED", "inventory_shadow_enabled"),
+        ("XW_PRODUCT_HUB_INVENTORY_MASTER_ENABLED", "inventory_master_enabled"),
+        ("XW_PRODUCT_HUB_SHARED_CATALOG_ENABLED", "shared_catalog_enabled"),
+    ):
+        flag = os.getenv(env_name, "").strip()
+        if flag:
+            yaml_data.setdefault("product_hub", {})[config_name] = flag.lower() in {
+                "1", "true", "yes", "ja", "on"
+            }
 
     return _merge_dataclass(AppConfig, yaml_data)

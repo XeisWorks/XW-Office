@@ -669,6 +669,51 @@ class WixProductDetailsClient:
                 return [item for item in items if isinstance(item, dict)]
         return []
 
+    def update_inventory_item(
+        self,
+        inventory_item_id: str,
+        *,
+        revision: str,
+        quantity: int,
+        reason: str = "MANUAL",
+    ) -> dict[str, Any]:
+        """Set one Wix Stores V3 inventory item's exact quantity.
+
+        Wix requires the current optimistic-concurrency ``revision`` on every
+        inventory update.  The caller must therefore query the item immediately
+        before this call and treat a 428/409 response as a resumable conflict.
+        Only the quantity and revision are sent so unrelated inventory fields are
+        never overwritten.
+        """
+        item_id = str(inventory_item_id or "").strip()
+        current_revision = str(revision or "").strip()
+        if not item_id:
+            raise ValueError("Wix inventory item ID fehlt")
+        if not current_revision:
+            raise ValueError("Wix inventory revision fehlt")
+        if not self.has_credentials():
+            raise RuntimeError("Wix Credentials fehlen")
+        if int(quantity) < 0:
+            raise ValueError("Wix inventory quantity darf nicht negativ sein")
+        payload = {
+            "inventoryItem": {
+                "id": item_id,
+                "revision": current_revision,
+                "quantity": int(quantity),
+            },
+            "reason": str(reason or "MANUAL").strip() or "MANUAL",
+        }
+        data = self._do_request(
+            "PATCH",
+            f"{self._V3_BASE}/inventory-items/{item_id}",
+            headers=self._headers(),
+            json_body=payload,
+        )
+        result = data.get("inventoryItem") if isinstance(data, dict) else None
+        if not isinstance(result, dict):
+            raise ValueError("Wix inventory update returned no inventoryItem")
+        return result
+
     def query_category_names(self) -> dict[str, str]:
         """Return Wix category/collection display names by ID.
 

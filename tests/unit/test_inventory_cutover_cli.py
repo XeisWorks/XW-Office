@@ -14,7 +14,7 @@ from xw_office.models.base import Base
 
 
 def test_assess_cutover_is_read_only_and_fails_closed(tmp_path: Path, monkeypatch) -> None:
-    for key in ("SEVDESK_API_TOKEN", "MS_GRAPH_TENANT_ID", "MS_GRAPH_CLIENT_ID", "MS_GRAPH_MAILBOX"):
+    for key in ("SEVDESK_API_TOKEN", "MS_GRAPH_TENANT_ID", "MS_GRAPH_CLIENT_ID", "MS_GRAPH_MAILBOX", "WIX_API_KEY", "WIX_SITE_ID"):
         monkeypatch.delenv(key, raising=False)
     database_path = tmp_path / "cutover.db"
     database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
@@ -63,7 +63,7 @@ def test_assess_cutover_can_skip_runtime_checks_for_database_service(tmp_path: P
 
 
 def test_assess_runtime_configuration_needs_no_database(monkeypatch) -> None:
-    for key in ("SEVDESK_API_TOKEN", "MS_GRAPH_TENANT_ID", "MS_GRAPH_CLIENT_ID", "MS_GRAPH_MAILBOX"):
+    for key in ("SEVDESK_API_TOKEN", "MS_GRAPH_TENANT_ID", "MS_GRAPH_CLIENT_ID", "MS_GRAPH_MAILBOX", "WIX_API_KEY", "WIX_SITE_ID"):
         monkeypatch.setenv(key, "configured")
     monkeypatch.setenv("XW_INVENTORY_WORKER_ACTIVE", "true")
 

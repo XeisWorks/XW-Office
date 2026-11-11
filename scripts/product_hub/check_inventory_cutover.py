@@ -87,13 +87,17 @@ def _runtime_configuration_checks() -> list[dict[str, str]]:
         if not str(os.getenv(key) or "").strip()
     ]
     missing = (["SEVDESK_API_TOKEN"] if missing_sevdesk else []) + missing_graph
+    missing_wix = [
+        key for key in ("WIX_API_KEY", "WIX_SITE_ID")
+        if not str(os.getenv(key) or "").strip()
+    ]
     worker_active = str(os.getenv("XW_INVENTORY_WORKER_ACTIVE") or "").strip().lower() in {
         "1",
         "true",
         "yes",
         "on",
     }
-    return [
+    checks = [
         {
             "code": "provider_credentials",
             "label": "sevDesk-/Graph-Zugangsdaten sind gesetzt",
@@ -102,6 +106,16 @@ def _runtime_configuration_checks() -> list[dict[str, str]]:
                 "Fehlende Variablen: " + ", ".join(missing)
                 if missing
                 else "sevDesk- und Graph-Grundkonfiguration ist vorhanden."
+            ),
+        },
+        {
+            "code": "channel_projection_credentials",
+            "label": "Wix-Bestandsprojektion ist konfiguriert",
+            "state": "blocked" if missing_wix else "ready",
+            "detail": (
+                "Fehlende Variablen: " + ", ".join(missing_wix)
+                if missing_wix
+                else "Wix-API-Key und Site-ID sind vorhanden."
             ),
         },
         {
@@ -115,6 +129,7 @@ def _runtime_configuration_checks() -> list[dict[str, str]]:
             ),
         },
     ]
+    return checks
 
 
 def _resolve_database_url(explicit: str = "") -> str:

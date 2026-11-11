@@ -8,6 +8,7 @@ import sys
 import time
 
 from xw_office.services.product_hub.forecast_cli import main as forecast_main
+from xw_office.services.product_hub.inventory_projection_cli import main as projection_main
 from xw_office.services.product_hub.inventory_sync_cli import main as sync_main
 
 logger = logging.getLogger("xw.inventory-worker")
@@ -33,7 +34,22 @@ def run_once(*, forecast_years: int = 5, credit_years: int = 1) -> tuple[int, in
     logger.info("Inventory sevDesk sync started")
     sync_exit = sync_main(["--years", str(credit_years)])
     logger.info("Inventory sevDesk sync finished exit=%s", sync_exit)
-    return forecast_exit, sync_exit
+    projection_exit = 0
+    if _env_flag("XW_PRODUCT_HUB_INVENTORY_MASTER_ENABLED") and sync_exit == 0:
+        logger.info("Inventory channel projection started")
+        projection_exit = projection_main(["--write"])
+        logger.info("Inventory channel projection finished exit=%s", projection_exit)
+    else:
+        logger.info(
+            "Inventory channel projection skipped master_enabled=%s sync_exit=%s",
+            _env_flag("XW_PRODUCT_HUB_INVENTORY_MASTER_ENABLED"),
+            sync_exit,
+        )
+    return forecast_exit, max(sync_exit, projection_exit)
+
+
+def _env_flag(name: str) -> bool:
+    return str(os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def main(argv: list[str] | None = None) -> int:

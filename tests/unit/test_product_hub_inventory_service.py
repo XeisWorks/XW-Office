@@ -138,7 +138,7 @@ def test_cutover_readiness_exposes_real_evidence_and_remaining_gates(
     assert checks["ledger_evidence"].state == "ready"
     assert checks["sevdesk_drift"].state == "ready"
     assert checks["legacy_mutation_paths"].state == "blocked"
-    assert checks["channel_projections"].state == "blocked"
+    assert checks["channel_projections"].state == "manual"
     assert checks["operational_signoff"].state == "manual"
 
 
