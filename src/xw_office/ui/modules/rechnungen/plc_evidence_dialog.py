@@ -30,6 +30,7 @@ class PlcEvidenceDialog(QDialog):
         self._invoice_id = invoice_id
         self._invoice_number = invoice_number
         self._worker: BackgroundWorker | None = None
+        self._write_worker: BackgroundWorker | None = None
         self._closing = False
         self._reload_pending = False
         self.setWindowTitle("PLC: Paketinhalt und Sendungsnachweis")
@@ -63,17 +64,24 @@ class PlcEvidenceDialog(QDialog):
         layout.addWidget(close, alignment=Qt.AlignmentFlag.AlignRight)
         self._reload()
 
-    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        self._closing = True
-        super().closeEvent(event)
-
     def accept(self) -> None:
+        if self._write_worker is not None:
+            return
         self._closing = True
         super().accept()
 
     def reject(self) -> None:
+        if self._write_worker is not None:
+            return
         self._closing = True
         super().reject()
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if self._write_worker is not None:
+            event.ignore()
+            return
+        self._closing = True
+        super().closeEvent(event)
 
     def _reload(self) -> None:
         if self._worker is not None and self._worker.isRunning():
@@ -134,6 +142,8 @@ class PlcEvidenceDialog(QDialog):
     def _worker_finished(self, worker: BackgroundWorker) -> None:
         if self._worker is worker:
             self._worker = None
+        if self._write_worker is worker:
+            self._write_worker = None
         if self._reload_pending and not self._closing:
             self._reload_pending = False
             self._reload()
@@ -145,6 +155,8 @@ class PlcEvidenceDialog(QDialog):
         self,
         job: Callable[[], Any],
         on_result: Callable[[object], None],
+        *,
+        blocks_close: bool = False,
     ) -> None:
         if self._closing:
             return
@@ -153,6 +165,8 @@ class PlcEvidenceDialog(QDialog):
         self._set_busy(True)
         worker = BackgroundWorker(job)
         self._worker = worker
+        if blocks_close:
+            self._write_worker = worker
         worker.signals.result.connect(on_result)
         worker.signals.error.connect(self._show_error)
         worker.signals.finished.connect(lambda current=worker: self._worker_finished(current))
@@ -252,7 +266,7 @@ class PlcEvidenceDialog(QDialog):
             )
             self._reload_pending = True
 
-        self._start_worker(job, on_imported)
+        self._start_worker(job, on_imported, blocks_close=True)
 
     def _confirm_code(self) -> None:
         selection = self._package.currentData()
@@ -281,4 +295,4 @@ class PlcEvidenceDialog(QDialog):
             self._code.clear()
             self._reload_pending = True
 
-        self._start_worker(job, on_confirmed)
+        self._start_worker(job, on_confirmed, blocks_close=True)

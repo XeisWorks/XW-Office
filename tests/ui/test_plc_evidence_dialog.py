@@ -119,12 +119,17 @@ def test_tracking_import_and_code_confirmation_run_in_workers(qtbot, monkeypatch
     repository = _Repository()
     dialog = PlcEvidenceDialog(repository, invoice_id="invoice-1", invoice_number="RE-1")  # type: ignore[arg-type]
     qtbot.addWidget(dialog)
+    dialog.show()
     qtbot.waitUntil(lambda: dialog._worker is None and dialog._package.count() == 1)  # noqa: SLF001
 
     dialog._code.setText("CODE-2")  # noqa: SLF001
     dialog._confirm_code()  # noqa: SLF001
     _assert_event_loop_responds(qtbot, repository.entered)
     assert not dialog._confirm.isEnabled()  # noqa: SLF001
+    dialog.accept()
+    dialog.reject()
+    dialog.close()
+    assert dialog.isVisible()
     repository.release.set()
     qtbot.waitUntil(lambda: dialog._worker is None, timeout=2000)  # noqa: SLF001
     assert repository.confirm_calls == [("shipment-1", 1, "CODE-2")]
@@ -144,6 +149,10 @@ def test_tracking_import_and_code_confirmation_run_in_workers(qtbot, monkeypatch
     dialog._import_tracking()  # noqa: SLF001
     _assert_event_loop_responds(qtbot, repository.entered)
     assert not dialog._import_button.isEnabled()  # noqa: SLF001
+    dialog.accept()
+    dialog.reject()
+    dialog.close()
+    assert dialog.isVisible()
     repository.release.set()
     qtbot.waitUntil(lambda: dialog._worker is None, timeout=2000)  # noqa: SLF001
     assert repository.import_calls == [b"<tracking />"]
