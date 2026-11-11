@@ -563,8 +563,12 @@ def test_packlist_print_button_uses_current_parcel_contexts(
     qtbot.waitUntil(lambda: len(printed_contexts) == 2, timeout=2000)
 
     assert dialog._packing_print_btn.text() == "Packliste drucken"  # noqa: SLF001
+    qtbot.waitUntil(lambda: bool(printed_contexts))  # type: ignore[attr-defined]
+    qtbot.waitUntil(  # type: ignore[attr-defined]
+        lambda: "Druckauftrag print-jo" in dialog._status.text()  # noqa: SLF001
+    )
+    qtbot.waitUntil(lambda: dialog._packing_print_worker is None)  # type: ignore[attr-defined]  # noqa: SLF001
     assert [context.weight_kg for context in printed_contexts] == [11.69, 10.21]
-    assert "Druckauftrag print-jo" in dialog._status.text()  # noqa: SLF001
 
 
 def test_weight_distribution_keeps_duplicate_skus_together_and_adds_parcels(qtbot: object) -> None:
