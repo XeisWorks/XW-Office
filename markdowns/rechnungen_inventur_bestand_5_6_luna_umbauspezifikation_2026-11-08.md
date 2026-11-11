@@ -36,7 +36,7 @@
 - Die Forecast-Provenienz (Nettoabsatz, volle Verkaufsmonate, Datenfenster, Datenqualität und letzter Refresh) wird in `inventory_stock` persistiert und im Alarm-Popup sowie in der Task-Mail verwendet.
 - Die Hub-Ledgerbuchung sperrt Lagerort und Bestandszeile transaktional, revalidiert den Idempotenzschlüssel nach dem Lock und rollt bei einem konkurrierenden Unique-Key-Sieg die Zwischenänderung zurück.
 - Die Cutover-Readiness nimmt nun den read-only Bestandsquellen-Audit und direkte Legacy-/Hub-Mengenabweichungen als eigene Gates auf; der Master bleibt bis zu den manuellen Betriebsnachweisen absichtlich deaktiviert.
-- Letzte Gesamtprüfung am 11. November 2026: `python -m pytest -q` → **2.175 bestanden, 5 übersprungen**; `python -m alembic heads/current` → `037_plc_parcel_evidence` (Head). Zusätzlich decken Zustandsautomat-, externe-Unterdeckungs-, Vollseiten-Pagination-, Inventur-CSV- und Freigabe-Vorprüfungstests die Alarm-/Konflikt-/Druck-/Inventurprojektion ab. `main` ist sauber zu `origin/main` gepusht.
+- Letzte Gesamtprüfung am 11. November 2026: `python -m pytest -q` → **2.176 bestanden, 5 übersprungen**; `python -m alembic heads/current` → `037_plc_parcel_evidence` (Head). Zusätzlich decken Zustandsautomat-, externe-Unterdeckungs-, Vollseiten-Pagination-, Inventur-CSV- und Freigabe-Vorprüfungstests die Alarm-/Konflikt-/Druck-/Inventurprojektion ab. `main` ist sauber zu `origin/main` gepusht.
 
 - **P00 – Live-Datenvertrag und Bestandsquellen:** begonnen und erster lesender Audit-Baustein umgesetzt in `services/product_hub/inventory_audit.py`; keine Bestands- oder sevDesk-Schreibzugriffe.
 - Der Audit meldet doppelte SKU, fehlende physische sevDesk-Part-Mappings, negative oder fehlende Quellbestände, Legacy-/Hub-Drift und fehlendes Verkaufsstartdatum. Der Live-DB-Snapshot ist jetzt als read-only `InventoryV2Service.audit_inventory_sources()` und `GET /api/v1/inventory/audit` verfügbar; vier Audit-Tests laufen grün.
@@ -160,6 +160,7 @@ Pflichtfälle der Abnahme:
 10. Historische Verkäufe vor dem Inventur-Stichtag verändern den gezählten Anfangsbestand nicht; ein späterer eindeutiger Gegenbeleg dazu wird korrekt zurückgebucht.
 
 P07-Ergänzung: Das Alarm-Popup und die Graph-Mail zeigen zusätzlich Zielbestand sowie die daraus abgeleitete empfohlene Bestell-/Nachdruckmenge. Die Mail enthält außerdem Alarmmodus und Erstellzeitpunkt.
+Der RECHNUNGEN-LAGERALARME-Zähler wird nach einer Schwellenänderung auch bei geöffnetem Popup sofort über ein UI-Signal neu bewertet.
 
 ## 7. Arbeitsanweisung an Codex 5.6 Luna
 

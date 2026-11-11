@@ -2998,6 +2998,7 @@ class RechnungenView(QWidget):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "Lageralarme", str(exc))
             return
+        dlg.alerts_changed.connect(self._refresh_inventory_alert_count)
         dlg.exec()
         self._refresh_inventory_alert_count()
 

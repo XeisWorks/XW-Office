@@ -87,3 +87,29 @@ def test_inventory_alert_load_and_save_leave_event_loop_responsive(qtbot) -> Non
     qtbot.waitUntil(lambda: load_calls == 2, timeout=1000)
     qtbot.waitUntil(lambda: dialog._worker is None, timeout=1000)  # noqa: SLF001
     assert dialog._threshold.value() == 7  # noqa: SLF001
+
+
+def test_threshold_change_notifies_parent_immediately(qtbot) -> None:
+    detail = SimpleNamespace(
+        alert=SimpleNamespace(id="alert-2", variant_id="variant-2"),
+        sku="XW-TEST-2", title="Test 2", location_code="MAIN", on_hand=1,
+        reorder_point=3, automatic_reorder_point=4, reorder_mode="fixed",
+        average_monthly_sales=1.0, three_month_demand=3, forecast_window="90d",
+    )
+    changed: list[bool] = []
+
+    class Inventory:
+        def list_open_alert_details(self):
+            return [detail]
+
+        def update_thresholds(self, **kwargs):
+            detail.reorder_point = kwargs["reorder_point"]
+
+    dialog = InventoryAlertsDialog(_AlertsContainer(Inventory()))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    dialog.alerts_changed.connect(lambda: changed.append(True))
+    qtbot.waitUntil(lambda: dialog._worker is None, timeout=1000)  # noqa: SLF001
+    dialog._threshold.setValue(5)  # noqa: SLF001
+    dialog._save_threshold()  # noqa: SLF001
+    qtbot.waitUntil(lambda: bool(changed), timeout=1000)
+    assert changed == [True]

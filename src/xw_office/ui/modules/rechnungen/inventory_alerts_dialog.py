@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QDialog,
@@ -28,6 +28,8 @@ from shiboken6 import isValid
 
 
 class InventoryAlertsDialog(QDialog):
+    alerts_changed = Signal()
+
     def __init__(self, container: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._container = container
@@ -187,7 +189,7 @@ class InventoryAlertsDialog(QDialog):
                 reorder_point=reorder_point,
                 reorder_mode="fixed",
             ),
-            lambda _result: self.refresh(),
+            self._threshold_change_finished,
         )
 
     def _use_automatic(self) -> None:
@@ -205,8 +207,12 @@ class InventoryAlertsDialog(QDialog):
                 automatic_reorder_point=automatic_point,
                 reorder_mode="auto",
             ),
-            lambda _result: self.refresh(),
+            self._threshold_change_finished,
         )
+
+    def _threshold_change_finished(self, _result: object) -> None:
+        self.alerts_changed.emit()
+        self.refresh()
 
     def _create_task(self) -> None:
         detail = self._current()

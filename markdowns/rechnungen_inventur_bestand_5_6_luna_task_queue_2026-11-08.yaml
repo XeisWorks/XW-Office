@@ -230,6 +230,7 @@ packages:
       - RECHNUNGEN zeigt bei offenen Product-Hub-Alarmen einen LAGERALARME-Button mit Popup, Schwellenänderung und Task-erzeugen-Aktion.
       - Das Popup zeigt automatischen Vorschlag/Modus und kann zwischen `fixed` und `auto` wechseln; Task-Mails enthalten jetzt auch Forecastwerte und Produktlink.
       - Popup und Task-Mail zeigen zusätzlich Zielbestand sowie die daraus abgeleitete empfohlene Bestell-/Nachdruckmenge; die Mail enthält Modus und Erstellzeitpunkt.
+      - Schwellenänderungen melden sich per UI-Signal an RECHNUNGEN zurück, sodass der Alarmzähler auch bei geöffnetem Popup sofort neu bewertet wird.
       - Absatzwerte kommen aus der persistierten Forecast-Provenienz; Task-Versand-/Fehlerzustände sind über `GET /api/v1/inventory/alerts/tasks` prüfbar.
     scope:
       - RECHNUNGEN-Alarm-Button mit Zahl betroffener Varianten und Popup bauen.
