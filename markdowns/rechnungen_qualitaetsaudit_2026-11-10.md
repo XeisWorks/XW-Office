@@ -759,6 +759,8 @@ Regression nach AP07/CI-Isolation auf `76a9ada`: Vollstaendige lokale Suite **2.
 
 AP05/AP08 Nachpruefung der auf `ff7ac62` ergaenzten externen Bestandsunterdeckung: `SevdeskInvoiceInventoryPoller` verwirft keine `Decimal`-Mengen am Mirror-Callback mehr, sondern uebergibt den validierten ganzzahligen Wert; JSON-/Part-Payloads sind praezise typisiert und vor Zugriff eingegrenzt. Sechs strikte MyPy-Fehler in `sevdesk_invoice_inventory.py` beseitigt; die drei betroffenen Service-/API-Dateien bestehen striktes MyPy, Ruff und **33 Inventur-/Bestandsregressionen**. Der aktuelle Hosted-CI-Lauf fuer `7305213` umfasst diese Aenderung und laeuft noch.
 
+AP08 Inventur-Sync-Typisierung: Der Shortage-Callback in `inventory_sync_cli.py` ist jetzt mit `InvoiceInventoryLine`/`Exception` typisiert. Striktes MyPy besteht fuer fuenf betroffene Product-Hub-/Rechnungsdateien; Ruff und **40 Inventur-/Bestandsregressionen** bestehen ebenfalls. Die bestehenden Geschaeftsregeln bleiben unveraendert.
+
 Der finale Suite-Nachweis dieses Fortschreibungsschritts steht oben. Weitere Commit-/Push-Nachweise werden nach ihrer Integration ergänzt. Das folgende statische Inventar
 wurde aus dem vorherigen Quellstand erzeugt und dient als Navigationshilfe; nach
 spaeteren Codeaenderungen koennen einzelne Zeilennummern abweichen.

@@ -72,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         return result
 
-    def record_shortage(line, error):
+    def record_shortage(line: InvoiceInventoryLine, error: Exception) -> None:
         location = inventory_repository.get_location_by_code("MAIN")
         stock = (
             inventory_repository.get_stock(line.variant_id, location.id)
