@@ -199,12 +199,15 @@ class DigitalLicensesDialog(QDialog):
         path, _ = QFileDialog.getOpenFileName(self, "Druck-PDF zuordnen", "", "PDF (*.pdf)")
         if not path:
             return
-        if not Path(path).is_file():
-            QMessageBox.warning(self, "Druck-PDF", "Die Datei wurde nicht gefunden.")
-            return
         self._status.setText("Druck-PDF-Zuordnung wird gespeichert...")
+
+        def save_print_path() -> None:
+            if not Path(path).is_file():
+                raise FileNotFoundError("Die ausgewaehlte Druck-PDF wurde nicht gefunden.")
+            self._service.apply_print_path(missing.sku, path)
+
         self._start_draft_job(
-            lambda: self._service.apply_print_path(missing.sku, path),
+            save_print_path,
             lambda _payload: self._on_print_path_applied(missing, path),
         )
 

@@ -211,6 +211,101 @@ def test_print_path_persistence_runs_in_worker_and_updates_captured_line(
     assert line.print_file_path == str(path)
     assert not line.missing_print_file
 
+
+def test_print_path_file_check_runs_in_worker_without_blocking_ui(
+    qtbot: QtBot, monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    from threading import Event
+    from PySide6.QtCore import QTimer
+
+    service = _FakeDigitalLicenseService()
+    line = DigitalLicenseLine(
+        sku="SKU-1", name="Noten", quantity=1, missing_print_file=True
+    )
+    service.case.lines = [line]
+    path = tmp_path / "noten.pdf"
+    entered, release = Event(), Event()
+    saved: list[tuple[str, str]] = []
+
+    def save_print_path(sku: str, print_path: str) -> None:
+        saved.append((sku, print_path))
+
+    monkeypatch.setattr(service, "apply_print_path", save_print_path, raising=False)
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.digital_licenses_dialog.QFileDialog.getOpenFileName",
+        lambda *_args, **_kwargs: (str(path), "PDF (*.pdf)"),
+    )
+    original_is_file = Path.is_file
+
+    def blocked_is_file(candidate: Path) -> bool:
+        if candidate == path:
+            entered.set()
+            assert release.wait(3)
+            return True
+        return original_is_file(candidate)
+
+    monkeypatch.setattr(Path, "is_file", blocked_is_file)
+    dialog = DigitalLicensesDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    qtbot.waitUntil(lambda: dialog._list.count() == 1, timeout=2000)  # noqa: SLF001
+    heartbeat: list[bool] = []
+    timer = QTimer(dialog)
+    timer.timeout.connect(lambda: heartbeat.append(True))
+    timer.start(5)
+    try:
+        dialog._pick_missing_pdf()  # noqa: SLF001
+        qtbot.waitUntil(entered.is_set, timeout=2000)
+        qtbot.waitUntil(lambda: bool(heartbeat), timeout=1000)
+        assert dialog._draft_worker is not None  # noqa: SLF001
+        assert dialog._draft_worker.isRunning()  # noqa: SLF001
+        assert saved == []
+        assert line.missing_print_file
+        release.set()
+        qtbot.waitUntil(lambda: dialog._draft_worker is None, timeout=2000)  # noqa: SLF001
+    finally:
+        release.set()
+        timer.stop()
+
+    assert saved == [("SKU-1", str(path))]
+    assert line.print_file_path == str(path)
+    assert not line.missing_print_file
+
+
+def test_missing_print_path_is_rejected_in_worker(
+    qtbot: QtBot, monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    service = _FakeDigitalLicenseService()
+    line = DigitalLicenseLine(
+        sku="SKU-1", name="Noten", quantity=1, missing_print_file=True
+    )
+    service.case.lines = [line]
+    path = tmp_path / "missing.pdf"
+    saved: list[tuple[str, str]] = []
+    warnings: list[str] = []
+
+    def save_print_path(sku: str, print_path: str) -> None:
+        saved.append((sku, print_path))
+
+    monkeypatch.setattr(service, "apply_print_path", save_print_path, raising=False)
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.digital_licenses_dialog.QFileDialog.getOpenFileName",
+        lambda *_args, **_kwargs: (str(path), "PDF (*.pdf)"),
+    )
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.digital_licenses_dialog.QMessageBox.warning",
+        lambda _parent, _title, message: warnings.append(str(message)),
+    )
+    dialog = DigitalLicensesDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    qtbot.waitUntil(lambda: dialog._list.count() == 1, timeout=2000)  # noqa: SLF001
+
+    dialog._pick_missing_pdf()  # noqa: SLF001
+    qtbot.waitUntil(lambda: dialog._draft_worker is None, timeout=2000)  # noqa: SLF001
+
+    assert saved == []
+    assert warnings == ["Die ausgewaehlte Druck-PDF wurde nicht gefunden."]
+    assert line.missing_print_file
+
 def test_license_pipeline_keeps_original_customer_and_second_worker(
     qtbot: QtBot, monkeypatch: MonkeyPatch, tmp_path: Path,
 ) -> None:
