@@ -560,6 +560,7 @@ def test_packlist_print_button_uses_current_parcel_contexts(
     monkeypatch.setattr(plc_dialog_module, "queue_packing_lists", lambda *_args: "print-job-123")
 
     dialog._print_packing_lists()  # noqa: SLF001
+    qtbot.waitUntil(lambda: len(printed_contexts) == 2, timeout=2000)
 
     assert dialog._packing_print_btn.text() == "Packliste drucken"  # noqa: SLF001
     assert [context.weight_kg for context in printed_contexts] == [11.69, 10.21]
