@@ -3,14 +3,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import datetime
+from collections.abc import Iterable
 from typing import Any, Protocol
 
 
 class SevdeskHistoryProvider(Protocol):
-    def list_invoices_for_year(self, year: int) -> list[dict]: ...
-    def list_invoice_positions(self, invoice_id: str) -> list[dict]: ...
-    def list_credit_notes_for_year(self, year: int) -> list[dict]: ...
-    def list_credit_note_positions(self, credit_note_id: str) -> list[dict]: ...
+    def list_invoices_for_year(self, year: int) -> list[dict[str, Any]]: ...
+    def list_invoice_positions(self, invoice_id: str) -> list[dict[str, Any]]: ...
+    def list_credit_notes_for_year(self, year: int) -> list[dict[str, Any]]: ...
+    def list_credit_note_positions(self, credit_note_id: str) -> list[dict[str, Any]]: ...
 
 
 class SevdeskMonthlyHistoryProvider(Protocol):
@@ -68,7 +69,7 @@ class SevdeskHistoryProviderAdapter:
         return result
 
     @staticmethod
-    def _deduplicate(rows: Any) -> list[dict[str, Any]]:
+    def _deduplicate(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         seen: set[str] = set()
         result: list[dict[str, Any]] = []
         for row in rows:
@@ -174,14 +175,17 @@ def audit_sevdesk_history(
     )
 
 
-def _is_draft(document: dict) -> bool:
+def _is_draft(document: dict[str, Any]) -> bool:
+    raw_status = document.get("status")
+    if raw_status is None:
+        return False
     try:
-        return int(document.get("status")) == 100
+        return int(raw_status) == 100
     except (TypeError, ValueError):
-        return str(document.get("status") or "").strip().casefold() in {"draft", "entwurf"}
+        return str(raw_status).strip().casefold() in {"draft", "entwurf"}
 
 
-def _parse_date(document: dict, keys: tuple[str, ...]) -> datetime.date | None:
+def _parse_date(document: dict[str, Any], keys: tuple[str, ...]) -> datetime.date | None:
     for key in keys:
         raw = str(document.get(key) or "").strip()
         if not raw:
@@ -196,7 +200,7 @@ def _parse_date(document: dict, keys: tuple[str, ...]) -> datetime.date | None:
     return None
 
 
-def _position_units(position: dict) -> int:
+def _position_units(position: dict[str, Any]) -> int:
     raw = position.get("quantity", position.get("qty", position.get("amount", 0)))
     try:
         return max(0, int(float(raw)))
@@ -204,8 +208,9 @@ def _position_units(position: dict) -> int:
         return 0
 
 
-def _position_sku(position: dict) -> str:
-    part = position.get("part") if isinstance(position.get("part"), dict) else {}
+def _position_sku(position: dict[str, Any]) -> str:
+    raw_part = position.get("part")
+    part = raw_part if isinstance(raw_part, dict) else {}
     return str(position.get("sku") or position.get("partNumber") or part.get("number") or "").strip()
 
 
