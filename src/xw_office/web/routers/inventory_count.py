@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from xw_office.services.product_hub.inventory_count import InventoryCountService
+from xw_office.services.product_hub.inventory_count import InventoryCountService, InventoryCountView
 from xw_office.web.schemas.inventory import (
     InventoryCountConfirmRequest,
     InventoryCountLineOut,
@@ -21,7 +21,7 @@ def build_inventory_count_router(
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1/inventory/counts", tags=["product-hub-inventory-count"])
 
-    def output(view) -> InventoryCountOut:
+    def output(view: InventoryCountView) -> InventoryCountOut:
         return InventoryCountOut(
             id=view.id, status=view.status, location_code=view.location_code,
             started_at=view.started_at, confirmed_at=view.confirmed_at,

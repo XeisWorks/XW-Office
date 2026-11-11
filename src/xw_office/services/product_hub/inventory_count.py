@@ -8,6 +8,7 @@ import json
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
 from xw_office.models.product_hub import Product, ProductVariant
@@ -46,7 +47,7 @@ class InventoryCountView:
 class InventoryCountService:
     """Create a frozen SKU count list and commit each confirmed difference once."""
 
-    def __init__(self, session_factory) -> None:
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
         self._inventory = InventoryV2Service(session_factory)
         self._repository = InventoryRepository(session_factory)
