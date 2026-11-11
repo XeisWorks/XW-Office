@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from threading import Event
 
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QPlainTextEdit, QPushButton
 
@@ -188,6 +189,8 @@ def test_defer_one_buyer_note_persists_hold_and_continues_with_next_case(
     qtbot: object, monkeypatch: object,
 ) -> None:
     calls: list[str] = []
+    entered = Event()
+    release = Event()
 
     class _Service:
         def get_start_hold(self, _invoice_id: str) -> None:
@@ -195,6 +198,8 @@ def test_defer_one_buyer_note_persists_hold_and_continues_with_next_case(
 
         def defer_invoice_from_start(self, invoice_id: str, _reason: str, **_kwargs: object) -> None:
             calls.append(invoice_id)
+            entered.set()
+            release.wait(timeout=2)
 
     class _Container:
         def resolve(self, _service: object) -> _Service:
@@ -217,8 +222,11 @@ def test_defer_one_buyer_note_persists_hold_and_continues_with_next_case(
     )
     qtbot.addWidget(dialog)
     dialog._defer.click()  # noqa: SLF001
+    qtbot.waitUntil(entered.is_set)
+    assert not dialog._skip.isEnabled()  # noqa: SLF001
+    release.set()
+    qtbot.waitUntil(lambda: dialog._case_list.currentRow() == 1)  # noqa: SLF001
     assert calls == ["1"]
-    assert dialog._case_list.currentRow() == 1  # noqa: SLF001
     assert dialog.selections()["1"][1].action == BUYER_NOTE_SKIP
     dialog._ack.click()  # noqa: SLF001
     assert dialog.result() == QDialog.DialogCode.Accepted

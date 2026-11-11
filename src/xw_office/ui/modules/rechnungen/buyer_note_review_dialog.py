@@ -51,6 +51,9 @@ class BuyerNoteReviewDialog(QDialog):
         self._allow_delivery_note = bool(allow_delivery_note)
         self._container = container
         self._mail_worker: BackgroundWorker | None = None
+        self._hold_worker: BackgroundWorker | None = None
+        self._hold_saved = False
+        self._hold_error: Exception | None = None
         self._selections: dict[str, BuyerNoteReviewSelection] = {}
         self._printed_cases: set[str] = set()
         self._manual_note_text = ""
@@ -141,19 +144,25 @@ class BuyerNoteReviewDialog(QDialog):
         root.addLayout(actions)
 
     def reject(self) -> None:
-        if self._mail_worker is not None and self._mail_worker.isRunning():
+        if self._worker_in_flight():
             if self._cancel is not None:
-                self._cancel.setToolTip("Outlook wird geöffnet; bitte warten")
+                self._cancel.setToolTip("Aktion wird gespeichert oder ge?ffnet; bitte warten")
             return
         super().reject()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self._mail_worker is not None and self._mail_worker.isRunning():
+        if self._worker_in_flight():
             if self._cancel is not None:
-                self._cancel.setToolTip("Outlook wird geöffnet; bitte warten")
+                self._cancel.setToolTip("Aktion wird gespeichert oder ge?ffnet; bitte warten")
             event.ignore()
             return
         super().closeEvent(event)
+
+    def _worker_in_flight(self) -> bool:
+        return any(
+            worker is not None and worker.isRunning()
+            for worker in (self._mail_worker, self._hold_worker)
+        )
 
     @staticmethod
     def _item_label(case: BuyerNoteCase) -> str:
@@ -258,29 +267,51 @@ class BuyerNoteReviewDialog(QDialog):
         case = self._case()
         if case is None or self._container is None:
             return
-        try:
-            service = self._container.resolve(InvoiceProcessingService)
-            existing = service.get_start_hold(case.invoice_id)
-        except Exception as exc:
-            QMessageBox.warning(self, "Rechnung zurückstellen", str(exc))
-            return
         dialog = StartHoldDialog(
             invoice_label=case.invoice_number or case.order_reference or case.invoice_id,
-            existing=existing,
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        try:
-            service.defer_invoice_from_start(
-                case.invoice_id, dialog.reason, note=dialog.note, review_on=dialog.review_on,
-                expected_ready=existing is None,
-                expected_updated_at=existing.updated_at if existing is not None else None,
-            )
-        except Exception as exc:
-            QMessageBox.warning(self, "Rechnung zurückstellen", str(exc))
+        if self._hold_worker is not None and self._hold_worker.isRunning():
             return
-        self._choose(BUYER_NOTE_SKIP)
+        container = self._container
+        reason, note, review_on = dialog.reason, dialog.note, dialog.review_on
+
+        def job() -> object:
+            service = container.resolve(InvoiceProcessingService)
+            return service.defer_invoice_from_start(
+                case.invoice_id, reason, note=note, review_on=review_on, expected_ready=True,
+            )
+
+        self._hold_saved = False
+        self._hold_error = None
+        self._set_hold_busy(True)
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(lambda _result: setattr(self, "_hold_saved", True))
+        worker.signals.error.connect(lambda exc: setattr(self, "_hold_error", exc))
+        worker.signals.finished.connect(self._hold_finished)
+        self._hold_worker = worker
+        worker.start()
+
+    def _set_hold_busy(self, busy: bool) -> None:
+        for widget in (
+            self._case_list, self._delivery, self._mail, self._skip, self._defer,
+            self._cancel, self._ack,
+        ):
+            if widget is not None:
+                widget.setEnabled(not busy)
+
+    def _hold_finished(self) -> None:
+        self._hold_worker = None
+        if self._hold_saved:
+            self._set_hold_busy(False)
+            self._choose(BUYER_NOTE_SKIP)
+            return
+        self._set_hold_busy(False)
+        self._show_case(self._current_index)
+        if self._hold_error is not None:
+            QMessageBox.warning(self, "Rechnung zurückstellen", str(self._hold_error))
 
     def _open_customer_mail(self) -> None:
         case = self._case()
