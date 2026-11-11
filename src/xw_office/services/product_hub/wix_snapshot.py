@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub import ProductFilter
 from xw_office.repositories.product_hub_sync import SyncRepository
+from xw_office.models.product_hub import ChannelMapping
 from xw_office.services.product_hub.conflicts.normalizer import equivalent
 from xw_office.services.product_hub.wix_import import _extract_media_items, _media_url
 from xw_office.services.wix.identifiers import canonical_wix_id
@@ -303,7 +304,7 @@ class WixSnapshotService:
 
         for product in self._products.list_products(ProductFilter(active=True)):
             sku = str(product.sku or "").strip()
-            expected = {"sku": sku}
+            expected: dict[str, object] = {"sku": sku}
             entries = duplicates.get(sku.casefold()) if sku else None
             actual: dict[str, object]
             if entries:
@@ -329,7 +330,7 @@ class WixSnapshotService:
 
     def _snapshot_one(
         self,
-        mapping: Any,
+        mapping: ChannelMapping,
         product_id: uuid.UUID,
         external_product_id: str,
         report: WixSnapshotReport,
@@ -412,7 +413,7 @@ class WixSnapshotService:
     def _record_mapping_failure(
         self,
         *,
-        mapping: Any,
+        mapping: ChannelMapping,
         error: str,
         report: WixSnapshotReport,
     ) -> None:
@@ -438,7 +439,7 @@ class WixSnapshotService:
             report.mapping_conflicts_updated += 1
 
     def _record_mapping_healthy(
-        self, *, mapping: Any, report: WixSnapshotReport
+        self, *, mapping: ChannelMapping, report: WixSnapshotReport
     ) -> None:
         expected = _mapping_state(mapping)
         _, outcome = self._sync.upsert_scanned_conflict(
@@ -458,18 +459,21 @@ def _canonical_wix_id(value: object) -> str:
     return canonical_wix_id(value)
 
 
-def _mapping_external_product_id(mapping: Any) -> str:
+def _mapping_external_product_id(mapping: ChannelMapping) -> str:
     """A variant is fetched through its Wix parent product, never as a product itself."""
     if mapping.entity_type == "variant":
         return str(mapping.external_parent_id or "").strip()
     return str(mapping.external_id or "").strip()
 
 
-def _mapping_product_id(mapping: Any, products: ProductHubRepository) -> uuid.UUID | None:
+def _mapping_product_id(
+    mapping: ChannelMapping, products: ProductHubRepository
+) -> uuid.UUID | None:
     if mapping.entity_type == "product":
         return mapping.internal_entity_id
     variant = products.get_variant(mapping.internal_entity_id)
-    return variant.product_id if variant is not None else None
+    product_id = variant.product_id if variant is not None else None
+    return product_id if isinstance(product_id, uuid.UUID) else None
 
 
 def _raw_has_variant(raw: dict[str, Any], external_id: str) -> bool:
@@ -477,7 +481,8 @@ def _raw_has_variant(raw: dict[str, Any], external_id: str) -> bool:
     for item in raw.get("variants") or []:
         if not isinstance(item, dict):
             continue
-        nested = item.get("variant") if isinstance(item.get("variant"), dict) else {}
+        raw_nested = item.get("variant")
+        nested = raw_nested if isinstance(raw_nested, dict) else {}
         actual = _canonical_wix_id(item.get("id") or nested.get("id")).casefold()
         if actual == wanted:
             return True
@@ -488,6 +493,12 @@ def _index_value(row: object, key: str) -> object:
     if isinstance(row, Mapping):
         return row.get(key)
     return getattr(row, key, None)
+
+
+def _sequence_values(value: object) -> list[object]:
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return []
 
 
 def _catalog_sku_entries(row: object) -> list[dict[str, str]]:
@@ -515,10 +526,10 @@ def _catalog_sku_entries(row: object) -> list[dict[str, str]]:
                     "variant_name": str(_index_value(variant, "name") or "").strip(),
                 }
             )
-    candidate_skus: list[object] = [
+    candidate_skus = [
         _index_value(row, "sku"),
-        *(_index_value(row, "skus") or []),
-        *(_index_value(row, "all_skus") or []),
+        *_sequence_values(_index_value(row, "skus")),
+        *_sequence_values(_index_value(row, "all_skus")),
     ]
     seen = {(entry["variant_external_id"], entry["sku"].casefold()) for entry in entries}
     for value in candidate_skus:
@@ -538,7 +549,7 @@ def _catalog_sku_entries(row: object) -> list[dict[str, str]]:
     return entries
 
 
-def _mapping_is_current(mapping: Any, index_entry: object) -> bool:
+def _mapping_is_current(mapping: ChannelMapping, index_entry: object) -> bool:
     """Only skip a detail fetch when Wix supplied a trustworthy change marker."""
     remote_revision = str(_index_value(index_entry, "revision") or "").strip()
     local_revision = str(mapping.external_revision or "").strip()
@@ -623,7 +634,7 @@ def _is_catalog_v1(source: WixSnapshotSource) -> bool:
     return str(getattr(version, "value", version)).lower() == "v1"
 
 
-def _mapping_state(mapping: Any) -> dict[str, str]:
+def _mapping_state(mapping: ChannelMapping) -> dict[str, str]:
     state = {"external_id": str(mapping.external_id), "state": "mapped"}
     if mapping.entity_type == "variant":
         state["external_parent_id"] = str(mapping.external_parent_id or "")

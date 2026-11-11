@@ -12,7 +12,10 @@ from xw_office.models.base import Base
 from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.product_hub_sync import SyncRepository
 from xw_office.services.product_hub.conflicts import ConflictWizardService
-from xw_office.services.product_hub.wix_snapshot import WixSnapshotService
+from xw_office.services.product_hub.wix_snapshot import (
+    WixSnapshotService,
+    _catalog_sku_entries,
+)
 
 
 class _FakeWix:
@@ -128,6 +131,12 @@ def test_incremental_snapshot_uses_catalog_revision_to_skip_unchanged_details(
     assert third.products_fetched == 1
     assert third.products_cached == 0
     assert wix.raw_calls == 2
+
+
+def test_catalog_sku_index_ignores_malformed_optional_sku_collections() -> None:
+    entries = _catalog_sku_entries({"id": "wix-1", "sku": "MAIN", "skus": {"bad": "shape"}})
+
+    assert [entry["sku"] for entry in entries] == ["MAIN"]
 
 
 def test_snapshot_marks_removed_wix_image_stale_and_closes_converged_field_conflict(
