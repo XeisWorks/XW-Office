@@ -514,6 +514,10 @@ class InventoryV2Service:
         """Resolve an exact Hub SKU for desktop consumers without exposing the repository."""
         return self._products.resolve_sku(sku)
 
+    def resolve_variants_by_skus(self, skus: list[str]) -> dict[str, ResolvedSku]:
+        """Resolve exact Hub SKUs and aliases with batched repository reads."""
+        return self._products.resolve_skus(skus)
+
     def list_open_alert_details(self) -> list[InventoryAlertDetail]:
         """Return open alerts enriched for the RECHNUNGEN popup."""
         details: list[InventoryAlertDetail] = []

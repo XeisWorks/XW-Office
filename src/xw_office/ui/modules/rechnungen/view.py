@@ -9,7 +9,6 @@ import logging
 import os
 import re
 import time
-import uuid
 from tempfile import TemporaryDirectory
 from pathlib import Path
 from urllib.parse import quote
@@ -4889,7 +4888,7 @@ class RechnungenView(QWidget):
         self, items: list[PrintProductAggregate]
     ) -> dict[tuple[str, str, str], PieceBlock]:
         blocks: dict[tuple[str, str, str], PieceBlock] = {}
-        variant_ids: dict[tuple[str, str, str], uuid.UUID] = {}
+        sku_keys: dict[tuple[str, str, str], str] = {}
         catalog: ProductCatalogService | None = None
         hub: InventoryV2Service | None = None
         try:
@@ -4915,19 +4914,23 @@ class RechnungenView(QWidget):
                 if hub is None:
                     self._apply_open_product_cached_stock(block)
                     continue
-                resolved = hub.resolve_variant_by_sku(block.sku)
-                if resolved is not None:
-                    variant_ids[key] = resolved.variant.id
+                sku_keys[key] = block.sku
             except Exception as exc:  # noqa: BLE001 - fall back to cached sevDesk stock.
                 logger.debug("Open print product catalog lookup failed sku=%s: %s", block.sku, exc)
                 self._apply_open_product_cached_stock(block)
 
-        if hub is not None and variant_ids:
+        if hub is not None and sku_keys:
             try:
+                resolved_by_sku = hub.resolve_variants_by_skus(list(sku_keys.values()))
+                variant_ids = {
+                    key: resolved_by_sku[sku.strip().upper()].variant.id
+                    for key, sku in sku_keys.items()
+                    if sku.strip().upper() in resolved_by_sku
+                }
                 stock_by_variant = hub.variant_on_hand_many(list(variant_ids.values()))
             except Exception as exc:  # noqa: BLE001 - preserve cached-stock fallback.
-                logger.debug("Open print product batch stock lookup failed: %s", exc)
-                for key in variant_ids:
+                logger.debug("Open print product batch variant/stock lookup failed: %s", exc)
+                for key in sku_keys:
                     self._apply_open_product_cached_stock(blocks[key])
             else:
                 for key, variant_id in variant_ids.items():

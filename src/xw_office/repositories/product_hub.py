@@ -277,6 +277,89 @@ class ProductHubRepository:
                 return None
             return ResolvedSku(product=product, variant=variant, matched_via=matched_via)
 
+    def resolve_skus(self, raw_skus: list[str]) -> dict[str, ResolvedSku]:
+        """Resolve exact variant SKUs and aliases for a set of input SKUs in batches.
+
+        Direct variant matches take precedence over aliases, matching ``resolve_sku``.
+        The returned keys are normalized input SKUs; unknown values are omitted.
+        """
+        needles = list(dict.fromkeys(normalize_sku(sku) for sku in raw_skus))
+        needles = [needle for needle in needles if needle]
+        if not needles:
+            return {}
+
+        with self._scope() as session:
+            variants = list(
+                session.scalars(
+                    select(ProductVariant).where(func.upper(ProductVariant.sku).in_(needles))
+                ).all()
+            )
+            variants_by_sku = {normalize_sku(variant.sku): variant for variant in variants}
+            matched_via = {needle: "sku" for needle in variants_by_sku}
+            unresolved = [needle for needle in needles if needle not in variants_by_sku]
+            if unresolved:
+                aliases = list(
+                    session.scalars(
+                        select(ProductSkuAlias)
+                        .where(func.upper(ProductSkuAlias.alias_sku).in_(unresolved))
+                        .order_by(ProductSkuAlias.id)
+                    ).all()
+                )
+                aliases_by_sku = {
+                    normalize_sku(alias.alias_sku): alias
+                    for alias in aliases
+                    if normalize_sku(alias.alias_sku) not in variants_by_sku
+                }
+                linked_ids = [
+                    alias.variant_id for alias in aliases_by_sku.values() if alias.variant_id is not None
+                ]
+                linked_variants = {
+                    variant.id: variant
+                    for variant in session.scalars(
+                        select(ProductVariant).where(ProductVariant.id.in_(linked_ids))
+                    ).all()
+                } if linked_ids else {}
+                default_product_ids = [
+                    alias.product_id
+                    for alias in aliases_by_sku.values()
+                    if alias.variant_id is None or alias.variant_id not in linked_variants
+                ]
+                defaults = {
+                    variant.product_id: variant
+                    for variant in session.scalars(
+                        select(ProductVariant)
+                        .where(
+                            ProductVariant.product_id.in_(default_product_ids),
+                            ProductVariant.is_default.is_(True),
+                        )
+                        .order_by(ProductVariant.id)
+                    ).all()
+                } if default_product_ids else {}
+                for needle, alias in aliases_by_sku.items():
+                    variant = (
+                        linked_variants.get(alias.variant_id)
+                        if alias.variant_id is not None
+                        else None
+                    ) or defaults.get(alias.product_id)
+                    if variant is not None:
+                        variants_by_sku[needle] = variant
+                        matched_via[needle] = "alias"
+
+            product_ids = list({variant.product_id for variant in variants_by_sku.values()})
+            products = {
+                product.id: product
+                for product in session.scalars(select(Product).where(Product.id.in_(product_ids))).all()
+            } if product_ids else {}
+            return {
+                needle: ResolvedSku(
+                    product=products[variant.product_id],
+                    variant=variant,
+                    matched_via=matched_via[needle],
+                )
+                for needle, variant in variants_by_sku.items()
+                if variant.product_id in products
+            }
+
     def add_sku_alias(
         self,
         product_id: uuid.UUID,

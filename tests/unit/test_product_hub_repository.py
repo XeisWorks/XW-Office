@@ -6,7 +6,7 @@ from decimal import Decimal
 import uuid
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -127,6 +127,53 @@ def test_resolve_sku_via_alias_without_variant_link_falls_back_to_default(
     resolved = repo.resolve_sku("OLD-401")
     assert resolved is not None
     assert resolved.variant.id == variant.id
+
+
+def test_resolve_skus_batches_direct_alias_and_default_variant_lookups(
+    repo: ProductHubRepository, session_factory: sessionmaker[Session]
+) -> None:
+    direct_product, direct_variant = repo.create_product(sku="XW-402", name="Direct")
+    linked_product, linked_variant = repo.create_product(sku="XW-403", name="Linked alias")
+    default_product, default_variant = repo.create_product(sku="XW-404", name="Default alias")
+    with session_factory() as session:
+        session.add_all(
+            [
+                ProductSkuAlias(
+                    product_id=linked_product.id,
+                    alias_sku="OLD-403",
+                    source="legacy",
+                    variant_id=linked_variant.id,
+                ),
+                ProductSkuAlias(
+                    product_id=default_product.id,
+                    alias_sku="OLD-404",
+                    source="legacy",
+                ),
+            ]
+        )
+        session.commit()
+
+    statements: list[str] = []
+
+    def count_select(_conn: object, _cursor: object, statement: str, *_args: object) -> None:
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(statement)
+
+    engine = session_factory.kw["bind"]
+    assert engine is not None
+    event.listen(engine, "before_cursor_execute", count_select)
+    try:
+        resolved = repo.resolve_skus([" xw-402 ", "old-403", "OLD-404", "missing"])
+    finally:
+        event.remove(engine, "before_cursor_execute", count_select)
+
+    assert set(resolved) == {"XW-402", "OLD-403", "OLD-404"}
+    assert resolved["XW-402"].product.id == direct_product.id
+    assert resolved["XW-402"].variant.id == direct_variant.id
+    assert resolved["OLD-403"].matched_via == "alias"
+    assert resolved["OLD-403"].variant.id == linked_variant.id
+    assert resolved["OLD-404"].variant.id == default_variant.id
+    assert len(statements) <= 5
 
 
 # -- default variant invariant --------------------------------------------------------

@@ -1589,6 +1589,53 @@ def test_open_product_stock_plan_keeps_order_quantity_printable(
     assert planned.print_quantity == 0
 
 
+def test_open_product_enrichment_resolves_hub_variants_as_one_batch(
+    qtbot: QtBot, monkeypatch: MonkeyPatch
+) -> None:
+    import uuid
+    from xw_office.services.product_hub.inventory import InventoryV2Service
+
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    items = [
+        PrintProductAggregate(sku=f"XW-BATCH-{index}", title=f"Produkt {index}", description="", quantity=1)
+        for index in range(2)
+    ]
+    variant_ids = [uuid.uuid4(), uuid.uuid4()]
+    resolution_calls: list[list[str]] = []
+    stock_calls: list[list[uuid.UUID]] = []
+
+    class FakeHub:
+        def resolve_variants_by_skus(self, skus: list[str]) -> dict[str, object]:
+            resolution_calls.append(skus)
+            return {
+                item.sku: types.SimpleNamespace(variant=types.SimpleNamespace(id=variant_id))
+                for item, variant_id in zip(items, variant_ids, strict=True)
+            }
+
+        def variant_on_hand_many(self, ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+            stock_calls.append(ids)
+            return {variant_id: 8 + index for index, variant_id in enumerate(variant_ids)}
+
+    container.register(InventoryV2Service, lambda _: FakeHub())  # type: ignore[arg-type,return-value]
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.resolve_piece_print_config",
+        lambda _catalog, block: types.SimpleNamespace(
+            **{
+                **block.__dict__,
+                "product": Product(id=block.sku, sku=block.sku, name=block.name),
+            }
+        ),
+    )
+
+    result = view._resolve_piece_blocks_from_open_products(items)  # noqa: SLF001
+
+    assert resolution_calls == [[item.sku for item in items]]
+    assert stock_calls == [variant_ids]
+    assert [result[view._open_product_check_key(item)].stock_status.on_hand for item in items] == [8, 9]  # noqa: SLF001
+
+
 def test_print_products_remain_frozen_after_completed_run(qtbot: object) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
