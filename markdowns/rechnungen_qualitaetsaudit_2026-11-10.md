@@ -749,7 +749,7 @@ Fortschreibung AP06: cf45a12 (Move confirmed B2B credit writes off UI thread) wu
 
 Fortschreibung AP07: `5d16413` (`Invalidate invoice snapshots after finalization`) implementiert Cache-Invalidierung nach finaler Rechnungsfreigabe und Entwurfserstellung; ein Generationstoken verwirft Batchantworten, die vor einer Mutation begonnen haben. 56 fokussierte Tests, Ruff und gezieltes MyPy gruen; Gesamtsuite 2.106 bestanden. Push erfolgt nach ff-only Synchronisierung.
 
-Fortschreibung AP07: Batched Hub-SKU-/Alias-Aufloesung fuer offene Printprodukte in `ProductHubRepository`, `InventoryV2Service` und Rechnungsansicht ergänzt. 34 gezielte Repository-/UI-Tests sowie 88 Rechnungsansicht-Smoke-Tests bestanden; gezieltes Ruff und striktes MyPy fuer die drei Produktionsdateien gruen. Hosted CI fuer den vorherigen Runtime-Dependency-Commit `d679d8b` bestanden; CI und Railway-Auto-Deployment fuer diesen AP07-Commit stehen nach Push aus.
+Fortschreibung AP07: Batched Hub-SKU-/Alias-Aufloesung fuer offene Printprodukte in `ProductHubRepository`, `InventoryV2Service` und Rechnungsansicht ergänzt. 34 gezielte Repository-/UI-Tests sowie 88 Rechnungsansicht-Smoke-Tests bestanden; gezieltes Ruff und striktes MyPy fuer die drei Produktionsdateien gruen. Hosted CI fuer `8486f23` (Ruff, volle Pytest-Suite, MyPy) erfolgreich; Railway-Deployment `10b49488-6383-4cf2-b11b-d7892d077b1f` ebenfalls **SUCCESS**.
 
 Der finale Suite-Nachweis dieses Fortschreibungsschritts steht oben. Weitere Commit-/Push-Nachweise werden nach ihrer Integration ergänzt. Das folgende statische Inventar
 wurde aus dem vorherigen Quellstand erzeugt und dient als Navigationshilfe; nach
