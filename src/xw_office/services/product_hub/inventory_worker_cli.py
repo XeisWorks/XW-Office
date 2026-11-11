@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 import time
 
 from xw_office.services.product_hub.forecast_cli import main as forecast_main
@@ -19,7 +20,10 @@ def _configure_logging() -> None:
     logging.basicConfig(
         level=level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        stream=sys.stdout,
     )
+    for noisy_logger in ("httpx", "httpcore"):
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 
 def run_once(*, forecast_years: int = 5, credit_years: int = 1) -> tuple[int, int]:
