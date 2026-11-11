@@ -162,6 +162,8 @@ Pflichtfälle der Abnahme:
 P07-Ergänzung: Das Alarm-Popup und die Graph-Mail zeigen zusätzlich Zielbestand sowie die daraus abgeleitete empfohlene Bestell-/Nachdruckmenge. Die Mail enthält außerdem Alarmmodus und Erstellzeitpunkt.
 Der RECHNUNGEN-LAGERALARME-Zähler wird nach einer Schwellenänderung auch bei geöffnetem Popup sofort über ein UI-Signal neu bewertet.
 
+P08-Ergänzung: `scripts/product_hub/export_inventory_snapshot.py` erstellt vor einer Cutover-Probe einen read-only JSON-Snapshot von Lagerledger, Bestandszeilen, Buchungs-Idempotenz, Alarmen, Inventursitzungen und Sync-Queues. Ein provider-natives PostgreSQL-Backup bleibt zusätzlich erforderlich.
+
 ## 7. Arbeitsanweisung an Codex 5.6 Luna
 
 Vor jedem Paket `AGENTS.md`, diesen Text, die YAML, `docs/product_hub/PROGRESS.md` und die betroffenen aktuellen Codepfade lesen. Mit sauberem `main` beginnen und `git pull --ff-only origin main` ausführen. Migrationen nur additiv gegen den **aktuellen** Alembic-Head erstellen; keine historischen Migrationen oder das geschützte Architekturarchiv verändern. Pro Paket nur den angegebenen Scope umsetzen, gezielte Tests und einen realistischen manuellen Abnahmeschritt durchführen, Fortschritt und verbleibende Risiken dokumentieren. Erst fertig getestete Änderungen nach `main` integrieren und ohne Force-Push zu `origin/main` pushen. Kein Bestands-Master-Cutover allein aufgrund grüner Unit-Tests: Datenabgleich, Projektionen, Shadow-Lauf und Rollback-Nachweis gehören zur Abnahme.

@@ -246,6 +246,7 @@ packages:
 
   - id: P08
     title: Shadow-Abnahme und Product-Hub-Bestands-Cutover
+    backup_artifact: scripts/product_hub/export_inventory_snapshot.py
     status: partially_integrated
     depends_on: [P02, P03, P04, P05, P06, P07]
     implementation_notes:
