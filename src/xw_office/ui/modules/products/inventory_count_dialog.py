@@ -39,7 +39,7 @@ class InventoryCountDialog(QDialog):
         self._line_edits: dict[str, QLineEdit] = {}
         self._note_edits: dict[str, QPlainTextEdit] = {}
 
-        self.setWindowTitle("Gefuehrte Inventur")
+        self.setWindowTitle("Geführte Inventur")
         self.resize(980, 620)
         root = QVBoxLayout(self)
         self._status = QLabel("Inventurliste wird erstellt ...")
@@ -124,7 +124,7 @@ class InventoryCountDialog(QDialog):
                 return
             values.append((line, int(edit.text()), note.toPlainText().strip() if note else ""))
 
-        self._set_busy(True, "Inventur wird geprueft und abgeschlossen ...")
+        self._set_busy(True, "Inventur wird geprüft und abgeschlossen …")
 
         def job() -> InventoryCountView:
             for line, quantity, note in values:
@@ -145,7 +145,7 @@ class InventoryCountDialog(QDialog):
     def _on_confirmed(self, result: object) -> None:
         if isinstance(result, InventoryCountView):
             self._view = result
-            self._status.setText("Inventur bestaetigt; Differenzen wurden idempotent gebucht.")
+            self._status.setText("Inventur bestätigt; Differenzen wurden idempotent gebucht.")
             self._confirm_button.setEnabled(False)
             self._table.setEnabled(False)
             self._buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Schliessen")

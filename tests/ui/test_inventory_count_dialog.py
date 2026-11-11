@@ -89,4 +89,4 @@ def test_guided_inventory_dialog_records_and_confirms_all_lines(qtbot) -> None:
     assert calls[0][1]["counted_quantity"] == 17
     assert calls[1][0] == "confirm"
     assert dialog._table.isEnabled() is False  # noqa: SLF001
-    assert "bestaetigt" in dialog._status.text()  # noqa: SLF001
+    assert "bestätigt" in dialog._status.text()  # noqa: SLF001

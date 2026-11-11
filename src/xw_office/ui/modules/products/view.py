@@ -791,7 +791,7 @@ class ProductsView(QWidget):
         self._sync_correction_btn.clicked.connect(self._correct_selected_stock)
         self._sync_correction_btn.setEnabled(False)
         bar.addWidget(self._sync_correction_btn)
-        self._guided_inventory_btn = QPushButton("Gefuehrte Inventur")
+        self._guided_inventory_btn = QPushButton("Geführte Inventur")
         self._guided_inventory_btn.setToolTip(
             "Erstellt eine eingefrorene Zaehlliste und bucht bestaetigte Differenzen idempotent."
         )
