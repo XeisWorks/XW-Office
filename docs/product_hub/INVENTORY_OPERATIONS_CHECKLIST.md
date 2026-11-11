@@ -166,3 +166,56 @@ Sync-Konflikte. Provider-/Graph-/Wix-Grundkonfiguration und der Worker-Marker si
   als übersprungen (`master_enabled=false`).
 - Deshalb bleiben Inventur, Konfliktbereinigung, Shadow-Phase, Backup und Rollback echte
   Betriebs-Gates; der Master darf nicht aktiviert werden.
+
+## Read-only-Folgepruefung (12. November 2026, 00:11 CET)
+
+Das Skript `scripts/product_hub/invoke_inventory_railway_preflight.ps1` wurde fuer
+Railway-Aufrufe ohne lokalen Projekt-Link angepasst: Projekt/Environment werden
+explizit adressiert, Service-IDs aus dem Railway-Inventar gelesen und der Python-
+Interpreter aus der Projekt-venv verwendet. Die PowerShell-Datei wurde geparst und
+der vollstaendige read-only Ablauf erfolgreich ausgefuehrt.
+
+- Healthcheck: HTTP 200; Railway-Serviceinventar: Postgres, XW-Product-Hub und
+  `xw-inventory-worker` melden SUCCESS. Der Worker-Deploymentstart
+  `3b4b3b87-2f31-4a72-8b5d-9094f3e1fdfe` und Product-Hub-Deployment
+  `e31e8357-4053-4fef-acc9-2ef63bfe7f1e` sind gesund.
+- Der DB-Readiness-Check endet erwartungsgemaess mit Exit 2 (`eligible=false`);
+  der getrennte Runtime-Check endet mit Exit 0 (`eligible=true`). sevDesk-, Graph-,
+  Wix-Projektionszugangsdaten und Worker-Service sind `ready`; Master und Shadow
+  bleiben `false`.
+- Snapshot um 00:11 CET: 432 `inventory_stock`, 0 Ledger-Bewegungen,
+  0 `inventory_document_booking`, 0 Inventur-Sessions, 432 Alarme,
+  726 Sync-Konflikte (710 offen), 432 Outbox-Ereignisse und 263 archivierte
+  Payloads. Datenbankchecks bleiben wegen fehlendem Shadow/Ledger, sevDesk-Drift,
+  Quellenvertrag und Sync-Queue blockiert; Kanalprojektionen und Betriebsfreigabe
+  stehen auf `manual`.
+- Damit bleiben Bestands-Master und Shadow weiterhin deaktiviert. Der frische
+  Snapshot liegt im lokalen Temp-Ordner; er ersetzt kein provider-natives Backup.
+- Separater Railway-Projektions-Dry-Run (`--summary`, read-only): 0 Schreibungen,
+  0 Konflikte/Fehler und 432 uebersprungene Varianten wegen nicht eindeutiger
+  Wix-Produkt-/Inventarzuordnungen.
+- Die automatischen Worker-Neustarts nach Main-Deployments um 00:07, 00:09 und
+  00:11 CET meldeten jeweils Forecast `exit=0`, sevDesk-Sync `exit=1`,
+  `invoice.processed=0`, `already_applied=0` und uebersprangen Projektionen bei
+  `master_enabled=false`. Der Snapshot bestaetigt 0 Ledger-Bewegungen und 0
+  Rechnungsbuchungsmarker; Codex hat keinen Worker-Lauf manuell ausgeloest.
+- Neuester Product-Hub- und Worker-Deploymentstand (Commit `4aef522`) ist SUCCESS.
+  Der Worker-Neustart um 00:12 CET war bei dieser Protokollierung noch aktiv;
+  sein Laufabschluss ist daher nicht vorweggenommen.
+
+## Read-only-Folgepruefung (12. November 2026, 00:17 CET)
+
+Nach Abschluss des Worker-Zyklus wurde der Railway-Preflight erneut vollstaendig
+read-only ausgefuehrt. Der Snapshot um 00:16:53 CET bestaetigt 432
+`inventory_stock`-Zeilen, 0 Ledger-Bewegungen, 0 `inventory_document_booking`-Marker,
+0 Inventur-Sessions, 432 Alarme, 726 Sync-Konflikte (710 offen), 432 Outbox-Ereignisse
+und 263 archivierte Payloads. Master und Shadow bleiben `false`; Runtime-Readiness ist
+`eligible=true`, DB-Readiness erwartungsgemaess `eligible=false`.
+
+Der Worker auf Deployment `0108b761-d361-4187-a581-6b9d540c7d4c` (Commit `4aef522`)
+beendete den Forecast mit Exit 0. Der sevDesk-Sync endete mit Exit 1, `processed=0`
+und `already_applied=0`, weil offene Altbelege wegen fehlender Bestandsbasis,
+unstabiler Positionszuordnung bzw. uneindeutiger SKU-Zuordnung in `needs_review`
+bleiben. Die Kanalprojektion wurde bei `master_enabled=false` uebersprungen. Der
+Folgesnapshot weist weiterhin keine Bestandsbewegungen oder Rechnungsbuchungen auf;
+Codex hat keinen Worker-Lauf manuell ausgeloest.

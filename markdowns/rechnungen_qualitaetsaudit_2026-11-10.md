@@ -2320,3 +2320,30 @@ Beim Wechsel der Rechnungszeile rief `RechnungenView._update_plc_controls()` bis
 Die vollstaendige `test_rechnungen_view_smoke.py`-Suite besteht mit **95 Tests**; ein zusaetzlicher Test stellt sicher, dass das Packlistenmenue keine Dateimetadaten liest. Gezieltes MyPy fuer `view.py`, globales Ruff und `git diff --check` sind gruen. Die Vollsuite besteht nach Lizenz-PDF- und Archivsuche-Aenderungen mit **2.245 Tests, 5 uebersprungen, 1 bestehender Starlette/httpx-Deprecation-Warnung (159,37 s)**. F17 bleibt teilweise offen, bis die restlichen Dialog-I/O-Pfade weiter geprueft sind.
 
 Nach Rebase auf `bfbb69e` (inklusive der zwischenzeitlichen Inventur-Projektionskorrektur) besteht die Vollsuite erneut mit **2.251 Tests, 5 uebersprungen, 1 bestehender Warnung (159,67 s)**. Die 95 Rechnungsansicht-Smokes, drei gezielten Projection-Regressionen, globales Ruff und gezieltes MyPy fuer `view.py` und `inventory_projection.py` bestehen ebenfalls.
+
+## Fortschreibung G2 - Railway-Preflight reproduzierbar ausgefuehrt
+
+`invoke_inventory_railway_preflight.ps1` funktioniert nun auch ohne globales Railway-Projekt-Linking: Projekt/Environment werden explizit angegeben, Service-IDs aus dem Railway-Inventar aufgeloest und die Projekt-venv fuer den lokalen read-only Python-Aufruf genutzt. PowerShell-Parser und vollstaendiger Railway-Lauf bestanden. Der Lauf vom 12.11.2026 00:11 CET meldet Health HTTP 200, Railway-Worker und Product Hub SUCCESS, Runtime-Readiness Exit 0 und DB-Readiness Exit 2 (`eligible=false`). Runtime-Zugangsdaten fuer sevDesk, Graph und Wix sowie Worker-Service sind `ready`; `inventory_master_enabled=false` und `inventory_shadow_enabled=false`.
+
+Der read-only Snapshot zaehlt 432 Bestandspositionen, 0 Ledger-Bewegungen, 0 Rechnungsbuchungsmarker, 0 Inventur-Sessions, 432 Alarme, 726 Sync-Konflikte (710 offen), 432 Outbox-Ereignisse und 263 archivierte Payloads. Shadow/Ledger-Belege, sevDesk-Drift, Quellenvertrag und Sync-Queue blockieren die DB-Freigabe; Kanalprojektionen und Betriebsfreigabe bleiben `manual`. Provider-natives PostgreSQL-Backup ist im Hobby-Plan weiterhin nicht verfuegbar. G2 bleibt daher BLOCKIERT; es wurden keine Master-/Shadow-Flags oder Bestandsdaten geaendert.
+
+Der produktionsnahe Projektions-Dry-Run auf `2731be8` meldet separat 0 Schreibungen, 0 Konflikte/Fehler und 432 Varianten, die wegen fehlender eindeutiger Wix-Produkt-/Inventarzuordnung uebersprungen wurden. Railway startete den Worker nach Main-Deployments automatisch um 00:07, 00:10 und 00:12 CET; fuer die ersten drei beobachteten Zyklen war Forecast `exit=0`, sevDesk-Sync `exit=1`, Rechnungen `processed=0`/`already_applied=0` und die Kanalprojektion bei `master_enabled=false` uebersprungen. Der Snapshot danach enthaelt weiterhin 0 Ledger-Bewegungen und 0 Buchungsmarker. Der vierte Lauf war beim letzten Log-Snapshot noch aktiv. Der neueste Hub-/Worker-Deploymentstand auf `4aef522` meldet SUCCESS.
+
+### G2-Folgepruefung nach Worker-Abschluss (12.11.2026, 00:17 CET)
+
+Der read-only Railway-Preflight wurde nach Abschluss des Worker-Laufs erneut
+ausgefuehrt. Healthcheck HTTP 200, Runtime-Readiness Exit 0 (`eligible=true`) und
+DB-Readiness Exit 2 (`eligible=false`) bestaetigen den unveraenderten Zustand;
+`inventory_master_enabled` und `inventory_shadow_enabled` bleiben `false`.
+Der Snapshot (Export 00:16:53 CET) zaehlt 432 Bestandspositionen, 0
+Ledger-Bewegungen, 0 Rechnungsbuchungsmarker, 0 Inventur-Sessions, 432 Alarme,
+726 Sync-Konflikte (710 offen), 432 Outbox-Ereignisse und 263 archivierte Payloads.
+
+Der Worker auf Deployment `0108b761-d361-4187-a581-6b9d540c7d4c` (Commit
+`4aef522`) beendete Forecast mit Exit 0; der sevDesk-Sync endete mit Exit 1,
+`processed=0` und `already_applied=0`. Altbelege mit Unterdeckung, fehlender
+stabiler Positions-ID oder uneindeutiger SKU bleiben in `needs_review`. Die
+Kanalprojektion wurde wegen `master_enabled=false` uebersprungen. Es wurden keine
+Ledger-/Buchungsdaten oder Betriebsflags geschrieben; Codex hat keinen Worker-Lauf
+manuell ausgeloest. G2 bleibt BLOCKIERT durch Inventur, Konfliktbereinigung,
+Shadow-Nachweis, provider-natives Backup und Betriebsfreigabe.
