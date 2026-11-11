@@ -8,6 +8,11 @@ Usage::
     python scripts/product_hub/check_inventory_cutover.py \
         --database-url postgresql://... --shadow-enabled --json
 
+When ``--database-url`` is omitted, the command resolves the connection from
+``XW_INVENTORY_DATABASE_URL``, then ``DATABASE_PUBLIC_URL`` and finally
+``DATABASE_URL``.  This keeps Railway runs from exposing a DSN in the process
+arguments while retaining the explicit argument for local use.
+
 Exit codes: 0 when every readiness check is ``ready``; 2 when any check is
 blocked or manual; 1 for configuration/runtime errors.
 """
@@ -89,16 +94,31 @@ def _runtime_configuration_checks() -> list[dict[str, str]]:
     ]
 
 
+def _resolve_database_url(explicit: str = "") -> str:
+    """Resolve a database URL without requiring it in process arguments."""
+    return (
+        str(explicit or "").strip()
+        or str(os.getenv("XW_INVENTORY_DATABASE_URL") or "").strip()
+        or str(os.getenv("DATABASE_PUBLIC_URL") or "").strip()
+        or str(os.getenv("DATABASE_URL") or "").strip()
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--database-url", required=True)
+    parser.add_argument("--database-url", default="")
     parser.add_argument("--shadow-enabled", action="store_true")
     parser.add_argument("--master-enabled", action="store_true")
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args()
     try:
+        database_url = _resolve_database_url(str(args.database_url))
+        if not database_url:
+            parser.error(
+                "DATABASE_URL/DATABASE_PUBLIC_URL oder --database-url ist erforderlich"
+            )
         payload = assess_cutover(
-            str(args.database_url),
+            database_url,
             shadow_enabled=bool(args.shadow_enabled),
             master_enabled=bool(args.master_enabled),
         )

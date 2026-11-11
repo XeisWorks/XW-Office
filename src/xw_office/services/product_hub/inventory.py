@@ -638,8 +638,16 @@ class InventoryV2Service:
             legacy_values = {}
         if not isinstance(legacy_values, dict):
             legacy_values = {}
-        rows: list[InventoryAuditRow] = []
         location = self._inventory.get_location_by_code(DEFAULT_LOCATION_CODE)
+        stock_by_variant = (
+            {
+                stock.variant_id: stock
+                for stock in self._inventory.list_stock_by_variants(variant_ids, location.id)
+            }
+            if location is not None
+            else {}
+        )
+        rows: list[InventoryAuditRow] = []
         for variant in variants:
             product = product_by_id.get(variant.product_id)
             if product is None:
@@ -653,7 +661,7 @@ class InventoryV2Service:
                 legacy_stock = int(legacy_raw) if legacy_raw is not None else None
             except (TypeError, ValueError):
                 legacy_stock = None
-            hub_stock = self._inventory.get_stock(variant.id, location.id) if location is not None else None
+            hub_stock = stock_by_variant.get(variant.id)
             rows.append(
                 InventoryAuditRow(
                     sku=variant.sku,

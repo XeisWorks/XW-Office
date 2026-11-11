@@ -5,7 +5,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from scripts.product_hub.check_inventory_cutover import assess_cutover
+from scripts.product_hub.check_inventory_cutover import _resolve_database_url, assess_cutover
 from xw_office.models.base import Base
 
 
@@ -31,3 +31,14 @@ def test_assess_cutover_is_read_only_and_fails_closed(tmp_path: Path, monkeypatc
     with sessionmaker(bind=engine, class_=Session, future=True)() as session:
         after = {table.name: session.query(table).count() for table in Base.metadata.sorted_tables}
     assert after == before
+
+
+def test_cutover_cli_resolves_public_database_url_without_argument(monkeypatch) -> None:
+    monkeypatch.delenv("XW_INVENTORY_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("DATABASE_PUBLIC_URL", "postgresql://public.example/inventory")
+
+    assert _resolve_database_url() == "postgresql://public.example/inventory"
+    assert _resolve_database_url("postgresql://explicit.example/inventory") == (
+        "postgresql://explicit.example/inventory"
+    )

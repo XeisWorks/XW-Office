@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,16 @@ _TABLES = (
 )
 
 
+def _resolve_database_url(explicit: str = "") -> str:
+    """Resolve a database URL without requiring it in process arguments."""
+    return (
+        str(explicit or "").strip()
+        or str(os.getenv("XW_INVENTORY_DATABASE_URL") or "").strip()
+        or str(os.getenv("DATABASE_PUBLIC_URL") or "").strip()
+        or str(os.getenv("DATABASE_URL") or "").strip()
+    )
+
+
 def _json_value(value: Any) -> Any:
     if isinstance(value, (datetime.datetime, datetime.date)):
         return value.isoformat()
@@ -107,10 +118,13 @@ def export_snapshot(database_url: str, out_path: Path) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--database-url", required=True)
+    parser.add_argument("--database-url", default="")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
-    export_snapshot(str(args.database_url), Path(args.out))
+    database_url = _resolve_database_url(str(args.database_url))
+    if not database_url:
+        parser.error("DATABASE_URL/DATABASE_PUBLIC_URL oder --database-url ist erforderlich")
+    export_snapshot(database_url, Path(args.out))
     return 0
 
 
