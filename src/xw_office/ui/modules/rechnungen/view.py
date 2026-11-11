@@ -200,6 +200,16 @@ class _PrintRunSnapshot:
 
 
 @dataclass(frozen=True)
+class _PlcArchiveLookup:
+    key: tuple[str, str]
+    generation: int
+    label_path: str
+    label_paths: tuple[str, ...]
+    customs_path: str
+    packing_list_paths: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _RunOutputPrintRequest:
     invoice_ids: tuple[str, ...]
     labels: bool
@@ -1456,13 +1466,16 @@ class RechnungenView(QWidget):
         self._last_print_all_products_key: tuple[tuple[str, str, str, int], ...] | None = None
         self._plc_label_archive = PlcLabelArchive()
         self._plc_archive_index_handle: JobHandle | None = None
+        self._plc_archive_lookup_handle: JobHandle | None = None
+        self._plc_archive_lookup_pending_key: tuple[str, str] | None = None
+        self._plc_archive_generation = 0
         self._plc_archive_index_ready = False
         self._pending_plc_archive_popup: InvoiceSummary | None = None
         self._selected_plc_label_path = ""
         self._selected_plc_label_paths: list[str] = []
         self._selected_plc_customs_path = ""
         self._selected_packing_list_paths: list[str] = []
-        self._plc_archive_lookup_cache: dict[tuple[str, str], str] = {}
+        self._plc_archive_lookup_cache: dict[tuple[str, str], _PlcArchiveLookup] = {}
         self._invoice_preview_tempdir = TemporaryDirectory(prefix="xw-office-invoice-preview-")
         self._printer_status_initialized = False
         self._post_load_prefetch_seq = 0
@@ -5667,10 +5680,23 @@ class RechnungenView(QWidget):
             signals.status_message.emit("PLC-Archiv wird vorbereitet…", 2500)
             performance_metrics.record_elapsed("plc_click_to_index_wait_ms", popup_started_at)
             return
-        existing_label_path = self._resolve_plc_archive_path_for_summary(summary)
+        archive_key = self._plc_archive_key(summary)
+        archive_lookup = (
+            self._plc_archive_lookup_cache.get(archive_key)
+            if archive_key is not None
+            else _PlcArchiveLookup(("", ""), -1, "", (), "", ())
+        )
+        if archive_lookup is None:
+            self._pending_plc_archive_popup = summary
+            if archive_key is not None:
+                self._start_plc_archive_lookup(archive_key)
+            archive_status_signals: AppSignals = self._container.resolve(AppSignals)
+            archive_status_signals.status_message.emit("PLC-Archiv wird durchsucht...", 2500)
+            return
+        existing_label_path = archive_lookup.label_path
         performance_metrics.record_elapsed("plc_click_to_dialog_setup_ms", popup_started_at)
         if existing_label_path:
-            existing_customs_path = self._resolve_plc_customs_archive_path_for_summary(summary)
+            existing_customs_path = archive_lookup.customs_path
             # The calibrated A5 derivative is generated only when the user
             # actually queues a customs reprint.  Parsing/regenerating PDFs
             # here delays the dialog shell on the Qt main thread.
@@ -5767,6 +5793,11 @@ class RechnungenView(QWidget):
             recipient_email=recipient_email,
         )
         dlg.exec()
+        self._plc_archive_generation += 1
+        if self._plc_archive_lookup_handle is not None:
+            self._plc_archive_lookup_handle.cancel()
+        self._plc_archive_lookup_handle = None
+        self._plc_archive_lookup_pending_key = None
         self._plc_archive_lookup_cache.clear()
         self._plc_archive_index_ready = False
         self._prime_plc_archive_index()
@@ -6433,68 +6464,128 @@ class RechnungenView(QWidget):
         self._delete_draft_worker = None
         self._overlay.hide()
 
-    def _resolve_plc_archive_path_for_summary(self, summary: InvoiceSummary) -> str:
+    @staticmethod
+    def _plc_archive_key(summary: InvoiceSummary) -> tuple[str, str] | None:
         order_ref = str(summary.order_reference or "").strip()
         invoice_no = str(summary.invoice_number or summary.id or "").strip()
-        if not order_ref or not invoice_no:
-            return ""
-        cache_key = (order_ref, invoice_no)
-        cached = self._plc_archive_lookup_cache.get(cache_key)
-        if cached is not None:
-            return cached
-        path = self._plc_label_archive.find_for_invoice(
-            order_reference=order_ref,
-            invoice_number=invoice_no,
-            refresh=False,
-        )
-        resolved = os.fspath(path) if path is not None else ""
-        self._plc_archive_lookup_cache[cache_key] = resolved
-        return resolved
+        return (order_ref, invoice_no) if order_ref and invoice_no else None
 
-    def _resolve_plc_archive_paths_for_summary(self, summary: InvoiceSummary) -> list[str]:
-        order_ref = str(summary.order_reference or "").strip()
-        invoice_no = str(summary.invoice_number or summary.id or "").strip()
-        if not order_ref or not invoice_no:
-            return []
-        return [
-            os.fspath(path)
-            for path in self._plc_label_archive.find_all_for_invoice(
+    def _start_plc_archive_lookup(self, key: tuple[str, str]) -> None:
+        if self._plc_archive_lookup_pending_key == key:
+            existing_handle = self._plc_archive_lookup_handle
+            if existing_handle is not None and existing_handle.running:
+                return
+        order_ref, invoice_no = key
+        generation = self._plc_archive_generation
+
+        def job(token: CancelToken) -> _PlcArchiveLookup:
+            token.raise_if_cancelled()
+            label = self._plc_label_archive.find_for_invoice(
                 order_reference=order_ref,
                 invoice_number=invoice_no,
                 refresh=False,
             )
-        ]
-
-    def _resolve_plc_customs_archive_path_for_summary(self, summary: InvoiceSummary) -> str:
-        order_ref = str(summary.order_reference or "").strip()
-        invoice_no = str(summary.invoice_number or summary.id or "").strip()
-        if not order_ref or not invoice_no:
-            return ""
-        path = self._plc_label_archive.find_customs_for_invoice(
-            order_reference=order_ref,
-            invoice_number=invoice_no,
-            refresh=False,
-        )
-        return os.fspath(path) if path is not None else ""
-
-    def _resolve_packing_list_archive_paths_for_summary(self, summary: InvoiceSummary) -> list[str]:
-        order_ref = str(summary.order_reference or "").strip()
-        invoice_no = str(summary.invoice_number or summary.id or "").strip()
-        if not order_ref or not invoice_no:
-            return []
-        return [
-            os.fspath(path)
-            for path in self._plc_label_archive.find_packing_lists_for_invoice(
+            token.raise_if_cancelled()
+            labels = self._plc_label_archive.find_all_for_invoice(
+                order_reference=order_ref,
+                invoice_number=invoice_no,
+                refresh=False,
+            )
+            token.raise_if_cancelled()
+            customs = self._plc_label_archive.find_customs_for_invoice(
+                order_reference=order_ref,
+                invoice_number=invoice_no,
+                refresh=False,
+            )
+            token.raise_if_cancelled()
+            packing_lists = self._plc_label_archive.find_packing_lists_for_invoice(
                 order_reference=order_ref,
                 invoice_number=invoice_no,
             )
-        ]
+            token.raise_if_cancelled()
+            return _PlcArchiveLookup(
+                key=key,
+                generation=generation,
+                label_path=os.fspath(label) if label is not None else "",
+                label_paths=tuple(os.fspath(path) for path in labels),
+                customs_path=os.fspath(customs) if customs is not None else "",
+                packing_list_paths=tuple(os.fspath(path) for path in packing_lists),
+            )
+
+        lookup_handle: JobHandle
+
+        def on_result(payload: object) -> None:
+            if (
+                not isinstance(payload, _PlcArchiveLookup)
+                or payload.key != key
+                or payload.generation != self._plc_archive_generation
+            ):
+                return
+            self._plc_archive_lookup_cache[key] = payload
+            selected = self._selected_summary()
+            if selected is not None and self._plc_archive_key(selected) == key:
+                self._apply_plc_archive_lookup(payload)
+            pending = self._pending_plc_archive_popup
+            if pending is not None and self._plc_archive_key(pending) == key and not self._shutting_down:
+                self._pending_plc_archive_popup = None
+                QTimer.singleShot(0, lambda summary=pending: self._open_plc_post_popup(summary))
+
+        def on_error(exc: Exception) -> None:
+            if self._plc_archive_lookup_pending_key == key:
+                logger.warning("PLC archive lookup failed for invoice %s: %s", invoice_no, exc)
+            pending = self._pending_plc_archive_popup
+            if pending is not None and self._plc_archive_key(pending) == key and not self._shutting_down:
+                self._pending_plc_archive_popup = None
+                QMessageBox.warning(
+                    self,
+                    "PLC-Archiv",
+                    "Die vorhandenen PLC-Dokumente konnten nicht geprueft werden. "
+                    "Aus Sicherheitsgruenden wurde kein neuer PLC-Auftrag geoeffnet.",
+                )
+
+        def on_finished() -> None:
+            if self._plc_archive_lookup_handle is lookup_handle:
+                self._plc_archive_lookup_handle = None
+                self._plc_archive_lookup_pending_key = None
+
+        try:
+            lookup_handle = self._background_jobs.submit_callable(
+                queue="cpu",
+                priority=5,
+                key="plc-selected-invoice-archive",
+                fn=job,
+                on_result=on_result,
+                on_error=on_error,
+                on_finished=on_finished,
+                owner=self,
+                replace="cancel_previous",
+            )
+        except Exception as exc:  # noqa: BLE001 - archive menus must not block invoice selection.
+            logger.warning("Could not schedule PLC archive lookup for invoice %s: %s", invoice_no, exc)
+            return
+        self._plc_archive_lookup_pending_key = key
+        self._plc_archive_lookup_handle = lookup_handle
+
+    def _apply_plc_archive_lookup(self, lookup: _PlcArchiveLookup) -> None:
+        self._selected_plc_label_path = lookup.label_path
+        self._selected_plc_label_paths = list(lookup.label_paths)
+        self._selected_plc_customs_path = lookup.customs_path
+        self._selected_packing_list_paths = list(lookup.packing_list_paths)
+        self._btn_multi_shipments.setVisible(len(lookup.label_paths) > 1)
+        self._view_plc_action.setEnabled(bool(lookup.label_path))
+        self._view_customs_action.setEnabled(bool(lookup.customs_path))
+        has_packing_lists = bool(lookup.packing_list_paths)
+        self._view_packing_lists_menu.setEnabled(has_packing_lists)
+        self._print_packing_lists_menu.setEnabled(has_packing_lists)
 
     @staticmethod
     def _packing_list_menu_label(path: str, position: int) -> str:
         try:
-            created = datetime.fromtimestamp(Path(path).stat().st_mtime).strftime("%d.%m.%Y %H:%M")
-        except OSError:
+            timestamp = re.search(r"(\d{8}_\d{6})(?=\.pdf$)", Path(path).name)
+            if timestamp is None:
+                raise ValueError("Packlistenname enthaelt keinen Erstellungszeitpunkt")
+            created = datetime.strptime(timestamp.group(1), "%Y%m%d_%H%M%S").strftime("%d.%m.%Y %H:%M")
+        except ValueError:
             created = "unbekanntes Datum"
         return f"Packliste {position} – erstellt {created}"
 
@@ -6626,6 +6717,11 @@ class RechnungenView(QWidget):
 
     def _on_plc_archive_index_ready(self, payload: object) -> None:
         counts = payload if isinstance(payload, tuple) else (0, 0)
+        self._plc_archive_generation += 1
+        if self._plc_archive_lookup_handle is not None:
+            self._plc_archive_lookup_handle.cancel()
+        self._plc_archive_lookup_handle = None
+        self._plc_archive_lookup_pending_key = None
         self._plc_archive_index_ready = True
         self._plc_archive_lookup_cache.clear()
         logger.debug("PLC archive index ready labels=%s customs=%s", counts[0], counts[1])
@@ -6637,6 +6733,15 @@ class RechnungenView(QWidget):
 
     def _on_plc_archive_index_error(self, exc: Exception) -> None:
         logger.warning("PLC archive index build failed: %s", exc)
+        pending = self._pending_plc_archive_popup
+        self._pending_plc_archive_popup = None
+        if pending is not None and not self._shutting_down:
+            QMessageBox.warning(
+                self,
+                "PLC-Archiv",
+                "Das PLC-Archiv konnte nicht durchsucht werden. "
+                "Aus Sicherheitsgruenden wurde kein neuer PLC-Auftrag geoeffnet.",
+            )
 
     def _on_open_plc_label_clicked(self) -> None:
         path = str(self._selected_plc_label_path or "").strip()
@@ -7686,19 +7791,21 @@ class RechnungenView(QWidget):
         self._selected_plc_label_paths = []
         self._selected_plc_customs_path = ""
         self._selected_packing_list_paths = []
-        if selected is not None:
-            self._selected_plc_label_path = self._resolve_plc_archive_path_for_summary(selected)
-            self._selected_plc_label_paths = self._resolve_plc_archive_paths_for_summary(selected)
-            self._selected_plc_customs_path = self._resolve_plc_customs_archive_path_for_summary(selected)
-            self._selected_packing_list_paths = self._resolve_packing_list_archive_paths_for_summary(selected)
-        self._btn_multi_shipments.setVisible(len(self._selected_plc_label_paths) > 1)
-        has_archived_plc = bool(self._selected_plc_label_path)
-        has_archived_customs = bool(self._selected_plc_customs_path)
-        has_archived_packing_lists = bool(self._selected_packing_list_paths)
-        self._view_plc_action.setEnabled(has_archived_plc)
-        self._view_customs_action.setEnabled(has_archived_customs)
-        self._view_packing_lists_menu.setEnabled(has_archived_packing_lists)
-        self._print_packing_lists_menu.setEnabled(has_archived_packing_lists)
+        archive_key = self._plc_archive_key(selected) if selected is not None else None
+        archive_lookup = self._plc_archive_lookup_cache.get(archive_key) if archive_key is not None else None
+        if archive_lookup is not None:
+            self._apply_plc_archive_lookup(archive_lookup)
+        else:
+            self._btn_multi_shipments.setVisible(False)
+            self._view_plc_action.setEnabled(False)
+            self._view_customs_action.setEnabled(False)
+            self._view_packing_lists_menu.setEnabled(False)
+            self._print_packing_lists_menu.setEnabled(False)
+            if archive_key is not None:
+                if self._plc_archive_index_ready:
+                    self._start_plc_archive_lookup(archive_key)
+                else:
+                    self._prime_plc_archive_index()
         if selected is not None and selected.status_code == _DRAFT_STATUS:
             self._btn_open_sevdesk_invoice.setText("Rechnung bearbeiten")
             self._btn_open_sevdesk_invoice.setToolTip("Rechnungsentwurf in sevDesk bearbeiten")

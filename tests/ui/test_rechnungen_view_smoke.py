@@ -1020,9 +1020,20 @@ def test_archived_packing_lists_appear_in_view_and_print_menus(
     packlists_dir.mkdir()
     packlist = packlists_dir / "20844 - RE-DRAFT - Packlisten - 20261013_090000.pdf"
     packlist.write_bytes(b"%PDF-1.7\npacking list")
+    archive.refresh_index()
     view._plc_label_archive = archive  # noqa: SLF001
+    view._plc_archive_index_ready = True  # noqa: SLF001
     view._summaries = [summary]  # noqa: SLF001
     view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    lookup_started = Event()
+    lookup_release = Event()
+
+    def find_packing_lists(**_kwargs: object) -> list[Path]:
+        lookup_started.set()
+        assert lookup_release.wait(2)
+        return [packlist]
+
+    monkeypatch.setattr(archive, "find_packing_lists_for_invoice", find_packing_lists)
     view._table.select_source_row(0)  # noqa: SLF001
     view._update_plc_controls()  # noqa: SLF001
     queued: list[tuple[object, str, str]] = []
@@ -1042,6 +1053,17 @@ def test_archived_packing_lists_appear_in_view_and_print_menus(
     )
     monkeypatch.setattr(QMessageBox, "information", lambda *_args: None)
 
+    ui_heartbeat: list[bool] = []
+    timer = QTimer(view)
+    timer.timeout.connect(lambda: ui_heartbeat.append(True))
+    timer.start(5)
+    qtbot.waitUntil(lookup_started.is_set)  # type: ignore[attr-defined]
+    qtbot.waitUntil(lambda: bool(ui_heartbeat))  # type: ignore[attr-defined]
+    assert not view._view_packing_lists_menu.isEnabled()  # noqa: SLF001
+    lookup_release.set()
+    qtbot.waitUntil(lambda: view._view_packing_lists_menu.isEnabled())  # type: ignore[attr-defined]  # noqa: SLF001
+    timer.stop()
+
     view._populate_packing_list_menus()  # noqa: SLF001
 
     assert view._view_packing_lists_menu.isEnabled()  # noqa: SLF001
@@ -1058,6 +1080,20 @@ def test_archived_packing_lists_appear_in_view_and_print_menus(
     release.set()
     qtbot.waitUntil(lambda: view._archived_packing_list_worker is None)  # type: ignore[attr-defined]  # noqa: SLF001
     assert queued == [(container, str(packlist), "20844")]
+
+
+def test_packing_list_menu_timestamp_does_not_stat_archive_file(monkeypatch: object) -> None:
+    def unexpected_stat(_path: Path, *_args: object, **_kwargs: object) -> object:
+        raise AssertionError("Packlisten-Menue darf keine Datei-Metadaten lesen")
+
+    monkeypatch.setattr(Path, "stat", unexpected_stat)
+
+    label = RechnungenView._packing_list_menu_label(  # noqa: SLF001
+        "C:/archive/20844 - RE-1 - Packlisten - 20261013_090000.pdf",
+        1,
+    )
+
+    assert label.endswith("erstellt 13.10.2026 09:00")
 
 
 def test_multi_shipment_button_opens_all_labels_and_packing_lists(
@@ -1079,16 +1115,24 @@ def test_multi_shipment_button_opens_all_labels_and_packing_lists(
     packing_list.write_bytes(b"%PDF-1.7\npacking list")
     archive.refresh_index()
     view._plc_label_archive = archive  # noqa: SLF001
+    view._plc_archive_index_ready = True  # noqa: SLF001
     view._summaries = [summary]  # noqa: SLF001
     view._table.set_data([summary.as_table_row()])  # noqa: SLF001
     view._table.select_source_row(0)  # noqa: SLF001
     view._update_plc_controls()  # noqa: SLF001
 
+    qtbot.waitUntil(
+        lambda: ("20844", "RE-DRAFT") in view._plc_archive_lookup_cache,  # noqa: SLF001
+        timeout=2000,
+    )
+
     assert view._btn_multi_shipments.isHidden()  # noqa: SLF001
 
     second.write_bytes(b"%PDF-1.7\nsecond")
     archive.refresh_index()
+    view._plc_archive_lookup_cache.clear()  # noqa: SLF001
     view._update_plc_controls()  # noqa: SLF001
+    qtbot.waitUntil(lambda: not view._btn_multi_shipments.isHidden(), timeout=2000)  # type: ignore[attr-defined]  # noqa: SLF001
 
     assert not view._btn_multi_shipments.isHidden()  # noqa: SLF001
     view._populate_multi_shipment_menu()  # noqa: SLF001
