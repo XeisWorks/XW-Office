@@ -30,6 +30,17 @@ class SettingKvRepository:
             row = session.get(SettingKV, key)
             return None if row is None else row.value_json
 
+    def get_values_json(self, keys: list[str] | tuple[str, ...]) -> dict[str, str]:
+        """Read several settings in one query and one database round trip."""
+        clean_keys = tuple(dict.fromkeys(key for key in keys if key))
+        if not clean_keys:
+            return {}
+        with self._scope() as session:
+            rows = session.execute(
+                select(SettingKV.key, SettingKV.value_json).where(SettingKV.key.in_(clean_keys))
+            ).all()
+            return {key: value_json for key, value_json in rows}
+
     def list_values_json_by_prefix(self, prefix: str) -> dict[str, str]:
         """List settings with one namespace prefix in deterministic key order."""
         clean_prefix = str(prefix or "")

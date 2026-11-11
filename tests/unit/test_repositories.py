@@ -54,6 +54,18 @@ def test_setting_kv_round_trip(session_factory: sessionmaker[Session]) -> None:
         assert raw == '{"mode":"dark"}'
 
 
+def test_setting_kv_reads_multiple_values_in_one_call(session_factory: sessionmaker[Session]) -> None:
+    repo = SettingKvRepository(session_factory)
+    repo.set_value_json("ui.theme", '{"mode":"dark"}')
+    repo.set_value_json("ui.language", '"de"')
+
+    assert repo.get_values_json(["ui.theme", "ui.language", "missing"]) == {
+        "ui.theme": '{"mode":"dark"}',
+        "ui.language": '"de"',
+    }
+    assert repo.get_values_json([]) == {}
+
+
 def test_setting_kv_lists_values_by_prefix_in_key_order(
     session_factory: sessionmaker[Session],
 ) -> None:

@@ -16,9 +16,14 @@ from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 class _Settings:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
+        self.bulk_reads: list[tuple[str, ...]] = []
 
     def get_value_json(self, key: str) -> str | None:
         return self.values.get(key)
+
+    def get_values_json(self, keys: list[str]) -> dict[str, str]:
+        self.bulk_reads.append(tuple(keys))
+        return {key: self.values[key] for key in keys if key in self.values}
 
     def mutate_value_json(self, key: str, mutator: object) -> str:
         updated = mutator(self.values.get(key))
@@ -96,6 +101,16 @@ def test_new_draft_is_checked_for_start_by_default() -> None:
     rows = service._rows_with_fulfillment([InvoiceSummary(id="43", status=100)])  # noqa: SLF001
     assert rows[0]["__start_selectable__"] is True
     assert rows[0]["__start_checked__"] is True
+
+
+def test_invoice_rows_read_fulfillment_and_start_holds_in_one_snapshot() -> None:
+    service, settings = _service()
+    service.defer_invoice_from_start("42", "customer_question")
+
+    rows = service._rows_with_fulfillment([InvoiceSummary(id="42", status=100)])  # noqa: SLF001
+
+    assert rows[0]["__start_checked__"] is False
+    assert settings.bulk_reads == [("rechnungen.fulfillment_status", START_HOLDS_KEY)]
 
 
 def test_full_start_only_receives_ready_drafts() -> None:

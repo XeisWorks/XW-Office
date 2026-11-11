@@ -547,6 +547,10 @@ class InvoiceProcessingService:
         if self._settings_repo is None:
             return {}
         raw = self._settings_repo.get_value_json(START_HOLDS_KEY)
+        return self._parse_start_holds(raw)
+
+    @staticmethod
+    def _parse_start_holds(raw: str | None) -> dict[str, StartHold]:
         try:
             payload = json.loads(raw) if raw else {}
         except (TypeError, json.JSONDecodeError) as exc:
@@ -4127,6 +4131,10 @@ class InvoiceProcessingService:
         if self._settings_repo is None:
             return {}
         raw = self._settings_repo.get_value_json(_FULFILLMENT_STATUS_KEY)
+        return self._parse_fulfillment_flags_map(raw)
+
+    @staticmethod
+    def _parse_fulfillment_flags_map(raw: str | None) -> dict[str, FulfillmentFlags]:
         if not raw:
             return {}
         try:
@@ -4148,8 +4156,18 @@ class InvoiceProcessingService:
         rows: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         row_list = rows if rows is not None else [s.as_table_row() for s in summaries]
-        states = self._load_fulfillment_flags_map()
-        start_holds = self.list_start_holds()
+        if self._settings_repo is None:
+            states, start_holds = {}, {}
+        else:
+            read_many = getattr(self._settings_repo, "get_values_json", None)
+            if callable(read_many):
+                settings = read_many([_FULFILLMENT_STATUS_KEY, START_HOLDS_KEY])
+                states = self._parse_fulfillment_flags_map(settings.get(_FULFILLMENT_STATUS_KEY))
+                start_holds = self._parse_start_holds(settings.get(START_HOLDS_KEY))
+            else:
+                # Keep compatibility with lightweight repository fakes used by older callers.
+                states = self._load_fulfillment_flags_map()
+                start_holds = self.list_start_holds()
         for summary, row in zip(summaries, row_list):
             flags = states.get(summary.id)
             if flags is None:
