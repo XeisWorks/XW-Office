@@ -667,8 +667,9 @@ class ProductCatalogService:
     @property
     def unreleased_products_loaded(self) -> bool:
         """Whether the disk/setting-backed unreleased catalog is already cached."""
-        with self._unreleased_cache_lock:
-            return self._unreleased_products is not None
+        # Do not wait for the cache lock here: the first load holds it during
+        # disk/settings I/O, and this status check is also used on the UI thread.
+        return self._unreleased_products is not None
 
     def unreleased_owners(self) -> list[str]:
         return sorted(

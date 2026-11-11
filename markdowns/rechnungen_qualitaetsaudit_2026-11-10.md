@@ -773,6 +773,8 @@ AP06/AP08 Windows-Regression auf ba77a44 (Hosted Run 43026932649): Der Prozess e
 
 Nach Fast-Forward auf 5bb2136 bestanden ausserdem die vollstaendige Rechnungs-UI-Smoke-Datei und der neue Inventurzaehldialog zusammen mit **90 Tests** (16,13 s); Ruff und Diff-Pruefung blieben gruen.
 
+AP06/AP08 Katalog-Cache-Race: Der Windows-Run 43029061301 brach bei 12 Prozent erneut mit Access Violation ab, diesmal waehrend test_late_invoice_product_configuration_is_discarded_after_selection_change und parallel laufendem warm_catalog(). Commit 259016d fuehrt einen reentrant lock fuer Cache-Initialisierung und Invalidierung ein und ergaenzt einen Parallel-Warmup-Test. Die Rechnungs-Regression test_unreleased_catalog_disk_and_settings_read_runs_off_ui_thread deckte auf, dass auch der reine unreleased_products_loaded-Statusgetter nicht auf den Lock warten darf: dessen Ladepfad haelt den Lock waehrend Disk-/Settings-I/O und wuerde sonst den GUI-Thread blockieren. Der Getter liest jetzt die atomare Cache-Referenz ohne Lock; die Initialisierung selbst bleibt serialisiert. Katalog- plus Rechnungs-Smokes: **95 bestanden**; Ruff, striktes MyPy fuer catalog.py und git diff --check bestanden. Hosted Run 43030648930 fuer 259016d laeuft und enthaelt diesen lockfreien Getter-Fix noch nicht; ein Folge-Run startet nach Push.
+
 Der finale Suite-Nachweis dieses Fortschreibungsschritts steht oben. Weitere Commit-/Push-Nachweise werden nach ihrer Integration ergänzt. Das folgende statische Inventar
 wurde aus dem vorherigen Quellstand erzeugt und dient als Navigationshilfe; nach
 spaeteren Codeaenderungen koennen einzelne Zeilennummern abweichen.
