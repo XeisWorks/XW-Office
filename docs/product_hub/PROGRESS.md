@@ -12,9 +12,11 @@ Stabiler Gesamt-Regressionslauf am 11. November 2026: `python -m pytest -q` → 
 
 Read-only Betriebscheck am 11. November 2026: Railway-Projekt **XW-Office** und der
 Service **XW-Product-Hub** sind online; `https://products.xeisworks.at/health` liefert
-HTTP 200. Es existiert noch kein separater `xw-inventory-worker`-Service, und in den
-Railway-Variablen ist kein sevDesk-Zugang hinterlegt. Deshalb bleiben Worker-Aktivierung,
-Live-Forecast/Abgleich und der Product-Hub-Cutover weiterhin bewusst offen.
+HTTP 200. Der laufende Container bestätigt per `alembic current` den Head
+`037_plc_parcel_evidence`. Es existiert noch kein separater `xw-inventory-worker`-Service;
+remote sind `DATABASE_URL`, Graph-Client-ID und Tenant gesetzt, aber
+`SEVDESK_API_TOKEN` und `MS_GRAPH_MAILBOX` fehlen. Deshalb bleiben Worker-Aktivierung,
+Live-Forecast/Abgleich, Graph-Mailbetrieb und der Product-Hub-Cutover weiterhin bewusst offen.
 
 P08 ergänzt den read-only `scripts/product_hub/export_inventory_snapshot.py`-Snapshot für Ledger-, Bestands-, Buchungs-, Alarm-, Inventur- und Sync-Zustände. Er unterstützt die Cutover-Vorbereitung, ersetzt aber kein provider-natives PostgreSQL-Backup.
 Die automatisierte Rollback-Probe deckt zusätzlich ab, dass ein Zurücksetzen der Master-Konfiguration Ledger und materialisierten Bestand unverändert lässt; Produktions-Rollback und Backup bleiben manuelle Nachweise.
