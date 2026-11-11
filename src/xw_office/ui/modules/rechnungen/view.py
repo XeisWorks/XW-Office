@@ -1422,6 +1422,7 @@ class RechnungenView(QWidget):
         self._detail_context_seq = 0
         self._table_layout_initialized = False
         self._open_overview_key = ""
+        self._open_overview_visible_key = ""
         self._open_overview_cached_physical = 0
         self._open_overview_cached_digital = 0
         self._open_overview_cached_note = 0
@@ -3196,6 +3197,7 @@ class RechnungenView(QWidget):
             self._open_physical.setText("0")
             self._open_digital.setText("0")
             self._open_overview_key = ""
+            self._open_overview_visible_key = ""
             self._open_overview_cached_physical = 0
             self._open_overview_cached_digital = 0
             self._open_overview_cached_note = 0
@@ -3207,7 +3209,11 @@ class RechnungenView(QWidget):
             self._open_overview_unreleased = []
             return
 
-        if overview.key and overview.key == self._open_overview_key and self._open_overview_complete:
+        if (
+            overview.key
+            and overview.key == self._open_overview_visible_key
+            and self._open_overview_complete
+        ):
             for key, value in overview.cache_updates.items():
                 self._wix_digital_cache[str(key)] = bool(value)
             self._open_total.setText(str(max(0, overview.total)))
@@ -3236,11 +3242,13 @@ class RechnungenView(QWidget):
                 self._render_unreleased_assignments(cached_overview)
             return
 
+        # Keep the key for the currently visible invoice page separate from the
+        # full cross-page result produced by the background worker.  This lets a
+        # later table reload start a new full scan when the visible page changes.
+        self._open_overview_visible_key = overview.key
         self._apply_open_invoice_overview(overview)
-        has_refs = any(str(summary.order_reference or "").strip() for summary in open_rows)
-        if has_refs:
-            self._open_overview_products_text = "Print-Produkte werden ermittelt..."
-            self._start_open_invoice_overview(open_rows)
+        self._open_overview_products_text = "Print-Produkte werden ermittelt..."
+        self._start_open_invoice_overview(open_rows)
 
     def _start_open_invoice_overview(
         self,
@@ -3251,15 +3259,14 @@ class RechnungenView(QWidget):
         except Exception:  # noqa: BLE001 - the local overview remains available.
             wix_client = None
         key = open_invoice_overview_key(open_rows)
-        if key != self._open_overview_key:
+        if self._open_overview_visible_key and key != self._open_overview_visible_key:
             return
+        self._open_overview_visible_key = key
         unknown_rows = unknown_open_invoice_summaries(
             open_rows,
             digital_cache=self._wix_digital_cache,
             wix_client=wix_client,
         )
-        if not unknown_rows:
-            return
         try:
             invoice_service: InvoiceProcessingService | None = self._container.resolve(InvoiceProcessingService)
         except Exception:  # noqa: BLE001 - overview still works without SKU flags.
@@ -3293,12 +3300,10 @@ class RechnungenView(QWidget):
         return True
 
     def _create_open_overview_worker(self) -> BackgroundWorker | None:
-        if not self._pending_open_overview_rows:
-            return None
         seq = self._open_overview_seq
         snapshot = list(self._pending_open_overview_rows[:_OPEN_OVERVIEW_BATCH_SIZE])
         del self._pending_open_overview_rows[:_OPEN_OVERVIEW_BATCH_SIZE]
-        all_rows = list(self._open_overview_all_rows)
+        loaded_rows = list(self._open_overview_all_rows)
         is_final_batch = not self._pending_open_overview_rows
         digital_cache = dict(self._wix_digital_cache)
         logger.debug(
@@ -3320,6 +3325,23 @@ class RechnungenView(QWidget):
             )
             payload = {"batch": batch}
             if is_final_batch:
+                all_rows = loaded_rows
+                try:
+                    fetched_rows = service.load_all_open_invoice_summaries(
+                        limit_per_page=100,
+                        max_pages=100,
+                    )
+                    by_id = {
+                        str(summary.id or "").strip(): summary
+                        for summary in [*loaded_rows, *fetched_rows]
+                        if str(summary.id or "").strip()
+                    }
+                    all_rows = list(by_id.values())
+                except Exception:  # noqa: BLE001 - retain the visible-page fallback.
+                    logger.exception(
+                        "Rechnungen open-overview full sevDesk pagination failed; "
+                        "using currently loaded rows"
+                    )
                 payload["final"] = resolve_open_invoice_overview(
                     all_rows,
                     seq=seq,

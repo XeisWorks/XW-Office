@@ -1014,6 +1014,33 @@ def test_start_fullflow_recovers_invoice_by_wix_reference_after_product_creation
     assert mailer.calls[0]["subject"] == "Rechnung zu Bestellung 20519 (RE-NEW)"
 
 
+def test_load_all_open_invoice_summaries_pages_until_exhausted() -> None:
+    rows = [
+        InvoiceSummary(id="open-1", invoiceNumber="RE-1", status_code=100),
+        InvoiceSummary(id="open-2", invoiceNumber="RE-2", status_code=100),
+        InvoiceSummary(id="open-3", invoiceNumber="RE-3", status_code=100),
+    ]
+
+    class PagingClient(_InvoiceClientStub):
+        def list_invoice_summaries(
+            self, *, limit: int = 50, offset: int = 0, status: int | None = None
+        ) -> list[InvoiceSummary]:
+            return list(self._rows[offset : offset + limit])
+
+    client = PagingClient(rows)
+    service = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        _RepoStub({}),
+        None,
+        _MailServiceStub(),  # type: ignore[arg-type]
+    )
+
+    loaded = service.load_all_open_invoice_summaries(limit_per_page=2, max_pages=5)
+
+    assert [summary.id for summary in loaded] == ["open-1", "open-2", "open-3"]
+
+
 def test_start_fullflow_auto_books_paid_wix_payment() -> None:
     summary = InvoiceSummary(id="21", invoiceNumber="RE-TEST-21", order_reference="20519", sum_gross="29.90")
     client = _InvoiceClientStub([summary])
@@ -1620,6 +1647,54 @@ def test_send_invoice_mail_uses_graph_without_calling_sevdesk() -> None:
     assert client.mail_calls == []
     assert mailer.calls[0]["to_email"] == "max@example.test"
     assert len(mailer.calls[0]["attachments"]) == 1
+
+
+def test_start_sends_one_graph_mail_after_sevdesk_marks_pdf_as_sent() -> None:
+    summary = InvoiceSummary(id="one-mail", invoiceNumber="RE-ONE-MAIL")
+
+    class FinalizingClient(_InvoiceClientStub):
+        def send_invoice_document(
+            self, invoice_id: str, *, send_type: str, send_draft: bool
+        ) -> None:
+            super().send_invoice_document(invoice_id, send_type=send_type, send_draft=send_draft)
+            self.invoice_payloads[invoice_id] = {
+                "id": invoice_id,
+                "invoiceNumber": summary.invoice_number,
+                "status": 200,
+                "sendType": send_type,
+                "sent": True,
+                "sendDate": "2026-11-11T12:00:00+01:00",
+                "contact": {"emails": [{"value": "max@example.test"}]},
+            }
+
+    client = FinalizingClient([summary])
+    mailer = _MailServiceStub()
+    service = InvoiceProcessingService(
+        AppConfig(), client, _RepoStub({}), None, mailer  # type: ignore[arg-type]
+    )
+
+    result = service.run_start_fullflow(full_mode=False, invoice_ids=[summary.id])
+    service.send_invoice_mail_for_invoice(summary)
+
+    assert result["successful"] == 1
+    assert client.last_send_document["send_type"] == "VPDF"
+    assert client.send_invoice_document_calls == 1
+    assert client.send_invoice_mail_calls == 0
+    assert len(mailer.calls) == 1
+    assert mailer.calls[0]["shared_sender_mailbox"] == "shop@xeisworks.at"
+
+
+def test_invoice_finalization_rejects_sevdesk_mail_send_type() -> None:
+    client = _InvoiceClientStub([])
+    service = InvoiceProcessingService(
+        AppConfig(), client, _RepoStub({}), None, _MailServiceStub()  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ValueError, match="keinen sevDesk-Mailversand"):
+        service._send_invoice_document_once("invoice-1", send_type="VM")  # noqa: SLF001
+
+    assert client.send_invoice_document_calls == 0
+    assert client.send_invoice_mail_calls == 0
 
 
 def test_send_invoice_mail_skips_graph_fallback_if_sevdesk_marked_sent_after_error() -> None:

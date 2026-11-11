@@ -1661,6 +1661,8 @@ class InvoiceProcessingService:
 
     def _send_invoice_document_once(self, invoice_id: str, *, send_type: str) -> None:
         """Finalize one invoice behind the same durable claim used by START/manual paths."""
+        if send_type not in {"VPR", "VPDF"}:
+            raise ValueError("Rechnungsfreigabe erlaubt nur VPR oder VPDF, keinen sevDesk-Mailversand.")
         claim = self._operation_claims.acquire(invoice_id, "invoice_finalize")
         if not claim.acquired:
             if claim.state == "succeeded":
@@ -2193,6 +2195,23 @@ class InvoiceProcessingService:
                 break
             offset += limit_per_page
         return all_rows
+
+    def load_all_open_invoice_summaries(
+        self, *, limit_per_page: int = 100, max_pages: int = 100
+    ) -> list[InvoiceSummary]:
+        """Load every currently open sevDesk invoice for cross-invoice planning.
+
+        The table view deliberately pages for responsiveness, but stock allocation
+        must not treat an unseen page as if it had no demand.  Keep the bounded
+        pagination in the service layer so desktop/background consumers share the
+        same status filter and normalization rules.
+        """
+        page_size = max(1, int(limit_per_page))
+        page_limit = max(1, int(max_pages))
+        return self._load_all_open_drafts(
+            limit_per_page=page_size,
+            max_pages=page_limit,
+        )
 
     def _load_start_target_summaries(
         self, *, invoice_ids: list[str] | None = None
@@ -3727,8 +3746,9 @@ class InvoiceProcessingService:
         if isinstance(send_type, dict):
             send_type = send_type.get("id") or send_type.get("value") or send_type.get("name")
         send_type_norm = str(send_type or "").strip().lower()
-        if send_type_norm in ("vm", "mail", "email", "e-mail"):
-            return True
+        if send_type_norm:
+            # sendBy VPR/VPDF marks the document as sent, but does not mail it.
+            return send_type_norm in ("vm", "mail", "email", "e-mail")
 
         sent_flag = invoice.get("sent") if isinstance(invoice, dict) else None
         if isinstance(sent_flag, bool) and sent_flag:
@@ -3737,7 +3757,7 @@ class InvoiceProcessingService:
             return True
 
         send_date = invoice.get("sendDate") if isinstance(invoice, dict) else None
-        if send_date and send_type_norm in ("", "vm", "mail", "email", "e-mail"):
+        if send_date:
             return True
         return False
 
