@@ -561,7 +561,7 @@ class ConflictWizardService:
     def wix_reconciliation_dispositions(self) -> list[WixReconciliationDisposition]:
         """Return durable decisions for Wix-only catalog positions."""
         with session_scope(self._factory) as session:
-            return session.scalars(select(WixReconciliationDisposition)).all()
+            return list(session.scalars(select(WixReconciliationDisposition)).all())
 
     def set_wix_reconciliation_disposition(
         self,
