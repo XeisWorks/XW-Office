@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from scripts.product_hub.export_inventory_snapshot import _resolve_database_url, export_snapshot
 from xw_office.models.base import Base
 from xw_office.models.product_hub_inventory import InventoryLocation, InventoryStock
+from xw_office.models.settings_kv import SettingKV
 
 
 def test_export_inventory_snapshot_contains_inventory_state(tmp_path: Path) -> None:
@@ -28,6 +29,12 @@ def test_export_inventory_snapshot_contains_inventory_state(tmp_path: Path) -> N
                 reorder_point=5, automatic_reorder_point=6,
             )
         )
+        session.add(
+            SettingKV(
+                key="product_hub.sevdesk_invoice_feed_start.v1",
+                value_json='{"first_eligible_date":"2026-11-12"}',
+            )
+        )
         session.commit()
 
     output = tmp_path / "inventory-cutover.json"
@@ -37,6 +44,9 @@ def test_export_inventory_snapshot_contains_inventory_state(tmp_path: Path) -> N
     stored = json.loads(output.read_text(encoding="utf-8"))
     assert stored["tables"] == payload["tables"]
     assert stored["tables"]["inventory_stock"][0]["on_hand"] == 7
+    assert payload["operational_settings"]["product_hub.sevdesk_invoice_feed_start.v1"] == (
+        '{"first_eligible_date":"2026-11-12"}'
+    )
 
 
 def test_snapshot_cli_resolves_public_database_url_without_argument(monkeypatch) -> None:

@@ -45,6 +45,7 @@ from xw_office.models.product_hub_sync import (  # noqa: E402
     SyncConflict,
     SyncCursor,
 )
+from xw_office.models.settings_kv import SettingKV  # noqa: E402
 
 
 _TABLES = (
@@ -61,6 +62,10 @@ _TABLES = (
     SyncCursor,
     OutboxEvent,
     ExternalPayloadArchive,
+)
+_OPERATIONAL_SETTING_KEYS = (
+    "product_hub.sevdesk_invoice_feed_checkpoint.v1",
+    "product_hub.sevdesk_invoice_feed_start.v1",
 )
 
 
@@ -110,6 +115,11 @@ def export_snapshot(database_url: str, out_path: Path) -> dict[str, Any]:
             rows = list(session.scalars(select(model)))
             snapshot["tables"][model.__tablename__] = [_row_to_dict(row) for row in rows]
             print(f"  {model.__tablename__}: {len(rows)} rows")
+        settings = session.query(SettingKV).filter(SettingKV.key.in_(_OPERATIONAL_SETTING_KEYS)).all()
+        snapshot["operational_settings"] = {
+            row.key: row.value_json for row in settings if row.key in _OPERATIONAL_SETTING_KEYS
+        }
+        print(f"  operational_settings: {len(settings)} rows")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Inventory snapshot written to {out_path} ({out_path.stat().st_size} bytes)")
