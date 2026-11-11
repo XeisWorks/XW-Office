@@ -7948,6 +7948,10 @@ class RechnungenView(QWidget):
         This is shared by the PRINT PRODUKTE '+' button and the unknown-title
         clarification popup, so both entry points retain the invoice alias.
         """
+        if self._unreleased_catalog_worker is not None and self._unreleased_catalog_worker.isRunning():
+            signals: AppSignals = self._container.resolve(AppSignals)
+            signals.status_message.emit("Unreleased-Katalog wird gerade aktualisiert.", 3000)
+            return None
         catalog = self._container.resolve(ProductCatalogService)
         raw_input = str(raw_title or "").strip()
         lines = [line.strip() for line in raw_input.splitlines() if line.strip()]
@@ -8074,6 +8078,10 @@ class RechnungenView(QWidget):
         def finish(ok: bool, error: str = "") -> None:
             if on_complete is not None:
                 on_complete(ok, error)
+
+        if self._unreleased_catalog_worker is not None and self._unreleased_catalog_worker.isRunning():
+            finish(False, "Eine andere Unreleased-Katalogaktion ist noch aktiv.")
+            return
 
         def clarify_issue(index: int) -> None:
             if self._shutting_down or (should_abort is not None and should_abort()):
@@ -8227,6 +8235,7 @@ class RechnungenView(QWidget):
         error = ""
         worker = BackgroundWorker(write)
         self._unreleased_catalog_worker = worker
+        self._table.setEnabled(False)
 
         def on_result(value: object) -> None:
             nonlocal result
@@ -8240,6 +8249,8 @@ class RechnungenView(QWidget):
             if self._unreleased_catalog_worker is not worker:
                 return
             self._unreleased_catalog_worker = None
+            if not self._shutting_down:
+                self._table.setEnabled(True)
             if self._shutting_down or worker.cancelled:
                 return
             on_done(not error, error, result)

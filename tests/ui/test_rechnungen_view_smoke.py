@@ -323,6 +323,7 @@ def test_unreleased_settings_write_runs_off_ui_thread_and_reports_after_commit(
         lambda ok, error, payload: result.append((ok, error, payload)),
     )
     assert entered.wait(timeout=1)
+    assert view._table.isEnabled() is False  # noqa: SLF001
     QTimer.singleShot(0, lambda: heartbeat.append(True))
     qtbot.waitUntil(lambda: bool(heartbeat), timeout=500)
     assert result == []
@@ -331,6 +332,7 @@ def test_unreleased_settings_write_runs_off_ui_thread_and_reports_after_commit(
     qtbot.waitUntil(lambda: bool(result), timeout=2000)
     assert committed.is_set()
     assert result == [(True, "", "saved")]
+    assert view._table.isEnabled() is True  # noqa: SLF001
 
 
 def test_start_product_preflight_continues_only_after_unreleased_commit(
@@ -352,12 +354,6 @@ def test_start_product_preflight_continues_only_after_unreleased_commit(
         ) -> None:
             del should_abort
             completion.append(on_complete)
-
-        def request_shutdown(self) -> None:
-            return
-
-        def shutdown_complete(self) -> bool:
-            return True
 
     plan = ProductPreflightPlan(
         issues=[],
