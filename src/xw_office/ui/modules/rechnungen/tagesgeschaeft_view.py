@@ -428,14 +428,18 @@ class TagesgeschaeftView(QWidget):
         self._shutdown_requested = True
         self._start_abort_requested = True
         if self._rechnungen_view is not None:
-            self._rechnungen_view.request_shutdown()
+            request_shutdown = getattr(self._rechnungen_view, "request_shutdown", None)
+            if callable(request_shutdown):
+                request_shutdown()
         for worker in self._shutdown_workers():
             if worker.isRunning():
                 worker.cancel()
 
     def shutdown_complete(self) -> bool:
-        if self._rechnungen_view is not None and not self._rechnungen_view.shutdown_complete():
-            return False
+        if self._rechnungen_view is not None:
+            shutdown_complete = getattr(self._rechnungen_view, "shutdown_complete", None)
+            if callable(shutdown_complete) and not shutdown_complete():
+                return False
         return not any(worker.isRunning() for worker in self._shutdown_workers())
 
     def _shutdown_workers(self) -> tuple[BackgroundWorker, ...]:
