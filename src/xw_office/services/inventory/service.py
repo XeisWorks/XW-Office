@@ -366,11 +366,14 @@ class InventoryService:
         self._save_stock_levels(stock_levels)
         for decision in preflight.decisions:
             if decision.sku in printed_skus:
+                current = max(0, int(decision.on_hand_qty))
+                produced = max(0, int(decision.final_print_qty))
                 self._record_stock_movement(
                     sku=decision.sku,
-                    delta=max(0, int(decision.final_print_qty)),
+                    delta=produced,
                     reason="print_run",
                     source="legacy_inventory.execute_reprint_workflow",
+                    idempotency_key=f"reprint:{decision.sku}:{current}:{produced}",
                 )
         return ReprintExecutionReport(
             decisions_count=len(preflight.decisions),
@@ -418,7 +421,7 @@ class InventoryService:
         printed_skus: list[str] = []
         consumed_skus: list[str] = []
         warnings: list[str] = []
-        shadow_movements: list[tuple[str, int, str]] = []
+        shadow_movements: list[tuple[str, int, str, str]] = []
 
         for decision in preflight.decisions:
             current = max(0, int(stock_levels.get(decision.sku, decision.on_hand_qty)))
@@ -435,19 +438,34 @@ class InventoryService:
 
             if produced > 0:
                 printed_skus.append(decision.sku)
-                shadow_movements.append((decision.sku, produced, "print_run"))
+                shadow_movements.append(
+                    (
+                        decision.sku,
+                        produced,
+                        "print_run",
+                        f"start-print:{decision.sku}:{current}:{produced}",
+                    )
+                )
             if consumed > 0:
                 consumed_skus.append(decision.sku)
                 if mirror_sales_to_hub:
-                    shadow_movements.append((decision.sku, -consumed, "sale"))
+                    shadow_movements.append(
+                        (
+                            decision.sku,
+                            -consumed,
+                            "sale",
+                            f"start-sale:{decision.sku}:{current}:{produced}:{consumed}",
+                        )
+                    )
 
         self._save_stock_levels(stock_levels)
-        for sku, delta, reason in shadow_movements:
+        for sku, delta, reason, idempotency_key in shadow_movements:
             self._record_stock_movement(
                 sku=sku,
                 delta=delta,
                 reason=reason,
                 source="legacy_inventory.execute_start_workflow",
+                idempotency_key=idempotency_key,
             )
         return StartExecutionReport(
             mode=mode,

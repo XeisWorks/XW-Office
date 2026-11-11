@@ -282,11 +282,13 @@ def test_start_workflow_mirrors_print_and_sale_as_separate_ledger_reasons(tmp_pa
             "sku": "XW-6-003", "delta": 4, "reason": "print_run",
             "source": "legacy_inventory.execute_start_workflow",
             "external_reference": "inventory.stock_levels",
+            "idempotency_key": "start-print:XW-6-003:1:4",
         },
         {
             "sku": "XW-6-003", "delta": -2, "reason": "sale",
             "source": "legacy_inventory.execute_start_workflow",
             "external_reference": "inventory.stock_levels",
+            "idempotency_key": "start-sale:XW-6-003:1:4:2",
         },
     ]
 
@@ -566,6 +568,7 @@ def test_execute_reprint_workflow_only_adds_printed_stock(tmp_path: Path) -> Non
         "sku": "XW-6-003", "delta": 3, "reason": "print_run",
         "source": "legacy_inventory.execute_reprint_workflow",
         "external_reference": "inventory.stock_levels",
+        "idempotency_key": "reprint:XW-6-003:2:3",
     }]
 
 
