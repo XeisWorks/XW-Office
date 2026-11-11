@@ -232,8 +232,7 @@ class InventoryProjectionService:
         product_mappings: dict[tuple[str, uuid.UUID], ChannelMapping],
     ) -> list[_Target]:
         variant_mappings = self._variant_mappings(variants)
-        targets: list[_Target] = []
-        used: dict[str, uuid.UUID] = {}
+        candidates: list[_Target] = []
         for variant in variants:
             product = products_by_id[variant.product_id]
             mapping = variant_mappings.get(("sevdesk", variant.id))
@@ -250,18 +249,19 @@ class InventoryProjectionService:
             if not external_id:
                 continue
             assert mapping is not None
-            owner = used.get(external_id)
-            if owner is not None and owner != variant.id:
-                logger.warning("Skipping duplicate sevDesk Part mapping %s", external_id)
-                continue
-            used[external_id] = variant.id
-            targets.append(
+            candidates.append(
                 _Target(
                     variant=variant, product=product, mapping=mapping, external_id=external_id,
                     external_parent_id="",
                 )
             )
-        return targets
+        counts: dict[str, int] = {}
+        for candidate in candidates:
+            counts[candidate.external_id] = counts.get(candidate.external_id, 0) + 1
+        duplicate_ids = {external_id for external_id, count in counts.items() if count > 1}
+        if duplicate_ids:
+            logger.warning("Skipping duplicate sevDesk Part mappings: %s", sorted(duplicate_ids))
+        return [candidate for candidate in candidates if candidate.external_id not in duplicate_ids]
 
     def _project_sevdesk(
         self, target: _Target, stock: InventoryStock | None, *, dry_run: bool
