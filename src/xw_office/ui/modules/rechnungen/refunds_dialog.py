@@ -69,6 +69,12 @@ class RefundsDialog(QDialog):
         self._closing = True
         super().reject()
 
+    def accept(self) -> None:
+        if self._write_is_running():
+            return
+        self._closing = True
+        super().accept()
+
     def _write_is_running(self) -> bool:
         return self._write_worker is not None
 

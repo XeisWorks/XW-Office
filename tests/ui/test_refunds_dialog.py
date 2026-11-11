@@ -95,6 +95,7 @@ def test_refund_dialog_stays_open_during_mail_write(qtbot) -> None:
     try:
         dialog._start_worker(send_mail, lambda _payload: None, blocks_close=True)  # noqa: SLF001
         qtbot.waitUntil(entered.is_set, timeout=1000)
+        dialog.accept()
         dialog.reject()
         dialog.close()
         assert dialog.isVisible()
