@@ -372,6 +372,9 @@ Payment-Link-Writes, damit Ergebnis oder unklarer Ausgang sichtbar bleiben. Der
 Produktlade-Callback ignoriert Ergebnisse nach Dialogschluss; Workerabschluss
 raeumt nur den zugehoerigen Worker auf. Regressionstest mit blockiertem Fake-Write:
 Close bleibt bis zum Abschluss verhindert, danach wird das Ergebnis angezeigt.
+Vollsuite auf Windows CI Run 43068708273: 2.195 bestanden, 5 uebersprungen,
+1 PyMuPDF-FutureWarning in 605,44 s; Ruff erfolgreich. Der globale MyPy-Gate
+bleibt mit 359 Fehlern in 63 Dateien rot (keiner in den geaenderten Dateien).
 
 Verbleibende UI-I/O-Slots auf vorhandenen
 `UiAsyncAction`/BackgroundWorker umstellen. Snapshot/Identität vor Workerstart;
