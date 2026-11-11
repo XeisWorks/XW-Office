@@ -162,7 +162,7 @@ packages:
       - Persistierte Ursprungsreferenzen begrenzen die Summe mehrerer Teilgutschriften auf die gebuchte Verkaufsmenge.
       - SevDesk-Gegenbeleg-Feed und `needs_review`-Fallliste laufen über `xw-inventory-worker`; die bestehende Refund-UI bleibt ein separater manueller Erzeugungspfad und erzeugt keine automatische Doppelbuchung.
       - SevdeskCreditNoteInventoryService verarbeitet einen Provider-Jahresfeed konservativ: nur explizite Ursprungsrechnung/-position werden gebucht, alle anderen Fälle landen in needs_review.
-      - `xw-inventory-sync` pollt finale externe Rechnungen und rescannt Gutschriften idempotent; unklare Positionen werden im JSON-Ergebnis als `needs_review` ausgegeben und mit Exit-Code 1 signalisiert.
+      - "`xw-inventory-sync` pollt finale externe Rechnungen und rescannt Gutschriften idempotent; unklare Positionen werden im JSON-Ergebnis als `needs_review` ausgegeben und mit Exit-Code 1 signalisiert."
     scope:
       - Finale sevDesk-Stornos und Gutschriften mit Ursprungsrechnung und Positionsmengen verknüpfen.
       - Voll- und Teilmengen automatisch idempotent als eigene Gegenbewegung buchen.
@@ -184,8 +184,8 @@ packages:
       - inventory_stock speichert automatischen Vorschlag und `auto`/`fixed`-Modus getrennt vom aktiven Alarmbestand.
       - inventory_stock speichert zusätzlich Nettoabsatz, volle Verkaufsmonate, Datenfenster, Datenqualität und letzten Forecast-Zeitpunkt; Popup und Graph-Mail verwenden diese Provenienz.
       - InventoryForecastRefreshService aggregiert finale Rechnungs-/Gutschriftpositionen und aktualisiert alle aktiven physischen Varianten; die wiederholbare Worker-Ausführung ist als `xw-inventory-worker` implementiert.
-      - `SevdeskHistoryProviderAdapter` nutzt den bestehenden paginierten Monatsfeed read-only; `POST /api/v1/inventory/forecast/refresh` und `xw-inventory-forecast-refresh` liefern einen geschützten Einmal-Refresh für Desktop/Railway-Cron.
-      - `xw-inventory-worker` führt Forecast-Refresh und sevDesk-Abgleich in einem idempotenten Intervall aus; Railway-Service-Aktivierung und Datenqualitäts-Dashboard bleiben Deployment-/Betriebsgates.
+      - "`SevdeskHistoryProviderAdapter` nutzt den bestehenden paginierten Monatsfeed read-only; `POST /api/v1/inventory/forecast/refresh` und `xw-inventory-forecast-refresh` liefern einen geschützten Einmal-Refresh für Desktop/Railway-Cron."
+      - "`xw-inventory-worker` führt Forecast-Refresh und sevDesk-Abgleich in einem idempotenten Intervall aus; der Railway-Service ist aktiviert, während das Datenqualitäts-Dashboard ein Betriebs-Gate bleibt."
       - Forecast- und Sync-CLI brechen bei fehlendem `SEVDESK_API_TOKEN` vor Datenbank-/Providerzugriff mit einem eindeutigen Konfigurationsfehler ab; so entstehen keine teilweisen Produktionszyklen.
     scope:
       - 60 volle Kalendermonate aus finalen sevDesk-Positionen und eindeutigen Gegenmengen aggregieren.
@@ -229,7 +229,7 @@ packages:
     implementation_notes:
       - InventoryAlertTaskService persistiert eine Aufgabe pro Alarm, erzeugt die Mail mit SKU, Titel, Ist-/Alarmbestand, Datenfenster und Absatzfeldern und schützt Wiederholungen.
       - Die Task-Erzeugung sperrt Alarm und bestehende Task-Zeile transaktional, damit parallele Klicks denselben Duplikatschutz auch unter PostgreSQL einhalten.
-      - `GET /api/v1/inventory/alerts/tasks` stellt persistierte Versand-/Fehlerzustände für Retry- und Betriebsprüfung bereit; erneutes Senden bleibt über `explicit_resend` kontrolliert.
+      - "`GET /api/v1/inventory/alerts/tasks` stellt persistierte Versand-/Fehlerzustände für Retry- und Betriebsprüfung bereit; erneutes Senden bleibt über `explicit_resend` kontrolliert."
       - RECHNUNGEN zeigt bei offenen Product-Hub-Alarmen einen LAGERALARME-Button mit Popup, Schwellenänderung und Task-erzeugen-Aktion.
       - Das Popup zeigt automatischen Vorschlag/Modus und kann zwischen `fixed` und `auto` wechseln; Task-Mails enthalten jetzt auch Forecastwerte und Produktlink.
       - Popup und Task-Mail zeigen zusätzlich Zielbestand sowie die daraus abgeleitete empfohlene Bestell-/Nachdruckmenge; die Mail enthält Modus und Erstellzeitpunkt.
@@ -257,7 +257,7 @@ packages:
     implementation_notes:
       - Die bestehende Cutover-Readiness prüft neben Ledger-/Sync-Gates jetzt auch den read-only Bestandsquellenvertrag und Legacy-/Hub-Mengenabweichungen.
       - Der eigentliche Master-Cutover bleibt bewusst blockiert, bis Shadow-Lauf, Projektionen, Backup und Rollback außerhalb der Anwendung nachgewiesen sind.
-      - `scripts/product_hub/check_inventory_cutover.py` weist nun zusätzlich fehlende sevDesk-/Graph-Variablen und die noch manuelle Railway-Worker-Aktivierung als eigene Readiness-Gates aus, ohne Secretwerte zu drucken oder Zustand zu verändern.
+      - "`scripts/product_hub/check_inventory_cutover.py` weist nun zusätzlich fehlende sevDesk-/Graph-Variablen und den aktiven Railway-Worker-/Backup-Betriebsstatus als eigene Readiness-Gates aus, ohne Secretwerte zu drucken oder Zustand zu verändern."
     scope:
       - Gezählt/Legacy/Hub/sevDesk je Variante abgleichen und offene Konflikte bereinigen.
       - Alle produktiven Bestands-Schreibpfade, sevDesk-/Wix-Projektionen und Rollback praktisch testen.

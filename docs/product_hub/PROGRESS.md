@@ -18,6 +18,8 @@ mit Postgres-/Product-Hub-Referenzen konfiguriert und mit Deployment
 `6978341f-0087-49bb-bb04-a567397f6914` validiert aktiv. `SEVDESK_API_TOKEN` und
 `MS_GRAPH_MAILBOX` sind gesetzt; Inventur, Shadow-/Rollback-Nachweis und der
 provider-native Backup-Gate bleiben bewusst offen.
+Die Arbeitslisten-YAML ist jetzt zusätzlich durch `tests/unit/test_inventory_task_queue_yaml.py`
+gegen Syntaxfehler und die vollständige P00--P08-Paketliste abgesichert.
 Das Deployment `f7a20d67-9d87-478a-86ad-337779a1c124` für `b19e9fc` wurde am
 11. November 2026 erfolgreich gebaut und ausgerollt; `https://products.xeisworks.at/health`
 liefert HTTP 200 und der anschließende Health-/Migration-Smokecheck blieb grün.
