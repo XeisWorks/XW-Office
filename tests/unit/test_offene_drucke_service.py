@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 from xw_office.services.drucke.service import OffeneDruckeService
 from xw_office.services.drucke.xw_flow_client import FlowPrintCase
 

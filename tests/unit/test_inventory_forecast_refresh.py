@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.models.base import Base
 from xw_office.models.product_hub import Product, ProductVariant
-from xw_office.models.product_hub_inventory import InventoryStock
 from xw_office.services.product_hub.inventory_forecast_refresh import InventoryForecastRefreshService
 
 

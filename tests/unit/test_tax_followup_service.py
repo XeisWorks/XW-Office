@@ -17,7 +17,10 @@ def _service() -> tuple[TaxFollowupService, Session]:
 def test_success_is_idempotent_for_same_recipient_and_hash() -> None:
     service, session = _service()
     calls: list[str] = []
-    send = lambda: calls.append("sent")
+
+    def send() -> None:
+        calls.append("sent")
+
     first = service.send_once(
         filing_kind="eu_oss", period="2026-Q3", calculation_hash="a" * 64,
         recipient_kind="xw_flow_transfer", send=send,

@@ -6,9 +6,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.models.base import Base
-from xw_office.models.inventory_count import InventoryCountLine, InventoryCountSession
 from xw_office.models.product_hub import Product, ProductVariant
-from xw_office.models.product_hub_inventory import InventoryMovement, InventoryStock
+from xw_office.models.product_hub_inventory import InventoryMovement
 from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.product_hub.inventory_count import InventoryCountService
 
