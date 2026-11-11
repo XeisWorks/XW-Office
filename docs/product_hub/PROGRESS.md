@@ -28,7 +28,7 @@ Der Desktop-Freigabe-Orchestrator ist zusätzlich mit einem direkten Regressions
 P02 ist nun auch im Desktop bedienbar: **Geführte Inventur** erstellt aus der Produkteansicht eine eingefrorene Zählliste, erfasst Mengen und Notizen asynchron und bestätigt die Differenzen über denselben idempotenten `InventoryCountService`. Die neue UI-Regression ergänzt den gezielten Lauf (`11 bestanden`).
 Die Forecast-/Sync-CLIs prüfen `SEVDESK_API_TOKEN` jetzt vor jedem Providerzugriff und beenden einen falsch konfigurierten Worker-Zyklus eindeutig; dadurch entstehen bei fehlender Railway-Konfiguration keine teilweisen Bestandsläufe.
 Der read-only Cutover-CLI ergänzt nun eigene Gates für fehlende sevDesk-/Graph-Variablen und die noch manuelle `xw-inventory-worker`-Aktivierung; Secretwerte werden nicht ausgegeben und der Master-Flag bleibt unverändert.
-Ein Windows-CI-Zugriffsfehler beim parallelen Erwärmen des unreleased-Katalogs wurde behoben: die gemeinsam genutzten Katalog-Caches werden nun per reentrantem Lock atomar veröffentlicht/invalidiert; ein dedizierter Parallel-Warmup-Test schützt den Fix.
+Ein Windows-CI-Zugriffsfehler beim parallelen Erwärmen des unreleased-Katalogs wurde behoben: langsame Disk-/Settings-Ladevorgänge laufen außerhalb des reentranten Cache-Locks, Ergebnisse werden generationsgeschützt atomar veröffentlicht/invalidiert; dedizierte Parallel-Warmup- und UI-Off-Thread-Regressionstests schützen den Fix.
 
 ## Conflict Resolution Wizard CW00–CW07 (2026-09-17)
 

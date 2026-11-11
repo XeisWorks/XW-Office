@@ -368,6 +368,7 @@ class ProductCatalogService:
         # The Rechnungen view warms this cache from a QThread while the same
         # catalog instance can still be queried by UI/background workers.
         self._unreleased_cache_lock = threading.RLock()
+        self._unreleased_cache_generation = 0
         self._legacy_unreleased_names: list[tuple[str, str]] | None = None
         self._unreleased_products: list[UnreleasedProduct] | None = None
         self._local_unreleased_overrides: list[dict[str, str]] = []
@@ -660,9 +661,18 @@ class ProductCatalogService:
 
     def list_unreleased_products(self) -> list[UnreleasedProduct]:
         with self._unreleased_cache_lock:
-            if self._unreleased_products is None:
-                self._unreleased_products = self._load_unreleased_products()
-            return list(self._unreleased_products)
+            cached = self._unreleased_products
+            generation = self._unreleased_cache_generation
+        if cached is not None:
+            return list(cached)
+
+        # Disk/settings I/O must not happen while holding the cache lock. The
+        # Rechnungen UI intentionally exercises this path with a slow loader.
+        loaded = self._load_unreleased_products()
+        with self._unreleased_cache_lock:
+            if self._unreleased_products is None and generation == self._unreleased_cache_generation:
+                self._unreleased_products = loaded
+            return list(self._unreleased_products or loaded)
 
     @property
     def unreleased_products_loaded(self) -> bool:
@@ -966,15 +976,19 @@ class ProductCatalogService:
         with self._unreleased_cache_lock:
             if self._legacy_unreleased_names is not None:
                 return list(self._legacy_unreleased_names)
-            names: list[tuple[str, str]] = []
-            for product in self.list_unreleased_products():
-                names.append((product.canonical_name, product.canonical_name))
-                names.extend((alias, product.canonical_name) for alias in product.aliases)
-            self._legacy_unreleased_names = names
-            return list(names)
+            generation = self._unreleased_cache_generation
+        names: list[tuple[str, str]] = []
+        for product in self.list_unreleased_products():
+            names.append((product.canonical_name, product.canonical_name))
+            names.extend((alias, product.canonical_name) for alias in product.aliases)
+        with self._unreleased_cache_lock:
+            if self._legacy_unreleased_names is None and generation == self._unreleased_cache_generation:
+                self._legacy_unreleased_names = names
+            return list(self._legacy_unreleased_names or names)
 
     def _invalidate_unreleased_cache(self) -> None:
         with self._unreleased_cache_lock:
+            self._unreleased_cache_generation += 1
             self._unreleased_products = None
             self._legacy_unreleased_names = None
 
