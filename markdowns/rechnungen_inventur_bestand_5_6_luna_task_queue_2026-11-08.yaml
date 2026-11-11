@@ -269,6 +269,7 @@ packages:
       - Die bestehende Cutover-Readiness prüft neben Ledger-/Sync-Gates jetzt auch den read-only Bestandsquellenvertrag und Legacy-/Hub-Mengenabweichungen.
       - Der eigentliche Master-Cutover bleibt bewusst blockiert, bis Shadow-Lauf, Projektionen, Backup und Rollback außerhalb der Anwendung nachgewiesen sind.
       - "`scripts/product_hub/check_inventory_cutover.py` weist nun zusätzlich fehlende sevDesk-/Graph-Variablen und den aktiven Railway-Worker-/Backup-Betriebsstatus als eigene Readiness-Gates aus, ohne Secretwerte zu drucken oder Zustand zu verändern."
+      - Der master-aware `InventoryService` routet nun auch START/REPRINTS, Druckläufe, Retouren/Recounts, direkte Wix-Fulfillments und manuelle Produktkorrekturen in das Hub-Ledger; der Legacy-JSON-Bestand bleibt im Master-Modus unverändert.
     scope:
       - Gezählt/Legacy/Hub/sevDesk je Variante abgleichen und offene Konflikte bereinigen.
       - Alle produktiven Bestands-Schreibpfade, sevDesk-/Wix-Projektionen und Rollback praktisch testen.

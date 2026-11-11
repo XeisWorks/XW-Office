@@ -614,10 +614,22 @@ def register_default_services(container: Container) -> None:
             c.config,
             c.resolve(SettingKvRepository) if (c.config.database_url or "").strip() else None,
             c.resolve(PrintQueueService),
-            LegacyInventoryShadowBridge(c.resolve(SessionMaker))
-            if c.config.product_hub.inventory_shadow_enabled
-            and (c.config.database_url or "").strip()
-            else None,
+            (
+                LegacyInventoryShadowBridge(c.resolve(SessionMaker))
+                if (
+                    c.config.product_hub.inventory_shadow_enabled
+                    or c.config.product_hub.inventory_master_enabled
+                )
+                and (c.config.database_url or "").strip()
+                else None
+            ),
+            master_store=(
+                LegacyInventoryShadowBridge(c.resolve(SessionMaker))
+                if c.config.product_hub.inventory_master_enabled
+                and (c.config.database_url or "").strip()
+                else None
+            ),
+            master_enabled=c.config.product_hub.inventory_master_enabled,
         ),
     )
     container.register(
@@ -650,7 +662,14 @@ def register_default_services(container: Container) -> None:
     # This keeps local dev/test environments (no DB) working without needing env vars.
     if (container.config.database_url or "").strip():
         container.register(SessionMaker, lambda c: create_session_factory(c.config))
-        container.register(InventoryV2Service, lambda c: InventoryV2Service(c.resolve(SessionMaker)))
+        container.register(
+            InventoryV2Service,
+            lambda c: InventoryV2Service(
+                c.resolve(SessionMaker),
+                shadow_enabled=c.config.product_hub.inventory_shadow_enabled,
+                master_enabled=c.config.product_hub.inventory_master_enabled,
+            ),
+        )
         container.register(InventoryCountService, lambda c: InventoryCountService(c.resolve(SessionMaker)))
         container.register(InventoryAlertTaskService, lambda c: InventoryAlertTaskService(c.resolve(SessionMaker)))
         container.register(

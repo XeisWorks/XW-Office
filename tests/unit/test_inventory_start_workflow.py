@@ -50,6 +50,30 @@ class _ShadowMirrorStub:
         return type("Result", (), {"status": "mirrored", "detail": "ok"})()
 
 
+class _MasterStoreStub(_ShadowMirrorStub):
+    def __init__(self, stock: dict[str, int]) -> None:
+        super().__init__()
+        self.stock = {str(key).upper(): int(value) for key, value in stock.items()}
+
+    def load_stock_levels(self) -> dict[str, int]:
+        return dict(self.stock)
+
+    def mirror_absolute_stock(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        sku = str(kwargs["sku"]).upper()
+        self.stock[sku] = int(kwargs["new_stock"])
+        return type("Result", (), {"status": "mirrored", "detail": "ok"})()
+
+    def mirror_stock_movement(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
+        sku = str(kwargs["sku"]).upper()
+        target = self.stock.get(sku, 0) + int(kwargs["delta"])
+        if target < 0:
+            return type("Result", (), {"status": "shortage", "detail": "negative"})()
+        self.stock[sku] = target
+        return type("Result", (), {"status": "mirrored", "detail": "ok"})()
+
+
 def _printing_config() -> PrintingSection:
     return PrintingSection(
         buffer_quantity=3,
@@ -407,6 +431,71 @@ def test_invoice_consumption_database_transaction_rolls_back_all_keys() -> None:
         "XW-6-003": 1
     }
     assert repository.get_value_json("inventory.invoice_consumption.v1") is None
+
+
+def test_master_stock_update_uses_hub_without_writing_legacy_stock(tmp_path: Path) -> None:
+    repo = _RepoStub(
+        {
+            "inventory.products": _product_payload(tmp_path / "score.pdf"),
+            "inventory.stock_levels": json.dumps({"XW-6-003": 1}),
+        }
+    )
+    master = _MasterStoreStub({"XW-6-003": 5})
+    service = InventoryService(AppConfig(), repo, master_store=master, master_enabled=True)
+
+    service.set_product_stock("xw-6-003", 7)
+
+    assert master.stock["XW-6-003"] == 7
+    assert json.loads(repo.values["inventory.stock_levels"]) == {"XW-6-003": 1}
+    assert json.loads(repo.values["inventory.products"])[0]["on_hand"] == 7
+    assert master.calls[0]["new_stock"] == 7
+
+
+def test_master_invoice_consumption_books_hub_and_does_not_create_legacy_journal(
+    tmp_path: Path,
+) -> None:
+    repo = _RepoStub(
+        {
+            "inventory.products": _product_payload(tmp_path / "score.pdf"),
+            "inventory.stock_levels": json.dumps({"XW-6-003": 5}),
+        }
+    )
+    master = _MasterStoreStub({"XW-6-003": 5})
+    service = InventoryService(AppConfig(), repo, master_store=master, master_enabled=True)
+
+    report = service.execute_start_invoice_consumption(
+        {"invoice-1": {"XW-6-003": 2}}, ["invoice-1"]
+    )
+
+    assert report.stock_updated is True
+    assert master.stock["XW-6-003"] == 3
+    assert repo.values["inventory.stock_levels"] == json.dumps({"XW-6-003": 5})
+    assert repo.get_value_json("inventory.invoice_consumption.v1") is None
+    assert master.calls[0]["idempotency_key"] == "start-invoice:invoice-1:XW-6-003"
+
+
+def test_master_stock_correction_uses_reasoned_hub_movement(tmp_path: Path) -> None:
+    repo = _RepoStub(
+        {
+            "inventory.products": _product_payload(tmp_path / "score.pdf"),
+            "inventory.stock_levels": json.dumps({"XW-6-003": 1}),
+        }
+    )
+    master = _MasterStoreStub({"XW-6-003": 4})
+    service = InventoryService(AppConfig(), repo, master_store=master, master_enabled=True)
+
+    result = service.apply_stock_correction(
+        sku="XW-6-003",
+        reason="return",
+        quantity=2,
+        reference="RET-42",
+    )
+
+    assert result.previous_stock == 4
+    assert result.new_stock == 6
+    assert master.stock["XW-6-003"] == 6
+    assert master.calls[0]["reason"] == "return"
+    assert json.loads(repo.values["inventory.stock_levels"]) == {"XW-6-003": 1}
 
 
 def test_build_reprint_preflight_identifies_low_stock() -> None:

@@ -32,6 +32,7 @@ from xw_office.services.invoice_processing.mail_content import (
     normalize_body_template,
     render_invoice_mail,
 )
+from xw_office.services.inventory.service import InventoryService
 from xw_office.services.mailing.service import MailDeliveryService
 from xw_office.services.secrets.service import SecretService
 
@@ -448,6 +449,9 @@ class SettingsView(QWidget):
         grid.addWidget(intro, 0, 0, 1, 2)
 
         stock_box, self._stock_json = self._json_box(_INV_STOCK_KEY, '{"XW-4-001": 5, "XW-6-003": 1}', 90)
+        if self._container.config.product_hub.inventory_master_enabled:
+            self._stock_json.setReadOnly(True)
+            stock_box.setTitle(f"{_INV_STOCK_KEY} (Product-Hub-Master: schreibgeschützt)")
         pending_box, self._pending_json = self._json_box(_PENDING_REQ_KEY, '{"XW-4-001": 7, "XW-6-003": 2}', 90)
         pending_counts_box, self._pending_counts_json = self._json_box(
             _PENDING_COUNTS_KEY,
@@ -668,8 +672,14 @@ class SettingsView(QWidget):
         repo: SettingKvRepository = self._container.resolve(SettingKvRepository)
 
         def job() -> dict[str, str]:
+            stock_value = repo.get_value_json(_INV_STOCK_KEY) or "{}"
+            if self._container.config.product_hub.inventory_master_enabled:
+                stock_value = json.dumps(
+                    self._container.resolve(InventoryService).load_stock_levels(),
+                    ensure_ascii=False,
+                )
             return {
-                "stock": repo.get_value_json(_INV_STOCK_KEY) or "{}",
+                "stock": stock_value,
                 "pending": repo.get_value_json(_PENDING_REQ_KEY) or "{}",
                 "pending_counts": repo.get_value_json(_PENDING_COUNTS_KEY) or "{}",
                 "mollie": repo.get_value_json(_QUEUE_MOLLIE_KEY) or "[]",
@@ -811,7 +821,6 @@ class SettingsView(QWidget):
 
         repo: SettingKvRepository = self._container.resolve(SettingKvRepository)
         values = {
-            _INV_STOCK_KEY: json.dumps(stock_obj),
             _PENDING_REQ_KEY: json.dumps(pending_obj),
             _PENDING_COUNTS_KEY: json.dumps(pending_counts_obj),
             _QUEUE_MOLLIE_KEY: json.dumps(queue_mollie_obj),
@@ -823,6 +832,8 @@ class SettingsView(QWidget):
             _SKU_FLAGS_KEY: json.dumps(normalized_sku_flags),
             _URGENCY_RULES_KEY: json.dumps(normalized_rules),
         }
+        if not self._container.config.product_hub.inventory_master_enabled:
+            values[_INV_STOCK_KEY] = json.dumps(stock_obj)
         self._queue_status.setText("Queue-Daten werden gespeichert...")
 
         def job() -> bool:

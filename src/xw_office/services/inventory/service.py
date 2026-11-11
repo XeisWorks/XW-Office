@@ -55,6 +55,12 @@ class InventoryShadowMirror(Protocol):
     ) -> object: ...
 
 
+class InventoryMasterStore(InventoryShadowMirror, Protocol):
+    """Canonical Product-Hub adapter used after the guarded master cutover."""
+
+    def load_stock_levels(self) -> dict[str, int]: ...
+
+
 @dataclass(frozen=True)
 class StartDecision:
     """Single SKU decision for START preflight."""
@@ -180,14 +186,20 @@ class InventoryService:
         settings_repo: SettingKvRepository | None = None,
         print_queue: PrintQueueService | None = None,
         shadow_mirror: InventoryShadowMirror | None = None,
+        master_store: InventoryMasterStore | None = None,
+        master_enabled: bool = False,
     ) -> None:
         self._config = config
         self._settings_repo = settings_repo
         self._print_queue = print_queue
         self._shadow_mirror = shadow_mirror
+        self._master_store = master_store
+        self._master_enabled = bool(master_enabled)
 
     def load_stock_levels(self) -> dict[str, int]:
         """Return stock levels by SKU (from DB setting if available)."""
+        if self._master_enabled and self._master_store is not None:
+            return self._master_store.load_stock_levels()
         if self._settings_repo is None:
             return {}
         raw = self._settings_repo.get_value_json(_STOCK_KEY)
@@ -354,7 +366,7 @@ class InventoryService:
         self._save_stock_levels(stock_levels)
         for decision in preflight.decisions:
             if decision.sku in printed_skus:
-                self._mirror_legacy_stock_movement(
+                self._record_stock_movement(
                     sku=decision.sku,
                     delta=max(0, int(decision.final_print_qty)),
                     reason="print_run",
@@ -431,7 +443,7 @@ class InventoryService:
 
         self._save_stock_levels(stock_levels)
         for sku, delta, reason in shadow_movements:
-            self._mirror_legacy_stock_movement(
+            self._record_stock_movement(
                 sku=sku,
                 delta=delta,
                 reason=reason,
@@ -460,6 +472,11 @@ class InventoryService:
         together. Replays also retry the deterministic Hub mirror key so a process
         interruption after the legacy commit can repair a missed shadow movement.
         """
+        if self._master_enabled and self._master_store is not None:
+            return self._execute_master_invoice_consumption(
+                requirements_by_invoice,
+                finalized_invoice_ids,
+            )
         if self._settings_repo is None:
             raise RuntimeError("START-Bestand kann ohne gemeinsamen Settings-Speicher nicht gebucht werden")
         mutate_many = getattr(self._settings_repo, "mutate_values_json", None)
@@ -599,6 +616,45 @@ class InventoryService:
             stock_updated=bool(new_movements),
         )
 
+    def _execute_master_invoice_consumption(
+        self,
+        requirements_by_invoice: dict[str, dict[str, int]],
+        finalized_invoice_ids: list[str],
+    ) -> StartExecutionReport:
+        """Book finalized invoice sales directly in the canonical Hub ledger."""
+        invoice_ids = sorted(
+            {str(value or "").strip() for value in finalized_invoice_ids if str(value or "").strip()}
+        )
+        consumed_skus: set[str] = set()
+        movements = 0
+        for invoice_id in invoice_ids:
+            quantities = requirements_by_invoice.get(invoice_id, {})
+            for raw_sku, raw_quantity in quantities.items():
+                sku = str(raw_sku or "").strip().upper()
+                quantity = max(0, int(raw_quantity or 0))
+                if not sku or quantity <= 0:
+                    continue
+                self._record_master_stock_movement(
+                    sku=sku,
+                    delta=-quantity,
+                    reason="sale",
+                    source="inventory.master.start_invoice",
+                    external_reference=f"invoice:{invoice_id}",
+                    idempotency_key=f"start-invoice:{invoice_id}:{sku}",
+                )
+                consumed_skus.add(sku)
+                movements += 1
+        return StartExecutionReport(
+            mode=StartMode.INVOICES_AND_PRINT,
+            open_invoice_count=len(invoice_ids),
+            decisions_count=sum(
+                len(requirements_by_invoice.get(invoice_id, {})) for invoice_id in invoice_ids
+            ),
+            printed_skus=[],
+            consumed_skus=sorted(consumed_skus),
+            stock_updated=movements > 0,
+        )
+
     def validate_invoice_stock(self, requirements: dict[str, int]) -> None:
         """Fail before invoice finalization when confirmed stock cannot cover it."""
         stock_levels = self.load_stock_levels()
@@ -679,6 +735,10 @@ class InventoryService:
                 pass
 
     def _save_stock_levels(self, stock_levels: dict[str, int]) -> None:
+        if self._master_enabled and self._master_store is not None:
+            # In master mode the Hub ledger is the only stock writer.  Product-row
+            # cache updates happen after each confirmed ledger movement.
+            return
         if self._settings_repo is None:
             return
         clean: dict[str, int] = {}
@@ -837,6 +897,9 @@ class InventoryService:
         if not wanted:
             raise RuntimeError("SKU fehlt bei der Bestandsaktualisierung")
         quantity = max(0, int(new_stock))
+        if self._master_enabled and self._master_store is not None:
+            self._set_master_absolute_stock(wanted, quantity, source="inventory.master.set_product_stock")
+            return
         if self.update_product_fields({wanted: {"on_hand": quantity}}) <= 0:
             raise RuntimeError(f"Lokaler Produktdatensatz nicht gefunden: {wanted}")
         if self._settings_repo is None:
@@ -852,12 +915,15 @@ class InventoryService:
             payload[wanted] = quantity
             return json.dumps(payload, ensure_ascii=False)
 
-        atomic_mutator = getattr(self._settings_repo, "mutate_value_json", None)
+        settings_repo = self._settings_repo
+        if settings_repo is None:
+            raise RuntimeError("Lokaler Einstellungs-Speicher ist nicht verfügbar")
+        atomic_mutator = getattr(settings_repo, "mutate_value_json", None)
         if callable(atomic_mutator):
             atomic_mutator(_STOCK_KEY, mutate_stock)
         else:
-            current_raw = self._settings_repo.get_value_json(_STOCK_KEY)
-            self._settings_repo.set_value_json(_STOCK_KEY, mutate_stock(current_raw))
+            current_raw = settings_repo.get_value_json(_STOCK_KEY)
+            settings_repo.set_value_json(_STOCK_KEY, mutate_stock(current_raw))
         self._mirror_legacy_stock_update(wanted, quantity)
 
     def record_print_run(
@@ -878,6 +944,17 @@ class InventoryService:
         produced = max(0, int(qty_printed or 0))
         target = max(0, int(new_stock or 0))
         if not wanted or produced <= 0:
+            return
+        if self._master_enabled and self._master_store is not None:
+            self._record_master_stock_movement(
+                sku=wanted,
+                delta=produced,
+                reason="print_run",
+                source="inventory.master.print_run",
+                external_reference=external_reference,
+                idempotency_key=idempotency_key,
+            )
+            self._sync_product_cache_from_master(wanted)
             return
         if self.update_product_fields({wanted: {"on_hand": target}}) <= 0:
             raise RuntimeError(f"Lokaler Produktdatensatz nicht gefunden: {wanted}")
@@ -953,7 +1030,7 @@ class InventoryService:
         clean_order_reference = str(order_reference or "").strip()
         clean_fulfillment_id = str(fulfillment_id or "").strip()
         key_suffix = clean_fulfillment_id or f"{clean_invoice_id}:{clean_order_reference}"
-        self._mirror_legacy_stock_movement(
+        self._record_stock_movement(
             sku=clean_sku,
             delta=-qty,
             reason="sale",
@@ -992,9 +1069,47 @@ class InventoryService:
         if len(clean_reference) > 160:
             raise RuntimeError("Referenz oder Notiz darf höchstens 160 Zeichen haben")
         if self._settings_repo is None:
-            raise RuntimeError("Lokaler Einstellungs-Speicher ist nicht verfügbar")
+            if not (self._master_enabled and self._master_store is not None):
+                raise RuntimeError("Lokaler Einstellungs-Speicher ist nicht verfügbar")
         if not any(row.sku.strip().upper() == wanted for row in self.list_products()):
             raise RuntimeError(f"Lokaler Produktdatensatz nicht gefunden: {wanted}")
+
+        if self._master_enabled and self._master_store is not None:
+            previous = int(self.load_stock_levels().get(wanted, 0))
+            if clean_reason == "return":
+                try:
+                    correction_qty = int(quantity if quantity is not None else 0)
+                except (TypeError, ValueError):
+                    correction_qty = 0
+                if correction_qty <= 0:
+                    raise RuntimeError("Retourmenge muss größer als 0 sein")
+                new_stock = previous + correction_qty
+            else:
+                if target_stock is None:
+                    raise RuntimeError("Gezählter Sollbestand fehlt")
+                try:
+                    new_stock = int(target_stock)
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError("Gezählter Sollbestand ist ungültig") from exc
+                if new_stock < 0:
+                    raise RuntimeError("Gezählter Sollbestand darf nicht negativ sein")
+            self._record_master_stock_movement(
+                sku=wanted,
+                delta=new_stock - previous,
+                reason=clean_reason,
+                source="inventory.master.manual_stock_correction",
+                external_reference=f"{clean_reason}:{clean_reference}",
+                idempotency_key=f"master-correction:{wanted}:{clean_reason}:{clean_reference}",
+            )
+            self._sync_product_cache_from_master(wanted)
+            return StockCorrectionResult(
+                sku=wanted,
+                reason=clean_reason,
+                previous_stock=previous,
+                new_stock=int(self.load_stock_levels().get(wanted, new_stock)),
+                delta=new_stock - previous,
+                reference=clean_reference,
+            )
 
         result: dict[str, int] = {}
 
@@ -1096,6 +1211,87 @@ class InventoryService:
         detail = str(getattr(result, "detail", ""))
         if outcome not in {"mirrored", "already_in_sync"}:
             logger.warning("Inventory V2 shadow movement skipped %s (%s): %s", sku, outcome, detail)
+
+    def _record_stock_movement(
+        self,
+        *,
+        sku: str,
+        delta: int,
+        reason: str,
+        source: str,
+        external_reference: str = _STOCK_KEY,
+        idempotency_key: str = "",
+    ) -> None:
+        if self._master_enabled and self._master_store is not None:
+            self._record_master_stock_movement(
+                sku=sku,
+                delta=delta,
+                reason=reason,
+                source=source,
+                external_reference=external_reference,
+                idempotency_key=idempotency_key,
+            )
+            return
+        self._mirror_legacy_stock_movement(
+            sku=sku,
+            delta=delta,
+            reason=reason,
+            source=source,
+            external_reference=external_reference,
+            idempotency_key=idempotency_key,
+        )
+
+    def _record_master_stock_movement(
+        self,
+        *,
+        sku: str,
+        delta: int,
+        reason: str,
+        source: str,
+        external_reference: str,
+        idempotency_key: str = "",
+    ) -> None:
+        if self._master_store is None:
+            raise RuntimeError("Product-Hub-Masteradapter ist nicht konfiguriert")
+        if int(delta) == 0:
+            return
+        result = self._master_store.mirror_stock_movement(
+            sku=sku,
+            delta=int(delta),
+            reason=reason,
+            source=source,
+            external_reference=external_reference,
+            idempotency_key=idempotency_key,
+        )
+        status = str(getattr(result, "status", "unknown"))
+        if status not in {"mirrored", "already_in_sync"}:
+            raise RuntimeError(
+                f"Product-Hub-Masterbuchung für {sku} nicht bestätigt ({status}): "
+                f"{getattr(result, 'detail', '')}"
+            )
+        self._sync_product_cache_from_master(sku)
+
+    def _set_master_absolute_stock(self, sku: str, quantity: int, *, source: str) -> None:
+        if self._master_store is None:
+            raise RuntimeError("Product-Hub-Masteradapter ist nicht konfiguriert")
+        result = self._master_store.mirror_absolute_stock(
+            sku=sku,
+            new_stock=int(quantity),
+            source=source,
+            external_reference="product_hub.inventory_stock",
+        )
+        status = str(getattr(result, "status", "unknown"))
+        if status not in {"mirrored", "already_in_sync"}:
+            raise RuntimeError(
+                f"Product-Hub-Masterbestand für {sku} nicht bestätigt ({status}): "
+                f"{getattr(result, 'detail', '')}"
+            )
+        self._sync_product_cache_from_master(sku)
+
+    def _sync_product_cache_from_master(self, sku: str) -> None:
+        quantity = int(self.load_stock_levels().get(str(sku or "").strip().upper(), 0))
+        if self.update_product_fields({str(sku or "").strip().upper(): {"on_hand": quantity}}) <= 0:
+            logger.warning("Product-Hub-Bestand konnte nicht in Produktcache gespiegelt werden: %s", sku)
 
     def save_product_print_config(
         self,

@@ -17,14 +17,12 @@ current planning markdown and PROGRESS.md.
 - The append-only ledger (``InventoryRepository.record_movement``), alert crossing
   detection, and the ``/api/v1/inventory/summary`` tile endpoint are fully built and
   usable by new code today.
-- **Not done**: none of the legacy inventory call sites (START/Druck, REPRINTS,
-  Rechnungs-Fulfillment, manuelle Korrektur, Retouren, Recount, `PrintDecisionEngine`)
-  have been rewired to write through this ledger. They keep using the existing
-  `SettingKV`-backed `InventoryService` entirely unchanged. Wiring them in is a
-  larger, higher-risk refactor of live production code paths that the build plan
-  itself does not ask PR13 to complete — it asks PR13 to *inventarisieren*
-  (catalogue/identify) those paths, which is done here in this docstring and in
-  `docs/product_hub/PROGRESS.md`, not by rewriting them.
+- The guarded master adapter now covers the legacy mutation surface (START/Druck,
+  REPRINTS, Rechnungs-Fulfillment, manuelle Korrektur, Retouren, Recount and the
+  `PrintDecisionEngine`-backed product writes). In Shadow Mode the legacy JSON remains
+  the operational source and these movements are mirrored; after the master flag is
+  enabled the same `InventoryService` calls read and write the Hub ledger directly,
+  while the product-row cache is derived for compatibility.
 - Historical PR13 note: automatic sevDesk stock reading was not part of the original
   ledger package. The current write-gated projection service uses `PartClient` from
   the worker CLI and keeps the production provider dry-run/readback probe as an
@@ -750,12 +748,12 @@ class InventoryV2Service:
             InventoryCutoverCheck(
                 code="legacy_mutation_paths",
                 label="Alle Bestandsänderungen laufen durch Inventory V2",
-                state="blocked",
+                state="ready",
                 detail=(
-                    "set_product_stock, START und REPRINTS werden im aktivierten Shadow Mode gespiegelt. "
-                    "Direktes Wix-Rechnungs-Fulfillment wird als sale gespiegelt. "
-                    "Alle aktuellen PrintDecisionEngine-Aufrufe schreiben danach den Legacy-Bestand. "
-                    "Bestandskorrektur bietet Retoure und Inventur-Recount mit Pflichtreferenz."
+                    "Master-aware InventoryService routet set_product_stock, START/REPRINTS, "
+                    "Wix-Fulfillment, Druckläufe und Retouren/Inventur-Recounts in das Hub-Ledger. "
+                    "Der Settings-Stock-Editor ist im Master schreibgeschützt; im Shadow-Betrieb "
+                    "bleibt die Legacy-Datei weiterhin die operative Quelle."
                 ),
             ),
             InventoryCutoverCheck(
@@ -961,6 +959,27 @@ class LegacyInventoryShadowBridge:
         self._products = ProductHubRepository(session_factory)
         self._inventory = InventoryRepository(session_factory)
         self._sync = SyncRepository(session_factory)
+
+    def load_stock_levels(self) -> dict[str, int]:
+        """Return canonical Hub quantities keyed by exact active physical SKU."""
+        products = self._products.list_products(ProductFilter(status="live", active=True))
+        physical_products = [product for product in products if product.product_type == "physical"]
+        variants = self._products.list_variants_for_products([product.id for product in physical_products])
+        active_variants = [variant for variant in variants if variant.active]
+        if not active_variants:
+            return {}
+        location = self._inventory.get_or_create_location(
+            code=DEFAULT_LOCATION_CODE, name=DEFAULT_LOCATION_NAME
+        )
+        rows = self._inventory.list_stock_by_variants(
+            [variant.id for variant in active_variants], location.id
+        )
+        by_variant = {row.variant_id: int(row.on_hand) for row in rows}
+        return {
+            variant.sku: max(0, int(by_variant.get(variant.id, 0)))
+            for variant in active_variants
+            if str(variant.sku or "").strip()
+        }
 
     def _record_issue(
         self,

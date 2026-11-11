@@ -150,6 +150,10 @@ Sync-Konflikte. Provider-/Graph-/Wix-Grundkonfiguration und der Worker-Marker si
   endet erwartungsgemäß mit Exit-Code 2 (`eligible=false`). Der getrennte
   Product-Hub-Runtime-Check endet mit Exit-Code 0 (`eligible=true`): Provider-
   credentials (sevDesk/Graph/Wix) und Worker-Service sind betriebsbereit.
+- Der Implementierungsgate `legacy_mutation_paths` ist im Readiness-Bericht jetzt
+  `ready`: Im Master-Modus schreibt `InventoryService` direkt in das Hub-Ledger; der
+  Legacy-JSON-Editor wird dabei schreibgeschützt. Das ist kein Ersatz für die noch
+  offenen Daten-/Betriebsnachweise.
 - Der read-only Projektions-Dry-Run lief über Railway mit `PYTHONPATH=src`: 0
   Schreibungen, 0 Konflikte/Fehler und 432 übersprungene Varianten. Die Überspringungen
   sind auf fehlende eindeutige Wix-Produkt-/Inventarzuordnungen zurückzuführen; es wurde

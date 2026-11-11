@@ -1522,3 +1522,16 @@ ausgeführt (lokales `PYTHONPATH=src`, Railway-Produktionsvariablen): 0 Schreibu
 0 Konflikte/Fehler und 432 übersprungene Varianten. Alle Überspringungen benötigen vor
 einer Master-Projektion noch eindeutige Wix-Produkt-/Inventarzuordnungen; externe
 Bestandsmengen wurden nicht verändert.
+
+### Master-Mutationsadapter (12. November 2026)
+
+Die bisherige harte Readiness-Blockade für Legacy-Mutationspfade ist technisch
+geschlossen: `InventoryService` kann bei aktiviertem Master-Flag Bestand aus dem Hub
+lesen und START/REPRINTS, Druckläufe, Retouren/Recounts, direkte Wix-Fulfillments und
+manuelle Produktkorrekturen direkt als idempotente Hub-Ledgerbewegungen buchen. Der
+Legacy-JSON-Bestand wird in diesem Modus nicht mehr beschrieben; der Produktzeilen-Cache
+bleibt nur als Kompatibilitätsprojektion erhalten. Der Settings-Stock-Editor ist dann
+schreibgeschützt. Im Shadow-Modus bleibt das bisherige Legacy-Verhalten unverändert.
+Die Readiness weist diesen Implementierungsgate nun als `ready` aus; Inventur, offene
+Konflikte, Shadow-Nachweis, Providerprojektionen, Backup und Rollback bleiben separate
+Betriebs-Gates.

@@ -100,7 +100,7 @@ def test_cutover_readiness_is_read_only_and_explicitly_blocked_before_pr15(db_pa
     body = response.json()
     assert body["master_enabled"] is False
     assert body["eligible"] is False
-    assert any(check["code"] == "legacy_mutation_paths" and check["state"] == "blocked" for check in body["checks"])
+    assert any(check["code"] == "legacy_mutation_paths" and check["state"] == "ready" for check in body["checks"])
 
 
 def test_legacy_baseline_preview_and_confirmed_apply(db_path: str) -> None:
