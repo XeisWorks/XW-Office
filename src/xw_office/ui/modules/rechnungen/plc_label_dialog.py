@@ -261,6 +261,13 @@ class _PlcFinalizeOutcome:
     error: str = ""
 
 
+@dataclass(frozen=True)
+class _ArchivedReprintOutcome:
+    customs_only: bool
+    label_job_id: str = ""
+    customs_job_id: str = ""
+
+
 class PlcLabelPrintDialog(QDialog):
     _mail_ref_counters: dict[str, int] = {}
 
@@ -282,6 +289,7 @@ class PlcLabelPrintDialog(QDialog):
         self._load_worker: BackgroundWorker | None = None
         self._send_worker: BackgroundWorker | None = None
         self._finalize_worker: BackgroundWorker | None = None
+        self._archived_reprint_worker: BackgroundWorker | None = None
         self._packing_print_worker: BackgroundWorker | None = None
         self._context = _PlcDialogContext(order_number="", address_lines=[], weight_kg=0.0, items=[])
         self._packing_items: list[WixOrderItem] = []
@@ -1943,7 +1951,12 @@ class PlcLabelPrintDialog(QDialog):
     def _has_active_write_worker(self) -> bool:
         return any(
             worker is not None and worker.isRunning()
-            for worker in (self._send_worker, self._finalize_worker, self._packing_print_worker)
+            for worker in (
+                self._send_worker,
+                self._finalize_worker,
+                self._archived_reprint_worker,
+                self._packing_print_worker,
+            )
         )
 
     def _send_to_plc(self) -> None:
@@ -2098,7 +2111,7 @@ class PlcLabelPrintDialog(QDialog):
     def _update_send_button_state(self) -> None:
         active = any(
             worker is not None and worker.isRunning()
-            for worker in (self._send_worker, self._finalize_worker)
+            for worker in (self._send_worker, self._finalize_worker, self._archived_reprint_worker)
         )
         self._send_btn.setEnabled(not active)
 
@@ -2450,36 +2463,12 @@ class PlcLabelPrintDialog(QDialog):
         box.exec()
         clicked = box.clickedButton()
         if clicked is reprint_btn:
-            try:
-                customs_job_id = ""
-                if self._customs_only:
-                    if customs_path is None:
-                        raise RuntimeError("Keine archivierte Zollerklärung verfügbar.")
-                    customs_job_id = self._queue_customs_document(
-                        customs_print_path or customs_path,
-                        shipment.reference,
-                    )
-                else:
-                    if archive_path is None:
-                        raise RuntimeError("Kein archiviertes PLC-Label verfügbar.")
-                    label_job_id = self._queue_webservice_label(archive_path, shipment.reference)
-                    if customs_path is not None:
-                        customs_job_id = self._queue_customs_document(
-                            customs_print_path or customs_path,
-                            shipment.reference,
-                        )
-            except Exception as exc:  # noqa: BLE001 - keep the archived recovery path visible.
-                QMessageBox.warning(self, "PLC-Nachdruck", f"Nachdruck konnte nicht eingereiht werden:\n\n{exc}")
-                return
-            if self._customs_only:
-                self._status.setText(f"Archivierte Zollerklärung eingereiht: {customs_job_id[:8]}…")
-                self._show_success_overlay("Zollerklärung erneut eingereiht")
-            else:
-                jobs = label_job_id[:8] + "…"
-                if customs_job_id:
-                    jobs += " / " + customs_job_id[:8] + "…"
-                self._status.setText(f"Archivierter PLC-Nachdruck eingereiht: {jobs}")
-                self._show_success_overlay("PLC-Dokumente erneut eingereiht")
+            self._start_archived_reprint(
+                shipment,
+                archive_path=archive_path,
+                customs_path=customs_path,
+                customs_print_path=customs_print_path,
+            )
             return
         if open_btn is not None and clicked is open_btn and archive_path is not None:
             QDesktopServices.openUrl(QUrl.fromLocalFile(os.fspath(archive_path)))
@@ -2506,6 +2495,85 @@ class PlcLabelPrintDialog(QDialog):
             )
             self._status.setText(f"{prefix}{next_shipment.reference} / {next_shipment.invoice_number}")
             self._start_send(next_shipment, "webservice")
+
+    def _start_archived_reprint(
+        self,
+        shipment: PlcShipmentDraft,
+        *,
+        archive_path: Path | None,
+        customs_path: Path | None,
+        customs_print_path: Path | None,
+    ) -> None:
+        if self._archived_reprint_worker is not None:
+            return
+        customs_only = self._customs_only
+        self._send_btn.setEnabled(False)
+        self._status.setText("Archivierte PLC-Dokumente werden erneut eingereiht...")
+
+        def job() -> _ArchivedReprintOutcome:
+            if customs_only:
+                if customs_path is None:
+                    raise RuntimeError("Keine archivierte Zollerklärung verfügbar.")
+                customs_job_id = self._queue_customs_document(
+                    customs_print_path or customs_path,
+                    shipment.reference,
+                )
+                return _ArchivedReprintOutcome(
+                    customs_only=True,
+                    customs_job_id=customs_job_id,
+                )
+            if archive_path is None:
+                raise RuntimeError("Kein archiviertes PLC-Label verfügbar.")
+            label_job_id = self._queue_webservice_label(archive_path, shipment.reference)
+            customs_job_id = ""
+            if customs_path is not None:
+                customs_job_id = self._queue_customs_document(
+                    customs_print_path or customs_path,
+                    shipment.reference,
+                )
+            return _ArchivedReprintOutcome(
+                customs_only=False,
+                label_job_id=label_job_id,
+                customs_job_id=customs_job_id,
+            )
+
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(self._on_archived_reprint_result)
+        worker.signals.error.connect(self._on_archived_reprint_error)
+        worker.signals.finished.connect(
+            lambda current=worker: self._on_archived_reprint_finished(current)
+        )
+        self._archived_reprint_worker = worker
+        worker.start()
+
+    def _on_archived_reprint_result(self, payload: object) -> None:
+        if not isinstance(payload, _ArchivedReprintOutcome):
+            self._on_archived_reprint_error(RuntimeError("Ungültiges Nachdruckergebnis"))
+            return
+        if payload.customs_only:
+            self._status.setText(
+                f"Archivierte Zollerklärung eingereiht: {payload.customs_job_id[:8]}…"
+            )
+            self._show_success_overlay("Zollerklärung erneut eingereiht")
+            return
+        jobs = payload.label_job_id[:8] + "…"
+        if payload.customs_job_id:
+            jobs += " / " + payload.customs_job_id[:8] + "…"
+        self._status.setText(f"Archivierter PLC-Nachdruck eingereiht: {jobs}")
+        self._show_success_overlay("PLC-Dokumente erneut eingereiht")
+
+    def _on_archived_reprint_error(self, exc: Exception) -> None:
+        self._status.setText("PLC-Nachdruck fehlgeschlagen.")
+        QMessageBox.warning(
+            self,
+            "PLC-Nachdruck",
+            f"Nachdruck konnte nicht eingereiht werden:\n\n{exc}",
+        )
+
+    def _on_archived_reprint_finished(self, worker: BackgroundWorker) -> None:
+        if self._archived_reprint_worker is worker:
+            self._archived_reprint_worker = None
+        self._update_send_button_state()
 
     def _next_additional_shipment(self, shipment: PlcShipmentDraft) -> PlcShipmentDraft:
         for index in range(2, 100):

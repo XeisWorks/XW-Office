@@ -201,6 +201,56 @@ def test_post_plc_archiving_and_queue_do_not_block_ui_or_allow_close(
     assert dialog._send_btn.isEnabled()  # noqa: SLF001
 
 
+def test_archived_plc_reprint_queue_is_async_and_cannot_be_submitted_twice(
+    qtbot: object,
+    tmp_path: Path,
+) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    shipment = _shipment()
+    archive_path = tmp_path / "archived-label.pdf"
+    started = Event()
+    release = Event()
+    heartbeat: list[bool] = []
+    queued: list[str] = []
+    shown: list[str] = []
+
+    def queue_label(_path: object, reference: str) -> str:
+        queued.append(reference)
+        started.set()
+        assert release.wait(3)
+        return "archived-print-job"
+
+    dialog._queue_webservice_label = queue_label  # type: ignore[method-assign]  # noqa: SLF001
+    dialog._show_success_overlay = shown.append  # type: ignore[method-assign]  # noqa: SLF001
+    dialog._start_archived_reprint(  # noqa: SLF001
+        shipment,
+        archive_path=archive_path,
+        customs_path=None,
+        customs_print_path=None,
+    )
+
+    qtbot.waitUntil(started.is_set)  # type: ignore[attr-defined]
+    QTimer.singleShot(0, lambda: heartbeat.append(True))
+    qtbot.waitUntil(lambda: bool(heartbeat))  # type: ignore[attr-defined]
+    dialog.reject()
+    assert dialog.isVisible()
+    assert not dialog._send_btn.isEnabled()  # noqa: SLF001
+
+    dialog._start_archived_reprint(  # noqa: SLF001
+        shipment,
+        archive_path=archive_path,
+        customs_path=None,
+        customs_print_path=None,
+    )
+    assert queued == [shipment.reference]
+    release.set()
+    qtbot.waitUntil(lambda: shown == ["PLC-Dokumente erneut eingereiht"])  # type: ignore[attr-defined]
+    qtbot.waitUntil(lambda: dialog._archived_reprint_worker is None)  # type: ignore[attr-defined]  # noqa: SLF001
+    assert dialog._send_btn.isEnabled()  # noqa: SLF001
+
+
 def test_customs_result_archives_both_pdfs_before_first_print_job(
     qtbot: object,
     tmp_path: Path,
