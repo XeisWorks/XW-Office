@@ -3032,6 +3032,7 @@ def test_rechnungen_cached_wix_summary_allows_product_fallback_when_items_missin
     assert "Wixstrasse 7" in view._shipping_editor.toPlainText()  # noqa: SLF001
     assert view._get_cached_wix_context("20900") is None  # noqa: SLF001
     assert load_calls == [("20900", False)]
+    qtbot.waitUntil(view.shutdown_complete, timeout=3000)
 
 
 def test_rechnungen_load_more_button_stages_drafts_before_open(qtbot: object) -> None:
