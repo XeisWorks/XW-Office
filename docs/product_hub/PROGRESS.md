@@ -1516,3 +1516,9 @@ archivierten Payloads. Das DB-Readiness-Gate endet vor der Inventur erwartungsge
 Exit-Code 2 (`eligible=false`); der getrennte Runtime-Check endet mit Exit-Code 0
 (`eligible=true`) für sevDesk, Graph, Wix und den Worker. Der Helper beendet sich bei
 diesem erwarteten Zustand mit Exit-Code 0 und aktiviert weder Shadow- noch Master-Flag.
+
+Der produktionsnahe Projektions-Dry-Run wurde danach ebenfalls read-only über Railway
+ausgeführt (lokales `PYTHONPATH=src`, Railway-Produktionsvariablen): 0 Schreibungen,
+0 Konflikte/Fehler und 432 übersprungene Varianten. Alle Überspringungen benötigen vor
+einer Master-Projektion noch eindeutige Wix-Produkt-/Inventarzuordnungen; externe
+Bestandsmengen wurden nicht verändert.

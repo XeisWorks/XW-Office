@@ -150,6 +150,10 @@ Sync-Konflikte. Provider-/Graph-/Wix-Grundkonfiguration und der Worker-Marker si
   endet erwartungsgemäß mit Exit-Code 2 (`eligible=false`). Der getrennte
   Product-Hub-Runtime-Check endet mit Exit-Code 0 (`eligible=true`): Provider-
   credentials (sevDesk/Graph/Wix) und Worker-Service sind betriebsbereit.
+- Der read-only Projektions-Dry-Run lief über Railway mit `PYTHONPATH=src`: 0
+  Schreibungen, 0 Konflikte/Fehler und 432 übersprungene Varianten. Die Überspringungen
+  sind auf fehlende eindeutige Wix-Produkt-/Inventarzuordnungen zurückzuführen; es wurde
+  keine externe Bestandsmenge verändert.
 - Railway-Worker: Service aktiv; der zuletzt geprüfte erfolgreiche Start ist Deployment
   `bcc5456a-9f31-48c0-9cde-492caf99d34b` (Commit `bfbb69e`).
 - Provider-natives PostgreSQL-Backup: über Railway CLI versucht, auf dem Hobby-Plan aber
