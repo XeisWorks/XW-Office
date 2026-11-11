@@ -77,6 +77,13 @@ class _PdfInspectionResult:
     error: str = ""
 
 
+@dataclass(frozen=True)
+class _PdfOpenTargetResult:
+    path: str
+    exists: bool
+    is_folder: bool
+
+
 def _inspect_product_pdf(raw_path: str) -> _PdfInspectionResult:
     path = Path(raw_path)
     if not path.is_file():
@@ -86,6 +93,13 @@ def _inspect_product_pdf(raw_path: str) -> _PdfInspectionResult:
             return _PdfInspectionResult(str(path), len(document))
     except Exception as exc:  # noqa: BLE001 - displayed in the configuration dialog.
         return _PdfInspectionResult(str(path), None, f"PDF kann nicht gelesen werden: {exc}")
+
+
+def _resolve_pdf_open_target(raw_path: str, open_folder: bool) -> _PdfOpenTargetResult:
+    path = Path(raw_path)
+    target = path.parent if open_folder else path
+    exists = target.exists() if open_folder else target.is_file()
+    return _PdfOpenTargetResult(str(target), exists, open_folder)
 
 
 def _format_page_ranges(pages: list[int]) -> str:
@@ -247,6 +261,8 @@ class ProductPrintConfigDialog(QDialog):
         self._pdf_validation_path = ""
         self._pdf_pending_path: str | None = None
         self._pdf_status_worker: BackgroundWorker | None = None
+        self._path_action_worker: BackgroundWorker | None = None
+        self._path_action_buttons: tuple[QPushButton, QPushButton] | None = None
         self._pending_accept = False
         self._closing = False
         self._pdf_status_timer = QTimer(self)
@@ -275,6 +291,7 @@ class ProductPrintConfigDialog(QDialog):
         open_folder_btn = QPushButton("Ordner")
         open_folder_btn.clicked.connect(self._open_pdf_folder)
         browse_row.addWidget(open_folder_btn)
+        self._path_action_buttons = (open_pdf_btn, open_folder_btn)
         form.addRow("Druckpfad:", browse_row)
         self._pdf_status = QLabel("")
         self._pdf_status.setWordWrap(True)
@@ -365,14 +382,18 @@ class ProductPrintConfigDialog(QDialog):
                 self._pdf_status.text() or "Die PDF-Datei konnte nicht geoeffnet werden.",
             )
             return
+        self._stop_pdf_inspection()
+        self._stop_path_action()
         super().accept()
 
     def reject(self) -> None:
         self._stop_pdf_inspection()
+        self._stop_path_action()
         super().reject()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._stop_pdf_inspection()
+        self._stop_path_action()
         super().closeEvent(event)
 
     def _stop_pdf_inspection(self) -> None:
@@ -384,25 +405,66 @@ class ProductPrintConfigDialog(QDialog):
         if self._pdf_status_worker is not None and self._pdf_status_worker.isRunning():
             self._pdf_status_worker.cancel()
 
+    def _stop_path_action(self) -> None:
+        if self._path_action_worker is not None and self._path_action_worker.isRunning():
+            self._path_action_worker.cancel()
+
     def _browse_pdf(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Produkt-PDF waehlen", self._path_edit.text(), "PDF (*.pdf)")
         if path:
             self._path_edit.setText(path)
 
     def _open_pdf(self) -> None:
-        if not self._path_edit.text().strip():
-            return
-        path = self._pdf_path()
-        if path.is_file():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        self._start_path_action(open_folder=False)
 
     def _open_pdf_folder(self) -> None:
-        if not self._path_edit.text().strip():
+        self._start_path_action(open_folder=True)
+
+    def _start_path_action(self, *, open_folder: bool) -> None:
+        raw_path = self._path_edit.text().strip()
+        if not raw_path or self._closing:
             return
-        path = self._pdf_path()
-        target = path.parent if path.parent.exists() else None
-        if target is not None:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
+        current = self._path_action_worker
+        if current is not None and current.isRunning():
+            return
+        if self._path_action_buttons is not None:
+            for button in self._path_action_buttons:
+                button.setEnabled(False)
+        worker = BackgroundWorker(_resolve_pdf_open_target, raw_path, open_folder)
+        self._path_action_worker = worker
+        worker.signals.result.connect(
+            lambda result: self._on_path_action_result(result) if isValid(self) else None
+        )
+        worker.signals.error.connect(
+            lambda exc: self._on_path_action_error(exc) if isValid(self) else None
+        )
+        worker.signals.finished.connect(
+            lambda current_worker=worker: self._on_path_action_finished(current_worker)
+            if isValid(self)
+            else None
+        )
+        worker.start()
+
+    def _on_path_action_result(self, result: object) -> None:
+        if self._closing or not isinstance(result, _PdfOpenTargetResult):
+            return
+        if not result.exists:
+            target = "Der Ordner" if result.is_folder else "Die PDF-Datei"
+            self._pdf_status.setText(f"{target} wurde nicht gefunden: {result.path}")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(result.path)):
+            self._pdf_status.setText(f"Konnte den Pfad nicht oeffnen: {result.path}")
+
+    def _on_path_action_error(self, exc: Exception) -> None:
+        if not self._closing:
+            self._pdf_status.setText(f"Pfad konnte nicht geprueft werden: {exc}")
+
+    def _on_path_action_finished(self, worker: BackgroundWorker) -> None:
+        if self._path_action_worker is worker:
+            self._path_action_worker = None
+        if not self._closing and self._path_action_buttons is not None:
+            for button in self._path_action_buttons:
+                button.setEnabled(True)
 
     def _load_initial_plan_rows(self) -> None:
         if self._piece.print_plan:

@@ -2347,3 +2347,19 @@ Kanalprojektion wurde wegen `master_enabled=false` uebersprungen. Es wurden kein
 Ledger-/Buchungsdaten oder Betriebsflags geschrieben; Codex hat keinen Worker-Lauf
 manuell ausgeloest. G2 bleibt BLOCKIERT durch Inventur, Konfliktbereinigung,
 Shadow-Nachweis, provider-natives Backup und Betriebsfreigabe.
+
+## Fortschreibung F17 - Produktdruck-Pfadaktionen im Worker
+
+Im `ProductPrintConfigDialog` liefen die Metadatenpruefungen der Aktionen „PDF oeffnen“
+(`Path.is_file()`) und „Ordner“ (`Path.exists()`) noch synchron. Auf Netzlaufwerken konnten
+sie den UI-Thread blockieren. Beide Pruefungen laufen nun in einem lifecycle-verfolgten
+Worker; die Desktop-Oeffnung erfolgt erst nach erfolgreicher Pruefung. Abbruch und
+Dialogabschluss invalidieren den Worker, doppelte Pfadaktionen werden waehrenddessen
+blockiert.
+
+Zwei neue Qt-Regressionen halten `is_file()` bzw. `exists()` im Worker an und bestaetigen,
+dass der Qt-Heartbeat weiterlaeuft und der passende PDF-/Ordnerpfad anschliessend geoeffnet
+wird. `test_rechnungen_product_print.py` besteht mit **17 Tests**, Ruff und gezieltes
+MyPy fuer `print_dialog.py` (bestehender `fitz`-Importfehlercode gezielt ausgenommen) sind
+gruen. Die vollstaendige Rechnungs-UI-/Drucksuite und Hosted CI laufen fuer den neuen
+Commit noch.

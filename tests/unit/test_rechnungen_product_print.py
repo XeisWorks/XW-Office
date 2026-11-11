@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import fitz
+from pathlib import Path
 from threading import Event
 
+import fitz
 from PySide6.QtCore import QRect, QTimer, Qt
 from PySide6.QtWidgets import QComboBox, QStyleOptionViewItem
 
@@ -568,6 +569,108 @@ def test_product_pdf_inspection_keeps_dialog_responsive(qtbot: object, tmp_path,
 
     assert dialog._page_count == 1  # noqa: SLF001
     assert heartbeats
+
+
+def test_product_pdf_open_path_metadata_check_keeps_dialog_responsive(
+    qtbot: object, tmp_path, monkeypatch
+) -> None:
+    pdf_path = tmp_path / "slow-open.pdf"
+    pdf_path.write_bytes(b"pdf")
+    entered = Event()
+    release = Event()
+    dialog = ProductPrintConfigDialog(
+        None,
+        Container(AppConfig()),
+        PieceBlock(
+            sku="XW-OPEN",
+            name="Langsamer Pfad",
+            qty_needed=1,
+            product=Product(
+                id="open",
+                sku="XW-OPEN",
+                name="Langsamer Pfad",
+                print_file_path=str(pdf_path),
+            ),
+        ),
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    _wait_for_pdf_inspection(qtbot, dialog)
+
+    original_is_file = type(pdf_path).is_file
+
+    def slow_is_file(path) -> bool:
+        if path == pdf_path:
+            entered.set()
+            assert release.wait(timeout=5)
+        return original_is_file(path)
+
+    monkeypatch.setattr(type(pdf_path), "is_file", slow_is_file)
+    opened: list[str] = []
+    monkeypatch.setattr(
+        print_dialog.QDesktopServices,
+        "openUrl",
+        lambda url: opened.append(url.toLocalFile()) or True,
+    )
+    dialog._open_pdf()  # noqa: SLF001
+    qtbot.waitUntil(entered.is_set, timeout=3000)  # type: ignore[attr-defined]
+    heartbeats: list[int] = []
+    timer = QTimer(dialog)
+    timer.timeout.connect(lambda: heartbeats.append(1))
+    timer.start(10)
+    qtbot.waitUntil(lambda: bool(heartbeats), timeout=1000)  # type: ignore[attr-defined]
+    release.set()
+    qtbot.waitUntil(lambda: dialog._path_action_worker is None, timeout=3000)  # type: ignore[attr-defined]
+
+    assert heartbeats
+    assert len(opened) == 1
+    assert Path(opened[0]) == pdf_path
+
+
+def test_product_pdf_folder_exists_check_runs_in_worker(qtbot: object, tmp_path, monkeypatch) -> None:
+    pdf_path = tmp_path / "folder-check.pdf"
+    pdf_path.write_bytes(b"pdf")
+    entered = Event()
+    release = Event()
+    dialog = ProductPrintConfigDialog(
+        None,
+        Container(AppConfig()),
+        PieceBlock(
+            sku="XW-FOLDER",
+            name="Ordnerpruefung",
+            qty_needed=1,
+            product=Product(
+                id="folder",
+                sku="XW-FOLDER",
+                name="Ordnerpruefung",
+                print_file_path=str(pdf_path),
+            ),
+        ),
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    _wait_for_pdf_inspection(qtbot, dialog)
+
+    original_exists = type(pdf_path).exists
+
+    def slow_exists(path) -> bool:
+        if path == tmp_path:
+            entered.set()
+            assert release.wait(timeout=5)
+        return original_exists(path)
+
+    monkeypatch.setattr(type(pdf_path), "exists", slow_exists)
+    opened: list[str] = []
+    monkeypatch.setattr(
+        print_dialog.QDesktopServices,
+        "openUrl",
+        lambda url: opened.append(url.toLocalFile()) or True,
+    )
+    dialog._open_pdf_folder()  # noqa: SLF001
+    qtbot.waitUntil(entered.is_set, timeout=3000)  # type: ignore[attr-defined]
+    release.set()
+    qtbot.waitUntil(lambda: dialog._path_action_worker is None, timeout=3000)  # type: ignore[attr-defined]
+
+    assert len(opened) == 1
+    assert Path(opened[0]) == tmp_path
 
 
 def test_product_pdf_inspection_discards_stale_path_result(qtbot: object, tmp_path, monkeypatch) -> None:
