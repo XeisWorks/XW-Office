@@ -6,7 +6,7 @@ from threading import Event
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QDialog, QMessageBox
 
 from xw_office.services.transfers.models import (
     TransferAttachment,
@@ -144,20 +144,32 @@ def test_open_count_uses_loaded_cases(qtbot: object, monkeypatch) -> None:
 
 def test_dialog_defer_calls_service(qtbot: object, monkeypatch) -> None:
     service = _FakeTransferService()
+    entered, release = Event(), Event()
+    mark_deferred = service.mark_deferred
+
+    def blocked_mark_deferred(case_id: str, note: str = "") -> None:
+        entered.set()
+        assert release.wait(3)
+        mark_deferred(case_id, note)
+
+    monkeypatch.setattr(service, "mark_deferred", blocked_mark_deferred)
     dialog = OffeneUeberweisungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
     qtbot.addWidget(dialog)
+    dialog.show()
     _wait_dialog_loaded(qtbot, dialog)
-    accepted = {"value": False}
-
-    monkeypatch.setattr(dialog, "accept", lambda: accepted.__setitem__("value", True))
 
     dialog._note.setText("spaeter")  # noqa: SLF001
     dialog._defer()  # noqa: SLF001
+    qtbot.waitUntil(entered.is_set, timeout=2000)
 
+    dialog.reject()
+    dialog.close()
+    assert dialog.isVisible()
+
+    release.set()
     qtbot.waitUntil(lambda: bool(service.mark_deferred_calls), timeout=2000)
-    qtbot.waitUntil(lambda: accepted["value"], timeout=2000)
+    qtbot.waitUntil(lambda: dialog.result() == QDialog.DialogCode.Accepted, timeout=2000)
     assert service.mark_deferred_calls == [("m1", "spaeter")]
-    assert accepted["value"] is True
 
 
 def test_dialog_mark_done_calls_service_after_confirmation(qtbot: object, monkeypatch) -> None:

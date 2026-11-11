@@ -256,19 +256,28 @@ def test_open_count_uses_loaded_cases(qtbot: object, monkeypatch: object) -> Non
     assert dialog.open_count() == 1
 
 
-def test_dialog_close_does_not_wait_for_running_worker(qtbot: object, monkeypatch) -> None:
+def test_dialog_stays_open_until_action_worker_finishes(qtbot: object, monkeypatch) -> None:
     dialog = OffeneSendungenDialog(_FakeContainer(_FakeSendungenService()))  # type: ignore[arg-type]
     qtbot.addWidget(dialog)
     release = Event()
     worker = BackgroundWorker(lambda: release.wait(2))
     dialog._action_worker = worker  # noqa: SLF001
+    worker.signals.finished.connect(
+        lambda current=worker: dialog._finish_action(current, dialog._btn_done, "Erledigen")  # noqa: SLF001
+    )
     wait_calls: list[bool] = []
     monkeypatch.setattr(BackgroundWorker, "wait", lambda *_args: wait_calls.append(True))
     worker.start()
+    dialog.show()
 
+    dialog.reject()
     dialog.close()
 
-    assert dialog._closing is True  # noqa: SLF001
+    assert dialog._closing is False  # noqa: SLF001
+    assert dialog.isVisible()
     assert wait_calls == []
     release.set()
-    qtbot.waitUntil(lambda: not worker.isRunning(), timeout=2000)
+    qtbot.waitUntil(lambda: dialog._action_worker is None, timeout=2000)  # noqa: SLF001
+    dialog.close()
+    assert dialog._closing is True  # noqa: SLF001
+    assert not dialog.isVisible()

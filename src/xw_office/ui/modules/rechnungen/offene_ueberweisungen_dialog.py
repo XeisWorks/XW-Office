@@ -55,6 +55,8 @@ class OffeneUeberweisungenDialog(QDialog):
         self._detail_worker: BackgroundWorker | None = None
         self._detail_workers: list[BackgroundWorker] = []
         self._action_worker: BackgroundWorker | None = None
+        self._write_action_worker: BackgroundWorker | None = None
+        self._allow_action_close = False
         self._closing = False
         self._load_seq = 0
         self._detail_seq = 0
@@ -62,14 +64,21 @@ class OffeneUeberweisungenDialog(QDialog):
         QTimer.singleShot(0, lambda: self._load_cases(refresh=True))
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if self._write_action_worker is not None and not self._allow_action_close:
+            event.ignore()
+            return
         self._invalidate_dialog_callbacks()
         super().closeEvent(event)
 
     def accept(self) -> None:
+        if self._write_action_worker is not None and not self._allow_action_close:
+            return
         self._invalidate_dialog_callbacks()
         super().accept()
 
     def reject(self) -> None:
+        if self._write_action_worker is not None and not self._allow_action_close:
+            return
         self._invalidate_dialog_callbacks()
         super().reject()
 
@@ -462,7 +471,13 @@ class OffeneUeberweisungenDialog(QDialog):
             self._service.save_manual_payment(case_id, payment)
             return self._service.generate_qr(case_id, payment), payment
 
-        self._start_action(self._btn_generate_qr, "QR wird erstellt...", job, self._on_qr_generated)
+        self._start_action(
+            self._btn_generate_qr,
+            "QR wird erstellt...",
+            job,
+            self._on_qr_generated,
+            blocks_close=True,
+        )
 
     def _on_qr_generated(self, payload: object) -> None:
         if not isinstance(payload, tuple) or len(payload) != 2:
@@ -484,11 +499,16 @@ class OffeneUeberweisungenDialog(QDialog):
             self._service.mark_deferred(case_id, note=note)
             return True
 
+        def on_deferred(_payload: object) -> None:
+            self._allow_action_close = True
+            QTimer.singleShot(0, self.accept)
+
         self._start_action(
             self._btn_defer,
             "Verschiebe...",
             job,
-            lambda _payload: QTimer.singleShot(0, self.accept),
+            on_deferred,
+            blocks_close=True,
         )
 
     def _mark_done(self) -> None:
@@ -524,6 +544,7 @@ class OffeneUeberweisungenDialog(QDialog):
             "Erledige...",
             job,
             lambda _payload: self._load_cases(refresh=True),
+            blocks_close=True,
         )
 
     def _start_action(
@@ -532,6 +553,8 @@ class OffeneUeberweisungenDialog(QDialog):
         busy_text: str,
         job: Callable[[], Any],
         on_result: Callable[[object], None],
+        *,
+        blocks_close: bool = False,
     ) -> None:
         if self._action_worker is not None and self._action_worker.isRunning():
             return
@@ -541,6 +564,8 @@ class OffeneUeberweisungenDialog(QDialog):
         self._detail_status_for_action(busy_text)
         self._action_worker = BackgroundWorker(job)
         worker = self._action_worker
+        if blocks_close:
+            self._write_action_worker = worker
         worker.signals.result.connect(
             lambda payload: on_result(payload)
             if not self._closing and isValid(self)
@@ -571,6 +596,8 @@ class OffeneUeberweisungenDialog(QDialog):
     ) -> None:
         if self._action_worker is worker:
             self._action_worker = None
+        if self._write_action_worker is worker:
+            self._write_action_worker = None
         if self._closing or not isValid(self) or not isValid(button):
             return
         button.setEnabled(True)

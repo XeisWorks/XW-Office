@@ -200,6 +200,7 @@ class OffeneSendungenDialog(QDialog):
         self._detail_worker: BackgroundWorker | None = None
         self._detail_workers: list[BackgroundWorker] = []
         self._action_worker: BackgroundWorker | None = None
+        self._allow_action_close = False
         self._closing = False
         self._load_seq = 0
         self._detail_seq = 0
@@ -216,14 +217,21 @@ class OffeneSendungenDialog(QDialog):
         QTimer.singleShot(0, lambda: self._load_cases(refresh=False))
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if self._action_worker is not None and not self._allow_action_close:
+            event.ignore()
+            return
         self._invalidate_dialog_callbacks()
         super().closeEvent(event)
 
     def accept(self) -> None:
+        if self._action_worker is not None and not self._allow_action_close:
+            return
         self._invalidate_dialog_callbacks()
         super().accept()
 
     def reject(self) -> None:
+        if self._action_worker is not None and not self._allow_action_close:
+            return
         self._invalidate_dialog_callbacks()
         super().reject()
 
@@ -910,6 +918,7 @@ class OffeneSendungenDialog(QDialog):
         remaining = payload
         self._open_case_count = remaining
         if remaining <= 0:
+            self._allow_action_close = True
             QTimer.singleShot(0, self.accept)
             return
         self._load_cases(refresh=False)
