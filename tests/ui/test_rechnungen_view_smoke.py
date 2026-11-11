@@ -23,6 +23,7 @@ from xw_office.services.draft_invoice.service import DraftInvoiceService
 from xw_office.services.inventory.service import StartMode, StartPreflight
 from xw_office.services.invoice_processing.context import InvoiceWorkContext, InvoiceWorkPosition
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.services.invoice_processing.start_holds import StartHold
 from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.products.catalog import Product, ProductCatalogService, StockStatus
 from xw_office.services.products.print_decision import (
@@ -573,6 +574,74 @@ def test_rechnungen_shutdown_tracks_redelivery_workers(qtbot: object) -> None:
 
     assert prepare_worker in view._shutdown_workers()  # noqa: SLF001
     assert apply_worker in view._shutdown_workers()  # noqa: SLF001
+
+
+def test_start_hold_table_toggle_persists_without_blocking_the_ui(
+    qtbot: QtBot, monkeypatch: MonkeyPatch,
+) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = invoice_service._draft.model_copy(update={"id": "hold-table-1"})  # noqa: SLF001
+    view._summaries = [summary]  # noqa: SLF001
+    view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    entered = Event()
+    release = Event()
+    holds: dict[str, StartHold] = {}
+
+    class _Service:
+        def get_start_hold(self, invoice_id: str) -> StartHold | None:
+            return holds.get(invoice_id)
+
+        def defer_invoice_from_start(self, invoice_id: str, reason: str, **kwargs: object) -> StartHold:
+            entered.set()
+            release.wait(timeout=2)
+            hold = StartHold.create(
+                invoice_id,
+                reason,
+                note=str(kwargs.get("note") or ""),
+                review_on=str(kwargs.get("review_on") or ""),
+            )
+            holds[invoice_id] = hold
+            return hold
+
+        def list_start_holds(self) -> dict[str, StartHold]:
+            return dict(holds)
+
+    service = _Service()
+    monkeypatch.setattr(container, "resolve", lambda _service_type: service)
+
+    class _HoldDialog:
+        reason = "customer_question"
+        note = "Rueckfrage offen"
+        review_on = ""
+
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.StartHoldDialog", _HoldDialog
+    )
+    heartbeat = {"ticks": 0}
+    timer = QTimer(view)
+    timer.timeout.connect(lambda: heartbeat.__setitem__("ticks", heartbeat["ticks"] + 1))
+    timer.start(1)
+
+    view._toggle_start_hold(summary, expected_checked=True)  # noqa: SLF001
+    qtbot.waitUntil(entered.is_set)
+    qtbot.wait(20)
+    assert heartbeat["ticks"] > 0
+    release.set()
+    qtbot.waitUntil(lambda: view._start_hold_worker is None)  # noqa: SLF001
+    timer.stop()
+
+    assert holds[summary.id].reason == "customer_question"
+    row = view._table.source_rows_data()[0]  # noqa: SLF001
+    assert row["__start_checked__"] is False
+    assert "Kundenklärung" in row["__tooltip__START"]
 
 
 def test_tagesgeschaeft_contains_rechnungen_view(qtbot: object) -> None:

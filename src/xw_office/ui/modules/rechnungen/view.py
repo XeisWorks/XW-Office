@@ -1331,6 +1331,10 @@ class RechnungenView(QWidget):
         self._run_output_active_request: _RunOutputPrintRequest | None = None
         self._run_output_pending_requests: list[_RunOutputPrintRequest] = []
         self._invoice_mail_worker: BackgroundWorker | None = None
+        self._start_hold_worker: BackgroundWorker | None = None
+        self._start_hold_refresh_pending = False
+        self._start_hold_worker_is_refresh = False
+        self._start_hold_error: Exception | None = None
         self._invoice_pdf_preview_worker: BackgroundWorker | None = None
         self._delete_draft_worker: BackgroundWorker | None = None
         self._open_overview_worker: BackgroundWorker | None = None
@@ -2238,6 +2242,7 @@ class RechnungenView(QWidget):
                 self._fulfillment_step_worker,
                 self._run_output_worker,
                 self._invoice_mail_worker,
+                self._start_hold_worker,
                 self._invoice_pdf_preview_worker,
                 self._delete_draft_worker,
                 self._open_overview_worker,
@@ -5853,21 +5858,46 @@ class RechnungenView(QWidget):
         self._select_visible_table_row(row)
 
     def refresh_start_holds(self) -> None:
-        """Refresh the compact START column after a hold changes in another dialog."""
-        service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-        holds = service.list_start_holds()
+        """Refresh the compact START column without reading SettingsKV on the UI thread."""
+        if self._shutting_down:
+            return
+        if self._start_hold_worker is not None:
+            self._start_hold_refresh_pending = True
+            return
+
+        def job() -> object:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            return service.list_start_holds()
+
+        self._start_hold_refresh_pending = False
+        self._start_hold_worker_is_refresh = True
+        self._start_hold_error = None
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(self._apply_start_holds)
+        worker.signals.error.connect(self._on_start_hold_worker_error)
+        worker.signals.finished.connect(self._on_start_hold_worker_finished)
+        self._start_hold_worker = worker
+        worker.start()
+
+    def _apply_start_holds(self, payload: object) -> None:
+        if not isinstance(payload, dict):
+            self._start_hold_error = RuntimeError("Ung\u00fcltige START-Haltepunkt-Antwort")
+            return
+        holds = payload
         for row_index, summary in enumerate(self._summaries):
             hold = holds.get(str(summary.id))
             selectable = int(summary.status_code or 0) == 100 or hold is not None
             if hold is not None:
                 reminder = (
-                    f" · Wiedervorlage {'fällig: ' if hold.review_due else ''}{hold.review_on}"
+                    " \u00b7 Wiedervorlage "
+                    + ("f\u00e4llig: " if hold.review_due else "")
+                    + hold.review_on
                     if hold.review_on else ""
                 )
                 detail = f"\n{hold.note}" if hold.note else ""
-                tooltip = f"Zurückgestellt: {hold.reason_label}{reminder}{detail}"
+                tooltip = f"Zur\u00fcckgestellt: {hold.reason_label}{reminder}{detail}"
             else:
-                tooltip = "Für START freigegeben" if selectable else ""
+                tooltip = "F\u00fcr START freigegeben" if selectable else ""
             patch = {
                 "__start_selectable__": selectable,
                 "__start_checked__": selectable and hold is None,
@@ -5880,44 +5910,66 @@ class RechnungenView(QWidget):
                     loaded_row.update(patch)
 
     def _toggle_start_hold(self, summary: InvoiceSummary, *, expected_checked: bool) -> None:
+        if self._shutting_down:
+            return
         if self._start_workflow_running:
             QMessageBox.information(
-                self, "START-Freigabe", "START läuft. Bitte zuerst STOP verwenden."
+                self, "START-Freigabe", "START l\u00e4uft. Bitte zuerst STOP verwenden."
             )
             return
-        service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-        try:
-            existing = service.get_start_hold(str(summary.id))
-            if (existing is None) != expected_checked:
-                self.refresh_start_holds()
-                QMessageBox.information(
-                    self, "START-Freigabe", "Der Status wurde auf einem anderen PC geändert. Bitte erneut klicken."
-                )
+        if self._start_hold_worker is not None:
+            return
+        reason = note = review_on = ""
+        if expected_checked:
+            dialog = StartHoldDialog(
+                invoice_label=summary.invoice_number or summary.order_reference or summary.id,
+                parent=self,
+            )
+            if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
+            reason, note, review_on = dialog.reason, dialog.note, dialog.review_on
+        invoice_id = str(summary.id)
+        status_code = int(summary.status_code or 0)
+
+        def job() -> object:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            existing = service.get_start_hold(invoice_id)
+            if (existing is None) != expected_checked:
+                raise RuntimeError(
+                    "Der Status wurde auf einem anderen PC ge\u00e4ndert. Bitte erneut klicken."
+                )
             if existing is not None:
                 service.release_invoice_for_start(
-                    str(summary.id), expected_updated_at=existing.updated_at,
+                    invoice_id, expected_updated_at=existing.updated_at,
                 )
-            elif int(summary.status_code or 0) == 100:
-                dialog = StartHoldDialog(
-                    invoice_label=summary.invoice_number or summary.order_reference or summary.id,
-                    parent=self,
-                )
-                if dialog.exec() != QDialog.DialogCode.Accepted:
-                    return
+            elif status_code == 100:
                 service.defer_invoice_from_start(
-                    str(summary.id), dialog.reason, note=dialog.note, review_on=dialog.review_on,
-                    expected_ready=True,
+                    invoice_id, reason, note=note, review_on=review_on, expected_ready=True,
                 )
-            else:
-                return
+            return service.list_start_holds()
+
+        self._start_hold_error = None
+        self._start_hold_worker_is_refresh = False
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(self._apply_start_holds)
+        worker.signals.error.connect(self._on_start_hold_worker_error)
+        worker.signals.finished.connect(self._on_start_hold_worker_finished)
+        self._start_hold_worker = worker
+        worker.start()
+
+    def _on_start_hold_worker_error(self, exc: Exception) -> None:
+        self._start_hold_error = exc
+        if not self._start_hold_worker_is_refresh:
+            self._start_hold_refresh_pending = True
+
+    def _on_start_hold_worker_finished(self) -> None:
+        self._start_hold_worker = None
+        self._start_hold_worker_is_refresh = False
+        if self._start_hold_error is not None and not self._shutting_down:
+            QMessageBox.warning(self, "START-Freigabe", str(self._start_hold_error))
+        if self._start_hold_refresh_pending and not self._shutting_down:
+            self._start_hold_refresh_pending = False
             self.refresh_start_holds()
-        except Exception as exc:
-            try:
-                self.refresh_start_holds()
-            except Exception:
-                pass
-            QMessageBox.warning(self, "START-Freigabe", str(exc))
 
     def _select_visible_table_row(self, row: int) -> None:
         if row < 0:
