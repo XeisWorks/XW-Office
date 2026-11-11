@@ -2703,6 +2703,9 @@ def test_rechnungen_applies_persistent_wix_cache_before_background_load(
     monkeypatch,
 ) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
+    # This test covers the persistent Wix cache; keep the unrelated first-use
+    # catalog disk/settings warm-up out of its background-worker lifecycle.
+    container.resolve(ProductCatalogService).list_unreleased_products()
     view = RechnungenView(container)
     qtbot.addWidget(view)
     summary = InvoiceSummary.model_validate(
@@ -2761,6 +2764,8 @@ def test_rechnungen_applies_persistent_wix_cache_before_background_load(
     assert not view._gb_stuecke.isHidden()  # noqa: SLF001
     assert view._get_cached_wix_context("20899") is not None  # noqa: SLF001
     assert load_calls == []
+    view.request_shutdown()
+    qtbot.waitUntil(view.shutdown_complete, timeout=3000)
 
 
 def test_shipping_editor_keeps_complete_panel_address_over_name_only_wix() -> None:

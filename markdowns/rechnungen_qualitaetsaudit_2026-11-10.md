@@ -769,6 +769,10 @@ AP04/AP08 Gutschrift-Feed: `sevdesk_credit_note_inventory.py` typisiert Provider
 
 AP07-Fortschreibung auf `305d929`: Offene Produktpositionen zeigen jetzt den aus frueheren offenen Auftraegen bereits verplanten Bestand separat vom tatsaechlich verfuegbaren Lager. Die sequenzielle SKU-Planung weist verbleibende Mengen korrekt dem spaeteren Auftrag zu; der neue Regressionstest und zusammen **40 Inventur-/Druckplan-Tests** bestehen lokal.
 
+AP06/AP08 Windows-Regression auf ba77a44 (Hosted Run 43026932649): Der Prozess endete mit einer Windows-Access-Violation waehrend warm_catalog() im Test test_rechnungen_applies_persistent_wix_cache_before_background_load; der Stack zeigte den erstmaligen Unreleased-Katalog-Read. Der Test prueft den persistenten Wix-Cache, nicht diesen unabhaengigen Katalog-Warmup. Er waermt den Katalog jetzt in der Testvorbereitung vor und wartet nach den Assertions auf den Abschluss des View-Shutdowns. Damit ist die Testisolation verbessert; ein Produktionsfehler oder dessen Ursache ist nicht belegt. Nach der Anpassung bestanden lokal der fokussierte Test und die vollstaendige Rechnungs-Smoke-Suite (89 Tests); die volle lokale Suite ergab **2.182 bestanden, 5 uebersprungen, 1 bestehende Starlette/httpx-Deprecation-Warnung, 0 fehlgeschlagen (200,16 s)**. Ruff und git diff --check bestanden. Der Windows-Hosted-Lauf fuer genau diese letzte Isolationsergaenzung steht nach Push noch aus.
+
+Nach Fast-Forward auf 5bb2136 bestanden ausserdem die vollstaendige Rechnungs-UI-Smoke-Datei und der neue Inventurzaehldialog zusammen mit **90 Tests** (16,13 s); Ruff und Diff-Pruefung blieben gruen.
+
 Der finale Suite-Nachweis dieses Fortschreibungsschritts steht oben. Weitere Commit-/Push-Nachweise werden nach ihrer Integration ergänzt. Das folgende statische Inventar
 wurde aus dem vorherigen Quellstand erzeugt und dient als Navigationshilfe; nach
 spaeteren Codeaenderungen koennen einzelne Zeilennummern abweichen.
