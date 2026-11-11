@@ -8,7 +8,7 @@ Update this file at the end of every PR.
 
 P07 wurde nachgeschärft: Das RECHNUNGEN-Lageralarm-Popup zeigt nun Zielbestand und empfohlene Bestell-/Nachdruckmenge. Die manuelle Microsoft-Graph-Task-Mail enthält zusätzlich Alarmmodus, Zielbestand, Bestell-/Nachdruckmenge und Erstellzeitpunkt. Die gezielten P07-/Inventurtests laufen grün; Produktionszugänge, Railway-Worker, Inventur und Shadow-/Rollback-Nachweis bleiben externe Cutover-Gates.
 
-Stabiler Gesamt-Regressionslauf am 11. November 2026: `python -m pytest -q` → **2.176 bestanden, 5 übersprungen**; Alembic `037_plc_parcel_evidence` bleibt der aktuelle Head.
+Stabiler Gesamt-Regressionslauf am 11. November 2026: `python -m pytest -q` → **2.177 bestanden, 5 übersprungen**; Alembic `037_plc_parcel_evidence` bleibt der aktuelle Head.
 
 ## Conflict Resolution Wizard CW00–CW07 (2026-09-17)
 
