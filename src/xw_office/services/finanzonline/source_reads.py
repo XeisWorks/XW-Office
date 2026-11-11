@@ -5,6 +5,8 @@ from typing import Any
 
 from xw_office.services.http_client import SevdeskConnection
 
+_MAX_PAGE_SIZE = 1_000
+
 
 class TaxPageLimitError(RuntimeError):
     """The source exceeded the explicitly bounded pagination budget."""
@@ -18,6 +20,8 @@ def load_tax_resource(
     page_size: int = 1000,
     max_pages: int = 100,
 ) -> list[dict[str, Any]]:
+    if not isinstance(page_size, int) or not 1 <= page_size <= _MAX_PAGE_SIZE:
+        raise ValueError(f"sevDesk page_size muss zwischen 1 und {_MAX_PAGE_SIZE} liegen.")
     documents: list[dict[str, Any]] = []
     for page in range(max_pages):
         query = dict(params or {})

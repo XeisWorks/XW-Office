@@ -110,7 +110,7 @@ class SevdeskZmInvoiceProvider:
             self._connection,
             path,
             params={"embed": "contact", "showAll": "true"},
-            page_size=5_000,
+            page_size=1_000,
             max_pages=100,
         )
         self._bulk_document_cache[key] = [dict(item) for item in documents]
@@ -241,7 +241,7 @@ class SevdeskZmInvoiceProvider:
             self._connection,
             path,
             params={"embed": "part"},
-            page_size=5_000,
+            page_size=1_000,
             max_pages=100,
         )
         self._bulk_position_cache[str(resource)] = [dict(item) for item in positions]

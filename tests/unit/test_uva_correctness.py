@@ -19,6 +19,7 @@ from xw_office.services.finanzonline.uva_preview import (
     UvaPreviewService,
 )
 from xw_office.services.finanzonline.uva_selection import UvaDocumentSelector
+from xw_office.services.finanzonline.zm_service import SevdeskZmInvoiceProvider
 from xw_office.services.http_client import SevdeskConnection
 
 
@@ -295,6 +296,32 @@ def test_complete_position_pagination_and_page_limit_failure() -> None:
         assert offsets == [0, 2]
         with pytest.raises(RuntimeError, match="nicht vollstaendig"):
             load_tax_resource(connection, "/InvoicePos", page_size=2, max_pages=1)
+
+
+def test_tax_resource_rejects_page_sizes_above_sevdesk_api_limit() -> None:
+    class NeverCalledConnection:
+        def get(self, *_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("invalid page size must fail before making a request")
+
+    with pytest.raises(ValueError, match="zwischen 1 und 1000"):
+        load_tax_resource(NeverCalledConnection(), "/Invoice", page_size=1_001)  # type: ignore[arg-type]
+
+
+def test_bulk_sevdesk_snapshots_use_supported_page_size() -> None:
+    limits: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        limits.append(int(request.url.params["limit"]))
+        return httpx.Response(200, json={"objects": [{"id": "snapshot-row"}]})
+
+    with httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://example.test"
+    ) as client:
+        provider = SevdeskZmInvoiceProvider(SevdeskConnection(client, AppConfig()))
+        assert provider.load_documents_bulk("Invoice") == [{"id": "snapshot-row"}]
+        assert provider.load_positions_bulk("Invoice") == [{"id": "snapshot-row"}]
+
+    assert limits == [1_000, 1_000]
 
 
 @pytest.mark.parametrize("objects", ["invalid", [None], [{"id": "1"}, "invalid"]])
