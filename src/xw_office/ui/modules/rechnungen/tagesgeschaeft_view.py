@@ -1508,10 +1508,10 @@ class TagesgeschaeftView(QWidget):
         plan: ProductPreflightPlan,
         preflight_elapsed_ms: int,
     ) -> None:
+        signals: AppSignals = self._container.resolve(AppSignals)
         if self._start_abort_requested:
             self._pending_start_preflight = None
             self._set_start_running(False)
-            signals: AppSignals = self._container.resolve(AppSignals)
             signals.status_message.emit("START gestoppt", 2500)
             return
         dialog_started = time.perf_counter()
@@ -1535,7 +1535,6 @@ class TagesgeschaeftView(QWidget):
 
         self._start_abort_requested = False
         self._set_start_running(True, allow_stop=True)
-        signals: AppSignals = self._container.resolve(AppSignals)
         signals.status_message.emit("START wird ausgefuehrt…", 2500)
 
         def job() -> dict[str, object]:

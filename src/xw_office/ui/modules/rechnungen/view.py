@@ -8140,7 +8140,7 @@ class RechnungenView(QWidget):
                         return
                     canonical_name, owner, aliases = product_dialog.get_data()
 
-                    def write() -> object:
+                    def write() -> object | None:
                         return catalog.add_or_update_unreleased_product(
                             canonical_name,
                             owner=owner,
@@ -8150,7 +8150,7 @@ class RechnungenView(QWidget):
                     saved_name = canonical_name
                 else:
 
-                    def write() -> object:
+                    def write() -> object | None:
                         return catalog.save_unreleased_resolution(
                             decision.raw_title,
                             canonical_name=decision.canonical_name,
@@ -8224,7 +8224,7 @@ class RechnungenView(QWidget):
 
     def _run_unreleased_settings_write(
         self,
-        write: Callable[[], object],
+        write: Callable[[], object | None],
         on_done: Callable[[bool, str, object], None],
     ) -> None:
         """Persist a user-approved catalog decision without blocking Qt."""
