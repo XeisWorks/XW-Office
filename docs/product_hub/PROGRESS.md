@@ -25,6 +25,9 @@ Der Readiness-CLI erkennt den aktivierten Worker nun über den nicht-geheimen
 Der Worker schreibt zusätzlich Start- und Zyklusstatus nach stdout in die Railway-Logs
 und unterdrückt HTTP-Client-Rauschen, damit der laufende Prozess ohne SSH-Zugriff
 beobachtbar bleibt.
+Die Forecast-Historie nutzt nun den vorhandenen paginierten sevDesk-Bulk-Positionspfad,
+statt bei jeder historischen Rechnung einen Einzelrequest zu senden; Fallback-Provider
+bleiben kompatibel.
 Das Deployment `f7a20d67-9d87-478a-86ad-337779a1c124` für `b19e9fc` wurde am
 11. November 2026 erfolgreich gebaut und ausgerollt; `https://products.xeisworks.at/health`
 liefert HTTP 200 und der anschließende Health-/Migration-Smokecheck blieb grün.

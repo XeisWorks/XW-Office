@@ -85,12 +85,57 @@ class InventoryForecastRefreshService:
     def _documents_for_year(
         self, year: int
     ) -> Iterator[tuple[dict[str, Any], list[dict[str, Any]], int]]:
-        for document in self._provider.list_invoices_for_year(year):
-            if not _is_draft(document):
-                yield document, self._provider.list_invoice_positions(str(document.get("id") or "")), 1
-        for document in self._provider.list_credit_notes_for_year(year):
-            if not _is_draft(document):
-                yield document, self._provider.list_credit_note_positions(str(document.get("id") or "")), -1
+        invoices = [
+            document
+            for document in self._provider.list_invoices_for_year(year)
+            if not _is_draft(document)
+        ]
+        credits = [
+            document
+            for document in self._provider.list_credit_notes_for_year(year)
+            if not _is_draft(document)
+        ]
+        invoice_positions = self._positions_by_document(
+            invoices, resource="invoice", bulk_name="list_invoice_positions_bulk"
+        )
+        credit_positions = self._positions_by_document(
+            credits, resource="creditNote", bulk_name="list_credit_note_positions_bulk"
+        )
+        for document in invoices:
+            document_id = str(document.get("id") or "")
+            yield document, invoice_positions.get(document_id, []), 1
+        for document in credits:
+            document_id = str(document.get("id") or "")
+            yield document, credit_positions.get(document_id, []), -1
+
+    def _positions_by_document(
+        self,
+        documents: list[dict[str, Any]],
+        *,
+        resource: str,
+        bulk_name: str,
+    ) -> dict[str, list[dict[str, Any]]]:
+        document_ids = [str(document.get("id") or "").strip() for document in documents]
+        bulk_loader = getattr(self._provider, bulk_name, None)
+        if callable(bulk_loader):
+            rows = bulk_loader(document_ids)
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                parent = row.get(resource)
+                parent_id = str(
+                    parent.get("id") if isinstance(parent, dict) else parent or ""
+                ).strip()
+                if parent_id:
+                    grouped.setdefault(parent_id, []).append(dict(row))
+            return grouped
+        single_loader = (
+            self._provider.list_invoice_positions
+            if resource == "invoice"
+            else self._provider.list_credit_note_positions
+        )
+        return {document_id: single_loader(document_id) for document_id in document_ids if document_id}
 
 
 def _is_draft(document: dict[str, Any]) -> bool:

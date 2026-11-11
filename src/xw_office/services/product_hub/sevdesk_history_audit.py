@@ -52,6 +52,31 @@ class SevdeskHistoryProviderAdapter:
     def list_credit_note_positions(self, credit_note_id: str) -> list[dict[str, Any]]:
         return self._monthly.load_positions("CreditNote", credit_note_id)
 
+    def list_invoice_positions_bulk(self, invoice_ids: list[str]) -> list[dict[str, Any]]:
+        return self._list_positions_bulk("Invoice", "invoice", invoice_ids)
+
+    def list_credit_note_positions_bulk(self, credit_note_ids: list[str]) -> list[dict[str, Any]]:
+        return self._list_positions_bulk("CreditNote", "creditNote", credit_note_ids)
+
+    def _list_positions_bulk(
+        self, resource: str, parent_key: str, document_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        ids = {str(item).strip() for item in document_ids if str(item).strip()}
+        loader = getattr(self._monthly, "load_positions_bulk", None)
+        if not ids or not callable(loader):
+            single = self.list_invoice_positions if resource == "Invoice" else self.list_credit_note_positions
+            return [position for document_id in ids for position in single(document_id)]
+        rows = loader(resource)
+        selected: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            parent = row.get(parent_key)
+            parent_id = str(parent.get("id") if isinstance(parent, dict) else parent or "").strip()
+            if parent_id in ids:
+                selected.append(dict(row))
+        return selected
+
     def list_final_invoices(self, *, since: datetime.date | None = None) -> list[dict[str, Any]]:
         default_since = datetime.date.today().replace(year=datetime.date.today().year - 5)
         start_year = (since or default_since).year

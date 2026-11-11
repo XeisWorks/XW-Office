@@ -58,3 +58,24 @@ def test_history_provider_adapter_groups_months_and_deduplicates_ids() -> None:
     assert adapter.list_credit_notes_for_year(2026) == [{"id": "credit-1", "month": 3}]
     assert adapter.list_invoice_positions("inv-1")[0]["resource"] == "Invoice"
     assert len(adapter.list_final_invoices(since=datetime.date(2026, 1, 1))) == 1
+
+
+def test_history_provider_adapter_uses_bulk_positions_when_available() -> None:
+    class MonthlyBulk:
+        def load_invoices(self, year: int, month: int):
+            return [{"id": "inv-1"}] if month == 1 else []
+
+        def load_credit_notes(self, year: int, month: int):
+            return [{"id": "credit-1"}] if month == 1 else []
+
+        def load_positions(self, resource: str, document_id: str):
+            raise AssertionError("bulk provider must avoid per-document position reads")
+
+        def load_positions_bulk(self, resource: str):
+            parent_key = "invoice" if resource == "Invoice" else "creditNote"
+            return [{parent_key: {"id": "inv-1" if resource == "Invoice" else "credit-1"}, "quantity": 2}]
+
+    adapter = SevdeskHistoryProviderAdapter(MonthlyBulk())
+
+    assert adapter.list_invoice_positions_bulk(["inv-1"])[0]["quantity"] == 2
+    assert adapter.list_credit_note_positions_bulk(["credit-1"])[0]["quantity"] == 2

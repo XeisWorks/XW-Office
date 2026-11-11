@@ -67,6 +67,8 @@ railway logs --service xw-inventory-worker --environment production --latest --j
 Die Logs schreiben nach stdout und enthalten `Inventory worker started` sowie pro Zyklus
 `Inventory cycle finished forecast=... sync=...`; HTTP-Client-Rauschmeldungen werden
 unterdrückt. Damit sind Lauf und Fehlerstatus ohne SSH-Zugriff prüfbar.
+Der Fünfjahres-Forecast verwendet den paginierten sevDesk-Bulk-Positionsabruf, sofern der
+Provider ihn anbietet; ältere/alternative Provider fallen sicher auf Einzelabrufe zurück.
 
 Ein erfolgreicher Lauf muss ohne `needs_review`-/Fehlerstatus enden. Der Worker aktiviert
 niemals `inventory_master_enabled`. Der erste Produktionsstart läuft; die bestehende

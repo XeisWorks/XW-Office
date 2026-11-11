@@ -173,6 +173,7 @@ Das read-only `scripts/product_hub/check_inventory_cutover.py` stellt dieselbe R
 Die zugehörige YAML-Arbeitsliste wird durch `tests/unit/test_inventory_task_queue_yaml.py` auf gültige Syntax und die vollständige P00--P08-Paketstruktur geprüft.
 Der Readiness-CLI kann den aktivierten Railway-Worker über `XW_INVENTORY_WORKER_ACTIVE=true` als betriebsbereit ausweisen; der Marker enthält keine Zugangsdaten und ersetzt nicht die fachliche Shadow-/Cutover-Abnahme.
 Der Worker protokolliert Start und Ergebnis jedes Forecast-/Sync-Zyklus in Railway, sodass die laufende Betriebsprüfung auch ohne SSH-Zugriff möglich ist.
+Für die fünfjährige Absatzhistorie wird der paginierte sevDesk-Positions-Bulkabruf verwendet, sofern vorhanden; dadurch bleibt der tägliche Forecast auch bei vielen Rechnungen praktikabel, ohne Positionen auszulassen.
 
 ## 7. Arbeitsanweisung an Codex 5.6 Luna
 

@@ -83,10 +83,12 @@ class SevdeskZmInvoiceProvider:
         self._max_pages = max_pages
         self._contact_cache: dict[str, dict[str, Any]] = {}
         self._position_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self._bulk_position_cache: dict[str, list[dict[str, Any]]] = {}
 
     def clear_cache(self) -> None:
         self._contact_cache.clear()
         self._position_cache.clear()
+        self._bulk_position_cache.clear()
 
     def load_invoices(self, year: int, month: int) -> list[dict[str, Any]]:
         return self._load_dated_resource(
@@ -193,6 +195,31 @@ class SevdeskZmInvoiceProvider:
         positions = load_tax_resource(self._connection, path, params=params)
         self._position_cache[cache_key] = [dict(item) for item in positions]
         return positions
+
+    def load_positions_bulk(self, resource: str) -> list[dict[str, Any]]:
+        """Load one complete position resource for local parent-ID grouping.
+
+        The sevDesk API does not reliably support a comma-separated parent-ID
+        filter.  A bounded paginated snapshot avoids one HTTP request per
+        historical invoice while retaining every returned position.
+        """
+        if resource in self._bulk_position_cache:
+            return [dict(item) for item in self._bulk_position_cache[resource]]
+        path = {
+            "Invoice": "/InvoicePos",
+            "CreditNote": "/CreditNotePos",
+        }.get(str(resource))
+        if path is None:
+            return []
+        positions = load_tax_resource(
+            self._connection,
+            path,
+            params={"embed": "part"},
+            page_size=5_000,
+            max_pages=100,
+        )
+        self._bulk_position_cache[str(resource)] = [dict(item) for item in positions]
+        return [dict(item) for item in positions]
 
 
 class ZmService:
