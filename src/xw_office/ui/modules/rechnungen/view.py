@@ -4738,6 +4738,13 @@ class RechnungenView(QWidget):
             plan_hint.setWordWrap(True)
             plan_hint.setStyleSheet("color: #a7f3d0; font-size: 11px;")
             text_col.addWidget(plan_hint)
+            allocation_hint = QLabel(
+                f"Im Lager: {item.on_hand if item.on_hand is not None else '?'} · "
+                f"bereits für andere offene Vorgänge eingeplant: {item.planned_for_other}"
+            )
+            allocation_hint.setWordWrap(True)
+            allocation_hint.setStyleSheet("color: #93c5fd; font-size: 11px;")
+            text_col.addWidget(allocation_hint)
         if policy_block.stock_status is not None:
             stock_hint = QLabel(policy_block.stock_label)
             stock_hint.setWordWrap(True)
@@ -4855,6 +4862,7 @@ class RechnungenView(QWidget):
             suggested = max(0, int(item.print_quantity or 0))
             plan = (
                 f" bestellt {item.ordered_quantity}, aus Lager {item.from_stock}, "
+                f"bereits eingeplant {item.planned_for_other}, "
                 f"Druckvorschlag {suggested} ({item.disposition}; nur Hinweis)"
             )
         return (

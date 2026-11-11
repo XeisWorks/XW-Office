@@ -16,6 +16,7 @@
 - Das offene Printfeld bevorzugt für die Druckentscheidung den zentralen Hub-Istbestand und fällt nur bei nicht verfügbarem Hub auf den sevDesk-Cache zurück.
 - Der offene Rechnungsdruck zeigt jetzt pro aggregierter SKU bestellt, aus Lager, neu drucken und die Disposition; POD-Bedarfe werden sequenziell geplant, sodass Restbestand nicht doppelt zugeteilt wird.
 - Die Hintergrundauflösung des offenen Rechnungsdrucks lädt beim Abschluss zusätzlich alle offenen sevDesk-Seiten und dedupliziert sie per Rechnungs-ID; damit wird die Varianten-/Reservierungsprojektion nicht auf die aktuell sichtbare UI-Seite begrenzt.
+- Der gemeinsame PrintPlan weist je Zeile zusätzlich „bereits für andere offene Vorgänge eingeplant“ aus und zeigt diese Zuteilung in Einzel- und Sammelansicht.
 - Für nicht angereicherte Legacy-Print-Aggregate bleibt der Einzel-/Sammeldruck rückwärtskompatibel; sobald der Bestandsplan einen Istbestand liefert, gilt ausschließlich die neue Lager-/POD-Policy.
 - Das Alarm-Popup zeigt zusätzlich Forecast-Modus und automatischen Vorschlag; manuelle Schwellen werden als `fixed` gespeichert, und „Automatik verwenden“ setzt den Forecast wieder aktiv.
 - Ein `InventoryForecastRefreshService` aggregiert finale sevDesk-Rechnungen und Gutschriften für alle aktiven physischen Varianten und persistiert den Drei-Monats-Wert. Der read-only Monatsadapter, `POST /api/v1/inventory/forecast/refresh` und das Railway-Cron-CLI `xw-inventory-forecast-refresh` sind verdrahtet; die eigentliche Cron-Zeitplanung bleibt deploymentseitig.

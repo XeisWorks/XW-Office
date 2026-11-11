@@ -8,8 +8,12 @@ def test_pod_stock_is_consumed_before_batch_print_and_next_demand_uses_remainder
     ]
     planned = plan_open_print_products(products, stock_by_sku={"POD-1": 2}, article_kind_by_sku={"POD-1": "pod"})
     assert planned[0].from_stock == 2
+    assert planned[0].planned_for_other == 0
     assert planned[0].quantity == 3
     assert planned[1].from_stock == 1
+    # The first POD line replenishes the two consumed copies with a three-copy
+    # batch, leaving the second line with two genuinely unallocated copies.
+    assert planned[1].planned_for_other == 0
     assert planned[1].quantity == 0
 
 
@@ -22,3 +26,18 @@ def test_external_print_shortage_is_replenishment_without_local_print() -> None:
     assert planned.from_stock == 1
     assert planned.quantity == 0
     assert planned.disposition == "nachbestellen"
+
+
+def test_sequential_external_print_lines_show_stock_reserved_for_previous_lines() -> None:
+    planned = plan_open_print_products(
+        [
+            PrintProductAggregate("EXT-2", "Druckerei", "", 2),
+            PrintProductAggregate("EXT-2", "Druckerei", "", 2),
+        ],
+        stock_by_sku={"EXT-2": 3},
+        article_kind_by_sku={"EXT-2": "external_print"},
+    )
+    assert planned[0].planned_for_other == 0
+    assert planned[0].from_stock == 2
+    assert planned[1].planned_for_other == 2
+    assert planned[1].from_stock == 1

@@ -26,6 +26,7 @@ class PrintProductAggregate:
     category_label: str = ""
     ordered_quantity: int | None = None
     on_hand: int | None = None
+    planned_for_other: int = 0
     from_stock: int = 0
     print_quantity: int | None = None
     disposition: str = ""
@@ -43,6 +44,7 @@ def plan_open_print_products(
     if batch_size < 1:
         raise ValueError("batch_size muss positiv sein")
     remaining_stock = {str(key).strip().upper(): max(0, int(value)) for key, value in stock_by_sku.items()}
+    starting_stock = dict(remaining_stock)
     kinds = {str(key).strip().upper(): str(value or "external_print").strip().lower() for key, value in (article_kind_by_sku or {}).items()}
     planned: list[PrintProductAggregate] = []
     for item in products:
@@ -54,6 +56,9 @@ def plan_open_print_products(
             planned.append(replace(item, ordered_quantity=ordered, article_kind=kind))
             continue
         available = max(0, int(available))
+        if sku not in starting_stock:
+            starting_stock[sku] = available
+        planned_for_other = max(0, int(starting_stock[sku]) - available)
         from_stock = min(ordered, available) if kind != "digital" else 0
         shortage = max(0, ordered - from_stock)
         if kind == "pod":
@@ -72,6 +77,7 @@ def plan_open_print_products(
                 quantity=print_qty,
                 ordered_quantity=ordered,
                 on_hand=available,
+                planned_for_other=planned_for_other,
                 from_stock=from_stock,
                 print_quantity=print_qty,
                 disposition=disposition,
