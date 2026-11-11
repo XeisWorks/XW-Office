@@ -56,6 +56,8 @@ class CustomerAftercareTab(QWidget):
 
     def __init__(self, container: object, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._ui_alive = True
+        self.destroyed.connect(lambda *_args: setattr(self, "_ui_alive", False))
         self._container = container
         self._service: CustomerAftercareService = container.resolve(CustomerAftercareService)  # type: ignore[attr-defined]
         self._cases: list[CustomerAftercareCase] = []
@@ -166,10 +168,18 @@ class CustomerAftercareTab(QWidget):
         self._count.setText("Lade Nachlieferungen…")
 
         worker = BackgroundWorker(lambda: self._service.list_cases_for_filter("alle"))
-        worker.signals.result.connect(lambda payload: self._on_cases_loaded(payload, selected_id))
-        worker.signals.error.connect(self._on_refresh_error)
+        worker.signals.result.connect(
+            lambda payload: self._on_cases_loaded(payload, selected_id)
+            if self._ui_alive
+            else None
+        )
+        worker.signals.error.connect(
+            lambda exc: self._on_refresh_error(exc) if self._ui_alive else None
+        )
 
         def finished(current_worker: BackgroundWorker = worker) -> None:
+            if not self._ui_alive:
+                return
             if self._refresh_worker is current_worker:
                 self._refresh_worker = None
             self._refresh_button.setEnabled(True)
@@ -183,6 +193,8 @@ class CustomerAftercareTab(QWidget):
         worker.start()
 
     def _on_cases_loaded(self, payload: object, selected_id: str) -> None:
+        if not self._ui_alive:
+            return
         if not isinstance(payload, list) or not all(
             isinstance(case, CustomerAftercareCase) for case in payload
         ):
@@ -215,6 +227,8 @@ class CustomerAftercareTab(QWidget):
             self._select(-1)
 
     def _on_refresh_error(self, exc: Exception) -> None:
+        if not self._ui_alive:
+            return
         self._count.setText(f"Laden fehlgeschlagen: {exc}")
         self._set_case_actions_enabled(False)
 
@@ -257,9 +271,13 @@ class CustomerAftercareTab(QWidget):
         self._case_action_succeeded = True
 
     def _on_case_action_error(self, exc: Exception) -> None:
+        if not self._ui_alive:
+            return
         QMessageBox.warning(self, "Nachlieferung", f"Aktion fehlgeschlagen:\n\n{exc}")
 
     def _on_case_action_finished(self, worker: BackgroundWorker) -> None:
+        if not self._ui_alive:
+            return
         if self._case_action_worker is worker:
             self._case_action_worker = None
         self._refresh_button.setEnabled(
@@ -343,6 +361,8 @@ class CustomerAftercareTab(QWidget):
         worker.start()
 
     def _on_items_loaded(self, case_id: str, seq: int, payload: object) -> None:
+        if not self._ui_alive:
+            return
         current = self._current()
         if (
             seq != self._selection_seq
@@ -372,6 +392,8 @@ class CustomerAftercareTab(QWidget):
         self._update_dispatch_actions(current)
 
     def _on_items_error(self, seq: int, exc: Exception) -> None:
+        if not self._ui_alive:
+            return
         if seq != self._selection_seq:
             return
         self._positions.setPlainText(f"Positionen konnten nicht geladen werden:\n{exc}")
@@ -499,14 +521,16 @@ class CustomerAftercareTab(QWidget):
             action.setEnabled(False)
         button.setText(running_text)
         worker = BackgroundWorker(job)
-        worker.signals.result.connect(on_result)
+        worker.signals.result.connect(
+            lambda payload: on_result(payload) if self._ui_alive else None
+        )
         worker.signals.error.connect(
-            lambda exc: QMessageBox.warning(
-                self, "Nachlieferung drucken", f"Druck konnte nicht vorbereitet werden:\n\n{exc}"
-            )
+            lambda exc: self._on_dispatch_error(exc) if self._ui_alive else None
         )
 
         def finished() -> None:
+            if not self._ui_alive:
+                return
             button.setText(original_text)
             self._dispatch_worker = None
             self._update_dispatch_actions(self._current())
@@ -514,6 +538,13 @@ class CustomerAftercareTab(QWidget):
         worker.signals.finished.connect(finished)
         self._dispatch_worker = worker
         worker.start()
+
+    def _on_dispatch_error(self, exc: Exception) -> None:
+        if not self._ui_alive:
+            return
+        QMessageBox.warning(
+            self, "Nachlieferung drucken", f"Druck konnte nicht vorbereitet werden:\n\n{exc}"
+        )
 
     def _show_delivery_note(self) -> None:
         request = self._dispatch_print_request()
@@ -687,19 +718,24 @@ class CustomerAftercareTab(QWidget):
             return target
 
         def done(path: object) -> None:
-            if isinstance(path, Path):
+            if self._ui_alive and isinstance(path, Path):
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
         worker = BackgroundWorker(job)
         worker.signals.result.connect(done)
         worker.signals.error.connect(
-            lambda exc: QMessageBox.warning(
-                self, "Originalrechnung", f"Rechnung konnte nicht geladen werden:\n\n{exc}"
-            )
+            lambda exc: self._on_invoice_error(exc) if self._ui_alive else None
         )
         worker.signals.finished.connect(lambda: setattr(self, "_invoice_worker", None))
         self._invoice_worker = worker
         worker.start()
+
+    def _on_invoice_error(self, exc: Exception) -> None:
+        if not self._ui_alive:
+            return
+        QMessageBox.warning(
+            self, "Originalrechnung", f"Rechnung konnte nicht geladen werden:\n\n{exc}"
+        )
 
     def _immediate(self) -> None:
         case = self._current()

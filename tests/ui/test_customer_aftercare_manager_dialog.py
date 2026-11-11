@@ -4,6 +4,8 @@ import uuid
 from threading import Event, get_ident
 
 from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QWidget
+from shiboken6 import isValid
 
 from xw_office.core.config import AppConfig
 from xw_office.core.worker import BackgroundWorker
@@ -335,6 +337,38 @@ def test_aftercare_tab_discards_stale_item_result_after_selection_change(
         assert "Second item" in tab._positions.toPlainText()  # noqa: SLF001
     finally:
         release_first.set()
+
+
+def test_aftercare_tab_ignores_item_result_after_qt_owner_is_destroyed(
+    qtbot: object, monkeypatch: object
+) -> None:
+    service = _FakeService()
+    first_entered = Event()
+    release_first = Event()
+    worker_finished = Event()
+
+    monkeypatch.setattr(service, "list_cases_for_filter", lambda _filter: [service.case])
+
+    def get_items(_case_id: uuid.UUID) -> list[CustomerAftercareItem]:
+        first_entered.set()
+        release_first.wait(timeout=3)
+        return service.items
+
+    monkeypatch.setattr(service, "get_items", get_items)
+    owner = QWidget()
+    qtbot.addWidget(owner)
+    tab = CustomerAftercareTab(_FakeContainer(service), owner)  # type: ignore[arg-type]
+    try:
+        qtbot.waitUntil(first_entered.is_set, timeout=3000)
+        worker = tab._read_workers[-1]  # noqa: SLF001
+        worker.signals.finished.connect(worker_finished.set)
+        tab.deleteLater()
+        qtbot.waitUntil(lambda: not isValid(tab), timeout=3000)
+    finally:
+        release_first.set()
+
+    qtbot.waitUntil(worker_finished.is_set, timeout=3000)
+    qtbot.wait(20)
 
 
 def test_redelivery_preview_tolerates_missing_optional_table_cells(qtbot: object, monkeypatch) -> None:
