@@ -15,7 +15,11 @@ from xw_office.core.container import Container
 from xw_office.core.signals import AppSignals
 from xw_office.services.plc.label_archive import PlcLabelArchive
 from xw_office.services.plc.models import PlcCustomsArticle, PlcParcel, PlcShipmentDraft
-from xw_office.services.plc.packing_list import PackingListService
+from xw_office.services.plc.packing_list import (
+    PackingListContext,
+    PackingListItem,
+    PackingListService,
+)
 from xw_office.services.plc.partial_fulfillment import PartialFulfillmentStore
 from xw_office.services.plc.polling import ShipmentAddress
 from xw_office.services.plc.service import PlcShipmentService
@@ -141,6 +145,150 @@ def test_successful_webservice_result_uses_overlay_without_information_popup(
     qtbot.waitUntil(lambda: dialog._finalize_worker is None)  # type: ignore[attr-defined]  # noqa: SLF001
     assert shown == ["PLC-Label erstellt"]
     assert plc_service.marked_jobs == ["print-job-1"]
+
+
+def test_single_parcel_label_does_not_create_or_queue_packing_list(
+    qtbot: object,
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    class PlcServiceStub:
+        def __init__(self) -> None:
+            self.marked_jobs: list[str] = []
+
+        def mark_print_queued(self, _shipment: PlcShipmentDraft, job_id: str) -> None:
+            self.marked_jobs.append(job_id)
+
+        def record_packing_pdf(self, _shipment: PlcShipmentDraft, _path: Path) -> None:
+            raise AssertionError("Ein Paket darf keine Packlisten-PDF erzeugen")
+
+    shipment = _shipment()
+    service = PlcServiceStub()
+    container = _container()
+    container.register(PlcShipmentService, lambda _: service)  # type: ignore[arg-type,return-value]
+    dialog = PlcLabelPrintDialog(container, None)
+    qtbot.addWidget(dialog)
+    dialog._label_archive = PlcLabelArchive(tmp_path)  # noqa: SLF001
+    dialog._pending_packing_contexts = (PackingListContext(  # noqa: SLF001
+        reference=shipment.reference,
+        invoice_number=shipment.invoice_number,
+        customer_name="Max Mustermann",
+        package_number=1,
+        package_count=1,
+        weight_kg=0.5,
+        items=(PackingListItem(quantity=1, name="Alpenmarsch", sku="XW-400"),),
+    ),)
+    dialog._queue_webservice_label = lambda _path, _reference: "label-job"  # type: ignore[method-assign]  # noqa: SLF001
+    shown: list[str] = []
+    warnings: list[str] = []
+    dialog._show_success_overlay = shown.append  # type: ignore[method-assign]  # noqa: SLF001
+
+    def unexpected_packing_list(*_args: object, **_kwargs: object) -> Path:
+        raise AssertionError("Ein Paket darf keine Packlisten-PDF erzeugen")
+
+    monkeypatch.setattr(PackingListService, "generate_pdf", unexpected_packing_list)
+    monkeypatch.setattr(plc_dialog_module, "queue_packing_lists", unexpected_packing_list)
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, message: warnings.append(str(message)))
+    dialog._on_send_result(  # noqa: SLF001
+        shipment,
+        _PlcSendResult(
+            transport="webservice",
+            reference=shipment.reference,
+            webservice_result=PlcWebserviceResult(
+                pdf_bytes=b"%PDF-1.7\nPLC label",
+                tracking_codes=("TRACK-1", "TRACK-ALT"),
+                collo_codes=(("TRACK-1", "TRACK-ALT"),),
+            ),
+        ),
+    )
+
+    qtbot.waitUntil(lambda: dialog._finalize_worker is None, timeout=2000)  # type: ignore[attr-defined]  # noqa: SLF001
+    assert shown == ["PLC-Label erstellt"]
+    assert warnings == []
+    assert service.marked_jobs == ["label-job"]
+    assert dialog._label_archive.find_packing_lists_for_invoice(  # noqa: SLF001
+        order_reference=shipment.reference,
+        invoice_number=shipment.invoice_number,
+    ) == []
+
+
+def test_two_parcel_label_keeps_automatic_packing_list(
+    qtbot: object,
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    class PlcServiceStub:
+        def __init__(self) -> None:
+            self.marked_jobs: list[str] = []
+            self.packing_paths: list[Path] = []
+
+        def mark_print_queued(self, _shipment: PlcShipmentDraft, job_id: str) -> None:
+            self.marked_jobs.append(job_id)
+
+        def record_packing_pdf(self, _shipment: PlcShipmentDraft, path: Path) -> None:
+            self.packing_paths.append(path)
+
+    shipment = replace(_shipment(), parcels=(
+        PlcParcel(weight_kg=0.4, reference="20868-P1"),
+        PlcParcel(weight_kg=0.6, reference="20868-P2"),
+    ))
+    contexts = tuple(PackingListContext(
+        reference=shipment.reference,
+        invoice_number=shipment.invoice_number,
+        customer_name="Max Mustermann",
+        package_number=index,
+        package_count=2,
+        weight_kg=parcel.weight_kg,
+        items=(PackingListItem(quantity=1, name=f"Produkt {index}"),),
+    ) for index, parcel in enumerate(shipment.parcels, start=1))
+    service = PlcServiceStub()
+    container = _container()
+    container.register(PlcShipmentService, lambda _: service)  # type: ignore[arg-type,return-value]
+    dialog = PlcLabelPrintDialog(container, None)
+    qtbot.addWidget(dialog)
+    dialog._label_archive = PlcLabelArchive(tmp_path)  # noqa: SLF001
+    dialog._pending_packing_contexts = contexts  # noqa: SLF001
+    dialog._queue_webservice_label = lambda _path, _reference: "label-job"  # type: ignore[method-assign]  # noqa: SLF001
+    shown: list[str] = []
+    warnings: list[str] = []
+    queued_paths: list[Path] = []
+    generated_contexts: list[PackingListContext] = []
+    dialog._show_success_overlay = shown.append  # type: ignore[method-assign]  # noqa: SLF001
+
+    def generate_pdf(_self: object, values: tuple[PackingListContext, ...], *, output_dir: Path) -> Path:
+        generated_contexts.extend(values)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / "packlists.pdf"
+        path.write_bytes(b"%PDF-1.7\npacking list")
+        return path
+
+    def queue_packing(_container: object, path: Path, _reference: str) -> str:
+        queued_paths.append(path)
+        return "packing-job"
+
+    monkeypatch.setattr(PackingListService, "generate_pdf", generate_pdf)
+    monkeypatch.setattr(plc_dialog_module, "queue_packing_lists", queue_packing)
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, message: warnings.append(str(message)))
+    dialog._on_send_result(  # noqa: SLF001
+        shipment,
+        _PlcSendResult(
+            transport="webservice",
+            reference=shipment.reference,
+            webservice_result=PlcWebserviceResult(
+                pdf_bytes=b"%PDF-1.7\nPLC label",
+                tracking_codes=("TRACK-1", "TRACK-2"),
+                collo_codes=(("TRACK-1",), ("TRACK-2",)),
+            ),
+        ),
+    )
+
+    qtbot.waitUntil(lambda: dialog._finalize_worker is None, timeout=2000)  # type: ignore[attr-defined]  # noqa: SLF001
+    assert warnings == []
+    assert service.marked_jobs == ["label-job"]
+    assert generated_contexts == list(contexts)
+    assert service.packing_paths == queued_paths
+    assert len(queued_paths) == 1
+    assert shown == ["PLC-Label + 2 Packlisten erstellt"]
 
 
 def test_post_plc_archiving_and_queue_do_not_block_ui_or_allow_close(

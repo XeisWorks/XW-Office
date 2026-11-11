@@ -359,3 +359,40 @@ def test_service_persists_exact_package_contents_before_plc_call() -> None:
     evidence = repo.list_parcel_evidence(invoice_id=shipment.invoice_id)
     assert [entry.contents[0]["quantity"] for entry in evidence] == [1, 2]
     assert [entry.tracking_code for entry in evidence] == ["", ""]
+
+
+def test_single_parcel_contents_remain_in_collo_evidence_without_packing_pdf() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    repo = PlcShipmentRepository(sessionmaker(bind=engine, expire_on_commit=False))
+    shipment = _shipment()
+    context = PackingListContext(
+        reference=shipment.reference,
+        invoice_number=shipment.invoice_number,
+        customer_name="Max Mustermann",
+        package_number=1,
+        package_count=1,
+        weight_kg=shipment.parcels[0].weight_kg,
+        items=(PackingListItem(quantity=2, name="Alpenmarsch", sku="XW-400"),),
+    )
+
+    class FakeClient:
+        def submit(self, _settings: object, _shipment: object) -> PlcWebserviceResult:
+            with engine.connect() as connection:
+                assert connection.exec_driver_sql("SELECT count(*) FROM plc_parcel_manifest").scalar() == 1
+            return PlcWebserviceResult(
+                pdf_bytes=b"%PDF-1.4",
+                tracking_codes=("C1", "C1-ALT"),
+                collo_codes=(("C1", "C1-ALT"),),
+            )
+
+    service = PlcShipmentService(FakeClient(), repo)  # type: ignore[arg-type]
+    service.submit_webservice(_settings(), shipment, packing_contexts=(context,))
+
+    evidence = repo.list_parcel_evidence(invoice_id=shipment.invoice_id)
+    assert len(evidence) == 1
+    assert evidence[0].contents == (
+        {"quantity": 2, "display_quantity": "", "name": "Alpenmarsch", "sku": "XW-400"},
+    )
+    assert evidence[0].available_codes == ("C1", "C1-ALT")
+    assert evidence[0].packing_pdf_sha256 == ""

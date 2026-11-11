@@ -2188,7 +2188,11 @@ class PlcLabelPrintDialog(QDialog):
                         shipment.reference,
                     )
 
-                if packing_contexts and any(context.items for context in packing_contexts):
+                if (
+                    len(shipment.parcels) >= 2
+                    and packing_contexts
+                    and any(context.items for context in packing_contexts)
+                ):
                     packing_list_path = PackingListService().generate_pdf(
                         packing_contexts,
                         output_dir=self._label_archive.packing_lists_dir,
