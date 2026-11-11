@@ -97,53 +97,54 @@ class BuyerNoteReviewDialog(QDialog):
         detail_columns.addLayout(product_column, 2)
         detail.addLayout(detail_columns)
 
+        split.addLayout(detail, stretch=1)
+        root.addLayout(split, stretch=1)
+
         actions = QHBoxLayout()
-        self._ack = QPushButton("✓")
-        self._ack.setToolTip("Gelesen · mit START fortfahren")
-        self._ack.setAccessibleName("Gelesen, START fortfahren")
-        self._ack.setStyleSheet("color: #22c55e; font-size: 23px; font-weight: bold")
-        self._ack.clicked.connect(lambda: self._choose(BUYER_NOTE_ACK))
-        actions.addWidget(self._ack)
-        self._delivery = QPushButton("▤")
-        self._delivery.setToolTip("Lieferschein öffnen: Vorschau, Druck und Mail")
+        actions.setSpacing(8)
+        self._delivery = QPushButton("▤ LS")
+        self._delivery.setToolTip("Lieferschein öffnen")
         self._delivery.setAccessibleName("Lieferschein öffnen")
         self._delivery.clicked.connect(self._open_delivery)
         actions.addWidget(self._delivery)
-        self._mail = QPushButton("✉")
-        self._mail.setToolTip("Auf Käufernotiz in Outlook Classic antworten")
+        self._mail = QPushButton("✉ MAIL")
+        self._mail.setToolTip("Antwort in Outlook öffnen")
         self._mail.setAccessibleName("Kundenmail zur Käufernotiz")
         self._mail.clicked.connect(self._open_customer_mail)
         actions.addWidget(self._mail)
-        self._skip = QPushButton("↷")
-        self._skip.setToolTip("Diese Rechnung in diesem START-Lauf überspringen; beim nächsten START erneut zeigen")
+        self._skip = QPushButton("↷ SKIP")
+        self._skip.setToolTip("Jetzt überspringen; nächster START fragt erneut")
         self._skip.setAccessibleName("Diese Rechnung überspringen")
         self._skip.clicked.connect(lambda: self._choose(BUYER_NOTE_SKIP))
         actions.addWidget(self._skip)
         actions.addStretch()
-        detail.addLayout(actions)
-        split.addLayout(detail, stretch=1)
-        root.addLayout(split, stretch=1)
 
-        buttons = QHBoxLayout()
-        buttons.addStretch()
-        cancel = QPushButton("CANCEL")
-        cancel.setToolTip("Gesamten START-Lauf abbrechen")
+        cancel = QPushButton("✕ CANCEL")
+        cancel.setToolTip("START abbrechen")
         cancel.clicked.connect(self.reject)
         self._cancel = cancel
-        buttons.addWidget(cancel)
-        root.addLayout(buttons)
+        actions.addWidget(cancel)
+        self._ack = QPushButton("✓ ERLEDIGT")
+        self._ack.setToolTip("Gelesen; START fortsetzen")
+        self._ack.setAccessibleName("Gelesen, START fortfahren")
+        self._ack.setStyleSheet("color: #22c55e; font-weight: bold")
+        self._ack.clicked.connect(lambda: self._choose(BUYER_NOTE_ACK))
+        actions.addWidget(self._ack)
+        for button in (self._delivery, self._mail, self._skip, cancel, self._ack):
+            button.setMinimumHeight(38)
+        root.addLayout(actions)
 
     def reject(self) -> None:
         if self._mail_worker is not None and self._mail_worker.isRunning():
             if self._cancel is not None:
-                self._cancel.setToolTip("Outlook-Entwurf wird noch vorbereitet. Danach erneut schließen.")
+                self._cancel.setToolTip("Outlook wird geöffnet; bitte warten")
             return
         super().reject()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._mail_worker is not None and self._mail_worker.isRunning():
             if self._cancel is not None:
-                self._cancel.setToolTip("Outlook-Entwurf wird noch vorbereitet. Danach erneut schließen.")
+                self._cancel.setToolTip("Outlook wird geöffnet; bitte warten")
             event.ignore()
             return
         super().closeEvent(event)

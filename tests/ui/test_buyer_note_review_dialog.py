@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from PySide6.QtWidgets import QDialog, QPlainTextEdit
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QPlainTextEdit, QPushButton
 
 from xw_office.services.invoice_processing.buyer_notes import (
     BUYER_NOTE_ACK, BUYER_NOTE_DELIVERY_NOTE, BUYER_NOTE_SKIP,
@@ -63,6 +63,19 @@ def test_cancel_rejects_without_start_decision(qtbot: object) -> None:
     dialog.reject()
     assert dialog.result() == QDialog.DialogCode.Rejected
     assert dialog.selections() == {}
+
+
+def test_actions_share_one_row_with_cancel_before_done(qtbot: object) -> None:
+    dialog = BuyerNoteReviewDialog([_case("1")], allow_delivery_note=False)
+    qtbot.addWidget(dialog)
+    row = dialog.layout().itemAt(dialog.layout().count() - 1).layout()
+    assert isinstance(row, QHBoxLayout)
+    buttons = [row.itemAt(index).widget() for index in range(row.count())]
+    buttons = [button for button in buttons if isinstance(button, QPushButton)]
+    assert [button.text() for button in buttons] == [
+        "▤ LS", "✉ MAIL", "↷ SKIP", "✕ CANCEL", "✓ ERLEDIGT",
+    ]
+    assert all(button.toolTip() for button in buttons)
 
 
 def test_delivery_preview_can_schedule_without_printing(qtbot: object) -> None:
