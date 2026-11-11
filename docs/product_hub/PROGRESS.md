@@ -11,6 +11,7 @@ P07 wurde nachgeschärft: Das RECHNUNGEN-Lageralarm-Popup zeigt nun Zielbestand 
 Stabiler Gesamt-Regressionslauf am 11. November 2026: `python -m pytest -q` → **2.179 bestanden, 5 übersprungen**; Alembic `037_plc_parcel_evidence` bleibt der aktuelle Head.
 
 P08 ergänzt den read-only `scripts/product_hub/export_inventory_snapshot.py`-Snapshot für Ledger-, Bestands-, Buchungs-, Alarm-, Inventur- und Sync-Zustände. Er unterstützt die Cutover-Vorbereitung, ersetzt aber kein provider-natives PostgreSQL-Backup.
+Die automatisierte Rollback-Probe deckt zusätzlich ab, dass ein Zurücksetzen der Master-Konfiguration Ledger und materialisierten Bestand unverändert lässt; Produktions-Rollback und Backup bleiben manuelle Nachweise.
 
 ## Conflict Resolution Wizard CW00–CW07 (2026-09-17)
 

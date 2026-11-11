@@ -142,6 +142,26 @@ def test_cutover_readiness_exposes_real_evidence_and_remaining_gates(
     assert checks["operational_signoff"].state == "manual"
 
 
+def test_disabling_master_flag_preserves_ledger_and_materialized_stock(
+    session_factory: sessionmaker[Session], variant_id: uuid.UUID
+) -> None:
+    enabled = InventoryV2Service(session_factory, master_enabled=True)
+    enabled.record_movement(
+        variant_id=variant_id,
+        delta=11,
+        reason="import_baseline",
+        source="rollback-probe",
+        idempotency_key="rollback-flag-probe-1",
+    )
+    repository = InventoryRepository(session_factory)
+    before_count = repository.count_movements()
+    before_stock = enabled.variant_on_hand(variant_id)
+
+    rolled_back = InventoryV2Service(session_factory, master_enabled=False)
+    assert repository.count_movements() == before_count
+    assert rolled_back.variant_on_hand(variant_id) == before_stock
+
+
 def test_legacy_baseline_requires_shadow_mode_and_never_rebases_a_variant(
     session_factory: sessionmaker[Session],
     product_repo: ProductHubRepository,

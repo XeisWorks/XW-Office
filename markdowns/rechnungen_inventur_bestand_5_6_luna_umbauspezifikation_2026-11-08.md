@@ -163,6 +163,7 @@ P07-Ergänzung: Das Alarm-Popup und die Graph-Mail zeigen zusätzlich Zielbestan
 Der RECHNUNGEN-LAGERALARME-Zähler wird nach einer Schwellenänderung auch bei geöffnetem Popup sofort über ein UI-Signal neu bewertet.
 
 P08-Ergänzung: `scripts/product_hub/export_inventory_snapshot.py` erstellt vor einer Cutover-Probe einen read-only JSON-Snapshot von Lagerledger, Bestandszeilen, Buchungs-Idempotenz, Alarmen, Inventursitzungen und Sync-Queues. Ein provider-natives PostgreSQL-Backup bleibt zusätzlich erforderlich.
+Die automatisierte Rollback-Probe bestätigt, dass das Zurücksetzen der Master-Konfiguration auf `false` Ledger-Bewegungen und materialisierten Bestand nicht löscht; die echte Produktions-Rollback-Probe bleibt ein manuelles Gate.
 
 ## 7. Arbeitsanweisung an Codex 5.6 Luna
 
