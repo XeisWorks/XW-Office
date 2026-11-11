@@ -19,7 +19,7 @@ from xw_office.core.types import ModuleKey
 from xw_office.core.worker import BackgroundWorker
 from xw_office.services.daily_business.service import DailyBusinessService
 from xw_office.services.digital_licenses import DigitalLicenseService
-from xw_office.services.draft_invoice.service import DraftInvoiceService
+from xw_office.services.draft_invoice.service import DraftInvoiceService, ProductPreflightPlan
 from xw_office.services.inventory.service import StartMode, StartPreflight
 from xw_office.services.invoice_processing.context import InvoiceWorkContext, InvoiceWorkPosition
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
@@ -265,6 +265,7 @@ def test_start_clarifies_same_unreleased_alias_only_once_across_invoices(
     view = RechnungenView(container)
     qtbot.addWidget(view)
     clarified: list[tuple[str, str]] = []
+    completions: list[tuple[bool, str]] = []
     issues = [
         types.SimpleNamespace(
             raw_title="Gleicher Wix-Alias",
@@ -281,14 +282,105 @@ def test_start_clarifies_same_unreleased_alias_only_once_across_invoices(
     ]
 
     monkeypatch.setattr(
-        view,
-        "_clarify_unreleased_piece",
-        lambda piece, _catalog, order_reference: clarified.append((piece.name, order_reference)),
+        "xw_office.ui.modules.rechnungen.view.UnreleasedTitleDialog.decision",
+        lambda _dialog: UnreleasedTitleDecision(
+            raw_title="Gleicher Wix-Alias",
+            canonical_name="Kanonisches Werk",
+            owner="Albert",
+        ),
     )
 
-    view.clarify_unreleased_start_issues(issues)
+    def persist(write: object, done: object) -> None:
+        del write
+        done(True, "", None)  # type: ignore[operator]
+
+    monkeypatch.setattr(view, "_run_unreleased_settings_write", persist)
+    monkeypatch.setattr(
+        view,
+        "_split_unreleased_piece",
+        lambda piece, _catalog, order_reference: clarified.append(
+            (piece.name, order_reference)
+        ) or [piece],
+    )
+
+    view.clarify_unreleased_start_issues(
+        issues,
+        on_complete=lambda ok, error: completions.append((ok, error)),
+    )
 
     assert clarified == [("Gleicher Wix-Alias", "21549")]
+    assert completions == [(True, "")]
+
+
+def test_unreleased_settings_write_runs_off_ui_thread_and_reports_after_commit(
+    qtbot: QtBot,
+) -> None:
+    view = RechnungenView(_build_container())
+    qtbot.addWidget(view)
+    entered = Event()
+    release = Event()
+    committed = Event()
+    heartbeat: list[bool] = []
+    result: list[tuple[bool, str, object]] = []
+
+    def blocked_write() -> str:
+        entered.set()
+        release.wait(timeout=2)
+        committed.set()
+        return "saved"
+
+    view._run_unreleased_settings_write(  # noqa: SLF001
+        blocked_write,
+        lambda ok, error, payload: result.append((ok, error, payload)),
+    )
+    assert entered.wait(timeout=1)
+    QTimer.singleShot(0, lambda: heartbeat.append(True))
+    qtbot.waitUntil(lambda: bool(heartbeat), timeout=500)
+    assert result == []
+
+    release.set()
+    qtbot.waitUntil(lambda: bool(result), timeout=2000)
+    assert committed.is_set()
+    assert result == [(True, "", "saved")]
+
+
+def test_start_product_preflight_continues_only_after_unreleased_commit(
+    qtbot: QtBot,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    view = TagesgeschaeftView(_build_container())
+    qtbot.addWidget(view)
+    completion: list[object] = []
+    continued: list[ProductPreflightPlan] = []
+
+    class _RechnungenView:
+        def clarify_unreleased_start_issues(
+            self,
+            _issues: object,
+            *,
+            on_complete: object,
+        ) -> None:
+            completion.append(on_complete)
+
+    plan = ProductPreflightPlan(
+        issues=[],
+        part_categories=[],
+        unreleased_titles=(types.SimpleNamespace(raw_title="Wix-Alias"),),
+    )
+    view._rechnungen_view = _RechnungenView()  # type: ignore[assignment]  # noqa: SLF001
+    monkeypatch.setattr(
+        view,
+        "_continue_start_product_preflight",
+        lambda ready_plan, _elapsed: continued.append(ready_plan),
+    )
+
+    view._on_start_product_preflight_ready(plan)  # noqa: SLF001
+    assert continued == []
+    assert len(completion) == 1
+
+    callback = completion[0]
+    callback(True, "")  # type: ignore[operator]
+    assert continued == [plan]
 
 
 def test_draft_preview_is_non_blocking(qtbot: object) -> None:

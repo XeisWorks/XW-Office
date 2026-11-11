@@ -1467,7 +1467,48 @@ class TagesgeschaeftView(QWidget):
         # unknown alias before any product/invoice action, just as selection
         # in the Rechnungen panel does.
         if self._rechnungen_view is not None and plan.unreleased_titles:
-            self._rechnungen_view.clarify_unreleased_start_issues(plan.unreleased_titles)
+            self._rechnungen_view.clarify_unreleased_start_issues(
+                plan.unreleased_titles,
+                on_complete=lambda ok, error: self._on_start_unreleased_clarification_complete(
+                    ok,
+                    error,
+                    plan,
+                    preflight_elapsed_ms,
+                ),
+            )
+            return
+        self._continue_start_product_preflight(plan, preflight_elapsed_ms)
+
+    def _on_start_unreleased_clarification_complete(
+        self,
+        ok: bool,
+        error: str,
+        plan: ProductPreflightPlan,
+        preflight_elapsed_ms: int,
+    ) -> None:
+        if self._start_abort_requested or not ok:
+            self._pending_start_preflight = None
+            self._set_start_running(False)
+            signals: AppSignals = self._container.resolve(AppSignals)
+            if self._start_abort_requested:
+                signals.status_message.emit("START gestoppt", 2500)
+            else:
+                signals.status_message.emit("START wegen nicht gespeicherter Unreleased-Zuordnung gestoppt", 5000)
+                logger.warning("START alias clarification stopped: %s", error)
+            return
+        self._continue_start_product_preflight(plan, preflight_elapsed_ms)
+
+    def _continue_start_product_preflight(
+        self,
+        plan: ProductPreflightPlan,
+        preflight_elapsed_ms: int,
+    ) -> None:
+        if self._start_abort_requested:
+            self._pending_start_preflight = None
+            self._set_start_running(False)
+            signals: AppSignals = self._container.resolve(AppSignals)
+            signals.status_message.emit("START gestoppt", 2500)
+            return
         dialog_started = time.perf_counter()
         decisions = self._run_product_preflight_dialogs(plan)
         logger.info(
