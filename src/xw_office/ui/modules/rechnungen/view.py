@@ -1337,6 +1337,7 @@ class RechnungenView(QWidget):
         self._start_hold_error: Exception | None = None
         self._invoice_pdf_preview_worker: BackgroundWorker | None = None
         self._delete_draft_worker: BackgroundWorker | None = None
+        self._archived_packing_list_worker: BackgroundWorker | None = None
         self._open_overview_worker: BackgroundWorker | None = None
         self._open_product_preparation_worker: BackgroundWorker | None = None
         self._open_product_preparation_seq = 0
@@ -2246,6 +2247,7 @@ class RechnungenView(QWidget):
                 self._start_hold_worker,
                 self._invoice_pdf_preview_worker,
                 self._delete_draft_worker,
+                self._archived_packing_list_worker,
                 self._open_overview_worker,
                 self._open_product_preparation_worker,
                 self._product_print_worker,
@@ -6516,14 +6518,28 @@ class RechnungenView(QWidget):
             QMessageBox.warning(self, "Packliste öffnen", "Die archivierte Packliste konnte nicht geöffnet werden.")
 
     def _reprint_archived_packing_list(self, path: str, reference: str) -> None:
-        try:
-            job_id = queue_packing_lists(self._container, path, reference)
-        except Exception as exc:  # noqa: BLE001 - archive remains available for manual recovery.
-            QMessageBox.warning(
-                self,
-                "Packliste drucken",
-                "Der Nachdruck der archivierten Packliste konnte nicht eingereiht werden.\n\n"
-                f"{exc}",
+        if self._archived_packing_list_worker is not None:
+            return
+
+        def job() -> str:
+            return queue_packing_lists(self._container, path, reference)
+
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(self._on_archived_packing_list_reprinted)
+        worker.signals.error.connect(self._on_archived_packing_list_reprint_error)
+        worker.signals.finished.connect(
+            lambda current=worker: self._on_archived_packing_list_reprint_finished(current)
+        )
+        self._archived_packing_list_worker = worker
+        worker.start()
+
+    def _on_archived_packing_list_reprinted(self, payload: object) -> None:
+        if self._shutting_down:
+            return
+        job_id = str(payload or "").strip()
+        if not job_id:
+            self._on_archived_packing_list_reprint_error(
+                RuntimeError("Druckwarteschlange lieferte keine Auftrags-ID")
             )
             return
         QMessageBox.information(
@@ -6531,6 +6547,20 @@ class RechnungenView(QWidget):
             "Packliste drucken",
             f"Archivierte Packliste zum Druck eingereiht: {job_id[:8]}…",
         )
+
+    def _on_archived_packing_list_reprint_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
+        QMessageBox.warning(
+            self,
+            "Packliste drucken",
+            "Der Nachdruck der archivierten Packliste konnte nicht eingereiht werden.\n\n"
+            f"{exc}",
+        )
+
+    def _on_archived_packing_list_reprint_finished(self, worker: BackgroundWorker) -> None:
+        if self._archived_packing_list_worker is worker:
+            self._archived_packing_list_worker = None
 
     def _prime_plc_archive_index(self) -> None:
         if self._plc_archive_index_ready:

@@ -1023,9 +1023,19 @@ def test_archived_packing_lists_appear_in_view_and_print_menus(
     view._table.select_source_row(0)  # noqa: SLF001
     view._update_plc_controls()  # noqa: SLF001
     queued: list[tuple[object, str, str]] = []
+    started = Event()
+    release = Event()
+    heartbeat: list[bool] = []
+
+    def queue_print(passed_container: object, path: str, reference: str) -> str:
+        started.set()
+        assert release.wait(2)
+        queued.append((passed_container, path, reference))
+        return "packing-job-1"
+
     monkeypatch.setattr(
         "xw_office.ui.modules.rechnungen.view.queue_packing_lists",
-        lambda passed_container, path, reference: queued.append((passed_container, path, reference)) or "packing-job-1",
+        queue_print,
     )
     monkeypatch.setattr(QMessageBox, "information", lambda *_args: None)
 
@@ -1037,7 +1047,13 @@ def test_archived_packing_lists_appear_in_view_and_print_menus(
     assert view._print_packing_lists_menu.actions()[0].text().startswith("Packliste 1 – erstellt ")  # noqa: SLF001
 
     view._print_packing_lists_menu.actions()[0].trigger()  # noqa: SLF001
-
+    qtbot.waitUntil(started.is_set)  # type: ignore[attr-defined]
+    QTimer.singleShot(0, lambda: heartbeat.append(True))
+    qtbot.waitUntil(lambda: bool(heartbeat))  # type: ignore[attr-defined]
+    assert not queued
+    view._reprint_archived_packing_list(str(packlist), "20844")  # noqa: SLF001
+    release.set()
+    qtbot.waitUntil(lambda: view._archived_packing_list_worker is None)  # type: ignore[attr-defined]  # noqa: SLF001
     assert queued == [(container, str(packlist), "20844")]
 
 

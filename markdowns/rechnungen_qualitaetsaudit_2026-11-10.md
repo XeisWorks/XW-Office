@@ -447,7 +447,7 @@ Geänderte Produktionsdateien:
 - `services/invoice_processing/service.py`: Header- und WorkContext-Caches erhalten eine 30-Sekunden-TTL mit gebundener Timestamp-Invalidierung (F19).
 - `ui/modules/rechnungen/view.py`: manuelle Worker und asynchroner Alarmzähler (F05/F06).
 - `ui/modules/rechnungen/view.py`: alle normalisierten SevDesk-Positionsdetails bleiben sichtbar, auch wenn eine Position nicht druckbar ist; Text kann markiert/kopiert werden (F14).
-- `ui/modules/rechnungen/plc_label_dialog.py`: Mehrpaket-Packlisten-PDF-Erstellung und Queue-Write laufen off-thread, Doppelklicks starten keinen zweiten Auftrag und der Dialog bleibt fuer Ergebnisfeedback offen (F17/F18).
+- `ui/modules/rechnungen/plc_label_dialog.py` und `view.py`: Mehrpaket-PDF-Erstellung sowie neuer und archivierter Packlisten-Queue-Write laufen off-thread; aktive Auftraege blockieren Doppelklicks und Shutdown verfolgt Worker-Lebenszyklen (F17/F18).
 - `ui/modules/rechnungen/view.py`: verhindert gleichzeitig gestartete Einzelproduktdrucke fuer dieselbe SKU/Part-ID, erlaubt bewusste Wiederholung nach Abschluss (F12).
 - `ui/modules/rechnungen/offene_drucke_dialog.py`: sequenzsichere Anhänge (F07).
 
@@ -2185,3 +2185,4 @@ Direkte interne Abhängigkeiten: `xw_office.core.container`, `xw_office.core.per
 | 7787 | Popup / Modal | `QMessageBox.critical(self, 'Produktdruck fehlgeschlagen', f'Die Produkt-PDF konnte nicht ueber den hinterlegten Druckplan gedruckt werden:\n\n{exc}')` |
 
 - AP06/F17 Packlisten-Print: PLC-Mehrpaket-PDF-Erzeugung und Queue-Write laufen jetzt in einem BackgroundWorker; der Button bleibt bis zum Ergebnis gesperrt und wiederholte Aufrufe werden ignoriert. Der Dialog bleibt waehrend des Drucklaufs offen, damit Erfolgs-/Fehlerfeedback am Owner ankommt. Neuer Fake-Test blockiert den Renderer, bestaetigt Qt-Heartbeat und genau einen Queue-Write nach Freigabe. Ruff bestanden; lokaler UI-Test mangels PySide6 nicht sammelbar.
+- AP06/F17 Archiv-Packlistennachdruck: Der Druckwarteschlangen-Write aus dem Rechnungsmenue laeuft nun in einem lifecycle-verfolgten Worker; ein paralleler identischer UI-Aufruf startet keinen zweiten Auftrag. Die Regression wurde um einen blockierten Fake-Queue-Write, Qt-Heartbeat und Einmaligkeitspruefung erweitert. Ruff und git diff --check bestanden; Qt-Ausfuehrung wartet auf Windows-CI.
