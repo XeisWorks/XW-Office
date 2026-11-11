@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import MethodType
 
 import pytest
 
 from xw_office.services.invoice_processing.service import FulfillmentFlags, InvoiceProcessingService
-from xw_office.services.invoice_processing.start_holds import START_HOLDS_KEY
+from xw_office.services.invoice_processing.start_holds import START_HOLDS_KEY, StartHold
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 
 
@@ -46,12 +47,24 @@ def test_start_hold_is_persistent_and_release_restores_draft() -> None:
     assert service.get_start_hold("42") is None
 
 
-def test_stale_pc_cannot_overwrite_or_release_a_changed_hold() -> None:
+def test_stale_pc_cannot_overwrite_or_release_a_changed_hold(monkeypatch: pytest.MonkeyPatch) -> None:
     service, _settings = _service()
     old = service.defer_invoice_from_start("42", "customer_question")
     with pytest.raises(RuntimeError, match="inzwischen"):
         service.defer_invoice_from_start("42", "other", expected_ready=True)
-    service.defer_invoice_from_start("42", "product_unavailable")
+    create_hold = StartHold.create
+
+    def same_timestamp(
+        cls: type[StartHold], invoice_id: str, reason: str, *, note: str = "", review_on: str = ""
+    ) -> StartHold:
+        return replace(
+            create_hold(invoice_id, reason, note=note, review_on=review_on),
+            updated_at=old.updated_at,
+        )
+
+    monkeypatch.setattr(StartHold, "create", classmethod(same_timestamp))
+    updated = service.defer_invoice_from_start("42", "product_unavailable")
+    assert datetime.fromisoformat(updated.updated_at) > datetime.fromisoformat(old.updated_at)
     with pytest.raises(RuntimeError, match="anderen PC"):
         service.release_invoice_for_start("42", expected_updated_at=old.updated_at)
     assert service.get_start_hold("42").reason == "product_unavailable"
