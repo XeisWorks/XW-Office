@@ -9,8 +9,8 @@ from xw_office.services.product_hub.sevdesk_feed_validation import document_stat
 
 
 class CreditNoteProvider(Protocol):
-    def list_credit_notes_for_year(self, year: int) -> list[dict]: ...
-    def list_credit_note_positions(self, credit_note_id: str) -> list[dict]: ...
+    def list_credit_notes_for_year(self, year: int) -> list[dict[str, object]]: ...
+    def list_credit_note_positions(self, credit_note_id: str) -> list[dict[str, object]]: ...
 
 
 @dataclass
@@ -58,6 +58,7 @@ class SevdeskCreditNoteInventoryService:
                     continue
                 if quantity == 0:
                     continue
+                quantity_int = int(quantity)
                 origin_position = _origin_position_key(position)
                 sku = _sku(position)
                 position_key = _position_key(position)
@@ -76,7 +77,7 @@ class SevdeskCreditNoteInventoryService:
                             document_id=credit_id,
                             position_key=position_key,
                             variant_id=resolved.variant.id,
-                            quantity=int(quantity),
+                            quantity=quantity_int,
                             movement_kind="return",
                             original_document_id=origin_invoice,
                             original_position_key=origin_position,
@@ -94,7 +95,7 @@ class SevdeskCreditNoteInventoryService:
                         document_id=credit_id,
                         position_key=position_key,
                         variant_id=resolved.variant.id,
-                        quantity=int(quantity),
+                        quantity=quantity_int,
                         movement_kind="return",
                         original_document_id=origin_invoice,
                         original_position_key=origin_position,
@@ -109,7 +110,7 @@ class SevdeskCreditNoteInventoryService:
         return result
 
 
-def _origin_invoice_id(document: dict) -> str:
+def _origin_invoice_id(document: dict[str, object]) -> str:
     for key in ("invoiceId", "invoice_id", "refInvoiceId", "originInvoiceId"):
         value = document.get(key)
         if isinstance(value, dict):
@@ -123,7 +124,7 @@ def _origin_invoice_id(document: dict) -> str:
     return ""
 
 
-def _origin_position_key(position: dict) -> str:
+def _origin_position_key(position: dict[str, object]) -> str:
     for key in ("invoicePosId", "invoicePositionId", "originPositionId", "refInvoicePosId", "originalPositionKey"):
         value = position.get(key)
         if isinstance(value, dict):
@@ -133,12 +134,13 @@ def _origin_position_key(position: dict) -> str:
     return ""
 
 
-def _position_key(position: dict) -> str:
+def _position_key(position: dict[str, object]) -> str:
     return str(position.get("id") or position.get("creditNotePosId") or "").strip()
 
 
-def _sku(position: dict) -> str:
-    part = position.get("part") if isinstance(position.get("part"), dict) else {}
+def _sku(position: dict[str, object]) -> str:
+    raw_part = position.get("part")
+    part = raw_part if isinstance(raw_part, dict) else {}
     return str(position.get("sku") or position.get("partNumber") or part.get("number") or "").strip().upper()
 
 

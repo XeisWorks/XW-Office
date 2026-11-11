@@ -761,6 +761,10 @@ AP05/AP08 Nachpruefung der auf `ff7ac62` ergaenzten externen Bestandsunterdeckun
 
 AP08 Inventur-Sync-Typisierung: Der Shortage-Callback in `inventory_sync_cli.py` ist jetzt mit `InvoiceInventoryLine`/`Exception` typisiert. Striktes MyPy besteht fuer fuenf betroffene Product-Hub-/Rechnungsdateien; Ruff und **40 Inventur-/Bestandsregressionen** bestehen ebenfalls. Die bestehenden Geschaeftsregeln bleiben unveraendert.
 
+AP04/AP08 Gutschrift-Feed: `sevdesk_credit_note_inventory.py` typisiert Provider-Payloads als JSON-Mappings und grenzt optionale Referenz-/Part-Objekte defensiv ein. Die bereits als ganzzahlig validierte Decimal-Menge wird fuer Booking und Mirror einmal in `int` normalisiert. Sieben strikte MyPy-Fehler beseitigt; acht Inventurdateien bestehen jetzt striktes MyPy, Ruff und **48 Inventur-/Invoice-/Credit-Feed-Regressionen** bestehen. Die separate nicht-strikte globale MyPy-Baseline liegt aktuell bei **367 Fehlern in 62 Dateien**; diese sieben dateilokalen Strict-Fehler waren darin nicht enthalten.
+
+AP07-Fortschreibung auf `305d929`: Offene Produktpositionen zeigen jetzt den aus frueheren offenen Auftraegen bereits verplanten Bestand separat vom tatsaechlich verfuegbaren Lager. Die sequenzielle SKU-Planung weist verbleibende Mengen korrekt dem spaeteren Auftrag zu; der neue Regressionstest und zusammen **40 Inventur-/Druckplan-Tests** bestehen lokal.
+
 Der finale Suite-Nachweis dieses Fortschreibungsschritts steht oben. Weitere Commit-/Push-Nachweise werden nach ihrer Integration ergänzt. Das folgende statische Inventar
 wurde aus dem vorherigen Quellstand erzeugt und dient als Navigationshilfe; nach
 spaeteren Codeaenderungen koennen einzelne Zeilennummern abweichen.
