@@ -6,17 +6,18 @@ Update this file at the end of every PR.
 
 ## Inventur-/Rechnungsabgang-Umbau (2026-11-11)
 
-P07 wurde nachgeschärft: Das RECHNUNGEN-Lageralarm-Popup zeigt nun Zielbestand und empfohlene Bestell-/Nachdruckmenge. Die manuelle Microsoft-Graph-Task-Mail enthält zusätzlich Alarmmodus, Zielbestand, Bestell-/Nachdruckmenge und Erstellzeitpunkt. Die gezielten P07-/Inventurtests laufen grün; Produktionszugänge, Railway-Worker, Inventur und Shadow-/Rollback-Nachweis bleiben externe Cutover-Gates.
+P07 wurde nachgeschärft: Das RECHNUNGEN-Lageralarm-Popup zeigt nun Zielbestand und empfohlene Bestell-/Nachdruckmenge. Die manuelle Microsoft-Graph-Task-Mail enthält zusätzlich Alarmmodus, Zielbestand, Bestell-/Nachdruckmenge und Erstellzeitpunkt. Die gezielten P07-/Inventurtests laufen grün; Inventur und Shadow-/Rollback-Nachweis bleiben externe Cutover-Gates.
 
 Stabiler Gesamt-Regressionslauf am 11. November 2026: `python -m pytest -q` → **2.200 bestanden, 5 übersprungen**; Alembic `037_plc_parcel_evidence` bleibt der aktuelle Head. Hosted CI `43081193618` bestätigt für `8976a9c` Ruff, **2.200/5** und den bestehenden weichen MyPy-Gate.
 
 Read-only Betriebscheck am 11. November 2026: Railway-Projekt **XW-Office** und der
 Service **XW-Product-Hub** sind online; `https://products.xeisworks.at/health` liefert
 HTTP 200. Der laufende Container bestätigt per `alembic current` den Head
-`037_plc_parcel_evidence`. Es existiert noch kein separater `xw-inventory-worker`-Service;
-remote sind `DATABASE_URL`, Graph-Client-ID und Tenant gesetzt, aber
-`SEVDESK_API_TOKEN` und `MS_GRAPH_MAILBOX` fehlen. Deshalb bleiben Worker-Aktivierung,
-Live-Forecast/Abgleich, Graph-Mailbetrieb und der Product-Hub-Cutover weiterhin bewusst offen.
+`037_plc_parcel_evidence`. Der separate `xw-inventory-worker`-Service ist angelegt,
+mit Postgres-/Product-Hub-Referenzen konfiguriert und mit Deployment
+`57f0e597-70be-4110-ba69-a97d7e7eded2` aktiv. `SEVDESK_API_TOKEN` und
+`MS_GRAPH_MAILBOX` sind gesetzt; Inventur, Shadow-/Rollback-Nachweis und der
+provider-native Backup-Gate bleiben bewusst offen.
 Das Deployment `f7a20d67-9d87-478a-86ad-337779a1c124` für `b19e9fc` wurde am
 11. November 2026 erfolgreich gebaut und ausgerollt; `https://products.xeisworks.at/health`
 liefert HTTP 200 und der anschließende Health-/Migration-Smokecheck blieb grün.
@@ -28,7 +29,7 @@ Die neue [Betriebs-Checkliste](INVENTORY_OPERATIONS_CHECKLIST.md) bündelt die R
 Der Desktop-Freigabe-Orchestrator ist zusätzlich mit einem direkten Regressionstest abgesichert: erfolgreiche sevDesk-Freigabe führt anschließend genau einmal zur Product-Hub-Buchung.
 P02 ist nun auch im Desktop bedienbar: **Geführte Inventur** erstellt aus der Produkteansicht eine eingefrorene Zählliste, erfasst Mengen und Notizen asynchron und bestätigt die Differenzen über denselben idempotenten `InventoryCountService`. Die neue UI-Regression ergänzt den gezielten Lauf (`11 bestanden`).
 Die Forecast-/Sync-CLIs prüfen `SEVDESK_API_TOKEN` jetzt vor jedem Providerzugriff und beenden einen falsch konfigurierten Worker-Zyklus eindeutig; dadurch entstehen bei fehlender Railway-Konfiguration keine teilweisen Bestandsläufe.
-Der read-only Cutover-CLI ergänzt nun eigene Gates für fehlende sevDesk-/Graph-Variablen und die noch manuelle `xw-inventory-worker`-Aktivierung; Secretwerte werden nicht ausgegeben und der Master-Flag bleibt unverändert.
+Der read-only Cutover-CLI ergänzt nun eigene Gates für fehlende sevDesk-/Graph-Variablen und die Worker-/Backup-Betriebsprüfung; Secretwerte werden nicht ausgegeben und der Master-Flag bleibt unverändert.
 Ein Windows-CI-Zugriffsfehler beim parallelen Erwärmen des unreleased-Katalogs wurde behoben: langsame Disk-/Settings-Ladevorgänge laufen außerhalb des reentranten Cache-Locks, Ergebnisse werden generationsgeschützt atomar veröffentlicht/invalidiert; dedizierte Parallel-Warmup- und UI-Off-Thread-Regressionstests schützen den Fix. Hosted CI `43051392068` lief danach vollständig grün.
 
 ## Conflict Resolution Wizard CW00–CW07 (2026-09-17)
@@ -1450,6 +1451,6 @@ removed there.
 
 ## Rechnungen-/Inventur-Umbau (2026-11-08)
 
-Der eigenständige Umbau gemäß `markdowns/rechnungen_inventur_bestand_5_6_luna_umbauspezifikation_2026-11-08.md` ist fachlich und technisch integriert: Rechnungsfreigabe, externe sevDesk-Poller, begrenzte Gutschrift-Rückbuchungen, geführte Inventur, Forecast-/Alarmzustand, POD-Dreierchargen, lagerbereinigte offene Druckplanung und Graph-Task-Popup sind idempotent verdrahtet. Der wiederholbare `xw-inventory-worker` führt Forecast und sevDesk-Abgleich aus; die externe Railway-Service-Aktivierung bleibt ein Betriebs-Gate.
+Der eigenständige Umbau gemäß `markdowns/rechnungen_inventur_bestand_5_6_luna_umbauspezifikation_2026-11-08.md` ist fachlich und technisch integriert: Rechnungsfreigabe, externe sevDesk-Poller, begrenzte Gutschrift-Rückbuchungen, geführte Inventur, Forecast-/Alarmzustand, POD-Dreierchargen, lagerbereinigte offene Druckplanung und Graph-Task-Popup sind idempotent verdrahtet. Der wiederholbare `xw-inventory-worker` führt Forecast und sevDesk-Abgleich aus und ist als separates Railway-Produktivdeployment `57f0e597-70be-4110-ba69-a97d7e7eded2` aktiv; der Provider-Backup-Gate bleibt auf dem Railway-Hobby-Plan blockiert.
 
 Die veralteten PR15-Hinweise oben beschreiben den damaligen Zwischenstand und bleiben als historische Cutover-Begründung bestehen. Für den aktuellen Bestand gelten zusätzlich der read-only Quellen-Audit (`GET /api/v1/inventory/audit`), der externe Legacy-Mirror und die Cutover-Readiness-Gates. Der Product-Hub-Master bleibt bewusst deaktiviert, bis Produktionsinventur, repräsentativer Shadow-Lauf, Backup und Rollback-Probe nachgewiesen sind. Letzte Gesamtprüfung am 11. November 2026: `python -m pytest -q` → **2.200 bestanden, 5 übersprungen**; Hosted CI `43081193618` für `8976a9c` ist grün; Alembic `037_plc_parcel_evidence` ist der aktuelle Head. Railway-Deployment `65fbd5af-2478-43a2-9fcf-6bbc88056e8f` ist erfolgreich und `/health` liefert HTTP 200.

@@ -38,23 +38,31 @@ provider-natives PostgreSQL-Backup.
 
 ## 3. Worker aktivieren
 
-Im Railway-Projekt einen separaten Service `xw-inventory-worker` aus demselben Repository
-und Branch `main` anlegen. Startkommando:
+Der separate Railway-Service `xw-inventory-worker` ist im Produktionsprojekt angelegt und
+aktiv. Er verwendet Repository/Branch `XeisWorks/XW-Office`/`main` und wurde zuletzt mit
+Deployment `57f0e597-70be-4110-ba69-a97d7e7eded2` erfolgreich gestartet. Aktuelles
+Startkommando:
 
 ```text
-PYTHONPATH=/app/src python -m xw_office.services.product_hub.inventory_worker_cli --interval-seconds 86400
+python -u -m xw_office.services.product_hub.inventory_worker_cli --interval-seconds 86400
 ```
 
-Die Variablen `DATABASE_URL`, `SEVDESK_API_TOKEN` sowie die Graph-Grundkonfiguration als
-Service-Variablen setzen. Danach einmalig im Worker ausführen:
+Die Variablen `DATABASE_URL`, `SEVDESK_API_TOKEN` sowie die Graph-Grundkonfiguration sind
+als Railway-Referenzen auf Postgres bzw. `XW-Product-Hub` gesetzt. Der Worker meldet sich
+als aktives Deployment; ein manueller SSH-Zugriff ist in diesem Railway-Konto nicht
+freigeschaltet. Für einen einmaligen Lauf kann bei Bedarf ein kontrolliertes
+`railway up` mit temporärem `--once`-Startkommando verwendet werden; der Dauerbetrieb
+bleibt danach wiederherzustellen:
 
 ```powershell
-railway ssh --service xw-inventory-worker --environment production -- `
-  python -m xw_office.services.product_hub.inventory_worker_cli --once
+railway deployment list --service xw-inventory-worker --environment production --json
+railway logs --service xw-inventory-worker --environment production --latest --json --lines 100
 ```
 
 Ein erfolgreicher Lauf muss ohne `needs_review`-/Fehlerstatus enden. Der Worker aktiviert
-niemals `inventory_master_enabled`.
+niemals `inventory_master_enabled`. Der erste Produktionsstart läuft; die bestehende
+Readiness-Blockade durch ungeklärte sevDesk-Zuordnungen/Synchronisationskonflikte bleibt
+bewusst bestehen.
 
 ## 4. Produktionsinventur
 
@@ -82,5 +90,10 @@ niemals `inventory_master_enabled`.
 - Healthcheck: HTTP 200; aktueller Alembic-Head `037_plc_parcel_evidence`.
 - Read-only Snapshot: 0 Ledger-Bewegungen, 0 Inventory-Bestandspositionen,
   588 `sync_conflict`-Zeilen und 263 archivierte Payloads.
+- Railway-Worker: Service aktiv, letztes Deployment `57f0e597-70be-4110-ba69-a97d7e7eded2`
+  erfolgreich; Laufzeitlog zeigt den Start des Containers.
+- Provider-natives PostgreSQL-Backup: über Railway CLI versucht, auf dem Hobby-Plan aber
+  nicht verfügbar (Railway: „Manual backups and backup schedules are only available for
+  Pro workspaces"). Der Anwendungs-Snapshot ist vorhanden, ersetzt dieses Backup nicht.
 - Deshalb bleiben Inventur, Konfliktbereinigung, Shadow-Phase, Backup und Rollback echte
   Betriebs-Gates; der Master darf nicht aktiviert werden.
