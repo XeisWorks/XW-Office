@@ -66,9 +66,17 @@ def build_preview(*, max_pages: int = 100) -> dict[str, object]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-pages", type=int, default=100)
+    parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Nur Zähler ausgeben; ohne Option werden die Kandidaten mit ausgegeben.",
+    )
     args = parser.parse_args(argv)
     try:
-        print(json.dumps(build_preview(max_pages=args.max_pages), ensure_ascii=False, indent=2))
+        payload = build_preview(max_pages=args.max_pages)
+        if args.summary:
+            payload.pop("candidates", None)
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
     except Exception as exc:  # noqa: BLE001 - stable operational failure output
         print(f"Exact-Mapping-Preview fehlgeschlagen: {exc}", file=sys.stderr)
         return 1
