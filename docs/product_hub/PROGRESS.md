@@ -1558,6 +1558,14 @@ geschrieben. Product Hub und Worker auf Commit `894753b` sind SUCCESS, Runtime-
 Readiness ist `eligible=true`, DB-Readiness bleibt vor Inventur erwartungsgemäß
 `eligible=false`.
 
+Der neue Exact-SKU-Preflight `scripts/product_hub/preview_exact_inventory_mappings.py`
+wurde im Railway-Worker read-only ausgeführt: 382 physische Produkte, 505 Varianten,
+528 sevDesk-Parts und 240 eindeutige 1:1-Kandidaten. Die Kandidaten werden nur als
+JSON-Vorschlag ausgegeben; es gibt bewusst keinen automatischen Schreibpfad, weil
+unter den Daten auch Versand-/Serviceartikel liegen und die Artikelart vor einer
+Zuordnung bestätigt werden muss. Der kompakte Betriebsaufruf ist:
+`python scripts/product_hub/preview_exact_inventory_mappings.py --summary`.
+
 ### Railway-Verifikation nach Idempotenz-Patch (12. November 2026, 00:36 CET)
 
 Commit `84cf681` macht die Legacy-START-/REPRINTS-Bewegungen deterministisch

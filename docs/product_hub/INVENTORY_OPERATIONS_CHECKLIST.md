@@ -183,6 +183,11 @@ Sync-Konflikte. Provider-/Graph-/Wix-Grundkonfiguration und der Worker-Marker si
 - Der Preflight-Snapshot bestätigt 432 `inventory_stock`, 0 Ledger-Bewegungen,
   726 Sync-Konflikte (710 offen), 432 Outbox-Ereignisse und 263 archivierte Payloads.
   Keine externen Bestandsdaten wurden verändert.
+- Für die Mapping-Bereinigung kann danach read-only der Exact-SKU-Preflight im
+  Worker ausgeführt werden:
+  `python scripts/product_hub/preview_exact_inventory_mappings.py --summary`.
+  Der zuletzt verifizierte Lauf fand 240 eindeutige Kandidaten; wegen unklarer
+  Artikelarten (u. a. Versand-/Serviceartikel) werden sie nicht automatisch angewandt.
 
 ## Read-only-Folgepruefung (12. November 2026, 00:11 CET)
 
