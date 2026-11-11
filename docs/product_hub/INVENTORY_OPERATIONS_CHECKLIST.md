@@ -67,8 +67,11 @@ railway logs --service xw-inventory-worker --environment production --latest --j
 Die Logs schreiben nach stdout und enthalten `Inventory worker started` sowie pro Zyklus
 `Inventory cycle finished forecast=... sync=...`; HTTP-Client-Rauschmeldungen werden
 unterdrückt. Damit sind Lauf und Fehlerstatus ohne SSH-Zugriff prüfbar.
-Der Fünfjahres-Forecast verwendet den paginierten sevDesk-Bulk-Positionsabruf, sofern der
-Provider ihn anbietet; ältere/alternative Provider fallen sicher auf Einzelabrufe zurück.
+Der Fünfjahres-Forecast verwendet paginierte sevDesk-Bulk-Snapshots für Dokumente und
+Positionen, sofern der Provider sie anbietet; ältere/alternative Provider fallen sicher
+auf Einzelabrufe zurück. Der Inventory-Feed verwendet dieselbe Bulk-Strategie für
+Rechnungs-/Gutschriftpositionen; verschachtelte sevDesk-SKUs aus `part.partNumber` werden
+normalisiert.
 
 Ein erfolgreicher Lauf muss ohne `needs_review`-/Fehlerstatus enden. Der Worker aktiviert
 niemals `inventory_master_enabled`. Der erste Produktionsstart läuft; die bestehende
@@ -107,5 +110,8 @@ bewusst bestehen.
 - Provider-natives PostgreSQL-Backup: über Railway CLI versucht, auf dem Hobby-Plan aber
   nicht verfügbar (Railway: „Manual backups and backup schedules are only available for
   Pro workspaces"). Der Anwendungs-Snapshot ist vorhanden, ersetzt dieses Backup nicht.
+- Worker-Laufzeitprüfung: Forecast mit 432 aktualisierten und 206 übersprungenen
+  Varianten erfolgreich; der anschließende Sync bleibt wegen fehlender Inventurbasis
+  (Unterdeckungen) und Gutschriften ohne eindeutige Ursprungsrechnung im Review.
 - Deshalb bleiben Inventur, Konfliktbereinigung, Shadow-Phase, Backup und Rollback echte
   Betriebs-Gates; der Master darf nicht aktiviert werden.

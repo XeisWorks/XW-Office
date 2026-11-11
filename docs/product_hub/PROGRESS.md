@@ -1461,6 +1461,16 @@ removed there.
 
 ## Rechnungen-/Inventur-Umbau (2026-11-08)
 
+### Laufzeitnachweis 2026-11-11
+
+Der Railway-Worker wurde mit paginierten Bulk-Snapshots für sevDesk-Dokumente und
+-Positionen verifiziert. Der Forecast aktualisierte 432 Varianten, übersprang 206
+nicht lagergeführte Varianten und meldete 0 Fehler in rund 50 Sekunden. Der
+anschließende Sync beendet deterministisch; offene Review-Fälle sind vor der
+Produktionsinventur erwartbar (fehlende Inventurbasis/Unterdeckungen sowie
+sevDesk-Gutschriften ohne eindeutige Ursprungsrechnung). Verschachtelte sevDesk-SKUs
+aus `part.partNumber` werden normalisiert. Der Product-Hub-Master bleibt deaktiviert.
+
 Der eigenständige Umbau gemäß `markdowns/rechnungen_inventur_bestand_5_6_luna_umbauspezifikation_2026-11-08.md` ist fachlich und technisch integriert: Rechnungsfreigabe, externe sevDesk-Poller, begrenzte Gutschrift-Rückbuchungen, geführte Inventur, Forecast-/Alarmzustand, POD-Dreierchargen, lagerbereinigte offene Druckplanung und Graph-Task-Popup sind idempotent verdrahtet. Der wiederholbare `xw-inventory-worker` führt Forecast und sevDesk-Abgleich aus und ist als separater Railway-Service aktiv (zuletzt validierter Start `6978341f-0087-49bb-bb04-a567397f6914`); der Provider-Backup-Gate bleibt auf dem Railway-Hobby-Plan blockiert.
 
 Die veralteten PR15-Hinweise oben beschreiben den damaligen Zwischenstand und bleiben als historische Cutover-Begründung bestehen. Für den aktuellen Bestand gelten zusätzlich der read-only Quellen-Audit (`GET /api/v1/inventory/audit`), der externe Legacy-Mirror und die Cutover-Readiness-Gates. Der Product-Hub-Master bleibt bewusst deaktiviert, bis Produktionsinventur, repräsentativer Shadow-Lauf, Backup und Rollback-Probe nachgewiesen sind. Letzte Gesamtprüfung am 11. November 2026: `python -m pytest -q` → **2.200 bestanden, 5 übersprungen**; Hosted CI `43081193618` für `8976a9c` ist grün; Alembic `037_plc_parcel_evidence` ist der aktuelle Head. Railway-Deployment `65fbd5af-2478-43a2-9fcf-6bbc88056e8f` ist erfolgreich und `/health` liefert HTTP 200.
