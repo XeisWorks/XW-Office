@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
 from xw_office.models.inventory_external_mirror import InventoryExternalMirror
@@ -31,7 +32,7 @@ class InventoryExternalMirrorService:
     returned as ``needs_review`` so a later inventory baseline can recover them.
     """
 
-    def __init__(self, session_factory) -> None:
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
 
     def apply(
@@ -57,6 +58,8 @@ class InventoryExternalMirrorService:
             stock_row = session.get(SettingKV, _STOCK_KEY, with_for_update=True)
             values = _parse_object(stock_row.value_json if stock_row is not None else None)
             raw_current = values.get(clean_sku)
+            if not isinstance(raw_current, (int, float, str)):
+                return ExternalMirrorResult("needs_review", clean_sku, detail="Legacy-Bestand für SKU fehlt oder ist ungültig")
             try:
                 current = int(raw_current)
             except (TypeError, ValueError):
@@ -94,7 +97,7 @@ class InventoryExternalMirrorService:
             )
 
     @staticmethod
-    def _update_product_snapshot(session, sku: str, target: int) -> None:
+    def _update_product_snapshot(session: Session, sku: str, target: int) -> None:
         row = session.get(SettingKV, _PRODUCTS_KEY, with_for_update=True)
         products = _parse_list(row.value_json if row is not None else None)
         changed = False
