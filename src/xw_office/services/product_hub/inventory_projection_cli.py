@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from collections import Counter
 
 from xw_office.core.config import load_config
 from xw_office.core.database import create_session_factory
@@ -26,6 +27,11 @@ def main(argv: list[str] | None = None) -> int:
         "--write",
         action="store_true",
         help="Apply provider writes; without this flag the command is read-only.",
+    )
+    parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Print counts and states without the potentially large per-variant detail list.",
     )
     args = parser.parse_args(argv)
     config = load_config()
@@ -51,8 +57,10 @@ def main(argv: list[str] | None = None) -> int:
         "conflicts": result.conflicts,
         "skipped": result.skipped,
         "errors": result.errors,
-        "items": [item.__dict__ for item in result.items],
+        "state_counts": dict(Counter(item.state for item in result.items)),
     }
+    if not args.summary:
+        payload["items"] = [item.__dict__ for item in result.items]
     print(json.dumps(payload, ensure_ascii=False, default=str))
     return 1 if result.errors or result.conflicts else 0
 

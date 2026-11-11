@@ -65,7 +65,7 @@ Die neue Projektionsroutine ist separat prÃ¼fbar und standardmÃ¤ÃŸig read-
 
 ```powershell
 railway run --service XW-Product-Hub --environment production -- `
-  python -m xw_office.services.product_hub.inventory_projection_cli
+  python -m xw_office.services.product_hub.inventory_projection_cli --summary
 ```
 
 `--write` darf erst nach bestandener Inventur, Readiness und ausdrÃ¼cklich
