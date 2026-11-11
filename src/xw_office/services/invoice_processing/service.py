@@ -2186,7 +2186,7 @@ class InvoiceProcessingService:
     def _load_all_open_drafts(self, *, limit_per_page: int, max_pages: int) -> list[InvoiceSummary]:
         all_rows: list[InvoiceSummary] = []
         offset = 0
-        for _ in range(max_pages):
+        for page_index in range(max_pages):
             batch = self.load_invoice_summaries(status=100, limit=limit_per_page, offset=offset)
             if not batch:
                 break
@@ -2194,6 +2194,13 @@ class InvoiceProcessingService:
             if len(batch) < limit_per_page:
                 break
             offset += limit_per_page
+            if page_index == max_pages - 1:
+                logger.warning(
+                    "Open sevDesk invoice pagination reached safety limit pages=%s page_size=%s; "
+                    "overview may be incomplete",
+                    max_pages,
+                    limit_per_page,
+                )
         return all_rows
 
     def load_all_open_invoice_summaries(
