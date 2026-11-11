@@ -249,6 +249,7 @@ class InventoryProjectionService:
             external_id = str(mapping.external_id or "").strip() if mapping else ""
             if not external_id:
                 continue
+            assert mapping is not None
             owner = used.get(external_id)
             if owner is not None and owner != variant.id:
                 logger.warning("Skipping duplicate sevDesk Part mapping %s", external_id)
@@ -353,13 +354,13 @@ class InventoryProjectionService:
             desired = max(0, int(stock.on_hand))
             try:
                 current = int(match.get("quantity") or 0)
+                def write_wix() -> str | None:
+                    return self._write_wix(item_id, revision, desired)
                 result.append(
                     self._reconcile_external(
                         target, channel="wix", current=current, desired=desired,
                         revision=revision, dry_run=dry_run,
-                        write=lambda item_id=item_id, revision=revision, desired=desired: self._write_wix(
-                            item_id, revision, desired
-                        ),
+                        write=write_wix,
                         location_id=location_id,
                     )
                 )
@@ -508,8 +509,11 @@ class InventoryProjectionService:
     def _baseline_quantity(payload: dict[str, object] | None) -> int | None:
         if not isinstance(payload, dict) or "quantity" not in payload:
             return None
+        value = payload["quantity"]
+        if not isinstance(value, (int, str, float)):
+            return None
         try:
-            return int(payload["quantity"])
+            return int(value)
         except (TypeError, ValueError):
             return None
 

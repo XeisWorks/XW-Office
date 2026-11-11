@@ -36,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.write and not (config.sevdesk.api_token or "").strip():
         parser.error("SEVDESK_API_TOKEN is required for provider writes")
 
-    wix = WixProductDetailsClient(secret_service=_EnvironmentSecrets())
+    wix = WixProductDetailsClient(secret_service=_EnvironmentSecrets())  # type: ignore[arg-type]
     result = InventoryProjectionService(
         create_session_factory(config),
         sevdesk=PartClient(build_sevdesk_connection(config)),
