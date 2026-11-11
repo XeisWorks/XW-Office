@@ -84,11 +84,37 @@ class SevdeskZmInvoiceProvider:
         self._contact_cache: dict[str, dict[str, Any]] = {}
         self._position_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
         self._bulk_position_cache: dict[str, list[dict[str, Any]]] = {}
+        self._bulk_document_cache: dict[str, list[dict[str, Any]]] = {}
 
     def clear_cache(self) -> None:
         self._contact_cache.clear()
         self._position_cache.clear()
         self._bulk_position_cache.clear()
+        self._bulk_document_cache.clear()
+
+    def load_documents_bulk(self, resource: str) -> list[dict[str, Any]]:
+        """Load one bounded snapshot of invoice-like documents.
+
+        Forecast refreshes need several years of history.  sevDesk's monthly
+        date filters are inconsistent for this account, so one paginated
+        snapshot is both faster and more deterministic than 12 requests per
+        year.  The caller performs the date/status filtering locally.
+        """
+        key = str(resource)
+        if key in self._bulk_document_cache:
+            return [dict(item) for item in self._bulk_document_cache[key]]
+        path = {"Invoice": "/Invoice", "CreditNote": "/CreditNote"}.get(key)
+        if path is None:
+            return []
+        documents = load_tax_resource(
+            self._connection,
+            path,
+            params={"embed": "contact", "showAll": "true"},
+            page_size=5_000,
+            max_pages=100,
+        )
+        self._bulk_document_cache[key] = [dict(item) for item in documents]
+        return [dict(item) for item in documents]
 
     def load_invoices(self, year: int, month: int) -> list[dict[str, Any]]:
         return self._load_dated_resource(

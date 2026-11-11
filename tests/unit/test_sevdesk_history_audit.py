@@ -79,3 +79,31 @@ def test_history_provider_adapter_uses_bulk_positions_when_available() -> None:
 
     assert adapter.list_invoice_positions_bulk(["inv-1"])[0]["quantity"] == 2
     assert adapter.list_credit_note_positions_bulk(["credit-1"])[0]["quantity"] == 2
+
+
+def test_history_provider_adapter_uses_bulk_documents_and_filters_year() -> None:
+    class MonthlyBulkDocuments:
+        def load_documents_bulk(self, resource: str):
+            if resource == "Invoice":
+                return [
+                    {"id": "inv-2025", "invoiceDate": "2025-12-31"},
+                    {"id": "inv-2026", "invoiceDate": "2026-01-01"},
+                ]
+            return [
+                {"id": "credit-2026", "creditNoteDate": "2026-02-01"},
+            ]
+
+        def load_invoices(self, year: int, month: int):
+            raise AssertionError("bulk document snapshot must avoid monthly reads")
+
+        def load_credit_notes(self, year: int, month: int):
+            raise AssertionError("bulk document snapshot must avoid monthly reads")
+
+    adapter = SevdeskHistoryProviderAdapter(MonthlyBulkDocuments())
+
+    assert adapter.list_invoices_for_year(2026) == [
+        {"id": "inv-2026", "invoiceDate": "2026-01-01"}
+    ]
+    assert adapter.list_credit_notes_for_year(2026) == [
+        {"id": "credit-2026", "creditNoteDate": "2026-02-01"}
+    ]

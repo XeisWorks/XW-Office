@@ -33,6 +33,9 @@ class SevdeskHistoryProviderAdapter:
         self._monthly = monthly_provider
 
     def list_invoices_for_year(self, year: int) -> list[dict[str, Any]]:
+        bulk = self._documents_for_year_bulk("Invoice", year)
+        if bulk is not None:
+            return bulk
         return self._deduplicate(
             row
             for month in range(1, 13)
@@ -40,6 +43,9 @@ class SevdeskHistoryProviderAdapter:
         )
 
     def list_credit_notes_for_year(self, year: int) -> list[dict[str, Any]]:
+        bulk = self._documents_for_year_bulk("CreditNote", year)
+        if bulk is not None:
+            return bulk
         return self._deduplicate(
             row
             for month in range(1, 13)
@@ -57,6 +63,23 @@ class SevdeskHistoryProviderAdapter:
 
     def list_credit_note_positions_bulk(self, credit_note_ids: list[str]) -> list[dict[str, Any]]:
         return self._list_positions_bulk("CreditNote", "creditNote", credit_note_ids)
+
+    def _documents_for_year_bulk(
+        self, resource: str, year: int
+    ) -> list[dict[str, Any]] | None:
+        loader = getattr(self._monthly, "load_documents_bulk", None)
+        if not callable(loader):
+            return None
+        rows = loader(resource)
+        date_key = "invoiceDate" if resource == "Invoice" else "creditNoteDate"
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            occurred = _parse_date(row, (date_key, "date", "create", "updated"))
+            if occurred is not None and occurred.year == year:
+                result.append(dict(row))
+        return self._deduplicate(result)
 
     def _list_positions_bulk(
         self, resource: str, parent_key: str, document_ids: list[str]
