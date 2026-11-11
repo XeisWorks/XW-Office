@@ -1437,6 +1437,96 @@ def test_start_resume_retries_stock_warning_after_other_steps_completed() -> Non
     assert service.read_fulfillment_flags(summary.id).last_warning == ""
 
 
+def test_start_resume_after_legacy_failure_replays_hub_booking_idempotently() -> None:
+    summary = InvoiceSummary(
+        id="split-stock-resume-1",
+        invoiceNumber="RE-SPLIT-STOCK-RESUME",
+        status_code=1000,
+        order_reference="20529",
+    )
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads[summary.id] = {
+        "id": summary.id,
+        "invoiceNumber": summary.invoice_number,
+        "status": 1000,
+        "customerInternalNote": summary.order_reference,
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+    client.invoice_positions[summary.id] = [
+        {"part": {"id": "part-100", "partNumber": "XW-100"}, "quantity": "1"}
+    ]
+    wix = _WixOrdersStub()
+    repo = _RepoStub({})
+
+    class IdempotentHubBooking:
+        def __init__(self) -> None:
+            self.attempts = 0
+            self.booked_documents: set[str] = set()
+
+        def apply_invoice_context(self, *, document_id: str, **_kwargs: object) -> None:
+            self.attempts += 1
+            self.booked_documents.add(document_id)
+
+    class LegacyInventory:
+        def __init__(self) -> None:
+            self.attempts = 0
+            self.booked_documents: set[str] = set()
+
+        def execute_start_invoice_consumption(
+            self, requirements: dict[str, dict[str, int]], invoice_ids: list[str], **_kwargs: object
+        ) -> None:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise RuntimeError("temporary legacy database outage")
+            assert requirements == {summary.id: {"XW-100": 1}}
+            self.booked_documents.update(invoice_ids)
+
+    hub = IdempotentHubBooking()
+    legacy = LegacyInventory()
+    service = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        repo,  # type: ignore[arg-type]
+        wix,  # type: ignore[arg-type]
+        _MailServiceStub(),  # type: ignore[arg-type]
+        invoice_inventory=hub,  # type: ignore[arg-type]
+        inventory_service=legacy,  # type: ignore[arg-type]
+    )
+    service.write_fulfillment_flags(
+        summary.id,
+        FulfillmentFlags(
+            invoice_printed=True,
+            label_printed=True,
+            mail_sent=True,
+            payment_applicable=True,
+            payment_booked=True,
+            wix_applicable=True,
+            wix_fulfilled=True,
+            last_run_iso=datetime.now(timezone.utc).isoformat(),
+            last_warning="START-Lagerbuchung fehlgeschlagen: previous outage",
+        ),
+    )
+
+    first = service._resume_incomplete_fulfillment(  # noqa: SLF001
+        should_abort=None, progress_callback=None, mail_recipient_override=None
+    )
+    assert first["processed"] == 1
+    assert hub.booked_documents == {summary.id}
+    assert legacy.booked_documents == set()
+    assert service.read_fulfillment_flags(summary.id).last_warning.startswith(
+        "START-Lagerbuchung fehlgeschlagen:"
+    )
+
+    second = service._resume_incomplete_fulfillment(  # noqa: SLF001
+        should_abort=None, progress_callback=None, mail_recipient_override=None
+    )
+    assert second["processed"] == 1
+    assert hub.attempts == 2
+    assert hub.booked_documents == {summary.id}
+    assert legacy.booked_documents == {summary.id}
+    assert service.read_fulfillment_flags(summary.id).last_warning == ""
+
+
 def test_inventory_requirements_use_only_requested_invoice_ids() -> None:
     rows = [
         InvoiceSummary(id="11", invoiceNumber="RE-TEST-11", order_reference="ORDER-11"),
