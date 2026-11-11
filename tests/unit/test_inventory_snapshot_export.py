@@ -47,6 +47,8 @@ def test_export_inventory_snapshot_contains_inventory_state(tmp_path: Path) -> N
     assert payload["operational_settings"]["product_hub.sevdesk_invoice_feed_start.v1"] == (
         '{"first_eligible_date":"2026-11-12"}'
     )
+    assert payload["source_audit"]["active_physical_count"] == 0
+    assert payload["source_audit"]["blocking_issue_count"] == 0
 
 
 def test_snapshot_cli_resolves_public_database_url_without_argument(monkeypatch) -> None:

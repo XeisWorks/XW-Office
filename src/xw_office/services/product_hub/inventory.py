@@ -633,6 +633,17 @@ class InventoryV2Service:
             for mapping in self._products.list_channel_mappings_for_entities(product_ids, entity_type="product")
             if mapping.channel == "sevdesk"
         }
+        # A product-level sevDesk mapping is only a safe compatibility fallback
+        # when the product has exactly one active stock-enabled variant.  A
+        # grouped product with several variants must carry explicit variant
+        # mappings; otherwise one Part-ID would be ambiguously projected to all
+        # siblings and could book the wrong physical SKU.
+        active_stock_variants_by_product: dict[uuid.UUID, int] = {}
+        for variant in variants:
+            if variant.active and variant.stock_enabled:
+                active_stock_variants_by_product[variant.product_id] = (
+                    active_stock_variants_by_product.get(variant.product_id, 0) + 1
+                )
         raw_legacy = self._settings.get_value_json(LEGACY_STOCK_LEVELS_KEY)
         try:
             legacy_values = json.loads(raw_legacy) if raw_legacy else {}
@@ -656,8 +667,12 @@ class InventoryV2Service:
                 continue
             raw_kind = (variant.attributes or {}).get("article_kind") or (product.attributes or {}).get("article_kind")
             kind = str(raw_kind or ("digital" if not variant.stock_enabled else "external_print")).strip().lower()
-            mapping = variant_mappings.get(variant.id) or product_mappings.get(product.id)
-            part_id = str(mapping.external_id if mapping is not None else product.sevdesk_part_id or "").strip()
+            mapping = variant_mappings.get(variant.id)
+            if mapping is None and active_stock_variants_by_product.get(product.id, 0) == 1:
+                mapping = product_mappings.get(product.id)
+            part_id = str(mapping.external_id if mapping is not None else "").strip()
+            if not part_id and active_stock_variants_by_product.get(product.id, 0) == 1:
+                part_id = str(product.sevdesk_part_id or "").strip()
             legacy_raw = legacy_values.get(variant.sku)
             try:
                 legacy_stock = int(legacy_raw) if legacy_raw is not None else None

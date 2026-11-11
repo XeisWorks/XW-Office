@@ -46,6 +46,7 @@ from xw_office.models.product_hub_sync import (  # noqa: E402
     SyncCursor,
 )
 from xw_office.models.settings_kv import SettingKV  # noqa: E402
+from xw_office.services.product_hub.inventory import InventoryV2Service  # noqa: E402
 
 
 _TABLES = (
@@ -120,6 +121,14 @@ def export_snapshot(database_url: str, out_path: Path) -> dict[str, Any]:
             row.key: row.value_json for row in settings if row.key in _OPERATIONAL_SETTING_KEYS
         }
         print(f"  operational_settings: {len(settings)} rows")
+    source_audit = InventoryV2Service(session_factory).audit_inventory_sources()
+    snapshot["source_audit"] = source_audit.as_dict()
+    print(
+        "  source_audit: "
+        f"{source_audit.active_physical_count} active physical, "
+        f"{source_audit.blocking_issue_count} blockers, "
+        f"{source_audit.warning_count} warnings"
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Inventory snapshot written to {out_path} ({out_path.stat().st_size} bytes)")
