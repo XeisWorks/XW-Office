@@ -48,7 +48,6 @@ from xw_office.services.products.print_decision import PieceBlock, resolve_piece
 from xw_office.services.printing.print_jobs import PdfPrintJob, PrintJobKind
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.printing.planned_pdf_printer import page_indices_from_range_text, print_pdf_by_plan
-from xw_office.services.printing.pdf_renderer import page_indices_from_qprinter
 from xw_office.services.printer_status.service import PrinterStatusService
 
 if TYPE_CHECKING:
@@ -100,6 +99,58 @@ def _resolve_pdf_open_target(raw_path: str, open_folder: bool) -> _PdfOpenTarget
     target = path.parent if open_folder else path
     exists = target.exists() if open_folder else target.is_file()
     return _PdfOpenTargetResult(str(target), exists, open_folder)
+
+
+def _selected_manual_pdf_pages(
+    page_count: int,
+    *,
+    page_range_selected: bool,
+    from_page: int,
+    to_page: int,
+) -> list[int] | None:
+    if page_count <= 0 or not page_range_selected or from_page < 1 or to_page < 1:
+        return None
+    start = max(0, from_page - 1)
+    end = min(page_count, to_page)
+    return list(range(start, end)) if start < end else None
+
+
+@dataclass(frozen=True)
+class _ManualPdfQueueResult:
+    path: str
+    job_id: str
+
+
+def _queue_manual_pdf(
+    path: str,
+    printer_name: str,
+    job_kind: PrintJobKind,
+    page_range_selected: bool,
+    from_page: int,
+    to_page: int,
+    container: Container,
+) -> _ManualPdfQueueResult:
+    with fitz.open(path) as document:
+        page_count = len(document)
+    pages = _selected_manual_pdf_pages(
+        page_count,
+        page_range_selected=page_range_selected,
+        from_page=from_page,
+        to_page=to_page,
+    )
+    queue: PrintQueueService = container.resolve(PrintQueueService)
+    job_id = queue.enqueue(
+        PdfPrintJob(
+            pdf_path=path,
+            printer_name=printer_name,
+            pages=pages,
+            copies=1,
+            dpi=None,
+            job_kind=job_kind,
+            description=f"Manueller PDF-Druck: {path}",
+        )
+    )
+    return _ManualPdfQueueResult(path, job_id)
 
 
 def _format_page_ranges(pages: list[int]) -> str:
@@ -730,30 +781,37 @@ def _print_with_dialog(
     if not _check_printer_runtime(parent, container, printer):
         return
 
-    doc = fitz.open(path)
-    try:
-        page_count = len(doc)
-    finally:
-        doc.close()
-
-    indices = page_indices_from_qprinter(printer, page_count)
     printer_name = str(printer.printerName() or "").strip()
     if not printer_name:
         QMessageBox.warning(parent, "Druck", "Kein Drucker ausgewaehlt.")
         return
 
-    queue: PrintQueueService = container.resolve(PrintQueueService)
-    queue.enqueue(
-        PdfPrintJob(
-            pdf_path=path,
-            printer_name=printer_name,
-            pages=indices,
-            copies=1,
-            dpi=None,
-            job_kind=job_kind,
-            description=f"Manueller PDF-Druck: {path}",
-        )
+    page_range_selected = printer.printRange() == QPrinter.PrintRange.PageRange
+    worker = BackgroundWorker(
+        _queue_manual_pdf,
+        path,
+        printer_name,
+        job_kind,
+        page_range_selected,
+        int(printer.fromPage()),
+        int(printer.toPage()),
+        container,
     )
+    worker.signals.result.connect(
+        lambda result: logger.info(
+            "Manual PDF print queued path=%s job_id=%s",
+            result.path,
+            result.job_id,
+        )
+        if isinstance(result, _ManualPdfQueueResult)
+        else None
+    )
+    worker.signals.error.connect(
+        lambda exc: QMessageBox.warning(parent, "Druck", f"PDF-Druckauftrag fehlgeschlagen: {exc}")
+        if isValid(parent)
+        else None
+    )
+    worker.start()
 
 
 def run_invoice_pdf_print(parent: QWidget, container: Container) -> None:

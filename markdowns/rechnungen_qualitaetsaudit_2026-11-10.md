@@ -2363,3 +2363,18 @@ wird. `test_rechnungen_product_print.py` besteht mit **17 Tests**, Ruff und gezi
 MyPy fuer `print_dialog.py` (bestehender `fitz`-Importfehlercode gezielt ausgenommen) sind
 gruen. Die vollstaendige Rechnungs-UI-/Drucksuite und Hosted CI laufen fuer den neuen
 Commit noch.
+
+### F17-Nachtrag - Manuelle Rechnungs-/Label-/Noten-PDF-Einreihung
+
+Der gemeinsame Dialog fuer manuelle Rechnungs-, Label- und Noten-PDFs oeffnete das
+PDF nach der Druckerauswahl synchron mit `fitz.open()` und reihte anschliessend den
+Druckauftrag im UI-Thread ein. Seitenzaehlung und Queue-Einreihung laufen jetzt in
+einem `BackgroundWorker`; die Seitenauswahl wird zuvor im UI aus dem Qt-Druckdialog
+in einfache Werte ueberfuehrt. Bei PDF-/Queue-Fehlern bleibt eine konkrete Warnung
+am Dialog sichtbar.
+
+Eine Qt-Regression blockiert die PDF-Oeffnung und bestaetigt UI-Heartbeat, korrekten
+Seitenbereich und genau einen Queue-Auftrag. `test_rechnungen_product_print.py`
+besteht jetzt mit **18 Tests**, globales Ruff und gezieltes MyPy fuer `print_dialog.py`
+(gruppierter Fremdimport `fitz` ausgenommen) bestehen. Hosted CI fuer den gepushten
+Vorgaengercommit laeuft; der neue Nachtrag wird mit dem Fixcommmit geprueft.

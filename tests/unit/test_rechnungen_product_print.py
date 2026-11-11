@@ -673,6 +673,107 @@ def test_product_pdf_folder_exists_check_runs_in_worker(qtbot: object, tmp_path,
     assert Path(opened[0]) == tmp_path
 
 
+def test_manual_pdf_inspection_and_queue_keep_ui_responsive(qtbot: object, tmp_path, monkeypatch) -> None:
+    pdf_path = tmp_path / "manual.pdf"
+    document = fitz.open()
+    document.new_page()
+    document.new_page()
+    document.save(pdf_path)
+    document.close()
+    entered = Event()
+    release = Event()
+    real_open = fitz.open
+
+    def slow_open(path: str):
+        entered.set()
+        assert release.wait(timeout=5)
+        return real_open(path)
+
+    monkeypatch.setattr(print_dialog.fitz, "open", slow_open)
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.print_dialog._check_printer_runtime",
+        lambda *_args: True,
+    )
+    monkeypatch.setattr(
+        print_dialog.QFileDialog,
+        "getOpenFileName",
+        lambda *_args: (str(pdf_path), "PDF (*.pdf)"),
+    )
+
+    class FakePrinter:
+        class PrinterMode:
+            HighResolution = object()
+
+        class PrintRange:
+            PageRange = "page-range"
+
+        def __init__(self, _mode: object) -> None:
+            self._name = ""
+
+        def setPrinterName(self, name: str) -> None:
+            self._name = name
+
+        def printerName(self) -> str:
+            return self._name
+
+        def printRange(self) -> str:
+            return self.PrintRange.PageRange
+
+        def fromPage(self) -> int:
+            return 2
+
+        def toPage(self) -> int:
+            return 2
+
+    class FakePrinterInfo:
+        @staticmethod
+        def defaultPrinter() -> FakePrinterInfo:
+            return FakePrinterInfo()
+
+        @staticmethod
+        def printerName() -> str:
+            return "Test Printer"
+
+    class FakePrintDialog:
+        class DialogCode:
+            Accepted = print_dialog.QDialog.DialogCode.Accepted
+
+        def __init__(self, _printer: object, _parent: object) -> None:
+            pass
+
+        @staticmethod
+        def exec() -> int:
+            return print_dialog.QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(print_dialog, "QPrinter", FakePrinter)
+    monkeypatch.setattr(print_dialog, "QPrinterInfo", FakePrinterInfo)
+    monkeypatch.setattr(print_dialog, "QPrintDialog", FakePrintDialog)
+
+    queued: list[object] = []
+
+    class PrintQueue:
+        def enqueue(self, job: object) -> str:
+            queued.append(job)
+            return "manual-job-1"
+
+    container = Container(AppConfig())
+    container.register(PrintQueueService, lambda _container: PrintQueue())  # type: ignore[arg-type]
+    parent = QComboBox()
+    qtbot.addWidget(parent)  # type: ignore[attr-defined]
+    print_dialog.run_invoice_pdf_print(parent, container)
+    qtbot.waitUntil(entered.is_set, timeout=3000)  # type: ignore[attr-defined]
+    heartbeats: list[int] = []
+    timer = QTimer(parent)
+    timer.timeout.connect(lambda: heartbeats.append(1))
+    timer.start(10)
+    qtbot.waitUntil(lambda: bool(heartbeats), timeout=1000)  # type: ignore[attr-defined]
+    release.set()
+    qtbot.waitUntil(lambda: len(queued) == 1, timeout=3000)  # type: ignore[attr-defined]
+
+    assert heartbeats
+    assert queued[0].pages == [1]
+
+
 def test_product_pdf_inspection_discards_stale_path_result(qtbot: object, tmp_path, monkeypatch) -> None:
     first_path = tmp_path / "first.pdf"
     first_document = fitz.open()
