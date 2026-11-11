@@ -1539,3 +1539,18 @@ Betriebs-Gates.
 Der anschließende Railway-Readiness-Lauf bestätigt den neuen Zustand (`legacy_mutation_paths=ready`);
 der Master bleibt wegen sechs Daten-/Betriebs-Blockaden und zwei manuellen Nachweisen
 weiterhin deaktiviert.
+
+### Railway-Verifikation nach Idempotenz-Patch (12. November 2026, 00:36 CET)
+
+Commit `84cf681` macht die Legacy-START-/REPRINTS-Bewegungen deterministisch
+idempotent (`start-print`, `start-sale`, `reprint`). Product Hub und Worker wurden
+daraufhin erfolgreich neu gebaut und gestartet: Product Hub Deployment
+`5dd2017d-6344-4e3a-80ef-cbc9178a170b`, Worker Deployment
+`e396cb2d-ac48-449c-8d0a-209d97283e8e`; `/health` liefert HTTP 200.
+
+Der reproduzierbare Railway-Preflight lief danach erneut read-only erfolgreich:
+Runtime-Readiness `eligible=true` (Exit 0), DB-Readiness erwartungsgemäß
+`eligible=false` (Exit 2). Der Snapshot enthält weiterhin 432 Bestandspositionen,
+0 Ledger-Bewegungen, 0 Rechnungsbuchungsmarker, 0 Inventur-Sessions, 432 Alarme,
+726 Sync-Konflikte (davon 710 offen), 432 Outbox-Ereignisse und 263 archivierte
+Payloads. Es wurden keine Bestands- oder Providerdaten geschrieben.

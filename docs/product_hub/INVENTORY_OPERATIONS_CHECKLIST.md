@@ -171,6 +171,19 @@ Sync-Konflikte. Provider-/Graph-/Wix-Grundkonfiguration und der Worker-Marker si
 - Deshalb bleiben Inventur, Konfliktbereinigung, Shadow-Phase, Backup und Rollback echte
   Betriebs-Gates; der Master darf nicht aktiviert werden.
 
+## Aktueller Deploy- und Preflight-Stand (12. November 2026, 00:36 CET)
+
+- `origin/main` steht auf Commit `84cf681` (deterministische Idempotenzschlüssel für
+  Legacy-START-/REPRINTS-Bewegungen).
+- Product Hub Deployment `5dd2017d-6344-4e3a-80ef-cbc9178a170b` und Worker Deployment
+  `e396cb2d-ac48-449c-8d0a-209d97283e8e` sind SUCCESS; `/health` ist HTTP 200.
+- `invoke_inventory_railway_preflight.ps1` ist der manuelle Betriebszugriff für den
+  read-only Check. Erwarteter Zustand vor Inventur: DB-Readiness Exit 2,
+  Runtime-Readiness Exit 0.
+- Der Preflight-Snapshot bestätigt 432 `inventory_stock`, 0 Ledger-Bewegungen,
+  726 Sync-Konflikte (710 offen), 432 Outbox-Ereignisse und 263 archivierte Payloads.
+  Keine externen Bestandsdaten wurden verändert.
+
 ## Read-only-Folgepruefung (12. November 2026, 00:11 CET)
 
 Das Skript `scripts/product_hub/invoke_inventory_railway_preflight.ps1` wurde fuer
