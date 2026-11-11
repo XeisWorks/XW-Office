@@ -1580,3 +1580,13 @@ Runtime-Readiness `eligible=true` (Exit 0), DB-Readiness erwartungsgemäß
 0 Ledger-Bewegungen, 0 Rechnungsbuchungsmarker, 0 Inventur-Sessions, 432 Alarme,
 726 Sync-Konflikte (davon 710 offen), 432 Outbox-Ereignisse und 263 archivierte
 Payloads. Es wurden keine Bestands- oder Providerdaten geschrieben.
+
+### Letzte Produktionsverifikation (12. November 2026, 00:59 CET)
+
+Der Railway-Preflight auf `main`/`d9e421b` ist erneut erfolgreich: Product Hub
+Deployment `2841582d-afab-4663-af81-1a389a8f8b21` und Worker Deployment
+`41d96250-a187-432f-a781-be4b35797dad` sind SUCCESS, `/health` liefert HTTP 200,
+Runtime-Readiness ist `eligible=true` und DB-Readiness bleibt mit Exit 2 korrekt
+vor der Inventur blockiert. Der neue Snapshot weist unverändert 594 aktive
+physische Varianten, 594 Mapping-Blocker, 565 fehlende Quellmengen und 29
+Legacy-/Hub-Drifts aus; es wurden keine externen Bestände geschrieben.
