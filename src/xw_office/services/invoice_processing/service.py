@@ -11,7 +11,7 @@ import time
 from collections.abc import Sequence
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock, RLock
@@ -553,8 +553,10 @@ class InvoiceProcessingService:
         if self._settings_repo is None:
             raise RuntimeError("START-Zurückstellung kann nicht gespeichert werden")
         hold = StartHold.create(invoice_id, reason, note=note, review_on=review_on)
+        updated_hold = hold
 
         def update(raw: str | None) -> str:
+            nonlocal updated_hold
             try:
                 data = json.loads(raw) if raw else {}
             except (TypeError, json.JSONDecodeError) as exc:
@@ -567,13 +569,32 @@ class InvoiceProcessingService:
                 current = StartHold.from_payload(hold.invoice_id, data.get(hold.invoice_id))
                 if current is None or current.updated_at != expected_updated_at:
                     raise RuntimeError("Die Zurückstellung wurde auf einem anderen PC geändert")
-            data[hold.invoice_id] = hold.as_payload()
+            current = StartHold.from_payload(hold.invoice_id, data.get(hold.invoice_id))
+            next_hold = hold
+            if current is not None and current.updated_at:
+                try:
+                    current_updated_at = datetime.fromisoformat(current.updated_at)
+                    next_updated_at = datetime.fromisoformat(hold.updated_at)
+                except ValueError:
+                    pass
+                else:
+                    if current_updated_at.tzinfo is None:
+                        current_updated_at = current_updated_at.replace(tzinfo=timezone.utc)
+                    if next_updated_at.tzinfo is None:
+                        next_updated_at = next_updated_at.replace(tzinfo=timezone.utc)
+                    if next_updated_at <= current_updated_at:
+                        next_hold = replace(
+                            hold,
+                            updated_at=(current_updated_at + timedelta(microseconds=1)).isoformat(),
+                        )
+            updated_hold = next_hold
+            data[hold.invoice_id] = next_hold.as_payload()
             return json.dumps(data, ensure_ascii=False)
 
         self._settings_repo.mutate_value_json(START_HOLDS_KEY, update)
         if hasattr(self, "_batch_cache_lock"):
             self.invalidate_invoice_batch_cache()
-        return hold
+        return updated_hold
 
     def release_invoice_for_start(
         self, invoice_id: str, *, expected_updated_at: str | None = None
