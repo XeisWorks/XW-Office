@@ -15,6 +15,7 @@ Invoke-WebRequest -UseBasicParsing https://products.xeisworks.at/health
 ```
 
 Erwartet werden gesetzte Variablennamen `DATABASE_URL`, `SEVDESK_API_TOKEN`,
+`WIX_API_KEY` und `WIX_SITE_ID`,
 `MS_GRAPH_TENANT_ID`, `MS_GRAPH_CLIENT_ID` und `MS_GRAPH_MAILBOX`; die Werte dürfen
 nicht in die Ausgabe übernommen werden. Der Healthcheck muss HTTP 200 liefern.
 
