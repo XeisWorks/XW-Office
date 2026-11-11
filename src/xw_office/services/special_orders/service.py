@@ -89,6 +89,22 @@ class SpecialOrderService:
         if not claim.acquired:
             if claim.state == "succeeded":
                 raise RuntimeError("Payment Link wurde bereits erstellt; bitte den bestehenden Link verwenden.")
+            if claim.state == "unknown" and self._wix_api_key() and self._wix_site_id():
+                matches = self.search_payment_links_by_request_key(claim.operation_id)
+                if len(matches) == 1:
+                    recovered = matches[0]
+                    self._claims.reconcile_unknown(
+                        claim.invoice_id,
+                        claim.operation,
+                        claim.operation_id,
+                        "succeeded",
+                        reconciled_by="Wix API request-key readback",
+                        evidence=(
+                            "Search Payment Links returned exactly one payment link with "
+                            f"an exact note.text clientRequestKey match; link_id={recovered.id}"
+                        ),
+                    )
+                    return recovered
             raise RuntimeError(
                 "Payment-Link-Ergebnis ist noch offen oder unklar. Keine automatische Wiederholung; "
                 "bitte den bestehenden Wix-Link manuell abgleichen."
@@ -144,6 +160,70 @@ class SpecialOrderService:
             if response.status_code >= 400:
                 raise RuntimeError(self._response_error_message(response, data, prefix="Wix Payment Links API"))
         return self._link_from_rest_response(data, fallback_title=fallback_title)
+
+    def search_payment_links_by_request_key(self, request_key: str) -> list[SpecialOrderLink]:
+        """Read back exact Wix matches for an uncertain create request.
+
+        Wix indexes ``note.text`` for Search Payment Links. Search results are
+        only accepted when their JSON note contains the exact request key; the
+        fuzzy text search itself is never treated as proof of a match.
+        """
+        key = str(request_key or "").strip()
+        if not key:
+            raise ValueError("Payment-Link-Request-Key fehlt")
+        api_key = self._wix_api_key()
+        site_id = self._wix_site_id()
+        if not api_key or not site_id:
+            raise RuntimeError("Wix API-Key und Site-ID sind fuer den Payment-Link-Readback erforderlich")
+
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                "https://www.wixapis.com/payment-links/v1/payment-links/search",
+                headers={
+                    "Authorization": api_key,
+                    "wix-site-id": site_id,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "search": {
+                        "search": {"expression": key, "fields": ["note.text"], "fuzzy": False},
+                        "cursorPaging": {"limit": 100},
+                    }
+                },
+            )
+            data = self._response_json(response)
+            if response.status_code >= 400:
+                raise RuntimeError(
+                    self._response_error_message(response, data, prefix="Wix Payment-Link-Suche")
+                )
+
+        response_data = self._string_keyed_dict(data)
+        if response_data is None:
+            raise RuntimeError("Wix Payment-Link-Suche lieferte keine JSON-Antwort")
+        raw_links = response_data.get("paymentLinks")
+        if not isinstance(raw_links, list):
+            raise RuntimeError("Wix Payment-Link-Suche lieferte keine Ergebnisliste")
+        if len(raw_links) >= 100:
+            raise RuntimeError("Wix Payment-Link-Suche erreichte das 100-Ergebnisse-Limit")
+
+        matches: list[SpecialOrderLink] = []
+        for raw_link in raw_links:
+            payment_link = self._string_keyed_dict(raw_link)
+            if payment_link is None:
+                continue
+            note = self._string_keyed_dict(payment_link.get("note")) or {}
+            try:
+                note_data = json.loads(str(note.get("text") or ""))
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(note_data, dict) or note_data.get("clientRequestKey") != key:
+                continue
+            link = self._link_from_rest_response(
+                {"paymentLink": payment_link},
+                fallback_title=str(payment_link.get("title") or "Payment Link"),
+            )
+            matches.append(link)
+        return matches
 
     def _payment_link_payload(self, payload: dict[str, object]) -> dict[str, object]:
         mode = str(payload.get("mode") or "").strip()
@@ -231,7 +311,11 @@ class SpecialOrderService:
             raise RuntimeError("Wix Payment Links API lieferte keine JSON-Antwort")
         payment_link = SpecialOrderService._string_keyed_dict(response.get("paymentLink")) or response
         links = SpecialOrderService._string_keyed_dict(payment_link.get("links")) or {}
-        url = str(links.get("url") or links.get("originalUrl") or payment_link.get("url") or "").strip()
+        raw_url = links.get("url") or links.get("originalUrl") or payment_link.get("url") or ""
+        if isinstance(raw_url, dict):
+            url_data = SpecialOrderService._string_keyed_dict(raw_url) or {}
+            raw_url = url_data.get("url") or url_data.get("originalUrl") or ""
+        url = str(raw_url).strip()
         link = SpecialOrderLink(
             id=str(payment_link.get("_id") or payment_link.get("id") or ""),
             url=url,

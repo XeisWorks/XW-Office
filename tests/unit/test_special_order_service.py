@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from threading import Lock
 
+import httpx
 import pytest
 
 from xw_office.services.special_orders.service import SpecialOrderItem, SpecialOrderLink, SpecialOrderService
@@ -79,6 +80,17 @@ def test_rest_response_accepts_nested_link_and_rejects_non_object_links() -> Non
     assert result.id == "link-1"
     assert result.url == "https://example.test/pay"
 
+    nested_url = SpecialOrderService._link_from_rest_response(
+        {
+            "paymentLink": {
+                "id": "link-2",
+                "links": {"url": {"url": "https://example.test/nested-pay"}},
+            }
+        },
+        fallback_title="Fallback",
+    )
+    assert nested_url.url == "https://example.test/nested-pay"
+
     with pytest.raises(RuntimeError, match="keinen Payment-Link-URL"):
         SpecialOrderService._link_from_rest_response(
             {"paymentLink": None}, fallback_title="Fallback"
@@ -103,6 +115,133 @@ def test_unclear_payment_link_result_blocks_retry_across_service_instances(monke
         _create(second)
     assert len(sent_keys) == 1
     assert json.loads(next(iter(settings.values.values())))["state"] == "unknown"
+
+
+def test_exact_wix_readback_reconciles_unclear_claim_without_second_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _SharedSettings()
+    first = _service(settings)
+    second = _service(settings)
+    sent_keys: list[str] = []
+
+    def accepted_then_timed_out(payload: dict[str, object], *, fallback_title: str) -> SpecialOrderLink:
+        sent_keys.append(str(payload["clientRequestKey"]))
+        raise TimeoutError("response lost")
+
+    recovered = SpecialOrderLink(
+        id="wix-link-1",
+        url="https://example.test/pay-existing",
+        status="ACTIVE",
+        title="Testauftrag",
+    )
+    monkeypatch.setattr(first, "_create_payment_link_via_endpoint", accepted_then_timed_out)
+    monkeypatch.setattr(second, "_wix_api_key", lambda: "test-key")
+    monkeypatch.setattr(second, "_wix_site_id", lambda: "test-site")
+    monkeypatch.setattr(
+        second,
+        "search_payment_links_by_request_key",
+        lambda request_key: [recovered] if request_key == sent_keys[0] else [],
+    )
+
+    with pytest.raises(TimeoutError):
+        _create(first)
+    assert _create(second) == recovered
+    claim = json.loads(next(iter(settings.values.values())))
+    assert claim["state"] == "succeeded"
+    assert claim["reconciliation_history"]
+    assert len(sent_keys) == 1
+
+
+def test_ambiguous_wix_readback_keeps_claim_unknown_and_blocks_second_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _SharedSettings()
+    first = _service(settings)
+    second = _service(settings)
+    sent_keys: list[str] = []
+
+    def accepted_then_timed_out(payload: dict[str, object], *, fallback_title: str) -> SpecialOrderLink:
+        sent_keys.append(str(payload["clientRequestKey"]))
+        raise TimeoutError("response lost")
+
+    possible = SpecialOrderLink(
+        id="possible-link",
+        url="https://example.test/possible",
+        status="ACTIVE",
+        title="Testauftrag",
+    )
+    monkeypatch.setattr(first, "_create_payment_link_via_endpoint", accepted_then_timed_out)
+    monkeypatch.setattr(second, "_wix_api_key", lambda: "test-key")
+    monkeypatch.setattr(second, "_wix_site_id", lambda: "test-site")
+    monkeypatch.setattr(second, "search_payment_links_by_request_key", lambda _key: [possible, possible])
+
+    with pytest.raises(TimeoutError):
+        _create(first)
+    with pytest.raises(RuntimeError, match="Ergebnis ist noch offen oder unklar"):
+        _create(second)
+
+    claim = json.loads(next(iter(settings.values.values())))
+    assert claim["state"] == "unknown"
+    assert len(sent_keys) == 1
+
+
+def test_wix_readback_accepts_only_exact_note_request_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = _service(_SharedSettings())
+    monkeypatch.setattr(service, "_wix_api_key", lambda: "test-key")
+    monkeypatch.setattr(service, "_wix_site_id", lambda: "test-site")
+    request: dict[str, object] = {}
+    key = "request-123"
+
+    class _Client:
+        def __init__(self, *, timeout: float) -> None:
+            assert timeout == 30.0
+
+        def __enter__(self) -> _Client:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> httpx.Response:
+            request.update(url=url, headers=headers, json=json)
+            return httpx.Response(
+                200,
+                json={
+                    "paymentLinks": [
+                        {
+                            "id": "link-exact",
+                            "title": "Found",
+                            "note": {"text": '{"clientRequestKey":"request-123"}'},
+                            "links": {"url": {"url": "https://example.test/exact"}},
+                        },
+                        {
+                            "id": "link-fuzzy-only",
+                            "title": "Other",
+                            "note": {"text": '{"clientRequestKey":"request-1234"}'},
+                            "links": {"url": {"url": "https://example.test/other"}},
+                        },
+                    ]
+                },
+            )
+
+    monkeypatch.setattr("xw_office.services.special_orders.service.httpx.Client", _Client)
+
+    matches = service.search_payment_links_by_request_key(key)
+
+    assert [(link.id, link.url) for link in matches] == [
+        ("link-exact", "https://example.test/exact")
+    ]
+    assert request["url"] == "https://www.wixapis.com/payment-links/v1/payment-links/search"
+    body = request["json"]
+    assert isinstance(body, dict)
+    search = body["search"]
+    assert isinstance(search, dict)
+    assert search["search"] == {
+        "expression": key,
+        "fields": ["note.text"],
+        "fuzzy": False,
+    }
 
 
 def test_confirmed_link_allows_deliberate_new_run_with_new_request_key(monkeypatch: pytest.MonkeyPatch) -> None:
