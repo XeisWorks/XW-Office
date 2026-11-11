@@ -113,6 +113,7 @@ packages:
       - InventoryCountService erzeugt eine eingefrorene Zählliste aktiver physischer Varianten mit SKU, Titel, Lagerort und Systembestand.
       - Gezählte Differenzen werden beim Abschluss als idempotente recount-Bewegungen gebucht; bestätigte Inventuren sind unveränderlich.
       - API-Endpunkte für Start, Abruf, Zeilenerfassung und Abschluss sind unter /api/v1/inventory/counts verfügbar.
+      - Jede gestartete Zählsitzung ist zusätzlich als UTF-8-CSV unter `/api/v1/inventory/counts/{count_id}/export.csv` exportierbar.
     scope:
       - Zählliste für aktive external_print- und pod-Varianten mit SKU, Titel, Lagerort und vorhandener Menge.
       - Zwischenstand, Referenz, Prüfung, Differenzvorschau und bestätigter Abschluss je Variante.

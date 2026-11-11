@@ -66,6 +66,33 @@ def test_summary_returns_zero_counts_when_empty(db_path: str) -> None:
     assert body["out_of_stock"] == 0
 
 
+def test_inventory_count_csv_export_contains_count_lines(db_path: str) -> None:
+    _seed_variant(db_path)
+    client = _client(db_path)
+
+    started = client.post("/api/v1/inventory/counts", headers=_auth_headers())
+    assert started.status_code == 201
+    count = started.json()
+    count_id = count["id"]
+    line = count["lines"][0]
+    counted = client.put(
+        f"/api/v1/inventory/counts/{count_id}/lines/{line['id']}",
+        headers=_auth_headers(),
+        json={"counted_quantity": 7, "note": "Erstzählung"},
+    )
+    assert counted.status_code == 200
+
+    exported = client.get(
+        f"/api/v1/inventory/counts/{count_id}/export.csv",
+        headers=_auth_headers(),
+    )
+    assert exported.status_code == 200
+    assert "attachment; filename=\"inventur-" in exported.headers["content-disposition"]
+    assert "XW-7000" in exported.text
+    assert "Erstzählung" in exported.text
+    assert "Systembestand" in exported.text
+
+
 def test_cutover_readiness_is_read_only_and_explicitly_blocked_before_pr15(db_path: str) -> None:
     client = _client(db_path)
     response = client.get("/api/v1/inventory/cutover-readiness", headers=_auth_headers())

@@ -1,10 +1,12 @@
 """Guided inventory count API."""
 from __future__ import annotations
 
+import csv
+import io
 import uuid
 from collections.abc import Callable
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from xw_office.services.product_hub.inventory_count import InventoryCountService, InventoryCountView
 from xw_office.web.schemas.inventory import (
@@ -32,6 +34,50 @@ def build_inventory_count_router(
     @router.post("", response_model=InventoryCountOut, status_code=status.HTTP_201_CREATED)
     def start_count(service: InventoryCountService = Depends(get_service)) -> InventoryCountOut:
         return output(service.start())
+
+    @router.get("/{count_id}/export.csv")
+    def export_count_csv(
+        count_id: uuid.UUID,
+        service: InventoryCountService = Depends(get_service),
+    ) -> Response:
+        try:
+            view = service.get(count_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        buffer = io.StringIO()
+        writer = csv.writer(buffer, delimiter=";")
+        writer.writerow(
+            [
+                "SKU",
+                "Titel",
+                "Lagerort",
+                "Systembestand",
+                "Gezählt",
+                "Differenz",
+                "Status",
+                "Notiz",
+                "Bewegungs-ID",
+            ]
+        )
+        for line in view.lines:
+            writer.writerow(
+                [
+                    line.sku,
+                    line.title,
+                    line.location_code,
+                    line.system_quantity,
+                    "" if line.counted_quantity is None else line.counted_quantity,
+                    "" if line.difference is None else line.difference,
+                    line.status,
+                    line.note,
+                    "" if line.movement_id is None else str(line.movement_id),
+                ]
+            )
+        return Response(
+            content="\ufeff" + buffer.getvalue(),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="inventur-{count_id}.csv"'},
+        )
 
     @router.get("/{count_id}", response_model=InventoryCountOut)
     def get_count(count_id: uuid.UUID, service: InventoryCountService = Depends(get_service)) -> InventoryCountOut:
