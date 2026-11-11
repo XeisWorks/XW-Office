@@ -158,6 +158,8 @@ Pflichtfälle der Abnahme:
 9. Graph-Mail wird nur nach Klick gesendet, enthält alle Pflichtfelder und erzeugt bei Doppelklick/Retry nicht unbemerkt eine zweite Task.
 10. Historische Verkäufe vor dem Inventur-Stichtag verändern den gezählten Anfangsbestand nicht; ein späterer eindeutiger Gegenbeleg dazu wird korrekt zurückgebucht.
 
+P07-Ergänzung: Das Alarm-Popup und die Graph-Mail zeigen zusätzlich Zielbestand sowie die daraus abgeleitete empfohlene Bestell-/Nachdruckmenge. Die Mail enthält außerdem Alarmmodus und Erstellzeitpunkt.
+
 ## 7. Arbeitsanweisung an Codex 5.6 Luna
 
 Vor jedem Paket `AGENTS.md`, diesen Text, die YAML, `docs/product_hub/PROGRESS.md` und die betroffenen aktuellen Codepfade lesen. Mit sauberem `main` beginnen und `git pull --ff-only origin main` ausführen. Migrationen nur additiv gegen den **aktuellen** Alembic-Head erstellen; keine historischen Migrationen oder das geschützte Architekturarchiv verändern. Pro Paket nur den angegebenen Scope umsetzen, gezielte Tests und einen realistischen manuellen Abnahmeschritt durchführen, Fortschritt und verbleibende Risiken dokumentieren. Erst fertig getestete Änderungen nach `main` integrieren und ohne Force-Push zu `origin/main` pushen. Kein Bestands-Master-Cutover allein aufgrund grüner Unit-Tests: Datenabgleich, Projektionen, Shadow-Lauf und Rollback-Nachweis gehören zur Abnahme.

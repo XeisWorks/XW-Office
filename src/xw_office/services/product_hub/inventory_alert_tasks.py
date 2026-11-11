@@ -78,6 +78,13 @@ class InventoryAlertTaskService:
             title = str((variant.name if variant is not None else "") or (product.name if product is not None else sku))
             on_hand = int(stock.on_hand if stock is not None else alert.observed_stock or 0)
             threshold = int(alert.threshold if alert.threshold is not None else 0)
+            mode = str(stock.reorder_mode if stock is not None else "auto")
+            target_stock = (
+                int(stock.target_stock)
+                if stock is not None and int(stock.target_stock or 0) > 0
+                else threshold
+            )
+            suggested_order_quantity = max(0, target_stock - on_hand)
             if sales_average_monthly is None and stock is not None:
                 full_months = max(0, int(stock.forecast_full_sellable_months or 0))
                 sales_average_monthly = (
@@ -99,8 +106,11 @@ class InventoryAlertTaskService:
                 f"Alarm-ID: {alert.id}\nSKU: {sku}\nProdukttitel: {title}\n"
                 f"Lagerort: {location.code if location is not None else 'unbekannt'}\n"
                 f"Ist-Bestand: {on_hand}\nAlarmbestand: {threshold}\n"
+                f"Alarmmodus: {mode}\nZielbestand: {target_stock}\n"
+                f"Empfohlene Bestell-/Nachdruckmenge: {suggested_order_quantity}\n"
                 f"Durchschnittlicher Monatsverkauf: {average_text}\n"
                 f"Drei-Monats-Bedarf: {demand_text}\nDatenfenster: {data_window}\n"
+                f"Erstellt am: {datetime.datetime.now(datetime.timezone.utc).isoformat()}\n"
                 f"Produktlink: {product_link}\n"
             )
             if existing is None:

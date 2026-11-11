@@ -4,6 +4,10 @@ Tracks which PR packages from `XW_PRODUCT_HUB_CODEX_5_6_LUNA_BUILD_PLAN.md` are 
 next work session (human, Codex, or Claude) does not have to re-derive state from scratch.
 Update this file at the end of every PR.
 
+## Inventur-/Rechnungsabgang-Umbau (2026-11-11)
+
+P07 wurde nachgeschärft: Das RECHNUNGEN-Lageralarm-Popup zeigt nun Zielbestand und empfohlene Bestell-/Nachdruckmenge. Die manuelle Microsoft-Graph-Task-Mail enthält zusätzlich Alarmmodus, Zielbestand, Bestell-/Nachdruckmenge und Erstellzeitpunkt. Die gezielten P07-/Inventurtests laufen grün; Produktionszugänge, Railway-Worker, Inventur und Shadow-/Rollback-Nachweis bleiben externe Cutover-Gates.
+
 ## Conflict Resolution Wizard CW00–CW07 (2026-09-17)
 
 Die erste produktive Wizard-Stufe ist umgesetzt: additive Migration 016, persistente

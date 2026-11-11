@@ -58,11 +58,26 @@ def test_task_mail_contains_inventory_facts_and_is_deduplicated() -> None:
     assert len(mail.sent) == 1
     assert "ALARM-1" in mail.sent[0]["text_body"]
     assert "Ist-Bestand: 2" in mail.sent[0]["text_body"]
+    assert "Alarmmodus: auto" in mail.sent[0]["text_body"]
+    assert "Zielbestand: 5" in mail.sent[0]["text_body"]
+    assert "Empfohlene Bestell-/Nachdruckmenge: 3" in mail.sent[0]["text_body"]
     assert "Durchschnittlicher Monatsverkauf:" in mail.sent[0]["text_body"]
     assert "Produktlink: /app/products/" in mail.sent[0]["text_body"]
     tasks = service.list_tasks(status="sent")
     assert len(tasks) == 1
     assert tasks[0].alert_id == alert_id
+
+
+def test_task_mail_uses_explicit_target_stock_for_order_quantity() -> None:
+    factory, alert_id = _factory()
+    with factory() as session:
+        stock = session.query(InventoryStock).one()
+        stock.target_stock = 10
+        session.commit()
+    mail = _Mail()
+    InventoryAlertTaskService(factory).create_and_send(alert_id, mail_delivery=mail)
+    assert "Zielbestand: 10" in mail.sent[0]["text_body"]
+    assert "Empfohlene Bestell-/Nachdruckmenge: 8" in mail.sent[0]["text_body"]
 
 
 def test_reentrant_caller_cannot_send_an_already_claimed_task() -> None:

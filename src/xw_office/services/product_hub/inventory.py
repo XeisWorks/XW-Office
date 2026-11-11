@@ -102,6 +102,8 @@ class InventoryAlertDetail:
     forecast_window: str = "bis zu 60 vollständige Monate"
     forecast_data_quality: str = "unknown"
     forecast_refreshed_at: datetime.datetime | None = None
+    target_stock: int = 0
+    suggested_order_quantity: int = 0
 
 
 class MovementResult:
@@ -556,6 +558,19 @@ class InventoryV2Service:
                     ),
                     forecast_data_quality=str(stock.forecast_data_quality if stock is not None else "unknown"),
                     forecast_refreshed_at=stock.forecast_refreshed_at if stock is not None else None,
+                    target_stock=(
+                        int(stock.target_stock)
+                        if stock is not None and int(stock.target_stock or 0) > 0
+                        else int(stock.reorder_point if stock is not None else alert.threshold or 0)
+                    ),
+                    suggested_order_quantity=max(
+                        0,
+                        (
+                            int(stock.target_stock)
+                            if stock is not None and int(stock.target_stock or 0) > 0
+                            else int(stock.reorder_point if stock is not None else alert.threshold or 0)
+                        ) - int(stock.on_hand if stock is not None else alert.observed_stock or 0),
+                    ),
                 )
             )
         return details
