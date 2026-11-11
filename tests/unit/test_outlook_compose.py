@@ -63,12 +63,14 @@ def test_open_classic_outlook_draft_passes_reply_and_attachment(monkeypatch: obj
     monkeypatch.setattr(outlook_compose.subprocess, "run", fake_run)  # type: ignore[attr-defined]
     outlook_compose.open_classic_outlook_draft(
         to_email="kunde@example.test", subject="Antwort", sender_smtp="office@example.test",
-        body="Ursprüngliche Käufernotiz", attachments=["C:/test/lieferschein.pdf"],
+        body="Antwort", body_after_signature="Ursprüngliche Käufernotiz",
+        attachments=["C:/test/lieferschein.pdf"],
         outlook_executable=executable,
     )
     import json
     data = json.loads(payloads[0])
-    assert data["body"] == "Ursprüngliche Käufernotiz"
+    assert data["body"] == "Antwort"
+    assert data["body_after_signature"] == "Ursprüngliche Käufernotiz"
     assert data["attachments"] == ["C:/test/lieferschein.pdf"]
 
 
@@ -175,3 +177,56 @@ def test_apply_html_body_replaces_outlook_signature() -> None:
 
     assert mail.HTMLBody == "<p>Complete custom mail</p>"
     assert "mailto:" not in mail.HTMLBody
+
+
+def test_reply_uses_word_editor_and_keeps_formatted_signature() -> None:
+    class _Document:
+        def __init__(self) -> None:
+            self.text = "XeisWorks Signatur"
+            self.Content = types.SimpleNamespace(InsertAfter=self._append)
+
+        def _append(self, value: str) -> None:
+            self.text += value
+
+        def Range(self, start: int, end: int) -> object:  # noqa: N802
+            assert (start, end) == (0, 0)
+            return types.SimpleNamespace(InsertBefore=self._prepend)
+
+        def _prepend(self, value: str) -> None:
+            self.text = value + self.text
+
+    document = _Document()
+    signature_html = '<p><b>XeisWorks</b><img src="cid:logo"></p>'
+    mail = types.SimpleNamespace(
+        Body="XeisWorks Signatur", HTMLBody=signature_html,
+        GetInspector=types.SimpleNamespace(WordEditor=document),
+    )
+
+    outlook_compose._apply_body_around_signature(  # noqa: SLF001
+        mail, "Guten Tag,\n\n[Antwort hier eingeben]", "--- Ursprüngliche Käufernotiz ---\n> Bitte prüfen"
+    )
+
+    assert document.text == (
+        "Guten Tag,\r\r[Antwort hier eingeben]\r\r"
+        "XeisWorks Signatur\r\r"
+        "--- Ursprüngliche Käufernotiz ---\r> Bitte prüfen"
+    )
+    assert mail.HTMLBody == signature_html
+    assert mail.Body == "XeisWorks Signatur"
+
+
+def test_plain_draft_preserves_outlook_signature_with_word_editor() -> None:
+    inserted: list[str] = []
+    document = types.SimpleNamespace(
+        Range=lambda _start, _end: types.SimpleNamespace(InsertBefore=inserted.append)
+    )
+    mail = types.SimpleNamespace(
+        Body="Signatur", HTMLBody="<b>Signatur</b>",
+        GetInspector=types.SimpleNamespace(WordEditor=document),
+    )
+
+    outlook_compose._apply_body(mail, "Guten Tag")  # noqa: SLF001
+
+    assert inserted == ["Guten Tag\r\r"]
+    assert mail.HTMLBody == "<b>Signatur</b>"
+    assert mail.Body == "Signatur"

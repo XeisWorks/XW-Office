@@ -256,11 +256,8 @@ class BuyerNoteReviewDialog(QDialog):
             return
         self._mail.setEnabled(False)
         quoted_note = "\n".join(f"> {line}" for line in case.note_text.splitlines())
-        body = (
-            "Guten Tag,\n\n[Antwort hier eingeben]\n\n"
-            "--- Ursprüngliche Käufernotiz ---\n"
-            f"{quoted_note}\n"
-        )
+        body = "Guten Tag,\n\n[Antwort hier eingeben]"
+        original_note = f"--- Ursprüngliche Käufernotiz ---\n{quoted_note}"
         subject = f"Ihre Nachricht zu Bestellung {case.order_reference or case.invoice_number or case.invoice_id}"
 
         def job() -> object:
@@ -270,6 +267,7 @@ class BuyerNoteReviewDialog(QDialog):
                 subject=subject,
                 sender_smtp=sender,
                 body=body,
+                body_after_signature=original_note,
             )
 
         self._mail_worker = BackgroundWorker(job)
@@ -287,7 +285,7 @@ class BuyerNoteReviewDialog(QDialog):
         case = self._case()
         self._mail.setEnabled(bool(case and case.customer_email))
         if self._cancel is not None:
-            self._cancel.setToolTip("Gesamten START-Lauf abbrechen")
+            self._cancel.setToolTip("START abbrechen")
 
     def selections(self) -> dict[str, tuple[BuyerNoteCase, BuyerNoteReviewSelection]]:
         return {

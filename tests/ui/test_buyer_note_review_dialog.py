@@ -21,6 +21,7 @@ class _Signal:
 
 class _RunningWorker:
     def __init__(self, _job: object) -> None:
+        self.job = _job
         self.running = True
         self.signals = type(
             "Signals", (), {"result": _Signal(), "error": _Signal(), "finished": _Signal()}
@@ -155,3 +156,29 @@ def test_buyer_note_review_window_close_waits_for_outlook_worker(
     dialog._mail_finished()  # noqa: SLF001
     dialog.close()
     assert not dialog.isVisible()
+
+
+def test_customer_reply_puts_original_note_after_outlook_signature(
+    qtbot: object, monkeypatch: object
+) -> None:
+    monkeypatch.setattr(buyer_note_review_dialog, "BackgroundWorker", _RunningWorker)
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        buyer_note_review_dialog, "open_classic_outlook_draft",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    class _Container:
+        def resolve(self, _service: object) -> object:
+            return type("Secrets", (), {"get_secret": lambda _self, _name: "office@xeisworks.at"})()
+
+    case = replace(_case("1"), customer_email="customer@example.test")
+    dialog = BuyerNoteReviewDialog([case], allow_delivery_note=False, container=_Container())
+    qtbot.addWidget(dialog)
+    dialog._open_customer_mail()  # noqa: SLF001
+    dialog._mail_worker.job()  # type: ignore[union-attr]  # noqa: SLF001
+
+    assert calls[0]["to_email"] == "customer@example.test"
+    assert "[Antwort hier eingeben]" in str(calls[0]["body"])
+    assert "> Bitte prüfen" in str(calls[0]["body_after_signature"])
+    assert "Ursprüngliche Käufernotiz" not in str(calls[0]["body"])

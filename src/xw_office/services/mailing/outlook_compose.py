@@ -31,6 +31,7 @@ def open_classic_outlook_draft(
     subject: str,
     sender_smtp: str,
     body: str = "",
+    body_after_signature: str = "",
     attachments: list[str] | None = None,
     outlook_executable: str | Path | None = None,
 ) -> dict[str, str]:
@@ -74,6 +75,7 @@ def open_classic_outlook_draft(
         subject=clean_subject,
         sender_smtp=sender,
         body=body,
+        body_after_signature=body_after_signature,
         attachments=attachments,
     )
     return {**result, **compose_result}
@@ -85,6 +87,7 @@ def _compose_in_running_outlook_helper(
     subject: str,
     sender_smtp: str,
     body: str = "",
+    body_after_signature: str = "",
     attachments: list[str] | None = None,
 ) -> dict[str, str]:
     payload = json.dumps(
@@ -94,6 +97,7 @@ def _compose_in_running_outlook_helper(
             "subject": subject,
             "sender": sender_smtp,
             "body": body,
+            "body_after_signature": body_after_signature,
             "attachments": attachments or [],
             "attach_only": True,
             "wait_seconds": 30,
@@ -198,6 +202,7 @@ def compose_outlook_mail(
     subject: str,
     sender_smtp: str,
     body: str = "",
+    body_after_signature: str = "",
     html_body: str = "",
     attachments: list[str] | None = None,
     attach_only: bool = False,
@@ -234,7 +239,10 @@ def compose_outlook_mail(
         # inspector/signature. Re-apply after Display so the visible From
         # selector is forced to the configured account.
         _apply_sender(mail, account)
-        _apply_body(mail, body, html_body=html_body)
+        if body_after_signature:
+            _apply_body_around_signature(mail, body, body_after_signature)
+        else:
+            _apply_body(mail, body, html_body=html_body)
         _apply_attachments(mail, attachments or [])
         save = getattr(mail, "Save", None)
         if callable(save):
@@ -352,10 +360,38 @@ def _apply_body(mail: Any, body: str, *, html_body: str = "") -> None:
     if not clean_body:
         return
     try:
+        document = mail.GetInspector.WordEditor
+        if document is not None:
+            document.Range(0, 0).InsertBefore(f"{_word_text(clean_body)}\r\r")
+            return
+    except Exception:
+        pass
+    try:
         existing = str(getattr(mail, "Body", "") or "")
         mail.Body = f"{clean_body}\n\n{existing}".rstrip()
     except Exception:
         mail.Body = clean_body
+
+
+def _apply_body_around_signature(mail: Any, body_before: str, body_after: str) -> None:
+    """Keep Outlook's formatted account signature between reply and quoted note."""
+    try:
+        document = mail.GetInspector.WordEditor
+        if document is None:
+            raise AttributeError("WordEditor fehlt")
+        # WordEditor edits the displayed message without replacing its HTMLBody.
+        # Outlook has already inserted the selected account's default signature.
+        document.Content.InsertAfter(f"\r\r{_word_text(body_after)}")
+        document.Range(0, 0).InsertBefore(f"{_word_text(body_before)}\r\r")
+    except Exception as exc:
+        raise OutlookComposeError(
+            "Die Outlook-Signatur konnte nicht formatiert übernommen werden. "
+            "Bitte den Entwurf in Outlook prüfen."
+        ) from exc
+
+
+def _word_text(value: str) -> str:
+    return str(value or "").strip().replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r")
 
 
 def _apply_attachments(mail: Any, attachments: list[str]) -> None:
@@ -382,6 +418,7 @@ def main() -> int:
             subject=str(payload.get("subject") or ""),
             sender_smtp=str(payload.get("sender") or ""),
             body=str(payload.get("body") or ""),
+            body_after_signature=str(payload.get("body_after_signature") or ""),
             html_body=str(payload.get("html_body") or ""),
             attachments=[
                 str(item)
