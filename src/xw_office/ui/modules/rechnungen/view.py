@@ -8140,8 +8140,8 @@ class RechnungenView(QWidget):
                         return
                     canonical_name, owner, aliases = product_dialog.get_data()
 
-                    def write() -> object | None:
-                        return catalog.add_or_update_unreleased_product(
+                    def write() -> None:
+                        catalog.add_or_update_unreleased_product(
                             canonical_name,
                             owner=owner,
                             aliases=aliases,
@@ -8150,8 +8150,8 @@ class RechnungenView(QWidget):
                     saved_name = canonical_name
                 else:
 
-                    def write() -> object | None:
-                        return catalog.save_unreleased_resolution(
+                    def write() -> None:
+                        catalog.save_unreleased_resolution(
                             decision.raw_title,
                             canonical_name=decision.canonical_name,
                             owner=decision.owner,
