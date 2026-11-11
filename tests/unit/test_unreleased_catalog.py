@@ -1,10 +1,23 @@
 from __future__ import annotations
 
+import pytest
+
 from xw_office.services.products.catalog import (
     ProductCatalogService,
     _title_match_score,
     split_unreleased_titles,
 )
+
+
+class _FailingSettingsRepo:
+    def get_value_json(self, key: str) -> str | None:
+        return "[]" if key == "inventory.products" else None
+
+    def mutate_value_json(self, _key: str, _mutator: object) -> str:
+        raise RuntimeError("settings database unavailable")
+
+    def set_value_json(self, _key: str, _value: str) -> None:
+        raise RuntimeError("settings database unavailable")
 
 
 def test_unreleased_title_distinct_versions_do_not_collide() -> None:
@@ -59,3 +72,21 @@ def test_add_and_delete_unreleased_product() -> None:
     catalog.delete_unreleased_product(canonical)
     found_after = next((p for p in catalog.list_unreleased_products() if p.canonical_name == canonical), None)
     assert found_after is None
+
+
+@pytest.mark.parametrize("operation", ["resolve", "create"])
+def test_failed_unreleased_settings_write_does_not_publish_local_override(operation: str) -> None:
+    catalog = ProductCatalogService(_FailingSettingsRepo())  # type: ignore[arg-type]
+    catalog.list_unreleased_products()
+
+    with pytest.raises(RuntimeError, match="settings database unavailable"):
+        if operation == "resolve":
+            catalog.save_unreleased_resolution(
+                "Unsaved alias", canonical_name="Unsaved product", owner="XeisWorks"
+            )
+        else:
+            catalog.add_or_update_unreleased_product(
+                "Unsaved product", owner="XeisWorks", aliases=["Unsaved alias"]
+            )
+
+    assert catalog._local_unreleased_overrides == []  # noqa: SLF001

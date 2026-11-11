@@ -664,12 +664,6 @@ class ProductCatalogService:
             raise ValueError("Titel, Produktname und Gattung sind erforderlich.")
         entry = {"alias": alias, "canonical_name": canonical, "owner": resolved_owner}
         alias_key = normalize_legacy_title(alias)
-        self._local_unreleased_overrides = [
-            row
-            for row in self._local_unreleased_overrides
-            if normalize_legacy_title(row.get("alias", "")) != alias_key
-        ]
-        self._local_unreleased_overrides.append(entry)
 
         def mutate(current: str | None) -> str:
             try:
@@ -694,6 +688,12 @@ class ProductCatalogService:
             else:
                 current = self._settings_repo.get_value_json(_UNRELEASED_TITLE_OVERRIDES_KEY)
                 self._settings_repo.set_value_json(_UNRELEASED_TITLE_OVERRIDES_KEY, mutate(current))
+        self._local_unreleased_overrides = [
+            row
+            for row in self._local_unreleased_overrides
+            if normalize_legacy_title(row.get("alias", "")) != alias_key
+        ]
+        self._local_unreleased_overrides.append(entry)
         self._unreleased_products = None
         self._legacy_unreleased_names = None
 
@@ -723,14 +723,6 @@ class ProductCatalogService:
         for alias in clean_aliases:
             entries_to_add.append({"alias": alias, "canonical_name": canonical, "owner": resolved_owner})
 
-        # Update in-memory overrides
-        self._local_unreleased_overrides = [
-            row
-            for row in self._local_unreleased_overrides
-            if normalize_legacy_title(str(row.get("canonical_name") or "")) != canonical_key
-        ]
-        self._local_unreleased_overrides.extend(entries_to_add)
-
         def mutate(current: str | None) -> str:
             try:
                 rows = json.loads(current or "[]")
@@ -754,6 +746,14 @@ class ProductCatalogService:
             else:
                 current = self._settings_repo.get_value_json(_UNRELEASED_TITLE_OVERRIDES_KEY)
                 self._settings_repo.set_value_json(_UNRELEASED_TITLE_OVERRIDES_KEY, mutate(current))
+        # Keep the in-memory view aligned with the durable settings write. If
+        # persistence fails, this process must not resolve an unsaved alias.
+        self._local_unreleased_overrides = [
+            row
+            for row in self._local_unreleased_overrides
+            if normalize_legacy_title(str(row.get("canonical_name") or "")) != canonical_key
+        ]
+        self._local_unreleased_overrides.extend(entries_to_add)
         self._unreleased_products = None
         self._legacy_unreleased_names = None
 
