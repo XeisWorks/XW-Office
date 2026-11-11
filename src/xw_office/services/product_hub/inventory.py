@@ -53,7 +53,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
 from xw_office.models.product_hub_inventory import InventoryAlert, InventoryMovement
-from xw_office.repositories.product_hub import ProductFilter, ProductHubRepository
+from xw_office.repositories.product_hub import ProductFilter, ProductHubRepository, ResolvedSku
 from xw_office.repositories.product_hub_inventory import InventoryRepository, NegativeStockError
 from xw_office.repositories.product_hub_sync import SyncRepository, append_outbox_event
 from xw_office.repositories.settings_kv import SettingKvRepository
@@ -493,7 +493,7 @@ class InventoryV2Service:
         stock = self._inventory.get_stock(variant_id, location.id)
         return stock.on_hand if stock is not None else 0
 
-    def resolve_variant_by_sku(self, sku: str):
+    def resolve_variant_by_sku(self, sku: str) -> ResolvedSku | None:
         """Resolve an exact Hub SKU for desktop consumers without exposing the repository."""
         return self._products.resolve_sku(sku)
 
