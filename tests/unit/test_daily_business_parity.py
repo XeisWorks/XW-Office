@@ -35,6 +35,7 @@ class TestCoreOperations:
         ]
         invoice_client.send_invoice_document = MagicMock()
         invoice_client.send_invoice_via_email = MagicMock()
+        invoice_client.get_invoice_pdf.return_value = b"%PDF-1.4\ntest"
         invoice_client.fetch_invoice_positions = MagicMock(return_value=[])
         invoice_client.fetch_invoice_by_id.return_value = {
             "id": "INV-001",
@@ -47,9 +48,9 @@ class TestCoreOperations:
         repo.set_value_json = MagicMock()
         repo.mutate_value_json = None
 
-        service = InvoiceProcessingService(
-            AppConfig(), invoice_client, repo, None
-        )
+        mailer = MagicMock()
+        mailer.is_configured.return_value = True
+        service = InvoiceProcessingService(AppConfig(), invoice_client, repo, None, mailer)
 
         result = service.run_start_fullflow(full_mode=False)
 
@@ -57,7 +58,8 @@ class TestCoreOperations:
         invoice_client.send_invoice_document.assert_called_once_with(
             "INV-001", send_type="VPDF", send_draft=False
         )
-        assert invoice_client.send_invoice_via_email.called
+        invoice_client.send_invoice_via_email.assert_not_called()
+        assert mailer.send_mail.call_args.kwargs["shared_sender_mailbox"] == "shop@xeisworks.at"
 
     def test_check_products_preflight_validation(self) -> None:
         """Verify current inventory preflight detects missing requirement data."""

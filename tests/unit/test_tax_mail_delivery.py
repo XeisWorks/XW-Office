@@ -32,6 +32,18 @@ def test_tax_mail_delivery_uses_dedicated_sender_mailbox(monkeypatch: pytest.Mon
     assert config.mailbox_user == "office@xeisworks.at"
 
 
+def test_invoice_mail_routes_through_shared_shop_mailbox(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MS_GRAPH_TENANT_ID", "tenant-test")
+    monkeypatch.setenv("MS_GRAPH_CLIENT_ID", "client-test")
+    monkeypatch.setenv("MS_GRAPH_MAILBOX", "office@xeisworks.at")
+
+    config = MailDeliveryService().load_graph_config(
+        shared_sender_mailbox="shop@xeisworks.at"
+    )
+
+    assert config.mailbox_user == "shop@xeisworks.at"
+
+
 def test_graph_send_payload_contains_exact_sender_and_allowlisted_recipient(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

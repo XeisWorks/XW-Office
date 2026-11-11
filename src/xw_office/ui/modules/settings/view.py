@@ -1,12 +1,10 @@
 """App-wide settings — DB status, secrets overview, printer config."""
 from __future__ import annotations
 
-import html
 import json
 import logging
 from typing import TYPE_CHECKING
 
-from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import (
     QFormLayout,
     QGridLayout,
@@ -27,6 +25,13 @@ from xw_office.core.signals import AppSignals
 from xw_office.core.worker import BackgroundWorker
 from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.clickup.client import ClickUpClient, ClickUpTask
+from xw_office.services.invoice_processing.mail_content import (
+    DEFAULT_BODY,
+    DEFAULT_SUBJECT,
+    SHOP_MAILBOX,
+    normalize_body_template,
+    render_invoice_mail,
+)
 from xw_office.services.mailing.service import MailDeliveryService
 from xw_office.services.secrets.service import SecretService
 
@@ -98,23 +103,9 @@ _EXTRA_SECRET_KEYS: tuple[str, ...] = (
     "XW_OFFICE_BRIDGE_SECRET",
 )
 
-_DEFAULT_FULFILLMENT_SUBJECT = "Ihre Rechnung {{invoice_number}}"
+_DEFAULT_FULFILLMENT_SUBJECT = DEFAULT_SUBJECT
 _DEFAULT_TEST_MAIL_RECIPIENT = "bernhard.holl@gmx.at"
-_DEFAULT_FULFILLMENT_TEMPLATE = (
-    "Guten Tag,\n\n"
-    "wir freuen uns, Ihnen mitteilen zu können, dass Ihre Bestellung soeben versendet wurde.\n\n"
-    "Die bestellten Produkte befinden sich nun auf dem Weg zu Ihnen. Je nach Versandart und Zielort kann die Zustellung einige Werktage in Anspruch nehmen.\n\n"
-    "Die zugehörige Rechnung finden Sie im Anhang dieser E-Mail.\n\n"
-    "Sollten Sie in der Zwischenzeit Fragen zu Ihrer Bestellung oder zum Lieferstatus haben, stehen wir Ihnen selbstverständlich gerne zur Verfügung.\n\n"
-    "Vielen Dank für Ihr Vertrauen und Ihre Bestellung.\n\n"
-    "Mit freundlichen Grüßen\n"
-    "XeisWorks\n"
-    "Mag. Bernhard Holl\n"
-    "Johnsbach 92\n"
-    "8912 Admont\n"
-    "office@xeisworks.at\n"
-    "www.xeisworks.at\n"
-)
+_DEFAULT_FULFILLMENT_TEMPLATE = DEFAULT_BODY
 _DEFAULT_ALLOWED_COUNTRIES = json.dumps(
     [
         "Austria",
@@ -539,10 +530,11 @@ class SettingsView(QWidget):
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(12)
 
-        gb_template = QGroupBox("Rechnungsmail-Vorlage")
+        gb_template = QGroupBox("Rechnungsmail ohne Wix-Versandbestätigung")
         template_layout = QVBoxLayout(gb_template)
         info = QLabel(
-            "Variablen: {{customer_name}}, {{invoice_number}}, {{download_link}}, {{items_html}}"
+            "Variablen: {{customer_name}}, {{invoice_number}}, {{download_link}}, {{items_html}}. "
+            "Für Wix-Bestellungen nutzt START automatisch passende Texte für Versand oder digitale Produkte."
         )
         info.setWordWrap(True)
         template_layout.addWidget(info)
@@ -866,7 +858,7 @@ class SettingsView(QWidget):
         def job() -> tuple[str, str]:
             subject = repo.get_value_json(_FULFILLMENT_MAIL_SUBJECT_KEY) or _DEFAULT_FULFILLMENT_SUBJECT
             raw = repo.get_value_json(_FULFILLMENT_MAIL_TEMPLATE_KEY) or _DEFAULT_FULFILLMENT_TEMPLATE
-            return subject, raw
+            return subject, normalize_body_template(str(raw))
 
         self._template_worker = BackgroundWorker(job)
         self._template_worker.signals.result.connect(self._on_fulfillment_template_loaded)
@@ -901,15 +893,8 @@ class SettingsView(QWidget):
             preview = preview.replace(token, value)
             subject_preview = subject_preview.replace(token, value)
         self._mail_subject_preview.setText(f"Betreff: {subject_preview}")
-        if "<" in preview and ">" in preview:
-            self._mail_template_preview.setHtml(preview)
-            doc = QTextDocument()
-            doc.setHtml(preview)
-            plain_preview = doc.toPlainText()
-        else:
-            html_preview = "<div style=\"white-space:pre-wrap;\">" + html.escape(preview) + "</div>"
-            self._mail_template_preview.setHtml(html_preview)
-            plain_preview = preview
+        plain_preview, html_preview = render_invoice_mail(preview)
+        self._mail_template_preview.setHtml(html_preview)
         self._mail_template_plain_preview.setPlainText(plain_preview)
         self._mail_template_status.setText("Vorschau aktualisiert")
         self._mail_template_status.setStyleSheet(_OK_STYLE)
@@ -921,7 +906,9 @@ class SettingsView(QWidget):
             QMessageBox.warning(self, "Fehler", "DB-Repository nicht verfuegbar.")
             return
         subject = self._mail_subject_editor.text().strip() or _DEFAULT_FULFILLMENT_SUBJECT
-        body = self._mail_template_editor.toPlainText().strip() or _DEFAULT_FULFILLMENT_TEMPLATE
+        body = normalize_body_template(
+            self._mail_template_editor.toPlainText().strip() or _DEFAULT_FULFILLMENT_TEMPLATE
+        )
         repo: SettingKvRepository = self._container.resolve(SettingKvRepository)
         self._mail_template_status.setText("Vorlage wird gespeichert...")
 
@@ -967,14 +954,15 @@ class SettingsView(QWidget):
             subject = subject.replace(token, value)
             body = body.replace(token, value)
 
+        rendered_text, rendered_html = render_invoice_mail(body)
         self._mail_template_status.setText("Sende Test-Mail...")
         self._mail_template_status.setStyleSheet(_WARN_STYLE)
         mailer: MailDeliveryService = self._container.resolve(MailDeliveryService)
-        if not mailer.is_configured():
+        if not mailer.is_configured(shared_sender_mailbox=SHOP_MAILBOX):
             QMessageBox.warning(
                 self,
                 "Test-Mail",
-                "Bitte zuerst MS Graph konfigurieren (fehlend: MS_GRAPH_TENANT_ID, MS_GRAPH_CLIENT_ID oder MS_GRAPH_MAILBOX).",
+                "Bitte zuerst MS Graph konfigurieren (MS_GRAPH_TENANT_ID und MS_GRAPH_CLIENT_ID).",
             )
             self._mail_template_status.setText("MS-Graph-Konfiguration fehlt")
             self._mail_template_status.setStyleSheet(_ERR_STYLE)
@@ -984,12 +972,9 @@ class SettingsView(QWidget):
             mailer.send_mail(
                 to_email=recipient,
                 subject=subject,
-                text_body=body,
-                html_body=(
-                    "<html><body style=\"font-family:Segoe UI,Arial,sans-serif;color:#0f172a;line-height:1.5;\">"
-                    f"{mailer.plain_text_to_html(body)}"
-                    "</body></html>"
-                ),
+                text_body=rendered_text,
+                html_body=rendered_html,
+                shared_sender_mailbox=SHOP_MAILBOX,
             )
             return recipient
 

@@ -39,6 +39,19 @@ from xw_office.services.invoice_processing.context import (
 from xw_office.services.invoice_processing.operation_claims import (
     InvoiceOperationClaimStore,
 )
+from xw_office.services.invoice_processing.mail_content import (
+    DEFAULT_BODY,
+    DEFAULT_SUBJECT,
+    DIGITAL_BODY,
+    DIGITAL_SUBJECT,
+    ORDER_INVOICE_BODY,
+    ORDER_INVOICE_SUBJECT,
+    SHIPPING_BODY,
+    SHIPPING_SUBJECT,
+    SHOP_MAILBOX,
+    normalize_body_template,
+    render_invoice_mail,
+)
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.mailing.service import MailAttachment, MailDeliveryService
 from xw_office.services.printing.invoice_printer import InvoicePrinter
@@ -144,21 +157,6 @@ _DEFAULT_ALLOWED_COUNTRIES = [
 ]
 _SKU_TOKEN_RE = re.compile(r"\bXW-[A-Z0-9][A-Z0-9.-]*\b", re.IGNORECASE)
 _LEGACY_MAIL_SUBJECT = "Ihre Rechnung {invoice_number}"
-_LEGACY_MAIL_BODY = (
-    "Guten Tag,\n\n"
-    "wir freuen uns, Ihnen mitteilen zu können, dass Ihre Bestellung soeben versendet wurde.\n\n"
-    "Die bestellten Produkte befinden sich nun auf dem Weg zu Ihnen. Je nach Versandart und Zielort kann die Zustellung einige Werktage in Anspruch nehmen.\n\n"
-    "Die zugehörige Rechnung finden Sie im Anhang dieser E-Mail.\n\n"
-    "Sollten Sie in der Zwischenzeit Fragen zu Ihrer Bestellung oder zum Lieferstatus haben, stehen wir Ihnen selbstverständlich gerne zur Verfügung.\n\n"
-    "Vielen Dank für Ihr Vertrauen und Ihre Bestellung.\n\n"
-    "Mit freundlichen Grüßen\n"
-    "XeisWorks\n"
-    "Mag. Bernhard Holl\n"
-    "Johnsbach 92\n"
-    "8912 Admont\n"
-    "office@xeisworks.at\n"
-    "www.xeisworks.at\n"
-)
 
 
 @dataclass(frozen=True)
@@ -1848,7 +1846,8 @@ class InvoiceProcessingService:
         """Send one invoice manually or through START using a shared durable claim."""
         flags = self.read_fulfillment_flags(summary.id)
         invoice = self._fetch_invoice_detail(summary.id)
-        subject, text_body = self._build_mail_content(summary, invoice)
+        mail_kind = self._invoice_mail_kind(summary, flags)
+        subject, text_body = self._build_mail_content(summary, invoice, kind=mail_kind)
         to_email = str(recipient_override or "").strip() or self._resolve_customer_email(
             summary, invoice
         )
@@ -1871,83 +1870,36 @@ class InvoiceProcessingService:
                 "Status pruefen, bevor erneut gesendet wird."
             )
 
-        html_body = self._build_mail_html(text_body)
-        sevdesk_error: Exception | None = None
-        sender = getattr(self._invoices, "send_invoice_via_email", None)
-        if callable(sender):
-            try:
-                sender(
-                    summary.id,
-                    to_email=to_email,
-                    subject=subject,
-                    text=html_body,
-                    copy=False,
-                )
-            except Exception as exc:  # noqa: BLE001 - read back before considering Graph.
-                sevdesk_error = exc
-                logger.warning("sevDesk invoice mail failed for %s: %s", summary.id, exc)
-            else:
-                self._operation_claims.finish(claim, "succeeded")
-                next_flags = self._next_flags(flags, mail_sent=True)
-                self.write_fulfillment_flags(summary.id, next_flags)
-                return next_flags, to_email, subject
-
-        can_use_graph_fallback = not callable(sender)
-        if callable(sender):
-            try:
-                refreshed = self._invoices.fetch_invoice_by_id(summary.id)
-            except Exception as probe_exc:  # noqa: BLE001 - an uncertain result must not resend.
-                self._operation_claims.finish(claim, "unknown", error=str(probe_exc))
-                raise RuntimeError(
-                    f"sevDesk-Mailstatus fuer {summary.id} ist unklar; Graph-Fallback gesperrt."
-                ) from probe_exc
-            if not isinstance(refreshed, dict):
-                self._operation_claims.finish(claim, "unknown", error="Ungueltige Readback-Antwort")
-                raise RuntimeError(
-                    f"sevDesk-Mailstatus fuer {summary.id} ist unklar; Graph-Fallback gesperrt."
-                ) from sevdesk_error
-            self._put_invoice_detail_cache(str(summary.id), refreshed)
-            self._drop_invoice_work_context_cache(str(summary.id))
-            if self._sevdesk_mail_sent(refreshed):
-                self._operation_claims.finish(claim, "succeeded")
-                next_flags = self._next_flags(flags, mail_sent=True)
-                self.write_fulfillment_flags(summary.id, next_flags)
-                logger.warning(
-                    "Invoice %s: sevDesk mail marked as sent after error, Graph fallback skipped",
-                    summary.id,
-                )
-                return next_flags, to_email, subject
-            can_use_graph_fallback = self._mail_probe_confirms_unsent(refreshed)
-            if not can_use_graph_fallback:
-                self._operation_claims.finish(claim, "unknown", error=str(sevdesk_error or "Unclear readback"))
-                raise RuntimeError(
-                    f"sevDesk-Mailstatus fuer {summary.id} ist unklar; Graph-Fallback gesperrt."
-                ) from sevdesk_error
-
-        if self._mail_service is not None and self._mail_service.is_configured():
-            try:
-                attachment = self._build_invoice_attachment(summary, invoice)
-                self._mail_service.send_mail(
-                    to_email=to_email,
-                    subject=subject,
-                    text_body=text_body,
-                    html_body=html_body,
-                    attachments=[attachment],
-                )
-            except Exception as exc:  # noqa: BLE001 - transport acceptance can be unclear.
-                self._operation_claims.finish(claim, "unknown", error=str(exc))
-                raise RuntimeError(
-                    f"sevDesk-Mail fehlgeschlagen ({sevdesk_error}); Graph-Mailstatus unklar ({exc})"
-                ) from exc
-            self._operation_claims.finish(claim, "succeeded")
-            next_flags = self._next_flags(flags, mail_sent=True)
-            self.write_fulfillment_flags(summary.id, next_flags)
-            return next_flags, to_email, subject
-
-        self._operation_claims.finish(claim, "failed", error=str(sevdesk_error or "No mail transport"))
-        raise RuntimeError(
-            f"sevDesk-Mail fehlgeschlagen ({sevdesk_error}); Graph-Mail nicht konfiguriert"
-        )
+        if self._mail_service is None or not self._mail_service.is_configured(
+            shared_sender_mailbox=SHOP_MAILBOX
+        ):
+            self._operation_claims.finish(claim, "failed", error="Microsoft Graph nicht konfiguriert")
+            raise RuntimeError("Rechnungsmail nicht gesendet: Microsoft Graph ist nicht konfiguriert.")
+        rendered_text, html_body = render_invoice_mail(text_body)
+        try:
+            attachment = self._build_invoice_attachment(summary, invoice)
+        except Exception as exc:
+            self._operation_claims.finish(claim, "failed", error=str(exc))
+            raise
+        try:
+            self._mail_service.send_mail(
+                to_email=to_email,
+                subject=subject,
+                text_body=rendered_text,
+                html_body=html_body,
+                attachments=[attachment],
+                shared_sender_mailbox=SHOP_MAILBOX,
+            )
+        except Exception as exc:  # noqa: BLE001 - Graph may have accepted the message.
+            self._operation_claims.finish(claim, "unknown", error=str(exc))
+            raise RuntimeError(
+                f"Rechnungsmail-Status unklar ({exc}); vor erneutem Versand Postausgang "
+                f"von {SHOP_MAILBOX} pruefen."
+            ) from exc
+        self._operation_claims.finish(claim, "succeeded")
+        next_flags = self._next_flags(flags, mail_sent=True)
+        self.write_fulfillment_flags(summary.id, next_flags)
+        return next_flags, to_email, subject
 
     def build_credit_note_mail_content(
         self,
@@ -3886,6 +3838,7 @@ class InvoiceProcessingService:
         return {
             "{{customer_name}}": self._resolve_customer_name(summary, invoice),
             "{{invoice_number}}": invoice_number,
+            "{{order_number}}": str(summary.order_reference or "").strip(),
             "{{download_link}}": "",
             "{{items_html}}": self._invoice_items_html(invoice),
         }
@@ -3897,13 +3850,27 @@ class InvoiceProcessingService:
         body = self._settings_repo.get_value_json(_FULFILLMENT_MAIL_TEMPLATE_KEY)
         return str(subject or "").strip(), str(body or "").strip()
 
+    def _invoice_mail_kind(self, summary: InvoiceSummary, flags: FulfillmentFlags) -> str:
+        if not str(summary.order_reference or "").strip():
+            return "invoice"
+        if self._is_digital_only(summary):
+            return "digital"
+        return "shipping" if flags.wix_fulfilled else "order_invoice"
+
     def _build_mail_content(
-        self, summary: InvoiceSummary, invoice: dict[str, Any]
+        self, summary: InvoiceSummary, invoice: dict[str, Any], *, kind: str = "invoice"
     ) -> tuple[str, str]:
         invoice_number = self._invoice_number(summary, invoice)
         subject_template, body_template = self._load_mail_templates()
-        subject = subject_template or _LEGACY_MAIL_SUBJECT
-        body = body_template or _LEGACY_MAIL_BODY
+        if kind == "shipping":
+            subject, body = SHIPPING_SUBJECT, SHIPPING_BODY
+        elif kind == "digital":
+            subject, body = DIGITAL_SUBJECT, DIGITAL_BODY
+        elif kind == "order_invoice":
+            subject, body = ORDER_INVOICE_SUBJECT, ORDER_INVOICE_BODY
+        else:
+            subject = subject_template or DEFAULT_SUBJECT
+            body = normalize_body_template(body_template or DEFAULT_BODY)
         for token, value in self._mail_template_values(summary, invoice).items():
             subject = subject.replace(token, value).replace(
                 token.replace("{{", "{").replace("}}", "}"), value
@@ -3913,29 +3880,11 @@ class InvoiceProcessingService:
             )
         subject = subject.replace("{invoice_number}", invoice_number)
         body = body.replace("{invoice_number}", invoice_number)
-        body = body.strip() or _LEGACY_MAIL_BODY.format(invoice_number=invoice_number).strip()
+        body = body.strip() or DEFAULT_BODY.replace("{{invoice_number}}", invoice_number)
         return subject.strip() or _LEGACY_MAIL_SUBJECT.format(invoice_number=invoice_number), body
 
     def _build_mail_html(self, body: str) -> str:
-        content = str(body or "").strip()
-        if self._looks_like_html(content):
-            inner = content
-        elif self._mail_service is not None:
-            inner = self._mail_service.plain_text_to_html(content)
-        else:
-            normalized = content.replace("\r\n", "\n").replace("\r", "\n").strip()
-            paragraphs = [
-                chunk.strip() for chunk in re.split(r"\n\s*\n", normalized) if chunk.strip()
-            ]
-            escaped_paragraphs = [
-                html.escape(paragraph).replace("\n", "<br>") for paragraph in paragraphs
-            ]
-            inner = "\n".join(f"<p>{paragraph}</p>" for paragraph in escaped_paragraphs)
-        return (
-            '<html><body style="font-family:Segoe UI,Arial,sans-serif;color:#0f172a;line-height:1.5;">'
-            f"{inner}"
-            "</body></html>"
-        )
+        return render_invoice_mail(body)[1]
 
     def _build_invoice_attachment(
         self, summary: InvoiceSummary, invoice: dict[str, Any]

@@ -42,18 +42,25 @@ class MailDeliveryService:
         self._client: GraphMailClient | None = None
         self._client_key: tuple[str, str, str, str] | None = None
 
-    def is_configured(self) -> bool:
+    def is_configured(self, *, shared_sender_mailbox: str | None = None) -> bool:
         try:
-            self.load_graph_config()
+            self.load_graph_config(shared_sender_mailbox=shared_sender_mailbox)
         except RuntimeError:
             return False
         return True
 
-    def load_graph_config(self, *, required_mailbox: str | None = None) -> GraphMailConfig:
+    def load_graph_config(
+        self,
+        *,
+        required_mailbox: str | None = None,
+        shared_sender_mailbox: str | None = None,
+    ) -> GraphMailConfig:
+        if required_mailbox and shared_sender_mailbox:
+            raise ValueError("Nur ein explizites Absenderpostfach ist erlaubt")
         tenant_id = self._secret_or_env("MS_GRAPH_TENANT_ID")
         client_id = self._secret_or_env("MS_GRAPH_CLIENT_ID")
         mailbox_key = "MS_GRAPH_TAX_MAILBOX" if required_mailbox else "MS_GRAPH_MAILBOX"
-        mailbox_user = self._secret_or_env(mailbox_key)
+        configured_mailbox = self._secret_or_env(mailbox_key)
         cache_override = self._secret_or_env("XW_OFFICE_MSAL_CACHE_PATH") or self._secret_or_env(
             "SEVDESK_MSAL_CACHE_PATH"
         )
@@ -63,14 +70,15 @@ class MailDeliveryService:
             for name, value in (
                 ("MS_GRAPH_TENANT_ID", tenant_id),
                 ("MS_GRAPH_CLIENT_ID", client_id),
-                (mailbox_key, mailbox_user),
+                (mailbox_key, configured_mailbox or shared_sender_mailbox),
             )
             if not value
         ]
         if missing:
             raise RuntimeError(f"MS-Graph-Konfiguration fehlt: {', '.join(missing)}")
-        if required_mailbox and mailbox_user.lower() != required_mailbox.lower():
+        if required_mailbox and configured_mailbox.lower() != required_mailbox.lower():
             raise RuntimeError(f"MS-Graph-Mailbox muss exakt {required_mailbox} sein.")
+        mailbox_user = str(shared_sender_mailbox or configured_mailbox).strip()
 
         cache_path = default_graph_cache_path()
         if cache_override:
@@ -94,8 +102,12 @@ class MailDeliveryService:
         attachments: list[MailAttachment] | None = None,
         sender_mailbox: str | None = None,
         require_exact_sender: bool = False,
+        shared_sender_mailbox: str | None = None,
     ) -> None:
-        config = self.load_graph_config(required_mailbox=sender_mailbox if require_exact_sender else None)
+        config = self.load_graph_config(
+            required_mailbox=sender_mailbox if require_exact_sender else None,
+            shared_sender_mailbox=shared_sender_mailbox,
+        )
         if require_exact_sender:
             validate_tax_recipient(to_email)
         client = self._client_for_config(config)

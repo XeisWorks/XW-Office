@@ -178,7 +178,7 @@ class _MailServiceStub:
         self.configured = configured
         self.calls: list[dict[str, object]] = []
 
-    def is_configured(self) -> bool:
+    def is_configured(self, *, shared_sender_mailbox: str | None = None) -> bool:
         return self.configured
 
     @staticmethod
@@ -193,6 +193,7 @@ class _MailServiceStub:
         text_body: str,
         html_body: str = "",
         attachments: list[object] | None = None,
+        shared_sender_mailbox: str | None = None,
     ) -> None:
         self.calls.append(
             {
@@ -201,6 +202,7 @@ class _MailServiceStub:
                 "text_body": text_body,
                 "html_body": html_body,
                 "attachments": list(attachments or []),
+                "shared_sender_mailbox": shared_sender_mailbox,
             }
         )
 
@@ -336,10 +338,14 @@ def test_fullflow_invoice_and_label_steps() -> None:
     assert mock_label_print.called
     assert invoice_client.send_calls == [("INV-001", "VPR", False)]
     assert wix_orders.fulfillment_calls == [("WIX-INV-001", [{"id": "line-1", "quantity": 1}])]
-    assert len(invoice_client.mail_calls) == 1
-    assert invoice_client.mail_calls[0]["to_email"] == "john@example.test"
-    assert invoice_client.mail_calls[0]["copy"] is False
-    assert len(mailer.calls) == 0
+    assert invoice_client.mail_calls == []
+    assert mailer.calls[0]["to_email"] == "john@example.test"
+    assert mailer.calls[0]["shared_sender_mailbox"] == "shop@xeisworks.at"
+    assert mailer.calls[0]["subject"] == (
+        "Rechnung und Versandbestätigung zu Bestellung WIX-INV-001 (R-001)"
+    )
+    assert "versendet wurde" in str(mailer.calls[0]["text_body"])
+    assert len(mailer.calls[0]["attachments"]) == 1
 
 
 def test_aftercare_failure_blocks_invoice_and_label_print() -> None:
@@ -851,9 +857,12 @@ def test_fullflow_skips_print_for_digital_only_wix_orders() -> None:
     assert result["failures"] == 0
     assert result["successful"] == 1
     assert invoice_client.send_calls == [("INV-DIGI-001", "VPDF", False)]
-    assert invoice_client.mail_calls[0]["invoice_id"] == "INV-DIGI-001"
-    assert invoice_client.mail_calls[0]["to_email"] == "digital@example.test"
-    assert len(mailer.calls) == 0
+    assert invoice_client.mail_calls == []
+    assert mailer.calls[0]["to_email"] == "digital@example.test"
+    assert mailer.calls[0]["subject"] == "Rechnung zu Bestellung WIX-12345 (R-001)"
+    assert "Download-Link" in str(mailer.calls[0]["text_body"])
+    assert "Versandbestätigung" not in str(mailer.calls[0]["subject"])
+    assert len(mailer.calls) == 1
     stored = json.loads(repo.values["rechnungen.fulfillment_status"])
     assert stored["INV-DIGI-001"]["mail_sent"] is True
     assert not mock_inv_print.called
@@ -1122,12 +1131,13 @@ def test_fullflow_resumes_incomplete_finalized_digital_invoice_once() -> None:
             ).as_row_payload()
         }
     )
+    mailer = _MailServiceStub()
     service = InvoiceProcessingService(
         AppConfig(),
         invoice_client,
         repo,
         _WixOrdersDigitalOnlyStub(),
-        _MailServiceStub(),
+        mailer,
     )
 
     first = service.run_start_fullflow(full_mode=True)
@@ -1138,7 +1148,8 @@ def test_fullflow_resumes_incomplete_finalized_digital_invoice_once() -> None:
     assert first["successful"] == 1
     assert second["resumed"] == 0
     assert invoice_client.send_calls == []
-    assert len(invoice_client.mail_calls) == 1
+    assert invoice_client.mail_calls == []
+    assert len(mailer.calls) == 1
     flags = service.read_fulfillment_flags("INV-RESUME-1")
     assert flags.wix_fulfilled is True
     assert flags.mail_sent is True
@@ -1297,11 +1308,11 @@ def test_start_fullflow_honors_abort_between_invoices() -> None:
     assert result["failures"] == 0
     assert result["aborted"] is True
     assert invoice_client.send_calls == [("INV-001", "VPDF", False)]
-    assert invoice_client.mail_calls[0]["invoice_id"] == "INV-001"
-    assert len(mailer.calls) == 0
+    assert invoice_client.mail_calls == []
+    assert len(mailer.calls) == 1
 
 
-def test_mail_only_fullflow_uses_sevdesk_email_when_no_print_copy_exists() -> None:
+def test_mail_only_fullflow_uses_shop_mailbox_when_no_print_copy_exists() -> None:
     config = AppConfig()
     invoice_client = _InvoiceClientE2E()
     repo = _SettingsRepoE2E()
@@ -1322,9 +1333,9 @@ def test_mail_only_fullflow_uses_sevdesk_email_when_no_print_copy_exists() -> No
     assert result["processed"] == 1
     assert result["failures"] == 0
     assert invoice_client.send_calls == [("INV-ORDER-001", "VPDF", False)]
-    assert invoice_client.mail_calls[0]["invoice_id"] == "INV-ORDER-001"
-    assert invoice_client.mail_calls[0]["to_email"] == "john@example.test"
-    assert len(mailer.calls) == 0
+    assert invoice_client.mail_calls == []
+    assert mailer.calls[0]["to_email"] == "john@example.test"
+    assert mailer.calls[0]["shared_sender_mailbox"] == "shop@xeisworks.at"
     stored = json.loads(repo.values["rechnungen.fulfillment_status"])
     assert stored["INV-ORDER-001"]["mail_sent"] is True
 
