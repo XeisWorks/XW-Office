@@ -236,3 +236,19 @@ unstabiler Positionszuordnung bzw. uneindeutiger SKU-Zuordnung in `needs_review`
 bleiben. Die Kanalprojektion wurde bei `master_enabled=false` uebersprungen. Der
 Folgesnapshot weist weiterhin keine Bestandsbewegungen oder Rechnungsbuchungen auf;
 Codex hat keinen Worker-Lauf manuell ausgeloest.
+
+## Read-only-Folgepruefung nach Mapping-Fix (12. November 2026, 00:49 CET)
+
+Nach Commit `894753b` sind Worker `43c530e1-a0ec-485b-921e-1b2a5ac403c4`
+und Product Hub `bb5f3c7f-ddfc-4c00-8ae3-28e067b56633` SUCCESS; Healthcheck HTTP 200.
+Der automatische Worker-Lauf meldet Forecast Exit 0, sevDesk-Sync Exit 1,
+`processed=0`/`already_applied=0` und uebersprungene Kanalprojektion bei
+`master_enabled=false`.
+
+Der Preflight-Snapshot (00:48:56 CET) zaehlt 432 Bestandspositionen, 0 Ledger-
+Bewegungen, 0 Rechnungsbuchungsmarker, 0 Inventur-Sessions, 432 Alarme, 726
+Sync-Konflikte (710 offen), 432 Outbox-Ereignisse und 263 archivierte Payloads.
+Runtime-Readiness ist `eligible=true`; DB-Readiness bleibt `eligible=false`.
+`legacy_mutation_paths` ist `ready`; weiterhin blockieren Shadow/Ledger-Nachweis,
+594 Quellen-Auditprobleme, 29 Bestandsabweichungen und 710 offene Sync-Konflikte.
+Master/Shadow blieben `false`; es wurden keine Buchungs- oder Providerdaten geschrieben.

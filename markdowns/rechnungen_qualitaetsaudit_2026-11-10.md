@@ -2421,3 +2421,21 @@ Rechnungsbuchungsmarker, 0 Inventur-Sessions, 432 Alarme, 726 Sync-Konflikte
 blieben `false`; es wurden keine Bestands-/Providerdaten geschrieben. G2 bleibt
 BLOCKIERT durch Inventur, Konfliktbereinigung, Shadow-Nachweis, Providerprojektionen,
 provider-natives Backup und Betriebsfreigabe.
+
+### G2-Folgepruefung nach Mapping-Fix (12.11.2026, 00:49 CET)
+
+Der Worker- und Product-Hub-Deploy auf `894753b` ist SUCCESS (Deployments
+`43c530e1-a0ec-485b-921e-1b2a5ac403c4` und `bb5f3c7f-ddfc-4c00-8ae3-28e067b56633`);
+Healthcheck HTTP 200. Der automatische Worker-Lauf endete mit Forecast Exit 0,
+sevDesk-Sync Exit 1 (`processed=0`, `already_applied=0`) und uebersprungener
+Kanalprojektion bei deaktiviertem Master.
+
+Der read-only Snapshot um 00:48:56 CET bestaetigt 432 Bestandspositionen, 0
+Ledger-Bewegungen, 0 Rechnungsbuchungsmarker, 0 Inventur-Sessions, 432 Alarme,
+726 Sync-Konflikte (710 offen), 432 Outbox-Ereignisse und 263 archivierte Payloads.
+Runtime-Readiness Exit 0 (`eligible=true`), DB-Readiness Exit 2 (`eligible=false`).
+`legacy_mutation_paths` bleibt `ready`; die Quellenpruefung meldet weiterhin 594
+blockierende Auditprobleme, dazu 29 Mengenabweichungen und 710 offene Konflikte.
+`inventory_master_enabled=false` und `inventory_shadow_enabled=false`; es gab keine
+Ledger-/Buchungs- oder Providerdaten-Schreibungen. G2 bleibt durch Inventur,
+Konfliktbereinigung, Shadow-Nachweis, Providerprojektionen, Backup und Sign-off blockiert.
