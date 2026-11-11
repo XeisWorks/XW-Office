@@ -164,6 +164,7 @@ Der RECHNUNGEN-LAGERALARME-Zähler wird nach einer Schwellenänderung auch bei g
 
 P08-Ergänzung: `scripts/product_hub/export_inventory_snapshot.py` erstellt vor einer Cutover-Probe einen read-only JSON-Snapshot von Lagerledger, Bestandszeilen, Buchungs-Idempotenz, Alarmen, Inventursitzungen und Sync-Queues. Ein provider-natives PostgreSQL-Backup bleibt zusätzlich erforderlich.
 Die automatisierte Rollback-Probe bestätigt, dass das Zurücksetzen der Master-Konfiguration auf `false` Ledger-Bewegungen und materialisierten Bestand nicht löscht; die echte Produktions-Rollback-Probe bleibt ein manuelles Gate.
+Das read-only `scripts/product_hub/check_inventory_cutover.py` stellt dieselbe Readiness als CI-/Railway-taugliches JSON-/Exit-Code-Gate bereit und aktiviert niemals den Master-Flag.
 
 ## 7. Arbeitsanweisung an Codex 5.6 Luna
 

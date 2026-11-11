@@ -12,6 +12,7 @@ Stabiler Gesamt-Regressionslauf am 11. November 2026: `python -m pytest -q` → 
 
 P08 ergänzt den read-only `scripts/product_hub/export_inventory_snapshot.py`-Snapshot für Ledger-, Bestands-, Buchungs-, Alarm-, Inventur- und Sync-Zustände. Er unterstützt die Cutover-Vorbereitung, ersetzt aber kein provider-natives PostgreSQL-Backup.
 Die automatisierte Rollback-Probe deckt zusätzlich ab, dass ein Zurücksetzen der Master-Konfiguration Ledger und materialisierten Bestand unverändert lässt; Produktions-Rollback und Backup bleiben manuelle Nachweise.
+Das read-only `scripts/product_hub/check_inventory_cutover.py` exportiert die Cutover-Readiness als JSON und liefert bei blockierten oder manuellen Gates einen nicht-grünen Exit-Code, ohne den Master-Flag zu verändern.
 
 ## Conflict Resolution Wizard CW00–CW07 (2026-09-17)
 

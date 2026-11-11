@@ -247,6 +247,7 @@ packages:
   - id: P08
     title: Shadow-Abnahme und Product-Hub-Bestands-Cutover
     backup_artifact: scripts/product_hub/export_inventory_snapshot.py
+    readiness_cli: scripts/product_hub/check_inventory_cutover.py
     rollback_probe_test: tests/unit/test_product_hub_inventory_service.py::test_disabling_master_flag_preserves_ledger_and_materialized_stock
     status: partially_integrated
     depends_on: [P02, P03, P04, P05, P06, P07]
