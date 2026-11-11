@@ -29,7 +29,10 @@ def _configure_logging() -> None:
 def run_once(*, forecast_years: int = 5, credit_years: int = 1) -> tuple[int, int]:
     """Run both idempotent jobs once and return their exit codes."""
     forecast_exit = forecast_main(["--years", str(forecast_years)])
+    logger.info("Inventory forecast refresh finished exit=%s", forecast_exit)
+    logger.info("Inventory sevDesk sync started")
     sync_exit = sync_main(["--years", str(credit_years)])
+    logger.info("Inventory sevDesk sync finished exit=%s", sync_exit)
     return forecast_exit, sync_exit
 
 
@@ -51,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     while True:
         try:
+            logger.info("Inventory forecast refresh started")
             forecast_exit, sync_exit = run_once(
                 forecast_years=int(args.forecast_years), credit_years=int(args.credit_years)
             )
