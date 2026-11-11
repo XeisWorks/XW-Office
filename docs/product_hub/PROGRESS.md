@@ -17,7 +17,7 @@ HTTP 200. Der laufende Container bestätigt per `alembic current` den Head
 remote sind `DATABASE_URL`, Graph-Client-ID und Tenant gesetzt, aber
 `SEVDESK_API_TOKEN` und `MS_GRAPH_MAILBOX` fehlen. Deshalb bleiben Worker-Aktivierung,
 Live-Forecast/Abgleich, Graph-Mailbetrieb und der Product-Hub-Cutover weiterhin bewusst offen.
-Das Deployment `1044ebf3-57cd-453b-adb3-03b5b9453787` für `3d79b6c` wurde am
+Das Deployment `f7a20d67-9d87-478a-86ad-337779a1c124` für `b19e9fc` wurde am
 11. November 2026 erfolgreich gebaut und ausgerollt; `https://products.xeisworks.at/health`
 liefert HTTP 200 und der anschließende Health-/Migration-Smokecheck blieb grün.
 
