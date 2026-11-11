@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import pytest
 
 from xw_office.models.inventory_document_booking import InventoryDocumentBooking
@@ -68,6 +69,37 @@ def test_credit_feed_uses_bulk_positions_when_provider_supports_it() -> None:
 
     result = SevdeskCreditNoteInventoryService(BulkProvider(), booking).process_year(2026)
     assert result.processed == 1
+
+
+def test_credit_feed_since_excludes_pre_inventory_notes() -> None:
+    factory, variant_id = _factory()
+    inventory = InventoryV2Service(factory)
+    inventory.record_movement(
+        variant_id=variant_id,
+        delta=10,
+        reason="import_baseline",
+        source="test",
+        idempotency_key="credit-since-baseline",
+    )
+    booking = InvoiceInventoryBookingService(factory)
+    booking.apply_line(InvoiceInventoryLine("invoice-1", "pos-1", variant_id, 2))
+
+    class DatedProvider(_Provider):
+        def list_credit_notes_for_year(self, year: int):
+            return [
+                {"id": "credit-old", "status": 200, "invoiceId": "invoice-1", "creditNoteDate": "2026-01-01"},
+                {"id": "credit-new", "status": 200, "invoiceId": "invoice-1", "creditNoteDate": "2026-11-09"},
+            ]
+
+        def list_credit_note_positions(self, credit_note_id: str):
+            return [{"id": credit_note_id + "-pos", "invoicePosId": "pos-1", "quantity": 1, "part": {"number": "XW-BOOKING"}}]
+
+    result = SevdeskCreditNoteInventoryService(DatedProvider(), booking).process_year(
+        2026,
+        since=datetime.date(2026, 11, 1),
+    )
+    assert result.processed == 1
+    assert result.needs_review == []
 
 
 @pytest.mark.parametrize("quantity", ["0.5", "1.5", "NaN", "Infinity", "not-a-number", None])

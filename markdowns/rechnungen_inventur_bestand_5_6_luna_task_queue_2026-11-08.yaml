@@ -140,6 +140,7 @@ packages:
       - Der externe Feed schreibt zusätzlich über `InventoryExternalMirrorService` mit eigener Idempotenz-Tabelle in die Legacy-JSON-Bestände; Unterdeckung wird als `shortage`/`needs_review` ausgegeben und nie negativ gekappt.
       - Eine externe Unterdeckung erzeugt zusätzlich einen deduplizierten `legacy_inventory`-Sync-Konflikt für die exakte Hub-Variante und bleibt damit in Cutover-/Produkt-Hub-Ansichten sichtbar.
       - Der sevDesk-Feed-Wasserstand wird nach bestätigter Inventur auf den Folgetag des Stichtags begrenzt; Overlap- und explizite Backfill-Aufrufe können dadurch nicht versehentlich vor der neuen Baseline buchen.
+      - Der Gutschrift-Feed verwendet denselben Datumsanker; alte Gegenbelege werden nicht nachträglich auf die gezählte Baseline gebucht, während neue Gutschriften zu historischen Verkäufen automatisch zulässig bleiben.
       - Reicht der Hub-Bestand selbst bei einer extern freigegebenen Rechnung nicht aus, bucht der Poller nicht negativ, sondern ruft den Unterdeckungs-Callback auf und legt denselben sichtbaren Klärfall an.
     scope:
       - Einen gemeinsamen Buchungsdienst für Desktop-Freigabe und externen sevDesk-Poller bauen.

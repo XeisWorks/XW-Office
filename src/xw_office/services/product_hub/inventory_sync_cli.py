@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     credit_needs_review: list[str] = []
     credit_errors: list[str] = []
     for year in range(today.year - int(args.years) + 1, today.year + 1):
-        result = credits.process_year(year)
+        result = credits.process_year(year, since=since)
         credit_processed += result.processed
         credit_already_applied += result.already_applied
         credit_needs_review.extend(result.needs_review)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import datetime
 from typing import Callable, Protocol
 
 from xw_office.services.product_hub.invoice_inventory import InvoiceInventoryBookingService, InvoiceInventoryLine
@@ -34,13 +35,27 @@ class SevdeskCreditNoteInventoryService:
         self._booking = booking
         self._on_applied = on_applied
 
-    def process_year(self, year: int) -> CreditNoteProcessingResult:
+    def process_year(
+        self,
+        year: int,
+        *,
+        since: datetime.date | None = None,
+    ) -> CreditNoteProcessingResult:
         result = CreditNoteProcessingResult()
         credits = self._provider.list_credit_notes_for_year(year)
         bulk_positions = _bulk_positions(
             self._provider, credits, "list_credit_note_positions_bulk", "creditNote"
         )
         for credit in credits:
+            if since is not None:
+                occurred_on = _credit_date(credit)
+                if occurred_on is None:
+                    result.needs_review.append(
+                        f"{credit.get('id') or 'Gutschrift'}: Gutschriftsdatum fehlt"
+                    )
+                    continue
+                if occurred_on < since:
+                    continue
             state = document_state(credit)
             if state == "draft":
                 continue
@@ -157,6 +172,23 @@ def _sku(position: dict[str, object]) -> str:
         or part.get("number")
         or ""
     ).strip().upper()
+
+
+def _credit_date(document: dict[str, object]) -> datetime.date | None:
+    for key in ("creditNoteDate", "invoiceDate", "date", "create", "updated"):
+        raw = document.get(key)
+        if isinstance(raw, datetime.datetime):
+            return raw.date()
+        if isinstance(raw, datetime.date):
+            return raw
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        try:
+            return datetime.date.fromisoformat(text[:10])
+        except ValueError:
+            continue
+    return None
 
 
 def _bulk_positions(

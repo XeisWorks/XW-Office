@@ -1478,6 +1478,8 @@ Der bestätigte `InventoryCountService`-Abschluss schreibt jetzt einen monotonen
 des bestätigten Zählabschlusses zugelassen; 30-Tage-Overlap und explizite alte
 Backfill-Daten können den gezählten Anfangsbestand nicht mehr rückwirkend doppelt
 belasten. Regressionen decken den Stichtag, die Clamping-Regel und fehlerhafte Marker ab.
+Der gleiche Anker filtert nun auch alte Gutschriften aus dem laufenden Inventarfeed;
+neue eindeutige Gutschriften zu älteren Verkäufen bleiben zulässig.
 
 Der eigenständige Umbau gemäß `markdowns/rechnungen_inventur_bestand_5_6_luna_umbauspezifikation_2026-11-08.md` ist fachlich und technisch integriert: Rechnungsfreigabe, externe sevDesk-Poller, begrenzte Gutschrift-Rückbuchungen, geführte Inventur, Forecast-/Alarmzustand, POD-Dreierchargen, lagerbereinigte offene Druckplanung und Graph-Task-Popup sind idempotent verdrahtet. Der wiederholbare `xw-inventory-worker` führt Forecast und sevDesk-Abgleich aus und ist als separater Railway-Service aktiv (zuletzt validierter Start `6978341f-0087-49bb-bb04-a567397f6914`); der Provider-Backup-Gate bleibt auf dem Railway-Hobby-Plan blockiert.
 
