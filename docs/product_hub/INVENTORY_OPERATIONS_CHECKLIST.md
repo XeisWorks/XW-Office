@@ -21,6 +21,19 @@ nicht in die Ausgabe übernommen werden. Der Healthcheck muss HTTP 200 liefern.
 
 ## 2. Read-only Snapshot und Readiness
 
+Die beiden ersten Betriebsprüfungen lassen sich gesammelt und ohne Secret-Ausgabe
+wiederholen. Das Hilfsskript schreibt Snapshot, DB-Gate und Runtime-Gate in ein lokales
+Verzeichnis; der erwartete Exit-Code `2` des DB-Gates vor der Inventur wird als normaler
+Blockierungsbefund behandelt:
+
+```powershell
+.\scripts\product_hub\invoke_inventory_railway_preflight.ps1
+```
+
+Das Skript verändert weder Railway-Variablen noch den Product-Hub-Master-Schalter.
+Es liest nur Health-/Service-Status und führt die unten beschriebenen read-only
+Anwendungsprüfungen aus.
+
 Der Datenbankservice stellt für lokale Betriebschecks `DATABASE_PUBLIC_URL` bereit. Die
 Snapshot-CLI verwendet diese Variable automatisch, ohne eine DSN als Argument zu loggen:
 
@@ -119,27 +132,26 @@ bewusst bestehen.
 5. Erst wenn Backup, Shadow-Nachweis, Projektionen und Rollback dokumentiert sind, darf
    `inventory_master_enabled=true` nach ausdrücklicher Bestätigung gesetzt werden.
 
-## Aktueller Befund (11. November 2026, Railway-Prüfung 23:38 CET)
+## Aktueller Befund (12. November 2026, Railway-Prüfung 00:00 CET)
 
 Nach dem Forecast-Refresh wurde der Read-only-Gate erneut über `DATABASE_PUBLIC_URL`
 des Postgres-Service plus Railway-Referenzen des Product-Hub-Service geprüft:
 432 Bestandspositionen sind materialisiert, 0 Ledger-Bewegungen vorhanden, 594
 blockierende Quellen-/Mappingprobleme, 29 Legacy-/Hub-Abweichungen und 710 offene
-Sync-Konflikte. Provider-/Graph-Grundkonfiguration und der Worker-Marker sind dabei
+Sync-Konflikte. Provider-/Graph-/Wix-Grundkonfiguration und der Worker-Marker sind dabei
 `ready`; der Master bleibt wegen Shadow, Inventur und Konflikten blockiert.
 
 - Railway-Zugangsdaten für sevDesk und Graph sind im Product-Hub-Service vorhanden.
 - Healthcheck: HTTP 200; aktueller Alembic-Head `037_plc_parcel_evidence`.
-- Read-only Snapshot (Railway CLI, 11. November 2026, 23:37 CET): 432
+- Read-only Snapshot (Railway CLI, 11. November 2026, 23:59 CET): 432
   `inventory_stock`-Zeilen, 0 Ledger-Bewegungen, 432 `inventory_alert`-Zeilen,
   726 `sync_conflict`-Zeilen, 432 Outbox-Ereignisse und 263 archivierte Payloads.
 - Der DB-Readiness-Check wurde mit `--skip-runtime-configuration` ausgeführt und
   endet erwartungsgemäß mit Exit-Code 2 (`eligible=false`). Der getrennte
   Product-Hub-Runtime-Check endet mit Exit-Code 0 (`eligible=true`): Provider-
-  credentials und Worker-Service sind betriebsbereit.
-- Railway-Worker: Service aktiv; der zuletzt validierte Start war Deployment
-  `6978341f-0087-49bb-bb04-a567397f6914`
-  erfolgreich; Laufzeitlog zeigt den Start des Containers.
+  credentials (sevDesk/Graph/Wix) und Worker-Service sind betriebsbereit.
+- Railway-Worker: Service aktiv; der zuletzt geprüfte erfolgreiche Start ist Deployment
+  `bcc5456a-9f31-48c0-9cde-492caf99d34b` (Commit `bfbb69e`).
 - Provider-natives PostgreSQL-Backup: über Railway CLI versucht, auf dem Hobby-Plan aber
   nicht verfügbar (Railway: „Manual backups and backup schedules are only available for
   Pro workspaces"). Der Anwendungs-Snapshot ist vorhanden, ersetzt dieses Backup nicht.

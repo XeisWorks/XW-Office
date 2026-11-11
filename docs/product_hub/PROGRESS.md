@@ -1502,6 +1502,17 @@ Ledger-Bewegungen, 594 blockierende Quellen-/Mappingprobleme, 29 Legacy-/Hub-Dri
 und 710 offene Sync-Konflikte. Provider-/Graph-Konfiguration und Worker-Marker sind
 bereit; der Master-Cutover bleibt deshalb korrekt blockiert.
 
-Der eigenständige Umbau gemäß `markdowns/rechnungen_inventur_bestand_5_6_luna_umbauspezifikation_2026-11-08.md` ist fachlich und technisch integriert: Rechnungsfreigabe, externe sevDesk-Poller, begrenzte Gutschrift-Rückbuchungen, geführte Inventur, Forecast-/Alarmzustand, POD-Dreierchargen, lagerbereinigte offene Druckplanung und Graph-Task-Popup sind idempotent verdrahtet. Der wiederholbare `xw-inventory-worker` führt Forecast und sevDesk-Abgleich aus und ist als separater Railway-Service aktiv (zuletzt validierter Start `6978341f-0087-49bb-bb04-a567397f6914`); der Provider-Backup-Gate bleibt auf dem Railway-Hobby-Plan blockiert.
+Der eigenständige Umbau gemäß `markdowns/rechnungen_inventur_bestand_5_6_luna_umbauspezifikation_2026-11-08.md` ist fachlich und technisch integriert: Rechnungsfreigabe, externe sevDesk-Poller, begrenzte Gutschrift-Rückbuchungen, geführte Inventur, Forecast-/Alarmzustand, POD-Dreierchargen, lagerbereinigte offene Druckplanung und Graph-Task-Popup sind idempotent verdrahtet. Der wiederholbare `xw-inventory-worker` führt Forecast und sevDesk-Abgleich aus und ist als separater Railway-Service aktiv (zuletzt geprüfter erfolgreicher Start `bcc5456a-9f31-48c0-9cde-492caf99d34b`); der Provider-Backup-Gate bleibt auf dem Railway-Hobby-Plan blockiert.
 
-Die veralteten PR15-Hinweise oben beschreiben den damaligen Zwischenstand und bleiben als historische Cutover-Begründung bestehen. Für den aktuellen Bestand gelten zusätzlich der read-only Quellen-Audit (`GET /api/v1/inventory/audit`), der externe Legacy-Mirror und die Cutover-Readiness-Gates. Der Product-Hub-Master bleibt bewusst deaktiviert, bis Produktionsinventur, repräsentativer Shadow-Lauf, Backup und Rollback-Probe nachgewiesen sind. Letzte Gesamtprüfung am 11. November 2026: `python -m pytest -q` → **2.200 bestanden, 5 übersprungen**; Hosted CI `43081193618` für `8976a9c` ist grün; Alembic `037_plc_parcel_evidence` ist der aktuelle Head. Railway-Deployment `65fbd5af-2478-43a2-9fcf-6bbc88056e8f` ist erfolgreich und `/health` liefert HTTP 200.
+Die veralteten PR15-Hinweise oben beschreiben den damaligen Zwischenstand und bleiben als historische Cutover-Begründung bestehen. Für den aktuellen Bestand gelten zusätzlich der read-only Quellen-Audit (`GET /api/v1/inventory/audit`), der externe Legacy-Mirror und die Cutover-Readiness-Gates. Der Product-Hub-Master bleibt bewusst deaktiviert, bis Produktionsinventur, repräsentativer Shadow-Lauf, Backup und Rollback-Probe nachgewiesen sind. Letzte Gesamtprüfung am 11. November 2026: `python -m pytest -q` → **2.250 bestanden, 5 übersprungen**; Hosted CI für die nachfolgenden Projection-/Railway-Commits ist noch separat zu verifizieren; Alembic `037_plc_parcel_evidence` ist der aktuelle Head. Railway-Deployment `ac932d19-65b4-4496-94ca-79e81f4bb468` ist erfolgreich und `/health` liefert HTTP 200.
+
+### Railway-Betriebszugriff (12. November 2026)
+
+Die beiden ersten manuellen Betriebsprüfungen sind über Railway CLI ausgeführt und als
+`scripts/product_hub/invoke_inventory_railway_preflight.ps1` reproduzierbar gebündelt.
+Der Lauf ist read-only: Healthcheck HTTP 200, Railway-Services online, Snapshot mit 432
+`inventory_stock`-Zeilen, 0 Ledger-Bewegungen, 726 `sync_conflict`-Zeilen und 263
+archivierten Payloads. Das DB-Readiness-Gate endet vor der Inventur erwartungsgemäß mit
+Exit-Code 2 (`eligible=false`); der getrennte Runtime-Check endet mit Exit-Code 0
+(`eligible=true`) für sevDesk, Graph, Wix und den Worker. Der Helper beendet sich bei
+diesem erwarteten Zustand mit Exit-Code 0 und aktiviert weder Shadow- noch Master-Flag.
