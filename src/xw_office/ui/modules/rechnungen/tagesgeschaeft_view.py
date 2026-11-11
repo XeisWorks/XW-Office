@@ -1475,6 +1475,7 @@ class TagesgeschaeftView(QWidget):
                     plan,
                     preflight_elapsed_ms,
                 ),
+                should_abort=lambda: self._start_abort_requested,
             )
             return
         self._continue_start_product_preflight(plan, preflight_elapsed_ms)

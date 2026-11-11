@@ -89,6 +89,7 @@ from xw_office.services.draft_invoice.service import (
     ProductIssueDecision,
     ProductPreflightApplyResult,
     ProductPreflightPlan,
+    UnreleasedTitleIssue,
 )
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.ui.modules.rechnungen.start_hold_dialog import StartHoldDialog
@@ -1379,8 +1380,7 @@ class RechnungenView(QWidget):
         self._pending_wix_reference = ""
         self._pending_stuecke_reference = ""
         self._wix_context_cache: dict[str, dict[str, object]] = {}
-        self._active_unreleased_clarifications: dict[str, list[PieceBlock]] = {}
-        self._unreleased_settings_worker: BackgroundWorker | None = None
+        self._unreleased_catalog_worker: BackgroundWorker | None = None
         self._shipping_address_overrides: dict[str, list[str]] = {}
         self._shipping_source_lines: list[str] = []
         self._wix_context_seq = 0
@@ -2249,7 +2249,7 @@ class RechnungenView(QWidget):
                 self._open_overview_worker,
                 self._open_product_preparation_worker,
                 self._product_print_worker,
-                self._unreleased_settings_worker,
+                self._unreleased_catalog_worker,
                 self._redelivery_prepare_worker,
                 self._redelivery_apply_worker,
                 *self._sevdesk_context_workers,
@@ -7936,59 +7936,6 @@ class RechnungenView(QWidget):
     def _load_stuecke(self, order_reference: str) -> None:
         self._load_wix_context(order_reference)
 
-    def _clarify_unreleased_piece(
-        self,
-        piece: PieceBlock,
-        catalog: ProductCatalogService,
-        order_reference: str,
-    ) -> None:
-        if not piece.is_unreleased or not str(piece.name or "").strip():
-            return
-        resolution = catalog.resolve_unreleased_title(piece.name)
-        if resolution.is_resolved:
-            piece.name = resolution.canonical_name
-            return
-        clarification_key = str(piece.name or "").strip().casefold()
-        active_pieces = self._active_unreleased_clarifications.get(clarification_key)
-        if active_pieces is not None:
-            active_pieces.append(piece)
-            return
-
-        waiting_pieces = [piece]
-        self._active_unreleased_clarifications[clarification_key] = waiting_pieces
-        canonical_name = ""
-        try:
-            dialog = UnreleasedTitleDialog(
-                catalog,
-                raw_title=piece.name,
-                context=f"Wix-Bestellung: {order_reference or 'unbekannt'} · SKU: {piece.sku}",
-                parent=self,
-            )
-            decision = dialog.decision()
-            if decision is None:
-                return
-            if decision.create_product:
-                canonical_name = self._create_unreleased_product_from_alias(
-                    raw_title=decision.raw_title,
-                    quantity=max(1, int(piece.qty_needed or 1)),
-                    note=str(piece.note or "").strip(),
-                ) or ""
-            else:
-                catalog.save_unreleased_resolution(
-                    decision.raw_title,
-                    canonical_name=decision.canonical_name,
-                    owner=decision.owner,
-                )
-                canonical_name = decision.canonical_name
-        finally:
-            pending_pieces = self._active_unreleased_clarifications.pop(
-                clarification_key,
-                waiting_pieces,
-            )
-            if canonical_name:
-                for pending_piece in pending_pieces:
-                    pending_piece.name = canonical_name
-
     def _create_unreleased_product_from_alias(
         self,
         *,
@@ -8045,40 +7992,47 @@ class RechnungenView(QWidget):
             return None
 
         canonical_name, owner, aliases = dialog.get_data()
-        catalog.add_or_update_unreleased_product(
-            canonical_name,
-            owner=owner,
-            aliases=aliases,
+
+        def saved(ok: bool, error: str, _result: object) -> None:
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Unreleased-Produkt",
+                    f"Das Produkt konnte nicht dauerhaft gespeichert werden.\n\n{error}",
+                )
+                return
+            signals = self._container.resolve(AppSignals)
+            signals.status_message.emit(
+                f"Unreleased-Produkt '{canonical_name}' gespeichert.",
+                5000,
+            )
+
+            # Update the visible row only after the durable catalog commit.
+            self._render_active_print_tab()
+            from xw_office.ui.modules.rechnungen.print_dialog import (
+                _configure_missing_piece_print,
+            )
+
+            piece_block = PieceBlock(
+                sku="XW-010",
+                name=canonical_name,
+                qty_needed=max(1, int(quantity or 1)),
+                note=str(note or "").strip(),
+                is_unreleased=True,
+                stock_status=None,
+            )
+            _configure_missing_piece_print(self, self._container, piece_block)
+            self._refresh_open_invoice_overview()
+
+        self._run_unreleased_settings_write(
+            lambda: catalog.add_or_update_unreleased_product(
+                canonical_name,
+                owner=owner,
+                aliases=aliases,
+            ),
+            saved,
         )
-
-        signals = self._container.resolve(AppSignals)
-        signals.status_message.emit(
-            f"Unreleased-Produkt '{canonical_name}' gespeichert.",
-            5000,
-        )
-
-        # A print-plan dialog follows immediately.  Redraw now, rather than
-        # waiting for that dialog to close, so the product row already shows
-        # the canonical title the user has just saved.  The original invoice
-        # title remains visible as the customer-provided subtitle.
-        self._render_active_print_tab()
-
-        # Immediately open the print configuration popup for this product
-        from xw_office.ui.modules.rechnungen.print_dialog import _configure_missing_piece_print
-
-        piece_block = PieceBlock(
-            sku="XW-010",
-            name=canonical_name,
-            qty_needed=max(1, int(quantity or 1)),
-            note=str(note or "").strip(),
-            is_unreleased=True,
-            stock_status=None,
-        )
-        _configure_missing_piece_print(self, self._container, piece_block)
-
-        # Refresh overview to reflect the new unreleased product and print settings
-        self._refresh_open_invoice_overview()
-        return canonical_name
+        return None
 
     def _on_add_unreleased_from_item(self, item: PrintProductAggregate) -> None:
         self._create_unreleased_product_from_alias(
@@ -8092,6 +8046,7 @@ class RechnungenView(QWidget):
         issues: object,
         *,
         on_complete: Callable[[bool, str], None] | None = None,
+        should_abort: Callable[[], bool] | None = None,
     ) -> None:
         """Clarify START aliases and persist each choice off the UI thread."""
         if not isinstance(issues, (list, tuple)):
@@ -8121,7 +8076,7 @@ class RechnungenView(QWidget):
                 on_complete(ok, error)
 
         def clarify_issue(index: int) -> None:
-            if self._shutting_down:
+            if self._shutting_down or (should_abort is not None and should_abort()):
                 finish(False, "Rechnungsansicht wird geschlossen.")
                 return
             if index >= len(unique_issues):
@@ -8206,6 +8161,9 @@ class RechnungenView(QWidget):
                         finish(False, error)
                         return
                     split_piece.name = saved_name
+                    if should_abort is not None and should_abort():
+                        finish(False, "START wurde gestoppt.")
+                        return
                     if decision.create_product:
                         signals: AppSignals = self._container.resolve(AppSignals)
                         signals.status_message.emit(
@@ -8224,7 +8182,37 @@ class RechnungenView(QWidget):
 
             clarify_piece(0)
 
-        clarify_issue(0)
+        if catalog.unreleased_products_loaded:
+            clarify_issue(0)
+            return
+
+        worker_error = ""
+        worker = BackgroundWorker(catalog.list_unreleased_products)
+        self._unreleased_catalog_worker = worker
+
+        def warm_error(exc: Exception) -> None:
+            nonlocal worker_error
+            worker_error = str(exc)
+
+        def warm_finished() -> None:
+            if self._unreleased_catalog_worker is not worker:
+                return
+            self._unreleased_catalog_worker = None
+            if self._shutting_down or worker.cancelled:
+                return
+            if worker_error:
+                QMessageBox.warning(
+                    self,
+                    "Unreleased-Katalog",
+                    f"Der Katalog konnte nicht geladen werden. START wurde angehalten.\n\n{worker_error}",
+                )
+                finish(False, worker_error)
+                return
+            clarify_issue(0)
+
+        worker.signals.error.connect(warm_error)
+        worker.signals.finished.connect(warm_finished)
+        worker.start()
 
     def _run_unreleased_settings_write(
         self,
@@ -8232,13 +8220,13 @@ class RechnungenView(QWidget):
         on_done: Callable[[bool, str, object], None],
     ) -> None:
         """Persist a user-approved catalog decision without blocking Qt."""
-        if self._unreleased_settings_worker is not None and self._unreleased_settings_worker.isRunning():
+        if self._unreleased_catalog_worker is not None and self._unreleased_catalog_worker.isRunning():
             on_done(False, "Eine andere Unreleased-Einstellung wird gerade gespeichert.", None)
             return
         result: object = None
         error = ""
         worker = BackgroundWorker(write)
-        self._unreleased_settings_worker = worker
+        self._unreleased_catalog_worker = worker
 
         def on_result(value: object) -> None:
             nonlocal result
@@ -8249,9 +8237,9 @@ class RechnungenView(QWidget):
             error = str(exc)
 
         def on_finished() -> None:
-            if self._unreleased_settings_worker is not worker:
+            if self._unreleased_catalog_worker is not worker:
                 return
-            self._unreleased_settings_worker = None
+            self._unreleased_catalog_worker = None
             if self._shutting_down or worker.cancelled:
                 return
             on_done(not error, error, result)
@@ -8284,7 +8272,14 @@ class RechnungenView(QWidget):
             titles = clarified
         return [replace(piece, name=title, qty_needed=1) for title in titles]
 
-    def _on_stuecke_loaded(self, items: object, *, catalog_warmed: bool = False) -> None:
+    def _on_stuecke_loaded(
+        self,
+        items: object,
+        *,
+        catalog_warmed: bool = False,
+        preexpanded_pieces: list[PieceBlock] | None = None,
+        aliases_clarified: bool = False,
+    ) -> None:
         requested_ref = ""
         payload_items: object = items
         if isinstance(items, dict):
@@ -8350,21 +8345,63 @@ class RechnungenView(QWidget):
             catalog: ProductCatalogService | None = self._container.resolve(ProductCatalogService)
         except KeyError:
             catalog = None
-        expanded_pieces: list[PieceBlock] = []
-        for piece in payload_items:
-            if not isinstance(piece, PieceBlock):
-                continue
-            if catalog is not None:
-                expanded_pieces.extend(
-                    self._split_unreleased_piece(piece, catalog, requested_ref or current_ref)
+        expanded_pieces: list[PieceBlock] = list(preexpanded_pieces or [])
+        if preexpanded_pieces is None:
+            for piece in payload_items:
+                if not isinstance(piece, PieceBlock):
+                    continue
+                if catalog is not None:
+                    expanded_pieces.extend(
+                        self._split_unreleased_piece(piece, catalog, requested_ref or current_ref)
+                    )
+                else:
+                    expanded_pieces.append(piece)
+        if catalog is not None and not aliases_clarified:
+            unresolved = [
+                piece
+                for piece in expanded_pieces
+                if piece.is_unreleased
+                and not catalog.resolve_unreleased_title(piece.name).is_resolved
+            ]
+            if unresolved:
+                issues = [
+                    UnreleasedTitleIssue(
+                        raw_title=piece.name,
+                        wix_order_number=requested_ref or current_ref,
+                        quantity=1,
+                        wix_description=piece.note,
+                    )
+                    for piece in unresolved
+                ]
+                self._stuecke_hint.setText("Unreleased-Titel werden geklärt...")
+                self._stuecke_hint.show()
+
+                def aliases_ready(
+                    _ok: bool,
+                    _error: str,
+                    *,
+                    source: object = items,
+                    pieces: list[PieceBlock] = expanded_pieces,
+                ) -> None:
+                    for candidate in pieces:
+                        resolution = catalog.resolve_unreleased_title(candidate.name)
+                        if resolution.is_resolved:
+                            candidate.name = resolution.canonical_name
+                    self._on_stuecke_loaded(
+                        source,
+                        catalog_warmed=True,
+                        preexpanded_pieces=pieces,
+                        aliases_clarified=True,
+                    )
+
+                self.clarify_unreleased_start_issues(
+                    issues,
+                    on_complete=aliases_ready,
                 )
-            else:
-                expanded_pieces.append(piece)
+                return
         for piece in expanded_pieces:
             if not isinstance(piece, PieceBlock):
                 continue
-            if catalog is not None:
-                self._clarify_unreleased_piece(piece, catalog, requested_ref or current_ref)
             key = (
                 str(piece.sku or "").strip().upper(),
                 str(piece.name or "").strip(),

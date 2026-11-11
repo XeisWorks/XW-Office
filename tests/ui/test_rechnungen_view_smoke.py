@@ -135,44 +135,6 @@ def test_unreleased_catalog_disk_and_settings_read_runs_off_ui_thread(
     assert catalog.unreleased_products_loaded is True
 
 
-def test_unknown_unreleased_title_offers_shared_product_creation_flow(qtbot: object, monkeypatch: object) -> None:
-    container, _invoice_service = _build_rechnungen_test_container()
-    view = RechnungenView(container)
-    qtbot.addWidget(view)
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(
-        "xw_office.ui.modules.rechnungen.view.UnreleasedTitleDialog.decision",
-        lambda _dialog: UnreleasedTitleDecision(
-            raw_title="Alias aus der Rechnung",
-            canonical_name="",
-            owner="",
-            create_product=True,
-        ),
-    )
-    monkeypatch.setattr(
-        view,
-        "_create_unreleased_product_from_alias",
-        lambda **kwargs: captured.update(kwargs) or "Neues Werk",
-    )
-
-    piece = PieceBlock(
-        sku="XW-010",
-        name="Alias aus der Rechnung",
-        qty_needed=2,
-        note="Besetzung: Flöte",
-        is_unreleased=True,
-    )
-    view._clarify_unreleased_piece(piece, container.resolve(ProductCatalogService), "21549")  # noqa: SLF001
-
-    assert captured == {
-        "raw_title": "Alias aus der Rechnung",
-        "quantity": 2,
-        "note": "Besetzung: Flöte",
-    }
-    assert piece.name == "Neues Werk"
-
-
 def test_add_unreleased_product_updates_the_analysis_row_before_print_configuration(
     qtbot: object,
     monkeypatch: object,
@@ -210,9 +172,10 @@ def test_add_unreleased_product_updates_the_analysis_row_before_print_configurat
         "xw_office.ui.modules.rechnungen.view.UnreleasedProductEditDialog.get_data",
         lambda _dialog: ("Kanonischer Titel", "Blasmusik", ["Kundenangabe aus Wix"]),
     )
+    configured: list[bool] = []
     monkeypatch.setattr(
         "xw_office.ui.modules.rechnungen.print_dialog._configure_missing_piece_print",
-        lambda *_args, **_kwargs: True,
+        lambda *_args, **_kwargs: configured.append(True),
     )
     monkeypatch.setattr(view, "_refresh_open_invoice_overview", lambda: None)
 
@@ -220,7 +183,9 @@ def test_add_unreleased_product_updates_the_analysis_row_before_print_configurat
         raw_title=item.title,
         quantity=item.quantity,
         note=item.description,
-    ) == "Kanonischer Titel"
+    ) is None
+
+    qtbot.waitUntil(lambda: bool(configured), timeout=3000)
 
     assert catalog.resolve_unreleased_title(item.title).canonical_name == "Kanonischer Titel"
     visible_labels = [label.text() for label in view._gb_open_products.findChildren(QLabel)]  # noqa: SLF001
@@ -228,33 +193,56 @@ def test_add_unreleased_product_updates_the_analysis_row_before_print_configurat
     assert "Kundenangabe: Kundenangabe aus Wix" in visible_labels
 
 
-def test_reentrant_unreleased_clarification_opens_only_one_dialog(qtbot: object, monkeypatch: object) -> None:
+def test_start_unreleased_product_creation_resumes_after_catalog_commit(
+    qtbot: QtBot,
+    monkeypatch: MonkeyPatch,
+) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
     catalog = container.resolve(ProductCatalogService)
+    catalog.list_unreleased_products()
     view = RechnungenView(container)
     qtbot.addWidget(view)
-    first_piece = PieceBlock(sku="XW-010", name="Gemeinsamer Wix-Alias", qty_needed=1, is_unreleased=True)
-    reentrant_piece = PieceBlock(sku="XW-010", name="Gemeinsamer Wix-Alias", qty_needed=1, is_unreleased=True)
-    dialog_calls = 0
+    configured: list[str] = []
+    completed: list[tuple[bool, str]] = []
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.UnreleasedTitleDialog.decision",
+        lambda _dialog: UnreleasedTitleDecision(
+            raw_title="Wix-Neuanlage-Alias",
+            canonical_name="",
+            owner="",
+            create_product=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.UnreleasedProductEditDialog.exec",
+        lambda _dialog: QDialog.DialogCode.Accepted,
+    )
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.UnreleasedProductEditDialog.get_data",
+        lambda _dialog: ("Neues Werk aus START", "Blasmusik", ["Wix-Neuanlage-Alias"]),
+    )
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.print_dialog._configure_missing_piece_print",
+        lambda _owner, _container, piece: configured.append(piece.name),
+    )
+    monkeypatch.setattr(view, "_refresh_open_invoice_overview", lambda: None)
 
-    def decide(_dialog: object) -> UnreleasedTitleDecision:
-        nonlocal dialog_calls
-        dialog_calls += 1
-        view._clarify_unreleased_piece(reentrant_piece, catalog, "21549")  # noqa: SLF001
-        return UnreleasedTitleDecision(
-            raw_title="Gemeinsamer Wix-Alias",
-            canonical_name="Gemeinsames Werk",
-            owner="Albert",
-        )
+    view.clarify_unreleased_start_issues(
+        [
+            types.SimpleNamespace(
+                raw_title="Wix-Neuanlage-Alias",
+                wix_order_number="21549",
+                quantity=1,
+                wix_description="",
+            )
+        ],
+        on_complete=lambda ok, error: completed.append((ok, error)),
+    )
 
-    monkeypatch.setattr("xw_office.ui.modules.rechnungen.view.UnreleasedTitleDialog.decision", decide)
-
-    view._clarify_unreleased_piece(first_piece, catalog, "21549")  # noqa: SLF001
-
-    assert dialog_calls == 1
-    assert first_piece.name == "Gemeinsames Werk"
-    assert reentrant_piece.name == "Gemeinsames Werk"
-    assert view._active_unreleased_clarifications == {}  # noqa: SLF001
+    qtbot.waitUntil(lambda: bool(completed), timeout=3000)
+    assert completed == [(True, "")]
+    assert configured == ["Neues Werk aus START"]
+    assert catalog.resolve_unreleased_title("Wix-Neuanlage-Alias").canonical_name == "Neues Werk aus START"
 
 
 def test_start_clarifies_same_unreleased_alias_only_once_across_invoices(
@@ -264,6 +252,7 @@ def test_start_clarifies_same_unreleased_alias_only_once_across_invoices(
     container, _invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
     qtbot.addWidget(view)
+    container.resolve(ProductCatalogService).list_unreleased_products()
     clarified: list[tuple[str, str]] = []
     completions: list[tuple[bool, str]] = []
     issues = [
@@ -359,8 +348,16 @@ def test_start_product_preflight_continues_only_after_unreleased_commit(
             _issues: object,
             *,
             on_complete: object,
+            should_abort: object,
         ) -> None:
+            del should_abort
             completion.append(on_complete)
+
+        def request_shutdown(self) -> None:
+            return
+
+        def shutdown_complete(self) -> bool:
+            return True
 
     plan = ProductPreflightPlan(
         issues=[],
