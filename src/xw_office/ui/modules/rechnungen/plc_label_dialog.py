@@ -1933,6 +1933,13 @@ class PlcLabelPrintDialog(QDialog):
             return
         super().closeEvent(event)
 
+    def reject(self) -> None:
+        worker = self._packing_print_worker
+        if worker is not None and worker.isRunning():
+            self._status.setText("Der Packlisten-Druckauftrag wird noch abgeschlossen.")
+            return
+        super().reject()
+
     def _send_to_plc(self) -> None:
         if self._manual_entry:
             missing_fields = [

@@ -367,6 +367,7 @@ def test_packing_list_pdf_and_queue_run_off_ui_thread_and_ignore_repeat_click(
 ) -> None:
     dialog = PlcLabelPrintDialog(_container(), None)
     qtbot.addWidget(dialog)
+    dialog.show()
     dialog._package_count.setValue(2)  # noqa: SLF001
     dialog._find_product = lambda: {"pakettyp": "PC"}  # type: ignore[method-assign]  # noqa: SLF001
     dialog._build_reference = lambda: "21104"  # type: ignore[method-assign]  # noqa: SLF001
@@ -398,6 +399,8 @@ def test_packing_list_pdf_and_queue_run_off_ui_thread_and_ignore_repeat_click(
     QTimer.singleShot(0, lambda: heartbeat.append(True))
     qtbot.waitUntil(lambda: bool(heartbeat))  # type: ignore[attr-defined]
     assert not dialog._packing_print_btn.isEnabled()  # noqa: SLF001
+    dialog.reject()
+    assert dialog.isVisible()
 
     dialog._print_packing_lists()  # noqa: SLF001
     assert not queued
