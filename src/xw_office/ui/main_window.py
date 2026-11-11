@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SHUTDOWN_POLL_INTERVAL_MS = 75
+_PRINTER_STATUS_REFRESH_INTERVAL_MS = 60_000
 
 
 class MainWindow(QMainWindow):
@@ -53,6 +54,9 @@ class MainWindow(QMainWindow):
         self._shutdown_timer = QTimer(self)
         self._shutdown_timer.setSingleShot(True)
         self._shutdown_timer.timeout.connect(self._continue_background_shutdown)
+        self._printer_status_timer = QTimer(self)
+        self._printer_status_timer.setInterval(_PRINTER_STATUS_REFRESH_INTERVAL_MS)
+        self._printer_status_timer.timeout.connect(self._refresh_printer_status_async)
         self._eventloop_watchdog = EventLoopWatchdog(self)
         self._setup_window()
         self._build_ui()
@@ -60,6 +64,7 @@ class MainWindow(QMainWindow):
         self._open_initial_module()
         self._apply_printer_status()
         self._refresh_printer_status_async()
+        self._printer_status_timer.start()
         self._eventloop_watchdog.start()
 
     def performance_snapshot(self) -> list[EventLoopGap]:
@@ -232,6 +237,8 @@ class MainWindow(QMainWindow):
         signals.printer_status_changed.emit(snapshot.printing_allowed)
 
     def _refresh_printer_status_async(self) -> None:
+        if self._shutdown_in_progress:
+            return
         if self._printer_status_worker is not None and self._printer_status_worker.isRunning():
             return
 
@@ -441,6 +448,7 @@ class MainWindow(QMainWindow):
         self._shutdown_in_progress = True
         logger.info("Application shutdown requested; cancelling background work")
         self._eventloop_watchdog.stop()
+        self._printer_status_timer.stop()
 
         for widget in self._pages.values():
             request_shutdown = getattr(widget, "request_shutdown", None)

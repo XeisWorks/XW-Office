@@ -6,15 +6,42 @@ from PySide6.QtWidgets import QComboBox, QStyleOptionViewItem
 
 from xw_office.core.config import AppConfig, PrintingSection
 from xw_office.core.container import Container
+from xw_office.core.types import PrinterStatus
 from xw_office.services.background_jobs import BackgroundJobManager
 from xw_office.services.inventory import InventoryService
 from xw_office.services.products.catalog import Product
 from xw_office.services.products.catalog import ProductCatalogService
 from xw_office.services.products.print_decision import PieceBlock
 from xw_office.services.printing.print_queue import PrintQueueService
+from xw_office.services.printer_status.service import PrinterStatusService, PrinterStatusSnapshot
 from xw_office.ui.modules.rechnungen import print_dialog
 from xw_office.ui.modules.rechnungen.print_dialog import ProductPrintConfigDialog, prepare_piece_pdf_print
 from xw_office.ui.modules.rechnungen.view import _PieceDelegate
+
+
+def test_product_print_runtime_check_uses_nonblocking_printer_snapshot(monkeypatch) -> None:
+    container = Container(AppConfig())
+    snapshot = PrinterStatusSnapshot(
+        status=PrinterStatus.RED,
+        printing_allowed=False,
+        color="red",
+        tooltip="Drucker nicht verfuegbar",
+    )
+
+    class StatusService:
+        def snapshot(self) -> PrinterStatusSnapshot:
+            return snapshot
+
+    container.register(PrinterStatusService, lambda _container: StatusService())  # type: ignore[arg-type]
+    warnings: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.print_dialog.QMessageBox.warning",
+        lambda *args: warnings.append(args),
+    )
+
+    assert not print_dialog._check_printer_runtime(None, container)  # type: ignore[arg-type]
+    assert len(warnings) == 1
+    assert "Kein konfigurierter Drucker" in str(warnings[0][2])
 
 
 def test_selected_product_delegate_has_exactly_one_print_or_settings_action() -> None:

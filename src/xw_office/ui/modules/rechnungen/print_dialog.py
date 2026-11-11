@@ -35,7 +35,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from xw_office.core.printer_detect import discover_printers, evaluate_printer_status
 from xw_office.core.signals import AppSignals
 from xw_office.core.types import PrinterStatus
 from xw_office.services.inventory import InventoryService
@@ -45,6 +44,7 @@ from xw_office.services.printing.print_jobs import PdfPrintJob, PrintJobKind
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.printing.planned_pdf_printer import page_indices_from_range_text, print_pdf_by_plan
 from xw_office.services.printing.pdf_renderer import page_indices_from_qprinter
+from xw_office.services.printer_status.service import PrinterStatusService
 
 if TYPE_CHECKING:
     from xw_office.core.container import Container
@@ -493,13 +493,20 @@ class ProductPrintConfigDialog(QDialog):
 
 def _check_printer_runtime(parent: QWidget, container: Container, printer: QPrinter | None = None) -> bool:
     configured = list(container.config.printing.configured_printer_names)
-    discovered = discover_printers()
-    status = evaluate_printer_status(discovered, configured)
+    snapshot = container.resolve(PrinterStatusService).snapshot()
+    status = snapshot.status
     if status == PrinterStatus.RED:
         QMessageBox.warning(
             parent,
             "Druck nicht verfuegbar",
             "Kein konfigurierter Drucker ist verfuegbar (Ampel rot).",
+        )
+        return False
+    if not snapshot.printing_allowed:
+        QMessageBox.warning(
+            parent,
+            "Druckerstatus wird geprueft",
+            "Der Druckerstatus wird noch geprueft. Bitte kurz warten und erneut drucken.",
         )
         return False
 

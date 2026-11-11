@@ -69,9 +69,11 @@ def test_close_hides_window_and_finishes_cancelled_worker_automatically(qtbot: o
     assert started.wait(1)
 
     window.show()
+    assert window._printer_status_timer.isActive()  # noqa: SLF001
     window.close()
 
     assert not window.isVisible()
+    assert not window._printer_status_timer.isActive()  # noqa: SLF001
     assert worker.cancelled
     assert not window._shutdown_finished  # noqa: SLF001
 
