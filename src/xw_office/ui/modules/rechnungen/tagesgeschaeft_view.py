@@ -547,32 +547,19 @@ class TagesgeschaeftView(QWidget):
         self._btn_start.setIconSize(QSize(18, 18))
         self._btn_start.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._btn_start.setToolTip("START: Rechnungen + Labels + Fulfillment + Mail")
-        self._btn_start.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self._btn_start.setFixedHeight(34)
-        self._btn_start.setFixedWidth(145)
+        self._btn_start.setFixedWidth(118)
         self._btn_start.setStyleSheet(
             "QToolButton { background-color: #15803d; color: white; border-radius: 6px;"
             " font-weight: bold; font-size: 13px; }"
             " QToolButton:hover { background-color: #166534; }"
             " QToolButton:pressed { background-color: #14532d; }"
             " QToolButton:disabled { background-color: #cbd5e1; color: #64748b; }"
-            " QToolButton::menu-button { border-left: 1px solid rgba(255,255,255,0.35); width: 26px; }"
         )
         self._btn_start.clicked.connect(
             lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, include_product_print=False)
         )
         self._start_button_idle_text = self._btn_start.text()
-        start_menu = QMenu(self._btn_start)
-        start_menu.addAction("Selected").triggered.connect(
-            lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, selected_only=True, include_product_print=False)
-        )
-        start_menu.addAction("+ Noten").triggered.connect(
-            lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, selected_only=False, include_product_print=True)
-        )
-        start_menu.addAction("+ Noten Selected").triggered.connect(
-            lambda: self._on_start_clicked(StartMode.INVOICES_AND_PRINT, selected_only=True, include_product_print=True)
-        )
-        self._btn_start.setMenu(start_menu)
 
         self._btn_stop = QPushButton("STOP")
         self._btn_stop.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop))
@@ -1183,22 +1170,18 @@ class TagesgeschaeftView(QWidget):
                 [
                     "START wird vorbereitet.",
                     f"Umfang: {scope}",
-                    f"Notendruck: {'ja' if self._start_include_product_print else 'nein'}",
                 ]
             )
         signals.status_message.emit("Pre-Flight wird erstellt…", 2500)
 
         def job() -> StartPreflight:
             invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-            open_count = (
-                len(self._start_selected_invoice_ids)
-                if self._start_selected_only
-                else invoice_service.count_invoices(status=100)
-            )
             if self._start_selected_only:
                 summaries = list(self._start_selected_summaries)
             else:
                 summaries = invoice_service.load_invoice_summaries(status=100, limit=1000, offset=0)
+            summaries = invoice_service.filter_start_ready(summaries)
+            open_count = len(summaries)
             credit_service: B2bCreditService = self._container.resolve(B2bCreditService)
             b2b_holds = [hold.as_dict() for hold in credit_service.evaluate(summaries)]
             buyer_note_cases = invoice_service.load_buyer_note_cases(summaries)
@@ -1264,7 +1247,15 @@ class TagesgeschaeftView(QWidget):
                 container=self._container,
                 parent=self,
             )
-            if review.exec() != QDialog.DialogCode.Accepted:
+            review_result = review.exec()
+            if self._rechnungen_view is not None:
+                try:
+                    self._rechnungen_view.refresh_start_holds()
+                except Exception as exc:
+                    self._set_start_running(False)
+                    QMessageBox.warning(self, "START-Freigabe", str(exc))
+                    return
+            if review_result != QDialog.DialogCode.Accepted:
                 self._set_start_running(False)
                 signals.status_message.emit("START abgebrochen – Käufernotizen nicht bestätigt", 3500)
                 return
@@ -1320,6 +1311,7 @@ class TagesgeschaeftView(QWidget):
                 summaries = list(self._start_selected_summaries)
             else:
                 summaries = invoice_service.load_invoice_summaries(status=100, limit=1000, offset=0)
+            summaries = invoice_service.filter_start_ready(summaries)
             targets_by_reference: dict[str, list[ProductIssueTarget]] = {}
             refs: list[str] = []
             for summary in summaries:

@@ -28,6 +28,7 @@ from xw_office.services.invoice_processing.buyer_notes import (
     BuyerNoteSource,
     normalized_lines,
 )
+from xw_office.services.invoice_processing.start_holds import START_HOLDS_KEY, StartHold
 from xw_office.services.invoice_processing.context import (
     InvoiceOrigin,
     InvoiceWorkContext,
@@ -522,6 +523,89 @@ class InvoiceProcessingService:
         all_flags = self._load_fulfillment_flags_map()
         return all_flags.get(str(invoice_id), FulfillmentFlags())
 
+    def list_start_holds(self) -> dict[str, StartHold]:
+        """Read cross-PC START holds; an absent entry means the draft is ready."""
+        if self._settings_repo is None:
+            return {}
+        raw = self._settings_repo.get_value_json(START_HOLDS_KEY)
+        try:
+            payload = json.loads(raw) if raw else {}
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("START-Zurückstellungen sind nicht lesbar") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("START-Zurückstellungen haben ein ungültiges Format")
+        holds: dict[str, StartHold] = {}
+        for invoice_id, value in payload.items():
+            hold = StartHold.from_payload(str(invoice_id), value)
+            if hold is None:
+                raise RuntimeError("START-Zurückstellungen enthalten einen ungültigen Eintrag")
+            holds[str(invoice_id)] = hold
+        return holds
+
+    def get_start_hold(self, invoice_id: str) -> StartHold | None:
+        return self.list_start_holds().get(str(invoice_id or "").strip())
+
+    def defer_invoice_from_start(
+        self, invoice_id: str, reason: str, *, note: str = "", review_on: str = "",
+        expected_ready: bool = False, expected_updated_at: str | None = None,
+    ) -> StartHold:
+        """Persist an explicit hold before any START side effect can run."""
+        if self._settings_repo is None:
+            raise RuntimeError("START-Zurückstellung kann nicht gespeichert werden")
+        hold = StartHold.create(invoice_id, reason, note=note, review_on=review_on)
+
+        def update(raw: str | None) -> str:
+            try:
+                data = json.loads(raw) if raw else {}
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise RuntimeError("START-Zurückstellungen sind nicht lesbar") from exc
+            if not isinstance(data, dict):
+                raise RuntimeError("START-Zurückstellungen haben ein ungültiges Format")
+            if expected_ready and hold.invoice_id in data:
+                raise RuntimeError("Die Rechnung wurde inzwischen auf einem anderen PC zurückgestellt")
+            if expected_updated_at is not None:
+                current = StartHold.from_payload(hold.invoice_id, data.get(hold.invoice_id))
+                if current is None or current.updated_at != expected_updated_at:
+                    raise RuntimeError("Die Zurückstellung wurde auf einem anderen PC geändert")
+            data[hold.invoice_id] = hold.as_payload()
+            return json.dumps(data, ensure_ascii=False)
+
+        self._settings_repo.mutate_value_json(START_HOLDS_KEY, update)
+        if hasattr(self, "_batch_cache_lock"):
+            self.invalidate_invoice_batch_cache()
+        return hold
+
+    def release_invoice_for_start(
+        self, invoice_id: str, *, expected_updated_at: str | None = None
+    ) -> None:
+        if self._settings_repo is None:
+            raise RuntimeError("START-Freigabe kann nicht gespeichert werden")
+        clean_id = str(invoice_id or "").strip()
+        if not clean_id:
+            raise ValueError("Rechnungs-ID fehlt")
+
+        def update(raw: str | None) -> str:
+            try:
+                data = json.loads(raw) if raw else {}
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise RuntimeError("START-Zurückstellungen sind nicht lesbar") from exc
+            if not isinstance(data, dict):
+                raise RuntimeError("START-Zurückstellungen haben ein ungültiges Format")
+            if expected_updated_at is not None:
+                current = StartHold.from_payload(clean_id, data.get(clean_id))
+                if current is None or current.updated_at != expected_updated_at:
+                    raise RuntimeError("Die Zurückstellung wurde auf einem anderen PC geändert")
+            data.pop(clean_id, None)
+            return json.dumps(data, ensure_ascii=False)
+
+        self._settings_repo.mutate_value_json(START_HOLDS_KEY, update)
+        if hasattr(self, "_batch_cache_lock"):
+            self.invalidate_invoice_batch_cache()
+
+    def filter_start_ready(self, summaries: list[InvoiceSummary]) -> list[InvoiceSummary]:
+        held_ids = self.list_start_holds()
+        return [summary for summary in summaries if str(summary.id) not in held_ids]
+
     def write_fulfillment_flags(self, invoice_id: str, flags: FulfillmentFlags) -> None:
         if self._settings_repo is None:
             return
@@ -614,7 +698,9 @@ class InvoiceProcessingService:
             self._customer_aftercare.release_next_start_snoozes()
         if progress_callback is not None:
             progress_callback("START: Entwuerfe werden geladen...")
-        summaries = self._load_start_target_summaries(invoice_ids=invoice_ids)
+        summaries = self.filter_start_ready(
+            self._load_start_target_summaries(invoice_ids=invoice_ids)
+        )
         if full_mode:
             if invoice_ids is None:
                 resume_result = self._resume_incomplete_fulfillment(
@@ -692,6 +778,9 @@ class InvoiceProcessingService:
                 break
             processed += 1
             summary = self._resolve_current_start_summary(summary)
+            if self.get_start_hold(str(summary.id)) is not None:
+                skipped += 1
+                continue
             note_action = (buyer_note_actions or {}).get(str(summary.id))
             if note_action is not None and note_action[1].action == "skip":
                 skipped += 1
@@ -879,6 +968,9 @@ class InvoiceProcessingService:
 
             summary = self._resolve_current_start_summary(original_summary)
             processed_ids.add(str(summary.id))
+            if self.get_start_hold(str(summary.id)) is not None:
+                skipped_ids.add(str(summary.id))
+                continue
             note_action = (buyer_note_actions or {}).get(str(summary.id))
             if note_action is not None and note_action[1].action == "skip":
                 skipped_ids.add(str(summary.id))
@@ -1027,11 +1119,13 @@ class InvoiceProcessingService:
         if post_tasks and progress_callback is not None:
             progress_callback("START: Fulfillment und Mail werden nachgelagert...")
 
-        def run_post_task(task: _StartPostTask) -> tuple[str, FulfillmentFlags, bool]:
+        def run_post_task(task: _StartPostTask) -> tuple[str, FulfillmentFlags, bool | None]:
             summary = task.summary
             label = summary.invoice_number or summary.order_reference or summary.id
             flags = task.flags
             try:
+                if self.get_start_hold(str(summary.id)) is not None:
+                    return str(summary.id), flags, None
                 # A manual licensed delivery is also technically digital-only.
                 # Handle the more specific branch first so it cannot fall
                 # through to automatic Wix fulfillment and sevDesk mail.
@@ -1123,6 +1217,8 @@ class InvoiceProcessingService:
                     persist(futures[future].summary, flags)
                     if success:
                         successful_ids.add(summary_id)
+                    elif success is None:
+                        skipped_ids.add(summary_id)
                     else:
                         failed_ids.add(summary_id)
             logger.info(
@@ -2188,9 +2284,11 @@ class InvoiceProcessingService:
                 stamp = stamp.replace(tzinfo=timezone.utc)
             return now - stamp <= max_age
 
+        held_ids = self.list_start_holds()
         candidate_ids = [
             invoice_id
             for invoice_id, flags in states.items()
+            if invoice_id not in held_ids
             if flags.last_run_iso
             and (
                 is_recent(
@@ -2292,6 +2390,8 @@ class InvoiceProcessingService:
             if should_abort is not None and should_abort():
                 aborted = True
                 break
+            if self.get_start_hold(str(summary.id)) is not None:
+                continue
             flags = states[str(summary.id)]
             label = summary.invoice_number or summary.order_reference or summary.id
             processed += 1
@@ -2380,11 +2480,13 @@ class InvoiceProcessingService:
                     "START resume physical invoice=%s outcome=failed: %s", summary.id, exc
                 )
 
-        def run_post_task(task: _StartPostTask) -> tuple[str, bool]:
+        def run_post_task(task: _StartPostTask) -> tuple[str, bool | None]:
             summary = task.summary
             flags = task.flags
             label = summary.invoice_number or summary.order_reference or summary.id
             try:
+                if self.get_start_hold(str(summary.id)) is not None:
+                    return str(summary.id), None
                 if progress_callback is not None:
                     progress_callback(
                         f"START: Unvollstaendige Rechnung {label} wird fortgesetzt..."
@@ -2425,6 +2527,8 @@ class InvoiceProcessingService:
                     _invoice_id, ok = future.result()
                     if ok:
                         successful += 1
+                    elif ok is None:
+                        pass
                     else:
                         failures += 1
 
@@ -4025,6 +4129,7 @@ class InvoiceProcessingService:
     ) -> list[dict[str, Any]]:
         row_list = rows if rows is not None else [s.as_table_row() for s in summaries]
         states = self._load_fulfillment_flags_map()
+        start_holds = self.list_start_holds()
         for summary, row in zip(summaries, row_list):
             flags = states.get(summary.id)
             if flags is None:
@@ -4048,6 +4153,21 @@ class InvoiceProcessingService:
                 tooltip += f"\n\nZahlung: {flags.payment_warning.strip()}"
             row["__tooltip__FULFILLMENT"] = tooltip
             row["__align__FULFILLMENT"] = "center"
+            hold = start_holds.get(str(summary.id))
+            selectable = int(summary.status_code or 0) == 100 or hold is not None
+            row["START"] = ""
+            row["__start_selectable__"] = selectable
+            row["__start_checked__"] = selectable and hold is None
+            row["__start_due__"] = bool(hold and hold.review_due)
+            if hold is not None:
+                reminder = (
+                    f" · Wiedervorlage {'fällig: ' if hold.review_due else ''}{hold.review_on}"
+                    if hold.review_on else ""
+                )
+                detail = f"\n{hold.note}" if hold.note else ""
+                row["__tooltip__START"] = f"Zurückgestellt: {hold.reason_label}{reminder}{detail}"
+            elif selectable:
+                row["__tooltip__START"] = "Für START freigegeben"
         return row_list
 
     def get_cached_invoice_list_hints(self, reference: str) -> InvoiceListHintFlags | None:

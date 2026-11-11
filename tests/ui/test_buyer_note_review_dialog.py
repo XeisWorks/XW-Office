@@ -74,7 +74,7 @@ def test_actions_share_one_row_with_cancel_before_done(qtbot: object) -> None:
     buttons = [row.itemAt(index).widget() for index in range(row.count())]
     buttons = [button for button in buttons if isinstance(button, QPushButton)]
     assert [button.text() for button in buttons] == [
-        "▤ LS", "✉ MAIL", "↷ SKIP", "✕ CANCEL", "✓ ERLEDIGT",
+        "▤ LS", "✉ MAIL", "↷ SKIP", "⏸ ZURÜCKSTELLEN", "✕ CANCEL", "✓ ERLEDIGT",
     ]
     assert all(button.toolTip() for button in buttons)
 
@@ -182,3 +182,43 @@ def test_customer_reply_puts_original_note_after_outlook_signature(
     assert "[Antwort hier eingeben]" in str(calls[0]["body"])
     assert "> Bitte prüfen" in str(calls[0]["body_after_signature"])
     assert "Ursprüngliche Käufernotiz" not in str(calls[0]["body"])
+
+
+def test_defer_one_buyer_note_persists_hold_and_continues_with_next_case(
+    qtbot: object, monkeypatch: object,
+) -> None:
+    calls: list[str] = []
+
+    class _Service:
+        def get_start_hold(self, _invoice_id: str) -> None:
+            return None
+
+        def defer_invoice_from_start(self, invoice_id: str, _reason: str, **_kwargs: object) -> None:
+            calls.append(invoice_id)
+
+    class _Container:
+        def resolve(self, _service: object) -> _Service:
+            return _Service()
+
+    class _HoldDialog:
+        reason = "customer_question"
+        note = "Kundenantwort offen"
+        review_on = ""
+
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(buyer_note_review_dialog, "StartHoldDialog", _HoldDialog)  # type: ignore[attr-defined]
+    dialog = BuyerNoteReviewDialog(
+        [_case("1"), _case("2")], allow_delivery_note=False, container=_Container()
+    )
+    qtbot.addWidget(dialog)
+    dialog._defer.click()  # noqa: SLF001
+    assert calls == ["1"]
+    assert dialog._case_list.currentRow() == 1  # noqa: SLF001
+    assert dialog.selections()["1"][1].action == BUYER_NOTE_SKIP
+    dialog._ack.click()  # noqa: SLF001
+    assert dialog.result() == QDialog.DialogCode.Accepted

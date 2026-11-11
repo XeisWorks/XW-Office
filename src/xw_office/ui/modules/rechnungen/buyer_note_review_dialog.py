@@ -29,6 +29,8 @@ from xw_office.services.invoice_processing.buyer_notes import (
     BuyerNoteReviewSelection,
     normalized_lines,
 )
+from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.ui.modules.rechnungen.start_hold_dialog import StartHoldDialog
 
 
 class BuyerNoteReviewDialog(QDialog):
@@ -117,6 +119,10 @@ class BuyerNoteReviewDialog(QDialog):
         self._skip.setAccessibleName("Diese Rechnung überspringen")
         self._skip.clicked.connect(lambda: self._choose(BUYER_NOTE_SKIP))
         actions.addWidget(self._skip)
+        self._defer = QPushButton("⏸ ZURÜCKSTELLEN")
+        self._defer.setToolTip("Rechnung dauerhaft aus START nehmen")
+        self._defer.clicked.connect(self._defer_current)
+        actions.addWidget(self._defer)
         actions.addStretch()
 
         cancel = QPushButton("✕ CANCEL")
@@ -130,7 +136,7 @@ class BuyerNoteReviewDialog(QDialog):
         self._ack.setStyleSheet("color: #22c55e; font-weight: bold")
         self._ack.clicked.connect(lambda: self._choose(BUYER_NOTE_ACK))
         actions.addWidget(self._ack)
-        for button in (self._delivery, self._mail, self._skip, cancel, self._ack):
+        for button in (self._delivery, self._mail, self._skip, self._defer, cancel, self._ack):
             button.setMinimumHeight(38)
         root.addLayout(actions)
 
@@ -195,6 +201,7 @@ class BuyerNoteReviewDialog(QDialog):
             and case.invoice_id not in self._printed_cases
         )
         self._mail.setEnabled(bool(case.customer_email) and self._container is not None)
+        self._defer.setEnabled(self._container is not None)
 
     def _choose(self, action: str) -> None:
         case = self._case()
@@ -246,6 +253,34 @@ class BuyerNoteReviewDialog(QDialog):
         elif dialog.output == "printed":
             self._printed_cases.add(case.invoice_id)
             self._delivery.setEnabled(False)
+
+    def _defer_current(self) -> None:
+        case = self._case()
+        if case is None or self._container is None:
+            return
+        try:
+            service = self._container.resolve(InvoiceProcessingService)
+            existing = service.get_start_hold(case.invoice_id)
+        except Exception as exc:
+            QMessageBox.warning(self, "Rechnung zurückstellen", str(exc))
+            return
+        dialog = StartHoldDialog(
+            invoice_label=case.invoice_number or case.order_reference or case.invoice_id,
+            existing=existing,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            service.defer_invoice_from_start(
+                case.invoice_id, dialog.reason, note=dialog.note, review_on=dialog.review_on,
+                expected_ready=existing is None,
+                expected_updated_at=existing.updated_at if existing is not None else None,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Rechnung zurückstellen", str(exc))
+            return
+        self._choose(BUYER_NOTE_SKIP)
 
     def _open_customer_mail(self) -> None:
         case = self._case()

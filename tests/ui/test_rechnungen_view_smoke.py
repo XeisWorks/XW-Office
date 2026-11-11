@@ -582,12 +582,10 @@ def test_tagesgeschaeft_contains_rechnungen_view(qtbot: object) -> None:
     _wait_embedded_rechnungen(qtbot, view)
     assert hasattr(view, "_rechnungen_view")  # noqa: SLF001
     assert view._btn_start.text() == "START"  # noqa: SLF001
-    assert view._btn_start.menu() is not None  # noqa: SLF001
-    assert [action.text() for action in view._btn_start.menu().actions()] == [  # noqa: SLF001
-        "Selected",
-        "+ Noten",
-        "+ Noten Selected",
-    ]
+    assert view._btn_start.menu() is None  # noqa: SLF001
+    assert view._rechnungen_view._table.model().headerData(  # noqa: SLF001
+        9, Qt.Orientation.Horizontal
+    ) == "START"
     assert view._btn_refresh.text() == ""  # noqa: SLF001
     assert not view._btn_refresh.icon().isNull()  # noqa: SLF001
     assert view._btn_draft.text() == "Entwurf"  # noqa: SLF001

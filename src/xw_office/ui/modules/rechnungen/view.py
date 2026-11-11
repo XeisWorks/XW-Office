@@ -92,6 +92,7 @@ from xw_office.services.draft_invoice.service import (
     ProductPreflightPlan,
 )
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.ui.modules.rechnungen.start_hold_dialog import StartHoldDialog
 from xw_office.services.invoice_processing.context import InvoiceWorkContext
 from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.inventory import InventoryService
@@ -214,6 +215,7 @@ _TABLE_COLUMNS = [
     "Hinweise",
     "AKTIONEN",
     "FULFILLMENT",
+    "START",
     "ID",
 ]
 
@@ -415,6 +417,38 @@ class _InvoiceStatusDelegate(QStyledItemDelegate):
         if base.height() < 22:
             base.setHeight(22)
         return base
+
+
+class _StartReleaseDelegate(QStyledItemDelegate):
+    """Compact, persistent START eligibility checkbox."""
+
+    def paint(
+        self, painter: QPainter, option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
+        row = index.data(Qt.ItemDataRole.UserRole)
+        painter.save()
+        painter.fillRect(
+            option.rect,
+            option.palette.highlight()
+            if option.state & QStyle.StateFlag.State_Selected
+            else option.palette.base(),
+        )
+        if isinstance(row, dict) and row.get("__start_selectable__"):
+            checked = bool(row.get("__start_checked__"))
+            size = 16
+            x = option.rect.center().x() - size // 2
+            y = option.rect.center().y() - size // 2
+            box = QRect(x, y, size, size)
+            due = bool(row.get("__start_due__"))
+            painter.setPen(QPen(QColor("#15803d" if checked else "#dc2626" if due else "#d97706"), 1.5))
+            painter.setBrush(QColor("#15803d" if checked else "#fff7ed"))
+            painter.drawRoundedRect(box, 3, 3)
+            if checked:
+                painter.setPen(QPen(QColor("white"), 2))
+                painter.drawLine(x + 3, y + 8, x + 7, y + 12)
+                painter.drawLine(x + 7, y + 12, x + 13, y + 4)
+        painter.restore()
 
 
 class _SevdeskDraftActionDelegate(QStyledItemDelegate):
@@ -1570,6 +1604,7 @@ class RechnungenView(QWidget):
         )
         self._hints_delegate = _HintsIconDelegate(self._table)
         self._status_delegate = _InvoiceStatusDelegate(self._table)
+        self._start_release_delegate = _StartReleaseDelegate(self._table)
         self._sevdesk_delegate = _SevdeskDraftActionDelegate(self._table)
         self._actions_delegate = _ActionsDelegate(self._table)
         self._fulfillment_delegate = _FulfillmentDelegate(self._table)
@@ -1577,11 +1612,13 @@ class RechnungenView(QWidget):
         status_col = 3
         hint_col = _TABLE_COLUMNS.index("Hinweise")
         fulfillment_col = _TABLE_COLUMNS.index("FULFILLMENT")
+        start_col = _TABLE_COLUMNS.index("START")
         actions_col = _TABLE_COLUMNS.index("AKTIONEN")
         self._table.setItemDelegateForColumn(sevdesk_col, self._sevdesk_delegate)
         self._table.setItemDelegateForColumn(status_col, self._status_delegate)
         self._table.setItemDelegateForColumn(hint_col, self._hints_delegate)
         self._table.setItemDelegateForColumn(fulfillment_col, self._fulfillment_delegate)
+        self._table.setItemDelegateForColumn(start_col, self._start_release_delegate)
         self._table.setItemDelegateForColumn(actions_col, self._actions_delegate)
         self._table.clicked.connect(self._on_table_clicked)
         self._table.viewport().installEventFilter(self)
@@ -1593,6 +1630,7 @@ class RechnungenView(QWidget):
         self._table.horizontalHeader().resizeSection(hint_col, 150)
         self._table.horizontalHeader().resizeSection(actions_col, 145)
         self._table.horizontalHeader().resizeSection(fulfillment_col, 170)
+        self._table.horizontalHeader().resizeSection(start_col, 58)
         self._table.setColumnHidden(_TABLE_COLUMNS.index("ID"), True)
         left_layout.addWidget(self._table, stretch=1)
 
@@ -2812,6 +2850,7 @@ class RechnungenView(QWidget):
         self._table.setColumnWidth(6, 160)  # Hinweise
         self._table.setColumnWidth(7, 124)  # Aktionen
         self._table.setColumnWidth(8, 178)  # Fulfillment
+        self._table.setColumnWidth(9, 58)   # START
 
     def _refresh_mollie_alert_count(self) -> None:
         self._background_jobs.submit(
@@ -5813,6 +5852,73 @@ class RechnungenView(QWidget):
             return
         self._select_visible_table_row(row)
 
+    def refresh_start_holds(self) -> None:
+        """Refresh the compact START column after a hold changes in another dialog."""
+        service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+        holds = service.list_start_holds()
+        for row_index, summary in enumerate(self._summaries):
+            hold = holds.get(str(summary.id))
+            selectable = int(summary.status_code or 0) == 100 or hold is not None
+            if hold is not None:
+                reminder = (
+                    f" · Wiedervorlage {'fällig: ' if hold.review_due else ''}{hold.review_on}"
+                    if hold.review_on else ""
+                )
+                detail = f"\n{hold.note}" if hold.note else ""
+                tooltip = f"Zurückgestellt: {hold.reason_label}{reminder}{detail}"
+            else:
+                tooltip = "Für START freigegeben" if selectable else ""
+            patch = {
+                "__start_selectable__": selectable,
+                "__start_checked__": selectable and hold is None,
+                "__start_due__": bool(hold and hold.review_due),
+                "__tooltip__START": tooltip,
+            }
+            self._table.update_source_row_data(row_index, patch)
+            for loaded_row in self._loaded_rows:
+                if str(loaded_row.get("ID") or "") == str(summary.id):
+                    loaded_row.update(patch)
+
+    def _toggle_start_hold(self, summary: InvoiceSummary, *, expected_checked: bool) -> None:
+        if self._start_workflow_running:
+            QMessageBox.information(
+                self, "START-Freigabe", "START läuft. Bitte zuerst STOP verwenden."
+            )
+            return
+        service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+        try:
+            existing = service.get_start_hold(str(summary.id))
+            if (existing is None) != expected_checked:
+                self.refresh_start_holds()
+                QMessageBox.information(
+                    self, "START-Freigabe", "Der Status wurde auf einem anderen PC geändert. Bitte erneut klicken."
+                )
+                return
+            if existing is not None:
+                service.release_invoice_for_start(
+                    str(summary.id), expected_updated_at=existing.updated_at,
+                )
+            elif int(summary.status_code or 0) == 100:
+                dialog = StartHoldDialog(
+                    invoice_label=summary.invoice_number or summary.order_reference or summary.id,
+                    parent=self,
+                )
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return
+                service.defer_invoice_from_start(
+                    str(summary.id), dialog.reason, note=dialog.note, review_on=dialog.review_on,
+                    expected_ready=True,
+                )
+            else:
+                return
+            self.refresh_start_holds()
+        except Exception as exc:
+            try:
+                self.refresh_start_holds()
+            except Exception:
+                pass
+            QMessageBox.warning(self, "START-Freigabe", str(exc))
+
     def _select_visible_table_row(self, row: int) -> None:
         if row < 0:
             return
@@ -5862,8 +5968,16 @@ class RechnungenView(QWidget):
                         return super().eventFilter(watched, event)
                     actions_col = _TABLE_COLUMNS.index("AKTIONEN")
                     sevdesk_col = _TABLE_COLUMNS.index("sevDesk")
+                    start_col = _TABLE_COLUMNS.index("START")
                     if event.type() == QEvent.Type.MouseMove:
-                        if int(index.column()) == sevdesk_col:
+                        if int(index.column()) == start_col:
+                            row_data = index.data(Qt.ItemDataRole.UserRole)
+                            self._table.viewport().setCursor(
+                                Qt.CursorShape.PointingHandCursor
+                                if isinstance(row_data, dict) and row_data.get("__start_selectable__")
+                                else Qt.CursorShape.ArrowCursor
+                            )
+                        elif int(index.column()) == sevdesk_col:
                             rect = self._table.visualRect(index)
                             row_data = index.data(Qt.ItemDataRole.UserRole)
                             can_remove = bool(isinstance(row_data, dict) and row_data.get("__draft_remove_enabled__"))
@@ -5893,6 +6007,20 @@ class RechnungenView(QWidget):
                         return super().eventFilter(watched, event)
 
                     self._select_visible_table_row(int(index.row()))
+                    if int(index.column()) == start_col:
+                        if event.button() != Qt.MouseButton.LeftButton:
+                            return super().eventFilter(watched, event)
+                        row_data = index.data(Qt.ItemDataRole.UserRole)
+                        if isinstance(row_data, dict) and row_data.get("__start_selectable__"):
+                            model = self._table.model()
+                            source_index = model.mapToSource(index) if isinstance(model, QSortFilterProxyModel) else index
+                            row = int(source_index.row())
+                            if 0 <= row < len(self._summaries):
+                                self._toggle_start_hold(
+                                    self._summaries[row],
+                                    expected_checked=bool(row_data.get("__start_checked__")),
+                                )
+                        return True
                     if int(index.column()) == sevdesk_col:
                         rect = self._table.visualRect(index)
                         row_data = index.data(Qt.ItemDataRole.UserRole)
