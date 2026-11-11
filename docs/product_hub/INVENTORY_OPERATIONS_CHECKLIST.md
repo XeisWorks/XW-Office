@@ -100,6 +100,13 @@ bewusst bestehen.
 
 ## Aktueller Befund (11. November 2026)
 
+Nach dem Forecast-Refresh wurde der Read-only-Gate erneut über `DATABASE_PUBLIC_URL`
+des Postgres-Service plus Railway-Referenzen des Product-Hub-Service geprüft:
+432 Bestandspositionen sind materialisiert, 0 Ledger-Bewegungen vorhanden, 594
+blockierende Quellen-/Mappingprobleme, 29 Legacy-/Hub-Abweichungen und 710 offene
+Sync-Konflikte. Provider-/Graph-Grundkonfiguration und der Worker-Marker sind dabei
+`ready`; der Master bleibt wegen Shadow, Inventur und Konflikten blockiert.
+
 - Railway-Zugangsdaten für sevDesk und Graph sind im Product-Hub-Service vorhanden.
 - Healthcheck: HTTP 200; aktueller Alembic-Head `037_plc_parcel_evidence`.
 - Read-only Snapshot: 0 Ledger-Bewegungen, 0 Inventory-Bestandspositionen,
