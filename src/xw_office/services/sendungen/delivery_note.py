@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 import re
+import httpx
 
 from xw_office.services.invoice_processing.buyer_notes import BuyerNoteProduct
 
@@ -23,6 +24,36 @@ class DeliveryNoteContext:
 class DeliveryNoteService:
     """Render the same style of customer delivery note used by Offene Sendungen."""
 
+    def suggest_manual_note(self, context: DeliveryNoteContext, api_key: str) -> str:
+        """Suggest only an optional delivery instruction; never rewrite order facts."""
+        if not api_key.strip():
+            raise RuntimeError("OPENAI_API_KEY fehlt")
+        prompt = (
+            "Du formulierst einen knappen, sachlichen Zusatz für einen Lieferschein auf Deutsch. "
+            "Verwende nur ausdrückliche Versand- oder Lieferhinweise aus der Käufernotiz. "
+            "Keine erfundenen Zusagen, Mengen, Termine oder Antworten auf Kundenfragen. "
+            "Wenn kein solcher Hinweis vorliegt, antworte exakt mit LEER. "
+            "Gib ausschließlich den Zusatztext zurück, maximal zwei Sätze.\n\n"
+            f"Käufernotiz:\n{context.buyer_note}"
+        )
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                "https://api.openai.com/v1/responses",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"model": "gpt-4.1-mini", "input": prompt, "max_output_tokens": 180},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        parts = [
+            str(item.get("text") or "")
+            for output in payload.get("output", [])
+            if isinstance(output, dict)
+            for item in output.get("content", [])
+            if isinstance(item, dict) and item.get("type") == "output_text"
+        ]
+        suggestion = "\n".join(parts).strip()
+        return "" if suggestion.upper() == "LEER" else suggestion
+
     def generate_pdf(self, context: DeliveryNoteContext) -> Path:
         try:
             import fitz  # type: ignore[import-untyped]
@@ -33,7 +64,7 @@ class DeliveryNoteService:
         out_dir = root / "state" / "generated" / "lieferscheine"
         out_dir.mkdir(parents=True, exist_ok=True)
         stem = self._safe_part(context.order_reference or context.invoice_number, "rechnung")
-        out_path = out_dir / f"lieferschein_{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        out_path = out_dir / f"lieferschein_{stem}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.pdf"
 
         doc = fitz.open()
         page = doc.new_page(width=595, height=842)

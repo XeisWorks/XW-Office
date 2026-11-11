@@ -30,6 +30,8 @@ def open_classic_outlook_draft(
     to_email: str,
     subject: str,
     sender_smtp: str,
+    body: str = "",
+    attachments: list[str] | None = None,
     outlook_executable: str | Path | None = None,
 ) -> dict[str, str]:
     """Start Outlook Classic normally, then create a draft for one account.
@@ -71,6 +73,8 @@ def open_classic_outlook_draft(
         to_email=recipient,
         subject=clean_subject,
         sender_smtp=sender,
+        body=body,
+        attachments=attachments,
     )
     return {**result, **compose_result}
 
@@ -80,6 +84,8 @@ def _compose_in_running_outlook_helper(
     to_email: str,
     subject: str,
     sender_smtp: str,
+    body: str = "",
+    attachments: list[str] | None = None,
 ) -> dict[str, str]:
     payload = json.dumps(
         {
@@ -87,6 +93,8 @@ def _compose_in_running_outlook_helper(
             "to": to_email,
             "subject": subject,
             "sender": sender_smtp,
+            "body": body,
+            "attachments": attachments or [],
             "attach_only": True,
             "wait_seconds": 30,
         },

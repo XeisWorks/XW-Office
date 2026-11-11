@@ -4,9 +4,6 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
-    QDialogButtonBox,
-    QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -18,10 +15,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from xw_office.core.worker import BackgroundWorker
+from xw_office.services.mailing.outlook_compose import open_classic_outlook_draft
+from xw_office.services.secrets.service import SecretService
+from xw_office.ui.modules.rechnungen.buyer_note_delivery_dialog import BuyerNoteDeliveryDialog
 from xw_office.services.invoice_processing.buyer_notes import (
     BUYER_NOTE_ACK,
     BUYER_NOTE_DELIVERY_NOTE,
-    BUYER_NOTE_DIGITAL_ACK,
     BUYER_NOTE_SKIP,
     BuyerNoteCase,
     BuyerNoteReviewSelection,
@@ -37,14 +37,19 @@ class BuyerNoteReviewDialog(QDialog):
         cases: list[BuyerNoteCase],
         *,
         allow_delivery_note: bool,
+        container: object | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("START – Käufernotizen und Lieferschein")
-        self.resize(980, 650)
+        self.resize(940, 620)
         self._cases = list(cases)
         self._allow_delivery_note = bool(allow_delivery_note)
+        self._container = container
+        self._mail_worker: BackgroundWorker | None = None
         self._selections: dict[str, BuyerNoteReviewSelection] = {}
+        self._printed_cases: set[str] = set()
+        self._manual_note_text = ""
         self._current_index = -1
         self._build_ui()
         for case in self._cases:
@@ -56,16 +61,10 @@ class BuyerNoteReviewDialog(QDialog):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        intro = QLabel(
-            "Vor START müssen Käufernotizen geprüft werden. Eine markierte Bestellung "
-            "kann einen kundenfähigen Lieferschein direkt vor Rechnung und Label drucken."
-        )
-        intro.setWordWrap(True)
-        root.addWidget(intro)
-
         split = QHBoxLayout()
         self._case_list = QListWidget()
-        self._case_list.setMinimumWidth(300)
+        self._case_list.setMinimumWidth(255)
+        self._case_list.setMaximumWidth(280)
         self._case_list.currentRowChanged.connect(self._show_case)
         split.addWidget(self._case_list)
 
@@ -73,54 +72,62 @@ class BuyerNoteReviewDialog(QDialog):
         self._headline = QLabel()
         self._headline.setStyleSheet("font-size: 15px; font-weight: bold;")
         detail.addWidget(self._headline)
-        self._source = QLabel()
-        self._source.setStyleSheet("color: #64748b;")
-        detail.addWidget(self._source)
+        detail.addWidget(QLabel("Käufernotiz"))
         self._note = QPlainTextEdit()
         self._note.setReadOnly(True)
         self._note.setPlaceholderText("Keine Käufernotiz")
         detail.addWidget(self._note, stretch=2)
 
-        address_box = QGroupBox("Lieferadresse – vor Lieferscheindruck prüfbar")
-        address_form = QFormLayout(address_box)
+        detail_columns = QHBoxLayout()
+        address_column = QVBoxLayout()
+        address_column.addWidget(QLabel("Lieferadresse"))
         self._address = QPlainTextEdit()
-        self._address.setPlaceholderText("Adresse fehlt – Lieferschein ist dann nicht möglich.")
-        self._address.setMaximumHeight(110)
-        address_form.addRow(self._address)
-        detail.addWidget(address_box)
-
-        self._products = QLabel()
-        self._products.setWordWrap(True)
-        detail.addWidget(self._products)
-        self._manual_note = QPlainTextEdit()
-        self._manual_note.setPlaceholderText("Optionaler Zusatz auf dem Lieferschein")
-        self._manual_note.setMaximumHeight(75)
-        detail.addWidget(self._manual_note)
+        self._address.setPlaceholderText("Lieferadresse fehlt")
+        self._address.setMaximumHeight(145)
+        address_column.addWidget(self._address)
+        detail_columns.addLayout(address_column, 1)
+        product_column = QVBoxLayout()
+        product_column.addWidget(QLabel("Positionen"))
+        self._products = QListWidget()
+        self._products.setMinimumHeight(130)
+        product_column.addWidget(self._products)
+        detail_columns.addLayout(product_column, 2)
+        detail.addLayout(detail_columns)
 
         actions = QHBoxLayout()
-        self._ack = QPushButton("Gelesen – ohne Lieferschein")
+        self._ack = QPushButton("✓")
+        self._ack.setToolTip("Gelesen · mit START fortfahren")
+        self._ack.setAccessibleName("Gelesen, START fortfahren")
+        self._ack.setStyleSheet("color: #22c55e; font-size: 23px; font-weight: bold")
         self._ack.clicked.connect(lambda: self._choose(BUYER_NOTE_ACK))
         actions.addWidget(self._ack)
-        self._delivery = QPushButton("Lieferschein vormerken")
-        self._delivery.clicked.connect(lambda: self._choose(BUYER_NOTE_DELIVERY_NOTE))
+        self._delivery = QPushButton("▤")
+        self._delivery.setToolTip("Lieferschein öffnen: Vorschau, Druck und Mail")
+        self._delivery.setAccessibleName("Lieferschein öffnen")
+        self._delivery.clicked.connect(self._open_delivery)
         actions.addWidget(self._delivery)
-        self._digital = QPushButton("Digital bestätigt")
-        self._digital.clicked.connect(lambda: self._choose(BUYER_NOTE_DIGITAL_ACK))
-        actions.addWidget(self._digital)
-        self._skip = QPushButton("Diesen Datensatz überspringen")
+        self._mail = QPushButton("✉")
+        self._mail.setToolTip("Auf Käufernotiz in Outlook Classic antworten")
+        self._mail.setAccessibleName("Kundenmail zur Käufernotiz")
+        self._mail.clicked.connect(self._open_customer_mail)
+        actions.addWidget(self._mail)
+        self._skip = QPushButton("↷")
+        self._skip.setToolTip("Diese Rechnung in diesem START-Lauf überspringen; beim nächsten START erneut zeigen")
+        self._skip.setAccessibleName("Diese Rechnung überspringen")
         self._skip.clicked.connect(lambda: self._choose(BUYER_NOTE_SKIP))
         actions.addWidget(self._skip)
+        actions.addStretch()
         detail.addLayout(actions)
         split.addLayout(detail, stretch=1)
         root.addLayout(split, stretch=1)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Cancel
-        )
-        self._continue = buttons.addButton("START fortsetzen", QDialogButtonBox.ButtonRole.AcceptRole)
-        buttons.accepted.connect(self._accept_if_complete)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel = QPushButton("CANCEL")
+        cancel.setToolTip("Gesamten START-Lauf abbrechen")
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        root.addLayout(buttons)
 
     @staticmethod
     def _item_label(case: BuyerNoteCase) -> str:
@@ -142,7 +149,7 @@ class BuyerNoteReviewDialog(QDialog):
         self._selections[case.invoice_id] = BuyerNoteReviewSelection(
             action=current.action,
             address_lines=normalized_lines(self._address.toPlainText().splitlines()),
-            manual_note=self._manual_note.toPlainText().strip(),
+            manual_note=self._manual_note_text,
         )
 
     def _show_case(self, index: int) -> None:
@@ -152,31 +159,22 @@ class BuyerNoteReviewDialog(QDialog):
         if case is None:
             return
         self._headline.setText(f"{case.customer_name or 'Unbekannter Kunde'} · {self._item_label(case)}")
-        self._source.setText(f"Quelle: {case.source_labels or 'unbekannt'}")
         self._note.setPlainText(case.note_text)
         selection = self._selections.get(case.invoice_id)
         self._address.setPlainText("\n".join(selection.address_lines if selection else case.address_lines))
-        self._manual_note.setPlainText(selection.manual_note if selection else "")
-        product_lines = [
-            f"{product.quantity} × {product.name or product.sku or 'Produkt'}"
-            for product in case.products
-        ]
-        self._products.setText(
-            "Positionen: " + (", ".join(product_lines) if product_lines else "nicht aufgelöst")
-        )
+        self._manual_note_text = selection.manual_note if selection else ""
+        self._products.clear()
+        for product in case.products:
+            self._products.addItem(f"{product.quantity} × {product.name or product.sku or 'Produkt'}"
+                                   + (f" · {product.sku}" if product.sku and product.name else ""))
+        if not case.products:
+            self._products.addItem("Keine Positionen verfügbar")
         is_digital = case.physical_delivery is False
-        self._delivery.setEnabled(self._allow_delivery_note and not is_digital)
-        self._digital.setEnabled(is_digital)
-        self._digital.setToolTip(
-            "Nur für digital-only Bestellungen verfügbar."
-            if not is_digital
-            else "Digitale Lieferung geprüft; es wird kein Papier ausgegeben."
+        self._delivery.setEnabled(
+            self._allow_delivery_note and not is_digital and self._container is not None
+            and case.invoice_id not in self._printed_cases
         )
-        self._delivery.setToolTip(
-            "Bei digital-only Bestellungen gibt es keinen Papier-Lieferschein."
-            if is_digital
-            else "Adressdaten prüfen; der Lieferschein wird direkt vor der Rechnung gedruckt."
-        )
+        self._mail.setEnabled(bool(case.customer_email) and self._container is not None)
 
     def _choose(self, action: str) -> None:
         case = self._case()
@@ -189,29 +187,84 @@ class BuyerNoteReviewDialog(QDialog):
         self._selections[case.invoice_id] = BuyerNoteReviewSelection(
             action=action,
             address_lines=address,
-            manual_note=self._manual_note.toPlainText().strip(),
+            manual_note=self._manual_note_text,
         )
         item = self._case_list.item(self._current_index)
         if item is not None:
             labels = {
                 BUYER_NOTE_ACK: "Gelesen",
                 BUYER_NOTE_DELIVERY_NOTE: "Lieferschein",
-                BUYER_NOTE_DIGITAL_ACK: "Digital bestätigt",
                 BUYER_NOTE_SKIP: "Übersprungen",
             }
             item.setText(f"{self._item_label(case)} · {labels.get(action, action)}")
+        if len(self._selections) == len(self._cases):
+            self.accept()
+        else:
+            next_index = next((i for i, other in enumerate(self._cases)
+                               if other.invoice_id not in self._selections), -1)
+            if next_index >= 0:
+                self._case_list.setCurrentRow(next_index)
 
-    def _accept_if_complete(self) -> None:
-        self._save_editor_values()
-        missing = [case for case in self._cases if case.invoice_id not in self._selections]
-        if missing:
-            QMessageBox.warning(
-                self,
-                "Prüfung unvollständig",
-                f"Bitte noch {len(missing)} Käufernotiz(en) bestätigen oder überspringen.",
-            )
+    def _open_delivery(self) -> None:
+        case = self._case()
+        if case is None or self._container is None:
             return
-        self.accept()
+        address = normalized_lines(self._address.toPlainText().splitlines())
+        if not address:
+            QMessageBox.warning(self, "Lieferschein", "Bitte zuerst die Lieferadresse eintragen.")
+            return
+        if not case.products:
+            QMessageBox.warning(self, "Lieferschein", "Positionen fehlen. Bitte START abbrechen und die Bestellung prüfen.")
+            return
+        dialog = BuyerNoteDeliveryDialog(case, address, self._manual_note_text,
+                                         self._container, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._manual_note_text = dialog.manual_note
+        if dialog.output == "schedule":
+            self._choose(BUYER_NOTE_DELIVERY_NOTE)
+        elif dialog.output == "printed":
+            self._printed_cases.add(case.invoice_id)
+            self._delivery.setEnabled(False)
+
+    def _open_customer_mail(self) -> None:
+        case = self._case()
+        if case is None or self._container is None or not case.customer_email:
+            return
+        if self._mail_worker is not None and self._mail_worker.isRunning():
+            return
+        self._mail.setEnabled(False)
+        quoted_note = "\n".join(f"> {line}" for line in case.note_text.splitlines())
+        body = (
+            "Guten Tag,\n\n[Antwort hier eingeben]\n\n"
+            "--- Ursprüngliche Käufernotiz ---\n"
+            f"{quoted_note}\n"
+        )
+        subject = f"Ihre Nachricht zu Bestellung {case.order_reference or case.invoice_number or case.invoice_id}"
+
+        def job() -> object:
+            sender = str(self._container.resolve(SecretService).get_secret("OUTLOOK_SENDER_EMAIL") or "")
+            return open_classic_outlook_draft(
+                to_email=case.customer_email,
+                subject=subject,
+                sender_smtp=sender,
+                body=body,
+            )
+
+        self._mail_worker = BackgroundWorker(job)
+        self._mail_worker.signals.result.connect(lambda _result: QMessageBox.information(
+            self, "Kundenmail", "Outlook-Entwurf geöffnet. Bitte dort prüfen und senden."
+        ))
+        self._mail_worker.signals.error.connect(lambda exc: QMessageBox.warning(
+            self, "Kundenmail", f"Outlook-Entwurf konnte nicht geöffnet werden:\n{exc}"
+        ))
+        self._mail_worker.signals.finished.connect(self._mail_finished)
+        self._mail_worker.start()
+
+    def _mail_finished(self) -> None:
+        self._mail_worker = None
+        case = self._case()
+        self._mail.setEnabled(bool(case and case.customer_email))
 
     def selections(self) -> dict[str, tuple[BuyerNoteCase, BuyerNoteReviewSelection]]:
         return {

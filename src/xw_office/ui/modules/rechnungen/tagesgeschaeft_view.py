@@ -1261,6 +1261,7 @@ class TagesgeschaeftView(QWidget):
             review = BuyerNoteReviewDialog(
                 result.buyer_note_cases,
                 allow_delivery_note=self._start_requested_mode == StartMode.INVOICES_AND_PRINT,
+                container=self._container,
                 parent=self,
             )
             if review.exec() != QDialog.DialogCode.Accepted:

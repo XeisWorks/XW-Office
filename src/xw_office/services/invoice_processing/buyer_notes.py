@@ -30,6 +30,7 @@ class BuyerNoteCase:
     physical_delivery: bool | None = None
     address_lines: tuple[str, ...] = ()
     products: tuple[BuyerNoteProduct, ...] = ()
+    customer_email: str = ""
 
     @property
     def note_text(self) -> str:

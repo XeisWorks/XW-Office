@@ -50,6 +50,28 @@ def test_open_classic_outlook_draft_uses_interactive_classic_cli(
     assert '"sender": "office@xeisworks.at"' in str(helper_calls[0]["input"])
 
 
+def test_open_classic_outlook_draft_passes_reply_and_attachment(monkeypatch: object, tmp_path: Path) -> None:
+    executable = tmp_path / "OUTLOOK.EXE"
+    executable.write_bytes(b"test")
+    payloads: list[str] = []
+    monkeypatch.setattr(outlook_compose.subprocess, "Popen", lambda *_a, **_k: types.SimpleNamespace(pid=1))  # type: ignore[attr-defined]
+
+    def fake_run(_command: object, **kwargs: object) -> object:
+        payloads.append(str(kwargs["input"]))
+        return types.SimpleNamespace(returncode=0, stdout='{"ok": true}', stderr="")
+
+    monkeypatch.setattr(outlook_compose.subprocess, "run", fake_run)  # type: ignore[attr-defined]
+    outlook_compose.open_classic_outlook_draft(
+        to_email="kunde@example.test", subject="Antwort", sender_smtp="office@example.test",
+        body="Ursprüngliche Käufernotiz", attachments=["C:/test/lieferschein.pdf"],
+        outlook_executable=executable,
+    )
+    import json
+    data = json.loads(payloads[0])
+    assert data["body"] == "Ursprüngliche Käufernotiz"
+    assert data["attachments"] == ["C:/test/lieferschein.pdf"]
+
+
 def test_wait_for_running_outlook_never_dispatches_hidden_instance(monkeypatch: object) -> None:
     outlook = object()
     win32 = types.SimpleNamespace(GetActiveObject=lambda _name: outlook)

@@ -1399,12 +1399,18 @@ class InvoiceProcessingService:
                     )
 
             customer_name = str(summary.contact_name or "").strip()
+            customer_email = ""
             if order and self._wix_orders is not None:
                 try:
-                    customer_name = str(
-                        self._wix_orders.resolve_order_summary(ref).get("wix_customer_name")
-                        or customer_name
-                    ).strip()
+                    order_summary = self._wix_orders.resolve_order_summary(ref)
+                    customer_name = str(order_summary.get("wix_customer_name") or customer_name).strip()
+                    customer_email = str(order_summary.get("wix_customer_email") or "").strip()
+                except Exception:  # noqa: BLE001
+                    pass
+            if not customer_email:
+                try:
+                    detail = self.get_cached_invoice_detail_context(summary) or self.get_invoice_detail_context(summary)
+                    customer_email = str(detail.get("customer_email") or "").strip()
                 except Exception:  # noqa: BLE001
                     pass
             cases.append(
@@ -1417,6 +1423,7 @@ class InvoiceProcessingService:
                     physical_delivery=physical,
                     address_lines=normalized_lines(address),
                     products=tuple(products),
+                    customer_email=customer_email,
                 )
             )
         return cases
