@@ -1596,8 +1596,6 @@ def test_open_product_enrichment_resolves_hub_variants_as_one_batch(
     from xw_office.services.product_hub.inventory import InventoryV2Service
 
     container, _invoice_service = _build_rechnungen_test_container()
-    view = RechnungenView(container)
-    qtbot.addWidget(view)
     items = [
         PrintProductAggregate(sku=f"XW-BATCH-{index}", title=f"Produkt {index}", description="", quantity=1)
         for index in range(2)
@@ -1605,6 +1603,16 @@ def test_open_product_enrichment_resolves_hub_variants_as_one_batch(
     variant_ids = [uuid.uuid4(), uuid.uuid4()]
     resolution_calls: list[list[str]] = []
     stock_calls: list[list[uuid.UUID]] = []
+    catalog_calls: list[list[str]] = []
+
+    class FakeCatalog:
+        def warm_hub_products(self, skus: list[str]) -> None:
+            catalog_calls.append(skus)
+
+        def clear_warmed_hub_products(self) -> None:
+            return None
+
+    container.register(ProductCatalogService, lambda _: FakeCatalog())  # type: ignore[arg-type,return-value]
 
     class FakeHub:
         def resolve_variants_by_skus(self, skus: list[str]) -> dict[str, object]:
@@ -1619,6 +1627,8 @@ def test_open_product_enrichment_resolves_hub_variants_as_one_batch(
             return {variant_id: 8 + index for index, variant_id in enumerate(variant_ids)}
 
     container.register(InventoryV2Service, lambda _: FakeHub())  # type: ignore[arg-type,return-value]
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
     monkeypatch.setattr(
         "xw_office.ui.modules.rechnungen.view.resolve_piece_print_config",
         lambda _catalog, block: types.SimpleNamespace(
@@ -1631,6 +1641,7 @@ def test_open_product_enrichment_resolves_hub_variants_as_one_batch(
 
     result = view._resolve_piece_blocks_from_open_products(items)  # noqa: SLF001
 
+    assert [call for call in catalog_calls if call] == [[item.sku for item in items]]
     assert resolution_calls == [[item.sku for item in items]]
     assert stock_calls == [variant_ids]
     assert [result[view._open_product_check_key(item)].stock_status.on_hand for item in items] == [8, 9]  # noqa: SLF001

@@ -12,7 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from xw_office.models.base import Base
-from xw_office.models.product_hub import PriceList, Product
+from xw_office.models.product_hub import PriceList, Product, ProductSkuAlias
 from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.services.product_hub.desktop_client import ProductHubDesktopClient
 from xw_office.web import ContentWebSettings, create_app
@@ -177,6 +177,40 @@ def test_desktop_snapshot_exposes_versioned_variant_and_print_contract(
     ).get_product_snapshot(str(seeded_product.id))
     assert desktop_snapshot.product["id"] == payload["product"]["id"]
     assert desktop_snapshot.variants[0]["prices"][0]["gross_amount"] == "27.9000"
+
+
+def test_desktop_batch_snapshots_resolve_aliases_and_omit_unknown_skus(
+    db_path: str, seeded_product: Product
+) -> None:
+    engine = create_engine(db_path, future=True)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+    repo = ProductHubRepository(factory)
+    variant = repo.get_default_variant(seeded_product.id)
+    assert variant is not None
+    with factory() as session:
+        session.add(
+            ProductSkuAlias(
+                product_id=seeded_product.id,
+                alias_sku="OLD-1",
+                source="test",
+                variant_id=variant.id,
+            )
+        )
+        session.commit()
+    engine.dispose()
+
+    response = _client(db_path).post(
+        "/api/v1/desktop/products/snapshots/batch",
+        headers=_auth_headers(),
+        json={"skus": ["xw-1", "OLD-1", "missing"]},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload) == {"XW-1", "OLD-1"}
+    assert payload["XW-1"]["product"]["id"] == str(seeded_product.id)
+    assert payload["OLD-1"]["variants"][0]["id"] == str(variant.id)
+    assert payload["XW-1"]["assets"][0]["uri"] == "https://x/c.jpg"
 
 
 def test_get_product_assets(db_path: str, seeded_product: Product) -> None:

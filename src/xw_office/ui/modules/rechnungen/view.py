@@ -4900,6 +4900,12 @@ class RechnungenView(QWidget):
         except Exception as exc:  # noqa: BLE001 - legacy configuration remains usable.
             logger.debug("Open print product inventory service unavailable: %s", exc)
 
+        if catalog is not None:
+            try:
+                catalog.warm_hub_products([item.sku for item in items])
+            except Exception as exc:  # noqa: BLE001 - individual lookup remains the fallback.
+                logger.debug("Open print product batch catalog lookup failed: %s", exc)
+
         for item in items:
             key = self._open_product_check_key(item)
             block = self._basic_piece_block_from_open_product(item)
@@ -4918,6 +4924,9 @@ class RechnungenView(QWidget):
             except Exception as exc:  # noqa: BLE001 - fall back to cached sevDesk stock.
                 logger.debug("Open print product catalog lookup failed sku=%s: %s", block.sku, exc)
                 self._apply_open_product_cached_stock(block)
+
+        if catalog is not None:
+            catalog.clear_warmed_hub_products()
 
         if hub is not None and sku_keys:
             try:

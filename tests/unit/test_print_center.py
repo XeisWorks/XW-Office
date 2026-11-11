@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
+import time
 from unittest.mock import MagicMock
 
 import fitz
@@ -303,7 +304,7 @@ def test_catalogue_cache_hits_updates_deletions_and_force_reload(
     assert loader.call_count == 3
     catalog.list_articles(force_refresh=True)
     assert loader.call_count == 4
-    catalog._last_resolution = 0.0
+    catalog._last_resolution = time.monotonic() - 301
     catalog.list_articles()
     assert loader.call_count == 5
 

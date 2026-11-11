@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Generator
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.encoders import jsonable_encoder
@@ -21,6 +22,7 @@ from xw_office.repositories.product_hub import (
     OptimisticLockError,
     ProductFilter,
     ProductHubRepository,
+    normalize_sku,
 )
 from xw_office.repositories.product_hub_drafts import ProductDraftRepository
 from xw_office.services.product_hub.catalog_list import build_parent_product_summaries
@@ -45,6 +47,7 @@ from xw_office.web.schemas.products import (
     ChannelOnboardingResultOut,
     ContentGenerateResponse,
     DesktopProductSnapshotV1,
+    DesktopProductSnapshotsRequest,
     DesktopVariantSnapshotV1,
     EditionCreateRequest,
     EditionOut,
@@ -101,7 +104,7 @@ DraftDependency = Callable[[], Generator[ProductDraftRepository, None, None]]
 OneDriveAssetDependency = Callable[[], OneDriveAssetService]
 AssetJobDependency = Callable[[], ProductAssetJobService]
 
-DRAFT_TEMPLATES = {
+DRAFT_TEMPLATES: dict[str, tuple[str, dict[str, object]]] = {
     "mnozil-single": ("Mnozil-Einzeltitel", {"product_type": "physical", "music_attributes": {"series": "Mnozil"}}),
     "musicheroes-booklet": ("MusikHeroes-Heft", {"product_type": "physical", "music_attributes": {"series": "MusikHeroes"}}),
     "additional-part": ("Zusatzstimme", {"product_type": "physical", "music_attributes": {"kind": "Zusatzstimme"}}),
@@ -123,10 +126,10 @@ def build_products_router(
     Mirrors ``create_app(settings)``'s own injection style so tests can pass a
     SQLite-backed repo and Railway gets one bound to the real Postgres session.
 
-    Every PATCH/POST/PUT/DELETE route is registered on ``write_router`` and only
-    mounted with ``require_edit_enabled`` applied — a separate kill switch from the
-    read API's, since this is the first write-capable surface this service exposes
-    (see ``ContentWebSettings.product_hub_edit_enabled``, defaults to off).
+    Mutating PATCH/POST/PUT/DELETE routes are registered on ``write_router`` and only
+    mounted with ``require_edit_enabled`` applied. Read-only POST batches stay on the
+    authenticated read router; the edit gate is a separate kill switch for the write
+    API (``ContentWebSettings.product_hub_edit_enabled``, defaults to off).
     """
     router = APIRouter(prefix="/api/v1", tags=["product-hub"])
     write_router = APIRouter()
@@ -148,9 +151,11 @@ def build_products_router(
 
     def _draft_out(repo: ProductDraftRepository, draft: object) -> ProductDraftOut:
         output = ProductDraftOut.model_validate(draft)
+        options = cast(list[object], repo.list_options(output.id))
+        variants = cast(list[object], repo.list_variants(output.id))
         return output.model_copy(update={
-            "options": [ProductDraftOptionOut.model_validate(item) for item in repo.list_options(output.id)],
-            "variants": [ProductDraftVariantOut.model_validate(item) for item in repo.list_variants(output.id)],
+            "options": [ProductDraftOptionOut.model_validate(item) for item in options],
+            "variants": [ProductDraftVariantOut.model_validate(item) for item in variants],
         })
 
     @router.get("/product-drafts/sku-availability", response_model=SkuAvailabilityOut)
@@ -466,30 +471,64 @@ def build_products_router(
         _get_product_or_404(repo, product_id)
         return [ProductVariantOut.model_validate(v) for v in repo.list_variants(product_id)]
 
-    def _desktop_snapshot(product: Product, repo: ProductHubRepository) -> DesktopProductSnapshotV1:
-        """Versioned, authenticated read contract for desktop print consumers.
-
-        All data comes from one Hub revision boundary; callers must treat it as
-        read-only and use the product/variant row versions for cache invalidation.
-        """
-        variants = []
-        for variant in repo.list_variants(product.id):
-            variants.append(
+    def _desktop_snapshots(
+        products: list[Product], repo: ProductHubRepository
+    ) -> dict[uuid.UUID, DesktopProductSnapshotV1]:
+        """Build snapshots for many products with bounded repository reads."""
+        products_by_id = {product.id: product for product in products}
+        product_ids = list(products_by_id)
+        variants = repo.list_variants_for_products(product_ids)
+        variant_ids = [variant.id for variant in variants]
+        prices_by_variant: dict[uuid.UUID, list[PriceOut]] = {}
+        for price in repo.list_prices_for_variants(variant_ids):
+            prices_by_variant.setdefault(price.variant_id, []).append(PriceOut.model_validate(price))
+        rules_by_variant = {
+            rule.variant_id: PrintRuleOut.model_validate(rule)
+            for rule in repo.list_print_rules_for_variants(variant_ids)
+        }
+        variants_by_product: dict[uuid.UUID, list[DesktopVariantSnapshotV1]] = {}
+        for variant in variants:
+            variants_by_product.setdefault(variant.product_id, []).append(
                 DesktopVariantSnapshotV1(
                     **ProductVariantOut.model_validate(variant).model_dump(),
-                    prices=[PriceOut.model_validate(price) for price in repo.list_prices(variant.id)],
-                    print_rule=(
-                        PrintRuleOut.model_validate(rule)
-                        if (rule := repo.get_print_rule(variant.id)) is not None
-                        else None
-                    ),
+                    prices=prices_by_variant.get(variant.id, []),
+                    print_rule=rules_by_variant.get(variant.id),
                 )
             )
-        return DesktopProductSnapshotV1(
-            product=ProductDetail.model_validate(product),
-            variants=variants,
-            assets=[ProductAssetOut.model_validate(asset) for asset in repo.list_assets(product.id)],
-        )
+        assets_by_product: dict[uuid.UUID, list[ProductAssetOut]] = {}
+        for asset in repo.list_assets_for_products(product_ids):
+            assets_by_product.setdefault(asset.product_id, []).append(ProductAssetOut.model_validate(asset))
+        return {
+            product_id: DesktopProductSnapshotV1(
+                product=ProductDetail.model_validate(product),
+                variants=variants_by_product.get(product_id, []),
+                assets=assets_by_product.get(product_id, []),
+            )
+            for product_id, product in products_by_id.items()
+        }
+
+    def _desktop_snapshot(product: Product, repo: ProductHubRepository) -> DesktopProductSnapshotV1:
+        """Versioned, authenticated read contract for desktop print consumers."""
+        return _desktop_snapshots([product], repo)[product.id]
+
+    @router.post(
+        "/desktop/products/snapshots/batch",
+        response_model=dict[str, DesktopProductSnapshotV1],
+    )
+    def get_desktop_product_snapshots_by_sku(
+        body: DesktopProductSnapshotsRequest,
+        repo: ProductHubRepository = Depends(get_repo),
+    ) -> dict[str, DesktopProductSnapshotV1]:
+        resolved = repo.resolve_skus(body.skus)
+        products = list({item.product.id: item.product for item in resolved.values()}.values())
+        snapshots = _desktop_snapshots(products, repo)
+        result: dict[str, DesktopProductSnapshotV1] = {}
+        for raw_sku in body.skus:
+            sku = normalize_sku(raw_sku)
+            item = resolved.get(sku)
+            if item is not None and item.product.id in snapshots:
+                result[sku] = snapshots[item.product.id]
+        return result
 
     @router.get("/desktop/products/by-sku/{sku}/snapshot", response_model=DesktopProductSnapshotV1)
     def get_desktop_product_snapshot_by_sku(

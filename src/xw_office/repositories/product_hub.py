@@ -645,6 +645,18 @@ class ProductHubRepository:
             )
             return list(session.scalars(stmt).all())
 
+    def list_assets_for_products(self, product_ids: list[uuid.UUID]) -> list[ProductAsset]:
+        """Return assets for multiple products with one ordered query."""
+        if not product_ids:
+            return []
+        with self._scope() as session:
+            stmt = (
+                select(ProductAsset)
+                .where(ProductAsset.product_id.in_(product_ids))
+                .order_by(ProductAsset.product_id, ProductAsset.role, ProductAsset.sort_order)
+            )
+            return list(session.scalars(stmt).all())
+
     def get_asset(self, asset_id: uuid.UUID) -> ProductAsset | None:
         with self._scope() as session:
             return session.get(ProductAsset, asset_id)
@@ -751,6 +763,14 @@ class ProductHubRepository:
     def get_print_rule(self, variant_id: uuid.UUID) -> PrintRule | None:
         with self._scope() as session:
             return session.scalar(select(PrintRule).where(PrintRule.variant_id == variant_id))
+
+    def list_print_rules_for_variants(self, variant_ids: list[uuid.UUID]) -> list[PrintRule]:
+        """Return print rules for multiple variants with one query."""
+        if not variant_ids:
+            return []
+        with self._scope() as session:
+            stmt = select(PrintRule).where(PrintRule.variant_id.in_(variant_ids))
+            return list(session.scalars(stmt).all())
 
     def upsert_print_rule(
         self,

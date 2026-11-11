@@ -42,7 +42,38 @@ class ProductHubDesktopClient:
     def get_product_snapshot_by_sku(self, sku: str) -> DesktopHubSnapshot:
         return self._get_snapshot(f"/api/v1/desktop/products/by-sku/{quote(str(sku), safe='')}/snapshot")
 
+    def get_product_snapshots_by_skus(self, skus: list[str]) -> dict[str, DesktopHubSnapshot]:
+        """Fetch authenticated snapshots for up to 100 SKUs per request."""
+        clean_skus = list(dict.fromkeys(str(sku or "").strip().upper() for sku in skus))
+        clean_skus = [sku for sku in clean_skus if sku]
+        if not clean_skus:
+            return {}
+        snapshots: dict[str, DesktopHubSnapshot] = {}
+        for offset in range(0, len(clean_skus), 100):
+            chunk = clean_skus[offset:offset + 100]
+            payload = self._request_json(
+                "/api/v1/desktop/products/snapshots/batch",
+                method="POST",
+                json_body={"skus": chunk},
+            )
+            if not isinstance(payload, dict):
+                raise ProductHubDesktopClientError("Unvollständiger Product-Hub-Desktop-Batchvertrag.")
+            for sku, raw_snapshot in payload.items():
+                if not isinstance(sku, str) or not isinstance(raw_snapshot, dict):
+                    raise ProductHubDesktopClientError("Ungültiger Product-Hub-Desktop-Batchvertrag.")
+                snapshots[sku] = self._parse_snapshot(raw_snapshot)
+        return snapshots
+
     def _get_snapshot(self, path: str) -> DesktopHubSnapshot:
+        return self._parse_snapshot(self._request_json(path))
+
+    def _request_json(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        json_body: dict[str, object] | None = None,
+    ) -> object:
         if not self._base_url or not self._token:
             raise ProductHubDesktopClientError("Product-Hub-Desktop-API ist nicht konfiguriert.")
         try:
@@ -52,11 +83,14 @@ class ProductHubDesktopClient:
                 timeout=self._timeout_seconds,
                 transport=self._transport,
             ) as client:
-                response = client.get(path)
+                response = client.request(method, path, json=json_body)
                 response.raise_for_status()
-                payload = response.json()
+                return response.json()
         except (httpx.HTTPError, ValueError) as exc:
             raise ProductHubDesktopClientError(f"Product-Hub-Desktop-Lesezugriff fehlgeschlagen: {exc}") from exc
+
+    @staticmethod
+    def _parse_snapshot(payload: object) -> DesktopHubSnapshot:
         if not isinstance(payload, dict) or payload.get("contract_version") != "v1":
             raise ProductHubDesktopClientError("Inkompatibler Product-Hub-Desktop-Vertrag.")
         product = payload.get("product")

@@ -22,7 +22,7 @@ from xw_office.core.shared_paths import resolve_shared_path
 
 if TYPE_CHECKING:
     from xw_office.repositories.settings_kv import SettingKvRepository
-    from xw_office.services.product_hub.desktop_client import ProductHubDesktopClient
+    from xw_office.services.product_hub.desktop_client import DesktopHubSnapshot, ProductHubDesktopClient
     from xw_office.services.sevdesk.part_client import SevdeskPart
 
 logger = logging.getLogger(__name__)
@@ -360,6 +360,7 @@ class ProductCatalogService:
         self._prefer_hub = prefer_hub and hub_client is not None
         # In-memory cache: canonical SKU -> Product
         self._by_sku: dict[str, Product] = {}
+        self._batch_hub_products: dict[str, Product | None] = {}
         # Alias map: any_sku -> canonical_sku
         self._alias_map: dict[str, str] = {}
         self._direct_print_config: dict[str, dict[str, object]] = {}
@@ -409,7 +410,11 @@ class ProductCatalogService:
     def resolve_sku(self, raw_sku: str) -> Product | None:
         """Return Product for raw_sku including alias lookup."""
         sku = raw_sku.strip().upper()
-        if self._prefer_hub and sku and sku not in _UNRELEASED_DYNAMIC_SKUS:
+        if sku in self._batch_hub_products:
+            batch_product = self._batch_hub_products[sku]
+            if batch_product is not None:
+                return batch_product
+        elif self._prefer_hub and sku and sku not in _UNRELEASED_DYNAMIC_SKUS:
             hub_product = self._resolve_hub_product(sku)
             if hub_product is not None:
                 return hub_product
@@ -459,6 +464,39 @@ class ProductCatalogService:
             snapshot = self._hub_client.get_product_snapshot_by_sku(sku)
         except Exception as exc:  # noqa: BLE001 - controlled local fallback
             logger.warning("Product Hub lookup failed for %s; using legacy catalog: %s", sku, exc)
+            return None
+        return self._product_from_hub_snapshot(sku, snapshot)
+
+    def warm_hub_products(self, raw_skus: list[str]) -> None:
+        """Hydrate known Hub products from one authenticated batch read when supported."""
+        self._batch_hub_products.clear()
+        if not self._prefer_hub or self._hub_client is None:
+            return
+        batch_lookup = getattr(self._hub_client, "get_product_snapshots_by_skus", None)
+        if not callable(batch_lookup):
+            return
+        skus = list(dict.fromkeys(str(sku or "").strip().upper() for sku in raw_skus))
+        skus = [sku for sku in skus if sku and sku not in _UNRELEASED_DYNAMIC_SKUS]
+        if not skus:
+            return
+        try:
+            snapshots = batch_lookup(skus)
+        except Exception as exc:  # noqa: BLE001 - legacy single-SKU fallback remains available.
+            logger.warning("Product Hub batch lookup failed; using individual lookups: %s", exc)
+            return
+        for sku, snapshot in snapshots.items():
+            product = self._product_from_hub_snapshot(sku, snapshot)
+            self._batch_hub_products[str(sku).strip().upper()] = product
+        for sku in skus:
+            self._batch_hub_products.setdefault(sku, None)
+
+    def clear_warmed_hub_products(self) -> None:
+        """Discard one render's batch snapshots so later actions fetch current data."""
+        self._batch_hub_products.clear()
+
+    def _product_from_hub_snapshot(self, sku: str, snapshot: DesktopHubSnapshot) -> Product | None:
+        """Hydrate legacy print metadata from one versioned Hub snapshot."""
+        if self._hub_client is None:
             return None
         variants = [item for item in snapshot.variants if isinstance(item, dict)]
         variant = next((item for item in variants if str(item.get("sku") or "").upper() == sku), None)

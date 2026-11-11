@@ -476,6 +476,12 @@ class DesktopProductSnapshotV1(BaseModel):
     assets: list[ProductAssetOut]
 
 
+class DesktopProductSnapshotsRequest(BaseModel):
+    """SKU batch for the authenticated read-only desktop snapshot endpoint."""
+
+    skus: list[str] = Field(min_length=1, max_length=100)
+
+
 class PrintRuleUpsertRequest(BaseModel):
     expected_row_version: int | None = None
     min_stock_target: int | None = None
