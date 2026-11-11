@@ -79,6 +79,27 @@ def test_external_invoice_poll_uses_bulk_positions_when_provider_supports_it() -
     assert result.processed == 1
 
 
+def test_invoice_feed_reads_nested_sevdesk_part_number() -> None:
+    factory, variant_id = _factory()
+    InventoryV2Service(factory).record_movement(
+        variant_id=variant_id,
+        delta=10,
+        reason="import_baseline",
+        source="test",
+        idempotency_key="poll-nested-sku-baseline",
+    )
+
+    class NestedPartProvider(_OneInvoiceProvider):
+        pass
+
+    provider = NestedPartProvider(
+        {"id": "nested-part-invoice", "status": 200},
+        {"id": "nested-part-position", "quantity": 1, "part": {"partNumber": "XW-BOOKING"}},
+    )
+    result = SevdeskInvoiceInventoryPoller(provider, InvoiceInventoryBookingService(factory)).poll()
+    assert result.processed == 1
+
+
 def test_invoice_feed_requires_explicit_final_status_and_position_id() -> None:
     factory, _variant_id = _factory()
     provider = _OneInvoiceProvider(

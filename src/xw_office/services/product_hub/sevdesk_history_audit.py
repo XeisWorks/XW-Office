@@ -259,7 +259,13 @@ def _position_units(position: dict[str, Any]) -> int:
 def _position_sku(position: dict[str, Any]) -> str:
     raw_part = position.get("part")
     part = raw_part if isinstance(raw_part, dict) else {}
-    return str(position.get("sku") or position.get("partNumber") or part.get("number") or "").strip()
+    return str(
+        position.get("sku")
+        or position.get("partNumber")
+        or part.get("partNumber")
+        or part.get("number")
+        or ""
+    ).strip()
 
 
 def _full_months_between(start: datetime.date, end: datetime.date) -> int:

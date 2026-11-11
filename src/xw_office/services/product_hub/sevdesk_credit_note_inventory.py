@@ -150,7 +150,13 @@ def _position_key(position: dict[str, object]) -> str:
 def _sku(position: dict[str, object]) -> str:
     raw_part = position.get("part")
     part = raw_part if isinstance(raw_part, dict) else {}
-    return str(position.get("sku") or position.get("partNumber") or part.get("number") or "").strip().upper()
+    return str(
+        position.get("sku")
+        or position.get("partNumber")
+        or part.get("partNumber")
+        or part.get("number")
+        or ""
+    ).strip().upper()
 
 
 def _bulk_positions(
