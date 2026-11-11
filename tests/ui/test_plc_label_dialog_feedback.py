@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QDialog, QHeaderView, QLabel, QMessageBox, QPushButton
 
 from xw_office.bootstrap import register_default_services
@@ -356,6 +358,54 @@ def test_multiple_parcels_split_physical_items_and_prepare_two_packing_lists(qtb
     assert [item.quantity for item in packing_lists[0].items] == [1]
     assert [item.quantity for item in packing_lists[1].items] == [1]
     assert all("Download" not in item.name for packing_list in packing_lists for item in packing_list.items)
+
+
+def test_packing_list_pdf_and_queue_run_off_ui_thread_and_ignore_repeat_click(
+    qtbot: object,
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    dialog = PlcLabelPrintDialog(_container(), None)
+    qtbot.addWidget(dialog)
+    dialog._package_count.setValue(2)  # noqa: SLF001
+    dialog._find_product = lambda: {"pakettyp": "PC"}  # type: ignore[method-assign]  # noqa: SLF001
+    dialog._build_reference = lambda: "21104"  # type: ignore[method-assign]  # noqa: SLF001
+    dialog._build_parcels_and_packing_lists = (  # type: ignore[method-assign]  # noqa: SLF001
+        lambda **_kwargs: ((), (object(), object()))
+    )
+    dialog._confirm_allocation_warnings = lambda **_kwargs: True  # type: ignore[method-assign]  # noqa: SLF001
+    started = Event()
+    release = Event()
+    queued: list[str] = []
+    heartbeat: list[bool] = []
+    pdf_path = tmp_path / "packing.pdf"
+
+    def generate_pdf(_self: object, _contexts: object, *, output_dir: object) -> Path:
+        assert output_dir == dialog._label_archive.packing_lists_dir  # noqa: SLF001
+        started.set()
+        assert release.wait(2)
+        return pdf_path
+
+    monkeypatch.setattr(PackingListService, "generate_pdf", generate_pdf)
+    monkeypatch.setattr(
+        plc_dialog_module,
+        "queue_packing_lists",
+        lambda _container, path, reference: queued.append(f"{path}:{reference}") or "job-12345678",
+    )
+
+    dialog._print_packing_lists()  # noqa: SLF001
+    qtbot.waitUntil(started.is_set)  # type: ignore[attr-defined]
+    QTimer.singleShot(0, lambda: heartbeat.append(True))
+    qtbot.waitUntil(lambda: bool(heartbeat))  # type: ignore[attr-defined]
+    assert not dialog._packing_print_btn.isEnabled()  # noqa: SLF001
+
+    dialog._print_packing_lists()  # noqa: SLF001
+    assert not queued
+
+    release.set()
+    qtbot.waitUntil(lambda: dialog._packing_print_worker is None)  # type: ignore[attr-defined]  # noqa: SLF001
+    assert queued == [f"{pdf_path}:21104"]
+    assert dialog._packing_print_btn.isEnabled()  # noqa: SLF001
 
 
 def test_single_parcel_retains_physical_items_for_shipment_evidence(qtbot: object) -> None:

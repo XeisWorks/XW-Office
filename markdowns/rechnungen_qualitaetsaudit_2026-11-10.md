@@ -447,6 +447,7 @@ Geänderte Produktionsdateien:
 - `services/invoice_processing/service.py`: Header- und WorkContext-Caches erhalten eine 30-Sekunden-TTL mit gebundener Timestamp-Invalidierung (F19).
 - `ui/modules/rechnungen/view.py`: manuelle Worker und asynchroner Alarmzähler (F05/F06).
 - `ui/modules/rechnungen/view.py`: alle normalisierten SevDesk-Positionsdetails bleiben sichtbar, auch wenn eine Position nicht druckbar ist; Text kann markiert/kopiert werden (F14).
+- `ui/modules/rechnungen/plc_label_dialog.py`: Mehrpaket-Packlisten-PDF-Erstellung und Queue-Write laufen off-thread, Doppelklicks starten keinen zweiten Auftrag und der Dialog bleibt fuer Ergebnisfeedback offen (F17/F18).
 - `ui/modules/rechnungen/view.py`: verhindert gleichzeitig gestartete Einzelproduktdrucke fuer dieselbe SKU/Part-ID, erlaubt bewusste Wiederholung nach Abschluss (F12).
 - `ui/modules/rechnungen/offene_drucke_dialog.py`: sequenzsichere Anhänge (F07).
 
@@ -2182,3 +2183,5 @@ Direkte interne Abhängigkeiten: `xw_office.core.container`, `xw_office.core.per
 | 7644 | Signal → Handler | `manage_btn.clicked.connect(lambda _checked=False, block=item: self._on_product_manage_clicked(block))` |
 | 7745 | Hintergrundarbeit | `self._background_jobs.submit_callable(queue='printing', priority=20, key=f'product-print:{block.sku}:{time.monotonic_ns()}', fn=lambda _token: worker_job(), on_result=self._on_product_print_result, on_error=self._on_product_print_error, on_finished=finished, owner=self, replace='allow_p…` |
 | 7787 | Popup / Modal | `QMessageBox.critical(self, 'Produktdruck fehlgeschlagen', f'Die Produkt-PDF konnte nicht ueber den hinterlegten Druckplan gedruckt werden:\n\n{exc}')` |
+
+- AP06/F17 Packlisten-Print: PLC-Mehrpaket-PDF-Erzeugung und Queue-Write laufen jetzt in einem BackgroundWorker; der Button bleibt bis zum Ergebnis gesperrt und wiederholte Aufrufe werden ignoriert. Der Dialog bleibt waehrend des Drucklaufs offen, damit Erfolgs-/Fehlerfeedback am Owner ankommt. Neuer Fake-Test blockiert den Renderer, bestaetigt Qt-Heartbeat und genau einen Queue-Write nach Freigabe. Ruff bestanden; lokaler UI-Test mangels PySide6 nicht sammelbar.

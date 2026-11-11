@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from PySide6.QtCore import QTimer, Qt, QUrl
-from PySide6.QtGui import QBrush, QColor, QDesktopServices
+from PySide6.QtGui import QBrush, QColor, QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -240,6 +240,12 @@ class _PlcSendResult:
     polling_path: str = ""
 
 
+@dataclass(frozen=True)
+class _PackingPrintResult:
+    packing_list_count: int
+    job_id: str
+
+
 class PlcLabelPrintDialog(QDialog):
     _mail_ref_counters: dict[str, int] = {}
 
@@ -260,6 +266,7 @@ class PlcLabelPrintDialog(QDialog):
         self._summary = summary or InvoiceSummary(id="")
         self._load_worker: BackgroundWorker | None = None
         self._send_worker: BackgroundWorker | None = None
+        self._packing_print_worker: BackgroundWorker | None = None
         self._context = _PlcDialogContext(order_number="", address_lines=[], weight_kg=0.0, items=[])
         self._packing_items: list[WixOrderItem] = []
         self._packing_open_quantities: list[int] = []
@@ -1858,6 +1865,8 @@ class PlcLabelPrintDialog(QDialog):
 
     def _print_packing_lists(self) -> None:
         """Print the current multi-parcel packing lists without creating a PLC shipment."""
+        if self._packing_print_worker is not None:
+            return
         if self._package_count.value() < 2:
             QMessageBox.information(
                 self,
@@ -1876,17 +1885,53 @@ class PlcLabelPrintDialog(QDialog):
             )
             if not self._confirm_allocation_warnings(action="Packliste drucken"):
                 return
-            pdf_path = PackingListService().generate_pdf(
-                packing_contexts,
-                output_dir=self._label_archive.packing_lists_dir,
-            )
-            job_id = queue_packing_lists(self._container, pdf_path, reference)
+            output_dir = self._label_archive.packing_lists_dir
         except (OSError, RuntimeError, ValueError) as exc:
-            QMessageBox.warning(self, "Packliste", f"Packliste konnte nicht gedruckt werden: {exc}")
+            QMessageBox.warning(self, "Packliste", f"Packliste konnte nicht vorbereitet werden: {exc}")
+            return
+
+        self._packing_print_btn.setEnabled(False)
+        self._status.setText("Packlisten-PDF wird erstellt und Druckauftrag eingereiht...")
+
+        def job() -> _PackingPrintResult:
+            pdf_path = PackingListService().generate_pdf(packing_contexts, output_dir=output_dir)
+            job_id = queue_packing_lists(self._container, pdf_path, reference)
+            return _PackingPrintResult(len(packing_contexts), job_id)
+
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(self._on_packing_lists_printed)
+        worker.signals.error.connect(self._on_packing_lists_print_error)
+        worker.signals.finished.connect(
+            lambda current=worker: self._on_packing_lists_print_finished(current)
+        )
+        self._packing_print_worker = worker
+        worker.start()
+
+    def _on_packing_lists_printed(self, payload: object) -> None:
+        if not isinstance(payload, _PackingPrintResult):
+            self._on_packing_lists_print_error(RuntimeError("Ungueltige Packlisten-Druckantwort"))
             return
         self._status.setText(
-            f"{len(packing_contexts)} Packlisten an Drucker übergeben (Druckauftrag {job_id[:8]}…)."
+            f"{payload.packing_list_count} Packlisten an Drucker übergeben "
+            f"(Druckauftrag {payload.job_id[:8]}…)."
         )
+
+    def _on_packing_lists_print_error(self, exc: Exception) -> None:
+        self._status.setText("Packlisten-Druck fehlgeschlagen.")
+        QMessageBox.warning(self, "Packliste", f"Packliste konnte nicht gedruckt werden: {exc}")
+
+    def _on_packing_lists_print_finished(self, worker: BackgroundWorker) -> None:
+        if self._packing_print_worker is worker:
+            self._packing_print_worker = None
+        self._packing_print_btn.setEnabled(True)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        worker = self._packing_print_worker
+        if worker is not None and worker.isRunning():
+            event.ignore()
+            self._status.setText("Der Packlisten-Druckauftrag wird noch abgeschlossen.")
+            return
+        super().closeEvent(event)
 
     def _send_to_plc(self) -> None:
         if self._manual_entry:
