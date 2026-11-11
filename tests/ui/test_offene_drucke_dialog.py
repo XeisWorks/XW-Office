@@ -89,7 +89,7 @@ def test_mark_done_does_not_block_event_loop_or_repeat(qtbot: QtBot) -> None:
     assert dialog._list.count() == 0
 
 
-def test_close_while_mark_done_runs_ignores_worker_result(qtbot: QtBot) -> None:
+def test_close_while_mark_done_runs_waits_for_write_result(qtbot: QtBot) -> None:
     entered, release = Event(), Event()
 
     class Mailbox:
@@ -111,10 +111,18 @@ def test_close_while_mark_done_runs_ignores_worker_result(qtbot: QtBot) -> None:
     container.register(OffeneDruckeService, lambda _: Mailbox())
     dialog = OffeneDruckeDialog(container)
     qtbot.addWidget(dialog)
+    dialog.show()
     qtbot.waitUntil(lambda: dialog._list.count() == 1)
     dialog._mark_done()
     qtbot.waitUntil(entered.is_set)
+    dialog.reject()
     dialog.close()
+    assert dialog.isVisible()
+
     release.set()
     qtbot.waitUntil(lambda: dialog._action_worker is None)
-    assert dialog._list.count() == 1
+    assert dialog._list.count() == 0
+    assert dialog.isVisible()
+
+    dialog.reject()
+    assert not dialog.isVisible()

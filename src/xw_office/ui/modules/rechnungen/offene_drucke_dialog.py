@@ -82,14 +82,21 @@ class OffeneDruckeDialog(QDialog):
         QTimer.singleShot(0, lambda: self._load(True))
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if self._action_worker is not None:
+            event.ignore()
+            return
         self._closing = True
         super().closeEvent(event)
 
     def accept(self) -> None:
+        if self._action_worker is not None:
+            return
         self._closing = True
         super().accept()
 
     def reject(self) -> None:
+        if self._action_worker is not None:
+            return
         self._closing = True
         super().reject()
 
