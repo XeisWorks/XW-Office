@@ -64,6 +64,10 @@ railway deployment list --service xw-inventory-worker --environment production -
 railway logs --service xw-inventory-worker --environment production --latest --json --lines 100
 ```
 
+Die Logs enthalten `Inventory worker started` sowie pro Zyklus
+`Inventory cycle finished forecast=... sync=...`; damit sind Lauf und Fehlerstatus ohne
+SSH-Zugriff prüfbar.
+
 Ein erfolgreicher Lauf muss ohne `needs_review`-/Fehlerstatus enden. Der Worker aktiviert
 niemals `inventory_master_enabled`. Der erste Produktionsstart läuft; die bestehende
 Readiness-Blockade durch ungeklärte sevDesk-Zuordnungen/Synchronisationskonflikte bleibt

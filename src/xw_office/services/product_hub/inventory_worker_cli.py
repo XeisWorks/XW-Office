@@ -3,12 +3,23 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import time
 
 from xw_office.services.product_hub.forecast_cli import main as forecast_main
 from xw_office.services.product_hub.inventory_sync_cli import main as sync_main
 
 logger = logging.getLogger("xw.inventory-worker")
+
+
+def _configure_logging() -> None:
+    """Make worker lifecycle messages visible in Railway/container logs."""
+    level_name = str(os.getenv("XW_INVENTORY_WORKER_LOG_LEVEL") or "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
 
 
 def run_once(*, forecast_years: int = 5, credit_years: int = 1) -> tuple[int, int]:
@@ -26,11 +37,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--once", action="store_true", help="Run one cycle and exit")
     args = parser.parse_args(argv)
     interval = max(60, int(args.interval_seconds))
+    _configure_logging()
+    logger.info(
+        "Inventory worker started interval_seconds=%s forecast_years=%s credit_years=%s once=%s",
+        interval,
+        args.forecast_years,
+        args.credit_years,
+        args.once,
+    )
     while True:
         try:
             forecast_exit, sync_exit = run_once(
                 forecast_years=int(args.forecast_years), credit_years=int(args.credit_years)
             )
+            logger.info("Inventory cycle finished forecast=%s sync=%s", forecast_exit, sync_exit)
             if forecast_exit or sync_exit:
                 logger.error("Inventory cycle reported issues: forecast=%s sync=%s", forecast_exit, sync_exit)
                 if args.once:

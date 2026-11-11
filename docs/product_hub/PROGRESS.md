@@ -22,6 +22,8 @@ Die Arbeitslisten-YAML ist jetzt zusätzlich durch `tests/unit/test_inventory_ta
 gegen Syntaxfehler und die vollständige P00--P08-Paketliste abgesichert.
 Der Readiness-CLI erkennt den aktivierten Worker nun über den nicht-geheimen
 `XW_INVENTORY_WORKER_ACTIVE`-Marker; dieser ist in Product Hub und Worker gesetzt.
+Der Worker schreibt zusätzlich Start- und Zyklusstatus in die Railway-Logs, damit der
+laufende Prozess ohne SSH-Zugriff beobachtbar bleibt.
 Das Deployment `f7a20d67-9d87-478a-86ad-337779a1c124` für `b19e9fc` wurde am
 11. November 2026 erfolgreich gebaut und ausgerollt; `https://products.xeisworks.at/health`
 liefert HTTP 200 und der anschließende Health-/Migration-Smokecheck blieb grün.

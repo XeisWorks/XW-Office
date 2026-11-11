@@ -172,6 +172,7 @@ Die automatisierte Rollback-Probe bestätigt, dass das Zurücksetzen der Master-
 Das read-only `scripts/product_hub/check_inventory_cutover.py` stellt dieselbe Readiness als CI-/Railway-taugliches JSON-/Exit-Code-Gate bereit und aktiviert niemals den Master-Flag.
 Die zugehörige YAML-Arbeitsliste wird durch `tests/unit/test_inventory_task_queue_yaml.py` auf gültige Syntax und die vollständige P00--P08-Paketstruktur geprüft.
 Der Readiness-CLI kann den aktivierten Railway-Worker über `XW_INVENTORY_WORKER_ACTIVE=true` als betriebsbereit ausweisen; der Marker enthält keine Zugangsdaten und ersetzt nicht die fachliche Shadow-/Cutover-Abnahme.
+Der Worker protokolliert Start und Ergebnis jedes Forecast-/Sync-Zyklus in Railway, sodass die laufende Betriebsprüfung auch ohne SSH-Zugriff möglich ist.
 
 ## 7. Arbeitsanweisung an Codex 5.6 Luna
 
