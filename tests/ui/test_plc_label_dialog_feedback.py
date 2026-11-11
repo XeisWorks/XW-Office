@@ -137,8 +137,68 @@ def test_successful_webservice_result_uses_overlay_without_information_popup(
         ),
     )
 
+    qtbot.waitUntil(lambda: shown == ["PLC-Label erstellt"])  # type: ignore[attr-defined]
+    qtbot.waitUntil(lambda: dialog._finalize_worker is None)  # type: ignore[attr-defined]  # noqa: SLF001
     assert shown == ["PLC-Label erstellt"]
     assert plc_service.marked_jobs == ["print-job-1"]
+
+
+def test_post_plc_archiving_and_queue_do_not_block_ui_or_allow_close(
+    qtbot: object,
+    tmp_path: Path,
+) -> None:
+    class PlcServiceStub:
+        def __init__(self) -> None:
+            self.marked_jobs: list[str] = []
+
+        def mark_print_queued(self, _shipment: PlcShipmentDraft, job_id: str) -> None:
+            self.marked_jobs.append(job_id)
+
+    plc_service = PlcServiceStub()
+    container = _container()
+    container.register(PlcShipmentService, lambda _: plc_service)  # type: ignore[arg-type,return-value]
+    dialog = PlcLabelPrintDialog(container, None)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog._label_archive = PlcLabelArchive(tmp_path)  # noqa: SLF001
+    started = Event()
+    release = Event()
+    heartbeat: list[bool] = []
+    shown: list[str] = []
+
+    def queue_label(path: object, _reference: str) -> str:
+        assert dialog._label_archive.find(_shipment()) is not None  # noqa: SLF001
+        started.set()
+        assert release.wait(3)
+        assert path
+        return "print-job-async"
+
+    dialog._queue_webservice_label = queue_label  # type: ignore[method-assign]  # noqa: SLF001
+    dialog._show_success_overlay = shown.append  # type: ignore[method-assign]  # noqa: SLF001
+    dialog._on_send_result(  # noqa: SLF001
+        _shipment(),
+        _PlcSendResult(
+            transport="webservice",
+            reference="20868",
+            webservice_result=PlcWebserviceResult(
+                pdf_bytes=b"%PDF-1.7\nPLC label",
+                tracking_codes=("TRACK-ASYNC",),
+            ),
+        ),
+    )
+
+    qtbot.waitUntil(started.is_set)  # type: ignore[attr-defined]
+    QTimer.singleShot(0, lambda: heartbeat.append(True))
+    qtbot.waitUntil(lambda: bool(heartbeat))  # type: ignore[attr-defined]
+    dialog.reject()
+    assert dialog.isVisible()
+    assert not dialog._send_btn.isEnabled()  # noqa: SLF001
+
+    release.set()
+    qtbot.waitUntil(lambda: shown == ["PLC-Label erstellt"])  # type: ignore[attr-defined]
+    qtbot.waitUntil(lambda: dialog._finalize_worker is None)  # type: ignore[attr-defined]  # noqa: SLF001
+    assert plc_service.marked_jobs == ["print-job-async"]
+    assert dialog._send_btn.isEnabled()  # noqa: SLF001
 
 
 def test_customs_result_archives_both_pdfs_before_first_print_job(
@@ -188,6 +248,8 @@ def test_customs_result_archives_both_pdfs_before_first_print_job(
         ),
     )
 
+    qtbot.waitUntil(lambda: queue_order == ["label", "customs"])  # type: ignore[attr-defined]
+    qtbot.waitUntil(lambda: dialog._finalize_worker is None)  # type: ignore[attr-defined]  # noqa: SLF001
     assert queue_order == ["label", "customs"]
 
 
@@ -222,6 +284,8 @@ def test_customs_only_result_creates_and_prints_cn23_without_queuing_label(
         ),
     )
 
+    qtbot.waitUntil(lambda: shown == ["Zollerklärung erstellt"])  # type: ignore[attr-defined]
+    qtbot.waitUntil(lambda: dialog._finalize_worker is None)  # type: ignore[attr-defined]  # noqa: SLF001
     assert dialog.windowTitle() == "Zollerklärung erstellen"
     assert dialog._label_archive.find(shipment) is None  # noqa: SLF001
     assert dialog._label_archive.find_customs_document(shipment) is not None  # noqa: SLF001
@@ -263,6 +327,8 @@ def test_customs_result_keeps_both_archives_when_first_print_queue_fails(
         ),
     )
 
+    qtbot.waitUntil(lambda: bool(warnings))  # type: ignore[attr-defined]
+    qtbot.waitUntil(lambda: dialog._finalize_worker is None)  # type: ignore[attr-defined]  # noqa: SLF001
     assert dialog._label_archive.find(shipment) is not None  # noqa: SLF001
     assert dialog._label_archive.find_customs_document(shipment) is not None  # noqa: SLF001
     assert dialog._label_archive.find_customs_print_document(shipment) is not None  # noqa: SLF001

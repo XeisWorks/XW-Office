@@ -246,6 +246,21 @@ class _PackingPrintResult:
     job_id: str
 
 
+@dataclass(frozen=True)
+class _PlcFinalizeOutcome:
+    reference: str = ""
+    archive_path: Path | None = None
+    customs_path: Path | None = None
+    customs_print_path: Path | None = None
+    packing_list_path: Path | None = None
+    label_job_id: str = ""
+    customs_job_id: str = ""
+    packing_list_job_id: str = ""
+    tracking: str = ""
+    packing_list_count: int = 0
+    error: str = ""
+
+
 class PlcLabelPrintDialog(QDialog):
     _mail_ref_counters: dict[str, int] = {}
 
@@ -266,6 +281,7 @@ class PlcLabelPrintDialog(QDialog):
         self._summary = summary or InvoiceSummary(id="")
         self._load_worker: BackgroundWorker | None = None
         self._send_worker: BackgroundWorker | None = None
+        self._finalize_worker: BackgroundWorker | None = None
         self._packing_print_worker: BackgroundWorker | None = None
         self._context = _PlcDialogContext(order_number="", address_lines=[], weight_kg=0.0, items=[])
         self._packing_items: list[WixOrderItem] = []
@@ -1696,20 +1712,6 @@ class PlcLabelPrintDialog(QDialog):
                 quantities[item_key] = quantities.get(item_key, 0) + dispatched
         return self._partial_fulfillment_order_key(), quantities
 
-    def _record_pending_fulfillment(self) -> None:
-        if not self._pending_fulfillment_order or not self._pending_fulfillment_quantities:
-            return
-        try:
-            self._partial_fulfillments.add_dispatched_quantities(
-                self._pending_fulfillment_order,
-                self._pending_fulfillment_quantities,
-            )
-        except Exception:  # noqa: BLE001 - dispatched labels must remain usable if local state fails.
-            logger.exception("Could not persist partial PLC fulfillment")
-        finally:
-            self._pending_fulfillment_order = ""
-            self._pending_fulfillment_quantities = {}
-
     def _build_parcels_and_packing_lists(
         self,
         *,
@@ -1926,19 +1928,23 @@ class PlcLabelPrintDialog(QDialog):
         self._packing_print_btn.setEnabled(True)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        worker = self._packing_print_worker
-        if worker is not None and worker.isRunning():
+        if self._has_active_write_worker():
             event.ignore()
-            self._status.setText("Der Packlisten-Druckauftrag wird noch abgeschlossen.")
+            self._status.setText("Der laufende Versand-/Druckauftrag wird noch abgeschlossen.")
             return
         super().closeEvent(event)
 
     def reject(self) -> None:
-        worker = self._packing_print_worker
-        if worker is not None and worker.isRunning():
-            self._status.setText("Der Packlisten-Druckauftrag wird noch abgeschlossen.")
+        if self._has_active_write_worker():
+            self._status.setText("Der laufende Versand-/Druckauftrag wird noch abgeschlossen.")
             return
         super().reject()
+
+    def _has_active_write_worker(self) -> bool:
+        return any(
+            worker is not None and worker.isRunning()
+            for worker in (self._send_worker, self._finalize_worker, self._packing_print_worker)
+        )
 
     def _send_to_plc(self) -> None:
         if self._manual_entry:
@@ -2079,8 +2085,22 @@ class PlcLabelPrintDialog(QDialog):
         self._send_worker = BackgroundWorker(job)
         self._send_worker.signals.result.connect(lambda result: self._on_send_result(shipment, result))
         self._send_worker.signals.error.connect(lambda exc: self._on_send_error(shipment, exc))
-        self._send_worker.signals.finished.connect(lambda: self._send_btn.setEnabled(True))
+        self._send_worker.signals.finished.connect(
+            lambda current=self._send_worker: self._on_send_worker_finished(current)
+        )
         self._send_worker.start()
+
+    def _on_send_worker_finished(self, worker: BackgroundWorker | None) -> None:
+        if self._send_worker is worker:
+            self._send_worker = None
+        self._update_send_button_state()
+
+    def _update_send_button_state(self) -> None:
+        active = any(
+            worker is not None and worker.isRunning()
+            for worker in (self._send_worker, self._finalize_worker)
+        )
+        self._send_btn.setEnabled(not active)
 
     def _on_send_result(self, shipment: PlcShipmentDraft, result: object) -> None:
         if not isinstance(result, _PlcSendResult):
@@ -2097,7 +2117,8 @@ class PlcLabelPrintDialog(QDialog):
             self._show_success_overlay("Importdatei erstellt")
             return
 
-        if result.webservice_result is None:
+        webservice_result = result.webservice_result
+        if webservice_result is None:
             self._on_send_error(
                 shipment,
                 RuntimeError(
@@ -2107,50 +2128,108 @@ class PlcLabelPrintDialog(QDialog):
                 ),
             )
             return
-        # A customs-only run uses the same PLC CN23 response, but must not
-        # mark stock as dispatched or queue its accompanying label PDF.
-        archive_path = None
-        customs_path = None
-        customs_print_path = None
-        packing_list_path = None
-        job_id = ""
-        customs_job_id = ""
-        packing_list_job_id = ""
-        try:
-            customs_pdf = result.webservice_result.shipment_documents
-            if shipment.country_group == "NON_EU" and not customs_pdf:
-                raise RuntimeError(
-                    "PLC hat trotz angeforderter Zollerklärung kein CN23-PDF zurückgegeben. "
-                    "Es wurde noch kein Druckauftrag gestartet."
+        if self._finalize_worker is not None:
+            return
+        packing_contexts = tuple(self._pending_packing_contexts)
+        customs_only = self._customs_only
+        fulfillment_order = self._pending_fulfillment_order
+        fulfillment_quantities = dict(self._pending_fulfillment_quantities)
+        self._pending_fulfillment_order = ""
+        self._pending_fulfillment_quantities = {}
+        self._send_btn.setEnabled(False)
+        self._status.setText("PLC-Antwort wird archiviert; Druckaufträge werden eingereiht...")
+
+        def job() -> _PlcFinalizeOutcome:
+            archive_path = customs_path = customs_print_path = packing_list_path = None
+            label_job_id = customs_job_id = packing_list_job_id = ""
+            try:
+                customs_pdf = webservice_result.shipment_documents
+                if shipment.country_group == "NON_EU" and not customs_pdf:
+                    raise RuntimeError(
+                        "PLC hat trotz angeforderter Zollerklärung kein CN23-PDF zurückgegeben. "
+                        "Es wurde noch kein Druckauftrag gestartet."
+                    )
+
+                # Persist both remote documents before starting their print jobs.
+                if shipment.country_group == "NON_EU":
+                    customs_path = self._label_archive.save_customs_document(shipment, customs_pdf)
+                    customs_print_path = self._label_archive.ensure_customs_print_document(shipment)
+
+                service: PlcShipmentService | None = None
+                if not customs_only:
+                    archive_path = self._label_archive.save(shipment, webservice_result.pdf_bytes)
+                    label_job_id = self._queue_webservice_label(archive_path, shipment.reference)
+                    service = self._container.resolve(PlcShipmentService)
+                    service.mark_print_queued(shipment, label_job_id)
+                    if fulfillment_order and fulfillment_quantities:
+                        try:
+                            self._partial_fulfillments.add_dispatched_quantities(
+                                fulfillment_order,
+                                fulfillment_quantities,
+                            )
+                        except Exception:  # noqa: BLE001 - keep the existing warning-only policy.
+                            logger.exception("Could not persist partial PLC fulfillment")
+                if customs_print_path is not None:
+                    customs_job_id = self._queue_customs_document(
+                        customs_print_path,
+                        shipment.reference,
+                    )
+
+                if packing_contexts and any(context.items for context in packing_contexts):
+                    packing_list_path = PackingListService().generate_pdf(
+                        packing_contexts,
+                        output_dir=self._label_archive.packing_lists_dir,
+                    )
+                    if service is None:
+                        service = self._container.resolve(PlcShipmentService)
+                    service.record_packing_pdf(shipment, packing_list_path)
+                    packing_list_job_id = queue_packing_lists(
+                        self._container,
+                        packing_list_path,
+                        shipment.reference,
+                    )
+                tracking = ", ".join(webservice_result.tracking_codes) or "ohne Trackingcode"
+                return _PlcFinalizeOutcome(
+                    reference=shipment.reference,
+                    archive_path=archive_path,
+                    customs_path=customs_path,
+                    customs_print_path=customs_print_path,
+                    packing_list_path=packing_list_path,
+                    label_job_id=label_job_id,
+                    customs_job_id=customs_job_id,
+                    packing_list_job_id=packing_list_job_id,
+                    tracking=tracking,
+                    packing_list_count=len(packing_contexts),
+                )
+            except Exception as exc:  # noqa: BLE001 - PLC already created the shipment.
+                return _PlcFinalizeOutcome(
+                    reference=shipment.reference,
+                    archive_path=archive_path,
+                    customs_path=customs_path,
+                    customs_print_path=customs_print_path,
+                    packing_list_path=packing_list_path,
+                    label_job_id=label_job_id,
+                    customs_job_id=customs_job_id,
+                    packing_list_job_id=packing_list_job_id,
+                    tracking=", ".join(webservice_result.tracking_codes) or "ohne Trackingcode",
+                    packing_list_count=len(packing_contexts),
+                    error=str(exc) or exc.__class__.__name__,
                 )
 
-            # Both remote responses must be safe locally before either print
-            # job starts. Printer/profile errors can then be retried without
-            # creating another PLC shipment.
-            if shipment.country_group == "NON_EU":
-                customs_path = self._label_archive.save_customs_document(shipment, customs_pdf)
-                customs_print_path = self._label_archive.ensure_customs_print_document(shipment)
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(self._on_plc_finalize_result)
+        worker.signals.error.connect(self._on_plc_finalize_error)
+        worker.signals.finished.connect(
+            lambda current=worker: self._on_plc_finalize_finished(current)
+        )
+        self._finalize_worker = worker
+        worker.start()
 
-            if not self._customs_only:
-                archive_path = self._label_archive.save(shipment, result.webservice_result.pdf_bytes)
-                job_id = self._queue_webservice_label(archive_path, shipment.reference)
-                service: PlcShipmentService = self._container.resolve(PlcShipmentService)
-                service.mark_print_queued(shipment, job_id)
-                self._record_pending_fulfillment()
-            if customs_print_path is not None:
-                customs_job_id = self._queue_customs_document(customs_print_path, shipment.reference)
-            if self._pending_packing_contexts and any(context.items for context in self._pending_packing_contexts):
-                packing_list_path = PackingListService().generate_pdf(
-                    self._pending_packing_contexts,
-                    output_dir=self._label_archive.packing_lists_dir,
-                )
-                service.record_packing_pdf(shipment, packing_list_path)
-                packing_list_job_id = queue_packing_lists(
-                    self._container,
-                    packing_list_path,
-                    shipment.reference,
-                )
-        except Exception as exc:  # noqa: BLE001 - shipment was created; preserve the recovery message.
+    def _on_plc_finalize_result(self, payload: object) -> None:
+        if not isinstance(payload, _PlcFinalizeOutcome):
+            self._on_plc_finalize_error(RuntimeError("Ungültiges PLC-Nachbereitungsergebnis"))
+            return
+        if payload.error:
             self._status.setText(
                 "Zollerklärung erstellt, Druckauftrag fehlgeschlagen"
                 if self._customs_only
@@ -2158,7 +2237,12 @@ class PlcLabelPrintDialog(QDialog):
             )
             archived = "\n".join(
                 f"- {path}"
-                for path in (archive_path, customs_path, customs_print_path, packing_list_path)
+                for path in (
+                    payload.archive_path,
+                    payload.customs_path,
+                    payload.customs_print_path,
+                    payload.packing_list_path,
+                )
                 if path is not None
             )
             archive_note = (
@@ -2175,46 +2259,59 @@ class PlcLabelPrintDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "Zollerklärung erstellt" if self._customs_only else "PLC-Label erstellt",
-                f"{failure_message}{archive_note}\n\nDetails: {exc}",
+                f"{failure_message}{archive_note}\n\nDetails: {payload.error}",
             )
             return
 
-        tracking = ", ".join(result.webservice_result.tracking_codes) or "ohne Trackingcode"
-        if self._customs_only and customs_job_id:
-            self._status.setText(f"Zollerklärung erstellt; Druckauftrag {customs_job_id[:8]}…")
-        elif customs_job_id:
+        if self._customs_only and payload.customs_job_id:
+            self._status.setText(f"Zollerklärung erstellt; Druckauftrag {payload.customs_job_id[:8]}…")
+        elif payload.customs_job_id:
             self._status.setText(
-                f"PLC-Label und Zollformular archiviert; Druckaufträge {job_id[:8]}… / {customs_job_id[:8]}…"
+                "PLC-Label und Zollformular archiviert; Druckaufträge "
+                f"{payload.label_job_id[:8]}… / {payload.customs_job_id[:8]}…"
             )
-        elif packing_list_job_id:
+        elif payload.packing_list_job_id:
             self._status.setText(
-                f"PLC-Label und {len(self._pending_packing_contexts)} Packlisten archiviert; "
-                f"Druckaufträge {job_id[:8]}… / {packing_list_job_id[:8]}…"
+                f"PLC-Label und {payload.packing_list_count} Packlisten archiviert; "
+                f"Druckaufträge {payload.label_job_id[:8]}… / {payload.packing_list_job_id[:8]}…"
             )
         else:
-            self._status.setText(f"PLC-Label archiviert; Druckauftrag {job_id[:8]}…")
+            self._status.setText(f"PLC-Label archiviert; Druckauftrag {payload.label_job_id[:8]}…")
         logger.info(
             "PLC label/customs created reference=%s tracking=%s archive=%s print_job=%s "
             "customs_archive=%s customs_print_archive=%s customs_job=%s packing_list=%s packing_job=%s",
-            shipment.reference,
-            tracking,
-            archive_path,
-            job_id,
-            customs_path,
-            customs_print_path,
-            customs_job_id,
-            packing_list_path,
-            packing_list_job_id,
+            payload.reference,
+            payload.tracking,
+            payload.archive_path,
+            payload.label_job_id,
+            payload.customs_path,
+            payload.customs_print_path,
+            payload.customs_job_id,
+            payload.packing_list_path,
+            payload.packing_list_job_id,
         )
         self._show_success_overlay(
             "Zollerklärung erstellt"
             if self._customs_only
             else "PLC-Label + Zollformular erstellt"
-            if customs_job_id
-            else f"PLC-Label + {len(self._pending_packing_contexts)} Packlisten erstellt"
-            if packing_list_job_id
+            if payload.customs_job_id
+            else f"PLC-Label + {payload.packing_list_count} Packlisten erstellt"
+            if payload.packing_list_job_id
             else "PLC-Label erstellt"
         )
+
+    def _on_plc_finalize_error(self, exc: Exception) -> None:
+        self._status.setText("PLC-Sendung erstellt, lokale Nachbereitung fehlgeschlagen")
+        QMessageBox.warning(
+            self,
+            "PLC-Sendung erstellt",
+            f"PLC hat die Sendung erstellt, aber die lokalen Druck-/Archivschritte sind fehlgeschlagen.\n\n{exc}",
+        )
+
+    def _on_plc_finalize_finished(self, worker: BackgroundWorker) -> None:
+        if self._finalize_worker is worker:
+            self._finalize_worker = None
+        self._update_send_button_state()
 
     def _show_success_overlay(self, message: str) -> None:
         if self._success_overlay is not None:
