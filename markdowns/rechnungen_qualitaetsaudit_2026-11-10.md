@@ -376,6 +376,25 @@ Vollsuite auf Windows CI Run 43068708273: 2.195 bestanden, 5 uebersprungen,
 1 PyMuPDF-FutureWarning in 605,44 s; Ruff erfolgreich. Der globale MyPy-Gate
 bleibt mit 359 Fehlern in 63 Dateien rot (keiner in den geaenderten Dateien).
 
+**Weitere F18-Fixes (ERLEDIGT):** Schreibaktionen halten ihre Dialoge bis zum
+abgearbeiteten Ergebnis offen: digitale Lieferung (PDF-Pfad, Lizenzentwurf,
+Outlook-Aktion und Wix-Abschluss), Gutschrift-Mailversand, Lageralarm-Schwellenwert
+und Task-Mail, OPEN-PRINTS-Abschluss, PLC-Trackingimport und Paketcode-Zuordnung,
+Nachbetreuungs-Manageraktionen, Sendungsdruck/Erledigen sowie Ueberweisungs-QR,
+Zurueckstellen und Erledigen. Reine Leseaktionen duerfen weiterhin geschlossen
+werden; verspaetete Leseantworten werden verworfen. Worker-Finish-Callbacks raeumen
+nur ihre eigene Worker-Referenz auf. Regressionen versuchen Accept, Reject und
+Fensterschliessen waehrend blockierter Fake-Writes und pruefen, dass Dialog und
+Ergebnis bis zum sicheren Abschluss erhalten bleiben.
+
+Gezielte Windows-venv-Pruefung: **60 Tests bestanden**; Ruff fuer alle geaenderten
+Dateien erfolgreich; strict MyPy fuer betroffene Rechnungsdialoge fehlerfrei und
+Paketpruefung `ui/modules/rechnungen`: **0 Fehler in 27 Quelldateien**. Windows-CI
+Run `43088839022` auf `febf9f3`: Ruff erfolgreich, **2.200 bestanden, 5
+uebersprungen, 1 PyMuPDF-FutureWarning in 618,80 s**. Globales MyPy bleibt bei
+**359 Fehlern in 63 Dateien**; die betroffenen Rechnungsdateien sind gezielt
+fehlerfrei. AP06 bleibt teilweise offen, da weitere UI-I/O-Pfade noch zu pruefen sind.
+
 Verbleibende UI-I/O-Slots auf vorhandenen
 `UiAsyncAction`/BackgroundWorker umstellen. Snapshot/Identität vor Workerstart;
 Callbacks auf aktuelle Auswahl prüfen oder bewusst ursprünglichen Fall bearbeiten.
