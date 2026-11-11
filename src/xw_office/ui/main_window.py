@@ -24,7 +24,7 @@ from xw_office.services.printer_status.service import PrinterStatusService, Prin
 from xw_office.services.wix.client import WixOrdersClient
 from xw_office.services.wix.product_details_client import WixProductDetailsClient
 from xw_office.core.performance_metrics import performance_metrics
-from xw_office.ui.performance import EventLoopWatchdog
+from xw_office.ui.performance import EventLoopGap, EventLoopWatchdog
 from xw_office.ui.sidebar import Sidebar
 from xw_office.ui.status_bar import OfficeStatusBar
 from xw_office.ui.theme import apply_app_theme
@@ -62,7 +62,7 @@ class MainWindow(QMainWindow):
         self._refresh_printer_status_async()
         self._eventloop_watchdog.start()
 
-    def performance_snapshot(self) -> list[object]:
+    def performance_snapshot(self) -> list[EventLoopGap]:
         """Return recent event-loop gaps for diagnostics/tests."""
         return self._eventloop_watchdog.snapshot()
 
@@ -177,7 +177,14 @@ class MainWindow(QMainWindow):
             service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             warm = getattr(service, "warm_startup_batches", None)
             if callable(warm):
-                return warm(draft_limit=5, open_limit=5)
+                result = warm(draft_limit=5, open_limit=5)
+                if (
+                    isinstance(result, tuple)
+                    and len(result) == 2
+                    and type(result[0]) is int
+                    and type(result[1]) is int
+                ):
+                    return result[0], result[1]
             return (0, 0)
 
         self._startup_preload_worker = BackgroundWorker(job)
@@ -187,10 +194,15 @@ class MainWindow(QMainWindow):
         self._startup_preload_worker.start()
 
     def _on_startup_preload_result(self, payload: object) -> None:
-        if not isinstance(payload, tuple) or len(payload) != 2:
+        if (
+            not isinstance(payload, tuple)
+            or len(payload) != 2
+            or type(payload[0]) is not int
+            or type(payload[1]) is not int
+        ):
             return
-        draft_count = max(0, int(payload[0]))
-        open_count = max(0, int(payload[1]))
+        draft_count = max(0, payload[0])
+        open_count = max(0, payload[1])
         self._status_bar.showMessage(
             f"Rechnungen vorab geladen: {draft_count} Entwuerfe, {open_count} offen",
             4000,
@@ -204,7 +216,7 @@ class MainWindow(QMainWindow):
             from PySide6.QtWidgets import QApplication
 
             app = QApplication.instance()
-            if app is not None:
+            if isinstance(app, QApplication):
                 apply_app_theme(app, theme_name)
                 logger.info("Theme switched to %s", theme_name)
         except Exception as exc:
@@ -457,11 +469,12 @@ class MainWindow(QMainWindow):
             worker is None or not worker.isRunning()
             for worker in (self._startup_preload_worker, self._printer_status_worker)
         )
-        pages_stopped = all(
-            not callable(getattr(widget, "shutdown_complete", None))
-            or bool(widget.shutdown_complete())
-            for widget in self._pages.values()
-        )
+        pages_stopped = True
+        for widget in self._pages.values():
+            shutdown_complete = getattr(widget, "shutdown_complete", None)
+            if callable(shutdown_complete) and not bool(shutdown_complete()):
+                pages_stopped = False
+                break
         if not all((background_jobs_stopped, print_queue_stopped, window_workers_stopped, pages_stopped)):
             self._shutdown_timer.start(_SHUTDOWN_POLL_INTERVAL_MS)
             return
