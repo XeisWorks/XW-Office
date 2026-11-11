@@ -114,6 +114,7 @@ packages:
       - Gezählte Differenzen werden beim Abschluss als idempotente recount-Bewegungen gebucht; bestätigte Inventuren sind unveränderlich.
       - API-Endpunkte für Start, Abruf, Zeilenerfassung und Abschluss sind unter /api/v1/inventory/counts verfügbar.
       - Jede gestartete Zählsitzung ist zusätzlich als UTF-8-CSV unter `/api/v1/inventory/counts/{count_id}/export.csv` exportierbar.
+      - Die Desktop-Produkteansicht bietet nun einen asynchronen Dialog für dieselbe eingefrorene Zählliste; Mengen, Notizen und der unveränderliche Abschluss werden ohne UI-Blockierung erfasst.
     scope:
       - Zählliste für aktive external_print- und pod-Varianten mit SKU, Titel, Lagerort und vorhandener Menge.
       - Zwischenstand, Referenz, Prüfung, Differenzvorschau und bestätigter Abschluss je Variante.

@@ -9,6 +9,7 @@
 ## Implementierungsfortschritt
 
 - Aktueller Zwischenstand: Der Freigabe-Buchungskern verarbeitet physische Rechnungspositionen idempotent; eindeutig referenzierte Gutschriften werden als begrenzte Gegenbewegungen ebenfalls idempotent gebucht. Die SevDesk-Gegenbeleg-Feedverdrahtung läuft über `xw-inventory-worker`; unklare Fälle bleiben als `needs_review` sichtbar.
+- Die geführte Inventur ist neben der geschützten Product-Hub-API auch direkt in der Desktop-Produkteansicht verfügbar: eingefrorene Zählliste, Mengen-/Notizeingabe und idempotenter Abschluss laufen asynchron und blockieren die UI nicht.
 - Eine geführte Product-Hub-Inventur ist als `InventoryCountService` mit persistierter Zählliste, Differenzvorschau, Stichtags-Snapshot und idempotenter `recount`-Buchung umgesetzt. Die geschützte API unterstützt Start, Zeilenerfassung und Abschluss; bestätigte Inventuren sind unveränderlich.
 - Die bestehende `PieceBlock`-Druckentscheidung berücksichtigt nun den Artikeltyp: POD nutzt Lagerstücke und druckt Fehlmengen in Chargen von drei; Druckerei-Noten werden bei Unterdeckung als Nachbestellung markiert und nicht lokal gedruckt. Sammelaggregation und bestätigte `print_run`-Buchungen laufen über denselben lagerbereinigten Plan.
 - Das offene RECHNUNGEN-Printfeld verwendet diese Policy nun auch beim Einzel- und Sammeldruck: Lagerbestand wird zuerst berücksichtigt, POD-Fehlmengen werden chargenweise ermittelt, und Druckerei-Unterdeckung deaktiviert den lokalen Druckknopf zugunsten eines Nachbestellhinweises.

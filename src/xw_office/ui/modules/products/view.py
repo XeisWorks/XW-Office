@@ -57,6 +57,7 @@ from xw_office.services.sevdesk.part_client import PartClient, SevdeskPart
 from xw_office.services.wix.client import WixProduct, WixProductsClient
 from xw_office.ui.dialogs.unreleased_title_dialog import UnreleasedCatalogDialog
 from xw_office.ui.modules.products.bulk_field_dialog import BulkFieldEditorDialog
+from xw_office.ui.modules.products.inventory_count_dialog import InventoryCountDialog
 from xw_office.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 from xw_office.ui.modules.rechnungen.print_dialog import (
     _configure_missing_piece_print,
@@ -790,6 +791,12 @@ class ProductsView(QWidget):
         self._sync_correction_btn.clicked.connect(self._correct_selected_stock)
         self._sync_correction_btn.setEnabled(False)
         bar.addWidget(self._sync_correction_btn)
+        self._guided_inventory_btn = QPushButton("Gefuehrte Inventur")
+        self._guided_inventory_btn.setToolTip(
+            "Erstellt eine eingefrorene Zaehlliste und bucht bestaetigte Differenzen idempotent."
+        )
+        self._guided_inventory_btn.clicked.connect(self._open_guided_inventory)
+        bar.addWidget(self._guided_inventory_btn)
         self._sync_apply_btn = QPushButton("Wix -> Lokal uebernehmen")
         self._sync_apply_btn.clicked.connect(self._apply_wix_to_local)
         self._sync_apply_btn.setEnabled(False)
@@ -879,6 +886,10 @@ class ProductsView(QWidget):
         plans_group.setVisible(False)
         lay.addWidget(plans_group)
         return page
+
+    def _open_guided_inventory(self) -> None:
+        dialog = InventoryCountDialog(self._container, self)
+        dialog.exec()
 
     def _load_sync_sources(self, _checked: bool = False, *, refresh_sevdesk_cache: bool = False) -> None:
         self._sync_load_btn.setEnabled(False)
