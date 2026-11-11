@@ -4,8 +4,11 @@ title: Inventur, Rechnungsabgang, Lagerwarnung und POD-Druck
 owner_model: Codex 5.6 Luna
 repository: XeisWorks/XW-Office
 baseline_analyzed: 2684773
-status: in_progress
+status: implementation_complete_operational_gates_open
 specification: markdowns/rechnungen_inventur_bestand_5_6_luna_umbauspezifikation_2026-11-08.md
+last_verified: '2026-11-12'
+status_legend:
+  implementation_complete_operational_gates_open: Code, migrations, tests and safe read-only production checks are complete; physical inventory, mapping cleanup, shadow/cutover and provider backup remain external gates.
 
 instructions:
   before_each_package:
@@ -72,7 +75,7 @@ source_paths:
 packages:
   - id: P00
     title: Live-Datenvertrag und Bestandsquellen lesen
-    status: partially_integrated
+    status: implementation_complete_operational_gates_open
     depends_on: []
     implementation_notes:
       - Read-only SevdeskHistoryAudit prüft finale Rechnungen/Gutschriften über ein 60-Monats-Fenster, ignoriert Entwürfe, summiert Netto-Stückzahlen und meldet fehlende SKU bzw. Abdeckung.
@@ -90,7 +93,7 @@ packages:
 
   - id: P01
     title: Artikelart, Policy und sichere Ledger-Transaktion
-    status: partially_integrated
+    status: implementation_complete_operational_gates_open
     depends_on: [P00]
     implementation_notes:
       - InventoryRepository.record_movement sperrt Lagerort/Bestandszeile innerhalb eines Savepoints, revalidiert Idempotenz nach dem Lock und schützt damit parallele Schreiber vor verlorenen Updates.
@@ -107,7 +110,7 @@ packages:
 
   - id: P02
     title: Geführte Inventur und Stichtag
-    status: foundation_ready
+    status: implementation_complete_operational_gates_open
     depends_on: [P01]
     implementation_notes:
       - InventoryCountService erzeugt eine eingefrorene Zählliste aktiver physischer Varianten mit SKU, Titel, Lagerort und Systembestand.
@@ -130,7 +133,7 @@ packages:
   - id: P03
     title: Idempotenter sevDesk-Rechnungsabgang je Position
     release_orchestrator_test: tests/unit/test_invoice_processing_service.py::test_finalize_books_product_hub_inventory_after_successful_sevdesk_release
-    status: partially_integrated
+    status: implementation_complete_operational_gates_open
     depends_on: [P02]
     implementation_notes:
       - Finalisierungen führen vor dem sevDesk-Freigabeschritt eine physische SKU-Auflösungsprüfung durch; nach erfolgreicher Freigabe wird die idempotente Hub-Buchung ausgeführt.
@@ -158,7 +161,7 @@ packages:
 
   - id: P04
     title: Storno- und Gutschrift-Rückbuchung
-    status: foundation_ready
+    status: implementation_complete_operational_gates_open
     depends_on: [P03]
     implementation_notes:
       - InvoiceInventoryBookingService.apply_credit_line verarbeitet eindeutig referenzierte Gegenbelegpositionen idempotent.
@@ -180,7 +183,7 @@ packages:
 
   - id: P05
     title: Absatzprognose und zustandsbasierte Lagerwarnung
-    status: partially_integrated
+    status: implementation_complete_operational_gates_open
     depends_on: [P03, P04]
     implementation_notes:
       - InventoryV2Service.refresh_reorder_point persistiert den Forecast-/Fixwert je Variante und bewertet den Alarmzustand sofort neu.
@@ -204,7 +207,7 @@ packages:
 
   - id: P06
     title: Lagerbereinigter POD- und Druckerei-Plan in RECHNUNGEN
-    status: partially_integrated
+    status: implementation_complete_operational_gates_open
     depends_on: [P01, P03, P05]
     implementation_notes:
       - PieceBlock unterscheidet POD und external_print: POD nutzt endlichen Lagerbestand und Dreierchargen, Druckerei-Noten erzeugen bei Unterdeckung keinen lokalen Druckauftrag, sondern einen Nachbestellhinweis.
@@ -227,7 +230,7 @@ packages:
 
   - id: P07
     title: Alarm-Popup und manuell ausgelöste Graph-Task
-    status: partially_integrated
+    status: implementation_complete_operational_gates_open
     depends_on: [P05]
     implementation_notes:
       - InventoryAlertTaskService persistiert eine Aufgabe pro Alarm, erzeugt die Mail mit SKU, Titel, Ist-/Alarmbestand, Datenfenster und Absatzfeldern und schützt Wiederholungen.
@@ -255,7 +258,7 @@ packages:
     backup_artifact: scripts/product_hub/export_inventory_snapshot.py
     readiness_cli: scripts/product_hub/check_inventory_cutover.py
     rollback_probe_test: tests/unit/test_product_hub_inventory_service.py::test_disabling_master_flag_preserves_ledger_and_materialized_stock
-    status: partially_integrated
+    status: implementation_complete_operational_gates_open
     projection_implementation:
       status: implemented
       service: src/xw_office/services/product_hub/inventory_projection.py

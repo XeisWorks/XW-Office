@@ -1540,6 +1540,24 @@ Der anschließende Railway-Readiness-Lauf bestätigt den neuen Zustand (`legacy_
 der Master bleibt wegen sechs Daten-/Betriebs-Blockaden und zwei manuellen Nachweisen
 weiterhin deaktiviert.
 
+### Quellenvertrag und Mapping-Audit (12. November 2026, 00:48 CET)
+
+Der read-only Snapshot exportiert jetzt neben Ledger-/Bestands-/Sync-Tabellen auch
+den vollständigen `source_audit`. Dabei wurde eine fachliche Fehlermöglichkeit
+geschlossen: Ein Produkt-Level-sevDesk-Part darf nur noch bei genau einer aktiven
+stock-enabled Variante als Kompatibilitätsfallback gelten; bei gruppierten Produkten
+müssen Varianten explizit gemappt sein. Die Regel ist getestet und verhindert
+Fehlbuchungen auf Geschwistervarianten.
+
+Der aktuelle Railway-Audit weist 594 aktive physische Varianten aus: 0 eindeutig
+gemappt, 594 blockierende Mappingprobleme, 594 fehlende Verkaufbarkeitsdaten,
+565 fehlende Quellmengen und 29 Legacy-/Hub-Abweichungen. Diese Werte sind jetzt
+direkt im archivierbaren Snapshot enthalten und bilden die konkrete Remediationsliste
+für die Produktionsinventur; es wurden dabei keine Bestands- oder Providerdaten
+geschrieben. Product Hub und Worker auf Commit `894753b` sind SUCCESS, Runtime-
+Readiness ist `eligible=true`, DB-Readiness bleibt vor Inventur erwartungsgemäß
+`eligible=false`.
+
 ### Railway-Verifikation nach Idempotenz-Patch (12. November 2026, 00:36 CET)
 
 Commit `84cf681` macht die Legacy-START-/REPRINTS-Bewegungen deterministisch
