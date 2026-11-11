@@ -2663,8 +2663,11 @@ class RechnungenView(QWidget):
         *,
         allow_background_prefetch: bool,
     ) -> None:
+        apply_started = time.perf_counter()
         self._prepare_rows_for_hint_prefetch(rows, summaries)
+        prepare_ms = int((time.perf_counter() - apply_started) * 1000)
 
+        table_started = time.perf_counter()
         if append:
             combined_rows = self._table.source_rows_data() + list(rows)
             combined_summaries = list(self._summaries) + list(summaries)
@@ -2687,6 +2690,7 @@ class RechnungenView(QWidget):
             self._loaded_rows = sorted_rows
             self._loaded_summaries = sorted_summaries
             self._loaded_has_more = has_more
+        table_ms = int((time.perf_counter() - table_started) * 1000)
 
         if status_filter == _DRAFT_STATUS:
             self._draft_offset = sum(
@@ -2723,6 +2727,18 @@ class RechnungenView(QWidget):
         )
         self._append_mode = False
         self._refresh_detail_for_selection()
+        total_ms = int((time.perf_counter() - apply_started) * 1000)
+        if total_ms >= 100:
+            logger.info(
+                "Rechnungen apply metric rows=%s append=%s prepare_ms=%s table_ms=%s "
+                "ui_ms=%s total_ms=%s",
+                len(rows),
+                append,
+                prepare_ms,
+                table_ms,
+                max(0, total_ms - prepare_ms - table_ms),
+                total_ms,
+            )
         if allow_background_prefetch:
             self._schedule_post_load_prefetch(status_filter, list(self._summaries))
         if auto_load_open:

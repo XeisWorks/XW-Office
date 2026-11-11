@@ -525,6 +525,7 @@ class InvoiceClient:
         if end_timestamp is not None:
             params["endDate"] = int(end_timestamp)
         retries = max(0, int(max_retries)) if max_retries is not None else None
+        page_started = time.perf_counter()
         if request_timeout is None:
             response = self._conn.get("/Invoice", params=params, max_retries=retries)
         else:
@@ -534,12 +535,16 @@ class InvoiceClient:
                 max_retries=retries,
                 timeout=max(0.1, float(request_timeout)),
             )
+        fetch_ms = int((time.perf_counter() - page_started) * 1000)
+        parse_started = time.perf_counter()
         payload = response.json()
+        parse_ms = int((time.perf_counter() - parse_started) * 1000)
         objects = payload.get("objects")
         if not isinstance(objects, list):
             logger.warning("Unexpected Invoice list payload: %s", type(objects))
             return []
 
+        normalize_started = time.perf_counter()
         result: list[InvoiceSummary] = []
         for obj in objects:
             if isinstance(obj, dict):
@@ -547,19 +552,38 @@ class InvoiceClient:
                 if status is not None and summary.status_code != status:
                     continue
                 result.append(summary)
+        normalize_ms = int((time.perf_counter() - normalize_started) * 1000)
 
         # Keep UI chronology stable: newest sevDesk import first (ID descending).
+        sort_started = time.perf_counter()
         result.sort(
             key=lambda item: int(item.id) if item.id.isdigit() else -1,
             reverse=True,
         )
+        sort_ms = int((time.perf_counter() - sort_started) * 1000)
 
         if status is not None and not result and objects:
             logger.debug(
                 "Status filter %s yielded no rows after parse; API may ignore query param.",
                 status,
             )
+        observer_started = time.perf_counter()
         self._notify_summary_observers(result)
+        observer_ms = int((time.perf_counter() - observer_started) * 1000)
+        total_ms = int((time.perf_counter() - page_started) * 1000)
+        if total_ms >= 250:
+            logger.info(
+                "sevDesk invoice page metric fetch_ms=%s json_ms=%s normalize_ms=%s "
+                "sort_ms=%s observers_ms=%s total_ms=%s objects=%s summaries=%s",
+                fetch_ms,
+                parse_ms,
+                normalize_ms,
+                sort_ms,
+                observer_ms,
+                total_ms,
+                len(objects),
+                len(result),
+            )
         return result
 
     def _notify_summary_observers(self, summaries: list[InvoiceSummary]) -> None:

@@ -455,16 +455,36 @@ class InvoiceProcessingService:
             if (now - ts) <= _BATCH_CACHE_TTL_SECONDS:
                 return list(cached_rows), list(cached_summaries)
 
+        load_started = time.perf_counter()
         summaries = self._invoices.list_recent_non_draft_summaries(
             limit=limit,
             offset=offset,
             request_timeout=request_timeout,
             max_retries=max_retries,
         )
+        load_ms = int((time.perf_counter() - load_started) * 1000)
+        flags_started = time.perf_counter()
         self._apply_sensitive_country_flags(summaries)
         self._apply_unreleased_sku_flags(summaries)
+        flags_ms = int((time.perf_counter() - flags_started) * 1000)
+        rows_started = time.perf_counter()
         rows = [s.as_table_row() for s in summaries]
+        rows_ms = int((time.perf_counter() - rows_started) * 1000)
+        fulfillment_started = time.perf_counter()
         final_rows = self._rows_with_fulfillment(summaries, rows)
+        fulfillment_ms = int((time.perf_counter() - fulfillment_started) * 1000)
+        total_ms = int((time.perf_counter() - load_started) * 1000)
+        if total_ms >= 250:
+            logger.info(
+                "Invoice batch metric load_ms=%s flags_ms=%s rows_ms=%s "
+                "fulfillment_ms=%s total_ms=%s rows=%s",
+                load_ms,
+                flags_ms,
+                rows_ms,
+                fulfillment_ms,
+                total_ms,
+                len(final_rows),
+            )
         with self._batch_cache_lock:
             if generation == self._batch_cache_generation:
                 self._batch_cache[key] = (time.perf_counter(), list(final_rows), list(summaries))  # type: ignore[index]
