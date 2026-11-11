@@ -3248,6 +3248,33 @@ def test_rechnungen_load_more_button_stages_drafts_before_open(qtbot: object) ->
     assert not view._btn_more.isEnabled()  # noqa: SLF001
 
 
+def test_invoice_list_secret_check_runs_off_ui_thread(qtbot: QtBot, monkeypatch: MonkeyPatch) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    entered = Event()
+    release = Event()
+    heartbeat = Event()
+
+    def blocked_secret_read() -> bool:
+        entered.set()
+        release.wait(timeout=3)
+        return True
+
+    monkeypatch.setattr(view, "_has_sevdesk_token", blocked_secret_read)
+    QTimer.singleShot(0, heartbeat.set)
+    view._start_load(limit=1)  # noqa: SLF001
+
+    try:
+        assert entered.wait(timeout=1)
+        qtbot.waitUntil(heartbeat.is_set, timeout=1000)
+    finally:
+        release.set()
+
+    qtbot.waitUntil(lambda: view._worker is None, timeout=3000)  # noqa: SLF001
+    assert invoice_service.load_calls == [("status:100", 1, 0)]
+
+
 def test_rechnungen_auto_loads_first_open_page_after_drafts(qtbot: object, monkeypatch) -> None:
     container = _build_container()
     view = RechnungenView(container)

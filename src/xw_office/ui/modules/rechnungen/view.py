@@ -1306,6 +1306,8 @@ class RechnungenView(QWidget):
         self._search_worker: BackgroundWorker | None = None
         self._index_sync_worker: BackgroundWorker | None = None
         self._index_sync_started = False
+        self._pending_batch_cache_invalidation = False
+        self._pending_detail_cache_invalidation_id = ""
         self._draft_worker: BackgroundWorker | None = None
         self._draft_product_worker: BackgroundWorker | None = None
         self._draft_preview_worker: BackgroundWorker | None = None
@@ -2140,9 +2142,8 @@ class RechnungenView(QWidget):
         self._prime_plc_archive_index()
         if not self._did_initial_load:
             self._did_initial_load = True
-            if self._has_sevdesk_token():
-                self._reload_first_page()
-                QTimer.singleShot(4000, self._start_search_index_sync)
+            self._reload_first_page()
+            QTimer.singleShot(4000, self._start_search_index_sync)
         if self._deferred_load_payload is not None:
             rows, summaries, has_more, status_filter, append = self._deferred_load_payload
             self._deferred_load_payload = None
@@ -2418,13 +2419,13 @@ class RechnungenView(QWidget):
         """Fill the shared invoice search index in the background (once per session)."""
         if self._index_sync_started or self._shutting_down:
             return
-        service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-        sync = getattr(service, "sync_search_index", None)
-        if not callable(sync):
-            return
         self._index_sync_started = True
 
         def job() -> str:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            sync = getattr(service, "sync_search_index", None)
+            if not callable(sync):
+                return ""
             worker = self._index_sync_worker
             return str(sync(should_abort=lambda: worker is not None and worker.cancelled))
 
@@ -2479,14 +2480,11 @@ class RechnungenView(QWidget):
         self._on_printer_status(service.snapshot().printing_allowed)
 
     def _reload_first_page(self, *, preserve_print_tab: bool = False) -> None:
-        service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-        invalidate_batch = getattr(service, "invalidate_invoice_batch_cache", None)
-        if callable(invalidate_batch):
-            invalidate_batch()
         selected = self._selected_summary()
-        invalidate_detail = getattr(service, "invalidate_invoice_detail_cache", None)
-        if selected is not None and callable(invalidate_detail):
-            invalidate_detail(str(selected.id or ""))
+        self._pending_batch_cache_invalidation = True
+        self._pending_detail_cache_invalidation_id = (
+            str(selected.id or "").strip() if selected is not None else ""
+        )
         if not preserve_print_tab:
             self._active_print_history_index = None
             self._print_products_last_run = False
@@ -2503,26 +2501,25 @@ class RechnungenView(QWidget):
         self._start_load(limit=_DRAFT_INITIAL_LOAD_LIMIT)
 
     def _load_more(self) -> None:
-        if not self._has_sevdesk_token():
-            return
         if self._active_load_status == _DRAFT_STATUS and not self._draft_has_more:
             self._active_load_status = _OPEN_STATUS
         self._append_mode = True
         self._start_load()
 
     def _start_load(self, *, limit: int | None = None) -> None:
-        if not self._has_sevdesk_token():
-            return
         if self._worker is not None and self._worker.isRunning():
             return
 
-        service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
         status_filter = self._active_load_status
         page_limit = max(1, int(limit or _PAGE_SIZE))
         offset = (
             self._draft_offset if status_filter == _DRAFT_STATUS else self._open_offset
         ) if self._append_mode else 0
         append = self._append_mode
+        invalidate_batch = self._pending_batch_cache_invalidation
+        invalidate_detail_id = self._pending_detail_cache_invalidation_id
+        self._pending_batch_cache_invalidation = False
+        self._pending_detail_cache_invalidation_id = ""
         self._load_started_at = time.perf_counter()
         logger.info(
             "Rechnungen phase=%s start limit=%s offset=%s append=%s",
@@ -2543,6 +2540,19 @@ class RechnungenView(QWidget):
             )
 
         def job() -> tuple[list[dict[str, str]], list[InvoiceSummary], bool, int | None]:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            if invalidate_batch:
+                invalidate = getattr(service, "invalidate_invoice_batch_cache", None)
+                if callable(invalidate):
+                    invalidate()
+            if invalidate_detail_id:
+                invalidate = getattr(service, "invalidate_invoice_detail_cache", None)
+                if callable(invalidate):
+                    invalidate(invalidate_detail_id)
+            # SecretService may need a database read on its first access. Keep
+            # both that read and lazy service construction off the GUI thread.
+            if not self._has_sevdesk_token():
+                return [], [], False, status_filter
             if status_filter == _DRAFT_STATUS:
                 rows, sums = service.load_invoice_batch(
                     status=status_filter,
