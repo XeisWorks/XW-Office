@@ -2764,13 +2764,19 @@ def test_open_product_enrichment_runs_off_ui_thread_and_discards_stale_result(
     )
     entered, release, heartbeat = Event(), Event(), Event()
 
-    def blocked(item: PrintProductAggregate) -> PieceBlock:
-        if item.sku == first.sku:
-            entered.set()
-            assert release.wait(3)
-        return PieceBlock(sku=str(item.sku), name=str(item.title), qty_needed=1)
+    def blocked(items: list[PrintProductAggregate]) -> dict[tuple[str, str, str], PieceBlock]:
+        for item in items:
+            if item.sku == first.sku:
+                entered.set()
+                assert release.wait(3)
+        return {
+            view._open_product_check_key(item): PieceBlock(  # noqa: SLF001
+                sku=str(item.sku), name=str(item.title), qty_needed=1
+            )
+            for item in items
+        }
 
-    monkeypatch.setattr(view, "_resolve_piece_block_from_open_product", blocked)
+    monkeypatch.setattr(view, "_resolve_piece_blocks_from_open_products", blocked)
     monkeypatch.setattr(view, "_resolve_open_print_product_ready", lambda _item: True)
     view._apply_open_invoice_overview(
         OpenInvoiceOverview(

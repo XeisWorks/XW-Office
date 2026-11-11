@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from tempfile import TemporaryDirectory
 from pathlib import Path
 from urllib.parse import quote
@@ -3485,11 +3486,10 @@ class RechnungenView(QWidget):
         items = list(overview.print_products)
 
         def job() -> tuple[int, tuple[object, ...], dict[tuple[str, str, str], PieceBlock], dict[tuple[str, str, str], bool]]:
-            blocks: dict[tuple[str, str, str], PieceBlock] = {}
+            blocks = self._resolve_piece_blocks_from_open_products(items)
             ready: dict[tuple[str, str, str], bool] = {}
             for item in items:
                 key = self._open_product_check_key(item)
-                blocks[key] = self._resolve_piece_block_from_open_product(item)
                 ready[key] = self._resolve_open_print_product_ready(item)
             return seq, target, blocks, ready
 
@@ -4836,42 +4836,94 @@ class RechnungenView(QWidget):
         return block
 
     def _resolve_piece_block_from_open_product(self, item: PrintProductAggregate) -> PieceBlock:
-        block = self._basic_piece_block_from_open_product(item)
-        sku = block.sku
+        key = self._open_product_check_key(item)
+        return self._resolve_piece_blocks_from_open_products([item]).get(
+            key, self._basic_piece_block_from_open_product(item)
+        )
+
+    def _resolve_piece_blocks_from_open_products(
+        self, items: list[PrintProductAggregate]
+    ) -> dict[tuple[str, str, str], PieceBlock]:
+        blocks: dict[tuple[str, str, str], PieceBlock] = {}
+        variant_ids: dict[tuple[str, str, str], uuid.UUID] = {}
+        catalog: ProductCatalogService | None = None
+        hub: InventoryV2Service | None = None
         try:
-            catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
-            block = resolve_piece_print_config(catalog, block)
-            if block.product is not None and not block.product.is_digital:
-                try:
-                    hub: InventoryV2Service = self._container.resolve(InventoryV2Service)
-                    resolved = hub.resolve_variant_by_sku(block.sku)
-                    if resolved is not None:
-                        block.stock_status = StockStatus(
-                            sku=block.sku,
-                            product_name=block.product.name,
-                            is_digital=False,
-                            on_hand=hub.variant_on_hand(resolved.variant.id),
-                            min_stock_target=block.product.print_rule.min_stock_target,
-                            reprint_batch_qty=block.product.print_rule.reprint_batch_qty,
-                        )
-                except Exception:
-                    part_id = str(block.product.sevdesk_part_id or "").strip()
-                    if part_id:
-                        parts: PartClient = self._container.resolve(PartClient)
-                        cached_stock = parts.get_cached_part_stock(part_id)
-                        if cached_stock is not None:
-                            block.stock_status = StockStatus(
-                                sku=block.sku,
-                                product_name=block.product.name,
-                                is_digital=False,
-                                on_hand=int(cached_stock),
-                                min_stock_target=block.product.print_rule.min_stock_target,
-                                reprint_batch_qty=block.product.print_rule.reprint_batch_qty,
-                            )
-            return block
-        except Exception as exc:  # noqa: BLE001 - dialog can still create config.
-            logger.debug("Open print product catalog lookup failed sku=%s: %s", sku, exc)
-        return block
+            catalog = self._container.resolve(ProductCatalogService)
+        except Exception as exc:  # noqa: BLE001 - legacy configuration remains usable.
+            logger.debug("Open print product catalog unavailable: %s", exc)
+        try:
+            hub = self._container.resolve(InventoryV2Service)
+        except Exception as exc:  # noqa: BLE001 - legacy configuration remains usable.
+            logger.debug("Open print product inventory service unavailable: %s", exc)
+
+        for item in items:
+            key = self._open_product_check_key(item)
+            block = self._basic_piece_block_from_open_product(item)
+            blocks[key] = block
+            try:
+                if catalog is None:
+                    continue
+                block = resolve_piece_print_config(catalog, block)
+                blocks[key] = block
+                if block.product is None or block.product.is_digital:
+                    continue
+                if hub is None:
+                    self._apply_open_product_cached_stock(block)
+                    continue
+                resolved = hub.resolve_variant_by_sku(block.sku)
+                if resolved is not None:
+                    variant_ids[key] = resolved.variant.id
+            except Exception as exc:  # noqa: BLE001 - fall back to cached sevDesk stock.
+                logger.debug("Open print product catalog lookup failed sku=%s: %s", block.sku, exc)
+                self._apply_open_product_cached_stock(block)
+
+        if hub is not None and variant_ids:
+            try:
+                stock_by_variant = hub.variant_on_hand_many(list(variant_ids.values()))
+            except Exception as exc:  # noqa: BLE001 - preserve cached-stock fallback.
+                logger.debug("Open print product batch stock lookup failed: %s", exc)
+                for key in variant_ids:
+                    self._apply_open_product_cached_stock(blocks[key])
+            else:
+                for key, variant_id in variant_ids.items():
+                    block = blocks[key]
+                    product = block.product
+                    on_hand = stock_by_variant.get(variant_id)
+                    if product is None or on_hand is None:
+                        continue
+                    block.stock_status = StockStatus(
+                        sku=block.sku,
+                        product_name=product.name,
+                        is_digital=False,
+                        on_hand=on_hand,
+                        min_stock_target=product.print_rule.min_stock_target,
+                        reprint_batch_qty=product.print_rule.reprint_batch_qty,
+                    )
+        return blocks
+
+    def _apply_open_product_cached_stock(self, block: PieceBlock) -> None:
+        product = block.product
+        if product is None or product.is_digital:
+            return
+        part_id = str(product.sevdesk_part_id or "").strip()
+        if not part_id:
+            return
+        try:
+            parts: PartClient = self._container.resolve(PartClient)
+            cached_stock = parts.get_cached_part_stock(part_id)
+        except Exception as exc:  # noqa: BLE001 - cached stock is optional display data.
+            logger.debug("Open print product cached stock lookup failed sku=%s: %s", block.sku, exc)
+            return
+        if cached_stock is not None:
+            block.stock_status = StockStatus(
+                sku=block.sku,
+                product_name=product.name,
+                is_digital=False,
+                on_hand=int(cached_stock),
+                min_stock_target=product.print_rule.min_stock_target,
+                reprint_batch_qty=product.print_rule.reprint_batch_qty,
+            )
 
     def _on_open_product_manage_clicked(self, item: PrintProductAggregate) -> None:
         from xw_office.ui.modules.rechnungen.print_dialog import _configure_missing_piece_print

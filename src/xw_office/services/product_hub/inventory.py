@@ -493,6 +493,23 @@ class InventoryV2Service:
         stock = self._inventory.get_stock(variant_id, location.id)
         return stock.on_hand if stock is not None else 0
 
+    def variant_on_hand_many(
+        self,
+        variant_ids: list[uuid.UUID],
+        *,
+        location_code: str = DEFAULT_LOCATION_CODE,
+    ) -> dict[uuid.UUID, int]:
+        """Return stock for many variants with one location lookup and one stock query."""
+        identifiers = list(dict.fromkeys(variant_ids))
+        if not identifiers:
+            return {}
+        location = self._inventory.get_or_create_location(
+            code=location_code, name=DEFAULT_LOCATION_NAME
+        )
+        stocks = self._inventory.list_stock_by_variants(identifiers, location.id)
+        on_hand_by_variant = {stock.variant_id: int(stock.on_hand) for stock in stocks}
+        return {variant_id: on_hand_by_variant.get(variant_id, 0) for variant_id in identifiers}
+
     def resolve_variant_by_sku(self, sku: str) -> ResolvedSku | None:
         """Resolve an exact Hub SKU for desktop consumers without exposing the repository."""
         return self._products.resolve_sku(sku)

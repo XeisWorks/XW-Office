@@ -5,7 +5,7 @@ import uuid
 import datetime
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.models.base import Base
@@ -66,6 +66,58 @@ def test_record_movement_applies_delta(
     )
     assert result.movement.on_hand_after == 10
     assert result.alert_opened is None  # no threshold set yet, nothing to cross
+
+
+def test_variant_on_hand_many_batches_stock_reads(
+    service: InventoryV2Service,
+    inventory_repo: InventoryRepository,
+    product_repo: ProductHubRepository,
+    session_factory: sessionmaker[Session],
+    variant_id: uuid.UUID,
+) -> None:
+    _product, second_variant = product_repo.create_product(
+        sku="XW-6001", name="Zweites Alert Produkt"
+    )
+    service.record_movement(
+        variant_id=variant_id,
+        delta=7,
+        reason="import_baseline",
+        source="test",
+        idempotency_key="batch-stock-1",
+    )
+    service.record_movement(
+        variant_id=second_variant.id,
+        delta=2,
+        reason="import_baseline",
+        source="test",
+        idempotency_key="batch-stock-2",
+    )
+    location = inventory_repo.get_location_by_code("MAIN")
+    assert location is not None
+
+    engine = session_factory.kw["bind"]
+    statements: list[str] = []
+
+    def count_query(_conn: object, _cursor: object, statement: str, *_args: object) -> None:
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", count_query)
+    try:
+        actual = service.variant_on_hand_many([variant_id, second_variant.id, variant_id])
+        batched_query_count = len(statements)
+        statements.clear()
+        individual = {
+            variant_id: service.variant_on_hand(variant_id),
+            second_variant.id: service.variant_on_hand(second_variant.id),
+        }
+        individual_query_count = len(statements)
+    finally:
+        event.remove(engine, "before_cursor_execute", count_query)
+
+    assert actual == {variant_id: 7, second_variant.id: 2}
+    assert individual == actual
+    assert batched_query_count == 2  # location plus all requested stock rows
+    assert individual_query_count == 4  # location and stock for each variant
 
 
 def test_cutover_readiness_exposes_real_evidence_and_remaining_gates(

@@ -74,6 +74,20 @@ class InventoryRepository:
         with self._scope() as session:
             return session.get(InventoryStock, (variant_id, location_id))
 
+    def list_stock_by_variants(
+        self, variant_ids: list[uuid.UUID], location_id: uuid.UUID
+    ) -> list[InventoryStock]:
+        """Load materialized stock rows for many variants in one query."""
+        identifiers = list(dict.fromkeys(variant_ids))
+        if not identifiers:
+            return []
+        with self._scope() as session:
+            statement = select(InventoryStock).where(
+                InventoryStock.variant_id.in_(identifiers),
+                InventoryStock.location_id == location_id,
+            )
+            return list(session.scalars(statement).all())
+
     def set_stock_thresholds(
         self,
         variant_id: uuid.UUID,
