@@ -3501,6 +3501,8 @@ def test_old_sevdesk_worker_finish_does_not_clear_new_request(
         for release in releases:
             release.set()
         qtbot.waitUntil(lambda: not view._sevdesk_context_workers)
+        view.request_shutdown()
+        qtbot.waitUntil(view.shutdown_complete, timeout=3000)
     assert view._stuecke_worker is None
 
 
