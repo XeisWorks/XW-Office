@@ -40,7 +40,8 @@ provider-natives PostgreSQL-Backup.
 
 Der separate Railway-Service `xw-inventory-worker` ist im Produktionsprojekt angelegt und
 aktiv. Er verwendet Repository/Branch `XeisWorks/XW-Office`/`main` und wurde zuletzt mit
-Deployment `57f0e597-70be-4110-ba69-a97d7e7eded2` erfolgreich gestartet. Aktuelles
+der zuletzt validierte Start war Deployment `6978341f-0087-49bb-bb04-a567397f6914`.
+Aktuelles
 Startkommando:
 
 ```text
@@ -90,7 +91,8 @@ bewusst bestehen.
 - Healthcheck: HTTP 200; aktueller Alembic-Head `037_plc_parcel_evidence`.
 - Read-only Snapshot: 0 Ledger-Bewegungen, 0 Inventory-Bestandspositionen,
   588 `sync_conflict`-Zeilen und 263 archivierte Payloads.
-- Railway-Worker: Service aktiv, letztes Deployment `57f0e597-70be-4110-ba69-a97d7e7eded2`
+- Railway-Worker: Service aktiv; der zuletzt validierte Start war Deployment
+  `6978341f-0087-49bb-bb04-a567397f6914`
   erfolgreich; Laufzeitlog zeigt den Start des Containers.
 - Provider-natives PostgreSQL-Backup: über Railway CLI versucht, auf dem Hobby-Plan aber
   nicht verfügbar (Railway: „Manual backups and backup schedules are only available for
