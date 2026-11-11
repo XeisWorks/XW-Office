@@ -757,6 +757,8 @@ AP06/AP08 CI-Isolation: Der Hosted-Lauf fuer `64223ba` brach im Windows-Pytestpr
 
 Regression nach AP07/CI-Isolation auf `76a9ada`: Vollstaendige lokale Suite **2.172 bestanden, 5 uebersprungen, 1 bestehende Starlette/httpx-Deprecation-Warnung (206,30 s)**; die Smoke-Suite Rechnungen **89 bestanden**, der Worker-Lifecycle-Test **5/5 Wiederholungen bestanden**. Der Product-Hub-Deploymentstand `76a9ada` ist auf Railway **SUCCESS** und `/health` antwortet HTTP 200. Hosted CI `43016634244` fuer denselben Code-Stand laeuft noch.
 
+AP05/AP08 Nachpruefung der auf `ff7ac62` ergaenzten externen Bestandsunterdeckung: `SevdeskInvoiceInventoryPoller` verwirft keine `Decimal`-Mengen am Mirror-Callback mehr, sondern uebergibt den validierten ganzzahligen Wert; JSON-/Part-Payloads sind praezise typisiert und vor Zugriff eingegrenzt. Sechs strikte MyPy-Fehler in `sevdesk_invoice_inventory.py` beseitigt; die drei betroffenen Service-/API-Dateien bestehen striktes MyPy, Ruff und **33 Inventur-/Bestandsregressionen**. Vollsuite und Hosted CI fuer den Folgecommit stehen noch aus.
+
 Der finale Suite-Nachweis dieses Fortschreibungsschritts steht oben. Weitere Commit-/Push-Nachweise werden nach ihrer Integration ergänzt. Das folgende statische Inventar
 wurde aus dem vorherigen Quellstand erzeugt und dient als Navigationshilfe; nach
 spaeteren Codeaenderungen koennen einzelne Zeilennummern abweichen.

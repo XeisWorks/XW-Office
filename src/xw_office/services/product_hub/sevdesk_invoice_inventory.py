@@ -11,8 +11,8 @@ from xw_office.services.product_hub.sevdesk_feed_validation import document_stat
 
 
 class InvoiceReleaseProvider(Protocol):
-    def list_final_invoices(self, *, since: datetime.date | None = None) -> list[dict]: ...
-    def list_invoice_positions(self, invoice_id: str) -> list[dict]: ...
+    def list_final_invoices(self, *, since: datetime.date | None = None) -> list[dict[str, object]]: ...
+    def list_invoice_positions(self, invoice_id: str) -> list[dict[str, object]]: ...
 
 
 @dataclass
@@ -61,6 +61,7 @@ class SevdeskInvoiceInventoryPoller:
                     continue
                 if quantity == 0:
                     continue
+                quantity_int = int(quantity)
                 sku = _sku(position)
                 position_key = _position_key(position)
                 if not sku or not position_key:
@@ -78,7 +79,7 @@ class SevdeskInvoiceInventoryPoller:
                             document_id=invoice_id,
                             position_key=position_key,
                             variant_id=resolved.variant.id,
-                            quantity=int(quantity),
+                            quantity=quantity_int,
                             source_revision=revision,
                         ),
                         source="sevdesk.final_invoice_poll",
@@ -91,7 +92,7 @@ class SevdeskInvoiceInventoryPoller:
                                     document_id=invoice_id,
                                     position_key=position_key,
                                     variant_id=resolved.variant.id,
-                                    quantity=int(quantity),
+                                    quantity=quantity_int,
                                     source_revision=revision,
                                 ),
                                 exc,
@@ -117,7 +118,7 @@ class SevdeskInvoiceInventoryPoller:
                             document_id=invoice_id,
                             position_key=position_key,
                             variant_id=resolved.variant.id,
-                            quantity=quantity,
+                            quantity=quantity_int,
                             source_revision=revision,
                         ),
                         applied,
@@ -131,12 +132,13 @@ class SevdeskInvoiceInventoryPoller:
         return result
 
 
-def _sku(position: dict) -> str:
-    part = position.get("part") if isinstance(position.get("part"), dict) else {}
+def _sku(position: dict[str, object]) -> str:
+    raw_part = position.get("part")
+    part = raw_part if isinstance(raw_part, dict) else {}
     return str(position.get("sku") or position.get("partNumber") or part.get("number") or "").strip().upper()
 
 
-def _position_key(position: dict) -> str:
+def _position_key(position: dict[str, object]) -> str:
     return str(position.get("id") or "").strip()
 
 
