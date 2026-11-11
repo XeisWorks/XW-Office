@@ -155,12 +155,14 @@ Sync-Konflikte. Provider-/Graph-/Wix-Grundkonfiguration und der Worker-Marker si
   sind auf fehlende eindeutige Wix-Produkt-/Inventarzuordnungen zurückzuführen; es wurde
   keine externe Bestandsmenge verändert.
 - Railway-Worker: Service aktiv; der zuletzt geprüfte erfolgreiche Start ist Deployment
-  `bcc5456a-9f31-48c0-9cde-492caf99d34b` (Commit `bfbb69e`).
+  `a76f87bf-fb25-4a9b-85b3-bc67a4a1b1c6` (Commit `2731be8`).
 - Provider-natives PostgreSQL-Backup: über Railway CLI versucht, auf dem Hobby-Plan aber
   nicht verfügbar (Railway: „Manual backups and backup schedules are only available for
   Pro workspaces"). Der Anwendungs-Snapshot ist vorhanden, ersetzt dieses Backup nicht.
 - Worker-Laufzeitprüfung: Forecast mit 432 aktualisierten und 206 übersprungenen
-  Varianten erfolgreich; der anschließende Sync bleibt wegen fehlender Inventurbasis
-  (Unterdeckungen) und Gutschriften ohne eindeutige Ursprungsrechnung im Review.
+  Varianten erfolgreich; der anschließende Sync endet weiterhin erwartungsgemäß mit
+  Exit 1 wegen fehlender Inventurbasis/Unterdeckungen und Gutschriften ohne eindeutige
+  Ursprungsrechnung. Der Worker markiert den Product-Hub-Projektionslauf deshalb sicher
+  als übersprungen (`master_enabled=false`).
 - Deshalb bleiben Inventur, Konfliktbereinigung, Shadow-Phase, Backup und Rollback echte
   Betriebs-Gates; der Master darf nicht aktiviert werden.
