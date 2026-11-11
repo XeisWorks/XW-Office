@@ -10,7 +10,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Literal, Mapping, Protocol
 
 from pydantic import BaseModel, Field
-from stdnum.eu import vat  # type: ignore[import-untyped]
+from stdnum.eu import vat
 
 from xw_office.services.http_client import SevdeskConnection
 from xw_office.services.finanzonline.source_reads import load_tax_resource
