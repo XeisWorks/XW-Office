@@ -174,8 +174,23 @@ def test_dialog_defer_calls_service(qtbot: object, monkeypatch) -> None:
 
 def test_dialog_mark_done_calls_service_after_confirmation(qtbot: object, monkeypatch) -> None:
     service = _FakeTransferService()
+    entered, release = Event(), Event()
+    mark_done = service.mark_done_in_outlook
+
+    def blocked_mark_done(
+        case_id: str,
+        payment: TransferPaymentData,
+        qr_path: str = "",
+        note: str = "",
+    ) -> None:
+        entered.set()
+        assert release.wait(3)
+        mark_done(case_id, payment, qr_path, note)
+
+    monkeypatch.setattr(service, "mark_done_in_outlook", blocked_mark_done)
     dialog = OffeneUeberweisungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
     qtbot.addWidget(dialog)
+    dialog.show()
     _wait_dialog_loaded(qtbot, dialog)
 
     monkeypatch.setattr(
@@ -186,6 +201,13 @@ def test_dialog_mark_done_calls_service_after_confirmation(qtbot: object, monkey
     dialog._note.setText("ok")  # noqa: SLF001
     dialog._mark_done()  # noqa: SLF001
 
+    qtbot.waitUntil(entered.is_set, timeout=2000)
+    dialog.accept()
+    dialog.reject()
+    dialog.close()
+    assert dialog.isVisible()
+
+    release.set()
     qtbot.waitUntil(lambda: bool(service.mark_done_calls), timeout=2000)
     assert len(service.mark_done_calls) == 1
     case_id, payment, qr_path, note = service.mark_done_calls[0]
@@ -193,6 +215,9 @@ def test_dialog_mark_done_calls_service_after_confirmation(qtbot: object, monkey
     assert payment.iban == "AT611904300234573201"
     assert qr_path == ""
     assert note == "ok"
+    qtbot.waitUntil(lambda: dialog._action_worker is None, timeout=2000)  # noqa: SLF001
+    dialog.reject()
+    assert not dialog.isVisible()
 
 
 def test_dialog_generate_qr_uses_manual_form_values(qtbot: object, monkeypatch) -> None:
