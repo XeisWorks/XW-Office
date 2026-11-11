@@ -61,6 +61,7 @@ def test_inventory_alert_load_and_save_leave_event_loop_responsive(qtbot) -> Non
 
     dialog = InventoryAlertsDialog(_AlertsContainer(Inventory()))  # type: ignore[arg-type]
     qtbot.addWidget(dialog)
+    dialog.show()
     heartbeats: list[bool] = []
     QTimer.singleShot(20, lambda: heartbeats.append(True))
     qtbot.waitUntil(load_started.is_set, timeout=1000)
@@ -73,6 +74,10 @@ def test_inventory_alert_load_and_save_leave_event_loop_responsive(qtbot) -> Non
     release.clear()
     dialog._save_threshold()  # noqa: SLF001
     qtbot.waitUntil(save_started.is_set, timeout=1000)
+    dialog.accept()
+    dialog.reject()
+    dialog.close()
+    assert dialog.isVisible()
     assert saved == []
     release.set()
     qtbot.waitUntil(lambda: dialog._worker is None, timeout=1000)  # noqa: SLF001
@@ -87,6 +92,8 @@ def test_inventory_alert_load_and_save_leave_event_loop_responsive(qtbot) -> Non
     qtbot.waitUntil(lambda: load_calls == 2, timeout=1000)
     qtbot.waitUntil(lambda: dialog._worker is None, timeout=1000)  # noqa: SLF001
     assert dialog._threshold.value() == 7  # noqa: SLF001
+    dialog.accept()
+    assert not dialog.isVisible()
 
 
 def test_threshold_change_notifies_parent_immediately(qtbot) -> None:

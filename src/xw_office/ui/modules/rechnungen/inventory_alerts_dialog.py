@@ -38,6 +38,7 @@ class InventoryAlertsDialog(QDialog):
         self._mail: MailDeliveryService = container.resolve(MailDeliveryService)
         self._details: list[InventoryAlertDetail] = []
         self._worker: BackgroundWorker | None = None
+        self._write_worker: BackgroundWorker | None = None
         self._closing = False
         self._refresh_pending = False
         self.setWindowTitle("Lageralarme")
@@ -80,6 +81,18 @@ class InventoryAlertsDialog(QDialog):
         layout.addLayout(buttons)
         self.refresh()
 
+    def accept(self) -> None:
+        if self._write_worker is not None:
+            return
+        self._closing = True
+        super().accept()
+
+    def reject(self) -> None:
+        if self._write_worker is not None:
+            return
+        self._closing = True
+        super().reject()
+
     def refresh(self) -> None:
         if self._closing or not isValid(self):
             return
@@ -95,6 +108,9 @@ class InventoryAlertsDialog(QDialog):
         worker.start()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if self._write_worker is not None:
+            event.ignore()
+            return
         self._closing = True
         super().closeEvent(event)
 
@@ -128,6 +144,8 @@ class InventoryAlertsDialog(QDialog):
         is_current = self._worker is worker
         if is_current:
             self._worker = None
+        if self._write_worker is worker:
+            self._write_worker = None
         if is_current and not self._closing and isValid(self):
             self._set_busy(False)
             if self._refresh_pending:
@@ -149,6 +167,7 @@ class InventoryAlertsDialog(QDialog):
         self._set_busy(True)
         worker = BackgroundWorker(job)
         self._worker = worker
+        self._write_worker = worker
         worker.signals.result.connect(
             lambda result: on_result(result) if not self._closing and isValid(self) else None
         )

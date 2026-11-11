@@ -70,7 +70,7 @@ class RefundsDialog(QDialog):
         super().reject()
 
     def _write_is_running(self) -> bool:
-        return self._write_worker is not None and self._write_worker.isRunning()
+        return self._write_worker is not None
 
     def _load(self) -> None:
         if self._worker is not None and self._worker.isRunning():
