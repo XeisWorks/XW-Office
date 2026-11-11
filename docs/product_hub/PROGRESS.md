@@ -6,6 +6,10 @@ Update this file at the end of every PR.
 
 ## Inventur-/Rechnungsabgang-Umbau (2026-11-11)
 
+Der aktuelle lokale Gesamtregressionslauf umfasst 2.250 bestandene und 5
+übersprungene Tests; der Hosted-CI-Lauf für den neuesten Projektionsstand wird
+separat nachgezogen.
+
 Die bisher fehlenden PR15-Bestandsprojektionen sind jetzt als `InventoryProjectionService`
 implementiert: sevDesk-Part- und Wix-Stocks werden nur bei eindeutiger Varianten-Zuordnung
 projiziert, externe Direktänderungen werden über die letzte Projektion als `sync_conflict`

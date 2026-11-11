@@ -48,6 +48,17 @@ provider-natives PostgreSQL-Backup.
 
 ## 3. Worker aktivieren
 
+Die neue Projektionsroutine ist separat prÃ¼fbar und standardmÃ¤ÃŸig read-only:
+
+```powershell
+railway run --service XW-Product-Hub --environment production -- `
+  python -m xw_office.services.product_hub.inventory_projection_cli
+```
+
+`--write` darf erst nach bestandener Inventur, Readiness und ausdrÃ¼cklich
+aktiviertem `XW_PRODUCT_HUB_INVENTORY_MASTER_ENABLED=true` verwendet werden. Der
+Worker ruft diesen Schreibpfad nur nach einem fehlerfreien sevDesk-Sync auf.
+
 Der separate Railway-Service `xw-inventory-worker` ist im Produktionsprojekt angelegt und
 aktiv. Er verwendet Repository/Branch `XeisWorks/XW-Office`/`main` und wurde zuletzt mit
 der zuletzt validierte Start war Deployment `6978341f-0087-49bb-bb04-a567397f6914`.
