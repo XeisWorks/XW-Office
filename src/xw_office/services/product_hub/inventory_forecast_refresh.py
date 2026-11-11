@@ -3,6 +3,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import datetime as dt
+from collections.abc import Iterator
+from typing import Any
+
+from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.repositories.product_hub import ProductFilter, ProductHubRepository
 from xw_office.repositories.product_hub_inventory import InventoryRepository
@@ -22,7 +26,9 @@ class ForecastRefreshResult:
 class InventoryForecastRefreshService:
     """Recompute every active physical variant without touching sales history."""
 
-    def __init__(self, session_factory, provider: SevdeskHistoryProvider) -> None:
+    def __init__(
+        self, session_factory: sessionmaker[Session], provider: SevdeskHistoryProvider
+    ) -> None:
         self._products = ProductHubRepository(session_factory)
         self._inventory = InventoryRepository(session_factory)
         self._service = InventoryV2Service(session_factory)
@@ -76,7 +82,9 @@ class InventoryForecastRefreshService:
                     )
         return history
 
-    def _documents_for_year(self, year: int):
+    def _documents_for_year(
+        self, year: int
+    ) -> Iterator[tuple[dict[str, Any], list[dict[str, Any]], int]]:
         for document in self._provider.list_invoices_for_year(year):
             if not _is_draft(document):
                 yield document, self._provider.list_invoice_positions(str(document.get("id") or "")), 1
@@ -85,9 +93,12 @@ class InventoryForecastRefreshService:
                 yield document, self._provider.list_credit_note_positions(str(document.get("id") or "")), -1
 
 
-def _is_draft(document: dict) -> bool:
+def _is_draft(document: dict[str, Any]) -> bool:
+    status = document.get("status")
+    if not isinstance(status, (int, float, str)):
+        status = ""
     try:
-        return int(document.get("status")) == 100
+        return int(status) == 100
     except (TypeError, ValueError):
         return str(document.get("status") or "").strip().casefold() in {"draft", "entwurf"}
 

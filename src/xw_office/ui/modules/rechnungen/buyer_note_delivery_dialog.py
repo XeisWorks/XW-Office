@@ -1,16 +1,19 @@
 """Delivery-note preview and explicit actions for the START buyer-note review."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit, QPushButton,
     QVBoxLayout, QWidget,
 )
 
 from xw_office.core.worker import BackgroundWorker
+from xw_office.core.container import Container
 from xw_office.services.invoice_processing.buyer_notes import BuyerNoteCase
 from xw_office.services.mailing.outlook_compose import open_classic_outlook_draft
 from xw_office.services.printing.print_queue import PrintQueueService
@@ -23,7 +26,7 @@ class BuyerNoteDeliveryDialog(QDialog):
     """Preview source data, edit the AI suggestion, then choose an output."""
 
     def __init__(self, case: BuyerNoteCase, address: tuple[str, ...], manual_note: str,
-                 container: object, parent: QWidget | None = None) -> None:
+                 container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Lieferschein")
         self.resize(760, 620)
@@ -94,8 +97,24 @@ class BuyerNoteDeliveryDialog(QDialog):
         close = QPushButton("Schließen")
         close.clicked.connect(self.reject)
         bottom.addWidget(close)
+        self._close_button = close
         root.addLayout(bottom)
-        self._action_buttons = (self._ai, self._open, self._print, self._mail, self._schedule)
+        self._action_buttons = (
+            self._ai, self._open, self._print, self._mail, self._schedule, self._close_button
+        )
+
+    def reject(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            self._status.setText("Eine Aktion läuft noch. Bitte nach Abschluss schließen.")
+            return
+        super().reject()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            self._status.setText("Eine Aktion läuft noch. Bitte nach Abschluss schließen.")
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     @staticmethod
     def _section(label: str, editor: QPlainTextEdit) -> QWidget:
@@ -117,7 +136,9 @@ class BuyerNoteDeliveryDialog(QDialog):
             manual_note=self.manual_note,
         )
 
-    def _run(self, label: str, job: object, ready: object) -> None:
+    def _run(
+        self, label: str, job: Callable[[], Any], ready: Callable[[object], None]
+    ) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
         for button in self._action_buttons:
@@ -182,6 +203,13 @@ class BuyerNoteDeliveryDialog(QDialog):
         self._run("Lieferschein wird vorbereitet…", job, self._on_prepared)
 
     def _on_prepared(self, value: object) -> None:
+        if (
+            not isinstance(value, tuple)
+            or len(value) != 2
+            or not isinstance(value[0], str)
+            or not isinstance(value[1], Path)
+        ):
+            raise RuntimeError("Ungueltiges Ergebnis der Lieferschein-Vorbereitung")
         action, path = value
         self._pdf = path
         if action == "open":

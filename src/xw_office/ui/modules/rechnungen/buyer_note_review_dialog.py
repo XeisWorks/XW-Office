@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from xw_office.core.container import Container
 from xw_office.core.worker import BackgroundWorker
 from xw_office.services.mailing.outlook_compose import open_classic_outlook_draft
 from xw_office.services.secrets.service import SecretService
@@ -37,7 +39,7 @@ class BuyerNoteReviewDialog(QDialog):
         cases: list[BuyerNoteCase],
         *,
         allow_delivery_note: bool,
-        container: object | None = None,
+        container: Container | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -51,6 +53,7 @@ class BuyerNoteReviewDialog(QDialog):
         self._printed_cases: set[str] = set()
         self._manual_note_text = ""
         self._current_index = -1
+        self._cancel: QPushButton | None = None
         self._build_ui()
         for case in self._cases:
             item = QListWidgetItem(self._item_label(case))
@@ -126,8 +129,24 @@ class BuyerNoteReviewDialog(QDialog):
         cancel = QPushButton("CANCEL")
         cancel.setToolTip("Gesamten START-Lauf abbrechen")
         cancel.clicked.connect(self.reject)
+        self._cancel = cancel
         buttons.addWidget(cancel)
         root.addLayout(buttons)
+
+    def reject(self) -> None:
+        if self._mail_worker is not None and self._mail_worker.isRunning():
+            if self._cancel is not None:
+                self._cancel.setToolTip("Outlook-Entwurf wird noch vorbereitet. Danach erneut schließen.")
+            return
+        super().reject()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._mail_worker is not None and self._mail_worker.isRunning():
+            if self._cancel is not None:
+                self._cancel.setToolTip("Outlook-Entwurf wird noch vorbereitet. Danach erneut schließen.")
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     @staticmethod
     def _item_label(case: BuyerNoteCase) -> str:
@@ -231,6 +250,7 @@ class BuyerNoteReviewDialog(QDialog):
         case = self._case()
         if case is None or self._container is None or not case.customer_email:
             return
+        container = self._container
         if self._mail_worker is not None and self._mail_worker.isRunning():
             return
         self._mail.setEnabled(False)
@@ -243,7 +263,7 @@ class BuyerNoteReviewDialog(QDialog):
         subject = f"Ihre Nachricht zu Bestellung {case.order_reference or case.invoice_number or case.invoice_id}"
 
         def job() -> object:
-            sender = str(self._container.resolve(SecretService).get_secret("OUTLOOK_SENDER_EMAIL") or "")
+            sender = str(container.resolve(SecretService).get_secret("OUTLOOK_SENDER_EMAIL") or "")
             return open_classic_outlook_draft(
                 to_email=case.customer_email,
                 subject=subject,
@@ -265,6 +285,8 @@ class BuyerNoteReviewDialog(QDialog):
         self._mail_worker = None
         case = self._case()
         self._mail.setEnabled(bool(case and case.customer_email))
+        if self._cancel is not None:
+            self._cancel.setToolTip("Gesamten START-Lauf abbrechen")
 
     def selections(self) -> dict[str, tuple[BuyerNoteCase, BuyerNoteReviewSelection]]:
         return {

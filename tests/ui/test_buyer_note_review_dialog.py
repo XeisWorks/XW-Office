@@ -1,6 +1,8 @@
 """The START buyer-note decision dialog must preserve its execution meaning."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 from PySide6.QtWidgets import QDialog, QPlainTextEdit
 
 from xw_office.services.invoice_processing.buyer_notes import (
@@ -10,6 +12,25 @@ from xw_office.services.invoice_processing.buyer_notes import (
 from xw_office.ui.modules.rechnungen import buyer_note_review_dialog
 from xw_office.ui.modules.rechnungen.buyer_note_review_dialog import BuyerNoteReviewDialog
 from xw_office.ui.modules.rechnungen.buyer_note_delivery_dialog import BuyerNoteDeliveryDialog
+
+
+class _Signal:
+    def connect(self, _callback: object) -> None:
+        pass
+
+
+class _RunningWorker:
+    def __init__(self, _job: object) -> None:
+        self.running = True
+        self.signals = type(
+            "Signals", (), {"result": _Signal(), "error": _Signal(), "finished": _Signal()}
+        )()
+
+    def isRunning(self) -> bool:
+        return self.running
+
+    def start(self) -> None:
+        pass
 
 
 def _case(invoice_id: str) -> BuyerNoteCase:
@@ -74,3 +95,50 @@ def test_scheduled_delivery_note_is_passed_to_start(qtbot: object, monkeypatch: 
     assert dialog.result() == QDialog.DialogCode.Accepted
     assert selection.action == BUYER_NOTE_DELIVERY_NOTE
     assert selection.manual_note == "Geprüfter Hinweis"
+
+
+def test_delivery_dialog_reject_and_window_close_wait_for_worker_without_blocking(
+    qtbot: object, monkeypatch: object
+) -> None:
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.buyer_note_delivery_dialog.BackgroundWorker",
+        _RunningWorker,
+    )
+    dialog = BuyerNoteDeliveryDialog(
+        _case("1"), ("Kundin", "Hauptstraße 1"), "Vorhandener Text", object()
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    dialog._prepare("open")  # noqa: SLF001
+    dialog.reject()
+    assert dialog.isVisible()
+    dialog.close()
+    assert dialog.isVisible()
+    assert "läuft noch" in dialog._status.text()  # noqa: SLF001
+
+    dialog._worker.running = False  # type: ignore[union-attr]  # noqa: SLF001
+    dialog._on_finished()  # noqa: SLF001
+    dialog.close()
+    assert not dialog.isVisible()
+
+
+def test_buyer_note_review_window_close_waits_for_outlook_worker(
+    qtbot: object, monkeypatch: object
+) -> None:
+    monkeypatch.setattr(buyer_note_review_dialog, "BackgroundWorker", _RunningWorker)
+    case = replace(_case("1"), customer_email="customer@example.test")
+    dialog = BuyerNoteReviewDialog([case], allow_delivery_note=False, container=object())
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    dialog._open_customer_mail()  # noqa: SLF001
+    dialog.reject()
+    assert dialog.isVisible()
+    dialog.close()
+    assert dialog.isVisible()
+
+    dialog._mail_worker.running = False  # type: ignore[union-attr]  # noqa: SLF001
+    dialog._mail_finished()  # noqa: SLF001
+    dialog.close()
+    assert not dialog.isVisible()
