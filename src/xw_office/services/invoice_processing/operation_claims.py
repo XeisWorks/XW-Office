@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Callable
+from datetime import datetime, timezone
 import json
 from threading import Lock
 from typing import Literal, cast
@@ -19,10 +20,13 @@ class OperationClaim:
     operation_id: str
     state: ClaimState
     acquired: bool
+    error: str = ""
 
 
 class InvoiceOperationClaimStore:
     """Serialize one external action across processes through SettingKV mutation."""
+
+    _PREFIX = "rechnungen.invoice_claim.v1:"
 
     def __init__(self, settings_repo: object | None) -> None:
         self._settings = settings_repo
@@ -56,6 +60,8 @@ class InvoiceOperationClaimStore:
                 return raw or "{}"
             operation_id = previous.get("operation_id") or str(uuid.uuid4())
             payload = {"operation_id": operation_id, "state": "running", "error": ""}
+            if previous.get("reconciliation_history"):
+                payload["reconciliation_history"] = previous["reconciliation_history"]
             decision.update(acquired=True, operation_id=operation_id, state="running")
             return json.dumps(payload, separators=(",", ":"))
 
@@ -92,6 +98,8 @@ class InvoiceOperationClaimStore:
                 str(uuid.uuid4()) if state == "succeeded" else previous.get("operation_id", "")
             ) or str(uuid.uuid4())
             payload = {"operation_id": operation_id, "state": "running", "error": ""}
+            if previous.get("reconciliation_history"):
+                payload["reconciliation_history"] = previous["reconciliation_history"]
             decision.update(acquired=True, operation_id=operation_id, state="running")
             return json.dumps(payload, separators=(",", ":"))
 
@@ -141,6 +149,111 @@ class InvoiceOperationClaimStore:
             operation_id=payload.get("operation_id", ""),
             state=cast(ClaimState, state),
             acquired=False,
+            error=payload.get("error", ""),
+        )
+
+    def list_unknown(self) -> list[OperationClaim]:
+        """Return durable claims requiring an operator-confirmed readback."""
+        method = getattr(self._settings, "list_values_json_by_prefix", None)
+        if callable(method):
+            values = method(self._PREFIX)
+        elif self._settings is not None:
+            raise RuntimeError("SettingKV-Repository kann Claims nicht nach Praefix auflisten")
+        else:
+            with self._local_lock:
+                values = {
+                    key: json.dumps(value, separators=(",", ":"))
+                    for key, value in self._local.items()
+                    if key.startswith(self._PREFIX)
+                }
+        claims: list[OperationClaim] = []
+        for key, raw in values.items():
+            payload = self._decode(raw)
+            if payload.get("state") != "unknown":
+                continue
+            identity = key[len(self._PREFIX) :]
+            invoice_id, separator, operation = identity.rpartition(":")
+            if not separator or not invoice_id or not operation:
+                raise ValueError(f"Ungueltiger Claim-Schluessel: {key}")
+            claims.append(
+                OperationClaim(
+                    invoice_id=invoice_id,
+                    operation=operation,
+                    operation_id=payload.get("operation_id", ""),
+                    state="unknown",
+                    acquired=False,
+                    error=payload.get("error", ""),
+                )
+            )
+        return sorted(claims, key=lambda claim: (claim.invoice_id, claim.operation))
+
+    def reconcile_unknown(
+        self,
+        invoice_id: str,
+        operation: str,
+        operation_id: str,
+        state: Literal["succeeded", "failed"],
+        *,
+        reconciled_by: str,
+        evidence: str,
+    ) -> OperationClaim:
+        """Record a human-verified outcome for exactly the current unknown run.
+
+        Choosing ``failed`` explicitly permits a later retry. Operators must only
+        choose it after verifying that the external side effect did not occur.
+        """
+        clean_operation_id = str(operation_id or "").strip()
+        operator = str(reconciled_by or "").strip()
+        proof = str(evidence or "").strip()
+        if not clean_operation_id:
+            raise ValueError("Operation-ID ist erforderlich")
+        if state not in {"succeeded", "failed"}:
+            raise ValueError("Reconciliation-Status muss succeeded oder failed sein")
+        if not operator:
+            raise ValueError("Operator ist erforderlich")
+        if len(proof) < 8:
+            raise ValueError("Abgleichnachweis muss mindestens 8 Zeichen enthalten")
+        key = self._key(invoice_id, operation)
+        updated: dict[str, str] = {}
+
+        def mutate(raw: str | None) -> str:
+            payload = self._decode(raw)
+            if payload.get("operation_id") != clean_operation_id:
+                raise ValueError("Operation-ID stimmt nicht mit dem aktuellen Claim ueberein")
+            if payload.get("state") != "unknown":
+                raise ValueError("Nur ein unknown-Claim kann manuell abgeglichen werden")
+            history_raw = payload.get("reconciliation_history", "[]")
+            try:
+                history = json.loads(history_raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Claim-Reconciliation-Historie ist unlesbar") from exc
+            if not isinstance(history, list):
+                raise ValueError("Claim-Reconciliation-Historie hat ein ungueltiges Format")
+            history.append(
+                {
+                    "state": state,
+                    "reconciled_at": datetime.now(timezone.utc).isoformat(),
+                    "reconciled_by": operator[:200],
+                    "evidence": proof[:2000],
+                }
+            )
+            payload.update(
+                state=state,
+                reconciled_by=operator[:200],
+                reconciled_at=history[-1]["reconciled_at"],
+                reconciliation_history=json.dumps(history, separators=(",", ":")),
+            )
+            updated.update(payload)
+            return json.dumps(payload, separators=(",", ":"))
+
+        self._mutate(key, mutate)
+        return OperationClaim(
+            invoice_id=str(invoice_id),
+            operation=str(operation),
+            operation_id=clean_operation_id,
+            state=state,
+            acquired=False,
+            error=updated.get("error", ""),
         )
 
     def _mutate(self, key: str, mutator: Callable[[str | None], str]) -> None:

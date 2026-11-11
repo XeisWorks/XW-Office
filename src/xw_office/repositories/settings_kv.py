@@ -30,6 +30,19 @@ class SettingKvRepository:
             row = session.get(SettingKV, key)
             return None if row is None else row.value_json
 
+    def list_values_json_by_prefix(self, prefix: str) -> dict[str, str]:
+        """List settings with one namespace prefix in deterministic key order."""
+        clean_prefix = str(prefix or "")
+        if not clean_prefix.strip():
+            raise ValueError("SettingKV-Praefix darf nicht leer sein")
+        with self._scope() as session:
+            rows = session.scalars(
+                select(SettingKV)
+                .where(SettingKV.key.startswith(clean_prefix, autoescape=True))
+                .order_by(SettingKV.key)
+            ).all()
+            return {row.key: row.value_json for row in rows}
+
     @contextmanager
     def advisory_lock(self, key: str) -> Generator[None, None, None]:
         """Hold a transaction-scoped PostgreSQL lock while a caller performs I/O.

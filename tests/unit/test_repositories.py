@@ -54,6 +54,22 @@ def test_setting_kv_round_trip(session_factory: sessionmaker[Session]) -> None:
         assert raw == '{"mode":"dark"}'
 
 
+def test_setting_kv_lists_values_by_prefix_in_key_order(
+    session_factory: sessionmaker[Session],
+) -> None:
+    repo = SettingKvRepository(session_factory)
+    repo.set_value_json("claims:b", '{"state":"unknown"}')
+    repo.set_value_json("other:a", '{"state":"unknown"}')
+    repo.set_value_json("claims:a", '{"state":"failed"}')
+
+    assert repo.list_values_json_by_prefix("claims:") == {
+        "claims:a": '{"state":"failed"}',
+        "claims:b": '{"state":"unknown"}',
+    }
+    with pytest.raises(ValueError, match="darf nicht leer"):
+        repo.list_values_json_by_prefix(" ")
+
+
 def test_setting_kv_mutate_value_json(session_factory: sessionmaker[Session]) -> None:
     repo = SettingKvRepository(session_factory)
     repo.set_value_json("shared.items", '["first"]')
