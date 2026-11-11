@@ -17,6 +17,9 @@ HTTP 200. Der laufende Container bestätigt per `alembic current` den Head
 remote sind `DATABASE_URL`, Graph-Client-ID und Tenant gesetzt, aber
 `SEVDESK_API_TOKEN` und `MS_GRAPH_MAILBOX` fehlen. Deshalb bleiben Worker-Aktivierung,
 Live-Forecast/Abgleich, Graph-Mailbetrieb und der Product-Hub-Cutover weiterhin bewusst offen.
+Das Deployment `634e2881-4c37-4897-a7be-12b8c7ffea97` mit dem aktuellen Stand wurde am
+11. November 2026 erfolgreich gebaut und ausgerollt; der anschließende Health-/Migration-
+Smokecheck blieb grün.
 
 P08 ergänzt den read-only `scripts/product_hub/export_inventory_snapshot.py`-Snapshot für Ledger-, Bestands-, Buchungs-, Alarm-, Inventur- und Sync-Zustände. Er unterstützt die Cutover-Vorbereitung, ersetzt aber kein provider-natives PostgreSQL-Backup.
 Die automatisierte Rollback-Probe deckt zusätzlich ab, dass ein Zurücksetzen der Master-Konfiguration Ledger und materialisierten Bestand unverändert lässt; Produktions-Rollback und Backup bleiben manuelle Nachweise.
