@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import types
 from unittest.mock import MagicMock
 
@@ -103,3 +104,49 @@ def test_idle_print_queue_thread_stops_cleanly() -> None:
     assert worker.isRunning()
     assert service.shutdown(1000) is True
     assert worker.isRunning() is False
+
+
+def test_concurrent_first_enqueues_start_only_one_worker(monkeypatch) -> None:
+    created: list[object] = []
+    created_lock = threading.Lock()
+
+    class FakeSignal:
+        def connect(self, _callback: object) -> None:
+            pass
+
+    class FakeWorker:
+        def __init__(self, _jobs: object, _result_callback: object) -> None:
+            self.job_started = FakeSignal()
+            self.job_finished = FakeSignal()
+            self.job_failed = FakeSignal()
+            self.running = False
+            with created_lock:
+                created.append(self)
+            time.sleep(0.02)
+
+        def isRunning(self) -> bool:
+            return self.running
+
+        def start(self) -> None:
+            self.running = True
+
+        def stop(self) -> None:
+            self.running = False
+
+        def wait(self, _timeout_ms: int) -> bool:
+            return True
+
+    monkeypatch.setattr(print_queue, "_PrintQueueWorker", FakeWorker)
+    service = print_queue.PrintQueueService()
+    jobs = [PdfPrintJob(pdf_path=f"{index}.pdf", printer_name="P") for index in range(12)]
+    threads = [threading.Thread(target=service.enqueue, args=(job,)) for job in jobs]
+
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(created) == 1
+    assert service._jobs.qsize() == len(jobs)  # noqa: SLF001
+    assert service.shutdown(0) is True

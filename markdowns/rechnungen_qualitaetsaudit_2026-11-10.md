@@ -1,6 +1,6 @@
 # RECHNUNGEN – Qualitätsaudit und Umsetzungsplan
 
-Erstellt: **10.11.2026**; fortgeschrieben bis **11.11.2026**, Europe/Vienna.
+Erstellt: **10.11.2026**; fortgeschrieben bis **12.11.2026**, Europe/Vienna.
 Repository: `XeisWorks/XW-Office`.
 Geprüfte Ausgangsbasis: `main`, `eb162c5d8c40db8052d31bc8bb009e27aa6cd351`.
 Vor Beginn sauberer Arbeitsbaum und erfolgreicher `git pull --ff-only origin main`.
@@ -2378,3 +2378,46 @@ Seitenbereich und genau einen Queue-Auftrag. `test_rechnungen_product_print.py`
 besteht jetzt mit **18 Tests**, globales Ruff und gezieltes MyPy fuer `print_dialog.py`
 (gruppierter Fremdimport `fitz` ausgenommen) bestehen. Hosted CI fuer den gepushten
 Vorgaengercommit laeuft; der neue Nachtrag wird mit dem Fixcommmit geprueft.
+
+## Fortschreibung F17/F18 - PDF-Aktionen und Druckqueue-Race (12.11.2026)
+
+Die Produktdruck-Konfiguration prueft „PDF oeffnen“ und „Ordner“ jetzt ohne
+UI-Thread-Dateizugriffe. Im gemeinsamen manuellen Rechnung-/Label-/Noten-PDF-Dialog
+laufen PDF-Seitenzaehlung und Druckqueue-Einreihung ebenfalls im Worker; die
+Seitenauswahl wird im UI in einfache Werte umgewandelt. Ein paralleler Erststart
+konnte zuvor ausserdem mehrere `_PrintQueueWorker` erzeugen: Workerstart, erster
+Queue-Put und Shutdown sind jetzt mit einem gemeinsamen Lock serialisiert, und
+neue Einreihungen werden nach Shutdown abgelehnt.
+
+Regressionen blockieren Dateizugriffe und PDF-Oeffnung, pruefen den Qt-Heartbeat,
+korrekte Seitenbereiche, genau einen Worker bei zwoelf gleichzeitigen Erstauftraegen
+und alle erhaltenen Jobs. Die vollstaendige lokale Suite auf `d82ae39` plus dem
+Readiness-Doc-Fast-Forward `7d6b514` besteht mit **2.258 Tests, 5 uebersprungen und
+1 bestehender Starlette/httpx-Deprecation-Warnung (165,28 s)**. Druck-/Queue-Tests:
+23 bestanden; globales Ruff und gezieltes MyPy fuer `print_queue.py` und
+`print_dialog.py` gruen. Das globale MyPy-Gate bleibt wegen bestehender Fehler in
+anderen Dateien separat offen.
+
+### F25 - aktueller Rechnungslisten-/Eventloop-Beleg
+
+Der letzte lokale Lauf mit 50 Rechnungen meldet `Invoice batch metric`
+`load_ms=760`, `flags_ms=283`, `rows_ms=0`, `fulfillment_ms=307`, `total_ms=1351`;
+diese Gesamtzeit enthaelt den Worker-Abruf. Die dazu protokollierten Eventloop-Gaps
+liegen bei 91 ms und 69 ms. Seit dem erfolgreichen START-Lauf um 21:38:58 wurden
+acht Eventloop-Samples mit einem Maximum von 116 ms beobachtet. Aeltere 334-487-ms-
+Gaps fallen zeitlich in die START-Druckdispatch-Phase; die Logs belegen Korrelation,
+aber keine Ursache. F25 bleibt TEILWEISE bis die Druckdispatch-GIL-/Qt-Last separat
+profiliert und die 250-ms-Anforderung fuer den kompletten START-Druckpfad belegt ist.
+
+### G2 - frischer Produktions-Read-only-Nachweis (12.11.2026, 00:37 CET)
+
+Nach `84cf681` wurde der Worker-Lauf read-only beobachtet: Forecast Exit 0, sevDesk-
+Sync Exit 1 mit `processed=0` und `already_applied=0`; die Kanalprojektion blieb bei
+`master_enabled=false` aus. Der Preflight danach lieferte Health HTTP 200, Runtime-
+Readiness Exit 0 (`eligible=true`) und DB-Readiness Exit 2 (`eligible=false`). Der
+Snapshot um 00:36:59 CET zaehlt 432 Bestandspositionen, 0 Ledger-Bewegungen, 0
+Rechnungsbuchungsmarker, 0 Inventur-Sessions, 432 Alarme, 726 Sync-Konflikte
+(710 offen), 432 Outbox-Ereignisse und 263 archivierte Payloads. Master und Shadow
+blieben `false`; es wurden keine Bestands-/Providerdaten geschrieben. G2 bleibt
+BLOCKIERT durch Inventur, Konfliktbereinigung, Shadow-Nachweis, Providerprojektionen,
+provider-natives Backup und Betriebsfreigabe.

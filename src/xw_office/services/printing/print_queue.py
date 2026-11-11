@@ -32,8 +32,8 @@ def _delete_paths(paths: tuple[str, ...]) -> None:
 def _execute_brother_lbx_job(job: BrotherLbxLabelJob) -> None:
     pythoncom_mod = None
     try:
-        import pythoncom  # type: ignore[import-untyped]
-        import win32com.client  # type: ignore[import-untyped]
+        import pythoncom
+        import win32com.client
 
         pythoncom_mod = pythoncom
     except ImportError as exc:
@@ -193,22 +193,28 @@ class PrintQueueService(QObject):
         super().__init__(parent)
         self._jobs: queue.Queue[PrintJob | None] = queue.Queue()
         self._worker: _PrintQueueWorker | None = None
+        self._worker_lock = threading.RLock()
+        self._stopping = False
         self._result_condition = threading.Condition()
         self._awaited_job_ids: set[str] = set()
         self._results: dict[str, PrintJobResult] = {}
 
     def _ensure_worker(self) -> _PrintQueueWorker:
-        if self._worker is None or not self._worker.isRunning():
-            self._worker = _PrintQueueWorker(self._jobs, self._record_result)
-            self._worker.job_started.connect(self.job_started.emit)
-            self._worker.job_finished.connect(self.job_finished.emit)
-            self._worker.job_failed.connect(self.job_failed.emit)
-            self._worker.start()
-        return self._worker
+        with self._worker_lock:
+            if self._stopping:
+                raise RuntimeError("Print queue is shutting down")
+            if self._worker is None or not self._worker.isRunning():
+                self._worker = _PrintQueueWorker(self._jobs, self._record_result)
+                self._worker.job_started.connect(self.job_started.emit)
+                self._worker.job_finished.connect(self.job_finished.emit)
+                self._worker.job_failed.connect(self.job_failed.emit)
+                self._worker.start()
+            return self._worker
 
     def enqueue(self, job: PrintJob) -> str:
-        self._ensure_worker()
-        self._jobs.put(job)
+        with self._worker_lock:
+            self._ensure_worker()
+            self._jobs.put(job)
         self.job_queued.emit(job)
         logger.info("Print job queued: id=%s printer='%s'", job.id, getattr(job, "printer_name", ""))
         return job.id
@@ -242,13 +248,15 @@ class PrintQueueService(QObject):
 
     def shutdown(self, wait_ms: int = 5000) -> bool:
         """Stop the queue thread, returning false while a backend is still busy."""
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.stop()
-            if not self._worker.wait(max(int(wait_ms), 0)):
-                logger.warning("Print queue worker still running during application shutdown")
-                return False
-        self._worker = None
-        return True
+        with self._worker_lock:
+            self._stopping = True
+            if self._worker is not None and self._worker.isRunning():
+                self._worker.stop()
+                if not self._worker.wait(max(int(wait_ms), 0)):
+                    logger.warning("Print queue worker still running during application shutdown")
+                    return False
+            self._worker = None
+            return True
 
     def __del__(self) -> None:
         try:
