@@ -6,6 +6,7 @@ import datetime
 from typing import Callable, Protocol
 
 from xw_office.services.product_hub.invoice_inventory import InvoiceInventoryBookingService, InvoiceInventoryLine
+from xw_office.repositories.product_hub_inventory import NegativeStockError
 from xw_office.services.product_hub.sevdesk_feed_validation import document_state, feed_quantity
 
 
@@ -30,10 +31,12 @@ class SevdeskInvoiceInventoryPoller:
         provider: InvoiceReleaseProvider,
         booking: InvoiceInventoryBookingService,
         on_applied: Callable[[InvoiceInventoryLine, object], object] | None = None,
+        on_shortage: Callable[[InvoiceInventoryLine, Exception], object] | None = None,
     ) -> None:
         self._provider = provider
         self._booking = booking
         self._on_applied = on_applied
+        self._on_shortage = on_shortage
 
     def poll(self, *, since: datetime.date | None = None) -> InvoicePollResult:
         result = InvoicePollResult()
@@ -80,6 +83,27 @@ class SevdeskInvoiceInventoryPoller:
                         ),
                         source="sevdesk.final_invoice_poll",
                     )
+                except NegativeStockError as exc:
+                    if self._on_shortage is not None:
+                        try:
+                            self._on_shortage(
+                                InvoiceInventoryLine(
+                                    document_id=invoice_id,
+                                    position_key=position_key,
+                                    variant_id=resolved.variant.id,
+                                    quantity=int(quantity),
+                                    source_revision=revision,
+                                ),
+                                exc,
+                            )
+                        except Exception as callback_exc:  # noqa: BLE001
+                            result.errors.append(
+                                f"{invoice_id}/{position_key}: Unterdeckungs-Callback fehlgeschlagen: {callback_exc}"
+                            )
+                    result.needs_review.append(
+                        f"{invoice_id}/{position_key}: Bestand reicht für externe Freigabe nicht aus: {exc}"
+                    )
+                    continue
                 except ValueError as exc:
                     result.errors.append(f"{invoice_id}: {exc}")
                     continue

@@ -84,8 +84,33 @@ class InvoiceInventoryBookingService:
         return results
 
     def validate_invoice_context(self, positions: Iterable[InvoiceWorkPosition]) -> None:
-        """Resolve all physical product positions before an external finalization."""
-        self._resolve_invoice_lines(positions)
+        """Resolve positions and reject physical undercoverage before finalization.
+
+        External sevDesk releases are handled by the polling path and become a
+        durable shortage conflict when the Legacy mirror cannot cover them.  The
+        desktop path has a stronger guarantee: it must surface the shortage before
+        sending the final invoice so the operator can print/replenish first.
+        """
+        resolved_lines = self._resolve_invoice_lines(positions)
+        location = self._repository.get_location_by_code("MAIN")
+        shortages: list[str] = []
+        for resolved, quantity, _position_key in resolved_lines:
+            stock = (
+                self._repository.get_stock(resolved.variant.id, location.id)
+                if location is not None
+                else None
+            )
+            available = int(stock.on_hand) if stock is not None else 0
+            required = int(quantity)
+            if required > available:
+                shortages.append(
+                    f"{resolved.variant.sku}: erforderlich {required}, verfügbar {available}"
+                )
+        if shortages:
+            raise ValueError(
+                "Physischer Bestand reicht vor Rechnungsfreigabe nicht aus: "
+                + "; ".join(shortages)
+            )
 
     def resolve_physical_sku(self, sku: str) -> ResolvedSku | None:
         """Expose exact SKU resolution to conservative external feed adapters."""

@@ -15,6 +15,7 @@ from xw_office.services.product_hub.invoice_inventory import (
 )
 from xw_office.services.product_hub.inventory_external_mirror import InventoryExternalMirrorService
 from xw_office.services.product_hub.inventory import LegacyInventoryShadowBridge
+from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.services.product_hub.sevdesk_credit_note_inventory import SevdeskCreditNoteInventoryService
 from xw_office.services.product_hub.sevdesk_history_audit import sevdesk_history_provider_from_connection
 from xw_office.services.product_hub.sevdesk_invoice_inventory import SevdeskInvoiceInventoryPoller
@@ -45,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     booking = InvoiceInventoryBookingService(factory)
     mirror = InventoryExternalMirrorService(factory)
     shadow_bridge = LegacyInventoryShadowBridge(factory)
+    inventory_repository = InventoryRepository(factory)
 
     def mirror_line(line: InvoiceInventoryLine, booking_result: object) -> object:
         delta = int(getattr(booking_result, "delta", 0))
@@ -70,7 +72,28 @@ def main(argv: list[str] | None = None) -> int:
             )
         return result
 
-    invoices = SevdeskInvoiceInventoryPoller(provider, booking, on_applied=mirror_line).poll(since=since)
+    def record_shortage(line, error):
+        location = inventory_repository.get_location_by_code("MAIN")
+        stock = (
+            inventory_repository.get_stock(line.variant_id, location.id)
+            if location is not None
+            else None
+        )
+        shadow_bridge.record_external_shortage(
+            sku=booking.sku_for_variant(line.variant_id),
+            requested_delta=-int(line.quantity),
+            current_on_hand=int(stock.on_hand) if stock is not None else 0,
+            target_on_hand=int(stock.on_hand) if stock is not None else 0,
+            detail=str(error),
+            external_reference=f"{line.document_id}:{line.position_key}",
+        )
+
+    invoices = SevdeskInvoiceInventoryPoller(
+        provider,
+        booking,
+        on_applied=mirror_line,
+        on_shortage=record_shortage,
+    ).poll(since=since)
     if not invoices.errors and not invoices.needs_review:
         advance_invoice_feed_checkpoint(settings, completed_through=today)
     credits = SevdeskCreditNoteInventoryService(provider, booking, on_applied=mirror_line)

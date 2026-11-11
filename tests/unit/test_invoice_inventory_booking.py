@@ -56,6 +56,26 @@ def test_unresolved_part_without_sku_is_not_silently_ignored() -> None:
         service.validate_invoice_context(positions)
 
 
+def test_validate_invoice_context_rejects_shortage_before_release() -> None:
+    factory, variant_id = _factory()
+    InventoryV2Service(factory).record_movement(
+        variant_id=variant_id,
+        delta=1,
+        reason="import_baseline",
+        source="test",
+        idempotency_key="preflight-baseline",
+    )
+    service = InvoiceInventoryBookingService(factory)
+    positions = normalize_invoice_positions(
+        [{"part": {"partNumber": "XW-BOOKING"}, "quantity": 2}]
+    )
+
+    with pytest.raises(ValueError, match="Bestand reicht.*XW-BOOKING"):
+        service.validate_invoice_context(positions)
+    with factory() as session:
+        assert session.query(InventoryDocumentBooking).count() == 0
+
+
 def test_zero_quantity_does_not_require_a_physical_mapping() -> None:
     factory, _variant_id = _factory()
     service = InvoiceInventoryBookingService(factory)

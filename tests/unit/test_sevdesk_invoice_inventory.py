@@ -82,3 +82,25 @@ def test_invoice_feed_does_not_invent_position_identity_from_display_number() ->
     assert any("stabile Positions-ID" in issue for issue in result.needs_review)
     with factory() as session:
         assert session.query(InventoryDocumentBooking).count() == 0
+
+
+def test_invoice_feed_exposes_hub_shortage_without_booking() -> None:
+    factory, variant_id = _factory()
+    provider = _OneInvoiceProvider(
+        {"id": "external-shortage", "status": 200},
+        {"id": "position-shortage", "quantity": 2, "part": {"number": "XW-BOOKING"}},
+    )
+    shortages: list[tuple[object, Exception]] = []
+
+    result = SevdeskInvoiceInventoryPoller(
+        provider,
+        InvoiceInventoryBookingService(factory),
+        on_shortage=lambda line, error: shortages.append((line, error)),
+    ).poll()
+
+    assert result.processed == 0
+    assert len(result.needs_review) == 1
+    assert len(shortages) == 1
+    assert shortages[0][0].variant_id == variant_id
+    with factory() as session:
+        assert session.query(InventoryDocumentBooking).count() == 0
