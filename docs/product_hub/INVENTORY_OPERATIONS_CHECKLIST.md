@@ -107,7 +107,7 @@ bewusst bestehen.
 5. Erst wenn Backup, Shadow-Nachweis, Projektionen und Rollback dokumentiert sind, darf
    `inventory_master_enabled=true` nach ausdrücklicher Bestätigung gesetzt werden.
 
-## Aktueller Befund (11. November 2026)
+## Aktueller Befund (11. November 2026, Railway-Prüfung 23:38 CET)
 
 Nach dem Forecast-Refresh wurde der Read-only-Gate erneut über `DATABASE_PUBLIC_URL`
 des Postgres-Service plus Railway-Referenzen des Product-Hub-Service geprüft:
@@ -118,8 +118,13 @@ Sync-Konflikte. Provider-/Graph-Grundkonfiguration und der Worker-Marker sind da
 
 - Railway-Zugangsdaten für sevDesk und Graph sind im Product-Hub-Service vorhanden.
 - Healthcheck: HTTP 200; aktueller Alembic-Head `037_plc_parcel_evidence`.
-- Read-only Snapshot: 0 Ledger-Bewegungen, 0 Inventory-Bestandspositionen,
-  588 `sync_conflict`-Zeilen und 263 archivierte Payloads.
+- Read-only Snapshot (Railway CLI, 11. November 2026, 23:37 CET): 432
+  `inventory_stock`-Zeilen, 0 Ledger-Bewegungen, 432 `inventory_alert`-Zeilen,
+  726 `sync_conflict`-Zeilen, 432 Outbox-Ereignisse und 263 archivierte Payloads.
+- Der DB-Readiness-Check wurde mit `--skip-runtime-configuration` ausgeführt und
+  endet erwartungsgemäß mit Exit-Code 2 (`eligible=false`). Der getrennte
+  Product-Hub-Runtime-Check endet mit Exit-Code 0 (`eligible=true`): Provider-
+  credentials und Worker-Service sind betriebsbereit.
 - Railway-Worker: Service aktiv; der zuletzt validierte Start war Deployment
   `6978341f-0087-49bb-bb04-a567397f6914`
   erfolgreich; Laufzeitlog zeigt den Start des Containers.
