@@ -7018,8 +7018,32 @@ class RechnungenView(QWidget):
                 details = []
                 if position.unit_weight_kg is not None:
                     details.append(f"Gewicht: {position.unit_weight_kg:g} kg")
-                if position.unit_value is not None:
+                if (
+                    position.unit_value is not None
+                    and position.unit_price_net is None
+                    and position.unit_price_gross is None
+                ):
                     details.append(f"Einzelwert: {position.unit_value} {position.currency}")
+                if position.unit:
+                    details.append(f"Einheit: {position.unit}")
+                if position.unit_price_net is not None:
+                    details.append(f"Einzelpreis netto: {position.unit_price_net} {position.currency}")
+                if position.unit_price_gross is not None:
+                    details.append(f"Einzelpreis brutto: {position.unit_price_gross} {position.currency}")
+                if position.unit_tax is not None:
+                    details.append(f"Einzelsteuer: {position.unit_tax} {position.currency}")
+                if position.tax_rate is not None:
+                    details.append(f"Steuersatz: {position.tax_rate}%")
+                if position.discount is not None:
+                    details.append(f"Rabatt: {position.discount}%")
+                for label, amount in (
+                    ("Rabattbetrag", position.sum_discount),
+                    ("Positionssumme netto", position.sum_net_accounting),
+                    ("Positionssteuer", position.sum_tax_accounting),
+                    ("Positionssumme brutto", position.sum_gross_accounting),
+                ):
+                    if amount is not None:
+                        details.append(f"{label}: {amount} {position.currency}")
                 if details:
                     position_lines.append("  " + " | ".join(details))
                 if position.warnings:

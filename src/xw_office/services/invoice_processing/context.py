@@ -40,6 +40,16 @@ class InvoiceWorkPosition:
     unit_weight_kg: float | None = None
     unit_value: Decimal | None = None
     currency: str = "EUR"
+    unit: str = ""
+    unit_price_net: Decimal | None = None
+    unit_price_gross: Decimal | None = None
+    unit_tax: Decimal | None = None
+    tax_rate: Decimal | None = None
+    discount: Decimal | None = None
+    sum_discount: Decimal | None = None
+    sum_net_accounting: Decimal | None = None
+    sum_tax_accounting: Decimal | None = None
+    sum_gross_accounting: Decimal | None = None
     warnings: tuple[str, ...] = ()
 
     @property
@@ -109,6 +119,16 @@ def decimal_value(value: object, default: Decimal = Decimal("0")) -> Decimal:
         return parsed if parsed.is_finite() else default
     except (InvalidOperation, TypeError, ValueError):
         return default
+
+
+def _optional_decimal(value: object) -> Decimal | None:
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        parsed = Decimal(str(value))
+        return parsed if parsed.is_finite() else None
+    except (InvalidOperation, TypeError, ValueError):
+        return None
 
 
 def _text(value: object) -> str:
@@ -185,6 +205,8 @@ def normalize_invoice_positions(
         if kind in {"service", "unknown"}:
             warnings.append("Keine physische Produktposition")
 
+        unit_price_gross = _optional_decimal(raw.get("priceGross"))
+        unit_price_net = _optional_decimal(raw.get("priceNet"))
         unit_value = decimal_value(raw.get("priceGross") or raw.get("price"), Decimal("0"))
         result.append(
             InvoiceWorkPosition(
@@ -199,6 +221,16 @@ def normalize_invoice_positions(
                 kind=kind,
                 printable=printable,
                 unit_value=unit_value,
+                unit=_text(raw.get("unity")),
+                unit_price_net=unit_price_net,
+                unit_price_gross=unit_price_gross,
+                unit_tax=_optional_decimal(raw.get("priceTax")),
+                tax_rate=_optional_decimal(raw.get("taxRate")),
+                discount=_optional_decimal(raw.get("discount")),
+                sum_discount=_optional_decimal(raw.get("sumDiscount")),
+                sum_net_accounting=_optional_decimal(raw.get("sumNetAccounting")),
+                sum_tax_accounting=_optional_decimal(raw.get("sumTaxAccounting")),
+                sum_gross_accounting=_optional_decimal(raw.get("sumGrossAccounting")),
                 warnings=tuple(warnings),
             )
         )

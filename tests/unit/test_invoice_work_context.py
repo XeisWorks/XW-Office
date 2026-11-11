@@ -55,6 +55,61 @@ def test_manual_invoice_positions_classify_products_shipping_and_services() -> N
     assert positions[1].printable is False
 
 
+def test_invoice_position_preserves_optional_price_tax_discount_and_accounting_fields() -> None:
+    position, = normalize_invoice_positions(
+        [
+            {
+                "id": "priced-position",
+                "positionNumber": 1,
+                "part": {"partNumber": "XW-1"},
+                "quantity": "2",
+                "unity": "Stück",
+                "price": "12.00",
+                "priceNet": "10.00",
+                "priceGross": "12.00",
+                "priceTax": "2.00",
+                "taxRate": "20",
+                "discount": "5",
+                "sumDiscount": "1.20",
+                "sumNetAccounting": "19.00",
+                "sumTaxAccounting": "3.80",
+                "sumGrossAccounting": "22.80",
+            }
+        ]
+    )
+
+    assert position.unit == "Stück"
+    assert position.unit_value == Decimal("12.00")
+    assert position.unit_price_net == Decimal("10.00")
+    assert position.unit_price_gross == Decimal("12.00")
+    assert position.unit_tax == Decimal("2.00")
+    assert position.tax_rate == Decimal("20")
+    assert position.discount == Decimal("5")
+    assert position.sum_discount == Decimal("1.20")
+    assert position.sum_net_accounting == Decimal("19.00")
+    assert position.sum_tax_accounting == Decimal("3.80")
+    assert position.sum_gross_accounting == Decimal("22.80")
+
+
+def test_invalid_optional_invoice_amounts_remain_absent() -> None:
+    position, = normalize_invoice_positions(
+        [
+            {
+                "part": {"partNumber": "XW-1"},
+                "priceNet": "not-an-amount",
+                "priceTax": "NaN",
+                "taxRate": None,
+                "sumGrossAccounting": "Infinity",
+            }
+        ]
+    )
+
+    assert position.unit_price_net is None
+    assert position.unit_tax is None
+    assert position.tax_rate is None
+    assert position.sum_gross_accounting is None
+
+
 def test_manual_invoice_address_falls_back_from_billing_to_shipping() -> None:
     summary = InvoiceSummary(id="42", contact_name="Roland Grunow")
     billing, shipping, source = address_lines_from_invoice(
