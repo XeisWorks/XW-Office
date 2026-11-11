@@ -186,6 +186,7 @@ packages:
       - InventoryForecastRefreshService aggregiert finale Rechnungs-/Gutschriftpositionen und aktualisiert alle aktiven physischen Varianten; die wiederholbare Worker-Ausführung ist als `xw-inventory-worker` implementiert.
       - `SevdeskHistoryProviderAdapter` nutzt den bestehenden paginierten Monatsfeed read-only; `POST /api/v1/inventory/forecast/refresh` und `xw-inventory-forecast-refresh` liefern einen geschützten Einmal-Refresh für Desktop/Railway-Cron.
       - `xw-inventory-worker` führt Forecast-Refresh und sevDesk-Abgleich in einem idempotenten Intervall aus; Railway-Service-Aktivierung und Datenqualitäts-Dashboard bleiben Deployment-/Betriebsgates.
+      - Forecast- und Sync-CLI brechen bei fehlendem `SEVDESK_API_TOKEN` vor Datenbank-/Providerzugriff mit einem eindeutigen Konfigurationsfehler ab; so entstehen keine teilweisen Produktionszyklen.
     scope:
       - 60 volle Kalendermonate aus finalen sevDesk-Positionen und eindeutigen Gegenmengen aggregieren.
       - Volle Monate seit Verkaufbarkeit einschließlich Nullmonaten ermitteln; vor sechs Monaten Startwert 50 verwenden.

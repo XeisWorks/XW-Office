@@ -20,6 +20,8 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config()
     if not (config.database_url or "").strip():
         parser.error("DATABASE_URL is required")
+    if not (config.sevdesk.api_token or "").strip():
+        parser.error("SEVDESK_API_TOKEN is required")
     as_of = dt.date.fromisoformat(args.as_of) if args.as_of else dt.date.today()
     service = InventoryForecastRefreshService(
         create_session_factory(config),

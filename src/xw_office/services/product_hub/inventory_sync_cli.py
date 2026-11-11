@@ -33,6 +33,8 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config()
     if not (config.database_url or "").strip():
         parser.error("DATABASE_URL is required")
+    if not (config.sevdesk.api_token or "").strip():
+        parser.error("SEVDESK_API_TOKEN is required")
     today = dt.date.today()
     requested_since = dt.date.fromisoformat(args.since) if args.since else None
     factory = create_session_factory(config)

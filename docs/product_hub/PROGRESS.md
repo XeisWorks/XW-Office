@@ -23,6 +23,7 @@ Die automatisierte Rollback-Probe deckt zusätzlich ab, dass ein Zurücksetzen d
 Das read-only `scripts/product_hub/check_inventory_cutover.py` exportiert die Cutover-Readiness als JSON und liefert bei blockierten oder manuellen Gates einen nicht-grünen Exit-Code, ohne den Master-Flag zu verändern.
 Der Desktop-Freigabe-Orchestrator ist zusätzlich mit einem direkten Regressionstest abgesichert: erfolgreiche sevDesk-Freigabe führt anschließend genau einmal zur Product-Hub-Buchung.
 P02 ist nun auch im Desktop bedienbar: **Geführte Inventur** erstellt aus der Produkteansicht eine eingefrorene Zählliste, erfasst Mengen und Notizen asynchron und bestätigt die Differenzen über denselben idempotenten `InventoryCountService`. Die neue UI-Regression ergänzt den gezielten Lauf (`11 bestanden`).
+Die Forecast-/Sync-CLIs prüfen `SEVDESK_API_TOKEN` jetzt vor jedem Providerzugriff und beenden einen falsch konfigurierten Worker-Zyklus eindeutig; dadurch entstehen bei fehlender Railway-Konfiguration keine teilweisen Bestandsläufe.
 
 ## Conflict Resolution Wizard CW00–CW07 (2026-09-17)
 
