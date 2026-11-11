@@ -2754,6 +2754,7 @@ def test_rechnungen_applies_persistent_wix_cache_before_background_load(
     assert "Wixstrasse 7" in view._shipping_editor.toPlainText()  # noqa: SLF001
     assert view._wix_customer.text() == "Wix Kunde"  # noqa: SLF001
     qtbot.waitUntil(lambda: view._piece_model.rowCount() == 1, timeout=3000)  # noqa: SLF001
+    qtbot.waitUntil(lambda: view._piece_config_worker is None, timeout=3000)  # noqa: SLF001
     assert view._piece_model.rowCount() == 1  # noqa: SLF001
     assert "Cache Produkt" in str(view._piece_model.index(0, 0).data())  # noqa: SLF001
     assert not view._piece_list.isHidden()  # noqa: SLF001
