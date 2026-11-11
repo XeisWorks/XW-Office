@@ -69,3 +69,41 @@ def test_refund_list_and_pdf_io_do_not_block_event_loop(qtbot, monkeypatch) -> N
     assert dialog._table.isEnabled() is False  # noqa: SLF001
     release.set()
     qtbot.waitUntil(lambda: dialog._worker is None, timeout=1000)  # noqa: SLF001
+
+
+def test_refund_dialog_stays_open_during_mail_write(qtbot) -> None:
+    entered, release = Event(), Event()
+
+    class Flow:
+        def list_refunds(self, *, limit: int):
+            del limit
+            return []
+
+    class Sevdesk:
+        pass
+
+    dialog = RefundsDialog(_Container(Flow(), Sevdesk()))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitUntil(lambda: dialog._worker is None, timeout=1000)  # noqa: SLF001
+
+    def send_mail() -> str:
+        entered.set()
+        assert release.wait(3)
+        return "customer@example.test"
+
+    try:
+        dialog._start_worker(send_mail, lambda _payload: None, blocks_close=True)  # noqa: SLF001
+        qtbot.waitUntil(entered.is_set, timeout=1000)
+        dialog.reject()
+        dialog.close()
+        assert dialog.isVisible()
+
+        release.set()
+        qtbot.waitUntil(lambda: dialog._worker is None, timeout=2000)  # noqa: SLF001
+    finally:
+        release.set()
+
+    assert dialog._write_worker is None  # noqa: SLF001
+    dialog.reject()
+    assert not dialog.isVisible()

@@ -38,6 +38,7 @@ class RefundsDialog(QDialog):
         self._container = container
         self._rows: list[dict[str, Any]] = []
         self._worker: BackgroundWorker | None = None
+        self._write_worker: BackgroundWorker | None = None
         self._closing = False
         self.setWindowTitle("Stornos & Gutschriften")
         self.resize(980, 520)
@@ -56,8 +57,20 @@ class RefundsDialog(QDialog):
         self._load()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if self._write_is_running():
+            event.ignore()
+            return
         self._closing = True
         super().closeEvent(event)
+
+    def reject(self) -> None:
+        if self._write_is_running():
+            return
+        self._closing = True
+        super().reject()
+
+    def _write_is_running(self) -> bool:
+        return self._write_worker is not None and self._write_worker.isRunning()
 
     def _load(self) -> None:
         if self._worker is not None and self._worker.isRunning():
@@ -102,12 +115,16 @@ class RefundsDialog(QDialog):
         self,
         job: Callable[[], Any],
         on_result: Callable[[object], None],
+        *,
+        blocks_close: bool = False,
     ) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
         self._set_busy(True)
         worker = BackgroundWorker(job)
         self._worker = worker
+        if blocks_close:
+            self._write_worker = worker
         worker.signals.result.connect(
             lambda result: on_result(result) if not self._closing and isValid(self) else None
         )
@@ -126,6 +143,8 @@ class RefundsDialog(QDialog):
         is_current = self._worker is worker
         if is_current:
             self._worker = None
+        if self._write_worker is worker:
+            self._write_worker = None
         if is_current and not self._closing and isValid(self):
             self._set_busy(False)
 
@@ -228,7 +247,7 @@ class RefundsDialog(QDialog):
                 f"Die Gutschrift wurde an {recipient} gesendet.",
             )
 
-        self._start_worker(send, on_sent)
+        self._start_worker(send, on_sent, blocks_close=True)
 
 
 def _find_email(value: Any) -> str:
