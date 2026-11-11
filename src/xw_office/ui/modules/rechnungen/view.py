@@ -4559,6 +4559,7 @@ class RechnungenView(QWidget):
                 return
 
         from xw_office.ui.modules.rechnungen.print_dialog import (
+            ProductPdfPreparationError,
             _configure_missing_piece_print,
             prepare_piece_pdf_print,
         )
@@ -4616,8 +4617,13 @@ class RechnungenView(QWidget):
                 try:
                     job()
                 except Exception as exc:
-                    engine.finish_product_print_claim(claim, "unknown", error=str(exc))
-                    warnings.append(f"{block.sku}: Druckergebnis unklar: {exc}")
+                    if isinstance(exc, ProductPdfPreparationError):
+                        engine.finish_product_print_claim(claim, "failed", error=str(exc))
+                        status = "PDF konnte vor dem Druck nicht vorbereitet werden"
+                    else:
+                        engine.finish_product_print_claim(claim, "unknown", error=str(exc))
+                        status = "Druckergebnis unklar"
+                    warnings.append(f"{block.sku}: {status}: {exc}")
                     continue
                 printed.append(f"{block.sku} ({qty}x)")
                 if block.product is None or not str(block.product.sevdesk_part_id or "").strip():
@@ -5767,7 +5773,10 @@ class RechnungenView(QWidget):
             return
         if self._product_print_worker is not None and self._product_print_worker.isRunning():
             return
-        from xw_office.ui.modules.rechnungen.print_dialog import prepare_piece_pdf_print
+        from xw_office.ui.modules.rechnungen.print_dialog import (
+            ProductPdfPreparationError,
+            prepare_piece_pdf_print,
+        )
 
         selected_jobs: list[tuple[PieceBlock, int, Callable[[], None]]] = []
         skipped: list[str] = []
@@ -5827,7 +5836,10 @@ class RechnungenView(QWidget):
                         block, qty, invoice_ref=invoice_ref
                     )
                 except Exception as exc:
-                    engine.finish_product_print_claim(claim, "unknown", error=str(exc))
+                    if isinstance(exc, ProductPdfPreparationError):
+                        engine.finish_product_print_claim(claim, "failed", error=str(exc))
+                    else:
+                        engine.finish_product_print_claim(claim, "unknown", error=str(exc))
                     logger.warning("Stock update after batch product print failed: %s", exc)
                     warnings.append(f"{block.sku}: {exc}")
                     continue
@@ -8584,7 +8596,10 @@ class RechnungenView(QWidget):
     ) -> None:
         if not self._print_allowed:
             return
-        from xw_office.ui.modules.rechnungen.print_dialog import prepare_piece_pdf_print
+        from xw_office.ui.modules.rechnungen.print_dialog import (
+            ProductPdfPreparationError,
+            prepare_piece_pdf_print,
+        )
         from xw_office.services.printing.planned_pdf_printer import PrintPlanPartialFailure
 
         print_key = str(
@@ -8646,6 +8661,9 @@ class RechnungenView(QWidget):
                         claim, "failed", error="Kein Exemplar wurde gedruckt"
                     )
                     raise
+            except ProductPdfPreparationError as exc:
+                engine.finish_product_print_claim(claim, "failed", error=str(exc))
+                raise
             except Exception as exc:
                 engine.finish_product_print_claim(claim, "unknown", error=str(exc))
                 raise

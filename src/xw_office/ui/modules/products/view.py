@@ -60,6 +60,7 @@ from xw_office.ui.modules.products.bulk_field_dialog import BulkFieldEditorDialo
 from xw_office.ui.modules.products.inventory_count_dialog import InventoryCountDialog
 from xw_office.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 from xw_office.ui.modules.rechnungen.print_dialog import (
+    ProductPdfPreparationError,
     _configure_missing_piece_print,
     prepare_piece_pdf_print,
 )
@@ -1547,7 +1548,10 @@ class ProductsView(QWidget):
                     raise RuntimeError("sevDesk-Bestand konnte nicht aktualisiert werden")
                 engine.finish_product_print_claim(claim, "succeeded")
             except Exception as exc:  # noqa: BLE001 - stock systems have varied failures
-                engine.finish_product_print_claim(claim, "unknown", error=str(exc))
+                if isinstance(exc, ProductPdfPreparationError):
+                    engine.finish_product_print_claim(claim, "failed", error=str(exc))
+                else:
+                    engine.finish_product_print_claim(claim, "unknown", error=str(exc))
                 logger.warning("Stock update after production print failed for %s: %s", row.sku, exc)
                 return {
                     "sku": row.sku,

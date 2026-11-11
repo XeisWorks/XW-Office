@@ -51,6 +51,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+class ProductPdfPreparationError(RuntimeError):
+    """A product PDF failed validation before a printer job was submitted."""
+
 _PRODUCT_PRINT_PROFILE_IDS = {
     "noten_simplex",
     "noten_simplex_color",
@@ -694,30 +698,19 @@ def prepare_piece_pdf_print(
         )
         return None
     path = str(path_obj)
-    doc = None
-    try:
-        doc = fitz.open(path)
-        page_count = len(doc)
-    except Exception as exc:
-        QMessageBox.critical(
-            parent,
-            "Produktdruck fehlgeschlagen",
-            f"Die Produkt-PDF konnte nicht geoeffnet werden:\n\n{exc}",
-        )
-        return None
-    finally:
-        try:
-            if doc is not None:
-                doc.close()
-        except Exception:
-            pass
-
     if not piece.has_direct_print_config:
         return None
 
     effective_copies = max(1, int(copies or piece.print_qty or piece.qty_needed or 1))
 
     def job() -> None:
+        try:
+            with fitz.open(path) as doc:
+                page_count = len(doc)
+        except Exception as exc:  # noqa: BLE001 - PDF parsing can fail for many file errors.
+            raise ProductPdfPreparationError(
+                f"Die Produkt-PDF konnte nicht geoeffnet werden: {exc}"
+            ) from exc
         queue: PrintQueueService = container.resolve(PrintQueueService)
         if wait:
             print_pdf_by_plan(
@@ -744,30 +737,3 @@ def prepare_piece_pdf_print(
             )
 
     return job
-
-
-def run_piece_pdf_print(
-    parent: QWidget,
-    container: Container,
-    *,
-    piece: PieceBlock,
-    copies: int = 1,
-) -> bool:
-    """Print one product PDF from the product pipeline path.
-
-    Returns ``True`` when printing was started successfully.
-    """
-    job = prepare_piece_pdf_print(parent, container, piece=piece, copies=copies)
-    if job is None:
-        return False
-    try:
-        job()
-        return True
-    except Exception as exc:
-        logger.exception("Direct product print failed: %s", exc)
-        QMessageBox.critical(
-            parent,
-            "Produktdruck fehlgeschlagen",
-            f"Die Produkt-PDF konnte nicht ueber den hinterlegten Druckplan gedruckt werden:\n\n{exc}",
-        )
-        return False

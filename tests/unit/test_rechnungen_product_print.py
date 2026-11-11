@@ -55,6 +55,14 @@ def test_prepare_piece_pdf_print_uses_requested_copy_count(monkeypatch, tmp_path
     queue = object()
     container.register(PrintQueueService, lambda _container: queue)  # type: ignore[return-value]
     captured: dict[str, object] = {}
+    opened_paths: list[str] = []
+    original_open = fitz.open
+
+    def tracked_open(filename: str):
+        opened_paths.append(str(filename))
+        return original_open(filename)
+
+    monkeypatch.setattr(print_dialog.fitz, "open", tracked_open)
 
     monkeypatch.setattr("xw_office.ui.modules.rechnungen.print_dialog._check_printer_runtime", lambda *_args: True)
 
@@ -85,7 +93,9 @@ def test_prepare_piece_pdf_print_uses_requested_copy_count(monkeypatch, tmp_path
     job = prepare_piece_pdf_print(None, container, piece=piece, copies=7)  # type: ignore[arg-type]
 
     assert job is not None
+    assert opened_paths == []
     job()
+    assert opened_paths == [str(pdf_path)]
     assert captured == {
         "pdf_path": str(pdf_path),
         "profile_id": "noten_duplex",
@@ -94,6 +104,44 @@ def test_prepare_piece_pdf_print_uses_requested_copy_count(monkeypatch, tmp_path
         "print_queue": queue,
         "job_kind": "product",
     }
+
+
+def test_invalid_pdf_is_reported_by_worker_job_before_queue_submission(monkeypatch, tmp_path) -> None:
+    missing_pdf = tmp_path / "missing.pdf"
+    piece = PieceBlock(
+        sku="XW-443",
+        name="Missing PDF",
+        qty_needed=1,
+        print_profile_id="noten_duplex",
+        product=Product(
+            id="p1",
+            sku="XW-443",
+            name="Missing PDF",
+            print_file_path=str(missing_pdf),
+        ),
+    )
+    container = Container(AppConfig())
+    container.register(PrintQueueService, lambda _container: object())  # type: ignore[return-value]
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.print_dialog._check_printer_runtime",
+        lambda *_args: True,
+    )
+    queued: list[bool] = []
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.print_dialog.print_pdf_by_plan",
+        lambda *_args, **_kwargs: queued.append(True),
+    )
+
+    job = prepare_piece_pdf_print(None, container, piece=piece)  # type: ignore[arg-type]
+
+    assert job is not None
+    try:
+        job()
+    except print_dialog.ProductPdfPreparationError:
+        pass
+    else:
+        raise AssertionError("invalid PDF should fail during worker job preparation")
+    assert queued == []
 
 
 def test_prepare_piece_pdf_print_prompts_for_missing_print_config(monkeypatch, tmp_path) -> None:
