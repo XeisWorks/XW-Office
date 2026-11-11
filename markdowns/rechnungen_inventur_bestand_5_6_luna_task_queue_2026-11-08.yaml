@@ -86,7 +86,7 @@ packages:
       - Prüfen, ob die aktuelle sevDesk-Konfiguration bei Rechnungsfreigabe selbst Part-Bestände verändert; doppelte Kanalbuchung ausschließen.
       - Bestehende Legacy-, Hub- und sevDesk-Bestände je Variante vergleichen; Shadow-Flag und Cutover-Gates ausweisen.
       - Status-/Positionsfelder gegen den aktuellen sevDesk-Client prüfen; keine API-Verträge raten.
-      - `scripts/product_hub/preview_exact_inventory_mappings.py` liefert zusätzlich sichere 1:1-SKU-Kandidaten read-only aus Railway; kein Fuzzy-Mapping und kein automatischer Provider-/Datenbank-Write.
+      - "scripts/product_hub/preview_exact_inventory_mappings.py liefert zusätzlich sichere 1:1-SKU-Kandidaten read-only aus Railway; kein Fuzzy-Mapping und kein automatischer Provider-/Datenbank-Write."
     acceptance:
       - Kein externer oder lokaler Bestands-Schreibzugriff.
       - Bericht weist 60-Monats-Abdeckung, Datenlücken, Mehrfachzuordnungen und fehlende verkaufsfähige Startdaten aus.
