@@ -9,7 +9,9 @@ from scripts.product_hub.check_inventory_cutover import assess_cutover
 from xw_office.models.base import Base
 
 
-def test_assess_cutover_is_read_only_and_fails_closed(tmp_path: Path) -> None:
+def test_assess_cutover_is_read_only_and_fails_closed(tmp_path: Path, monkeypatch) -> None:
+    for key in ("SEVDESK_API_TOKEN", "MS_GRAPH_TENANT_ID", "MS_GRAPH_CLIENT_ID", "MS_GRAPH_MAILBOX"):
+        monkeypatch.delenv(key, raising=False)
     database_path = tmp_path / "cutover.db"
     database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
     engine = create_engine(database_url, future=True)
@@ -22,6 +24,10 @@ def test_assess_cutover_is_read_only_and_fails_closed(tmp_path: Path) -> None:
     assert payload["eligible"] is False
     assert payload["master_enabled"] is False
     assert any(check["code"] == "shadow_mode" and check["state"] == "blocked" for check in payload["checks"])
+    config_check = next(check for check in payload["checks"] if check["code"] == "provider_credentials")
+    assert config_check["state"] == "blocked"
+    assert "SEVDESK_API_TOKEN" in config_check["detail"]
+    assert any(check["code"] == "inventory_worker_service" and check["state"] == "manual" for check in payload["checks"])
     with sessionmaker(bind=engine, class_=Session, future=True)() as session:
         after = {table.name: session.query(table).count() for table in Base.metadata.sorted_tables}
     assert after == before

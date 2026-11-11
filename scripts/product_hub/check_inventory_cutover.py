@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -44,16 +45,48 @@ def assess_cutover(
         shadow_enabled=shadow_enabled,
         master_enabled=master_enabled,
     ).cutover_readiness()
+    checks = [
+        {"code": check.code, "label": check.label, "state": check.state, "detail": check.detail}
+        for check in readiness.checks
+    ]
+    checks.extend(_runtime_configuration_checks())
+    eligible = bool(readiness.eligible and all(check["state"] == "ready" for check in checks))
     return {
         "master_enabled": readiness.master_enabled,
         "shadow_enabled": readiness.shadow_enabled,
-        "eligible": readiness.eligible,
+        "eligible": eligible,
         "assessed_at": readiness.assessed_at.isoformat(),
-        "checks": [
-            {"code": check.code, "label": check.label, "state": check.state, "detail": check.detail}
-            for check in readiness.checks
-        ],
+        "checks": checks,
     }
+
+
+def _runtime_configuration_checks() -> list[dict[str, str]]:
+    """Return credential/service gates without exposing secret values."""
+    missing_sevdesk = not str(os.getenv("SEVDESK_API_TOKEN") or "").strip()
+    missing_graph = [
+        key
+        for key in ("MS_GRAPH_TENANT_ID", "MS_GRAPH_CLIENT_ID", "MS_GRAPH_MAILBOX")
+        if not str(os.getenv(key) or "").strip()
+    ]
+    missing = (["SEVDESK_API_TOKEN"] if missing_sevdesk else []) + missing_graph
+    return [
+        {
+            "code": "provider_credentials",
+            "label": "sevDesk-/Graph-Zugangsdaten sind gesetzt",
+            "state": "blocked" if missing_sevdesk or missing_graph else "ready",
+            "detail": (
+                "Fehlende Variablen: " + ", ".join(missing)
+                if missing
+                else "sevDesk- und Graph-Grundkonfiguration ist vorhanden."
+            ),
+        },
+        {
+            "code": "inventory_worker_service",
+            "label": "Separater xw-inventory-worker ist aktiviert",
+            "state": "manual",
+            "detail": "Railway-Service-Aktivierung muss im Deployment nachgewiesen werden.",
+        },
+    ]
 
 
 def main() -> int:
