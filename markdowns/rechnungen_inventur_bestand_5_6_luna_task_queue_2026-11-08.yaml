@@ -127,6 +127,7 @@ packages:
 
   - id: P03
     title: Idempotenter sevDesk-Rechnungsabgang je Position
+    release_orchestrator_test: tests/unit/test_invoice_processing_service.py::test_finalize_books_product_hub_inventory_after_successful_sevdesk_release
     status: partially_integrated
     depends_on: [P02]
     implementation_notes:

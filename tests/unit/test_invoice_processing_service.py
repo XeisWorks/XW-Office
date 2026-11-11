@@ -1487,6 +1487,57 @@ def test_start_resume_retries_stock_warning_after_other_steps_completed() -> Non
     assert service.read_fulfillment_flags(summary.id).last_warning == ""
 
 
+def test_finalize_books_product_hub_inventory_after_successful_sevdesk_release() -> None:
+    summary = InvoiceSummary(
+        id="release-hub-booking-1",
+        invoiceNumber="RE-HUB-BOOKING-1",
+        status_code=1000,
+    )
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads[summary.id] = {
+        "id": summary.id,
+        "invoiceNumber": summary.invoice_number,
+        "status": 1000,
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+    client.invoice_positions[summary.id] = [
+        {"part": {"id": "part-100", "partNumber": "XW-100"}, "quantity": "2"}
+    ]
+
+    class Booking:
+        def __init__(self) -> None:
+            self.validated: list[object] = []
+            self.applied: list[tuple[str, object]] = []
+
+        def validate_invoice_context(self, positions: object) -> None:
+            self.validated.append(positions)
+
+        def apply_invoice_context(self, *, document_id: str, positions: object) -> None:
+            self.applied.append((document_id, positions))
+
+    booking = Booking()
+    service = InvoiceProcessingService(
+        AppConfig(),
+        client,  # type: ignore[arg-type]
+        _RepoStub({}),
+        None,
+        _MailServiceStub(),
+        invoice_inventory=booking,  # type: ignore[arg-type]
+    )
+
+    flags = service._run_finalize_step(  # noqa: SLF001
+        summary,
+        service.read_fulfillment_flags(summary.id),
+        digital_only=False,
+        printed_copy=False,
+    )
+
+    assert client.send_invoice_document_calls == 1
+    assert len(booking.validated) == 1
+    assert booking.applied and booking.applied[0][0] == summary.id
+    assert flags.last_warning == ""
+
+
 def test_start_resume_after_legacy_failure_replays_hub_booking_idempotently() -> None:
     summary = InvoiceSummary(
         id="split-stock-resume-1",
