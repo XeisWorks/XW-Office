@@ -1189,14 +1189,6 @@ class TagesgeschaeftView(QWidget):
             credit_service: B2bCreditService = self._container.resolve(B2bCreditService)
             b2b_holds = [hold.as_dict() for hold in credit_service.evaluate(summaries)]
             buyer_note_cases = invoice_service.load_buyer_note_cases(summaries)
-            if not self._start_include_product_print:
-                return StartPreflight(
-                    open_invoice_count=open_count,
-                    decisions=[],
-                    missing_position_data=True,
-                    b2b_holds=b2b_holds,
-                    buyer_note_cases=buyer_note_cases,
-                )
             inventory_service: InventoryService = self._container.resolve(InventoryService)
             invoice_requirements = invoice_service.build_invoice_inventory_requirements(
                 invoice_ids=(
@@ -1241,6 +1233,25 @@ class TagesgeschaeftView(QWidget):
             self._set_start_running(False)
             self._show_b2b_credit_holds(result.b2b_holds)
             return
+        if not self._start_include_product_print:
+            missing_skus = sorted(
+                decision.sku for decision in result.decisions if decision.will_print
+            )
+            if missing_skus:
+                self._set_start_running(False)
+                shown = ", ".join(missing_skus[:10])
+                if len(missing_skus) > 10:
+                    shown += f" und {len(missing_skus) - 10} weitere"
+                message = (
+                    "START wurde vor der Rechnungsfreigabe angehalten. "
+                    f"Fuer diese Produkte fehlt Bestand: {shown}. "
+                    "Bitte unter PRINT-PRODUKTE drucken oder den Bestand korrigieren "
+                    "und START danach erneut ausfuehren."
+                )
+                if self._rechnungen_view is not None:
+                    self._rechnungen_view.show_start_summary([message])
+                QMessageBox.warning(self, "START: Bestand fehlt", message)
+                return
         signals: AppSignals = self._container.resolve(AppSignals)
         self._start_selected_mode = StartMode.INVOICES_AND_PRINT
         self._pending_start_preflight = result
@@ -1575,7 +1586,7 @@ class TagesgeschaeftView(QWidget):
                     "inventory_report": None,
                     "inventory_warning": (
                         "START wurde vor der Rechnungsfinalisierung gestoppt, weil Bestand "
-                        "fehlt. Bitte START + NOTENDRUCK verwenden: "
+                        "fehlt. Bitte unter PRINT-PRODUKTE drucken und START wiederholen: "
                         + ", ".join(sorted(required_print_skus))
                     ),
                     "product_apply": apply_result,
