@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -42,8 +43,23 @@ class SpecialOrderDialog(QDialog):
         self._products: list[object] = []
         self._selected_products: list[object] = []
         self._worker: BackgroundWorker | None = None
+        self._creating_link = False
+        self._closing = False
         self._build_ui()
         QTimer.singleShot(0, self._load_products)
+
+    def reject(self) -> None:
+        if self._creating_link:
+            return
+        self._closing = True
+        super().reject()
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if self._creating_link:
+            event.ignore()
+            return
+        self._closing = True
+        super().closeEvent(event)
 
     def _build_ui(self) -> None:
         self.setWindowTitle("Sonderauftrag")
@@ -117,16 +133,30 @@ class SpecialOrderDialog(QDialog):
         if self._worker is not None and self._worker.isRunning():
             return
         self._status.setText("Lade Wix-Produkte...")
-        self._worker = BackgroundWorker(self._service.list_wix_products)
-        self._worker.signals.result.connect(self._on_products_loaded)
-        self._worker.signals.error.connect(lambda exc: self._status.setText(str(exc)))
-        self._worker.signals.finished.connect(lambda: setattr(self, "_worker", None))
-        self._worker.start()
+        worker = BackgroundWorker(self._service.list_wix_products)
+        self._worker = worker
+        worker.signals.result.connect(self._on_products_loaded)
+        worker.signals.error.connect(self._on_products_error)
+        worker.signals.finished.connect(lambda current=worker: self._worker_finished(current))
+        worker.start()
 
     def _on_products_loaded(self, payload: object) -> None:
+        if self._closing:
+            return
         self._products = list(payload) if isinstance(payload, list) else []
         self._filter_products()
         self._status.setText(f"Wix-Produkte: {len(self._products)}")
+
+    def _on_products_error(self, exc: Exception) -> None:
+        if not self._closing:
+            self._status.setText(str(exc))
+
+    def _worker_finished(self, worker: BackgroundWorker, *, creating_link: bool = False) -> None:
+        if self._worker is worker:
+            self._worker = None
+        if creating_link:
+            self._creating_link = False
+            self._create_btn.setEnabled(True)
 
     def _filter_products(self) -> None:
         query = self._product_filter.text().strip().casefold() if hasattr(self, "_product_filter") else ""
@@ -242,14 +272,17 @@ class SpecialOrderDialog(QDialog):
             )
             return link.url
 
+        self._creating_link = True
         self._create_btn.setEnabled(False)
         self._status.setText("Erstelle Payment Link...")
-        self._worker = BackgroundWorker(job)
-        self._worker.signals.result.connect(self._on_link_created)
-        self._worker.signals.error.connect(self._on_link_error)
-        self._worker.signals.finished.connect(lambda: self._create_btn.setEnabled(True))
-        self._worker.signals.finished.connect(lambda: setattr(self, "_worker", None))
-        self._worker.start()
+        worker = BackgroundWorker(job)
+        self._worker = worker
+        worker.signals.result.connect(self._on_link_created)
+        worker.signals.error.connect(self._on_link_error)
+        worker.signals.finished.connect(
+            lambda current=worker: self._worker_finished(current, creating_link=True)
+        )
+        worker.start()
 
     def _build_items(self, mode: str) -> list[SpecialOrderItem]:
         if mode == "digital_sheet_music":

@@ -367,6 +367,12 @@ erhalten.
 
 **Teilweise umgesetzt (F17/F18):** Lageralarm-Laden, Schwellenwertspeichern und Task-Mail laufen im Worker; Refund-Liste, Gutschrift-Mail, Refund-PDF, OPEN-PRINTS-Anhaenge und Erledigen-Aktion ebenfalls. Das eingebettete Nachbetreuungs-Tab lädt Liste/Positionen sequenzsicher im Worker und führt Snooze, Sofortversand, Bearbeiten, Erledigen und Stornieren außerhalb des GUI-Threads aus. Sendungen-, Ueberweisungs-, Nachbetreuungs- und OPEN-PRINTS-Dialoge warten beim Schliessen nicht im GUI-Thread und verwerfen spaete UI-Ergebnisse. Die Nachbetreuungs-Worker pruefen vor Ergebnis-, Fehler- und Abschlusscallbacks, ob ihr Qt-Owner noch lebt; Ergebnisse nach Owner-Zerstoerung werden ignoriert. Auch Zusatzrechnungsdialog und Tagesgeschaeft-Close blockieren nicht mehr; Dialog-Rueckgabewerte fuer Sendungen, digitale Lieferung und Ueberweisungen nutzen den geladenen Zaehlersnapshot statt synchroner Serviceabfragen; der Nachbetreuungs-Badge wird nach Dialogschluss erneut im koaleszierten Worker berechnet. Die manuelle B2B-Kreditpruefung sowie ausdruecklich bestaetigte Plan- und Limit-Schreibaktionen laufen in serialisierten Workern, die bei Close beruecksichtigt werden. Rechnungslisten-Toggle und Refresh lesen/schreiben START-Haltepunkt-Settings jetzt im Worker und aktualisieren die Tabelle nach Commit; BuyerNote-Review setzt START ebenfalls erst nach durablem Commit fort. Das Oeffnen/Parsen von Produktdruck-PDFs wurde aus dem GUI-Thread in den Druck-Worker verschoben; die bisher ungenutzte synchrone Druck-Wrapperfunktion wurde entfernt. Auch die Windows-Druckererkennung vor dem Druck nutzt nun den zentralen Status-Snapshot ohne UI-seitige Systemabfrage; der Status wird lifecycle-sicher jede Minute asynchron aktualisiert. Weitere UI-I/O-Pfade und spaete Callback-Policies bleiben offen.
 
+Der Sonderauftrag-Dialog verhindert jetzt Schliessen/Escape waehrend des externen
+Payment-Link-Writes, damit Ergebnis oder unklarer Ausgang sichtbar bleiben. Der
+Produktlade-Callback ignoriert Ergebnisse nach Dialogschluss; Workerabschluss
+raeumt nur den zugehoerigen Worker auf. Regressionstest mit blockiertem Fake-Write:
+Close bleibt bis zum Abschluss verhindert, danach wird das Ergebnis angezeigt.
+
 Verbleibende UI-I/O-Slots auf vorhandenen
 `UiAsyncAction`/BackgroundWorker umstellen. Snapshot/Identität vor Workerstart;
 Callbacks auf aktuelle Auswahl prüfen oder bewusst ursprünglichen Fall bearbeiten.
