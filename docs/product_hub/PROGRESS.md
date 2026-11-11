@@ -1504,7 +1504,7 @@ bereit; der Master-Cutover bleibt deshalb korrekt blockiert.
 
 Der eigenständige Umbau gemäß `markdowns/rechnungen_inventur_bestand_5_6_luna_umbauspezifikation_2026-11-08.md` ist fachlich und technisch integriert: Rechnungsfreigabe, externe sevDesk-Poller, begrenzte Gutschrift-Rückbuchungen, geführte Inventur, Forecast-/Alarmzustand, POD-Dreierchargen, lagerbereinigte offene Druckplanung und Graph-Task-Popup sind idempotent verdrahtet. Der wiederholbare `xw-inventory-worker` führt Forecast und sevDesk-Abgleich aus und ist als separater Railway-Service aktiv (zuletzt geprüfter erfolgreicher Start `a76f87bf-fb25-4a9b-85b3-bc67a4a1b1c6`); der Provider-Backup-Gate bleibt auf dem Railway-Hobby-Plan blockiert.
 
-Die veralteten PR15-Hinweise oben beschreiben den damaligen Zwischenstand und bleiben als historische Cutover-Begründung bestehen. Für den aktuellen Bestand gelten zusätzlich der read-only Quellen-Audit (`GET /api/v1/inventory/audit`), der externe Legacy-Mirror und die Cutover-Readiness-Gates. Der Product-Hub-Master bleibt bewusst deaktiviert, bis Produktionsinventur, repräsentativer Shadow-Lauf, Backup und Rollback-Probe nachgewiesen sind. Letzte Gesamtprüfung am 11. November 2026: `python -m pytest -q` → **2.250 bestanden, 5 übersprungen**; Hosted CI für die nachfolgenden Projection-/Railway-Commits ist noch separat zu verifizieren; Alembic `037_plc_parcel_evidence` ist der aktuelle Head. Railway-Deployment `ac932d19-65b4-4496-94ca-79e81f4bb468` ist erfolgreich und `/health` liefert HTTP 200.
+Die veralteten PR15-Hinweise oben beschreiben den damaligen Zwischenstand und bleiben als historische Cutover-Begründung bestehen. Für den aktuellen Bestand gelten zusätzlich der read-only Quellen-Audit (`GET /api/v1/inventory/audit`), der externe Legacy-Mirror und die Cutover-Readiness-Gates. Der Product-Hub-Master bleibt bewusst deaktiviert, bis Produktionsinventur, repräsentativer Shadow-Lauf, Backup und Rollback-Probe nachgewiesen sind. Letzte Gesamtprüfung am 11. November 2026: `python -m pytest -q` → **2.254 bestanden, 5 übersprungen**; Hosted CI für die nachfolgenden Projection-/Railway-Commits ist noch separat zu verifizieren; Alembic `037_plc_parcel_evidence` ist der aktuelle Head. Railway-Deployment `782caf20-294f-4214-acec-695c91f04399` ist erfolgreich und `/health` liefert HTTP 200.
 
 ### Railway-Betriebszugriff (12. November 2026)
 
@@ -1535,3 +1535,7 @@ schreibgeschützt. Im Shadow-Modus bleibt das bisherige Legacy-Verhalten unverä
 Die Readiness weist diesen Implementierungsgate nun als `ready` aus; Inventur, offene
 Konflikte, Shadow-Nachweis, Providerprojektionen, Backup und Rollback bleiben separate
 Betriebs-Gates.
+
+Der anschließende Railway-Readiness-Lauf bestätigt den neuen Zustand (`legacy_mutation_paths=ready`);
+der Master bleibt wegen sechs Daten-/Betriebs-Blockaden und zwei manuellen Nachweisen
+weiterhin deaktiviert.
