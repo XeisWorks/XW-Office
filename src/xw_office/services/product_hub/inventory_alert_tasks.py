@@ -6,11 +6,13 @@ import datetime
 import uuid
 
 from sqlalchemy import desc, select
+from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
 from xw_office.models.inventory_alert_task import InventoryAlertTask
 from xw_office.models.product_hub import Product, ProductVariant
 from xw_office.models.product_hub_inventory import InventoryAlert, InventoryLocation, InventoryStock
+from xw_office.services.mailing.service import MailDeliveryService
 
 
 @dataclass(frozen=True)
@@ -37,14 +39,14 @@ class InventoryAlertTaskService:
                 stmt = stmt.where(InventoryAlertTask.status == str(status).strip())
             return list(session.scalars(stmt).all())
 
-    def __init__(self, session_factory) -> None:
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._session_factory = session_factory
 
     def create_and_send(
         self,
         alert_id: uuid.UUID,
         *,
-        mail_delivery,
+        mail_delivery: MailDeliveryService,
         sales_average_monthly: float | None = None,
         three_month_demand: int | None = None,
         data_window: str = "bis zu 60 vollständige Monate",

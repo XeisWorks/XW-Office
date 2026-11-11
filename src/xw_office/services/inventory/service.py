@@ -17,7 +17,7 @@ from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.invoice_processing.buyer_notes import BuyerNoteCase
 
 try:
-    import fitz
+    import fitz  # type: ignore[import-untyped]
 except Exception:  # pragma: no cover - optional at import time
     fitz = None
 
@@ -496,7 +496,16 @@ class InventoryService:
                     identity = f"{invoice_id}:{sku}"
                     previous = journal.get(identity)
                     if isinstance(previous, dict):
-                        if int(previous.get("quantity") or 0) != quantity:
+                        raw_quantity = previous.get("quantity") or 0
+                        if not isinstance(raw_quantity, (int, float, str)):
+                            raise RuntimeError(f"Ungueltige START-Buchungsmenge fuer {identity}")
+                        try:
+                            previous_quantity = int(raw_quantity)
+                        except (TypeError, ValueError, OverflowError) as exc:
+                            raise RuntimeError(
+                                f"Ungueltige START-Buchungsmenge fuer {identity}"
+                            ) from exc
+                        if previous_quantity != quantity:
                             raise RuntimeError(
                                 f"START-Buchungsmenge fuer {identity} hat sich nach Freigabe geaendert"
                             )
@@ -513,9 +522,12 @@ class InventoryService:
         def mutate_stock(raw: str | None) -> str:
             stock = parse_object(raw, _STOCK_KEY)
             for invoice_id, sku, quantity in new_movements:
+                raw_current = stock.get(sku) or 0
+                if not isinstance(raw_current, (int, float, str)):
+                    raise RuntimeError(f"Ungueltiger Lagerbestand fuer {sku}")
                 try:
-                    current = max(0, int(stock.get(sku) or 0))
-                except (TypeError, ValueError) as exc:
+                    current = max(0, int(raw_current))
+                except (TypeError, ValueError, OverflowError) as exc:
                     raise RuntimeError(f"Ungueltiger Lagerbestand fuer {sku}") from exc
                 if current < quantity:
                     raise RuntimeError(
@@ -540,7 +552,14 @@ class InventoryService:
                 sku = str(row.get("sku") or "").strip().upper()
                 if sku not in deltas:
                     continue
-                row["on_hand"] = max(0, int(row.get("on_hand") or 0) - deltas[sku])
+                raw_on_hand = row.get("on_hand") or 0
+                if not isinstance(raw_on_hand, (int, float, str)):
+                    raise RuntimeError(f"Ungueltiger Produktbestand fuer {sku}")
+                try:
+                    current_on_hand = int(raw_on_hand)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise RuntimeError(f"Ungueltiger Produktbestand fuer {sku}") from exc
+                row["on_hand"] = max(0, current_on_hand - deltas[sku])
             return json.dumps(rows, ensure_ascii=False)
 
         mutate_many(
@@ -703,9 +722,12 @@ class InventoryService:
 
     @staticmethod
     def _product_row_from_payload(item: dict[str, object]) -> ProductRow:
+        raw_on_hand = item.get("on_hand") or 0
+        if not isinstance(raw_on_hand, (int, float, str)):
+            raw_on_hand = 0
         try:
-            on_hand = int(item.get("on_hand") or 0)
-        except (TypeError, ValueError):
+            on_hand = int(raw_on_hand)
+        except (TypeError, ValueError, OverflowError):
             on_hand = 0
         title_configs: dict[str, dict[str, object]] = {}
         raw_title_configs = item.get("title_print_configs")
@@ -1050,16 +1072,23 @@ class InventoryService:
         if self._shadow_mirror is None or delta == 0:
             return
         try:
-            mirror_args: dict[str, object] = {
-                "sku": sku,
-                "delta": delta,
-                "reason": reason,
-                "source": source,
-                "external_reference": external_reference,
-            }
             if idempotency_key:
-                mirror_args["idempotency_key"] = idempotency_key
-            result = self._shadow_mirror.mirror_stock_movement(**mirror_args)
+                result = self._shadow_mirror.mirror_stock_movement(
+                    sku=sku,
+                    delta=delta,
+                    reason=reason,
+                    source=source,
+                    external_reference=external_reference,
+                    idempotency_key=idempotency_key,
+                )
+            else:
+                result = self._shadow_mirror.mirror_stock_movement(
+                    sku=sku,
+                    delta=delta,
+                    reason=reason,
+                    source=source,
+                    external_reference=external_reference,
+                )
         except Exception:  # noqa: BLE001 - completed legacy print/invoice work stays intact
             logger.exception("Inventory V2 shadow movement mirror failed for SKU %s", sku)
             return
@@ -1260,7 +1289,9 @@ class InventoryService:
                 sevdesk_id=current.sevdesk_id or str(raw_record.get("sevdesk_part_id") or "").strip(),
                 print_file_path=str(default_entry.get("path") or current.print_file_path or "").strip(),
                 print_profile_id=str(default_entry.get("profile_id") or current.print_profile_id or "").strip(),
-                print_plan=list(default_entry.get("print_plan") or current.print_plan or []),
+            print_plan=InventoryService._normalize_print_plan(
+                default_entry.get("print_plan") or current.print_plan or []
+            ),
                 title_print_configs=title_entries or dict(current.title_print_configs or {}),
             )
             if updated != current:
