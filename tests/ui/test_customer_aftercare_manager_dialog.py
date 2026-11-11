@@ -150,17 +150,25 @@ def test_close_does_not_wait_for_running_worker(qtbot: object, monkeypatch) -> N
 
     worker = BackgroundWorker(blocked)
     dialog._action_worker = worker  # noqa: SLF001
+    worker.signals.finished.connect(
+        lambda current=worker: dialog._clear_worker("_action_worker", current)  # noqa: SLF001
+    )
     wait_calls: list[bool] = []
     monkeypatch.setattr(BackgroundWorker, "wait", lambda *_args: wait_calls.append(True))
     worker.start()
+    dialog.show()
     qtbot.waitUntil(entered.is_set)
 
     dialog.close()
 
-    assert dialog._closing is True  # noqa: SLF001
+    assert dialog._closing is False  # noqa: SLF001
+    assert dialog.isVisible()
     assert wait_calls == []
     release.set()
-    qtbot.waitUntil(lambda: not worker.isRunning(), timeout=2000)
+    qtbot.waitUntil(lambda: dialog._action_worker is None, timeout=2000)  # noqa: SLF001
+    dialog.close()
+    assert dialog._closing is True  # noqa: SLF001
+    assert not dialog.isVisible()
 
 
 def test_review_confirm_outcome_calls_confirm_case(qtbot: object, monkeypatch) -> None:

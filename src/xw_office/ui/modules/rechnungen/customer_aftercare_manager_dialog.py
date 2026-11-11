@@ -82,14 +82,21 @@ class CustomerAftercareManagerDialog(QDialog):
         QTimer.singleShot(0, self._load_cases)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if self._action_worker is not None:
+            event.ignore()
+            return
         self._invalidate_callbacks()
         super().closeEvent(event)
 
     def accept(self) -> None:
+        if self._action_worker is not None:
+            return
         self._invalidate_callbacks()
         super().accept()
 
     def reject(self) -> None:
+        if self._action_worker is not None:
+            return
         self._invalidate_callbacks()
         super().reject()
 
