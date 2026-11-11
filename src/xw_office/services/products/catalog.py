@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import unicodedata
 import uuid
 from dataclasses import dataclass, field
@@ -364,6 +365,9 @@ class ProductCatalogService:
         # Alias map: any_sku -> canonical_sku
         self._alias_map: dict[str, str] = {}
         self._direct_print_config: dict[str, dict[str, object]] = {}
+        # The Rechnungen view warms this cache from a QThread while the same
+        # catalog instance can still be queried by UI/background workers.
+        self._unreleased_cache_lock = threading.RLock()
         self._legacy_unreleased_names: list[tuple[str, str]] | None = None
         self._unreleased_products: list[UnreleasedProduct] | None = None
         self._local_unreleased_overrides: list[dict[str, str]] = []
@@ -655,14 +659,16 @@ class ProductCatalogService:
         return split_unreleased_titles(values, quantity)
 
     def list_unreleased_products(self) -> list[UnreleasedProduct]:
-        if self._unreleased_products is None:
-            self._unreleased_products = self._load_unreleased_products()
-        return list(self._unreleased_products)
+        with self._unreleased_cache_lock:
+            if self._unreleased_products is None:
+                self._unreleased_products = self._load_unreleased_products()
+            return list(self._unreleased_products)
 
     @property
     def unreleased_products_loaded(self) -> bool:
         """Whether the disk/setting-backed unreleased catalog is already cached."""
-        return self._unreleased_products is not None
+        with self._unreleased_cache_lock:
+            return self._unreleased_products is not None
 
     def unreleased_owners(self) -> list[str]:
         return sorted(
@@ -732,8 +738,7 @@ class ProductCatalogService:
             if normalize_legacy_title(row.get("alias", "")) != alias_key
         ]
         self._local_unreleased_overrides.append(entry)
-        self._unreleased_products = None
-        self._legacy_unreleased_names = None
+        self._invalidate_unreleased_cache()
 
     def add_or_update_unreleased_product(
         self,
@@ -792,8 +797,7 @@ class ProductCatalogService:
             if normalize_legacy_title(str(row.get("canonical_name") or "")) != canonical_key
         ]
         self._local_unreleased_overrides.extend(entries_to_add)
-        self._unreleased_products = None
-        self._legacy_unreleased_names = None
+        self._invalidate_unreleased_cache()
 
     def delete_unreleased_product(self, canonical_name: str) -> None:
         """Remove an unreleased product and all its overrides from settings."""
@@ -829,8 +833,7 @@ class ProductCatalogService:
             else:
                 current = self._settings_repo.get_value_json(_UNRELEASED_TITLE_OVERRIDES_KEY)
                 self._settings_repo.set_value_json(_UNRELEASED_TITLE_OVERRIDES_KEY, mutate(current))
-        self._unreleased_products = None
-        self._legacy_unreleased_names = None
+        self._invalidate_unreleased_cache()
 
     def unreleased_document_title(self, reference: str) -> str:
         key = str(reference or "").strip()
@@ -959,14 +962,20 @@ class ProductCatalogService:
         return ranked[0][1], ranked[0][0]
 
     def _load_legacy_unreleased_names(self) -> list[tuple[str, str]]:
-        if self._legacy_unreleased_names is not None:
-            return self._legacy_unreleased_names
-        names: list[tuple[str, str]] = []
-        for product in self.list_unreleased_products():
-            names.append((product.canonical_name, product.canonical_name))
-            names.extend((alias, product.canonical_name) for alias in product.aliases)
-        self._legacy_unreleased_names = names
-        return names
+        with self._unreleased_cache_lock:
+            if self._legacy_unreleased_names is not None:
+                return list(self._legacy_unreleased_names)
+            names: list[tuple[str, str]] = []
+            for product in self.list_unreleased_products():
+                names.append((product.canonical_name, product.canonical_name))
+                names.extend((alias, product.canonical_name) for alias in product.aliases)
+            self._legacy_unreleased_names = names
+            return list(names)
+
+    def _invalidate_unreleased_cache(self) -> None:
+        with self._unreleased_cache_lock:
+            self._unreleased_products = None
+            self._legacy_unreleased_names = None
 
     def _load_unreleased_products(self) -> list[UnreleasedProduct]:
         raw_products: list[dict[str, object]] = []

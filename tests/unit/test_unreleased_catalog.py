@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 from xw_office.services.products.catalog import (
@@ -90,3 +92,14 @@ def test_failed_unreleased_settings_write_does_not_publish_local_override(operat
             )
 
     assert catalog._local_unreleased_overrides == []  # noqa: SLF001
+
+
+def test_unreleased_catalog_cache_is_safe_for_concurrent_warmers() -> None:
+    catalog = ProductCatalogService()
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        snapshots = list(pool.map(lambda _index: catalog.list_unreleased_products(), range(24)))
+
+    assert snapshots
+    assert all(snapshot == snapshots[0] for snapshot in snapshots)
+    assert catalog.unreleased_products_loaded is True
