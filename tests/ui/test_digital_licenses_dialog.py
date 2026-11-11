@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from threading import Event
 from pathlib import Path
 from pytest import MonkeyPatch
 from pytestqt.qtbot import QtBot
@@ -67,6 +68,71 @@ def test_mark_done_closes_dialog_when_queue_is_empty(qtbot: object, monkeypatch)
     qtbot.waitUntil(lambda: service.mark_done_calls == 1, timeout=2000)
     qtbot.waitUntil(lambda: dialog.result() == QDialog.DialogCode.Accepted, timeout=2000)
     assert dialog.open_count() == 0
+
+
+def test_dialog_stays_open_until_fulfillment_write_finishes(qtbot: QtBot, monkeypatch) -> None:
+    service = _FakeDigitalLicenseService()
+    entered, release = Event(), Event()
+    mark_done = service.mark_done
+
+    def blocked_mark_done(case: DigitalLicenseCase) -> None:
+        entered.set()
+        assert release.wait(3)
+        mark_done(case)
+
+    monkeypatch.setattr(service, "mark_done", blocked_mark_done)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.StandardButton.Yes,
+    )
+    dialog = DigitalLicensesDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitUntil(lambda: dialog._list.count() == 1, timeout=2000)  # noqa: SLF001
+    try:
+        dialog._mark_selected_done()  # noqa: SLF001
+        qtbot.waitUntil(entered.is_set, timeout=2000)
+
+        dialog.reject()
+        dialog.close()
+        assert dialog.isVisible()
+
+        release.set()
+        qtbot.waitUntil(
+            lambda: dialog.result() == QDialog.DialogCode.Accepted,
+            timeout=2000,
+        )
+    finally:
+        release.set()
+
+    assert service.mark_done_calls == 1
+    assert dialog.open_count() == 0
+
+
+def test_late_case_load_is_ignored_after_dialog_close(qtbot: QtBot) -> None:
+    service = _FakeDigitalLicenseService()
+    entered, release = Event(), Event()
+
+    def blocked_list_open_cases(**_kwargs: object) -> list[DigitalLicenseCase]:
+        entered.set()
+        assert release.wait(3)
+        return [service.case]
+
+    service.list_open_cases = blocked_list_open_cases  # type: ignore[method-assign]
+    dialog = DigitalLicensesDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=2000)
+        dialog.reject()
+        assert not dialog.isVisible()
+
+        release.set()
+        qtbot.waitUntil(lambda: dialog._load_worker is None, timeout=2000)  # noqa: SLF001
+    finally:
+        release.set()
+
+    assert dialog._cases == []  # noqa: SLF001
 
 
 def test_unknown_mark_done_payload_reloads_without_synchronous_count(

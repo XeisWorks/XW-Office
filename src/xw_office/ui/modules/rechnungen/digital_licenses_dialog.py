@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -45,8 +46,27 @@ class DigitalLicensesDialog(QDialog):
         self._prepared_files: list[Path] = []
         self._draft_worker: BackgroundWorker | None = None
         self._license_preparing = False
+        self._closing = False
         self._build_ui()
         QTimer.singleShot(0, self._load_cases)
+
+    def reject(self) -> None:
+        if self._has_active_write():
+            return
+        self._closing = True
+        super().reject()
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if self._has_active_write():
+            event.ignore()
+            return
+        self._closing = True
+        super().closeEvent(event)
+
+    def _has_active_write(self) -> bool:
+        return self._license_preparing or (
+            self._action_worker is not None and self._action_worker.isRunning()
+        )
 
     def _build_ui(self) -> None:
         self.setWindowTitle("Digitale Lieferung")
@@ -106,13 +126,21 @@ class DigitalLicensesDialog(QDialog):
         if self._load_worker is not None and self._load_worker.isRunning():
             return
         self._status.setText("Lade externe Bestellungen...")
-        self._load_worker = BackgroundWorker(self._service.list_open_cases)
-        self._load_worker.signals.result.connect(self._on_cases_loaded)
-        self._load_worker.signals.error.connect(self._on_error)
-        self._load_worker.signals.finished.connect(lambda: setattr(self, "_load_worker", None))
-        self._load_worker.start()
+        worker = BackgroundWorker(self._service.list_open_cases)
+        self._load_worker = worker
+        worker.signals.result.connect(self._on_cases_loaded)
+        worker.signals.error.connect(self._on_error)
+        worker.signals.finished.connect(lambda current=worker: self._on_load_worker_finished(current))
+        worker.start()
+
+    def _on_load_worker_finished(self, worker: BackgroundWorker) -> None:
+        if self._load_worker is not worker:
+            return
+        self._load_worker = None
 
     def _on_cases_loaded(self, payload: object) -> None:
+        if self._closing:
+            return
         self._cases = list(payload) if isinstance(payload, list) else []
         self._open_case_count = len(self._cases)
         self._list.clear()
@@ -326,13 +354,21 @@ class DigitalLicensesDialog(QDialog):
         ):
             return
         self._status.setText(message)
-        self._action_worker = BackgroundWorker(job)  # type: ignore[arg-type]
+        worker = BackgroundWorker(job)  # type: ignore[arg-type]
+        self._action_worker = worker
         result_handler = on_result or (lambda _payload: self._load_cases())
-        self._action_worker.signals.result.connect(result_handler)
-        self._action_worker.signals.error.connect(self._on_error)
-        self._action_worker.signals.finished.connect(lambda: setattr(self, "_action_worker", None))
-        self._action_worker.start()
+        worker.signals.result.connect(result_handler)
+        worker.signals.error.connect(self._on_error)
+        worker.signals.finished.connect(lambda current=worker: self._on_action_worker_finished(current))
+        worker.start()
+
+    def _on_action_worker_finished(self, worker: BackgroundWorker) -> None:
+        if self._action_worker is not worker:
+            return
+        self._action_worker = None
 
     def _on_error(self, exc: Exception) -> None:
+        if self._closing:
+            return
         self._status.setText("Fehler")
         QMessageBox.warning(self, "Externe Bestellung", str(exc))
