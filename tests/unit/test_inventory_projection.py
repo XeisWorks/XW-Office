@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
+from collections.abc import Iterator
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.models.base import Base
 from xw_office.repositories.product_hub import ProductHubRepository
 from xw_office.repositories.settings_kv import SettingKvRepository
+from xw_office.repositories.product_hub_sync import SyncRepository
 from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.product_hub.inventory_projection import InventoryProjectionService
 
@@ -117,13 +120,13 @@ def test_external_change_after_projection_becomes_conflict() -> None:
     assert sevdesk.writes == [("part-1", 12)]
 
 
-def test_sevdesk_projection_holds_shared_part_stock_lock(monkeypatch) -> None:
+def test_sevdesk_projection_holds_shared_part_stock_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     factory = _factory()
     _seed(factory)
     lock_state = {"active": False}
 
     @contextmanager
-    def tracked_lock(_repository, key: str):
+    def tracked_lock(_repository: SettingKvRepository, key: str) -> Iterator[None]:
         assert key == "sevdesk-part-stock:part-1"
         assert not lock_state["active"]
         lock_state["active"] = True
@@ -163,4 +166,40 @@ def test_write_gate_prevents_provider_calls() -> None:
 
     assert result.items[0].state == "disabled"
     assert sevdesk.writes == []
+
+
+def test_equal_dry_run_does_not_archive_or_resolve_conflicts() -> None:
+    factory = _factory()
+    _product_id, variant_id = _seed(factory)
+    sync = SyncRepository(factory)
+    conflict = sync.create_sync_conflict(
+        channel="sevdesk", entity_type="inventory_stock", internal_entity_id=variant_id,
+        field_name="on_hand", hub_value=12, external_value=4,
+    )
+    sevdesk = _FakeSevdesk({"part-1": 12})
+
+    result = InventoryProjectionService(factory, sevdesk=sevdesk).run(dry_run=True)
+
+    assert result.equal == 1
+    assert sync.get_latest_external_payload(
+        channel="sevdesk", entity_type="inventory_stock", external_id="part-1"
+    ) is None
+    current_conflict = sync.get_sync_conflict(conflict.id)
+    assert current_conflict is not None
+    assert current_conflict.resolved_at is None
+
+
+def test_conflicting_dry_run_does_not_persist_a_conflict() -> None:
+    factory = _factory()
+    _seed(factory)
+    sevdesk = _FakeSevdesk({"part-1": 4})
+    service = InventoryProjectionService(factory, sevdesk=sevdesk, write_enabled=lambda: True)
+
+    assert service.run(dry_run=False).projected == 1
+    sevdesk.stocks["part-1"] = 99
+
+    preview = InventoryProjectionService(factory, sevdesk=sevdesk).run(dry_run=True)
+
+    assert preview.conflicts == 1
+    assert SyncRepository(factory).list_open_sync_conflicts(channel="sevdesk") == []
 

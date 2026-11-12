@@ -421,14 +421,15 @@ class InventoryProjectionService:
         )
         baseline_quantity = self._baseline_quantity(baseline.payload if baseline else None)
         if baseline_quantity is not None and current != baseline_quantity and current != desired:
-            self._sync.upsert_scanned_conflict(
-                channel=channel,
-                entity_type=_CHANNEL_ENTITY_TYPE,
-                internal_entity_id=target.variant.id,
-                field_name="on_hand",
-                hub_value=desired,
-                external_value=current,
-            )
+            if not dry_run:
+                self._sync.upsert_scanned_conflict(
+                    channel=channel,
+                    entity_type=_CHANNEL_ENTITY_TYPE,
+                    internal_entity_id=target.variant.id,
+                    field_name="on_hand",
+                    hub_value=desired,
+                    external_value=current,
+                )
             return InventoryProjectionItem(
                 variant_id=target.variant.id, sku=target.variant.sku, channel=channel,
                 external_id=target.external_id, desired_quantity=desired,
@@ -436,7 +437,10 @@ class InventoryProjectionService:
                 detail="Externer Bestand wurde seit der letzten Projektion direkt geändert.",
             )
         if current == desired:
-            self._archive_projection(target, channel, quantity=current, revision=revision, location_id=location_id)
+            if not dry_run:
+                self._archive_projection(
+                    target, channel, quantity=current, revision=revision, location_id=location_id
+                )
             return InventoryProjectionItem(
                 variant_id=target.variant.id, sku=target.variant.sku, channel=channel,
                 external_id=target.external_id, desired_quantity=desired,

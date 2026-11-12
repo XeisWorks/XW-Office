@@ -3409,3 +3409,20 @@ Smokesuiten bestehen zusammen mit **131 Tests**, striktes MyPy, Ruff und
 Die Vollsuite nach beiden asynchronen Cachekorrekturen besteht mit **2.330
 Tests, 5 Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung
 (150,71 s)**.
+
+## AP03-Nachtrag - Inventory-Projektions-Dry-Run bleibt schreibfrei (12.11.2026)
+
+Die standardmaessig read-only Inventory-Projektion schrieb zuvor bei einem
+bereits gleichen sevDesk-Bestand lokale Snapshot-/Mappingdaten und loeste dabei
+gegebenenfalls offene Sync-Konflikte. Eine Dry-Run-Konflikterkennung konnte
+umgekehrt neue Konfliktzeilen speichern. `_reconcile_external` persistiert
+Snapshot, Push-Metadaten und Konfliktstatus jetzt nur im Write-Modus; Vorschauen
+liefern weiterhin `equal` bzw. `conflict`, ohne lokale oder externe Daten zu
+veraendern. Zwei Regressionen decken Gleichstand mit offenem Konflikt und einen
+externen Konflikt nach vorheriger Projektion ab. Die Projektionssuite besteht
+mit **6 Tests**, striktes MyPy fuer Service und Tests sowie Ruff sind gruen. Die
+vollstaendige Suite besteht mit **2.332 Tests, 5 Ueberspringungen und 1
+bestehenden Starlette/httpx-Deprecation-Warnung (155,11 s)**. Die
+ledgerbasierte Sollmenge bleibt die materialisierte Hub-Ledgerbilanz; produktive
+Projektion und Inventur-Cutover bleiben durch den bestehenden Master-Gate
+geschuetzt.
