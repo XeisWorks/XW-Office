@@ -3792,3 +3792,28 @@ die Vollsuite (**2.365 bestanden, 5 uebersprungen, 1 bestehende Warnung,
 153,75 s**) bestehen. Hosted-Windows-Nachpruefung mit diesen Korrekturen steht
 nach dem Folgecommit noch aus; F20 bleibt bis zum erfolgreichen Pflichtlauf
 offen.
+
+## Ziel- und Vorgehensreview (12.11.2026)
+
+Das urspruengliche Goal bleibt passend: Es benennt den gesamten Rechnungsbereich,
+die zugehoerigen Qualitaetsziele, die verbotenen Produktivschreibzugriffe, die
+verbindliche Dokumentation und den erforderlichen Abschlussnachweis. Den Umfang
+jetzt zu kuerzen wuerde die geforderte vollstaendige Umsetzung verfehlen. Die
+effizientere Steuerung ist deshalb eine engere Abarbeitungsreihenfolge bei
+unveraenderten Akzeptanzkriterien: code-seitig unabhaengige Befunde bis zu Fix,
+Regression und CI-Nachweis abschliessen; echte externe Betriebsbelege getrennt
+als G1/G2-Gates fuehren und erst am Ende nur die dafuer noetigen Bedienerschritte
+anfordern. Bereits gruene Bereiche werden nur bei widersprechendem Befund erneut
+geoeffnet.
+
+Die Desktop-Logs vom 12.11.2026 um 09:10-09:17 koennen F25/F27 nicht kausal
+schliessen. Darin stehen die Eventloop-Gaps noch im alten Format ohne
+`process_cpu_ms`, `ui_thread_cpu_ms` und `active_print_job`; ausserdem fehlen
+`Print job metric`-Zeilen. Git-Historie bestaetigt, dass diese Instrumentierung
+erst danach hinzukam: Druckjob-Dauern mit `deb317e` um 09:24, aktiver Jobkontext
+mit `7f08dac` um 11:09 und CPU-Zuordnung mit `1046743` um 12:23 (jeweils
+Europe/Vienna). Die sichtbare zeitliche Naehe zum START-/PLC-Druck ist damit
+weiterhin nur Korrelation. Fuer die Ursachenentscheidung ist ein neuer Lauf mit
+einem Build ab `1046743` erforderlich; der Abschlussgrenzwert bleibt fuer die
+Seitenanwendung unter 250 ms, fuer Druckdispatch ist die Job-ID samt CPU-/Thread-
+Metrik auszuwerten. Bis dahin bleiben F25 und F27 offen.
