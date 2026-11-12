@@ -19,11 +19,11 @@ from xw_office.services.invoice_processing.operation_claims import (
     InvoiceOperationClaimStore,
     OperationClaim,
 )
+from xw_office.services.sevdesk.part_client import SevdeskPart
 
 if TYPE_CHECKING:
     from xw_office.services.products.catalog import ProductCatalogService
     from xw_office.services.sevdesk.part_client import PartClient
-    from xw_office.services.sevdesk.part_client import SevdeskPart
     from xw_office.services.wix.client import WixOrderItem
 
 logger = logging.getLogger(__name__)

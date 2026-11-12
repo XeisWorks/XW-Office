@@ -8,6 +8,7 @@ from xw_office.services.products.print_decision import (
     PrintDecisionEngine,
     resolve_piece_print_config,
 )
+from xw_office.services.sevdesk.part_client import SevdeskPart
 from xw_office.services.wix.client import WixOrderItem
 
 
@@ -156,6 +157,23 @@ def test_piece_blocks_use_stock_snapshot_without_individual_stock_requests() -> 
 
     assert blocks[0].stock_status is not None
     assert blocks[0].stock_status.on_hand == 9
+
+
+def test_cached_part_lookup_keeps_runtime_sevdesk_part_type_available() -> None:
+    class CachedPartClient:
+        def get_cached_part_by_sku(self, sku: str) -> SevdeskPart | None:
+            if sku != "XW-1201":
+                return None
+            return SevdeskPart(id="part-1201", sku=sku, name="Testnoten", stock_qty=8)
+
+    status = PrintDecisionEngine(
+        ProductCatalogService(),
+        CachedPartClient(),  # type: ignore[arg-type]
+    )._fetch_stock_by_sku_safe("XW-1201")
+
+    assert status is not None
+    assert status.sku == "XW-1201"
+    assert status.on_hand == 8
 
 
 def test_title_overrides_for_sku_lists_saved_title_specific_plans() -> None:
