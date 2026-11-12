@@ -2669,3 +2669,20 @@ globales Ruff sind gruen. Die Vollsuite besteht mit **2.278 Tests, 5 optionalen
 PostgreSQL-Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung
 (148,19 s)**. F17 bleibt offen, bis die restlichen UI-I/O- und Lifecycle-Pfade
 geprueft sind.
+
+## F17-Fortschreibung - Unreleased-Titelaufloesung im Worker (12.11.2026)
+
+Beim Starten der Konfiguration fuer einen unbekannten Wix-Titel loeste
+`_create_unreleased_product_from_alias` den Produktkatalog synchron auf und las
+Alias-Mapping sowie vorhandene Katalogprodukte im UI-Thread. Diese Reads laufen
+jetzt vor dem Edit-Dialog in einem `BackgroundWorker`; der Dialog wird nach dem
+Ergebnis geoeffnet und der bestehende Settings-Write bleibt im bestaetigten
+Workerpfad. Der Regressionstest blockiert die Titelaufloesung gezielt, prueft
+einen Qt-Heartbeat und gibt den Worker auch bei einem fehlschlagenden Testlauf
+zuverlaessig frei. Die Rechnungsansicht-Smoke-Suite besteht mit **95 Tests**,
+der fokussierte Fortsetzungs-/Speicherpfad mit **2 Tests**; Ruff und striktes
+MyPy fuer `view.py` sowie striktes MyPy fuer alle 27 Rechnungs-UI-Dateien sind
+gruen. Die Vollsuite besteht mit **2.278 Tests, 5 optionalen PostgreSQL-
+Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung
+(156,03 s)**; globales Ruff und `git diff --check` sind ebenfalls gruen. F17
+bleibt bis zur Pruefung der uebrigen UI-I/O- und Lifecycle-Pfade offen.

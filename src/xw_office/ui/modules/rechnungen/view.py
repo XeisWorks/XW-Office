@@ -8139,99 +8139,135 @@ class RechnungenView(QWidget):
         quantity: int = 1,
         note: str = "",
     ) -> str | None:
-        """Create an XW-010 work from a Wix alias, then collect its print plan.
-
-        This is shared by the PRINT PRODUKTE '+' button and the unknown-title
-        clarification popup, so both entry points retain the invoice alias.
-        """
-        if self._unreleased_catalog_worker is not None and self._unreleased_catalog_worker.isRunning():
+        """Create an XW-010 work from a Wix alias, then collect its print plan."""
+        current_worker = self._unreleased_catalog_worker
+        if current_worker is not None and current_worker.isRunning():
             signals: AppSignals = self._container.resolve(AppSignals)
             signals.status_message.emit("Unreleased-Katalog wird gerade aktualisiert.", 3000)
             return None
-        catalog = self._container.resolve(ProductCatalogService)
+
         raw_input = str(raw_title or "").strip()
         lines = [line.strip() for line in raw_input.splitlines() if line.strip()]
         first_line = lines[0] if lines else raw_input
+        container = self._container
 
-        # Check if already resolved or if candidates exist
-        resolution = catalog.resolve_unreleased_title(first_line)
-        if resolution.is_resolved and resolution.canonical_name:
-            initial_canonical = resolution.canonical_name
-            initial_owner = resolution.owner
-            existing = next(
-                (
-                    p
-                    for p in catalog.list_unreleased_products()
-                    if p.canonical_name.casefold() == initial_canonical.casefold()
-                ),
-                None,
-            )
-            existing_aliases = list(existing.aliases) if existing else []
-            initial_aliases = list(dict.fromkeys([*existing_aliases, *lines, raw_input]))
-        else:
-            cleaned = clean_unreleased_match_title(first_line) or first_line
-            initial_canonical = cleaned
-            initial_owner = ""
-            initial_aliases = list(dict.fromkeys([*lines, raw_input])) if raw_input else []
+        def prepare() -> tuple[ProductCatalogService, str, str, list[str]]:
+            catalog: ProductCatalogService = container.resolve(ProductCatalogService)
+            resolution = catalog.resolve_unreleased_title(first_line)
+            if resolution.is_resolved and resolution.canonical_name:
+                initial_canonical = resolution.canonical_name
+                initial_owner = resolution.owner
+                existing = next(
+                    (
+                        product
+                        for product in catalog.list_unreleased_products()
+                        if product.canonical_name.casefold() == initial_canonical.casefold()
+                    ),
+                    None,
+                )
+                existing_aliases = list(existing.aliases) if existing else []
+                initial_aliases = list(dict.fromkeys([*existing_aliases, *lines, raw_input]))
+            else:
+                initial_canonical = clean_unreleased_match_title(first_line) or first_line
+                initial_owner = ""
+                initial_aliases = list(dict.fromkeys([*lines, raw_input])) if raw_input else []
+            return catalog, initial_canonical, initial_owner, initial_aliases
 
-        dialog = UnreleasedProductEditDialog(
-            catalog,
-            canonical_name=initial_canonical,
-            owner=initial_owner,
-            aliases=initial_aliases,
-            source_aliases=[raw_input] if raw_input else [],
-            continue_label="NEXT",
-            title=(
-                f"Unreleased-Produkt anlegen – Schritt 1 von 2 ({first_line})"
-                if first_line
-                else "Unreleased-Produkt anlegen – Schritt 1 von 2"
-            ),
-            parent=self,
-        )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return None
+        worker = BackgroundWorker(prepare)
+        self._unreleased_catalog_worker = worker
 
-        canonical_name, owner, aliases = dialog.get_data()
-
-        def saved(ok: bool, error: str, _result: object) -> None:
-            if not ok:
+        def on_prepared(payload: object) -> None:
+            if self._shutting_down:
+                return
+            if not isinstance(payload, tuple) or len(payload) != 4:
                 QMessageBox.warning(
-                    self,
-                    "Unreleased-Produkt",
-                    f"Das Produkt konnte nicht dauerhaft gespeichert werden.\n\n{error}",
+                    self, "Unreleased-Katalog", "Der Katalog lieferte ungueltige Daten."
                 )
                 return
-            signals = self._container.resolve(AppSignals)
-            signals.status_message.emit(
-                f"Unreleased-Produkt '{canonical_name}' gespeichert.",
-                5000,
+            catalog, initial_canonical, initial_owner, initial_aliases = payload
+            if not isinstance(catalog, ProductCatalogService):
+                QMessageBox.warning(
+                    self, "Unreleased-Katalog", "Der Katalogservice ist nicht verfuegbar."
+                )
+                return
+            if self._unreleased_catalog_worker is worker:
+                self._unreleased_catalog_worker = None
+
+            dialog = UnreleasedProductEditDialog(
+                catalog,
+                canonical_name=str(initial_canonical),
+                owner=str(initial_owner),
+                aliases=list(initial_aliases),
+                source_aliases=[raw_input] if raw_input else [],
+                continue_label="NEXT",
+                title=(
+                    f"Unreleased-Produkt anlegen \u2013 Schritt 1 von 2 ({first_line})"
+                    if first_line
+                    else "Unreleased-Produkt anlegen \u2013 Schritt 1 von 2"
+                ),
+                parent=self,
+            )
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+
+            canonical_name, owner, aliases = dialog.get_data()
+
+            def saved(ok: bool, error: str, _result: object) -> None:
+                if not ok:
+                    QMessageBox.warning(
+                        self,
+                        "Unreleased-Produkt",
+                        f"Das Produkt konnte nicht dauerhaft gespeichert werden.\n\n{error}",
+                    )
+                    return
+                signals = self._container.resolve(AppSignals)
+                signals.status_message.emit(
+                    f"Unreleased-Produkt '{canonical_name}' gespeichert.",
+                    5000,
+                )
+                self._render_active_print_tab()
+                from xw_office.ui.modules.rechnungen.print_dialog import (
+                    _configure_missing_piece_print,
+                )
+
+                piece_block = PieceBlock(
+                    sku="XW-010",
+                    name=canonical_name,
+                    qty_needed=max(1, int(quantity or 1)),
+                    note=str(note or "").strip(),
+                    is_unreleased=True,
+                    stock_status=None,
+                )
+                _configure_missing_piece_print(self, self._container, piece_block)
+                self._refresh_open_invoice_overview()
+
+            self._run_unreleased_settings_write(
+                lambda: catalog.add_or_update_unreleased_product(
+                    canonical_name,
+                    owner=owner,
+                    aliases=aliases,
+                ),
+                saved,
             )
 
-            # Update the visible row only after the durable catalog commit.
-            self._render_active_print_tab()
-            from xw_office.ui.modules.rechnungen.print_dialog import (
-                _configure_missing_piece_print,
-            )
+        def on_error(exc: Exception) -> None:
+            if self._unreleased_catalog_worker is worker:
+                self._unreleased_catalog_worker = None
+            if not self._shutting_down:
+                QMessageBox.warning(
+                    self,
+                    "Unreleased-Katalog",
+                    f"Der Katalog konnte nicht geladen werden.\n\n{exc}",
+                )
 
-            piece_block = PieceBlock(
-                sku="XW-010",
-                name=canonical_name,
-                qty_needed=max(1, int(quantity or 1)),
-                note=str(note or "").strip(),
-                is_unreleased=True,
-                stock_status=None,
-            )
-            _configure_missing_piece_print(self, self._container, piece_block)
-            self._refresh_open_invoice_overview()
-
-        self._run_unreleased_settings_write(
-            lambda: catalog.add_or_update_unreleased_product(
-                canonical_name,
-                owner=owner,
-                aliases=aliases,
-            ),
-            saved,
+        worker.signals.result.connect(on_prepared)
+        worker.signals.error.connect(on_error)
+        worker.signals.finished.connect(
+            lambda current=worker: setattr(self, "_unreleased_catalog_worker", None)
+            if self._unreleased_catalog_worker is current
+            else None
         )
+        worker.start()
         return None
 
     def _on_add_unreleased_from_item(self, item: PrintProductAggregate) -> None:

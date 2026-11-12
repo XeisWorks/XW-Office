@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from threading import Event
+from threading import Event, Timer
 import types
 from pathlib import Path
 
@@ -176,11 +176,32 @@ def test_add_unreleased_product_updates_the_analysis_row_before_print_configurat
         lambda _dialog: ("Kanonischer Titel", "Blasmusik", ["Kundenangabe aus Wix"]),
     )
     configured: list[bool] = []
+    errors: list[str] = []
     monkeypatch.setattr(
         "xw_office.ui.modules.rechnungen.print_dialog._configure_missing_piece_print",
         lambda *_args, **_kwargs: configured.append(True),
     )
     monkeypatch.setattr(view, "_refresh_open_invoice_overview", lambda: None)
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *_args: errors.append(str(_args[-1]) if _args else "warning"),
+    )
+    entered, release, heartbeat = Event(), Event(), Event()
+    fallback_release = Timer(5, release.set)
+    fallback_release.start()
+    original_resolve = catalog.resolve_unreleased_title
+    heartbeat_timer = QTimer(view)
+    heartbeat_timer.setInterval(5)
+    heartbeat_timer.timeout.connect(heartbeat.set)
+    heartbeat_timer.start()
+
+    def blocked_resolve(title: str) -> object:
+        entered.set()
+        assert release.wait(10)
+        return original_resolve(title)
+
+    monkeypatch.setattr(catalog, "resolve_unreleased_title", blocked_resolve)
 
     assert view._create_unreleased_product_from_alias(  # noqa: SLF001
         raw_title=item.title,
@@ -188,7 +209,16 @@ def test_add_unreleased_product_updates_the_analysis_row_before_print_configurat
         note=item.description,
     ) is None
 
-    qtbot.waitUntil(lambda: bool(configured), timeout=3000)
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=1000)
+        qtbot.waitUntil(heartbeat.is_set, timeout=1000)
+    finally:
+        heartbeat_timer.stop()
+        fallback_release.cancel()
+        release.set()
+
+    qtbot.waitUntil(lambda: bool(configured) or bool(errors), timeout=3000)
+    assert not errors, errors
 
     assert catalog.resolve_unreleased_title(item.title).canonical_name == "Kanonischer Titel"
     visible_labels = [label.text() for label in view._gb_open_products.findChildren(QLabel)]  # noqa: SLF001
