@@ -348,6 +348,7 @@ class ProductPrintConfigDialog(QDialog):
         self._pdf_pending_path: str | None = None
         self._pdf_status_worker: BackgroundWorker | None = None
         self._path_action_worker: BackgroundWorker | None = None
+        self._title_override_worker: BackgroundWorker | None = None
         self._path_action_buttons: tuple[QPushButton, QPushButton] | None = None
         self._pending_accept = False
         self._closing = False
@@ -484,6 +485,7 @@ class ProductPrintConfigDialog(QDialog):
 
     def _stop_pdf_inspection(self) -> None:
         self._closing = True
+        self._stop_title_override_lookup()
         self._pending_accept = False
         self._pdf_status_timer.stop()
         self._pdf_pending_path = None
@@ -720,12 +722,30 @@ class ProductPrintConfigDialog(QDialog):
     def _refresh_title_override_note(self) -> None:
         if not hasattr(self, "_title_override_note"):
             return
-        try:
-            catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
-            override_titles = catalog.title_overrides_for_sku(self._piece.sku)
-        except Exception as exc:  # noqa: BLE001 - purely informational note.
-            logger.debug("Title override lookup failed for %s: %s", self._piece.sku, exc)
+        if self._closing or self._title_override_worker is not None:
             return
+        container = self._container
+        sku = self._piece.sku
+
+        def load_override_titles() -> list[str]:
+            catalog: ProductCatalogService = container.resolve(ProductCatalogService)
+            return catalog.title_overrides_for_sku(sku)
+
+        worker = BackgroundWorker(load_override_titles)
+        worker.signals.result.connect(self._apply_title_override_note)
+        worker.signals.error.connect(self._on_title_override_error)
+        worker.signals.finished.connect(
+            lambda current=worker: self._on_title_override_finished(current)
+            if isValid(self)
+            else None
+        )
+        self._title_override_worker = worker
+        worker.start()
+
+    def _apply_title_override_note(self, value: object) -> None:
+        if self._closing or not isValid(self):
+            return
+        override_titles = [title for title in value if isinstance(title, str)] if isinstance(value, list) else []
         current_title = str(self._piece.name or "").strip()
         other_titles = [title for title in override_titles if title != current_title]
         if not other_titles:
@@ -740,6 +760,18 @@ class ProductPrintConfigDialog(QDialog):
             f"Standard ueberschreiben und hier NICHT bearbeitet werden: {joined}."
         )
         self._title_override_note.show()
+
+    def _on_title_override_error(self, exc: Exception) -> None:
+        if not self._closing:
+            logger.debug("Title override lookup failed for %s: %s", self._piece.sku, exc)
+
+    def _on_title_override_finished(self, worker: BackgroundWorker) -> None:
+        if self._title_override_worker is worker:
+            self._title_override_worker = None
+
+    def _stop_title_override_lookup(self) -> None:
+        if self._title_override_worker is not None and self._title_override_worker.isRunning():
+            self._title_override_worker.cancel()
 
     def _profile_printer(self, profile_id: str) -> str:
         for candidate_id, _label, printer, _backend in self._profiles:

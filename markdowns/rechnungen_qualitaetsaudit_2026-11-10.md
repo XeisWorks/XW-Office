@@ -2616,6 +2616,17 @@ Aenderungen besteht mit **2.274 Tests, 5 uebersprungen und 1 bestehender
 Starlette/httpx-Deprecation-Warnung (158,75 s)**; globales Ruff und der
 `git diff --check` sind gruen.
 
+## F17-Fortschreibung - Druckplan-Hinweis beim Konfigurationsdialog (12.11.2026)
+
+Der rein informative Lookup weiterer Titel-Druckplaene in
+`ProductPrintConfigDialog` loest `ProductCatalogService` jetzt erst im Worker
+auf. Der Dialog zeigt den Hinweis nach erfolgreichem Read asynchron an und
+verwirft spaete Resultate beim Schliessen. Ein blockierter Katalog-Fake prueft
+Qt-Heartbeats und die spaete Anzeige; `test_rechnungen_product_print.py` besteht
+mit **19 Tests**, Ruff und striktes MyPy fuer `print_dialog.py` sind gruen. Die
+Vollsuite nach diesem Nachtrag besteht mit **2.275 Tests, 5 uebersprungen und 1
+bestehender Starlette/httpx-Deprecation-Warnung (148,82 s)**.
+
 ## F17-Fortschreibung - Ueberweisungs-PDF-Dateipruefung im Worker (12.11.2026)
 
 `OffeneUeberweisungenDialog` schreibt die heruntergeladene Rechnungs-PDF und

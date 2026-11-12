@@ -53,6 +53,39 @@ def test_product_print_runtime_check_uses_nonblocking_printer_snapshot(monkeypat
     assert "Kein konfigurierter Drucker" in str(warnings[0][2])
 
 
+def test_product_print_config_title_override_read_runs_off_ui_thread(qtbot: object) -> None:
+    entered, release = Event(), Event()
+
+    class CatalogStub:
+        def title_overrides_for_sku(self, _sku: str) -> list[str]:
+            entered.set()
+            assert release.wait(3)
+            return ["Work A", "Work B"]
+
+    container = Container(AppConfig())
+    container.register(ProductCatalogService, lambda _: CatalogStub())  # type: ignore[arg-type,return-value]
+    piece = PieceBlock(
+        sku="XW-010",
+        name="Work A",
+        qty_needed=1,
+        product=Product(id="p1", sku="XW-010", name="Work A"),
+    )
+    dialog = ProductPrintConfigDialog(None, container, piece)
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    beats: list[bool] = []
+    QTimer.singleShot(10, lambda: beats.append(True))
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=1000)  # type: ignore[attr-defined]
+        qtbot.waitUntil(lambda: bool(beats), timeout=1000)  # type: ignore[attr-defined]
+        assert dialog._title_override_note.isHidden()  # noqa: SLF001
+    finally:
+        release.set()
+    qtbot.waitUntil(  # type: ignore[attr-defined]
+        lambda: dialog._title_override_worker is None, timeout=1000  # noqa: SLF001
+    )
+    assert not dialog._title_override_note.isHidden()  # noqa: SLF001
+
+
 def test_selected_product_delegate_has_exactly_one_print_or_settings_action() -> None:
     """The row always carries a qty stepper; the single action button next
     to it must still be exclusively "print" xor "manage", never both."""
