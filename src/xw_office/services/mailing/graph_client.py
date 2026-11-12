@@ -12,8 +12,8 @@ import re
 import threading
 from typing import Any
 
-import msal
-import requests
+import msal  # type: ignore[import-untyped]  # MSAL does not publish typing metadata.
+import requests  # type: ignore[import-untyped]  # requests typing is supplied by downstream users.
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,10 @@ _CACHE_IO_LOCK = threading.Lock()
 _DEVICE_FLOW_LOCK = threading.Lock()
 _STYLE_TAG_RE = re.compile(r"<style\b[^>]*>.*?</style>", re.IGNORECASE | re.DOTALL)
 _COMMENT_TAG_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def _dict_or_empty(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -263,7 +267,7 @@ class GraphMailClient:
         payload = response.json() if response.content else {}
         if not isinstance(payload, dict):
             return ""
-        body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
+        body = _dict_or_empty(payload.get("body"))
         content = str(body.get("content") or "").strip()
         content_type = str(body.get("contentType") or "").strip()
         if _looks_like_html(content, content_type):
@@ -329,14 +333,12 @@ class GraphMailClient:
         for item in values:
             if not isinstance(item, dict):
                 continue
-            from_obj = item.get("from") if isinstance(item.get("from"), dict) else {}
-            email_obj = (
-                from_obj.get("emailAddress") if isinstance(from_obj.get("emailAddress"), dict) else {}
-            )
+            from_obj = _dict_or_empty(item.get("from"))
+            email_obj = _dict_or_empty(from_obj.get("emailAddress"))
             sender = str(email_obj.get("address") or email_obj.get("name") or "").strip() or "Unbekannt"
             subject = str(item.get("subject") or "").strip()
             received = str(item.get("receivedDateTime") or "").strip()
-            body_obj = item.get("body") if isinstance(item.get("body"), dict) else {}
+            body_obj = _dict_or_empty(item.get("body"))
             content = str(body_obj.get("content") or "").strip()
             content_type = str(body_obj.get("contentType") or "").strip()
             body_text = html_to_text(content) if _looks_like_html(content, content_type) else content

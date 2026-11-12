@@ -78,3 +78,51 @@ def test_graph_send_payload_contains_exact_sender_and_allowlisted_recipient(
     assert message["from"] == {"emailAddress": {"address": "office@xeisworks.at"}}
     assert message["toRecipients"] == [{"emailAddress": {"address": "transfer@xeisworks.at"}}]
     assert message["attachments"][0]["name"] == "report.pdf"
+
+
+def test_graph_message_readers_tolerate_missing_optional_objects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = object.__new__(GraphMailClient)
+    client._mailbox_segment = "users/office@xeisworks.at"
+    client._auth_headers = lambda: {"Authorization": "Bearer synthetic"}
+
+    class Response:
+        status_code = 200
+        text = ""
+        content = b"payload"
+
+        def __init__(self, payload: object) -> None:
+            self._payload = payload
+
+        def json(self) -> object:
+            return self._payload
+
+    responses = iter(
+        [
+            Response({"body": None}),
+            Response(
+                {
+                    "value": [
+                        {
+                            "id": "message-1",
+                            "subject": "Zahlungsbeleg",
+                            "from": None,
+                            "body": None,
+                            "bodyPreview": "Bitte Rechnung zuordnen",
+                        }
+                    ]
+                }
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        "xw_office.services.mailing.graph_client.requests.get",
+        lambda *_args, **_kwargs: next(responses),
+    )
+
+    assert client.get_message_body("message-1") == ""
+    thread_text = client.get_conversation_thread_text("conversation-1")
+
+    assert "Unbekannt | Zahlungsbeleg" in thread_text
+    assert "Bitte Rechnung zuordnen" in thread_text
