@@ -15,10 +15,11 @@ Beanspruchen externer Schreibaktionen, unvollständige Positionsdaten sowie
 Transaktionsgrenzen zwischen Lagerbewegung, Buchungsmarke und Legacy-Bestand.
 
 **27 Code-/Testbefunde: 25 ERLEDIGT, 2 OFFEN, 0 BLOCKIERT. Keine bestaetigte P0-Stoerung.**
-Zwei zusaetzliche Betriebsabnahmen sind BLOCKIERT durch benoetigte Testbelege,
-Hardware und eine isolierte PostgreSQL-Betriebsumgebung; sie sind nicht als
-zusaetzliche Softwarefehler gezaehlt. OFFEN bedeutet eine konkrete, abgrenzbare
-Aufgabe, nicht eine Behauptung ueber bereits eingetretene Schaeden.
+Zwei zusaetzliche Betriebsabnahmen bleiben BLOCKIERT durch benoetigte externe
+Testbelege, echte App-Instanzen und Hardware; sie sind nicht als zusaetzliche
+Softwarefehler gezaehlt. Die isolierte PostgreSQL-Testumgebung ist vorhanden und
+wurde fuer G2 genutzt. OFFEN bedeutet eine konkrete, abgrenzbare Aufgabe, nicht
+eine Behauptung ueber bereits eingetretene Schaeden.
 
 Direkt behoben wurden falsche Nullmengen, unzulässige Bestandsmengen, doppelte
 Lageralarm-Mails während eines laufenden Versands, vertauschter Kundenkontext bei
@@ -31,8 +32,10 @@ erscheinen lässt.
 
 **Keine Freigabe zum Bestands-Master-Cutover aus diesem Audit ableiten.**
 Die offenen P1-Pakete betreffen Datenintegrität. Produktive Rechnungen, E-Mails,
-Drucker, Bestände und Infrastruktur wurden nicht gezielt verändert. Alle neuen
-Regressionstests verwenden Fakes bzw. lokale SQLite-Datenbanken.
+Drucker, Bestände und Produktionsdienste wurden nicht verändert. Die Zugangsdaten
+des isolierten Restore-Drill-PostgreSQL wurden rotiert (siehe G2-Fortschreibung).
+Die reguläre Suite verwendet Fakes bzw. SQLite; opt-in PostgreSQL-Integrationstests
+laufen separat mit zufälligem Schema gegen die isolierte Testumgebung.
 
 ### Belegstufen und Grenzen
 
@@ -3912,3 +3915,8 @@ Das Zugangspasswort der nichtproduktiven Restore-Drill-PostgreSQL wurde danach
 vorsorglich rotiert und die Verbindung mit der neuen Railway-Konfiguration per
 `SELECT 1` bestaetigt. Der SSH-Tunnel ist geschlossen; Produktivdienste und
 Produktivdaten waren davon nicht betroffen.
+
+Railway XW-Office production wurde anschliessend read-only geprueft: `XW-Product-Hub`
+und `xw-inventory-worker` laufen auf `c36275b` mit Status `SUCCESS`; es gibt keine
+gestagten Aenderungen. Beide PostgreSQL-Dienste melden ebenfalls `SUCCESS` und
+wurden bei dieser Pruefung nicht beschrieben.
