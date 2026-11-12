@@ -7089,19 +7089,10 @@ class RechnungenView(QWidget):
             if has_memory_context:
                 self._load_wix_context(summary.order_reference, show_loading=False)
             else:
-                has_persistent_context = self._apply_cached_wix_context(summary.order_reference)
-                cached_context = self._get_cached_wix_context(summary.order_reference)
-                cached_status = str((cached_context or {}).get("status") or "").strip()
-                if has_persistent_context and cached_status:
-                    self._load_sevdesk_context(summary, seq)
-                    self._start_next_wix_warm_batch()
-                    return
-                has_complete_context = self._get_cached_wix_context(summary.order_reference) is not None
-                if not has_complete_context:
-                    self._load_wix_context(
-                        summary.order_reference,
-                        show_loading=not has_persistent_context,
-                    )
+                # Persistent Wix snapshots use SQLite and can initialize their
+                # schema on first access. Resolve them through the same worker
+                # as network misses so row selection never performs disk I/O.
+                self._load_wix_context(summary.order_reference, show_loading=True)
         else:
             self._reset_wix_meta("Keine Wix-Order-Referenz")
             self._load_sevdesk_context(summary, seq)
@@ -7351,65 +7342,6 @@ class RechnungenView(QWidget):
         elif not current_lines:
             self._shipping_status.setText("Keine Versandadresse in sevDesk")
             self._set_shipping_editor_lines(override_lines)
-
-    def _apply_cached_wix_context(self, order_reference: str) -> bool:
-        ref = str(order_reference or "").strip()
-        if not ref:
-            return False
-        try:
-            wix_client: WixOrdersClient = self._container.resolve(WixOrdersClient)
-            meta = wix_client.get_cached_order_summary(ref)
-            cached_items = wix_client.get_cached_order_line_items(ref)
-        except Exception as exc:  # noqa: BLE001 - cache must never block row selection.
-            logger.debug("Persistent Wix context cache lookup failed ref=%s: %s", ref, exc)
-            return False
-        if meta is None:
-            return False
-        if not meta:
-            self._put_cached_wix_context(
-                ref,
-                status="Wix-Order nicht gefunden",
-                meta={},
-                items=[],
-            )
-            self._reset_wix_meta("Wix-Order nicht gefunden")
-            self._reset_stuecke()
-            self._stuecke_hint.setText("Wix-Order nicht gefunden")
-            self._stuecke_hint.show()
-            self._gb_stuecke.show()
-            return True
-        self._on_wix_meta_loaded({**meta, "__requested_ref": ref})
-        if cached_items is None:
-            return True
-        pieces = self._piece_blocks_from_cached_wix_items(cached_items)
-        self._put_cached_wix_context(ref, status="", meta=meta, items=pieces)
-        self._on_stuecke_loaded({"__requested_ref": ref, "items": pieces})
-        return True
-
-    @staticmethod
-    def _piece_blocks_from_cached_wix_items(items: object) -> list[PieceBlock]:
-        if not isinstance(items, list):
-            return []
-        pieces: list[PieceBlock] = []
-        for item in items:
-            sku = str(getattr(item, "sku", "") or "").strip()
-            name = str(getattr(item, "name", "") or "").strip() or sku
-            if not sku and not name:
-                continue
-            try:
-                qty = max(1, int(getattr(item, "qty", 1) or 1))
-            except (TypeError, ValueError):
-                qty = 1
-            pieces.append(
-                PieceBlock(
-                    sku=sku,
-                    name=name,
-                    qty_needed=qty,
-                    note=str(getattr(item, "note", "") or "").strip(),
-                    is_unreleased=bool(getattr(item, "is_unreleased", False)),
-                )
-            )
-        return pieces
 
     def _load_wix_context(self, order_reference: str, *, show_loading: bool = True) -> None:
         ref = order_reference.strip()

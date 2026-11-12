@@ -41,6 +41,7 @@ from xw_office.services.products.print_decision import (
 )
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sendungen.service import OffeneSendungenService
+from xw_office.services.sevdesk.part_client import PartClient
 from xw_office.services.transfers.service import OffeneUeberweisungenService
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 from xw_office.services.wix.client import WixOrdersClient
@@ -3287,10 +3288,7 @@ def test_wix_order_button_requires_confirmed_context(
     assert not view._btn_open_wix_order.isEnabled()  # noqa: SLF001
 
 
-def test_rechnungen_applies_persistent_wix_cache_before_background_load(
-    qtbot: object,
-    monkeypatch,
-) -> None:
+def test_rechnungen_reads_persistent_wix_cache_in_background_worker(qtbot: object) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
     # This test covers the persistent Wix cache; keep the unrelated first-use
     # catalog disk/settings warm-up out of its background-worker lifecycle.
@@ -3306,10 +3304,16 @@ def test_rechnungen_applies_persistent_wix_cache_before_background_load(
             "order_reference": "20899",
         }
     )
-    load_calls: list[tuple[str, bool]] = []
+    lookup_started = Event()
+    release_lookup = Event()
+    lookup_threads: list[int] = []
 
     class _CachedWixClient(_FakeWixOrdersClient):
-        def get_cached_order_summary(self, reference: str) -> dict[str, str] | None:
+        def resolve_order_summary(self, reference: str) -> dict[str, str]:
+            lookup_threads.append(get_ident())
+            lookup_started.set()
+            if not release_lookup.wait(timeout=3):
+                raise TimeoutError("blocked Wix cache lookup was not released")
             return {
                 "wix_order_number": reference,
                 "wix_customer_name": "Wix Kunde",
@@ -3318,41 +3322,32 @@ def test_rechnungen_applies_persistent_wix_cache_before_background_load(
                 "wix_shipping_address": "Wix Kunde\nWixstrasse 7\n1010 Wien\nAUSTRIA",
             }
 
-        def get_cached_order_line_items(self, _reference: str) -> list[object] | None:
-            return [
-                types.SimpleNamespace(
-                    sku="XW-CACHE-1",
-                    name="Cache Produkt",
-                    qty=2,
-                    note="",
-                    is_unreleased=False,
-                )
-            ]
-
-    def fake_load_wix_context(order_reference: str, *, show_loading: bool = True) -> None:
-        load_calls.append((order_reference, show_loading))
+        def fetch_order_line_items(self, _reference: str) -> list[dict[str, object]]:
+            return []
 
     container.register(WixOrdersClient, lambda _: _CachedWixClient())
-    monkeypatch.setattr(view, "_load_wix_context", fake_load_wix_context)
+    container.register(
+        PartClient,
+        lambda _: types.SimpleNamespace(ensure_parts_cache=lambda: None),
+    )
 
     view._summaries = [summary]  # noqa: SLF001
     view._table.set_data([summary.as_table_row()])  # noqa: SLF001
+    ui_thread = get_ident()
     view._table.select_source_row(0)  # noqa: SLF001
+    qtbot.waitUntil(lookup_started.is_set, timeout=2000)
+    heartbeat = Event()
+    QTimer.singleShot(0, heartbeat.set)
+    try:
+        qtbot.waitUntil(heartbeat.is_set, timeout=500)
+    finally:
+        release_lookup.set()
 
-    qtbot.waitUntil(
-        lambda: "Wixstrasse 7" in view._shipping_editor.toPlainText(),  # noqa: SLF001
-        timeout=1000,
-    )
+    qtbot.waitUntil(lambda: "Wixstrasse 7" in view._shipping_editor.toPlainText(), timeout=3000)  # noqa: SLF001
     assert "Wixstrasse 7" in view._shipping_editor.toPlainText()  # noqa: SLF001
     assert view._wix_customer.text() == "Wix Kunde"  # noqa: SLF001
-    qtbot.waitUntil(lambda: view._piece_model.rowCount() == 1, timeout=3000)  # noqa: SLF001
-    qtbot.waitUntil(lambda: view._piece_config_worker is None, timeout=3000)  # noqa: SLF001
-    assert view._piece_model.rowCount() == 1  # noqa: SLF001
-    assert "Cache Produkt" in str(view._piece_model.index(0, 0).data())  # noqa: SLF001
-    assert not view._piece_list.isHidden()  # noqa: SLF001
-    assert not view._gb_stuecke.isHidden()  # noqa: SLF001
+    assert lookup_threads and all(thread_id != ui_thread for thread_id in lookup_threads)
     assert view._get_cached_wix_context("20899") is not None  # noqa: SLF001
-    assert load_calls == []
     view.request_shutdown()
     qtbot.waitUntil(view.shutdown_complete, timeout=3000)
 
@@ -3624,10 +3619,8 @@ def test_rechnungen_cached_wix_summary_allows_product_fallback_when_items_missin
             "order_reference": "20900",
         }
     )
-    load_calls: list[tuple[str, bool]] = []
-
     class _CachedSummaryOnlyWixClient(_FakeWixOrdersClient):
-        def get_cached_order_summary(self, reference: str) -> dict[str, str] | None:
+        def resolve_order_summary(self, reference: str) -> dict[str, str]:
             return {
                 "wix_order_number": reference,
                 "wix_customer_name": "Wix Kunde",
@@ -3636,14 +3629,10 @@ def test_rechnungen_cached_wix_summary_allows_product_fallback_when_items_missin
                 "wix_shipping_address": "Wix Kunde\nWixstrasse 7\n1010 Wien\nAUSTRIA",
             }
 
-        def get_cached_order_line_items(self, _reference: str) -> list[object] | None:
-            return None
-
-    def fake_load_wix_context(order_reference: str, *, show_loading: bool = True) -> None:
-        load_calls.append((order_reference, show_loading))
+        def fetch_order_line_items(self, _reference: str) -> list[dict[str, object]]:
+            return []
 
     container.register(WixOrdersClient, lambda _: _CachedSummaryOnlyWixClient())
-    monkeypatch.setattr(view, "_load_wix_context", fake_load_wix_context)
 
     view._summaries = [summary]  # noqa: SLF001
     view._table.set_data([summary.as_table_row()])  # noqa: SLF001
@@ -3651,11 +3640,15 @@ def test_rechnungen_cached_wix_summary_allows_product_fallback_when_items_missin
 
     qtbot.waitUntil(
         lambda: "Wixstrasse 7" in view._shipping_editor.toPlainText(),  # noqa: SLF001
-        timeout=1000,
+        timeout=3000,
     )
     assert "Wixstrasse 7" in view._shipping_editor.toPlainText()  # noqa: SLF001
-    assert view._get_cached_wix_context("20900") is None  # noqa: SLF001
-    assert load_calls == [("20900", False)]
+    qtbot.waitUntil(lambda: view._wix_context_worker is None, timeout=3000)  # noqa: SLF001
+    cached = view._get_cached_wix_context("20900")  # noqa: SLF001
+    assert cached is not None
+    assert cached["meta"]["wix_customer_name"] == "Wix Kunde"
+    assert cached["items"] == []
+    view.request_shutdown()
     qtbot.waitUntil(view.shutdown_complete, timeout=3000)
 
 

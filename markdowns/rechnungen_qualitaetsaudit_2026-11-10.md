@@ -3363,3 +3363,18 @@ und gibt fuer die Kinderliste explizit `list[OneDriveItem]` zurueck. Die
 strikte MyPy-Baseline sinkt von 65 Fehlern in 27 Dateien auf **63 Fehler in 26
 Dateien**. Der letzte volle Lauf 2.328/5/1 liegt vor dieser kleinen
 Annotationsergaenzung; deren Service-Regressionen sind gezielt bestanden.
+
+## AP06-Fortschreibung - Persistenter Wix-Cache im Rechnungsworker (12.11.2026)
+
+Die Rechnungsdetailauswahl liest persistierte Wix-Snapshots nicht mehr direkt
+aus der SQLite-Order-Cache-DB. Auch Cachetreffer laufen jetzt durch den
+sequenzgesicherten Wix-Ladeworker; damit liegen Cache-Initialisierung,
+Cache-Lesezugriff und ein moeglicher Netzwerk-Miss ausserhalb des Qt-Threads.
+Die doppelten synchronen Cache-Helfer wurden entfernt. Ein blockierter Cache-
+Fake bestaetigt einen weiterlaufenden Qt-Heartbeat und einen Worker-Thread;
+Summary-only-Fallback und die gesamte Rechnungsansicht-Smoke-Suite mit **104
+Tests** sind gruen. Gezieltes striktes MyPy, Ruff und `git diff --check` sind
+ebenfalls gruen.
+Die Vollsuite nach dieser UI-Aenderung besteht mit **2.328 Tests, 5
+Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung
+(161,53 s)**.
