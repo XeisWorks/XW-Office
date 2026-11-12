@@ -3395,3 +3395,17 @@ Die Rechnungsdetailansicht liest diese Cachegrenze nun im Background-Worker
 Die Vollsuite nach dem TTL-Nachtrag besteht mit **2.329 Tests, 5
 Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung
 (151,42 s)**; globales Ruff und `git diff --check` sind gruen.
+
+## AP06-Nachtrag - PLC-Empfaenger im Dialogworker (12.11.2026)
+
+Der Klick auf PLC-Label/Zoll holt die Empfaengeradresse nicht mehr vor dem
+Oeffnen des Dialogs synchron aus dem persistenten Wix-Cache. Der Dialog laedt
+Adresse, Artikel und Empfaenger gemeinsam im bereits vorhandenen Kontextworker
+und fuellt das E-Mail-Feld nach dessen Ergebnis. Ein blockierter Cache-Fake
+belegt Worker-Thread und weiterlaufenden Heartbeat; solange der Read offen ist,
+bleibt das Feld leer statt die GUI aufzuhalten. Die PLC- und Rechnungsansicht-
+Smokesuiten bestehen zusammen mit **131 Tests**, striktes MyPy, Ruff und
+`git diff --check` sind gruen.
+Die Vollsuite nach beiden asynchronen Cachekorrekturen besteht mit **2.330
+Tests, 5 Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung
+(150,71 s)**.

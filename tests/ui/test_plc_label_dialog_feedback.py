@@ -25,7 +25,7 @@ from xw_office.services.plc.polling import ShipmentAddress
 from xw_office.services.plc.service import PlcShipmentService
 from xw_office.services.plc.webservice import PlcWebserviceResult
 from xw_office.repositories.settings_kv import SettingKvRepository
-from xw_office.services.wix.client import WixOrderItem
+from xw_office.services.wix.client import WixOrderItem, WixOrdersClient
 from xw_office.ui.modules.rechnungen import plc_label_dialog as plc_dialog_module
 from xw_office.ui.modules.rechnungen.plc_label_dialog import (
     PlcLabelPrintDialog,
@@ -73,6 +73,43 @@ def test_partial_fulfillment_store_resolution_runs_off_ui_thread(qtbot: object) 
         timeout=2000,
     )  # noqa: SLF001
     assert dialog._partial_fulfillments is not None  # noqa: SLF001
+
+
+def test_plc_cached_recipient_email_is_read_in_background_worker(qtbot: object) -> None:
+    container = _container()
+    ui_thread = get_ident()
+    entered, release = Event(), Event()
+
+    class CachedWixClient:
+        def has_credentials(self) -> bool:
+            return True
+
+        def get_cached_plc_order_context(self, _reference: str) -> dict[str, object]:
+            assert get_ident() != ui_thread
+            entered.set()
+            if not release.wait(timeout=3):
+                raise TimeoutError("PLC cache lookup was not released")
+            return {
+                "meta": {"wix_order_number": "20868"},
+                "shipping": {"email": "kunde@example.test", "order_number": "20868"},
+                "items": [],
+            }
+
+    container.register(WixOrdersClient, lambda _: CachedWixClient())  # type: ignore[arg-type]
+    summary = plc_dialog_module.InvoiceSummary(id="cache-email", order_reference="20868")
+    dialog = PlcLabelPrintDialog(container, summary)
+    qtbot.addWidget(dialog)
+    heartbeat: list[bool] = []
+    QTimer.singleShot(20, lambda: heartbeat.append(True))
+    qtbot.waitUntil(entered.is_set, timeout=1000)
+    qtbot.waitUntil(lambda: bool(heartbeat), timeout=1000)
+    assert dialog._recipient_email.text() == ""  # noqa: SLF001
+    release.set()
+    qtbot.waitUntil(
+        lambda: dialog._recipient_email.text() == "kunde@example.test",
+        timeout=2000,
+    )
+    assert get_ident() == ui_thread
 
 
 def _shipment() -> PlcShipmentDraft:

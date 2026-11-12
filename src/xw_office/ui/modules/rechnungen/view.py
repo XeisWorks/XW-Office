@@ -5620,28 +5620,6 @@ class RechnungenView(QWidget):
     def _on_print_plc_selected(self) -> None:
         self._run_selected_row_action("post")
 
-    def _cached_customer_email_for_summary(self, summary: InvoiceSummary) -> str:
-        """Resolve the customer's email from already-fetched Wix data (no fresh API call)."""
-        ref = str(summary.order_reference or "").strip()
-        if not ref:
-            return ""
-        cached_ctx = self._wix_context_cache.get(ref)
-        if isinstance(cached_ctx, dict):
-            meta = cached_ctx.get("meta")
-            if isinstance(meta, dict):
-                email = str(meta.get("wix_customer_email") or "").strip()
-                if email:
-                    return email
-        try:
-            wix_client: WixOrdersClient = self._container.resolve(WixOrdersClient)
-            meta = wix_client.get_cached_order_summary(ref)
-        except Exception as exc:  # noqa: BLE001 - cache lookup must never block the PLC popup.
-            logger.debug("Cached Wix customer-email lookup failed ref=%s: %s", ref, exc)
-            return ""
-        if isinstance(meta, dict):
-            return str(meta.get("wix_customer_email") or "").strip()
-        return ""
-
     def _open_plc_post_popup(self, summary: InvoiceSummary) -> None:
         popup_started_at = time.perf_counter()
         if not self._plc_archive_index_ready:
@@ -5755,13 +5733,11 @@ class RechnungenView(QWidget):
             address_lines = self._current_shipping_lines()
         else:
             address_lines = list(self._shipping_address_overrides.get(summary.id, []))
-        recipient_email = self._cached_customer_email_for_summary(summary)
         dlg = PlcLabelPrintDialog(
             self._container,
             summary,
             self,
             address_override_lines=address_lines,
-            recipient_email=recipient_email,
         )
         dlg.exec()
         self._plc_archive_generation += 1
@@ -5788,7 +5764,6 @@ class RechnungenView(QWidget):
             summary,
             self,
             address_override_lines=address_lines,
-            recipient_email=self._cached_customer_email_for_summary(summary),
             customs_only=True,
         )
         dlg.exec()
