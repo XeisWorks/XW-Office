@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -69,8 +71,10 @@ class TaxFollowupDispatchRepository:
                 current.last_error_code = "graph_timeout_unknown"
                 current.last_error_detail = detail[:1000] or None
 
-    def _scope(self):
+    @contextmanager
+    def _scope(self) -> Generator[Session, None, None]:
         if isinstance(self._session_or_factory, Session):
-            from contextlib import nullcontext
-            return nullcontext(self._session_or_factory)
-        return session_scope(self._session_or_factory)
+            yield self._session_or_factory
+            return
+        with session_scope(self._session_or_factory) as session:
+            yield session
