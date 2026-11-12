@@ -3996,3 +3996,25 @@ auf `b51fe95` besteht vollstaendig: **2.373 bestanden, 7 uebersprungen,
 Quelldateien**. Beide aktualisierten Actions liefen erfolgreich; die Node-20-
 Deprecation-Warnung trat nicht mehr auf. Der vorherige Lauf `43280079484` wurde
 nach Start dieses vollstaendigen Ersatzlaufs abgebrochen.
+
+## G2-Fortschreibung - frischer read-only Produktionspreflight (12.11.2026)
+
+`invoke_inventory_railway_preflight.ps1 -IncludeExactMappingSummary` wurde am
+12.11.2026 um 18:58 UTC gegen Railway Production ausgefuehrt. Product Hub,
+Inventory-Worker und beide PostgreSQL-Dienste meldeten `SUCCESS`; der Healthcheck
+lieferte HTTP 200. Datenbank-, Runtime- und sevDesk-Mapping-Pruefung waren
+read-only; es wurden keine Bestandswerte, Mapping-Zeilen oder Flags geschrieben.
+
+Die Cutover-Readiness bleibt `eligible=false`, `master_enabled=false`,
+`shadow_enabled=false` (DB-Pruefung Exit 2, Runtime Exit 0). Der Snapshot enthaelt
+432 Bestandspositionen, **0** Ledgerbewegungen, 432 Alarme, 0 Buchungsmarker,
+0 Inventur-Sessions, 726 Sync-Konflikte (710 offen), 432 Outbox-Ereignisse und
+263 archivierte Payloads. Der Quell-Audit zaehlt 594 aktive physische Artikel,
+0 gemappte Artikel, 594 blockierende Befunde, 1.188 Warnungen und 29 Varianten
+mit Legacy-/Hub-Bestandsabweichung. Diese Befunde verhindern weiterhin Shadow-
+und Master-Cutover sowie G2-Sign-off.
+
+Die credentialed, read-only Exact-Mapping-Vorschau ist technisch bereit und
+zaehlt 374 Live-Produkte, 492 Varianten, 528 sevDesk-Parts sowie **231 eindeutige
+exakte Kandidaten**. Es wurden keine Kandidaten angewendet; vor einer produktiven
+Mapping-/Bestandsaenderung bleiben physische Inventur und Freigabe erforderlich.
