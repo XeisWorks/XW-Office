@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+import builtins
 import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -143,7 +144,7 @@ class ProductDraftRepository:
             session.flush()
             return draft
 
-    def list_options(self, draft_id: uuid.UUID) -> list[ProductDraftOption]:
+    def list_options(self, draft_id: uuid.UUID) -> builtins.list[ProductDraftOption]:
         with self._scope() as session:
             return list(session.scalars(
                 select(ProductDraftOption).where(ProductDraftOption.draft_id == draft_id)
@@ -151,7 +152,7 @@ class ProductDraftRepository:
             ).all())
 
     def add_option(self, draft_id: uuid.UUID, *, expected_draft_row_version: int, name: str,
-                   values: list[object], sort_order: int = 0) -> ProductDraftOption:
+                   values: builtins.list[object], sort_order: int = 0) -> ProductDraftOption:
         clean_name = name.strip()
         if not clean_name:
             raise ValueError("Option name is required")
@@ -174,7 +175,7 @@ class ProductDraftRepository:
             session.flush()
             return option
 
-    def list_variants(self, draft_id: uuid.UUID) -> list[ProductDraftVariant]:
+    def list_variants(self, draft_id: uuid.UUID) -> builtins.list[ProductDraftVariant]:
         with self._scope() as session:
             return list(session.scalars(
                 select(ProductDraftVariant).where(ProductDraftVariant.draft_id == draft_id)

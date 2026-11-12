@@ -3342,3 +3342,15 @@ und Ruff sind gruen. Die globale strikte MyPy-Baseline sinkt von 72/29 auf
 Nachtrag besteht mit **2.328 Tests, 5 Ueberspringungen und 1 bestehenden
 Starlette/httpx-Deprecation-Warnung (151,51 s)**. Globales Ruff und
 `git diff --check` sind ebenfalls gruen.
+
+## AP08-Fortschreibung - Produktentwurf-Listenannotation (12.11.2026)
+
+`ProductDraftRepository.list()` ueberschattet im Klassen-Namensraum den
+eingebauten Typnamen `list`. Die nachfolgenden Annotationen fuer Draft-Optionen
+und -Varianten sowie deren Eingabeparameter verweisen jetzt explizit auf
+`builtins.list`; dadurch werden vier MyPy-Fehler ohne Laufzeit- oder
+API-Aenderung beseitigt. Die **3 Product-Draft-API-Tests**, strict MyPy fuer das
+Repository, Ruff und `git diff --check` sind gruen. Die globale MyPy-Baseline
+sinkt von 69 Fehlern in 28 Dateien auf **65 Fehler in 27 Dateien**. Der
+vorherige Vollsuite-Lauf mit 2.328/5/1 umfasst die Laufzeitkorrektur fuer
+Sample-Page-Rezepte; diese reine Annotation wurde gezielt getestet.
