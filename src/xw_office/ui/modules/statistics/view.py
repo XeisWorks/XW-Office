@@ -184,7 +184,7 @@ class StatisticsView(QWidget):
         if self._worker is not None and self._worker.isRunning():
             return False
         return all(
-            not callable(getattr(child, "shutdown_complete", None))
-            or bool(child.shutdown_complete())
+            not callable(checker := getattr(child, "shutdown_complete", None))
+            or bool(checker())
             for child in self.findChildren(QWidget)
         )

@@ -12,7 +12,7 @@ import re
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from rapidfuzz import fuzz
@@ -146,7 +146,7 @@ def _matching_variant(row: object, sku: str) -> object | None:
         return None
     for variant in getattr(row, "variants", []) or []:
         if _search_text(getattr(variant, "sku", "")) == wanted:
-            return variant
+            return cast(object, variant)
     return None
 
 

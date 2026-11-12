@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import cast
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -160,7 +161,9 @@ class XWCopilotDryRunService:
             }
         if action == "inventory.start_preflight":
             sku = str(payload.get("sku") or "")
-            quantity = int(payload.get("quantity") or 0)
+            quantity = int(
+                cast(int | float | str | bool, payload.get("quantity") or 0)
+            )
             return {
                 "service": "inventory",
                 "operation": "start_preflight",

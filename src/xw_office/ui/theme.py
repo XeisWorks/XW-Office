@@ -29,7 +29,7 @@ def _resolve_material_theme(theme_name: str) -> str:
 def apply_app_theme(app: QApplication, theme_name: str) -> None:
     """Apply qt-material theme and append local project overrides."""
     try:
-        from qt_material import apply_stylesheet
+        from qt_material import apply_stylesheet  # type: ignore[import-untyped]
 
         apply_stylesheet(app, theme=_resolve_material_theme(theme_name))
     except Exception as exc:  # pragma: no cover - UI fallback

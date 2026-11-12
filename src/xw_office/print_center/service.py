@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-import fitz
+import fitz  # type: ignore[import-untyped]
 
 from xw_office.core.config import PrintingSection
 from xw_office.core.shared_paths import resolve_shared_path

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from types import ModuleType
 from typing import cast
 from xml.etree import ElementTree as ET
 
@@ -10,7 +11,9 @@ from xw_office.services.finanzonline.u30_xml import parse_fastnr
 from xw_office.services.finanzonline.zm_service import ZmRow
 
 try:
-    from lxml import etree
+    from lxml import etree as _lxml_etree
+
+    etree: ModuleType | None = _lxml_etree
 except Exception:  # pragma: no cover - optional dependency guard
     etree = None
 

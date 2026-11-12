@@ -86,7 +86,7 @@ class MsalInteractiveGraphTokenProvider:
         factory = self._app_factory
         if factory is None:
             try:
-                import msal
+                import msal  # type: ignore[import-untyped]
             except ImportError as exc:
                 raise InvoiceCollectionError(
                     InvoiceErrorCode.CONFIGURATION_ERROR,
@@ -103,7 +103,10 @@ def _token_from_result(result: Any) -> str:
 
 def _dpapi_cache(path: Path) -> Any:
     try:
-        from msal_extensions import FilePersistenceWithDataProtection, PersistedTokenCache
+        from msal_extensions import (  # type: ignore[import-untyped]
+            FilePersistenceWithDataProtection,
+            PersistedTokenCache,
+        )
     except ImportError as exc:
         raise InvoiceCollectionError(
             InvoiceErrorCode.CONFIGURATION_ERROR,

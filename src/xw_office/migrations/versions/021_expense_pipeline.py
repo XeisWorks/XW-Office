@@ -8,6 +8,7 @@ from __future__ import annotations
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+from typing import Any
 
 revision = "021_expense_pipeline"
 down_revision = "020_print_center"
@@ -15,7 +16,7 @@ branch_labels = None
 depends_on = None
 
 
-def _uuid(name: str) -> sa.Column:
+def _uuid(name: str) -> sa.Column[Any]:
     return sa.Column(name, postgresql.UUID(as_uuid=True), primary_key=True, nullable=False)
 
 

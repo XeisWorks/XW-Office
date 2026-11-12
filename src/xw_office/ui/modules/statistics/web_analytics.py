@@ -110,12 +110,12 @@ class WebAnalyticsView(QWidget):
         if not isinstance(analytics, dict):
             self._on_error(RuntimeError("Analytics-Antwort enthält keine Kennzahlen"))
             return
-        for key, label in self._cards.items():
+        for key in self._cards:
             self._cards[key].setText(self._format_value(key, analytics.get(key)))
         period = payload.get("period")
-        label = period.get("label") if isinstance(period, dict) else ""
+        period_label = period.get("label") if isinstance(period, dict) else ""
         generated = str(payload.get("generatedAt") or "")
-        self._status.setText(f"Quelle: wix-sevdesk-api · {label} · {generated.replace('T', ' ')[:19]}")
+        self._status.setText(f"Quelle: wix-sevdesk-api · {period_label} · {generated.replace('T', ' ')[:19]}")
         self._populate_table(analytics)
 
     def _populate_table(self, analytics: dict[str, Any]) -> None:
@@ -127,7 +127,9 @@ class WebAnalyticsView(QWidget):
             for item in values[:12]:
                 if not isinstance(item, dict):
                     continue
-                rows.append((f"{title}: {item.get('label', '—')}", str(item.get("count", 0)), f"{float(item.get('share', 0) or 0):.1f} %"))
+                share = self._number(item.get("share", 0))
+                share_text = f"{share:.1f} %" if share is not None else "—"
+                rows.append((f"{title}: {item.get('label', '—')}", str(item.get("count", 0)), share_text))
         self._table.setRowCount(len(rows))
         for row_index, row in enumerate(rows):
             for column, value in enumerate(row):
@@ -140,11 +142,23 @@ class WebAnalyticsView(QWidget):
     def _format_value(key: str, value: object) -> str:
         if value is None:
             return "—"
+        number = WebAnalyticsView._number(value)
+        if number is None:
+            return str(value)
         if key in {"revenue", "averageOrderValue"}:
-            return f"EUR {float(value):,.2f}"
+            return f"EUR {number:,.2f}"
         if key in {"medianPaymentHours", "averagePublishHours"}:
-            return f"{float(value):.1f} h"
+            return f"{number:.1f} h"
         return str(value)
+
+    @staticmethod
+    def _number(value: object) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            return None
 
     def _on_error(self, exc: BaseException) -> None:
         self._status.setText(f"Nicht verfügbar: {exc}")

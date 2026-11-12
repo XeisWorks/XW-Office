@@ -39,7 +39,7 @@ class PdfPreviewDialog(QDialog):
         self._img_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         try:
-            import fitz
+            import fitz  # type: ignore[import-untyped]
             doc = fitz.open(str(pdf_path))
             for page in doc:
                 mat = fitz.Matrix(PDF_PREVIEW_DPI / 72, PDF_PREVIEW_DPI / 72)

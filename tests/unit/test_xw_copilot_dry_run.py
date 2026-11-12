@@ -33,6 +33,24 @@ def test_dry_run_accepts_supported_action() -> None:
     assert response.errors == []
 
 
+def test_dry_run_normalizes_start_preflight_quantity() -> None:
+    svc = XWCopilotDryRunService(_ConfigServiceStub())  # type: ignore[arg-type]
+    response = svc.simulate_raw_request(
+        """
+        {
+          "tenant": "xeisworks",
+          "mailbox": "info@xeisworks.at",
+          "action": "inventory.start_preflight",
+          "payload_version": "1.0",
+          "payload": {"sku": "SKU-1", "quantity": "4"}
+        }
+        """
+    )
+
+    assert response.accepted is True
+    assert response.preview["quantity"] == 4
+
+
 def test_dry_run_rejects_invalid_json() -> None:
     svc = XWCopilotDryRunService(_ConfigServiceStub())  # type: ignore[arg-type]
     response = svc.simulate_raw_request("{invalid")
