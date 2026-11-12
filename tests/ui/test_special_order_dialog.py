@@ -2,12 +2,42 @@ from __future__ import annotations
 
 from threading import Event
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMessageBox
 
 from xw_office.core.config import AppConfig
 from xw_office.core.container import Container
 from xw_office.services.special_orders import SpecialOrderService
 from xw_office.ui.modules.rechnungen.special_order_dialog import SpecialOrderDialog
+
+
+def test_special_order_service_resolution_runs_off_ui_thread(qtbot) -> None:
+    entered = Event()
+    release = Event()
+
+    class Service:
+        def list_wix_products(self) -> list[object]:
+            return []
+
+    def create_service(_container: Container) -> Service:
+        entered.set()
+        release.wait(2)
+        return Service()
+
+    container = Container(AppConfig())
+    container.register(SpecialOrderService, create_service)  # type: ignore[arg-type]
+    dialog = SpecialOrderDialog(container)
+    qtbot.addWidget(dialog)
+    heartbeats: list[bool] = []
+    QTimer.singleShot(20, lambda: heartbeats.append(True))
+    qtbot.waitUntil(entered.is_set, timeout=1000)
+    qtbot.waitUntil(lambda: bool(heartbeats), timeout=1000)
+    assert dialog._status.text() == "Lade Wix-Produkte..."  # noqa: SLF001
+    release.set()
+    qtbot.waitUntil(
+        lambda: dialog._worker is None and dialog._status.text() == "Wix-Produkte: 0",
+        timeout=1000,
+    )
 
 
 def test_payment_link_write_keeps_dialog_open_until_result(qtbot, monkeypatch) -> None:

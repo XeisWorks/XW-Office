@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QCloseEvent
@@ -39,7 +40,7 @@ class SpecialOrderDialog(QDialog):
     def __init__(self, container: Container, parent: object | None = None) -> None:
         super().__init__(parent)  # type: ignore[arg-type]
         self._container = container
-        self._service: SpecialOrderService = container.resolve(SpecialOrderService)
+        self._service: SpecialOrderService | None = None
         self._products: list[object] = []
         self._selected_products: list[object] = []
         self._worker: BackgroundWorker | None = None
@@ -133,7 +134,13 @@ class SpecialOrderDialog(QDialog):
         if self._worker is not None and self._worker.isRunning():
             return
         self._status.setText("Lade Wix-Produkte...")
-        worker = BackgroundWorker(self._service.list_wix_products)
+        container = self._container
+
+        def job() -> tuple[SpecialOrderService, list[Any]]:
+            service: SpecialOrderService = container.resolve(SpecialOrderService)
+            return service, service.list_wix_products()
+
+        worker = BackgroundWorker(job)
         self._worker = worker
         worker.signals.result.connect(self._on_products_loaded)
         worker.signals.error.connect(self._on_products_error)
@@ -143,7 +150,13 @@ class SpecialOrderDialog(QDialog):
     def _on_products_loaded(self, payload: object) -> None:
         if self._closing:
             return
-        self._products = list(payload) if isinstance(payload, list) else []
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            return
+        service, products = payload
+        if not isinstance(products, list):
+            return
+        self._service = service
+        self._products = products
         self._filter_products()
         self._status.setText(f"Wix-Produkte: {len(self._products)}")
 
@@ -261,7 +274,10 @@ class SpecialOrderDialog(QDialog):
         )
 
         def job() -> str:
-            link = self._service.create_payment_link(
+            service = self._service
+            if service is None:
+                raise RuntimeError("Sonderauftragsservice ist noch nicht geladen")
+            link = service.create_payment_link(
                 mode=mode,  # type: ignore[arg-type]
                 title=title,
                 description=description,
