@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -142,6 +143,33 @@ def _resolve_piece_print_config(
 ) -> None:
     catalog: ProductCatalogService = container.resolve(ProductCatalogService)
     resolve_piece_print_config(catalog, piece)
+
+
+@contextmanager
+def warmed_product_catalog_for_print(
+    parent: QWidget | None,
+    container: Container,
+    pieces: list[PieceBlock],
+) -> Iterator[None]:
+    """Warm all Hub product snapshots once for a multi-piece print action."""
+    try:
+        catalog = container.resolve(ProductCatalogService)
+    except Exception as exc:  # noqa: BLE001 - legacy catalog fallback remains usable.
+        logger.debug("Product print batch catalog unavailable: %s", exc)
+        yield
+        return
+
+    _result, failure = _run_worker_with_ui_pump(
+        parent,
+        catalog.warm_hub_products,
+        [piece.sku for piece in pieces],
+    )
+    if failure is not None:
+        logger.debug("Product print batch catalog warmup failed: %s", failure)
+    try:
+        yield
+    finally:
+        catalog.clear_warmed_hub_products()
 
 
 def _run_worker_with_ui_pump(

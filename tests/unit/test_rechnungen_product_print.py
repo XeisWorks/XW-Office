@@ -19,7 +19,11 @@ from xw_office.services.products.print_decision import PieceBlock
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.printer_status.service import PrinterStatusService, PrinterStatusSnapshot
 from xw_office.ui.modules.rechnungen import print_dialog
-from xw_office.ui.modules.rechnungen.print_dialog import ProductPrintConfigDialog, prepare_piece_pdf_print
+from xw_office.ui.modules.rechnungen.print_dialog import (
+    ProductPrintConfigDialog,
+    prepare_piece_pdf_print,
+    warmed_product_catalog_for_print,
+)
 from xw_office.ui.modules.rechnungen.view import _PieceDelegate
 
 
@@ -52,6 +56,33 @@ def test_product_print_runtime_check_uses_nonblocking_printer_snapshot(monkeypat
     assert not print_dialog._check_printer_runtime(None, container)  # type: ignore[arg-type]
     assert len(warnings) == 1
     assert "Kein konfigurierter Drucker" in str(warnings[0][2])
+
+
+def test_multi_piece_print_warms_hub_catalog_once_off_ui_thread(qtbot: object) -> None:
+    container = Container(AppConfig())
+    calls: list[tuple[list[str], int]] = []
+    clears: list[int] = []
+
+    class CatalogStub:
+        def warm_hub_products(self, skus: list[str]) -> None:
+            calls.append((skus, get_ident()))
+
+        def clear_warmed_hub_products(self) -> None:
+            clears.append(get_ident())
+
+    container.register(ProductCatalogService, lambda _: CatalogStub())  # type: ignore[arg-type,return-value]
+    pieces = [
+        PieceBlock(sku="XW-1", name="One", qty_needed=1),
+        PieceBlock(sku="XW-2", name="Two", qty_needed=1),
+    ]
+
+    with warmed_product_catalog_for_print(None, container, pieces):
+        assert not clears
+
+    assert len(calls) == 1
+    assert calls[0][0] == ["XW-1", "XW-2"]
+    assert calls[0][1] != main_thread().ident
+    assert len(clears) == 1
 
 
 def test_product_print_config_title_override_read_runs_off_ui_thread(qtbot: object) -> None:

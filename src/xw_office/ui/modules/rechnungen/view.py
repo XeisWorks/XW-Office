@@ -4552,36 +4552,38 @@ class RechnungenView(QWidget):
             ProductPdfPreparationError,
             _configure_missing_piece_print,
             prepare_piece_pdf_print,
+            warmed_product_catalog_for_print,
         )
 
         prepared_jobs: list[tuple[PieceBlock, int, Callable[[], None]]] = []
-        for item in products:
-            block = self._piece_block_from_open_product(item)
-            # This quantity is explicitly visible and editable in the panel.
-            # Inventory hints must not recalculate or veto it at print time.
-            qty = max(0, int(item.quantity or 0))
-            if qty <= 0:
-                continue
-            if not self._open_print_product_ready(item) and not _configure_missing_piece_print(
-                self,
-                self._container,
-                block,
-            ):
-                signals = self._container.resolve(AppSignals)
-                signals.status_message.emit(
-                    f"PRINT SELECTED PRODUCTS abgebrochen: {block.sku} wurde nicht konfiguriert.",
-                    8000,
-                )
-                return
-            job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty, wait=True)
-            if job is None:
-                signals = self._container.resolve(AppSignals)
-                signals.status_message.emit(
-                    f"PRINT SELECTED PRODUCTS abgebrochen: {block.sku} ist nicht druckbereit.",
-                    8000,
-                )
-                return
-            prepared_jobs.append((block, qty, job))
+        pieces = [self._piece_block_from_open_product(item) for item in products]
+        with warmed_product_catalog_for_print(self, self._container, pieces):
+            for item, block in zip(products, pieces, strict=True):
+                # This quantity is explicitly visible and editable in the panel.
+                # Inventory hints must not recalculate or veto it at print time.
+                qty = max(0, int(item.quantity or 0))
+                if qty <= 0:
+                    continue
+                if not self._open_print_product_ready(item) and not _configure_missing_piece_print(
+                    self,
+                    self._container,
+                    block,
+                ):
+                    signals = self._container.resolve(AppSignals)
+                    signals.status_message.emit(
+                        f"PRINT SELECTED PRODUCTS abgebrochen: {block.sku} wurde nicht konfiguriert.",
+                        8000,
+                    )
+                    return
+                job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty, wait=True)
+                if job is None:
+                    signals = self._container.resolve(AppSignals)
+                    signals.status_message.emit(
+                        f"PRINT SELECTED PRODUCTS abgebrochen: {block.sku} ist nicht druckbereit.",
+                        8000,
+                    )
+                    return
+                prepared_jobs.append((block, qty, job))
 
         if not prepared_jobs:
             return
@@ -5751,22 +5753,27 @@ class RechnungenView(QWidget):
         from xw_office.ui.modules.rechnungen.print_dialog import (
             ProductPdfPreparationError,
             prepare_piece_pdf_print,
+            warmed_product_catalog_for_print,
         )
 
         selected_jobs: list[tuple[PieceBlock, int, Callable[[], None]]] = []
         skipped: list[str] = []
-        for block, qty, selected_for_print in self._piece_model.rows():
-            if not selected_for_print:
-                continue
-            qty = max(1, int(qty or self._default_piece_print_qty(block)))
-            if not block.has_direct_print_config:
-                skipped.append(block.sku)
-                continue
-            job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty)
-            if job is None:
-                skipped.append(block.sku)
-                continue
-            selected_jobs.append((block, qty, job))
+        selected_rows = [row for row in self._piece_model.rows() if row[2]]
+        with warmed_product_catalog_for_print(
+            self,
+            self._container,
+            [block for block, _qty, _selected in selected_rows],
+        ):
+            for block, qty, _selected_for_print in selected_rows:
+                qty = max(1, int(qty or self._default_piece_print_qty(block)))
+                if not block.has_direct_print_config:
+                    skipped.append(block.sku)
+                    continue
+                job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty)
+                if job is None:
+                    skipped.append(block.sku)
+                    continue
+                selected_jobs.append((block, qty, job))
 
         if not selected_jobs:
             message = "Keine druckfaehigen Produkte fuer diese Rechnung gefunden."
