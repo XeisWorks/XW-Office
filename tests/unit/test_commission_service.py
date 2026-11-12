@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 from xw_office.services.commission.service import (
     CategoryBreakdownRow,
@@ -14,6 +15,7 @@ from xw_office.services.commission.service import (
     ProductBreakdownRow,
     SevdeskCommissionProvider,
     calculate_commission_amount,
+    format_euro_amount,
     format_commission_summary,
 )
 from xw_office.services.products.catalog import ProductCatalogService
@@ -583,3 +585,43 @@ def test_provider_bulk_positions_loads_one_snapshot_and_filters_locally() -> Non
     assert [row["id"] for row in first] == ["p1", "p3"]
     assert [row["id"] for row in second] == ["p2"]
     assert connection.calls == 1
+
+
+def test_provider_treats_missing_position_objects_as_empty() -> None:
+    class _Response:
+        def json(self) -> dict[str, object]:
+            return {"objects": None}
+
+    class _Connection:
+        def get(self, _path: str, **_kwargs: object) -> _Response:
+            return _Response()
+
+    provider = SevdeskCommissionProvider(_Connection(), object())  # type: ignore[arg-type]
+
+    assert provider.list_invoice_positions("invoice-1") == []
+    assert provider.list_credit_note_positions("credit-1") == []
+
+
+def test_provider_stops_incomplete_resource_snapshot_at_page_limit() -> None:
+    class _Response:
+        def json(self) -> dict[str, object]:
+            return {"objects": [{"id": "position-1"}]}
+
+    class _Connection:
+        def get(self, _path: str, **_kwargs: object) -> _Response:
+            return _Response()
+
+    provider = SevdeskCommissionProvider(
+        _Connection(), object(), page_size=1, max_pages=1  # type: ignore[arg-type]
+    )
+
+    try:
+        provider.list_invoices_for_year(2026)
+    except RuntimeError as exc:
+        assert "unvollstaendig" in str(exc)
+    else:
+        raise AssertionError("Incomplete paginated data must not be accepted")
+
+
+def test_format_euro_amount_accepts_decimal_without_float_rounding() -> None:
+    assert format_euro_amount(Decimal("1234.50")) == "€ 1.234,50"

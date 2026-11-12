@@ -273,7 +273,8 @@ class SevdeskCommissionProvider:
                     "embed": "part",
                 },
             ).json()
-            objects = payload.get("objects") if isinstance(payload, dict) else []
+            raw_objects = payload.get("objects") if isinstance(payload, dict) else None
+            objects = raw_objects if isinstance(raw_objects, list) else []
             self._invoice_pos_cache[doc_id] = [
                 dict(item)
                 for item in objects
@@ -311,7 +312,8 @@ class SevdeskCommissionProvider:
                     "embed": "part",
                 },
             ).json()
-            objects = payload.get("objects") if isinstance(payload, dict) else []
+            raw_objects = payload.get("objects") if isinstance(payload, dict) else None
+            objects = raw_objects if isinstance(raw_objects, list) else []
             self._credit_pos_cache[doc_id] = [
                 dict(item)
                 for item in objects
@@ -364,14 +366,17 @@ class SevdeskCommissionProvider:
         result: list[dict[str, Any]] = []
         offset = 0
         page_count = 0
+        objects: list[Any] = []
         while page_count < self._max_pages:
             query: dict[str, Any] = {"limit": self._page_size, "offset": offset}
             if params:
                 query.update(params)
             payload = self._connection.get(path, params=query).json()
-            objects = payload.get("objects") if isinstance(payload, dict) else None
-            if not isinstance(objects, list) or not objects:
+            raw_objects = payload.get("objects") if isinstance(payload, dict) else None
+            if not isinstance(raw_objects, list) or not raw_objects:
+                objects = []
                 break
+            objects = raw_objects
             result.extend(item for item in objects if isinstance(item, dict))
             page_count += 1
             if len(objects) < self._page_size:
@@ -882,10 +887,10 @@ class CommissionService:
         for raw in raw_profiles:
             if not isinstance(raw, dict):
                 continue
-            profile = _profile_from_dict(raw)
-            if profile is None:
+            parsed_profile = _profile_from_dict(raw)
+            if parsed_profile is None:
                 continue
-            profiles[profile.key] = profile
+            profiles[parsed_profile.key] = parsed_profile
         return profiles
 
     def _build_contribution(
@@ -915,7 +920,8 @@ class CommissionService:
         adjusted_net = raw_net * net_factor
         adjusted_gross = raw_gross * net_factor
 
-        part_obj = position.get("part") if isinstance(position.get("part"), dict) else {}
+        raw_part_obj = position.get("part")
+        part_obj = raw_part_obj if isinstance(raw_part_obj, dict) else {}
         part_id = str(
             part_obj.get("id")
             or _reference_id(position.get("part"))
@@ -1100,7 +1106,7 @@ def _to_float(value: object) -> float:
         return 0.0
 
 
-def _format_de_number(value: float, *, trim: bool = False) -> str:
+def _format_de_number(value: float | Decimal, *, trim: bool = False) -> str:
     formatted = f"{value:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
     if trim:
         formatted = formatted.rstrip("0").rstrip(",")
