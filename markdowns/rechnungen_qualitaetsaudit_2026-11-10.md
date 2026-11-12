@@ -2886,8 +2886,13 @@ PostgreSQL-Tests uebersprungen, 1 bestehende Starlette/httpx-Deprecation-
 Warnung (152,49 s)**; globales Ruff `ruff check .` mit **All checks passed**.
 Der Vollsuite-Lauf erfolgte nach dem Qt-Tabellenfix und vor dem anschliessenden
 reinen Unreleased-Dialog-Typfix; dessen direkt betroffene Rechnungs-Smoke- und
-Dialogtests bestanden danach separat. Der globale MyPy-Lauf fand zuletzt **183
-Fehler in 49 Dateien**; die in diesem Arbeitsabschnitt bereinigten Wix-,
+Dialogtests bestanden danach separat. GitHub-CI `43189075628` fuer Commit
+`05db7b3` ist erfolgreich: **2.302 bestanden, 5 uebersprungen, 1 Warnung
+(795,98 s)**. Der weiche Hosted-MyPy-Schritt meldete **192 Fehler in 53
+Dateien**; das Job-Ergebnis blieb wegen `continue-on-error` erfolgreich. Lokal
+fand der globale MyPy-Lauf zuletzt **183 Fehler in 49 Dateien**; die Ursache
+der unterschiedlichen globalen Baselines ist nicht isoliert. Die in diesem
+Arbeitsabschnitt bereinigten Wix-,
 Transfer-/Graph-, PDF-Layout-, Tabellenmodell- und Unreleased-Dialog-Dateien
 haben jeweils null Fehler. Die globale Typbereinigung und Controller-Extraktion
 bleiben F20-offen.
@@ -2943,3 +2948,9 @@ Product Hub und Inventory Worker (Deployments
 `681a4da4-58f6-4779-a506-313d23836b97`). Dieser Commit enthaelt den
 Qt-Tabellenmodell-Fix; der danach vorgenommene reine Rueckgabetyp-Fix im
 Unreleased-Produktdialog ist darin noch nicht enthalten.
+
+Der neueste Readback bestaetigt auch fuer Commit `05db7b3` **SUCCESS** bei
+Product Hub (`bc5a0c99-e9e5-401c-ad5f-c7ee94d6ca56`) und Inventory Worker
+(`a1c28423-8992-4576-951e-25ab1e8c52e7`). GitHub-CI fuer diesen Commit ist
+vollstaendig erfolgreich; der MyPy-Unterbefehl bleibt ein dokumentierter
+weicher Warn-Gate.
