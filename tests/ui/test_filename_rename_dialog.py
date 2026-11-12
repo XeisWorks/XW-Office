@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt
 from xw_office.bootstrap import register_default_services
 from xw_office.core.config import AppConfig
 from xw_office.core.container import Container
+from xw_office.services.filename_generator.mh_tracks_import_core import MhTracksImportPlan
 from xw_office.services.filename_generator.service import FilenameGeneratorService
 from xw_office.ui.modules.layout.filename_rename_dialog import FilenameRenamePanel
 from xw_office.ui.modules.layout.view import LayoutView
@@ -59,3 +60,22 @@ def test_panel_suggests_precise_wix_batch_path(qtbot, tmp_path) -> None:
     panel._scan()  # noqa: SLF001
 
     assert panel._wix_path_edit.text().startswith("/MH-Tracks/sk-t/btb/uploads/")  # noqa: SLF001
+
+
+def test_cms_preview_labels_unknown_action_type(qtbot) -> None:
+    panel = FilenameRenamePanel(FilenameGeneratorService())
+    qtbot.addWidget(panel)
+    plan = MhTracksImportPlan(
+        token="preview-token",
+        files=[],
+        actions=[{"type": None, "trackKey": "track-1", "group": "brass", "role": "teacher", "fileName": "a.mp3"}],
+        writes=[],
+        errors=[],
+        warnings=[],
+        ignored_files=[],
+        can_apply=True,
+    )
+
+    panel._on_cms_preview_result("/target", plan)  # noqa: SLF001
+
+    assert "Aktion: track-1 / brass-teacher" in panel._cms_status.text()  # noqa: SLF001

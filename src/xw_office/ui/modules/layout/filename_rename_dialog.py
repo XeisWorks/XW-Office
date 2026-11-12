@@ -647,12 +647,15 @@ class FilenameRenamePanel(QWidget):
             f"Ignorierte Dateien: {summary.get('ignoredFiles', 0)}",
             f"Fehler: {summary.get('errors', 0)}",
         ]
-        action_lines = [
-            f"{_CMS_ACTION_LABELS.get(action.get('type'), action.get('type'))}: "
-            f"{action.get('trackKey')} / {action.get('group')}-{action.get('role')} "
-            f"← {action.get('fileName')}"
-            for action in plan.actions
-        ]
+        action_lines: list[str] = []
+        for action in plan.actions:
+            raw_action_type = action.get("type")
+            action_type = str(raw_action_type) if raw_action_type is not None else ""
+            action_label = _CMS_ACTION_LABELS.get(action_type, action_type or "Aktion")
+            action_lines.append(
+                f"{action_label}: {action.get('trackKey')} / "
+                f"{action.get('group')}-{action.get('role')} ← {action.get('fileName')}"
+            )
         if action_lines:
             lines.append("<b>Geplante Zuordnungen (bitte prüfen):</b>")
             lines.append(self._format_html_list(action_lines))
