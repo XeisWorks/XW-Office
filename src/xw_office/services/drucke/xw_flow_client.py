@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 import httpx
 
 from xw_office.core.config import AppConfig
@@ -15,7 +16,7 @@ class FlowPrintCase:
     body_text: str
     source_url: str
     created_at: str
-    attachments: list[dict]
+    attachments: list[dict[str, object]]
 
 
 @dataclass(frozen=True)
@@ -49,8 +50,34 @@ class XwFlowPrintClient:
             response = client.get("/api/v1/office-bridge/print-cases")
             response.raise_for_status()
             payload = response.json()
-        values = payload.get("cases") if isinstance(payload, dict) else []
-        return [FlowPrintCase(id=str(item.get("id") or ""), title=str(item.get("title") or "Neuer Druckauftrag"), body_text=str(item.get("body_text") or ""), source_url=str(item.get("source_url") or ""), created_at=str(item.get("created_at") or ""), attachments=list(item.get("attachments") or [])) for item in values if isinstance(item, dict) and str(item.get("id") or "").strip()]
+        values = payload.get("cases") if isinstance(payload, dict) else None
+        if not isinstance(values, list):
+            raise TypeError("XW-Flow Druckantwort hat ein unbekanntes Format.")
+
+        cases: list[FlowPrintCase] = []
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            case_id = str(item.get("id") or "").strip()
+            if not case_id:
+                continue
+            raw_attachments = item.get("attachments")
+            attachments: list[dict[str, object]] = []
+            if isinstance(raw_attachments, list):
+                for attachment in raw_attachments:
+                    if isinstance(attachment, dict):
+                        attachments.append({str(key): value for key, value in attachment.items()})
+            cases.append(
+                FlowPrintCase(
+                    id=case_id,
+                    title=str(item.get("title") or "Neuer Druckauftrag"),
+                    body_text=str(item.get("body_text") or ""),
+                    source_url=str(item.get("source_url") or ""),
+                    created_at=str(item.get("created_at") or ""),
+                    attachments=attachments,
+                )
+            )
+        return cases
 
     def download_attachment_bytes(self, case_id: str, attachment_id: str) -> bytes:
         connection = self._connection()
@@ -96,5 +123,7 @@ class XwFlowPrintClient:
             response = client.get("/api/v1/office-bridge/print-cases/email-completions")
             response.raise_for_status()
             payload = response.json()
-        values = payload.get("client_request_ids") if isinstance(payload, dict) else []
+        values = payload.get("client_request_ids") if isinstance(payload, dict) else None
+        if not isinstance(values, list):
+            raise TypeError("XW-Flow Abschlussantwort hat ein unbekanntes Format.")
         return {str(value).strip() for value in values if str(value).strip()}

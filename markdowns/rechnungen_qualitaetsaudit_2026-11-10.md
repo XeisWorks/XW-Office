@@ -3093,3 +3093,19 @@ die MyPy-Baseline bei 143 Fehlern in 40 Dateien. Die zugehoerigen vollen
 Rechnungs-Smoke- und HTTP-Client-Tests bestehen lokal. Die Audit-Restpunkte
 einschliesslich des F23-Live-Exact-Match-Nachweises und manueller G1/G2-
 Abnahmen bleiben offen.
+
+## F17/F20-Fortschreibung - OPEN-PRINTS-Bridge-Payloads (12.11.2026)
+
+Der XW-Flow-Client fuer offene Druckauftraege akzeptierte vorher fehlende oder
+`null`-Listen erst implizit und hatte ungepruefte Attachment-Werte sowie einen
+untypisierten `attachments`-Vertrag. Unbekannte Listenformen werden jetzt mit
+konkreten Formatfehlern abgewiesen, ungueltige Zeilen/Anhaenge werden beim
+Normalisieren verworfen und `FlowPrintCase.attachments` ist als Liste
+string-keyed Objekt-Mappings typisiert. Vier Fake-HTTP-Regressionsfaelle decken
+gueltige und fehlerhafte Case-/Completion-Antworten ab. Zusammen mit den zwei
+OPEN-PRINTS-Service-Regressionen bestehen **6 gezielte Tests**; die Vollsuite
+besteht mit **2.310 Tests, 5 optionalen PostgreSQL-Ueberspringungen und 1
+bestehenden Warnung (168,44 s)**. Strict MyPy und Ruff fuer den Client/Test sind
+gruen. Die globale lokale MyPy-Baseline sinkt von 143 Fehlern in 40 Dateien auf
+**141 Fehler in 40 Dateien**. F17 und die uebrigen F20-Aufraeumarbeiten bleiben
+offen.
