@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from urllib.parse import quote
 
 import msal  # type: ignore[import-untyped]
-import requests  # type: ignore[import-untyped]
+import requests
 
 
 class OneDriveConfigurationError(RuntimeError):
@@ -103,10 +103,14 @@ class OneDriveAssetClient:
         """List immediate children of the configured root only."""
         parent_id = item_id or self.root_item_id
         self.assert_within_root(self.root_drive_id, parent_id)
+        params: dict[str, str | int] = {
+            "$select": "id,name,eTag,size,folder,parentReference",
+            "$top": min(max(limit, 1), 100),
+        }
         response = requests.get(
             f"https://graph.microsoft.com/v1.0/drives/{self.root_drive_id}/items/{parent_id}/children",
             headers=self._headers(),
-            params={"$select": "id,name,eTag,size,folder,parentReference", "$top": min(max(limit, 1), 100)},
+            params=params,
             timeout=30,
         )
         response.raise_for_status()

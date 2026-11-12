@@ -321,7 +321,7 @@ def _article_row(article: object) -> dict[str, object]:
 def _create_zeep_service(settings: PlcWebserviceSettings) -> _PlcSoapService:
     """Create the WSDL client lazily so app start never performs network I/O."""
     try:
-        import requests  # type: ignore[import-untyped]
+        import requests
         from zeep import Client, Settings
         from zeep.transports import Transport
     except ImportError as exc:  # pragma: no cover - covered by project dependency declaration.

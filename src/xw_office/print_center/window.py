@@ -162,13 +162,16 @@ class PrintCenterWindow(QMainWindow):
         worker.signals.result.connect(on_result)
         worker.signals.error.connect(self._error)
         worker.signals.finished.connect(self._finished)
-        if block_ui:
-            self.centralWidget().setEnabled(False)
+        central_widget = self.centralWidget()
+        if block_ui and central_widget is not None:
+            central_widget.setEnabled(False)
         worker.start()
 
     def _finished(self) -> None:
         self._worker = None
-        self.centralWidget().setEnabled(True)
+        central_widget = self.centralWidget()
+        if central_widget is not None:
+            central_widget.setEnabled(True)
         self._selection_changed()
 
     def _error(self, error: Exception) -> None:

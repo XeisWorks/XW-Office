@@ -13,7 +13,7 @@ import threading
 from typing import Any
 
 import msal  # type: ignore[import-untyped]  # MSAL does not publish typing metadata.
-import requests  # type: ignore[import-untyped]  # requests typing is supplied by downstream users.
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -354,7 +354,7 @@ class GraphMailClient:
             raise RuntimeError("Message-ID fehlt")
         now_utc = datetime.now(timezone.utc).replace(microsecond=0)
         url = f"https://graph.microsoft.com/v1.0/{self._mailbox_segment}/messages/{message_id}"
-        payload = {
+        payload: dict[str, Any] = {
             "flag": {
                 "flagStatus": "complete",
                 "completedDateTime": {
@@ -400,7 +400,7 @@ class GraphMailClient:
         attachment_items = self._build_attachment_payloads(attachments or [])
         if attachment_items:
             message["attachments"] = attachment_items
-        payload = {"message": message, "saveToSentItems": True}
+        payload: dict[str, Any] = {"message": message, "saveToSentItems": True}
         url = f"https://graph.microsoft.com/v1.0/{self._mailbox_segment}/sendMail"
         response = requests.post(url, headers=self._auth_headers(), json=payload, timeout=60)
         self._raise_for_status(response)

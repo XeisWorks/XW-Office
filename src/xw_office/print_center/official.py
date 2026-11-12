@@ -152,8 +152,8 @@ class OfficialCatalogue:
         # The same canonical unreleased catalogue shown by PRODUKTE / UNRELEASED.
         # Each work deliberately persists a title-specific XW-010 configuration.
         if self._include_unreleased:
-            for product in catalog.list_unreleased_products():
-                title = product.canonical_name
+            for unreleased_product in catalog.list_unreleased_products():
+                title = unreleased_product.canonical_name
                 config = catalog.resolve_print_config("XW-010", title=title)
                 articles[f"unreleased:XW-010:{title}"] = PrintArticle(
                     id=f"unreleased:XW-010:{title}",
