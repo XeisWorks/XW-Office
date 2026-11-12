@@ -3966,7 +3966,7 @@ eine Deprecation-Warnung, weil `actions/checkout@v4` und `actions/setup-python@v
 noch Node.js 20 als Ziel ausweisen und auf Node.js 24 erzwungen werden.
 
 Die aktuelle Railway-XW-Office-Production-Abfrage zeigt beide App-Services
-`XW-Product-Hub` und `xw-inventory-worker` auf `ce12371`, Deployment-Status
+`XW-Product-Hub` und `xw-inventory-worker` auf `b51fe95`, Deployment-Status
 `SUCCESS`, keine staged changes; beide Postgres-Dienste sind ebenfalls `SUCCESS`.
 `https://products.xeisworks.at/health` antwortet mit HTTP 200. Es wurden keine
 Produktivdaten oder Bestands-Flags beschrieben. Der Desktop-Log
@@ -3990,5 +3990,9 @@ Node 20 seit 23.09.2026 auf Actions-Runnern nicht mehr verfuegbar ist. Der
 Workflow verwendet jetzt `actions/checkout@v7` und `actions/setup-python@v7`,
 deren aktuellen offiziellen Releases Node 24 nutzen ([checkout changelog](https://github.com/actions/checkout/blob/main/CHANGELOG.md),
 [setup-python release notes](https://github.com/actions/setup-python/releases)).
-Der Hosted-Lauf fuer den aktualisierten Workflow steht nach dem Push aus; der
-laufende Run `43280079484` verwendet noch den vorherigen Workflow-Stand.
+Der Windows-Run [`43281416010`](https://github.com/XeisWorks/XW-Office/actions/runs/43281416010)
+auf `b51fe95` besteht vollstaendig: **2.373 bestanden, 7 uebersprungen,
+1 bestehende Warnung (908,49 s)** und verpflichtendes MyPy ohne Fehler in **499
+Quelldateien**. Beide aktualisierten Actions liefen erfolgreich; die Node-20-
+Deprecation-Warnung trat nicht mehr auf. Der vorherige Lauf `43280079484` wurde
+nach Start dieses vollstaendigen Ersatzlaufs abgebrochen.
