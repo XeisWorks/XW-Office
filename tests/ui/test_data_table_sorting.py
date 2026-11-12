@@ -25,6 +25,8 @@ def test_simple_table_model_accepts_persistent_indexes() -> None:
     model.set_data([{"Label": "kept"}])
     index = QPersistentModelIndex(model.index(0, 0))
 
-    assert model.rowCount(index) == 1
-    assert model.columnCount(index) == 1
+    assert model.rowCount() == 1
+    assert model.columnCount() == 1
+    assert model.rowCount(index) == 0
+    assert model.columnCount(index) == 0
     assert model.data(index) == "kept"

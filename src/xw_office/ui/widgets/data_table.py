@@ -44,18 +44,20 @@ class SimpleTableModel(QAbstractTableModel):
     def rowCount(
         self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()
     ) -> int:
-        return len(self._rows)
+        return 0 if parent.isValid() else len(self._rows)
 
     def columnCount(
         self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()
     ) -> int:
-        return len(self._columns)
+        return 0 if parent.isValid() else len(self._columns)
 
     def data(
         self,
         index: QModelIndex | QPersistentModelIndex,
         role: int = Qt.ItemDataRole.DisplayRole,
     ) -> Any:
+        if not index.isValid():
+            return None
         row = self._rows[index.row()]
         col = self._columns[index.column()]
         if role == Qt.ItemDataRole.DisplayRole:

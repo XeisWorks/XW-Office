@@ -2897,10 +2897,13 @@ bleiben F20-offen.
 `ui/widgets/data_table.py` hatte unpassende Typen an den Qt-Overrides
 `rowCount`, `columnCount` und `data`: PySide6 kann dort neben `QModelIndex` auch
 `QPersistentModelIndex` uebergeben. Die Signaturen akzeptieren jetzt beide
-Typen. Eine Regression prueft Zeilenanzahl, Spaltenanzahl und Datenzugriff ueber
-einen persistenten Index. Beide direkten DataTable-Consumer bestehen mit **13
-UI-Tests**; gezieltes MyPy und Ruff sind gruen. Der globale MyPy-Stand sank von
-193/51 auf **190 Fehler in 50 Dateien**.
+Typen. Die Implementierung liefert fuer gueltige Parent-Indizes keine Kinder,
+wie es der Qt-Tabellenmodellvertrag verlangt, und gibt fuer ungueltige Daten-
+Indizes keinen Zellwert zurueck. Eine Regression prueft Root-Dimensionen,
+Parent-Indizes und Datenzugriff ueber einen persistenten Index. Beide direkten
+DataTable-Consumer bestehen mit **13 UI-Tests**; gezieltes MyPy und Ruff sind
+gruen. Der globale MyPy-Stand sank von 193/51 auf **190 Fehler in 50 Dateien**.
+Siehe [QAbstractItemModel in Qt for Python](https://doc.qt.io/qtforpython-6/PySide6/QtCore/QAbstractItemModel.html).
 
 ## F20-Fortschreibung - Typ des Unreleased-Produkts
 
