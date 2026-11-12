@@ -17,6 +17,8 @@ class EventLoopGap:
     threshold_ms: int
     timestamp: float
     context: str | None = None
+    process_cpu_ms: int = 0
+    ui_thread_cpu_ms: int = 0
 
 
 class EventLoopWatchdog(QObject):
@@ -39,6 +41,8 @@ class EventLoopWatchdog(QObject):
         self._history_size = max(1, int(history_size))
         self._context_provider = context_provider
         self._last_tick = time.perf_counter()
+        self._last_process_cpu = time.process_time()
+        self._last_ui_thread_cpu = time.thread_time()
         self._gaps: list[EventLoopGap] = []
         self._timer = QTimer(self)
         self._timer.setInterval(self._interval_ms)
@@ -46,6 +50,8 @@ class EventLoopWatchdog(QObject):
 
     def start(self) -> None:
         self._last_tick = time.perf_counter()
+        self._last_process_cpu = time.process_time()
+        self._last_ui_thread_cpu = time.thread_time()
         self._timer.start()
 
     def stop(self) -> None:
@@ -58,6 +64,12 @@ class EventLoopWatchdog(QObject):
         now = time.perf_counter()
         elapsed_ms = int((now - self._last_tick) * 1000)
         self._last_tick = now
+        process_cpu = time.process_time()
+        ui_thread_cpu = time.thread_time()
+        process_cpu_ms = max(0, int((process_cpu - self._last_process_cpu) * 1000))
+        ui_thread_cpu_ms = max(0, int((ui_thread_cpu - self._last_ui_thread_cpu) * 1000))
+        self._last_process_cpu = process_cpu
+        self._last_ui_thread_cpu = ui_thread_cpu
         if elapsed_ms < self._warn_ms:
             return
         threshold = self._critical_ms if elapsed_ms >= self._critical_ms else self._warn_ms
@@ -67,14 +79,19 @@ class EventLoopWatchdog(QObject):
             threshold_ms=threshold,
             timestamp=time.time(),
             context=context,
+            process_cpu_ms=process_cpu_ms,
+            ui_thread_cpu_ms=ui_thread_cpu_ms,
         )
         self._gaps.append(gap)
         if len(self._gaps) > self._history_size:
             del self._gaps[0 : len(self._gaps) - self._history_size]
         log = logger.warning if elapsed_ms >= self._critical_ms else logger.info
         log(
-            "Eventloop gap detected elapsed_ms=%s threshold_ms=%s active_print_job=%s",
+            "Eventloop gap detected elapsed_ms=%s threshold_ms=%s process_cpu_ms=%s "
+            "ui_thread_cpu_ms=%s active_print_job=%s",
             elapsed_ms,
             threshold,
+            process_cpu_ms,
+            ui_thread_cpu_ms,
             context or "none",
         )

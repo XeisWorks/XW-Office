@@ -3145,3 +3145,26 @@ Produktionsdienste mit Status `SUCCESS`; GitHub-CI fuer denselben Commit ist
 ebenfalls erfolgreich. Die API-Projekt-Deploymentliste war mit der
 verfuegbaren Railway-Rolle nicht lesbar und wird hier nicht als verifiziert
 ausgewiesen.
+
+## F24-Live-Log-Verifikation und F25-CPU-Ursachenmessung (12.11.2026)
+
+Der lokale `load_config()`-Readback ergibt `inventory.start_stock_booking_enabled = false`.
+Die Desktop-Aufzeichnung vom 12.11. um 09:10:51 zeigt beim START dennoch den
+3.804-ms-Produktvollstaendigkeitscheck und `PartClient: fetched 528 parts`. Das
+ist der getrennte `DraftInvoiceService.build_missing_product_plan`-Pfad, der
+unbekannte Wix-Produkte zuordnet; er ist kein Bestands-Preflight. Im START-
+Zeitfenster 09:10:51–09:11:15 ist keine `Part stock set`-/`Stock updated`-
+Buchung protokolliert. Ein Regressionstest bestaetigt zudem, dass die
+Rechnungsfreigabe bei ausgeschaltetem Schalter weder Legacy- noch Hub-Bestand
+liest/prueft/bucht. F24 bleibt erledigt; die Produktvollstaendigkeitspruefung
+bleibt unabhaengig davon aktiv und laeuft im Worker.
+
+F25 bleibt offen, wird aber fuer die naechste Desktop-Aufzeichnung besser
+messbar: Jede Eventloop-Luecke enthaelt jetzt neben der verstrichenen Zeit die
+CPU-Zeit des Gesamtprozesses und des Qt-Threads. Damit laesst sich erkennen, ob
+die Zeit im UI-Thread verbraucht wurde, in anderen Prozess-Threads anfiel oder
+ueberwiegend als Wartezeit verging. Der neue Watchdog-Test prueft die Werte im
+Log und Snapshot. Gezielt bestanden: **3 Tests** fuer Watchdog-Metrik,
+START-Bestandsbuchung aus und Qt-Preflight; Ruff und gezieltes MyPy sind gruen.
+Die neue Messung braucht noch einen Desktop-Lauf; die Ursache der bisherigen
+339–481-ms-Luecken ist deshalb weiterhin nicht als behoben nachgewiesen.
