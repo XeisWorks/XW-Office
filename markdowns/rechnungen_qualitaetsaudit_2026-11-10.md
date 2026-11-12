@@ -2621,8 +2621,9 @@ Damit lassen sich Eventloop-Luecken in einem kuenftigen Desktop-Log mit der exak
 Laufzeit des zeitgleich ausgefuehrten Backends abgleichen. Die neue Regression
 ueberprueft den Job-ID-/Backend-/Dauer-/Ergebnis-Logeintrag mit einem Fake-Backend.
 Queue-, Produktdruck- und 50-Zeilen-Qt-Regressionen: **28 bestanden**; Ruff gruen;
-striktes MyPy fuer die Queue-Datei mit ignorierten externen `pywin32`-Stubfehlern
-gruen. Kein realer Druckauftrag wurde ausgeloest.
+striktes MyPy fuer die Queue-Datei gruen; die beiden dynamischen COM-Imports ohne
+gelieferte Typstubs sind punktuell markiert. Kein realer Druckauftrag wurde
+ausgeloest.
 
 ### F17-Fortschreibung - Produktdruck-Konfiguration beim ersten Druck
 

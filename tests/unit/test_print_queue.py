@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import queue
+import re
 import threading
 import time
 import types
-import queue
-import re
 from unittest.mock import MagicMock
 
 from xw_office.services.printing import print_queue

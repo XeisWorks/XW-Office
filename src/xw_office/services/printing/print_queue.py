@@ -32,8 +32,8 @@ def _delete_paths(paths: tuple[str, ...]) -> None:
 def _execute_brother_lbx_job(job: BrotherLbxLabelJob) -> None:
     pythoncom_mod = None
     try:
-        import pythoncom
-        import win32com.client
+        import pythoncom  # type: ignore[import-untyped]  # COM bindings do not ship stubs.
+        import win32com.client  # type: ignore[import-untyped]  # COM bindings do not ship stubs.
 
         pythoncom_mod = pythoncom
     except ImportError as exc:
