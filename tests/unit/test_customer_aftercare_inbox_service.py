@@ -174,3 +174,17 @@ def test_ai_can_only_select_authoritative_invoice_candidates() -> None:
     assert selected[0].quantity == 3
     assert selected[1].role == "ORIGINAL_CANDIDATE"
     assert {item.sku for item in selected} == {"TEN-1", "BASS-1"}
+
+
+def test_inbox_normalization_tolerates_null_optional_graph_objects() -> None:
+    message = {
+        "body": None,
+        "from": {"emailAddress": None},
+        "flag": None,
+        "bodyPreview": "Falsch geliefert",
+    }
+
+    assert CustomerAftercareInboxService._body_text(message) == "Falsch geliefert"  # noqa: SLF001
+    assert CustomerAftercareInboxService._sender_address(message) == ""  # noqa: SLF001
+    assert CustomerAftercareInboxService._is_unresolved(message)  # noqa: SLF001
+    assert CustomerAftercareInboxService._is_candidate(message)  # noqa: SLF001

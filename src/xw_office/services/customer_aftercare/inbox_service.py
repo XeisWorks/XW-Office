@@ -16,7 +16,7 @@ from dataclasses import replace
 import logging
 import re
 import unicodedata
-from typing import Any
+from typing import Any, Sequence
 
 from xw_office.repositories.customer_aftercare import (
     CustomerAftercareItemInput,
@@ -98,14 +98,14 @@ class CustomerAftercareInboxService:
             _DEFAULT_AFTERCARE_MAILBOX if primary_mailbox else ""
         )
         if dedicated_mailbox and dedicated_mailbox.lower() != primary_mailbox.lower():
-            dedicated = self._graph_client(mailbox=dedicated_mailbox)
-            if dedicated is not None:
-                sources.append((dedicated, True))
+            dedicated_client = self._graph_client(mailbox=dedicated_mailbox)
+            if dedicated_client is not None:
+                sources.append((dedicated_client, True))
         if not sources:
             return InboxPollResult(scanned=0, new_cases=0)
         candidates: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
-        for source_client, dedicated in sources:
+        for source_client, is_dedicated in sources:
             if not allow_interactive_auth and not source_client.has_silent_token():
                 continue
             try:
@@ -121,8 +121,8 @@ class CustomerAftercareInboxService:
                     continue
                 if message_id:
                     seen_ids.add(message_id)
-                if (dedicated and self._is_unresolved(msg)) or (
-                    not dedicated and self._is_candidate(msg)
+                if (is_dedicated and self._is_unresolved(msg)) or (
+                    not is_dedicated and self._is_candidate(msg)
                 ):
                     candidates.append(self._normalize_message(msg))
         api_key = self._secrets.get_secret("OPENAI_API_KEY") or None
@@ -237,9 +237,7 @@ class CustomerAftercareInboxService:
                     invoice_number = str(selected.invoice_number or invoice_number).strip()
                     invoice_date = str(selected.invoice_date or "").strip()
                     detail = self._invoices.fetch_invoice_by_id(invoice_id)
-                    contact = (
-                        detail.get("contact") if isinstance(detail.get("contact"), dict) else {}
-                    )
+                    contact = _dict_or_empty(detail.get("contact"))
                     sevdesk_contact_id = str(
                         contact.get("id") or detail.get("contactId") or ""
                     ).strip()
@@ -260,9 +258,7 @@ class CustomerAftercareInboxService:
                 order = self._wix_orders.resolve_order(order_number)
                 if isinstance(order, dict):
                     wix_order_id = str(order.get("id") or "").strip()
-                    buyer = (
-                        order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
-                    )
+                    buyer = _dict_or_empty(order.get("buyerInfo"))
                     wix_contact_id = str(buyer.get("contactId") or "").strip()
                     customer_email = customer_email or str(buyer.get("email") or "").strip()
                     customer_name = customer_name or str(buyer.get("firstName") or "").strip()
@@ -316,7 +312,7 @@ class CustomerAftercareInboxService:
         for index, position in enumerate(positions):
             if not isinstance(position, dict):
                 continue
-            part = position.get("part") if isinstance(position.get("part"), dict) else {}
+            part = _dict_or_empty(position.get("part"))
             name = str(
                 position.get("name") or position.get("text") or part.get("name") or ""
             ).strip()
@@ -378,7 +374,7 @@ class CustomerAftercareInboxService:
     def _select_ai_suggestions(
         cls,
         candidates: list[CustomerAftercareItemInput],
-        suggestions: list[object],
+        suggestions: Sequence[object],
     ) -> list[CustomerAftercareItemInput]:
         """Mark only authoritative invoice/Product-Hub rows suggested by AI."""
         wanted: list[tuple[str, str, int]] = []
@@ -431,7 +427,7 @@ class CustomerAftercareInboxService:
 
     @staticmethod
     def _invoice_address_lines(invoice: dict[str, Any]) -> list[str]:
-        contact = invoice.get("contact") if isinstance(invoice.get("contact"), dict) else {}
+        contact = _dict_or_empty(invoice.get("contact"))
         values = [
             invoice.get("deliveryName") or invoice.get("shippingName") or contact.get("name"),
             invoice.get("deliveryStreet")
@@ -476,7 +472,7 @@ class CustomerAftercareInboxService:
 
     @staticmethod
     def _normalize_message(msg: dict[str, Any]) -> dict[str, Any]:
-        body_obj = msg.get("body") if isinstance(msg.get("body"), dict) else {}
+        body_obj = _dict_or_empty(msg.get("body"))
         content = str(body_obj.get("content") or "").strip()
         content_type = str(body_obj.get("contentType") or "").strip()
         normalized = dict(msg)
@@ -490,15 +486,13 @@ class CustomerAftercareInboxService:
 
     @staticmethod
     def _sender_address(msg: dict[str, Any]) -> str:
-        from_obj = msg.get("from") if isinstance(msg.get("from"), dict) else {}
-        email_obj = (
-            from_obj.get("emailAddress") if isinstance(from_obj.get("emailAddress"), dict) else {}
-        )
+        from_obj = _dict_or_empty(msg.get("from"))
+        email_obj = _dict_or_empty(from_obj.get("emailAddress"))
         return str(email_obj.get("address") or email_obj.get("name") or "").strip()
 
     @staticmethod
     def _body_text(msg: dict[str, Any]) -> str:
-        body_obj = msg.get("body") if isinstance(msg.get("body"), dict) else {}
+        body_obj = _dict_or_empty(msg.get("body"))
         content = str(body_obj.get("content") or "").strip()
         return content or str(msg.get("bodyPreview") or "").strip()
 
@@ -509,15 +503,19 @@ class CustomerAftercareInboxService:
             return False
         subject = str(msg.get("subject") or "").strip().lower()
         preview = str(msg.get("bodyPreview") or "").strip().lower()
-        body_obj = msg.get("body") if isinstance(msg.get("body"), dict) else {}
+        body_obj = _dict_or_empty(msg.get("body"))
         body = str(body_obj.get("content") or "").strip().lower()
         haystack = f"{subject}\n{preview}\n{body}"
         return any(keyword in haystack for keyword in _CANDIDATE_KEYWORDS)
 
     @staticmethod
     def _is_unresolved(msg: dict[str, Any]) -> bool:
-        flag = msg.get("flag") if isinstance(msg.get("flag"), dict) else {}
+        flag = _dict_or_empty(msg.get("flag"))
         return str(flag.get("flagStatus") or "").strip().casefold() != "complete"
+
+
+def _dict_or_empty(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _as_quantity(raw: str) -> int:
