@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
 import uuid
 
 from sqlalchemy import create_engine
@@ -10,6 +11,9 @@ from xw_office.models.base import Base
 from xw_office.repositories.customer_aftercare import (
     CustomerAftercareItemInput,
     CustomerAftercareRepository,
+)
+from xw_office.services.customer_aftercare.redelivery import (
+    CustomerAftercareRedeliveryService,
 )
 
 
@@ -194,3 +198,40 @@ def test_resolved_redelivery_does_not_prevent_a_later_case_for_same_invoice() ->
 
     assert second.state == "created"
     assert second.case.id != first.id
+
+
+def test_redelivery_normalization_accepts_null_optional_json_objects() -> None:
+    class FakeInvoiceClient:
+        def fetch_invoice_positions(self, _invoice_id: str) -> list[dict[str, object]]:
+            return [
+                {
+                    "id": "position-1",
+                    "name": "Notenheft",
+                    "sku": "XW-400",
+                    "part": None,
+                    "quantity": 2,
+                    "price": "12.50",
+                    "taxRate": None,
+                }
+            ]
+
+    service = CustomerAftercareRedeliveryService(
+        repo=None,
+        invoices=FakeInvoiceClient(),  # type: ignore[arg-type]
+        wix_orders=None,
+    )
+
+    items = service._invoice_items("invoice-1", "RE-1", "20842")  # noqa: SLF001
+
+    assert len(items) == 1
+    assert items[0].name == "Notenheft"
+    assert items[0].sku == "XW-400"
+    assert items[0].sevdesk_part_id == ""
+    assert items[0].source_unit_price == Decimal("12.50")
+    assert items[0].source_tax_rate is None
+    assert CustomerAftercareRedeliveryService._invoice_email(  # noqa: SLF001
+        {"contact": None, "email": "kunde@example.test"}
+    ) == "kunde@example.test"
+    assert CustomerAftercareRedeliveryService._invoice_address_lines(  # noqa: SLF001
+        {"contact": None, "shippingAddress": None, "deliveryAddress": "Stiege 2"}
+    ) == ["Stiege 2"]

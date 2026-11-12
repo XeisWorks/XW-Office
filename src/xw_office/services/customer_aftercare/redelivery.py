@@ -7,6 +7,7 @@ source of truth for customer, address, SKU or quantity.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 import re
 from typing import Any
 
@@ -67,7 +68,7 @@ class CustomerAftercareRedeliveryService:
                 raw_invoice.get("invoiceNumber") or raw_invoice.get("number") or ""
             ).strip()
 
-        contact = raw_invoice.get("contact") if isinstance(raw_invoice.get("contact"), dict) else {}
+        contact = _dict_or_empty(raw_invoice.get("contact"))
         sevdesk_contact_id = str(contact.get("id") or raw_invoice.get("contactId") or "").strip()
         order_number = str(summary.order_reference or "").strip()
         if not order_number:
@@ -80,7 +81,7 @@ class CustomerAftercareRedeliveryService:
             except Exception:
                 order = {}
 
-        buyer = order.get("buyerInfo") if isinstance(order.get("buyerInfo"), dict) else {}
+        buyer = _dict_or_empty(order.get("buyerInfo"))
         wix_contact_id = str(buyer.get("contactId") or "").strip()
         email = str(
             buyer.get("email")
@@ -164,7 +165,7 @@ class CustomerAftercareRedeliveryService:
         for index, position in enumerate(positions):
             if not isinstance(position, dict):
                 continue
-            part = position.get("part") if isinstance(position.get("part"), dict) else {}
+            part = _dict_or_empty(position.get("part"))
             name = str(
                 position.get("name")
                 or position.get("text")
@@ -240,14 +241,14 @@ class CustomerAftercareRedeliveryService:
 
     @staticmethod
     def _invoice_email(invoice: dict[str, Any]) -> str:
-        contact = invoice.get("contact") if isinstance(invoice.get("contact"), dict) else {}
+        contact = _dict_or_empty(invoice.get("contact"))
         return str(invoice.get("email") or contact.get("email") or "").strip()
 
     @staticmethod
     def _invoice_address_lines(invoice: dict[str, Any]) -> list[str]:
-        contact = invoice.get("contact") if isinstance(invoice.get("contact"), dict) else {}
-        shipping = invoice.get("shippingAddress") if isinstance(invoice.get("shippingAddress"), dict) else {}
-        delivery = invoice.get("deliveryAddress") if isinstance(invoice.get("deliveryAddress"), dict) else {}
+        contact = _dict_or_empty(invoice.get("contact"))
+        shipping = _dict_or_empty(invoice.get("shippingAddress"))
+        delivery = _dict_or_empty(invoice.get("deliveryAddress"))
         address = shipping or delivery
         legacy_address = invoice.get("deliveryAddress") if isinstance(invoice.get("deliveryAddress"), str) else invoice.get("shippingAddress")
         values = [
@@ -276,12 +277,14 @@ class CustomerAftercareRedeliveryService:
         return ""
 
 
-def _decimal_or_none(value: object):
-    from decimal import Decimal, InvalidOperation
-
+def _decimal_or_none(value: object) -> Decimal | None:
     try:
         if value is None or str(value).strip() == "":
             return None
         return Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
         return None
+
+
+def _dict_or_empty(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
