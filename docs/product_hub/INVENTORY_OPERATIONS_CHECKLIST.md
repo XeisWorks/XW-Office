@@ -258,6 +258,15 @@ Runtime-Readiness ist `eligible=true`; DB-Readiness bleibt `eligible=false`.
 594 Quellen-Auditprobleme, 29 Bestandsabweichungen und 710 offene Sync-Konflikte.
 Master/Shadow blieben `false`; es wurden keine Buchungs- oder Providerdaten geschrieben.
 
+## Post-Deploy-Verifikation (12. November 2026, 01:36 CET)
+
+Product Hub und `xw-inventory-worker` sind auf Commit `59ecdde` SUCCESS deployed;
+`/health` liefert HTTP 200. Der erneute read-only Preflight bestätigt
+Runtime-Readiness `eligible=true`, DB-Readiness Exit 2 vor der Inventur sowie
+deaktivierte Master-/Shadow-Flags. Der Exact-SKU-Preflight fand 231 Kandidaten
+(374 Live-Produkte, 492 Varianten, 528 Parts). Vollständige Prüfung: **2272 passed,
+5 skipped**; Ruff ohne Befund.
+
 ## Aktueller manueller Zugriff (12. November 2026, 01:23 CET)
 
 Der Helper verarbeitet Railway-Native-Exitcodes robust und beendet den Exact-

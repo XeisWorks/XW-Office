@@ -1581,6 +1581,16 @@ Runtime-Readiness `eligible=true` (Exit 0), DB-Readiness erwartungsgemäß
 726 Sync-Konflikte (davon 710 offen), 432 Outbox-Ereignisse und 263 archivierte
 Payloads. Es wurden keine Bestands- oder Providerdaten geschrieben.
 
+### Post-Deploy-Verifikation (12. November 2026, 01:36 CET)
+
+Product Hub und `xw-inventory-worker` sind auf Commit `59ecdde` SUCCESS deployed;
+`/health` liefert HTTP 200. Der erneute Railway-Preflight bleibt read-only mit
+Runtime-Readiness `eligible=true`, DB-Readiness `eligible=false` (Exit 2) und
+deaktivierten Master-/Shadow-Flags. Der Exact-SKU-Teil bestätigt 231 Kandidaten
+(374 Live-Produkte, 492 Varianten, 528 sevDesk-Parts). Der vollständige Testlauf
+gegen diesen `main`-Stand ergibt **2272 bestanden, 5 übersprungen**; Ruff ist ohne
+Befund. Es wurden keine externen Bestände oder Providerdaten geschrieben.
+
 ### Railway-Preflight-Haertung und aktueller Betriebszugriff (12. November 2026, 01:23 CET)
 
 Der kombinierte Helper verarbeitet PowerShell-Native-Command-Exitcodes jetzt robust:
