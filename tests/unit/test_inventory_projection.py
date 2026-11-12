@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import contextmanager
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.models.base import Base
 from xw_office.repositories.product_hub import ProductHubRepository
+from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.product_hub.inventory_projection import InventoryProjectionService
 
@@ -112,6 +114,42 @@ def test_external_change_after_projection_becomes_conflict() -> None:
 
     result = service.run(dry_run=False)
     assert result.conflicts == 1
+    assert sevdesk.writes == [("part-1", 12)]
+
+
+def test_sevdesk_projection_holds_shared_part_stock_lock(monkeypatch) -> None:
+    factory = _factory()
+    _seed(factory)
+    lock_state = {"active": False}
+
+    @contextmanager
+    def tracked_lock(_repository, key: str):
+        assert key == "sevdesk-part-stock:part-1"
+        assert not lock_state["active"]
+        lock_state["active"] = True
+        try:
+            yield
+        finally:
+            lock_state["active"] = False
+
+    class LockedSevdesk(_FakeSevdesk):
+        def get_part_stock(self, part_id: str, *, strict: bool = False) -> int:
+            assert lock_state["active"]
+            return super().get_part_stock(part_id, strict=strict)
+
+        def set_part_stock(self, part_id: str, new_stock: int) -> None:
+            assert lock_state["active"]
+            super().set_part_stock(part_id, new_stock)
+
+    monkeypatch.setattr(SettingKvRepository, "advisory_lock", tracked_lock)
+    sevdesk = LockedSevdesk({"part-1": 4})
+
+    result = InventoryProjectionService(
+        factory, sevdesk=sevdesk, write_enabled=lambda: True
+    ).run(dry_run=False)
+
+    assert result.projected == 1
+    assert not lock_state["active"]
     assert sevdesk.writes == [("part-1", 12)]
 
 

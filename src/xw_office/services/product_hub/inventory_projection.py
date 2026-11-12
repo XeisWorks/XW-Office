@@ -31,6 +31,7 @@ from xw_office.models.product_hub_inventory import InventoryStock
 from xw_office.repositories.product_hub import ProductFilter, ProductHubRepository
 from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.repositories.product_hub_sync import SyncRepository
+from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.wix.identifiers import canonical_wix_id
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,7 @@ class InventoryProjectionService:
         self._products = ProductHubRepository(session_factory)
         self._inventory = InventoryRepository(session_factory)
         self._sync = SyncRepository(session_factory)
+        self._settings = SettingKvRepository(session_factory)
         self._sevdesk = sevdesk
         self._wix = wix
         self._write_enabled = write_enabled or (lambda: False)
@@ -272,12 +274,16 @@ class InventoryProjectionService:
             return self._skipped(target, "sevDesk-Projektor ist nicht konfiguriert.", "sevdesk")
         desired = max(0, int(stock.on_hand))
         try:
-            current = int(self._sevdesk.get_part_stock(target.external_id, strict=True))
-            return self._reconcile_external(
-                target, channel="sevdesk", current=current, desired=desired,
-                revision=None, dry_run=dry_run,
-                write=lambda: self._write_sevdesk(target.external_id, desired),
-            )
+            # Physical product printing performs the same Part GET/SET under
+            # this shared lock. Keep the projection read, decision, write, and
+            # verification inside it so a concurrent print cannot be lost.
+            with self._settings.advisory_lock(f"sevdesk-part-stock:{target.external_id}"):
+                current = int(self._sevdesk.get_part_stock(target.external_id, strict=True))
+                return self._reconcile_external(
+                    target, channel="sevdesk", current=current, desired=desired,
+                    revision=None, dry_run=dry_run,
+                    write=lambda: self._write_sevdesk(target.external_id, desired),
+                )
         except Exception as exc:  # noqa: BLE001 - one channel item must not abort others
             return self._error(target, "sevdesk", str(exc))
 

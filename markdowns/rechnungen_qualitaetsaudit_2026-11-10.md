@@ -3309,3 +3309,22 @@ schuetzt gueltige Textgroesse und verwirft unbekannte Objekte. **8 OneDrive-/Ass
 Tests**, gezieltes striktes MyPy, Ruff und `git diff --check` bestehen. Die globale
 strikte MyPy-Baseline sinkt von 76 Fehlern in 30 Dateien auf **72 Fehler in 29
 Dateien**.
+
+## AP03-Fortschreibung - Gemeinsamer sevDesk-Part-Lock (12.11.2026)
+
+Die absolute sevDesk-Bestandsprojektion verwendet jetzt denselben
+PostgreSQL-Advisory-Lock `sevdesk-part-stock:<Part-ID>` wie der physische
+Produktdruck. Der Lock umfasst Part-GET, Konfliktentscheidung, SET und
+Readback. Damit kann ein parallel laufender Produktdruck nicht zwischen
+Projektion und Verifikation durch ein verlorenes GET/SET-Update ueberschrieben
+werden. Ein Regressionstest prueft, dass alle Providerzugriffe innerhalb des
+Locks stattfinden. Die **4 Projection-Tests**, striktes MyPy fuer den Service,
+Ruff und `git diff --check` sind gruen. Dies behebt die gemeinsame
+Schreibserialisierung; die ledgerbasierte Projektion und der Nachweis, dass
+Hub-Ausgangsbestaende als Cutover-Quelle vollstaendig sind, bleiben offen.
+
+Der anschliessende lokale Vollsuite-Lauf besteht mit **2.318 Tests, 5
+Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung
+(157,72 s)**. Globales Ruff und `git diff --check` sind gruen. Die globale
+strikte MyPy-Baseline bleibt bei **72 Fehlern in 29 Dateien**; der geaenderte
+Projection-Service ist einzeln strict-Mypy-sauber.
