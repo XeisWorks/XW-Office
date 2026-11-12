@@ -12,7 +12,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Lock
-from typing import TYPE_CHECKING, Iterable, Literal, cast
+from typing import TYPE_CHECKING, Iterable, Literal, Protocol, cast
 
 from xw_office.services.products.catalog import Product, StockStatus
 from xw_office.services.invoice_processing.operation_claims import (
@@ -27,6 +27,21 @@ if TYPE_CHECKING:
     from xw_office.services.wix.client import WixOrderItem
 
 logger = logging.getLogger(__name__)
+
+
+class PrintInventoryRecorder(Protocol):
+    @property
+    def master_enabled(self) -> bool: ...
+
+    def record_print_run(
+        self,
+        *,
+        sku: str,
+        qty_printed: int,
+        new_stock: int | None = None,
+        external_reference: str,
+        idempotency_key: str = "",
+    ) -> int: ...
 
 
 @dataclass
@@ -356,6 +371,46 @@ class PrintDecisionEngine:
             invoice_ref,
         )
         return new_stock
+
+    def record_confirmed_print(
+        self,
+        piece: PieceBlock,
+        qty_printed: int,
+        inventory: PrintInventoryRecorder,
+        *,
+        operation_id: str,
+        invoice_ref: str = "",
+    ) -> int:
+        """Commit a claimed print through the active inventory authority.
+
+        During shadow operation sevDesk remains the operational writer and the
+        resulting print movement is mirrored to Hub. After master cutover, write
+        only the idempotent Hub ledger movement; provider projection owns sevDesk.
+        """
+        operation = str(operation_id or "").strip()
+        if not operation:
+            raise ValueError("Druck-Claim ohne Operation-ID kann nicht gebucht werden")
+        quantity = max(0, int(qty_printed or 0))
+        external_reference = f"product-print:{operation}"
+        if invoice_ref:
+            external_reference = f"{external_reference}:invoice:{str(invoice_ref).strip()}"
+        idempotency_key = f"product-print:{operation}"
+        if inventory.master_enabled:
+            return inventory.record_print_run(
+                sku=piece.sku,
+                qty_printed=quantity,
+                external_reference=external_reference,
+                idempotency_key=idempotency_key,
+            )
+
+        new_stock = self.record_print_and_update_sevdesk(piece, quantity, invoice_ref=invoice_ref)
+        return inventory.record_print_run(
+            sku=piece.sku,
+            qty_printed=quantity,
+            new_stock=new_stock,
+            external_reference=external_reference,
+            idempotency_key=idempotency_key,
+        )
 
     def acquire_product_print_claim(self, piece: PieceBlock) -> OperationClaim:
         """Claim one physical Part print across the app and configured workstations."""

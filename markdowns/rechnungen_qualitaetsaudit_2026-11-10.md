@@ -3444,3 +3444,25 @@ fuer Repository, Projektor und Tests, globales Ruff und `git diff --check` sind
 gruen. Die Vollsuite besteht mit **2.334 Tests, 5 Ueberspringungen und 1
 bestehenden Starlette/httpx-Deprecation-Warnung (154,19 s)**. Die verbleibenden
 Cutover- und Recovery-Gates bleiben offen.
+
+## AP03/AP05-Nachtrag - Produktdruck im aktiven Inventory-Master (12.11.2026)
+
+Die vier physischen Produktdruck-Einstiege (Produktmenue, ausgewaehlte offene
+Produkte, Notendruck und einzelner Rechnungsproduktdruck) buchen jetzt ueber
+`PrintDecisionEngine.record_confirmed_print` innerhalb ihres dauerhaften Druck-
+Claims. Im Master-Modus schreibt der Flow die bestaetigte `print_run`-Bewegung
+mit `product-print:<Claim-Operation-ID>` idempotent ins Hub-Ledger; er schreibt
+sevDesk nicht direkt, da die externe Menge aus der Hub-Projektion folgt. Im
+Shadow-Modus bleibt sevDesk der operative Bestandsschreiber; anschliessend
+werden Legacy-Snapshot und Hub-Printbewegung mit derselben Claim-ID aktualisiert.
+Der Claim wird erst nach bestaetigter Bestandsbuchung als erfolgreich markiert;
+Fehler nach moeglichem Druck bleiben `unknown` und blockieren automatische
+Wiederholung. Das neue `InventoryService.record_print_run` stoppt im aktivierten
+Master-Modus, wenn der Masteradapter fehlt, statt auf Legacy-Speicherung
+zurueckzufallen. Drei Service-/Engine-Regressionen plus Rechnungs- und
+Produktansicht-Smokes bestehen zusammen mit **151 Tests**; striktes MyPy fuer
+die vier Produktionsdateien, globales Ruff und `git diff --check` sind gruen.
+Die Vollsuite besteht mit **2.337 Tests, 5 Ueberspringungen und 1 bestehenden
+Starlette/httpx-Deprecation-Warnung (152,16 s)**. STARTs eigener
+`start_stock_booking_enabled`-Schalter bleibt unabhaengig davon standardmaessig
+aus; reale Master-Aktivierung und Zwei-Instanz-Recovery bleiben G2-Gates.

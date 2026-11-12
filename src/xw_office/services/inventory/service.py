@@ -196,6 +196,11 @@ class InventoryService:
         self._master_store = master_store
         self._master_enabled = bool(master_enabled)
 
+    @property
+    def master_enabled(self) -> bool:
+        """Whether stock movements must be written to the Product Hub ledger."""
+        return self._master_enabled
+
     def load_stock_levels(self) -> dict[str, int]:
         """Return stock levels by SKU (from DB setting if available)."""
         if self._master_enabled and self._master_store is not None:
@@ -949,21 +954,24 @@ class InventoryService:
         *,
         sku: str,
         qty_printed: int,
-        new_stock: int,
+        new_stock: int | None = None,
         external_reference: str,
         idempotency_key: str = "",
-    ) -> None:
+    ) -> int:
         """Persist a confirmed local print and mirror it as ``print_run``.
 
         This keeps print production distinguishable from an absolute/manual stock
         correction while retaining the legacy stock snapshot during Shadow Mode.
+        In master mode the Hub ledger is the only stock writer and its resulting
+        balance is returned without writing the legacy snapshot.
         """
         wanted = str(sku or "").strip().upper()
         produced = max(0, int(qty_printed or 0))
-        target = max(0, int(new_stock or 0))
         if not wanted or produced <= 0:
-            return
-        if self._master_enabled and self._master_store is not None:
+            return int(self.load_stock_levels().get(wanted, 0))
+        if self._master_enabled:
+            if self._master_store is None:
+                raise RuntimeError("Product-Hub-Masteradapter ist nicht konfiguriert")
             self._record_master_stock_movement(
                 sku=wanted,
                 delta=produced,
@@ -972,8 +980,10 @@ class InventoryService:
                 external_reference=external_reference,
                 idempotency_key=idempotency_key,
             )
-            self._sync_product_cache_from_master(wanted)
-            return
+            return int(self.load_stock_levels().get(wanted, 0))
+        if new_stock is None:
+            raise ValueError("Der sevDesk-Zielbestand fehlt im Shadow-Modus")
+        target = max(0, int(new_stock))
         if self.update_product_fields({wanted: {"on_hand": target}}) <= 0:
             raise RuntimeError(f"Lokaler Produktdatensatz nicht gefunden: {wanted}")
         if self._settings_repo is not None:
@@ -1000,6 +1010,7 @@ class InventoryService:
             external_reference=external_reference,
             idempotency_key=idempotency_key,
         )
+        return target
 
     def _mirror_legacy_stock_update(self, sku: str, quantity: int) -> None:
         """Mirror after a successful legacy write, without ever blocking that write.

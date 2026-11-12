@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import json
+from typing import cast
 
-from xw_office.services.products.catalog import ProductCatalogService
+from xw_office.services.products.catalog import Product, ProductCatalogService
 from xw_office.services.products.print_decision import (
     PieceBlock,
     PrintDecisionEngine,
     resolve_piece_print_config,
 )
-from xw_office.services.sevdesk.part_client import SevdeskPart
+from xw_office.services.sevdesk.part_client import PartClient, SevdeskPart
 from xw_office.services.wix.client import WixOrderItem
 
 
@@ -37,6 +38,96 @@ class _SnapshotPartClientStub:
 
     def get_part_stock(self, _part_id: str) -> int:
         raise AssertionError("piece rendering must not make an individual stock request")
+
+
+class _RecordingPartClientStub(_PartClientStub):
+    def __init__(self) -> None:
+        self.reads: list[str] = []
+        self.writes: list[tuple[str, int]] = []
+
+    def get_part_stock(self, part_id: str) -> int:
+        self.reads.append(part_id)
+        return 7
+
+    def set_part_stock(self, part_id: str, new_stock: int) -> None:
+        self.writes.append((part_id, new_stock))
+
+
+class _InventoryRecorderStub:
+    def __init__(self, *, master_enabled: bool) -> None:
+        self.master_enabled = master_enabled
+        self.calls: list[dict[str, object]] = []
+
+    def record_print_run(
+        self,
+        *,
+        sku: str,
+        qty_printed: int,
+        new_stock: int | None = None,
+        external_reference: str,
+        idempotency_key: str = "",
+    ) -> int:
+        self.calls.append(
+            {
+                "sku": sku,
+                "qty_printed": qty_printed,
+                "new_stock": new_stock,
+                "external_reference": external_reference,
+                "idempotency_key": idempotency_key,
+            }
+        )
+        return new_stock if new_stock is not None else 9
+
+
+def _piece_with_part() -> PieceBlock:
+    return PieceBlock(
+        sku="XW-6-003",
+        name="Test piece",
+        qty_needed=2,
+        product=Product(id="product-1", sku="XW-6-003", name="Test piece", sevdesk_part_id="part-1"),
+    )
+
+
+def test_confirmed_print_uses_hub_ledger_as_master_and_skips_sevdesk_write() -> None:
+    part_client = _RecordingPartClientStub()
+    engine = PrintDecisionEngine(ProductCatalogService(), cast(PartClient, part_client))
+    inventory = _InventoryRecorderStub(master_enabled=True)
+
+    new_stock = engine.record_confirmed_print(
+        _piece_with_part(), 2, inventory, operation_id="operation-42", invoice_ref="INV-42"
+    )
+
+    assert new_stock == 9
+    assert part_client.reads == []
+    assert part_client.writes == []
+    assert inventory.calls == [{
+        "sku": "XW-6-003",
+        "qty_printed": 2,
+        "new_stock": None,
+        "external_reference": "product-print:operation-42:invoice:INV-42",
+        "idempotency_key": "product-print:operation-42",
+    }]
+
+
+def test_confirmed_print_keeps_sevdesk_writer_in_shadow_and_mirrors_claim_id() -> None:
+    part_client = _RecordingPartClientStub()
+    engine = PrintDecisionEngine(ProductCatalogService(), cast(PartClient, part_client))
+    inventory = _InventoryRecorderStub(master_enabled=False)
+
+    new_stock = engine.record_confirmed_print(
+        _piece_with_part(), 2, inventory, operation_id="operation-43"
+    )
+
+    assert new_stock == 9
+    assert part_client.reads == ["part-1"]
+    assert part_client.writes == [("part-1", 9)]
+    assert inventory.calls == [{
+        "sku": "XW-6-003",
+        "qty_printed": 2,
+        "new_stock": 9,
+        "external_reference": "product-print:operation-43",
+        "idempotency_key": "product-print:operation-43",
+    }]
 
 
 def test_bundled_legacy_unreleased_alias_resolves_canonical_title_and_owner() -> None:

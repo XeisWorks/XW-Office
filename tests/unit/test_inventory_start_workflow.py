@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -443,7 +444,9 @@ def test_master_stock_update_uses_hub_without_writing_legacy_stock(tmp_path: Pat
         }
     )
     master = _MasterStoreStub({"XW-6-003": 5})
-    service = InventoryService(AppConfig(), repo, master_store=master, master_enabled=True)
+    service = InventoryService(
+        AppConfig(), cast(SettingKvRepository, repo), master_store=master, master_enabled=True
+    )
 
     service.set_product_stock("xw-6-003", 7)
 
@@ -629,4 +632,36 @@ def test_record_print_run_mirrors_print_reason_and_updates_legacy_snapshot(tmp_p
         "sku": "XW-6-003", "delta": 3, "reason": "print_run",
         "source": "legacy_inventory.print_run", "external_reference": "print-run:test",
         "idempotency_key": "print-run:test",
+    }]
+    assert service.master_enabled is False
+
+
+def test_master_record_print_run_books_idempotent_hub_movement(tmp_path: Path) -> None:
+    repo = _RepoStub(
+        {
+            "inventory.products": _product_payload(tmp_path / "score.pdf"),
+            "inventory.stock_levels": json.dumps({"XW-6-003": 1}),
+        }
+    )
+    master = _MasterStoreStub({"XW-6-003": 5})
+    service = InventoryService(
+        AppConfig(), cast(SettingKvRepository, repo), master_store=master, master_enabled=True
+    )
+
+    new_stock = service.record_print_run(
+        sku="XW-6-003",
+        qty_printed=2,
+        external_reference="product-print:operation-42",
+        idempotency_key="product-print:operation-42",
+    )
+
+    assert service.master_enabled is True
+    assert new_stock == 7
+    assert master.stock["XW-6-003"] == 7
+    assert json.loads(repo.values["inventory.stock_levels"]) == {"XW-6-003": 1}
+    assert master.calls == [{
+        "sku": "XW-6-003", "delta": 2, "reason": "print_run",
+        "source": "inventory.master.print_run",
+        "external_reference": "product-print:operation-42",
+        "idempotency_key": "product-print:operation-42",
     }]

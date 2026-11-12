@@ -1539,13 +1539,15 @@ class ProductsView(QWidget):
                 }
             try:
                 print_job()
-                new_stock = engine.record_print_and_update_sevdesk(
+                new_stock = engine.record_confirmed_print(
                     piece,
                     copies,
+                    inventory,
+                    operation_id=claim.operation_id,
                     invoice_ref="Produkte-Menue",
                 )
                 if new_stock <= 0:
-                    raise RuntimeError("sevDesk-Bestand konnte nicht aktualisiert werden")
+                    raise RuntimeError("Bestandsbuchung konnte nicht bestätigt werden")
                 engine.finish_product_print_claim(claim, "succeeded")
             except Exception as exc:  # noqa: BLE001 - stock systems have varied failures
                 if isinstance(exc, ProductPdfPreparationError):
@@ -1560,18 +1562,12 @@ class ProductsView(QWidget):
                     "stock_warning": str(exc),
                     "local_warning": "",
                 }
-            local_warning = ""
-            try:
-                inventory.set_product_stock(row.sku, new_stock)
-            except Exception as exc:  # noqa: BLE001 - sevDesk is already authoritative here
-                local_warning = str(exc)
-                logger.warning("Local stock cache update failed for %s: %s", row.sku, exc)
             return {
                 "sku": row.sku,
                 "quantity": copies,
                 "new_stock": new_stock,
                 "stock_warning": "",
-                "local_warning": local_warning,
+                "local_warning": "",
             }
 
         self._product_print_worker = BackgroundWorker(worker_job)

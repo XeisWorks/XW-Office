@@ -4,7 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import datetime
 import html
-import hashlib
 import logging
 import os
 import re
@@ -4618,6 +4617,7 @@ class RechnungenView(QWidget):
             warnings: list[str] = []
             claim_warnings: list[str] = []
             engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
+            inventory: InventoryService = self._container.resolve(InventoryService)
             for block, qty, job in prepared_jobs:
                 claim = engine.acquire_product_print_claim(block)
                 if not claim.acquired:
@@ -4642,25 +4642,15 @@ class RechnungenView(QWidget):
                     warnings.append(f"{block.sku}: kein sevDesk-Part fuer Bestandsbuchung hinterlegt")
                     continue
                 try:
-                    new_stock = engine.record_print_and_update_sevdesk(block, qty)
+                    engine.record_confirmed_print(
+                        block, qty, inventory, operation_id=claim.operation_id
+                    )
                 except Exception as exc:
                     engine.finish_product_print_claim(claim, "unknown", error=str(exc))
                     logger.warning("Stock update after PRINT SELECTED PRODUCTS failed for %s: %s", block.sku, exc)
                     warnings.append(f"{block.sku}: {exc}")
                     continue
                 engine.finish_product_print_claim(claim, "succeeded")
-                try:
-                    run_token = hashlib.sha256(repr(products_key).encode("utf-8")).hexdigest()[:24]
-                    self._container.resolve(InventoryService).record_print_run(
-                        sku=block.sku,
-                        qty_printed=qty,
-                        new_stock=new_stock,
-                        external_reference=f"print-run:{run_token}:{block.sku}",
-                        idempotency_key=f"print-run:{run_token}:{block.sku}",
-                    )
-                except Exception as exc:
-                    logger.warning("Stock update after PRINT SELECTED PRODUCTS failed for %s: %s", block.sku, exc)
-                    warnings.append(f"{block.sku}: {exc}")
             return {
                 "sku": f"{len(printed)} Produkt(e)",
                 "quantity": total_copies,
@@ -5821,6 +5811,7 @@ class RechnungenView(QWidget):
             printed: list[str] = []
             claim_warnings: list[str] = []
             engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
+            inventory: InventoryService = self._container.resolve(InventoryService)
             for block, qty, job in selected_jobs:
                 claim = engine.acquire_product_print_claim(block)
                 if not claim.acquired:
@@ -5835,8 +5826,12 @@ class RechnungenView(QWidget):
                         )
                         warnings.append(f"{block.sku}: kein sevDesk-Part fuer Bestandsbuchung hinterlegt")
                         continue
-                    new_stock = engine.record_print_and_update_sevdesk(
-                        block, qty, invoice_ref=invoice_ref
+                    engine.record_confirmed_print(
+                        block,
+                        qty,
+                        inventory,
+                        operation_id=claim.operation_id,
+                        invoice_ref=invoice_ref,
                     )
                 except Exception as exc:
                     if isinstance(exc, ProductPdfPreparationError):
@@ -5847,14 +5842,6 @@ class RechnungenView(QWidget):
                     warnings.append(f"{block.sku}: {exc}")
                     continue
                 engine.finish_product_print_claim(claim, "succeeded")
-                if new_stock > 0:
-                    try:
-                        self._container.resolve(InventoryService).set_product_stock(
-                            block.sku, new_stock
-                        )
-                    except Exception as exc:
-                        logger.warning("Local stock mirror update failed for %s: %s", block.sku, exc)
-                        warnings.append(f"{block.sku}: lokaler Bestandsspiegel nicht aktualisiert: {exc}")
             return {
                 "sku": f"{len(printed)} Produkt(e)",
                 "quantity": total_copies,
@@ -8769,6 +8756,7 @@ class RechnungenView(QWidget):
 
         def worker_job() -> dict[str, object]:
             engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
+            inventory: InventoryService = self._container.resolve(InventoryService)
             claim = engine.acquire_product_print_claim(block)
             if not claim.acquired:
                 return {
@@ -8811,23 +8799,23 @@ class RechnungenView(QWidget):
                     "print_warning": print_warning,
                 }
             try:
-                new_stock = engine.record_print_and_update_sevdesk(block, completed, invoice_ref=invoice_ref)
+                engine.record_confirmed_print(
+                    block,
+                    completed,
+                    inventory,
+                    operation_id=claim.operation_id,
+                    invoice_ref=invoice_ref,
+                )
             except Exception as exc:
                 engine.finish_product_print_claim(claim, "unknown", error=str(exc))
                 logger.warning("Stock update after product print failed: %s", exc)
                 return {"sku": block.sku, "quantity": completed, "stock_warning": str(exc), "print_warning": print_warning}
             engine.finish_product_print_claim(claim, "succeeded")
-            local_warning = ""
-            try:
-                self._container.resolve(InventoryService).set_product_stock(block.sku, new_stock)
-            except Exception as exc:
-                local_warning = str(exc)
-                logger.warning("Local stock mirror update failed for %s: %s", block.sku, exc)
             return {
                 "sku": block.sku,
                 "quantity": completed,
                 "stock_warning": "",
-                "local_warning": local_warning,
+                "local_warning": "",
                 "print_warning": print_warning,
             }
 
