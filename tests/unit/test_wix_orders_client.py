@@ -124,6 +124,32 @@ def test_line_item_is_digital_detects_wix_item_type_flags() -> None:
     assert not WixOrdersClient.line_item_is_digital({"itemType": {"preset": "PHYSICAL"}})
 
 
+def test_wix_order_normalizers_tolerate_null_optional_payload_nodes() -> None:
+    line_item = _parse_order_line_item(
+        {
+            "id": "line-1",
+            "catalogReference": None,
+            "physicalProperties": None,
+            "itemType": None,
+        }
+    )
+
+    assert line_item.line_item_id == "line-1"
+    assert line_item.sku == ""
+    assert WixOrdersClient.line_item_is_digital(
+        {"itemType": None, "physicalProperties": None}
+    ) is False
+    address = WixOrdersClient._shipping_address_parts_from_order(  # noqa: SLF001
+        {"buyerInfo": None, "shippingInfo": None}
+    )
+    assert address["name"] == ""
+    assert address["street1"] == ""
+    assert address["postal_code"] == ""
+    assert WixOrdersClient._physical_fulfillment_line_items_from_order(  # noqa: SLF001
+        {"lineItems": None}
+    ) == []
+
+
 def test_is_reference_digital_only_checks_all_line_items() -> None:
     class _Client(WixOrdersClient):
         def __init__(self) -> None:
