@@ -1583,6 +1583,9 @@ Payloads. Es wurden keine Bestands- oder Providerdaten geschrieben.
 
 ### Letzte Produktionsverifikation (12. November 2026, 00:59 CET)
 
+Der kombinierte Railway-Betriebszugriff inklusive Exact-SKU-ZÃ¤hler wird mit
+`invoke_inventory_railway_preflight.ps1 -IncludeExactMappingSummary` ausgefÃ¼hrt.
+
 Der Railway-Preflight auf `main`/`d9e421b` ist erneut erfolgreich: Product Hub
 Deployment `2841582d-afab-4663-af81-1a389a8f8b21` und Worker Deployment
 `41d96250-a187-432f-a781-be4b35797dad` sind SUCCESS, `/health` liefert HTTP 200,

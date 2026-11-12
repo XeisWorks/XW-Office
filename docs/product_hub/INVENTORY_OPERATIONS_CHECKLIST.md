@@ -260,6 +260,9 @@ Master/Shadow blieben `false`; es wurden keine Buchungs- oder Providerdaten gesc
 
 ## Read-only-Folgepruefung nach Exact-SKU-Preflight (12. November 2026, 00:59 CET)
 
+Der kombinierte read-only Zugriff inklusive Exact-SKU-Zaehler ist:
+`powershell -ExecutionPolicy Bypass -File .\scripts\product_hub\invoke_inventory_railway_preflight.ps1 -IncludeExactMappingSummary`.
+
 Der aktuelle Stand auf Commit `d9e421b` ist erfolgreich deployt:
 Product Hub `2841582d-afab-4663-af81-1a389a8f8b21`, Worker
 `41d96250-a187-432f-a781-be4b35797dad`, Healthcheck HTTP 200. Der Preflight endet
