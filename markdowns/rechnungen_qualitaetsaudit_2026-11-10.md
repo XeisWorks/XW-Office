@@ -3955,3 +3955,29 @@ Produktionsdatenbanken haben keinen aktivierten Backup-/PITR-Schutz, und echte
 Zwei-App-Instanz-Recovery, Inventur, Shadow-/Drift-Bereinigung, Providerprojektionen
 und Cutover-/Rollback-Sign-off sind nicht erledigt. Produktions-PITR nicht ohne
 ausdrueckliche Freigabe aktivieren.
+
+## Hosted-CI und Produktionsstand nach PITR-Drill (12.11.2026)
+
+GitHub Actions Windows-Run [`43277099830`](https://github.com/XeisWorks/XW-Office/actions/runs/43277099830)
+auf `f1a4976` ist vollstaendig gruen: **2.373 bestanden, 7 uebersprungen,
+1 bestehende Warnung (784,85 s)**; verpflichtendes MyPy meldet **0 Fehler in
+499 Quelldateien**. Ruff und Install bestanden. Der Runner meldet zusaetzlich
+eine Deprecation-Warnung, weil `actions/checkout@v4` und `actions/setup-python@v5`
+noch Node.js 20 als Ziel ausweisen und auf Node.js 24 erzwungen werden.
+
+Die aktuelle Railway-XW-Office-Production-Abfrage zeigt beide App-Services
+`XW-Product-Hub` und `xw-inventory-worker` auf `f1a4976`, Deployment-Status
+`SUCCESS`, keine staged changes; beide Postgres-Dienste sind ebenfalls `SUCCESS`.
+`https://products.xeisworks.at/health` antwortet mit HTTP 200. Es wurden keine
+Produktivdaten oder Bestands-Flags beschrieben. Der Desktop-Log
+`logs/xw_office.log` ist weiterhin vom 12.11.2026 09:17:41; damit gibt es keinen
+neuen Lauf mit der vollstaendigen F25/F27-Instrumentierung und diese beiden
+Messnachweise bleiben offen.
+
+Die separate Wix-/sevDesk-API wurde auf `1d09311` veroeffentlicht und meldet
+nach dem Deploy HTTP 200 fuer `/health/live` und `/health/ready`. Der Commit
+enthaelt ausschliesslich Biome-Formatierung. Die lokale Suite besteht mit
+124 Tests, `npm run check` ist gruen. Die Railway-API weist das manuelle
+MySQL-Volume-Backup als im aktuellen Workspace-Tarif nicht verfuegbar aus;
+fuer diesen Dienst liegt deshalb kein Backup-/Restore-Nachweis vor. Dieser
+separate Release aendert nicht den Status von G1/G2 oder den Rechnungs-Code.
