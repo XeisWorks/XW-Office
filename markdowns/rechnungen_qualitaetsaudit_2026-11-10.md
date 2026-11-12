@@ -3083,8 +3083,13 @@ Produktionsziel. Der Rechner verwendet fuer XW-Office die Repository-`.venv`;
 dort ist PySide6 `6.11.0` bereits installiert. Die globale Python-3.14-Umgebung
 enthaelt PySide6 nicht und ist fuer die Desktop-Tests nicht vorgesehen.
 
-GitHub-CI fuer `7f08dac` ist erfolgreich (Install, Ruff, Pytest und MyPy).
-CI fuer `ba7f2a2` und `b67e6d4` laeuft noch; beide Install-/Ruff-Schritte sind
-gruen, Pytest ist noch aktiv. Die zugehoerigen vollen Rechnungs-Smoke- und
-HTTP-Client-Tests bestehen lokal. Die Audit-Restpunkte einschliesslich des
-F23-Live-Exact-Match-Nachweises und manueller G1/G2-Abnahmen bleiben offen.
+GitHub-CI fuer `7f08dac`, `ba7f2a2` und `b67e6d4` ist erfolgreich; Install,
+Ruff und Pytest sind jeweils gruen. Auf `ba7f2a2` und `b67e6d4` bestanden
+jeweils **2.306 Tests**, 5 optionale PostgreSQL-Tests wurden uebersprungen und
+es gab 1 bestehende Warnung. Der weiche globale Hosted-MyPy-Schritt meldete
+153 Fehler in 45 Dateien auf `ba7f2a2` und 152 Fehler in 44 Dateien auf
+`b67e6d4`; er blockiert CI gemaess Workflow-Konfiguration nicht. Lokal liegt
+die MyPy-Baseline bei 143 Fehlern in 40 Dateien. Die zugehoerigen vollen
+Rechnungs-Smoke- und HTTP-Client-Tests bestehen lokal. Die Audit-Restpunkte
+einschliesslich des F23-Live-Exact-Match-Nachweises und manueller G1/G2-
+Abnahmen bleiben offen.
