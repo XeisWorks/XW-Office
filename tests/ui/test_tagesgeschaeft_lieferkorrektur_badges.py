@@ -1,21 +1,24 @@
 """Tests for the Lieferkorrektur badges/popup wiring in TagesgeschaeftView (Phase 10)."""
 from __future__ import annotations
 
-from threading import Event
+from threading import Event, get_ident
 import time
 from types import SimpleNamespace
+from uuid import uuid4
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from xw_office.core.config import AppConfig
 from xw_office.core.container import Container
 from xw_office.core.signals import AppSignals
 from xw_office.core.worker import BackgroundWorker
+from xw_office.models.customer_aftercare import CustomerAftercareCase
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.b2b_credit import B2bCreditService
 from xw_office.bootstrap import register_default_services
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.ui.modules.rechnungen.customer_aftercare_review_dialog import ReviewDialogOutcome
 from xw_office.ui.modules.rechnungen.tagesgeschaeft_view import TagesgeschaeftView
 
 
@@ -164,6 +167,98 @@ def test_new_review_cases_without_active_window_does_not_start_popup_worker(qtbo
     # Hybrid guard (QApplication.activeWindow() is None) must short-circuit.
     assert view._lieferkorrektur_popup_fetch_worker is None  # noqa: SLF001
     assert view._lieferkorrektur_review_popup_open is False  # noqa: SLF001
+
+
+def test_review_popup_service_resolution_runs_off_ui_thread(qtbot: object, monkeypatch) -> None:
+    entered = Event()
+    main_thread_id = get_ident()
+    resolve_threads: list[int] = []
+    case = CustomerAftercareCase(id=uuid4(), source_message_id="popup-thread-test")
+
+    class Aftercare:
+        def list_cases_for_filter(self, _filter: str) -> list[CustomerAftercareCase]:
+            assert get_ident() != main_thread_id
+            return [case]
+
+        def get_items(self, _case_id: object) -> list[object]:
+            assert get_ident() != main_thread_id
+            return []
+
+    def resolve_service(_container: Container) -> Aftercare:
+        resolve_threads.append(get_ident())
+        entered.set()
+        time.sleep(0.3)
+        return Aftercare()
+
+    container = _build_container()
+    container.register(CustomerAftercareService, resolve_service)  # type: ignore[arg-type,return-value]
+    view = TagesgeschaeftView(container)
+    qtbot.addWidget(view)
+    monkeypatch.setattr(QApplication, "activeWindow", staticmethod(lambda: view))
+    rendered: list[tuple[object, object]] = []
+    monkeypatch.setattr(
+        view,
+        "_show_lieferkorrektur_review_popup",
+        lambda found_case, items: rendered.append((found_case, items)),
+    )
+
+    heartbeat = Event()
+    QTimer.singleShot(0, heartbeat.set)
+    started_at = time.monotonic()
+    view._maybe_show_next_lieferkorrektur_review_popup()  # noqa: SLF001
+    assert time.monotonic() - started_at < 0.2
+    qtbot.waitUntil(entered.is_set, timeout=1000)
+    assert resolve_threads and resolve_threads[0] != main_thread_id
+    qtbot.waitUntil(heartbeat.is_set, timeout=500)
+    qtbot.waitUntil(lambda: view._lieferkorrektur_popup_fetch_worker is None, timeout=1000)  # noqa: SLF001
+    assert rendered == [(case, [])]
+
+
+def test_review_popup_write_resolves_service_and_waits_for_shutdown_off_ui_thread(
+    qtbot: object, monkeypatch
+) -> None:
+    entered, release = Event(), Event()
+    main_thread_id = get_ident()
+    resolve_threads: list[int] = []
+    write_threads: list[int] = []
+    case_id = uuid4()
+    case = CustomerAftercareCase(id=case_id, source_message_id="popup-write-thread-test")
+
+    class Aftercare:
+        def ignore_case(self, received_case_id: object) -> None:
+            assert received_case_id == case_id
+            write_threads.append(get_ident())
+            entered.set()
+            assert release.wait(3)
+
+    def resolve_service(_container: Container) -> Aftercare:
+        resolve_threads.append(get_ident())
+        return Aftercare()
+
+    container = _build_container()
+    container.register(CustomerAftercareService, resolve_service)  # type: ignore[arg-type,return-value]
+    view = TagesgeschaeftView(container)
+    qtbot.addWidget(view)
+    monkeypatch.setattr(view, "_refresh_badges", lambda: None)  # noqa: SLF001
+    monkeypatch.setattr(view, "_maybe_show_next_lieferkorrektur_review_popup", lambda: None)  # noqa: SLF001
+    outcome = ReviewDialogOutcome(
+        action="ignore", case_type="", courtesy=False, note=""
+    )
+
+    try:
+        view._apply_lieferkorrektur_review_outcome(case, outcome)  # noqa: SLF001
+        qtbot.waitUntil(entered.is_set, timeout=1000)
+        assert resolve_threads and resolve_threads[0] != main_thread_id
+        assert write_threads and write_threads[0] != main_thread_id
+        assert not view.shutdown_complete()
+        heartbeat = Event()
+        QTimer.singleShot(0, heartbeat.set)
+        qtbot.waitUntil(heartbeat.is_set, timeout=500)
+        view.request_shutdown()
+        assert not view.shutdown_complete()
+    finally:
+        release.set()
+    qtbot.waitUntil(view.shutdown_complete, timeout=1000)
 
 
 def test_review_alert_click_opens_dialog_prefiltered_and_refreshes_badges_async(

@@ -3678,3 +3678,16 @@ vollstaendige Rechnungsansicht-Smokesuite
 besteht mit **106 Tests**; striktes MyPy fuer `tagesgeschaeft_view.py`, Ruff und
 `git diff --check` sind gruen. Weitere F17-I/O-Einstiege bleiben gemaess AP06 zu
 pruefen.
+
+## AP06/F17-Fortschreibung - Lieferkorrektur-Popup-Serviceaufloesung (12.11.2026)
+
+Die Customer-Aftercare-Servicefactory wurde beim automatischen Review-Popup und
+beim Speichern von Bestaetigen/Ignorieren noch vor dem BackgroundWorker im
+GUI-Thread aufgeloest. Beide Aufloesungen liegen jetzt im jeweiligen Worker; bei
+Abbrechen/Zurueckstellen wird kein Service mehr unnoetig konstruiert. Zwei
+Qt-Regressionen blockieren die Servicefactory bzw. den Ignore-Write und belegen
+Worker-Thread, UI-Heartbeat und Close-/Shutdown-Warten fuer den Schreibpfad.
+Die Lieferkorrektur-Badge-/Popup-Suite besteht mit **13 Tests**; striktes MyPy
+fuer `tagesgeschaeft_view.py`, Ruff und `git diff --check` sind gruen. F17 bleibt
+offen, bis die weiteren synchronen UI-I/O-Einstiege des Vollinventars abgenommen
+sind.

@@ -1047,10 +1047,13 @@ class TagesgeschaeftView(QWidget):
             and self._lieferkorrektur_popup_fetch_worker.isRunning()
         ):
             return
-        aftercare_service: CustomerAftercareService = self._container.resolve(CustomerAftercareService)
+        container = self._container
         skip_ids = set(self._lieferkorrektur_deferred_case_ids)
 
         def job() -> tuple[CustomerAftercareCase, list[CustomerAftercareItem]] | None:
+            aftercare_service: CustomerAftercareService = container.resolve(
+                CustomerAftercareService
+            )
             candidates = [
                 case
                 for case in aftercare_service.list_cases_for_filter("zu_pruefen")
@@ -1091,13 +1094,15 @@ class TagesgeschaeftView(QWidget):
     def _apply_lieferkorrektur_review_outcome(
         self, case: CustomerAftercareCase, outcome: ReviewDialogOutcome | None
     ) -> None:
-        aftercare_service: CustomerAftercareService = self._container.resolve(CustomerAftercareService)
         if outcome is not None and outcome.action == "defer":
             self._lieferkorrektur_deferred_case_ids.add(case.id)
 
         def job() -> None:
             if outcome is None or outcome.action == "defer":
                 return
+            aftercare_service: CustomerAftercareService = self._container.resolve(
+                CustomerAftercareService
+            )
             if outcome.action == "confirm":
                 if outcome.selected_items:
                     aftercare_service.confirm_case(
