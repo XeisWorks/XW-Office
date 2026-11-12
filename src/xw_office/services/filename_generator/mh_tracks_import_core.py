@@ -190,35 +190,32 @@ def _build_default_stem(parsed: ParsedAudioFile, file_url: str, existing_stems: 
 
 
 def _plan_fingerprint(files: list[dict[str, Any]], tracks: list[dict[str, Any]]) -> str:
-    file_state = sorted(
-        (
-            {"name": _text(file.get("originalFileName")), "url": _text(file.get("fileUrl"))}
-            for file in files
-        ),
-        key=lambda entry: _natural_sort_key(entry["name"]),
-    )
-    track_state = sorted(
-        (
+    file_state: list[dict[str, str]] = [
+        {"name": _text(file.get("originalFileName")), "url": _text(file.get("fileUrl"))}
+        for file in files
+    ]
+    file_state.sort(key=lambda entry: _natural_sort_key(entry["name"]))
+
+    track_state: list[dict[str, Any]] = []
+    for source_track in tracks:
+        stems_state: list[dict[str, str]] = [
             {
-                "id": _text(track.get("_id")),
-                "updated": _text(track.get("_updatedDate")),
-                "key": _text(track.get("trackKey")),
-                "stems": sorted(
-                    (
-                        {
-                            "identity": _normalized_stem_identity(stem),
-                            "url": _text(stem.get("audioUrl")),
-                        }
-                        for stem in (track.get("stems") or [])
-                        if isinstance(stem, dict)
-                    ),
-                    key=lambda entry: _natural_sort_key(entry["identity"]),
-                ),
+                "identity": _normalized_stem_identity(stem),
+                "url": _text(stem.get("audioUrl")),
             }
-            for track in tracks
-        ),
-        key=lambda entry: _natural_sort_key(entry["key"]),
-    )
+            for stem in (source_track.get("stems") or [])
+            if isinstance(stem, dict)
+        ]
+        stems_state.sort(key=lambda entry: _natural_sort_key(entry["identity"]))
+        track_state.append(
+            {
+                "id": _text(source_track.get("_id")),
+                "updated": _text(source_track.get("_updatedDate")),
+                "key": _text(source_track.get("trackKey")),
+                "stems": stems_state,
+            }
+        )
+    track_state.sort(key=lambda entry: _natural_sort_key(_text(entry["key"])))
     return _stable_hash({"fileState": file_state, "trackState": track_state})
 
 
@@ -280,15 +277,15 @@ def build_mh_tracks_import_plan(
     ignored_files: list[str] = []
     parsed_files: list[ParsedAudioFile] = []
 
-    for file in files:
-        parsed = parse_mh_tracks_audio_file_name(file.get("originalFileName"))
+    for file_payload in files:
+        parsed = parse_mh_tracks_audio_file_name(file_payload.get("originalFileName"))
         if not parsed.recognized:
-            ignored_files.append(_text(file.get("originalFileName")))
+            ignored_files.append(_text(file_payload.get("originalFileName")))
             continue
         if not parsed.valid:
             errors.append(f"{parsed.file_name}: {parsed.error}")
             continue
-        file_url = _text(file.get("fileUrl"))
+        file_url = _text(file_payload.get("fileUrl"))
         if not file_url:
             errors.append(f"{parsed.file_name}: Die Wix-Media-URL fehlt.")
             continue
@@ -313,8 +310,8 @@ def build_mh_tracks_import_plan(
         )
 
     duplicate_map: dict[str, list[str]] = {}
-    for file in parsed_files:
-        duplicate_map.setdefault(file.import_key, []).append(file.file_name)
+    for parsed_file in parsed_files:
+        duplicate_map.setdefault(parsed_file.import_key, []).append(parsed_file.file_name)
     for import_key, names in duplicate_map.items():
         if len(names) > 1:
             errors.append(f"Mehrdeutige Dateien für {import_key}: {', '.join(names)}")
@@ -322,8 +319,8 @@ def build_mh_tracks_import_plan(
     edition_slugs = {_slug(edition.get("editionSlug")) for edition in editions if _slug(edition.get("editionSlug"))}
     known_groups: set[str] = set()
     known_roles: set[str] = set()
-    for track in tracks:
-        for stem in track.get("stems") or []:
+    for source_track in tracks:
+        for stem in source_track.get("stems") or []:
             if not isinstance(stem, dict):
                 continue
             if _slug(stem.get("group")):
@@ -332,12 +329,14 @@ def build_mh_tracks_import_plan(
                 known_roles.add(_slug(stem.get("role")))
 
     tracks_by_key: dict[str, dict[str, Any]] = {}
-    for track in tracks:
-        track_number = _normalized_track_number(track.get("trackNumber"))
-        edition_slug = _slug(track.get("editionSlug"))
-        key = _text(track.get("trackKey")) or (f"{edition_slug}::{track_number}" if edition_slug and track_number else "")
+    for source_track in tracks:
+        track_number = _normalized_track_number(source_track.get("trackNumber"))
+        edition_slug = _slug(source_track.get("editionSlug"))
+        key = _text(source_track.get("trackKey")) or (
+            f"{edition_slug}::{track_number}" if edition_slug and track_number else ""
+        )
         if key:
-            tracks_by_key[key] = {**track, "stems": list(track.get("stems") or [])}
+            tracks_by_key[key] = {**source_track, "stems": list(source_track.get("stems") or [])}
 
     working_tracks: dict[str, dict[str, Any]] = {}
     actions: list[dict[str, Any]] = []
@@ -430,7 +429,7 @@ def build_mh_tracks_import_plan(
 
     writes: list[dict[str, Any]] = []
     for track in working_tracks.values():
-        original = tracks_by_key.get(track.get("trackKey"))
+        original = tracks_by_key.get(_text(track.get("trackKey")))
         if original is None:
             writes.append(track)
             continue
