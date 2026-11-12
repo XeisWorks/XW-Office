@@ -2498,6 +2498,14 @@ Fulfillment greifen nach dem Erstladen auf dieselbe Serviceinstanz zu. Ein
 blockierter Resolver bestaetigt den Qt-Heartbeat. Die Dialogsuite besteht mit
 **10 Tests**; Ruff und striktes MyPy sind gruen.
 
+## Qualitaetslauf nach F17-Serviceauflosungen (12.11.2026)
+
+Nach den sieben Dialogaenderungen auf `00323f0` besteht die lokale Vollsuite mit
+**2.268 Tests, 5 optionalen PostgreSQL-Ueberspringungen und 1 bestehenden
+Starlette/httpx-Deprecation-Warnung (165,65 s)**. Globales Ruff besteht; striktes
+MyPy fuer alle **27 Rechnungs-UI-Quelldateien** meldet 0 Fehler; `git diff --check`
+ist sauber. Hosted CI fuer `00323f0` ist beim Dokumentieren noch `in_progress`.
+
 ## F17-Fortschreibung - OPEN-PRINTS-Service beim Erstladen (12.11.2026)
 
 `OffeneDruckeDialog` loest den Mailbox-Service jetzt im Listenworker auf und
